@@ -352,6 +352,22 @@ describe('the old form at /profile/edit', () => {
     for (const field of ['whatICareAbout', 'whyIWantToMeet']) expect(form()).toMatch(new RegExp(`register\\('${field}'\\)`));
   });
 
+  // Final review (C5): the form's own clean-up turned "linkedin.com/in/jane" into
+  // "https://linkedin.com/in/linkedin.com/in/jane" and kept share queries. Your profile's "connect LinkedIn" card sends
+  // members here, so it uses the request form's clean-up (normalizeLinkedinInput, run in join-form-linkedin.test.ts).
+  it('the LinkedIn field is cleaned up by the request form\'s own rule, and a link that is not a profile is said next to the field', () => {
+    const submit = form().slice(form().indexOf('const onSubmit = async'), form().indexOf('if (!user) return null;'));
+    expect(form()).toMatch(/import \{ LINKEDIN_LINK_HELP, normalizeLinkedinInput \} from '@\/features\/auth\/linkedin-link';/);
+    expect(form()).not.toMatch(/normalizeLinkedInUrl|isValidLinkedInUrl|https:\/\/linkedin\.com\/in\/\$\{/);
+    expect(submit).toMatch(/const linkedinUrl = normalizeLinkedinInput\(data\.linkedinUrl\);\s*if \(linkedinUrl === null\) \{\s*setError\('linkedinUrl', \{ message: LINKEDIN_LINK_HELP \}, \{ shouldFocus: true \}\);\s*return;\s*\}/);
+    expect(submit).toMatch(/api\.put\('\/users\/me', \{\s*\.\.\.data,\s*linkedinUrl,/);
+    // Said under the field, never as a toast, and the field says it is the one that is wrong.
+    expect(submit).not.toMatch(/addToast\([^)]*LinkedIn/);
+    expect(form()).toMatch(/aria-invalid=\{errors\.linkedinUrl \? true : undefined\}/);
+    expect(form()).toMatch(/aria-describedby=\{errors\.linkedinUrl \? 'linkedin-error' : undefined\}/);
+    expect(form()).toMatch(/<p id="linkedin-error" role="alert"[^>]*>\{errors\.linkedinUrl\.message\}<\/p>/);
+  });
+
   it('a save on the form never sends those three, so it never writes over the answers', () => {
     const submit = form().slice(form().indexOf('const onSubmit = async'), form().indexOf('if (!user) return null;'));
     expect(submit).toMatch(/api\.put\('\/users\/me', \{/);

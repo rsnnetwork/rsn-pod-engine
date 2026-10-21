@@ -12,6 +12,7 @@ import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Camera, Info, T
 import api from '@/lib/api';
 import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
 import { EDIT_ANSWERS_TO } from '@/features/reason/profile/your-profile-text';
+import { LINKEDIN_LINK_HELP, normalizeLinkedinInput } from '@/features/auth/linkedin-link';
 import { visibleText } from '@/features/reason/person';
 
 interface ProfileForm {
@@ -193,7 +194,7 @@ export default function ProfilePage() {
     }
   }, [hash, userId]);
 
-  const { register, handleSubmit, reset, formState: { isSubmitting, isDirty } } = useForm<ProfileForm>();
+  const { register, handleSubmit, reset, setError, formState: { isSubmitting, isDirty, errors } } = useForm<ProfileForm>();
   const [tagsChanged, setTagsChanged] = useState(false);
 
   useEffect(() => {
@@ -258,33 +259,18 @@ export default function ProfilePage() {
   const handleSetReasons = (t: string[]) => { setReasons(t); setTagsChanged(true); };
   const handleSetLanguages = (t: string[]) => { setLanguages(t); setTagsChanged(true); };
 
-  const normalizeLinkedInUrl = (value: string): string => {
-    let v = value.trim();
-    if (!v) return '';
-    // Strip trailing slashes
-    v = v.replace(/\/+$/, '');
-    // If it already looks like a URL, return as-is (after trailing slash strip)
-    if (/^https?:\/\//i.test(v)) return v;
-    // Otherwise treat as a username — strip any leading @ or /in/ prefix users might paste
-    v = v.replace(/^@/, '').replace(/^\/?in\//, '');
-    return `https://linkedin.com/in/${v}`;
-  };
-
-  const isValidLinkedInUrl = (url: string): boolean => {
-    if (!url) return true; // optional field on profile
-    return /^https?:\/\/(www\.)?linkedin\.com\/in\/.+/i.test(url);
-  };
-
   const onSubmit = async (data: ProfileForm) => {
-    // Normalize LinkedIn URL before saving
-    data.linkedinUrl = normalizeLinkedInUrl(data.linkedinUrl);
-    if (data.linkedinUrl && !isValidLinkedInUrl(data.linkedinUrl)) {
-      addToast('Enter your LinkedIn username or full profile URL', 'error');
+    // The request form's clean-up (final review, 21 Oct 2026): a name, or any form of a profile link, becomes
+    // https://www.linkedin.com/in/<name>, with no share query; an empty box sends ''; anything else is said under the field.
+    const linkedinUrl = normalizeLinkedinInput(data.linkedinUrl);
+    if (linkedinUrl === null) {
+      setError('linkedinUrl', { message: LINKEDIN_LINK_HELP }, { shouldFocus: true });
       return;
     }
     try {
       await api.put('/users/me', {
         ...data,
+        linkedinUrl,
         interests,
         reasonsToConnect: reasons,
         languages,
@@ -455,9 +441,14 @@ export default function ProfilePage() {
                   id="linkedin"
                   {...register('linkedinUrl')}
                   placeholder="your-username"
-                  className="flex-1 bg-transparent px-2 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"
+                  aria-invalid={errors.linkedinUrl ? true : undefined}
+                  aria-describedby={errors.linkedinUrl ? 'linkedin-error' : undefined}
+                  className="min-w-0 flex-1 bg-transparent px-2 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"
                 />
               </div>
+              {errors.linkedinUrl?.message && (
+                <p id="linkedin-error" role="alert" className="mt-1 text-xs text-red-700">{errors.linkedinUrl.message}</p>
+              )}
             </div>
           </div>
         </Card>
