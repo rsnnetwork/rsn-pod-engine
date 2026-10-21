@@ -88,6 +88,35 @@ describe('parseBannerImage: the types', () => {
       expect({ image, ...refusal(image) }).toEqual({ image, status: 400, message: expect.any(String) });
     }
   });
+
+  it('keeps base64 that ends in two, one or no "=", and refuses any other shape or a type with more in it', () => {
+    for (const size of [300, 301, 302]) expect(parseBannerImage(dataUrl('image/jpeg', picture('image/jpeg', size))).bytes.length).toBe(size);
+    const text = picture('image/jpeg', 300).toString('base64');
+    for (const base64 of [
+      `${text.slice(0, 8)}=${text.slice(9)}`, // "=" before the end
+      `${text.slice(0, -4)}A===`, // three "="
+      `${text.slice(0, 8)}-${text.slice(9)}`, // the URL alphabet
+      `${text.slice(0, 8)}\n${text.slice(9)}`, // a line break
+      '====',
+    ]) {
+      expect({ base64, ...refusal(`data:image/jpeg;base64,${base64}`) }).toEqual({ base64, status: 400, message: NOT_A_PICTURE });
+    }
+    expect(refusal(`data:image/jpeg;name=me;base64,${text}`)).toEqual({ status: 400, message: NOT_A_PICTURE });
+    expect(refusal(`data:image/jp,eg;base64,${text}`)).toEqual({ status: 400, message: NOT_A_PICTURE });
+  });
+
+  // Node 20's pattern engine has run out of stack ("Maximum call stack size exceeded") reading a 3 MB banner's
+  // base64 (CI, 21 Oct 2026), so the text of a picture is read with plain string steps, never a pattern.
+  it('reads a 3 MB picture without running a pattern over its text', () => {
+    const longest: number[] = [];
+    const exec = RegExp.prototype.exec;
+    jest.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, text: string) {
+      longest.push(String(text).length);
+      return exec.call(this, text);
+    });
+    parseBannerImage(dataUrl('image/jpeg', picture('image/jpeg', BANNER_MAX_BYTES)));
+    expect(Math.max(0, ...longest)).toBeLessThan(1000);
+  });
 });
 
 describe('parseBannerImage: the size, after decoding', () => {
