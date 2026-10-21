@@ -14,6 +14,9 @@
 //                     outcome is read on the form, at /profile/edit.
 //   More              the Human Profile's header offers Block and Report this member (the old profile's dialogs);
 //                     the move bar steps aside while the report dialog is open; a block asks first, then leaves.
+//   Unblock           the profile is closed to the one who blocked: its notice says "You blocked this member." and
+//                     offers Unblock, which asks first and brings the profile back. The member who was blocked sees
+//                     only "This profile is not available.", with no word of a block.
 //   Every size        360 to 1440: nothing scrolls sideways, the name is never cut mid-word, and the banner's
 //                     controls, the edit links and More can be pressed.
 //
@@ -258,7 +261,7 @@ test(`your profile is the way others see it, with what only you see apart, and e
   await pool.query('UPDATE users SET linkedin_url = NULL WHERE id = $1', [owner.id]);
 });
 
-test(`More on the Human Profile: Report this member, and Block, which asks first and then leaves the profile (${ENGINE})`, async () => {
+test(`More on the Human Profile: Report this member, and Block, which asks first and leaves; the notice then offers Unblock, which brings the profile back (${ENGINE})`, async () => {
   test.setTimeout(240_000);
   const { ctx, page, errors } = await signedIn(viewer, { width: 390, height: 844 });
   await gotoRetry(page, `${APP}/people/${owner.id}`);
@@ -291,11 +294,30 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   await expect(page.getByText(`${OWNER.name} is blocked. They can no longer message you, and you won't be matched together.`)).toBeVisible({ timeout: 30_000 });
   await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(1);
+
+  // The profile is closed to the one who blocked, and its notice says so and offers Unblock (fix round 1: once every
+  // people link opens this page, it is the only way to undo a block).
   await gotoRetry(page, `${APP}/people/${owner.id}`);
-  await expect(page.getByText('This profile is not available.')).toBeVisible({ timeout: SLOW });
+  await expect(page.getByRole('heading', { level: 1, name: 'You blocked this member.' })).toBeVisible({ timeout: SLOW });
+  await expect(page.getByText('This profile is not available.')).toHaveCount(0);
+  const unblock = page.getByRole('button', { name: 'Unblock' });
+  await expectReachable(page, unblock, 'Unblock');
+  expect((await unblock.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  // Unblock asks first. Dismissed, nothing changes.
+  const unblockQuestion = 'Unblock this member? They will be able to message you again, and you may be matched together in future events.';
+  page.once('dialog', (d) => { expect(d.message()).toBe(unblockQuestion); void d.dismiss(); });
+  await unblock.click();
+  await expect(page.getByRole('heading', { level: 1, name: 'You blocked this member.' })).toBeVisible();
+  expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(1);
+  // Accepted: unblocked, said, and the profile is back on the same page, with no refresh.
+  page.once('dialog', (d) => void d.accept());
+  await unblock.click();
+  await expect(page.getByText('Unblocked. Their profile is open to you again.')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: 'More' })).toBeVisible();
+  expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(0);
   expect(unexpected(errors)).toEqual([]);
   await ctx.close();
-  await pool.query('DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id]);
 });
 
 test(`Report this member with "Also block" ticked: the report is sent, they are blocked, and Done leaves the profile (${ENGINE})`, async () => {
@@ -315,9 +337,19 @@ test(`Report this member with "Also block" ticked: the report is sent, they are 
   await page.getByRole('button', { name: 'Done' }).click();
   await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
   await gotoRetry(page, `${APP}/people/${reported.id}`);
-  await expect(page.getByText('This profile is not available.')).toBeVisible({ timeout: SLOW });
+  await expect(page.getByRole('heading', { level: 1, name: 'You blocked this member.' })).toBeVisible({ timeout: SLOW });
+  await expect(page.getByRole('button', { name: 'Unblock' })).toBeVisible();
   expect(unexpected(errors)).toEqual([]);
   await ctx.close();
+
+  // The member who was blocked is told nothing: the plain notice, with no Unblock and no word of a block.
+  const them = await signedIn(reported, { width: 390, height: 844 });
+  await gotoRetry(them.page, `${APP}/people/${viewer.id}`);
+  await expect(them.page.getByText('This profile is not available.')).toBeVisible({ timeout: SLOW });
+  await expect(them.page.getByRole('button', { name: 'Unblock' })).toHaveCount(0);
+  await expect(them.page.getByText(/blocked/i)).toHaveCount(0);
+  expect(unexpected(them.errors)).toEqual([]);
+  await them.ctx.close();
 });
 
 test(`every size: nothing scrolls sideways, no name is cut mid-word, and every control can be pressed (${ENGINE})`, async () => {
