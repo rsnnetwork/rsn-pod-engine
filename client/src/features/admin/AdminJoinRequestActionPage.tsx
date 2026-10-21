@@ -18,6 +18,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { CheckCircle2, XCircle, AlertCircle, Loader2, ExternalLink } from 'lucide-react';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/Button';
+import { linkedinHref } from './linkedin-href';
 
 type ActionKind = 'approve' | 'reject';
 
@@ -170,6 +171,7 @@ function ReadyCard({
   onCancel: () => void;
 }) {
   const isApprove = action === 'approve';
+  const linkedin = linkedinHref(request.linkedinUrl);
   return (
     <>
       <h1 className="text-lg font-semibold text-gray-900 mb-1">
@@ -184,17 +186,19 @@ function ReadyCard({
       <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-5">
         <Field label="Name" value={request.fullName} />
         <Field label="Email" value={request.email} />
-        {request.linkedinUrl && (
-          <Field
-            label="LinkedIn"
-            value={
-              <a href={request.linkedinUrl} target="_blank" rel="noopener noreferrer" className="text-rsn-red hover:underline break-all">
-                {request.linkedinUrl}
+        <Field
+          label="LinkedIn"
+          value={
+            linkedin ? (
+              <a href={linkedin} target="_blank" rel="noopener noreferrer" className="text-rsn-red hover:underline break-all">
+                {linkedin}
               </a>
-            }
-          />
-        )}
-        {request.reason && <Field label="Why RSN" value={request.reason} multiline />}
+            ) : (
+              <span className="text-gray-400">No LinkedIn</span>
+            )
+          }
+        />
+        {request.reason && <Field label="Why REASON" value={request.reason} multiline />}
       </div>
 
       <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
@@ -322,7 +326,7 @@ function Field({
 }) {
   return (
     <div className="flex flex-col sm:flex-row sm:gap-3 py-1.5">
-      <span className="text-[11px] uppercase tracking-wide text-gray-400 sm:w-20 shrink-0 mt-0.5">{label}</span>
+      <span className="text-[11px] uppercase tracking-wide text-gray-400 sm:w-24 shrink-0 mt-0.5">{label}</span>
       <span className={`text-sm text-gray-800 ${multiline ? 'whitespace-pre-wrap break-words' : 'break-words'}`}>
         {value}
       </span>
