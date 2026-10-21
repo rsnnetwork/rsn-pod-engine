@@ -394,6 +394,12 @@ describe('the old form at /profile/edit', () => {
     expect(form()).toMatch(/scrollIntoView\(/);
   });
 
+  // Fix round 1: at 360px a long name or e-mail squeezed the photo into a thin oval and could push the card sideways.
+  it('the form\'s header keeps the photo round at any width, and a long name or e-mail wraps beside it', () => {
+    expect(form()).toMatch(/<div className="relative group shrink-0">\s*\{user\.avatarUrl \?/);
+    expect(form()).toMatch(/<div className="min-w-0 \[overflow-wrap:anywhere\]">\s*<p className="text-lg font-semibold text-\[#1a1a2e\]">\{user\.displayName \|\| 'Set your name'\}<\/p>/);
+  });
+
   it('the Google photo comes back to the form, where its outcome is read', () => {
     expect(form()).toMatch(/api\.post\('\/auth\/google\/photo-state', \{ redirect: '\/profile\/edit' \}\)/);
   });

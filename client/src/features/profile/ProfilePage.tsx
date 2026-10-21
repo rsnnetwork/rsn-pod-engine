@@ -330,7 +330,7 @@ export default function ProfilePage() {
       {/* Profile Header Card */}
       <Card className="animate-fade-in-up">
         <div className="flex items-center gap-4 mb-2">
-          <div className="relative group">
+          <div className="relative group shrink-0">
             {user.avatarUrl ? (
               <img src={user.avatarUrl} alt={user.displayName || 'Avatar'} className="h-16 w-16 rounded-full object-cover" />
             ) : (
@@ -352,7 +352,7 @@ export default function ProfilePage() {
               className="hidden"
             />
           </div>
-          <div>
+          <div className="min-w-0 [overflow-wrap:anywhere]">
             <p className="text-lg font-semibold text-[#1a1a2e]">{user.displayName || 'Set your name'}</p>
             <p className="text-sm text-gray-500">{user.email}</p>
             {user.jobTitle && user.company && (
