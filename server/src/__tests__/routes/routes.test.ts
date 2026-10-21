@@ -304,6 +304,19 @@ describe('Auth Routes', () => {
       expect(res.body.data.user.lastOnboardedAt).toBeNull();
     });
 
+    // 21 Oct 2026: the member's banner rides the session like their photo does, as its address or null.
+    it('carries the banner\'s address, and null when the member has none', async () => {
+      const bannerUrl = 'http://localhost:3001/api/users/user-123/banner?v=1761040000000';
+      (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, bannerUrl });
+      const withOne = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
+      expect(withOne.status).toBe(200);
+      expect(withOne.body.data.user.bannerUrl).toBe(bannerUrl);
+
+      (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, bannerUrl: null });
+      const without = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
+      expect(without.body.data.user).toHaveProperty('bannerUrl', null);
+    });
+
     // 29 Sep 2026: the Settings page fills its five switches from this payload.
     // It carried none of them, so every switch read its built-in default (on, on,
     // on, on, off) and any Save wrote those defaults back over what the member had

@@ -20,8 +20,9 @@ const everything = () => [...components(), rules(), read('busy.ts')];
 const count = (src: string, re: RegExp) => src.match(re)?.length ?? 0;
 
 describe('Human Profile: one brief query, tagged for realtime', () => {
-  it('has the four entity tags', () => {
-    expect(page()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\)\] : \[\]/);
+  // 21 Oct 2026: the page can block now, and a block in either direction closes the profile, so blocks are a tag too.
+  it('has the five entity tags, blocks included', () => {
+    expect(page()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\), E\.userBlocks\(me\)\] : \[\]/);
   });
   it('asks for the brief once, in the page: no second copy in a child, no polling', () => {
     expect(count(page(), /\buseQuery\(/g)).toBe(1);
@@ -205,7 +206,12 @@ describe('Human Profile: faults found by looking at it', () => {
   it('the three columns are slimmer from 981px to 1199px and the name smaller, so no name is cut mid-word at 1024px', () => {
     expect(hero()).toMatch(/min-\[981px\]:grid-cols-\[250px_minmax\(0,1fr\)_290px\] min-\[1200px\]:grid-cols-\[320px_minmax\(0,1fr\)_330px\]/);
     expect(hero()).not.toMatch(/min-\[981px\]:grid-cols-\[320px/);
-    expect(hero()).toMatch(/<h1 className="[^"]*min-\[981px\]:max-\[1199px\]:text-\[44px\]/);
+    // The name's size for each fit lives in the frame's table (21 Oct 2026: your own profile is drawn by it too).
+    expect(hero()).toMatch(/name: 'min-\[981px\]:max-\[1199px\]:text-\[44px\]'/);
+    expect(hero()).toMatch(/<h1 className=\{cn\('[^']*md:text-\[52px\]', FRAME\[fit\]\.name\)\}>/);
+    // The Human Profile is drawn with the window's breakpoints, as it always was.
+    expect(hero()).toMatch(/export function HeroFrame\(\{[^}]*fit = 'screen' \}: FrameProps\)/);
+    expect(hero()).not.toMatch(/<HeroFrame[^>]*fit=/);
   });
   it('a failed photo and no photo look alike: the photo covers the tile, initials sit round in the middle', () => {
     expect(hero()).toMatch(/\[&>img\]:absolute \[&>img\]:inset-0 \[&>img\]:h-full \[&>img\]:w-full \[&>img\]:rounded-none/);
@@ -261,6 +267,9 @@ interface ReasonApi {
   setPersonResponse: (userId: string, response: 'saved' | 'passed' | null) => Promise<unknown>;
   sendMeetRequest: (userId: string, note: string, format: 'video_20' | 'coffee' | 'message_first') => Promise<unknown>;
   recordOutcomeRequest: (userId: string, worth: 'yes' | 'maybe' | 'no', outcomes: string[]) => Promise<unknown>;
+  blockMember: (userId: string) => Promise<unknown>;
+  unblockMember: (userId: string) => Promise<unknown>;
+  fetchBlockStatus: (userId: string) => Promise<unknown>;
 }
 
 function loadApi(): { api: ReasonApi; exported: string[]; calls: RecordedCall[] } {
@@ -296,12 +305,18 @@ describe('REASON api: a member id is data, never part of the path', () => {
     await api.setPersonResponse(crafted, null);
     await api.sendMeetRequest(crafted, 'Hello', 'coffee');
     await api.recordOutcomeRequest(crafted, 'yes', ['advice']);
+    await api.blockMember(crafted);
+    await api.unblockMember(crafted);
+    await api.fetchBlockStatus(crafted);
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       `GET /people/${encoded}/brief`,
       `PUT /people/${encoded}/response`,
       `DELETE /people/${encoded}/response`,
       `POST /matches/platform/${encoded}/interest`,
       `POST /people/${encoded}/outcome`,
+      `POST /users/${encoded}/block`,
+      `DELETE /users/${encoded}/block`,
+      `GET /users/${encoded}/block-status`,
     ]);
   });
 
@@ -321,8 +336,9 @@ describe('REASON api: a member id is data, never part of the path', () => {
 
   it('still exports every name the pages import', () => {
     expect(loadApi().exported).toEqual([
-      'errorMessage', 'fetchBrief', 'fetchForYou', 'fetchRecentConnections', 'personName', 'reasonKeys',
-      'recordOutcomeRequest', 'sendMeetRequest', 'setPersonResponse', 'stateFromPoke',
+      'blockMember', 'errorMessage', 'fetchBlockStatus', 'fetchBrief', 'fetchForYou', 'fetchMyCard', 'fetchMyProfile',
+      'fetchRecentConnections', 'personName', 'reasonKeys', 'recordOutcomeRequest', 'removeBannerRequest', 'sendMeetRequest',
+      'setPersonResponse', 'stateFromPoke', 'unblockMember', 'uploadBanner',
     ]);
   });
 });

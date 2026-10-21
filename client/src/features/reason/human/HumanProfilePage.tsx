@@ -9,19 +9,24 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { Skeleton } from '@/components/ui/Spinner';
+import ReportUserModal from '@/components/ReportUserModal';
 import { cn } from '@/lib/utils';
 import ReasonMark from '../brand/ReasonMark';
 import ReasonSheep from '../brand/ReasonSheep';
+import ProfileBanner from './ProfileBanner';
 import ProfileHero from './ProfileHero';
 import ProfileDetails from './ProfileDetails';
 import MoveBar from './MoveBar';
+import ProfileMoreMenu from './ProfileMoreMenu';
+import { useBlockedByYou } from './useBlockedByYou';
+import { BUSY } from './busy';
 import MeetSheet from './MeetSheet';
 import OutcomeSheet from './OutcomeSheet';
 import { STATE_LABEL } from './labels';
 import {
   MOVE_RESPONSE, isMemberId, knownSource, loadFailedText, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
 } from './profile-text';
-import { errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
+import { blockMember, errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
 
 // The line under "could not load" when the failure itself has nothing more specific to say.
 const LOAD_HINT = 'Try again in a moment.';
@@ -57,8 +62,9 @@ function Notice({ title, text, children }: { title: string; text: string; childr
 }
 
 // The profile itself, once the brief is in. Keyed by the person in the page, so Save, Pass and the two
-// sheets start fresh when one profile opens another (the "Your path" link).
-function Profile({ brief, userId, source }: { brief: PersonBrief; userId: string; source: KnownSource | null }) {
+// sheets start fresh when one profile opens another (the "Your path" link). The bar steps aside while the
+// report dialog is open: the dialog sits under it otherwise, and the bar would cover its buttons on a phone.
+function Profile({ brief, userId, source, hideBar }: { brief: PersonBrief; userId: string; source: KnownSource | null; hideBar: boolean }) {
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
   const qc = useQueryClient();
@@ -113,16 +119,22 @@ function Profile({ brief, userId, source }: { brief: PersonBrief; userId: string
   return (
     <>
       <main className={cn(MAIN, SIDES, 'pb-[calc(116px+env(safe-area-inset-bottom))] pt-3 md:pt-6')}>
+        {/* The person's banner, or the default one, across the top of the hero (21 Oct 2026). */}
+        <div className="mb-[11px] md:mb-[18px]">
+          <ProfileBanner src={brief.person.bannerUrl} />
+        </div>
         <ProfileHero brief={brief} who={who} source={source} />
         <ProfileDetails brief={brief} who={who} source={source} onRecordOutcome={() => setOutcomeOpen(true)} />
       </main>
-      <MoveBar
-        brief={brief}
-        busy={respond.isPending}
-        onPrimary={onPrimary}
-        onToggleSave={() => press(r.saved ? 'unsave' : 'save')}
-        onTogglePass={() => press(r.passed ? 'unpass' : 'pass')}
-      />
+      {!hideBar && (
+        <MoveBar
+          brief={brief}
+          busy={respond.isPending}
+          onPrimary={onPrimary}
+          onToggleSave={() => press(r.saved ? 'unsave' : 'save')}
+          onTogglePass={() => press(r.passed ? 'unpass' : 'pass')}
+        />
+      )}
       <MeetSheet person={meetPerson} onClose={() => setMeetOpen(false)} />
       <OutcomeSheet person={outcomePerson} onClose={() => setOutcomeOpen(false)} />
     </>
@@ -148,10 +160,9 @@ export default function HumanProfilePage() {
     enabled: validId && !!me && userId !== me,
     // A 4xx is an answer, so asking again changes nothing; a lost connection or a 5xx gets one more try.
     retry: shouldRetry,
-    meta: { entities: me && userId ? [E.user(me), E.user(userId), E.userInvites(me), E.userDms(me)] : [] },
+    // A block in either direction takes the profile away (the brief is a 404 then), so a block answers it too.
+    meta: { entities: me && userId ? [E.user(me), E.user(userId), E.userInvites(me), E.userDms(me), E.userBlocks(me)] : [] },
   });
-
-  if (me && userId === me) return <Navigate to="/profile" replace />;
 
   // The first screen of the app in this tab (a link opened from an email, say): going back would leave
   // the app, so go to For You instead. `replace` keeps the browser's own Back button from returning here.
@@ -159,9 +170,45 @@ export default function HumanProfilePage() {
     if (location.key === 'default') navigate('/', { replace: true });
     else navigate(-1);
   };
+
+  // More (21 Oct 2026): Block and Report this member, with the old public profile's confirmation, its block call
+  // and its report dialog. Once you have blocked them the profile is closed to you, so the page leaves it.
+  const addToast = useToastStore((s) => s.addToast);
+  const qc = useQueryClient();
+  const name = brief ? personFacts(brief.person).name : 'This member';
+  const [reportOpen, setReportOpen] = useState(false);
+  const [blockedInReport, setBlockedInReport] = useState(false);
+  const leaveBlocked = () => {
+    void qc.invalidateQueries({ queryKey: reasonKeys.all });
+    back();
+  };
+  const block = useMutation({
+    networkMode: 'always',
+    mutationFn: () => blockMember(userId),
+    onSuccess: () => {
+      addToast(`${name} is blocked. They can no longer message you, and you won't be matched together.`, 'success');
+      leaveBlocked();
+    },
+    onError: (err) => addToast(errorMessage(err, 'Could not block right now. Try again in a moment.'), 'error'),
+  });
+  const onBlock = () => {
+    if (block.isPending) return;
+    if (confirm(`Block ${name}? They won't be able to message you and you won't be matched together in future events.`)) block.mutate();
+  };
+  // The page stays mounted when one profile opens another, so the dialog's "also blocked" is read once and cleared.
+  const closeReport = () => {
+    setReportOpen(false);
+    setBlockedInReport(false);
+    if (blockedInReport) leaveBlocked();
+  };
+
   // Which screen: see viewFor. In short, a profile already on screen stays through a failed or held-back
   // refetch, and only "this person is gone" replaces it.
   const view = viewFor({ hasBrief: !!brief, validId, isPending, isError, error, fetchStatus });
+  // A profile that is not available may be one you blocked: then the notice says so and offers Unblock.
+  const blocked = useBlockedByYou(userId, me, view === 'unavailable' && validId);
+
+  if (me && userId === me) return <Navigate to="/profile" replace />;
 
   return (
     <div className="min-h-[100dvh] bg-[#f6f5f3] font-reason text-reason-ink antialiased">
@@ -171,14 +218,28 @@ export default function HumanProfilePage() {
           <span className="hidden sm:inline"><ReasonMark variant="mobile" /></span>
         </div>
         {view === 'profile' && brief && (
-          <span className="rounded-full bg-[#f2f3f5] px-2.5 py-1.5 text-[10px] font-extrabold text-[#555d69]">{STATE_LABEL[brief.relationship.state]}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate rounded-full bg-[#f2f3f5] px-2.5 py-1.5 text-[10px] font-extrabold text-[#555d69]">{STATE_LABEL[brief.relationship.state]}</span>
+            <ProfileMoreMenu
+              onBlock={onBlock}
+              onReport={() => setReportOpen(true)}
+              blocking={block.isPending}
+            />
+          </div>
         )}
       </header>
 
       {view === 'profile' && brief ? (
-        <Profile key={userId} brief={brief} userId={userId} source={source} />
-      ) : view === 'loading' ? (
+        <Profile key={userId} brief={brief} userId={userId} source={source} hideBar={reportOpen} />
+      ) : view === 'loading' || (view === 'unavailable' && blocked.checking) ? (
         <Loading />
+      ) : view === 'unavailable' && blocked.blockedByYou ? (
+        <Notice title="You blocked this member." text="They cannot message you, and you are not matched together. Unblock them to see their profile again.">
+          <button type="button" onClick={blocked.askToUnblock} aria-disabled={blocked.unblocking || undefined} className={cn(PRIMARY_BUTTON, blocked.unblocking && BUSY)}>
+            {blocked.unblocking ? 'Unblocking...' : 'Unblock'}
+          </button>
+          <button type="button" onClick={back} className={QUIET_BUTTON}>Go back</button>
+        </Notice>
       ) : view === 'unavailable' ? (
         <Notice title="This profile is not available." text="It may have been closed, or it is not open to you.">
           <button type="button" onClick={back} className={PRIMARY_BUTTON}>Go back</button>
@@ -190,6 +251,15 @@ export default function HumanProfilePage() {
           <button type="button" onClick={() => void refetch()} className={PRIMARY_BUTTON}>Try again</button>
           <button type="button" onClick={back} className={QUIET_BUTTON}>Go back</button>
         </Notice>
+      )}
+      {brief && (
+        <ReportUserModal
+          open={reportOpen}
+          onClose={closeReport}
+          reportedId={userId}
+          reportedDisplayName={name}
+          onBlocked={() => setBlockedInReport(true)}
+        />
       )}
     </div>
   );

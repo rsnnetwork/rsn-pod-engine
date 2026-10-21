@@ -58,6 +58,12 @@ export const ONBOARDING_V2_LIMITS = _V2_LIMITS;
 export const ONBOARDING_V2_STEPS = _V2_STEPS;
 export * from './types/post-event-message';
 export * from './identity/displayName';
+// A member's own words, as a page shows them (21 Oct 2026): one rule for the brief another member reads and for your
+// own profile. Real VALUES (functions) the client calls, so each has its own named export, same as OPENINGS above.
+import { canBring as _canBring, clip as _clip, usableAnswer as _usableAnswer } from './people/text';
+export const clip = _clip;
+export const usableAnswer = _usableAnswer;
+export const canBring = _canBring;
 export * from './types/reason';
 // Real VALUES the client renders (For You, the Human Profile), so each needs
 // its own statically analysable named export, same as OPENINGS above.

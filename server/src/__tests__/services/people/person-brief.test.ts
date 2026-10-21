@@ -20,8 +20,8 @@ jest.mock('../../../services/poke/poke.service', () => ({ getPokeWith: (...a: un
 const mockGetResponse = jest.fn();
 jest.mock('../../../services/people/person-response.service', () => ({ getResponse: (...a: unknown[]) => mockGetResponse(...a), __esModule: true }));
 
-import { getPersonBrief, listRecentConnections } from '../../../services/people/person-brief.service';
-import { PRIVATE_MEMBER_KEYS } from '../../../services/user/public-card';
+import { getOwnCard, getPersonBrief, listRecentConnections } from '../../../services/people/person-brief.service';
+import { PRIVATE_MEMBER_KEYS, toPublicMember } from '../../../services/user/public-card';
 import { NotFoundError } from '../../../middleware/errors';
 
 const VIEWER = 'a0000000-0000-4000-8000-000000000001';
@@ -119,6 +119,51 @@ describe('getPersonBrief', () => {
     const r = (await getPersonBrief(VIEWER, TARGET)).relationship;
     expect(r.passed).toBe(true);
     expect(r.saved).toBe(false);
+  });
+
+  // 21 Oct 2026: the banner is on the public card, so the Human Profile gets it with the person.
+  it('carries the person\'s banner, and null when they have none', async () => {
+    arm();
+    const bannerUrl = `https://api.example.test/api/users/${TARGET}/banner?v=1761040000000`;
+    mockGetUser.mockResolvedValue({ ...target, bannerUrl });
+    expect((await getPersonBrief(VIEWER, TARGET)).person.bannerUrl).toBe(bannerUrl);
+    mockGetUser.mockResolvedValue({ ...target, bannerUrl: null });
+    expect((await getPersonBrief(VIEWER, TARGET)).person.bannerUrl).toBeNull();
+  });
+});
+
+// 21 Oct 2026 (Stefan): "when I look at my profile, I should see my profile, how other people see it". The
+// brief refuses your own id, and keeps refusing it; your own card is its own read, and it is the public card.
+describe('getOwnCard', () => {
+  beforeEach(() => jest.clearAllMocks());
+  const me = { ...target, id: VIEWER, bannerUrl: `https://api.example.test/api/users/${VIEWER}/banner?v=1` };
+
+  it('is exactly the public card other members get of you, banner included', async () => {
+    mockGetUser.mockResolvedValue(me);
+    const card = await getOwnCard(VIEWER);
+    expect(card).toEqual(toPublicMember(me as unknown as Parameters<typeof toPublicMember>[0]));
+    expect(card.bannerUrl).toBe(me.bannerUrl);
+    expect(mockGetUser).toHaveBeenCalledWith(VIEWER);
+  });
+
+  it('carries none of your private answers: they are shown to you from your own profile, apart', async () => {
+    mockGetUser.mockResolvedValue(me);
+    const card = await getOwnCard(VIEWER);
+    for (const k of PRIVATE_MEMBER_KEYS) expect(card).not.toHaveProperty(k);
+    expect(JSON.stringify(card)).not.toMatch(/SECRET-|sarah@example\.com/);
+  });
+
+  it('reads nothing but your own row, and works for the id the brief refuses', async () => {
+    mockGetUser.mockResolvedValue(me);
+    await getOwnCard(VIEWER);
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockBlocked).not.toHaveBeenCalled();
+    await expect(getPersonBrief(VIEWER, VIEWER)).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('passes on "not found" for an account that is gone', async () => {
+    mockGetUser.mockRejectedValue(new NotFoundError('User', VIEWER));
+    await expect(getOwnCard(VIEWER)).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 

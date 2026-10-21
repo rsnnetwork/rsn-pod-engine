@@ -42,6 +42,8 @@ export interface User {
   firstName: string;
   lastName: string;
   avatarUrl: string | null;
+  /** Where the member's banner is loaded from (GET /api/users/:id/banner?v=...), or null for the default one. */
+  bannerUrl: string | null;
   bio: string | null;
   company: string | null;
   jobTitle: string | null;
@@ -95,6 +97,8 @@ export interface PublicMember {
   firstName: string;
   lastName: string;
   avatarUrl: string | null;
+  /** The banner across the top of their profile, or null for the default one. Public, like the photo. */
+  bannerUrl: string | null;
   bio: string | null;
   company: string | null;
   jobTitle: string | null;

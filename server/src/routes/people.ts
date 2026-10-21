@@ -1,5 +1,6 @@
 // ─── People (REASON milestone 1, 29 Sep 2026) ────────────────────────────────
 // GET    /people/connections/recent
+// GET    /people/me/card            (21 Oct 2026) your own public card, exactly what others see
 // GET    /people/:userId/brief
 // PUT    /people/:userId/response  { response: 'saved' | 'passed' }
 // DELETE /people/:userId/response
@@ -38,6 +39,18 @@ type OutcomeBody = z.infer<typeof outcomeBody>;
 router.get('/connections/recent', authenticate, peopleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await brief.listRecentConnections(req.user!.userId);
+    res.json({ success: true, data } as ApiResponse);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Your own profile, the way other members see it. It takes no id: it is always the signed-in member's card,
+// through the same projection the brief uses for anyone else. It sits ahead of /:userId/brief with the other
+// fixed paths; the brief goes on refusing your own id.
+router.get('/me/card', authenticate, peopleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await brief.getOwnCard(req.user!.userId);
     res.json({ success: true, data } as ApiResponse);
   } catch (err) {
     next(err);
