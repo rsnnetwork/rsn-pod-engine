@@ -14,7 +14,7 @@ import {
   BANNER_HEIGHT, BANNER_INPUT_MAX_BYTES, BANNER_QUALITY, BANNER_TYPES, BANNER_WIDTH, bannerCrop, bannerFileProblem,
 } from '../../../../client/src/features/reason/profile/banner-image';
 import {
-  ADD_COMPANY_TO, CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, needsLinkedin, privateRows, youCanBring,
+  ADD_COMPANY_TO, CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, answerLines, needsLinkedin, privateRows, youCanBring,
 } from '../../../../client/src/features/reason/profile/your-profile-text';
 import { personFacts } from '../../../../client/src/features/reason/human/profile-text';
 import { linkedinBoxValue, linkedinSave } from '../../../../client/src/features/profile/linkedin-box';
@@ -137,6 +137,20 @@ describe('Your profile: what it says', () => {
     expect(find.lines).toEqual([answerSummary(questionFor('q2')!, { ...ANSWERS, hopingToFind: ['find_customers', 'find_cofounder'] })]);
     // Never the matcher's wording for them.
     expect(JSON.stringify(privateRows(state({ lookingToMeet: ['meet_students_early_career'] })))).not.toMatch(/interns|recent graduates/);
+  });
+
+  // Fix round 1 (M-2): the profile form shows the same answers, by the same rule, for what you can offer too.
+  it('answerLines: a question\'s answers as you gave them, the specific wish on its own line, and nothing for none', () => {
+    expect(answerLines('q1', ANSWERS)).toEqual(['Investors · “bakers who sell abroad”']);
+    expect(answerLines('q2', ANSWERS)).toEqual(['Raising funding', '“A lead investor for a seed round”']);
+    expect(answerLines('q3', { ...ANSWERS, canOffer: ['offer_advice_mentoring', 'offer_other'], offerOther: ' bread classes ' }))
+      .toEqual([answerSummary(questionFor('q3')!, { ...ANSWERS, canOffer: ['offer_advice_mentoring', 'offer_other'], offerOther: ' bread classes ' })]);
+    expect(answerLines('q3', ANSWERS)[0]).not.toMatch(/as an advisor and mentor/);
+    expect(answerLines('q3', { ...ANSWERS, canOffer: [] })).toEqual([]);
+    expect(answerLines('q2', { ...ANSWERS, hopingToFind: [], findSpecific: '  ' })).toEqual([]);
+    // Your profile's private rows are made from it.
+    const [meet, find] = privateRows(state({}));
+    expect([meet.lines, find.lines]).toEqual([answerLines('q1', ANSWERS), answerLines('q2', ANSWERS)]);
   });
 
   it('says so when a question is not answered, or there is no time zone, and never falls back to anything else', () => {
@@ -390,12 +404,23 @@ describe('the old form at /profile/edit', () => {
   it('"What I can help with", "Who I want to meet" and "My intent" are shown, not edited, with Edit answers beside them', () => {
     for (const field of ANSWER_FIELDS) {
       expect(form()).not.toMatch(new RegExp(`register\\('${field}'\\)`));
-      expect(form()).toMatch(new RegExp(`value: visibleText\\(user\\.${field}\\) \\}`));
+      // Fix round 1 (M-2): never the stored text, which is the matcher's wording for them.
+      expect(form()).not.toMatch(new RegExp(`user\\.${field}\\b`));
     }
-    for (const label of ['What I can help with', 'Who I want to meet', 'My intent']) expect(form()).toContain(`label: '${label}'`);
-    expect(form()).toMatch(/import \{ EDIT_ANSWERS_TO \} from '@\/features\/reason\/profile\/your-profile-text';/);
+    // The member's own answers, by the rule Your profile uses: Q3, Q1 and Q2, from the onboarding's own state.
+    for (const [label, step] of [['What I can help with', 'q3'], ['Who I want to meet', 'q1'], ['My intent', 'q2']]) {
+      expect(form()).toContain(`{ label: '${label}', icon: `);
+      expect(form()).toMatch(new RegExp(`label: '${label}', icon: \\w+, step: '${step}' \\}`));
+    }
+    expect(form()).toMatch(/import \{ EDIT_ANSWERS_TO, answerLines \} from '@\/features\/reason\/profile\/your-profile-text';/);
+    expect(form()).toMatch(/import \{ useOnboardingV2State \} from '@\/features\/onboarding\/useOnboardingV2';/);
+    expect(form()).toMatch(/const lines = answerLines\(step, state\.data\.answers\);/);
     expect(form()).toMatch(/<Link to=\{EDIT_ANSWERS_TO\} className="[^"]*\bmin-h-\[44px\][^"]*">Edit answers<\/Link>/);
-    expect(form()).toMatch(/\{value \?\? 'Not answered yet\.'\}/);
+    expect(form()).toMatch(/\(lines\.length \? lines : \['Not answered yet\.'\]\)/);
+    // Loading and a failed load each say so; a failed one can be tried again.
+    expect(form()).toMatch(/aria-busy="true"/);
+    expect(form()).toMatch(/We could not load your answers just now\./);
+    expect(form()).toMatch(/onClick=\{\(\) => void state\.refetch\(\)\}/);
     // The two that only this form writes stay editable.
     for (const field of ['whatICareAbout', 'whyIWantToMeet']) expect(form()).toMatch(new RegExp(`register\\('${field}'\\)`));
   });

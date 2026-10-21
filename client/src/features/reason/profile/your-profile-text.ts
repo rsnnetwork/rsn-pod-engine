@@ -33,18 +33,22 @@ const some = (text: string | null): string[] => (text ? [text] : []);
  * them and never the reason given on the request form (final review, 21 Oct 2026). Then your time zone.
  */
 export function privateRows(state: { answers: OnboardingV2Answers; profile: { timezone: string | null } }): PrivateRow[] {
-  const { answers } = state;
-  const specific = visibleText(answers.findSpecific);
   const zone = visibleText(state.profile.timezone);
   return [
-    { label: 'Who you want to meet', lines: some(visibleText(answerSummary(questionFor('q1')!, answers))), empty: 'Not answered yet.' },
-    {
-      label: "What you're hoping to find",
-      lines: [...some(visibleText(answerSummary(questionFor('q2')!, answers))), ...(specific ? [`“${specific}”`] : [])],
-      empty: 'Not answered yet.',
-    },
+    { label: 'Who you want to meet', lines: answerLines('q1', state.answers), empty: 'Not answered yet.' },
+    { label: "What you're hoping to find", lines: answerLines('q2', state.answers), empty: 'Not answered yet.' },
     { label: 'Time zone', lines: some(zone && zoneLabel(zone)), empty: 'Not set yet.' },
   ];
+}
+
+/**
+ * One question's answers as you gave them, the way screen 7 shows them: the short labels with your own words in quotes,
+ * and for Q2 the specific wish on a line of its own. None when it is not answered. Your profile and the profile form
+ * (what you can offer, who you want to meet, what you are hoping to find) both show them so.
+ */
+export function answerLines(step: 'q1' | 'q2' | 'q3', answers: OnboardingV2Answers): string[] {
+  const specific = step === 'q2' ? visibleText(answers.findSpecific) : null;
+  return [...some(visibleText(answerSummary(questionFor(step)!, answers))), ...(specific ? [`“${specific}”`] : [])];
 }
 
 /**
