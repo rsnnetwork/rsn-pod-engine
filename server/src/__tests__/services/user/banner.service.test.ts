@@ -8,26 +8,23 @@ const mockConfig = { apiBaseUrl: 'https://api.example.test' };
 jest.mock('../../../config', () => ({ default: mockConfig, __esModule: true }));
 
 import {
-  BANNER_MAX_BYTES, BANNER_TYPES, bannerUrlFor, getBannerBlob, parseBannerImage, removeBanner, saveBanner,
+  BANNER_MAX_BYTES, BANNER_MAX_SIDE, BANNER_TYPES, bannerUrlFor, getBannerBlob, parseBannerImage, pictureSize,
+  removeBanner, saveBanner,
 } from '../../../services/user/banner.service';
 import { AppError } from '../../../middleware/errors';
+import { dataUrl, jpeg, jpegWithoutFrame, png, webpExtended, webpLossless, webpLossy } from '../../fixtures/pictures';
 
-const MAGIC: Record<string, number[]> = {
-  'image/jpeg': [0xff, 0xd8, 0xff, 0xe0],
-  'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
-  // RIFF, a size, then WEBP
-  'image/webp': [0x52, 0x49, 0x46, 0x46, 0x10, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50],
-};
 const GIF = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
 
-/** A file of `size` bytes that starts the way a real `kind` file does. */
+/** A banner-sized file of `size` bytes, with the header a real `kind` file has. Anything else is a GIF's start. */
 const picture = (kind: string, size = 64) => {
-  const head = MAGIC[kind] ?? GIF;
-  const bytes = Buffer.alloc(Math.max(size, head.length), 7);
-  Buffer.from(head).copy(bytes);
+  if (kind === 'image/png') return png(1500, 500, size);
+  if (kind === 'image/jpeg') return jpeg(1500, 500, size);
+  if (kind === 'image/webp') return webpLossy(1500, 500, size);
+  const bytes = Buffer.alloc(Math.max(size, GIF.length), 7);
+  Buffer.from(GIF).copy(bytes);
   return bytes;
 };
-const dataUrl = (mime: string, bytes: Buffer) => `data:${mime};base64,${bytes.toString('base64')}`;
 
 /** What parseBannerImage refused with: the status and the member's sentence. */
 function refusal(image: string): { status: number; message: string } {
@@ -106,6 +103,79 @@ describe('parseBannerImage: the size, after decoding', () => {
 
   it('says it is too big before it says what is wrong with the bytes', () => {
     expect(refusal(dataUrl('image/png', picture('image/gif', BANNER_MAX_BYTES + 10))).message).toBe(TOO_BIG);
+  });
+});
+
+// A 3 MB PNG or WebP can state an enormous size, and every phone that opens the profile would have to decode it.
+// The size is read from the file's own header, without decoding anything.
+describe('pictureSize: the width and height a picture states in its own header', () => {
+  it('reads a PNG\'s IHDR', () => {
+    expect(pictureSize(png(1500, 500), 'image/png')).toEqual({ width: 1500, height: 500 });
+    expect(pictureSize(png(70_000, 3), 'image/png')).toEqual({ width: 70_000, height: 3 });
+  });
+
+  it('reads a JPEG\'s frame header past the segments before it (APP0 and a Huffman table, which is not a frame), whichever frame kind it is', () => {
+    expect(pictureSize(jpeg(1500, 500), 'image/jpeg')).toEqual({ width: 1500, height: 500 });
+    for (const sof of [0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]) {
+      expect({ sof, size: pictureSize(jpeg(640, 480, 64, { sof }), 'image/jpeg') }).toEqual({ sof, size: { width: 640, height: 480 } });
+    }
+  });
+
+  it('steps over fill bytes between a JPEG\'s segments', () => {
+    const app0 = Buffer.from([0xff, 0xe0, 0x00, 0x04, 0x00, 0x00]);
+    expect(pictureSize(jpeg(800, 600, 64, { before: [Buffer.from([0xff, 0xff]), app0] }), 'image/jpeg')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('reads all three kinds of WebP: lossy, lossless and extended', () => {
+    expect(pictureSize(webpLossy(1500, 500), 'image/webp')).toEqual({ width: 1500, height: 500 });
+    expect(pictureSize(webpLossless(1500, 500), 'image/webp')).toEqual({ width: 1500, height: 500 });
+    expect(pictureSize(webpExtended(1500, 500), 'image/webp')).toEqual({ width: 1500, height: 500 });
+    expect(pictureSize(webpExtended(16_000, 9_000), 'image/webp')).toEqual({ width: 16_000, height: 9_000 });
+  });
+
+  it('gives nothing for a header it cannot read', () => {
+    expect(pictureSize(jpegWithoutFrame(), 'image/jpeg')).toBeNull();
+    expect(pictureSize(jpeg(1500, 500).subarray(0, 30), 'image/jpeg')).toBeNull();
+    expect(pictureSize(png(1500, 500).subarray(0, 20), 'image/png')).toBeNull();
+    const notIhdr = png(1500, 500);
+    notIhdr.write('IDAT', 12, 'latin1');
+    expect(pictureSize(notIhdr, 'image/png')).toBeNull();
+    const noStartCode = webpLossy(1500, 500);
+    noStartCode[23] = 0;
+    expect(pictureSize(noStartCode, 'image/webp')).toBeNull();
+    const otherChunk = webpLossy(1500, 500);
+    otherChunk.write('ALPH', 12, 'latin1');
+    expect(pictureSize(otherChunk, 'image/webp')).toBeNull();
+    expect(pictureSize(webpLossy(1500, 500).subarray(0, 24), 'image/webp')).toBeNull();
+  });
+});
+
+describe('parseBannerImage: at most 4096 pixels on a side', () => {
+  const TOO_MANY_PIXELS = 'Your banner can be at most 4096 by 4096 pixels.';
+  const kinds: Array<[string, string, (w: number, h: number) => Buffer]> = [
+    ['a PNG', 'image/png', png], ['a JPEG', 'image/jpeg', jpeg], ['a lossy WebP', 'image/webp', webpLossy],
+    ['a lossless WebP', 'image/webp', webpLossless], ['an extended WebP', 'image/webp', webpExtended],
+  ];
+
+  it('is 4096', () => {
+    expect(BANNER_MAX_SIDE).toBe(4096);
+  });
+
+  it.each(kinds)('keeps %s of exactly 4096 by 4096, and refuses one pixel more either way, in a sentence', (_name, mime, make) => {
+    expect(parseBannerImage(dataUrl(mime, make(4096, 4096))).mime).toBe(mime);
+    expect(refusal(dataUrl(mime, make(4097, 500)))).toEqual({ status: 400, message: TOO_MANY_PIXELS });
+    expect(refusal(dataUrl(mime, make(1500, 4097)))).toEqual({ status: 400, message: TOO_MANY_PIXELS });
+  });
+
+  it('refuses a picture whose size cannot be read, and one that says it has no pixels, as not a picture', () => {
+    expect(refusal(dataUrl('image/jpeg', jpegWithoutFrame()))).toEqual({ status: 400, message: NOT_A_PICTURE });
+    expect(refusal(dataUrl('image/png', png(0, 500)))).toEqual({ status: 400, message: NOT_A_PICTURE });
+    expect(refusal(dataUrl('image/png', png(1500, 0)))).toEqual({ status: 400, message: NOT_A_PICTURE });
+  });
+
+  it('writes nothing for a picture that is too large', async () => {
+    await expect(saveBanner('3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', dataUrl('image/png', png(9000, 3000)))).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });
 
