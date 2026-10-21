@@ -6,7 +6,9 @@
 // ones whose own wants are a strong fit for the member come first.
 //
 // Wants are private (9 Sep rule; ledger ruling R8), so the order is the ONLY effect: the same
-// people, as many as before, and the same cards word for word. These tests pin all of it.
+// people, as many as before, and the same cards word for word. The one number that could give
+// the order away is masked: a lifted card shows the highest score below it, so no score ever
+// rises down the list. Someone who passed on the member is never lifted. These tests pin all of it.
 
 const mockQuery = jest.fn();
 const mockTransaction = jest.fn();
@@ -60,7 +62,10 @@ const BILAL = profile({
   id: 'u-bilal', displayName: 'Bilal', professionalRole: ['Pastry Chef'], expertiseText: 'sourdough croissants', whoIWantToMeet: 'founders',
 });
 
-function arm(viewer: IntentProfile, candidates: IntentProfile[]) {
+/** A row as the candidates query returns it. passedOnMember: they passed on the member. */
+type Candidate = IntentProfile & { passedOnMember?: boolean | null };
+
+function arm(viewer: IntentProfile, candidates: Candidate[]) {
   mockQuery.mockImplementation((sql: string) => {
     if (/FROM sessions/.test(sql)) return Promise.resolve({ rows: [] });
     if (/WHERE u\.id = \$1/.test(sql)) return Promise.resolve({ rows: [{ ...viewer, onboardingCompleted: true }] });
@@ -68,13 +73,19 @@ function arm(viewer: IntentProfile, candidates: IntentProfile[]) {
   });
 }
 
-async function matchesFor(viewer: IntentProfile, candidates: IntentProfile[], opts: { browse?: boolean } = {}): Promise<PlatformMatch[]> {
+async function matchesFor(viewer: IntentProfile, candidates: Candidate[], opts: { browse?: boolean } = {}): Promise<PlatformMatch[]> {
   arm(viewer, candidates);
   return (await getPlatformMatches(viewer.id, opts)).matches;
 }
 
-async function orderFor(viewer: IntentProfile, candidates: IntentProfile[], opts: { browse?: boolean } = {}): Promise<string[]> {
+async function orderFor(viewer: IntentProfile, candidates: Candidate[], opts: { browse?: boolean } = {}): Promise<string[]> {
   return (await matchesFor(viewer, candidates, opts)).map(m => m.userId);
+}
+
+/** No score on the list is higher than the one above it. A failure prints the scores. */
+function expectNeverRises(ms: PlatformMatch[]) {
+  const scores = ms.map(m => m.score);
+  expect(scores).toEqual([...scores].sort((a, b) => b - a));
 }
 
 beforeEach(() => { mockQuery.mockReset(); mockTransaction.mockReset(); });
@@ -103,11 +114,14 @@ describe('the premise: who fits whom, one way and the other', () => {
 });
 
 describe('For You and Matches: people who would also want to meet you come first', () => {
-  it('a mutual fit comes first even though its one-way score is lower', async () => {
+  it('a mutual fit comes first even though its one-way score is lower, and no score shows the step', async () => {
+    expect(scoreFit(FATIMA, GITA).score).toBeLessThan(scoreFit(FATIMA, ANGEL).score); // the premise
     const matches = await matchesFor(FATIMA, [ANGEL, GITA]);
     expect(matches.map(m => m.userId)).toEqual(['u-gita', 'u-angel']);
-    // Gita is first on the order alone: the score on her own card is still the lower one.
-    expect(matches[0].score).toBeLessThan(matches[1].score);
+    // Gita's card shows Iqbal's score, not her own lower one: a score rising down the list
+    // would mark her as someone whose private wants fit Fatima.
+    expect(matches.map(m => m.score)).toEqual([1, 1]);
+    expect(matches.map(m => m.strength)).toEqual(['strong', 'strong']);
   });
 
   it('two mutual fits keep today\'s order between them, and so do the people who fit one way', async () => {
@@ -115,7 +129,7 @@ describe('For You and Matches: people who would also want to meet you come first
     expect(await orderFor(FATIMA, [OMAR, GP, MIRA, ANGEL])).toEqual(['u-mira', 'u-omar', 'u-angel', 'u-gp']);
   });
 
-  it('equal scores keep the order they were loaded in, on both sides', async () => {
+  it('equal scores keep the order they were loaded in (by id, see below), on both sides', async () => {
     const MIRA_2 = { ...MIRA, id: 'u-mira-2' };
     const ANGEL_2 = { ...ANGEL, id: 'u-angel-2' };
     expect(await orderFor(FATIMA, [ANGEL_2, MIRA_2, ANGEL, MIRA])).toEqual(['u-mira-2', 'u-mira', 'u-angel-2', 'u-angel']);
@@ -127,6 +141,67 @@ describe('For You and Matches: people who would also want to meet you come first
 
   it('browse mode puts mutual fits first too', async () => {
     expect(await orderFor(FATIMA, [MARYAM, ANGEL, GITA], { browse: true })).toEqual(['u-gita', 'u-angel', 'u-maryam']);
+  });
+});
+
+describe('the scores on the list never rise, so they cannot show who was lifted', () => {
+  it('a lifted card shows the highest score below it; the others keep their own', async () => {
+    // Today, by score: Iqbal 1, Mira 0.95, Nadia 0.6, Omar 0.56. Mira and Omar are lifted.
+    const matches = await matchesFor(FATIMA, [OMAR, GP, MIRA, ANGEL]);
+    expect(matches.map(m => [m.userId, m.score])).toEqual([['u-mira', 1], ['u-omar', 1], ['u-angel', 1], ['u-gp', 0.6]]);
+  });
+
+  it('a lifted card keeps its own score when nothing below it is higher', async () => {
+    // Today: Mira 0.95, Nadia 0.6, Omar 0.56. Omar is lifted above Nadia and shows her 0.6; Mira keeps 0.95.
+    const matches = await matchesFor(FATIMA, [OMAR, GP, MIRA]);
+    expect(matches.map(m => [m.userId, m.score])).toEqual([['u-mira', 0.95], ['u-omar', 0.6], ['u-gp', 0.6]]);
+  });
+
+  it.each([
+    ['one lifted above one', [ANGEL, GITA], false],
+    ['two lifted, loaded shuffled', [OMAR, GP, MIRA, ANGEL], false],
+    ['a Close fallback', [ANGEL, MARYAM, MAYA, GITA], false],
+    ['browse', [MARYAM, ANGEL, GITA, OMAR, GP], true],
+    ['nobody lifted', [GP, ANGEL, MARYAM], false],
+  ] as Array<[string, Candidate[], boolean]>)('%s: no score is higher than the one above it', async (_label, pool, browse) => {
+    const matches = await matchesFor(FATIMA, pool, { browse });
+    expect(matches.length).toBeGreaterThan(1); // the premise: there is a list to read
+    expectNeverRises(matches);
+  });
+});
+
+describe('someone who passed on you is not lifted, and not pushed down either', () => {
+  // Gita and Mira would want to meet Fatima on their wants alone. Here they passed on her ("not relevant").
+  it('a Pass keeps a would-be mutual fit where today\'s order puts her', async () => {
+    expect(await orderFor(FATIMA, [ANGEL, { ...GITA, passedOnMember: true }])).toEqual(['u-angel', 'u-gita']);
+  });
+
+  it('she keeps her place among the others: not lifted above them, not dropped below them', async () => {
+    // Today: Iqbal 1, Mira 0.95, Nadia 0.6, Omar 0.56. Omar is lifted; Mira passed on Fatima, so she is not.
+    expect(await orderFor(FATIMA, [OMAR, GP, { ...MIRA, passedOnMember: true }, ANGEL]))
+      .toEqual(['u-omar', 'u-angel', 'u-mira', 'u-gp']);
+  });
+
+  it('only a Pass counts: a Save, or no response at all, still lifts her', async () => {
+    expect(await orderFor(FATIMA, [ANGEL, { ...GITA, passedOnMember: false }])).toEqual(['u-gita', 'u-angel']);
+    expect(await orderFor(FATIMA, [ANGEL, { ...GITA, passedOnMember: null }])).toEqual(['u-gita', 'u-angel']);
+  });
+
+  it('the Pass is read in the candidates query itself: their own response, about the member', async () => {
+    arm(FATIMA, []);
+    await getPlatformMatches('u-fatima');
+    const candidatesSql = String(mockQuery.mock.calls.find(c => /u\.id <> \$1/.test(String(c[0])))![0]);
+    expect(candidatesSql).toMatch(/LEFT JOIN person_responses prb ON prb\.user_id = u\.id AND prb\.target_user_id = \$1/);
+    expect(candidatesSql).toMatch(/\(prb\.response = 'passed'\) AS "passedOnMember"/);
+  });
+});
+
+describe('the same order on every load', () => {
+  it('the candidates come back ordered by id, so people with equal scores never swap places', async () => {
+    arm(FATIMA, []);
+    await getPlatformMatches('u-fatima');
+    const candidatesSql = String(mockQuery.mock.calls.find(c => /u\.id <> \$1/.test(String(c[0])))![0]);
+    expect(candidatesSql).toMatch(/ORDER BY u\.id\s*$/);
   });
 });
 
@@ -207,22 +282,32 @@ describe('the same people, as many as before', () => {
 
 describe('the cards are today\'s cards, word for word', () => {
   // The same people without their wants: nobody would want to meet Fatima back, so that list is
-  // exactly the one-way rule's. With their wants, only the order may differ from it.
+  // exactly the one-way rule's. With their wants, only the order moves, and the number a lifted
+  // card shows (the scores tests above); everything else on every card is the same.
   const withoutWants = (p: IntentProfile): IntentProfile => ({ ...p, whoIWantToMeet: null, whyIWantToMeet: null, myIntent: null, goals: null });
-  const byId = (ms: PlatformMatch[]) => Object.fromEntries(ms.map(m => [m.userId, m]));
+  const withoutScore = (m: PlatformMatch) => Object.fromEntries(Object.entries(m).filter(([key]) => key !== 'score'));
+  const byId = (ms: PlatformMatch[]) => Object.fromEntries(ms.map(m => [m.userId, withoutScore(m)]));
 
   it.each([
-    ['a Close fallback, strict', [ANGEL, MARYAM, MAYA, GITA, BILAL], false, ['u-gita', 'u-angel', 'u-maryam', 'u-maya']],
-    ['a Close fallback, browse', [ANGEL, MARYAM, MAYA, GITA, BILAL], true, ['u-gita', 'u-angel', 'u-maryam', 'u-maya']],
-    ['strong fits only', [OMAR, GP, MIRA, ANGEL, BILAL], false, ['u-mira', 'u-omar', 'u-angel', 'u-gp']],
-  ])('%s: the same people with the same cards; only the order moves', async (_label, pool, browse, expected) => {
-    const mutual = await matchesFor(FATIMA, pool, { browse });
-    const oneWay = await matchesFor(FATIMA, pool.map(withoutWants), { browse });
-    expect(mutual.map(m => m.userId)).toEqual(expected);
-    expect(oneWay.map(m => m.userId)).not.toEqual(expected); // the premise: the order did move
-    expect(mutual.map(m => m.userId).sort()).toEqual(oneWay.map(m => m.userId).sort());
-    expect(byId(mutual)).toEqual(byId(oneWay));
-  });
+    ['a Close fallback, strict', [ANGEL, MARYAM, MAYA, GITA, BILAL], false, ['u-gita', 'u-angel', 'u-maryam', 'u-maya'], [1, 1, 0.35, 0.35], 1],
+    ['a Close fallback, browse', [ANGEL, MARYAM, MAYA, GITA, BILAL], true, ['u-gita', 'u-angel', 'u-maryam', 'u-maya'], [1, 1, 0.35, 0.35], 1],
+    ['strong fits only', [OMAR, GP, MIRA, ANGEL, BILAL], false, ['u-mira', 'u-omar', 'u-angel', 'u-gp'], [1, 1, 1, 0.6], 2],
+  ] as Array<[string, Candidate[], boolean, string[], number[], number]>)(
+    '%s: the same people with the same cards; only the order and a lifted card\'s score move',
+    async (_label, pool, browse, expected, scores, lifted) => {
+      const mutual = await matchesFor(FATIMA, pool, { browse });
+      const oneWay = await matchesFor(FATIMA, pool.map(withoutWants), { browse });
+      expect(mutual.map(m => m.userId)).toEqual(expected);
+      expect(oneWay.map(m => m.userId)).not.toEqual(expected); // the premise: the order did move
+      expect(mutual.map(m => m.userId).sort()).toEqual(oneWay.map(m => m.userId).sort());
+      expect(byId(mutual)).toEqual(byId(oneWay));
+      expect(mutual.map(m => m.score)).toEqual(scores);
+      // A card that was not lifted shows exactly today's score; a lifted one never shows less than its own.
+      const today = Object.fromEntries(oneWay.map(m => [m.userId, m.score]));
+      for (const m of mutual.slice(lifted)) expect(m.score).toBe(today[m.userId]);
+      for (const m of mutual.slice(0, lifted)) expect(m.score).toBeGreaterThanOrEqual(today[m.userId]);
+    },
+  );
 });
 
 describe('no new field', () => {
@@ -233,11 +318,13 @@ describe('no new field', () => {
   const PAYLOAD_KEYS = ['matches', 'nextEvent', 'profileIncomplete', 'youAreLookingFor'];
 
   it.each([false, true])('browse %s: a mutual fit\'s card has the fields every card has, and the payload has today\'s', async (browse) => {
-    arm(FATIMA, [ANGEL, GITA, MARYAM]);
+    arm(FATIMA, [ANGEL, GITA, MARYAM, { ...MIRA, passedOnMember: true }]);
     const res = await getPlatformMatches('u-fatima', { browse });
-    expect(res.matches[0].userId).toBe('u-gita'); // the premise: a mutual fit is on the list
+    expect(res.matches[0].userId).toBe('u-gita'); // the premise: a mutual fit is on the list...
+    expect(res.matches.map(m => m.userId)).toContain('u-mira'); // ...and someone who passed on Fatima
     expect(Object.keys(res).sort()).toEqual(PAYLOAD_KEYS);
     for (const m of res.matches) expect(Object.keys(m).sort()).toEqual(MATCH_KEYS);
+    expect(JSON.stringify(res)).not.toMatch(/passed/i);
   });
 
   it('nothing of a mutual fit\'s wants reaches the response', async () => {
