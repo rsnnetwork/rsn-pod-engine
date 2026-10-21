@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, BrowserContext } from '@playwright/tes
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { createPod, createSession } from '../helpers/api';
 import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
+import { profileLinkSelector } from '../helpers/profile-link';
 
 // PROD VERIFICATION — REASON v1 Phase 3a (19 Jul 2026): circles core.
 // Circle = community (WHO); pods ATTACH to circles many-to-many. Admin-created
@@ -99,9 +100,9 @@ test('circles core: admin creates, members join idempotently, detail aggregates 
   console.log('  ✓ headed: joined from the real card on mobile width.');
 
   await gotoRetry(page, `${APP}/circles/${circleId}`);
-  // The member row links to /profile/<id> — unique on the page (the sidebar's
+  // The member row links to their profile (the Human Profile on the preview) — unique on the page (the sidebar's
   // own-user chip is a bare /profile link and is hidden on mobile anyway).
-  await expect(page.locator(`a[href="/profile/${m2.id}"]`)).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(profileLinkSelector(m2.id, 'Circles'))).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('E2E Circle Event')).toBeVisible();
   await page.screenshot({ path: 'test-results/circle-detail.png' }).catch(() => {});
   console.log('  ✓ headed: detail page shows the new member + the upcoming event.');

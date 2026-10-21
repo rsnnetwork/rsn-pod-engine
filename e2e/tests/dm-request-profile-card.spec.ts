@@ -3,6 +3,7 @@ import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
+import { profileHref, profileLinkSelector, profilePage } from '../helpers/profile-link';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // W5 (7 Sep 2026, Ali must-have): a meeting request shows WHO is asking as a
@@ -74,11 +75,11 @@ test('a meeting request shows the sender as a profile card, name links to their 
   await expect(card).toContainText('Senior React Developer');
   await expect(card).toContainText('Acme Robotics');
 
-  // The name links to the sender's profile (ProfileLink → /profile/:id).
-  const profileLink = card.locator(`a[href="/profile/${sender.id}"]`);
+  // The name links to the sender's profile (ProfileLink: /profile/:id live, the Human Profile on the preview).
+  const profileLink = card.locator(profileLinkSelector(sender.id, 'Messages'));
   await expect(profileLink.first()).toBeVisible();
   // Name text is inside a profile link, not plain text.
-  await expect(card.getByText('Dana Sender')).toHaveAttribute('href', `/profile/${sender.id}`);
+  await expect(card.getByText('Dana Sender')).toHaveAttribute('href', profileHref(sender.id, 'Messages'));
 
   // Clicking it opens the sender's public profile (new tab).
   const [profileTab] = await Promise.all([
@@ -86,7 +87,7 @@ test('a meeting request shows the sender as a profile card, name links to their 
     card.getByText('Dana Sender').click(),
   ]);
   await profileTab.waitForLoadState('domcontentloaded');
-  await expect(profileTab).toHaveURL(new RegExp(`/profile/${sender.id}`));
+  await expect(profileTab).toHaveURL(profilePage(sender.id));
   await profileTab.close();
 
   // 7 Sep 2026 (Ali): the MAIN pane (not just the left band) shows the
@@ -98,6 +99,6 @@ test('a meeting request shows the sender as a profile card, name links to their 
     await expect(panel).toContainText('Senior React Developer');
     await expect(panel.getByRole('button', { name: /^Accept$/i })).toBeVisible();
     await expect(panel.getByRole('button', { name: /^Decline$/i })).toBeVisible();
-    await expect(panel.locator(`a[href="/profile/${sender.id}"]`).first()).toBeVisible();
+    await expect(panel.locator(profileLinkSelector(sender.id, 'Messages')).first()).toBeVisible();
   }
 });
