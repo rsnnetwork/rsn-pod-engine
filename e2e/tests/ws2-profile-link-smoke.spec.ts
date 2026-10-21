@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import { profileLinkSelector } from '../helpers/profile-link';
+import { skipEventCheckIn } from '../helpers/event-check-in';
 
 // HEADED smoke for WS2/S3 (name-click safety) against PRODUCTION:
 //   Alice + Bob in a live event lobby. Alice opens the participant list and
@@ -91,6 +92,8 @@ test('clicking a participant name opens the profile in a NEW tab; the event tab 
   const bobSession = await openUserPage(bob);
   const alicePage = aliceSession.page;
   await alicePage.waitForTimeout(9000); // lobby mounts
+  // The check-in question covers the top bar until it is skipped.
+  await Promise.all([skipEventCheckIn(alicePage), skipEventCheckIn(bobSession.page)]);
 
   // Open the participant list drawer (Users icon button in the top bar).
   await alicePage.locator('button:has(svg.lucide-users)').first().click();
