@@ -43,7 +43,10 @@ describe('REASON shell (milestone 1)', () => {
     expect(app).toMatch(/<ProtectedRoute><ReasonShell \/><\/ProtectedRoute>/);
     expect(app).toMatch(/<Route path="\/" element=\{<ForYouPage \/>\} \/>/);
     expect(app).toMatch(/path="\/people\/:userId"/);
-    expect(app).toMatch(/<ComingSoonPage kind="entities" \/>/);
+    // Entities is a real page now (21 Oct 2026); its profile is full screen, like the Human Profile.
+    expect(app).toMatch(/<Route path="\/entities" element=\{<EntitiesPage \/>\} \/>/);
+    expect(app).toMatch(/<Route path="\/entities\/:entityId" element=\{<ProtectedRoute><><EntityProfilePage \/><ToastContainer \/><\/><\/ProtectedRoute>\} \/>/);
+    expect(app).not.toMatch(/kind="entities"/);
     expect(app).toMatch(/<ComingSoonPage kind="introductions" \/>/);
   });
 });
@@ -251,7 +254,8 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
       /<div className="flex items-center justify-between max-\[720px\]:flex-wrap max-\[720px\]:gap-x-3 max-\[720px\]:gap-y-2">\s*<a href=\{`\/profile\/\$\{e\.otherUserId\}`\} className="flex items-center gap-3 hover:opacity-80 transition-opacity max-\[720px\]:\[overflow-wrap:anywhere\]"/,
     );
   });
-  it('the top search says it searches people, and its accessible name matches: it opens Find people, and nothing else is searched yet', () => {
+  // Entities has its own search box on its own page (21 Oct 2026); the top search still searches people only.
+  it('the top search says it searches people, and its accessible name matches: it opens Find people, and searches nothing else', () => {
     const top = read('features/reason/shell/ShellTopbar.tsx');
     expect(top).toMatch(/aria-label="Search people"/);
     expect(top).toMatch(/placeholder="Search people…"/);

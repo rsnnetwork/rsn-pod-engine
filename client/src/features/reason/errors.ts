@@ -37,7 +37,7 @@ function gotNoAnswer(err: FailedRequest): boolean {
 }
 
 /** The server's sentence, trimmed, if it is short, free of ids and in words a member would use. */
-function memberSentence(text: unknown): string | null {
+export function memberSentence(text: unknown): string | null {
   if (typeof text !== 'string') return null;
   const sentence = text.trim();
   if (!sentence || sentence.length > LONGEST_SENTENCE) return null;

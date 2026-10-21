@@ -2,11 +2,6 @@ import PageHead from '../ui/PageHead';
 import ReasonSheep from '../brand/ReasonSheep';
 
 const COPY = {
-  entities: {
-    eyebrow: 'THE NETWORK AROUND PEOPLE', title: 'Entities matter.',
-    subtitle: 'Companies, funds, projects and organisations give relationships context.', pose: 'thinking',
-    noteTitle: 'Organisations come next.', note: 'For now each person shows their company on their card and profile.',
-  },
   introductions: {
     eyebrow: 'THE HUMAN BRIDGE', title: 'Introductions create leverage.',
     subtitle: 'Make the right introduction at the right time and let REASON learn what happened.', pose: 'hopeful',
