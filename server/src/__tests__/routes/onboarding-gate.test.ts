@@ -130,6 +130,13 @@ describe('the v2 confirm does the whole job too', () => {
     expect(routes).toMatch(/fanoutUserEntity/);
   });
 
+  // Final review, 21 Oct 2026: the confirm can change the name, title and company on the member's card.
+  it('the confirm tells the screens that show the member\'s card, their own and their pods\', as a profile save does', () => {
+    const confirm = routes.slice(routes.indexOf("'/confirm'"));
+    expect(confirm).toMatch(/await fanoutProfileChange\(userId\)/);
+    expect(confirm).not.toMatch(/fanoutUserEntity/);
+  });
+
   it('every v2 route is signed-in and rate limited', () => {
     const declared = [...routes.matchAll(/router\.(get|put|post|patch|delete)\(\s*'([^']+)',([\s\S]*?)async/g)];
     expect(declared.map(m => m[2])).toEqual(['/state', '/answers', '/linkedin', '/linkedin/skip', '/confirm']);
