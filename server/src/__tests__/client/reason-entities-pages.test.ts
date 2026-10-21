@@ -24,8 +24,12 @@ describe('Entities: every query is told by the contract\'s realtime tags', () =>
     expect(page('EntityProfilePage.tsx')).toMatch(/meta: \{ entities: me && validId \? \[E\.entity\(entityId\), E\.userEntities\(me\)\] : \[\] \},/);
     expect(page('NameTaken.tsx')).toMatch(/meta: \{ entities: me \? \[E\.entity\(taken\.id\), E\.userEntities\(me\)\] : \[\] \},/);
   });
-  it('there are exactly those four queries', () => {
-    expect(files().reduce((n, { s }) => n + count(s, /\buseQuery\(/g), 0)).toBe(4);
+  it('your own entities on Your profile listen for your entities tag', () => {
+    expect(page('ProfileEntities.tsx')).toMatch(/queryKey: entityKeys\.person\(me \?\? ''\),/);
+    expect(page('ProfileEntities.tsx')).toMatch(/meta: \{ entities: me \? \[E\.userEntities\(me\)\] : \[\] \},/);
+  });
+  it('there are exactly those five queries', () => {
+    expect(files().reduce((n, { s }) => n + count(s, /\buseQuery\(/g), 0)).toBe(5);
   });
   it('a write never edits the cache by hand: it refreshes every entity screen (and the tags tell the other tabs and people)', () => {
     for (const { f, s } of files()) {
@@ -183,6 +187,35 @@ describe('Entities: the entity profile', () => {
     expect(hero).toMatch(/const site = websiteLink\(e\.website\);/);
     expect(hero).toMatch(/<a href=\{site\.href\} target="_blank" rel="noopener noreferrer nofollow ugc"/);
     expect(count(hero, /href=/g)).toBe(1);
+  });
+});
+
+describe('Entities: your own, on Your profile (brief item 5)', () => {
+  const section = () => page('ProfileEntities.tsx');
+  it('Your profile draws the section in place of the old placeholder', () => {
+    const yours = read('features/reason/profile/YourProfilePage.tsx');
+    expect(yours).toMatch(/<ProfileEntities \/>/);
+    expect(yours).not.toMatch(/Show where you work\./);
+  });
+  it('lists your entities from GET /users/<you>/entities, each opening its page with role and title, as the Human Profile does', () => {
+    expect(section()).toMatch(/queryFn: \(\) => fetchPersonEntities\(me \?\? ''\),/);
+    expect(section()).toMatch(/<EntityRows entities=\{entities\} \/>/);
+    const rows = page('EntityRows.tsx');
+    expect(rows).toMatch(/to=\{`\/entities\/\$\{e\.id\}`\}/);
+    expect(rows).toMatch(/roleLine\(e\.role, e\.title\)/);
+    // One drawing for both: the Human Profile's list is the same component.
+    expect(read('features/reason/human/ProfileDetails.tsx')).toMatch(/<EntityRows entities=\{entities\} linkClassName=\{KEEP_CLEAR\} \/>/);
+  });
+  it('always offers "Add your company", to the create sheet', () => {
+    expect(section()).toMatch(/to=\{ADD_COMPANY_TO\}/);
+    expect(section()).toMatch(/>Add your company</);
+  });
+  it('has a loading, an empty and an error state; an API without the route (the live one, until it ships) reads as none', () => {
+    expect(section()).toMatch(/aria-busy="true"/);
+    expect(section()).toMatch(/Show where you work\./);
+    expect(section()).toMatch(/We could not load your entities just now\./);
+    expect(section()).toMatch(/onClick=\{\(\) => void mine\.refetch\(\)\}/);
+    expect(section()).toMatch(/statusOf\(mine\.error\) === 404/);
   });
 });
 

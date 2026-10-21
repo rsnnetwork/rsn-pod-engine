@@ -263,7 +263,11 @@ interface EntityApi {
   archiveEntity: (id: string) => Promise<unknown>;
   setMyEntityRole: (id: string, role: string, title?: string | null) => Promise<unknown>;
   leaveEntity: (id: string) => Promise<unknown>;
-  entityKeys: { all: readonly string[]; list: (t: string) => readonly string[]; page: (id: string) => readonly string[] };
+  fetchPersonEntities: (userId: string) => Promise<unknown>;
+  entityKeys: {
+    all: readonly string[]; list: (t: string) => readonly string[]; page: (id: string) => readonly string[];
+    person: (userId: string) => readonly string[];
+  };
 }
 
 function loadEntityApi(): { api: EntityApi; exported: string[]; calls: RecordedCall[] } {
@@ -299,6 +303,7 @@ describe('the entities api: the contract\'s addresses, an id is data and never p
     await api.setMyEntityRole(ID, 'advisor', 'Chair');
     await api.setMyEntityRole(ID, 'advisor');
     await api.leaveEntity(ID);
+    await api.fetchPersonEntities(ID);
     expect(calls).toEqual([
       { method: 'GET', url: '/entities', config: { params: {} } },
       { method: 'GET', url: '/entities', config: { params: { q: 'acme' } } },
@@ -310,6 +315,8 @@ describe('the entities api: the contract\'s addresses, an id is data and never p
       // A title left out keeps the one on record (the contract), so it is not sent as null.
       { method: 'POST', url: `/entities/${ID}/members`, body: { role: 'advisor' }, config: undefined },
       { method: 'DELETE', url: `/entities/${ID}/members/me`, config: undefined },
+      // A person's own entities (Your profile reads yours).
+      { method: 'GET', url: `/users/${ID}/entities`, config: undefined },
     ]);
   });
   it('puts an id into every address as one encoded segment', async () => {
@@ -319,9 +326,10 @@ describe('the entities api: the contract\'s addresses, an id is data and never p
     await api.archiveEntity(crafted);
     await api.setMyEntityRole(crafted, 'member');
     await api.leaveEntity(crafted);
+    await api.fetchPersonEntities(crafted);
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       `GET /entities/${encoded}`, `PATCH /entities/${encoded}`, `DELETE /entities/${encoded}`,
-      `POST /entities/${encoded}/members`, `DELETE /entities/${encoded}/members/me`,
+      `POST /entities/${encoded}/members`, `DELETE /entities/${encoded}/members/me`, `GET /users/${encoded}/entities`,
     ]);
   });
   it('keys every query under one root, so a write can refresh them all at once', () => {
@@ -329,10 +337,12 @@ describe('the entities api: the contract\'s addresses, an id is data and never p
     expect(api.entityKeys.all).toEqual(['reason', 'entities']);
     expect(api.entityKeys.list('acme')).toEqual(['reason', 'entities', 'list', 'acme']);
     expect(api.entityKeys.page(ID)).toEqual(['reason', 'entities', 'page', ID]);
+    expect(api.entityKeys.person(ID)).toEqual(['reason', 'entities', 'person', ID]);
   });
   it('exports exactly what the pages import', () => {
     expect(loadEntityApi().exported).toEqual([
-      'archiveEntity', 'createEntity', 'entityKeys', 'fetchEntities', 'fetchEntity', 'leaveEntity', 'setMyEntityRole', 'updateEntity',
+      'archiveEntity', 'createEntity', 'entityKeys', 'fetchEntities', 'fetchEntity', 'fetchPersonEntities', 'leaveEntity',
+      'setMyEntityRole', 'updateEntity',
     ]);
   });
 });

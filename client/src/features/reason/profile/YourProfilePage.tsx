@@ -13,12 +13,12 @@ import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal
 import { cn } from '@/lib/utils';
 import ReasonSheep from '../brand/ReasonSheep';
 import { DarkPanel, HeroFrame, NoteBox, Offer } from '../human/ProfileHero';
-import { Section } from '../human/ProfileDetails';
 import { personFacts } from '../human/profile-text';
 import { errorMessage, fetchMyCard, fetchMyProfile, reasonKeys } from '../api';
+import ProfileEntities from '../entities/ProfileEntities';
 import BannerEditor from './BannerEditor';
 import {
-  ADD_COMPANY_TO, CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, needsLinkedin, privateRows, youCanBring,
+  CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, needsLinkedin, privateRows, youCanBring,
 } from './your-profile-text';
 
 const PAGE = 'mx-auto grid w-full max-w-[1284px] gap-[11px] md:gap-[18px]';
@@ -98,10 +98,7 @@ export default function YourProfilePage() {
 
       {/* Side by side, each card keeps its own height: stretched, the short company card was a blank box beside the answers. */}
       <div className="grid grid-cols-[minmax(0,1fr)] gap-[11px] min-[981px]:grid-cols-2 min-[981px]:items-start min-[981px]:gap-[18px]">
-        <Section kicker="Entities & roles" title="Show where you work.">
-          <p className={BODY}>Add your company and your role in it. Members see it on your profile.</p>
-          <Link to={ADD_COMPANY_TO} className={cn(QUIET, 'mt-3.5 w-fit')}>Add your company</Link>
-        </Section>
+        <ProfileEntities />
 
         <section className="min-w-0 rounded-[19px] border border-reason-line bg-white p-[17px] md:rounded-[24px] md:p-6" aria-labelledby="only-you">
           <p className="text-[11px] font-extrabold uppercase tracking-[0.11em]">Your answers</p>

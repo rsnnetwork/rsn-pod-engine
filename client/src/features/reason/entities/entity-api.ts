@@ -1,7 +1,9 @@
 // client/src/features/reason/entities/entity-api.ts
 // Everything the Entities pages read and write: the routes of the entities contract (Task 10, 21 Oct 2026).
 import api from '@/lib/api';
-import type { CreateEntityResult, EntityList, EntityMembershipResult, EntityPage, EntityRole, LeaveEntityResult } from '@rsn/shared';
+import type {
+  CreateEntityResult, EntityList, EntityMembershipResult, EntityPage, EntityRole, LeaveEntityResult, PersonEntity,
+} from '@rsn/shared';
 import type { EntityChanges, NewEntityBody } from './entity-form';
 
 // Under the REASON root, so everything REASON caches can be refreshed together; `all` refreshes every entity screen.
@@ -9,11 +11,16 @@ export const entityKeys = {
   all: ['reason', 'entities'] as const,
   list: (term: string) => ['reason', 'entities', 'list', term] as const,
   page: (id: string) => ['reason', 'entities', 'page', id] as const,
+  person: (userId: string) => ['reason', 'entities', 'person', userId] as const,
 };
 
 // An id is one encoded segment of an address. A route parameter arrives decoded, so a crafted one would otherwise be
 // read as another route.
 const entitySegment = (id: string) => encodeURIComponent(id);
+
+/** A person's own entities, with their role and title in each. Your own id gives yours (Your profile). */
+export const fetchPersonEntities = (userId: string) =>
+  api.get(`/users/${entitySegment(userId)}/entities`).then((r) => r.data.data as PersonEntity[]);
 
 /** Your entities, and others: a name search from 2 characters (searchTerm), else the most recently active. */
 export const fetchEntities = (term: string) =>
