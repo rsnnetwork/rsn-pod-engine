@@ -869,3 +869,67 @@ describe('runEnrichment', () => {
     });
   });
 });
+
+// Fix round 1 (21 Oct 2026): every state the job writes says which address its
+// lookup ran for, so onboarding v2 never reads an earlier address's "not found"
+// as the answer for the one on the member's profile now.
+describe('runEnrichment: the address each state is written with', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockConfig.enrichProvider = 'scrapingdog';
+    mockConfig.scrapingdogApiKey = 'sd-key';
+    mockConfig.anthropicApiKey = 'anthropic-key';
+    mockGetCachedEnrichment.mockResolvedValue(null);
+    mockGetEnrichmentState.mockResolvedValue({ status: 'none', source: null, error: null, startedAt: null, completedAt: null });
+    mockSetEnrichmentState.mockResolvedValue(undefined);
+    mockSaveEnrichedCandidate.mockResolvedValue(undefined);
+    mockRecordStageEvent.mockResolvedValue(undefined);
+    mockGetClient.mockReturnValue({
+      messages: { create: jest.fn().mockResolvedValue({ content: [{ type: 'text', text: '{}' }] }) },
+    });
+  });
+  const writes = () => mockSetEnrichmentState.mock.calls.map(([, s]) => s as { status: string; linkedinUrl?: string | null });
+
+  it('searching and found both carry the address looked up', async () => {
+    mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+    await runEnrichment('u1', { linkedinUrl: 'linkedin.com/in/Jane-Doe/', fullName: 'Jane Doe' });
+    expect(writes()).toEqual([
+      expect.objectContaining({ status: 'searching', linkedinUrl: REQ_URL }),
+      expect.objectContaining({ status: 'found', linkedinUrl: REQ_URL }),
+    ]);
+  });
+
+  it('not found and failed carry it too', async () => {
+    mockScrapingdogEnrich.mockResolvedValue({ kind: 'not_found', reason: 'scrapingdog 404' });
+    await runEnrichment('u1', { linkedinUrl: REQ_URL });
+    expect(writes()[1]).toMatchObject({ status: 'not_found', linkedinUrl: REQ_URL });
+    jest.clearAllMocks();
+    mockGetEnrichmentState.mockResolvedValue({ status: 'none', source: null, error: null, startedAt: null, completedAt: null });
+    mockScrapingdogEnrich.mockResolvedValue({ kind: 'provider_error', reason: 'scrapingdog 500' });
+    await runEnrichment('u1', { linkedinUrl: REQ_URL });
+    expect(writes()[1]).toMatchObject({ status: 'failed', linkedinUrl: REQ_URL });
+  });
+
+  it('a crash after the address was known still says which address', async () => {
+    mockScrapingdogEnrich.mockRejectedValue(new Error('unexpected crash'));
+    await runEnrichment('u1', { linkedinUrl: REQ_URL });
+    expect(writes()[writes().length - 1]).toMatchObject({ status: 'failed', linkedinUrl: REQ_URL });
+  });
+
+  it('a fresh cached result is reflected with the address IT was looked up for', async () => {
+    mockGetCachedEnrichment.mockResolvedValue(foundResult());
+    await runEnrichment('u1', { linkedinUrl: null });
+    expect(writes()).toEqual([expect.objectContaining({ status: 'found', linkedinUrl: REQ_URL })]);
+  });
+
+  it('no address anywhere, or lookups switched off, is a lookup for no address', async () => {
+    await runEnrichment('u1', { linkedinUrl: null });
+    expect(writes()).toEqual([expect.objectContaining({ status: 'not_found', linkedinUrl: null })]);
+    jest.clearAllMocks();
+    mockGetEnrichmentState.mockResolvedValue({ status: 'none', source: null, error: null, startedAt: null, completedAt: null });
+    mockConfig.enrichProvider = 'none';
+    await runEnrichment('u1', { linkedinUrl: REQ_URL });
+    // Not "not found for that address": switched back on, the address is looked up again.
+    expect(writes()).toEqual([expect.objectContaining({ status: 'not_found', linkedinUrl: null })]);
+  });
+});

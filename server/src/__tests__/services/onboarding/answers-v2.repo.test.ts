@@ -37,7 +37,7 @@ const stateRow = (over: Record<string, unknown> = {}) => ({
   onboarding_intent: null, looking_to_meet: [], can_offer: [], self_kinds: [], hoping_to_find: [],
   meet_other: null, find_other: null, find_specific: null, offer_other: null, self_other: null,
   draft: null, enriched: null, enrichment_status: null, enrichment_started_at: null, enrichment_completed_at: null,
-  preload: null,
+  lookup_url: null, preload: null, last_onboarded_at: null,
   ...over,
 });
 
@@ -140,6 +140,26 @@ describe('getState', () => {
       status: 'found',
       prefill: { displayName: 'Jane Doe', photoUrl: null, jobTitle: 'Angel Investor', company: 'Northwind', industry: 'Finance', location: 'Oslo', selfGuess: 'self_investor' },
     });
+  });
+
+  // Fix round 1 (Important 2): "not found" belongs to the address it was for.
+  it('a not-found for an earlier address is never reported for the address on the profile now', async () => {
+    const s = await answer({
+      linkedin_url: 'https://www.linkedin.com/in/jane-new', enrichment_status: 'not_found',
+      enrichment_completed_at: new Date(NOW), lookup_url: 'https://www.linkedin.com/in/jane-old',
+    });
+    expect(s.linkedin).toEqual({ status: 'none' });
+    const same = await answer({
+      linkedin_url: 'https://www.linkedin.com/in/jane-old', enrichment_status: 'not_found',
+      enrichment_completed_at: new Date(NOW), lookup_url: 'https://www.linkedin.com/in/jane-old',
+    });
+    expect(same.linkedin).toEqual({ status: 'not_found' });
+  });
+
+  it('reads the address the last lookup ran for', async () => {
+    mockQuery.mockResolvedValue({ rows: [stateRow()] });
+    await getState('u-1');
+    expect(mockQuery.mock.calls[0][0]).toMatch(/inferred_profile->'lastLookup'->>'linkedinUrl' AS lookup_url/);
   });
 
   it('the tour is due only for someone who has just finished', async () => {
