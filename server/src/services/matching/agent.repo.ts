@@ -177,7 +177,14 @@ export async function updateAgent(
   return r.rows[0] ? mapAgent(r.rows[0]) : null;
 }
 
-/** Pause, resume or archive. Archiving stamps archived_at — never a hard delete. */
+/**
+ * Pause, resume or archive. Archiving stamps archived_at — never a hard delete.
+ *
+ * 21 Oct 2026: a status change here is the member's own (or onboarding bringing
+ * back a search it paused), so it clears intent.pausedBy. Onboarding v2 only
+ * resumes a search that still carries that mark, so a member's own pause is
+ * never undone by a confirm.
+ */
 export async function setStatus(
   agentId: string,
   userId: string,
@@ -187,6 +194,7 @@ export async function setStatus(
     `UPDATE matching_agents
         SET status = $3,
             archived_at = CASE WHEN $3 = 'archived' THEN NOW() ELSE NULL END,
+            intent = COALESCE(intent, '{}'::jsonb) - 'pausedBy',
             updated_at = NOW()
       WHERE id = $1 AND user_id = $2
       RETURNING id, user_id, label, want_text, matching_tags, status,
@@ -369,6 +377,27 @@ export async function listOnboardingAgents(userId: string): Promise<OnboardingAg
   }));
 }
 
+/**
+ * Onboarding v2 pauses a search whose kind the member no longer ticks, and
+ * marks it (intent.pausedBy = 'onboarding') so that only a search it paused
+ * itself is brought back when the kind is ticked again. Only a search that is
+ * searching is paused; ownership is in the WHERE clause.
+ */
+export async function pauseForOnboarding(agentId: string, userId: string): Promise<MatchingAgent | null> {
+  const r = await query<AgentRow>(
+    `UPDATE matching_agents
+        SET status = 'paused',
+            intent = COALESCE(intent, '{}'::jsonb) || '{"pausedBy":"onboarding"}'::jsonb,
+            updated_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND status = 'active'
+      RETURNING id, user_id, label, want_text, matching_tags, status,
+                last_matched_at, created_at, updated_at,
+                ${counts('matching_agents')}`,
+    [agentId, userId],
+  );
+  return r.rows[0] ? mapAgent(r.rows[0]) : null;
+}
+
 /** New words for a search, and the record of which words they were. Ownership is in the WHERE clause. */
 export async function rewordAgent(
   agentId: string,
@@ -376,8 +405,13 @@ export async function rewordAgent(
   input: { label: string; wantText: string; intent: Record<string, unknown> },
 ): Promise<MatchingAgent | null> {
   const r = await query<AgentRow>(
+    // Who paused it is not part of its words: the mark survives a rewording.
     `UPDATE matching_agents
-        SET label = $3, want_text = $4, intent = $5::jsonb, updated_at = NOW()
+        SET label = $3, want_text = $4,
+            intent = $5::jsonb || CASE WHEN intent ? 'pausedBy'
+                                       THEN jsonb_build_object('pausedBy', intent->'pausedBy')
+                                       ELSE '{}'::jsonb END,
+            updated_at = NOW()
       WHERE id = $1 AND user_id = $2
       RETURNING id, user_id, label, want_text, matching_tags, status,
                 last_matched_at, created_at, updated_at,
