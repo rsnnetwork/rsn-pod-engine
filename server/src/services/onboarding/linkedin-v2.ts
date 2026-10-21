@@ -194,12 +194,27 @@ async function adoptPreload(userId: string, preload: Preload): Promise<void> {
   });
 }
 
+/** The address on the member's profile now, and their name, for a lookup that waited its turn. */
+async function currentAddress(userId: string): Promise<{ linkedin_url: string | null; display_name: string | null } | null> {
+  const r = await query<{ linkedin_url: string | null; display_name: string | null }>(
+    `SELECT linkedin_url, display_name FROM users WHERE id = $1`,
+    [userId],
+  );
+  return r.rows[0] ?? null;
+}
+
 /** Fire-and-forget: runEnrichment never throws and writes every state itself. */
 function startLookup(userId: string, linkedinUrl: string, fullName: string | null, afterTheRunningOne: boolean): void {
-  const run = () => runEnrichment(userId, { linkedinUrl, fullName: fullName || undefined });
+  const run = (url: string, name: string | null) => runEnrichment(userId, { linkedinUrl: url, fullName: name || undefined });
   // runEnrichment hands back the lookup already running for this member, so
-  // the second call is the one that actually looks this address up.
-  const job = afterTheRunningOne ? run().then(run) : run();
+  // the call after it is the one that actually looks an address up. By then
+  // the member may have changed the address again: look up the one their
+  // profile holds at that moment, so a run of changes ends on the last one.
+  const job = afterTheRunningOne
+    ? run(linkedinUrl, fullName)
+      .then(() => currentAddress(userId))
+      .then(now => (now?.linkedin_url ? run(now.linkedin_url, now.display_name) : undefined))
+    : run(linkedinUrl, fullName);
   job
     // The screens learn the outcome from the member's own entity tag.
     .then(() => fanoutUserEntity(userId))
