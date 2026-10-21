@@ -58,7 +58,10 @@ export const ROLE_TAXONOMY: RoleBucket[] = [
   { key: 'hr', label: 'HR and people leads', is: /\b(hr|human resources|people (lead|ops|officer|partner)|recruit(er|ing|ment)?|talent)s?\b/ },
   { key: 'product_manager', label: 'product and project managers', is: /\b(product manager|project manager|programme manager|program manager|product owner|scrum master)s?\b/ },
   { key: 'manufacturer', label: 'manufacturers and suppliers', is: /\b(manufacturer|supplier|factory|fabricator|distributor)s?\b/ },
-  { key: 'consultant', label: 'consultants', is: /\b(consultant|freelanc|contractor)s?\b/ },
+  // 21 Oct 2026: this read "freelanc" followed by a word boundary, which no
+  // real word has, so "freelancer" was never a consultant. Onboarding v2 asks
+  // "I am a freelancer or consultant", so each form is named.
+  { key: 'consultant', label: 'consultants', is: /\b(consultant|freelancer|freelance|freelancing|contractor)s?\b/ },
   { key: 'ceo', label: 'CEOs', is: /\b(ceo|chief executive)s?\b/ },
   { key: 'executive', label: 'executives', is: /\b(cto|cfo|coo|cmo|cso|cco|chief|c[-\s]?suite|executive)s?\b/ },
   {

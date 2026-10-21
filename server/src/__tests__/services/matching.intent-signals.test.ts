@@ -1,5 +1,6 @@
 import {
   normalizeDesignation,
+  designationsWanted,
   designationAffinity,
   tokenizeTerms,
   termOverlap,
@@ -34,6 +35,34 @@ describe('normalizeDesignation', () => {
     expect(normalizeDesignation('')).toBeNull();
     expect(normalizeDesignation(null)).toBeNull();
     expect(normalizeDesignation('Wizard')).toBeNull();
+  });
+
+  // 21 Oct 2026: the consultant bucket read /freelanc\b/, which no real word
+  // ends at, so "freelancer" fell through to nothing. Onboarding v2 asks
+  // "I am a freelancer or consultant", so the word has to be understood.
+  it.each(['Freelancer', 'Freelancers', 'Freelance writer', 'Freelancing', 'freelance', 'Independent consultant', 'Contractor'])(
+    '%s is a consultant',
+    (title) => {
+      expect(normalizeDesignation(title)).toBe('consultant');
+    },
+  );
+
+  it('keeps a freelance developer a developer: the more specific kind still wins', () => {
+    expect(normalizeDesignation('Freelance Developer')).toBe('developer');
+    expect(normalizeDesignation('Freelance Designer')).toBe('designer');
+  });
+});
+
+describe('designationsWanted (freelance)', () => {
+  it.each(['freelancers', 'a freelancer', 'freelance help', 'people freelancing'])(
+    'a search for %s asks for consultants',
+    (text) => {
+      expect(designationsWanted(text).map((d) => d.key)).toContain('consultant');
+    },
+  );
+
+  it('a word that only starts the same way is not a freelancer', () => {
+    expect(designationsWanted('freelancement').map((d) => d.key)).not.toContain('consultant');
   });
 });
 

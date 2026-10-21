@@ -264,3 +264,80 @@ describe('an agent card accounts for everyone inside it', () => {
     expect(a?.askedCount).toBe(1);
   });
 });
+
+describe('the searches onboarding made (onboarding v2, 21 Oct 2026)', () => {
+  it('lists only the member\'s own, and only the ones onboarding made, with where each came from', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [
+      row({ id: 'a-1', intent: { source: 'onboarding_v2', meetKey: 'meet_investors' } }),
+      row({ id: 'a-2', intent: { source: 'tickbox_v1', meetKey: 'investors' }, status: 'paused' }),
+    ] });
+    const agents = await repo.listOnboardingAgents('u-1');
+    expect(agents).toEqual([
+      { id: 'a-1', label: 'Developers', wantText: 'senior react developers', status: 'active', intent: { source: 'onboarding_v2', meetKey: 'meet_investors' } },
+      { id: 'a-2', label: 'Developers', wantText: 'senior react developers', status: 'paused', intent: { source: 'tickbox_v1', meetKey: 'investors' } },
+    ]);
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/WHERE user_id = \$1/);
+    expect(sql).toMatch(/intent->>'source' IN \('tickbox_v1', 'onboarding_v2'\)/);
+    expect(params).toEqual(['u-1']);
+  });
+
+  it('a missing origin reads as none', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ intent: null })] });
+    const [a] = await repo.listOnboardingAgents('u-1');
+    expect(a.intent).toEqual({});
+  });
+
+  it('rewords one search, its origin included, and only the caller\'s own', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ label: 'Potters in Graz', want_text: 'potters in Graz' })] });
+    const a = await repo.rewordAgent('a-1', 'u-1', {
+      label: 'Potters in Graz', wantText: 'potters in Graz',
+      intent: { source: 'onboarding_v2', meetKey: 'meet_other', text: 'potters in Graz' },
+    });
+    expect(a?.label).toBe('Potters in Graz');
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/WHERE id = \$1 AND user_id = \$2/);
+    expect(sql).toMatch(/intent = \$5::jsonb/);
+    expect(params.slice(0, 4)).toEqual(['a-1', 'u-1', 'Potters in Graz', 'potters in Graz']);
+    expect(JSON.parse(params[4] as string)).toEqual({ source: 'onboarding_v2', meetKey: 'meet_other', text: 'potters in Graz' });
+  });
+
+  it('rewording someone else\'s search finds nothing', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await repo.rewordAgent('a-1', 'u-2', { label: 'x', wantText: 'x', intent: {} })).toBeNull();
+  });
+});
+
+describe('who paused a search (fix round 1, 21 Oct 2026)', () => {
+  it('onboarding pausing a search marks it as paused by onboarding, and only pauses one that is searching', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ status: 'paused' })] });
+    const a = await repo.pauseForOnboarding('a-1', 'u-1');
+    expect(a?.status).toBe('paused');
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/SET status = 'paused'/);
+    expect(sql).toMatch(/intent = COALESCE\(intent, '\{\}'::jsonb\) \|\| '\{"pausedBy":"onboarding"\}'::jsonb/);
+    expect(sql).toMatch(/WHERE id = \$1 AND user_id = \$2 AND status = 'active'/);
+    expect(params).toEqual(['a-1', 'u-1']);
+  });
+
+  it('a search that was not searching is not paused by onboarding', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await repo.pauseForOnboarding('a-1', 'u-1')).toBeNull();
+  });
+
+  it('any other status change, the member\'s own included, clears that mark', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ status: 'paused' })] });
+    await repo.setStatus('a-1', 'u-1', 'paused');
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/intent = COALESCE\(intent, '\{\}'::jsonb\) - 'pausedBy'/);
+  });
+});
+
+describe('rewording keeps who paused it', () => {
+  it('the pausedBy mark survives new words', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row()] });
+    await repo.rewordAgent('a-1', 'u-1', { label: 'x', wantText: 'x', intent: { source: 'onboarding_v2', meetKey: 'meet_other', text: 'x' } });
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/CASE WHEN intent \? 'pausedBy'/);
+  });
+});

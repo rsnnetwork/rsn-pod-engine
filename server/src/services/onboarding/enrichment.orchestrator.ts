@@ -60,7 +60,7 @@ const PROVIDER_DEADLINE_MS = 150 * 1000;
  *  actually running" rather than a crashed attempt that never reached a
  *  terminal state. See the module-level in-flight guard below for layer (i).
  *  Longer than the provider deadline: a live attempt always terminal-s first. */
-const SEARCHING_LOCK_MS = 3 * 60 * 1000;
+export const SEARCHING_LOCK_MS = 3 * 60 * 1000;
 
 /** Race the provider against the job deadline. A late answer is logged and dropped. */
 function withDeadline(run: Promise<ProviderOutcome>, userId: string): Promise<ProviderOutcome> {
@@ -249,6 +249,9 @@ export function runEnrichment(userId: string, input: RunEnrichmentInput): Promis
 async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Promise<void> {
   const startedAtMs = Date.now();
   let provider: EnrichProviderName = 'none';
+  // The address this attempt looks up, once it is known: every state written
+  // below says which address it is about (enrichment.repo, lastLookup).
+  let lookupUrl: string | null = null;
   try {
     provider = resolveEnrichProvider();
 
@@ -281,7 +284,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     const cached = await getCachedEnrichment(userId).catch(() => null);
     if (isFreshCacheHit(cached, linkedinUrl)) {
       const status = statusFromResult(cached);
-      await writeState(userId, { status });
+      await writeState(userId, { status, linkedinUrl: cached!.requestedLinkedinUrl ?? linkedinUrl });
       logTerminal(userId, provider, status, startedAtMs, { cacheHit: true });
       // The LinkedIn photo is OFFERED to the member on the confirm step and
       // never applied here (23 Sep 2026, Shradha's "they confirm it"; a match
@@ -298,21 +301,24 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // happened to arrive with an empty body. Only when there is truly no URL
     // anywhere (this call AND no cached anchor) do we give up.
     const resolvedLinkedinUrl = linkedinUrl || cached?.requestedLinkedinUrl || null;
+    lookupUrl = resolvedLinkedinUrl;
 
     // Step 2: no URL resolvable at all, or enrichment deliberately killed.
     if (!resolvedLinkedinUrl) {
-      await writeState(userId, { status: 'not_found', error: 'no linkedin url', source: null });
+      await writeState(userId, { status: 'not_found', error: 'no linkedin url', source: null, linkedinUrl: null });
       logTerminal(userId, provider, 'not_found', startedAtMs, { reason: 'no linkedin url' });
       return;
     }
     if (provider === 'none') {
-      await writeState(userId, { status: 'not_found', error: null, source: null });
+      // Switched off is not an answer about the address: none is recorded, so
+      // it is looked up again once lookups are back on.
+      await writeState(userId, { status: 'not_found', error: null, source: null, linkedinUrl: null });
       logTerminal(userId, provider, 'not_found', startedAtMs);
       return;
     }
 
     // Step 3: searching.
-    await writeState(userId, { status: 'searching', source: provider });
+    await writeState(userId, { status: 'searching', source: provider, linkedinUrl: resolvedLinkedinUrl });
     logger.info({ userId, slug: linkedinSlug(resolvedLinkedinUrl), provider }, 'enrichment searching');
     recordStageEvent(userId, 'enrich_started', { provider }).catch(() => {});
 
@@ -342,7 +348,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
       await saveEnrichedCandidate(userId, result).catch((err) =>
         logger.warn({ err, userId }, 'enrichment: saveEnrichedCandidate failed (non-fatal)'),
       );
-      await writeState(userId, { status: kind, source: provider });
+      await writeState(userId, { status: kind, source: provider, linkedinUrl: resolvedLinkedinUrl });
       // The LinkedIn photo is OFFERED on the confirm step, never applied here
       // (23 Sep 2026 — see services/onboarding/linkedin-photo.ts). With none at
       // all, a public Gravatar for their own email may exist.
@@ -354,7 +360,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Step 7: not_found / retry_exhausted / provider_error.
     tryGravatar(userId).catch(() => {});
     const { status, error } = mapFailureOutcome(outcome);
-    await writeState(userId, { status, error, source: provider });
+    await writeState(userId, { status, error, source: provider, linkedinUrl: resolvedLinkedinUrl });
     logTerminal(userId, provider, status, startedAtMs, error ? { reason: sanitizeErrorMessage(error) } : undefined);
   } catch (err) {
     // Never throws: any unexpected failure still lands in a terminal, visible
@@ -365,6 +371,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
       status: 'failed',
       error: crashReason,
       source: provider === 'none' ? null : provider,
+      linkedinUrl: lookupUrl,
     });
     logTerminal(userId, provider, 'failed', startedAtMs, { crashed: true, reason: crashReason });
   }
