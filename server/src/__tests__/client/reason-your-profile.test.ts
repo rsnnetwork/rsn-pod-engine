@@ -152,6 +152,21 @@ describe('Your profile: what it says', () => {
     expect(needsLinkedin({ linkedinUrl: 'https://linkedin.com/in/nora' })).toBe(false);
   });
 
+  // Fix round 1 (M-3): any stored text hid the card, while the hero links only an https address on LinkedIn, so a junk or
+  // http address left the member with neither a link nor the way to add one. The card follows the hero's own parse.
+  it('the LinkedIn card shows whenever the hero has no LinkedIn link to show: an http address or text that is no link too', () => {
+    for (const linkedinUrl of ['http://www.linkedin.com/in/nora', 'not a link', 'linkedin.com/in/nora', 'https://evil.example/in/nora', 'javascript:alert(1)']) {
+      expect({ linkedinUrl, card: needsLinkedin({ linkedinUrl }) }).toEqual({ linkedinUrl, card: true });
+    }
+    for (const linkedinUrl of ['https://www.linkedin.com/in/nora', 'https://www.linkedin.com/in/jane?utm_source=share&utm_medium=ios_app', 'https://uk.linkedin.com/in/nora/']) {
+      expect({ linkedinUrl, card: needsLinkedin({ linkedinUrl }) }).toEqual({ linkedinUrl, card: false });
+    }
+    // The very parse the hero links with.
+    for (const linkedinUrl of [null, 'http://www.linkedin.com/in/nora', 'https://www.linkedin.com/in/nora', 'junk']) {
+      expect(needsLinkedin({ linkedinUrl })).toBe(personFacts(person({ linkedinUrl })).linkedin === null);
+    }
+  });
+
   // Final review (C2): "Edit answers" opened the first question alone, a dead end. It opens screen 7, with every
   // answer's [Edit].
   it('every link goes where the brief says, and Edit answers opens every answer, on screen 7', () => {

@@ -3,6 +3,7 @@
 // so a test can run it: server/src/__tests__/client/reason-your-profile.test.ts.
 import { canBring, type OnboardingV2Answers, type PublicMember } from '@rsn/shared';
 import { answerSummary, questionFor, zoneLabel } from '../../onboarding/flow';
+import { linkedinLink } from '../human/profile-text';
 import { visibleText } from '../person';
 
 export const EDIT_PROFILE_TO = '/profile/edit';
@@ -46,5 +47,8 @@ export function privateRows(state: { answers: OnboardingV2Answers; profile: { ti
   ];
 }
 
-/** The card that asks for LinkedIn shows only while there is none on your card. */
-export const needsLinkedin = (card: Pick<PublicMember, 'linkedinUrl'>): boolean => !visibleText(card.linkedinUrl);
+/**
+ * The card that asks for LinkedIn shows while the hero has no LinkedIn link to show: none on your card, or one it will
+ * not link to (an http address, text that is no link). The same parse as the hero's (fix round 1, 21 Oct 2026).
+ */
+export const needsLinkedin = (card: Pick<PublicMember, 'linkedinUrl'>): boolean => linkedinLink(card.linkedinUrl) === null;
