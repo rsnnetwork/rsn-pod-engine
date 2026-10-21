@@ -34,7 +34,9 @@ export default function ShellSidebar({ unreadCount }: { unreadCount: number }) {
   return (
     <aside className="fixed inset-y-0 left-0 z-20 hidden w-[calc(82px+env(safe-area-inset-left))] flex-col border-r border-reason-line bg-white pb-[calc(14px+env(safe-area-inset-bottom))] pl-[calc(14px+env(safe-area-inset-left))] pr-3.5 pt-4 min-[721px]:flex min-[981px]:w-[calc(232px+env(safe-area-inset-left))]">
       <div className="flex h-[52px] shrink-0 items-center justify-center pb-2 min-[981px]:justify-start">
-        <Link to="/" aria-label="REASON home" className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl px-2">
+        {/* The rail's 53px of room holds the 40px sheep only with 4px of padding a side: with 8px the link shrinks and
+            the picture is squeezed to 37px. The sidebar has room for the wider padding. */}
+        <Link to="/" aria-label="REASON home" className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl px-1 min-[981px]:px-2">
           <ReasonMark variant="rail" />
         </Link>
       </div>
