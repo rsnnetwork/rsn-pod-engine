@@ -119,6 +119,37 @@ describe('getState', () => {
     expect(s.answers.lookingToMeet).toEqual(['meet_investors']);
   });
 
+  // Fix round 1 (M4): an edit-mode screen saves a draft and redraws from the
+  // state. A draft saved after the member's last confirm is the newest thing
+  // they said, so it is what they see; an older one, or one with no time, is not.
+  const finished = {
+    onboarding_status: 'completed', onboarding_version: 2, last_onboarded_at: new Date(NOW - 60_000),
+    looking_to_meet: ['meet_investors'], hoping_to_find: ['find_funding'], can_offer: ['offer_investment'], self_kinds: ['self_investor'],
+  };
+
+  it('a completed member\'s draft saved after their last confirm is what the screens show', async () => {
+    const s = await answer({ ...finished, draft: { canOffer: ['offer_introductions'], step: 'q3', savedAt: new Date(NOW).toISOString() } });
+    expect(s.answers.canOffer).toEqual(['offer_introductions']);
+    // Every question the draft did not touch is what they have.
+    expect(s.answers.lookingToMeet).toEqual(['meet_investors']);
+    expect(s.step).toBe('q3');
+  });
+
+  it('a draft from before their last confirm does not override what they have', async () => {
+    const s = await answer({ ...finished, draft: { canOffer: ['offer_introductions'], savedAt: new Date(NOW - 120_000).toISOString() } });
+    expect(s.answers.canOffer).toEqual(['offer_investment']);
+  });
+
+  it('the database clock\'s own format is read (microseconds and an offset)', async () => {
+    const s = await answer({ ...finished, last_onboarded_at: new Date('2026-10-21T05:40:12.100Z'), draft: { canOffer: ['offer_introductions'], savedAt: '2026-10-21T10:40:12.123456+05:00' } });
+    expect(s.answers.canOffer).toEqual(['offer_introductions']);
+  });
+
+  it('the time stamp never shows up as an answer', async () => {
+    const s = await answer({ ...finished, draft: { canOffer: ['offer_introductions'], savedAt: new Date(NOW).toISOString() } });
+    expect(JSON.stringify(s.answers)).not.toMatch(/savedAt/);
+  });
+
   it('words are only shown with the option they belong to', async () => {
     const s = await answer({
       onboarding_status: 'completed', onboarding_version: 2,
@@ -186,6 +217,12 @@ describe('saveDraft', () => {
     mockQuery.mockReset();
     mockTx.mockReset();
     mockTx.mockResolvedValue({ rows: [] });
+  });
+
+  it('stamps the draft with when it was saved, by the database clock', async () => {
+    await saveDraft('u-1', { canOffer: ['offer_introductions'] });
+    const call = mockTx.mock.calls.find(c => /INSERT INTO user_intent_profiles/.test(c[0] as string))!;
+    expect((call[0] as string).match(/jsonb_build_object\('savedAt', NOW\(\)\)/g)).toHaveLength(2);
   });
 
   it('merges into the v2 draft, leaving anything else in the draft alone', async () => {
