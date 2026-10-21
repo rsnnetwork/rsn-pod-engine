@@ -18,7 +18,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   INVALID_INVITE: 'The invite code is invalid or expired.',
   REGISTRATION_BLOCKED: 'You need an approved join request to sign up. Please request to join first.',
   ACCOUNT_CLOSED: 'This account was closed. Ask to join again, and you can sign in as soon as you are approved.',
-  USER_SUSPENDED: 'This account is suspended. Please contact the RSN team if you think this is a mistake.',
+  USER_SUSPENDED: 'This account is suspended. Please contact the REASON team if you think this is a mistake.',
 };
 
 export default function LoginPage() {
@@ -128,9 +128,9 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-white p-4 font-display">
       <div className="w-full max-w-md animate-fade-in-up">
-        {/* RSN Logo + Header */}
+        {/* REASON logo + header */}
         <div className="text-center mb-10">
-          <img src="/rsn-logo.png" alt="RSN" className="h-14 w-auto mx-auto mb-6" />
+          <img src="/reason-logo.png" alt="REASON" width={204} height={44} className="h-11 w-auto mx-auto mb-6" />
           <h1 className="text-3xl md:text-4xl font-extrabold text-[#1a1a2e] tracking-tight">CONNECT WITH REASON</h1>
           {hasInvite && (
             <p className="mt-4 text-sm text-gray-500">You&apos;ve been invited — sign in to accept your invite</p>
@@ -184,6 +184,7 @@ export default function LoginPage() {
                   label="Email address"
                   type="email"
                   placeholder="you@example.com"
+                  className="min-h-[44px]"
                   error={errors.email?.message}
                   {...register('email', { required: 'Email is required', pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: 'Invalid email' } })}
                 />
@@ -199,10 +200,10 @@ export default function LoginPage() {
             {!hasInvite && (
               <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-6 text-center">
                 <h2 className="text-base font-semibold text-[#1a1a2e] mb-2">New here? Request access</h2>
-                <p className="text-sm text-gray-500 mb-4">RSN is invite-only. Apply and we&apos;ll review your request.</p>
+                <p className="text-sm text-gray-500 mb-4">REASON is invite-only. Apply and we&apos;ll review your request.</p>
                 <button
                   onClick={() => navigate('/request-to-join')}
-                  className="bg-rsn-red text-white px-6 py-2.5 rounded-full text-sm font-semibold hover:bg-rsn-red-hover transition-all hover:scale-[1.02] shadow-md inline-flex items-center gap-2"
+                  className="bg-rsn-red text-white px-6 py-2.5 min-h-[44px] rounded-full text-sm font-semibold hover:bg-rsn-red-hover transition-all hover:scale-[1.02] shadow-md inline-flex items-center gap-2"
                 >
                   Request to Join <ArrowRight className="h-4 w-4" />
                 </button>
@@ -239,7 +240,7 @@ export default function LoginPage() {
               </div>
             )}
 
-            <button onClick={() => setSent(false)} className="text-sm text-gray-400 hover:text-gray-600 transition-colors">
+            <button onClick={() => setSent(false)} className="min-h-[44px] px-3 text-sm text-gray-400 hover:text-gray-600 transition-colors">
               Try a different email
             </button>
           </div>

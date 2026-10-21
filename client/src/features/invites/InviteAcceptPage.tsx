@@ -173,7 +173,7 @@ export default function InviteAcceptPage() {
   if (loading) return <PageLoader />;
 
   const InviteIcon = invite?.type === 'session' ? Calendar : invite?.type === 'circle' ? CircleDashed : Users;
-  const inviteLabel = invite?.type === 'pod' ? 'a pod' : invite?.type === 'session' ? 'an event' : invite?.type === 'circle' ? 'a circle' : 'RSN';
+  const inviteLabel = invite?.type === 'pod' ? 'a pod' : invite?.type === 'session' ? 'an event' : invite?.type === 'circle' ? 'a circle' : 'REASON';
 
   // Derive display values from enriched invite data
   const targetName = invite?.sessionTitle || invite?.podName || invite?.circleName;

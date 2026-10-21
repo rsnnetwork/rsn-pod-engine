@@ -298,7 +298,7 @@ export default function InvitesPage() {
             {receivedInvites.map((inv: any) => {
               const typeConf = TYPE_CONFIG[inv.type] || TYPE_CONFIG.platform;
               const TypeIcon = typeConf.icon;
-              const targetName = inv.podName || inv.sessionTitle || 'RSN Platform';
+              const targetName = inv.podName || inv.sessionTitle || 'REASON';
               return (
                 <Card key={inv.id} className="border-rsn-red-200 bg-rsn-red-light/30">
                   <div className="flex items-center justify-between">
@@ -355,7 +355,7 @@ export default function InvitesPage() {
                 onChange={e => { setInviteType(e.target.value); setPodId(''); setSessionId(''); setCircleId(''); }}
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
               >
-                <option value="platform">Platform Invite (someone new to Reason)</option>
+                <option value="platform">Platform Invite (new to REASON)</option>
                 <option value="pod">Pod Invite</option>
                 <option value="session">Event Invite</option>
                 <option value="circle">Circle Invite</option>

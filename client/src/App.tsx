@@ -209,7 +209,7 @@ export default function App() {
       <Route element={<ProtectedRoute><ReasonShell /></ProtectedRoute>}>
         <Route path="/" element={<ForYouPage />} />
         <Route path="/entities" element={<ComingSoonPage kind="entities" />} />
-        <Route path="/introductions" element={<ComingSoonPage kind="introductions" />} />
+        <Route path="/introductions" element={<Navigate to="/" replace />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/profile/:userId" element={<PublicProfilePage />} />
         <Route path="/pods" element={<PodsPage />} />

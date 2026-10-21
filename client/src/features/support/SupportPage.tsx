@@ -14,8 +14,8 @@ import { E } from '@/realtime/entities';
 const faqs = [
   { q: 'How do I join a pod?', a: 'Go to the Pods page, browse available pods, and click "Join" on one that interests you. Or create your own pod.' },
   { q: 'How does matching work?', a: 'During live events, our matching engine pairs you with other participants for 1:1 video conversations. Each round, you get a new partner.' },
-  { q: 'What is the unlock system?', a: 'Invite others to RSN. Each accepted invite unlocks more pod slots. 1 invite = 1 pod, 3 invites = 3 pods.' },
-  { q: 'What if someone is selling during an event?', a: 'RSN has a strict no-selling policy. Report the user and they\'ll receive a strike. Three strikes = permanent ban.' },
+  { q: 'What is the unlock system?', a: 'Invite others to REASON. Each accepted invite unlocks more pod slots. 1 invite = 1 pod, 3 invites = 3 pods.' },
+  { q: 'What if someone is selling during an event?', a: 'REASON has a strict no-selling policy. Report the user and they\'ll receive a strike. Three strikes = permanent ban.' },
   { q: 'How do I become a host?', a: 'Hosts are assigned by admins. Contact support if you\'d like to host events for your community.' },
 ];
 
@@ -77,7 +77,7 @@ export default function SupportPage() {
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-rsn-red" />
             <div>
-              <h2 className="font-semibold text-[#1a1a2e]">How RSN works</h2>
+              <h2 className="font-semibold text-[#1a1a2e]">How REASON works</h2>
               <p className="text-sm text-gray-500">
                 A minute on suggestions, matches, meetings, circles and events.
               </p>

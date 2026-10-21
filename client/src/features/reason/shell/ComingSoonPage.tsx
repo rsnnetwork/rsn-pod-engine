@@ -7,11 +7,6 @@ const COPY = {
     subtitle: 'Companies, funds, projects and organisations give relationships context.', pose: 'thinking',
     noteTitle: 'Organisations come next.', note: 'For now each person shows their company on their card and profile.',
   },
-  introductions: {
-    eyebrow: 'THE HUMAN BRIDGE', title: 'Introductions create leverage.',
-    subtitle: 'Make the right introduction at the right time and let REASON learn what happened.', pose: 'hopeful',
-    noteTitle: 'Introductions come in a later step.', note: 'Meeting requests you send and receive are in Messages.',
-  },
 } as const;
 
 export default function ComingSoonPage({ kind }: { kind: keyof typeof COPY }) {

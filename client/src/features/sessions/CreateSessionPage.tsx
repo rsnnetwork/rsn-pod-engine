@@ -32,7 +32,7 @@ const MATCHING_POLICIES = [
   {
     value: 'platform_wide' as const,
     label: 'Platform-wide no rematch',
-    description: 'Strictest. If two people have ever met before anywhere on RSN, they will never be matched again.',
+    description: 'Strictest. If two people have ever met before anywhere on REASON, they will never be matched again.',
     hint: 'Best for large-scale discovery events.',
   },
   {

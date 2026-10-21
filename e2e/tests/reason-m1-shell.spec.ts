@@ -6,9 +6,11 @@
 //                      1280, 1440 and 1920; the right navigation for the width; the official
 //                      sheep logo; every navigation target at least 44px
 //   2  phone bar       up to 720px: For You, People, Events, Messages, More; the More sheet
-//                      lists Entities, Circles, Pods, Introductions, Settings, Support and
+//                      lists Entities, Circles, Pods, Settings, Support and
 //                      each one navigates
-//   3  breakpoints     720 / 721 and 980 / 981: where the bar, the icon rail (eight named icons,
+//  2b  Introductions   no tab and no More tile (the client dropped it on 19 Oct); the old
+//                      /introductions address lands on For You
+//   3  breakpoints     720 / 721 and 980 / 981: where the bar, the icon rail (seven named icons,
 //                      no words) and the full sidebar (labels) start and stop
 //   4  People          the four people pages sit under one row of four tabs
 //   5  top search      opens Find people with the words already typed
@@ -61,10 +63,10 @@ let unfinished: TestUser;
 
 // ── The shell's own vocabulary (client/src/features/reason/shell/nav.ts) ─────────────────────
 
-const MAIN = ['For You', 'People', 'Entities', 'Circles', 'Pods', 'Events', 'Messages', 'Introductions'];
+const MAIN = ['For You', 'People', 'Entities', 'Circles', 'Pods', 'Events', 'Messages'];
 const SUB = ['Profile', 'Settings', 'Support'];
 const BAR = ['For You', 'People', 'Events', 'Messages', 'More'];
-const MORE = ['Entities', 'Circles', 'Pods', 'Introductions', 'Settings', 'Support'];
+const MORE = ['Entities', 'Circles', 'Pods', 'Settings', 'Support'];
 const PEOPLE_TABS = [
   { to: '/search', label: 'Find people' },
   { to: '/agents', label: 'Your searches' },
@@ -236,15 +238,38 @@ async function expectTapSize(targets: Array<{ name: string; loc: Locator }>, whe
   expect(bad, `${where}: targets under 44px\n${bad.join('\n')}`).toEqual([]);
 }
 
-// The official sheep mark, loaded, from /rsn-sheep.png.
+// The official sheep mark with its outline grown so the face reads when small, loaded, from /reason-mark-small.png; and the
+// mark is the sheep and the word REASON on one line, centred on each other, with nothing beside them (19 Oct: no small "RSN").
 async function expectOfficialLogo(page: Page, where: string): Promise<void> {
-  const logo = page.locator('img[src="/rsn-sheep.png"]:visible').first();
+  const logo = page.locator('img[src="/reason-mark-small.png"]:visible').first();
   await expect(logo, `${where}: the official sheep logo is not on screen`).toBeVisible();
   // On screen is not loaded: the picture can still be arriving (it was not, once, at 721px on the preview), so it is waited for.
   await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0), {
-    message: `${where}: /rsn-sheep.png did not load`,
+    message: `${where}: /reason-mark-small.png did not load`,
     timeout: 10_000,
   }).toBe(true);
+  const mark = await logo.evaluate((img: HTMLImageElement) => {
+    const box = img.parentElement as HTMLElement;
+    const word = box.querySelector('strong');
+    const pic = img.getBoundingClientRect();
+    const w = word ? word.getBoundingClientRect() : null;
+    return {
+      name: box.getAttribute('aria-label'),
+      words: (box.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      sheep: { top: pic.top, bottom: pic.bottom, right: pic.right, width: pic.width, height: pic.height },
+      // The rail (721 to 980px) hides the word, and a hidden box has no size.
+      word: w && w.width > 0 ? { top: w.top, bottom: w.bottom, left: w.left } : null,
+    };
+  });
+  expect(mark.name, `${where}: the mark's accessible name`).toBe('REASON');
+  expect(mark.words, `${where}: the mark says REASON and nothing else (no small RSN)`).toBe('REASON');
+  // Its full box, 40x30 on the sidebar and the rail and 34x26 on a phone. On the rail it was once squeezed to 37px wide.
+  const phone = (page.viewportSize()?.width ?? 0) <= 720;
+  expect([Math.round(mark.sheep.width), Math.round(mark.sheep.height)], `${where}: the sheep's box`).toEqual(phone ? [34, 26] : [40, 30]);
+  if (!mark.word) return;
+  const off = Math.abs((mark.sheep.top + mark.sheep.bottom) / 2 - (mark.word.top + mark.word.bottom) / 2);
+  expect(off, `${where}: the sheep and REASON share a centre line (off by ${off.toFixed(1)}px)`).toBeLessThanOrEqual(1);
+  expect(mark.word.left, `${where}: REASON sits to the right of the sheep, on its line`).toBeGreaterThanOrEqual(mark.sheep.right);
 }
 
 // The navigation that belongs to this width, and none of the other two.
@@ -273,13 +298,14 @@ async function expectChrome(page: Page, width: number, where: string): Promise<v
   await expect(bar, `${where}: the phone bar must be gone above 720px`).toBeHidden();
 
   const links = aside.getByRole('navigation', { name: 'Main' }).getByRole('link');
-  await expect(links, `${where}: eight main entries`).toHaveCount(8);
+  await expect(links, `${where}: seven main entries`).toHaveCount(7);
+  await expect(aside.getByRole('link', { name: 'Introductions' }), `${where}: no Introductions tab`).toHaveCount(0);
   // An entry is named by its label; Messages adds its unread count when there is one ("Messages, 3 unread").
   expect(await links.evaluateAll((els) => els.map((e) => (e.getAttribute('aria-label') ?? '').replace(/, \d+ unread$/, ''))), `${where}: every entry is named`).toEqual(MAIN);
   const words = (await links.evaluateAll((els) => els.map((e) => (e as HTMLElement).innerText.trim())));
   if (mode === 'rail') {
     expect(words, `${where}: the rail shows icons, not words`).toEqual(MAIN.map(() => ''));
-    await expect(aside.getByRole('navigation', { name: 'Main' }).locator('svg'), `${where}: one icon per entry`).toHaveCount(8);
+    await expect(aside.getByRole('navigation', { name: 'Main' }).locator('svg'), `${where}: one icon per entry`).toHaveCount(7);
     const rail = await aside.boundingBox();
     expect(rail && Math.round(rail.width), `${where}: the rail is 82px wide`).toBe(82);
   } else {
@@ -336,7 +362,7 @@ test.afterAll(async () => {
 
 test('1 every width: no sideways scroll, the right navigation, the official logo, 44px targets', async () => {
   test.setTimeout(1_500_000);
-  const routes = ['/', '/entities', '/introductions', '/search', '/circles', '/sessions', '/messages', '/settings'];
+  const routes = ['/', '/entities', '/search', '/circles', '/sessions', '/messages', '/settings'];
   const problems: string[] = [];
   const label = engineLabel().replace(/[^a-z0-9]+/gi, '-');
 
@@ -437,7 +463,6 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
         { label: 'Entities', url: /\/entities$/, see: () => page.getByRole('heading', { name: 'Entities matter.' }) },
         { label: 'Circles', url: /\/circles$/, see: () => page.getByRole('heading', { name: 'Circles', level: 1 }) },
         { label: 'Pods', url: /\/pods$/, see: () => page.getByRole('main').getByRole('heading', { level: 1 }) },
-        { label: 'Introductions', url: /\/introductions$/, see: () => page.getByRole('heading', { name: 'Introductions create leverage.' }) },
         { label: 'Settings', url: /\/settings$/, see: () => page.getByRole('heading', { name: 'Settings', level: 1 }) },
         { label: 'Support', url: /\/support$/, see: () => page.getByRole('heading', { name: 'Support', level: 1 }) },
       ];
@@ -477,6 +502,47 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
+// 2b. The Introductions tab is gone (19 Oct)
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+test('2b Introductions: no tab, no More tile, and the old address lands on For You', async () => {
+  test.setTimeout(300_000);
+  for (const size of sizes([{ width: 390, height: 844 }, { width: 1280, height: 800 }])) {
+    const where = `${size.width}x${size.height}`;
+    const phone = modeOf(size.width) === 'phone';
+    await using(member, size, async ({ page, errors }) => {
+      // A bookmark or an old link must not land on a missing page: it goes to For You, and For You is the current page.
+      await visit(page, '/introductions', size.width);
+      await expect.poll(() => new URL(page.url()).pathname, { message: `${where}: /introductions lands on For You` }).toBe('/');
+      const current = phone
+        ? page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'For You' })
+        : sidebar(page).getByRole('link', { name: 'For You', exact: true });
+      await expect(current, `${where}: For You is the current page`).toHaveAttribute('aria-current', 'page');
+      await expect(page.getByText('Introductions create leverage.'), `${where}: the old page is not drawn`).toHaveCount(0);
+      await expectContained(page, `${where} after the redirect`);
+
+      if (phone) {
+        const more = page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'More' });
+        const sheet = page.getByRole('dialog', { name: 'More' });
+        await more.click();
+        await expect(sheet, `${where}: the More sheet opens`).toBeVisible();
+        // Exactly the five that are left, in order, and then the member's own link: no extra tile, and no hole where one went.
+        const links = (await sheet.locator('a').allInnerTexts()).map((t) => t.trim());
+        expect(links.slice(0, MORE.length), `${where}: the More tiles`).toEqual(MORE);
+        expect(links[MORE.length], `${where}: the member's own link follows the tiles`).toContain('View profile');
+        await expect(sheet.getByRole('link', { name: 'Introductions' }), `${where}: no Introductions in More`).toHaveCount(0);
+        await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${size.width}-more-without-introductions.png`) });
+        await page.keyboard.press('Escape');
+      } else {
+        await expect(sidebar(page).getByRole('link', { name: 'Introductions' }), `${where}: no Introductions in the sidebar`).toHaveCount(0);
+      }
+      console.log(`  ✓ ${where}: /introductions lands on For You, and no Introductions anywhere in the navigation.`);
+      expect(errors, `${where}: script errors`).toEqual([]);
+    });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
 // 3. Breakpoints: the bar, the rail and the sidebar
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -502,7 +568,7 @@ test('3 breakpoints: bar to 720px, named icons 721 to 980px, labels from 981px',
         ? null
         : sidebar(page).getByRole('link', { name: 'Circles', exact: true });
       if (circles) await expect(circles, `${where}: Circles is the current page`).toHaveAttribute('aria-current', 'page');
-      console.log(`  ✓ ${where}: ${modeOf(size.width) === 'phone' ? 'five-tab bar' : modeOf(size.width) === 'rail' ? 'rail with eight named icons and no words' : 'sidebar with labels'}.`);
+      console.log(`  ✓ ${where}: ${modeOf(size.width) === 'phone' ? 'five-tab bar' : modeOf(size.width) === 'rail' ? 'rail with seven named icons and no words' : 'sidebar with labels'}.`);
       expect(errors, `${where}: script errors`).toEqual([]);
     });
   }
