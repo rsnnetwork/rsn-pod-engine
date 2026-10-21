@@ -192,6 +192,28 @@ describe('POST /entities', () => {
     nothingCalled();
   });
 
+  // Final review, 21 Oct 2026: the database counts characters, and the check counted UTF-16 units, so a
+  // name of one emoji or one rare Chinese character got past it and the database answered with a 500.
+  it.each([
+    ['an emoji', '😀'],
+    ['one character from CJK Extension B', '𠀀'],
+  ])('refuses a name of one character beyond the basic plane (%s) in words, before the service', async (_what, name) => {
+    const res = await request(app).post('/entities').set(as(`u-astral-${name.codePointAt(0)}`)).send({ ...body, name });
+    expect(res.status).toBe(400);
+    expect(res.body.error.details).toEqual({ name: ['Give the entity a name of at least 2 characters.'] });
+    nothingCalled();
+  });
+
+  it('takes two such characters, and 200 of them, and refuses 201', async () => {
+    const who = as('u-astral-lengths');
+    expect((await request(app).post('/entities').set(who).send({ ...body, name: '😀😀' })).status).toBe(201);
+    expect(mockCreate).toHaveBeenLastCalledWith('u-astral-lengths', expect.objectContaining({ name: '😀😀' }));
+    expect((await request(app).post('/entities').set(who).send({ ...body, name: '𠀀'.repeat(200) })).status).toBe(201);
+    const tooLong = await request(app).post('/entities').set(who).send({ ...body, name: '𠀀'.repeat(201) });
+    expect(tooLong.status).toBe(400);
+    expect(tooLong.body.error.details).toEqual({ name: ['Keep the name to 200 characters.'] });
+  });
+
   it('answers 409 with the id of the entity that already has the name, and tells no screens', async () => {
     mockCreate.mockRejectedValueOnce(
       new ConflictError(ErrorCodes.ENTITY_NAME_TAKEN, 'Acme Ltd is already on REASON.', { existingId: [OLD] }),
@@ -278,6 +300,7 @@ describe('PATCH /entities/:id', () => {
     ['nothing to change', {}],
     ['a name of null', { name: null }],
     ['a one-letter name', { name: 'A' }],
+    ['a name of one emoji', { name: '🚀' }],
     ['a kind of null', { kind: null }],
     ['an unknown kind', { kind: 'empire' }],
     ['a javascript: website', { website: 'javascript:alert(1)' }],

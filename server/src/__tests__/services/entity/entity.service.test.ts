@@ -150,6 +150,36 @@ describe('createEntity', () => {
     expect(mockTransaction).not.toHaveBeenCalled();
   });
 
+  // Final review, 21 Oct 2026: the database counts characters (length(btrim(name)) >= 2, VARCHAR(200)),
+  // and the check counted UTF-16 units, so one character beyond the basic plane (an emoji, a rare
+  // Chinese character) passed it, the database refused it, and the member got a 500.
+  it.each([
+    ['an emoji alone', '😀'],
+    ['one character from CJK Extension B', '𠀀'],
+    ['an emoji with spaces around it', '  👍  '],
+  ])('counts characters, not units: %s is one character, and too short', async (_what, name) => {
+    const err = await caught(createEntity(ME, { ...input, name }));
+    expect(err).toMatchObject({
+      statusCode: 400, code: 'VALIDATION_ERROR', details: { name: ['Give the entity a name of at least 2 characters.'] },
+    });
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('takes a name of two characters from beyond the basic plane, and one of 200', async () => {
+    tx([[/INSERT INTO entities/, [{ id: ENTITY }]]]);
+    await createEntity(ME, { ...input, name: '😀😀' });
+    expect(callTo(mockTx, /INSERT INTO entities/)![1][0]).toBe('😀😀');
+    mockTx.mockClear();
+    tx([[/INSERT INTO entities/, [{ id: ENTITY }]]]);
+    await createEntity(ME, { ...input, name: '𠀀'.repeat(200) });
+    expect(callTo(mockTx, /INSERT INTO entities/)![1][0]).toBe('𠀀'.repeat(200));
+  });
+
+  it('refuses 201 characters, counted as characters', async () => {
+    const err = await caught(createEntity(ME, { ...input, name: '𠀀'.repeat(201) }));
+    expect(err).toMatchObject({ statusCode: 400, details: { name: ['Keep the name to 200 characters.'] } });
+  });
+
   describe('the creator\'s profile company', () => {
     it.each([...COMPANY_ROLES])('is filled with the entity\'s name when it is empty and they are its %s', async (role) => {
       tx([[/INSERT INTO entities/, [{ id: ENTITY }]], [/UPDATE users/, { rows: [], rowCount: 1 }]]);
@@ -350,6 +380,13 @@ describe('updateEntity', () => {
     expect(callTo(mockTx, SAME_NAME)![1]).toEqual(['Acme Group', ENTITY]);
     expect(sqlOf(mockTx).find(s => SAME_NAME.test(s))).toMatch(/id <> \$2::uuid/);
     expect(callTo(mockTx, /UPDATE entities/)![1]).toEqual([ENTITY, 'Acme Group']);
+  });
+
+  it('a rename to one character beyond the basic plane is too short, and nothing is written', async () => {
+    tx(admin(true));
+    const err = await caught(updateEntity(ME, ENTITY, { name: '😀' }, false));
+    expect(err).toMatchObject({ statusCode: 400, details: { name: ['Give the entity a name of at least 2 characters.'] } });
+    expect(ran(mockTx, /UPDATE entities/)).toBe(false);
   });
 
   it('refuses a name another active entity has, says which one, and writes nothing', async () => {

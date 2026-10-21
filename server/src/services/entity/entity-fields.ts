@@ -10,6 +10,15 @@ export function normaliseName(typed: string): string {
   return typed.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * How many characters a name has, counted as the database counts them (length() and VARCHAR(200) count
+ * characters). A string's .length counts UTF-16 units, so one emoji or one rare Chinese character counts 2:
+ * a name of just one of them passed a .length check of "at least 2" and the database refused it.
+ */
+export function characterCount(text: string): number {
+  return Array.from(text).length;
+}
+
 /** Optional text as stored: trimmed, and an answer with nothing in it is null. */
 export function blankToNull(typed: string | null): string | null {
   const text = typed?.trim() ?? '';
