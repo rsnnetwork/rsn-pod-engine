@@ -1,8 +1,8 @@
 // client/src/features/reason/for-you/ForYouRail.tsx
-// Real data only. No "Suggested entities" (no organisations yet) and no event
-// photo (events have none): nothing is invented. A card shows a skeleton until its
-// answer arrives and says so if it cannot; "none yet" is only said once the server
-// has answered that there is none.
+// Real data only. No "Suggested entities" (nothing suggests an entity yet) and no
+// event photo (events have none): nothing is invented. A card shows a skeleton until
+// its answer arrives and says so if it cannot; "none yet" is only said once the
+// server has answered that there is none.
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { fetchRecentConnections, personName, reasonKeys, type ForYouPayload } from '../api';
+import { personHref } from '../human/profile-text';
 import { firstCharacter } from './firstCharacter';
 
 // GET /pods?status=active: the pods the member is in, each with its live member count.
@@ -104,13 +105,15 @@ export default function ForYouRail({ nextEvent, failed }: Props) {
         ))}
       </RailCard>
 
-      <RailCard title="Recent introductions" to="/messages" all="introductions" load={loadOf(recent.data, cannotAnswer(recent))}>
+      {/* The people a meeting request between you and them was accepted with (final review, 21 Oct 2026: it was named
+          after a tab the client dropped, and opened Messages). View all opens Your connections. */}
+      <RailCard title="Recent connections" to="/connections" all="connections" load={loadOf(recent.data, cannotAnswer(recent))}>
         {recent.data?.length === 0 ? (
           <p className={NOTE}>When someone accepts a meeting request, they show up here.</p>
         ) : recent.data?.map((r) => {
           const name = personName(r.displayName);
           return (
-            <Link key={r.userId} to={`/people/${r.userId}?from=Introductions`} className={ROW}>
+            <Link key={r.userId} to={personHref(r.userId, 'Connections')} className={ROW}>
               {/* The photo repeats the name beside it, so a screen reader skips it. */}
               <span aria-hidden="true" className="flex"><Avatar src={r.avatarUrl} name={name} size="sm" className="h-[38px] w-[38px]" /></span>
               <span className="min-w-0">

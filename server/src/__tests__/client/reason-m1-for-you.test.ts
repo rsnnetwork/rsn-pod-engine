@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { CONNECTION_LOST, errorMessage } from '../../../../client/src/features/reason/errors';
 import { firstCharacter } from '../../../../client/src/features/reason/for-you/firstCharacter';
+import { personHref } from '../../../../client/src/features/reason/human/profile-text';
 
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
 const read = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../client/src', rel), 'utf8').replace(/\r\n/g, '\n');
@@ -227,26 +228,33 @@ describe('For You: the rail', () => {
     expect(src).toMatch(/E\.userPods\(userId\)/);
   });
 
-  it('a pod\'s initial is its first whole character, one member reads "1 member", and a blank introduction name reads as "Member"', () => {
+  it('a pod\'s initial is its first whole character, one member reads "1 member", and a blank connection name reads as "Member"', () => {
     const src = withoutComments(rail());
     expect(src).toMatch(/\{firstCharacter\(p\.name\)\}/);
     expect(src).toMatch(/p\.memberCount === 1 \? '1 member' : `\$\{p\.memberCount\} members`/);
     expect(src).toMatch(/personName\(r\.displayName\)/);
   });
 
-  it('a row is read once: the pod\'s initial and the introduction\'s photo are decoration beside the name, so a screen reader skips them', () => {
+  it('a row is read once: the pod\'s initial and the connection\'s photo are decoration beside the name, so a screen reader skips them', () => {
     const src = withoutComments(rail());
     expect(src).toMatch(/<span aria-hidden="true" className="[^"]*">\{firstCharacter\(p\.name\)\}<\/span>/);
     expect(src).toMatch(/<span aria-hidden="true"[^>]*><Avatar [^>]*\/><\/span>/);
   });
 
-  it('every "View all" says what it opens (the visible words stay inside the name): people, events, pods, introductions', () => {
+  // Final review, 21 Oct 2026 (C10): the card was "Recent introductions", a feature the client asked to drop, and its
+  // View all opened Messages. It is the member's recent connections, and View all opens Your connections.
+  it('every "View all" says what it opens (the visible words stay inside the name): people, events, pods, connections', () => {
     expect(page()).toMatch(/<Link to="\/matches" aria-label="View all people" [^>]*>View all<\/Link>/);
     const src = withoutComments(rail());
     expect(src).toMatch(/<Link to=\{to\} aria-label=\{`View all \$\{all\}`\} [^>]*>View all<\/Link>/);
-    for (const [title, to, all] of [['Your next event', '/sessions', 'events'], ['Your pods', '/pods', 'pods'], ['Recent introductions', '/messages', 'introductions']]) {
+    for (const [title, to, all] of [['Your next event', '/sessions', 'events'], ['Your pods', '/pods', 'pods'], ['Recent connections', '/connections', 'connections']]) {
       expect(src).toContain(`<RailCard title="${title}" to="${to}" all="${all}" `);
     }
+    expect(src).not.toMatch(/[Ii]ntroduction/);
+  });
+
+  it('a recent connection opens their Human Profile, which says you are connected', () => {
+    expect(withoutComments(rail())).toMatch(/<Link key=\{r\.userId\} to=\{personHref\(r\.userId, 'Connections'\)\} className=\{ROW\}>/);
   });
 
   it('refreshes the pods card when the member\'s pods change, and when an event is created, changed, cancelled or deleted, together with the next-event card (the card draws each pod\'s name and member count, not a session count)', () => {
@@ -258,7 +266,7 @@ describe('For You: the rail', () => {
     expect(withoutComments(rail())).not.toMatch(/sessionCount|session_count/);
   });
 
-  it('refreshes recent introductions when a request is answered (user and invite tags)', () => {
+  it('refreshes recent connections when a request is answered (user and invite tags)', () => {
     expect(rail()).toMatch(/queryKey: reasonKeys\.recent,[\s\S]*?E\.user\(userId\), E\.userInvites\(userId\)/);
   });
 
@@ -290,9 +298,11 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
 
   it('every link on the page goes to a route that exists', () => {
     const targets = [page(), rail(), empty()].flatMap(pathsLinkedFrom);
-    for (const wanted of ['/matches', '/sessions', '/sessions/:param', '/pods', '/pods/:param', '/search', '/messages', '/onboarding', '/people/:param']) {
+    for (const wanted of ['/matches', '/sessions', '/sessions/:param', '/pods', '/pods/:param', '/search', '/connections', '/onboarding']) {
       expect(targets).toContain(wanted);
     }
+    // A recent connection's link is made by personHref, the one every people link uses: the Human Profile's route.
+    expect(appRoutes().some((r) => routeMatches(r, personHref('a1', 'Connections').split('?')[0]))).toBe(true);
     for (const target of new Set(targets)) {
       expect({ target, routed: appRoutes().some((r) => routeMatches(r, target)) }).toEqual({ target, routed: true });
     }

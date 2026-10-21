@@ -12,8 +12,9 @@ export interface Row { title: string; text: string }
 
 // ?from= is part of the address, so anyone can write anything into it. Only the places the app itself sends a
 // member from are ever shown on the page. Circles, pods and events open the Human Profile too (final review, 21 Oct
-// 2026); before, they opened the old /profile/:id page, which the admin links still use.
-export const KNOWN_SOURCES = ['For You', 'People', 'Messages', 'Introductions', 'Your path', 'Circles', 'Pods', 'Events'] as const;
+// 2026); before, they opened the old /profile/:id page, which the admin links still use. Connections is For You's
+// "Recent connections" card: the Introductions it was named after went on 19 Oct.
+export const KNOWN_SOURCES = ['For You', 'People', 'Messages', 'Connections', 'Your path', 'Circles', 'Pods', 'Events'] as const;
 export type KnownSource = (typeof KNOWN_SOURCES)[number];
 
 export function knownSource(from: string | null): KnownSource | null {
@@ -161,8 +162,9 @@ export function foundThrough(source: KnownSource | null, first: string): { title
       return { title: `You found ${first} through People`, line: `You found ${first} while exploring the wider network. REASON still explains why this person may matter, rather than leaving you with a directory result.` };
     case 'Messages':
       return { title: `You found ${first} through Messages`, line: 'This profile is the relationship layer behind your conversation. The history, reason and next useful move travel with the message thread.' };
-    case 'Introductions':
-      return { title: `You found ${first} through Introductions`, line: 'This relationship arrived through an introduction. REASON keeps the introducer, reason and outcome as part of the relationship memory.' };
+    // A recent connection: a meeting request one of them sent and the other accepted.
+    case 'Connections':
+      return { title: `You and ${first} are connected`, line: 'One of you asked to meet and the other said yes. Your meetings, and what you note after them, stay on this page.' };
     case 'Your path':
       return { title: `You found ${first} on your path`, line: GENERIC_LINE };
     case 'Circles':

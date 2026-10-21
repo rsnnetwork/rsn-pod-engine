@@ -34,7 +34,9 @@ const GENERIC_LINE = 'REASON explains why this person may matter to you right no
 describe('?from= and the member id', () => {
   // Final review, 21 Oct 2026 (C3): circles, pods and events open the Human Profile too, and say so.
   it('knows exactly the places the app itself sends a member from', () => {
-    expect([...KNOWN_SOURCES]).toEqual(['For You', 'People', 'Messages', 'Introductions', 'Your path', 'Circles', 'Pods', 'Events']);
+    // Final review (C10): Introductions went on 19 Oct; the For You rail's recent connections say Connections.
+    expect([...KNOWN_SOURCES]).toEqual(['For You', 'People', 'Messages', 'Connections', 'Your path', 'Circles', 'Pods', 'Events']);
+    expect(knownSource('Introductions')).toBeNull();
   });
   it('a people link is the Human Profile with where it was opened from, each part encoded', () => {
     expect(personHref('3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', 'Pods')).toBe('/people/3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03?from=Pods');
@@ -74,7 +76,7 @@ describe('every ?from= the app writes is one the profile accepts', () => {
     .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []));
 
   it('the scan reads literals, plain and encoded, and skips what is not one', () => {
-    expect(fromLiterals('to={`/people/${id}?from=Introductions`}')).toEqual(['Introductions']);
+    expect(fromLiterals('to={`/people/${id}?from=Connections`}')).toEqual(['Connections']);
     expect(fromLiterals('<Link to="/people/x?from=Directory">')).toEqual(['Directory']);
     expect(fromLiterals("to={`/people/${id}?from=${encodeURIComponent('Your path')}`}")).toEqual(['Your path']);
     expect(fromLiterals('const url = `/people/${id}?from=${encodeURIComponent("For You")}&x=1`;')).toEqual(['For You']);
@@ -307,9 +309,11 @@ describe('foundThrough: the small box under the name', () => {
       title: 'You found Nora through Messages',
       line: 'This profile is the relationship layer behind your conversation. The history, reason and next useful move travel with the message thread.',
     });
-    expect(foundThrough('Introductions', 'Nora')).toEqual({
-      title: 'You found Nora through Introductions',
-      line: 'This relationship arrived through an introduction. REASON keeps the introducer, reason and outcome as part of the relationship memory.',
+    // Final review (C10): it named the removed feature and an introducer nobody records. A recent connection is someone
+    // one of you asked to meet and the other said yes to; the profile keeps your meetings and what you note after them.
+    expect(foundThrough('Connections', 'Nora')).toEqual({
+      title: 'You and Nora are connected',
+      line: 'One of you asked to meet and the other said yes. Your meetings, and what you note after them, stay on this page.',
     });
   });
   it('names a circle, a pod or an event as the place they were found, and says only what is always true', () => {
@@ -326,7 +330,8 @@ describe('foundThrough: the small box under the name', () => {
   it('never says "Profile", and always has something to say', () => {
     for (const s of [...KNOWN_SOURCES, null]) {
       const { title, line } = foundThrough(s, 'Nora');
-      expect(title).toMatch(/^(You found Nora (through|on) |About Nora)/);
+      expect(title).toMatch(/^(You found Nora (through|on) |About Nora|You and Nora are connected$)/);
+      expect(`${title} ${line}`).not.toMatch(/[Ii]ntroduc/);
       expect(title).not.toMatch(/Profile/);
       expect(line.length).toBeGreaterThan(20);
     }
