@@ -320,6 +320,23 @@ describe('getPersonBrief: what the page is given', () => {
     });
   });
 
+  // 21 Oct 2026: the entities (companies, funds…) the person is linked to, with their role and title in each.
+  it('lists the person\'s own entities, not the viewer\'s, archived ones left out', async () => {
+    arm();
+    const theirs = [{ id: 'e1', name: 'Harbor Collective', kind: 'company', role: 'founder', title: 'CEO' }];
+    mockQuery.mockImplementation((sql: string) => Promise.resolve({ rows: /FROM entity_members m/.test(sql) ? theirs : [] }));
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect(brief.entities).toEqual(theirs);
+    const call = mockQuery.mock.calls.find(c => /FROM entity_members m/.test(String(c[0])))!;
+    expect(call[1]).toEqual([TARGET]);
+    expect(String(call[0]).replace(/\s+/g, ' ')).toMatch(/e\.archived_at IS NULL/);
+  });
+
+  it('gives an empty list when the person is linked to no entity', async () => {
+    arm();
+    expect((await getPersonBrief(VIEWER, TARGET)).entities).toEqual([]);
+  });
+
   it('writes the first-20-minutes line from the two members\' own answers, in fixed words', async () => {
     arm();
     mockQuery.mockImplementation((sql: string) => Promise.resolve({
@@ -699,6 +716,7 @@ describe('getPersonBrief: one profile open takes at most four database connectio
     ['pods', /FROM pod_members x/],
     ['events', /FROM session_participants x/],
     ['path', /FROM encounter_history e1/],
+    ['entities', /FROM entity_members m/],
   ];
 
   // Every read the brief makes goes through one of these stand-ins. Each is wrapped to count the reads
@@ -733,8 +751,10 @@ describe('getPersonBrief: one profile open takes at most four database connectio
     arm();
     const seen = watchReads();
     await getPersonBrief(VIEWER, TARGET);
-    // The block check and the member lookup, then the eleven reads: one dropped to stay under the limit shows here.
-    expect(seen.started).toHaveLength(13);
+    // The block check and the member lookup, then the twelve reads (the person's entities joined them on
+    // 21 Oct 2026): one dropped to stay under the limit shows here.
+    expect(seen.started).toHaveLength(14);
+    expect(seen.started).not.toContain('unknown query');
     expect(seen.peak).toBeLessThanOrEqual(4);
     expect(seen.peak).toBeGreaterThan(1); // in groups, not one after another
   });

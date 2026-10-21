@@ -4,6 +4,7 @@
 // gives each its own named re-export (Rollup CJS interop; see OPENINGS there).
 
 import type { PublicMember } from './user';
+import type { PersonEntity } from './entity';
 
 // What a member can do with a person (Save = maybe later, Pass = not relevant).
 // The routes and the client read this list. The CHECK in migration 101 is the same
@@ -88,6 +89,8 @@ export interface PersonBrief {
     upcomingEvents: Array<{ id: string; title: string; scheduledAt: string }>;
   };
   path: { id: string; displayName: string } | null;
+  /** The person's own entities (their company, fund…) with their role and title in each (21 Oct 2026). */
+  entities: PersonEntity[];
 }
 
 export interface RecentConnection {
