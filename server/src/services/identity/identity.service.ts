@@ -437,9 +437,15 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
 export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
-  // Find the magic link
+  // Find the magic link. Only a LOGIN link can sign anyone in. The Approve and Reject buttons in an
+  // admin's email are rows in this table too (purpose 'join_request_review', bound to that admin by
+  // admin-action-tokens.service.ts), and they must never be a way in: before 21 Oct 2026 posting one
+  // here signed in the admin it was made for, and spent the link. A link of any other purpose is simply
+  // not found, so it is refused exactly like a token nobody issued: not marked used, no account made,
+  // nothing said about what it is. (The column is NOT NULL DEFAULT 'login' since migration 058, so
+  // every link made before purposes existed is a login link.)
   const result = await query<{ id: string; email: string; expires_at: Date; used_at: Date | null }>(
-    `SELECT id, email, expires_at, used_at FROM magic_links WHERE token_hash = $1`,
+    `SELECT id, email, expires_at, used_at FROM magic_links WHERE token_hash = $1 AND purpose = 'login'`,
     [tokenHash]
   );
 
