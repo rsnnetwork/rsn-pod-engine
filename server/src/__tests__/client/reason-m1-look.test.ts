@@ -386,8 +386,8 @@ describe('A sheep that cannot load keeps its place, empty (integration pass, pol
   it('every call site gives the sheep both a width and a height of its own, and wherever it changes one at a wider window it changes the other', () => {
     const sites = sourcesUnder('src').flatMap((file) => [...read(file).matchAll(/<ReasonSheep\b([^>]*)>/g)]
       .map((m) => ({ file: file.split('/').pop()!, classes: m[1].match(/\bclassName="([^"]*)"/)?.[1].split(/\s+/) })));
-    // The page head, the two For You empty states, the profile's hero and its notice, the For You list and the coming-soon note:
-    // a count that drops to nothing would make the loop below pass for nothing.
+    // The page head, the two For You empty states, the profile's hero and its notice, the For You list, the entity page's
+    // notice and the empty "Your entities" note: a count that drops to nothing would make the loop below pass for nothing.
     expect(sites.length).toBeGreaterThanOrEqual(7);
     for (const { file, classes } of sites) {
       expect({ file, hasClasses: !!classes }).toEqual({ file, hasClasses: true });

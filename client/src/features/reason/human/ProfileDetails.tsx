@@ -6,6 +6,8 @@ import { Link } from 'react-router-dom';
 import type { PersonBrief } from '@rsn/shared';
 import { cn } from '@/lib/utils';
 import { personName, visibleText } from '../person';
+import EntityRows from '../entities/EntityRows';
+import { entitiesOf } from '../entities/entity-text';
 import { memoryRows, metTitle, whyNowRows, type KnownSource, type PersonFacts, type Row } from './profile-text';
 
 // When the keyboard moves focus to a link or button in the page, the browser scrolls it into view. A control
@@ -59,6 +61,7 @@ export default function ProfileDetails({ brief, who, source, onRecordOutcome }: 
   const hasShared = circles.length + pods.length + upcomingEvents.length > 0;
   const bring = visibleText(brief.theyCanBring);
   const whyNow = whyNowRows(brief, source);
+  const entities = entitiesOf(brief);
 
   return (
     <section className="mt-[11px] grid grid-cols-[minmax(0,1fr)] gap-[11px] md:mt-[18px] min-[981px]:grid-cols-[minmax(0,1.15fr)_minmax(0,.85fr)] min-[981px]:gap-[18px]">
@@ -94,13 +97,16 @@ export default function ProfileDetails({ brief, who, source, onRecordOutcome }: 
         )}
       </Section>
 
-      <Section kicker="Entities & roles" title={who.company ?? 'No organisation shared yet'}>
-        {who.company ? (
+      {/* The person's own entities, from the brief, each opening its page. With none, the company on their profile, as before. */}
+      <Section kicker="Entities & roles" title={entities.length > 0 ? `The entities around ${first}.` : who.company ?? 'No organisation shared yet'}>
+        {entities.length > 0 ? (
+          <EntityRows entities={entities} linkClassName={KEEP_CLEAR} />
+        ) : who.company ? (
           <p className={BODY}>
             {first} is connected to this entity{who.role ? <> as <strong>{who.role}</strong></> : null}. REASON uses entity relationships as context, not as a replacement for the human.
           </p>
         ) : (
-          <p className={BODY}>Organisations and roles arrive in the next step of REASON.</p>
+          <p className={BODY}>When {first} links a company or organisation, it shows here.</p>
         )}
       </Section>
 

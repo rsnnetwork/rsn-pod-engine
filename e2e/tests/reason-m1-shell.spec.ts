@@ -462,7 +462,7 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
 
       // Every entry in More goes where it says and closes the sheet.
       const destinations: Array<{ label: string; url: RegExp; see: () => Locator }> = [
-        { label: 'Entities', url: /\/entities$/, see: () => page.getByRole('heading', { name: 'Entities matter.' }) },
+        { label: 'Entities', url: /\/entities$/, see: () => page.getByRole('heading', { name: 'Entities', exact: true, level: 1 }) },
         { label: 'Circles', url: /\/circles$/, see: () => page.getByRole('heading', { name: 'Circles', level: 1 }) },
         { label: 'Pods', url: /\/pods$/, see: () => page.getByRole('main').getByRole('heading', { level: 1 }) },
         { label: 'Settings', url: /\/settings$/, see: () => page.getByRole('heading', { name: 'Settings', level: 1 }) },

@@ -14,9 +14,10 @@ function LiveRedirectCompat() {
 }
 import { useAuthStore } from '@/stores/authStore';
 import ReasonShell from '@/features/reason/shell/ReasonShell';
-import ComingSoonPage from '@/features/reason/shell/ComingSoonPage';
 import ForYouPage from '@/features/reason/for-you/ForYouPage';
 import HumanProfilePage from '@/features/reason/human/HumanProfilePage';
+import EntitiesPage from '@/features/reason/entities/EntitiesPage';
+import EntityProfilePage from '@/features/reason/entities/EntityProfilePage';
 import ProtectedRoute from '@/components/layout/ProtectedRoute';
 import LoginPage from '@/features/auth/LoginPage';
 import VerifyPage from '@/features/auth/VerifyPage';
@@ -210,7 +211,7 @@ export default function App() {
       {/* Protected with layout */}
       <Route element={<ProtectedRoute><ReasonShell /></ProtectedRoute>}>
         <Route path="/" element={<ForYouPage />} />
-        <Route path="/entities" element={<ComingSoonPage kind="entities" />} />
+        <Route path="/entities" element={<EntitiesPage />} />
         <Route path="/introductions" element={<Navigate to="/" replace />} />
         {/* 21 Oct 2026: your profile the way others see it; the form it used to be is one tap away at /profile/edit,
             which a fixed path ranks ahead of /profile/:userId. */}
@@ -264,6 +265,7 @@ export default function App() {
           ("Photo added.", the Google photo outcome) was ever visible. */}
       <Route path="/onboarding" element={<ProtectedRoute><><OnboardingFlow /><ToastContainer /></></ProtectedRoute>} />
       <Route path="/people/:userId" element={<ProtectedRoute><><HumanProfilePage /><ToastContainer /></></ProtectedRoute>} />
+      <Route path="/entities/:entityId" element={<ProtectedRoute><><EntityProfilePage /><ToastContainer /></></ProtectedRoute>} />
       <Route path="/meet/:conversationId" element={<ProtectedRoute><MeetPage /></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />

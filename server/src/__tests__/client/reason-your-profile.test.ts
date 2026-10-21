@@ -176,14 +176,17 @@ describe('Your profile: the page', () => {
     expect(page()).toMatch(/personFacts\(card\.data\)/);
   });
 
-  it('has the section headed "Only you see this", and the two edit links, and the company placeholder', () => {
+  it('has the section headed "Only you see this", the two edit links, and your entities with "Add your company"', () => {
     expect(count(page(), />Only you see this</g)).toBe(1);
     expect(page()).toMatch(/to=\{EDIT_PROFILE_TO\}/);
     expect(page()).toMatch(/to=\{EDIT_ANSWERS_TO\}/);
-    expect(page()).toMatch(/to=\{ADD_COMPANY_TO\}/);
     expect(page()).toMatch(/>Edit profile</);
     expect(page()).toMatch(/>Edit answers</);
-    expect(page()).toMatch(/>Add your company</);
+    // Task 11 (item 5): the company placeholder is your entities now, with the same link (pinned in reason-entities-pages).
+    expect(page()).toMatch(/<ProfileEntities \/>/);
+    const entities = read('features/reason/entities/ProfileEntities.tsx');
+    expect(entities).toMatch(/to=\{ADD_COMPANY_TO\}/);
+    expect(entities).toMatch(/>Add your company</);
   });
 
   it('shows "Optimize your profile: connect LinkedIn" only when there is no LinkedIn', () => {
@@ -274,7 +277,7 @@ describe('Human Profile: More, with Block and Report this member', () => {
   });
 
   it('the brief also listens for blocks, so a block in either direction takes the profile away without a refresh', () => {
-    expect(human()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\), E\.userBlocks\(me\)\] : \[\]/);
+    expect(human()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\), E\.userBlocks\(me\), E\.userEntities\(userId\), E\.userEntities\(me\)\] : \[\]/);
   });
 
   // Fix round 1: a profile you blocked is a 404, so Unblock cannot live on the profile or in More. Without it on the

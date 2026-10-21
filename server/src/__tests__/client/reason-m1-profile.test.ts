@@ -21,8 +21,10 @@ const count = (src: string, re: RegExp) => src.match(re)?.length ?? 0;
 
 describe('Human Profile: one brief query, tagged for realtime', () => {
   // 21 Oct 2026: the page can block now, and a block in either direction closes the profile, so blocks are a tag too.
-  it('has the five entity tags, blocks included', () => {
-    expect(page()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\), E\.userBlocks\(me\)\] : \[\]/);
+  // And the brief lists the person's entities ("Entities & roles"): their own entities tag (they join, leave, change
+  // role) and yours (an entity you share is edited or archived), so an archived entity never stays on screen as a link.
+  it('has the seven entity tags: blocks, and the person\'s and your own entities', () => {
+    expect(page()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\), E\.userBlocks\(me\), E\.userEntities\(userId\), E\.userEntities\(me\)\] : \[\]/);
   });
   it('asks for the brief once, in the page: no second copy in a child, no polling', () => {
     expect(count(page(), /\buseQuery\(/g)).toBe(1);
@@ -219,8 +221,8 @@ describe('Human Profile: faults found by looking at it', () => {
   });
   it('a link or button in the page keeps clear of the header and the bar when the keyboard focuses it', () => {
     expect(details()).toMatch(/const KEEP_CLEAR = 'scroll-mt-\[calc\(90px\+env\(safe-area-inset-top\)\)\] scroll-mb-\[calc\(100px\+env\(safe-area-inset-bottom\)\)\]'/);
-    // The definition, the shared-context chips, the path link and the Record button.
-    expect(count(details(), /KEEP_CLEAR/g)).toBe(4);
+    // The definition, the shared-context chips, the path link, the person's entity links and the Record button.
+    expect(count(details(), /KEEP_CLEAR/g)).toBe(5);
   });
   it('the fixed header and bar grow by the notch and the home indicator, and keep their sides clear of a phone on its side', () => {
     expect(page()).toMatch(/h-\[calc\(60px\+env\(safe-area-inset-top\)\)\]/);

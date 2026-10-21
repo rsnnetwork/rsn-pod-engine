@@ -48,10 +48,11 @@ describe('REASON shell (milestone 1)', () => {
     it('is not a navigation key either, so the compiler refuses any list that names it (its icon may stay in the icon set)', () => {
       expect(read('features/reason/shell/nav.ts')).toMatch(/export type NavKey = Exclude<ReasonIconName, 'more' \| 'introductions'>;/);
     });
-    it('the coming-soon page has no Introductions copy left, and still has its Entities page', () => {
-      const coming = read('features/reason/shell/ComingSoonPage.tsx');
-      expect(coming).not.toMatch(/ntroductions/);
-      expect(coming).toMatch(/entities: \{/);
+    // Introductions went (Task 4) and Entities became a real page (Task 11), so the coming-soon page had nothing left
+    // to show and is gone, with every route and import of it.
+    it('the coming-soon page is gone: nothing in the app imports or routes to it', () => {
+      expect(fs.existsSync(path.join(__dirname, '../../../../client/src/features/reason/shell/ComingSoonPage.tsx'))).toBe(false);
+      expect(read('App.tsx')).not.toMatch(/ComingSoonPage/);
     });
   });
   it('the tablet rail keeps its icons (the prototype hid them) and names each one', () => {
@@ -84,12 +85,15 @@ describe('REASON shell (milestone 1)', () => {
     expect(shell).toMatch(/Complete your profile/);
     expect(shell).toMatch(/to="\/onboarding"/);
   });
-  it('App uses the new shell, For You at /, a full-screen Human Profile, and the Entities coming-soon page', () => {
+  it('App uses the new shell, For You at /, a full-screen Human Profile, and the Entities pages', () => {
     const app = read('App.tsx');
     expect(app).toMatch(/<ProtectedRoute><ReasonShell \/><\/ProtectedRoute>/);
     expect(app).toMatch(/<Route path="\/" element=\{<ForYouPage \/>\} \/>/);
     expect(app).toMatch(/path="\/people\/:userId"/);
-    expect(app).toMatch(/<ComingSoonPage kind="entities" \/>/);
+    // Entities is a real page now (21 Oct 2026); its profile is full screen, like the Human Profile.
+    expect(app).toMatch(/<Route path="\/entities" element=\{<EntitiesPage \/>\} \/>/);
+    expect(app).toMatch(/<Route path="\/entities\/:entityId" element=\{<ProtectedRoute><><EntityProfilePage \/><ToastContainer \/><\/><\/ProtectedRoute>\} \/>/);
+    expect(app).not.toMatch(/kind="entities"/);
   });
   it('the old /introductions address sends a member to For You, with no page left behind it (a bookmark or an old link must not land on a 404)', () => {
     const app = read('App.tsx');
@@ -306,7 +310,8 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
     // Two to a row from 1024px, one list below.
     expect(read('features/sessions/EncounterHistoryPage.tsx')).toMatch(/<div className="grid gap-3 animate-fade-in-up stagger-1 min-\[1024px\]:grid-cols-2">/);
   });
-  it('the top search says it searches people, and its accessible name matches: it opens Find people, and nothing else is searched yet', () => {
+  // Entities has its own search box on its own page (21 Oct 2026); the top search still searches people only.
+  it('the top search says it searches people, and its accessible name matches: it opens Find people, and searches nothing else', () => {
     const top = read('features/reason/shell/ShellTopbar.tsx');
     expect(top).toMatch(/aria-label="Search people"/);
     expect(top).toMatch(/placeholder="Search people…"/);
