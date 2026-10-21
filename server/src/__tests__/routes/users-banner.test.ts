@@ -40,6 +40,7 @@ import { authenticate } from '../../middleware/auth';
 import { bannerReadLimiter, bannerWriteLimiter } from '../../middleware/rateLimit';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { BANNER_MAX_BYTES } from '../../services/user/banner.service';
+import { dataUrl, jpeg, png, webpLossy } from '../fixtures/pictures';
 
 const app = express();
 app.use(express.json({ limit: '10mb' })); // as index.ts has it
@@ -53,16 +54,20 @@ const OTHER = '9b2d5c1e-3f4a-4b6c-8d7e-0a1b2c3d4e5f';
 const token = (sub: string) => jwt.sign({ sub, email: `${sub}@example.com`, role: 'member', sessionId: 's-1' }, JWT_SECRET, { expiresIn: '1h' });
 const auth = (sub: string = ME) => ({ Authorization: `Bearer ${token(sub)}` });
 
-const JPEG = [0xff, 0xd8, 0xff, 0xe0];
-const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-const WEBP = [0x52, 0x49, 0x46, 0x46, 0x10, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50];
+// The three kinds kept, as files with real headers (the server reads the size from them), and the start of other files.
+type Kind = 'jpeg' | 'png' | 'webp';
+const JPEG: Kind = 'jpeg';
+const PNG: Kind = 'png';
+const WEBP: Kind = 'webp';
 const GIF = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
-const file = (head: number[], size = 256) => {
+const file = (head: Kind | number[], size = 256): Buffer => {
+  if (head === 'jpeg') return jpeg(1500, 500, size);
+  if (head === 'png') return png(1500, 500, size);
+  if (head === 'webp') return webpLossy(1500, 500, size);
   const bytes = Buffer.alloc(Math.max(size, head.length), 1);
   Buffer.from(head).copy(bytes);
   return bytes;
 };
-const dataUrl = (mime: string, bytes: Buffer) => `data:${mime};base64,${bytes.toString('base64')}`;
 
 const STAMP = new Date('2026-10-21T11:00:00.000Z');
 let stored: { banner_blob: Buffer | null; banner_mime: string | null } = { banner_blob: null, banner_mime: null };
@@ -93,7 +98,7 @@ describe('PUT /users/me/banner', () => {
   it.each([
     ['image/jpeg', JPEG], ['image/png', PNG], ['image/webp', WEBP],
   ])('keeps a %s for the member who sent it, answers with its address, and tells their screens', async (mime, head) => {
-    const bytes = file(head as number[]);
+    const bytes = file(head as Kind);
     const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl(mime as string, bytes) });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, data: { bannerUrl: `https://api.example.test/api/users/${ME}/banner?v=${STAMP.getTime()}` } });
@@ -142,6 +147,14 @@ describe('PUT /users/me/banner', () => {
     expect(res.status).toBe(400);
     expect(res.body.error.details.image).toEqual(['Your banner must be 3 MB or smaller.']);
     expect(writes()).toHaveLength(0);
+  });
+
+  it('refuses a picture over 4096 pixels on a side, in a sentence, though it is small in bytes', async () => {
+    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/png', png(5000, 1000)) });
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toBe('Your banner can be at most 4096 by 4096 pixels.');
+    expect(writes()).toHaveLength(0);
+    expect(mockFanoutUser).not.toHaveBeenCalled();
   });
 
   it('refuses a body with no picture in it', async () => {
@@ -199,6 +212,8 @@ describe('GET /users/:id/banner', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/^image\/webp/);
     expect(res.headers['cache-control']).toBe('public, max-age=86400');
+    // Set by the route itself, not left to helmet: a browser never reads the bytes as anything but the stored type.
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(Buffer.compare(res.body as Buffer, bytes)).toBe(0);
     const read = mockQuery.mock.calls.find((c) => /SELECT banner_blob, banner_mime/.test(String(c[0])))!;
     expect(read[1]).toEqual([OTHER]);

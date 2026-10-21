@@ -590,6 +590,9 @@ router.get(
       }
       res.setHeader('Content-Type', banner.contentType);
       res.setHeader('Cache-Control', 'public, max-age=86400');
+      // Said here, not left to the app-wide helmet: these bytes come from a member, so a browser must never read them
+      // as anything but the picture type they were checked as.
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.send(banner.blob);
     } catch (err) {
       next(err);
