@@ -60,7 +60,7 @@ const PROVIDER_DEADLINE_MS = 150 * 1000;
  *  actually running" rather than a crashed attempt that never reached a
  *  terminal state. See the module-level in-flight guard below for layer (i).
  *  Longer than the provider deadline: a live attempt always terminal-s first. */
-const SEARCHING_LOCK_MS = 3 * 60 * 1000;
+export const SEARCHING_LOCK_MS = 3 * 60 * 1000;
 
 /** Race the provider against the job deadline. A late answer is logged and dropped. */
 function withDeadline(run: Promise<ProviderOutcome>, userId: string): Promise<ProviderOutcome> {
