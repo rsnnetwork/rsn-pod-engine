@@ -73,10 +73,15 @@ function mapRow(row: any): JoinRequest {
  * that the emails sent to this applicant open there; the live app stores nothing.
  */
 export async function createJoinRequest(input: CreateJoinRequestInput, requestOrigin?: string): Promise<JoinRequest> {
+  // Stored the way the sign-in gate looks an address up: isEmailApproved (identity.service.ts) trims and lower-cases
+  // the address it is asked about and compares it exactly. A request kept as typed ("Jane.Doe@Example.com") was
+  // approved and then never found at sign-in. Lower case is also how users and invites are stored.
+  const email = input.email.trim().toLowerCase();
+
   // Check for duplicate pending request
   const existing = await query(
     `SELECT id FROM join_requests WHERE email = $1 AND status = 'pending'`,
-    [input.email]
+    [email]
   );
   if (existing.rows.length > 0) {
     throw new AppError(409, ErrorCodes.INVALID_INPUT, 'You already have a pending request.');
@@ -86,10 +91,10 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
     `INSERT INTO join_requests (full_name, email, linkedin_url, reason, sign_in_origin)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [input.fullName, input.email, input.linkedinUrl, input.reason, signInOriginFor(requestOrigin)]
+    [input.fullName, email, input.linkedinUrl, input.reason, signInOriginFor(requestOrigin)]
   );
 
-  logger.info({ email: input.email }, 'New join request submitted');
+  logger.info({ email }, 'New join request submitted');
 
   // Notify all admins about the new join request
   try {
@@ -98,22 +103,22 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
        SELECT id, 'join_request', 'New Join Request',
          $1 || ' wants to join RSN', '/admin/join-requests', NOW()
        FROM users WHERE role IN ('admin', 'super_admin')`,
-      [input.fullName || input.email]
+      [input.fullName || email]
     );
   } catch (notifErr) {
     logger.warn({ err: notifErr }, 'Failed to create admin notifications for join request — non-fatal');
   }
 
   // Send confirmation email (non-blocking)
-  sendJoinRequestConfirmationEmail(input.email, input.fullName).catch(err =>
-    logger.error({ err, email: input.email }, 'Failed to send join request confirmation')
+  sendJoinRequestConfirmationEmail(email, input.fullName).catch(err =>
+    logger.error({ err, email }, 'Failed to send join request confirmation')
   );
 
   // Fan out the email-action review email to every admin (non-blocking).
   // Each admin gets two signed single-use tokens (approve / reject) tied
   // to (admin, request, action), 24h expiry. Click → confirmation page →
   // confirm POST runs the same review flow as the dashboard.
-  fanOutAdminReviewEmails(result.rows[0].id, input.fullName, input.email, input.linkedinUrl, input.reason)
+  fanOutAdminReviewEmails(result.rows[0].id, input.fullName, email, input.linkedinUrl, input.reason)
     .catch(err => logger.error({ err, requestId: result.rows[0].id }, 'Admin review email fan-out failed (non-fatal)'));
 
   return mapRow(result.rows[0]);
