@@ -284,19 +284,32 @@ test('an answer that is not on the list is refused', async () => {
   });
   expect(bad.status).toBe(400);
 
-  const tooMany = await apiAs(me, 'POST', '/onboarding/answers/confirm', {
-    intent: 'get_advice',
-    lookingToMeet: ['founders', 'investors', 'advisors_mentors', 'developers_technical'],
-    canOffer: ['investment'], industries: ['software_ai'], selfKinds: ['founders'],
-  });
-  expect(tooMany.status).toBe(400);
-
   // Ticking Other without saying which leaves them with no industry at all.
   const otherMissing = await apiAs(me, 'POST', '/onboarding/answers/confirm', {
     intent: 'get_advice', lookingToMeet: ['founders'], canOffer: ['investment'],
     industries: ['other'], selfKinds: ['founders'],
   });
   expect(otherMissing.status).toBe(400);
+});
+
+// The 25 Oct review (ONB-01): no question has a maximum. These screens still stop at three people and two
+// self-descriptions, but the server keeps whatever a screen sends, and the database's old caps (3 and 2) are
+// gone (migration 109), so a screen that lets a member choose more is never refused.
+test('four people to meet and three self-descriptions are kept: no question has a maximum', async () => {
+  const me = await freshMember('tbmany');
+  const res = await apiAs(me, 'POST', '/onboarding/answers/confirm', {
+    intent: 'get_advice',
+    lookingToMeet: ['founders', 'investors', 'advisors_mentors', 'developers_technical'],
+    canOffer: ['investment'], industries: ['software_ai'], industryOther: null,
+    selfKinds: ['founders', 'investors', 'advisors_mentors'],
+    jobTitle: null, company: null, about: null,
+  });
+  expect(res.status).toBe(200);
+  const row = await pool.query<{ meet: number; self: number }>(
+    `SELECT cardinality(looking_to_meet) AS meet, cardinality(self_kinds) AS self FROM users WHERE id = $1`,
+    [me.id],
+  );
+  expect(row.rows[0]).toEqual({ meet: 4, self: 3 });
 });
 
 test('two people who answered the tick boxes can find each other', async () => {
