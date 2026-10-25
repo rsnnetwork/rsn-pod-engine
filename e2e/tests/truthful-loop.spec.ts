@@ -236,9 +236,12 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
   expect(introMsg, 'the introduction must be seeded as a real thread message').toBeTruthy();
   console.log(`  ✓ (4) thread seeded: "${introMsg.content.slice(0, 60)}..."`);
 
-  // ── (5) Both pick overlapping windows -> confirm -> pinned + notified ───
-  // (trimmed from intro-scheduling.spec.ts: skips its one-sided-window
-  // 400 negative-case check, which belongs to that file, not this journey)
+  // ── (5) Both pick the same time -> the second save books it -> pinned + notified ───
+  // 26 Oct 2026: on 25 Oct both people saved the same time on production and no
+  // meeting existed, because the step that books was never in front of them.
+  // The time both picked is now the agreement: the save that leaves exactly one
+  // shared time books it (the confirm step for two or more shared times is
+  // intro-scheduling.spec.ts, which also covers the one-sided-window refusal).
   const W_OVERLAP = dayKey(2, 'evening');
   const invSet = await apiAs(investor, 'PUT', `/dm/conversations/${conversationId}/scheduling/availability`,
     { windows: [W_OVERLAP, dayKey(4, 'morning')] });
@@ -247,18 +250,14 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
     { windows: [W_OVERLAP, dayKey(3, 'morning')] });
   expect(fSet.status).toBe(200);
   expect(fSet.json.data.overlap).toEqual([W_OVERLAP]);
-  console.log('  ✓ (5) both sides set availability — overlap:', fSet.json.data.overlap);
+  expect(fSet.json.data.confirmed).toMatchObject({ window: W_OVERLAP, byUserId: founder.id, durationMin: 30, type: 'video' });
+  console.log('  ✓ (5) both sides set availability; the one shared time was booked:', fSet.json.data.confirmed.window);
 
   await gotoRetry(fPage, `${APP}/messages/${conversationId}`);
-  // On phones the thread actions live under "More actions" (4 Sep 2026).
-  { const either = fPage.locator('button[aria-label^="More actions"]:visible, button[aria-label="Find a time to meet"]:visible').first(); await either.waitFor({ timeout: 30_000 }); if ((await either.getAttribute('aria-label'))?.startsWith('More actions')) await either.click(); }
-  await fPage.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
-  await expect(fPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 10_000 });
-  await expect(fPage.getByText('Both can').first()).toBeVisible({ timeout: 10_000 });
-  await fPage.getByRole('button', { name: /^Confirm / }).first().click();
-  await fPage.getByRole('button', { name: /Confirm meeting/i }).click();
-  await expect(fPage.getByText(/Meeting confirmed/i).first()).toBeVisible({ timeout: 15_000 });
-  console.log('  ✓ (5) headed: founder confirmed the overlap in the real scheduler.');
+  // The thread shows the meeting and the pinned Join, with nothing left to confirm.
+  await expect(fPage.getByTestId('thread-meeting-banner')).toBeVisible({ timeout: 20_000 });
+  await expect(fPage.getByTestId('system-message-card').filter({ hasText: /Meeting confirmed/i })).toBeVisible({ timeout: 20_000 });
+  console.log('  ✓ (5) headed: the founder sees the booked meeting in the real thread.');
 
   const conv = await pool.query(
     `SELECT meeting_confirmed_window, meeting_confirmed_by FROM dm_conversations WHERE id = $1`, [conversationId]);

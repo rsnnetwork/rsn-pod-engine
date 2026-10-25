@@ -28,6 +28,7 @@ import { expandWantTags } from './want-synonyms';
 import { MEET_SIGNALS, INTENT_SIGNALS, MEET_V2_SIGNALS } from './option-signals';
 import { MEET_V1_TO_V2, isMeetV1Key, isMeetV2Key } from '../onboarding/answers-v2.map';
 import { clipAtWord } from '../people/text';
+import { fanoutUserEntity } from '../../realtime/fanout';
 import logger from '../../config/logger';
 import type { MatchingAgent, OnboardingAgentRef } from './agent.repo';
 import type { MeetKey, IntentKey, MeetV2Key, OnboardingV2SearchChange } from '@rsn/shared';
@@ -320,16 +321,18 @@ export async function createAgentsFromAnswers(
 
 // ─── Onboarding v2 (Shradha's brief, 19 Oct 2026) ───────────────────────────
 //
-// One search per kind of person ticked, all searching (the member chose at
-// most three on purpose, as in v1), plus one for "in my own words" in their
-// own words. Searches are matched to answers by the KEY recorded on them
-// (intent.meetKey), never by label, which the member may reword. A search v1
-// made counts for the v2 kind it maps to, so moving to v2 with the same
-// answers makes no duplicates. When the answers change, a search onboarding
-// made whose key is gone is paused, never deleted, and marked as paused by
-// onboarding (intent.pausedBy); only a search carrying that mark is resumed
-// when its key comes back. A search the member paused or archived themselves
-// stays as they left it, whatever a confirm says.
+// One search per kind of person ticked, all searching (the member chose each
+// on purpose, as in v1; since the 25 Oct review there is no limit on how
+// many), plus one for "in my own words" in their own words. The first search
+// is scored before the confirm answers and the rest after it, so ticking every
+// kind never makes the member wait. Searches are matched to answers by the KEY
+// recorded on them (intent.meetKey), never by label, which the member may
+// reword. A search v1 made counts for the v2 kind it maps to, so moving to v2
+// with the same answers makes no duplicates. When the answers change, a search
+// onboarding made whose key is gone is paused, never deleted, and marked as
+// paused by onboarding (intent.pausedBy); only a search carrying that mark is
+// resumed when its key comes back. A search the member paused or archived
+// themselves stays as they left it, whatever a confirm says.
 
 const V2_SOURCE = 'onboarding_v2';
 /** matching_agents.label is VARCHAR(80). */
@@ -412,11 +415,34 @@ export interface V2SearchResult {
   change: OnboardingV2SearchChange;
 }
 
+/** Score searches one after another. A search that fails to score is scored when it is next opened. */
+async function scoreInTurn(agents: MatchingAgent[]): Promise<void> {
+  for (const agent of agents) {
+    await recomputeAgent(agent).catch(err =>
+      logger.warn({ err, agentId: agent.id }, 'search will be scored on next open'));
+  }
+}
+
+/**
+ * Score these searches once the request has answered, then tell the member's
+ * screens (their searches and For You read user:<id>), as every background job
+ * does. Never rejects into anything.
+ */
+function scoreAfterTheResponse(userId: string, agents: MatchingAgent[]): void {
+  setImmediate(() => {
+    scoreInTurn(agents)
+      .then(() => fanoutUserEntity(userId))
+      .catch(err => logger.error({ err, userId }, 'scoring onboarding searches after the response failed'));
+  });
+}
+
 /**
  * Apply a member's v2 answers to their searches: pause, reword, resume and
- * create as planned, then score every search that is now searching with new
+ * create as planned, then score each search that is now searching with new
  * words or after a pause. Inserting a row runs no search, which is why the
- * migration-seeded ones all read "0 potential matches" on 3 Aug.
+ * migration-seeded ones all read "0 potential matches" on 3 Aug. Every search
+ * reloads every candidate, and with no limit a member can tick every kind, so
+ * the first is scored before this returns and the rest after the response.
  *
  * Never throws: a member must not lose the onboarding they just finished
  * because a search could not be made or scored.
@@ -442,11 +468,9 @@ export async function syncSearchesFromV2Answers(
     for (const p of plan.create) note(await agentRepo.createAgent(userId, p), 'created');
 
     const out = [...results.values()];
-    for (const r of out) {
-      if (r.change === 'paused' || r.agent.status !== 'active') continue;
-      await recomputeAgent(r.agent).catch(err =>
-        logger.warn({ err, agentId: r.agent.id }, 'search will be scored on next open'));
-    }
+    const searching = out.filter(r => r.change !== 'paused' && r.agent.status === 'active').map(r => r.agent);
+    await scoreInTurn(searching.slice(0, 1));
+    if (searching.length > 1) scoreAfterTheResponse(userId, searching.slice(1));
     if (out.length) logger.info({ userId, changes: out.map(r => `${r.change}:${r.agent.label}`) }, 'searches synced from onboarding v2 answers');
     return out;
   } catch (err) {

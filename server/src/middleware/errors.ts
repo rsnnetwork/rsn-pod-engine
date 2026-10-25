@@ -4,13 +4,14 @@ import { ErrorCode, ErrorCodes } from '@rsn/shared';
 export class AppError extends Error {
   public readonly statusCode: number;
   public readonly code: ErrorCode;
-  public readonly details?: Record<string, string[]>;
+  /** Sent to the client as `error.details` (see ApiError in @rsn/shared for the shapes in use). */
+  public readonly details?: Record<string, unknown>;
 
   constructor(
     statusCode: number,
     code: ErrorCode,
     message: string,
-    details?: Record<string, string[]>
+    details?: Record<string, unknown>
   ) {
     super(message);
     this.statusCode = statusCode;
@@ -53,9 +54,10 @@ export class ValidationError extends AppError {
 export class ConflictError extends AppError {
   /**
    * `details` says what the request clashed with, so the client can offer it: the entity name
-   * clash sends `{ existingId: [id] }`. Same shape as validation details (a list per key).
+   * clash sends `{ existingId: [id] }`, a meeting request already answered sends `{ status }`,
+   * a meeting time that is no longer free for both sends `{ scheduling }`.
    */
-  constructor(code: ErrorCode, message: string, details?: Record<string, string[]>) {
+  constructor(code: ErrorCode, message: string, details?: Record<string, unknown>) {
     super(409, code, message, details);
   }
 }

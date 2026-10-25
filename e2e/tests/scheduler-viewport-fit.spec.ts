@@ -34,6 +34,7 @@ let c: TestUser, d: TestUser;
 let convId: string;
 let convCd: string;
 let KEY: string;
+let KEY2: string;
 let NEXT: string;
 const ctxs: BrowserContext[] = [];
 
@@ -112,15 +113,22 @@ test.beforeAll(async () => {
   await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Fit Bo', b.id]);
   console.log(`[scheduler-viewport-fit] engine=${engineLabel()} app=${APP}`);
 
-  // Pair A+B: both saved the same time, so a green slot is already on offer.
+  // Pair A+B: both saved the same TWO times, so green times are on offer to
+  // confirm. (One shared time is an agreement and is booked by the second save
+  // itself since 26 Oct, which would leave no confirm step to measure.) KEY2 is
+  // not NEXT: the first test toggles NEXT on and off, and taking a shared time
+  // away would leave one, which books it.
   convId = await connect(a, b);
   KEY = futureSlot(3, 14);
+  KEY2 = futureSlot(3, 15);
   NEXT = futureSlot(3, 14, 30);
-  expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
-  expect((await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
+  expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] })).status).toBe(200);
+  const pairAb = await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] });
+  expect(pairAb.status).toBe(200);
+  expect(pairAb.json.data.confirmed, 'two shared times book nothing').toBeNull();
 
-  // Pair C+D: only D has saved. C is the second saver, whose own Save press
-  // is what creates the green time.
+  // Pair C+D: only D has saved, one time. C is the second saver, whose own Save
+  // press makes it the one shared time, and so books it.
   c = await createTestUser('svfc');
   d = await createTestUser('svfd');
   await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Fit Cy', c.id]);
@@ -274,7 +282,7 @@ test('nested scroll: on a small phone, scrolling from inside the timeline still 
   expect(after, 'a scroll that starts on the timeline (already at its end) must move the panel').toBeGreaterThan(before);
 });
 
-test('second saver: my Save creates the green time, and its chip is in reach without scrolling back', async () => {
+test('second saver: my Save picks the one time they offered, books it, and the meeting is in reach without scrolling back', async () => {
   test.setTimeout(180_000);
   // A small phone: the panel's frame is far shorter than the timeline, so
   // picking a time really does mean scrolling away from the top of the panel.
@@ -305,14 +313,21 @@ test('second saver: my Save creates the green time, and its chip is in reach wit
   await expect(page.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
 
   // Sending is where this job ends, so the panel hands the thread back (21 Sep).
-  // The guarantee is unchanged: the next step has to be in front of this person,
-  // not somewhere they would have to go looking for. It is now the card the send
-  // just wrote, with the times on it.
+  // The guarantee is unchanged: what comes next has to be in front of this
+  // person, not somewhere they would have to go looking for. Picking the one
+  // time they offered is the agreement (26 Oct: on 25 Oct both people saved the
+  // same time and nothing was booked), so it is the meeting itself, with Join.
   await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0, { timeout: 15_000 });
-  const card = page.getByTestId('system-message-card').filter({ hasText: /You are both free/i });
+  const card = page.getByTestId('system-message-card').filter({ hasText: /Meeting confirmed/i });
   await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('system-message-card').filter({ hasText: /You are both free/i })).toHaveCount(0);
   await page.waitForTimeout(300);
-  await expectReachable(page, card.getByRole('button').first(), 'a time to confirm, right after my send');
+  await expectReachable(page, card.getByRole('button', { name: /Join meeting/i }), 'the booked meeting, right after my send');
+  const row = (await pool.query<{ meeting_start_at: Date | null; meeting_confirmed_by: string | null }>(
+    `SELECT meeting_start_at, meeting_confirmed_by FROM dm_conversations WHERE id=$1`, [convCd],
+  )).rows[0];
+  expect(row.meeting_start_at?.toISOString().replace('.000Z', 'Z')).toBe(KEY);
+  expect(row.meeting_confirmed_by).toBe(c.id);
 });
 
 test('pinned bar: a control focused by keyboard is never left hidden under the Save bar', async () => {

@@ -836,6 +836,23 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
   }
 }
 
+/** One agent that gained a newcomer, as scoreNewcomerAgainstAgents reports it. */
+interface NewcomerHit {
+  agentId: string;
+  ownerId: string;
+  label: string;
+  score: number;
+  reason: string;
+}
+
+/** Each owner's agents that gained the newcomer, the best fit first; owners in the order they were found. */
+function byOwnerBestFirst(gained: NewcomerHit[]): NewcomerHit[][] {
+  const byOwner = new Map<string, NewcomerHit[]>();
+  for (const g of gained) byOwner.set(g.ownerId, [...(byOwner.get(g.ownerId) ?? []), g]);
+  // A stable sort: two searches that fit equally well keep the order they were found in.
+  return [...byOwner.values()].map(hits => [...hits].sort((a, b) => b.score - a.score));
+}
+
 /**
  * Wave 2 continuous matching: a member who joins today is scored against every
  * ACTIVE agent in the network, and each owner whose agent wanted them is told
@@ -845,6 +862,12 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
  * Dedupe is per (owner, agent) rather than the blanket 24h window the profile
  * pass uses, so a member running three agents can hear about three different
  * people on the same day — one notification each, not one in total.
+ *
+ * One bell per member for one newcomer (25 Oct 2026): with no limit on the
+ * kinds a member ticks, several of their searches can want the same newcomer,
+ * and each used to ring. Now the search that fits the newcomer best rings,
+ * once, and the others still hold the newcomer among their matches. When the
+ * best one already rang today, the next one that has not rings instead.
  *
  * Returns the owners it notified so the profile-level pass can skip them.
  */
@@ -856,36 +879,40 @@ async function notifyAgentsOfNewUser(newUserId: string): Promise<Set<string>> {
     const { scoreNewcomerAgainstAgents } = await import('./agent-matching.service');
     const gained = await scoreNewcomerAgainstAgents(newUserId);
 
-    for (const g of gained) {
-      const dedupe = await query<{ id: string }>(
-        `SELECT id FROM notifications
-          WHERE user_id = $1 AND type = 'platform_match'
-            AND link = $2
-            AND created_at > NOW() - INTERVAL '24 hours' LIMIT 1`,
-        [g.ownerId, `/agents/${g.agentId}`],
-      );
-      if (dedupe.rows.length > 0) continue;
+    for (const searches of byOwnerBestFirst(gained)) {
+      for (const g of searches) {
+        const dedupe = await query<{ id: string }>(
+          `SELECT id FROM notifications
+            WHERE user_id = $1 AND type = 'platform_match'
+              AND link = $2
+              AND created_at > NOW() - INTERVAL '24 hours' LIMIT 1`,
+          [g.ownerId, `/agents/${g.agentId}`],
+        );
+        if (dedupe.rows.length > 0) continue;
 
-      const title = `Your ${g.label} agent found someone`;
-      const inserted = await query<{ id: string; created_at: Date }>(
-        `INSERT INTO notifications (id, user_id, type, title, body, link)
-         VALUES (gen_random_uuid(), $1, 'platform_match', $2, $3, $4)
-         RETURNING id, created_at`,
-        [g.ownerId, title, g.reason, `/agents/${g.agentId}`],
-      );
-      owners.add(g.ownerId);
-      try {
-        const { io } = await import('../../index');
-        io.to(`user:${g.ownerId}`).emit('notification:new', {
-          id: inserted.rows[0].id,
-          type: 'platform_match',
-          title,
-          body: g.reason,
-          link: `/agents/${g.agentId}`,
-          isRead: false,
-          createdAt: inserted.rows[0].created_at,
-        });
-      } catch { /* socket push is non-fatal */ }
+        const title = `Your ${g.label} agent found someone`;
+        const inserted = await query<{ id: string; created_at: Date }>(
+          `INSERT INTO notifications (id, user_id, type, title, body, link)
+           VALUES (gen_random_uuid(), $1, 'platform_match', $2, $3, $4)
+           RETURNING id, created_at`,
+          [g.ownerId, title, g.reason, `/agents/${g.agentId}`],
+        );
+        owners.add(g.ownerId);
+        try {
+          const { io } = await import('../../index');
+          io.to(`user:${g.ownerId}`).emit('notification:new', {
+            id: inserted.rows[0].id,
+            type: 'platform_match',
+            title,
+            body: g.reason,
+            link: `/agents/${g.agentId}`,
+            isRead: false,
+            createdAt: inserted.rows[0].created_at,
+          });
+        } catch { /* socket push is non-fatal */ }
+        // Told once: their other searches that want this newcomer stay quiet.
+        break;
+      }
     }
     if (owners.size > 0) {
       logger.info({ newUserId, agents: gained.length, owners: owners.size }, 'Agent match notifications sent');

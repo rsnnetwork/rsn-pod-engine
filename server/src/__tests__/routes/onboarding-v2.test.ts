@@ -116,7 +116,7 @@ const ANSWERS = {
 const STATE = {
   status: 'not_started', version: null, step: 'welcome', answers: ANSWERS, prefilledFromV1: false,
   profile: { displayName: 'Ana', avatarUrl: null, jobTitle: null, company: null, industry: null, timezone: null, linkedinUrl: null },
-  linkedin: { status: 'none' },
+  linkedin: { status: 'none', chosen: null },
   tour: { pending: false, seenAt: null, outcome: null },
 };
 const agent = (id: string, status: string) => ({ id, label: `L-${id}`, status, wantText: 'w', matchingTags: [], userId: 'u-1' });
@@ -192,8 +192,19 @@ describe('POST /onboarding/v2/linkedin', () => {
     expect(mockFanout).toHaveBeenCalledWith('u-1');
   });
 
+  // The 25 Oct review (ONB-03): the state's linkedin.chosen is read from this stage, so it is written before
+  // the member's screens are told to read the state again.
+  it('records the choice before it tells the member\'s screens, so the state they read again already says LinkedIn', async () => {
+    const order: string[] = [];
+    mockStage.mockImplementation(async () => { await new Promise(r => setImmediate(r)); order.push('recorded'); });
+    mockFanout.mockImplementation(async () => { order.push('told'); });
+    const res = await auth(request(app).post('/onboarding/v2/linkedin').send({ url: 'linkedin.com/in/ana' }));
+    expect(res.status).toBe(200);
+    expect(order).toEqual(['recorded', 'told']);
+  });
+
   it('a found profile comes back with its prefill', async () => {
-    const prefill = { displayName: 'Ana', photoUrl: null, jobTitle: 'Founder', company: 'Vokt', industry: null, location: null, selfGuess: 'self_founder_owner' };
+    const prefill = { displayName: 'Ana', photoUrl: null, jobTitle: 'Founder', company: 'Vokt', industry: null, location: null, selfGuesses: ['self_founder_owner'], selfGuess: 'self_founder_owner' };
     mockConnect.mockResolvedValue({ linkedin: { status: 'found', prefill }, linkedinUrl: 'https://www.linkedin.com/in/ana', decision: 'reuse' });
     const res = await auth(request(app).post('/onboarding/v2/linkedin').send({ url: 'https://www.linkedin.com/in/ana' }));
     expect(res.body.data).toEqual({ status: 'found', prefill, linkedinUrl: 'https://www.linkedin.com/in/ana' });
@@ -310,12 +321,37 @@ describe('POST /onboarding/v2/confirm', () => {
     expect(mockUsePhoto).not.toHaveBeenCalled();
   });
 
+  // The 25 Oct review (ONB-01): every question is "Select all that apply.", through the real router too.
+  it('takes every kind of person to meet, every hope and every self-description at once', async () => {
+    const everything = {
+      ...ANSWERS,
+      lookingToMeet: [
+        'meet_founders_owners', 'meet_investors', 'meet_advisors_experienced', 'meet_specialists',
+        'meet_freelancers_consultants', 'meet_students_early_career', 'meet_managers_leaders', 'meet_hiring',
+      ],
+      hopingToFind: [
+        'find_customers', 'find_funding', 'find_cofounder', 'find_friends_conversations',
+        'find_new_role', 'find_advice_learning', 'find_hire', 'find_partners',
+      ],
+      selfKinds: [
+        'self_founder_owner', 'self_employee', 'self_manager_leader', 'self_investor',
+        'self_advisor_experienced', 'self_specialist', 'self_freelancer_consultant', 'self_student_early_career',
+      ],
+    };
+    const res = await authAs('u-everything')(request(app).post('/onboarding/v2/confirm').send(everything));
+    expect(res.status).toBe(200);
+    expect(mockConfirm).toHaveBeenCalledWith('u-everything', expect.objectContaining({
+      lookingToMeet: everything.lookingToMeet, hopingToFind: everything.hopingToFind, selfKinds: everything.selfKinds,
+    }));
+  });
+
   it('refuses an unfinished set, "Something else" without words, and a made-up time zone', async () => {
     const bad = [
       { ...ANSWERS, selfKinds: [] },
       { ...ANSWERS, lookingToMeet: ['meet_other'], meetOther: '' },
       { ...ANSWERS, profile: { timezone: 'Mars/Base' } },
-      { ...ANSWERS, lookingToMeet: ['meet_investors', 'meet_specialists', 'meet_founders_owners', 'meet_students_early_career'] },
+      // No question has a maximum since the 25 Oct review; only a runaway list of 21 keys is refused.
+      { ...ANSWERS, lookingToMeet: Array.from({ length: 21 }, () => 'meet_investors') },
     ];
     const asRefused = authAs('u-refused');
     for (const body of bad) {

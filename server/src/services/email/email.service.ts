@@ -660,7 +660,7 @@ export async function sendJoinRequestConfirmationEmail(
             Thank you for requesting to join REASON. We've received your application and our team will review it shortly.
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            REASON is an invite-only community for founders, leaders, and company owners who value honesty over hype. We review every application carefully to maintain the quality of our community.
+            REASON is an invite-only community for professionals of every kind, from founders to employees, investors and advisors, who value honesty over hype. We review every application carefully to maintain the quality of our community.
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;">
             You'll hear from us within 1-3 business days.
@@ -675,7 +675,7 @@ export async function sendJoinRequestConfirmationEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hi ${fullName},\n\nThank you for requesting to join REASON. We've received your application and our team will review it shortly.\n\nREASON is an invite-only community for founders, leaders, and company owners who value honesty over hype. We review every application carefully to maintain the quality of our community.\n\nYou'll hear from us within 1-3 business days.\n\nREASON — Fast, focused, and human.`;
+    const text = `Hi ${fullName},\n\nThank you for requesting to join REASON. We've received your application and our team will review it shortly.\n\nREASON is an invite-only community for professionals of every kind, from founders to employees, investors and advisors, who value honesty over hype. We review every application carefully to maintain the quality of our community.\n\nYou'll hear from us within 1-3 business days.\n\nREASON — Fast, focused, and human.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -709,7 +709,7 @@ export async function sendJoinRequestWelcomeEmail(
             Great news — your request to join REASON has been <strong style="color:#1a1a2e;">approved</strong>!
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            You're now part of a community of founders, leaders, and company owners who connect with honesty and purpose. No pitching. No selling. Just real conversations.
+            You're now part of a community of professionals of every kind, from founders to employees, investors and advisors, who connect with honesty and purpose. No pitching. No selling. Just real conversations.
           </p>
 
           <div style="text-align:center;margin:32px 0;">
@@ -732,7 +732,7 @@ export async function sendJoinRequestWelcomeEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hi ${fullName},\n\nGreat news — your request to join REASON has been approved!\n\nYou're now part of a community of founders, leaders, and company owners who connect with honesty and purpose. No pitching. No selling. Just real conversations.\n\nSign In to REASON: ${loginUrl}\n\nYour first step: sign up for an event and meet five people in focused 8-minute conversations.\n\nREASON — Fast, focused, and human.`;
+    const text = `Hi ${fullName},\n\nGreat news — your request to join REASON has been approved!\n\nYou're now part of a community of professionals of every kind, from founders to employees, investors and advisors, who connect with honesty and purpose. No pitching. No selling. Just real conversations.\n\nSign In to REASON: ${loginUrl}\n\nYour first step: sign up for an event and meet five people in focused 8-minute conversations.\n\nREASON — Fast, focused, and human.`;
     await sendEmail({ to, subject, html, text });
     return;
   }

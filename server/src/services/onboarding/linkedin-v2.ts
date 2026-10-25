@@ -24,9 +24,12 @@ import { linkedinSlug, type EnrichResult } from './enrichment.service';
 import { saveEnrichedCandidate, setEnrichmentState, type EnrichmentStatus } from './enrichment.repo';
 import { runEnrichment, isFreshCacheHit, SEARCHING_LOCK_MS } from './enrichment.orchestrator';
 import { statusFromResult } from './providers/registry';
-import { selfGuessFromRole } from '../matching/option-signals';
+import { selfGuessesFromText } from '../matching/option-signals';
 import { fanoutUserEntity } from '../../realtime/fanout';
-import { LINKEDIN_PROFILE_HELP, linkedinProfileUrl, type OnboardingV2Linkedin, type OnboardingV2LinkedinPrefill } from '@rsn/shared';
+import {
+  LINKEDIN_PROFILE_HELP, linkedinProfileUrl,
+  type OnboardingV2Linkedin, type OnboardingV2LinkedinPrefill, type OnboardingV2SignupChoice,
+} from '@rsn/shared';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** "Not found" is an answer about that address; it stands as long as a found result would. */
@@ -98,6 +101,11 @@ const text = (v: string | null | undefined): string | null => {
 export function prefillFrom(result: EnrichResult): OnboardingV2LinkedinPrefill {
   const p = result.profile;
   const role = text(p?.currentRole);
+  // Q4 is suggested only from what the member says about themselves: a role read out of the rest of the page
+  // (a recommendation, a post) still fills the title in for them to check, but suggests no answer (25 Oct
+  // review). Their headline is their own words too, read when there is no stated role.
+  const statedRole = p?.roleSource === 'inferred' ? null : role;
+  const selfGuesses = selfGuessesFromText(statedRole, text(p?.headline));
   return {
     displayName: text(p?.fullName),
     photoUrl: text(p?.photoUrl),
@@ -105,9 +113,20 @@ export function prefillFrom(result: EnrichResult): OnboardingV2LinkedinPrefill {
     company: text(p?.currentCompany),
     industry: text(p?.industry),
     location: text(p?.location),
-    // The role first; the headline is their own words too, when the page hid the role.
-    selfGuess: selfGuessFromRole(role) ?? selfGuessFromRole(text(p?.headline)),
+    selfGuesses,
+    selfGuess: selfGuesses[0] ?? null,
   };
+}
+
+/**
+ * How the member chose on screen 2, from the stage the server recorded for it ("Continue with LinkedIn" is
+ * linkedin_connected, "Continue with email" linkedin_skipped), so the choice holds in every tab and on every
+ * device; null before either.
+ */
+export function chosenFrom(stage: string | null): OnboardingV2SignupChoice | null {
+  if (stage === 'linkedin_connected') return 'linkedin';
+  if (stage === 'linkedin_skipped') return 'email';
+  return null;
 }
 
 function blockFrom(result: EnrichResult): OnboardingV2Linkedin {

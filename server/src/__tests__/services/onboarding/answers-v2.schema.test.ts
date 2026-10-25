@@ -1,11 +1,31 @@
 // ─── Onboarding v2: what the server accepts ──────────────────────────────────
 //
-// The limits are the brief's ("Select up to three answers.", "Select up to two
-// answers."), "Something else" needs its words, and a time zone must be one a
-// clock can actually show. Everything else is refused before the database.
+// Every question is "Select all that apply." (the 25 Oct review): at least one
+// answer, no maximum, and a ceiling of 20 against a runaway request. A key sent
+// twice is still one answer. "Something else" needs its words, and a time zone
+// must be one a clock can actually show. Everything else is refused before the
+// database.
 
 import { draftSchemaV2, confirmSchemaV2, linkedinSchemaV2, skipSchemaV2 } from '../../../services/onboarding/answers-v2.schema';
 import { canonicalTimeZone } from '../../../services/onboarding/time-zone';
+
+// Every answer of Q1, Q2 and Q4, written out: the new 25 Oct answers included.
+const ALL_MEET = [
+  'meet_founders_owners', 'meet_investors', 'meet_advisors_experienced', 'meet_specialists',
+  'meet_freelancers_consultants', 'meet_students_early_career', 'meet_managers_leaders', 'meet_hiring', 'meet_other',
+];
+const ALL_FIND = [
+  'find_customers', 'find_funding', 'find_cofounder', 'find_friends_conversations',
+  'find_new_role', 'find_advice_learning', 'find_hire', 'find_partners', 'find_other',
+];
+const ALL_SELF = [
+  'self_founder_owner', 'self_employee', 'self_manager_leader', 'self_investor', 'self_advisor_experienced',
+  'self_specialist', 'self_freelancer_consultant', 'self_student_early_career', 'self_other',
+];
+/** 21 keys: every answer twice, then three more. Only a broken or hostile client sends this. */
+const twentyOne = (all: string[]) => [...all, ...all, ...all.slice(0, 3)];
+/** 20 keys: the most a list may carry. */
+const twenty = (all: string[]) => [...all, ...all, ...all.slice(0, 2)];
 
 const GOOD = {
   lookingToMeet: ['meet_investors'],
@@ -51,10 +71,22 @@ describe('the draft: any part of the answers, as the member moves through', () =
     expect(draftSchemaV2.safeParse({ lookingToMeet: ['investors'] }).success).toBe(false);
   });
 
-  it('refuses more than the brief allows', () => {
-    expect(draftSchemaV2.safeParse({ lookingToMeet: ['meet_investors', 'meet_specialists', 'meet_founders_owners', 'meet_other'] }).success).toBe(false);
-    expect(draftSchemaV2.safeParse({ hopingToFind: ['find_customers', 'find_funding', 'find_cofounder', 'find_other'] }).success).toBe(false);
-    expect(draftSchemaV2.safeParse({ selfKinds: ['self_investor', 'self_specialist', 'self_other'] }).success).toBe(false);
+  it('accepts every meet, find and self option at once', () => {
+    const r = draftSchemaV2.safeParse({ lookingToMeet: ALL_MEET, hopingToFind: ALL_FIND, selfKinds: ALL_SELF });
+    expect(issues(r)).toEqual([]);
+    expect(r.success && r.data).toMatchObject({ lookingToMeet: ALL_MEET, hopingToFind: ALL_FIND, selfKinds: ALL_SELF });
+  });
+
+  it('refuses 21 keys in a list, in words, and takes 20', () => {
+    expect(issues(draftSchemaV2.safeParse({ lookingToMeet: twentyOne(ALL_MEET) }))).toEqual(['lookingToMeet: Choose from the answers shown.']);
+    expect(draftSchemaV2.safeParse({ hopingToFind: twentyOne(ALL_FIND) }).success).toBe(false);
+    expect(draftSchemaV2.safeParse({ selfKinds: twentyOne(ALL_SELF) }).success).toBe(false);
+    expect(draftSchemaV2.safeParse({ lookingToMeet: twenty(ALL_MEET), hopingToFind: twenty(ALL_FIND), selfKinds: twenty(ALL_SELF) }).success).toBe(true);
+  });
+
+  it('still refuses duplicate keys: a tick sent twice is saved as one answer', () => {
+    const r = draftSchemaV2.parse({ selfKinds: ['self_employee', 'self_employee', 'self_manager_leader'] });
+    expect(r.selfKinds).toEqual(['self_employee', 'self_manager_leader']);
   });
 
   it('refuses words over their length', () => {
@@ -89,17 +121,43 @@ describe('confirm: the finished answers', () => {
     expect(confirmSchemaV2.safeParse({ ...GOOD, [field]: value }).success).toBe(false);
   });
 
-  it('holds each question to its limit, and offers to none', () => {
-    expect(confirmSchemaV2.safeParse({ ...GOOD, lookingToMeet: ['meet_investors', 'meet_specialists', 'meet_founders_owners', 'meet_students_early_career'] }).success).toBe(false);
-    expect(confirmSchemaV2.safeParse({ ...GOOD, hopingToFind: ['find_customers', 'find_funding', 'find_cofounder', 'find_friends_conversations'] }).success).toBe(false);
-    expect(confirmSchemaV2.safeParse({ ...GOOD, selfKinds: ['self_investor', 'self_specialist', 'self_student_early_career'] }).success).toBe(false);
-    const allOffers = ['offer_products_services', 'offer_investment', 'offer_join_build_team', 'offer_advice_mentoring', 'offer_introductions', 'offer_friends_conversations'];
-    expect(confirmSchemaV2.safeParse({ ...GOOD, canOffer: allOffers }).success).toBe(true);
+  it('accepts every meet, find and self option at once, and every offer', () => {
+    const allOffers = [
+      'offer_products_services', 'offer_investment', 'offer_join_build_team', 'offer_advice_mentoring',
+      'offer_introductions', 'offer_friends_conversations', 'offer_knowledge', 'offer_referrals',
+    ];
+    const r = confirmSchemaV2.safeParse({
+      ...GOOD,
+      lookingToMeet: ALL_MEET, meetOther: 'bakers in Vienna',
+      hopingToFind: ALL_FIND, findOther: 'a sailing crew',
+      canOffer: allOffers,
+      selfKinds: ALL_SELF, selfOther: 'a chef',
+    });
+    expect(issues(r)).toEqual([]);
+    expect(r.success && r.data).toMatchObject({ lookingToMeet: ALL_MEET, hopingToFind: ALL_FIND, canOffer: allOffers, selfKinds: ALL_SELF });
   });
 
-  it('a tick twice is one answer', () => {
-    const r = confirmSchemaV2.parse({ ...GOOD, lookingToMeet: ['meet_investors', 'meet_investors'] });
-    expect(r.lookingToMeet).toEqual(['meet_investors']);
+  it('refuses 21 keys in a list, and takes 20', () => {
+    const words = { meetOther: 'bakers', findOther: 'a crew', selfOther: 'a chef' };
+    expect(confirmSchemaV2.safeParse({ ...GOOD, ...words, lookingToMeet: twentyOne(ALL_MEET) }).success).toBe(false);
+    expect(confirmSchemaV2.safeParse({ ...GOOD, ...words, hopingToFind: twentyOne(ALL_FIND) }).success).toBe(false);
+    expect(confirmSchemaV2.safeParse({ ...GOOD, ...words, selfKinds: twentyOne(ALL_SELF) }).success).toBe(false);
+    const most = confirmSchemaV2.safeParse({
+      ...GOOD, ...words, lookingToMeet: twenty(ALL_MEET), hopingToFind: twenty(ALL_FIND), selfKinds: twenty(ALL_SELF),
+    });
+    expect(issues(most)).toEqual([]);
+  });
+
+  it('still refuses duplicate keys: a tick sent twice is one answer, in every list', () => {
+    const r = confirmSchemaV2.parse({
+      ...GOOD,
+      lookingToMeet: ['meet_investors', 'meet_investors', 'meet_hiring'],
+      hopingToFind: ['find_new_role', 'find_new_role'],
+      selfKinds: ['self_employee', 'self_manager_leader', 'self_employee'],
+    });
+    expect(r.lookingToMeet).toEqual(['meet_investors', 'meet_hiring']);
+    expect(r.hopingToFind).toEqual(['find_new_role']);
+    expect(r.selfKinds).toEqual(['self_employee', 'self_manager_leader']);
   });
 
   it.each([

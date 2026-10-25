@@ -134,6 +134,58 @@ const cardContent = (n = 0) => (mockInsertOn.mock.calls[n] as unknown[])[3] as s
 /** The system_meta of the Nth card. */
 const cardMeta = (n = 0) => ((mockInsertOn.mock.calls[n] as unknown[])[5] as { systemMeta?: unknown }).systemMeta;
 
+/** A concrete 30-minute slot key, `daysAhead` days from the real clock, at hh:mm UTC. */
+const futureSlot = (daysAhead: number, hh: number, mm = 0) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + daysAhead);
+  d.setUTCHours(hh, mm, 0, 0);
+  return d.toISOString().replace('.000Z', 'Z');
+};
+
+/** Every write that books (or moves) a meeting onto the conversation. */
+const confirmations = () => mockQuery.mock.calls.filter(c => /UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(c[0] as string));
+
+/** The bell rows written, as [user, type, title, body, link]. */
+const bellsWritten = () => mockQuery.mock.calls
+  .filter(c => /INSERT INTO notifications/.test(c[0] as string))
+  .map(c => c[1] as unknown[]);
+
+/**
+ * Like armSave, and the conversation row follows the writes: once a save books a meeting, reading
+ * the conversation back shows it, as the database would. Both people have an email address and a
+ * time zone (Copenhagen, where the 25 Oct walkthrough happened), so emails and bell times can be read.
+ */
+function armBooking(
+  before: Array<{ user_id: string; window_key: string }>,
+  after: Array<{ user_id: string; window_key: string }>,
+  conv: Record<string, unknown> = CONV,
+) {
+  const row: Record<string, unknown> = { ...conv };
+  let reads = 0;
+  mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
+    if (/UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(sql)) {
+      const [, window, by, startAt, durationMin, type] = params;
+      Object.assign(row, {
+        meeting_confirmed_window: window, meeting_confirmed_by: by, meeting_confirmed_at: new Date(),
+        meeting_start_at: startAt, meeting_duration_min: durationMin, meeting_type: type, meeting_proposed_key: null,
+      });
+      return Promise.resolve({ rows: [] });
+    }
+    if (/FROM dm_conversations WHERE id/.test(sql)) return Promise.resolve({ rows: [{ ...row }] });
+    if (/FROM meeting_availability/.test(sql)) {
+      reads += 1;
+      return Promise.resolve({ rows: reads === 1 ? before : after });
+    }
+    if (/SELECT display_name FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ display_name: 'Claus' }] });
+    if (/FROM users WHERE id = ANY/.test(sql)) return Promise.resolve({ rows: [
+      { id: 'u-a', display_name: 'Claus', email: 'claus@example.com', timezone: 'Europe/Copenhagen' },
+      { id: 'u-b', display_name: 'Stefan', email: 'stefan@example.com', timezone: 'Europe/Copenhagen' },
+    ] });
+    return Promise.resolve({ rows: [{ id: 'n1', created_at: NOW }] });
+  });
+  return row;
+}
+
 describe('isValidWindowKey', () => {
   it('accepts today through the horizon, all dayparts', () => {
     expect(isValidWindowKey(key(0), NOW)).toBe(true);
@@ -337,22 +389,61 @@ describe('setAvailability', () => {
 
   // The second person to save is the one who creates the overlap, and before
   // this nobody was told: "we both have saved our availability?" / "no clue!!!"
-  it('posts ONE proposal card the moment both sides can meet', async () => {
-    const shared = futureKey(2, 'evening');
-    // Partner already saved it; my save is what makes it an overlap.
+  // 26 Oct 2026: a save that leaves exactly ONE shared time books it (the suite
+  // below); two or more still get one proposal card, and nothing is booked.
+  it('two shared slots still post one proposal card and confirm nothing', async () => {
+    const first = futureSlot(2, 13);
+    const second = futureSlot(2, 14, 30);
+    // Partner already saved both; my save is what makes them an overlap.
     armSave(
-      [{ user_id: 'u-b', window_key: shared }],
-      [{ user_id: 'u-b', window_key: shared }, { user_id: 'u-a', window_key: shared }],
+      [{ user_id: 'u-b', window_key: first }, { user_id: 'u-b', window_key: second }],
+      [
+        { user_id: 'u-b', window_key: first }, { user_id: 'u-b', window_key: second },
+        { user_id: 'u-a', window_key: first }, { user_id: 'u-a', window_key: second },
+      ],
     );
-    await setAvailability('conv-1', 'u-a', [shared]);
+    mockSendMtgEmail.mockClear();
+    await setAvailability('conv-1', 'u-a', [first, second]);
     expect(mockInsertOn).toHaveBeenCalledTimes(1);
-    expect(cardContent()).toMatch(/You are both free/);
-    expect(cardMeta()).toMatchObject({ type: 'meeting_proposal', slots: [shared] });
+    expect(cardMeta()).toMatchObject({ type: 'meeting_proposal', slots: [first, second] });
     // …and the partner is rung, with a link to this thread, not just /messages.
     const bell = mockQuery.mock.calls.find(c => /INSERT INTO notifications/.test(c[0] as string))!;
     expect(bell[0]).toMatch(/\$2/);
     expect((bell[1] as unknown[])[1]).toBe('meeting_proposed');
     expect((bell[1] as unknown[])[4]).toBe('/messages/conv-1');
+    // Nothing was booked: no meeting written, no confirmation emails.
+    expect(confirmations()).toHaveLength(0);
+    expect(mockSendMtgEmail).not.toHaveBeenCalled();
+  });
+
+  // 26 Oct 2026: the inbox shows a proposal's text, and the client puts every ISO instant in it
+  // into the reader's own time. A label written here was UTC: Stefan read "Sun 25 Oct, 12:00 UTC"
+  // and took it as "we meet Sunday at 12" when he had picked 13:00.
+  it('the proposal text carries ISO instants', async () => {
+    const first = futureSlot(3, 11);
+    const second = futureSlot(3, 15);
+    armSave(
+      [{ user_id: 'u-b', window_key: first }, { user_id: 'u-b', window_key: second }],
+      [
+        { user_id: 'u-b', window_key: first }, { user_id: 'u-b', window_key: second },
+        { user_id: 'u-a', window_key: first }, { user_id: 'u-a', window_key: second },
+      ],
+    );
+    await setAvailability('conv-1', 'u-a', [first, second]);
+    expect(cardContent()).toBe(`You are both free: ${first}, ${second}. Pick one to confirm.`);
+    expect(cardContent()).not.toMatch(/UTC/);
+  });
+
+  it('a shared day part (no time of its own) is never booked: it still gets the proposal card, labelled as before', async () => {
+    const shared = futureKey(2, 'evening');
+    armSave(
+      [{ user_id: 'u-b', window_key: shared }],
+      [{ user_id: 'u-b', window_key: shared }, { user_id: 'u-a', window_key: shared }],
+    );
+    await setAvailability('conv-1', 'u-a', [shared]);
+    expect(cardMeta()).toMatchObject({ type: 'meeting_proposal', slots: [shared] });
+    expect(cardContent()).toBe(`You are both free: ${windowLabel(shared)}. Pick one to confirm.`);
+    expect(confirmations()).toHaveLength(0);
   });
 
   it('does not post a second proposal when the same overlap is re-saved', async () => {
@@ -377,6 +468,19 @@ describe('setAvailability', () => {
     expect(mockInsertOn).not.toHaveBeenCalled();
   });
 
+  it('a meeting that stands is never moved by a save: one new shared time books nothing', async () => {
+    const standing = futureSlot(2, 13);
+    const other = futureSlot(3, 10);
+    armSave(
+      [{ user_id: 'u-b', window_key: other }],
+      [{ user_id: 'u-b', window_key: other }, { user_id: 'u-a', window_key: other }],
+      { ...CONV, meeting_confirmed_window: standing, meeting_start_at: new Date(standing), meeting_duration_min: 30 },
+    );
+    await setAvailability('conv-1', 'u-a', [other]);
+    expect(confirmations()).toHaveLength(0);
+    expect(mockInsertOn).not.toHaveBeenCalled();
+  });
+
   it('refuses to schedule with someone a block stands between', async () => {
     armConv([]);
     mockAreBlocked.mockResolvedValue(true);
@@ -386,12 +490,194 @@ describe('setAvailability', () => {
   });
 });
 
+// ── Agreeing a time books it (25 Oct 2026) ───────────────────────────────────
+//
+// Stefan saved 2026-10-25T12:00:00Z (13:00 in Copenhagen) and Claus saved the same slot.
+// The server posted "You are both free … Pick one to confirm", both panels had closed on
+// Save, nobody found the one control that books, and no meeting existed (walkthrough
+// 2:45:09: "press the green, and nothing happens"). The same time picked by both is now
+// the agreement: the save that leaves exactly one shared future time confirms it, in the
+// same transaction, exactly as Confirm would.
+describe('setAvailability — agreeing a time books it', () => {
+  afterEach(() => jest.useRealTimers());
+
+  const both = (slot: string) => [{ user_id: 'u-b', window_key: slot }, { user_id: 'u-a', window_key: slot }];
+
+  it('a save that creates exactly one shared future slot confirms it', async () => {
+    const slot = futureSlot(2, 12);
+    const conv = armBooking([{ user_id: 'u-b', window_key: slot }], both(slot));
+    mockSendMtgEmail.mockClear();
+    mockBroadcastDm.mockClear();
+
+    const scheduling = await setAvailability('conv-1', 'u-a', [slot]);
+
+    // The meeting is written: this slot is its start, 30 minutes, a video call, booked by the saver.
+    expect(confirmations()).toHaveLength(1);
+    const [, window, by, startAt, durationMin, type] = confirmations()[0][1] as unknown[];
+    expect([window, by, (startAt as Date).toISOString(), durationMin, type])
+      .toEqual([slot, 'u-a', new Date(slot).toISOString(), 30, 'video']);
+    // One card in the thread, and it is the confirmed meeting, not a proposal.
+    expect(mockInsertOn).toHaveBeenCalledTimes(1);
+    expect(cardContent()).toBe(`📅 Meeting confirmed: ${slot} · 30 min video call`);
+    expect(cardMeta()).toEqual({
+      type: 'meeting_confirmed', startAt: new Date(slot).toISOString(), durationMin: 30,
+      meetingType: 'video', joinPath: '/meet/conv-1?scheduled=1&kind=video',
+    });
+    expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
+    // The partner's bell says the time is confirmed; there is no "pick a time" bell at all.
+    expect(bellsWritten()).toEqual([
+      ['u-b', 'meeting_confirmed', 'Meeting time confirmed', expect.stringMatching(/ · 30 min video call$/), '/messages/conv-1'],
+    ]);
+    // Both people get the invite.
+    expect(mockSendMtgEmail.mock.calls.map(c => c[0]).sort()).toEqual(['claus@example.com', 'stefan@example.com']);
+    // The answer to the save says so: production's scheduler draws its confirmed card and Join from it.
+    expect(scheduling.confirmed).toMatchObject({ window: slot, byUserId: 'u-a', durationMin: 30, type: 'video' });
+    expect(conv.meeting_proposed_key).toBeNull();
+  });
+
+  it('the length and kind sent with the save are the ones booked', async () => {
+    const slot = futureSlot(2, 16, 30);
+    armBooking([{ user_id: 'u-b', window_key: slot }], both(slot));
+
+    await setAvailability('conv-1', 'u-a', [slot], { durationMin: 45, type: 'audio' });
+
+    const [, , , , durationMin, type] = confirmations()[0][1] as unknown[];
+    expect([durationMin, type]).toEqual([45, 'audio']);
+    expect(cardContent()).toBe(`📅 Meeting confirmed: ${slot} · 45 min audio call`);
+    expect(cardMeta()).toMatchObject({ durationMin: 45, meetingType: 'audio', joinPath: '/meet/conv-1?scheduled=1&kind=audio' });
+  });
+
+  it('a legacy availability body { windows } with no durationMin/type is accepted, and books 30 minutes of video', async () => {
+    // What the route passes for production's body, which has neither field.
+    const slot = futureSlot(4, 8);
+    armBooking([{ user_id: 'u-b', window_key: slot }], both(slot));
+
+    await expect(setAvailability('conv-1', 'u-a', [slot], { durationMin: undefined, type: undefined })).resolves.toBeTruthy();
+
+    const [, , , , durationMin, type] = confirmations()[0][1] as unknown[];
+    expect([durationMin, type]).toEqual([30, 'video']);
+  });
+
+  it('auto-confirm on 2026-10-25 (EU clock change) stores 2026-10-25T12:00:00Z', async () => {
+    // The moment of Claus's save in the walkthrough.
+    jest.useFakeTimers({ now: new Date('2026-10-25T11:45:47Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    const slot = '2026-10-25T12:00:00Z';
+    armBooking([{ user_id: 'u-b', window_key: slot }], both(slot));
+
+    const scheduling = await setAvailability('conv-1', 'u-a', [slot]);
+
+    expect((confirmations()[0][1] as unknown[])[3]).toEqual(new Date('2026-10-25T12:00:00Z'));
+    expect(cardContent()).toBe('📅 Meeting confirmed: 2026-10-25T12:00:00Z · 30 min video call');
+    expect(cardMeta()).toMatchObject({ startAt: '2026-10-25T12:00:00.000Z' });
+    // Copenhagen left summer time at 01:00 UTC that morning, so 12:00 UTC is 13:00 CET: the hour they picked.
+    expect(bellsWritten()[0][3]).toMatch(/^Sun 25 Oct, 13:00 (CET|GMT\+1) · 30 min video call$/);
+    expect(scheduling.confirmed?.startAt).toEqual(new Date('2026-10-25T12:00:00Z'));
+  });
+
+  it('a later save that leaves the one shared time as it was books nothing: only the save that makes it shared does', async () => {
+    // Both have had this time since before (an older conversation, or one whose meeting was cancelled since):
+    // adding another time of my own must not quietly book it.
+    const slot = futureSlot(2, 12);
+    const extra = futureSlot(2, 18);
+    armBooking(
+      both(slot),
+      [...both(slot), { user_id: 'u-a', window_key: extra }],
+    );
+
+    await setAvailability('conv-1', 'u-a', [slot, extra]);
+
+    expect(confirmations()).toHaveLength(0);
+    expect(mockInsertOn).not.toHaveBeenCalled();
+  });
+
+  it('a time that passes while the save runs does not make it look like a new agreement', async () => {
+    // Both share 12:00 and 13:00, and the save changes neither. 12:00 goes by between the
+    // two reads of the table: judged by two different clocks, the shared times would look
+    // as if they had narrowed to 13:00 alone, which would book it. One save, one clock.
+    jest.useFakeTimers({ now: new Date('2026-11-02T11:59:59.500Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    const passing = '2026-11-02T12:00:00Z';
+    const later = '2026-11-02T13:00:00Z';
+    const rows = [...both(passing), ...both(later)];
+    let reads = 0;
+    mockQuery.mockImplementation((sql: string) => {
+      if (/FROM dm_conversations WHERE id/.test(sql)) return Promise.resolve({ rows: [CONV] });
+      if (/FROM meeting_availability/.test(sql)) {
+        reads += 1;
+        if (reads === 2) jest.setSystemTime(new Date('2026-11-02T12:00:01Z'));
+        return Promise.resolve({ rows });
+      }
+      return Promise.resolve({ rows: [{ id: 'n1', created_at: NOW }] });
+    });
+
+    await setAvailability('conv-1', 'u-a', [passing, later]);
+
+    expect(confirmations()).toHaveLength(0);
+    expect(mockInsertOn).not.toHaveBeenCalled();
+  });
+
+  it('narrowing two shared times down to one books the one left', async () => {
+    const keep = futureSlot(2, 12);
+    const drop = futureSlot(2, 13);
+    armBooking(
+      [...both(keep), ...both(drop)],
+      [...both(keep), { user_id: 'u-b', window_key: drop }],
+    );
+
+    await setAvailability('conv-1', 'u-a', [keep]);
+
+    expect(confirmations()).toHaveLength(1);
+    expect((confirmations()[0][1] as unknown[])[1]).toBe(keep);
+  });
+
+  it('once the earlier meeting is over, a save that makes one new shared time books the next one', async () => {
+    const next = futureSlot(3, 9);
+    const longGone = new Date(Date.now() - 4 * 3_600_000);
+    armBooking(
+      [{ user_id: 'u-b', window_key: next }],
+      both(next),
+      { ...CONV, meeting_confirmed_window: longGone.toISOString().replace('.000Z', 'Z'), meeting_start_at: longGone, meeting_duration_min: 30 },
+    );
+
+    await setAvailability('conv-1', 'u-a', [next]);
+
+    expect(confirmations()).toHaveLength(1);
+    // A new meeting, not a move: the one it replaces had already ended.
+    expect(cardMeta()).toMatchObject({ type: 'meeting_confirmed' });
+    expect((cardMeta() as { movedFrom?: string }).movedFrom).toBeUndefined();
+  });
+});
+
 describe('confirmWindow', () => {
   it('rejects a window only ONE side selected', async () => {
     const windowKey = futureKey(2);
     armConv([{ user_id: 'u-a', window_key: windowKey }]); // partner never picked it
     await expect(confirmWindow('conv-1', 'u-a', windowKey))
-      .rejects.toMatchObject({ statusCode: 400 });
+      .rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  // 26 Oct 2026: the time was shared when the screen was drawn, and the partner has taken it off
+  // since. A 409 with where both people's times stand now lets the client redraw instead of
+  // showing a dead end.
+  it('confirm on a slot no longer shared throws ConflictError with the current scheduling in details', async () => {
+    const slot = futureSlot(2, 13);
+    const mine = futureSlot(2, 15);
+    armConv([{ user_id: 'u-a', window_key: slot }, { user_id: 'u-a', window_key: mine }, { user_id: 'u-b', window_key: futureSlot(4, 9) }]);
+    mockSendMtgEmail.mockClear();
+
+    await expect(confirmWindow('conv-1', 'u-a', slot)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'MEETING_TIME_NOT_SHARED',
+      message: 'That time is no longer free for both of you.',
+      details: {
+        scheduling: {
+          conversationId: 'conv-1', partnerId: 'u-b',
+          mine: [slot, mine].sort(), theirs: [futureSlot(4, 9)], overlap: [], confirmed: null,
+        },
+      },
+    });
+    expect(confirmations()).toHaveLength(0);
+    expect(mockInsertOn).not.toHaveBeenCalled();
+    expect(mockSendMtgEmail).not.toHaveBeenCalled();
   });
 
   it('confirms an overlap window: updates the conversation, drops a thread message, notifies the partner', async () => {
@@ -649,16 +935,20 @@ describe('acceptPoke intro seeding', () => {
   // accident: they were asserting against this always-false stub.
 
   function armAccept(message: string | null) {
-    mockQuery.mockImplementation((sql: string) => {
-      if (/FROM user_pokes WHERE id/.test(sql)) {
-        return Promise.resolve({
-          rows: [{
-            id: 'poke-1', sender_id: 'u-send', recipient_id: 'u-recv',
-            status: 'pending', message, responded_at: null, created_at: new Date(),
-          }],
-        });
+    const request = {
+      id: 'poke-1', sender_id: 'u-send', recipient_id: 'u-recv',
+      status: 'pending', message, responded_at: null as Date | null, created_at: new Date(), preferred_format: null,
+    };
+    mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
+      // The accept is a claim: only a pending request sent to this member changes, and it comes back whole.
+      if (/UPDATE user_pokes[\s\S]*WHERE id = \$1/.test(sql)) {
+        if (request.status !== 'pending' || params[1] !== request.recipient_id) return Promise.resolve({ rows: [] });
+        Object.assign(request, { status: params[2], responded_at: new Date() });
+        return Promise.resolve({ rows: [{ ...request }] });
       }
-      if (/UPDATE user_pokes/.test(sql)) return Promise.resolve({ rows: [{ responded_at: new Date() }] });
+      if (/FROM user_pokes WHERE id/.test(sql)) return Promise.resolve({ rows: [{ ...request }] });
+      if (/UPDATE user_pokes/.test(sql)) return Promise.resolve({ rows: [] }); // no request the other way
+      if (/SELECT status FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }] });
       if (/INSERT INTO dm_conversations/.test(sql)) return Promise.resolve({ rows: [{ id: 'conv-9' }] });
       if (/SELECT display_name FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ display_name: 'Recv Person' }] });
       if (/INSERT INTO notifications/.test(sql)) return Promise.resolve({ rows: [{ id: 'notif-1', created_at: new Date() }] });

@@ -1,9 +1,11 @@
 // ─── Onboarding v2: validation ───────────────────────────────────────────────
 //
 // Built from the shared catalogue, so a key the screens cannot show is a key
-// this will not accept. The limits are the brief's; "Something else" requires
-// its words; a time zone has to be real. Every body is strict: an unknown field
-// is a mistake in the caller, and is refused rather than quietly ignored.
+// this will not accept. Every question is "Select all that apply." (25 Oct
+// review): at least one answer and no maximum, only a ceiling against a
+// runaway request. "Something else" requires its words; a time zone has to be
+// real. Every body is strict: an unknown field is a mistake in the caller, and
+// is refused rather than quietly ignored.
 
 import { z } from 'zod';
 import {
@@ -44,15 +46,12 @@ const line = (max: number) => tidied(max).transform(s => (s.length ? s : null)).
  */
 const clearableLine = (max: number) => tidied(max).nullable();
 
-/** A set, not a list: a tick twice is one answer. */
+/** A set, not a list: a tick twice is one answer. Held to the shared ceiling, which no question has as many answers as. */
 const uniqueKeys = <T extends z.ZodTypeAny>(item: T) =>
   z.array(item, { required_error: 'Select at least one answer.', invalid_type_error: 'Choose from the answers shown.' })
-    .max(20)
+    .max(L.ceiling, 'Choose from the answers shown.')
     .transform(v => [...new Set(v)] as z.infer<T>[]);
 
-/** The brief's own helper line is the message: "Select up to three answers." */
-const atMost = <T extends z.ZodTypeAny>(item: T, max: number, words: string) =>
-  uniqueKeys(item).refine(v => v.length <= max, { message: `Select up to ${words} answers.` });
 const atLeastOne = { message: 'Select at least one answer.' };
 
 const TIMEZONE_MESSAGE = 'Choose your time zone from the list, for example Asia/Kathmandu.';
@@ -71,14 +70,14 @@ const timezone = z.string().max(200).nullable().transform((value, ctx) => {
 
 /** Saved as the member moves through the screens. No minimums yet, but never an unknown key. */
 export const draftSchemaV2 = z.object({
-  lookingToMeet: atMost(meetKey, L.meetMax, 'three').optional(),
+  lookingToMeet: uniqueKeys(meetKey).optional(),
   meetOther: line(L.otherMaxLen).optional(),
-  hopingToFind: atMost(findKey, L.findMax, 'three').optional(),
+  hopingToFind: uniqueKeys(findKey).optional(),
   findOther: line(L.otherMaxLen).optional(),
   findSpecific: line(L.findSpecificMaxLen).optional(),
   canOffer: uniqueKeys(offerKey).optional(),
   offerOther: line(L.otherMaxLen).optional(),
-  selfKinds: atMost(selfKey, L.selfMax, 'two').optional(),
+  selfKinds: uniqueKeys(selfKey).optional(),
   selfOther: line(L.otherMaxLen).optional(),
   step: z.enum(ONBOARDING_V2_STEPS).optional(),
 }).strict();
@@ -104,14 +103,14 @@ const OWN_WORDS = [
 
 /** The finished set, sent whole, so confirming never depends on whether a draft save landed. */
 export const confirmSchemaV2 = z.object({
-  lookingToMeet: atMost(meetKey, L.meetMax, 'three').refine(v => v.length >= L.meetMin, atLeastOne),
+  lookingToMeet: uniqueKeys(meetKey).refine(v => v.length >= L.meetMin, atLeastOne),
   meetOther: line(L.otherMaxLen).optional().default(null),
-  hopingToFind: atMost(findKey, L.findMax, 'three').refine(v => v.length >= L.findMin, atLeastOne),
+  hopingToFind: uniqueKeys(findKey).refine(v => v.length >= L.findMin, atLeastOne),
   findOther: line(L.otherMaxLen).optional().default(null),
   findSpecific: line(L.findSpecificMaxLen).optional().default(null),
   canOffer: uniqueKeys(offerKey).refine(v => v.length >= L.offerMin, atLeastOne),
   offerOther: line(L.otherMaxLen).optional().default(null),
-  selfKinds: atMost(selfKey, L.selfMax, 'two').refine(v => v.length >= L.selfMin, atLeastOne),
+  selfKinds: uniqueKeys(selfKey).refine(v => v.length >= L.selfMin, atLeastOne),
   selfOther: line(L.otherMaxLen).optional().default(null),
   profile: profileSchema.optional().default({}),
 }).strict()

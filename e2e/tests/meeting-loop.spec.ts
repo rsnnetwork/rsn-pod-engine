@@ -14,6 +14,12 @@ import { expectReachable, tapReachable } from '../helpers/viewport-fit';
 //
 // Ana is on a laptop, Bo on a phone, in different timezones. Nobody reloads
 // anything: every step has to arrive on the other screen on its own.
+//
+// 25 Oct 2026 (Stefan and Claus on production): both saved the same time, the
+// server said "pick a time to confirm", nobody found the control that books,
+// and no meeting existed. The same time picked by both is now the agreement:
+// the save that leaves exactly one shared time books it. Two or more shared
+// times still get the proposal card and the Confirm step (the second test).
 // ─────────────────────────────────────────────────────────────────────────────
 
 let browser: Browser;
@@ -128,7 +134,7 @@ test.afterAll(async () => {
   await pool.end().catch(() => {});
 });
 
-test('two people go from silence to a confirmed meeting, each step arriving on both screens', async () => {
+test('two people go from silence to a booked meeting, each step arriving on both screens', async () => {
   test.setTimeout(300_000);
 
   // Both are looking at the thread the whole way through. Nothing below
@@ -152,39 +158,25 @@ test('two people go from silence to a confirmed meeting, each step arriving on b
   // The inbox preview never says "You: Loop Ana shared times…" — nobody wrote it.
   await expect(boPage.locator('text=/You: Loop Ana shared/')).toHaveCount(0);
 
-  // ── 2. Bo picks the same time. Now they can both meet, and both are told.
+  // ── 2. Bo picks the same time and saves. That is the agreement: the meeting
+  //       is booked by the save itself, and both are told, with nothing more to press.
   await openScheduler(boPage);
   await reachSlot(boPage, SLOT, 'Bo: the same time, from a different timezone');
   await tapReachable(boPage, boPage.getByRole('button', { name: /Save and send availability/i }), 'Bo: "Save and send availability"');
 
-  const proposal = /You are both free/i;
-  await expect(cards(boPage).filter({ hasText: proposal })).toBeVisible({ timeout: 30_000 });
-  await expect(cards(anaPage).filter({ hasText: proposal })).toBeVisible({ timeout: 30_000 });
-  console.log('  ✓ both sides told they can meet, neither reloaded');
-
-  // Exactly one proposal card, however the saves landed.
-  const rows = await pool.query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM direct_messages
-     WHERE conversation_id=$1 AND kind='system' AND system_meta->>'type'='meeting_proposal'`,
-    [convId],
-  );
-  expect(rows.rows[0].n).toBe('1');
-
   // Sending ended the job: the panel is gone and the chat is back, with the
-  // card it just wrote in it. Nothing traps them any more.
+  // card the save wrote in it. Nothing traps them any more.
   await expect(boPage.getByTestId('meeting-scheduler')).toHaveCount(0);
   await expect(anaPage.getByTestId('meeting-scheduler')).toHaveCount(0);
 
-  // ── 3. Bo confirms from the card in the chat, on a phone.
-  await tapReachable(boPage, cards(boPage).filter({ hasText: proposal }).getByRole('button').first(), 'Bo: the proposed time');
-  await expect(boPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
-  await tapReachable(boPage, boPage.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first(), 'Bo: green time chip');
-  await tapReachable(boPage, boPage.getByRole('button', { name: /^Confirm meeting$/ }), 'Bo: "Confirm meeting"');
-
-  // ── 4. The meeting exists, for both, each in their OWN local time.
+  // ── 3. The meeting exists, for both, each in their OWN local time.
   const confirmed = /Meeting confirmed/i;
   await expect(cards(boPage).filter({ hasText: confirmed })).toBeVisible({ timeout: 30_000 });
   await expect(cards(anaPage).filter({ hasText: confirmed })).toBeVisible({ timeout: 30_000 });
+  console.log('  ✓ the save booked it; both sides see the meeting, neither reloaded');
+  // No "pick one to confirm" step was left in front of either of them.
+  await expect(cards(boPage).filter({ hasText: /You are both free/i })).toHaveCount(0);
+  await expect(cards(anaPage).filter({ hasText: /You are both free/i })).toHaveCount(0);
 
   const boCard = cards(boPage).filter({ hasText: confirmed });
   await expect(boCard.getByRole('button', { name: /Join meeting/i })).toBeVisible();
@@ -196,17 +188,124 @@ test('two people go from silence to a confirmed meeting, each step arriving on b
   console.log(`  ✓ same meeting, Oslo ${localIn('Europe/Oslo')} and Karachi ${localIn('Asia/Karachi')}`);
   // Nobody sees a raw timestamp.
   await expect(boCard).not.toContainText(/\d{4}-\d{2}-\d{2}T/);
+  // Production's scheduler shows the meeting with Join as soon as the scheduling says it is confirmed.
+  await expect(anaPage.getByTestId('thread-meeting-banner').getByRole('button', { name: /^Join$/ })).toBeVisible({ timeout: 30_000 });
 
-  // ── 5. The database holds ONE meeting and ONE confirmation card.
-  const row = (await pool.query<{ meeting_start_at: Date | null; cards: string }>(
-    `SELECT c.meeting_start_at,
+  // ── 4. The database holds ONE meeting, booked by Bo's save, 30 minutes of
+  //       video (production's scheduler sends no length), ONE confirmation card,
+  //       no proposal card, and Ana's bell says the time is confirmed.
+  const row = (await pool.query<{
+    meeting_start_at: Date | null; meeting_duration_min: number | null; meeting_type: string | null;
+    meeting_confirmed_by: string | null; cards: string; proposals: string;
+  }>(
+    `SELECT c.meeting_start_at, c.meeting_duration_min, c.meeting_type, c.meeting_confirmed_by,
             (SELECT count(*)::text FROM direct_messages m
              WHERE m.conversation_id=c.id AND m.kind='system'
-               AND m.system_meta->>'type'='meeting_confirmed') AS cards
+               AND m.system_meta->>'type'='meeting_confirmed') AS cards,
+            (SELECT count(*)::text FROM direct_messages m
+             WHERE m.conversation_id=c.id AND m.kind='system'
+               AND m.system_meta->>'type'='meeting_proposal') AS proposals
      FROM dm_conversations c WHERE c.id=$1`, [convId],
   )).rows[0];
   expect(row.meeting_start_at?.toISOString().replace('.000Z', 'Z')).toBe(SLOT);
+  expect([row.meeting_duration_min, row.meeting_type, row.meeting_confirmed_by]).toEqual([30, 'video', bo.id]);
   expect(row.cards).toBe('1');
+  expect(row.proposals).toBe('0');
+  const anaBell = await pool.query<{ title: string }>(
+    `SELECT title FROM notifications WHERE user_id=$1 AND type='meeting_confirmed'`, [ana.id]);
+  expect(anaBell.rows.map(r => r.title)).toEqual(['Meeting time confirmed']);
+});
+
+test('when two times are shared, the card leads to Confirm, and Confirm books the time picked', async () => {
+  test.setTimeout(240_000);
+  // Its own pair: two shared times are not an agreement on one, so nothing is booked by the saves.
+  const cy = await createTestUser('mlcy');
+  const di = await createTestUser('mldi');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Cy', cy.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Di', di.id]);
+    const sent = await apiAs(cy, 'POST', '/pokes', { recipientId: di.id, message: 'Coffee?' });
+    expect((await apiAs(di, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [cy.id, di.id],
+    )).rows[0].id;
+    const early = futureSlot(4, 10);
+    const late = futureSlot(4, 16);
+    expect((await apiAs(cy, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [early, late] })).status).toBe(200);
+    const second = await apiAs(di, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [early, late] });
+    expect(second.status).toBe(200);
+    expect(second.json.data.confirmed, 'two shared times book nothing').toBeNull();
+    expect(second.json.data.overlap).toEqual([early, late]);
+
+    const cyPage = await openAs(cy, `/messages/${conv}`, { width: 1366, height: 768 }, 'Europe/Oslo');
+    const diPage = await openAs(di, `/messages/${conv}`, { width: 390, height: 844 }, 'Asia/Karachi');
+    const proposal = /You are both free/i;
+    await expect(cards(diPage).filter({ hasText: proposal })).toBeVisible({ timeout: 30_000 });
+
+    // Di confirms from the card in the chat, on a phone: the card's time, the green chip, Confirm meeting.
+    await tapReachable(diPage, cards(diPage).filter({ hasText: proposal }).getByRole('button').first(), 'Di: the proposed time');
+    await expect(diPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    await tapReachable(diPage, diPage.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first(), 'Di: green time chip');
+    await tapReachable(diPage, diPage.getByRole('button', { name: /^Confirm meeting$/ }), 'Di: "Confirm meeting"');
+
+    const confirmed = /Meeting confirmed/i;
+    await expect(cards(diPage).filter({ hasText: confirmed })).toBeVisible({ timeout: 30_000 });
+    await expect(cards(cyPage).filter({ hasText: confirmed })).toBeVisible({ timeout: 30_000 });
+
+    const row = (await pool.query<{ meeting_start_at: Date | null; cards: string; proposals: string }>(
+      `SELECT c.meeting_start_at,
+              (SELECT count(*)::text FROM direct_messages m WHERE m.conversation_id=c.id AND m.kind='system'
+                 AND m.system_meta->>'type'='meeting_confirmed') AS cards,
+              (SELECT count(*)::text FROM direct_messages m WHERE m.conversation_id=c.id AND m.kind='system'
+                 AND m.system_meta->>'type'='meeting_proposal') AS proposals
+         FROM dm_conversations c WHERE c.id=$1`, [conv],
+    )).rows[0];
+    expect(row.meeting_start_at?.toISOString().replace('.000Z', 'Z')).toBe(early);
+    expect(row.cards).toBe('1');
+    expect(row.proposals).toBe('1');
+    console.log('  ✓ two shared times: one proposal card, then Confirm booked the time picked');
+  } finally {
+    await cleanup(pool, { ids: [cy.id, di.id] });
+  }
+});
+
+test('a save that books the agreed time books it with the length and kind it carried', async () => {
+  const x = await createTestUser('mlbookx');
+  const y = await createTestUser('mlbooky');
+  try {
+    const sent = await apiAs(x, 'POST', '/pokes', { recipientId: y.id, message: 'Hi' });
+    expect((await apiAs(y, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [x.id, y.id],
+    )).rows[0].id;
+    const slot = futureSlot(5, 11);
+    expect((await apiAs(x, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot] })).status).toBe(200);
+    const booked = await apiAs(y, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot], durationMin: 20, type: 'audio' });
+    expect(booked.status).toBe(200);
+    expect(booked.json.data.confirmed).toMatchObject({ window: slot, byUserId: y.id, durationMin: 20, type: 'audio' });
+    expect(new Date(booked.json.data.confirmed.startAt).toISOString().replace('.000Z', 'Z')).toBe(slot);
+
+    const row = (await pool.query<{ meeting_duration_min: number; meeting_type: string; proposals: string }>(
+      `SELECT c.meeting_duration_min, c.meeting_type,
+              (SELECT count(*)::text FROM direct_messages m WHERE m.conversation_id=c.id AND m.kind='system'
+                 AND m.system_meta->>'type'='meeting_proposal') AS proposals
+         FROM dm_conversations c WHERE c.id=$1`, [conv],
+    )).rows[0];
+    expect([row.meeting_duration_min, row.meeting_type, row.proposals]).toEqual([20, 'audio', '0']);
+
+    // Saving again changes nothing: the meeting stands, and only an explicit Confirm moves it.
+    const again = await apiAs(x, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot, futureSlot(5, 15)] });
+    expect(again.json.data.confirmed).toMatchObject({ window: slot, durationMin: 20, type: 'audio' });
+    const cardsAfter = await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM direct_messages WHERE conversation_id=$1 AND kind='system' AND system_meta->>'type'='meeting_confirmed'`,
+      [conv],
+    );
+    expect(cardsAfter.rows[0].n).toBe('1');
+  } finally {
+    await cleanup(pool, { ids: [x.id, y.id] });
+  }
 });
 
 test('confirming the same time twice books one meeting, not two', async () => {
@@ -221,8 +320,13 @@ test('confirming the same time twice books one meeting, not two', async () => {
       [x.id, y.id],
     )).rows[0].id;
     const slot = futureSlot(6, 10);
-    expect((await apiAs(x, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot] })).status).toBe(200);
-    expect((await apiAs(y, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot] })).status).toBe(200);
+    // Two shared times, so the saves book nothing and Confirm is what books (one shared time
+    // would be booked by the second save itself).
+    const spare = futureSlot(6, 14);
+    expect((await apiAs(x, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot, spare] })).status).toBe(200);
+    const saved = await apiAs(y, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot, spare] });
+    expect(saved.status).toBe(200);
+    expect(saved.json.data.confirmed).toBeNull();
 
     // Both press Confirm at the same instant, on the same time.
     const [a, b] = await Promise.all([

@@ -17,7 +17,7 @@ import type {
   OnboardingStatus, OnboardingV2Answers, OnboardingV2State, OnboardingV2Step, TourOutcome,
 } from '@rsn/shared';
 import { v2FromV1, isMeetV2Key, isFindV2Key, isOfferV2Key, isSelfV2Key } from './answers-v2.map';
-import { linkedinBlock, sourcesFromRow, shownPrefill, type LinkedinRow } from './linkedin-v2';
+import { chosenFrom, linkedinBlock, sourcesFromRow, shownPrefill, type LinkedinRow } from './linkedin-v2';
 import { sameTitle } from './enrichment.repo';
 import {
   wantTextV2, intentTextV2, offerTextV2, roleTitlesV2, reasonsV2, desiredDesignationsV2,
@@ -53,6 +53,8 @@ interface StateRow extends LinkedinRow {
   offer_other: string | null;
   self_other: string | null;
   draft: Draft | null;
+  /** The member's latest screen 2 stage, linkedin_connected or linkedin_skipped; null before either. */
+  signup_stage: string | null;
 }
 
 const iso = (v: Date | string | null): string | null => (v == null ? null : new Date(v).toISOString());
@@ -149,7 +151,8 @@ export async function getState(userId: string): Promise<OnboardingV2State> {
             p.inferred_profile->'enriched' AS enriched,
             p.enrichment_status, p.enrichment_started_at, p.enrichment_completed_at,
             p.inferred_profile->'lastLookup'->>'linkedinUrl' AS lookup_url,
-            jr.enriched AS preload
+            jr.enriched AS preload,
+            choice.stage AS signup_stage
        FROM users u
        LEFT JOIN user_intent_profiles p ON p.user_id = u.id
        -- The lookup made when they were approved, for a member who signed in before it landed.
@@ -159,6 +162,13 @@ export async function getState(userId: string): Promise<OnboardingV2State> {
           ORDER BY j.reviewed_at DESC NULLS LAST
           LIMIT 1
        ) jr ON TRUE
+       -- How they chose on screen 2, last time they chose, in any tab or on any device (idx_ose_user).
+       LEFT JOIN LATERAL (
+         SELECT e.stage FROM onboarding_stage_events e
+          WHERE e.user_id = u.id AND e.stage IN ('linkedin_connected', 'linkedin_skipped')
+          ORDER BY e.created_at DESC
+          LIMIT 1
+       ) choice ON TRUE
       WHERE u.id = $1`,
     [userId],
   );
@@ -181,7 +191,7 @@ export async function getState(userId: string): Promise<OnboardingV2State> {
       timezone: row.timezone,
       linkedinUrl: row.linkedin_url,
     },
-    linkedin: linkedinBlock(sourcesFromRow(row)),
+    linkedin: { ...linkedinBlock(sourcesFromRow(row)), chosen: chosenFrom(row.signup_stage) },
     tour: {
       // Only someone who just finished is shown the tour.
       pending: !!row.tour_due_at && !row.tour_seen_at,
@@ -306,10 +316,11 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
     const firstCompletion = before.onboarding_status !== 'completed';
 
     // What the matcher and the public card read: canonical text, never a label.
-    const roleTitles = roleTitlesV2(answers.selfKinds, answers.selfOther, afterThis(profile.jobTitle, before.job_title));
+    const jobTitle = afterThis(profile.jobTitle, before.job_title);
+    const roleTitles = roleTitlesV2(answers.selfKinds, answers.selfOther, jobTitle);
     const wantText = wantTextV2(answers.lookingToMeet, answers.meetOther);
     const intentText = intentTextV2(answers.hopingToFind, answers.findOther, answers.findSpecific);
-    const offerText = offerTextV2(answers.canOffer, answers.offerOther);
+    const offerText = offerTextV2(answers.canOffer, answers.offerOther, jobTitle);
     const displayName = given(profile.displayName);
     const [firstName, lastName] = displayName ? splitName(displayName) : [null, null];
 

@@ -8,7 +8,9 @@ import { gotoRetry, cleanup, wait, APP, SERVER } from '../helpers/live-ui';
 //       cold and the intro died with the poke);
 //   (b) "setup availability to be introduced" — both sides pick time windows,
 //       the overlap shows, one side confirms → conversation pinned, a message
-//       lands in the thread, the partner gets a bell notification.
+//       lands in the thread, the partner gets a bell notification. (Two shared
+//       times: since 26 Oct a single shared time is booked by the save itself,
+//       which meeting-loop.spec.ts covers.)
 //
 // REST drives the investor; the founder drives the REAL UI headed at 390px.
 
@@ -78,23 +80,30 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   expect(introMsg, 'the introduction must be seeded into the thread').toBeTruthy();
   console.log(`  ✓ intro seeded into the thread: "${introMsg.content.slice(0, 60)}..."`);
 
-  // (3) Availability via REST: investor picks two windows.
-  const W_OVERLAP = dayKey(2, 'evening');
+  // (3) Availability via REST: investor picks three windows.
+  // Two of them overlap the founder's: one shared time is an agreement, booked by
+  // the save that makes it (26 Oct 2026), so two keep the confirm step this test is about.
+  const W_OVERLAP = dayKey(2, 'afternoon');
+  const W_OVERLAP_2 = dayKey(2, 'evening');
   const invSet = await apiAs(investor, 'PUT', `/dm/conversations/${conversationId}/scheduling/availability`,
-    { windows: [W_OVERLAP, dayKey(4, 'morning')] });
+    { windows: [W_OVERLAP, W_OVERLAP_2, dayKey(4, 'morning')] });
   expect(invSet.status).toBe(200);
-  // Founder picks two too — one overlapping.
+  // Founder picks three too — two overlapping.
   const fSet = await apiAs(founder, 'PUT', `/dm/conversations/${conversationId}/scheduling/availability`,
-    { windows: [W_OVERLAP, dayKey(3, 'morning')] });
+    { windows: [W_OVERLAP, W_OVERLAP_2, dayKey(3, 'morning')] });
   expect(fSet.status).toBe(200);
-  expect(fSet.json.data.overlap).toEqual([W_OVERLAP]);
+  expect(fSet.json.data.overlap).toEqual([W_OVERLAP, W_OVERLAP_2]);
+  expect(fSet.json.data.confirmed, 'two shared times book nothing').toBeNull();
   console.log('  ✓ both sides saved availability — overlap:', fSet.json.data.overlap);
 
-  // (4) A non-overlap window cannot be confirmed (server gate).
+  // (4) A non-overlap window cannot be confirmed (server gate): a 409 that says
+  //     where both people's times stand, so a screen can redraw.
   const bad = await apiAs(founder, 'POST', `/dm/conversations/${conversationId}/scheduling/confirm`,
     { window: dayKey(3, 'morning') });
-  expect(bad.status).toBe(400);
-  console.log('  ✓ confirming a one-sided window is rejected.');
+  expect(bad.status).toBe(409);
+  expect(bad.json.error.code).toBe('MEETING_TIME_NOT_SHARED');
+  expect(bad.json.error.details.scheduling.overlap).toEqual([W_OVERLAP, W_OVERLAP_2]);
+  console.log('  ✓ confirming a one-sided window is refused, with the current times.');
 
   // (5) HEADED — the founder opens the real thread on a phone width, sees the
   //     intro message and the scheduler with the green overlap, confirms it.
@@ -132,7 +141,9 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
 
   await page.getByRole('button', { name: /^Confirm / }).first().click();
   await page.getByRole('button', { name: /Confirm meeting/i }).click();
-  await expect(page.getByText(/Meeting confirmed/i).first()).toBeVisible({ timeout: 15_000 });
+  // The visible one: at 390px the inbox pane is hidden behind the thread, and its preview line
+  // ("📅 Meeting confirmed: …") comes first in the page, so .first() alone latches onto it.
+  await expect(page.getByText(/Meeting confirmed/i).filter({ visible: true }).first()).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'test-results/sch-confirmed.png' }).catch(() => {});
   console.log('  ✓ headed: founder confirmed the overlap — banner shown.');
 

@@ -45,7 +45,7 @@ const stateRow = (over: Record<string, unknown> = {}) => ({
   onboarding_intent: null, looking_to_meet: [], can_offer: [], self_kinds: [], hoping_to_find: [],
   meet_other: null, find_other: null, find_specific: null, offer_other: null, self_other: null,
   draft: null, enriched: null, enrichment_status: null, enrichment_started_at: null, enrichment_completed_at: null,
-  lookup_url: null, preload: null, last_onboarded_at: null,
+  lookup_url: null, preload: null, last_onboarded_at: null, signup_stage: null,
   ...over,
 });
 
@@ -65,7 +65,7 @@ describe('getState', () => {
       },
       prefilledFromV1: false,
       profile: { displayName: 'Jane Doe', avatarUrl: null, jobTitle: null, company: null, industry: null, timezone: null, linkedinUrl: null },
-      linkedin: { status: 'none' },
+      linkedin: { status: 'none', chosen: null },
       tour: { pending: false, seenAt: null, outcome: null },
     });
   });
@@ -177,7 +177,11 @@ describe('getState', () => {
     expect(s.profile.linkedinUrl).toBe(url);
     expect(s.linkedin).toEqual({
       status: 'found',
-      prefill: { displayName: 'Jane Doe', photoUrl: null, jobTitle: 'Angel Investor', company: 'Northwind', industry: 'Finance', location: 'Oslo', selfGuess: 'self_investor' },
+      prefill: {
+        displayName: 'Jane Doe', photoUrl: null, jobTitle: 'Angel Investor', company: 'Northwind', industry: 'Finance', location: 'Oslo',
+        selfGuesses: ['self_investor'], selfGuess: 'self_investor',
+      },
+      chosen: null,
     });
   });
 
@@ -187,12 +191,29 @@ describe('getState', () => {
       linkedin_url: 'https://www.linkedin.com/in/jane-new', enrichment_status: 'not_found',
       enrichment_completed_at: new Date(NOW), lookup_url: 'https://www.linkedin.com/in/jane-old',
     });
-    expect(s.linkedin).toEqual({ status: 'none' });
+    expect(s.linkedin).toEqual({ status: 'none', chosen: null });
     const same = await answer({
       linkedin_url: 'https://www.linkedin.com/in/jane-old', enrichment_status: 'not_found',
       enrichment_completed_at: new Date(NOW), lookup_url: 'https://www.linkedin.com/in/jane-old',
     });
-    expect(same.linkedin).toEqual({ status: 'not_found' });
+    expect(same.linkedin).toEqual({ status: 'not_found', chosen: null });
+  });
+
+  // The 25 Oct review (ONB-03): how the member chose on screen 2 is the server's to say, so the LinkedIn
+  // suggestions survive a new tab or another device. It is the last of the two stages the screen records.
+  it('says how the member chose on screen 2: LinkedIn, email, or not yet', async () => {
+    expect((await answer({ signup_stage: 'linkedin_connected' })).linkedin.chosen).toBe('linkedin');
+    expect((await answer({ signup_stage: 'linkedin_skipped' })).linkedin.chosen).toBe('email');
+    expect((await answer({ signup_stage: null })).linkedin.chosen).toBeNull();
+  });
+
+  it('reads the choice from the member\'s latest LinkedIn stage, in the same query', async () => {
+    mockQuery.mockResolvedValue({ rows: [stateRow()] });
+    await getState('u-1');
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const flat = (mockQuery.mock.calls[0][0] as string).replace(/\s+/g, ' ');
+    expect(flat).toMatch(/FROM onboarding_stage_events e WHERE e\.user_id = u\.id AND e\.stage IN \('linkedin_connected', 'linkedin_skipped'\) ORDER BY e\.created_at DESC LIMIT 1/);
+    expect(flat).toMatch(/AS signup_stage/);
   });
 
   it('reads the address the last lookup ran for', async () => {
@@ -336,6 +357,30 @@ describe('confirm', () => {
   it('an offer of only friends and good conversations writes no offer text at all', async () => {
     await confirm('u-1', { ...FULL, canOffer: ['offer_friends_conversations'] });
     expect(update().value('what_i_can_help_with')).toBeNull();
+  });
+
+  // "I can share what I know from my work." says what that work is, from the title the profile holds after
+  // this confirm: the one they sent, else the one already stored, and nothing once they emptied it.
+  describe('sharing what they know from their work', () => {
+    const offering = (profile: Record<string, unknown>) =>
+      confirm('u-1', confirmSchemaV2.parse({ ...FULL_ANSWERS, canOffer: ['offer_knowledge'], profile }));
+
+    it('names the title they confirmed', async () => {
+      await offering({ jobTitle: 'Head of Pastry' });
+      expect(update().value('what_i_can_help_with')).toBe('knowledge from my work as Head of Pastry');
+    });
+
+    it('names the title already on their profile when they sent none', async () => {
+      before.job_title = 'Data Engineer';
+      await offering({});
+      expect(update().value('what_i_can_help_with')).toBe('knowledge from my work as Data Engineer');
+    });
+
+    it('says their profession once they emptied the title', async () => {
+      before.job_title = 'Data Engineer';
+      await offering({ jobTitle: '' });
+      expect(update().value('what_i_can_help_with')).toBe('knowledge from my profession');
+    });
   });
 
   it('a missing industry never blanks the stored one; profile fields are written only when given', async () => {

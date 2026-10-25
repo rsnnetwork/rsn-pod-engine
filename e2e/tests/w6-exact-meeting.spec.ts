@@ -83,10 +83,15 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   const convId = await convBetween(a.id, b.id);
   expect(convId).toBeTruthy();
 
-  // Both save the same window, so it is a confirmable overlap.
+  // Both save the same two windows, so there is a confirmable overlap to pick
+  // from. (A single shared window is an agreement, booked by the second save
+  // itself since 26 Oct, which would leave no confirm step to test here.)
   const KEY = futureWindowKey(3, 'afternoon');
-  expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
-  expect((await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
+  const KEY2 = futureWindowKey(3, 'evening');
+  expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] })).status).toBe(200);
+  const second = await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] });
+  expect(second.status).toBe(200);
+  expect(second.json.data.confirmed, 'two shared windows book nothing').toBeNull();
 
   // A opens the thread and the scheduler. On phone widths the header actions
   // collapse into a "More actions" menu, so open that first if present. Wait for

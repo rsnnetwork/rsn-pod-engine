@@ -20,10 +20,15 @@
 // builders). Adjusted here for this file's one-deeper nesting (../../../).
 
 const mockQuery = jest.fn();
+type MockClient = { query: (...args: unknown[]) => unknown };
+// A test that needs a transaction to roll back (the request world below) sets this;
+// every other test gets the plain pass-through. Read at call time, so it can change per test.
+let mockTransactionHook: ((cb: (client: MockClient) => unknown) => unknown) | null = null;
 
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
-  transaction: (cb: (client: { query: typeof mockQuery }) => unknown) => cb({ query: mockQuery }),
+  transaction: (cb: (client: MockClient) => unknown) =>
+    (mockTransactionHook ? mockTransactionHook(cb) : cb({ query: mockQuery })),
   __esModule: true,
 }));
 
@@ -49,8 +54,9 @@ jest.mock('../../../realtime/emit', () => ({
   __esModule: true,
 }));
 
+const mockAreBlocked = jest.fn();
 jest.mock('../../../services/block/block.service', () => ({
-  areBlocked: async () => false,
+  areBlocked: (...args: unknown[]) => mockAreBlocked(...args),
   __esModule: true,
 }));
 
@@ -113,13 +119,16 @@ const MESSAGES_URL = `${config.clientUrl}/messages`;
 const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
 
 /**
- * Wires mockQuery to answer every statement acceptPoke's transaction issues,
- * in the order the service currently runs them (SELECT ... FOR UPDATE,
- * UPDATE user_pokes, INSERT encounter_history, INSERT dm_conversations,
- * INSERT direct_messages, UPDATE dm_conversations, SELECT accepter name,
- * INSERT notifications). Regex-routed (not positional) so re-ordering the
- * service's queries doesn't silently break these tests the way a strict
- * mockResolvedValueOnce queue would.
+ * Wires mockQuery to answer every statement acceptPoke's transaction issues:
+ * the claim (UPDATE user_pokes ... WHERE id = $1 AND recipient_id = $2 AND
+ * status = 'pending' RETURNING ...), the sender's status, INSERT
+ * encounter_history, INSERT dm_conversations, INSERT direct_messages, UPDATE
+ * dm_conversations, the request the other way (none here), SELECT accepter
+ * name, INSERT notifications, UPDATE notifications (the bell row read).
+ * Regex-routed (not positional) so re-ordering the service's queries doesn't
+ * silently break these tests the way a strict mockResolvedValueOnce queue would.
+ * The claim answers the way the database does: only a request that is still
+ * pending and was sent to this member is changed and returned.
  */
 const SENDER_EMAIL = 'sender@example.com';
 const SENDER_DISPLAY_NAME = 'Sam Sender';
@@ -135,18 +144,23 @@ function armAccept(
 ) {
   const senderNotifyEmail = opts.senderNotifyEmail ?? true;
   const senderHasEmail = opts.senderHasEmail ?? true;
-  mockQuery.mockImplementation((sql: string) => {
-    if (/FROM user_pokes WHERE id/.test(sql)) {
-      return Promise.resolve({
-        rows: [{
-          id: 'poke-1', sender_id: SENDER, recipient_id: RECIPIENT,
-          status: 'pending', message, responded_at: null, created_at: new Date('2026-07-20T00:00:00Z'),
-          preferred_format: opts.preferredFormat ?? null,
-        }],
-      });
+  const request = {
+    id: 'poke-1', sender_id: SENDER, recipient_id: RECIPIENT,
+    status: 'pending', message, responded_at: null as Date | null, created_at: new Date('2026-07-20T00:00:00Z'),
+    preferred_format: opts.preferredFormat ?? null,
+  };
+  mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
+    if (/UPDATE user_pokes[\s\S]*WHERE id = \$1/.test(sql)) {
+      if (request.status !== 'pending' || params[1] !== request.recipient_id) return Promise.resolve({ rows: [] });
+      request.status = params[2] as string;
+      request.responded_at = RESPONDED_AT;
+      return Promise.resolve({ rows: [{ ...request }] });
     }
-    if (/UPDATE user_pokes SET status/.test(sql)) {
-      return Promise.resolve({ rows: [{ responded_at: RESPONDED_AT }] });
+    if (/FROM user_pokes WHERE id/.test(sql)) {
+      return Promise.resolve({ rows: [{ ...request }] });
+    }
+    if (/SELECT status FROM users WHERE id/.test(sql)) {
+      return Promise.resolve({ rows: [{ status: 'active' }] });
     }
     if (/INSERT INTO dm_conversations/.test(sql)) {
       return Promise.resolve({ rows: [{ id: 'conv-9' }] });
@@ -245,10 +259,12 @@ function armSend(
 
 beforeEach(() => {
   mockQuery.mockReset();
+  mockTransactionHook = null;
+  mockAreBlocked.mockReset().mockResolvedValue(false);
   mockEmit.mockClear();
   mockTo.mockClear();
-  mockEmitEntities.mockClear();
-  mockBroadcastDm.mockClear();
+  mockEmitEntities.mockReset().mockResolvedValue(undefined);
+  mockBroadcastDm.mockReset().mockResolvedValue(undefined);
   mockSendPokeReceivedEmail.mockClear();
   mockSendPokeAcceptedEmail.mockClear();
   mockIsEmailTypeEnabled.mockReset().mockResolvedValue(true);
@@ -466,34 +482,47 @@ describe('acceptPoke — F3 message-less poke edge', () => {
   });
 });
 
-describe('declinePoke — still notifies nobody', () => {
-  function armDecline() {
-    mockQuery.mockImplementation((sql: string) => {
-      if (/FROM user_pokes WHERE id/.test(sql)) {
-        return Promise.resolve({
-          rows: [{
-            id: 'poke-1', sender_id: SENDER, recipient_id: RECIPIENT,
-            status: 'pending', message: 'hi', responded_at: null, created_at: new Date('2026-07-20T00:00:00Z'),
-          }],
-        });
-      }
-      if (/UPDATE user_pokes SET status/.test(sql)) {
-        return Promise.resolve({ rows: [{ responded_at: RESPONDED_AT }] });
-      }
-      return Promise.resolve({ rows: [] });
-    });
-  }
+/**
+ * A pending request from SENDER to RECIPIENT, for the decline path: the claim
+ * answers the way the database does (only a pending request sent to this
+ * member changes), and the request can be read back by id.
+ */
+function armDecline(preferredFormat: string | null = null) {
+  const request = {
+    id: 'poke-1', sender_id: SENDER, recipient_id: RECIPIENT, status: 'pending', message: 'hi',
+    responded_at: null as Date | null, created_at: new Date('2026-07-20T00:00:00Z'), preferred_format: preferredFormat,
+  };
+  mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
+    if (/UPDATE user_pokes[\s\S]*WHERE id = \$1/.test(sql)) {
+      if (request.status !== 'pending' || params[1] !== request.recipient_id) return Promise.resolve({ rows: [] });
+      request.status = params[2] as string;
+      request.responded_at = RESPONDED_AT;
+      return Promise.resolve({ rows: [{ ...request }] });
+    }
+    if (/FROM user_pokes WHERE id/.test(sql)) return Promise.resolve({ rows: [{ ...request }] });
+    return Promise.resolve({ rows: [] });
+  });
+}
 
-  it('declining inserts no notification and pushes no socket event', async () => {
+describe('declinePoke — still notifies nobody', () => {
+  it('the sender is told nothing: no bell, no socket push, no email, and no tag addressed to them', async () => {
     armDecline();
 
     const result = await pokeService.declinePoke('poke-1', RECIPIENT);
+    await flushPromises();
 
     expect(result.status).toBe('declined');
     expect(mockQuery.mock.calls.some(c => /INSERT INTO notifications/.test(c[0] as string))).toBe(false);
     expect(mockTo).not.toHaveBeenCalled();
     expect(mockEmit).not.toHaveBeenCalled();
-    expect(mockEmitEntities).not.toHaveBeenCalled();
+    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    // The recipient's own bell row may be marked read, and their own screens told;
+    // nothing anywhere names the sender.
+    for (const [, users, tags] of mockEmitEntities.mock.calls as Array<[unknown, string[], string[]]>) {
+      expect(users).not.toContain(SENDER);
+      for (const tag of tags) expect(tag).not.toContain(SENDER);
+    }
   });
 });
 
@@ -862,7 +891,8 @@ describe('sendPoke — both members\' screens refresh (29 Sep 2026)', () => {
 });
 
 describe('acceptPoke and declinePoke — the request they return keeps its preferred format', () => {
-  const selectOfThePoke = () => mockQuery.mock.calls.find(c => /FROM user_pokes WHERE id/.test(String(c[0])))!;
+  // The answer is a claim: the UPDATE that changes the request is also what reads it back (RETURNING).
+  const claimOfThePoke = () => mockQuery.mock.calls.find(c => /UPDATE user_pokes[\s\S]*WHERE id = \$1/.test(String(c[0])))!;
 
   it('acceptPoke reads the column and returns it', async () => {
     armAccept('hi', { preferredFormat: 'message_first' });
@@ -870,27 +900,16 @@ describe('acceptPoke and declinePoke — the request they return keeps its prefe
     const { poke } = await pokeService.acceptPoke('poke-1', RECIPIENT);
 
     expect(poke.preferredFormat).toBe('message_first');
-    expect(String(selectOfThePoke()[0])).toMatch(/preferred_format/);
+    expect(String(claimOfThePoke()[0])).toMatch(/RETURNING[\s\S]*preferred_format/);
   });
 
   it('declinePoke reads the column and returns it', async () => {
-    mockQuery.mockImplementation((sql: string) => {
-      if (/FROM user_pokes WHERE id/.test(sql)) {
-        return Promise.resolve({
-          rows: [{
-            id: 'poke-1', sender_id: SENDER, recipient_id: RECIPIENT, status: 'pending', message: 'hi',
-            responded_at: null, created_at: new Date('2026-07-20T00:00:00Z'), preferred_format: 'video_20',
-          }],
-        });
-      }
-      if (/UPDATE user_pokes SET status/.test(sql)) return Promise.resolve({ rows: [{ responded_at: RESPONDED_AT }] });
-      return Promise.resolve({ rows: [] });
-    });
+    armDecline('video_20');
 
     const result = await pokeService.declinePoke('poke-1', RECIPIENT);
 
     expect(result.preferredFormat).toBe('video_20');
-    expect(String(selectOfThePoke()[0])).toMatch(/preferred_format/);
+    expect(String(claimOfThePoke()[0])).toMatch(/RETURNING[\s\S]*preferred_format/);
   });
 });
 
@@ -930,5 +949,375 @@ describe('sendPoke — a run of line breaks cannot build a very tall request', (
     const atTheCap = 'x'.repeat(REQUEST_MESSAGE_MAX);
     expect(await storedMessage(atTheCap)).toBe(atTheCap);
     expect(await storedMessage(`${atTheCap}x`)).toBe(atTheCap);
+  });
+});
+
+// ─── Answering a request is a claim (25 Oct 2026) ────────────────────────────
+//
+// On production Claus accepted Stefan's request on the Messages card, and the bell
+// entry for it went on offering Accept; pressing it showed an error. The request row
+// is now the one state: the first answer wins, the same answer again is already done
+// and says where it went, and the other answer is a 409 that names the answer the
+// request already has. Accepting also answers the request the other person had sent
+// the other way, and asking someone who has already asked you is a match.
+//
+// A small model of the tables stands in for the database. Each transaction gets its
+// own client and keeps a journal, so a transaction that throws puts the model back the
+// way it was, as Postgres would, and a refused accept can be seen to change nothing.
+
+interface RequestRow {
+  id: string; sender_id: string; recipient_id: string; status: 'pending' | 'accepted' | 'declined';
+  message: string | null; responded_at: Date | null; created_at: Date; preferred_format: string | null;
+}
+interface BellRow { user_id: string; type: string; link: string; is_read: boolean }
+interface World {
+  requests: RequestRow[];
+  conversations: Array<{ id: string; user_a_id: string; user_b_id: string }>;
+  bells: BellRow[];
+  /** users.status by id; anyone not listed is active. */
+  status: Record<string, string>;
+}
+
+const THIRD = 'u-third';
+
+function pendingRequest(id: string, from: string, to: string, status: RequestRow['status'] = 'pending'): RequestRow {
+  return {
+    id, sender_id: from, recipient_id: to, status, message: `${from} would like to meet`,
+    responded_at: null, created_at: new Date('2026-10-25T11:43:07Z'), preferred_format: null,
+  };
+}
+
+/** The bell row sendPoke writes for a request: the recipient's, linking to /messages?poke=<id>. */
+const bellFor = (r: RequestRow): BellRow => ({ user_id: r.recipient_id, type: 'poke', link: `/messages?poke=${r.id}`, is_read: false });
+
+const statements = (pattern: RegExp) => mockQuery.mock.calls.filter(c => pattern.test(String(c[0])));
+
+function armWorld(world: World) {
+  let journal: Array<() => void> | null = null;
+  const remember = (undo: () => void) => { journal?.push(undo); };
+  mockTransactionHook = async (cb) => {
+    const mine: Array<() => void> = [];
+    const client: MockClient = {
+      // mockQuery answers synchronously, so the journal it should write to can be handed over around the call.
+      query: (...args: unknown[]) => {
+        journal = mine;
+        try { return mockQuery(...args); } finally { journal = null; }
+      },
+    };
+    try {
+      return await cb(client);
+    } catch (err) {
+      for (const undo of mine.reverse()) undo();
+      throw err;
+    }
+  };
+
+  const answer = (r: RequestRow, status: RequestRow['status']) => {
+    const before = { status: r.status, responded_at: r.responded_at };
+    r.status = status;
+    r.responded_at = RESPONDED_AT;
+    remember(() => Object.assign(r, before));
+    return { rows: [{ ...r }] };
+  };
+
+  mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
+    const none = { rows: [] as unknown[] };
+    // The claim: one request, by id, still pending, sent to this member.
+    if (/UPDATE user_pokes[\s\S]*WHERE id = \$1 AND recipient_id = \$2 AND status = 'pending'/.test(sql)) {
+      const r = world.requests.find(x => x.id === params[0] && x.recipient_id === params[1] && x.status === 'pending');
+      return Promise.resolve(r ? answer(r, params[2] as RequestRow['status']) : none);
+    }
+    // Accepting whatever request is still pending from one member to another.
+    if (/UPDATE user_pokes SET status = 'accepted'[\s\S]*WHERE sender_id = \$1 AND recipient_id = \$2 AND status = 'pending'/.test(sql)) {
+      const r = world.requests.find(x => x.sender_id === params[0] && x.recipient_id === params[1] && x.status === 'pending');
+      return Promise.resolve(r ? answer(r, 'accepted') : none);
+    }
+    if (/UPDATE user_pokes/.test(sql)) throw new Error(`a write to user_pokes the model does not expect: ${sql}`);
+    if (/FROM user_pokes WHERE id = \$1/.test(sql)) {
+      return Promise.resolve({ rows: world.requests.filter(x => x.id === params[0]).map(x => ({ ...x })) });
+    }
+    if (/INSERT INTO user_pokes/.test(sql)) {
+      const r: RequestRow = {
+        id: params[0] as string, sender_id: params[1] as string, recipient_id: params[2] as string, status: 'pending',
+        message: params[3] as string | null, responded_at: null, created_at: NOTIF_CREATED_AT,
+        preferred_format: (params[5] as string | null) ?? null,
+      };
+      world.requests.push(r);
+      return Promise.resolve({ rows: [{ ...r }] });
+    }
+    if (/SELECT status FROM users WHERE id/.test(sql)) {
+      return Promise.resolve({ rows: [{ status: world.status[params[0] as string] ?? 'active' }] });
+    }
+    if (/FROM encounter_history/.test(sql)) return Promise.resolve(none);
+    if (/SELECT id FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ id: params[0] }] });
+    if (/INSERT INTO dm_conversations/.test(sql)) {
+      const [, a, b] = params as string[];
+      let conv = world.conversations.find(c => c.user_a_id === a && c.user_b_id === b);
+      if (!conv) {
+        const added = { id: `conv-${world.conversations.length + 1}`, user_a_id: a, user_b_id: b };
+        world.conversations.push(added);
+        remember(() => { world.conversations.splice(world.conversations.indexOf(added), 1); });
+        conv = added;
+      }
+      return Promise.resolve({ rows: [{ id: conv.id }] });
+    }
+    if (/SELECT id FROM dm_conversations/.test(sql)) {
+      const [x, y] = params as string[];
+      return Promise.resolve({
+        rows: world.conversations
+          .filter(c => (c.user_a_id === x && c.user_b_id === y) || (c.user_a_id === y && c.user_b_id === x))
+          .map(c => ({ id: c.id })),
+      });
+    }
+    if (/INSERT INTO direct_messages/.test(sql)) {
+      return Promise.resolve({ rows: [{
+        id: params[0], conversation_id: params[1], from_user_id: params[2], content: params[3],
+        read_at: null, created_at: NOTIF_CREATED_AT,
+      }] });
+    }
+    if (/UPDATE notifications SET is_read = TRUE/.test(sql)) {
+      // The member's poke bell row with exactly this link.
+      const [userId, link] = params as string[];
+      for (const b of world.bells) {
+        if (b.user_id === userId && b.type === 'poke' && b.link === link && !b.is_read) {
+          b.is_read = true;
+          remember(() => { b.is_read = false; });
+        }
+      }
+      return Promise.resolve(none);
+    }
+    if (/INSERT INTO notifications/.test(sql)) {
+      const type = /VALUES \(\$1, \$2, '(\w+)'/.exec(sql)?.[1] ?? 'unknown';
+      const added: BellRow = { user_id: params[1] as string, type, link: params[4] as string, is_read: false };
+      world.bells.push(added);
+      remember(() => { world.bells.splice(world.bells.indexOf(added), 1); });
+      return Promise.resolve({ rows: [{ id: `notif-${world.bells.length}`, created_at: NOTIF_CREATED_AT }] });
+    }
+    if (/SELECT email, display_name, notify_email FROM users WHERE id/.test(sql)) {
+      return Promise.resolve({ rows: [{ email: `${params[0]}@example.com`, display_name: String(params[0]), notify_email: true }] });
+    }
+    if (/SELECT display_name FROM users WHERE id/.test(sql)) {
+      return Promise.resolve({ rows: [{ display_name: `Name of ${params[0]}` }] });
+    }
+    return Promise.resolve(none);
+  });
+}
+
+function newWorld(requests: RequestRow[], bells: BellRow[] = requests.map(bellFor)): World {
+  return { requests, conversations: [], bells, status: {} };
+}
+
+describe('acceptPoke and declinePoke are claims: one answer per request', () => {
+  it('acceptPoke twice returns 200 with the same conversationId and creates one conversation', async () => {
+    const world = newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]);
+    armWorld(world);
+
+    const first = await pokeService.acceptPoke('poke-1', RECIPIENT);
+    await flushPromises();
+    const second = await pokeService.acceptPoke('poke-1', RECIPIENT);
+    await flushPromises();
+
+    expect(first).toMatchObject({ poke: { id: 'poke-1', status: 'accepted' }, conversationId: 'conv-1' });
+    expect(second).toMatchObject({ poke: { id: 'poke-1', status: 'accepted' }, conversationId: 'conv-1' });
+    // Everything an accept does happened once: the stale second press repeats none of it.
+    expect(statements(/INSERT INTO dm_conversations/)).toHaveLength(1);
+    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(1);
+    expect(mockEmit).toHaveBeenCalledTimes(1);
+    expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
+    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('acceptPoke after decline throws ConflictError code MEETING_REQUEST_ALREADY_ANSWERED with details.status declined', async () => {
+    const world = newWorld([pendingRequest('poke-1', SENDER, RECIPIENT, 'declined')]);
+    armWorld(world);
+
+    await expect(pokeService.acceptPoke('poke-1', RECIPIENT)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'MEETING_REQUEST_ALREADY_ANSWERED',
+      message: 'You already declined this request.',
+      details: { status: 'declined' },
+    });
+    expect(world.requests[0].status).toBe('declined');
+    expect(statements(/INSERT INTO/)).toHaveLength(0);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('declinePoke after accept throws 409 with details.status accepted', async () => {
+    const world = newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]);
+    armWorld(world);
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+
+    await expect(pokeService.declinePoke('poke-1', RECIPIENT)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'MEETING_REQUEST_ALREADY_ANSWERED',
+      message: 'You already accepted this request.',
+      details: { status: 'accepted' },
+    });
+    expect(world.requests[0].status).toBe('accepted');
+  });
+
+  it('declining twice is done once: the second answer resolves with the request, still declined', async () => {
+    const world = newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]);
+    armWorld(world);
+
+    const first = await pokeService.declinePoke('poke-1', RECIPIENT);
+    const second = await pokeService.declinePoke('poke-1', RECIPIENT);
+
+    expect(first).toMatchObject({ id: 'poke-1', status: 'declined' });
+    expect(second).toMatchObject({ id: 'poke-1', status: 'declined' });
+  });
+
+  it('a concurrent decline whose conditional UPDATE matches no row never overwrites an accept', async () => {
+    const world = newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]);
+    armWorld(world);
+
+    // Pressed at the same moment: the accept's claim lands first, so when the decline's
+    // UPDATE runs the request is no longer pending and nothing matches.
+    const [accepted, declined] = await Promise.allSettled([
+      pokeService.acceptPoke('poke-1', RECIPIENT),
+      pokeService.declinePoke('poke-1', RECIPIENT),
+    ]);
+
+    expect(accepted).toMatchObject({ status: 'fulfilled', value: { conversationId: 'conv-1' } });
+    expect(declined).toMatchObject({ status: 'rejected', reason: { statusCode: 409, details: { status: 'accepted' } } });
+    expect(world.requests[0].status).toBe('accepted');
+    expect(world.conversations).toHaveLength(1);
+    // Every write to a request is conditional on it still being pending.
+    const writes = statements(/UPDATE user_pokes/);
+    expect(writes.length).toBeGreaterThan(0);
+    for (const [sql] of writes) expect(String(sql)).toMatch(/status = 'pending'/);
+  });
+
+  it('accept closes the reverse pending request with no second intro or bell', async () => {
+    const asked = pendingRequest('poke-1', SENDER, RECIPIENT);
+    const askedBack = pendingRequest('poke-2', RECIPIENT, SENDER);
+    const world = newWorld([asked, askedBack]);
+    armWorld(world);
+
+    const { conversationId } = await pokeService.acceptPoke('poke-1', RECIPIENT);
+    await flushPromises();
+
+    expect(world.requests.map(r => r.status)).toEqual(['accepted', 'accepted']);
+    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(world.bells.filter(b => b.type === 'poke_accepted')).toEqual([expect.objectContaining({ user_id: SENDER })]);
+    // Both bell entries now read as answered, so neither person is offered Accept again.
+    expect(world.bells.filter(b => b.type === 'poke').map(b => b.is_read)).toEqual([true, true]);
+    // The request the other way is answered too: accepting it later is a repeat, not a second connection.
+    const again = await pokeService.acceptPoke('poke-2', SENDER);
+    expect(again.conversationId).toBe(conversationId);
+    expect(statements(/INSERT INTO dm_conversations/)).toHaveLength(1);
+    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('sendPoke when the recipient already asked me returns { status: accepted, conversationId } (mutual = match)', async () => {
+    // RECIPIENT asked SENDER first; now SENDER asks RECIPIENT.
+    const theirs = pendingRequest('poke-theirs', RECIPIENT, SENDER);
+    const world = newWorld([theirs]);
+    armWorld(world);
+
+    const result = await pokeService.sendPoke(SENDER, RECIPIENT, 'Would love to meet');
+    await flushPromises();
+
+    expect(result).toMatchObject({ id: 'poke-theirs', status: 'accepted', conversationId: 'conv-1' });
+    // No second request: theirs is answered, and nobody is told a new one arrived.
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0].status).toBe('accepted');
+    expect(statements(/INSERT INTO user_pokes/)).toHaveLength(0);
+    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    // They hear that their request was accepted, once; my bell entry for their request reads answered.
+    expect(world.bells.filter(b => b.type === 'poke_accepted')).toEqual([expect.objectContaining({ user_id: RECIPIENT })]);
+    expect(world.bells.filter(b => b.type === 'poke')).toEqual([expect.objectContaining({ user_id: SENDER, is_read: true })]);
+    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
+    expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
+    // Both people's screens and bells refresh.
+    const tagsFor = (u: string) => (mockEmitEntities.mock.calls as Array<[unknown, string[], string[]]>)
+      .filter(([, users]) => users.includes(u)).flatMap(([, , tags]) => tags);
+    for (const u of [SENDER, RECIPIENT]) {
+      expect(tagsFor(u)).toEqual(expect.arrayContaining([`user:${u}`, `user:${u}:invites`, `user:${u}:notifications`]));
+    }
+  });
+
+  it('accept refuses when a block stands between the two, whoever blocked whom (403), and changes nothing', async () => {
+    const world = newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]);
+    armWorld(world);
+    // areBlocked looks both ways in one query, so either person's block answers true.
+    mockAreBlocked.mockResolvedValue(true);
+
+    await expect(pokeService.acceptPoke('poke-1', RECIPIENT)).rejects.toMatchObject({ statusCode: 403, code: 'AUTH_FORBIDDEN' });
+
+    expect(mockAreBlocked).toHaveBeenCalledWith(SENDER, RECIPIENT);
+    expect(world.requests[0].status).toBe('pending');
+    expect(world.conversations).toHaveLength(0);
+    expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(0);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it('accept refuses when the sender is no longer active (404, no longer available), and changes nothing', async () => {
+    const world = newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]);
+    world.status[SENDER] = 'deactivated';
+    armWorld(world);
+
+    await expect(pokeService.acceptPoke('poke-1', RECIPIENT)).rejects.toMatchObject({
+      statusCode: 404,
+      message: 'That member is no longer available.',
+    });
+
+    expect(world.requests[0].status).toBe('pending');
+    expect(world.conversations).toHaveLength(0);
+    expect(world.bells.every(b => !b.is_read)).toBe(true);
+  });
+
+  it("resolving a request marks the recipient's poke notification read", async () => {
+    const accepted = pendingRequest('poke-1', SENDER, RECIPIENT);
+    const declined = pendingRequest('poke-2', THIRD, RECIPIENT);
+    const untouched = pendingRequest('poke-3', THIRD, SENDER);
+    const world = newWorld([accepted, declined, untouched]);
+    armWorld(world);
+
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+    await pokeService.declinePoke('poke-2', RECIPIENT);
+
+    expect(world.bells.filter(b => b.type === 'poke').map(b => [b.link, b.is_read])).toEqual([
+      ['/messages?poke=poke-1', true],
+      ['/messages?poke=poke-2', true],
+      ['/messages?poke=poke-3', false],
+    ]);
+    // The row is found by the link format sendPoke writes, scoped to the poke rows of that member.
+    const marks = statements(/UPDATE notifications SET is_read = TRUE/);
+    expect(marks.map(([, params]) => params)).toEqual([
+      [RECIPIENT, '/messages?poke=poke-1'],
+      [RECIPIENT, '/messages?poke=poke-2'],
+    ]);
+    for (const [sql] of marks) {
+      expect(String(sql)).toMatch(/user_id = \$1/);
+      expect(String(sql)).toMatch(/type = 'poke'/);
+      expect(String(sql)).toMatch(/link = \$2/);
+    }
+  });
+
+  it('the link the read is matched on is the very link sendPoke writes on the bell row', async () => {
+    armSend('hi');
+    await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+    const written = mockQuery.mock.calls.find(c => /INSERT INTO notifications/.test(String(c[0])))!;
+    const pokeId = (mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))![1] as string[])[0];
+
+    expect((written[1] as string[])[4]).toBe(`/messages?poke=${pokeId}`);
+  });
+});
+
+describe('listReceivedPokes — only requests that can still be answered', () => {
+  it('leaves out requests from a member a block stands between, either way, and from members who are no longer active', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+
+    await pokeService.listReceivedPokes('u-me');
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    const flat = String(sql).replace(/\s+/g, ' ');
+    expect(flat).toMatch(/u\.status = 'active'/);
+    expect(flat).toMatch(/NOT EXISTS \( ?SELECT 1 FROM user_blocks b/);
+    expect(flat).toMatch(/b\.blocker_id = \$1 AND b\.blocked_id = p\.sender_id/);
+    expect(flat).toMatch(/b\.blocker_id = p\.sender_id AND b\.blocked_id = \$1/);
+    expect(params).toEqual(['u-me']);
   });
 });

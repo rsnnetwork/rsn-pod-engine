@@ -12,7 +12,7 @@
 
 import {
   ONBOARDING_MEET, ONBOARDING_OFFERS, ONBOARDING_INTENTS,
-  ONBOARDING_V2_MEET, ONBOARDING_V2_FIND, ONBOARDING_V2_OFFER, ONBOARDING_V2_SELF, ONBOARDING_V2_LIMITS,
+  ONBOARDING_V2_MEET, ONBOARDING_V2_FIND, ONBOARDING_V2_OFFER, ONBOARDING_V2_SELF,
 } from '@rsn/shared';
 import type {
   IntentKey, MeetKey, OfferKey, MeetV2Key, FindV2Key, OfferV2Key, SelfV2Key, OnboardingV2Answers,
@@ -45,8 +45,10 @@ export const INTENT_V1_TO_V2: Record<IntentKey, FindV2Key | null> = {
   find_investors: 'find_funding',
   find_cofounder_talent: 'find_cofounder',
   grow_network: 'find_friends_conversations',
-  // Advice is a kind of person in v2 (Q1), not something to find; exploring is nothing.
-  get_advice: null,
+  // "Get advice from experienced people": since the 25 Oct review, Q2 has
+  // "I am looking for advice, mentoring or to learn from others."
+  get_advice: 'find_advice_learning',
+  // Exploring is nothing to find.
   invited_exploring: null,
 };
 
@@ -77,12 +79,14 @@ export const isFindV2Key = (k: string): k is FindV2Key => V2_FIND.has(k);
 export const isOfferV2Key = (k: string): k is OfferV2Key => V2_OFFER.has(k);
 export const isSelfV2Key = (k: string): k is SelfV2Key => V2_SELF.has(k);
 
-/** Map, drop what has no v2 meaning, de-duplicate, keep the member's order, respect the limit. */
+/**
+ * Map, drop what has no v2 meaning, de-duplicate, keep the member's order. Every answer is carried: v2 has
+ * no maximum since the 25 Oct review.
+ */
 function carry<V1 extends string, V2 extends string>(
   keys: readonly string[] | null | undefined,
   isV1: (k: string) => k is V1,
   table: Record<V1, V2 | null>,
-  max = Number.POSITIVE_INFINITY,
 ): V2[] {
   const out: V2[] = [];
   for (const k of keys ?? []) {
@@ -90,7 +94,7 @@ function carry<V1 extends string, V2 extends string>(
     const v2 = table[k];
     if (v2 && !out.includes(v2)) out.push(v2);
   }
-  return out.slice(0, max);
+  return out;
 }
 
 export interface V1Answers {
@@ -105,9 +109,9 @@ export type V2KeyAnswers = Pick<OnboardingV2Answers, 'lookingToMeet' | 'hopingTo
 /** A member's v1 answers as v2 keys. Anything that is not a v1 key is ignored. */
 export function v2FromV1(v1: V1Answers): V2KeyAnswers {
   return {
-    lookingToMeet: carry(v1.lookingToMeet, isMeetV1Key, MEET_V1_TO_V2, ONBOARDING_V2_LIMITS.meetMax),
-    hopingToFind: carry(v1.intent ? [v1.intent] : [], isIntentV1Key, INTENT_V1_TO_V2, ONBOARDING_V2_LIMITS.findMax),
+    lookingToMeet: carry(v1.lookingToMeet, isMeetV1Key, MEET_V1_TO_V2),
+    hopingToFind: carry(v1.intent ? [v1.intent] : [], isIntentV1Key, INTENT_V1_TO_V2),
     canOffer: carry(v1.canOffer, isOfferV1Key, OFFER_V1_TO_V2),
-    selfKinds: carry(v1.selfKinds, isMeetV1Key, SELF_V1_TO_V2, ONBOARDING_V2_LIMITS.selfMax),
+    selfKinds: carry(v1.selfKinds, isMeetV1Key, SELF_V1_TO_V2),
   };
 }

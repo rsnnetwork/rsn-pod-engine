@@ -20,7 +20,7 @@ import type {
   IntentKey, MeetKey, OfferKey, IndustryKey, MeetV2Key, FindV2Key, OfferV2Key, SelfV2Key,
 } from '@rsn/shared';
 import { ONBOARDING_V2_FIND, shortLabelFor } from '@rsn/shared';
-import { designationsWanted, normalizeDesignation } from './intent-signals';
+import { designationsWanted, ROLE_TAXONOMY } from './intent-signals';
 
 export interface MeetSignal {
   /** ROLE_TAXONOMY keys this asks for. */
@@ -254,6 +254,23 @@ export const MEET_V2_SIGNALS: Record<MeetV2Fixed, MeetV2Signal> = {
     wantText: 'students, interns and recent graduates',
     tags: ['student', 'graduate'],
   },
+  // The 25 Oct review: people who are not founders.
+  meet_managers_leaders: {
+    buckets: ['manager', 'executive'],
+    agentLabel: 'Managers & leaders',
+    wantText: 'managers, directors and executives',
+    tags: ['manager', 'director', 'executive'],
+  },
+  meet_hiring: {
+    buckets: ['hr', 'manager'],
+    agentLabel: 'People who are hiring',
+    // Never "recruit", "hire" or "talent" on their own: as a want, those read
+    // as a search for candidates, people who want to BE hired. "hiring
+    // managers" names the manager, which the candidate want leaves out. The
+    // tag is the same phrase: "recruiter" or "hr" would expand to "talent".
+    wantText: 'recruiters and hiring managers',
+    tags: ['hiring manager'],
+  },
 };
 
 export interface FindV2Signal {
@@ -268,6 +285,13 @@ export const FIND_V2_SIGNALS: Record<FindV2Fixed, FindV2Signal> = {
   // A co-founder, never "talent": that reads as someone who wants to BE hired.
   find_cofounder: { intentText: 'to find a co-founder for a startup' },
   find_friends_conversations: { intentText: null },
+  // The 25 Oct review: goals that are not founder goals.
+  // The people who hire: "hiring managers" never reads as a want for candidates.
+  find_new_role: { intentText: 'to find a new role, meeting recruiters and hiring managers' },
+  find_advice_learning: { intentText: 'to get advice from mentors and advisors' },
+  // Candidates. Not "recruit", which also asks for HR people.
+  find_hire: { intentText: 'to hire people and find candidates' },
+  find_partners: { intentText: 'to find partners and collaborators' },
 };
 
 /** Presentable on the public card ("They can bring: …"), or null for no words at all. */
@@ -278,19 +302,29 @@ export const OFFER_V2_TEXT: Record<OfferV2Fixed, string | null> = {
   offer_advice_mentoring: 'advice and mentoring as an advisor and mentor',
   offer_introductions: 'introductions to people in my network',
   offer_friends_conversations: null,
+  // Named by their job title when it is known (offerTextV2). "experience",
+  // "expertise" and "professional" are stop words; "profession" is not.
+  offer_knowledge: 'knowledge from my profession',
+  offer_referrals: 'job referrals and introductions to hiring managers',
 };
 
 /** Written into professional_role, the field "what B is" is read from. */
 export const SELF_V2_TITLES: Record<SelfV2Fixed, string[]> = {
   // They said founder OR business owner: either kind of search should find them.
   self_founder_owner: ['Founder', 'Business owner'],
+  // These three are replaced by the member's own job title when they typed
+  // one (roleTitlesV2): it says more than the kind does.
+  self_employee: ['Employee'],
+  self_manager_leader: ['Manager'],
   self_investor: ['Investor'],
   self_advisor_experienced: ['Advisor'],
-  // Replaced by the member's own job title when they typed one (roleTitlesV2).
   self_specialist: ['Specialist'],
   self_freelancer_consultant: ['Consultant'],
   self_student_early_career: ['Student'],
 };
+
+/** The kinds a typed job title says better than the kind's own title does. */
+const TITLE_SAYS_MORE = new Set<SelfV2Key>(['self_specialist', 'self_employee', 'self_manager_leader']);
 
 const isFixedMeet = (k: MeetV2Key): k is MeetV2Fixed => k !== 'meet_other';
 const isFixedFind = (k: FindV2Key): k is FindV2Fixed => k !== 'find_other';
@@ -322,18 +356,22 @@ export function intentTextV2(keys: FindV2Key[], findOther: string | null, findSp
   return parts.length ? parts.join('; ') : null;
 }
 
-/** What they can offer, as one line for the card and the scorer, or null when it names nothing. */
-export function offerTextV2(keys: OfferV2Key[], offerOther: string | null): string | null {
+/**
+ * What they can offer, as one line for the card and the scorer, or null when it names nothing. Sharing what
+ * they know names their work when the profile holds a job title.
+ */
+export function offerTextV2(keys: OfferV2Key[], offerOther: string | null, jobTitle: string | null = null): string | null {
+  const title = words(jobTitle);
   const parts = keys
     .filter(isFixedOffer)
-    .map(k => OFFER_V2_TEXT[k])
+    .map(k => (k === 'offer_knowledge' && title ? `knowledge from my work as ${title}` : OFFER_V2_TEXT[k]))
     .filter((t): t is string => !!t);
   const own = keys.includes('offer_other') ? words(offerOther) : null;
   if (own) parts.push(own);
   return parts.length ? parts.join('; ') : null;
 }
 
-/** Who they are, as titles the designation check reads. A typed job title wins over "Specialist". */
+/** Who they are, as titles the designation check reads. A typed job title wins over "Specialist", "Employee" and "Manager". */
 export function roleTitlesV2(keys: SelfV2Key[], selfOther: string | null, jobTitle: string | null): string[] {
   const typed = words(jobTitle);
   const titles = keys.flatMap((k): string[] => {
@@ -341,7 +379,7 @@ export function roleTitlesV2(keys: SelfV2Key[], selfOther: string | null, jobTit
       const own = words(selfOther);
       return own ? [own] : [];
     }
-    if (k === 'self_specialist' && typed) return [typed];
+    if (typed && TITLE_SAYS_MORE.has(k)) return [typed];
     return SELF_V2_TITLES[k];
   });
   const seen = new Set<string>();
@@ -372,9 +410,9 @@ export function desiredDesignationsV2(meet: MeetV2Key[], find: FindV2Key[]): str
 }
 
 /**
- * Q4's most likely answer, read from a role through ROLE_TAXONOMY, for the
- * member to confirm or change (brief, screen 6). Only buckets that clearly say
- * one answer have one: a manufacturer, a community builder, a candidate, a
+ * Q4's likely answers, read from a role through ROLE_TAXONOMY, for the member
+ * to confirm or change (brief, screen 6). Only buckets that clearly say one
+ * answer have one: a manufacturer, a community builder, a candidate, a
  * customer or a partner could be any of them, so they get none.
  */
 const SELF_GUESS_BY_BUCKET: Partial<Record<string, SelfV2Key>> = {
@@ -385,20 +423,96 @@ const SELF_GUESS_BY_BUCKET: Partial<Record<string, SelfV2Key>> = {
   investor: 'self_investor',
   advisor: 'self_advisor_experienced',
   board: 'self_advisor_experienced',
-  executive: 'self_advisor_experienced',
-  manager: 'self_advisor_experienced',
+  // 25 Oct review: a manager or an executive leads, and is never filed as an
+  // advisor; the rest of a company's people work for it.
+  executive: 'self_manager_leader',
+  manager: 'self_manager_leader',
+  employee: 'self_employee',
+  product_manager: 'self_employee',
+  hr: 'self_employee',
+  sales: 'self_employee',
   developer: 'self_specialist',
   designer: 'self_specialist',
   marketer: 'self_specialist',
-  sales: 'self_specialist',
-  hr: 'self_specialist',
-  product_manager: 'self_specialist',
-  employee: 'self_specialist',
   consultant: 'self_freelancer_consultant',
   student: 'self_student_early_career',
 };
 
-export function selfGuessFromRole(role: string | null | undefined): SelfV2Key | null {
-  const bucket = normalizeDesignation(role);
-  return bucket ? SELF_GUESS_BY_BUCKET[bucket] ?? null : null;
+/** Between two titles: "Founder & CEO | Angel investor", "Owner, Bakery Schmidt", "Founder – helping …". */
+const BETWEEN_TITLES = /\s*[|·•,;/]\s*|\s+[-–—]\s+/;
+/** Where a title ends and its company, or the people it serves, begin: "Investor at Northwind", "Advisor to founders". */
+const AFTER_THE_TITLE = /\s(?:at|@|for|to|with)\s[\s\S]*$/;
+/** Two titles in one: "Founder & CEO", "Mentor and board advisor". */
+const AND = /\s+(?:&|and)\s+/;
+/** A headline that opens with what someone does ("Helping founders raise capital") says nothing about who they are. */
+const OPENS_WITH_A_DOING_WORD = /^([a-z]{2,}ing)\b/;
+/** Words in -ing that open job titles ("Marketing Lead", "Managing Director"): those are titles, not doing. */
+const TITLE_WORDS_IN_ING = new Set([
+  'accounting', 'acting', 'advertising', 'banking', 'consulting', 'engineering', 'founding', 'fundraising',
+  'learning', 'managing', 'manufacturing', 'marketing', 'merchandising', 'nursing', 'operating', 'planning',
+  'programming', 'publishing', 'purchasing', 'recruiting', 'sourcing', 'teaching', 'training', 'visiting',
+]);
+
+const saysWhatTheyDo = (phrase: string): boolean => {
+  const opening = OPENS_WITH_A_DOING_WORD.exec(phrase);
+  return !!opening && !TITLE_WORDS_IN_ING.has(opening[1]);
+};
+
+/**
+ * The titles in which the executive kind leads: a C-level title (a chief anything, a CTO, the c-suite) or a
+ * leadership compound. On its own, "executive" names a level of a function, not a leader: a sales, HR,
+ * marketing or business development executive, or an executive assistant, does the work of that function
+ * (task review, 26 Oct 2026).
+ */
+const EXECUTIVE_WHO_LEADS = new RegExp([
+  'chief', 'c[-\\s]?suite',
+  'ceo', 'cto', 'cfo', 'coo', 'cmo', 'cpo', 'cio', 'cso', 'cco', 'cdo', 'cro', 'ciso',
+  'executive (?:director|vice president|chair(?:man|woman|person)?)', 'evp', 'svp',
+  'vice president', 'vp', 'chair(?:man|woman|person)', 'managing director', 'head of',
+].map(t => `\\b${t}\\b`).join('|'));
+
+/**
+ * Every answer one title names, the most specific kind first. A match that is
+ * only part of a longer one is no second answer: the "manager" of "product
+ * manager" says nothing more. The executive kind is the exception both ways:
+ * it leads only in a title EXECUTIVE_WHO_LEADS names, so "Sales Executive" is
+ * no leader, and "Chief Executive Officer" is one although its "chief" sits
+ * inside the CEO title.
+ */
+function guessesIn(title: string): SelfV2Key[] {
+  const hits = ROLE_TAXONOMY.flatMap((bucket) => {
+    const m = bucket.is.exec(title);
+    return m ? [{ key: bucket.key, start: m.index, end: m.index + m[0].length }] : [];
+  });
+  const insideALongerOne = (h: typeof hits[number]) => hits.some(o =>
+    o.start <= h.start && h.end <= o.end && o.end - o.start > h.end - h.start);
+  const counts = (h: typeof hits[number]) =>
+    (h.key === 'executive' ? EXECUTIVE_WHO_LEADS.test(title) : !insideALongerOne(h));
+  return hits
+    .filter(counts)
+    .map(h => SELF_GUESS_BY_BUCKET[h.key])
+    .filter((k): k is SelfV2Key => !!k);
+}
+
+/**
+ * Q4's likely answers from what LinkedIn says (25 Oct review): every answer
+ * the role names, in the order it names them, each once. The headline is read
+ * only when there is no role, and a headline phrase that says what they do for
+ * others ("Helping founders raise capital") is skipped, or it would suggest
+ * the very people they help. A company, or the people a title serves ("at
+ * Northwind", "to founders"), is never read as their role.
+ */
+export function selfGuessesFromText(role: string | null | undefined, headline: string | null | undefined): SelfV2Key[] {
+  const stated = words(role);
+  const text = stated ?? words(headline);
+  if (!text) return [];
+  const out: SelfV2Key[] = [];
+  for (const piece of text.toLowerCase().split(BETWEEN_TITLES)) {
+    const segment = piece.trim();
+    if (!segment || (!stated && saysWhatTheyDo(segment))) continue;
+    for (const title of segment.replace(AFTER_THE_TITLE, '').split(AND)) {
+      for (const key of guessesIn(title.trim())) if (!out.includes(key)) out.push(key);
+    }
+  }
+  return out;
 }
