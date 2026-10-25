@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as ts from 'typescript';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { EXAMPLE_PEOPLE } from '@rsn/shared';
 
 const root = path.join(__dirname, '../../../../client');
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
@@ -622,7 +623,7 @@ describe('Admin users does not scroll <main> sideways at phone widths (fix wave 
   });
 });
 
-describe('The short tour shows no made-up people, puts its words above the picture, and ends on For You (19 Oct feedback)', () => {
+describe('The short tour says its pictures are examples, names only the shared example people, puts its words above the picture, and ends on For You (19 and 25 Oct feedback)', () => {
   interface Card { title: string; body: string; visual: ReactElement }
   // HowRsnWorks.tsx, run: the cards are read from its own export, and each card's picture is drawn to markup. The sheep is
   // a stand-in that draws the file it would show, so the pictures can be read as well as the words.
@@ -638,62 +639,125 @@ describe('The short tour shows no made-up people, puts its words above the pictu
     return {
       title: card.title,
       body: card.body,
+      markup,
       // The words in the picture, one text node each.
       words: markup.replace(/<[^>]*>/g, '\n').split('\n').map((s) => s.trim()).filter(Boolean),
       images: [...markup.matchAll(/<img[^>]*\bsrc="([^"]*)"/g)].map((m) => m[1]),
     };
   });
   const source = () => read('src/features/onboarding/HowRsnWorks.tsx');
+  // 25 Oct (ONB-05): between the explanation and the picture, outside the picture, which a screen reader skips.
+  const CAPTION = 'Examples only. These are not real members.';
+  const [emma, james, olivia, daniel, hannah] = EXAMPLE_PEOPLE;
 
-  it('card 1 is "For You" and tells the member to tap Meet, and its picture is a Meet button and nothing else to read', () => {
+  it('card 1 is "For You" and tells the member to tap Meet, and its picture is two example people, each tagged Example, the first with a Meet button', () => {
     const [first] = cards();
     expect(first.title).toBe('For You');
     expect(first.body).toBe("We suggest people who match your intent. Tap 'Meet' to ask.");
-    expect(first.words).toEqual(['Meet']);
+    expect(first.words).toEqual([emma.name, emma.role, 'Example', 'Meet', james.name, james.role, 'Example']);
   });
 
-  it('there are still four cards, with the client\'s deck copy word for word, and the pictures say only what the product says', () => {
+  it('there are still four cards, with the client\'s deck copy word for word, and the pictures say only what the product says and what the example people are called', () => {
     const all = cards();
     expect(all).toHaveLength(4);
     expect(all.map(({ title, body, words }) => ({ title, body, words }))).toEqual([
-      { title: 'For You', body: "We suggest people who match your intent. Tap 'Meet' to ask.", words: ['Meet'] },
+      {
+        title: 'For You',
+        body: "We suggest people who match your intent. Tap 'Meet' to ask.",
+        words: [emma.name, emma.role, 'Example', 'Meet', james.name, james.role, 'Example'],
+      },
       {
         title: 'Matches',
         body: "When they want to meet you too, it's a match - you'll see it here and in chat.",
-        words: ['Matched', 'Wants to meet you', 'Request sent'],
+        words: ['Example', olivia.name, olivia.role, 'Matched', daniel.name, daniel.role, 'Wants to meet you', hannah.name, hannah.role, 'Request sent'],
       },
       {
         title: 'Meetings',
         body: 'Share your availability, pick a green slot - we create the meeting with a link.',
-        words: ['9:00', '9:30', '10:00', '10:30', '11:00', 'Both can', '11:30', '12:00', '12:30', '1:00', 'Meeting confirmed · Join'],
+        words: ['Example', '9:00', '9:30', '10:00', '10:30', '11:00', 'Both can', '11:30', '12:00', '12:30', '1:00', 'Meeting confirmed · Join'],
       },
       {
         title: 'Circles & events',
         body: 'Join circles of people who share your intent, and networking events.',
-        words: ['Founders', 'Join', 'Investors', 'Join', 'Networking event', 'Join'],
+        words: ['Example', 'Founders', 'Join', 'Investors', 'Join', 'Networking event', 'Join'],
       },
     ]);
   });
 
-  it('no picture shows a person: no name, no company, no initials and no photo, and the only images are the sheep', () => {
+  it('every person in a picture is an EXAMPLE_PEOPLE entry, shown with that person\'s own role, and every picture carries the Example tag', () => {
+    const known = new Map(EXAMPLE_PEOPLE.map((p) => [p.name, p.role]));
+    for (const card of cards()) {
+      // Whatever is shaped like a person's name must be one of the list's, and be followed by that person's role.
+      const named = card.words.filter((w) => /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(w));
+      for (const name of named) {
+        expect({ card: card.title, name, listed: known.has(name) }).toEqual({ card: card.title, name, listed: true });
+        expect({ card: card.title, name, role: card.words[card.words.indexOf(name) + 1] }).toEqual({ card: card.title, name, role: known.get(name) });
+      }
+      expect({ card: card.title, tagged: card.words.includes('Example') }).toEqual({ card: card.title, tagged: true });
+    }
+    // The people cards (For You) are tagged one by one; the list pictures (Matches, Meetings, Circles) carry one tag for the frame.
+    const [forYou, ...lists] = cards();
+    expect(forYou.words.filter((w) => w === 'Example')).toHaveLength(2);
+    for (const card of lists) expect({ card: card.title, tags: card.words.filter((w) => w === 'Example').length }).toEqual({ card: card.title, tags: 1 });
+  });
+
+  it('the Example tag is text, with a contrast of at least 4.5 to 1 against its own ground, so it reads without colour', () => {
+    // WCAG 2.x relative luminance and contrast ratio, for two #rrggbb colours.
+    const channel = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    const luminance = (hex: string) => {
+      const n = parseInt(hex.slice(1), 16);
+      return 0.2126 * channel((n >> 16) & 255) + 0.7152 * channel((n >> 8) & 255) + 0.0722 * channel(n & 255);
+    };
+    const contrast = (a: string, b: string) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+    const tags = cards().flatMap((card) => [...card.markup.matchAll(/<span class="([^"]*)">Example<\/span>/g)].map((m) => ({ card: card.title, classes: m[1] })));
+    expect(tags).toHaveLength(2 + 3);
+    for (const { card, classes } of tags) {
+      const background = classes.match(/\bbg-\[(#[0-9a-fA-F]{6})\]/)?.[1];
+      const colour = classes.includes('text-white') ? '#ffffff' : classes.match(/\btext-\[(#[0-9a-fA-F]{6})\]/)?.[1];
+      expect({ card, background: !!background, colour: !!colour }).toEqual({ card, background: true, colour: true });
+      expect({ card, readable: contrast(background!, colour!) >= 4.5 }).toEqual({ card, readable: true });
+      // And not smaller than the other small labels in the pictures (11px).
+      expect({ card, size: /\btext-\[11px\]/.test(classes) }).toEqual({ card, size: true });
+    }
+  });
+
+  it('the people come from the shared list and nowhere else: none is typed into the file, none of the old ones is back, and no photo or initials stand in for a face', () => {
     const src = source();
+    expect(src).toMatch(/import \{[^}]*\bEXAMPLE_PEOPLE\b[^}]*\} from '@rsn\/shared';/);
     for (const made of ['Amara', 'Okafor', 'Tomas', 'Priya', 'Raman', 'Northwind', 'Baltic']) expect(src).not.toContain(made);
+    for (const person of EXAMPLE_PEOPLE) {
+      expect({ name: person.name, typedIn: src.includes(person.name) }).toEqual({ name: person.name, typedIn: false });
+      // A role as a text of its own ("Founders", the circle, is not "Founder").
+      expect({ role: person.role, typedIn: new RegExp(`[>'"\`]${person.role}[<'"\`]`).test(src) }).toEqual({ role: person.role, typedIn: false });
+    }
     // A person's photo or initials come from Avatar. SheepAvatar was the mascot over the heading, and nothing is over it now.
     expect(src).not.toMatch(/ui\/Avatar|SheepAvatar/);
+    // The face of an example is always a sheep, so it can never pass for a real photo.
     for (const card of cards()) {
       expect(card.images.length).toBeGreaterThan(0);
       for (const image of card.images) expect(image).toMatch(/^\/sheep\/(v4\/)?[a-z]+\.png$/);
     }
   });
 
-  it('on every card the heading and the description come above the picture', () => {
+  it('on every card the heading and the description come first, then the caption, then the picture, which a screen reader skips', () => {
     const { TOUR_CARDS, TourSlide } = tour();
     for (const card of TOUR_CARDS as Card[]) {
       const html = renderToStaticMarkup(createElement(TourSlide as never, { card }));
-      const at = { heading: html.search(/<h2[ >]/), description: html.search(/<p[ >]/), picture: html.indexOf('data-testid="tour-picture"') };
+      const at = {
+        heading: html.search(/<h2[ >]/),
+        description: html.search(/<p[ >]/),
+        caption: html.indexOf(`>${CAPTION}<`),
+        picture: html.indexOf('data-testid="tour-picture"'),
+      };
       expect(Object.values(at).every((i) => i >= 0)).toBe(true);
       expect(at.heading).toBeLessThan(at.description);
-      expect(at.description).toBeLessThan(at.picture);
+      expect(at.description).toBeLessThan(at.caption);
+      expect(at.caption).toBeLessThan(at.picture);
+      // The caption is a paragraph of its own, said once, and outside the hidden picture: it is the one thing that tells a
+      // screen reader (and everyone else) the people are made up.
+      expect(html.match(new RegExp(CAPTION.replace(/[.]/g, '\\.'), 'g'))).toHaveLength(1);
+      expect(html).toMatch(new RegExp(`<p [^>]*>${CAPTION.replace(/[.]/g, '\\.')}</p>`));
+      expect(html.indexOf('aria-hidden="true"')).toBeGreaterThan(at.caption);
       // The words are all there, as markup writes them.
       const asMarkup = (text: string) => text.replace(/&/g, '&amp;').replace(/'/g, '&#x27;');
       expect(html).toContain(asMarkup(card.title));
@@ -703,6 +767,10 @@ describe('The short tour shows no made-up people, puts its words above the pictu
     const dialog = source().slice(source().indexOf('return createPortal('), source().indexOf('// ── The pictures.'));
     expect(dialog).toContain('<TourSlide card={TOUR_CARDS[index]} />');
     expect(dialog).not.toMatch(/<ReasonSheep|<img|<picture/);
+  });
+
+  it('the caption is the exact words the client asked for, kept in one place', () => {
+    expect(source()).toContain(`export const EXAMPLES_CAPTION = '${CAPTION}';`);
   });
 
   it('the header says "How REASON works", on screen and as the dialog\'s name, and no word in the file says RSN', () => {

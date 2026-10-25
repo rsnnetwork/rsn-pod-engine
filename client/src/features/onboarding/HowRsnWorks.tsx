@@ -12,18 +12,28 @@
 // week and a screenshot taken today would be wrong by Friday.
 //
 // 19 Oct 2026, the client's feedback on the preview: the pictures showed made-up
-// people ("They confuse people"), so nobody is in them any more: where a person
-// would be there is the sheep, and where their words would be there is a grey
-// bar. The heading and the description now come first and the picture under
-// them, and finishing the tour lands on For You, unless the flow put the member
-// on the page it opened over (OnboardingTour).
+// people ("They confuse people"), so for a while nobody was in them. The heading
+// and the description now come first and the picture under them, and finishing
+// the tour lands on For You, unless the flow put the member on the page it
+// opened over (OnboardingTour).
+//
+// 25 Oct 2026, Stefan and Claus asked for the example back, as long as it is
+// plain that it is one: so the pictures show people again, with English names
+// and roles from the shared list (EXAMPLE_PEOPLE, an employee among them). The
+// sheep still stands where a photo would be, so it never passes for a real one.
+// A caption between the description and the picture says they are examples,
+// and every picture carries an "Example" tag, as text and not colour alone.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { CalendarClock } from 'lucide-react';
+import { EXAMPLE_PEOPLE, type ExamplePerson } from '@rsn/shared';
 import { Button } from '@/components/ui/Button';
 import ReasonSheep, { type ReasonSheepPose } from '@/features/reason/brand/ReasonSheep';
+
+/** Said once per card, between its description and its picture, outside the picture: a screen reader reads it too. */
+export const EXAMPLES_CAPTION = 'Examples only. These are not real members.';
 
 export interface TourCard {
   title: string;
@@ -66,12 +76,13 @@ interface Props {
   onFinish: (outcome: 'completed' | 'skipped') => void;
 }
 
-/** One card: what it is called, what it does, and then the picture of it. */
+/** One card: what it is called, what it does, that its picture is an example, and then the picture of it. */
 export function TourSlide({ card }: { card: TourCard }) {
   return (
     <>
       <h2 className="text-center font-display text-xl font-bold text-[#1a1a2e]">{card.title}</h2>
       <p className="mt-2 text-balance text-center text-sm leading-relaxed text-gray-600">{card.body}</p>
+      <p className="mt-3 text-balance text-center text-xs font-medium text-gray-600">{EXAMPLES_CAPTION}</p>
       <div className="mt-5 flex justify-center">{card.visual}</div>
     </>
   );
@@ -241,11 +252,25 @@ export default function HowRsnWorks({ open, mode, failed = false, closesHere = f
   );
 }
 
-// ── The pictures. Nobody is in them: this is shown to everyone, a member's
-//    profile is theirs, and the client found made-up people confusing. Where a
-//    person would be there is the sheep; where their words would be, a grey
-//    bar. The only words are the labels the product itself shows. aria-hidden,
-//    because the card text already says what they show.
+// ── The pictures. This is shown to everyone and a member's profile is theirs, so
+//    the people in them are made up, and the pictures say so (the caption above
+//    them, an "Example" tag on each). They come from the shared list, never from
+//    this file. Where a person's photo would be there is the sheep; where their
+//    words would be, a grey bar. The other words are the labels the product
+//    itself shows. aria-hidden, because the card text and the caption already
+//    say what they show.
+
+/** The made-up person at this place in the list, wrapping round so a shorter list still fills every picture. */
+const exampleAt = (index: number): ExamplePerson => EXAMPLE_PEOPLE[index % EXAMPLE_PEOPLE.length];
+
+/** The label on a picture, in words and white on a dark ground (about 17 to 1), so it reads without colour. */
+function ExampleTag({ className = '' }: { className?: string }) {
+  return (
+    <span className={`inline-flex shrink-0 items-center rounded-full bg-[#1a1a2e] px-2 py-0.5 text-[11px] font-semibold leading-4 text-white ${className}`}>
+      Example
+    </span>
+  );
+}
 
 /** Where a person's photo would be: a soft tile, with the sheep standing in it. */
 function Tile({ children, round = false }: { children: React.ReactNode; round?: boolean }) {
@@ -256,35 +281,51 @@ function Tile({ children, round = false }: { children: React.ReactNode; round?: 
   );
 }
 
-function Frame({ children }: { children: React.ReactNode }) {
+/**
+ * The picture's frame. Unless the picture tags each of its people itself, the frame carries the one "Example" tag, on
+ * its top edge so it takes no room from the rows.
+ */
+function Frame({ children, tagged = true }: { children: React.ReactNode; tagged?: boolean }) {
   return (
     <div
       aria-hidden
       data-testid="tour-picture"
       // One height for every card, so on a desktop the dialog does not grow and shrink under the pointer that is
       // pressing Next. A minimum: a larger text size makes it taller and never clips it.
-      className="pointer-events-none flex min-h-[240px] w-full max-w-[320px] flex-col justify-center rounded-2xl border border-gray-200 bg-gray-50 p-3"
+      className="pointer-events-none relative flex min-h-[240px] w-full max-w-[320px] flex-col justify-center rounded-2xl border border-gray-200 bg-gray-50 p-3"
     >
+      {tagged && <ExampleTag className="absolute -top-2.5 right-4" />}
       {children}
     </div>
   );
 }
 
-/** Where a line of someone's words would be. */
-function Bar({ className, strong = false }: { className: string; strong?: boolean }) {
-  return <span className={`block h-2 rounded-full ${strong ? 'bg-gray-300' : 'bg-gray-200'} ${className}`} />;
+/** A made-up person: the sheep where the photo would be, then the name and the role from the shared list. */
+function Person({ person, pose }: { person: ExamplePerson; pose: ReasonSheepPose }) {
+  return (
+    <>
+      <Tile><ReasonSheep pose={pose} className="h-9 w-9" /></Tile>
+      <div className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-semibold text-[#1a1a2e]">{person.name}</span>
+        <span className="block truncate text-[11px] text-gray-600">{person.role}</span>
+      </div>
+    </>
+  );
 }
 
+/** Where a line of someone's words would be. */
+function Bar({ className }: { className: string }) {
+  return <span className={`block h-2 rounded-full bg-gray-200 ${className}`} />;
+}
+
+/** Two suggested people, each tagged Example: the first is the one the Meet button asks. */
 function SuggestionsMock() {
   return (
-    <Frame>
+    <Frame tagged={false}>
       <div className="rounded-xl border-2 border-rsn-red bg-white p-3">
         <div className="flex items-center gap-3">
-          <Tile><ReasonSheep pose="curious" className="h-9 w-9" /></Tile>
-          <div className="min-w-0 flex-1 space-y-2">
-            <Bar strong className="w-3/4" />
-            <Bar className="w-1/2" />
-          </div>
+          <Person person={exampleAt(0)} pose="curious" />
+          <ExampleTag />
         </div>
         <div className="mt-2.5 space-y-1.5">
           <Bar className="w-full" />
@@ -292,32 +333,26 @@ function SuggestionsMock() {
         </div>
         <div className="mt-2.5 rounded-lg bg-rsn-red py-2 text-center text-xs font-bold text-white">Meet</div>
       </div>
-      <div className="mt-2 flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-2.5 opacity-60">
-        <Tile><ReasonSheep pose="thinking" className="h-9 w-9" /></Tile>
-        <div className="min-w-0 flex-1 space-y-2">
-          <Bar strong className="w-2/3" />
-          <Bar className="w-2/5" />
-        </div>
+      <div className="mt-2 flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-2.5">
+        <Person person={exampleAt(1)} pose="thinking" />
+        <ExampleTag />
       </div>
     </Frame>
   );
 }
 
 function MatchesMock() {
-  const rows: Array<{ pose: ReasonSheepPose; name: string; state: string; tone: string }> = [
-    { pose: 'match', name: 'w-4/5', state: 'Matched', tone: 'bg-emerald-100 text-emerald-800' },
-    { pose: 'curious', name: 'w-3/5', state: 'Wants to meet you', tone: 'bg-rsn-red-light text-rsn-red-hover' },
-    { pose: 'thinking', name: 'w-2/3', state: 'Request sent', tone: 'bg-gray-100 text-gray-600' },
+  const rows: Array<{ pose: ReasonSheepPose; person: ExamplePerson; state: string; tone: string }> = [
+    { pose: 'match', person: exampleAt(2), state: 'Matched', tone: 'bg-emerald-100 text-emerald-800' },
+    { pose: 'curious', person: exampleAt(3), state: 'Wants to meet you', tone: 'bg-rsn-red-light text-rsn-red-hover' },
+    { pose: 'thinking', person: exampleAt(4), state: 'Request sent', tone: 'bg-gray-100 text-gray-600' },
   ];
   return (
     <Frame>
       <div className="space-y-2">
         {rows.map((r) => (
           <div key={r.state} className="flex items-center gap-2.5 rounded-xl bg-white p-2.5">
-            <Tile><ReasonSheep pose={r.pose} className="h-9 w-9" /></Tile>
-            <div className="min-w-0 flex-1">
-              <Bar strong className={r.name} />
-            </div>
+            <Person person={r.person} pose={r.pose} />
             <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${r.tone}`}>{r.state}</span>
           </div>
         ))}
