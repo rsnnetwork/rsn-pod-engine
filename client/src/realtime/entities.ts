@@ -54,6 +54,9 @@ export const E = {
   // Support
   supportTicket: (ticketId: string) => `support-ticket:${ticketId}`,
 
+  // Group chat (26 Oct 2026): its thread, details and members
+  dmGroup: (groupId: string) => `dm-group:${groupId}`,
+
   // Admin
   adminPods: 'admin:pods',
   adminSessions: 'admin:sessions',
