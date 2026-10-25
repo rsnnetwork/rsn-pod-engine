@@ -160,13 +160,21 @@ const cases: EmailCase[] = [
   {
     fn: 'sendJoinRequestConfirmationEmail', label: 'the request received', subject: 'REASON — We received your request',
     brandLine: FAST, brandLineInHtml: true,
-    says: ['Thank you for requesting to join REASON.', 'REASON is an invite-only community'],
+    says: [
+      'Thank you for requesting to join REASON.',
+      // 25 Oct review: REASON is for everyone, not only founders.
+      'REASON is an invite-only community for professionals of every kind, from founders to employees, investors and advisors, who value honesty over hype.',
+    ],
     run: () => emailService.sendJoinRequestConfirmationEmail('sam@example.com', 'Sam'),
   },
   {
     fn: 'sendJoinRequestWelcomeEmail', label: 'the welcome after approval', subject: "Welcome to REASON — You're in!",
     brandLine: FAST, brandLineInHtml: true,
-    says: ['your request to join REASON has been', 'Sign In to REASON'],
+    says: [
+      'your request to join REASON has been',
+      'Sign In to REASON',
+      "You're now part of a community of professionals of every kind, from founders to employees, investors and advisors, who connect with honesty and purpose.",
+    ],
     run: () => emailService.sendJoinRequestWelcomeEmail('sam@example.com', 'Sam', 'https://app.rsn.network/auth/verify?token=abc'),
   },
   {
@@ -310,6 +318,13 @@ describe('every email says REASON, never RSN', () => {
     const sent = await sendAndCapture(c.run);
     expect(sent.text.trimEnd().split('\n').pop()).toBe(c.brandLine);
     if (c.brandLineInHtml) expect(divDepthAt(sent.html, c.brandLine!)).toBe(1);
+  });
+
+  // The 25 Oct review (ONB-02): Claus, an employee, read that REASON was for "founders, leaders, and company
+  // owners". No email says that any more.
+  it.each(labelled)('%s: never says REASON is only for founders, leaders and company owners', async (_label, c) => {
+    const sent = await sendAndCapture(c.run);
+    for (const part of [sent.subject, sent.html, sent.text]) expect(part).not.toMatch(/founders, leaders,? and company owners/i);
   });
 
   it('the join-request review email says "Why REASON" in its label and in its plain text', async () => {

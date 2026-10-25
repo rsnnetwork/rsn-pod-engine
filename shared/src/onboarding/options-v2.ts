@@ -14,13 +14,21 @@
 // label is what a person reads. Each question ends with "Something else. I'd
 // like to say it in my own words.", which opens a text box: the member's own
 // words, up to 120 characters, required when that option is chosen.
+//
+// The 25 Oct review (Stefan and Claus) changed the brief in three ways. Every
+// question is "Select all that apply.": a founder can invest, and a student
+// can freelance. Each list gained answers for people who are not founders,
+// placed before "Something else" (and on Q4 second and third, where an
+// employee looks first). And the advisor answer no longer says "experienced
+// professional", so an experienced employee is not filed as an advisor; its
+// key stays, so nothing stored changes.
 
 import type { OnboardingOption, TourOutcome } from './options';
 import type { OnboardingStatus } from '../types/onboarding';
 
 const OWN_WORDS = "Something else. I'd like to say it in my own words.";
 
-/** Screen 3, "1 of 4": "Who would you like to meet?" (up to three) */
+/** Screen 3, "1 of 4": "Who would you like to meet?" (all that apply) */
 export const ONBOARDING_V2_MEET = [
   { key: 'meet_founders_owners', label: 'I would like to meet founders and business owners.', shortLabel: 'Founders and business owners' },
   { key: 'meet_investors', label: 'I would like to meet investors.', shortLabel: 'Investors' },
@@ -28,15 +36,21 @@ export const ONBOARDING_V2_MEET = [
   { key: 'meet_specialists', label: 'I would like to meet specialists, such as developers, designers or marketers.', shortLabel: 'Specialists' },
   { key: 'meet_freelancers_consultants', label: 'I would like to meet freelancers and consultants.', shortLabel: 'Freelancers and consultants' },
   { key: 'meet_students_early_career', label: 'I would like to meet students and people early in their career.', shortLabel: 'Students and early career' },
+  { key: 'meet_managers_leaders', label: 'I would like to meet managers and leaders in companies and organisations.', shortLabel: 'Managers and leaders' },
+  { key: 'meet_hiring', label: 'I would like to meet people who are hiring.', shortLabel: 'People who are hiring' },
   { key: 'meet_other', label: OWN_WORDS, shortLabel: 'Something else' },
 ] as const satisfies readonly OnboardingOption[];
 
-/** Screen 4, "2 of 4": "What are you hoping to find?" (up to three) */
+/** Screen 4, "2 of 4": "What are you hoping to find?" (all that apply) */
 export const ONBOARDING_V2_FIND = [
   { key: 'find_customers', label: 'I am looking for customers or clients.', shortLabel: 'Customers or clients' },
   { key: 'find_funding', label: 'I am looking to raise funding.', shortLabel: 'Raising funding' },
   { key: 'find_cofounder', label: 'I am looking for a cofounder', shortLabel: 'A cofounder' },
   { key: 'find_friends_conversations', label: 'I would like to make new friends and have good conversations.', shortLabel: 'New friends and good conversations' },
+  { key: 'find_new_role', label: 'I am looking for a new job or my next career step.', shortLabel: 'A new job or career step' },
+  { key: 'find_advice_learning', label: 'I am looking for advice, mentoring or to learn from others.', shortLabel: 'Advice, mentoring or learning' },
+  { key: 'find_hire', label: 'I am looking for people to hire.', shortLabel: 'People to hire' },
+  { key: 'find_partners', label: 'I am looking for partners or collaborators.', shortLabel: 'Partners or collaborators' },
   { key: 'find_other', label: OWN_WORDS, shortLabel: 'Something else' },
 ] as const satisfies readonly OnboardingOption[];
 
@@ -48,30 +62,34 @@ export const ONBOARDING_V2_OFFER = [
   { key: 'offer_advice_mentoring', label: 'I can give advice and mentoring.', shortLabel: 'Advice and mentoring' },
   { key: 'offer_introductions', label: 'I can introduce people to others in my network.', shortLabel: 'Introductions' },
   { key: 'offer_friends_conversations', label: 'I am happy to make new friends and have good conversations.', shortLabel: 'New friends and good conversations' },
+  { key: 'offer_knowledge', label: 'I can share what I know from my work.', shortLabel: 'Knowledge from my work' },
+  { key: 'offer_referrals', label: 'I can help people find jobs or refer them where I work.', shortLabel: 'Job referrals' },
   { key: 'offer_other', label: OWN_WORDS, shortLabel: 'Something else' },
 ] as const satisfies readonly OnboardingOption[];
 
-/** Screen 6, "4 of 4": "How would you describe yourself?" (up to two) */
+/** Screen 6, "4 of 4": "How would you describe yourself?" (all that apply) */
 export const ONBOARDING_V2_SELF = [
   { key: 'self_founder_owner', label: 'I am a founder or business owner.', shortLabel: 'Founder or business owner' },
+  { key: 'self_employee', label: 'I work for a company or organisation.', shortLabel: 'Employee' },
+  { key: 'self_manager_leader', label: 'I lead a team or part of an organisation.', shortLabel: 'Manager or leader' },
   { key: 'self_investor', label: 'I am an investor.', shortLabel: 'Investor' },
-  { key: 'self_advisor_experienced', label: 'I am an advisor, mentor or experienced professional.', shortLabel: 'Advisor or mentor' },
+  { key: 'self_advisor_experienced', label: 'I am an advisor or mentor.', shortLabel: 'Advisor or mentor' },
   { key: 'self_specialist', label: 'I am a specialist, such as a developer, designer or marketer.', shortLabel: 'Specialist' },
   { key: 'self_freelancer_consultant', label: 'I am a freelancer or consultant.', shortLabel: 'Freelancer or consultant' },
   { key: 'self_student_early_career', label: 'I am a student or early in my career.', shortLabel: 'Student or early career' },
   { key: 'self_other', label: OWN_WORDS, shortLabel: 'Something else' },
 ] as const satisfies readonly OnboardingOption[];
 
-/** The question titles and helper lines, verbatim from the brief. */
+/** The question titles and helper lines, verbatim from the brief as the 25 Oct review changed it. */
 export const ONBOARDING_V2_COPY = {
-  meet: { title: 'Who would you like to meet?', hint: 'Select up to three answers.' },
-  find: { title: 'What are you hoping to find?', hint: 'Select up to three answers.' },
+  meet: { title: 'Who would you like to meet?', hint: 'Select all that apply.' },
+  find: { title: 'What are you hoping to find?', hint: 'Select all that apply.' },
   findSpecific: {
     label: "Is there anything specific you're looking for? (optional)",
     example: 'For example: "I\'m looking for someone who has helped small businesses expand internationally."',
   },
   offer: { title: 'What can you offer others?', hint: 'Select all that apply.' },
-  self: { title: 'How would you describe yourself?', hint: 'Select up to two answers.' },
+  self: { title: 'How would you describe yourself?', hint: 'Select all that apply.' },
 } as const;
 
 /** The "in my own words" option of each question: choosing it requires its text. */
@@ -82,14 +100,24 @@ export const ONBOARDING_V2_OTHER_KEYS = {
   self: 'self_other',
 } as const;
 
+/**
+ * The most keys one answer list may hold: a guard against a runaway request, never a limit a member meets,
+ * since no question has this many answers. The server's Zod and the database (migration 109) hold each list
+ * to it.
+ */
+const ANSWERS_CEILING = 20;
+
 export const ONBOARDING_V2_LIMITS = {
   meetMin: 1,
-  meetMax: 3,
   findMin: 1,
-  findMax: 3,
   offerMin: 1,
   selfMin: 1,
-  selfMax: 2,
+  ceiling: ANSWERS_CEILING,
+  // No question has a maximum any more (25 Oct). The preview's screens still read these three until they
+  // drop their limit lines, so each is the ceiling, which no member reaches.
+  meetMax: ANSWERS_CEILING,
+  findMax: ANSWERS_CEILING,
+  selfMax: ANSWERS_CEILING,
   /** Each "Something else" text box. */
   otherMaxLen: 120,
   /** "Is there anything specific you're looking for?" */
@@ -147,7 +175,13 @@ export interface OnboardingV2LinkedinPrefill {
   company: string | null;
   industry: string | null;
   location: string | null;
-  /** Q4's most likely answer, read from the LinkedIn role; null when the role says nothing clear. */
+  /**
+   * Every Q4 answer the member's own stated role supports (the headline when there is no role), in the order
+   * it names them; empty when it says nothing clear. A role LinkedIn only inferred from the rest of the page
+   * suggests nothing (25 Oct review).
+   */
+  selfGuesses: SelfV2Key[];
+  /** The first of selfGuesses, or null: what a screen that preselects one answer reads. */
   selfGuess: SelfV2Key | null;
 }
 
@@ -155,6 +189,15 @@ export interface OnboardingV2Linkedin {
   status: OnboardingV2LinkedinStatus;
   /** Present only when status is 'found' or 'partial'. */
   prefill?: OnboardingV2LinkedinPrefill;
+}
+
+/** Screen 2: "Continue with LinkedIn" or "Continue with email". */
+export type OnboardingV2SignupChoice = 'linkedin' | 'email';
+
+/** The state's linkedin block: the lookup, and how the member chose on screen 2. */
+export interface OnboardingV2StateLinkedin extends OnboardingV2Linkedin {
+  /** Whichever they pressed last, in any tab or on any device; null before either. */
+  chosen: OnboardingV2SignupChoice | null;
 }
 
 /** GET /api/onboarding/v2/state */
@@ -167,7 +210,7 @@ export interface OnboardingV2State {
   /** True when at least one question was filled from the member's version 1 answers. */
   prefilledFromV1: boolean;
   profile: OnboardingV2Profile;
-  linkedin: OnboardingV2Linkedin;
+  linkedin: OnboardingV2StateLinkedin;
   tour: { pending: boolean; seenAt: string | null; outcome: TourOutcome | null };
 }
 

@@ -3,6 +3,10 @@
 // The vocabulary comes from shared, so what the client shows and what the
 // server accepts are the same list by construction: a key the flow cannot
 // display is a key this will not accept.
+//
+// No question has a maximum here any more (25 Oct review). The live screens
+// still stop themselves at ONBOARDING_LIMITS.meetMax and selfMax, so today's
+// bodies are unchanged; a screen that lets a member choose more is accepted.
 
 import { z } from 'zod';
 import {
@@ -38,15 +42,11 @@ const uniqueKeys = <T extends z.ZodTypeAny>(item: T) =>
  */
 export const draftSchema = z.object({
   intent: intentKey.optional(),
-  lookingToMeet: uniqueKeys(meetKey)
-    .refine(v => v.length <= ONBOARDING_LIMITS.meetMax, { message: `Pick up to ${ONBOARDING_LIMITS.meetMax}` })
-    .optional(),
+  lookingToMeet: uniqueKeys(meetKey).optional(),
   canOffer: uniqueKeys(offerKey).optional(),
   industries: uniqueKeys(industryKey).optional(),
   industryOther: line(ONBOARDING_LIMITS.otherMaxLen).optional(),
-  selfKinds: uniqueKeys(meetKey)
-    .refine(v => v.length <= ONBOARDING_LIMITS.selfMax, { message: `Pick up to ${ONBOARDING_LIMITS.selfMax}` })
-    .optional(),
+  selfKinds: uniqueKeys(meetKey).optional(),
   jobTitle: line(ONBOARDING_LIMITS.roleMaxLen).optional(),
   company: line(ONBOARDING_LIMITS.companyMaxLen).optional(),
   about: line(ONBOARDING_LIMITS.aboutMaxLen).optional(),
@@ -62,14 +62,12 @@ export type DraftInput = z.infer<typeof draftSchema>;
 export const confirmSchema = z.object({
   intent: intentKey,
   lookingToMeet: uniqueKeys(meetKey)
-    .refine(v => v.length >= ONBOARDING_LIMITS.meetMin, { message: 'Pick at least one' })
-    .refine(v => v.length <= ONBOARDING_LIMITS.meetMax, { message: `Pick up to ${ONBOARDING_LIMITS.meetMax}` }),
+    .refine(v => v.length >= ONBOARDING_LIMITS.meetMin, { message: 'Pick at least one' }),
   canOffer: uniqueKeys(offerKey).refine(v => v.length >= ONBOARDING_LIMITS.offersMin, { message: 'Pick at least one' }),
   industries: uniqueKeys(industryKey).refine(v => v.length >= ONBOARDING_LIMITS.industriesMin, { message: 'Pick at least one' }),
   industryOther: line(ONBOARDING_LIMITS.otherMaxLen).optional().default(null),
   selfKinds: uniqueKeys(meetKey)
-    .refine(v => v.length >= ONBOARDING_LIMITS.selfMin, { message: 'Pick at least one' })
-    .refine(v => v.length <= ONBOARDING_LIMITS.selfMax, { message: `Pick up to ${ONBOARDING_LIMITS.selfMax}` }),
+    .refine(v => v.length >= ONBOARDING_LIMITS.selfMin, { message: 'Pick at least one' }),
   jobTitle: line(ONBOARDING_LIMITS.roleMaxLen).optional().default(null),
   company: line(ONBOARDING_LIMITS.companyMaxLen).optional().default(null),
   about: line(ONBOARDING_LIMITS.aboutMaxLen).optional().default(null),

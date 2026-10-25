@@ -50,7 +50,8 @@ describe('the table itself', () => {
       find_investors: 'find_funding',
       find_cofounder_talent: 'find_cofounder',
       grow_network: 'find_friends_conversations',
-      get_advice: null,
+      // "Get advice from experienced people" is the 25 Oct "I am looking for advice, mentoring or to learn from others."
+      get_advice: 'find_advice_learning',
       invited_exploring: null,
     });
   });
@@ -83,11 +84,16 @@ describe('v2FromV1', () => {
 
   it('merges two v1 kinds that became one, and drops kinds v2 does not have', () => {
     expect(v2FromV1({
-      intent: 'get_advice',
+      intent: 'invited_exploring',
       lookingToMeet: ['developers_technical', 'sales_marketing_growth', 'event_community'],
       canOffer: ['partnerships_collaboration'],
       selfKinds: ['event_community'],
     })).toEqual({ lookingToMeet: ['meet_specialists'], hopingToFind: [], canOffer: [], selfKinds: [] });
+  });
+
+  it('a v1 member who came for advice opens Q2 with the advice answer', () => {
+    expect(v2FromV1({ intent: 'get_advice', lookingToMeet: [], canOffer: [], selfKinds: [] }).hopingToFind)
+      .toEqual(['find_advice_learning']);
   });
 
   it('ignores anything that is not a v1 key, including v2 keys already in the same column', () => {
@@ -99,15 +105,15 @@ describe('v2FromV1', () => {
     })).toEqual({ lookingToMeet: [], hopingToFind: [], canOffer: [], selfKinds: [] });
   });
 
-  it('stays inside the v2 limits', () => {
+  it('carries every answer, with no cut to three people or two self-descriptions (v2 has no maximum now)', () => {
     const r = v2FromV1({
       intent: 'grow_network',
-      lookingToMeet: ['founders', 'investors', 'advisors_mentors'],
+      lookingToMeet: ['founders', 'investors', 'advisors_mentors', 'developers_technical'],
       canOffer: ONBOARDING_OFFERS.map(o => o.key),
-      selfKinds: ['founders', 'investors'],
+      selfKinds: ['founders', 'investors', 'advisors_mentors'],
     });
-    expect(r.lookingToMeet.length).toBeLessThanOrEqual(3);
-    expect(r.selfKinds.length).toBeLessThanOrEqual(2);
+    expect(r.lookingToMeet).toEqual(['meet_founders_owners', 'meet_investors', 'meet_advisors_experienced', 'meet_specialists']);
+    expect(r.selfKinds).toEqual(['self_founder_owner', 'self_investor', 'self_advisor_experienced']);
     expect(r.hopingToFind).toEqual(['find_friends_conversations']);
   });
 });

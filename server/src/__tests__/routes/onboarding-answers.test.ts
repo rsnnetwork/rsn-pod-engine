@@ -111,6 +111,37 @@ describe('the flow can actually be completed through the router', () => {
     expect(mockSaveDraft).toHaveBeenCalledWith('u-1', expect.objectContaining({ intent: 'get_advice' }));
   });
 
+  // Production's client sends exactly this body today: one reason, at most three people, at most two words.
+  it('still accepts the old single-intent body, as the live client sends it', async () => {
+    const res = await auth(request(app).post('/onboarding/answers/confirm').send(GOOD));
+    expect(res.status).toBe(200);
+    expect(mockConfirm).toHaveBeenCalledWith('u-1', expect.objectContaining({
+      intent: 'find_investors', lookingToMeet: ['investors'], selfKinds: ['founders'],
+    }));
+  });
+
+  // The 25 Oct review (ONB-01): no question has a maximum. The live client still stops itself at three
+  // and two, so this changes nothing a member sees until a client sends more.
+  it('accepts four people to meet, and three words for themselves', async () => {
+    const res = await auth(request(app).post('/onboarding/answers/confirm').send({
+      ...GOOD,
+      lookingToMeet: ['founders', 'investors', 'advisors_mentors', 'developers_technical'],
+      selfKinds: ['founders', 'investors', 'advisors_mentors'],
+    }));
+    expect(res.status).toBe(200);
+    expect(mockConfirm).toHaveBeenCalledWith('u-1', expect.objectContaining({
+      lookingToMeet: ['founders', 'investors', 'advisors_mentors', 'developers_technical'],
+      selfKinds: ['founders', 'investors', 'advisors_mentors'],
+    }));
+  });
+
+  it('accepts four people to meet in a draft too', async () => {
+    const res = await auth(request(app).put('/onboarding/answers').send({
+      lookingToMeet: ['founders', 'investors', 'advisors_mentors', 'developers_technical'], step: 'q3',
+    }));
+    expect(res.status).toBe(200);
+  });
+
   it('confirms, seeds the searches and hands back where to go next', async () => {
     const res = await auth(request(app).post('/onboarding/answers/confirm').send(GOOD));
     expect(res.status).toBe(200);
@@ -145,13 +176,6 @@ describe('what it refuses', () => {
     const res = await auth(request(app).post('/onboarding/answers/confirm').send({ ...GOOD, intent: 'made_up' }));
     expect(res.status).toBe(400);
     expect(mockConfirm).not.toHaveBeenCalled();
-  });
-
-  it('rejects more than three people to meet', async () => {
-    const res = await auth(request(app).post('/onboarding/answers/confirm').send({
-      ...GOOD, lookingToMeet: ['founders', 'investors', 'advisors_mentors', 'developers_technical'],
-    }));
-    expect(res.status).toBe(400);
   });
 
   it('rejects an unfinished set', async () => {

@@ -115,7 +115,7 @@ describe('useLinkedinPhoto — "that\'s me"', () => {
 // saw on that screen.
 describe('useShownLinkedinPhoto — the photo the member was shown', () => {
   const prefill = (photoUrl: string | null) => ({
-    displayName: 'Ana', photoUrl, jobTitle: null, company: null, industry: null, location: null, selfGuess: null,
+    displayName: 'Ana', photoUrl, jobTitle: null, company: null, industry: null, location: null, selfGuesses: [], selfGuess: null,
   });
 
   it("captures exactly the prefill's photo", async () => {

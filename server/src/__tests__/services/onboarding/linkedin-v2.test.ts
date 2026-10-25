@@ -50,7 +50,7 @@ jest.mock('../../../realtime/fanout', () => ({
 
 import { LINKEDIN_PROFILE_HELP, linkedinProfileUrl } from '@rsn/shared';
 import {
-  planLinkedinLookup, linkedinBlock, connectLinkedin, shownPrefill,
+  planLinkedinLookup, linkedinBlock, connectLinkedin, shownPrefill, prefillFrom, chosenFrom,
 } from '../../../services/onboarding/linkedin-v2';
 import type { EnrichResult } from '../../../services/onboarding/enrichment.service';
 import type { EnrichmentStatus } from '../../../services/onboarding/enrichment.repo';
@@ -197,22 +197,24 @@ describe('linkedinBlock: what the screens are told', () => {
     expect(linkedinBlock(sources({ state: state('searching', { startedAt: ago(MIN), lookupUrl: URL }) }))).toEqual({ status: 'searching' });
   });
 
-  it('found: the prefill, with Q4\'s likeliest answer', () => {
+  it('found: the prefill, with Q4\'s likely answers', () => {
     expect(linkedinBlock(sources({ state: state('found', { lookupUrl: URL }), ownCache: found() }))).toEqual({
       status: 'found',
       prefill: {
         displayName: 'Jane Doe', photoUrl: 'https://media.licdn.com/jane.jpg', jobTitle: 'Founder & CEO',
-        company: 'Vokt', industry: 'Software', location: 'Berlin, Germany', selfGuess: 'self_founder_owner',
+        company: 'Vokt', industry: 'Software', location: 'Berlin, Germany',
+        selfGuesses: ['self_founder_owner'], selfGuess: 'self_founder_owner',
       },
     });
   });
 
-  it('partial when the page left the role out, and the guess then comes from the headline', () => {
+  it('partial when the page left the role out, and the guesses then come from the headline', () => {
     const thin = found({ confidence: 0.7 });
     thin.profile!.currentRole = null;
     const block = linkedinBlock(sources({ state: state('partial'), ownCache: thin }));
     expect(block.status).toBe('partial');
     expect(block.prefill?.jobTitle).toBeNull();
+    expect(block.prefill?.selfGuesses).toEqual(['self_founder_owner']);
     expect(block.prefill?.selfGuess).toBe('self_founder_owner');
   });
 
@@ -245,6 +247,63 @@ describe('linkedinBlock: what the screens are told', () => {
 
   it('never carries a prefill without a usable result', () => {
     expect(linkedinBlock(sources({ state: state('found', { lookupUrl: URL }) }))).toEqual({ status: 'none' });
+  });
+});
+
+// The 25 Oct review (ONB-03): LinkedIn suggests every answer to Q4 the member's own stated role supports, and
+// never one read out of the rest of the page (a recommendation, a post), which is only a guess about them.
+describe('prefillFrom: what LinkedIn suggests for Q4', () => {
+  const withRole = (currentRole: string | null, over: Record<string, unknown> = {}) => {
+    const r = found();
+    Object.assign(r.profile!, { currentRole, headline: null, ...over });
+    return r;
+  };
+
+  it('every answer the role supports, and the first as selfGuess for a screen that reads one', () => {
+    const p = prefillFrom(withRole('Founder & CEO | Angel investor'));
+    expect(p.selfGuesses).toEqual(['self_founder_owner', 'self_investor']);
+    expect(p.selfGuess).toBe('self_founder_owner');
+  });
+
+  it('a role read from the rest of the page suggests nothing, though it still fills the title in for them to check', () => {
+    const p = prefillFrom(withRole('Investor', { roleSource: 'inferred' }));
+    expect(p.selfGuesses).toEqual([]);
+    expect(p.selfGuess).toBeNull();
+    expect(p.jobTitle).toBe('Investor');
+  });
+
+  it('with an inferred role, their own headline speaks, as when there is no role', () => {
+    expect(prefillFrom(withRole('Investor', { roleSource: 'inferred', headline: 'Founder at Vokt' })).selfGuesses)
+      .toEqual(['self_founder_owner']);
+  });
+
+  it('a stated role suggests, and so does one from an older result that never recorded its source', () => {
+    expect(prefillFrom(withRole('Investor', { roleSource: 'stated' })).selfGuesses).toEqual(['self_investor']);
+    expect(prefillFrom(withRole('Investor', { roleSource: undefined })).selfGuesses).toEqual(['self_investor']);
+    expect(prefillFrom(withRole('Investor', { roleSource: null })).selfGuesses).toEqual(['self_investor']);
+  });
+
+  it('a manager is suggested as someone who leads, never as an advisor', () => {
+    expect(prefillFrom(withRole('Engineering Manager')).selfGuesses).toEqual(['self_manager_leader']);
+  });
+
+  it('nothing to go on: no suggestions, and selfGuess is null', () => {
+    const p = prefillFrom(withRole(null));
+    expect(p.selfGuesses).toEqual([]);
+    expect(p.selfGuess).toBeNull();
+  });
+});
+
+// How the member chose on screen 2, read back from the stage the server recorded for it, so a choice made in one
+// tab or on one device holds on every other.
+describe('chosenFrom: the screen 2 choice, from its recorded stage', () => {
+  it.each([
+    ['linkedin_connected', 'linkedin'],
+    ['linkedin_skipped', 'email'],
+    [null, null],
+    ['confirmed', null],
+  ] as const)('%s is %s', (stage, chosen) => {
+    expect(chosenFrom(stage)).toBe(chosen);
   });
 });
 

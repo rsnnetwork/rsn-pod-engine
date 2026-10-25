@@ -33,6 +33,11 @@ jest.mock('../../../config/logger', () => ({
   __esModule: true,
   default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
 }));
+const mockFanout = jest.fn();
+jest.mock('../../../realtime/fanout', () => ({
+  __esModule: true,
+  fanoutUserEntity: (...a: unknown[]) => mockFanout(...a),
+}));
 
 import { planSearchesFromV2Answers, syncSearchesFromV2Answers } from '../../../services/matching/first-agent.service';
 import type { OnboardingAgentRef } from '../../../services/matching/agent.repo';
@@ -195,13 +200,58 @@ describe('syncSearchesFromV2Answers', () => {
       id, userId, label: `L-${id}`, wantText: 'w', matchingTags: [], status: 'paused',
     }));
     mockRecompute.mockResolvedValue(3);
+    mockFanout.mockResolvedValue(undefined);
   });
 
-  it('makes the searches and scores each one straight away', async () => {
-    const out = await syncSearchesFromV2Answers('u-1', ['meet_investors', 'meet_other'], 'bakers in Vienna');
-    expect(out.map(c => c.change)).toEqual(['created', 'created']);
-    expect(mockCreate).toHaveBeenCalledTimes(2);
-    expect(mockRecompute).toHaveBeenCalledTimes(2);
+  /** Lets the work scheduled for after the response run to its end. */
+  const afterTheResponse = async () => {
+    for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  };
+  const scoredIds = () => mockRecompute.mock.calls.map(c => (c[0] as { id: string }).id);
+
+  // The 25 Oct review (ONB-01): with no limits a member can tick every kind, and each search reloads every
+  // candidate to score. One search is scored before the confirm answers; the rest after it, and then the
+  // member's screens are told, so their counts fill in without a refresh.
+  it('scores the first search before it answers, and the others after, then tells the member\'s screens', async () => {
+    const out = await syncSearchesFromV2Answers('u-1', ['meet_investors', 'meet_specialists', 'meet_other'], 'bakers in Vienna');
+    expect(out.map(c => c.change)).toEqual(['created', 'created', 'created']);
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+    expect(scoredIds()).toEqual(['new-1']);
+    expect(mockFanout).not.toHaveBeenCalled();
+
+    await afterTheResponse();
+    expect(scoredIds()).toEqual(['new-1', 'new-2', 'new-3']);
+    expect(mockFanout).toHaveBeenCalledTimes(1);
+    expect(mockFanout).toHaveBeenCalledWith('u-1');
+    // Told once every search has its matches, not before.
+    const lastScore = Math.max(...mockRecompute.mock.invocationCallOrder);
+    expect(mockFanout.mock.invocationCallOrder[0]).toBeGreaterThan(lastScore);
+  });
+
+  it('one search: scored before it answers, and nothing is left for afterwards', async () => {
+    await syncSearchesFromV2Answers('u-1', ['meet_investors'], null);
+    expect(scoredIds()).toEqual(['new-1']);
+    await afterTheResponse();
+    expect(scoredIds()).toEqual(['new-1']);
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+
+  it('a search that fails to score afterwards loses nothing: the next is still scored and the screens still told', async () => {
+    mockRecompute
+      .mockResolvedValueOnce(3)
+      .mockRejectedValueOnce(new Error('slow'))
+      .mockResolvedValueOnce(2);
+    await syncSearchesFromV2Answers('u-1', ['meet_investors', 'meet_specialists', 'meet_hiring'], null);
+    await afterTheResponse();
+    expect(scoredIds()).toEqual(['new-1', 'new-2', 'new-3']);
+    expect(mockFanout).toHaveBeenCalledWith('u-1');
+  });
+
+  it('a paused search is never scored, before or after', async () => {
+    mockList.mockResolvedValue([agent({ id: 'a-stu', intent: { source: 'onboarding_v2', meetKey: 'meet_students_early_career' } })]);
+    await syncSearchesFromV2Answers('u-1', ['meet_investors', 'meet_hiring'], null);
+    await afterTheResponse();
+    expect(scoredIds()).toEqual(['new-1', 'new-2']);
   });
 
   it('pauses without deleting, marks it as paused by onboarding, and does not score it', async () => {

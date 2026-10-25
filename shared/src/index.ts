@@ -56,6 +56,11 @@ export const ONBOARDING_V2_COPY = _V2_COPY;
 export const ONBOARDING_V2_OTHER_KEYS = _V2_OTHER_KEYS;
 export const ONBOARDING_V2_LIMITS = _V2_LIMITS;
 export const ONBOARDING_V2_STEPS = _V2_STEPS;
+// The made-up people the tour's pictures show (25 Oct 2026): a real VALUE both tours render, so it has its
+// own named export for the same Rollup reason as OPENINGS above.
+export * from './onboarding/example-people';
+import { EXAMPLE_PEOPLE as _EXAMPLE_PEOPLE } from './onboarding/example-people';
+export const EXAMPLE_PEOPLE = _EXAMPLE_PEOPLE;
 export * from './types/post-event-message';
 export * from './identity/displayName';
 // A member's own words, as a page shows them (21 Oct 2026): one rule for the brief another member reads and for your

@@ -79,7 +79,9 @@ router.post(
     try {
       const userId = req.user!.userId;
       const out = await connectLinkedin(userId, req.body.url as string);
-      recordStageEvent(userId, 'linkedin_connected', { lookup: out.decision, status: out.linkedin.status });
+      // The state's linkedin.chosen is read from this stage, so it is written before the screens are told to
+      // read the state again. record() never throws.
+      await recordStageEvent(userId, 'linkedin_connected', { lookup: out.decision, status: out.linkedin.status });
       // The address on their profile changed; the lookup tells them again when it ends.
       await fanoutUserEntity(userId);
       const data: OnboardingV2LinkedinResponse = { ...out.linkedin, linkedinUrl: out.linkedinUrl };
