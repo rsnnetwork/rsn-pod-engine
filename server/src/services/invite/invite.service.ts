@@ -5,7 +5,7 @@ import { customAlphabet } from 'nanoid';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
-  Invite, InviteStatus, InviteType, CreateInviteInput,
+  Invite, InviteStatus, InviteType, CreateInviteInput, eventDurationMinutes, resolveEventFormat,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
@@ -252,28 +252,16 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     }
     let calendarEvent: any = undefined;
     if (input.type === InviteType.SESSION && input.sessionId) {
-      const sessionResult = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any }>(
-        'SELECT title, scheduled_at, host_user_id, config FROM sessions WHERE id = $1', [input.sessionId]
+      const sessionResult = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null }>(
+        'SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1', [input.sessionId]
       );
       const session = sessionResult.rows[0];
       targetName = session?.title;
 
       // Build calendar event data if session has a scheduled time
       if (session?.scheduled_at) {
-        const cfg = session.config || {};
-        const rounds = cfg.numberOfRounds || 5;
-        const roundDuration = cfg.roundDurationSeconds || 480;
-        const ratingWindow = cfg.ratingWindowSeconds || 30;
-        const transitionDuration = cfg.transitionDurationSeconds || 30;
-        const closingLobby = cfg.closingLobbyDurationSeconds || 120;
-
-        const totalSeconds =
-          (rounds * roundDuration) +
-          (rounds * ratingWindow) +
-          ((rounds - 1) * transitionDuration) +
-          closingLobby;
-
-        const totalMinutes = Math.ceil(totalSeconds / 60);
+        // 26 Oct 2026 — the event's own length: a meeting's, or the rounds estimate (eventDurationMinutes).
+        const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
 
         // Get host email for organizer
         const hostResult = await query<{ display_name: string; email: string }>(

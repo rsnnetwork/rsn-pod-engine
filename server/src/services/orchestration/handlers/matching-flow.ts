@@ -21,7 +21,7 @@ import { query } from '../../../db';
 import { SessionStatus, resolveDisplayName, placeholderName } from '@rsn/shared';
 import {
   ActiveSession, activeSessions, withMatchGenerationLock, withSessionGuard,
-  sessionRoom, userRoom, persistSessionState,
+  sessionRoom, userRoom, persistSessionState, refuseIfFormatLacks,
 } from '../state/session-state';
 import { verifyHost, getAllHostIds } from './host-actions';
 import * as matchingService from '../../matching/matching.service';
@@ -224,6 +224,8 @@ export async function handleHostGenerateMatches(
   // could queue unauthorized / no-op host:generate_matches calls ahead of
   // legitimate match writes. verifyHost is cheap and lock-independent.
   if (!await verifyHost(socket, data.sessionId)) return;
+  // 26 Oct 2026 — matching exists only in a rounds event; a video meeting refuses it.
+  if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
   // Serialize match generation per session against the auto-repair paths
   // (late-joiner/leaver/reconciler) so a host's preview generation and a
   // background regeneration can't read the same eligible set and clobber
@@ -592,6 +594,8 @@ export async function handleHostConfirmRound(
   // interleave with joins/leaves/timers). See the lock-ordering rule in
   // session-state.ts.
   if (!await verifyHost(socket, data.sessionId)) return;
+  // 26 Oct 2026 — matching exists only in a rounds event; a video meeting refuses it.
+  if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
   return withMatchGenerationLock(data.sessionId, () =>
     withSessionGuard(data.sessionId, async () => {
   try {
@@ -649,6 +653,8 @@ export async function handleHostSwapMatch(
 ): Promise<void> {
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
+    // 26 Oct 2026 — matching exists only in a rounds event; a video meeting refuses it.
+    if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
 
     const activeSession = activeSessions.get(data.sessionId);
     if (!activeSession) {
@@ -738,6 +744,8 @@ export async function handleHostExcludeFromRound(
 ): Promise<void> {
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
+    // 26 Oct 2026 — matching exists only in a rounds event; a video meeting refuses it.
+    if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
 
     const activeSession = activeSessions.get(data.sessionId);
     if (!activeSession || !activeSession.pendingRoundNumber) {
@@ -829,6 +837,8 @@ export async function handleHostRegenerateMatches(
 ): Promise<void> {
   // Authorize before taking the lock (see handleHostGenerateMatches).
   if (!await verifyHost(socket, data.sessionId)) return;
+  // 26 Oct 2026 — matching exists only in a rounds event; a video meeting refuses it.
+  if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
   // Serialize with all other match-write paths (see handleHostGenerateMatches).
   return withMatchGenerationLock(data.sessionId, async () => {
   try {
@@ -972,6 +982,8 @@ export async function handleHostCancelPreview(
 ): Promise<void> {
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
+    // 26 Oct 2026 — matching exists only in a rounds event; a video meeting refuses it.
+    if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
 
     const activeSession = activeSessions.get(data.sessionId);
     if (!activeSession) return;
@@ -1016,6 +1028,8 @@ export async function handleHostConfirmMatches(
 ): Promise<void> {
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
+    // 26 Oct 2026 — matching exists only in a rounds event; a video meeting refuses it.
+    if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
 
     const activeSession = activeSessions.get(data.sessionId);
     if (!activeSession || !activeSession.pendingRoundNumber) {

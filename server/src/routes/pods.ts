@@ -7,7 +7,7 @@ import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
 import { withoutEmail } from '../services/user/public-card';
-import { fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
+import { fanoutAdminEntities, fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { canViewPod } from '../services/pods/pod-access';
@@ -68,6 +68,10 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const pod = await podService.createPod(req.user!.userId, req.body);
+      // 26 Oct 2026 — a new pod used to tell nobody (the client refetched its own list by hand). Its only
+      // member, the creator, gets the pod and their pods list; every admin's pod list refreshes.
+      fanoutPodEntities(pod.id, [E.userPods(req.user!.userId)]).catch(() => {});
+      fanoutAdminEntities('pods').catch(() => {});
       const response: ApiResponse = { success: true, data: pod };
       res.status(201).json(response);
     } catch (err) {

@@ -18,7 +18,7 @@
 
 import { Server as SocketServer } from 'socket.io';
 import { query } from '../../db';
-import { SessionStatus, SessionConfig } from '@rsn/shared';
+import { SessionStatus, SessionConfig, EventFormat, LiveKind, resolveEventFormat, liveKindOf, eventDurationMinutes } from '@rsn/shared';
 import { activeSessions, sessionRoom } from '../orchestration/state/session-state';
 import { readCanonical } from '../orchestration/state/canonical-state';
 import * as sessionService from './session.service';
@@ -27,7 +27,16 @@ export interface SessionStateSnapshot {
   sessionId: string;
   sessionStatus: SessionStatus;
   currentRound: number;
+  /** Rounds in the event; 0 for an event without rounds (a video meeting), so no round label shows. */
   totalRounds: number;
+  /** 26 Oct 2026 — what the event is (speed networking, a video meeting…), as the live engine runs it. */
+  format: EventFormat;
+  /** How it runs live: timed rounds, one room for everyone, or no video room. */
+  live: LiveKind;
+  /** How long it lasts, in minutes (a meeting's length; the rounds estimate for speed networking). */
+  durationMinutes: number;
+  /** When it is due to end (ISO 8601): its start, or else its scheduled start, plus durationMinutes. null when it has neither. */
+  scheduledEndAt: string | null;
   /**
    * Bug 28 (19 May Ali + Stefan) — count of "Another Round" presses that
    * extended the event past its originally-configured rounds. UI uses
@@ -223,6 +232,15 @@ export async function buildSessionStateSnapshot(
 
   // ── activeSessions overlay (preferred when present) ────────────────────
   const activeSession = activeSessions.get(sessionId);
+
+  // ── Event format (26 Oct 2026) — the live engine's own, else the stored one ──
+  const format = activeSession?.format ?? resolveEventFormat(session);
+  const live = liveKindOf(format);
+  const durationMinutes = eventDurationMinutes(format, config);
+  const startsAt = session.startedAt ?? session.scheduledAt;
+  const scheduledEndAt = startsAt
+    ? new Date(new Date(startsAt).getTime() + durationMinutes * 60_000).toISOString()
+    : null;
 
   // ── Connected participants (real-time socket presence) ────────────────
   // io is optional so this helper can be called in pure-DB contexts (e.g.
@@ -450,7 +468,11 @@ export async function buildSessionStateSnapshot(
     sessionId,
     sessionStatus: activeSession?.status ?? session.status,
     currentRound: activeSession?.currentRound ?? session.currentRound,
-    totalRounds: config.numberOfRounds || 5,
+    totalRounds: live === 'rounds' ? config.numberOfRounds || 5 : 0,
+    format,
+    live,
+    durationMinutes,
+    scheduledEndAt,
     // Bug 28 (19 May Ali + Stefan) — surface the bonus-round count so
     // refresh / cold-fetch clients can render the "Bonus" badge on
     // round headers without waiting for a host:event_plan_repaired emit.

@@ -71,6 +71,8 @@ export const ErrorCodes = {
   SESSION_NOT_REGISTERED: 'SESSION_NOT_REGISTERED',
   SESSION_IN_PROGRESS: 'SESSION_IN_PROGRESS',
   EVENT_ENDED: 'EVENT_ENDED',
+  EVENT_FORMAT_NOT_ALLOWED: 'EVENT_FORMAT_NOT_ALLOWED',  // the format is not offered, or the pod's type does not hold it
+  NOT_A_ROUNDS_EVENT: 'NOT_A_ROUNDS_EVENT',              // a round, matching or breakout action on an event that has none (a video meeting)
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

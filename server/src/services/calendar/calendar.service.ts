@@ -3,6 +3,7 @@
 // Works with Google Calendar, Outlook, Apple Calendar — no API keys needed.
 
 import { v4 as uuid } from 'uuid';
+import { eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
 import { query } from '../../db';
 
 interface CalendarEventData {
@@ -114,23 +115,13 @@ export interface SessionCalendarEvent {
 }
 
 /**
- * Estimate a session's wall-clock duration in minutes from its round config:
- * rounds × (round + rating) + (rounds − 1) transitions + closing lobby.
- * Mirrors the computation the emailed-invite path uses so the invite and the
- * self-registration confirmation produce the same calendar block.
+ * Estimate a speed-networking event's wall-clock duration in minutes from its round config:
+ * rounds × (round + rating) + (rounds − 1) transitions + closing lobby. Since 26 Oct 2026 this is the
+ * speed-networking case of the shared eventDurationMinutes, the one formula every calendar entry, invite
+ * email and LiveKit token lifetime uses.
  */
-export function computeSessionDurationMinutes(cfg: any): number {
-  const rounds = cfg?.numberOfRounds || 5;
-  const roundDuration = cfg?.roundDurationSeconds || 480;
-  const ratingWindow = cfg?.ratingWindowSeconds || 30;
-  const transitionDuration = cfg?.transitionDurationSeconds || 30;
-  const closingLobby = cfg?.closingLobbyDurationSeconds || 120;
-  const totalSeconds =
-    (rounds * roundDuration) +
-    (rounds * ratingWindow) +
-    (Math.max(0, rounds - 1) * transitionDuration) +
-    closingLobby;
-  return Math.ceil(totalSeconds / 60);
+export function computeSessionDurationMinutes(cfg: object | null | undefined): number {
+  return eventDurationMinutes('speed_networking', cfg);
 }
 
 /**
@@ -140,8 +131,8 @@ export function computeSessionDurationMinutes(cfg: any): number {
  * the self-registration confirmation email.
  */
 export async function buildSessionCalendarEvent(sessionId: string): Promise<SessionCalendarEvent | undefined> {
-  const r = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any }>(
-    'SELECT title, scheduled_at, host_user_id, config FROM sessions WHERE id = $1',
+  const r = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null }>(
+    'SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1',
     [sessionId],
   );
   const session = r.rows[0];
@@ -156,7 +147,7 @@ export async function buildSessionCalendarEvent(sessionId: string): Promise<Sess
     title: session.title,
     description: `REASON event — ${session.title}`,
     startTime: new Date(session.scheduled_at),
-    durationMinutes: computeSessionDurationMinutes(session.config || {}),
+    durationMinutes: eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config),
     organizerName: host?.display_name || 'REASON',
     organizerEmail: host?.email,
     sessionId,

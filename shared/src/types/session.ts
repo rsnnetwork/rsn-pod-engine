@@ -1,5 +1,7 @@
 // ─── Session Domain Types ────────────────────────────────────────────────────
 
+import type { EventFormat } from '../events/definitions';
+
 export enum SessionStatus {
   SCHEDULED = 'scheduled',
   LOBBY_OPEN = 'lobby_open',
@@ -93,6 +95,16 @@ export interface SessionConfig {
    * Default 0; bumped by +1 every successful "Another Round" click.
    */
   bonusRoundsAdded?: number;
+  /**
+   * 26 Oct 2026 — a meeting-kind event's length in minutes (a video meeting's "Length"). Its calendar
+   * entry, invite emails and LiveKit token lifetime follow it. Never filtered, so it lives here, not in a column.
+   */
+  durationMinutes?: number;
+  /**
+   * The event's format as production's old form sends it. Since 26 Oct 2026 the server keeps it equal to
+   * the stored format (sessions.event_format), so a copy the old form makes keeps the format.
+   */
+  eventType?: string;
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -149,6 +161,8 @@ export interface Session {
   hostUserId: string;
   lobbyRoomId: string | null;
   hostVisibilityMode?: HostVisibilityMode;
+  /** 26 Oct 2026 — what the event is (speed networking, a video meeting…); sessions.event_format. */
+  format?: EventFormat;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -165,19 +179,35 @@ export interface SessionParticipant {
   roundsCompleted: number;
 }
 
+/**
+ * The settings a create or edit may send: stored settings, plus the round length in minutes as the event
+ * forms hold it (the server stores it as `roundDurationSeconds`).
+ */
+export type SessionConfigInput = Partial<SessionConfig> & {
+  roundMinutes?: number;
+  matchingTemplateId?: string;
+};
+
 export interface CreateSessionInput {
   podId: string;
   title: string;
   description?: string;
   scheduledAt: string;  // ISO date string
-  config?: Partial<SessionConfig>;
+  /**
+   * 26 Oct 2026 — checked against the pod's type. Production's old form omits it: the server then reads an
+   * offered `config.eventType` (option O1), else speed networking.
+   */
+  format?: EventFormat;
+  config?: SessionConfigInput;
 }
 
 export interface UpdateSessionInput {
   title?: string;
   description?: string;
   scheduledAt?: string;
-  config?: Partial<SessionConfig>;
+  /** 26 Oct 2026 — a scheduled event may switch to another format its pod holds. */
+  format?: EventFormat;
+  config?: SessionConfigInput;
 }
 
 export interface SessionSegment {

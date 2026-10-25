@@ -101,3 +101,43 @@ export const ENTITY_KIND_LABELS = _ENTITY_KIND_LABELS;
 export const ENTITY_LIMITS = _ENTITY_LIMITS;
 export const ENTITY_ROLES = _ENTITY_ROLES;
 export const ENTITY_ROLE_LABELS = _ENTITY_ROLE_LABELS;
+// Event formats and pod types (26 Oct 2026): the one definition every pod and event form reads and the server
+// enforces, with its rules. Real VALUES the client renders and calls, so each has its own named export, same
+// as OPENINGS above.
+export * from './events/definitions';
+export * from './events/rules';
+import {
+  EVENT_FORMATS as _EVENT_FORMATS, EVENT_FORMAT_KEYS as _EVENT_FORMAT_KEYS, POD_TYPES as _POD_TYPES,
+  ORCHESTRATION_MODES as _ORCHESTRATION_MODES,
+} from './events/definitions';
+import {
+  formatRule as _formatRule, podTypeRule as _podTypeRule, isEventFormat as _isEventFormat, liveKindOf as _liveKindOf,
+  effectiveOrchestration as _effectiveOrchestration, eventFormatsForPod as _eventFormatsForPod,
+  defaultEventFormat as _defaultEventFormat, fieldsFor as _fieldsFor, defaultsFor as _defaultsFor,
+  defaultTitle as _defaultTitle, checkEventInput as _checkEventInput, normaliseConfig as _normaliseConfig,
+  valuesFromConfig as _valuesFromConfig, eventDurationMinutes as _eventDurationMinutes,
+  applyTypeChange as _applyTypeChange, applyFormatChange as _applyFormatChange,
+  resolveEventFormat as _resolveEventFormat, formatRefusal as _formatRefusal,
+} from './events/rules';
+export const EVENT_FORMATS = _EVENT_FORMATS;
+export const EVENT_FORMAT_KEYS = _EVENT_FORMAT_KEYS;
+export const POD_TYPES = _POD_TYPES;
+export const ORCHESTRATION_MODES = _ORCHESTRATION_MODES;
+export const formatRule = _formatRule;
+export const podTypeRule = _podTypeRule;
+export const isEventFormat = _isEventFormat;
+export const liveKindOf = _liveKindOf;
+export const effectiveOrchestration = _effectiveOrchestration;
+export const eventFormatsForPod = _eventFormatsForPod;
+export const defaultEventFormat = _defaultEventFormat;
+export const fieldsFor = _fieldsFor;
+export const defaultsFor = _defaultsFor;
+export const defaultTitle = _defaultTitle;
+export const checkEventInput = _checkEventInput;
+export const normaliseConfig = _normaliseConfig;
+export const valuesFromConfig = _valuesFromConfig;
+export const eventDurationMinutes = _eventDurationMinutes;
+export const applyTypeChange = _applyTypeChange;
+export const applyFormatChange = _applyFormatChange;
+export const resolveEventFormat = _resolveEventFormat;
+export const formatRefusal = _formatRefusal;

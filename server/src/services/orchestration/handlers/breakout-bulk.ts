@@ -25,7 +25,7 @@ import logger from '../../../config/logger';
 import { query, transaction } from '../../../db';
 import { ParticipantStatus } from '@rsn/shared';
 import {
-  activeSessions, withSessionGuard, userRoom, emitRatingWindowOnce,
+  activeSessions, withSessionGuard, userRoom, emitRatingWindowOnce, refuseIfFormatLacks,
 } from '../state/session-state';
 import {
   roomTimers, roomSyncIntervals, RoomTimerState, verifyHost, clearRoomTimers,
@@ -99,6 +99,8 @@ export async function handleHostCreateBreakoutBulk(
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
     if (!await verifyHost(socket, data.sessionId)) return;
+    // 26 Oct 2026 — no breakout rooms in a video meeting.
+    if (refuseIfFormatLacks(socket, data.sessionId, 'breakouts')) return;
 
     const { sessionId, rooms } = data;
     const sharedDurationSeconds = Math.max(0, Math.floor(data.sharedDurationSeconds || 0));
@@ -697,6 +699,8 @@ export async function handleHostAddToRoom(
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
     if (!await verifyHost(socket, data.sessionId)) return;
+    // 26 Oct 2026 — no breakout rooms in a video meeting.
+    if (refuseIfFormatLacks(socket, data.sessionId, 'breakouts')) return;
 
     const { sessionId, userId, matchId } = data;
     const activeSession = activeSessions.get(sessionId);

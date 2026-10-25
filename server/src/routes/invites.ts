@@ -10,7 +10,7 @@ import { fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { query } from '../db';
-import { ApiResponse, InviteType, InviteStatus } from '@rsn/shared';
+import { ApiResponse, InviteType, InviteStatus, eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
 
 const router = Router();
 
@@ -235,18 +235,15 @@ router.post(
         let targetName: string | undefined;
         let calendarEvent: any = undefined;
         if (inv.session_id) {
-          const sr = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any }>(
-            `SELECT title, scheduled_at, host_user_id, config FROM sessions WHERE id = $1`, [inv.session_id]
+          const sr = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null }>(
+            `SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1`, [inv.session_id]
           );
           const session = sr.rows[0];
           targetName = session?.title;
 
           if (session?.scheduled_at) {
-            const cfg = session.config || {};
-            const rounds = cfg.numberOfRounds || 5;
-            const roundDuration = cfg.roundDurationSeconds || 480;
-            const breakDuration = cfg.transitionDurationSeconds || 30;
-            const totalMinutes = Math.ceil((rounds * roundDuration + (rounds - 1) * breakDuration) / 60);
+            // 26 Oct 2026 — the same length as the first invite: the shared eventDurationMinutes.
+            const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
             const hostResult = await query<{ display_name: string; email: string }>(
               'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
             );
@@ -290,8 +287,8 @@ router.post(
       const { sessionId } = req.params;
 
       // Only host/admin can bulk remind
-      const sessionResult = await query<{ host_user_id: string; title: string; scheduled_at: string | null; config: any }>(
-        `SELECT host_user_id, title, scheduled_at, config FROM sessions WHERE id = $1`, [sessionId]
+      const sessionResult = await query<{ host_user_id: string; title: string; scheduled_at: string | null; config: any; event_format?: string | null }>(
+        `SELECT host_user_id, title, scheduled_at, config, event_format FROM sessions WHERE id = $1`, [sessionId]
       );
       if (sessionResult.rows.length === 0) {
         return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Session not found' } });
@@ -322,11 +319,8 @@ router.post(
 
       let calendarEvent: any = undefined;
       if (session.scheduled_at) {
-        const cfg = session.config || {};
-        const rounds = cfg.numberOfRounds || 5;
-        const roundDuration = cfg.roundDurationSeconds || 480;
-        const breakDuration = cfg.transitionDurationSeconds || 30;
-        const totalMinutes = Math.ceil((rounds * roundDuration + (rounds - 1) * breakDuration) / 60);
+        // 26 Oct 2026 — the same length as the first invite: the shared eventDurationMinutes.
+        const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
         const hostResult = await query<{ display_name: string; email: string }>(
           'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
         );
