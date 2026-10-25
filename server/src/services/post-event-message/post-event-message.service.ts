@@ -20,6 +20,7 @@ import { query, transaction } from '../../db';
 import { AppError, ConflictError } from '../../middleware/errors';
 import { getSessionParticipants } from '../session/session.service';
 import { classifyParticipant } from './classify';
+import { skipReasonFor, type RecipientSkipReason } from './skip-rule';
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
@@ -222,9 +223,6 @@ export async function createJob(sessionId: string, createdBy: string): Promise<P
 
 // ─── Version 2: the organiser's own words ─────────────────────────────────────
 
-/** Why a person on the list is not messaged: someone blocked the other, or the account is closed. */
-export type RecipientSkipReason = 'blocked' | 'inactive';
-
 export interface PlannedRecipient {
   userId: string;
   bucket: PostEventMessageBucket;
@@ -244,13 +242,6 @@ interface ParticipantPersonRow extends PersonRow {
   joined_at: Date | null;
   left_at: Date | null;
   rounds_completed: number | null;
-}
-
-/** A closed, suspended or banned account has no one to message; a block in either direction is a refusal. */
-function skipReasonFor(person: PersonRow): RecipientSkipReason | null {
-  if (person.account_status !== 'active') return 'inactive';
-  if (person.blocked) return 'blocked';
-  return null;
 }
 
 /**

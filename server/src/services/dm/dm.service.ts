@@ -28,6 +28,7 @@ import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import * as blockService from '../block/block.service';
+import { BroadcastBlockedError } from './broadcast-errors';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -399,7 +400,7 @@ export async function sendBroadcastMessage(
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message too long (max 4000 characters)');
   }
   if (await blockService.areBlocked(fromUserId, toUserId)) {
-    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You can no longer message this user');
+    throw new BroadcastBlockedError();
   }
   return insertDirectMessage(fromUserId, toUserId, trimmed, null);
 }

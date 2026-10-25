@@ -24,6 +24,8 @@ jest.mock('../../../services/session/session.service', () => ({
 // ─── Existing task-6 export check ────────────────────────────────────────────
 
 import * as dm from '../../../services/dm/dm.service';
+import { BroadcastBlockedError } from '../../../services/dm/broadcast-errors';
+import { AppError } from '../../../middleware/errors';
 
 describe('sendBroadcastMessage', () => {
   it('is exported and takes (from, to, content)', () => {
@@ -69,6 +71,17 @@ describe('sendBroadcastMessage and blocks', () => {
     });
     expect(mockTransaction).not.toHaveBeenCalled();
     expect(sent).toEqual([]);
+  });
+
+  it('the refusal is a BroadcastBlockedError, so the worker can tell a block (a skip) from a fault (a failure)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'block-1' }] });
+    fakeInsert([]);
+
+    const refusal = await dm.sendBroadcastMessage('organiser', 'recipient', 'Thanks all').catch((err: unknown) => err);
+
+    expect(refusal).toBeInstanceOf(BroadcastBlockedError);
+    expect(refusal).toBeInstanceOf(AppError); // still an ordinary 403 to anything that only knows AppError
+    expect(refusal).toMatchObject({ statusCode: 403, code: 'AUTH_FORBIDDEN' });
   });
 
   it('refuses a recipient who has blocked the sender (the check reads both directions)', async () => {
