@@ -31,7 +31,7 @@ import { useLeaveEdit } from './useLeaveEdit';
 import { useProfileForm } from './useProfileForm';
 import { useConfirm, useConnectLinkedin, useOnboardingV2State, useSaveDraft, useSkipLinkedin } from './useOnboardingV2';
 import {
-  LANDED, PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, problemMessage,
+  LANDED, PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, guessedStill, problemMessage,
   questionFor, questionProblem, stepAfter, stepBefore, tourOpensAfterConfirm, withKeys,
   type ConfirmProblem, type DraftPatch, type Question, type QuestionStepKey,
 } from './flow';
@@ -68,8 +68,8 @@ function Flow({ state }: { state: OnboardingV2State }) {
   const navigate = useNavigate();
   const { addToast } = useToastStore();
   const leave = useLeaveEdit();
-  // Only a LinkedIn choice made in this visit lets LinkedIn suggest anything (useSignupChoice).
-  const [via, choose] = useSignupChoice();
+  // Only a LinkedIn choice lets LinkedIn suggest anything: made in this visit, or recorded by the server (useSignupChoice).
+  const [via, choose] = useSignupChoice(state.linkedin.chosen);
   const linkedinOn = via === 'linkedin';
   const form = useProfileForm(state, linkedinOn);
   const { busy, once } = useOnePress();
@@ -84,20 +84,20 @@ function Flow({ state }: { state: OnboardingV2State }) {
   // A refusal about a question itself, or a failed save, said under its options.
   const [listError, setListError] = useState<string | null>(null);
   const [selfTouched, setSelfTouched] = useState(false);
-  const [guessApplied, setGuessApplied] = useState<string | null>(null);
+  const [guessApplied, setGuessApplied] = useState<readonly string[]>([]);
   const ownWordsRef = useRef<HTMLInputElement>(null);
   const steps = useFlowSteps(state, answers);
   const { edit, screen } = steps;
 
-  // Screen 6: LinkedIn's most likely answer, ticked for them to confirm or change, when they chose LinkedIn.
-  const guess = linkedinOn ? state.linkedin.prefill?.selfGuess ?? null : null;
+  // Screen 6: every answer LinkedIn's stated role supports, ticked for them to confirm or change, when they chose LinkedIn.
+  const guesses = linkedinOn ? state.linkedin.prefill?.selfGuesses : undefined;
   useEffect(() => {
     if (screen !== 'q4') return;
-    const picked = guessedSelf(answers, guess, selfTouched);
+    const picked = guessedSelf(answers, guesses, selfTouched);
     if (!picked) return;
     setAnswers(a => withKeys(a, questionFor('q4')!, picked));
-    setGuessApplied(picked[0]);
-  }, [screen, guess, selfTouched, answers]);
+    setGuessApplied(picked);
+  }, [screen, guesses, selfTouched, answers]);
 
   const go = (step: OnboardingV2Step, from?: 'profile') => {
     setOwnWordsError(null);
@@ -175,7 +175,7 @@ function Flow({ state }: { state: OnboardingV2State }) {
 
   const questionFooter = (question: Question): FooterProps => {
     const problem = questionProblem(question, answers);
-    const blocked = problem === 'empty' || problem === 'too-many';
+    const blocked = problem === 'empty';
     /** Leave this question for `next`, keeping the draft in step (never in edit mode, where Cancel must leave nothing). */
     const leaveFor = (next: OnboardingV2Step, arrive: () => void) => () => {
       if (!canLeave(question)) return;
@@ -277,7 +277,7 @@ function Flow({ state }: { state: OnboardingV2State }) {
       ownWordsError={ownWordsError}
       listError={listError}
       ownWordsRef={ownWordsRef}
-      guessed={q.step === 'q4' && !selfTouched && !!guessApplied && answers.selfKinds.length === 1 && answers.selfKinds[0] === guessApplied}
+      fromLinkedin={q.step === 'q4' && !selfTouched ? guessedStill(answers.selfKinds, guessApplied) : []}
       showProgress={!edit}
       footer={<FooterButtons {...questionFooter(q)} />}
     />

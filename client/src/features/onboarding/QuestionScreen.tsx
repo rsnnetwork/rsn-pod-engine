@@ -15,13 +15,13 @@ interface Props {
   ownWordsError: string | null;
   listError: string | null;
   ownWordsRef: Ref<HTMLInputElement>;
-  guessed: boolean;
+  fromLinkedin: readonly string[];
   showProgress: boolean;
   footer: ReactNode;
 }
 
 export default function QuestionScreen({ question, showProgress, footer, ...body }: Props) {
-  // The helper line ("Select up to three answers.") describes the options, so they point at it.
+  // The helper line ("Select all that apply.") describes the options, so they point at it.
   const hintId = useId();
   return (
     <OnboardingShell

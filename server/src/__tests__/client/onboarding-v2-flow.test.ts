@@ -7,13 +7,13 @@ import {
   type OnboardingV2Answers,
 } from '@rsn/shared';
 import {
-  QUESTIONS, WELCOME, SIGNUP, PROFILE, SELF_GUESS_LINE, SPECIFIC, OWN_WORDS_MAX,
+  QUESTIONS, WELCOME, SIGNUP, PROFILE, SELF_GUESS_LINE, FROM_LINKEDIN, SPECIFIC, OWN_WORDS_MAX,
   LINKEDIN_EMPTY, LINKEDIN_EXAMPLE,
   questionFor, questionProblem, firstIncomplete, stepToShow, stepAfter, stepBefore, parseEdit,
   toggleKey, confirmBody, draftPatch, profileValue, profileInput, linkedinForInput, linkedinInputProblem,
-  zoneLabel, searchZones, onboardingError, answerSummary, linkedinNote, editAction, editFallback, guessedSelf,
+  zoneLabel, searchZones, onboardingError, answerSummary, linkedinNote, editAction, editFallback, guessedSelf, guessedStill,
   withKeys, withOwnWords, isRealZone, zoneList, currentZoneName, confirmProblem,
-  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, LANDED, isLanded, returnedKey, tourOpensAfterConfirm,
+  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, signupChoiceOf, LANDED, isLanded, returnedKey, tourOpensAfterConfirm,
 } from '../../../../client/src/features/onboarding/flow';
 import { forgetReturned, hasReturned, markReturned } from '../../../../client/src/features/onboarding/tour-landing';
 
@@ -49,7 +49,7 @@ describe('the brief\'s words, verbatim', () => {
     });
   });
 
-  it('screen 7, Your profile, and the line for a role picked from LinkedIn', () => {
+  it('screen 7, Your profile, and the words for answers picked from LinkedIn', () => {
     expect(PROFILE.title).toBe("Here's how others will see you");
     expect(PROFILE.subtitle).toBe("Change anything that isn't right.");
     expect(PROFILE.keepPhoto).toBe('Keep this photo');
@@ -62,22 +62,25 @@ describe('the brief\'s words, verbatim', () => {
     expect(PROFILE.addLinkedin).toBe('Add LinkedIn');
     expect(PROFILE.later).toBe('Later');
     expect(PROFILE.finish).toBe('Show me my matches');
-    expect(SELF_GUESS_LINE).toBe("We picked this from your LinkedIn. Change it if it's wrong.");
+    // 25 Oct review: LinkedIn can suggest several answers, so the line is plural and each tile carries a note.
+    expect(SELF_GUESS_LINE).toBe("We picked these from your LinkedIn. Change them if they're wrong.");
+    expect(FROM_LINKEDIN).toBe('From LinkedIn');
   });
 
   it('none of it says RSN', () => {
-    const all = JSON.stringify({ WELCOME, SIGNUP, PROFILE, SELF_GUESS_LINE, QUESTIONS: QUESTIONS.map(x => [x.title, x.hint, x.limitHint, x.ownWordsMissing]) });
+    const all = JSON.stringify({ WELCOME, SIGNUP, PROFILE, SELF_GUESS_LINE, FROM_LINKEDIN, QUESTIONS: QUESTIONS.map(x => [x.title, x.hint, x.ownWordsMissing]) });
     expect(all).not.toMatch(/\bRSN\b/);
   });
 });
 
 describe('the four questions (screens 3 to 6)', () => {
   it('come in the brief\'s order, numbered 1 to 4, with its titles, helper lines and options', () => {
+    // 25 Oct review: every question takes all the answers that apply.
     expect(QUESTIONS.map(x => [x.step, x.number, x.title, x.hint])).toEqual([
-      ['q1', 1, 'Who would you like to meet?', 'Select up to three answers.'],
-      ['q2', 2, 'What are you hoping to find?', 'Select up to three answers.'],
+      ['q1', 1, 'Who would you like to meet?', 'Select all that apply.'],
+      ['q2', 2, 'What are you hoping to find?', 'Select all that apply.'],
       ['q3', 3, 'What can you offer others?', 'Select all that apply.'],
-      ['q4', 4, 'How would you describe yourself?', 'Select up to two answers.'],
+      ['q4', 4, 'How would you describe yourself?', 'Select all that apply.'],
     ]);
     expect(QUESTIONS.map(x => x.options)).toEqual([ONBOARDING_V2_MEET, ONBOARDING_V2_FIND, ONBOARDING_V2_OFFER, ONBOARDING_V2_SELF]);
     expect(QUESTIONS.map(x => x.title)).toEqual([
@@ -85,14 +88,34 @@ describe('the four questions (screens 3 to 6)', () => {
     ]);
   });
 
-  it('have the brief\'s limits, and a gentle line for when one is reached', () => {
-    expect(QUESTIONS.map(x => x.max)).toEqual([3, 3, null, 2]);
-    expect(QUESTIONS.map(x => x.limitHint)).toEqual([
-      "You've chosen three. Untick one to choose another.",
-      "You've chosen three. Untick one to choose another.",
-      null,
-      "You've chosen two. Untick one to choose another.",
-    ]);
+  // 25 Oct review (ONB-01): "step 1 should allow multiple choice", and no question stops at three or two.
+  it('have no limit at all: a question holds no maximum and no line for reaching one', () => {
+    for (const x of QUESTIONS) {
+      expect({ step: x.step, hasMaximum: 'max' in x, hasLimitLine: 'limitHint' in x }).toEqual({ step: x.step, hasMaximum: false, hasLimitLine: false });
+    }
+  });
+
+  it('take five answers on each question, and one unticked, and can be left with no refusal', () => {
+    for (const x of QUESTIONS) {
+      const ticks = x.options.filter(o => o.key !== x.ownWordsKey).slice(0, 5).map(o => o.key);
+      expect(ticks).toHaveLength(5);
+      const five = ticks.reduce<string[]>((chosen, key) => toggleKey(chosen, key), []);
+      expect(five).toEqual(ticks);
+      expect(questionProblem(x, withKeys(NONE, x, five))).toBeNull();
+      const four = toggleKey(five, ticks[2]);
+      expect(four).toEqual(ticks.filter(k => k !== ticks[2]));
+      expect(questionProblem(x, withKeys(NONE, x, four))).toBeNull();
+    }
+  });
+
+  it('take every answer of the question at once, "Something else" included once it has its words', () => {
+    for (const x of QUESTIONS) {
+      const all = x.options.map(o => o.key).reduce<string[]>((chosen, key) => toggleKey(chosen, key), []);
+      expect(all).toEqual(x.options.map(o => o.key));
+      const answered = withOwnWords(withKeys(NONE, x, all), x, 'bakers in Vienna');
+      expect(questionProblem(x, answered)).toBeNull();
+      expect(questionProblem(x, withOwnWords(answered, x, '  '))).toBe('own-words');
+    }
   });
 
   it('each end in "Something else", whose words are required, up to 120 characters, in the server\'s own sentences', () => {
@@ -144,17 +167,44 @@ describe('whether a question can be left', () => {
     expect(questionProblem(q('q3'), { ...DONE, offerOther: 'anything' })).toBeNull();
   });
 
-  it('more than the limit (stale data) cannot be left either', () => {
+  it('a fourth person to meet is an answer like the others: it used to be refused as "too many"', () => {
     const four = { ...DONE, lookingToMeet: ['meet_investors', 'meet_founders_owners', 'meet_specialists', 'meet_advisors_experienced'] as OnboardingV2Answers['lookingToMeet'] };
-    expect(questionProblem(q('q1'), four)).toBe('too-many');
+    expect(questionProblem(q('q1'), four)).toBeNull();
+    expect(firstIncomplete(four)).toBeNull();
   });
 
-  it('says why a question cannot be left, in the server\'s own sentences: none ticked, too many, or no words', () => {
+  it('says why a question cannot be left, in the server\'s own sentences: none ticked, or no words', () => {
     expect(ANSWER_NEEDED).toBe('Select at least one answer.');
     expect(problemMessage(q('q1'), 'empty')).toBe('Select at least one answer.');
-    expect(problemMessage(q('q1'), 'too-many')).toBe('Select up to three answers.');
-    expect(problemMessage(q('q4'), 'too-many')).toBe('Select up to two answers.');
     expect(problemMessage(q('q2'), 'own-words')).toBe('Tell us what you are hoping to find.');
+    expect(problemMessage(q('q4'), 'own-words')).toBe('Tell us how you would describe yourself.');
+  });
+
+  // 25 Oct review (ONB-02): four employees could not find themselves without "Something else". Every question now has
+  // an answer for someone who works for a company, and the whole flow can be finished without the words box.
+  it('an employee answers every question without "Something else"', () => {
+    const employee: OnboardingV2Answers = {
+      ...NONE,
+      lookingToMeet: ['meet_managers_leaders', 'meet_hiring'],
+      hopingToFind: ['find_new_role', 'find_advice_learning'],
+      canOffer: ['offer_knowledge', 'offer_referrals'],
+      selfKinds: ['self_employee'],
+    };
+    for (const x of QUESTIONS) {
+      const keys = employee[x.field] as readonly string[];
+      for (const key of keys) expect({ step: x.step, key, shown: x.options.some(o => o.key === key) }).toEqual({ step: x.step, key, shown: true });
+      expect({ step: x.step, usedSomethingElse: keys.includes(x.ownWordsKey) }).toEqual({ step: x.step, usedSomethingElse: false });
+      expect(questionProblem(x, employee)).toBeNull();
+    }
+    expect(firstIncomplete(employee)).toBeNull();
+    expect(confirmBody(employee)).toEqual({
+      lookingToMeet: ['meet_managers_leaders', 'meet_hiring'], meetOther: null,
+      hopingToFind: ['find_new_role', 'find_advice_learning'], findOther: null, findSpecific: null,
+      canOffer: ['offer_knowledge', 'offer_referrals'], offerOther: null,
+      selfKinds: ['self_employee'], selfOther: null,
+    });
+    // The two answers an employee looks for first on the last question come right after the founder's.
+    expect(q('q4').options.slice(0, 3).map(o => o.key)).toEqual(['self_founder_owner', 'self_employee', 'self_manager_leader']);
   });
 
   it('Q2\'s "anything specific" is optional', () => {
@@ -243,18 +293,20 @@ describe('which screen to show', () => {
 
 describe('ticking options', () => {
   it('ticks and unticks', () => {
-    expect(toggleKey([], 'a', 3)).toEqual(['a']);
-    expect(toggleKey(['a', 'b'], 'a', 3)).toEqual(['b']);
+    expect(toggleKey([], 'a')).toEqual(['a']);
+    expect(toggleKey(['a', 'b'], 'a')).toEqual(['b']);
   });
 
-  it('refuses a fourth (or a third, where two is the most), and Q3 has no limit', () => {
-    expect(toggleKey(['a', 'b', 'c'], 'd', 3)).toEqual(['a', 'b', 'c']);
-    expect(toggleKey(['a', 'b'], 'c', 2)).toEqual(['a', 'b']);
-    expect(toggleKey(['a', 'b', 'c', 'd', 'e', 'f'], 'g', null)).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+  it('never refuses a tick, however many are already ticked, and keeps the order they were ticked in', () => {
+    expect(toggleKey(['a', 'b', 'c'], 'd')).toEqual(['a', 'b', 'c', 'd']);
+    expect(toggleKey(['a', 'b'], 'c')).toEqual(['a', 'b', 'c']);
+    expect(toggleKey(['a', 'b', 'c', 'd', 'e', 'f'], 'g')).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
   });
 
-  it('at the limit, one already ticked can still be unticked, so they can swap', () => {
-    expect(toggleKey(['a', 'b', 'c'], 'b', 3)).toEqual(['a', 'c']);
+  it('unticks one from the middle of many, and gives back the list it was given, unchanged', () => {
+    const ticked = ['a', 'b', 'c', 'd', 'e'];
+    expect(toggleKey(ticked, 'c')).toEqual(['a', 'b', 'd', 'e']);
+    expect(ticked).toEqual(['a', 'b', 'c', 'd', 'e']);
   });
 
   it('a question\'s ticks and words land on that question\'s own fields and nowhere else', () => {
@@ -264,11 +316,35 @@ describe('ticking options', () => {
     expect(withOwnWords(DONE, q('q1'), '')).toEqual({ ...DONE, meetOther: '' });
   });
 
-  it('LinkedIn\'s guess at Q4 is used only when they have not answered and have not touched it', () => {
-    expect(guessedSelf(NONE, 'self_investor', false)).toEqual(['self_investor']);
-    expect(guessedSelf(NONE, 'self_investor', true)).toBeNull();
-    expect(guessedSelf(DONE, 'self_investor', false)).toBeNull();
+  // 25 Oct review (ONB-03): LinkedIn can say several things about a person ("Founder & CEO | Angel investor"), and
+  // with no limit every one of them can be true, so every one is ticked.
+  it('LinkedIn\'s guesses at Q4 are all used, in its order, only when they have not answered and have not touched it', () => {
+    expect(guessedSelf(NONE, ['self_founder_owner', 'self_investor'], false)).toEqual(['self_founder_owner', 'self_investor']);
+    expect(guessedSelf(NONE, ['self_investor'], false)).toEqual(['self_investor']);
+    expect(guessedSelf(NONE, ['self_investor'], true)).toBeNull();
+    expect(guessedSelf(DONE, ['self_investor'], false)).toBeNull();
+  });
+
+  it('LinkedIn saying nothing ticks nothing', () => {
+    expect(guessedSelf(NONE, [], false)).toBeNull();
     expect(guessedSelf(NONE, null, false)).toBeNull();
+    expect(guessedSelf(NONE, undefined, false)).toBeNull();
+  });
+
+  it('only answers the screen shows are ticked, once each: a key from a newer server is left out, never saved unseen', () => {
+    expect(guessedSelf(NONE, ['self_investor', 'self_something_new', 'self_investor', 'self_employee'], false)).toEqual(['self_investor', 'self_employee']);
+    expect(guessedSelf(NONE, ['self_something_new'], false)).toBeNull();
+  });
+
+  it('what LinkedIn picked is marked only while exactly that is ticked, in any order', () => {
+    const picked = ['self_founder_owner', 'self_investor'];
+    expect(guessedStill(['self_founder_owner', 'self_investor'], picked)).toEqual(picked);
+    expect(guessedStill(['self_investor', 'self_founder_owner'], picked)).toEqual(picked);
+    expect(guessedStill(['self_founder_owner'], picked)).toEqual([]);
+    expect(guessedStill(['self_founder_owner', 'self_investor', 'self_employee'], picked)).toEqual([]);
+    expect(guessedStill(['self_founder_owner', 'self_employee'], picked)).toEqual([]);
+    expect(guessedStill([], [])).toEqual([]);
+    expect(guessedStill(['self_founder_owner'], [])).toEqual([]);
   });
 });
 
@@ -443,6 +519,18 @@ describe('the choice on screen 2, remembered for the visit', () => {
     expect(parseSignupChoice('linkedin')).toBe('linkedin');
     expect(parseSignupChoice('email')).toBe('email');
     for (const junk of [null, '', 'LinkedIn', 'yes', '1']) expect(parseSignupChoice(junk)).toBeNull();
+  });
+
+  // 25 Oct review (ONB-03): the choice used to live in this tab only, so another tab or device lost every suggestion.
+  // The server now says how they chose last (linkedin.chosen), and this tab's own choice still comes first: it is the
+  // freshest thing the member did here, and the state it would be read from may not have caught up yet.
+  it('this tab\'s own choice comes first, then the one the server recorded in any other tab or on any device, then none', () => {
+    expect(signupChoiceOf('email', 'linkedin')).toBe('email');
+    expect(signupChoiceOf('linkedin', 'email')).toBe('linkedin');
+    expect(signupChoiceOf(null, 'linkedin')).toBe('linkedin');
+    expect(signupChoiceOf(null, 'email')).toBe('email');
+    expect(signupChoiceOf(null, null)).toBeNull();
+    expect(signupChoiceOf(null, undefined)).toBeNull();
   });
 });
 

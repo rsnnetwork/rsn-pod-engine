@@ -107,33 +107,49 @@ describe('screens 3 to 6, the questions', () => {
   const step = loadModule(`${dir}/QuestionStep.tsx`, { './OptionTile': optionTile, './flow': flow }).default;
   const q = (s: 'q1' | 'q2' | 'q3' | 'q4') => flow.questionFor(s)!;
   const html = (s: 'q1' | 'q2' | 'q3' | 'q4', answers: OnboardingV2Answers, extra: Record<string, unknown> = {}) =>
-    draw(step, { question: q(s), answers, onChange: () => undefined, ownWordsError: null, guessed: false, ...extra });
+    draw(step, { question: q(s), answers, onChange: () => undefined, ownWordsError: null, fromLinkedin: [], ...extra });
+  /** Every answer of a question ticked at once. */
+  const everyAnswer = (s: 'q1' | 'q2' | 'q3' | 'q4') => flow.withKeys(NONE, q(s), q(s).options.map(o => o.key));
 
   it('every option is a checkbox with the brief\'s label, ticked as answered', () => {
     const markup = html('q1', { ...NONE, lookingToMeet: ['meet_investors'] });
-    expect(markup.match(/role="checkbox"/g)).toHaveLength(7);
+    expect(markup.match(/role="checkbox"/g)).toHaveLength(flow.QUESTIONS[0].options.length);
     expect(words(markup)).toEqual(flow.QUESTIONS[0].options.map(o => o.label));
     expect(markup).toMatch(/aria-checked="true"[^>]*>(?:(?!<button).)*I would like to meet investors\./);
     expect(markup.match(/aria-checked="true"/g)).toHaveLength(1);
   });
 
-  it('at three, the rest are disabled and the gentle line shows; the three chosen stay live', () => {
-    const markup = html('q1', { ...NONE, lookingToMeet: ['meet_investors', 'meet_founders_owners', 'meet_specialists'] });
-    expect(markup.match(/disabled=""/g)).toHaveLength(4);
-    expect(words(markup)).toContain("You've chosen three. Untick one to choose another.");
-    expect(html('q1', { ...NONE, lookingToMeet: ['meet_investors'] })).not.toContain("You've chosen");
+  // 25 Oct review (ONB-01): at three the rest used to grey out ("You've chosen three. Untick one to choose another.").
+  it('no question has a limit: with every answer ticked nothing is greyed out and there is no line about a limit', () => {
+    for (const s of ['q1', 'q2', 'q3', 'q4'] as const) {
+      const markup = html(s, everyAnswer(s));
+      expect({ s, ticked: markup.match(/aria-checked="true"/g)?.length }).toEqual({ s, ticked: q(s).options.length });
+      expect({ s, greyedOut: /disabled/.test(markup) }).toEqual({ s, greyedOut: false });
+      expect({ s, limitLine: /You&#x27;ve chosen|Untick one|Select up to/.test(markup) }).toEqual({ s, limitLine: false });
+      expect({ s, status: markup.includes('role="status"') }).toEqual({ s, status: false });
+    }
   });
 
-  it('the options are described by the helper line, and by the limit line and the error when they show', () => {
+  it('five ticked on each question leave every other answer live, and every tile can be pressed', () => {
+    for (const s of ['q1', 'q2', 'q3', 'q4'] as const) {
+      const five = q(s).options.filter(o => o.key !== q(s).ownWordsKey).slice(0, 5).map(o => o.key);
+      const markup = html(s, flow.withKeys(NONE, q(s), five));
+      expect({ s, ticked: markup.match(/aria-checked="true"/g)?.length, open: markup.match(/aria-checked="false"/g)?.length })
+        .toEqual({ s, ticked: 5, open: q(s).options.length - 5 });
+      expect({ s, greyedOut: /disabled/.test(markup) }).toEqual({ s, greyedOut: false });
+    }
+  });
+
+  it('the options are described by the helper line, and by the error when it shows', () => {
     const described = (markup: string) => markup.match(/role="group"[^>]*aria-describedby="([^"]*)"/)?.[1].split(' ') ?? [];
     expect(described(html('q1', NONE, { hintId: 'hint' }))).toEqual(['hint']);
-    const full = html('q1', { ...NONE, lookingToMeet: ['meet_investors', 'meet_founders_owners', 'meet_specialists'] }, { hintId: 'hint', listError: 'Select up to three answers.' });
+    const full = html('q1', { ...NONE, lookingToMeet: ['meet_investors', 'meet_founders_owners', 'meet_specialists', 'meet_hiring', 'meet_managers_leaders'] },
+      { hintId: 'hint', listError: 'Select at least one answer.' });
     const ids = described(full);
     expect(ids[0]).toBe('hint');
-    expect(ids).toHaveLength(3);
+    expect(ids).toHaveLength(2);
     for (const id of ids.slice(1)) expect(full).toContain(`id="${id}"`);
-    expect(full).toMatch(/role="status">You&#x27;ve chosen three/);
-    expect(full).toMatch(/role="alert">Select up to three answers\./);
+    expect(full).toMatch(/role="alert">Select at least one answer\./);
   });
 
   it('an empty question\'s Continue can still be pressed and says why: "Select at least one answer."', () => {
@@ -142,13 +158,6 @@ describe('screens 3 to 6, the questions', () => {
     expect(markup).toContain('aria-disabled="true"');
     expect(markup).not.toMatch(/ disabled=""/);
     expect(read(`${dir}/OnboardingFlow.tsx`)).toMatch(/setListError\(problemMessage\(question, problem\)\)/);
-  });
-
-  it('Q4 stops at two; Q3 has no limit at all', () => {
-    expect(words(html('q4', { ...NONE, selfKinds: ['self_investor', 'self_specialist'] }))).toContain("You've chosen two. Untick one to choose another.");
-    const all = html('q3', { ...NONE, canOffer: flow.QUESTIONS[2].options.map(o => o.key) as OnboardingV2Answers['canOffer'] });
-    expect(all).not.toMatch(/disabled=""/);
-    expect(all).not.toContain("You've chosen");
   });
 
   it('"Something else" opens a box of up to 120 characters, right under it, with its count and, when empty, the reason', () => {
@@ -171,14 +180,56 @@ describe('screens 3 to 6, the questions', () => {
     for (const s of ['q1', 'q3', 'q4'] as const) expect(html(s, NONE)).not.toContain('anything specific');
   });
 
-  it('Q4 says when LinkedIn picked the answer', () => {
-    expect(html('q4', { ...NONE, selfKinds: ['self_founder_owner'] }, { guessed: true })).toContain('We picked this from your LinkedIn. Change it if it&#x27;s wrong.');
-    expect(html('q4', { ...NONE, selfKinds: ['self_founder_owner'] })).not.toContain('We picked this');
+  // 25 Oct review (ONB-03): LinkedIn can pick several answers. The line is above the options, and each picked tile says so.
+  describe('Q4 says when LinkedIn picked the answers', () => {
+    const picked = ['self_founder_owner', 'self_investor'];
+    const founderAndInvestor = { ...NONE, selfKinds: picked as OnboardingV2Answers['selfKinds'] };
+    /** The tile's own markup, from its opening button to the next. */
+    const tileOf = (markup: string, label: string) => markup.split('<button').find(b => b.includes(`>${label}<`)) ?? '';
+    const attr = (tile: string, name: string) => tile.match(new RegExp(`${name}="([^"]*)"`))?.[1];
+
+    it('the plural line above the options, once, when LinkedIn picked something that is still what is ticked', () => {
+      const markup = html('q4', founderAndInvestor, { fromLinkedin: picked });
+      expect(markup).toContain('We picked these from your LinkedIn. Change them if they&#x27;re wrong.');
+      expect(markup.match(/We picked these/g)).toHaveLength(1);
+      expect(markup).toMatch(/role="status">We picked these/);
+      expect(markup.indexOf('We picked these')).toBeLessThan(markup.indexOf('<button'));
+      for (const quiet of [html('q4', founderAndInvestor), html('q4', founderAndInvestor, { fromLinkedin: [] })]) {
+        expect(quiet).not.toContain('We picked');
+        expect(quiet).not.toContain('From LinkedIn');
+      }
+    });
+
+    it('each picked tile says "From LinkedIn", linked to its tile; the tiles nobody picked say nothing', () => {
+      const markup = html('q4', founderAndInvestor, { fromLinkedin: picked });
+      expect(markup.match(/From LinkedIn/g)).toHaveLength(2);
+      for (const key of picked) {
+        const option = flow.QUESTIONS[3].options.find(o => o.key === key)!;
+        const tile = tileOf(markup, option.label);
+        const note = attr(tile, 'aria-describedby');
+        expect({ key, described: !!note }).toEqual({ key, described: true });
+        expect(markup).toMatch(new RegExp(`id="${note}"[^>]*>From LinkedIn<`));
+        expect(attr(tile, 'aria-checked')).toBe('true');
+      }
+      const quiet = tileOf(markup, flow.QUESTIONS[3].options.find(o => o.key === 'self_employee')!.label);
+      expect(attr(quiet, 'aria-describedby')).toBeUndefined();
+      expect(quiet).not.toContain('From LinkedIn');
+    });
+
+    it('a tile is still named by its answer alone: the note describes it, it is not part of its name', () => {
+      const markup = html('q4', founderAndInvestor, { fromLinkedin: picked });
+      const label = flow.QUESTIONS[3].options.find(o => o.key === 'self_founder_owner')!.label;
+      const tile = tileOf(markup, label);
+      const name = attr(tile, 'aria-labelledby');
+      expect(name).toBeTruthy();
+      expect(markup).toMatch(new RegExp(`id="${name}"[^>]*>${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<`));
+      expect(name).not.toBe(attr(tile, 'aria-describedby'));
+    });
   });
 
   it('the screen shows "1 of 4" to "4 of 4" in the flow, and no progress in edit mode', () => {
     const screen = loadModule(`${dir}/QuestionScreen.tsx`, { './OnboardingShell': { __esModule: true, default: Shell }, './QuestionStep': { __esModule: true, default: () => null }, './flow': flow }).default;
-    const props = { answers: NONE, onChange: () => undefined, ownWordsError: null, ownWordsRef: null, guessed: false, footer: null };
+    const props = { answers: NONE, onChange: () => undefined, ownWordsError: null, ownWordsRef: null, fromLinkedin: [], footer: null };
     for (const x of flow.QUESTIONS) {
       expect(words(draw(screen, { ...props, question: x, showProgress: true }))).toEqual([`${x.number} of 4`, x.title, x.hint]);
       expect(words(draw(screen, { ...props, question: x, showProgress: false }))).toEqual([x.title, x.hint]);
@@ -274,9 +325,9 @@ describe('the data contract', () => {
     expect(leave.match(/\bnavigate\(/g)).toHaveLength(2);
   });
 
-  it('LinkedIn suggests nothing unless they chose it in this visit: not the Q4 guess, not the fields, not the photo, not its notes', () => {
+  it('LinkedIn suggests nothing unless they chose it (in this visit, or as the server recorded it): not the Q4 guesses, not the fields, not the photo, not its notes', () => {
     expect(flowSource).toMatch(/const linkedinOn = via === 'linkedin';/);
-    expect(flowSource).toMatch(/const guess = linkedinOn \? state\.linkedin\.prefill\?\.selfGuess \?\? null : null;/);
+    expect(flowSource).toMatch(/const guesses = linkedinOn \? state\.linkedin\.prefill\?\.selfGuesses : undefined;/);
     expect(flowSource).toMatch(/useProfileForm\(state, linkedinOn\)/);
     expect(read(`${dir}/useProfileForm.ts`)).toMatch(/const prefill = linkedinOn \? state\.linkedin\.prefill : undefined;/);
     const profile = read(`${dir}/ProfileScreen.tsx`);
@@ -288,6 +339,21 @@ describe('the data contract', () => {
     // Remembered per member for the visit.
     expect(read(`${dir}/useSignupChoice.ts`)).toMatch(/sessionStorage\.setItem\(key, next\)/);
     expect(read(`${dir}/useSignupChoice.ts`)).toMatch(/signupChoiceKey\(memberId\)/);
+  });
+
+  // 25 Oct review (ONB-03): another tab or device has no sessionStorage, so it asks the server how they chose last.
+  it('this tab\'s choice comes first and the server\'s linkedin.chosen follows it, so the suggestions survive another tab or device', () => {
+    const hook = read(`${dir}/useSignupChoice.ts`);
+    expect(hook).toMatch(/export function useSignupChoice\(onServer: SignupChoice \| null\)/);
+    expect(hook).toMatch(/return \[signupChoiceOf\(choice, onServer\), choose\];/);
+    expect(flowSource).toMatch(/useSignupChoice\(state\.linkedin\.chosen\)/);
+  });
+
+  // 25 Oct review (ONB-01): the shared maxima are 20 so that the old build compiled; nothing on a screen reads them.
+  it('no screen reads a maximum, a limit line or a refusal for "too many": the ceiling of 20 is the server\'s alone', () => {
+    const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const everything = fs.readdirSync(path.join(root, dir)).filter(f => /\.(ts|tsx)$/.test(f)).map(f => `${f}\n${code(read(`${dir}/${f}`))}`).join('\n');
+    expect(everything).not.toMatch(/\bmeetMax\b|\bfindMax\b|\bselfMax\b|limitHint|atLimit|too-many|Untick one/);
   });
 
   // Final review (C2): emptying a stored role, company or industry clears it, so what is stored is what decides.

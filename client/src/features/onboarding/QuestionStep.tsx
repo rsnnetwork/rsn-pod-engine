@@ -1,12 +1,12 @@
 // One question, one screen (brief screens 3 to 6). Every question is this
-// component: the options, the limit, the "Something else" box and Q2's
-// "anything specific" box are all configuration from flow.ts, so the four
-// screens cannot drift apart from each other.
+// component: the options, the "Something else" box and Q2's "anything specific"
+// box are all configuration from flow.ts, so the four screens cannot drift
+// apart from each other. Every question takes all the answers that apply.
 
 import { useEffect, useId, useRef, type Ref } from 'react';
 import type { OnboardingV2Answers } from '@rsn/shared';
 import OptionTile from './OptionTile';
-import { OWN_WORDS_MAX, SELF_GUESS_LINE, SPECIFIC, toggleKey, withKeys, withOwnWords, type Question } from './flow';
+import { FROM_LINKEDIN, OWN_WORDS_MAX, SELF_GUESS_LINE, SPECIFIC, toggleKey, withKeys, withOwnWords, type Question } from './flow';
 
 interface Props {
   question: Question;
@@ -16,22 +16,21 @@ interface Props {
   ownWordsError: string | null;
   /** A refusal about the question itself ("Select at least one answer."), or saving it failed: said under the options. */
   listError?: string | null;
-  /** Q4: the answer was picked from their LinkedIn and is still the one ticked. */
-  guessed: boolean;
+  /** Q4: the answers picked from their LinkedIn that are still the ones ticked; each says so, and the line above them. */
+  fromLinkedin: readonly string[];
   /** The "Something else" box, for the flow to focus when it asks for the words. */
   ownWordsRef?: Ref<HTMLInputElement>;
-  /** The id of the helper line above ("Select up to three answers."), which describes the options. */
+  /** The id of the helper line above ("Select all that apply."), which describes the options. */
   hintId?: string;
 }
 
 const FIELD = 'w-full rounded-xl border bg-white px-3 text-base text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rsn-red sm:text-sm';
 
-export default function QuestionStep({ question: q, answers, onChange, ownWordsError, listError = null, guessed, ownWordsRef, hintId }: Props) {
+export default function QuestionStep({ question: q, answers, onChange, ownWordsError, listError = null, fromLinkedin, ownWordsRef, hintId }: Props) {
   const id = useId();
   const errorLine = useRef<HTMLDivElement>(null);
   const listErrorLine = useRef<HTMLParagraphElement>(null);
   const selected: readonly string[] = answers[q.field];
-  const atLimit = q.max !== null && selected.length >= q.max;
   const ownWordsOn = selected.includes(q.ownWordsKey);
   const words = answers[q.ownWordsField] ?? '';
   const specific = answers.findSpecific ?? '';
@@ -46,15 +45,15 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
 
   return (
     <div>
-      {guessed && (
+      {fromLinkedin.length > 0 && (
         <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-center text-sm text-amber-900" role="status">{SELF_GUESS_LINE}</p>
       )}
 
       <div
         role="group"
         aria-label={q.title}
-        // The helper line, and the limit line and the error when they show, are what a screen reader says next.
-        aria-describedby={[hintId, atLimit && q.limitHint ? `${id}-limit` : null, listError ? `${id}-list-error` : null].filter(Boolean).join(' ') || undefined}
+        // The helper line, and the error when it shows, are what a screen reader says next.
+        aria-describedby={[hintId, listError ? `${id}-list-error` : null].filter(Boolean).join(' ') || undefined}
         className="flex flex-col gap-2.5"
       >
         {q.options.map(o => (
@@ -62,10 +61,8 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
             key={o.key}
             label={o.label}
             selected={selected.includes(o.key)}
-            // At the limit, the ones already chosen stay live, so a member can
-            // swap one for another without first working out what to untick.
-            disabled={atLimit && !selected.includes(o.key)}
-            onToggle={() => onChange(withKeys(answers, q, toggleKey(selected, o.key, q.max)))}
+            note={fromLinkedin.includes(o.key) ? FROM_LINKEDIN : undefined}
+            onToggle={() => onChange(withKeys(answers, q, toggleKey(selected, o.key)))}
           />
         ))}
       </div>
@@ -92,10 +89,6 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
             <span id={`${id}-own-count`} className="shrink-0 text-gray-500">{words.length}/{OWN_WORDS_MAX}</span>
           </div>
         </div>
-      )}
-
-      {atLimit && q.limitHint && (
-        <p id={`${id}-limit`} className="mt-3 text-center text-sm text-gray-600" role="status">{q.limitHint}</p>
       )}
 
       {listError && (

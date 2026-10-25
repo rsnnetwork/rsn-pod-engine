@@ -22,7 +22,7 @@ interface Props {
   progress?: { current: number; total: number };
   title?: string;
   subtitle?: string;
-  /** An id for the subtitle, so what it explains can point at it (a question's "Select up to three answers."). */
+  /** An id for the subtitle, so what it explains can point at it (a question's "Select all that apply."). */
   subtitleId?: string;
   children: ReactNode;
   /** Always in reach at the bottom, whatever the body does. Screen 2 has none: its choices are the body. */

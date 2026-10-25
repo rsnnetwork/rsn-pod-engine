@@ -55,8 +55,11 @@ export const PROFILE = {
   finish: 'Show me my matches',
 } as const;
 
-/** Screen 6, when LinkedIn's role points at one answer and they have not chosen yet. */
-export const SELF_GUESS_LINE = "We picked this from your LinkedIn. Change it if it's wrong.";
+/** Screen 6, when LinkedIn's stated role points at some answers and they have not chosen yet. */
+export const SELF_GUESS_LINE = "We picked these from your LinkedIn. Change them if they're wrong.";
+
+/** The note on each tile LinkedIn picked. */
+export const FROM_LINKEDIN = 'From LinkedIn';
 
 // ── The four questions (screens 3 to 6) ──────────────────────────────────────
 
@@ -75,10 +78,6 @@ export interface Question {
   title: string;
   hint: string;
   options: readonly OnboardingOption[];
-  /** The most that can be ticked; null for "Select all that apply." */
-  max: number | null;
-  /** Shown once they reach the most they can choose. */
-  limitHint: string | null;
   /** "Something else" ticked with no words: the server's own sentence for it. */
   ownWordsMissing: string;
   /** Only the member sees these answers (screen 7 marks them). */
@@ -87,27 +86,26 @@ export interface Question {
 
 const L = ONBOARDING_V2_LIMITS;
 const C = ONBOARDING_V2_COPY;
-const reached = (n: 'two' | 'three') => `You've chosen ${n}. Untick one to choose another.`;
 
 export const QUESTIONS: readonly Question[] = [
   {
     step: 'q1', number: 1, field: 'lookingToMeet', ownWordsField: 'meetOther', ownWordsKey: ONBOARDING_V2_OTHER_KEYS.meet,
-    title: C.meet.title, hint: C.meet.hint, options: ONBOARDING_V2_MEET, max: L.meetMax, limitHint: reached('three'),
+    title: C.meet.title, hint: C.meet.hint, options: ONBOARDING_V2_MEET,
     ownWordsMissing: 'Tell us who you would like to meet.', onlyYou: true,
   },
   {
     step: 'q2', number: 2, field: 'hopingToFind', ownWordsField: 'findOther', ownWordsKey: ONBOARDING_V2_OTHER_KEYS.find,
-    title: C.find.title, hint: C.find.hint, options: ONBOARDING_V2_FIND, max: L.findMax, limitHint: reached('three'),
+    title: C.find.title, hint: C.find.hint, options: ONBOARDING_V2_FIND,
     ownWordsMissing: 'Tell us what you are hoping to find.', onlyYou: true,
   },
   {
     step: 'q3', number: 3, field: 'canOffer', ownWordsField: 'offerOther', ownWordsKey: ONBOARDING_V2_OTHER_KEYS.offer,
-    title: C.offer.title, hint: C.offer.hint, options: ONBOARDING_V2_OFFER, max: null, limitHint: null,
+    title: C.offer.title, hint: C.offer.hint, options: ONBOARDING_V2_OFFER,
     ownWordsMissing: 'Tell us what you can offer.', onlyYou: false,
   },
   {
     step: 'q4', number: 4, field: 'selfKinds', ownWordsField: 'selfOther', ownWordsKey: ONBOARDING_V2_OTHER_KEYS.self,
-    title: C.self.title, hint: C.self.hint, options: ONBOARDING_V2_SELF, max: L.selfMax, limitHint: reached('two'),
+    title: C.self.title, hint: C.self.hint, options: ONBOARDING_V2_SELF,
     ownWordsMissing: 'Tell us how you would describe yourself.', onlyYou: false,
   },
 ];
@@ -133,11 +131,10 @@ const tidy = (v: string | null | undefined): string | null => {
 
 const keysOf = (q: Question, a: OnboardingV2Answers): readonly string[] => a[q.field];
 
-/** Why a question cannot be left yet, or null when it can. */
-export function questionProblem(q: Question, a: OnboardingV2Answers): 'empty' | 'own-words' | 'too-many' | null {
+/** Why a question cannot be left yet, or null when it can. Every question takes all the answers that apply. */
+export function questionProblem(q: Question, a: OnboardingV2Answers): 'empty' | 'own-words' | null {
   const keys = keysOf(q, a);
   if (!keys.length) return 'empty';
-  if (q.max !== null && keys.length > q.max) return 'too-many';
   if (keys.includes(q.ownWordsKey) && !tidy(a[q.ownWordsField])) return 'own-words';
   return null;
 }
@@ -146,10 +143,8 @@ export function questionProblem(q: Question, a: OnboardingV2Answers): 'empty' | 
 export const ANSWER_NEEDED = 'Select at least one answer.';
 
 /** Why a question cannot be left, as the member is told it: the server's own sentences. */
-export function problemMessage(q: Question, problem: 'empty' | 'own-words' | 'too-many'): string {
-  if (problem === 'empty') return ANSWER_NEEDED;
-  if (problem === 'too-many') return q.hint;
-  return q.ownWordsMissing;
+export function problemMessage(q: Question, problem: 'empty' | 'own-words'): string {
+  return problem === 'empty' ? ANSWER_NEEDED : q.ownWordsMissing;
 }
 
 /** The first question still open, in order, leaving out `skip`; null when every answer is there. */
@@ -247,6 +242,14 @@ export const signupChoiceKey = (memberId: string): string => `rsn_onb_v2_via_${m
 export const parseSignupChoice = (value: string | null | undefined): SignupChoice | null =>
   (value === 'linkedin' || value === 'email' ? value : null);
 
+/**
+ * The choice to act on: this tab's own first (it is the freshest thing the member did here, and the state may not have
+ * caught up with it yet), then whichever the server recorded last, which is how another tab or device knows.
+ */
+export function signupChoiceOf(inThisTab: SignupChoice | null, onServer: SignupChoice | null | undefined): SignupChoice | null {
+  return inThisTab ?? onServer ?? null;
+}
+
 /** Where edit mode returns to when the page was opened straight onto it, with nothing in the app before it. */
 export function editFallback(target: EditTarget): string {
   return target === 'profile' ? '/profile' : '/';
@@ -254,11 +257,9 @@ export function editFallback(target: EditTarget): string {
 
 // ── Ticking ──────────────────────────────────────────────────────────────────
 
-/** Tick or untick. At the limit nothing new is added, and a ticked one can always be unticked. */
-export function toggleKey(selected: readonly string[], key: string, max: number | null): string[] {
-  if (selected.includes(key)) return selected.filter(k => k !== key);
-  if (max !== null && selected.length >= max) return [...selected];
-  return [...selected, key];
+/** Tick or untick: every answer on a question can be ticked together, in the order they were ticked. */
+export function toggleKey(selected: readonly string[], key: string): string[] {
+  return selected.includes(key) ? selected.filter(k => k !== key) : [...selected, key];
 }
 
 /** A question's ticks, on that question's own field. */
@@ -273,10 +274,20 @@ export function withOwnWords(a: OnboardingV2Answers, q: Question, text: string):
   return { ...a, [q.ownWordsField]: text };
 }
 
-/** Q4, from LinkedIn's role: used only when they have not answered it and have not touched it. */
-export function guessedSelf(a: OnboardingV2Answers, guess: string | null | undefined, touched: boolean): string[] | null {
-  if (touched || a.selfKinds.length || !guess) return null;
-  return [guess];
+/**
+ * Q4, from every answer LinkedIn's stated role supports: used only when they have not answered it and have not touched
+ * it. Only answers this screen shows are used, once each, so nothing is ticked that the member cannot see.
+ */
+export function guessedSelf(a: OnboardingV2Answers, guesses: readonly string[] | null | undefined, touched: boolean): string[] | null {
+  if (touched || a.selfKinds.length) return null;
+  const shown: readonly string[] = ONBOARDING_V2_SELF.map(o => o.key);
+  const picked = [...new Set((guesses ?? []).filter(k => shown.includes(k)))];
+  return picked.length ? picked : null;
+}
+
+/** What LinkedIn picked, while that is exactly what is ticked (in any order): those tiles carry the note. Else none. */
+export function guessedStill(selected: readonly string[], picked: readonly string[]): readonly string[] {
+  return picked.length > 0 && selected.length === picked.length && picked.every(k => selected.includes(k)) ? picked : [];
 }
 
 // ── What goes to the server ──────────────────────────────────────────────────
@@ -543,7 +554,7 @@ function refusalOf(err: unknown): { status?: number; error?: { message?: unknown
 /**
  * One sentence for a failed onboarding request. 429 and 400 carry sentences the
  * server wrote for members ("Please wait a few minutes before trying another
- * LinkedIn link.", "Select up to three answers."); anything else is the
+ * LinkedIn link.", "Select at least one answer."); anything else is the
  * caller's own words, so no code, id or library message reaches a member.
  */
 export function onboardingError(err: unknown, fallback: string): string {
