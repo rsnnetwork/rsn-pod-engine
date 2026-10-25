@@ -23,6 +23,21 @@ interface CalendarEventData {
    *  calendar" left two entries, and a later reschedule could never update
    *  the first. Pass something derived from the meeting itself. */
   uid?: string;
+  /** RFC 5545 SEQUENCE: a calendar applies a file for an entry it holds only when this is higher (26 Oct
+   *  2026). A meeting starts at 0 and goes one up on each move and on cancel. Default 0. */
+  sequence?: number;
+  /** REQUEST (the default) adds or updates the entry; CANCEL removes the entry with the same UID. */
+  method?: 'REQUEST' | 'CANCEL';
+}
+
+/**
+ * One meeting's calendar identity, the same in every copy of its file: both emails, every move, the
+ * cancellation and the in-app "Add to calendar". Built from the meeting's own id, never its time, so a
+ * moved meeting updates the entry already in each calendar instead of adding a second one (26 Oct 2026).
+ * generateIcsContent adds the @rsn.network.
+ */
+export function meetingCalendarUid(meetingId: string): string {
+  return `meeting-${meetingId}`;
 }
 
 /**
@@ -33,13 +48,14 @@ export function generateIcsContent(data: CalendarEventData): string {
   const end = formatIcsDate(new Date(data.startTime.getTime() + data.durationMinutes * 60 * 1000));
   const now = formatIcsDate(new Date());
   const uid = `${data.uid ?? uuid()}@rsn.network`;
+  const cancelling = data.method === 'CANCEL';
 
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//RSN//Pod Engine//EN',
     'CALSCALE:GREGORIAN',
-    'METHOD:REQUEST',
+    `METHOD:${cancelling ? 'CANCEL' : 'REQUEST'}`,
     'BEGIN:VEVENT',
     `UID:${uid}`,
     `DTSTAMP:${now}`,
@@ -63,21 +79,26 @@ export function generateIcsContent(data: CalendarEventData): string {
   for (const a of data.attendees ?? []) {
     if (!a.email) continue;
     const cn = a.name ? `;CN=${escapeIcsText(a.name)}` : '';
-    lines.push(`ATTENDEE${cn};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${a.email}`);
+    // A cancellation asks nobody for an answer.
+    const answer = cancelling ? '' : ';PARTSTAT=NEEDS-ACTION;RSVP=TRUE';
+    lines.push(`ATTENDEE${cn};ROLE=REQ-PARTICIPANT${answer}:mailto:${a.email}`);
   }
 
-  lines.push(
-    'SEQUENCE:0',
-    'STATUS:CONFIRMED',
-    'TRANSP:OPAQUE',
-    'BEGIN:VALARM',
-    'TRIGGER:-PT15M',
-    'ACTION:DISPLAY',
-    'DESCRIPTION:Event starting in 15 minutes',
-    'END:VALARM',
-    'END:VEVENT',
-    'END:VCALENDAR',
-  );
+  lines.push(`SEQUENCE:${data.sequence ?? 0}`);
+  if (cancelling) {
+    lines.push('STATUS:CANCELLED', 'TRANSP:TRANSPARENT');
+  } else {
+    lines.push(
+      'STATUS:CONFIRMED',
+      'TRANSP:OPAQUE',
+      'BEGIN:VALARM',
+      'TRIGGER:-PT15M',
+      'ACTION:DISPLAY',
+      'DESCRIPTION:Event starting in 15 minutes',
+      'END:VALARM',
+    );
+  }
+  lines.push('END:VEVENT', 'END:VCALENDAR');
 
   // RFC 5545 §3.1: lines longer than 75 octets must be folded (CRLF + space).
   // Outlook/Apple reject or truncate an unfolded long DESCRIPTION.

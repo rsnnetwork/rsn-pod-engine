@@ -46,7 +46,14 @@ export type DmMessageKind = 'user' | 'system';
 export type DmSystemMeta =
   | { type: 'availability_shared' }
   | { type: 'meeting_proposal'; slots: string[] }
-  | { type: 'meeting_confirmed'; startAt: string; durationMin: number; meetingType: 'audio' | 'video'; joinPath: string };
+  | {
+      type: 'meeting_confirmed'; startAt: string; durationMin: number; meetingType: 'audio' | 'video'; joinPath: string;
+      /** The start it replaced, when it moved a meeting that still stood. */
+      movedFrom?: string;
+      /** Its meetings row (26 Oct 2026). */
+      meetingId?: string;
+    }
+  | { type: 'meeting_cancelled'; meetingId: string; startAt: string; durationMin: number; meetingType: 'audio' | 'video' };
 
 export interface DmMessage {
   id: string;

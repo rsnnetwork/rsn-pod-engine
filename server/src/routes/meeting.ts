@@ -13,7 +13,7 @@ import { authenticate } from '../middleware/auth';
 import * as meetingService from '../services/dm/meeting-windows.service';
 import * as callService from '../services/dm/meeting-call.service';
 import { areActive } from '../services/presence/presence.service';
-import { generateIcsContent } from '../services/calendar/calendar.service';
+import { generateIcsContent, meetingCalendarUid } from '../services/calendar/calendar.service';
 import { NotFoundError } from '../middleware/errors';
 import { query } from '../db';
 import config from '../config';
@@ -39,11 +39,22 @@ router.get(
       );
       const other = people.rows.find((p) => p.id === s.partnerId);
       const kind = s.confirmed.type ?? 'video';
+      // 26 Oct 2026: the same calendar identity, SEQUENCE and organizer as the emailed invite, so
+      // adding this file updates the entry the email made instead of adding a second one.
+      const meetingId = s.confirmed.meetingId;
+      const booked = meetingId
+        ? (await query<{ calendar_sequence: number; confirmed_by: string | null }>(
+            `SELECT calendar_sequence, confirmed_by FROM meetings WHERE id = $1`, [meetingId],
+          )).rows[0]
+        : undefined;
+      const organizer = booked?.confirmed_by ? people.rows.find((p) => p.id === booked.confirmed_by) : undefined;
       const ics = generateIcsContent({
         title: 'REASON meeting',
         description: `A 1:1 ${kind} call on REASON with ${other?.display_name || 'your match'}. Join: ${config.clientUrl}/meet/${req.params.id}?scheduled=1&kind=${kind}`,
         startTime: new Date(s.confirmed.startAt),
         durationMinutes: s.confirmed.durationMin ?? 30,
+        ...(meetingId ? { uid: meetingCalendarUid(meetingId), sequence: booked?.calendar_sequence ?? 0 } : {}),
+        ...(organizer?.email ? { organizerName: organizer.display_name || 'REASON', organizerEmail: organizer.email } : {}),
         attendees: people.rows.filter((p) => p.email).map((p) => ({ name: p.display_name || undefined, email: p.email! })),
       });
       res.setHeader('Content-Type', 'text/calendar; charset=utf-8; method=REQUEST');

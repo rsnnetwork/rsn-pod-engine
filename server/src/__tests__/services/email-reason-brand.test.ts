@@ -236,17 +236,39 @@ const cases: EmailCase[] = [
     shell: false,
     run: () => emailService.sendLlmBalanceAlertEmail({ to: 'ops@example.com', where: 'onboarding chat', at: '2026-11-05T17:00:00Z' }),
   },
+  // 26 Oct 2026: the subject carries the time, in the recipient's zone (Berlin here), with the zone named.
   {
-    fn: 'sendMeetingConfirmedEmail', label: 'a confirmed meeting with a join link', subject: 'Meeting confirmed with Bo',
+    fn: 'sendMeetingConfirmedEmail', label: 'a confirmed meeting with a join link', subject: 'Meeting confirmed: Bo on Thu 5 Nov, 18:00 (CET)',
     brandLine: MEET,
     run: () => emailService.sendMeetingConfirmedEmail('ana@example.com', 'Ana', meetingConfirmed({
-      joinUrl: 'https://app.rsn.network/meet/c1?scheduled=1&kind=video', kind: 'video',
+      joinUrl: 'https://app.rsn.network/meet/c1?scheduled=1&kind=video', kind: 'video', eventsUrl: 'https://app.rsn.network/sessions',
     })),
   },
   {
-    fn: 'sendMeetingConfirmedEmail', label: 'a confirmed meeting without a join link', subject: 'Meeting confirmed with Bo',
+    fn: 'sendMeetingConfirmedEmail', label: 'a confirmed meeting without a join link', subject: 'Meeting confirmed: Bo on Thu 5 Nov, 18:00 (CET)',
     brandLine: MEET,
     run: () => emailService.sendMeetingConfirmedEmail('ana@example.com', 'Ana', meetingConfirmed()),
+  },
+  {
+    fn: 'sendMeetingConfirmedEmail', label: 'a moved meeting', subject: 'Meeting moved: Bo on Thu 5 Nov, 18:00 (CET)',
+    brandLine: MEET,
+    run: () => emailService.sendMeetingConfirmedEmail('ana@example.com', 'Ana', meetingConfirmed({ moved: true })),
+  },
+  {
+    fn: 'sendMeetingCancelledEmail', label: 'a cancelled meeting', subject: 'Meeting cancelled: Bo on Thu 5 Nov, 18:00 (CET)',
+    brandLine: MEET,
+    run: () => emailService.sendMeetingCancelledEmail('ana@example.com', 'Ana', {
+      partnerName: 'Bo', cancellerName: 'Bo', cancelledByMe: false, startAt: STARTS, durationMin: 30, kind: 'video',
+      recipientTimezone: 'Europe/Berlin', threadUrl: 'https://app.rsn.network/messages/c1', icsContent: aStubCalendarFile,
+    }),
+  },
+  {
+    fn: 'sendMeetingReminderEmail', label: 'a meeting reminder', subject: 'Your meeting with Bo starts in 10 minutes',
+    brandLine: MEET,
+    run: () => emailService.sendMeetingReminderEmail('ana@example.com', 'Ana', {
+      partnerName: 'Bo', startAt: STARTS, durationMin: 30, kind: 'video', recipientTimezone: 'Europe/Berlin', minutesToGo: 10,
+      joinUrl: 'https://app.rsn.network/meet/c1?scheduled=1&kind=video', eventsUrl: 'https://app.rsn.network/sessions',
+    }),
   },
 ];
 

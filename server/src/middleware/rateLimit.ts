@@ -301,6 +301,20 @@ export const bannerWriteLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// Cancelling a meeting (26 Oct 2026). Each cancel rings the other person, emails both and posts a card in
+// their thread, so a runaway client is stopped at 10 an hour. Keyed per member: the route signs in first.
+// Only a cancel that happened counts: a refusal (a meeting not found, or already over) changed nothing.
+export const meetingCancelLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('meeting-cancel'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have cancelled a lot of meetings this hour. Try again later.' } },
+});
+
 // The banner picture itself. It is public (an <img> sends no token), so it is counted per network address.
 // Each banner's URL is versioned and cached for a day, so one person opening profiles asks for each only once,
 // and a refused picture only means the page draws the default banner in its place.

@@ -141,3 +141,13 @@ export const applyTypeChange = _applyTypeChange;
 export const applyFormatChange = _applyFormatChange;
 export const resolveEventFormat = _resolveEventFormat;
 export const formatRefusal = _formatRefusal;
+export * from './types/meeting';
+// Real VALUES the client uses (the Events meetings and the meeting page redraw their phase as the clock
+// moves), so each needs its own statically analysable named export, same as OPENINGS above.
+import {
+  MEETING_JOIN_EARLY_MIN as _MEETING_JOIN_EARLY_MIN, MEETING_GRACE_MIN as _MEETING_GRACE_MIN,
+  meetingPhase as _meetingPhase,
+} from './types/meeting';
+export const MEETING_JOIN_EARLY_MIN = _MEETING_JOIN_EARLY_MIN;
+export const MEETING_GRACE_MIN = _MEETING_GRACE_MIN;
+export const meetingPhase = _meetingPhase;

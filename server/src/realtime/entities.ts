@@ -46,6 +46,10 @@ export const E = {
   // DM
   dmConversation: (convId: string) => `dm-conversation:${convId}`,
 
+  // Meetings (26 Oct 2026): a member's confirmed 1:1 meetings, and one meeting
+  userMeetings: (userId: string) => `user:${userId}:meetings`,
+  meeting: (meetingId: string) => `meeting:${meetingId}`,
+
   // Support
   supportTicket: (ticketId: string) => `support-ticket:${ticketId}`,
 

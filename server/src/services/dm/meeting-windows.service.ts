@@ -17,6 +17,7 @@ import logger from '../../config/logger';
 import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import * as dmService from './dm.service';
+import { emitMeetingChanged } from '../meetings/meeting-tags';
 
 export const DAYPARTS = ['morning', 'afternoon', 'evening'] as const;
 export type Daypart = typeof DAYPARTS[number];
@@ -49,6 +50,8 @@ export interface ConversationScheduling {
     durationMin: number | null;
     /** 'audio' | 'video' — the kind of call this meeting is (W-meet). */
     type: 'audio' | 'video' | null;
+    /** The meetings row this is (26 Oct 2026), for a link to its page. Null for a legacy day part. */
+    meetingId: string | null;
   } | null;
   /** W-meet (8 Sep 2026): the partner changed their availability more recently
    *  than I last opened the scheduler — drives the calendar-icon dot. */
@@ -72,6 +75,15 @@ export interface ConfirmOptions {
   type: MeetingKind;
 }
 
+/** The meetings row a booking wrote or moved (26 Oct 2026). */
+export interface BookedMeeting {
+  id: string;
+  /** Its calendar file's SEQUENCE: 0 for a new meeting, one up per move. */
+  calendarSequence: number;
+  /** Who booked it first: every copy of its calendar file names them as the organizer. */
+  confirmedBy: string | null;
+}
+
 /** What a confirm wrote, for the steps that run once its transaction has committed. */
 export type ConfirmResult =
   | { already: true }
@@ -87,6 +99,8 @@ export type ConfirmResult =
       type: MeetingKind | null;
       /** The start of the meeting this one replaced, when it moved one that still stood. */
       movedFrom: string | null;
+      /** Its meetings row; null for a legacy day-part confirm, which has no time to list. */
+      meeting: BookedMeeting | null;
     };
 
 // ── Validation (pure — unit-tested directly) ─────────────────────────────────
@@ -163,6 +177,8 @@ interface ConversationRow {
   scheduler_seen_at_a: Date | null;
   scheduler_seen_at_b: Date | null;
   calls_unlocked_at: Date | null;
+  /** The meetings row the meeting_* columns describe (migration 110). */
+  current_meeting_id: string | null;
 }
 
 /** The columns a ConversationRow is read with. */
@@ -171,7 +187,7 @@ const CONVERSATION_COLUMNS = `id, user_a_id, user_b_id,
             meeting_start_at, meeting_duration_min, meeting_type,
             avail_updated_at_a, avail_updated_at_b,
             scheduler_seen_at_a, scheduler_seen_at_b,
-            calls_unlocked_at`;
+            calls_unlocked_at, current_meeting_id`;
 
 /** Load the conversation and prove the caller belongs to it. */
 async function requireParticipant(conversationId: string, userId: string): Promise<ConversationRow> {
@@ -220,6 +236,7 @@ function buildScheduling(
           startAt: conv.meeting_start_at,
           durationMin: conv.meeting_duration_min,
           type: conv.meeting_type,
+          meetingId: conv.current_meeting_id ?? null,
         }
       : null,
     schedulingUpdated,
@@ -236,11 +253,6 @@ const PROPOSAL_COOLDOWN_MS = 10 * 60 * 1000;
 export function isMeetingOver(startAt: Date | null, durationMin: number | null, now = new Date()): boolean {
   if (!startAt) return false;
   return now.getTime() > startAt.getTime() + (durationMin ?? 30) * 60_000 + 30 * 60_000;
-}
-
-/** One stable calendar identity per meeting, shared by every copy of the file. */
-export function meetingUid(conversationId: string, startAt: Date): string {
-  return `meeting-${conversationId}-${startAt.toISOString().replace(/[-:]/g, '').replace('.000Z', 'Z')}`;
 }
 
 /** Has this time already gone? A daypart key counts as past after its day. */
@@ -536,7 +548,7 @@ function meetingLength(minutes?: number | null): number {
 }
 
 /** Where both people join a meeting: the pair's own call room. */
-function meetingJoinPath(conversationId: string, type: MeetingKind | null): string {
+export function meetingJoinPath(conversationId: string, type: MeetingKind | null): string {
   return `/meet/${conversationId}?scheduled=1&kind=${type ?? 'video'}`;
 }
 
@@ -626,13 +638,18 @@ async function writeConfirmation(
     ? conv.meeting_start_at.toISOString()
     : null;
 
+  // 26 Oct 2026: the meeting gets a row of its own under Events, in this transaction, and the
+  // conversation names it. A meeting that still stands with a row is moved, not replaced.
+  const standingId = conv.meeting_confirmed_window && !over ? conv.current_meeting_id ?? null : null;
+  const booked = await writeMeetingRow(client, conv, actorId, meeting, standingId, movedFrom);
+
   await client.query(
     `UPDATE dm_conversations
      SET meeting_confirmed_window = $2, meeting_confirmed_by = $3, meeting_confirmed_at = NOW(),
          meeting_start_at = $4, meeting_duration_min = $5, meeting_type = $6,
-         meeting_proposed_key = NULL
+         meeting_proposed_key = NULL, current_meeting_id = $7
      WHERE id = $1`,
-    [conversationId, meeting.window, actorId, meeting.startAt, meeting.durationMin, meeting.type],
+    [conversationId, meeting.window, actorId, meeting.startAt, meeting.durationMin, meeting.type, booked?.id ?? null],
   );
 
   // The thread line is one shared text: for a slot it carries the instant
@@ -651,6 +668,7 @@ async function writeConfirmation(
             type: 'meeting_confirmed', startAt: meeting.startAt.toISOString(), durationMin: meeting.durationMin,
             meetingType: meeting.type ?? 'video', joinPath: meetingJoinPath(conversationId, meeting.type),
             ...(movedFrom ? { movedFrom } : {}),
+            ...(booked ? { meetingId: booked.id } : {}),
           }
         : null,
     },
@@ -659,8 +677,75 @@ async function writeConfirmation(
   return {
     already: false, sent, partnerId,
     window: meeting.window, startAt: meeting.startAt, durationMin: meeting.durationMin, type: meeting.type,
-    movedFrom,
+    movedFrom, meeting: booked,
   };
+}
+
+/**
+ * The meetings row behind a booking (26 Oct 2026, CON-04/05), on the caller's transaction and after
+ * the conversation row is locked, so it lands with the meeting_* columns or not at all.
+ *  - A new time: a new row. Its context is the note on the request that connected the pair ("why
+ *    you are meeting"); a pair who met at an event has none.
+ *  - A different time while a meeting with a row still stands: that row moves. It keeps its calendar
+ *    identity and goes one SEQUENCE up, so the entry already in each calendar updates, and it will be
+ *    reminded again at its new time.
+ *  - A legacy day part: no row, as it has no time to list. A timed meeting it replaces no longer
+ *    stands, so that row is cancelled rather than left showing as still to come.
+ */
+async function writeMeetingRow(
+  client: PoolClient,
+  conv: ConversationRow,
+  actorId: string,
+  meeting: { startAt: Date | null; durationMin: number | null; type: MeetingKind | null },
+  standingId: string | null,
+  movedFrom: string | null,
+): Promise<BookedMeeting | null> {
+  if (!meeting.startAt || !meeting.durationMin || !meeting.type) {
+    if (standingId) {
+      await client.query(
+        `UPDATE meetings SET status = 'cancelled', cancelled_by = $2, cancelled_at = NOW(), updated_at = NOW()
+          WHERE id = $1 AND status = 'scheduled'`,
+        [standingId, actorId],
+      );
+    }
+    return null;
+  }
+
+  if (standingId) {
+    const moved = await client.query<{ id: string; calendar_sequence: number; confirmed_by: string | null }>(
+      `UPDATE meetings
+          SET start_at = $2, duration_min = $3, kind = $4, moved_from = start_at,
+              calendar_sequence = calendar_sequence + 1, reminder_sent_at = NULL, updated_at = NOW()
+        WHERE id = $1 AND status = 'scheduled'
+        RETURNING id, calendar_sequence, confirmed_by`,
+      [standingId, meeting.startAt, meeting.durationMin, meeting.type],
+    );
+    const row = moved.rows[0];
+    if (row) return { id: row.id, calendarSequence: row.calendar_sequence, confirmedBy: row.confirmed_by };
+  }
+
+  // Otherwise a new row. A meeting that still stands without a row of its own (the old server booked
+  // it while this one was deploying) is replaced by one, and moved_from says what it replaced.
+  const request = await client.query<{ id: string; message: string | null }>(
+    `SELECT id, message FROM user_pokes
+      WHERE status = 'accepted'
+        AND ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1))
+      ORDER BY responded_at DESC NULLS LAST, created_at DESC
+      LIMIT 1`,
+    [conv.user_a_id, conv.user_b_id],
+  );
+  const connectedBy = request.rows[0];
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO meetings (conversation_id, user_a_id, user_b_id, request_id, context,
+                           start_at, duration_min, kind, confirmed_by, moved_from)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id`,
+    [
+      conv.id, conv.user_a_id, conv.user_b_id, connectedBy?.id ?? null, connectedBy?.message?.trim() || null,
+      meeting.startAt, meeting.durationMin, meeting.type, actorId, movedFrom ? new Date(movedFrom) : null,
+    ],
+  );
+  return { id: inserted.rows[0].id, calendarSequence: 0, confirmedBy: actorId };
 }
 
 /**
@@ -693,7 +778,7 @@ export async function confirmInTx(
  */
 async function announceConfirmation(conversationId: string, actorId: string, done: ConfirmResult): Promise<void> {
   if (done.already) return;
-  const { partnerId, window, startAt, durationMin, type, movedFrom } = done;
+  const { partnerId, window, startAt, durationMin, type, movedFrom, meeting } = done;
 
   let people: Array<{ id: string; display_name: string | null; email: string | null; timezone: string | null }> = [];
   try {
@@ -718,13 +803,18 @@ async function announceConfirmation(conversationId: string, actorId: string, don
     body: label,
   });
 
+  // 26 Oct 2026: both people's Events lists and the meeting's own page.
+  if (meeting) await emitMeetingChanged(meeting.id, [actorId, partnerId]);
+
   // W6: email BOTH people a real calendar invite (.ics + Google link) when an
   // exact time was set. Best-effort — never let an email hiccup fail the confirm.
   if (!startAt || !durationMin) return;
   try {
-    const confirmer = byId.get(actorId);
+    // Whoever booked the meeting first organises every copy of its file, moves included: a
+    // calendar trusts an update to an entry from the organizer it already has.
+    const organizer = meeting?.confirmedBy ? byId.get(meeting.confirmedBy) : undefined;
     const joinPath = meetingJoinPath(conversationId, type);
-    const { generateIcsContent, buildGoogleCalendarUrl } = await import('../calendar/calendar.service');
+    const { generateIcsContent, buildGoogleCalendarUrl, meetingCalendarUid } = await import('../calendar/calendar.service');
     const { sendMeetingConfirmedEmail } = await import('../email/email.service');
     const title = 'REASON meeting';
     const threadUrl = `${config.clientUrl}/messages/${conversationId}`;
@@ -739,12 +829,12 @@ async function announceConfirmation(conversationId: string, actorId: string, don
         startTime: startAt,
         durationMinutes: durationMin,
         location: `${config.clientUrl}${joinPath}`,
-        // Same meeting, same identity, every copy: both emails and the
-        // in-app download. Otherwise accepting the invite and then pressing
-        // "Add to calendar" leaves two entries in the same calendar.
-        uid: meetingUid(conversationId, startAt),
-        organizerName: confirmer?.display_name || 'REASON',
-        organizerEmail: confirmer?.email || undefined,
+        // Same meeting, same identity, every copy: both emails, every move and
+        // the in-app download. A move carries the next SEQUENCE, so calendars
+        // move the entry they already have instead of keeping the old time.
+        ...(meeting ? { uid: meetingCalendarUid(meeting.id), sequence: meeting.calendarSequence } : {}),
+        organizerName: organizer?.display_name || 'REASON',
+        organizerEmail: organizer?.email || undefined,
         attendees: people.filter(p => p.email).map(p => ({ name: p.display_name || undefined, email: p.email! })),
       });
       void sendMeetingConfirmedEmail(me.email, me.display_name || 'there', {
@@ -753,10 +843,12 @@ async function announceConfirmation(conversationId: string, actorId: string, don
         durationMin,
         recipientTimezone: me.timezone,
         threadUrl,
+        eventsUrl: `${config.clientUrl}/sessions`,
         googleCalendarUrl: googleUrl,
         icsContent: ics,
         joinUrl: `${config.clientUrl}${joinPath}`,
         kind: type ?? 'video',
+        moved: !!movedFrom,
       }).catch(err => logger.warn({ err, uid }, 'meeting-confirmed email failed (non-fatal)'));
     }
   } catch (err) {

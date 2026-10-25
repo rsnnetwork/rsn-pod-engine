@@ -13,7 +13,7 @@
 // duration the caller types (Stefan: "choose the intended duration, start once
 // the other accepts").
 
-import { query } from '../../db';
+import { query, transaction } from '../../db';
 import config from '../../config';
 import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
@@ -21,6 +21,8 @@ import { ErrorCodes } from '@rsn/shared';
 import { getVideoProvider } from '../video/video.service';
 import * as blockService from '../block/block.service';
 import { isActive } from '../presence/presence.service';
+import { stampAttendance } from '../meetings/meeting.service';
+import { emitMeetingChanged } from '../meetings/meeting-tags';
 
 const CALL_TOKEN_TTL_SECONDS = 4 * 60 * 60; // a call can run a while
 // The scheduled-meeting window: you may enter from 5 min before, and it stays
@@ -45,6 +47,8 @@ interface ConvParticipants {
   calls_unlocked_at: Date | null;
   meeting_start_at: Date | null;
   meeting_duration_min: number | null;
+  /** The meetings row the conversation's meeting is (migration 110). */
+  current_meeting_id: string | null;
 }
 
 /** Load the conversation, prove the caller is in it and not blocked either way. */
@@ -52,8 +56,9 @@ async function requireCallParticipant(conversationId: string, userId: string): P
   const r = await query<{
     id: string; user_a_id: string; user_b_id: string;
     calls_unlocked_at: Date | null; meeting_start_at: Date | null; meeting_duration_min: number | null;
+    current_meeting_id: string | null;
   }>(
-    `SELECT id, user_a_id, user_b_id, calls_unlocked_at, meeting_start_at, meeting_duration_min
+    `SELECT id, user_a_id, user_b_id, calls_unlocked_at, meeting_start_at, meeting_duration_min, current_meeting_id
        FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
@@ -108,11 +113,31 @@ export interface CallToken {
   kind: 'audio' | 'video';
 }
 
+/** A scheduled meeting stands on the conversation and has not ended (its end plus the grace period). */
+function hasUnendedMeeting(conv: ConvParticipants): boolean {
+  if (!conv.meeting_start_at) return false;
+  const end = conv.meeting_start_at.getTime() + (conv.meeting_duration_min ?? 30) * 60_000;
+  return Date.now() <= end + MEETING_GRACE_MS;
+}
+
+/** The refusal production's call screen shows, above its "Back to chat", when there is no meeting to enter. */
+async function noMeetingToJoin(conversationId: string): Promise<AppError> {
+  const latest = await query<{ status: string }>(
+    `SELECT status FROM meetings WHERE conversation_id = $1 ORDER BY updated_at DESC LIMIT 1`,
+    [conversationId],
+  );
+  const message = latest.rows[0]?.status === 'cancelled'
+    ? 'This meeting was cancelled. Pick a new time to meet in your chat.'
+    : "There's no meeting to join right now. Pick a time to meet in your chat.";
+  return new AppError(403, ErrorCodes.AUTH_FORBIDDEN, message);
+}
+
 /**
- * Entering the room before calls are unlocked can only mean joining the
- * scheduled meeting. If that's inside the meeting's window it counts as
- * attending; once BOTH sides have attended, calls unlock for the pair and both
- * clients are told (the scheduler goes away, the call buttons appear).
+ * Entering the room inside the scheduled meeting's window counts as attending it, on the meeting's
+ * own row (26 Oct 2026: the "attended" Events shows), whether or not calls are already unlocked.
+ * Before they are, it is also stamped on the conversation; once BOTH sides have attended, calls
+ * unlock for the pair and both clients are told (the scheduler goes away, the call buttons appear).
+ * Both stamps are one transaction, the conversation first: the order every booking locks them in.
  */
 async function recordScheduledJoin(conv: ConvParticipants, userId: string): Promise<void> {
   if (!conv.meeting_start_at) return; // nothing scheduled → nothing to attend
@@ -121,20 +146,33 @@ async function recordScheduledJoin(conv: ConvParticipants, userId: string): Prom
   const now = Date.now();
   if (now < start - EARLY_JOIN_MS || now > end + MEETING_GRACE_MS) return; // outside the window
 
-  const col = conv.iAmA ? 'meeting_joined_a_at' : 'meeting_joined_b_at';
-  const stamped = await query<{ a: Date | null; b: Date | null }>(
-    `UPDATE dm_conversations SET ${col} = COALESCE(${col}, NOW())
-      WHERE id = $1
-      RETURNING meeting_joined_a_at AS a, meeting_joined_b_at AS b`,
-    [conv.id],
-  );
-  const row = stamped.rows[0];
-  if (!row?.a || !row?.b) return;
+  const meetingId = conv.current_meeting_id;
+  if (conv.calls_unlocked_at && !meetingId) return; // nothing left to stamp
+  const { attended, unlocked } = await transaction(async (client) => {
+    let bothJoined = false;
+    if (!conv.calls_unlocked_at) {
+      const col = conv.iAmA ? 'meeting_joined_a_at' : 'meeting_joined_b_at';
+      const stamped = await client.query<{ a: Date | null; b: Date | null }>(
+        `UPDATE dm_conversations SET ${col} = COALESCE(${col}, NOW())
+          WHERE id = $1
+          RETURNING meeting_joined_a_at AS a, meeting_joined_b_at AS b`,
+        [conv.id],
+      );
+      const row = stamped.rows[0];
+      bothJoined = !!row?.a && !!row?.b;
+      if (bothJoined) {
+        await client.query(
+          `UPDATE dm_conversations SET calls_unlocked_at = COALESCE(calls_unlocked_at, NOW()) WHERE id = $1`,
+          [conv.id],
+        );
+      }
+    }
+    const firstJoin = meetingId ? await stampAttendance(client, meetingId, conv.iAmA ? 'a' : 'b') : false;
+    return { attended: firstJoin, unlocked: bothJoined };
+  });
 
-  await query(
-    `UPDATE dm_conversations SET calls_unlocked_at = COALESCE(calls_unlocked_at, NOW()) WHERE id = $1`,
-    [conv.id],
-  );
+  if (attended && meetingId) await emitMeetingChanged(meetingId, [conv.user_a_id, conv.user_b_id]);
+  if (!unlocked) return;
   logger.info({ conversationId: conv.id, userId }, 'calls unlocked after first meeting');
   try {
     const { io } = await import('../../index');
@@ -153,7 +191,12 @@ export async function getCallToken(
   kind: 'audio' | 'video',
 ): Promise<CallToken> {
   const conv = await requireCallParticipant(conversationId, userId);
-  if (!conv.calls_unlocked_at) await recordScheduledJoin(conv, userId);
+  // 26 Oct 2026: before calls unlock, the room is the scheduled meeting's. It is never refused for
+  // being early (production's MeetPage mints this token on mount, under its own countdown); it is
+  // refused once no meeting stands (none booked, cancelled, or over), so an old Join lands on a clear
+  // sentence instead of an empty room.
+  if (!conv.calls_unlocked_at && !hasUnendedMeeting(conv)) throw await noMeetingToJoin(conversationId);
+  await recordScheduledJoin(conv, userId);
   const me = (await query<{ display_name: string | null }>(
     `SELECT display_name FROM users WHERE id = $1`, [userId],
   )).rows[0];

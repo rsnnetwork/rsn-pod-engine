@@ -15,7 +15,13 @@ const mockSendBroadcast = jest.fn((..._a: any[]) => Promise.resolve({ conversati
 const mockBroadcastDm = jest.fn((..._a: any[]) => Promise.resolve(undefined));
 const mockEmitEntities = jest.fn((..._a: any[]) => Promise.resolve(undefined));
 
-jest.mock('../../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), __esModule: true }));
+// 26 Oct 2026: attendance stamps the meeting row and the conversation together, in one transaction.
+const mockTxSql: string[] = [];
+jest.mock('../../../db', () => ({
+  query: (...a: unknown[]) => mockQuery(...a),
+  transaction: (cb: Function) => cb({ query: (...a: unknown[]) => { mockTxSql.push(a[0] as string); return mockQuery(...a); } }),
+  __esModule: true,
+}));
 jest.mock('../../../config', () => ({ __esModule: true, default: { livekit: { host: 'wss://lk.example' } } }));
 jest.mock('../../../config/logger', () => ({
   __esModule: true,
@@ -47,7 +53,10 @@ jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
 jest.mock('../../../realtime/emit', () => ({ __esModule: true, emitEntities: (...a: unknown[]) => mockEmitEntities(...a) }));
 jest.mock('../../../realtime/entities', () => ({
   __esModule: true,
-  E: { userNotifications: (id: string) => `user:${id}:notifications`, dmConversation: (id: string) => `dm-conversation:${id}` },
+  E: {
+    userNotifications: (id: string) => `user:${id}:notifications`, dmConversation: (id: string) => `dm-conversation:${id}`,
+    userMeetings: (id: string) => `user:${id}:meetings`, meeting: (id: string) => `meeting:${id}`,
+  },
 }));
 
 import {
@@ -62,16 +71,29 @@ const baseConv = () => ({
   calls_unlocked_at: null as Date | null,
   meeting_start_at: new Date(NOW) as Date | null,
   meeting_duration_min: 30,
+  current_meeting_id: null as string | null,
 });
 let conv = baseConv();
 // State of the per-side attendance stamps the UPDATE … RETURNING reports back.
 let stamps: { a: Date | null; b: Date | null } = { a: null, b: null };
 let request: any = null;
+// The meetings row's own stamps (26 Oct 2026), and the status of the pair's latest meeting.
+let meetingStamps: { a: boolean; b: boolean } = { a: false, b: false };
+let lastMeetingStatus: string | null = null;
 
 function arm() {
   mockQuery.mockImplementation((sql: string, params?: unknown[]) => {
     if (/FROM dm_conversations WHERE id/.test(sql)) return Promise.resolve({ rows: [conv] });
     if (/SELECT display_name FROM users/.test(sql)) return Promise.resolve({ rows: [{ display_name: 'Ana' }] });
+    if (/UPDATE meetings SET joined_[ab]_at/.test(sql)) {
+      const side = /joined_a_at/.test(sql) ? 'a' : 'b';
+      if (meetingStamps[side]) return Promise.resolve({ rows: [] });
+      meetingStamps[side] = true;
+      return Promise.resolve({ rows: [{ id: params![0] }] });
+    }
+    if (/FROM meetings WHERE conversation_id/.test(sql)) {
+      return Promise.resolve({ rows: lastMeetingStatus ? [{ status: lastMeetingStatus }] : [] });
+    }
     if (/SET meeting_joined_[ab]_at/.test(sql)) {
       if (/joined_a_at = COALESCE/.test(sql)) stamps.a = stamps.a ?? new Date();
       if (/joined_b_at = COALESCE/.test(sql)) stamps.b = stamps.b ?? new Date();
@@ -89,6 +111,7 @@ function arm() {
 
 beforeEach(() => {
   conv = baseConv(); stamps = { a: null, b: null }; request = null;
+  meetingStamps = { a: false, b: false }; lastMeetingStatus = null; mockTxSql.length = 0;
   mockQuery.mockReset(); mockIssue.mockClear(); mockEmit.mockClear();
   mockSendBroadcast.mockClear(); mockBroadcastDm.mockClear(); mockEmitEntities.mockClear();
   mockAreBlocked.mockReset(); mockAreBlocked.mockResolvedValue(false);
@@ -136,12 +159,84 @@ describe('getCallToken', () => {
     await getCallToken('conv-1', 'u-a', 'video');
     expect(mockQuery.mock.calls.some(c => /SET meeting_joined/.test(c[0] as string))).toBe(false);
   });
-  it('with no scheduled meeting there is nothing to attend', async () => {
+  // 26 Oct 2026: the server never refuses an EARLY join. Production's MeetPage mints this token on
+  // mount and draws its own countdown over it, so a refusal would replace the countdown with an error.
+  it('an early join is never refused: a meeting hours away still gets a token, and counts as nothing yet', async () => {
+    conv.meeting_start_at = new Date(NOW + 5 * 60 * 60 * 1000);
+    await expect(getCallToken('conv-1', 'u-a', 'video')).resolves.toMatchObject({ token: 'tok-123', roomName: 'dm-conv-1' });
+    expect(mockQuery.mock.calls.some(c => /joined_[ab]_at/.test(c[0] as string))).toBe(false);
+  });
+
+  // A token is refused only when calls are still locked AND no scheduled meeting stands that has not
+  // ended. The words land on production's call screen, above its "Back to chat" button.
+  it('with no meeting and calls still locked, the token is refused in words the call screen can show', async () => {
     conv.meeting_start_at = null;
-    await getCallToken('conv-1', 'u-a', 'video');
+    await expect(getCallToken('conv-1', 'u-a', 'video')).rejects.toMatchObject({
+      statusCode: 403, message: "There's no meeting to join right now. Pick a time to meet in your chat.",
+    });
+    expect(mockIssue).not.toHaveBeenCalled();
     expect(mockQuery.mock.calls.some(c => /SET meeting_joined/.test(c[0] as string))).toBe(false);
   });
-  it('does not re-stamp once calls are already unlocked', async () => {
+
+  it('a meeting that has ended (30 minutes past its end) while calls are still locked is refused the same way', async () => {
+    conv.meeting_start_at = new Date(NOW - 2 * 60 * 60 * 1000);
+    await expect(getCallToken('conv-1', 'u-a', 'video')).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockIssue).not.toHaveBeenCalled();
+  });
+
+  it('a meeting still inside its 30 minutes after the end can be entered', async () => {
+    conv.meeting_start_at = new Date(NOW - 50 * 60 * 1000); // 30 minutes long: ended 20 minutes ago
+    await expect(getCallToken('conv-1', 'u-a', 'video')).resolves.toMatchObject({ token: 'tok-123' });
+  });
+
+  it('after a cancel, the old Join in production\'s thread lands on "This meeting was cancelled"', async () => {
+    conv.meeting_start_at = null; // a cancel clears the conversation's meeting
+    lastMeetingStatus = 'cancelled';
+    await expect(getCallToken('conv-1', 'u-a', 'video')).rejects.toMatchObject({
+      statusCode: 403, message: 'This meeting was cancelled. Pick a new time to meet in your chat.',
+    });
+    const lookup = mockQuery.mock.calls.find(c => /FROM meetings WHERE conversation_id/.test(c[0] as string))!;
+    expect(String(lookup[0]).replace(/\s+/g, ' ')).toMatch(/SELECT status FROM meetings WHERE conversation_id = \$1 ORDER BY updated_at DESC LIMIT 1/);
+    expect(lookup[1]).toEqual(['conv-1']);
+  });
+
+  it('once calls are unlocked a token needs no meeting at all', async () => {
+    conv.calls_unlocked_at = new Date();
+    conv.meeting_start_at = null;
+    await expect(getCallToken('conv-1', 'u-a', 'video')).resolves.toMatchObject({ token: 'tok-123' });
+  });
+
+  // ── Attendance on the meeting row (26 Oct 2026) ───────────────────────────
+  it('entering inside the window stamps the meeting row and the conversation together, in one transaction, and tells both screens', async () => {
+    conv.current_meeting_id = 'mtg-1';
+    await getCallToken('conv-1', 'u-b', 'video');
+    const meetingStamp = mockQuery.mock.calls.find(c => /UPDATE meetings SET joined_b_at/.test(c[0] as string))!;
+    expect(meetingStamp[1]).toEqual(['mtg-1']);
+    expect(mockTxSql.some(s => /UPDATE meetings SET joined_b_at/.test(s))).toBe(true);
+    expect(mockTxSql.some(s => /SET meeting_joined_b_at = COALESCE/.test(s))).toBe(true);
+    // The conversation is stamped before the meeting row: the order every booking locks them in.
+    expect(mockTxSql.findIndex(s => /SET meeting_joined_b_at/.test(s)))
+      .toBeLessThan(mockTxSql.findIndex(s => /UPDATE meetings SET joined_b_at/.test(s)));
+    expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), ['u-a'], ['user:u-a:meetings', 'meeting:mtg-1']);
+    expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), ['u-b'], ['user:u-b:meetings', 'meeting:mtg-1']);
+  });
+
+  it('joining again (a reconnect) stamps nothing new and tells nobody again', async () => {
+    conv.current_meeting_id = 'mtg-1';
+    meetingStamps.a = true;
+    await getCallToken('conv-1', 'u-a', 'video');
+    expect(mockEmitEntities.mock.calls.filter(c => (c[2] as string[]).includes('meeting:mtg-1'))).toEqual([]);
+  });
+
+  it('after calls unlock, a later meeting still records who attended it, on the meeting row only', async () => {
+    conv.calls_unlocked_at = new Date();
+    conv.current_meeting_id = 'mtg-2';
+    await getCallToken('conv-1', 'u-a', 'video');
+    expect(mockQuery.mock.calls.find(c => /UPDATE meetings SET joined_a_at/.test(c[0] as string))?.[1]).toEqual(['mtg-2']);
+    expect(mockQuery.mock.calls.some(c => /SET meeting_joined/.test(c[0] as string))).toBe(false);
+  });
+
+  it('does not re-stamp the conversation once calls are already unlocked', async () => {
     conv.calls_unlocked_at = new Date();
     await getCallToken('conv-1', 'u-a', 'video');
     expect(mockQuery.mock.calls.some(c => /SET meeting_joined/.test(c[0] as string))).toBe(false);

@@ -39,6 +39,7 @@ import { authenticateSocketToken } from './middleware/auth';
 import { processAutoReminders } from './services/join-request/join-request.service';
 import { pruneExpiredAuthTokens } from './services/maintenance/token-cleanup';
 import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
+import { processMeetingReminders } from './services/meetings/meeting-reminder.worker';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -61,6 +62,7 @@ import matchesRoutes from './routes/matches';
 import peopleRoutes from './routes/people';
 import agentRoutes from './routes/agents';
 import meetingRoutes from './routes/meeting';
+import meetingsRoutes from './routes/meetings';
 import circleRoutes from './routes/circles';
 import entityRoutes from './routes/entities';
 import reportRoutes from './routes/reports';
@@ -344,6 +346,7 @@ app.use('/api/admin/join-request-action', adminActionRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dm', dmRoutes);
 app.use('/api/dm', meetingRoutes); // scheduling endpoints — path shapes disjoint from dmRoutes
+app.use('/api/meetings', meetingsRoutes); // confirmed 1:1 meetings: Events, the Events count, one meeting, cancel
 app.use('/api/pokes', pokeRoutes);
 app.use('/api/matches', matchesRoutes);
 app.use('/api/people', peopleRoutes);
@@ -406,6 +409,14 @@ async function start(): Promise<void> {
       processPendingJobs(io).catch(err =>
         logger.error({ err }, 'Post-event message worker cycle failed'));
     }, POST_EVENT_MSG_INTERVAL);
+
+    // Remind both people 10 minutes before a meeting (26 Oct 2026). The claim is safe with several
+    // instances running: each meeting is reminded by one of them, once.
+    const MEETING_REMINDER_INTERVAL = 60_000;
+    setInterval(() => {
+      processMeetingReminders().catch(err =>
+        logger.error({ err }, 'Meeting reminder cycle failed'));
+    }, MEETING_REMINDER_INTERVAL);
 
     // Start auto-reminder engine for join requests (runs every 6 hours)
     const SIX_HOURS = 6 * 60 * 60 * 1000;

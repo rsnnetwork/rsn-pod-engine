@@ -100,6 +100,7 @@ export const ErrorCodes = {
   // Meeting request and meeting errors
   MEETING_REQUEST_ALREADY_ANSWERED: 'MEETING_REQUEST_ALREADY_ANSWERED',  // 409; details.status is the answer it already has
   MEETING_TIME_NOT_SHARED: 'MEETING_TIME_NOT_SHARED',  // 409; details.scheduling is where the two people's times stand now
+  MEETING_ALREADY_ENDED: 'MEETING_ALREADY_ENDED',  // 409; a meeting that is over can no longer be cancelled
 
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',
