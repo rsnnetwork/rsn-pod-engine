@@ -252,11 +252,11 @@ export function isPastKey(key: string, now = new Date()): boolean {
   return Date.UTC(Number(y), Number(mo) - 1, Number(d)) + 86_400_000 < now.getTime();
 }
 
-/** Times BOTH sides still have, sorted, past ones dropped. */
-function futureOverlap(rows: Array<{ user_id: string; window_key: string }>, userId: string): string[] {
+/** Times BOTH sides still have at `now`, sorted, past ones dropped. */
+function futureOverlap(rows: Array<{ user_id: string; window_key: string }>, userId: string, now = new Date()): string[] {
   const mine = new Set(rows.filter(r => r.user_id === userId).map(r => r.window_key));
   return rows
-    .filter(r => r.user_id !== userId && mine.has(r.window_key) && !isPastKey(r.window_key))
+    .filter(r => r.user_id !== userId && mine.has(r.window_key) && !isPastKey(r.window_key, now))
     .map(r => r.window_key)
     .sort();
 }
@@ -388,14 +388,18 @@ export async function setAvailability(
       [conversationId],
     );
     const row = locked.rows[0];
+    // One clock for the whole save: what was shared before it and what is shared
+    // after it must be judged at the same moment, or a time going by in between
+    // would look like a change this save made (and could book the time left).
+    const now = new Date();
 
     const before = await client.query<{ user_id: string; window_key: string }>(
       `SELECT user_id, window_key FROM meeting_availability WHERE conversation_id = $1`,
       [conversationId],
     );
-    const overlapBefore = futureOverlap(before.rows, userId);
+    const overlapBefore = futureOverlap(before.rows, userId, now);
     const hadOverlap = overlapBefore.length > 0;
-    const iHadSlots = before.rows.some(r => r.user_id === userId && !isPastKey(r.window_key));
+    const iHadSlots = before.rows.some(r => r.user_id === userId && !isPastKey(r.window_key, now));
 
     // Prune everyone's expired rows while we are here, so the table does not
     // grow a tail of times nobody can pick any more.
@@ -422,7 +426,7 @@ export async function setAvailability(
       `SELECT user_id, window_key FROM meeting_availability WHERE conversation_id = $1`,
       [conversationId],
     );
-    const overlapNow = futureOverlap(after.rows, userId);
+    const overlapNow = futureOverlap(after.rows, userId, now);
 
     // 25 Oct 2026: the same time picked by both is the agreement. Stefan and
     // Claus both saved 13:00, the panel closed on each Save, and nobody found the

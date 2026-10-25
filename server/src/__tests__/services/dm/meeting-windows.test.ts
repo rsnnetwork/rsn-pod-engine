@@ -590,6 +590,31 @@ describe('setAvailability — agreeing a time books it', () => {
     expect(mockInsertOn).not.toHaveBeenCalled();
   });
 
+  it('a time that passes while the save runs does not make it look like a new agreement', async () => {
+    // Both share 12:00 and 13:00, and the save changes neither. 12:00 goes by between the
+    // two reads of the table: judged by two different clocks, the shared times would look
+    // as if they had narrowed to 13:00 alone, which would book it. One save, one clock.
+    jest.useFakeTimers({ now: new Date('2026-11-02T11:59:59.500Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    const passing = '2026-11-02T12:00:00Z';
+    const later = '2026-11-02T13:00:00Z';
+    const rows = [...both(passing), ...both(later)];
+    let reads = 0;
+    mockQuery.mockImplementation((sql: string) => {
+      if (/FROM dm_conversations WHERE id/.test(sql)) return Promise.resolve({ rows: [CONV] });
+      if (/FROM meeting_availability/.test(sql)) {
+        reads += 1;
+        if (reads === 2) jest.setSystemTime(new Date('2026-11-02T12:00:01Z'));
+        return Promise.resolve({ rows });
+      }
+      return Promise.resolve({ rows: [{ id: 'n1', created_at: NOW }] });
+    });
+
+    await setAvailability('conv-1', 'u-a', [passing, later]);
+
+    expect(confirmations()).toHaveLength(0);
+    expect(mockInsertOn).not.toHaveBeenCalled();
+  });
+
   it('narrowing two shared times down to one books the one left', async () => {
     const keep = futureSlot(2, 12);
     const drop = futureSlot(2, 13);
