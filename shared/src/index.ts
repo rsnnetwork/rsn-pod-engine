@@ -62,6 +62,10 @@ export * from './onboarding/example-people';
 import { EXAMPLE_PEOPLE as _EXAMPLE_PEOPLE } from './onboarding/example-people';
 export const EXAMPLE_PEOPLE = _EXAMPLE_PEOPLE;
 export * from './types/post-event-message';
+// A real VALUE the "message everyone" screen counts with, so it needs its own statically analysable
+// named export for Rollup's CJS interop, same as OPENINGS above (26 Oct 2026).
+import { POST_EVENT_MESSAGE_LIMITS as _POST_EVENT_MESSAGE_LIMITS } from './types/post-event-message';
+export const POST_EVENT_MESSAGE_LIMITS = _POST_EVENT_MESSAGE_LIMITS;
 export * from './identity/displayName';
 // A member's own words, as a page shows them (21 Oct 2026): one rule for the brief another member reads and for your
 // own profile. Real VALUES (functions) the client calls, so each has its own named export, same as OPENINGS above.

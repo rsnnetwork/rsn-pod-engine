@@ -327,3 +327,27 @@ export const bannerReadLimiter = rateLimit({
   store: buildStore('banner-read'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
+
+// "Message all participants" (26 Oct 2026). One send writes a private message to everyone who took part, so
+// the route holds a person to 10 sends an hour across all their events, on top of the rule that decides
+// the real limit (3 per event per sender per 24 hours). Counted per signed-in person and not per network
+// address: the people who run events often share one office. Every attempt counts, so a script cannot
+// probe the rule for free.
+export const postEventMessageLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('post-event-message'),
+  handler: (_req, res) => {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'You have sent a lot of messages this hour. Please try again later.',
+      },
+    };
+    res.status(429).json(response);
+  },
+});

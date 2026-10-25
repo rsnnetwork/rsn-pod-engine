@@ -17,6 +17,7 @@ import { query } from '../../db';
 import logger from '../../config/logger';
 import { getRedisClient } from '../redis/redis.client';
 import { buildMessage } from './templates';
+import { reportProgress, resolveProgressAudience } from './send-progress';
 import { sendBroadcastMessage } from '../dm/dm.service';
 import { broadcastDmMessage } from '../orchestration/handlers/dm-handlers';
 import type { PostEventMessageBucket } from '@rsn/shared';
@@ -29,6 +30,8 @@ interface PendingJob {
   id: string;
   session_id: string;
   created_by: string;
+  /** The organiser's own words (version 2). NULL on a template job, which is every job made before 26 Oct 2026. */
+  body: string | null;
 }
 
 interface RecipientRow {
@@ -36,6 +39,10 @@ interface RecipientRow {
   user_id: string;
   bucket: PostEventMessageBucket;
   first_name: string | null;
+  /** users.status of the recipient right now: only 'active' accounts are messaged. */
+  account_status: string;
+  /** Whether either person has blocked the other, as of this read. */
+  blocked: boolean;
 }
 
 // ─── Date formatter ───────────────────────────────────────────────────────────
@@ -93,7 +100,7 @@ export async function processPendingJobs(io: SocketServer): Promise<void> {
 async function _runWorkerCycle(io: SocketServer): Promise<void> {
   // ── 2. Pick one pending job ────────────────────────────────────────────────
   const pickResult = await query<PendingJob>(
-    `SELECT id, session_id, created_by
+    `SELECT id, session_id, created_by, body
      FROM post_event_message_jobs
      WHERE status = 'pending'
      ORDER BY created_at
@@ -105,6 +112,9 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
   const jobId = job.id;
   const sessionId = job.session_id;
   const createdBy = job.created_by;
+  // A body means the organiser wrote this message: it goes out as they wrote it, under a bell that says
+  // why they wrote. No body means the older feedback template, with the bell it always had.
+  const organiserBody = typeof job.body === 'string' ? job.body : null;
 
   // ── 3. Mark processing ─────────────────────────────────────────────────────
   await query(
@@ -114,7 +124,10 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
     [jobId],
   );
 
+  let progressAudience: string[] = [createdBy];
   try {
+    progressAudience = await resolveProgressAudience(sessionId, createdBy);
+
     // ── 4. Load context once ─────────────────────────────────────────────────
     const sessionResult = await query<{ title: string; ended_at: Date | null; scheduled_at: Date }>(
       `SELECT title, ended_at, scheduled_at FROM sessions WHERE id = $1`,
@@ -131,25 +144,54 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
     );
     const senderRow = senderResult.rows[0];
     const senderName = senderRow?.first_name || senderRow?.display_name || 'The team';
+    // The bell names the person as the rest of the DM system does (the display name), not as a sign-off.
+    const bellSenderName = senderRow?.display_name || senderRow?.first_name || 'The team';
+    const dmOptions = organiserBody === null
+      ? {}
+      : { bellTitle: `${bellSenderName} messaged everyone from ‘${eventTitle}’` };
 
     // ── 5. Drain in batches of 25 ─────────────────────────────────────────────
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      // Blocks and account status are read here, in the same query, as of this moment: a person who
+      // blocked the sender or closed their account since the job was made is skipped, not messaged.
       const batchResult = await query<RecipientRow>(
-        `SELECT r.id, r.user_id, r.bucket, u.first_name
+        `SELECT r.id, r.user_id, r.bucket, u.first_name, u.status AS account_status,
+                EXISTS (SELECT 1 FROM user_blocks b
+                         WHERE (b.blocker_id = $2 AND b.blocked_id = r.user_id)
+                            OR (b.blocker_id = r.user_id AND b.blocked_id = $2)) AS blocked
          FROM post_event_message_recipients r
          JOIN users u ON u.id = r.user_id
          WHERE r.job_id = $1 AND r.status = 'pending'
          ORDER BY r.created_at
          LIMIT 25`,
-        [jobId],
+        [jobId, createdBy],
       );
 
       if (batchResult.rows.length === 0) break;
 
       for (const row of batchResult.rows) {
         try {
-          const content = buildMessage(row.bucket, {
+          const skipReason = row.account_status !== 'active' ? 'inactive' : row.blocked ? 'blocked' : null;
+          if (skipReason) {
+            // Not a failure: nobody did anything wrong, and the job is not an "error" for it. Taken off
+            // the total as well, so "x of y" can reach y.
+            await query(
+              `UPDATE post_event_message_recipients
+               SET status='skipped', error=$1
+               WHERE id=$2`,
+              [skipReason, row.id],
+            );
+            await query(
+              `UPDATE post_event_message_jobs
+               SET total_recipients = total_recipients - 1
+               WHERE id=$1`,
+              [jobId],
+            );
+            continue;
+          }
+
+          const content = organiserBody ?? buildMessage(row.bucket, {
             firstName: row.first_name || '',
             eventTitle,
             eventDate,
@@ -162,7 +204,7 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
             content,
           );
 
-          await broadcastDmMessage(io, createdBy, row.user_id, conversationId, message);
+          await broadcastDmMessage(io, createdBy, row.user_id, conversationId, message, dmOptions);
 
           await query(
             `UPDATE post_event_message_recipients
@@ -199,6 +241,9 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
           );
         }
       }
+
+      // The people running the event watch "Sending… x of y": tell them it moved.
+      await reportProgress(io, progressAudience, sessionId);
     }
 
     // ── 6. Finalize ───────────────────────────────────────────────────────────
@@ -217,6 +262,7 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
     );
 
     logger.info({ jobId, finalStatus, failedCount }, 'Post-event message job finalized');
+    await reportProgress(io, progressAudience, sessionId);
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     logger.error({ err, jobId }, 'Post-event message job failed unexpectedly');
@@ -227,5 +273,6 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
        WHERE id = $2`,
       [errMsg, jobId],
     ).catch(() => {});
+    await reportProgress(io, progressAudience, sessionId);
   }
 }

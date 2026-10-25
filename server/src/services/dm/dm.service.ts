@@ -376,10 +376,12 @@ export async function insertDirectMessageOn(
 }
 
 /**
- * Send a DM as part of an authorized broadcast. Skips canMessage() because the
- * caller (post-event-message job creation) has already authorized the sender
- * for this audience. Still validates content length. Returns the same shape as
- * sendMessage so the caller can broadcast via broadcastDmMessage().
+ * Send a DM as part of an authorized broadcast. Skips the "have you met" gate of
+ * canMessage() because the caller (post-event-message job creation) has already
+ * authorized the sender for this audience, but never skips a block: a block, in
+ * either direction, is the one thing a person says to stop hearing from someone.
+ * Still validates content length. Returns the same shape as sendMessage so the
+ * caller can broadcast via broadcastDmMessage().
  */
 export async function sendBroadcastMessage(
   fromUserId: string,
@@ -395,6 +397,9 @@ export async function sendBroadcastMessage(
   }
   if (trimmed.length > 4000) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message too long (max 4000 characters)');
+  }
+  if (await blockService.areBlocked(fromUserId, toUserId)) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You can no longer message this user');
   }
   return insertDirectMessage(fromUserId, toUserId, trimmed, null);
 }
