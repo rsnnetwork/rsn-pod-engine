@@ -4,6 +4,8 @@ import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/liv
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable, tapReachable } from '../helpers/viewport-fit';
+// The made-up people the pictures name: the shared list itself, so a name changed there is followed here.
+import { EXAMPLE_PEOPLE } from '../../shared/src/onboarding/example-people';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // "How REASON works" (Shradha's deck, task 2; the client's feedback of 19 Oct).
@@ -15,9 +17,15 @@ import { expectReachable, tapReachable } from '../helpers/viewport-fit';
 // finished. Nobody who onboarded before it existed is interrupted, and it
 // stays re-openable from Support afterwards.
 //
-// 19 Oct: no made-up people in the pictures, the heading and the description
-// above the picture, and finishing or skipping it lands on For You, except
-// when it is replayed from Support, which stays where it is.
+// 19 Oct: the heading and the description above the picture, and finishing or
+// skipping it lands on For You, except when it is replayed from Support, which
+// stays where it is.
+//
+// 25 Oct (Stefan and Claus): the pictures may show people again, as long as it is
+// plain they are made up. So: the heading, the description, then "Examples only.
+// These are not real members.", then a picture whose people are the shared
+// EXAMPLE_PEOPLE (English names and roles, the sheep for a photo), every picture
+// carrying an "Example" tag.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PHONE = { width: 390, height: 844 };
@@ -25,9 +33,14 @@ let browser: Browser;
 const ctxs: BrowserContext[] = [];
 const made: string[] = [];
 
-// The people the pictures used to show. None of them, or anyone like them, belongs in the tour.
-const MADE_UP_PEOPLE = /Amara|Okafor|Tomas|Lind\b|Priya|Raman|Northwind|Baltic/;
+// The people the first pictures showed, with no label. Never back: the examples are the shared list's.
+const OLD_EXAMPLE_PEOPLE = /Amara|Okafor|Tomas|Lind\b|Priya|Raman|Northwind|Baltic/;
+const CAPTION = 'Examples only. These are not real members.';
 const TITLES = ['For You', 'Matches', 'Meetings', 'Circles & events'];
+// How many example people each picture names (For You suggests two, Matches shows three) and how many Example tags it
+// carries (one on each suggested person; one on the frame of each list).
+const PEOPLE_IN_PICTURE = [2, 3, 0, 0];
+const TAGS_IN_PICTURE = [2, 1, 1, 1];
 
 async function apiAs(u: TestUser, method: string, path: string, body?: unknown) {
   const res = await fetch(`${SERVER}/api${path}`, {
@@ -72,24 +85,60 @@ const tour = (page: Page) => page.getByTestId('how-rsn-works');
 const slide = (page: Page) => tour(page).locator('[aria-roledescription="slide"]');
 const pathOf = (page: Page) => new URL(page.url()).pathname;
 
-/** The heading and the description both end above the picture's top edge. */
+/** The heading, the description and the caption all end above the picture's top edge, in that order. */
 async function expectWordsAboveThePicture(page: Page, title: string) {
   const card = slide(page);
   const heading = await card.getByRole('heading', { name: title }).boundingBox();
   const description = await card.locator('p').first().boundingBox();
+  const caption = await card.getByText(CAPTION, { exact: true }).boundingBox();
   const picture = await card.getByTestId('tour-picture').boundingBox();
   expect(heading, `${title}: heading not drawn`).not.toBeNull();
   expect(description, `${title}: description not drawn`).not.toBeNull();
+  expect(caption, `${title}: the caption is not drawn`).not.toBeNull();
   expect(picture, `${title}: picture not drawn`).not.toBeNull();
   expect(heading!.y + heading!.height, `${title}: the heading is not above the picture`).toBeLessThanOrEqual(picture!.y);
   expect(description!.y + description!.height, `${title}: the description is not above the picture`).toBeLessThanOrEqual(picture!.y);
   expect(heading!.y, `${title}: the heading is not above the description`).toBeLessThan(description!.y);
+  expect(description!.y + description!.height, `${title}: the caption is not under the description`).toBeLessThanOrEqual(caption!.y + 1);
+  expect(caption!.y + caption!.height, `${title}: the caption is not above the picture`).toBeLessThanOrEqual(picture!.y);
+  // It is said once, and outside the picture, which a screen reader skips: it is what tells everyone they are made up.
+  await expect(card.getByText(CAPTION)).toHaveCount(1);
+  await expect(card.getByTestId('tour-picture')).toHaveAttribute('aria-hidden', 'true');
+  await expect(card.getByTestId('tour-picture').getByText(CAPTION)).toHaveCount(0);
 }
 
-/** Nobody in the picture: no made-up name, and the only images are the sheep, loaded. */
-async function expectNobodyInThePicture(page: Page, title: string) {
-  await expect(tour(page), `${title}: a made-up person is on the card`).not.toContainText(MADE_UP_PEOPLE);
-  const pictures = slide(page).getByTestId('tour-picture').locator('img');
+/**
+ * The people in the picture are the shared list's, each with its own role and a sheep for a photo, and the picture
+ * says Example; nothing the old pictures showed, and no name or role cut off.
+ */
+async function expectLabelledExamples(page: Page, index: number) {
+  const title = TITLES[index];
+  await expect(tour(page), `${title}: a person the old pictures showed is back`).not.toContainText(OLD_EXAMPLE_PEOPLE);
+  const picture = slide(page).getByTestId('tour-picture');
+  const lines = (await picture.innerText()).split('\n').map((line) => line.trim()).filter(Boolean);
+  const names = lines.filter((line) => /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(line));
+  for (const name of names) {
+    const person = EXAMPLE_PEOPLE.find((p) => p.name === name);
+    expect(person, `${title}: ${name} is not one of the example people`).toBeTruthy();
+    expect(lines[lines.indexOf(name) + 1], `${title}: ${name} is not shown with the role the list gives`).toBe(person!.role);
+  }
+  expect(names.length, `${title}: how many example people it names`).toBe(PEOPLE_IN_PICTURE[index]);
+  expect(lines.filter((line) => line === 'Example').length, `${title}: how many Example tags it carries`).toBe(TAGS_IN_PICTURE[index]);
+  // Every tag is drawn, inside the picture's width.
+  const frame = (await picture.boundingBox())!;
+  const tags = picture.getByText('Example', { exact: true });
+  for (let t = 0; t < (await tags.count()); t += 1) {
+    await expect(tags.nth(t), `${title}: an Example tag is not drawn`).toBeVisible();
+    const box = (await tags.nth(t).boundingBox())!;
+    expect(box.x, `${title}: an Example tag is off the left of the picture`).toBeGreaterThanOrEqual(frame.x);
+    expect(box.x + box.width, `${title}: an Example tag is off the right of the picture`).toBeLessThanOrEqual(frame.x + frame.width);
+  }
+  // Nothing in the picture is wider than the room it was given: no "Hannah M…".
+  const cutOff = await picture.locator('span').evaluateAll((list) =>
+    list.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent ?? ''));
+  expect(cutOff, `${title}: words cut off`).toEqual([]);
+  // The face is always a sheep, so it can never pass for a real photo, and each one loaded.
+  const pictures = picture.locator('img');
   const sources = await pictures.evaluateAll((list) => list.map((i) => i.getAttribute('src') ?? ''));
   expect(sources.length, `${title}: no sheep in the picture`).toBeGreaterThan(0);
   for (const src of sources) expect(src, `${title}: an image that is not the sheep`).toMatch(/^\/sheep\//);
@@ -124,14 +173,15 @@ test('it explains the product once, then never again', async () => {
   // It is called what the product is called, on screen and to a screen reader.
   await expect(tour(page)).toHaveAttribute('aria-label', 'How REASON works');
   await expect(tour(page).getByText('How REASON works', { exact: true })).toBeVisible();
-  // All four cards, in the deck's words, each reachable on a phone, each with its words above its picture and nobody in it.
+  // All four cards, in the deck's words, each reachable on a phone, each with its words and the caption above its picture,
+  // whose people are the shared list's and are labelled Example.
   for (const [i, title] of TITLES.entries()) {
     await expect(tour(page).getByRole('heading', { name: title })).toBeVisible();
     await expectWordsAboveThePicture(page, title);
-    await expectNobodyInThePicture(page, title);
+    await expectLabelledExamples(page, i);
     if (i < 3) await tapReachable(page, page.getByRole('button', { name: /^Next$/ }), `Next from ${title}`);
   }
-  console.log('  ✓ four cards: words above the picture, nobody in it');
+  console.log('  ✓ four cards: words and caption above the picture, whose people are the labelled examples');
   // The last card is the clear next step the deck asks for.
   const cta = page.getByRole('button', { name: 'See my matches' });
   await expectReachable(page, cta, '"See my matches"');
@@ -366,11 +416,18 @@ test('every control can be pressed on a small phone', async () => {
   await tapReachable(page, dot, 'the third dot');
   await expect(tour(page).getByRole('heading', { name: 'Meetings' })).toBeVisible();
 
-  // The words are above the picture here too, and the whole picture is inside the window.
+  // The words and the caption are above the picture here too, and the whole picture is inside the window.
   await expectWordsAboveThePicture(page, 'Meetings');
   const picture = (await slide(page).getByTestId('tour-picture').boundingBox())!;
   expect(picture.x).toBeGreaterThanOrEqual(0);
   expect(picture.x + picture.width).toBeLessThanOrEqual(360);
+  // On every card of a 360px phone: the names and roles fit (none cut off), and each Example tag is inside the picture.
+  for (const [i, title] of TITLES.entries()) {
+    await tapReachable(page, page.getByRole('button', { name: new RegExp(`Go to card ${i + 1}`) }), `the dot for ${title}`);
+    await expect(tour(page).getByRole('heading', { name: title })).toBeVisible();
+    await expectWordsAboveThePicture(page, title);
+    await expectLabelledExamples(page, i);
+  }
 
   // The last card's button is reachable too.
   await tapReachable(page, page.getByRole('button', { name: /Go to card 4/ }), 'the fourth dot');
