@@ -87,6 +87,37 @@ export async function fanoutPodMembershipForUser(
   }
 }
 
+// ─── Pod wall fanout (26 Oct 2026) ──────────────────────────────────────────
+//
+// A pod's wall changed: a post was made, deleted or pinned, a comment or reaction moved a count, a
+// comment was liked. The audience is the pod's ACTIVE members and nobody else, because only they can
+// read the wall; fanoutPodEntities is not used since it also re-tags the pod, its members and its
+// invites, and reaches invited, pending and left rows.
+//
+// Sends `pod:<podId>:wall` (the feed and its counts) plus the tags a caller names, such as
+// `pod-wall-post:<postId>` (one post's thread). `wall: false` leaves the feed's tag out for a change
+// only a thread shows (a like on a comment), so a like does not refetch every member's loaded feed.
+
+export async function fanoutPodWall(
+  podId: string,
+  extraEntities: string[] = [],
+  options: { wall?: boolean } = {},
+): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const result = await query<{ user_id: string }>(
+      `SELECT user_id FROM pod_members WHERE pod_id = $1 AND status = 'active'`,
+      [podId],
+    );
+    const entities = [...(options.wall === false ? [] : [E.podWall(podId)]), ...extraEntities];
+    await emitEntities(io, result.rows.map(r => r.user_id), entities);
+  } catch (err) {
+    logger.warn({ err, podId }, 'fanoutPodWall: failed to fan out');
+  }
+}
+
 // ─── Session-scoped fanout ──────────────────────────────────────────────────
 //
 // Mirrors the legacy notifySessionListChanged audience: anyone who is a

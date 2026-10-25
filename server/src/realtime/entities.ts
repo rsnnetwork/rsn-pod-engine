@@ -16,6 +16,10 @@ export const E = {
   podInvites: (podId: string) => `pod:${podId}:invites`,
   podSessions: (podId: string) => `pod:${podId}:sessions`,
 
+  // Pod wall (26 Oct 2026): a pod's discussion feed, and one post's thread on it
+  podWall: (podId: string) => `pod:${podId}:wall`,
+  podWallPost: (postId: string) => `pod-wall-post:${postId}`,
+
   // User-scoped
   user: (userId: string) => `user:${userId}`,
   userPods: (userId: string) => `user:${userId}:pods`,
