@@ -15,11 +15,19 @@ import { launchBrowser, contextOptions } from '../helpers/engine';
 // accepted, the sender's bell entry links to that conversation, a declined
 // request is declined in the database, and a pasted www. address renders as a
 // real anchor for both sides of the chat.
+//
+// 25 Oct 2026 (Stefan and Claus on production): Claus accepted on the Messages
+// card, opened the bell, and the entry still offered Accept. The bell only ever
+// knew an answer given inside the panel it had open, so every fetch brought the
+// buttons back. The server now says where each request stands, so after an
+// answer, closing the bell and opening it again must read Accepted or Declined,
+// with no Accept button left anywhere in it.
 
 let browser: Browser;
 let sender: TestUser;
 let recipient: TestUser;
 let decliner: TestUser;
+let carder: TestUser;
 const ctxs: BrowserContext[] = [];
 
 async function apiAs(u: TestUser, method: string, path: string, body?: unknown) {
@@ -46,10 +54,32 @@ async function openAs(u: TestUser, path: string, viewport = { width: 390, height
 
 const bellButton = (page: Page) => page.locator('button:has(.lucide-bell):visible').first();
 
+/** The bell is a sheet over a backdrop; a tap on the backdrop (above the sheet on a phone) closes it. */
+async function closeBell(page: Page) {
+  await page.mouse.click(10, 10);
+  await expect(page.getByRole('heading', { name: 'Notifications' })).toHaveCount(0, { timeout: 10_000 });
+}
+
+/**
+ * Opens the bell afresh, the way a member comes back to it. Opening it fetches the list again, and
+ * the panel first draws whatever it remembered from before; so wait for that fetch and its render,
+ * then what it shows is what the server says now (a panel that remembered "Declined" from its own
+ * click would otherwise pass for one the server told).
+ */
+async function reopenBellOn(page: Page) {
+  const fetched = page.waitForResponse((r) =>
+    new URL(r.url()).pathname.endsWith('/api/notifications') && r.request().method() === 'GET' && r.ok());
+  await bellButton(page).click();
+  await fetched;
+  await page.waitForTimeout(500);
+  await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+}
+
 test.beforeAll(async () => {
   sender = await createTestUser('mrbellsender');
   recipient = await createTestUser('mrbellrecipient');
   decliner = await createTestUser('mrbelldecliner');
+  carder = await createTestUser('mrbellcarder');
   await pool.query(`UPDATE users SET display_name = 'Bell Sender' WHERE id = $1`, [sender.id]);
   browser = await launchBrowser();
 });
@@ -57,7 +87,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) await c.close().catch(() => {});
   try { await browser?.close(); } catch {}
-  await cleanup(pool, { ids: [sender?.id, recipient?.id, decliner?.id].filter(Boolean) });
+  await cleanup(pool, { ids: [sender?.id, recipient?.id, decliner?.id, carder?.id].filter(Boolean) });
   const swept = await cleanupByPrefix(pool, 'e2etest-mrbell');
   if (swept) console.log(`  swept ${swept} leftover mrbell* account(s)`);
 });
@@ -94,6 +124,13 @@ test('a meeting request can be accepted from the bell and lands in the conversat
   expect(sn.rows[0].link).toBe(`/messages/${conv.rows[0].id}`);
   console.log('  ✓ accepted from the bell, landed in the conversation, sender told where.');
 
+  // Open the bell again: the entry reads Accepted, from the server, with nothing left to press.
+  await reopenBellOn(page);
+  await expect(page.getByText(/^Accepted$/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: /^Accept$/ })).toHaveCount(0);
+  await closeBell(page);
+  console.log('  ✓ reopened, the bell says Accepted and offers no Accept.');
+
   // A pasted address is a link, on the recipient's own screen and on the sender's.
   const input = page.getByPlaceholder(/Type a message/i);
   await expect(input).toBeVisible({ timeout: 30_000 });
@@ -129,4 +166,105 @@ test('a meeting request can be declined from the bell', async () => {
   expect(poke.rows[0].status).toBe('declined');
   await expect(page.getByRole('button', { name: /^Accept$/ })).toHaveCount(0);
   console.log('  ✓ declined from the bell; buttons gone; row declined.');
+
+  // The answer above was the panel's own memory. Close it and open it again: what it says now
+  // comes from the server, which is what any other tab or device sees too.
+  await closeBell(page);
+  await reopenBellOn(page);
+  await expect(page.getByText(/^Declined$/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: /^Accept$/ })).toHaveCount(0);
+  const n = await pool.query(`SELECT is_read FROM notifications WHERE user_id = $1 AND type = 'poke' AND link = $2`, [decliner.id, `/messages?poke=${pokeId}`]);
+  expect(n.rows[0].is_read, 'an answered request is no longer unread').toBe(true);
+  console.log('  ✓ closed and reopened, the bell still says Declined and offers no Accept.');
+});
+
+test('a request accepted on the Messages card reads Accepted in the bell, with nothing left to press', async () => {
+  test.setTimeout(180_000);
+  const p = await apiAs(sender, 'POST', '/pokes', { recipientId: carder.id, message: 'Shall we meet?' });
+  expect(p.status).toBe(201);
+  const pokeId = p.json.data.id;
+
+  // Claus's path at 2:43:53: accept on the request card in the Messages list...
+  const page = await openAs(carder, '/messages');
+  const card = page.locator(`[data-testid="meeting-request"][data-sender-id="${sender.id}"]`);
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await card.getByRole('button', { name: /^Accept$/ }).click();
+  await expect(page).toHaveURL(/\/messages\/[0-9a-f-]{36}/, { timeout: 30_000 });
+
+  // ...then open the bell. Its entry for that request must not offer Accept again.
+  await reopenBellOn(page);
+  await expect(page.getByText(/^Accepted$/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: /^Accept$/ })).toHaveCount(0);
+  const n = await pool.query(`SELECT is_read FROM notifications WHERE user_id = $1 AND type = 'poke' AND link = $2`, [carder.id, `/messages?poke=${pokeId}`]);
+  expect(n.rows[0].is_read, 'an answered request is no longer unread').toBe(true);
+  console.log('  ✓ accepted on the card; the bell says Accepted and offers no Accept.');
+});
+
+test('asking someone who has already asked you is a match: one request, accepted, and one conversation', async () => {
+  test.setTimeout(60_000);
+  const x = await createTestUser('mrbellmutualx');
+  const y = await createTestUser('mrbellmutualy');
+  try {
+    const first = await apiAs(x, 'POST', '/pokes', { recipientId: y.id, message: 'Hello' });
+    expect(first.status).toBe(201);
+    expect(first.json.data.status).toBe('pending');
+
+    const back = await apiAs(y, 'POST', '/pokes', { recipientId: x.id, message: 'Hello back' });
+    expect(back.status, JSON.stringify(back.json)).toBe(201);
+    expect(back.json.data).toMatchObject({ id: first.json.data.id, status: 'accepted' });
+    expect(back.json.data.conversationId).toBeTruthy();
+
+    const rows = await pool.query(
+      `SELECT status FROM user_pokes WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)`, [x.id, y.id]);
+    expect(rows.rows.map(r => r.status)).toEqual(['accepted']);
+    const conv = await pool.query(
+      `SELECT id FROM dm_conversations WHERE (user_a_id = $1 AND user_b_id = $2) OR (user_a_id = $2 AND user_b_id = $1)`, [x.id, y.id]);
+    expect(conv.rows.map(r => r.id)).toEqual([back.json.data.conversationId]);
+
+    // y's bell entry for x's request now reads accepted; x was told the way an accept tells them.
+    const bell = await apiAs(y, 'GET', '/notifications');
+    const entry = bell.json.data.notifications.find((n: { type: string }) => n.type === 'poke');
+    expect(entry).toMatchObject({ pokeStatus: 'accepted', requestState: { status: 'accepted', conversationId: back.json.data.conversationId }, isRead: true });
+    const told = await pool.query(`SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND type = 'poke_accepted'`, [x.id]);
+    expect(told.rows[0].n).toBe(1);
+    console.log('  ✓ asking back made a match: one request, accepted, one conversation.');
+  } finally {
+    await cleanup(pool, { ids: [x.id, y.id] });
+  }
+});
+
+test('an accept and a decline sent at the same moment end in one answer, never both', async () => {
+  test.setTimeout(60_000);
+  const x = await createTestUser('mrbellracex');
+  const y = await createTestUser('mrbellracey');
+  try {
+    const sent = await apiAs(x, 'POST', '/pokes', { recipientId: y.id, message: 'Race' });
+    expect(sent.status).toBe(201);
+    const id = sent.json.data.id;
+
+    const [accepted, declined] = await Promise.all([
+      apiAs(y, 'POST', `/pokes/${id}/accept`),
+      apiAs(y, 'POST', `/pokes/${id}/decline`),
+    ]);
+    console.log(`  accept → ${accepted.status}, decline → ${declined.status}`);
+    const row = await pool.query(`SELECT status FROM user_pokes WHERE id = $1`, [id]);
+    const winner = row.rows[0].status as 'accepted' | 'declined';
+    expect(['accepted', 'declined']).toContain(winner);
+    const loser = winner === 'accepted' ? declined : accepted;
+    expect((winner === 'accepted' ? accepted : declined).status).toBe(200);
+    expect(loser.status).toBe(409);
+    expect(loser.json.error).toMatchObject({ code: 'MEETING_REQUEST_ALREADY_ANSWERED', details: { status: winner } });
+
+    // The rest agrees with the one answer: a conversation exists exactly when it was accepted.
+    const conv = await pool.query(
+      `SELECT id FROM dm_conversations WHERE (user_a_id = $1 AND user_b_id = $2) OR (user_a_id = $2 AND user_b_id = $1)`, [x.id, y.id]);
+    expect(conv.rows.length).toBe(winner === 'accepted' ? 1 : 0);
+
+    // Answering again the same way is not an error.
+    const again = await apiAs(y, 'POST', `/pokes/${id}/${winner === 'accepted' ? 'accept' : 'decline'}`);
+    expect(again.status).toBe(200);
+    console.log(`  ✓ one answer (${winner}); the other got a 409 naming it; repeating it is a 200.`);
+  } finally {
+    await cleanup(pool, { ids: [x.id, y.id] });
+  }
 });

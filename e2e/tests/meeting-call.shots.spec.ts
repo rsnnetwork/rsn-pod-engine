@@ -83,10 +83,13 @@ test('capture meeting + call UI', async () => {
   test.setTimeout(300_000);
   const convId = await convBetween(a.id, b.id);
 
-  // A confirmed audio meeting 3 days out.
+  // A confirmed audio meeting 3 days out. Two shared times, so the confirm below
+  // books it as audio for 45 minutes: one shared time is booked by the second
+  // save itself (26 Oct 2026), as 30 minutes of video.
   const KEY = futureWindowKey(3, 'afternoon');
-  await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] });
-  await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] });
+  const KEY2 = futureWindowKey(3, 'evening');
+  await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] });
+  await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] });
   await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
     window: KEY, durationMin: 45, type: 'audio', // a slot key IS the start instant
   });
@@ -130,8 +133,10 @@ test('capture meeting + call UI', async () => {
   // ── Hold the first meeting: confirm one starting now, both enter → calls unlock.
   const now = await serverNowMs();
   const TODAY = dayKeyAt(now);
-  await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [TODAY] });
-  await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [TODAY] });
+  // Two shared times, so the confirm below sets the start (in 2 minutes), whatever the pair's state.
+  const LATER = dayKeyAt(now + 60 * 60_000);
+  await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [TODAY, LATER] });
+  await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [TODAY, LATER] });
   const confirmed = await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
     window: TODAY, startAt: new Date(now + 2 * 60_000).toISOString(), durationMin: 30, type: 'video',
   });

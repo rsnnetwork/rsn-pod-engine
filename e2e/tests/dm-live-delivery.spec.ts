@@ -119,10 +119,12 @@ test('confirmWindow: the partner\'s open thread shows the confirmation live, no 
   const convId = await convBetween(sender.id, recip2.id);
   expect(convId, 'conversation exists after accept').toBeTruthy();
 
-  // Both pick the same window.
+  // Both pick the same two windows: confirming is what books here. (One shared
+  // window is booked by the second save itself since 26 Oct 2026.)
   const KEY = futureWindowKey(3, 'evening');
-  expect((await apiAs(sender, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
-  expect((await apiAs(recip2, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
+  const KEY2 = futureWindowKey(4, 'evening');
+  expect((await apiAs(sender, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] })).status).toBe(200);
+  expect((await apiAs(recip2, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] })).status).toBe(200);
 
   // Recipient is watching the thread. Sender confirms via API.
   const recipPage = await openAs(recip2, `/messages/${convId}`);

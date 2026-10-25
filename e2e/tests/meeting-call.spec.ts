@@ -95,8 +95,12 @@ async function holdFirstMeeting(x: TestUser, y: TestUser, convId: string) {
   // and already inside the 5-min early-join window.
   const now = await serverNowMs();
   const KEY = dayKeyAt(now);
-  expect((await apiAs(x, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
-  expect((await apiAs(y, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
+  // Two shared times, so the confirm below is what books it, at now + 2 min. One
+  // shared time is booked by the second save itself (26 Oct 2026), at the slot,
+  // which can be up to half an hour away: outside the join window.
+  const SPARE = dayKeyAt(now + 60 * 60_000);
+  expect((await apiAs(x, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, SPARE] })).status).toBe(200);
+  expect((await apiAs(y, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, SPARE] })).status).toBe(200);
   const startAt = new Date(now + 2 * 60_000).toISOString();
   const c = await apiAs(x, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, { window: KEY, startAt, durationMin: 30, type: 'video' });
   expect(c.status).toBe(200);
@@ -171,9 +175,12 @@ test.describe.serial('meeting + call', () => {
   test('3) confirming an audio meeting pins a Join card and a universal calendar invite', async () => {
     test.setTimeout(120_000);
     const convId = await convBetween(a.id, b.id);
+    // Two shared times, so the confirm step (length, audio) is what books. One
+    // shared time is booked by the second save itself since 26 Oct 2026.
     const KEY = futureWindowKey(5, 'afternoon');
-    expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
-    expect((await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
+    const KEY2 = futureWindowKey(5, 'evening');
+    expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] })).status).toBe(200);
+    expect((await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] })).status).toBe(200);
 
     const page = await openAs(a, `/messages/${convId}`);
     await openScheduler(page);

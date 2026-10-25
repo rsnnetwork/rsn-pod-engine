@@ -327,11 +327,14 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
   const sched = await apiAs(member, 'GET', `/dm/conversations/${conversationId}/scheduling`);
   const mine = sched.json.data.mine as string[];
   expect(mine.length).toBe(2);
+  // Both windows: one shared window is an agreement, booked by the partner's save
+  // itself (26 Oct 2026), which would leave no Confirm step to check.
   const partnerPut = await apiAs(poster, 'PUT', `/dm/conversations/${conversationId}/scheduling/availability`,
-    { windows: [mine[0]] });
+    { windows: [mine[0], mine[1]] });
   expect(partnerPut.status).toBe(200);
   const overlapCheck = await apiAs(member, 'GET', `/dm/conversations/${conversationId}/scheduling`);
-  expect(overlapCheck.json.data.overlap, 'server must compute the overlap').toEqual([mine[0]]);
+  expect(overlapCheck.json.data.overlap, 'server must compute the overlap').toEqual([mine[0], mine[1]]);
+  expect(overlapCheck.json.data.confirmed, 'two shared windows book nothing').toBeNull();
 
   await mPage.reload();
   // On phones the thread actions live under "More actions" (4 Sep 2026).
@@ -344,6 +347,7 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
     .toBeVisible({ timeout: 15_000 });
   await mPage.getByRole('button', { name: /^Confirm / }).first().click();
   await mPage.getByRole('button', { name: /Confirm meeting/i }).click();
-  await expect(mPage.getByText(/Meeting confirmed/i).first()).toBeVisible({ timeout: 15_000 });
+  // The visible one: at 390px the hidden inbox pane's preview line comes first in the page.
+  await expect(mPage.getByText(/Meeting confirmed/i).filter({ visible: true }).first()).toBeVisible({ timeout: 15_000 });
   console.log('  ✓ overlap server-verified, rendered green, confirmed via the UI.');
 });
