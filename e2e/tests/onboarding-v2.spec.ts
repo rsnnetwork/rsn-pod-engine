@@ -16,10 +16,18 @@ import { expectReachable, tapReachable } from '../helpers/viewport-fit';
 // The LinkedIn lookup runs for real: on the local stack there is no ScrapingDog
 // key, so it ends with nothing found, and the member types their details. The
 // "found" case is the real cached-result path, seeded the way a lookup writes it.
+//
+// 25 Oct review (Stefan and Claus): every question is "Select all that apply."
+// (no limit, nothing greyed out), an employee finds themselves without
+// "Something else", and LinkedIn can suggest several descriptions, each marked
+// "From LinkedIn", for a tab or a device that did not make the choice too.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PHONE = { width: 390, height: 844 };
 const ZONE = 'Europe/Berlin';
+const ALL_THAT_APPLY = 'Select all that apply.';
+const PICKED_LINE = "We picked these from your LinkedIn. Change them if they're wrong.";
+const FROM_LINKEDIN = 'From LinkedIn';
 // On the local stack there is no ScrapingDog key, so a LinkedIn lookup costs nothing and ends with nothing found.
 // Anywhere else (a preview, production) a lookup is a paid request: a test that presses "Continue with LinkedIn" seeds
 // the outcome for its address first, and the server reuses it instead of starting one (final review, 21 Oct 2026).
@@ -67,8 +75,11 @@ async function finishedMember(suffix: string): Promise<TestUser> {
   return u;
 }
 
-/** A finished LinkedIn lookup for `url`, exactly as one leaves it: the result, the state, and the address it ran for. */
-async function seedFoundLookup(u: TestUser, url: string, photoUrl = `${APP}/sheep/wave.png`) {
+/**
+ * A finished LinkedIn lookup for `url`, exactly as one leaves it: the result, the state, and the address it ran for.
+ * `profile` replaces words of the page (a role, a headline, where the role was read from).
+ */
+async function seedFoundLookup(u: TestUser, url: string, photoUrl = `${APP}/sheep/wave.png`, profile: Record<string, unknown> = {}) {
   await pool.query(
     `INSERT INTO user_intent_profiles (user_id, inferred_profile, enrichment_status, enrichment_started_at, enrichment_completed_at)
      VALUES ($1, jsonb_build_object('enriched', $2::jsonb, 'lastLookup', jsonb_build_object('linkedinUrl', $3::text, 'at', NOW())),
@@ -81,6 +92,7 @@ async function seedFoundLookup(u: TestUser, url: string, photoUrl = `${APP}/shee
         fullName: 'Ana Found', headline: 'Founder at Crumb Bakery', currentRole: 'Founder & CEO', currentCompany: 'Crumb Bakery',
         industry: 'Food and drink', location: 'Vienna, Austria', summary: null, pastRoles: [], education: [], skills: [],
         likelyWantsToMeet: [], likelyOffers: [], conversationStarters: [], questionsToVerify: [], linkedinUrl: url, photoUrl,
+        ...profile,
       },
     }), url],
   );
@@ -146,6 +158,18 @@ async function tick(page: Page, ...labels: string[]) {
 
 async function press(page: Page, name: string) {
   await tapInView(page, button(page, name), `"${name}"`);
+}
+
+/** Nothing on the question is greyed out and nothing says a limit was reached. */
+async function nothingInTheWay(page: Page, where: string) {
+  await expect(page.locator('[role="checkbox"][disabled]'), `${where}: a tile is greyed out`).toHaveCount(0);
+  await expect(page.getByText(/You've chosen|Untick one|Select up to/), `${where}: a line about a limit`).toHaveCount(0);
+}
+
+/** LinkedIn picked nothing on this question: no line above the options, and no tile says "From LinkedIn". */
+async function nothingFromLinkedin(page: Page, where: string) {
+  await expect(page.getByText(PICKED_LINE), `${where}: the line about LinkedIn's picks`).toHaveCount(0);
+  await expect(page.getByText(FROM_LINKEDIN, { exact: true }), `${where}: a tile marked From LinkedIn`).toHaveCount(0);
 }
 
 async function noSidewaysScroll(page: Page, where: string) {
@@ -217,10 +241,10 @@ test('continue with email: the brief\'s words, own words for Q1, a specific wish
   // Q1: "Something else" opens a box whose words are required.
   await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('1 of 4', { exact: true })).toBeVisible();
-  await expect(page.getByText('Select up to three answers.', { exact: true })).toBeVisible();
+  await expect(page.getByText(ALL_THAT_APPLY, { exact: true })).toBeVisible();
   // The options are described by that line, so a screen reader says it with them.
   const describedBy = (await page.getByRole('group', { name: 'Who would you like to meet?' }).getAttribute('aria-describedby')) ?? '';
-  await expect(page.locator(`[id="${describedBy.split(' ')[0]}"]`)).toHaveText('Select up to three answers.');
+  await expect(page.locator(`[id="${describedBy.split(' ')[0]}"]`)).toHaveText(ALL_THAT_APPLY);
   // Nothing ticked: Continue reads as unavailable, and pressing it says why rather than doing nothing.
   await expect(button(page, 'Continue')).toHaveAttribute('aria-disabled', 'true');
   await press(page, 'Continue');
@@ -246,14 +270,14 @@ test('continue with email: the brief\'s words, own words for Q1, a specific wish
   await press(page, 'Continue');
 
   await expect(page.getByText('3 of 4', { exact: true })).toBeVisible();
-  await expect(page.getByText('Select all that apply.', { exact: true })).toBeVisible();
+  await expect(page.getByText(ALL_THAT_APPLY, { exact: true })).toBeVisible();
   await tick(page, 'I can give advice and mentoring.', 'I can introduce people to others in my network.');
   await press(page, 'Continue');
 
   await expect(page.getByText('4 of 4', { exact: true })).toBeVisible();
-  await expect(page.getByText('Select up to two answers.', { exact: true })).toBeVisible();
+  await expect(page.getByText(ALL_THAT_APPLY, { exact: true })).toBeVisible();
   // No LinkedIn, so nothing is picked for them.
-  await expect(page.getByText("We picked this from your LinkedIn. Change it if it's wrong.")).toHaveCount(0);
+  await nothingFromLinkedin(page, 'Q4 by email');
   await tick(page, 'I am a founder or business owner.');
   await press(page, 'Continue');
 
@@ -384,7 +408,7 @@ test('continue with LinkedIn: the link from the join form is in the box, the loo
   console.log(`  ✓ LinkedIn ${LOCAL_API ? 'looked up for real (local)' : 'answered without a lookup'}: answered ${answer?.data?.status}, recorded lookup=${connected?.detail?.lookup}; enrich stages ${stages.filter(s => s.startsWith('enrich_')).join(', ') || '(none)'}; finished by hand`);
 });
 
-test('LinkedIn found: details filled in and marked, Q4 picked from the role, and the photo used only when they keep it', async () => {
+test('LinkedIn found: details filled in and marked, Q4 picked from the role and marked, and the photo used only when they keep it', async () => {
   test.setTimeout(240_000);
   const url = `https://www.linkedin.com/in/ob2-found-${Date.now()}`;
   const me = await freshMember('ob2found', url);
@@ -404,9 +428,15 @@ test('LinkedIn found: details filled in and marked, Q4 picked from the role, and
   await tick(page, 'I can give advice and mentoring.');
   await press(page, 'Continue');
 
-  // Screen 6: their LinkedIn role points at one answer, ticked for them to confirm.
-  await expect(page.getByText("We picked this from your LinkedIn. Change it if it's wrong.", { exact: true })).toBeVisible();
-  await expect(tile(page, 'I am a founder or business owner.')).toHaveAttribute('aria-checked', 'true');
+  // Screen 6: their LinkedIn role points at one answer, ticked for them to confirm, and the tile says where it came from.
+  await expect(page.getByText(PICKED_LINE, { exact: true })).toBeVisible();
+  const founder = tile(page, 'I am a founder or business owner.');
+  await expect(founder).toHaveAttribute('aria-checked', 'true');
+  await expect(founder.getByText(FROM_LINKEDIN, { exact: true })).toBeVisible();
+  // The note describes the tile; the tile is still named by its answer alone.
+  await expect(founder).toHaveAccessibleDescription(FROM_LINKEDIN);
+  await expect(page.getByText(FROM_LINKEDIN, { exact: true })).toHaveCount(1);
+  await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(1);
   await press(page, 'Continue');
 
   // Screen 7: filled in from LinkedIn and marked; the name they gave stays theirs.
@@ -447,6 +477,131 @@ test('LinkedIn found: details filled in and marked, Q4 picked from the role, and
   });
 });
 
+test('LinkedIn can suggest several descriptions: each is ticked and marked, and what they change is what is saved', async () => {
+  test.setTimeout(240_000);
+  const url = `https://www.linkedin.com/in/ob2-several-${Date.now()}`;
+  const me = await freshMember('ob2several', url);
+  // Two things in the member's own words: Q4 lists the founder answer first and the investor answer fourth.
+  await seedFoundLookup(me, url, undefined, { currentRole: 'Founder & CEO | Angel investor', headline: 'Building Crumb Bakery' });
+  const page = await openAs(me);
+  await throughWelcome(page);
+  await press(page, 'Continue with LinkedIn');
+  await press(page, 'Continue');
+  await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
+  await tick(page, 'I would like to meet investors.');
+  await press(page, 'Continue');
+  await tick(page, 'I am looking to raise funding.');
+  await press(page, 'Continue');
+  await tick(page, 'I can give advice and mentoring.');
+  await press(page, 'Continue');
+
+  // Both are ticked, the line is above the options, and each ticked tile carries the note: nothing else does.
+  await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+  await expect(page.getByText(PICKED_LINE, { exact: true })).toBeVisible();
+  const founder = tile(page, 'I am a founder or business owner.');
+  const investor = tile(page, 'I am an investor.');
+  await expect(founder).toHaveAttribute('aria-checked', 'true');
+  await expect(investor).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(2);
+  for (const picked of [founder, investor]) {
+    await expect(picked.getByText(FROM_LINKEDIN, { exact: true })).toBeVisible();
+    await expect(picked).toHaveAccessibleDescription(FROM_LINKEDIN);
+  }
+  await expect(page.getByText(FROM_LINKEDIN, { exact: true })).toHaveCount(2);
+  await expect(tile(page, 'I work for a company or organisation.')).not.toHaveAccessibleDescription(FROM_LINKEDIN);
+  await nothingInTheWay(page, 'Q4 with two picked');
+  // The line sits above the first option.
+  const line = (await page.getByText(PICKED_LINE, { exact: true }).boundingBox())!;
+  const first = (await founder.boundingBox())!;
+  expect(line.y + line.height, 'the line is above the options').toBeLessThanOrEqual(first.y);
+  await page.screenshot({ path: `${SHOTS}/${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-q4-several-from-linkedin.png` });
+
+  // Changing one makes the answer theirs: the line and the notes go, and what they ticked is what is kept.
+  await tick(page, 'I am an investor.');
+  await tick(page, 'I work for a company or organisation.');
+  await nothingFromLinkedin(page, 'Q4 after a change');
+  await expect(investor).toHaveAttribute('aria-checked', 'false');
+  await press(page, 'Continue');
+  await expect(heading(page, "Here's how others will see you")).toBeVisible();
+  await expect(page.getByTestId('answer-q4')).toContainText('Founder or business owner · Employee');
+  await press(page, 'Show me my matches');
+  await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/');
+  const row = (await pool.query<{ self_kinds: string[] }>(`SELECT self_kinds FROM users WHERE id = $1`, [me.id])).rows[0];
+  expect(row.self_kinds).toEqual(['self_founder_owner', 'self_employee']);
+});
+
+test('a role LinkedIn only inferred from the rest of the page picks no description, though it still fills in the role', async () => {
+  test.setTimeout(240_000);
+  const url = `https://www.linkedin.com/in/ob2-inferred-${Date.now()}`;
+  const me = await freshMember('ob2inferred', url);
+  await seedFoundLookup(me, url, undefined, { currentRole: 'Founder & CEO | Angel investor', roleSource: 'inferred', headline: null });
+  const page = await openAs(me);
+  await throughWelcome(page);
+  await press(page, 'Continue with LinkedIn');
+  await press(page, 'Continue');
+  await tick(page, 'I would like to meet investors.');
+  await press(page, 'Continue');
+  await tick(page, 'I am looking to raise funding.');
+  await press(page, 'Continue');
+  await tick(page, 'I can give advice and mentoring.');
+  await press(page, 'Continue');
+
+  await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+  await nothingFromLinkedin(page, 'Q4 with an inferred role');
+  await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(0);
+  await tick(page, 'I lead a team or part of an organisation.');
+  await press(page, 'Continue');
+  // The role itself is still offered on screen 7, marked, for them to check.
+  await expect(page.getByLabel('Role', { exact: true })).toHaveValue('Founder & CEO | Angel investor');
+  await expect(page.getByText('From your LinkedIn').first()).toBeVisible();
+});
+
+test('another tab or device follows how they chose on screen 2, as the server recorded it: LinkedIn keeps its suggestions, email and no choice keep none', async () => {
+  test.setTimeout(300_000);
+  const stamp = Date.now();
+  /** Answers to Q1 to Q3 are saved, so a tab opened cold on Q4 may show it; nothing is chosen in the browser. */
+  const toQ4 = async (u: TestUser) => {
+    expect((await apiAs(u, 'PUT', '/onboarding/v2/answers', {
+      lookingToMeet: ['meet_investors'], hopingToFind: ['find_funding'], canOffer: ['offer_investment'], step: 'q4',
+    })).status).toBe(200);
+  };
+  const withLookup = async (suffix: string) => {
+    const url = `https://www.linkedin.com/in/ob2-${suffix}-${stamp}`;
+    const u = await freshMember(`ob2${suffix}`, url);
+    await seedFoundLookup(u, url, undefined, { currentRole: 'Founder & CEO | Angel investor' });
+    await toQ4(u);
+    return { u, url };
+  };
+
+  // Pressed "Continue with LinkedIn" somewhere else: the server recorded it (the lookup is the seeded one, so none starts).
+  const linkedin = await withLookup('tablinkedin');
+  expect((await apiAs(linkedin.u, 'POST', '/onboarding/v2/linkedin', { url: linkedin.url })).status).toBe(200);
+  const onLinkedin = await openAs(linkedin.u, '/onboarding?step=q4');
+  expect(await storedChoice(onLinkedin, linkedin.u), 'this tab chose nothing').toBeNull();
+  await expect(heading(onLinkedin, 'How would you describe yourself?')).toBeVisible({ timeout: 30_000 });
+  await expect(onLinkedin.getByText(PICKED_LINE, { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(tile(onLinkedin, 'I am a founder or business owner.')).toHaveAttribute('aria-checked', 'true');
+  await expect(tile(onLinkedin, 'I am an investor.')).toHaveAttribute('aria-checked', 'true');
+  await expect(onLinkedin.getByText(FROM_LINKEDIN, { exact: true })).toHaveCount(2);
+
+  // Pressed "Continue with email" somewhere else: LinkedIn found them, but they said no.
+  const email = await withLookup('tabemail');
+  expect((await apiAs(email.u, 'POST', '/onboarding/v2/linkedin/skip', {})).status).toBe(200);
+  const onEmail = await openAs(email.u, '/onboarding?step=q4');
+  await expect(heading(onEmail, 'How would you describe yourself?')).toBeVisible({ timeout: 30_000 });
+  await onEmail.waitForTimeout(2500);
+  await nothingFromLinkedin(onEmail, 'Q4 after email, in another tab');
+  await expect(onEmail.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(0);
+
+  // Never chose: nothing is suggested, as before.
+  const neither = await withLookup('tabneither');
+  const onNeither = await openAs(neither.u, '/onboarding?step=q4');
+  await expect(heading(onNeither, 'How would you describe yourself?')).toBeVisible({ timeout: 30_000 });
+  await onNeither.waitForTimeout(2500);
+  await nothingFromLinkedin(onNeither, 'Q4 with no choice at all');
+  await expect(onNeither.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(0);
+});
+
 test('continue with email means no LinkedIn, even for a member LinkedIn already found: no guess, no prefill, no photo, until [Add LinkedIn]', async () => {
   test.setTimeout(240_000);
   // Most members look like this: the link from their join form, looked up when they were approved, "found".
@@ -470,7 +625,7 @@ test('continue with email means no LinkedIn, even for a member LinkedIn already 
 
   // Q4: nothing picked for them, and nothing said about LinkedIn.
   await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
-  await expect(page.getByText("We picked this from your LinkedIn. Change it if it's wrong.")).toHaveCount(0);
+  await nothingFromLinkedin(page, 'Q4 by email, for a member LinkedIn found');
   await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(0);
   await tick(page, 'I am an investor.');
   await press(page, 'Continue');
@@ -482,7 +637,7 @@ test('continue with email means no LinkedIn, even for a member LinkedIn already 
     await expect(page.getByText('From your LinkedIn')).toHaveCount(0);
     await expect(page.getByAltText('The photo on your LinkedIn')).toHaveCount(0);
     await expect(page.getByTestId('linkedin-note')).toHaveCount(0);
-    await expect(page.locator('body')).not.toContainText(/We found this photo on your LinkedIn|We picked this from your LinkedIn/);
+    await expect(page.locator('body')).not.toContainText(/We found this photo on your LinkedIn|We picked these from your LinkedIn/);
     // The email sign-up's own line, as the brief has it.
     await expect(page.getByText('Add your LinkedIn profile so people can learn more about you. You can do this later.', { exact: true })).toBeVisible();
   };
@@ -513,46 +668,165 @@ test('continue with email means no LinkedIn, even for a member LinkedIn already 
   expect(confirms[0].profile).not.toHaveProperty('useLinkedinPhoto');
 });
 
-test('the limits: a fourth person to meet and a third description are refused with a gentle line, and they can still swap', async () => {
-  test.setTimeout(180_000);
-  const me = await freshMember('ob2limit');
+// 25 Oct review (ONB-01): "step 1 should allow multiple choice", and Claus stopped at three and at two. The test that
+// expected a gentle refusal at the fourth now expects none: five on every question, one unticked, and on.
+test('no limits: five answers on every question, one unticked, and Continue goes on with nothing refused or greyed out', async () => {
+  test.setTimeout(240_000);
+  const me = await freshMember('ob2nolimit');
   const page = await openAs(me);
   await throughWelcome(page);
   await press(page, 'Continue with email');
+  const ticked = page.locator('[role="checkbox"][aria-checked="true"]');
+  const confirms: Array<Record<string, unknown>> = [];
+  page.on('request', r => { if (r.method() === 'POST' && r.url().includes('/onboarding/v2/confirm')) confirms.push(r.postDataJSON()); });
 
+  // Q1: five of the eight answers, none of them "Something else", then one unticked.
   await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
-  await tick(page, 'I would like to meet investors.', 'I would like to meet founders and business owners.', 'I would like to meet freelancers and consultants.');
-  await expect(page.getByText("You've chosen three. Untick one to choose another.", { exact: true })).toBeVisible();
-  await expect(tile(page, 'I would like to meet students and people early in their career.')).toBeDisabled();
+  await expect(page.getByText(ALL_THAT_APPLY, { exact: true })).toBeVisible();
+  await tick(
+    page, 'I would like to meet investors.', 'I would like to meet founders and business owners.',
+    'I would like to meet freelancers and consultants.', 'I would like to meet students and people early in their career.',
+    'I would like to meet managers and leaders in companies and organisations.',
+  );
+  await expect(ticked).toHaveCount(5);
+  await nothingInTheWay(page, 'Q1 with five');
   await tick(page, 'I would like to meet investors.');
-  await expect(tile(page, 'I would like to meet students and people early in their career.')).toBeEnabled();
-  await tick(page, 'I would like to meet students and people early in their career.');
-  await expect(tile(page, 'I would like to meet investors.')).toBeDisabled();
+  await expect(ticked).toHaveCount(4);
+  await expect(tile(page, 'I would like to meet investors.')).toHaveAttribute('aria-checked', 'false');
+  await nothingInTheWay(page, 'Q1 with four');
   await press(page, 'Continue');
 
-  await tick(page, 'I am looking for customers or clients.');
+  await expect(heading(page, 'What are you hoping to find?')).toBeVisible();
+  await tick(
+    page, 'I am looking for customers or clients.', 'I am looking to raise funding.', 'I am looking for a cofounder',
+    'I am looking for a new job or my next career step.', 'I am looking for advice, mentoring or to learn from others.',
+  );
+  await expect(ticked).toHaveCount(5);
+  await nothingInTheWay(page, 'Q2 with five');
+  await tick(page, 'I am looking for a cofounder');
+  await expect(ticked).toHaveCount(4);
   await press(page, 'Continue');
-  // "Select all that apply": all seven, no limit line.
-  for (const o of [
-    'I can offer my products or services.', 'I can invest in promising ideas.', 'I am open to joining or building a team.',
+
+  // "Select all that apply": every answer but "Something else", no limit line.
+  await expect(heading(page, 'What can you offer others?')).toBeVisible();
+  await tick(
+    page, 'I can offer my products or services.', 'I can invest in promising ideas.', 'I am open to joining or building a team.',
     'I can give advice and mentoring.', 'I can introduce people to others in my network.',
-    'I am happy to make new friends and have good conversations.',
-  ]) await tick(page, o);
-  await expect(page.getByText(/You've chosen/)).toHaveCount(0);
+    'I am happy to make new friends and have good conversations.', 'I can share what I know from my work.',
+    'I can help people find jobs or refer them where I work.',
+  );
+  await expect(ticked).toHaveCount(8);
+  await nothingInTheWay(page, 'Q3 with all eight');
+  await tick(page, 'I can invest in promising ideas.');
+  await expect(ticked).toHaveCount(7);
   await press(page, 'Continue');
 
-  await tick(page, 'I am an investor.', 'I am a freelancer or consultant.');
-  await expect(page.getByText("You've chosen two. Untick one to choose another.", { exact: true })).toBeVisible();
-  await expect(tile(page, 'I am a student or early in my career.')).toBeDisabled();
-  // The "Something else" box holds 120 characters and counts them.
+  await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+  await tick(
+    page, 'I am a founder or business owner.', 'I work for a company or organisation.', 'I lead a team or part of an organisation.',
+    'I am an investor.', 'I am an advisor or mentor.',
+  );
+  await expect(ticked).toHaveCount(5);
+  await nothingInTheWay(page, 'Q4 with five');
   await tick(page, 'I am an investor.');
+  await expect(ticked).toHaveCount(4);
+  // The "Something else" box holds 120 characters and counts them.
   await tick(page, "Something else. I'd like to say it in my own words.");
   await page.getByLabel('In your own words').fill('x'.repeat(130));
   await expect(page.getByLabel('In your own words')).toHaveValue('x'.repeat(120));
   await expect(page.getByText('120/120', { exact: true })).toBeVisible();
+  await nothingInTheWay(page, 'Q4 with five and the words box');
+  await tick(page, "Something else. I'd like to say it in my own words.");
   await press(page, 'Continue');
+
+  // Screen 7 reads back every answer that was left ticked, in the order they were ticked.
   await expect(heading(page, "Here's how others will see you")).toBeVisible();
-  await expect(page.getByTestId('answer-q1')).toContainText('Founders and business owners · Freelancers and consultants · Students and early career');
+  await expect(page.getByTestId('answer-q1')).toContainText('Founders and business owners · Freelancers and consultants · Students and early career · Managers and leaders');
+  await expect(page.getByTestId('answer-q2')).toContainText('Customers or clients · Raising funding · A new job or career step · Advice, mentoring or learning');
+  await expect(page.getByTestId('answer-q3')).toContainText(
+    'Products or services · Joining or building a team · Advice and mentoring · Introductions · New friends and good conversations · Knowledge from my work · Job referrals',
+  );
+  await expect(page.getByTestId('answer-q4')).toContainText('Founder or business owner · Employee · Manager or leader · Advisor or mentor');
+  await noSidewaysScroll(page, 'screen 7 with every answer');
+  await press(page, 'Show me my matches');
+  await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/');
+
+  // Nothing was refused on the way: the server kept every answer, the old caps (3, 3, 2) gone.
+  expect(confirms).toHaveLength(1);
+  const row = (await pool.query(
+    `SELECT looking_to_meet, hoping_to_find, can_offer, self_kinds, self_other, onboarding_status FROM users WHERE id = $1`, [me.id],
+  )).rows[0];
+  expect(row).toEqual({
+    looking_to_meet: ['meet_founders_owners', 'meet_freelancers_consultants', 'meet_students_early_career', 'meet_managers_leaders'],
+    hoping_to_find: ['find_customers', 'find_funding', 'find_new_role', 'find_advice_learning'],
+    can_offer: [
+      'offer_products_services', 'offer_join_build_team', 'offer_advice_mentoring', 'offer_introductions',
+      'offer_friends_conversations', 'offer_knowledge', 'offer_referrals',
+    ],
+    self_kinds: ['self_founder_owner', 'self_employee', 'self_manager_leader', 'self_advisor_experienced'],
+    self_other: null,
+    onboarding_status: 'completed',
+  });
+});
+
+// 25 Oct review (ONB-02): four employees could not find themselves on any question, and went to "Something else".
+test('an employee answers every question without "Something else", and the searches they asked for are made', async () => {
+  test.setTimeout(240_000);
+  const me = await freshMember('ob2employee');
+  const page = await openAs(me);
+  await throughWelcome(page);
+  await press(page, 'Continue with email');
+  const somethingElse = () => tile(page, "Something else. I'd like to say it in my own words.");
+
+  // A product manager at a large company: who they would meet, what they hope for, what they can give, who they are.
+  await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
+  await tick(page, 'I would like to meet managers and leaders in companies and organisations.', 'I would like to meet people who are hiring.');
+  await expect(somethingElse()).toHaveAttribute('aria-checked', 'false');
+  await press(page, 'Continue');
+  await expect(heading(page, 'What are you hoping to find?')).toBeVisible();
+  await tick(page, 'I am looking for a new job or my next career step.', 'I am looking for advice, mentoring or to learn from others.');
+  await expect(somethingElse()).toHaveAttribute('aria-checked', 'false');
+  await press(page, 'Continue');
+  await expect(heading(page, 'What can you offer others?')).toBeVisible();
+  await tick(page, 'I can share what I know from my work.', 'I can help people find jobs or refer them where I work.');
+  await expect(somethingElse()).toHaveAttribute('aria-checked', 'false');
+  await press(page, 'Continue');
+  await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+  // For someone who works for a company, the answer for them comes second, straight after the founder's.
+  const options = await page.locator('[role="checkbox"]').evaluateAll(list => list.map(el => (el.textContent ?? '').trim()));
+  expect(options.slice(0, 3)).toEqual(['I am a founder or business owner.', 'I work for a company or organisation.', 'I lead a team or part of an organisation.']);
+  await tick(page, 'I work for a company or organisation.');
+  await expect(somethingElse()).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByLabel('In your own words')).toHaveCount(0);
+  await press(page, 'Continue');
+
+  await expect(heading(page, "Here's how others will see you")).toBeVisible();
+  await expect(page.getByTestId('answer-q1')).toContainText('Managers and leaders · People who are hiring');
+  await expect(page.getByTestId('answer-q2')).toContainText('A new job or career step · Advice, mentoring or learning');
+  await expect(page.getByTestId('answer-q3')).toContainText('Knowledge from my work · Job referrals');
+  await expect(page.getByTestId('answer-q4')).toContainText('Employee');
+  for (const q of ['q1', 'q2', 'q3', 'q4']) await expect(page.getByTestId(`answer-${q}`)).not.toContainText('Something else');
+  await page.getByLabel('Role', { exact: true }).fill('Product manager');
+  await page.getByLabel('Company', { exact: true }).fill('Crumb Logistics');
+  await press(page, 'Show me my matches');
+  await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/');
+
+  const row = (await pool.query(
+    `SELECT looking_to_meet, meet_other, hoping_to_find, find_other, can_offer, offer_other, self_kinds, self_other, onboarding_status
+       FROM users WHERE id = $1`, [me.id],
+  )).rows[0];
+  expect(row).toEqual({
+    looking_to_meet: ['meet_managers_leaders', 'meet_hiring'], meet_other: null,
+    hoping_to_find: ['find_new_role', 'find_advice_learning'], find_other: null,
+    can_offer: ['offer_knowledge', 'offer_referrals'], offer_other: null,
+    self_kinds: ['self_employee'], self_other: null,
+    onboarding_status: 'completed',
+  });
+  // The people they asked to meet are searched for, one search each.
+  const searches = (await pool.query<{ label: string; status: string }>(
+    `SELECT label, status FROM matching_agents WHERE user_id = $1 ORDER BY created_at`, [me.id],
+  )).rows;
+  expect(searches.filter(a => a.status === 'active').map(a => a.label).sort()).toEqual(['Managers & leaders', 'People who are hiring']);
 });
 
 test('edit mode: a finished member changes one answer, saves, and is back where they came from', async () => {
@@ -1001,11 +1275,12 @@ test('the whole flow works on a 360px phone: every button reachable and at least
   }
   await press(page, 'Continue with email');
 
+  // The last answer of each list, before "Something else": the longest scroll to reach it.
   const steps: [string, string][] = [
-    ['Q1', 'I would like to meet specialists, such as developers, designers or marketers.'],
-    ['Q2', 'I would like to make new friends and have good conversations.'],
-    ['Q3', 'I am happy to make new friends and have good conversations.'],
-    ['Q4', 'I am a specialist, such as a developer, designer or marketer.'],
+    ['Q1', 'I would like to meet people who are hiring.'],
+    ['Q2', 'I am looking for partners or collaborators.'],
+    ['Q3', 'I can help people find jobs or refer them where I work.'],
+    ['Q4', 'I am a student or early in my career.'],
   ];
   for (const [where, label] of steps) {
     await expect(tile(page, label)).toBeVisible({ timeout: 20_000 });
@@ -1036,22 +1311,42 @@ test('the whole flow works on a 360px phone: every button reachable and at least
   await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/');
 });
 
-test('with the phone keyboard up (a short window), the words box and Continue are both on screen', async () => {
-  test.setTimeout(120_000);
-  const me = await freshMember('ob2kbd');
-  const page = await openAs(me, '/onboarding', { width: 390, height: 420 });
-  await throughWelcome(page);
-  await press(page, 'Continue with email');
-  await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
-  const other = tile(page, "Something else. I'd like to say it in my own words.");
-  await other.scrollIntoViewIfNeeded();
-  await tapReachable(page, other, '"Something else"');
-  const own = page.getByLabel('In your own words');
-  await own.focus();
-  await own.fill('people who restore old boats');
-  await own.scrollIntoViewIfNeeded();
-  await expectReachable(page, own, 'the words box');
-  await expectReachable(page, button(page, 'Continue'), 'Continue');
-  await press(page, 'Continue');
-  await expect(heading(page, 'What are you hoping to find?')).toBeVisible();
-});
+// With the phone keyboard up the window is short. The lists are longer now (nine answers), so "Something else" is
+// further down: the words box and Continue must both still be on screen, at 360 as well as 390.
+for (const width of [360, 390]) {
+  test(`with the phone keyboard up (a ${width}px window 420px tall), the words box and Continue are both on screen, on the first question and the last`, async () => {
+    test.setTimeout(180_000);
+    const me = await freshMember(`ob2kbd${width}`);
+    const page = await openAs(me, '/onboarding', { width, height: 420 });
+    await throughWelcome(page);
+    await press(page, 'Continue with email');
+    await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
+
+    /** "Something else" ticked, the box focused and filled, and the box and Continue both whole inside the window. */
+    const typeInWords = async (words: string) => {
+      const other = tile(page, "Something else. I'd like to say it in my own words.");
+      await other.scrollIntoViewIfNeeded();
+      await tapReachable(page, other, '"Something else"');
+      const own = page.getByLabel('In your own words');
+      await own.focus();
+      await own.fill(words);
+      await own.scrollIntoViewIfNeeded();
+      await expectReachable(page, own, 'the words box');
+      await expectReachable(page, button(page, 'Continue'), 'Continue');
+      await noSidewaysScroll(page, 'a short window');
+    };
+
+    await typeInWords('people who restore old boats');
+    await press(page, 'Continue');
+    await expect(heading(page, 'What are you hoping to find?')).toBeVisible();
+    await tick(page, 'I am looking to raise funding.');
+    await press(page, 'Continue');
+    await expect(heading(page, 'What can you offer others?')).toBeVisible();
+    await tick(page, 'I can give advice and mentoring.');
+    await press(page, 'Continue');
+    await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+    await typeInWords('a lighthouse keeper');
+    await press(page, 'Continue');
+    await expect(heading(page, "Here's how others will see you")).toBeVisible();
+  });
+}
