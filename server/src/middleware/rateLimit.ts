@@ -162,6 +162,52 @@ export const inviteLimiter = rateLimit({
   },
 });
 
+// Group chats (26 Oct 2026). Every limit is per signed-in member (the routes sign in first). Reads are
+// generous: a busy group of 50 refetches the thread and the list on every message. Messages are held to
+// 30 a minute, faster than anyone types. Read marks, leaving, adding and removing share a write allowance.
+// Starting a group has a small hourly one, and only a group that was started uses it: a refusal (too few
+// people, an event not yet over) started nothing.
+export const groupReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('group-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const groupMessageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('group-message'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You are sending messages very quickly. Wait a moment, then try again.' } },
+});
+
+export const groupWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('group-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const groupCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('group-create'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have started a lot of group chats this hour. Try again later.' } },
+});
+
 /**
  * Onboarding chatbot limiter — bounds LLM cost/abuse on the chat + confirm
  * endpoints. Keyed per authenticated user (these routes require auth). 30

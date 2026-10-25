@@ -5,9 +5,30 @@
 //   1. self → blocked → admin override → existing-thread grandfather → mutual → no_encounter
 //
 // The test file runs against the compiled TypeScript source, not a live DB.
+//
+// 26 Oct 2026 (X2): two people who both took part in the same completed event count as having met, so
+// people who were in a video meeting together (which makes no match, so no encounter row) can write to
+// each other one to one. The last block below calls canMessage against a stand-in database.
+
+const mockQuery = jest.fn();
+jest.mock('../../../db', () => ({
+  query: (...a: unknown[]) => mockQuery(...a),
+  transaction: jest.fn(),
+  __esModule: true,
+}));
+jest.mock('../../../config/logger', () => ({
+  default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  __esModule: true,
+}));
+const mockAreBlocked = jest.fn();
+jest.mock('../../../services/block/block.service', () => ({
+  areBlocked: (...a: unknown[]) => mockAreBlocked(...a),
+  __esModule: true,
+}));
 
 import * as nodeFs from 'fs';
 import * as nodePath from 'path';
+import { canMessage } from '../../../services/dm/dm.service';
 
 function readServer(rel: string): string {
   return nodeFs.readFileSync(nodePath.join(__dirname, '../../../', rel), 'utf8');
@@ -154,5 +175,81 @@ describe('canMessage() — existing invariants still hold', () => {
     // self check fires before any DB call
     const firstQueryIdx = fn.indexOf('await ');
     expect(selfReasonIdx).toBeLessThan(firstQueryIdx);
+  });
+});
+
+// ─── X2 (26 Oct 2026): taking part in the same completed event counts as having met ─────────────────────
+
+describe('canMessage() — people who took part in the same completed event', () => {
+  const ME = 'a0000000-0000-4000-8000-000000000001';
+  const THEM = 'b0000000-0000-4000-8000-000000000002';
+
+  /** canMessage's body, ending at the first closing brace on a line of its own, whatever the line ending. */
+  const body = (() => {
+    const start = src.indexOf('export async function canMessage(');
+    const end = src.slice(start).search(/\r?\n\}\r?\n/);
+    return src.slice(start, start + end);
+  })();
+  const flat = (sql: unknown) => String(sql).replace(/\s+/g, ' ');
+  const TOGETHER = /FROM session_participants a JOIN session_participants b ON b\.session_id = a\.session_id/;
+
+  /** The stand-in database: the user's role, whether a thread has messages, the encounter row, a shared event. */
+  function db(opts: { role?: string; messages?: number; encounter?: { mutual_meet_again: boolean } | null; together?: boolean }) {
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = flat(sql);
+      if (/FROM users WHERE id/.test(text)) return { rows: [{ role: opts.role ?? 'member' }] };
+      if (/FROM dm_conversations c JOIN direct_messages/.test(text)) return { rows: [{ msg_count: String(opts.messages ?? 0) }] };
+      if (/FROM encounter_history/.test(text)) return { rows: opts.encounter ? [opts.encounter] : [] };
+      if (TOGETHER.test(text)) return { rows: opts.together ? [{ '?column?': 1 }] : [] };
+      return { rows: [] };
+    });
+  }
+
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockAreBlocked.mockReset();
+    mockAreBlocked.mockResolvedValue(false);
+  });
+
+  it('two people who both joined the same completed event, with no encounter row, may write to each other', async () => {
+    db({ encounter: null, together: true });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: true });
+  });
+
+  it('asks whether both joined (not only registered), neither was removed, and the event is completed', async () => {
+    db({ encounter: null, together: true });
+    await canMessage(ME, THEM);
+    const call = mockQuery.mock.calls.find((c) => TOGETHER.test(flat(c[0])))!;
+    const sql = flat(call[0]);
+    expect(sql).toMatch(/a\.user_id = \$1 AND b\.user_id = \$2/);
+    expect(sql).toMatch(/a\.joined_at IS NOT NULL AND b\.joined_at IS NOT NULL/);
+    expect(sql).toMatch(/a\.status <> 'removed' AND b\.status <> 'removed'/);
+    expect(sql).toMatch(/JOIN sessions s ON s\.id = a\.session_id/);
+    expect(sql).toMatch(/s\.status = 'completed'/);
+    expect(call[1]).toEqual([ME, THEM]);
+  });
+
+  it('without a shared completed event (one of them only registered, say) the answer is still no_encounter', async () => {
+    db({ encounter: null, together: false });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'no_encounter' });
+  });
+
+  it('an encounter where one of them said no to meeting again still wins: attending the event does not override it', async () => {
+    db({ encounter: { mutual_meet_again: false }, together: true });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'not_mutual' });
+    expect(mockQuery.mock.calls.some((c) => TOGETHER.test(flat(c[0])))).toBe(false);
+  });
+
+  it('a block still wins over everything', async () => {
+    mockAreBlocked.mockResolvedValue(true);
+    db({ encounter: null, together: true });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'blocked' });
+  });
+
+  it('is asked only once the encounter row is known to be missing: after reading it, before answering no_encounter', () => {
+    const together = body.search(/FROM session_participants a/);
+    expect(together).toBeGreaterThan(body.indexOf('FROM encounter_history'));
+    expect(together).toBeGreaterThan(body.search(/encounterResult\.rows\.length === 0/));
+    expect(together).toBeLessThan(body.search(/reason:\s*['"]no_encounter['"]/));
   });
 });

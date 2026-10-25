@@ -441,14 +441,18 @@ export async function fanoutDmConversation(
   }
 }
 
-// ─── Group fanout ───────────────────────────────────────────────────────────
+// ─── Group chat fanout (26 Oct 2026) ────────────────────────────────────────
 //
-// Emits the group:${groupId} entity to every dm_group_members row so each
-// member's inbox + thread surfaces refetch.
+// A group chat changed: it was started, a message was sent, people were added, someone left or was
+// removed (and maybe a new admin took over). Each member as they are after the change is sent, in an emit
+// of their own, the group's tag (dm-group:<id>: its thread, details and members) and their own Messages
+// tag (user:<id>:dms: the list and its unread counts). `alsoTell` names the people the change took out of
+// the group, who are no longer members but whose Messages must drop it. Until 26 Oct this sent an untyped
+// `group:<id>` that no query listened for.
 
 export async function fanoutGroupEntities(
   groupId: string,
-  extraEntities: string[] = [],
+  alsoTell: string[] = [],
 ): Promise<void> {
   const io = getRealtimeIo();
   if (!io) return;
@@ -458,13 +462,23 @@ export async function fanoutGroupEntities(
       `SELECT user_id FROM dm_group_members WHERE group_id = $1`,
       [groupId],
     );
-    await emitEntities(
-      io,
-      result.rows.map(r => r.user_id),
-      [`group:${groupId}`, ...extraEntities],
-    );
+    const recipients = new Set([...result.rows.map(r => r.user_id), ...alsoTell].filter(Boolean));
+    await Promise.all([...recipients].map(userId =>
+      emitEntities(io, [userId], [E.dmGroup(groupId), E.userDms(userId)]),
+    ));
   } catch (err) {
     logger.warn({ err, groupId }, 'fanoutGroupEntities: failed to fan out');
+  }
+}
+
+// One member marked a group read: only their own tabs and devices redraw its unread count.
+export async function fanoutGroupForUser(groupId: string, userId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    await emitEntities(io, [userId], [E.dmGroup(groupId), E.userDms(userId)]);
+  } catch (err) {
+    logger.warn({ err, groupId, userId }, 'fanoutGroupForUser: failed to fan out');
   }
 }
 

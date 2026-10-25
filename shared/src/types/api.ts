@@ -62,6 +62,12 @@ export const ErrorCodes = {
   POD_MEMBER_NOT_FOUND: 'POD_MEMBER_NOT_FOUND',
   POD_UNAUTHORIZED: 'POD_UNAUTHORIZED',
 
+  // Group chat errors (26 Oct 2026)
+  GROUP_NOT_FOUND: 'GROUP_NOT_FOUND',
+  GROUP_MEMBER_NOT_FOUND: 'GROUP_MEMBER_NOT_FOUND',
+  GROUP_FULL: 'GROUP_FULL',            // 409; a group chat holds GROUP_CHAT_MAX_MEMBERS people, its creator included
+  GROUP_TOO_SMALL: 'GROUP_TOO_SMALL',  // 400; a group chat starts with at least GROUP_CHAT_MIN_MEMBERS people
+
   // Session errors
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   SESSION_FULL: 'SESSION_FULL',

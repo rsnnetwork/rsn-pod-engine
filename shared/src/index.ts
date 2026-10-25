@@ -10,6 +10,12 @@ export * from './types/subscription';
 export * from './types/video';
 export * from './types/events';
 export * from './types/api';
+// Group chats (26 Oct 2026). The two sizes are real VALUES the client shows ("12 of 50"), so each has its
+// own statically analysable named export for Rollup's CJS interop, as OPENINGS below explains.
+export * from './types/group-chat';
+import { GROUP_CHAT_MAX_MEMBERS as _GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS as _GROUP_CHAT_MIN_MEMBERS } from './types/group-chat';
+export const GROUP_CHAT_MAX_MEMBERS = _GROUP_CHAT_MAX_MEMBERS;
+export const GROUP_CHAT_MIN_MEMBERS = _GROUP_CHAT_MIN_MEMBERS;
 export * from './types/onboarding';
 // Explicit named re-export alongside the `export *` above: bundlers that do
 // static CJS/ESM interop (Rollup/Vite) can't see through the `__exportStar`

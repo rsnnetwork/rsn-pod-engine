@@ -138,7 +138,8 @@ function normalizePair(userA: string, userB: string): [string, string] {
  *                          (forward-only: don't break in-progress conversations)
  *   5. mutual gate       → {allowed:true} if encounter_history.mutual_meet_again = TRUE
  *                          else {allowed:false, reason:'not_mutual'}
- *   6. no encounter row  → {allowed:false, reason:'no_encounter'}
+ *   6. no encounter row  → {allowed:true} if both took part in the same completed event (X2, 26 Oct 2026)
+ *                          else {allowed:false, reason:'no_encounter'}
  */
 export async function canMessage(
   userA: string,
@@ -189,6 +190,26 @@ export async function canMessage(
     [orderedA, orderedB],
   );
   if (encounterResult.rows.length === 0) {
+    // Step 6 (X2, 26 Oct 2026) — taking part in the same completed event counts as having met. A video
+    // meeting makes no match, so it writes no encounter row, and its people could never write to each
+    // other afterwards. Took part = joined (not only registered) and not removed, the same rule as group
+    // chats and "message everyone". Only asked when there is no encounter row: where two people were
+    // matched and one said they did not want to meet again, attending the same event does not override it.
+    const together = await query(
+      `SELECT 1
+         FROM session_participants a
+         JOIN session_participants b ON b.session_id = a.session_id
+         JOIN sessions s ON s.id = a.session_id
+        WHERE a.user_id = $1 AND b.user_id = $2
+          AND a.joined_at IS NOT NULL AND b.joined_at IS NOT NULL
+          AND a.status <> 'removed' AND b.status <> 'removed'
+          AND s.status = 'completed'
+        LIMIT 1`,
+      [userA, userB],
+    );
+    if (together.rows.length > 0) {
+      return { allowed: true };
+    }
     return { allowed: false, reason: 'no_encounter' };
   }
   if (encounterResult.rows[0].mutual_meet_again) {
