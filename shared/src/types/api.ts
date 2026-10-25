@@ -10,7 +10,12 @@ export interface ApiResponse<T = unknown> {
 export interface ApiError {
   code: string;
   message: string;
-  details?: Record<string, string[]>;
+  /**
+   * Validation failures send `{ field: [messages] }`. A conflict says what it clashed with, so the
+   * client can show it: `{ existingId: [id] }` (an entity name), `{ status: 'declined' }` (a meeting
+   * request already answered), `{ scheduling: {...} }` (a meeting time no longer free for both).
+   */
+  details?: Record<string, unknown>;
 }
 
 export interface PaginationMeta {
@@ -89,6 +94,10 @@ export const ErrorCodes = {
   // Entity errors (an organisation members create: a company, a fund…)
   ENTITY_NOT_FOUND: 'ENTITY_NOT_FOUND',    // missing or archived; the two read the same
   ENTITY_NAME_TAKEN: 'ENTITY_NAME_TAKEN',  // 409; details.existingId[0] is the active entity with that name
+
+  // Meeting request and meeting errors
+  MEETING_REQUEST_ALREADY_ANSWERED: 'MEETING_REQUEST_ALREADY_ANSWERED',  // 409; details.status is the answer it already has
+  MEETING_TIME_NOT_SHARED: 'MEETING_TIME_NOT_SHARED',  // 409; details.scheduling is where the two people's times stand now
 
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',

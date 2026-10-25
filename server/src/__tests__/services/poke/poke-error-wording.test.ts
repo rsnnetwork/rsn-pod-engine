@@ -3,7 +3,9 @@
 // which says "Meet" and "meeting request". The refusals thrown on the send,
 // accept and decline paths are shown to the member as a toast, so they speak
 // the same words, with no internal id and no internal name in them. Statuses
-// and codes are not part of the wording and must not move.
+// and codes are not part of the wording and must not move, except where the
+// product changed them: since 26 Oct a request answered twice the same way is
+// not refused, and the other answer is a 409 MEETING_REQUEST_ALREADY_ANSWERED.
 const mockQuery = jest.fn();
 const mockAreBlocked = jest.fn();
 
@@ -121,12 +123,19 @@ describe('acceptPoke refusals', () => {
     });
   });
 
-  it.each(['accepted', 'declined'] as const)('says a request that is already %s has been answered', async (status) => {
-    requestIs(status);
+  // 26 Oct 2026: answering twice is safe. Accepting an accepted request is done already and
+  // answers with it (200); only the other answer is refused, as a 409 that says what was chosen.
+  it('accepting a request that is already accepted is not refused: it answers with the request', async () => {
+    requestIs('accepted');
+    await expect(acceptPoke(POKE_ID, RECIPIENT)).resolves.toMatchObject({ poke: { id: POKE_ID, status: 'accepted' } });
+  });
+
+  it('says a request that was declined was declined, in the member\'s own words', async () => {
+    requestIs('declined');
     await expectRefusal(acceptPoke(POKE_ID, RECIPIENT), {
-      statusCode: 400,
-      code: 'VALIDATION_ERROR',
-      message: `This meeting request has already been ${status}.`,
+      statusCode: 409,
+      code: 'MEETING_REQUEST_ALREADY_ANSWERED',
+      message: 'You already declined this request.',
     });
   });
 });
@@ -150,12 +159,17 @@ describe('declinePoke refusals', () => {
     });
   });
 
-  it.each(['accepted', 'declined'] as const)('says a request that is already %s has been answered', async (status) => {
-    requestIs(status);
+  it('declining a request that is already declined is not refused: it answers with the request', async () => {
+    requestIs('declined');
+    await expect(declinePoke(POKE_ID, RECIPIENT)).resolves.toMatchObject({ id: POKE_ID, status: 'declined' });
+  });
+
+  it('says a request that was accepted was accepted, in the member\'s own words', async () => {
+    requestIs('accepted');
     await expectRefusal(declinePoke(POKE_ID, RECIPIENT), {
-      statusCode: 400,
-      code: 'VALIDATION_ERROR',
-      message: `This meeting request has already been ${status}.`,
+      statusCode: 409,
+      code: 'MEETING_REQUEST_ALREADY_ANSWERED',
+      message: 'You already accepted this request.',
     });
   });
 });

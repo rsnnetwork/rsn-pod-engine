@@ -92,6 +92,11 @@ const callRequestBodySchema = z.object({
 const availabilityBodySchema = z.object({
   // 30-min slots over a week are far more than the old 7×3 day-parts.
   windows: z.array(z.string().max(30)).max(200),
+  // 25 Oct 2026: a save that leaves exactly one shared time books it, with this
+  // length and kind. Both optional: production's scheduler sends only `windows`,
+  // and then the meeting is 30 minutes of video. Same bounds as confirm.
+  durationMin: z.number().int().min(5).max(240).optional(),
+  type: z.enum(['audio', 'video']).optional(),
 });
 
 const confirmBodySchema = z.object({
@@ -126,6 +131,7 @@ router.put(
     try {
       const result = await meetingService.setAvailability(
         req.params.id, req.user!.userId, req.body.windows,
+        { durationMin: req.body.durationMin, type: req.body.type },
       );
       const response: ApiResponse = { success: true, data: result };
       res.json(response);

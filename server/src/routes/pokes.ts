@@ -41,10 +41,29 @@ router.post(
   }
 );
 
-// POST /pokes/:id/accept — accept a poke (recipient only)
+// A request id that is not a UUID used to reach SQL and come back as a Postgres 500.
+const requestParams = z.object({ id: z.string().uuid('Not a request id') });
+
+/**
+ * Everyone whose screens show a request just answered: both people's request
+ * lists (user, invites) and both bells. 25 Oct 2026: the bells were left out, so
+ * the recipient's bell row for the request (now marked read, now Accepted or
+ * Declined) only caught up on the next poll, and the other tabs never did.
+ */
+function tellBothAboutAnswer(senderId: string, recipientId: string): void {
+  for (const userId of [senderId, recipientId]) {
+    fanoutUserEntity(userId, [E.userInvites(userId), E.userNotifications(userId)]).catch(() => {});
+  }
+}
+
+// POST /pokes/:id/accept — accept a poke (recipient only). Accepting a request
+// that is already accepted is a 200 with the same conversation (a stale bell or
+// card lands in the thread); accepting a declined one is the service's 409
+// MEETING_REQUEST_ALREADY_ANSWERED, whose details.status says which answer it has.
 router.post(
   '/:id/accept',
   authenticate,
+  validate(requestParams, 'params'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await pokeService.acceptPoke(req.params.id, req.user!.userId);
@@ -55,10 +74,9 @@ router.post(
       // 22 Sep 2026: this emitted only E.user(...), but both request queries
       // declare meta.entities = [E.userInvites(...)], so neither side's list
       // actually refetched — the answered request sat there until a reload.
-      fanoutUserEntity(result.poke.senderId, [E.userInvites(result.poke.senderId)]).catch(() => {});
       // The accepter's own other tabs need the same ping so their
       // pending-request inbox decrements.
-      fanoutUserEntity(req.user!.userId, [E.userInvites(req.user!.userId)]).catch(() => {});
+      tellBothAboutAnswer(result.poke.senderId, req.user!.userId);
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {
@@ -67,17 +85,19 @@ router.post(
   }
 );
 
-// POST /pokes/:id/decline — decline a poke (recipient only)
+// POST /pokes/:id/decline — decline a poke (recipient only). Declining twice is a
+// 200; declining an accepted request is the service's 409, as for accept.
 router.post(
   '/:id/decline',
   authenticate,
+  validate(requestParams, 'params'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await pokeService.declinePoke(req.params.id, req.user!.userId);
       // Phase May-19 realtime — same fanout shape as accept so the
       // sender's badge updates and the decliner's other tabs flip too.
-      fanoutUserEntity(result.senderId, [E.userInvites(result.senderId)]).catch(() => {});
-      fanoutUserEntity(req.user!.userId, [E.userInvites(req.user!.userId)]).catch(() => {});
+      // Tags only: the sender is still never TOLD of a decline (no bell, no email).
+      tellBothAboutAnswer(result.senderId, req.user!.userId);
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {
