@@ -165,6 +165,42 @@ describe("createSession from production's old form (no format)", () => {
     expect(insert.config).toEqual({ ...DEFAULT_SESSION_CONFIG, eventType: 'speed_networking' });
   });
 
+  // Fix round 1 (26 Oct review): the two settings only the new forms send are checked on this path too.
+  it('refuses a round length in minutes below the limit, at the field, and writes nothing', async () => {
+    mockGetPodById.mockResolvedValue(pod(PodType.SPEED_NETWORKING));
+    answerWith();
+    await expect(createSession(DIRECTOR, { ...base, config: { roundMinutes: 0.001 } })).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'VALIDATION_ERROR',
+      message: 'Round length must be between 1 and 60 minutes.',
+      details: { roundMinutes: ['Round length must be between 1 and 60 minutes.'] },
+    });
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('refuses a 24-hour meeting from the old body, at the field, and writes nothing', async () => {
+    mockGetPodById.mockResolvedValue(pod(PodType.REASON));
+    answerWith();
+    await expect(createSession(DIRECTOR, { ...base, config: { eventType: 'video_meeting', durationMinutes: 1440 } }))
+      .rejects.toMatchObject({
+        statusCode: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'Length must be between 15 and 240 minutes.',
+        details: { durationMinutes: ['Length must be between 15 and 240 minutes.'] },
+      });
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('never stores a meeting length on a speed-networking event (it is not one of its settings)', async () => {
+    mockGetPodById.mockResolvedValue(pod(PodType.SPEED_NETWORKING));
+    answerWith();
+    await createSession(DIRECTOR, { ...base, config: { durationMinutes: 1440 } });
+    const insert = sessionInsert();
+    expect(insert.format).toBe('speed_networking');
+    expect(insert.config).not.toHaveProperty('durationMinutes');
+    expect(insert.config).toEqual({ ...DEFAULT_SESSION_CONFIG, eventType: 'speed_networking' });
+  });
+
   it('runs an event with no format and no config as speed networking with the defaults', async () => {
     mockGetPodById.mockResolvedValue(pod(PodType.SPEED_NETWORKING));
     answerWith();
@@ -219,6 +255,13 @@ describe('updateSession', () => {
     await updateSession(SESSION_ID, DIRECTOR, { format: 'speed_networking', title: 'Renamed' });
     expect(sessionUpdate()).toBeDefined();
     expect(mockGetPodById).not.toHaveBeenCalled();
+  });
+
+  it('refuses a meeting length beyond the limit sent without a format, and changes nothing', async () => {
+    answerWith(scheduledMeeting);
+    await expect(updateSession(SESSION_ID, DIRECTOR, { config: { durationMinutes: 1440 } }))
+      .rejects.toMatchObject({ statusCode: 400, details: { durationMinutes: ['Length must be between 15 and 240 minutes.'] } });
+    expect(sessionUpdate()).toBeUndefined();
   });
 
   it('refuses an explicit meeting capacity beyond the meeting’s limit', async () => {

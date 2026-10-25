@@ -65,9 +65,10 @@ export const createSessionSchema = z.object({
     // Phase 2 (matching) — months a pair stays un-rematchable under 'cooldown'.
     cooldownMonths: z.coerce.number().int().min(1).max(60).optional(),
     // 26 Oct 2026 — the event forms' own fields: a meeting's length, and the round length in minutes (stored
-    // as roundDurationSeconds). Each format's limits are checked by the service against the shared definition.
-    durationMinutes: z.number().int().positive().max(1440).optional(),
-    roundMinutes: z.number().positive().max(60).optional(),
+    // as roundDurationSeconds). Only their shape is checked here: their limits are the shared definition's,
+    // checked by the service on every path (old body included), so a refusal reads in the definition's words.
+    durationMinutes: z.number().int().optional(),
+    roundMinutes: z.number().finite().optional(),
   }).optional(),
 });
 
@@ -99,9 +100,10 @@ export const updateSessionSchema = z.object({
     // Phase 2 (matching) — months a pair stays un-rematchable under 'cooldown'.
     cooldownMonths: z.coerce.number().int().min(1).max(60).optional(),
     // 26 Oct 2026 — the event forms' own fields: a meeting's length, and the round length in minutes (stored
-    // as roundDurationSeconds). Each format's limits are checked by the service against the shared definition.
-    durationMinutes: z.number().int().positive().max(1440).optional(),
-    roundMinutes: z.number().positive().max(60).optional(),
+    // as roundDurationSeconds). Only their shape is checked here: their limits are the shared definition's,
+    // checked by the service on every path (old body included), so a refusal reads in the definition's words.
+    durationMinutes: z.number().int().optional(),
+    roundMinutes: z.number().finite().optional(),
   }).optional(),
 });
 

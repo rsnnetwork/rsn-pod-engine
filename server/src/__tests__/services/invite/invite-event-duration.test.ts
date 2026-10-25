@@ -47,7 +47,6 @@ import { InviteType, DEFAULT_SESSION_CONFIG } from '@rsn/shared';
 import { createInvite } from '../../../services/invite/invite.service';
 import inviteRoutes from '../../../routes/invites';
 import { errorHandler, notFoundHandler } from '../../../middleware/errorHandler';
-import { computeSessionDurationMinutes } from '../../../services/calendar/calendar.service';
 
 const SESSION_ID = '3a7c1f52-5b9e-4f0a-8e0d-2c4b6d8f1a22';
 const HOST = 'user-host';
@@ -109,10 +108,11 @@ describe('the first invite email', () => {
     expect(sentDuration()).toBe(90);
   });
 
-  it('keeps the speed-networking length it always had', async () => {
+  it('keeps the speed-networking length it always had: 53 minutes for a new event', async () => {
     world(SPEED_ROW);
     await createInvite(HOST, { type: InviteType.SESSION, sessionId: SESSION_ID, inviteeEmail: 'guest@example.com' }, 'admin');
-    expect(sentDuration()).toBe(computeSessionDurationMinutes(SPEED_ROW.config));
+    // 5×480 + 5×30 + 4×30 + 480 (closing lobby) = 3150 s, rounded up.
+    expect(sentDuration()).toBe(53);
   });
 });
 
@@ -134,6 +134,7 @@ describe('the reminder emails', () => {
   it('a speed-networking reminder is as long as its first invite (the rating windows and closing lobby count)', async () => {
     world(SPEED_ROW);
     await request(app()).post('/invites/inv-1/remind').set('Authorization', `Bearer ${token}`);
-    expect(sentDuration()).toBe(computeSessionDurationMinutes(SPEED_ROW.config));
+    // 53 minutes, as the first invite; the reminder's old formula left out ratings and the closing lobby (42).
+    expect(sentDuration()).toBe(53);
   });
 });

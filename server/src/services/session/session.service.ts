@@ -6,7 +6,7 @@ import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
   Session, SessionParticipant, SessionConfig, SessionStatus,
-  ParticipantStatus, CreateSessionInput, UpdateSessionInput,
+  ParticipantStatus, CreateSessionInput, UpdateSessionInput, SessionConfigInput, EventInputIssue,
   UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType,
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
   liveKindOf, eventDurationMinutes,
@@ -40,13 +40,34 @@ function assertFormatAllowed(podType: PodType, format: EventFormat): void {
   if (refusal) throw new AppError(400, ErrorCodes.EVENT_FORMAT_NOT_ALLOWED, refusal, { format: [refusal] });
 }
 
-/** Refuses settings outside the format's limits: 400 VALIDATION_ERROR, each problem at its field. */
-function assertEventInput(format: EventFormat, storedConfig: Record<string, unknown>): void {
-  const issues = checkEventInput(format, valuesFromConfig(format, storedConfig));
+/** 400 VALIDATION_ERROR when there is anything to say, each problem at its field. */
+function throwIfIssues(issues: EventInputIssue[]): void {
   if (issues.length === 0) return;
   const details: Record<string, string[]> = {};
   for (const issue of issues) (details[issue.field] ??= []).push(issue.message);
   throw new ValidationError(issues[0].message, details);
+}
+
+/** An explicit format: every setting the event will be stored with must be inside the format's limits. */
+function assertEventInput(format: EventFormat, storedConfig: Record<string, unknown>): void {
+  throwIfIssues(checkEventInput(format, valuesFromConfig(format, storedConfig)));
+}
+
+/**
+ * The settings only the new event forms send: a round length in minutes and a meeting's length. Production's
+ * old form never sends them, so they are checked even when no format is sent; its own settings (a "Video
+ * Meeting" for 500 people, by default) stay unchecked on that path, exactly as before. A setting the event's
+ * format does not have is not checked here: normaliseConfig never stores it.
+ */
+const FORM_ONLY_SETTINGS = ['roundMinutes', 'durationMinutes'] as const;
+
+function assertFormOnlySettings(format: EventFormat, config: SessionConfigInput | undefined): void {
+  if (!config) return;
+  const sent: Record<string, unknown> = {};
+  for (const key of FORM_ONLY_SETTINGS) {
+    if (config[key] !== undefined) sent[key] = config[key];
+  }
+  throwIfIssues(checkEventInput(format, sent));
 }
 
 const PARTICIPANT_COLUMNS = `
@@ -79,6 +100,7 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   if (explicit) assertFormatAllowed(pod.podType, format);
   const sessionConfig = normaliseConfig(format, input.config);
   if (explicit) assertEventInput(format, sessionConfig);
+  else assertFormOnlySettings(format, input.config);
 
   const sessionId = uuid();
 
@@ -176,6 +198,7 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     const merged = formatChanges ? { ...input.config } : { ...currentConfig, ...input.config };
     const newConfig = normaliseConfig(nextFormat, merged);
     if (input.format !== undefined) assertEventInput(nextFormat, newConfig);
+    else assertFormOnlySettings(nextFormat, input.config);
     setClauses.push(`config = $${paramIdx}`);
     values.push(JSON.stringify(newConfig));
     paramIdx++;

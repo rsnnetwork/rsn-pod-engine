@@ -146,6 +146,12 @@ describe('checkEventInput', () => {
     ]);
   });
 
+  it('refuses a round length of a fraction of a minute (it would store 0 seconds)', () => {
+    expect(checkEventInput('speed_networking', { roundMinutes: 0.001 })).toEqual([
+      { field: 'roundMinutes', message: 'Round length must be between 1 and 60 minutes.' },
+    ]);
+  });
+
   it('refuses a value that is not a number, and a choice that is not on the list', () => {
     expect(checkEventInput('video_meeting', { durationMinutes: 'an hour' })).toEqual([
       { field: 'durationMinutes', message: 'Length must be a number.' },
@@ -185,6 +191,12 @@ describe('normaliseConfig: the stored config for an event of this format', () =>
     expect(out).not.toHaveProperty('roundMinutes');
   });
 
+  it('drops a setting that belongs only to another format (a meeting length on speed networking)', () => {
+    const out = normaliseConfig('speed_networking', { durationMinutes: 1440, numberOfRounds: 3 });
+    expect(out).not.toHaveProperty('durationMinutes');
+    expect(out.numberOfRounds).toBe(3);
+  });
+
   it('reads a meeting length the client sent', () => {
     expect(normaliseConfig('video_meeting', { durationMinutes: 90, maxParticipants: 8 }))
       .toEqual({ durationMinutes: 90, maxParticipants: 8, eventType: 'video_meeting' });
@@ -203,13 +215,22 @@ describe('valuesFromConfig: what an edit form shows', () => {
 });
 
 describe('eventDurationMinutes: one formula for every length (token, calendar, invite)', () => {
+  // Hand-computed: rounds × (round + rating) + (rounds − 1) × transition + closing lobby, rounded up to minutes.
   it.each([
-    {},
-    { numberOfRounds: 3, roundDurationSeconds: 60, ratingWindowSeconds: 30, transitionDurationSeconds: 30, closingLobbyDurationSeconds: 120 },
-    { ...DEFAULT_SESSION_CONFIG },
-    { numberOfRounds: 1, roundDurationSeconds: 3600 },
-  ])('equals computeSessionDurationMinutes for speed networking (%j)', (cfg) => {
-    expect(eventDurationMinutes('speed_networking', cfg)).toBe(computeSessionDurationMinutes(cfg));
+    // 5×480 + 5×30 + 4×30 + 120 (the closing lobby's fallback when unset) = 2790 s
+    [{}, 47],
+    // 3×60 + 3×30 + 2×30 + 120 = 450 s
+    [{ numberOfRounds: 3, roundDurationSeconds: 60, ratingWindowSeconds: 30, transitionDurationSeconds: 30, closingLobbyDurationSeconds: 120 }, 8],
+    // What a new event is stored with (closing lobby 480): 2400 + 150 + 120 + 480 = 3150 s
+    [{ ...DEFAULT_SESSION_CONFIG }, 53],
+    // 3600 + 30 + 0 + 120 = 3750 s
+    [{ numberOfRounds: 1, roundDurationSeconds: 3600 }, 63],
+  ])('speed networking %j lasts %i minutes', (cfg, minutes) => {
+    expect(eventDurationMinutes('speed_networking', cfg)).toBe(minutes);
+  });
+
+  it('the calendar’s speed-networking length is that formula: a new event lasts 53 minutes', () => {
+    expect(computeSessionDurationMinutes({ ...DEFAULT_SESSION_CONFIG })).toBe(53);
   });
 
   it('is the length for a meeting, its default when unset', () => {

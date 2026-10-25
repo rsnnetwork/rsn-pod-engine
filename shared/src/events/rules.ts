@@ -148,19 +148,32 @@ function storedValue(field: EventFieldRule, key: string, source: Settings): unkn
   return field.stored && typeof field.default === 'number' ? Math.round(field.default * scale) : field.default;
 }
 
+/** Settings other formats have and this one does not, nor its engine: a meeting's length, for speed networking. */
+function otherFormatsSettings(f: EventFormat): string[] {
+  const own = new Set(Object.keys(formatRule(f).fields));
+  const others = new Set<string>();
+  for (const key of EVENT_FORMAT_KEYS) {
+    for (const field of Object.keys(EVENT_FORMATS[key].fields)) {
+      if (!own.has(field) && !(field in DEFAULT_SESSION_CONFIG)) others.add(field);
+    }
+  }
+  return [...others];
+}
+
 /**
  * The config an event of this format is stored with, from everything known of its settings (stored keys,
  * or fields as the forms hold them, such as the round length in minutes). It always names its format
  * (`eventType`), so a copy made by production's old form keeps it.
  *
  * A rounds event keeps every engine setting it was given and takes DEFAULT_SESSION_CONFIG for the rest,
- * exactly what an event has always been stored with. Any other format keeps only its own fields: a video
- * meeting carries no round settings.
+ * exactly what an event has always been stored with, but never another format's setting. Any other format
+ * keeps only its own fields: a video meeting carries no round settings.
  */
 export function normaliseConfig(f: EventFormat, config: object | null | undefined): Settings {
   const rule = formatRule(f);
   const source = (config ?? {}) as Settings;
   const out: Settings = rule.live === 'rounds' ? { ...DEFAULT_SESSION_CONFIG, ...source } : {};
+  if (rule.live === 'rounds') for (const key of otherFormatsSettings(f)) delete out[key];
   for (const [key, field] of Object.entries(rule.fields)) {
     const value = storedValue(field, key, source);
     if (field.stored) delete out[key];

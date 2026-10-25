@@ -137,6 +137,18 @@ function refused(socket: { emit: jest.Mock }): boolean {
 
 const flush = () => new Promise((r) => setImmediate(r));
 
+// The join and leave handlers schedule a 300 ms participant-list broadcast whose callback imports the
+// snapshot module. On real timers it fired after this suite was torn down ("You are trying to `import` a
+// file after the Jest environment has been torn down", then a worker that would not exit). Fake timers keep
+// every handler timer inside the test, and each test clears them; setImmediate (the flushes) and Date stay real.
+beforeAll(() => {
+  jest.useFakeTimers({ doNotFake: ['Date', 'setImmediate', 'clearImmediate', 'nextTick', 'queueMicrotask', 'performance'] });
+});
+
+afterAll(() => {
+  jest.useRealTimers();
+});
+
 beforeEach(() => {
   gMockQuery.mockReset();
   gMockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
@@ -162,6 +174,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  jest.clearAllTimers();
   activeSessions.clear();
 });
 

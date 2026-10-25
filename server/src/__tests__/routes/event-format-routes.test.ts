@@ -104,6 +104,22 @@ describe('POST /sessions', () => {
     expect((sessionService.createSession as jest.Mock).mock.calls[0][1].config).toEqual({ roundMinutes: 4 });
   });
 
+  it('leaves the range of the two form settings to the service, which answers in the definition’s words', async () => {
+    await request(app()).post('/sessions').set('Authorization', `Bearer ${token()}`)
+      .send({ ...body, config: { eventType: 'video_meeting', durationMinutes: 1440 } });
+    await request(app()).post('/sessions').set('Authorization', `Bearer ${token()}`)
+      .send({ ...body, config: { roundMinutes: 0.001 } });
+    const configs = (sessionService.createSession as jest.Mock).mock.calls.map((c) => c[1].config);
+    expect(configs).toEqual([{ eventType: 'video_meeting', durationMinutes: 1440 }, { roundMinutes: 0.001 }]);
+  });
+
+  it('refuses a form setting that is not a number, before the service', async () => {
+    const res = await request(app()).post('/sessions').set('Authorization', `Bearer ${token()}`)
+      .send({ ...body, config: { roundMinutes: 'four' } });
+    expect(res.status).toBe(400);
+    expect(sessionService.createSession).not.toHaveBeenCalled();
+  });
+
   it('refuses a format that does not exist, before the service', async () => {
     const res = await request(app()).post('/sessions').set('Authorization', `Bearer ${token()}`)
       .send({ ...body, format: 'roundtable' });
