@@ -137,7 +137,8 @@ describe('the words the client asked for, screen by screen (19 Oct feedback)', (
   });
 
   it('event setup, Matches, Meet and the admin email list: "anywhere on REASON", "Join the next event", "Connected on REASON", "invited to REASON"', () => {
-    expect(source('features/sessions/CreateSessionPage.tsx')).toContain('If two people have ever met before anywhere on REASON, they will never be matched again.');
+    // The matching rule moved into the event forms' shared fields (C7, 26 Oct 2026), the words unchanged.
+    expect(source('features/sessions/EventFormatFields.tsx')).toContain('If two people have ever met before anywhere on REASON, they will never be matched again.');
     expect(source('features/matches/MatchesPage.tsx')).toContain('<p className="font-medium text-gray-900">Join the next event</p>');
     expect(source('features/messages/MeetPage.tsx')).toContain('<p className="text-[11px] text-white/50">Connected on REASON</p>');
     expect(source('features/admin/AdminEmailPage.tsx')).toContain("description: 'Sent when a new user is invited to REASON' },");
