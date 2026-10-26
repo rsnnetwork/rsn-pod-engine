@@ -286,6 +286,11 @@ test('the Messages list card and the focused card share one answer: while one is
     const focused = page.getByTestId('focused-meeting-request');
     await expect(listCard).toBeVisible({ timeout: 30_000 });
     await expect(focused).toBeVisible({ timeout: 30_000 });
+    // Every way into the sender's profile on both cards (avatar, name, "View full profile") is at least 44px to press.
+    for (const link of await page.locator('[data-testid="meeting-request"] a, [data-testid="focused-meeting-request"] a').all()) {
+      const box = await link.boundingBox();
+      expect(box?.height ?? 0, `profile link "${(await link.textContent())?.trim() || 'avatar'}"`).toBeGreaterThanOrEqual(44);
+    }
 
     // Slow the answer down so the moment in between can be seen.
     await page.route('**/api/pokes/*/accept', async (route) => {
@@ -301,6 +306,34 @@ test('the Messages list card and the focused card share one answer: while one is
     console.log('  ✓ one answer in flight: the focused card waited while the list card answered.');
   } finally {
     await cleanup(pool, { ids: [dual.id] });
+  }
+});
+
+test('a double click on Accept answers once: one request to the server, one trip into the conversation, no second toast', async () => {
+  test.setTimeout(120_000);
+  const twice = await createTestUser('mrbelltwice');
+  try {
+    const p = await apiAs(sender, 'POST', '/pokes', { recipientId: twice.id, message: 'Coffee?' });
+    expect(p.status).toBe(201);
+    const pokeId = p.json.data.id;
+    const page = await openAs(twice, '/');
+    const answers: string[] = [];
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && /\/api\/pokes\/[^/]+\/(accept|decline)$/.test(new URL(r.url()).pathname)) answers.push(r.url());
+    });
+    await bellButton(page).click();
+    await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+    // Two presses in the same instant, before the page can redraw: the button's disabled state only comes a render later.
+    await page.getByRole('button', { name: /^Accept$/ }).first().evaluate((el: HTMLElement) => { el.click(); el.click(); });
+    await expect(page).toHaveURL(/\/messages\/[0-9a-f-]{36}/, { timeout: 30_000 });
+    await page.waitForTimeout(2_000);
+    expect(answers, 'one answer sent').toHaveLength(1);
+    await expect(page.getByText('You already accepted this request.')).toHaveCount(0);
+    await expect(page.getByRole('alert').getByText(/\S/)).toHaveCount(0);
+    expect((await pool.query(`SELECT status FROM user_pokes WHERE id = $1`, [pokeId])).rows[0].status).toBe('accepted');
+    console.log('  ✓ a double click sent one answer and went into the conversation once.');
+  } finally {
+    await cleanup(pool, { ids: [twice.id] });
   }
 });
 
