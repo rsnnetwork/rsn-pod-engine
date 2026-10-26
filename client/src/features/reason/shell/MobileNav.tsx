@@ -3,6 +3,8 @@ import { Link, useLocation } from 'react-router-dom';
 import Avatar from '@/components/ui/Avatar';
 import { useAuthStore } from '@/stores/authStore';
 import { cn, isAdmin } from '@/lib/utils';
+import { useEventsBadge } from '@/features/meetings/useMeetings';
+import { eventsLinkName } from '@/features/meetings/meeting-words';
 import Sheet from '../ui/Sheet';
 import { ReasonIcon } from '../ui/icons';
 import { MOBILE_MORE, MOBILE_PRIMARY, NAV_BY_KEY, isAccountPage, onAdmin, onInvites } from './nav';
@@ -17,6 +19,8 @@ export default function MobileNav({ unreadCount }: { unreadCount: number }) {
   const user = useAuthStore((s) => s.user);
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  // The Events count: upcoming meetings, and a live dot while one can be joined (26 Oct 2026, CON-05).
+  const meetings = useEventsBadge();
   const moreActive = MOBILE_MORE.some((k) => NAV_BY_KEY[k].match(pathname)) || NAV_BY_KEY.profile.match(pathname) || isAccountPage(pathname);
   const done = () => setMoreOpen(false);
 
@@ -29,20 +33,29 @@ export default function MobileNav({ unreadCount }: { unreadCount: number }) {
         {MOBILE_PRIMARY.map((key) => {
           const item = NAV_BY_KEY[key];
           const active = item.match(pathname);
+          const count = key === 'messages' ? unreadCount : key === 'events' ? meetings.count : 0;
+          const liveNow = key === 'events' && meetings.liveNow;
+          const name = key === 'messages' && unreadCount > 0
+            ? `${item.label}, ${unreadCount} unread`
+            : key === 'events' && meetings.count > 0 ? eventsLinkName(item.label, meetings.count, meetings.liveNow) : undefined;
           return (
             <Link
               key={key}
               to={item.to}
-              aria-label={key === 'messages' && unreadCount > 0 ? `${item.label}, ${unreadCount} unread` : undefined}
+              aria-label={name}
               aria-current={active ? 'page' : undefined}
               className={cn(TAB, active ? 'bg-reason-pink text-reason-red-hover' : 'text-[#697180]')}
             >
-              {/* The label is the darker red (4.5:1 on the pink); the icon is not text and keeps the brand red. */}
-              <ReasonIcon name={key} className={active ? 'text-reason-red' : undefined} />
+              <span className="relative flex">
+                {/* The label is the darker red (4.5:1 on the pink); the icon is not text and keeps the brand red. */}
+                <ReasonIcon name={key} className={active ? 'text-reason-red' : undefined} />
+                {/* A meeting can be joined now. The tab's name says so in words. */}
+                {liveNow && <span data-live-now aria-hidden="true" className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-reason-green ring-2 ring-white motion-safe:animate-pulse" />}
+              </span>
               <span>{item.label}</span>
-              {key === 'messages' && unreadCount > 0 && (
+              {count > 0 && (
                 <i className="absolute right-[18%] top-1 grid h-4 min-w-4 place-items-center rounded-full bg-reason-red px-1 text-[9px] not-italic text-white">
-                  {unreadCount > 9 ? '9+' : unreadCount}
+                  {count > 9 ? '9+' : count}
                 </i>
               )}
             </Link>

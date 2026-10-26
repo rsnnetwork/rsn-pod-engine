@@ -193,7 +193,10 @@ describe('REASON shell: faults found by looking at it', () => {
     expect(read('features/reason/shell/ProfileMenu.tsx')).toMatch(/aria-current=\{isAccountPage\(pathname\) \? 'true' : undefined\}/);
   });
   it('the Messages link keeps its unread count in its accessible name, as the old sidebar did', () => {
-    expect(read('features/reason/shell/ShellSidebar.tsx')).toMatch(/aria-label=\{badge \? `\$\{item\.label\}, \$\{badge\} unread` : item\.label\}/);
+    // 26 Oct 2026: a link's badge carries its own name (Events names its upcoming meetings, meetings-ui.test.ts).
+    const side = read('features/reason/shell/ShellSidebar.tsx');
+    expect(side).toMatch(/aria-label=\{badge\?\.name \?\? item\.label\}/);
+    expect(side).toMatch(/if \(item\.key === 'messages'\) return \{ count: unreadCount, name: unreadCount \? `\$\{item\.label\}, \$\{unreadCount\} unread` : item\.label \};/);
     expect(read('features/reason/shell/MobileNav.tsx')).toMatch(/`\$\{item\.label\}, \$\{unreadCount\} unread`/);
   });
   it('the current tab is brought into view inside the tab rows (not by moving the page), and again once the font has loaded', () => {

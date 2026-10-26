@@ -35,6 +35,7 @@ import LiveSessionPage from '@/features/live/LiveSessionPage';
 import SessionGuard from '@/features/live/SessionGuard';
 import HostDashboardPage from '@/features/host/HostDashboardPage';
 import RecapPage from '@/features/sessions/RecapPage';
+import MeetingDetailPage from '@/features/meetings/MeetingDetailPage';
 import MessagesPage from '@/features/messages/MessagesPage';
 import MeetPage from '@/features/messages/MeetPage';
 import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
@@ -224,6 +225,8 @@ export default function App() {
         <Route path="/sessions/new" element={<CreateSessionPage />} />
         <Route path="/sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
+        {/* A meeting two members agreed (26 Oct 2026), under Events. */}
+        <Route path="/meetings/:meetingId" element={<MeetingDetailPage />} />
         <Route path="/encounters" element={<EncounterHistoryPage />} />
         <Route path="/matches" element={<MatchesPage />} />
         {/* Wave 2: agents are the primary way to look for people. /matches
