@@ -14,6 +14,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { isAdmin } from '@/lib/utils';
+import { useGroupUnreadTotal } from '@/features/messages/useGroups';
 import ToastContainer from '@/components/ui/Toast';
 import OnboardingTour from '@/features/onboarding/OnboardingTour';
 import ShellSidebar from './ShellSidebar';
@@ -40,7 +41,9 @@ export default function ReasonShell() {
     enabled: !!userId,
     meta: { entities: userId ? [E.userDms(userId)] : [] },
   });
-  const unreadCount = unread ?? 0;
+  // The Messages badge: unread one-to-one messages and, since group chats (26 Oct 2026, C12), every group's unread.
+  const groupUnread = useGroupUnreadTotal();
+  const unreadCount = (unread ?? 0) + groupUnread;
   const inPeople = PEOPLE_TABS.some((t) => pathname === t.to || pathname.startsWith(`${t.to}/`));
   const inAdmin = isAdmin(user?.role) && onAdmin(pathname);
   // The old layout's nudge, kept. For You says the same thing in its own card. Messages

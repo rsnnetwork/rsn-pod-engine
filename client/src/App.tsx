@@ -244,9 +244,8 @@ export default function App() {
             Order matters: this must precede /:conversationId so "new" isn't
             interpreted as a conversation id. */}
         <Route path="/messages/new/:userId" element={<MessagesPage />} />
-        {/* 26 Oct 2026 — a group-chat bell links to /messages/g/:groupId. The group screen is on the preview;
-            until it goes live, production sends that address to the member's Messages. */}
-        <Route path="/messages/g/:groupId" element={<Navigate to="/messages" replace />} />
+        {/* A group chat (26 Oct 2026, COM-04): Messages with the group's thread open beside the inbox. */}
+        <Route path="/messages/g/:groupId" element={<MessagesPage />} />
         <Route path="/messages/:conversationId" element={<MessagesPage />} />
         <Route path="/invites" element={<InvitesPage />} />
         <Route path="/settings" element={<SettingsPage />} />

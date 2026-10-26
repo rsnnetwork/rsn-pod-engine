@@ -19,6 +19,7 @@ import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
 import MessageParticipantsPanel from './MessageParticipantsPanel';
+import StartGroupChatCard from './StartGroupChatCard';
 import EventChatHistory from './EventChatHistory';
 import EditEventModal from './EditEventModal';
 import { eventFacts, eventFactsLine } from './event-format-form';
@@ -615,11 +616,11 @@ export default function SessionDetailPage() {
         </div>
       </div>
 
-      {/* After the event, for the people who run it: message everyone who took part. The group chat (task C12) is
-          started from here too, as another card in this column. */}
+      {/* After the event, for the people who run it: message everyone who took part, or start a group chat with them. */}
       {showAfterEventTools && sessionId && (
         <div data-testid="after-event-tools" className="grid gap-3 empty:hidden animate-fade-in-up stagger-1">
           <MessageParticipantsPanel sessionId={sessionId} />
+          <StartGroupChatCard sessionId={sessionId} />
         </div>
       )}
 

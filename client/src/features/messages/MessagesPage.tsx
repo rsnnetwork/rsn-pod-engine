@@ -18,6 +18,11 @@ import SystemMessageCard, { type DmMessageKind, type DmSystemMeta } from './Syst
 import { CallRequestModal, CallWaitingCard, IncomingCallCard } from './CallRequest';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
+import GroupThread from './GroupThread';
+import GroupInboxRow from './GroupInboxRow';
+import { useMyGroups } from './useGroups';
+import { GROUPS_FAILED, TRY_AGAIN, mergeInbox } from './group-chat-text';
+import { dayHeaderLabel, formatRelative, sameLocalDay, timeOnly } from './message-time';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
@@ -93,39 +98,6 @@ function emojiForType(type: string): string {
   return DM_REACTIONS.find(r => r.type === type)?.emoji || type;
 }
 
-function formatRelative(iso: string | null): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const diff = Date.now() - d.getTime();
-  if (diff < 60_000) return 'just now';
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
-  return d.toLocaleDateString();
-}
-
-// Phase A polish — date separators ("Today" / "Yesterday" / "Mon May 1") between day boundaries.
-function sameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-function dayHeaderLabel(d: Date): string {
-  const now = new Date();
-  if (sameLocalDay(d, now)) return 'Today';
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (sameLocalDay(d, yesterday)) return 'Yesterday';
-  const daysAgo = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
-  if (daysAgo < 7) return d.toLocaleDateString([], { weekday: 'long' });
-  if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-  }
-  return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-function timeOnly(d: Date): string {
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
 // Phase A polish — group consecutive messages from the same sender within 60s
 // so we only show name/avatar/timestamp once per cluster (iMessage / WhatsApp pattern).
 const CLUSTER_GAP_MS = 60_000;
@@ -163,16 +135,18 @@ function clusterMessages(messages: DmMessage[]): MessageCluster[] {
 }
 
 export default function MessagesPage() {
-  // Feature 18 (13 May spec) — single page renders three modes:
+  // Feature 18 (13 May spec) — single page renders four modes:
   //   • /messages                     → inbox only (right pane is empty state)
   //   • /messages/:conversationId     → existing thread
   //   • /messages/new/:userId         → compose to a user who isn't in the inbox yet
+  //   • /messages/g/:groupId          → a group chat (26 Oct 2026, C12), its own thread (GroupThread)
   // In compose mode the right pane shows the target user's header and an empty
   // thread with the same composer; on first send the server creates the
   // conversation and we replace the URL with the real conversationId.
-  const { conversationId: activeId, userId: composeToUserId } = useParams<{
+  const { conversationId: activeId, userId: composeToUserId, groupId } = useParams<{
     conversationId?: string;
     userId?: string;
+    groupId?: string;
   }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -279,6 +253,9 @@ export default function MessagesPage() {
     refetchOnWindowFocus: true,
     meta: { entities: myUserId ? [E.userDms(myUserId)] : [] },
   });
+
+  // The group chats the member is in, listed beside the conversations (26 Oct 2026, C12).
+  const groups = useMyGroups();
 
   // Online status of every conversation partner, for the green dot in the list.
   // realtime: skip — presence is inherently pollable; a 20s poll is the source of truth.
@@ -668,6 +645,9 @@ export default function MessagesPage() {
   // composing a new one. composeTarget supplies the header info when we
   // don't have a conversation row yet.
   const isComposeMode = !!composeToUserId && !activeId;
+  // The right pane holds a thread: a conversation, a new message, or a group chat. On a phone it then
+  // takes the screen, and the inbox list steps aside.
+  const threadShown = !!activeId || isComposeMode || !!groupId;
   const composeTarget = composeToUserId && composeTargetUser
     ? {
         otherUserId: composeToUserId,
@@ -1019,12 +999,15 @@ export default function MessagesPage() {
 
   if (!myUserId) return <PageLoader />;
 
+  // One list: the conversations and the group chats, the latest activity first (26 Oct 2026, C12).
+  const inboxRows = inboxData ? mergeInbox(inboxData, groups.data ?? []) : [];
+
   return (
     <div ref={fillRef} className="flex min-h-0 flex-col lg:flex-row gap-4" style={{ height: fillHeight ?? 'calc(100dvh - 100px)' }}>
       {/* Conversation list (left, hidden on mobile when a thread is open or a new
           message is being written: stacked above the compose panel it left the
           message box under the bottom bar on a short phone) */}
-      <div className={`lg:w-80 lg:flex-shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden ${(activeId || isComposeMode) ? 'hidden lg:flex' : 'flex'} flex-col`}>
+      <div className={`lg:w-80 lg:flex-shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden ${threadShown ? 'hidden lg:flex' : 'flex'} flex-col`}>
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-gray-500" />
           <h2 className="text-sm font-semibold text-[#1a1a2e]">Messages</h2>
@@ -1033,67 +1016,88 @@ export default function MessagesPage() {
           {/* Pending meeting requests sit above the inbox — this is the page the
               'poke' notification links to, so the accept must live here. */}
           <MeetingRequests myUserId={myUserId} focusPokeId={focusPokeId} />
-          {inboxData === undefined ? (
+          {/* Group chats that could not be read are said, with a retry; the conversations still show. */}
+          {groups.isError && (
+            <div role="alert" className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-1 text-xs text-gray-600">
+              <span>{GROUPS_FAILED}</span>
+              <button
+                type="button"
+                onClick={() => { void groups.refetch(); }}
+                className="min-h-[44px] shrink-0 rounded-lg px-3 font-semibold text-rsn-red hover:bg-rsn-red/5"
+              >
+                {TRY_AGAIN}
+              </button>
+            </div>
+          )}
+          {inboxData === undefined || groups.isPending ? (
             <div className="flex items-center justify-center py-12"><Spinner /></div>
-          ) : inboxData.length === 0 ? (
+          ) : inboxRows.length === 0 ? (
             <div className="text-center py-12 px-4 text-sm text-gray-500">
               No conversations yet. When you accept a meeting request — or someone accepts yours — the chat opens here.
             </div>
           ) : (
-            inboxData.map(c => (
-              <Link
-                key={c.conversationId}
-                to={`/messages/${c.conversationId}`}
-                className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 border-b border-gray-100 transition-colors ${activeId === c.conversationId ? 'bg-rsn-red/5' : ''}`}
-              >
-                {/* Online dot on the avatar (8 Sep 2026) — green when this
-                    partner is on the platform now. */}
-                <span className="relative shrink-0">
-                  <Avatar src={c.otherAvatarUrl || undefined} name={c.otherDisplayName || 'User'} size="md" />
-                  {inboxPresence?.[c.otherUserId] && (
-                    <span
-                      className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-white"
-                      title="On the platform now"
-                      aria-label="Online"
-                    />
-                  )}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline justify-between">
-                    <p className="text-sm font-medium text-[#1a1a2e] truncate">{c.otherDisplayName || 'User'}</p>
-                    {c.lastMessageAt && <span className="text-[11px] text-gray-400 flex-shrink-0 ml-2">{formatRelative(c.lastMessageAt)}</span>}
-                  </div>
-                  {/* 13 Aug 2026 overhaul (task A5 review fix) — the inbox row, not
-                      the thread header, is a stranger's FIRST encounter with a new
-                      sender. listConversations() already returns otherJobTitle /
-                      otherCompany over the wire; this line is what stops them being
-                      dead payload weight. Own <p>, own truncate — it can never
-                      collide with the timestamp on the row above, which lives in a
-                      separate flex row. Bio deliberately excluded here (row density
-                      + it already lives in the thread header). */}
-                  {(c.otherJobTitle || c.otherCompany) && (
-                    <p className="truncate text-xs text-gray-500">
-                      {[c.otherJobTitle, c.otherCompany].filter(Boolean).join(' · ')}
-                    </p>
-                  )}
-                  <p className={`text-xs truncate ${c.unreadCount > 0 && !c.lastMessageFromMe ? 'font-semibold text-[#1a1a2e]' : 'text-gray-500'}`}>
-                    {c.lastMessageFromMe && c.lastMessageKind !== 'system' ? 'You: ' : ''}{c.lastMessage ? localizeMeetingText(c.lastMessage) : <em className="text-gray-300">No messages yet</em>}
-                  </p>
-                </div>
-                {c.unreadCount > 0 && !c.lastMessageFromMe && (
-                  <span className="bg-rsn-red text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
-                    {c.unreadCount > 99 ? '99+' : c.unreadCount}
+            inboxRows.map((row) => {
+              if (row.kind === 'group') {
+                return <GroupInboxRow key={row.key} group={row.group} active={groupId === row.group.id} myUserId={myUserId} />;
+              }
+              const c = row.conversation;
+              return (
+                <Link
+                  key={row.key}
+                  to={`/messages/${c.conversationId}`}
+                  className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 border-b border-gray-100 transition-colors ${activeId === c.conversationId ? 'bg-rsn-red/5' : ''}`}
+                >
+                  {/* Online dot on the avatar (8 Sep 2026) — green when this
+                      partner is on the platform now. */}
+                  <span className="relative shrink-0">
+                    <Avatar src={c.otherAvatarUrl || undefined} name={c.otherDisplayName || 'User'} size="md" />
+                    {inboxPresence?.[c.otherUserId] && (
+                      <span
+                        className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-white"
+                        title="On the platform now"
+                        aria-label="Online"
+                      />
+                    )}
                   </span>
-                )}
-              </Link>
-            ))
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline justify-between">
+                      <p className="text-sm font-medium text-[#1a1a2e] truncate">{c.otherDisplayName || 'User'}</p>
+                      {c.lastMessageAt && <span className="text-[11px] text-gray-400 flex-shrink-0 ml-2">{formatRelative(c.lastMessageAt)}</span>}
+                    </div>
+                    {/* 13 Aug 2026 overhaul (task A5 review fix) — the inbox row, not
+                        the thread header, is a stranger's FIRST encounter with a new
+                        sender. listConversations() already returns otherJobTitle /
+                        otherCompany over the wire; this line is what stops them being
+                        dead payload weight. Own <p>, own truncate — it can never
+                        collide with the timestamp on the row above, which lives in a
+                        separate flex row. Bio deliberately excluded here (row density
+                        + it already lives in the thread header). */}
+                    {(c.otherJobTitle || c.otherCompany) && (
+                      <p className="truncate text-xs text-gray-500">
+                        {[c.otherJobTitle, c.otherCompany].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                    <p className={`text-xs truncate ${c.unreadCount > 0 && !c.lastMessageFromMe ? 'font-semibold text-[#1a1a2e]' : 'text-gray-500'}`}>
+                      {c.lastMessageFromMe && c.lastMessageKind !== 'system' ? 'You: ' : ''}{c.lastMessage ? localizeMeetingText(c.lastMessage) : <em className="text-gray-300">No messages yet</em>}
+                    </p>
+                  </div>
+                  {c.unreadCount > 0 && !c.lastMessageFromMe && (
+                    <span className="bg-rsn-red text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                      {c.unreadCount > 99 ? '99+' : c.unreadCount}
+                    </span>
+                  )}
+                </Link>
+              );
+            })
           )}
         </div>
       </div>
 
       {/* Thread view (right) */}
-      <div className={`flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden ${(activeId || isComposeMode) ? 'flex' : 'hidden lg:flex'} flex-col`}>
-        {!headerContext ? (
+      <div className={`flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden ${threadShown ? 'flex' : 'hidden lg:flex'} flex-col`}>
+        {groupId ? (
+          <GroupThread key={groupId} groupId={groupId} />
+        ) : !headerContext ? (
           composeToUserId ? (
             <>
               {/* The inbox list is hidden on a phone while composing, so the way back is
