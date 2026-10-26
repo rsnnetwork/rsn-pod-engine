@@ -175,6 +175,19 @@ describe('L2 — a profile\'s Back goes back, and goes somewhere when there is n
     expect(found).toEqual(Object.fromEntries(Object.entries(counts).map(([rel, n]) => [rel, { imports: true, opened: n, closed: n }])));
   });
 
+  it('the avatar beside a name in the live event cannot be squeezed: it has shrink-0 (a long name pressed it into an oval)', () => {
+    // Measured on the end screen with a 38-letter name: 21 by 32 pixels at 360 wide, 26 by 32 at 1100. The name's block
+    // takes its own width and the avatar, left able to shrink, gave way. e2e/tests/live-end-screen-links.spec.ts measures it.
+    const found: Record<string, boolean[]> = {};
+    for (const rel of ['features/live/SessionComplete.tsx', 'features/live/ParticipantList.tsx']) {
+      found[rel] = readClient(rel).split('<ProfileLink').slice(1).map((block) => /<Avatar\b[^>]*className="shrink-0"[^>]*\/>/.test(block.slice(0, block.indexOf('</ProfileLink>'))));
+    }
+    expect(found).toEqual({
+      'features/live/SessionComplete.tsx': [true, true],
+      'features/live/ParticipantList.tsx': [true],
+    });
+  });
+
   it('the page reads the router location, and the message button still opens the compose screen in this tab', () => {
     expect(page).toMatch(/useLocation/);
     expect(page).toMatch(/navigate\(`\/messages\/new\/\$\{userId\}`\)/);

@@ -258,7 +258,7 @@ export default function SessionComplete({ sessionId }: Props) {
                   {mutualConnections.map(c => (
                     <div key={c.userId} className="flex items-center gap-3 p-2 rounded-lg bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 transition-colors">
                       <ProfileLink newTab userId={c.userId} className="flex items-center gap-3 flex-1 min-w-0">
-                        <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+                        <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" className="shrink-0" />
                         <div className="min-w-0">
                           <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
                           {(c.jobTitle || c.company) && (
@@ -288,7 +288,7 @@ export default function SessionComplete({ sessionId }: Props) {
               const row = (c: Connection) => (
                 <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100">
                   <ProfileLink newTab userId={c.userId} className="flex items-center gap-3 flex-1 min-w-0">
-                    <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+                    <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" className="shrink-0" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
