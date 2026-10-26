@@ -44,9 +44,9 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
   if (flat === 'SELECT user_id, status, joined_at FROM session_participants WHERE session_id = $1') {
     return { rows: [...rows.values()].map((r) => ({ user_id: r.user_id, status: r.status, joined_at: r.joined_at })), rowCount: rows.size };
   }
-  // The restart's warm-up of memory from the rows.
-  if (flat === 'SELECT user_id, status, current_room_id FROM session_participants WHERE session_id = $1') {
-    return { rows: [...rows.values()].map((r) => ({ user_id: r.user_id, status: r.status, current_room_id: null })), rowCount: rows.size };
+  // The restart's warm-up of memory from the rows (fix round 2: with when a removal was made).
+  if (flat === 'SELECT user_id, status, current_room_id, left_at FROM session_participants WHERE session_id = $1') {
+    return { rows: [...rows.values()].map((r) => ({ user_id: r.user_id, status: r.status, current_room_id: null, left_at: r.left_at })), rowCount: rows.size };
   }
   if (flat === 'SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2') {
     const r = rows.get(params[1] as string);
@@ -312,6 +312,52 @@ describe('the kick writes every removal, and keeps one the database has not take
     expect(rows.get(MEMBER)!.status).toBe('removed');
     expect(rows.get(MEMBER)!.left_at!.getTime()).toBe(kickedAt);
     expect(memory(MEMBER)).toBe(ParticipantState.REMOVED);
+  });
+
+  // Fix round 2 (26 Oct 2026, re-review): a restart used to stamp every removal memory holds with the restart's time, so
+  // a personal invite made before the restart was refused in memory, and an unfinished kick restored from Redis was
+  // written back over the person the host had just invited back.
+  it('after a restart, memory\'s record of a removal carries the kick\'s time from the row: a personal invite made after the kick, before the restart, lifts it at once', async () => {
+    const kickedAt = new Date(Date.now() - 120_000);
+    rows.set(MEMBER, row(MEMBER, 'removed', kickedAt));
+    const s = event();
+    await persistSessionState(EVENT, s);
+    await settle();
+    activeSessions.clear();
+    await recoverActiveSessions({} as SocketServer);
+    expect(memory(MEMBER)).toBe(ParticipantState.REMOVED);
+    expect(activeSessions.get(EVENT)!.participantStates!.get(MEMBER)!.updatedAt.getTime()).toBe(kickedAt.getTime());
+    // The host's invite was made a minute ago; its accept lifted the row, and memory follows the database at once.
+    rows.set(MEMBER, row(MEMBER, 'registered'));
+    expect(await readmitAfterPersonalInvite(EVENT, MEMBER, new Date(Date.now() - 60_000))).toBe(true);
+    expect(memory(MEMBER)).toBe(ParticipantState.REGISTERED);
+  });
+
+  it('an unfinished kick restored after a restart keeps the kick\'s own time as the bound: a personal invite made after the kick lifts it, and the tick leaves them in', async () => {
+    const s = event();
+    setMemory(MEMBER, ParticipantState.IN_MAIN_ROOM);
+    rows.set(MEMBER, row(MEMBER, 'in_lobby'));
+    await canonicalWith({ [MEMBER]: 'connected' });
+    failNextWrite = true;
+    await transitionParticipant(EVENT, MEMBER, ParticipantState.REMOVED);
+    const kickedAt = s.unsavedRemovals!.get(MEMBER)!;
+    expect(rows.get(MEMBER)!.status).toBe('in_lobby');
+    await aMomentLater();
+    const invitedAt = new Date();
+    await aMomentLater();
+    await persistSessionState(EVENT, s);
+    await settle();
+    activeSessions.clear();
+    await recoverActiveSessions({} as SocketServer);
+    expect(memory(MEMBER)).toBe(ParticipantState.REMOVED);
+    expect(activeSessions.get(EVENT)!.unsavedRemovals!.get(MEMBER)).toBe(kickedAt);
+    // The invite's accept answered "already registered" (the row was never removed); memory follows the database.
+    expect(await readmitAfterPersonalInvite(EVENT, MEMBER, invitedAt)).toBe(true);
+    expect(activeSessions.get(EVENT)!.unsavedRemovals?.has(MEMBER) ?? false).toBe(false);
+    await aMomentLater();
+    await reconcileSessionStates(EVENT);
+    expect(rows.get(MEMBER)!.status).toBe('in_lobby');
+    expect(memory(MEMBER)).toBe(ParticipantState.IN_MAIN_ROOM);
   });
 });
 

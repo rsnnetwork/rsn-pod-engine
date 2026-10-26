@@ -386,7 +386,10 @@ export function readmitParticipant(
   const states = activeSession?.participantStates;
   const current = states?.get(userId);
   if (!activeSession || !states || !current || current.state !== ParticipantState.REMOVED) return false;
-  if (new Date(current.updatedAt).getTime() >= removedBefore) return false;
+  // When the removal is a kick whose write has not reached the database, the kick's own time is the time of the
+  // removal, whatever memory's record says (after a restart it says the restart's time; fix round 2, 26 Oct 2026).
+  const removedAt = activeSession.unsavedRemovals?.get(userId) ?? new Date(current.updatedAt).getTime();
+  if (removedAt >= removedBefore) return false;
   states.set(userId, { state: toState, currentRoomId: null, updatedAt: new Date() });
   if (activeSession.unsavedRemovals?.delete(userId)) persistSessionState(sessionId, activeSession).catch(() => {});
   // Best-effort, as every canonical write is: the person's own join marks them connected there in any case.
@@ -731,7 +734,7 @@ export function snapshotParticipantStates(
  */
 export function bootstrapStatesFromDb(
   sessionId: string,
-  rows: { user_id: string; status: string; current_room_id: string | null }[],
+  rows: { user_id: string; status: string; current_room_id: string | null; left_at?: Date | string | null }[],
 ): void {
   const activeSession = activeSessions.get(sessionId);
   if (!activeSession) return;
@@ -739,10 +742,13 @@ export function bootstrapStatesFromDb(
   const now = new Date();
   for (const row of rows) {
     const liftedState = liftFromDbStatus(row.status as ParticipantStatus);
+    // A removal's record carries the time it was made (fix round 2, 26 Oct 2026): a host's personal invite lifts only
+    // a removal made before it, so a record stamped with the restart's time would refuse an invite made before then.
+    const removedAt = liftedState === ParticipantState.REMOVED && row.left_at ? new Date(row.left_at) : null;
     activeSession.participantStates.set(row.user_id, {
       state: liftedState,
       currentRoomId: liftedState === ParticipantState.IN_BREAKOUT ? row.current_room_id : null,
-      updatedAt: now,
+      updatedAt: removedAt ?? now,
     });
   }
 }
@@ -760,8 +766,8 @@ export async function warmParticipantStatesOnRestore(sessionId: string): Promise
   const activeSession = activeSessions.get(sessionId);
   if (!activeSession) return;
   try {
-    const rows = await query<{ user_id: string; status: string; current_room_id: string | null }>(
-      `SELECT user_id, status, current_room_id FROM session_participants WHERE session_id = $1`,
+    const rows = await query<{ user_id: string; status: string; current_room_id: string | null; left_at: Date | null }>(
+      `SELECT user_id, status, current_room_id, left_at FROM session_participants WHERE session_id = $1`,
       [sessionId],
     );
     bootstrapStatesFromDb(sessionId, rows.rows);
@@ -779,10 +785,15 @@ export async function warmParticipantStatesOnRestore(sessionId: string): Promise
         cp.connState === 'disconnected' ? ParticipantState.DISCONNECTED :
         cp.location.type === 'breakout' ? ParticipantState.IN_BREAKOUT :
         ParticipantState.IN_MAIN_ROOM;
+      // A removal the row carries keeps the row's time (the kick's); the doc has no time of its own.
+      const rowRecord = states.get(uid);
+      const removedAt = liftedFromCanonical === ParticipantState.REMOVED && rowRecord?.state === ParticipantState.REMOVED
+        ? rowRecord.updatedAt
+        : null;
       states.set(uid, {
         state: liftedFromCanonical,
         currentRoomId: cp.location.type === 'breakout' ? cp.location.roomId : null,
-        updatedAt: now,
+        updatedAt: removedAt ?? now,
       });
     }
   } catch (err) {
