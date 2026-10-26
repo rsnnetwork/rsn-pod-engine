@@ -1,6 +1,6 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
+import { gotoRetry, cleanup, cleanupByPrefix, idsOf, teardown, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 
@@ -55,9 +55,12 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   try { await browser?.close(); } catch { /* noop */ }
   for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
-  await cleanup(pool, { ids: [sender.id, recipient.id] });
-  await cleanupByPrefix(pool, 'e2etest-reqcard');
-  await pool.end().catch(() => {});
+  // An account whose creation failed is undefined here and has nothing to delete; each step runs even if another fails.
+  await teardown(
+    () => cleanup(pool, { ids: idsOf(sender, recipient) }),
+    () => cleanupByPrefix(pool, 'e2etest-reqcard'),
+    () => pool.end().catch(() => {}),
+  );
 });
 
 test('a meeting request shows the sender as a profile card, name links to their profile, and the bell link focuses it', async () => {

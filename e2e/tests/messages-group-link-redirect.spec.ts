@@ -1,6 +1,6 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, cleanupByPrefix, APP } from '../helpers/live-ui';
+import { gotoRetry, cleanup, cleanupByPrefix, idsOf, teardown, APP } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 
@@ -40,9 +40,12 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
   try { await browser?.close(); } catch { /* noop */ }
-  await cleanup(pool, { ids: [me.id] });
-  await cleanupByPrefix(pool, 'e2etest-grouplink');
-  await pool.end().catch(() => {});
+  // An account whose creation failed is undefined here and has nothing to delete; each step runs even if another fails.
+  await teardown(
+    () => cleanup(pool, { ids: idsOf(me) }),
+    () => cleanupByPrefix(pool, 'e2etest-grouplink'),
+    () => pool.end().catch(() => {}),
+  );
 });
 
 test('the address of a group chat lands on Messages, not on a page that is not found, and Back does not return to it', async () => {

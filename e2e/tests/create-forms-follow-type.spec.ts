@@ -1,6 +1,7 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
+import { gotoRetry, cleanup, cleanupByPrefix, idsOf, teardown, APP, SERVER } from '../helpers/live-ui';
+import { addPodMember } from '../helpers/api';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 
@@ -21,6 +22,8 @@ let browser: Browser;
 let host: TestUser;
 let admin: TestUser;
 const ctxs: BrowserContext[] = [];
+/** Accounts a test makes for itself (the two above are made once, for all of them). */
+const madeInTests: TestUser[] = [];
 const run = Date.now().toString().slice(-7);
 
 async function apiAs(u: TestUser, method: string, path: string, body?: unknown) {
@@ -32,7 +35,7 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
   return { status: res.status, json: await res.json().catch(() => null) };
 }
 
-async function openAs(u: TestUser, path: string, opts: { countCommits?: boolean; delayPodsMs?: number; watchRoundsCard?: boolean } = {}): Promise<Page> {
+async function openAs(u: TestUser, path: string, opts: { countCommits?: boolean; delayPodsMs?: number; watchRoundsCard?: boolean; dropFromPodList?: string } = {}): Promise<Page> {
   const ctx = await browser.newContext(contextOptions({ width: 1100, height: 900 }));
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
@@ -74,6 +77,16 @@ async function openAs(u: TestUser, path: string, opts: { countCommits?: boolean;
       await route.continue();
     });
   }
+  if (opts.dropFromPodList) {
+    // What a pod older than the newest twenty looks like to the form: the list it asks for (the server's first page, newest
+    // first) does not hold it, while the pod itself can still be read by id. The real answer, less that one pod.
+    await ctx.route(/\/api\/pods\?status=active/, async (route) => {
+      const real = await route.fetch();
+      const body = await real.json();
+      const data = (body.data ?? []).filter((p: { id: string }) => p.id !== opts.dropFromPodList);
+      await route.fulfill({ status: real.status(), contentType: 'application/json', body: JSON.stringify({ ...body, data }) });
+    });
+  }
   ctxs.push(ctx);
   await primePreview(ctx);
   const page = await ctx.newPage();
@@ -107,13 +120,19 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
   try { await browser?.close(); } catch { /* noop */ }
-  // Every pod these accounts own, however it was made. A pod a failed test never got to note would stay, and
-  // pods.created_by stops its owner being deleted: a live test account left in production.
-  const owned = await pool.query<{ id: string }>(`SELECT id FROM pods WHERE created_by = ANY($1)`, [[host.id, admin.id]]);
-  for (const { id } of owned.rows) await cleanup(pool, { ids: [], podId: id });
-  await cleanup(pool, { ids: [host.id, admin.id] });
-  await cleanupByPrefix(pool, 'e2etest-forms');
-  await pool.end().catch(() => {});
+  // An account whose creation failed is undefined here and has nothing to delete; each step runs even if another fails.
+  const ids = idsOf(host, admin, ...madeInTests);
+  await teardown(
+    // Every pod these accounts own, however it was made. A pod a failed test never got to note would stay, and
+    // pods.created_by stops its owner being deleted: a live test account left in production.
+    async () => {
+      const owned = await pool.query<{ id: string }>(`SELECT id FROM pods WHERE created_by = ANY($1)`, [ids]);
+      for (const { id } of owned.rows) await cleanup(pool, { ids: [], podId: id });
+    },
+    () => cleanup(pool, { ids }),
+    () => cleanupByPrefix(pool, 'e2etest-forms'),
+    () => pool.end().catch(() => {}),
+  );
 });
 
 test('choosing a Reason pod sets Freeform, says so when a choice is replaced, and saves the pod that way', async () => {
@@ -366,4 +385,63 @@ test('a duplicate of a Chat pod made a Reason pod is by video, not text carried 
   expect(posted.json).toMatchObject({ podType: 'reason', orchestrationMode: 'free_form', communicationMode: 'video' });
   const copy = (await pool.query(`SELECT pod_type, communication_mode FROM pods WHERE created_by = $1 AND name LIKE '%(copy)'`, [host.id])).rows[0];
   expect(copy).toEqual({ pod_type: 'reason', communication_mode: 'video' });
+});
+
+for (const who of ['a director', 'an admin'] as const) {
+  test(`a pod older than the newest twenty can still be scheduled when the address names it: ${who} is offered it, preselected, and can submit`, async () => {
+    test.setTimeout(180_000);
+    // The pod is the host's own, so the host is its director; the admin is not a member of it at all.
+    const podName = `E2E Older pod ${who === 'a director' ? 'dir' : 'adm'} ${run}`;
+    const podId = await podOfType('reason', podName, host);
+    const page = await openAs(who === 'a director' ? host : admin, `/sessions/new?podId=${podId}`, { dropFromPodList: podId });
+
+    // The list the form asked for does not hold the pod (what the newest twenty do to an older one), and it is the
+    // chosen one all the same: before this, the select stayed on "Select a pod" and the required check stopped the submit.
+    const select = page.locator('select[name="podId"]');
+    await expect(select).toHaveValue(podId, { timeout: 40_000 });
+    await expect(select.locator('option:checked')).toHaveText(podName);
+    // The form follows that pod as it does a listed one: a Reason pod's event is a video meeting, titled with its name.
+    await expect(page.getByTestId('event-format-select')).toHaveValue('video_meeting');
+    await expect(page.locator('input[name="title"]')).toHaveValue(`Video meeting · ${podName}`);
+
+    const posted: { json?: Record<string, unknown> } = {};
+    page.on('request', (r) => { if (r.method() === 'POST' && /\/api\/sessions$/.test(r.url())) posted.json = r.postDataJSON(); });
+    await page.locator('form button[type="submit"]').click();
+    await expect(page).toHaveURL(/\/sessions\/[0-9a-f-]{36}$/, { timeout: 30_000 });
+    expect(posted.json).toMatchObject({ podId, format: 'video_meeting' });
+    const saved = (await pool.query(`SELECT pod_id, event_format FROM sessions WHERE pod_id = $1`, [podId])).rows;
+    expect(saved).toEqual([{ pod_id: podId, event_format: 'video_meeting' }]);
+  });
+}
+
+test('a pod the member cannot schedule in is not offered, and neither is an archived one, even to an admin', async () => {
+  test.setTimeout(180_000);
+  const member = await createTestUser('formsmember');
+  madeInTests.push(member);
+  const podName = `E2E Not offered ${run}`;
+  const podId = await podOfType('reason', podName, host);
+  await addPodMember(host, podId, member.id);
+
+  // A plain member of the pod: the server would refuse ("Only pod directors and hosts can create sessions"), so the
+  // form does not offer it. It is not in the director/host list either, so the select stays on "Select a pod".
+  let posts = 0;
+  const page = await openAs(member, `/sessions/new?podId=${podId}`);
+  page.on('request', (r) => { if (r.method() === 'POST' && /\/api\/sessions$/.test(r.url())) posts += 1; });
+  const select = page.locator('select[name="podId"]');
+  await expect(select).toBeVisible({ timeout: 40_000 });
+  await expect(page.getByTestId('format-pending')).toHaveCount(0, { timeout: 40_000 });
+  await expect(select.locator('option')).toHaveCount(1);
+  await expect(select).toHaveValue('');
+  await page.locator('form button[type="submit"]').click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Select a pod' })).toBeVisible();
+  expect(posts, 'nothing was posted').toBe(0);
+
+  // An archived pod is not one the list offers, so an address naming it does not bring it back, even for an admin.
+  await pool.query(`UPDATE pods SET status = 'archived' WHERE id = $1`, [podId]);
+  const adminPage = await openAs(admin, `/sessions/new?podId=${podId}`);
+  const adminSelect = adminPage.locator('select[name="podId"]');
+  await expect(adminSelect).toBeVisible({ timeout: 40_000 });
+  await expect(adminPage.getByTestId('format-pending')).toHaveCount(0, { timeout: 40_000 });
+  await expect(adminSelect.locator('option', { hasText: podName })).toHaveCount(0);
+  await expect(adminSelect).toHaveValue('');
 });

@@ -1,6 +1,6 @@
 import { test, expect, Browser, BrowserContext, Locator, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
+import { gotoRetry, cleanup, cleanupByPrefix, teardown, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable, tapReachable } from '../helpers/viewport-fit';
@@ -87,9 +87,12 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
   try { await browser?.close(); } catch { /* noop */ }
-  if (made.length) await cleanup(pool, { ids: made });
-  await cleanupByPrefix(pool, 'e2etest-tour');
-  await pool.end().catch(() => {});
+  // Each step runs even if another fails.
+  await teardown(
+    () => cleanup(pool, { ids: made }),
+    () => cleanupByPrefix(pool, 'e2etest-tour'),
+    () => pool.end().catch(() => {}),
+  );
 });
 
 test('it explains the product once, then never again', async () => {

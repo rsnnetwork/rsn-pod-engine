@@ -1,7 +1,7 @@
 import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwright/test';
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, TestUser, pool, closePool } from '../helpers/auth';
-import { cleanup, cleanupByPrefix, submitIntent } from '../helpers/live-ui';
+import { cleanup, cleanupByPrefix, idsOf, submitIntent, teardown } from '../helpers/live-ui';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 
 // HEADED smoke for WS2/S3 (name-click safety) against PRODUCTION:
@@ -81,9 +81,13 @@ test.afterAll(async () => {
   try { await endSession(host, sessionId); } catch {}
   // This spec's own three accounts and its pod, by id, and anything its own prefix made. Never cleanupTestData(): that
   // deletes EVERY e2etest- account in the database, which against production is other people's running tests too.
-  await cleanup(pool, { ids: [host.id, alice.id, bob.id], podId });
-  await cleanupByPrefix(pool, 'e2etest-ws2p');
-  await closePool();
+  // An account whose creation failed is undefined here and has nothing to delete; each step runs even if another fails.
+  await teardown(
+    () => cleanup(pool, { ids: [], podId }),
+    () => cleanup(pool, { ids: idsOf(host, alice, bob) }),
+    () => cleanupByPrefix(pool, 'e2etest-ws2p'),
+    () => closePool(),
+  );
 });
 
 test('clicking a participant name opens the profile in a NEW tab; the event tab survives', async () => {

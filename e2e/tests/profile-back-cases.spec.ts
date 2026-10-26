@@ -1,6 +1,6 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, cleanupByPrefix, APP } from '../helpers/live-ui';
+import { gotoRetry, cleanup, cleanupByPrefix, idsOf, teardown, APP } from '../helpers/live-ui';
 import { createPod, addPodMember, createSession, registerForSession } from '../helpers/api';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
@@ -87,9 +87,13 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
   try { await browser?.close(); } catch { /* noop */ }
-  await cleanup(pool, { ids: [viewer.id, peer.id, admin.id], podId });
-  await cleanupByPrefix(pool, 'e2etest-back');
-  await pool.end().catch(() => {});
+  // An account whose creation failed is undefined here and has nothing to delete; each step runs even if another fails.
+  await teardown(
+    () => cleanup(pool, { ids: [], podId }),
+    () => cleanup(pool, { ids: idsOf(viewer, peer, admin) }),
+    () => cleanupByPrefix(pool, 'e2etest-back'),
+    () => pool.end().catch(() => {}),
+  );
 });
 
 for (const from of [
@@ -188,4 +192,30 @@ test('a new tab where the member goes on to Message and comes back: Back still g
   await backButton(tab).click();
   await expect(tab).toHaveURL(`${APP}/`);
   console.log(`  ✓ a new tab, Message, browser Back, page Back: goes to ${tab.url().replace(APP, '') || '/'}`);
+});
+
+test('after the Google photo return strips ?photo= from the address, a profile\'s Back still goes to the page before, not the dashboard', async () => {
+  test.setTimeout(120_000);
+  // The return from Google lands on /profile?photo=..., and the page takes the ?photo= out of the address. It used to do
+  // that by writing an empty state over the entry, which dropped the router's count of the app's pages: every page the
+  // member then opened was counted from nothing (NaN), and a profile's Back went to the dashboard.
+  const page = await openAs(viewer, '/profile?photo=cancelled');
+  await expect(page.getByText('No problem, nothing changed.')).toBeVisible({ timeout: 40_000 });
+  await expect(page).toHaveURL(`${APP}/profile`);
+  await mark(page);
+
+  // Then the member goes on inside the app: the pods list, a pod, a name.
+  await page.locator('a[href="/pods"]:visible').first().click();
+  await page.getByText(`E2E Back pod ${run}`).first().click();
+  await expect(page).toHaveURL(`${APP}/pods/${podId}`);
+  const link = page.locator(`a[href="/profile/${peer.id}"]`).first();
+  await expect(link).toBeVisible({ timeout: 40_000 });
+  await link.click();
+  await expect(page).toHaveURL(profileOf(peer.id));
+  await expect(page.getByTestId('profile-card')).toBeVisible({ timeout: 40_000 });
+
+  await backButton(page).click();
+  await expect(page).toHaveURL(`${APP}/pods/${podId}`);
+  expect(await marked(page), 'Back loaded the page again').toBe(true);
+  console.log(`  ✓ after the photo return: Back goes to ${page.url().replace(APP, '')}`);
 });
