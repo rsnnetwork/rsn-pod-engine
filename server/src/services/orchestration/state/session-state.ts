@@ -79,19 +79,8 @@ export interface ActiveSession {
   tileDemotedUserIds?: string[];
 }
 
-export interface ChatMessage {
-  id: string;
-  userId: string;
-  displayName: string;
-  message: string;
-  timestamp: string;
-  scope: 'lobby' | 'room';
-  isHost: boolean;
-  roomId?: string; // breakout room ID for room-scope messages
-  reactions: Record<string, string[]>; // emoji → userIds
-}
-
 // ─── State Stores ───────────────────────────────────────────────────────────
+// (The event chat is not held here: it is stored in Postgres as it is sent. See services/event-chat.)
 
 export const activeSessions = new Map<string, ActiveSession>();
 
@@ -114,9 +103,6 @@ export const sessionLocks = new Map<string, Promise<void>>();
  * presence updates flowing.
  */
 export const matchGenerationLocks = new Map<string, Promise<void>>();
-
-export const MAX_CHAT_MESSAGES = 50;
-export const chatMessages = new Map<string, ChatMessage[]>(); // sessionId -> messages
 
 // ─── Session Guard ──────────────────────────────────────────────────────────
 //
@@ -180,7 +166,6 @@ export async function withMatchGenerationLock<T>(sessionId: string, fn: () => Pr
 // ─── Session State Persistence ──────────────────────────────────────────────
 
 const REDIS_SESSION_PREFIX = 'rsn:session:';
-const REDIS_CHAT_PREFIX = 'rsn:chat:';
 const REDIS_TTL = 14400; // 4 hours — matches in-memory TTL cleanup
 
 export async function persistSessionState(sessionId: string, activeSession: ActiveSession): Promise<void> {
@@ -260,7 +245,6 @@ async function deleteFromRedis(sessionId: string): Promise<void> {
   if (!redis) return;
   try {
     await redis.del(`${REDIS_SESSION_PREFIX}${sessionId}`);
-    await redis.del(`${REDIS_CHAT_PREFIX}${sessionId}`);
   } catch { /* non-fatal */ }
 }
 
@@ -326,48 +310,6 @@ export function refuseIfFormatLacks(socket: Socket, sessionId: string, need: 'ro
   });
   logger.info({ sessionId, format, need }, 'Refused a round action on an event without rounds');
   return true;
-}
-
-// ─── Chat Helpers ───────────────────────────────────────────────────────────
-
-/** Get chat messages for a session (returns empty array if none) */
-export function getSessionChat(sessionId: string): ChatMessage[] {
-  return chatMessages.get(sessionId) || [];
-}
-
-/** Add a chat message to a session, enforcing the max message limit */
-export function addSessionChat(sessionId: string, message: ChatMessage): void {
-  let messages = chatMessages.get(sessionId);
-  if (!messages) {
-    messages = [];
-    chatMessages.set(sessionId, messages);
-  }
-  messages.push(message);
-  // Trim oldest messages when over limit
-  if (messages.length > MAX_CHAT_MESSAGES) {
-    messages.splice(0, messages.length - MAX_CHAT_MESSAGES);
-  }
-  // Redis write-through for chat
-  persistChatToRedis(sessionId, messages).catch(() => {});
-}
-
-/** Remove all chat messages for a session */
-export function cleanupChatMessages(sessionId: string): void {
-  chatMessages.delete(sessionId);
-  const redis = getRedisClient();
-  if (redis) redis.del(`${REDIS_CHAT_PREFIX}${sessionId}`).catch(() => {});
-}
-
-async function persistChatToRedis(sessionId: string, messages: ChatMessage[]): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
-  try {
-    await redis.setex(
-      `${REDIS_CHAT_PREFIX}${sessionId}`,
-      REDIS_TTL,
-      JSON.stringify(messages.slice(-MAX_CHAT_MESSAGES))
-    );
-  } catch { /* non-fatal */ }
 }
 
 // ─── Rating Emit Dedup Helper ───────────────────────────────────────────────

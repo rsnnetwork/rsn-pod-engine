@@ -234,6 +234,16 @@ describe('Ship B — chat routes by canonical location (primary)', () => {
     } as any;
   }
 
+  // 26 Oct 2026 — a message is stored before it is sent, and what is sent is the stored message: the
+  // database answers the insert with the new row.
+  beforeEach(() => {
+    queryMock.mockImplementation(async (sql: string) => (
+      /INSERT INTO event_chat_messages/.test(String(sql))
+        ? { rows: [{ id: 'msg-1', created_at: new Date('2026-10-26T10:00:00.000Z') }] }
+        : { rows: [] }
+    ));
+  });
+
   it('delivers a room-scope message to canonical roommates without touching roomParticipants or the DB fallback', async () => {
     seedSession(); // NO roomParticipants map at all
     await writeCanonical(docBase(13, {
@@ -249,6 +259,7 @@ describe('Ship B — chat routes by canonical location (primary)', () => {
     const recipients = emits.filter(e => e.event === 'chat:message').map(e => e.room).sort();
     expect(recipients).toEqual(['user:u1', 'user:u2']);
     expect(emits[0].payload.roomId).toBe('r1');
+    expect(emits[0].payload.id).toBe('msg-1');
     // The matches-table fallback must not have been consulted.
     const matchQueries = queryMock.mock.calls.filter(c => String(c[0]).includes('FROM matches'));
     expect(matchQueries).toHaveLength(0);
@@ -262,7 +273,7 @@ describe('Ship B — chat routes by canonical location (primary)', () => {
     await handleChatSend(makeIo(emits), socket,
       { sessionId: 's8', message: 'hi', scope: 'room' });
     // canonical 'main' → legacy resolution (no roomParticipants, empty DB) → sender echo
-    expect(socket.emit).toHaveBeenCalledWith('chat:message', expect.anything());
+    expect(socket.emit).toHaveBeenCalledWith('chat:message', expect.objectContaining({ id: 'msg-1' }));
   });
 });
 

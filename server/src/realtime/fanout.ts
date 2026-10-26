@@ -209,6 +209,76 @@ export async function fanoutSessionListEntities(
   }
 }
 
+// ─── Event-completed fanout (26 Oct 2026) ───────────────────────────────────
+//
+// An event ended (completeSession). Every page that shows it must flip to "Ended" and its chat must be read
+// in full, without a refresh: the event page, the pod's events, Home and Sessions, the For You next event.
+// Audience: its participants, INCLUDING those who already left (the end-of-event sweep marks everyone
+// left while this runs, so fanoutSessionEntities' "not left" audience would miss nearly everyone), less
+// anyone removed before they ever joined; its host and co-hosts; its pod's active members. Each person is
+// sent, in one emit of their own, the event's tags and their own two list tags:
+//   session:<id>, session:<id>:participants, session:<id>:chat, pod:<podId>:sessions,
+//   user:<recipient>:sessions, user:<recipient>:pods.
+// Never throws: a failure here is logged and the completion carries on.
+
+export async function fanoutSessionCompleted(sessionId: string): Promise<void> {
+  try {
+    const io = getRealtimeIo();
+    if (!io) return;
+    const { query } = await import('../db');
+    const event = await query<{ pod_id: string | null }>(`SELECT pod_id FROM sessions WHERE id = $1`, [sessionId]);
+    if (event.rows.length === 0) return;
+    const podId = event.rows[0].pod_id;
+    const people = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants
+         WHERE session_id = $1 AND (joined_at IS NOT NULL OR status <> 'removed')
+       UNION
+       SELECT host_user_id FROM sessions WHERE id = $1
+       UNION
+       SELECT user_id FROM session_cohosts WHERE session_id = $1
+       UNION
+       SELECT user_id FROM pod_members
+         WHERE pod_id = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid) AND status = 'active'`,
+      [sessionId, podId],
+    );
+    const shared = [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionChat(sessionId)];
+    if (podId) shared.push(E.podSessions(podId));
+    const recipients = new Set(people.rows.map((r) => r.user_id).filter(Boolean));
+    await Promise.all([...recipients].map((userId) =>
+      emitEntities(io, [userId], [...shared, E.userSessions(userId), E.userPods(userId)]),
+    ));
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'fanoutSessionCompleted: failed to fan out');
+  }
+}
+
+// ─── Event-chat fanout (26 Oct 2026) ────────────────────────────────────────
+//
+// The event's chat changed after the fact: a message was taken down. Sent to the people who can read it (those
+// who took part, the host, the co-hosts) and to whoever took it down, so their other tabs follow. Live messages
+// are not announced this way: the live panel receives them on chat:message.
+
+export async function fanoutSessionChat(sessionId: string, actorId?: string): Promise<void> {
+  try {
+    const io = getRealtimeIo();
+    if (!io) return;
+    const { query } = await import('../db');
+    const readers = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants
+         WHERE session_id = $1 AND joined_at IS NOT NULL AND status <> 'removed'
+       UNION
+       SELECT host_user_id FROM sessions WHERE id = $1
+       UNION
+       SELECT user_id FROM session_cohosts WHERE session_id = $1`,
+      [sessionId],
+    );
+    const recipients = [...readers.rows.map((r) => r.user_id), ...(actorId ? [actorId] : [])];
+    await emitEntities(io, recipients, [E.sessionChat(sessionId)]);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'fanoutSessionChat: failed to fan out');
+  }
+}
+
 // ─── Admin-list fanout ──────────────────────────────────────────────────────
 //
 // Targets every admin / super_admin user's room. `scope` plugs into the

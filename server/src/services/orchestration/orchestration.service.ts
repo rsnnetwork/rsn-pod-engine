@@ -28,7 +28,7 @@ import { setRealtimeIo } from '../../realtime/emit';
 
 // State
 import {
-  activeSessions, getUserIdFromSocket, cleanupChatMessages, withSessionGuard,
+  activeSessions, getUserIdFromSocket, withSessionGuard,
 } from './state/session-state';
 
 // Handlers — Participant Flow
@@ -215,7 +215,6 @@ export function initOrchestration(socketServer: SocketServer): void {
         cleanupLiveKitRooms(sessionId).catch(err =>
           logger.warn({ err, sessionId }, 'TTL reaper: LiveKit cleanup failed (non-fatal)'));
         activeSessions.delete(sessionId);
-        cleanupChatMessages(sessionId);
         // Tier-1 A1: also clear dashboard coalesce state
         clearDashboardCoalesce(sessionId);
       }
@@ -430,8 +429,10 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('host:cancel_preview', socket, handleHostCancelPreview);
 
     // ── Chat Events (unguarded) ──
-    socket.on('chat:send', async (data) => {
-      try { await handleChatSend(io, socket, data); }
+    // 26 Oct 2026 — a client may send an acknowledgement callback (new clients): the outcome goes there.
+    // Production's client sends none and keeps getting refusals as `error` events.
+    socket.on('chat:send', async (data, ack) => {
+      try { await handleChatSend(io, socket, data, typeof ack === 'function' ? ack : undefined); }
       catch (err) { logger.error({ err, userId }, 'Chat send error'); }
     });
     socket.on('chat:react', async (data) => {

@@ -71,6 +71,7 @@ import groupRoutes from './routes/groups';
 import notificationPrefsRoutes from './routes/notification-prefs';
 import { webhooksRouter } from './routes/webhooks';
 import postEventMessageRoutes from './routes/post-event-message';
+import eventChatRoutes from './routes/event-chat';
 
 // Services
 import { initOrchestration } from './services/orchestration/orchestration.service';
@@ -339,6 +340,7 @@ app.use('/api/invites', inviteRoutes);
 app.use('/api/ratings', ratingRoutes);
 app.use('/api/sessions', hostRoutes); // Host controls under /api/sessions/:id/host/*
 app.use('/api/sessions', postEventMessageRoutes); // Post-event broadcast message endpoints
+app.use('/api/sessions', eventChatRoutes); // An event's chat, kept as it was sent: /api/sessions/:id/chat
 app.use('/api/join-requests', joinRequestRoutes);
 app.use('/api/admin', adminRoutes);
 // Task E2 — admin per-user inspection API (onboarding, conversations, interactions).

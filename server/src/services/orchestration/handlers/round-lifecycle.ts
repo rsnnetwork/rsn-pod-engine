@@ -13,7 +13,6 @@ import { SessionStatus, ParticipantStatus, formatRule, resolveEventFormat } from
 import {
   ActiveSession, activeSessions, withSessionGuard,
   sessionRoom, userRoom, persistSessionState, clearPersistedState,
-  cleanupChatMessages,
 } from '../state/session-state';
 import { canTransitionSession } from '../state/session-fsm';
 import { startSegmentTimer, clearSessionTimers, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
@@ -34,6 +33,7 @@ import * as emailService from '../../email/email.service';
 // can refresh React-Query keys without bespoke listeners.
 import { emitEntities } from '../../../realtime/emit';
 import { E } from '../../../realtime/entities';
+import { fanoutSessionCompleted } from '../../../realtime/fanout';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 
@@ -1130,6 +1130,10 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
       logger.warn({ err, sessionId }, '#11 per-user session:completed fan-out failed (non-fatal)');
     }
 
+    // 26 Oct 2026 — tell every open page of this event (those who already left included) that it has ended
+    // and its chat is complete. Never throws.
+    await fanoutSessionCompleted(sessionId);
+
     logger.info({ sessionId }, 'Session completed (clients signaled)');
 
     // M1 sweep (21 May Ali) — close out the participant roster when the
@@ -1201,9 +1205,9 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
   } catch (err) {
     logger.error({ err, sessionId }, 'Error completing session');
   } finally {
-    // Always clean up to prevent memory leak, even on error
+    // Always clean up to prevent memory leak, even on error. (The event's chat is not in memory: it stays
+    // in the database with the event.)
     activeSessions.delete(sessionId);
-    cleanupChatMessages(sessionId);
     clearPersistedState(sessionId).catch(() => {});
     // Tier-1 A1: clear dashboard coalesce state so any pending trailing
     // emit doesn't fire after the session is gone.

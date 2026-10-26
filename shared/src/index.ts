@@ -67,6 +67,7 @@ export * from './types/post-event-message';
 import { POST_EVENT_MESSAGE_LIMITS as _POST_EVENT_MESSAGE_LIMITS } from './types/post-event-message';
 export const POST_EVENT_MESSAGE_LIMITS = _POST_EVENT_MESSAGE_LIMITS;
 export * from './types/wall';
+export * from './types/event-chat';
 export * from './identity/displayName';
 // A member's own words, as a page shows them (21 Oct 2026): one rule for the brief another member reads and for your
 // own profile. Real VALUES (functions) the client calls, so each has its own named export, same as OPENINGS above.

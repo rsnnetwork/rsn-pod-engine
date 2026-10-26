@@ -99,13 +99,17 @@ describe('Phase A — in-room chat scope resolution', () => {
     });
   });
 
-  describe('handleChatReact: same scope-resolution pattern (no regression for reactions)', () => {
-    it('chat-reactions still resolves recipients per match.room_id (no status=active hard filter)', () => {
+  describe('handleChatReact: recipients never depend on a match status (no regression for reactions)', () => {
+    // 26 Oct 2026 — a room message is stored with exactly who it reached (event-chat.service), so a
+    // reaction on it goes to those people. The old lookup (the first match with that room id) could miss a
+    // host who visited the room; a status filter cannot creep back in because there is no match lookup.
+    // Behaviour: event-chat-handlers.test.ts ("a reaction on a room message goes to the people the message reached").
+    it('chat reactions go to the room message\'s stored audience, with no match lookup', () => {
       const fnStart = src.indexOf('export async function handleChatReact');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
+      const fnEnd = src.indexOf('\n}', fnStart);
       const fn = src.slice(fnStart, fnEnd);
-      // Reaction broadcast looks up the match by msg.roomId (already correct).
-      expect(fn).toMatch(/WHERE room_id = \$1/);
+      expect(fn).toMatch(/result\.audienceIds/);
+      expect(fn).not.toMatch(/FROM matches/);
     });
   });
 

@@ -11,7 +11,7 @@
 - **Server**: Express 4, Socket.IO 4, PostgreSQL (raw SQL via `pg`), Redis (ioredis), Pino logger, Zod validation, JWT auth, Sentry
 - **Client**: React 18, Vite 5, Zustand (local state), React Query (server state), Socket.IO client, LiveKit (video), Tailwind CSS
 - **Deploy**: Server on Render, Client on Vercel, DB on Neon/hosted PostgreSQL, Redis on Upstash
-- **Real-time**: Socket.IO with Redis adapter for multi-instance broadcasting, Redis-backed session state + chat persistence
+- **Real-time**: Socket.IO with Redis adapter for multi-instance broadcasting, Redis-backed session state; event chat is stored in PostgreSQL (`event_chat_messages`) as it is sent and kept as long as the event exists, never in Redis or memory
 - **Monitoring**: Sentry for error tracking (server-side wired, client needs DSN)
 
 ### Critical Invariant: Real-Time First
@@ -200,8 +200,8 @@ RSN uses Redis (ioredis + Upstash) for three critical functions:
 ### Rules:
 - Redis is **optional but expected** in production. The system gracefully degrades to in-memory if Redis is unavailable — but this means session state is lost on restart and multi-instance broadcasting breaks.
 - Always use `getRedisClient()` and check for `null` before Redis operations — never assume Redis is available.
-- All Redis keys must be prefixed with their domain (`rsn:session:`, `rsn:chat:`, etc.) to avoid collisions.
-- Always set TTL on Redis keys — never store data without expiry. Live session data: 4 hours. Chat messages: 4 hours. Rate limit counters: match the window.
+- All Redis keys must be prefixed with their domain (`rsn:session:`, `rsn:canonical:`, `rsn:ratelimit:`, etc.) to avoid collisions.
+- Always set TTL on Redis keys — never store data without expiry. Live session data: 4 hours. Rate limit counters: match the window. Event chat is not in Redis at all: each message is written to PostgreSQL (`event_chat_messages`, migration 112) before anyone receives it, and kept with the event (no TTL).
 - Never store large objects in Redis — keep payloads under 1MB. If you need to store more, put it in PostgreSQL and cache a reference in Redis.
 - For new features that need caching: use Redis first, PostgreSQL as the source of truth. Cache invalidation must happen in the same transaction as the DB write.
 

@@ -366,3 +366,26 @@ export const postEventMessageLimiter = rateLimit({
     res.status(429).json(response);
   },
 });
+
+// Event chat (26 Oct 2026). Any event's chat can be asked for by id, so reads are limited like the entity
+// reads; a page is 50 messages, so 60 a minute is far more than a person scrolling back reads. Taking a
+// message down has a smaller allowance of its own. Keyed per member: the routes sign in first.
+export const eventChatReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-chat-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const eventChatWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-chat-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});

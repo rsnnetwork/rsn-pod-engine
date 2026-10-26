@@ -15,8 +15,9 @@ import {
 import {
   ActiveSession, activeSessions, disconnectTimeouts, withSessionGuard, withMatchGenerationLock,
   sessionRoom, userRoom, getUserIdFromSocket,
-  chatMessages, emitRatingWindowOnce, activeFormat,
+  emitRatingWindowOnce, activeFormat,
 } from '../state/session-state';
+import { sendJoinChatHistory } from './chat-handlers';
 import * as sessionService from '../../session/session.service';
 import * as matchingService from '../../matching/matching.service';
 import * as ratingService from '../../rating/rating.service';
@@ -1100,12 +1101,10 @@ export async function handleJoinSession(
         }
       }
 
-      // Send chat history — only lobby messages (room messages are private to their breakout)
-      const allHistory = chatMessages.get(data.sessionId) || [];
-      const lobbyHistory = allHistory.filter(m => m.scope === 'lobby' || !m.scope);
-      if (lobbyHistory.length > 0) {
-        socket.emit('chat:history', { messages: lobbyHistory });
-      }
+      // Send chat history from the database, which keeps it (26 Oct 2026): the lobby messages and the room
+      // messages this member was sent, so a restart or deploy mid-event loses nothing. Not awaited, so the
+      // read never holds this event's join guard.
+      void sendJoinChatHistory(socket, data.sessionId, userId);
 
       logger.info({ sessionId: data.sessionId, userId }, 'User joined session');
     } catch (err: any) {
