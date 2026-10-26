@@ -10,7 +10,7 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import logger from '../../../config/logger';
 import { query } from '../../../db';
 import {
-  SessionStatus, ParticipantStatus, UserRole, resolveDisplayName, placeholderName, resolveEventFormat, liveKindOf,
+  SessionStatus, ParticipantStatus, UserRole, ErrorCodes, resolveDisplayName, placeholderName, resolveEventFormat, liveKindOf,
 } from '@rsn/shared';
 import {
   ActiveSession, activeSessions, disconnectTimeouts, withSessionGuard, withMatchGenerationLock,
@@ -19,6 +19,7 @@ import {
 } from '../state/session-state';
 import { sendJoinChatHistory } from './chat-handlers';
 import * as sessionService from '../../session/session.service';
+import { eventRoomAdmission, eventRoomRefusal } from '../../session/session-access';
 import * as matchingService from '../../matching/matching.service';
 import * as ratingService from '../../rating/rating.service';
 import { clearRoomTimers } from './host-actions';
@@ -455,19 +456,6 @@ export async function handleJoinSession(
 
       const session = await sessionService.getSessionById(data.sessionId);
 
-      // ── Single-session enforcement ──
-      // At 200+ participants, duplicate tabs/reconnects are common.
-      // A user can only be "present" in ONE active session at a time.
-      // If they're already in another session, remove them from the old one first.
-      for (const [existingSessionId, existingSession] of activeSessions) {
-        if (existingSessionId !== data.sessionId && existingSession.presenceMap.has(userId)) {
-          setPresence(existingSessionId, userId, null);
-          socket.leave(sessionRoom(existingSessionId));
-          logger.info({ userId, oldSessionId: existingSessionId, newSessionId: data.sessionId },
-            'User moved to new session — removed from previous session presence');
-        }
-      }
-
       // ── Single-socket enforcement for same session ──
       // If this user already has a socket in this session, evict the old one
       let activeSession = activeSessions.get(data.sessionId);
@@ -547,24 +535,15 @@ export async function handleJoinSession(
         logger.info({ sessionId: data.sessionId, userId }, 'Cancelled disconnect timeout — user reconnected');
       }
 
-      // Join socket room
-      socket.join(sessionRoom(data.sessionId));
+      // The person's own room. Every socket is already in it from its connection.
       socket.join(userRoom(userId));
-
-      // Update presence — FIX 3C: set reconnectedAt so disconnect timeout can detect reconnect
-      if (activeSession) {
-        setPresence(data.sessionId, userId, {
-          lastHeartbeat: new Date(),
-          socketId: socket.id,
-          reconnectedAt: new Date(),
-        });
-      }
 
       // Auto-register if not already a participant.
       // The host is also a participant in speed networking — they network too.
       // Pass user role so admin/super_admin can bypass pod visibility restrictions.
       const userRole = (socket.data as any)?.role as UserRole | undefined;
       let didRegister = false;
+      let registrationRefusal: string | undefined;
       try {
         await sessionService.registerParticipant(data.sessionId, userId, userRole);
         didRegister = true;
@@ -585,6 +564,69 @@ export async function handleJoinSession(
           logger.info({ sessionId: data.sessionId, userId }, 'Removed user attempted to rejoin — evicted');
           return;
         }
+        registrationRefusal = regErr?.code;
+      }
+
+      // ── H1 (26 Oct 2026): only the people this event admits join its live room ──
+      // The room carries the event's chat, reactions, presence and round events. It used to be joined above,
+      // before this registration, whose refusal was swallowed, so anyone who knew a private pod's event id was in
+      // it. Now one positive check decides (session-access.ts): host, co-host or moderator, admin, or a
+      // participant row that is not removed (left and coming back, reconnecting, a refresh, a second tab, a late
+      // joiner registered just above). A removed row gets the same terminal bounce: the registration reports a
+      // full or finished event, or a pod they are not in, before it looks at the row. Someone refused only because
+      // the event is full joins as before, on purpose. Anyone else gets one sentence and nothing more: not the
+      // room, not presence, no state, no history.
+      const admission = await eventRoomAdmission(data.sessionId, userId, userRole).catch((admissionErr) => {
+        logger.warn({ err: admissionErr, sessionId: data.sessionId, userId }, 'Could not check who the event admits — not joining its room');
+        return null;
+      });
+      if (admission === 'removed') {
+        socket.leave(sessionRoom(data.sessionId));
+        socket.emit('session:evicted', { reason: 'removed_from_event' });
+        logger.info({ sessionId: data.sessionId, userId, registrationRefusal }, 'Removed user attempted to rejoin — evicted');
+        return;
+      }
+      const overCapacityOnly = admission === 'refused' && registrationRefusal === ErrorCodes.SESSION_FULL;
+      if (admission !== 'admitted' && !overCapacityOnly) {
+        socket.leave(sessionRoom(data.sessionId));
+        // One sentence per page: production's live page asks again on load and on every focus return, and its
+        // toasts stack. A new page (a refresh) is a new socket and is told again.
+        const refusal = eventRoomRefusal(session.status, admission === null ? undefined : registrationRefusal);
+        const told: Set<string> = socket.data.eventRoomRefusals ?? new Set<string>();
+        socket.data.eventRoomRefusals = told;
+        const said = `${data.sessionId}|${refusal.message}`;
+        if (!told.has(said)) {
+          told.add(said);
+          socket.emit('error', refusal);
+        }
+        logger.info({ sessionId: data.sessionId, userId, registrationRefusal }, 'Not admitted to the event room — refused');
+        return;
+      }
+
+      // ── Single-session enforcement ──
+      // At 200+ participants, duplicate tabs/reconnects are common.
+      // A user can only be "present" in ONE active session at a time.
+      // If they're already in another session, remove them from the old one first.
+      // H1 — only once this event has admitted them: a refused join moves nobody out of the event they are in.
+      for (const [existingSessionId, existingSession] of activeSessions) {
+        if (existingSessionId !== data.sessionId && existingSession.presenceMap.has(userId)) {
+          setPresence(existingSessionId, userId, null);
+          socket.leave(sessionRoom(existingSessionId));
+          logger.info({ userId, oldSessionId: existingSessionId, newSessionId: data.sessionId },
+            'User moved to new session — removed from previous session presence');
+        }
+      }
+
+      // Join socket room
+      socket.join(sessionRoom(data.sessionId));
+
+      // Update presence — FIX 3C: set reconnectedAt so disconnect timeout can detect reconnect
+      if (activeSession) {
+        setPresence(data.sessionId, userId, {
+          lastHeartbeat: new Date(),
+          socketId: socket.id,
+          reconnectedAt: new Date(),
+        });
       }
 
       // Phase 2.5D (5 May spec) — late-joiner future-only repair.
@@ -1217,6 +1259,10 @@ export function handleHeartbeat(
 ): void {
   const userId = getUserIdFromSocket(socket);
   if (!userId) return;
+  // H1 (26 Oct 2026) — a heartbeat keeps someone present only while their socket is in the event's room,
+  // which the join puts it in only once the event has admitted them. A refused page still heartbeats every
+  // 15 s, and this used to mark its person present (in the presence map and on every member's roster).
+  if (!socket.rooms.has(sessionRoom(data?.sessionId))) return;
 
   const activeSession = activeSessions.get(data.sessionId);
   if (activeSession) {
