@@ -28,6 +28,9 @@ export function isRoomGone(err: unknown): boolean {
   if (!e) return false;
   if (e.code === 5 || e.code === 'not_found' || e.status === 404) return true;
   const msg = String(e.message ?? '').toLowerCase();
+  // A room LiveKit has closed (right after an event ends) answers 409 "room has already closed": nobody is in it
+  // either (H2b item 19, 26 Oct 2026; production logged it as an error every sweep tick).
+  if (msg.includes('already closed')) return true;
   return msg.includes('not found') || msg.includes('does not exist');
 }
 

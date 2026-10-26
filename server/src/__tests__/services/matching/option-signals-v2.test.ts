@@ -142,6 +142,11 @@ describe('find: what they hope for, in words that work', () => {
 // The 25 Oct review (ONB-02): answers for people who are not founders. Each one asks for the kinds of person
 // the audit's table names, and never for the opposite: "people who are hiring" is not a search for candidates.
 describe('the 25 Oct answers ask for the right kinds of person', () => {
+  it('a vice-president with a hyphen is a manager too (H2b item 13)', () => {
+    expect(wantedKeys('I want to meet a vice-president of sales')).toEqual(expect.arrayContaining(['manager']));
+    expect(wantedKeys('I want to meet a vice president of sales')).toEqual(expect.arrayContaining(['manager']));
+  });
+
   it('managers and leaders asks for managers and executives', () => {
     expect(wantedKeys(MEET_V2_SIGNALS.meet_managers_leaders.wantText)).toEqual(expect.arrayContaining(['manager', 'executive']));
   });
@@ -343,6 +348,12 @@ describe('offers reach the people who are looking for them', () => {
 });
 
 // The 25 Oct review (ONB-03): with no limits, every answer the role supports is suggested, not only the first.
+describe('a leader\'s assistant, secretary or coordinator is not suggested as a leader (H2b item 13)', () => {
+  it.each(['Executive Assistant of the CEO', 'Executive Assistant to the Chief Executive Officer', 'Secretary to the Managing Director', 'Coordinator, Office of the VP'])('%s', (role) => {
+    expect(selfGuessesFromText(role, null)).not.toContain('self_manager_leader');
+  });
+});
+
 describe('selfGuessesFromText: Q4\'s likely answers, read from the LinkedIn role', () => {
   it.each([
     ['Founder & CEO', ['self_founder_owner']],
@@ -372,6 +383,10 @@ describe('selfGuessesFromText: Q4\'s likely answers, read from the LinkedIn role
     ['Product Owner', ['self_employee']],
     // Two things the title really says.
     ['Head of Sales', ['self_employee', 'self_manager_leader']],
+    // H2b item 13 (26 Oct 2026): a hyphen is still a vice president; an assistant, a secretary or a coordinator of a
+    // leader is not one, whoever they assist.
+    ['Executive Vice-President', ['self_manager_leader']],
+    ['Executive Vice President', ['self_manager_leader']],
   ] as const)('%s', (role, keys) => {
     expect(selfGuessesFromText(role, null)).toEqual(keys);
   });

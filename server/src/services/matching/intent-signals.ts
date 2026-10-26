@@ -77,7 +77,8 @@ export const ROLE_TAXONOMY: RoleBucket[] = [
   // platform is nearly everyone. Sits BEFORE manager so "community manager"
   // reads as a community builder rather than a generic manager.
   { key: 'community', label: 'event organisers and community builders', is: /\b(community (manager|builder|lead|organi[sz]er)|event (organi[sz]er|host|producer)|organi[sz]er|meetup (host|organi[sz]er))s?\b/ },
-  { key: 'manager', label: 'managers and leads', is: /\b(manager|director|head of|team lead|vp|vice president)s?\b/ },
+  // H2b item 13 (26 Oct 2026): "vice-president" with a hyphen is the same person.
+  { key: 'manager', label: 'managers and leads', is: /\b(manager|director|head of|team lead|vp|vice[-\s]president)s?\b/ },
   { key: 'student', label: 'students', is: /\b(student|intern|undergrad|graduate)s?\b/ },
   {
     key: 'job_seeker', label: 'candidates',

@@ -224,14 +224,12 @@ router.delete(
   auditMiddleware('delete_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Bug 30 (19 May Ali) — fan out BEFORE the delete so fanoutPodEntities
-      // can still resolve the active member list. After deletion the
-      // pod_members rows are gone (cascade) and the lookup would find no
-      // one to notify. fanoutPodEntities is fire-and-forget, so this is
-      // safe to run before awaiting the deletePod call. includeUserPods
-      // tags so every member's My Pods list invalidates too.
-      fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
+      // The pod is archived, not deleted (its members stay), so its screens are told AFTER the archive is saved, as
+      // every mutation does (H2b item 20, 26 Oct 2026). The fan-out used to go first, from the days the pod and its
+      // member rows were really deleted (Bug 30, 19 May): a page that refetched at once could still read the pod as
+      // open. includeUserPods tags so every member's My Pods list invalidates too.
       await podService.deletePod(req.params.id, req.user!.userId, req.user!.role);
+      fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Pod deleted' } };
       res.json(response);
     } catch (err) {

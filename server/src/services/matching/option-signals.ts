@@ -467,9 +467,17 @@ const saysWhatTheyDo = (phrase: string): boolean => {
 const EXECUTIVE_WHO_LEADS = new RegExp([
   'chief', 'c[-\\s]?suite',
   'ceo', 'cto', 'cfo', 'coo', 'cmo', 'cpo', 'cio', 'cso', 'cco', 'cdo', 'cro', 'ciso',
-  'executive (?:director|vice president|chair(?:man|woman|person)?)', 'evp', 'svp',
-  'vice president', 'vp', 'chair(?:man|woman|person)', 'managing director', 'head of',
+  'executive (?:director|vice[-\\s]president|chair(?:man|woman|person)?)', 'evp', 'svp',
+  'vice[-\\s]president', 'vp', 'chair(?:man|woman|person)', 'managing director', 'head of',
 ].map(t => `\\b${t}\\b`).join('|'));
+
+/**
+ * A title that names whom its holder assists is not the leader's own (H2b item 13, 26 Oct 2026): an executive
+ * assistant of the CEO, a secretary to the managing director or a coordinator in the office of the VP is not
+ * suggested as someone who leads or owns, whatever leader the title names.
+ */
+const ASSISTS_A_LEADER = /\b(assistant|secretary|coordinator)s?\b/i;
+const LEADER_GUESSES: ReadonlySet<SelfV2Key> = new Set<SelfV2Key>(['self_manager_leader', 'self_founder_owner']);
 
 /**
  * Every answer one title names, the most specific kind first. A match that is
@@ -514,5 +522,6 @@ export function selfGuessesFromText(role: string | null | undefined, headline: s
       for (const key of guessesIn(title.trim())) if (!out.includes(key)) out.push(key);
     }
   }
-  return out;
+  // Read on the whole role, not a piece of it: "Coordinator, Office of the VP" names the VP in its second piece.
+  return ASSISTS_A_LEADER.test(text) ? out.filter((k) => !LEADER_GUESSES.has(k)) : out;
 }
