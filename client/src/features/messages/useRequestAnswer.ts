@@ -7,7 +7,7 @@ import { useMutation, useMutationState, useQueryClient, type QueryClient } from 
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import { errorMessage } from '@/features/reason/errors';
-import { alreadyAnswered, requestAnswerKey, type Answer } from './request-answer';
+import { alreadyAnswered, answerOnce, requestAnswerKey, type Answer } from './request-answer';
 
 /** What accept and decline answer with. Accept carries the conversation, so a repeated accept lands in it too. */
 export interface AnswerResult { conversationId?: string | null }
@@ -54,8 +54,10 @@ export function useRequestAnswer(requestId: string, followUp: AnswerFollowUp = {
     filters: { mutationKey: requestAnswerKey(requestId), status: 'pending' },
     select: (m) => m.state.variables as Answer | undefined,
   });
+  // A double click, or two surfaces pressed at once, answers once (answerOnce).
+  const answer = (choice: Answer) => { answerOnce(qc, requestId, () => mutation.mutate(choice)); };
   return {
-    answer: mutation.mutate,
+    answer,
     /** Some surface is answering this request right now. */
     busy: inFlight.length > 0,
     /** Which answer is on its way, for the busy button's words. */

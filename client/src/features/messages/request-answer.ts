@@ -7,6 +7,8 @@
 // Now every surface draws what the server says (GET /notifications carries `requestState` on each `poke` row), and the
 // three places a request can be answered share one mutation key per request.
 
+import { memberSentence } from '../reason/errors';
+
 export type Answer = 'accept' | 'decline';
 
 /** Where a request stands, as GET /notifications sends it on a `poke` row. */
@@ -18,6 +20,20 @@ export interface RequestStateLike { status: string; conversationId: string | nul
  */
 export function requestAnswerKey(requestId: string): readonly ['request-answer', string] {
   return ['request-answer', requestId] as const;
+}
+
+/** The one thing the guard asks of the query client: how many answers to this request are on their way. */
+export interface AnswersInFlight { isMutating: (filters: { mutationKey: readonly unknown[] }) => number }
+
+/**
+ * Answer once. A double click, or two surfaces pressed at the same moment, must never post, navigate or toast twice:
+ * the second press finds the first in the mutation cache, which holds a mutation from the instant it is made (a
+ * disabled button only follows on the next render). Returns whether this press sent the answer.
+ */
+export function answerOnce(client: AnswersInFlight, requestId: string, send: () => void): boolean {
+  if (client.isMutating({ mutationKey: requestAnswerKey(requestId) }) > 0) return false;
+  send();
+  return true;
 }
 
 // The link a request's bell row carries: /messages?poke=<a whole uuid>, nothing after it.
@@ -59,22 +75,27 @@ export function bellRequestView(n: {
   return { requestId, canAnswer: false, label: null, destination };
 }
 
-/** "You already accepted this request." */
+/** "You already accepted this request.": what is said when the server sends no sentence fit to show. */
 export function alreadyAnsweredMessage(status: 'accepted' | 'declined'): string {
   return `You already ${status} this request.`;
 }
 
 interface FailedAnswer {
-  response?: { status?: number; data?: { error?: { code?: unknown; details?: { status?: unknown } } } };
+  response?: { status?: number; data?: { error?: { code?: unknown; message?: unknown; details?: { status?: unknown } } } };
 }
 
 /**
  * The 409 for a request answered the other way already (in another tab, on another device, or on another surface
  * here), with the answer it has. Answering the SAME way twice is not this: the server answers that with a 200.
+ *
+ * The sentence is the server's own whenever it sends one fit to show: it knows why the request is closed, and says
+ * "You're already connected." when a match closed it rather than an answer. Only with no such sentence does the
+ * member read "You already {accepted|declined} this request."
  */
 export function alreadyAnswered(err: unknown): { status: 'accepted' | 'declined'; message: string } | null {
   const response = (err as FailedAnswer | null | undefined)?.response;
   if (response?.status !== 409 || response.data?.error?.code !== 'MEETING_REQUEST_ALREADY_ANSWERED') return null;
   const status = response.data.error.details?.status;
-  return status === 'accepted' || status === 'declined' ? { status, message: alreadyAnsweredMessage(status) } : null;
+  if (status !== 'accepted' && status !== 'declined') return null;
+  return { status, message: memberSentence(response.data.error.message) ?? alreadyAnsweredMessage(status) };
 }

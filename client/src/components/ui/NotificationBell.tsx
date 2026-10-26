@@ -65,9 +65,12 @@ function getDestination(n: Notification): string | null {
 
 /**
  * The list as it will be once a change lands, drawn at once (an optimistic
- * update). The server's answer replaces it: every caller invalidates after.
+ * update). A bell fetch already on its way is cancelled first, so its older
+ * answer cannot land on top and briefly undo the change. The server's answer
+ * replaces it: every caller invalidates after.
  */
-function patchList(qc: QueryClient, change: (n: Notification) => Notification) {
+async function patchList(qc: QueryClient, change: (n: Notification) => Notification) {
+  await qc.cancelQueries({ queryKey: NOTIFICATIONS_KEY });
   qc.setQueryData<NotificationList>(NOTIFICATIONS_KEY, (old) => {
     if (!old) return old;
     const notifications = old.notifications.map(change);
@@ -153,14 +156,14 @@ export default function NotificationBell() {
     // Mark-read failures are non-critical (UX nicety) — log to console for
     // dev visibility but don't toast: the user has already moved on. The
     // optimistic update below shows it read at once; the refetch after is the truth.
-    patchList(qc, (n) => (n.id === id ? { ...n, isRead: true } : n));
+    await patchList(qc, (n) => (n.id === id ? { ...n, isRead: true } : n));
     try { await api.post(`/notifications/${id}/read`); }
     catch (err) { console.warn('mark notification read failed', err); }
     qc.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
   };
 
   const markAllRead = async () => {
-    patchList(qc, (n) => ({ ...n, isRead: true }));
+    await patchList(qc, (n) => ({ ...n, isRead: true }));
     try { await api.post('/notifications/read-all'); }
     catch (err) { console.warn('mark all notifications read failed', err); }
     qc.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
@@ -240,7 +243,7 @@ export default function NotificationBell() {
     if (success) {
       addToast('Invite accepted!', 'success');
       if (!n.isRead) markRead(n.id);
-      patchList(qc, (x) => (x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
+      await patchList(qc, (x) => (x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
       invalidateInviteCaches();
       setOpen(false);
       // SPA navigation — no more page reload (the white-flash UX everyone hated).
@@ -260,7 +263,7 @@ export default function NotificationBell() {
       await api.post(`/invites/${code}/decline`);
       addToast('Invite declined', 'info');
       if (!n.isRead) markRead(n.id);
-      patchList(qc, (x) => (x.id === n.id ? { ...x, inviteStatus: 'revoked', isRead: true } : x));
+      await patchList(qc, (x) => (x.id === n.id ? { ...x, inviteStatus: 'revoked', isRead: true } : x));
       invalidateInviteCaches();
     } catch {
       addToast('Failed to decline invite', 'error');

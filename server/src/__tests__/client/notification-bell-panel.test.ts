@@ -12,8 +12,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { MutationObserver, QueryClient } from '@tanstack/query-core';
 import {
-  alreadyAnswered, alreadyAnsweredMessage, bellRequestView, requestAnswerKey, requestIdFromLink,
+  alreadyAnswered, alreadyAnsweredMessage, answerOnce, bellRequestView, requestAnswerKey, requestIdFromLink,
 } from '../../../../client/src/features/messages/request-answer';
 
 const BELL = fs.readFileSync(path.join(__dirname, '../../../../client/src/components/ui/NotificationBell.tsx'), 'utf8')
@@ -110,13 +111,28 @@ describe('a meeting request in the bell is drawn from the server, never from the
 });
 
 describe('answering a request that was already answered the other way', () => {
-  const conflict = (status: string) => ({
-    response: { status: 409, data: { error: { code: 'MEETING_REQUEST_ALREADY_ANSWERED', message: 'x', details: { status } } } },
+  const conflict = (status: string, message?: unknown) => ({
+    response: { status: 409, data: { error: { code: 'MEETING_REQUEST_ALREADY_ANSWERED', message, details: { status } } } },
   });
 
-  it('says which answer it already has: "You already {accepted|declined} this request."', () => {
+  it('says the server\'s own sentence: today "You already {accepted|declined} this request."', () => {
+    expect(alreadyAnswered(conflict('accepted', 'You already accepted this request.')))
+      .toEqual({ status: 'accepted', message: 'You already accepted this request.' });
+    expect(alreadyAnswered(conflict('declined', 'You already declined this request.')))
+      .toEqual({ status: 'declined', message: 'You already declined this request.' });
+  });
+
+  it('a request a match already closed reads as the server says it: "You\'re already connected."', () => {
+    expect(alreadyAnswered(conflict('accepted', "You're already connected.")))
+      .toEqual({ status: 'accepted', message: "You're already connected." });
+  });
+
+  it('with no sentence fit to show, it says which answer the request has', () => {
     expect(alreadyAnswered(conflict('accepted'))).toEqual({ status: 'accepted', message: 'You already accepted this request.' });
-    expect(alreadyAnswered(conflict('declined'))).toEqual({ status: 'declined', message: 'You already declined this request.' });
+    expect(alreadyAnswered(conflict('declined', '   '))).toEqual({ status: 'declined', message: 'You already declined this request.' });
+    // A sentence carrying an id, or the code's word for a request, is never shown.
+    expect(alreadyAnswered(conflict('accepted', `Poke ${REQUEST} was already accepted`)))
+      .toEqual({ status: 'accepted', message: 'You already accepted this request.' });
     expect(alreadyAnsweredMessage('accepted')).toBe('You already accepted this request.');
   });
 
@@ -129,6 +145,63 @@ describe('answering a request that was already answered the other way', () => {
 
   it('one mutation key per request, the same wherever the request is answered', () => {
     expect(requestAnswerKey(REQUEST)).toEqual(['request-answer', REQUEST]);
+  });
+});
+
+describe('a double click answers once', () => {
+  // Run against React Query's own mutation cache (the one the app uses), with answers that stay on their way until the
+  // test lets them land. Every answer still on its way lands after each test, pass or fail: a mutation left pending
+  // keeps jest from exiting.
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  let client: QueryClient;
+  let pending: Array<() => void> = [];
+  const landAll = async () => {
+    const lands = pending;
+    pending = [];
+    for (const land of lands) land();
+    await flush();
+  };
+  beforeEach(() => { client = new QueryClient(); });
+  afterEach(async () => {
+    await landAll();
+    client.clear();
+  });
+
+  function answering(requestId: string) {
+    const sent: string[] = [];
+    const observer = new MutationObserver<void, Error, string>(client, {
+      mutationKey: requestAnswerKey(requestId),
+      gcTime: 0,
+      mutationFn: (answer) => {
+        sent.push(answer);
+        return new Promise<void>((resolve) => { pending.push(resolve); });
+      },
+    });
+    const press = (answer: string) => answerOnce(client, requestId, () => { observer.mutate(answer).catch(() => undefined); });
+    return { sent, press };
+  }
+
+  it('the second press, in the same instant (no render between), finds the first on its way and sends nothing', async () => {
+    const { sent, press } = answering(REQUEST);
+    expect(press('accept')).toBe(true);
+    expect(press('accept')).toBe(false);
+    expect(press('decline')).toBe(false);
+    await flush();
+    expect(sent).toEqual(['accept']);
+    // Once it has landed, the request can be answered again (a retry after a failure is the same press).
+    await landAll();
+    expect(press('accept')).toBe(true);
+    await flush();
+    expect(sent).toEqual(['accept', 'accept']);
+  });
+
+  it('an answer on its way for one request never holds back another request', async () => {
+    const first = answering(REQUEST);
+    const second = answering('f5f5f5f5-0000-4000-8000-000000000002');
+    expect(first.press('accept')).toBe(true);
+    expect(second.press('decline')).toBe(true);
+    await flush();
+    expect([first.sent, second.sent]).toEqual([['accept'], ['decline']]);
   });
 });
 
@@ -160,6 +233,31 @@ describe('the bell and the request cards, read from source', () => {
   it('the hook keys the mutation by request and reads every answer in flight for it, from any surface', () => {
     expect(hook()).toMatch(/mutationKey: requestAnswerKey\(requestId\)/);
     expect(hook()).toMatch(/useMutationState\(\{\s*filters: \{ mutationKey: requestAnswerKey\(requestId\), status: 'pending' \}/);
+  });
+
+  it('every press goes through the double-click guard; the bare mutate is never handed out', () => {
+    expect(hook()).toMatch(/const answer = \(choice: Answer\) => \{ answerOnce\(qc, requestId, \(\) => mutation\.mutate\(choice\)\); \};/);
+    expect(hook()).toMatch(/return \{\s*answer,/);
+    expect(hook()).not.toMatch(/answer: mutation\.mutate/);
+  });
+
+  it('an optimistic mark-read first cancels any bell fetch on its way, so an older answer cannot undo it', () => {
+    expect(bell()).toMatch(/async function patchList\(qc: QueryClient, change: \(n: Notification\) => Notification\) \{\s*await qc\.cancelQueries\(\{ queryKey: NOTIFICATIONS_KEY \}\);\s*qc\.setQueryData</);
+    const calls = bell().match(/\n[^\n]*\bpatchList\(qc,/g) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(4);
+    for (const call of calls) expect(call).toMatch(/await patchList\(qc,/);
+  });
+
+  it('the request cards\' profile links are 44px to press and look as they did: padding taken back by margins', () => {
+    const src = requests();
+    // The list card: a 40px avatar plus 2px all round, and a 20px name line plus 12px above and below.
+    expect(src).toMatch(/className="-m-0\.5 shrink-0 p-0\.5"/);
+    expect(src).toMatch(/className="relative -my-3 block truncate py-3 text-sm font-semibold/);
+    // The focused card: a 28px name line plus 8px, and the 16px "View full profile" line plus 14px.
+    expect(src).toMatch(/className="relative mt-1 -mb-2 block py-2 text-lg font-bold/);
+    expect(src).toMatch(/className="relative -mt-0\.5 -mb-3\.5 inline-block py-3\.5 text-xs font-medium text-rsn-red underline"/);
+    // Profiles open in the same tab now; nothing here says otherwise.
+    expect(src).not.toMatch(/new tab/i);
   });
 
   it('the Messages list card and the focused card both answer through it, one request at a time', () => {

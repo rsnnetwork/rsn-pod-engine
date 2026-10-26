@@ -206,10 +206,12 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
         <ProfileLink from="Messages" userId={req.senderId} className="mt-4 inline-block" title={`View ${req.senderDisplayName || 'this member'}'s profile`}>
           <Avatar src={req.senderAvatarUrl || undefined} name={req.senderDisplayName || 'Member'} size="xl" />
         </ProfileLink>
+        {/* The name and "View full profile" are at least 44px to press: the
+            padding is taken back by the margins, so nothing moves. */}
         <ProfileLink
           from="Messages"
           userId={req.senderId}
-          className="mt-3 block text-lg font-bold text-[#1a1a2e] hover:text-rsn-red hover:underline"
+          className="relative mt-1 -mb-2 block py-2 text-lg font-bold text-[#1a1a2e] hover:text-rsn-red hover:underline"
           title={`View ${req.senderDisplayName || 'this member'}'s profile`}
         >
           {req.senderDisplayName || 'A member'}
@@ -223,7 +225,7 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
         {formatLabel(req.preferredFormat) && (
           <p className="mt-1 text-xs text-gray-500">Prefers {formatLabel(req.preferredFormat)?.toLowerCase()}</p>
         )}
-        <ProfileLink from="Messages" userId={req.senderId} className="mt-3 inline-block text-xs font-medium text-rsn-red underline">
+        <ProfileLink from="Messages" userId={req.senderId} className="relative -mt-0.5 -mb-3.5 inline-block py-3.5 text-xs font-medium text-rsn-red underline">
           View full profile
         </ProfileLink>
         <RequestAnswerButtons
@@ -358,16 +360,18 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
           >
             <div className="flex items-start gap-3">
               {/* 7 Sep 2026 (Ali): the request is a profile card — avatar and
-                  name open the sender's profile (new tab) so the recipient can
-                  check who is asking before accepting. */}
-              <ProfileLink from="Messages" userId={r.senderId} title={`View ${r.senderDisplayName || 'this member'}'s profile`} className="shrink-0">
+                  name open the sender's profile (in the same tab, since 26 Oct
+                  2026) so the recipient can check who is asking before
+                  accepting. Each is at least 44px to press: padding cancelled
+                  by an equal negative margin, so the card looks as it did. */}
+              <ProfileLink from="Messages" userId={r.senderId} title={`View ${r.senderDisplayName || 'this member'}'s profile`} className="-m-0.5 shrink-0 p-0.5">
                 <Avatar src={r.senderAvatarUrl || undefined} name={r.senderDisplayName || 'Member'} size="md" />
               </ProfileLink>
               <div className="min-w-0 flex-1">
                 <ProfileLink
                   from="Messages"
                   userId={r.senderId}
-                  className="block truncate text-sm font-semibold text-[#1a1a2e] hover:text-rsn-red hover:underline"
+                  className="relative -my-3 block truncate py-3 text-sm font-semibold text-[#1a1a2e] hover:text-rsn-red hover:underline"
                   title={`View ${r.senderDisplayName || 'this member'}'s profile`}
                 >
                   {r.senderDisplayName || 'A member'}
