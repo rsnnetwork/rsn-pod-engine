@@ -25,8 +25,10 @@
 //                         from a card goes back to where it came from; a made-up ?from= is never printed
 //   Back, the place       (CON-01, 25 Oct) Back from a profile returns For You to the pixel and the card to where it
 //                         was, by the page's Back and the browser's; the typed search (?q=) and "everyone who fits"
-//                         (?view=all) are in the address and come back; a profile with nothing behind it goes back to
-//                         the screen its ?from= names
+//                         (?view=all) are in the address and come back; a profile with nothing behind it (a fresh tab, a
+//                         pasted address, a new tab taken through its main button, a first page reached by a replace)
+//                         goes back to the screen its ?from= names; a restore that gives up on a slow page leaves the
+//                         saved place alone, so the next Back still lands on it
 //   Failures              For You and a profile forced to 500 show their error and Try again, and Try again
 //                         recovers; with no connection a Save fails at once, and nothing loaded shows the
 //                         error state with the connection sentence (never "no one to suggest") and fills in
@@ -1503,6 +1505,73 @@ test.describe('REASON milestone 1', () => {
       await tab.close();
       await expectQuiet(o, 'a profile in a new tab, then Continue');
       console.log('  ✓ A profile in a new tab, then Continue, then the browser\'s Back, then the page\'s Back, goes to the screen its ?from= names.');
+    });
+  });
+
+  // The onboarding gate puts a member on a profile by REPLACING the first entry of the tab (ProtectedRoute sends them to
+  // /onboarding?redirect=..., and OnboardingFlow ends with navigate(redirect, { replace: true })). The router gives that entry
+  // a key of its own, so a rule that reads the key alone calls navigate(-1) with nothing behind it, and Back does nothing. The
+  // router's own count of this app's pages (idx) is 0 there, and says so.
+  test(`${engineLabel()} phone: a profile that is the first page of a tab by a replace, with a router key of its own, has a Back that goes to the screen it names`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const tab = await newTab(o);
+      await visit(tab, `/people/${giver.id}?from=Messages`);
+      await expectProfileOf(tab, giver, NAME.giver);
+      // What a replace leaves in the entry: the router's key and a count of 0, where an address typed in has no key at all.
+      await tab.evaluate(() => window.history.replaceState({ usr: null, key: 'replaced-first-entry', idx: 0 }, ''));
+      await reload(tab);
+      await expectProfileOf(tab, giver, NAME.giver);
+      expect(await tab.evaluate(() => window.history.state), 'the page starts with a key of its own, nothing behind it').toMatchObject({ key: 'replaced-first-entry', idx: 0 });
+      await tap(tab, backButton(tab), 'Back (first page by a replace)', { centre: false });
+      await expect(tab, 'Back goes to the screen the profile names').toHaveURL(`${APP}/messages`, { timeout: SLOW });
+      await settle(tab);
+      await tab.close();
+      await expectQuiet(o, 'a profile reached by a replace');
+      console.log('  ✓ A profile that is the first page of a tab by a replace goes back to the screen its ?from= names.');
+    });
+  });
+
+  // A restore waits 1.5 s for the page to grow, then gives up and goes as far as the page goes. That move is the code's own: it
+  // must not be recorded as where the member left, or the place they were after is lost for the next Back.
+  test(`${engineLabel()} phone: a restore that gives up on a slow page does not forget the place, so the next Back still lands on it`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const { page } = o;
+      await visit(page, '/');
+      await expectPeople(page, [giver, longName, secretive], 'For You');
+      const last = page.locator('[data-person-id]').last();
+      ours((await last.getAttribute('data-person-id')) ?? '');
+      await last.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }));
+      await holdsStill(page, last);
+      const place = await pageAreaPlace(page, last);
+      expect(place.top, 'the page area is scrolled').toBeGreaterThan(100);
+      await last.locator('h3 a').first().click();
+      await expect(backButton(page), 'the profile is drawn').toBeVisible({ timeout: SLOW });
+
+      // A reload empties what the page remembers of For You (the place is in sessionStorage, which a reload keeps), so on the way
+      // back the list is fetched again, and the answer is held for 3 s: a restore waits 1.5 s and gives up.
+      await reload(page);
+      await expect(backButton(page), 'the profile is back after the reload').toBeVisible({ timeout: SLOW });
+      let slow = true;
+      const forYou = /\/api\/matches\/platform$/;
+      await page.route(forYou, async (route) => {
+        if (slow) await new Promise((resolve) => setTimeout(resolve, 3_000));
+        await route.continue();
+      });
+      await page.goBack();
+      await expect(page.locator('[data-person-id]').first(), 'the list arrives after the restore has given up').toBeVisible({ timeout: SLOW });
+      slow = false;
+      expect((await pageAreaPlace(page, last)).top, 'the restore gave up: the page area did not reach the place').toBeLessThan(place.top - 100);
+
+      // The browser's Forward and Back again, now with the list drawn: the place the first visit saved is what comes back.
+      await page.goForward();
+      await expect(backButton(page), 'the profile again').toBeVisible({ timeout: SLOW });
+      await page.goBack();
+      await expectPlace(page, last, place, 'after the Back that follows a restore that gave up');
+      await page.unroute(forYou);
+      await expectQuiet(o, 'a restore that gave up');
+      console.log(`  ✓ A restore that gave up on a slow page left the place at ${place.top}px, and the next Back lands on it.`);
     });
   });
 
