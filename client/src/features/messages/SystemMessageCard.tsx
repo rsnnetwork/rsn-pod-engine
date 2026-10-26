@@ -10,7 +10,7 @@
 
 import { CalendarCheck, CalendarClock, Clock, Video, Phone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { isMeetingOver } from './MeetingScheduler';
+import { isMeetingOver, slotLabel, viewerZone } from './scheduler-flow';
 import SheepAvatar from '@/components/brand/SheepAvatar';
 
 export type DmMessageKind = 'user' | 'system';
@@ -25,19 +25,21 @@ export type DmSystemMeta =
       movedFrom?: string;
     };
 
-/** One instant, in the reader's own timezone. */
+/** One instant, in the reader's own time zone, in the form the scheduler and the emails use: "Sun 25 Oct, 13:00". */
 export function localWhen(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  if (isNaN(Date.parse(iso))) return iso;
+  return slotLabel(iso, viewerZone());
 }
 
 interface Props {
   content: string;
   meta?: DmSystemMeta | null;
-  /** Live overlap from the scheduler, so a proposal card never offers a time
-   *  that has since been taken off the table. Falls back to the stored slots. */
+  /** The times both still share, from the scheduler, so a proposal card never
+   *  offers a time that has since been taken off the table. Undefined until
+   *  the scheduling has loaded; the card's own stored times stand in till then. */
   liveSlots?: string[];
+  /** A time on a proposal card: opens the scheduler on that time's confirm
+   *  card (26 Oct 2026; it used to drop the time and only open the panel). */
   onPickSlot?: (slot: string) => void;
   onOpenScheduler?: () => void;
   /** Hidden once a meeting is set: the proposal has been answered. */
@@ -126,18 +128,22 @@ export default function SystemMessageCard({
   if (meta?.type === 'meeting_proposal') {
     // Once a meeting is set the card has served its purpose; leave the text so
     // the history still reads, but drop the times nobody should pick any more.
-    const slots = (liveSlots?.length ? liveSlots : meta.slots).slice(0, 3);
+    // The same for a time that has started, or that one of them took back.
+    // data-scheduler-trigger: these buttons open or point the scheduler, so the
+    // panel's "tap outside closes it" must not treat them as outside.
+    const slots = (liveSlots ?? meta.slots).filter(s => Date.parse(s) > Date.now()).slice(0, 3);
     return (
       <Shell tone="proposal" icon={<Clock className="h-4 w-4 text-emerald-600" />}>
         <p className="text-sm text-[#1a1a2e]">You are both free. Pick one to confirm.</p>
-        {!meetingConfirmed && slots.length > 0 && (
+        {!meetingConfirmed && (slots.length > 0 || onOpenScheduler) && (
           <div className="mt-1.5 flex flex-wrap justify-center gap-1.5">
             {slots.map(s => (
               <button
                 key={s}
                 type="button"
+                data-scheduler-trigger
                 onClick={() => onPickSlot?.(s)}
-                className="inline-flex min-h-[44px] items-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+                className="inline-flex min-h-[44px] items-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
               >
                 {localWhen(s)}
               </button>
@@ -145,8 +151,9 @@ export default function SystemMessageCard({
             {onOpenScheduler && (
               <button
                 type="button"
+                data-scheduler-trigger
                 onClick={onOpenScheduler}
-                className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
+                className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 hover:bg-gray-50"
               >
                 See all times
               </button>
@@ -165,6 +172,7 @@ export default function SystemMessageCard({
         <div className="mt-1.5 flex justify-center">
           <button
             type="button"
+            data-scheduler-trigger
             onClick={onOpenScheduler}
             className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
