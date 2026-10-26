@@ -18,6 +18,7 @@ import { AppError, ConflictError, NotFoundError } from '../../middleware/errors'
 import { ErrorCodes } from '@rsn/shared';
 import * as dmService from './dm.service';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
+import { meetingTime } from '../meetings/meeting-time';
 
 export const DAYPARTS = ['morning', 'afternoon', 'evening'] as const;
 export type Daypart = typeof DAYPARTS[number];
@@ -137,19 +138,12 @@ export function isValidWindowKey(key: string, now = new Date()): boolean {
 export function windowLabel(key: string, timeZone?: string | null): string {
   // A concrete slot is one instant; render it in the reader's timezone when we
   // know it (notifications), else UTC. The shared thread line embeds the
-  // instant itself and each client localises it.
-  const s = SLOT_RE.exec(key);
-  if (s) {
-    const date = new Date(key);
-    const fmt = (tz: string) => new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz, weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
-    }).formatToParts(date);
-    let parts: Intl.DateTimeFormatPart[];
-    try { parts = fmt(timeZone || 'UTC'); } catch { parts = fmt('UTC'); }
-    const p = (t: string) => parts.find(x => x.type === t)?.value ?? '';
-    // en-GB for real zone names (CEST, not GMT+2) but its "Sept" → our own month list.
-    const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(p('month')) - 1];
-    return `${p('weekday')} ${p('day')} ${month}, ${p('hour')}:${p('minute')} ${p('timeZoneName')}`;
+  // instant itself and each client localises it. 26 Oct 2026: written by the
+  // helper every meeting bell and email uses, which reads the day as a number:
+  // en-GB's numeric pattern pads it, and the bell said "Thu 05 Nov".
+  if (SLOT_RE.test(key)) {
+    const t = meetingTime(new Date(key), timeZone);
+    return `${t.short} ${t.zone}`;
   }
   const m = WINDOW_RE.exec(key);
   if (!m) return key;
@@ -248,6 +242,16 @@ function buildScheduling(
 
 /** One proposal card per conversation per 10 minutes, however often they save. */
 const PROPOSAL_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * A list as it is said: "A", "A and B", "A, B and C" (26 Oct 2026). Each time in a
+ * proposal is shown as "Mon 2 Nov, 10:00" or the like, with a comma of its own, so
+ * times joined by commas alone read as one run of commas.
+ */
+function spokenList(items: string[]): string {
+  if (items.length < 2) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
 
 /** A meeting stops standing 30 minutes after it should have ended. */
 export function isMeetingOver(startAt: Date | null, durationMin: number | null, now = new Date()): boolean {
@@ -485,7 +489,7 @@ export async function setAvailability(
         // reader's own time, as it does for "Meeting confirmed". A label written
         // here was UTC: Stefan read "Sun 25 Oct, 12:00 UTC" in his inbox when he
         // had picked 13:00 (25 Oct 2026). A day part has no instant; it keeps its label.
-        const content = `You are both free: ${shown.map(k => (isSlotKey(k) ? k : windowLabel(k))).join(', ')}. Pick one to confirm.`;
+        const content = `You are both free: ${spokenList(shown.map(k => (isSlotKey(k) ? k : windowLabel(k))))}. Pick one to confirm.`;
         const sent = await dmService.insertDirectMessageOn(
           client, userId, partnerId, content, null,
           { kind: 'system', systemMeta: { type: 'meeting_proposal', slots: shown } },

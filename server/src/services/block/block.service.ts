@@ -10,10 +10,14 @@
 // bidirectionally at read time via areBlocked(a, b) which checks both
 // directions. This keeps writes simple and reads symmetric.
 
+import type { PoolClient } from 'pg';
 import { query } from '../../db';
 import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
+
+/** Where a read runs: a transaction's own client, so the read sees what that transaction sees. */
+type Db = Pick<PoolClient, 'query'>;
 
 export interface UserBlock {
   id: string;
@@ -90,16 +94,20 @@ export async function unblock(blockerId: string, blockedId: string): Promise<voi
  * Returns true if EITHER direction is blocked between the two users.
  * This is the symmetric check that DM and matching consumers should use.
  * Single roundtrip query.
+ *
+ * `db` is for a caller inside a transaction (26 Oct 2026): the check then runs on
+ * that transaction's own connection instead of taking a second one from the pool
+ * while the first is held.
  */
-export async function areBlocked(userA: string, userB: string): Promise<boolean> {
+export async function areBlocked(userA: string, userB: string, db?: Db): Promise<boolean> {
   if (userA === userB) return false;
-  const result = await query<{ id: string }>(
-    `SELECT id FROM user_blocks
+  const sql = `SELECT id FROM user_blocks
      WHERE (blocker_id = $1 AND blocked_id = $2)
         OR (blocker_id = $2 AND blocked_id = $1)
-     LIMIT 1`,
-    [userA, userB],
-  );
+     LIMIT 1`;
+  const result = db
+    ? await db.query<{ id: string }>(sql, [userA, userB])
+    : await query<{ id: string }>(sql, [userA, userB]);
   return result.rows.length > 0;
 }
 

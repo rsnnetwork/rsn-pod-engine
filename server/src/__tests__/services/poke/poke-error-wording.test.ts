@@ -164,12 +164,15 @@ describe('declinePoke refusals', () => {
     await expect(declinePoke(POKE_ID, RECIPIENT)).resolves.toMatchObject({ id: POKE_ID, status: 'declined' });
   });
 
-  it('says a request that was accepted was accepted, in the member\'s own words', async () => {
+  // 26 Oct 2026 (H2a): an accepted request always connected the two, whether this member accepted
+  // it or a match closed it (the other person accepted this member's request, or asked them back).
+  // "You already accepted this request." was untrue in the second case; this is true in both.
+  it('says a request that was accepted connected them, in the member\'s own words', async () => {
     requestIs('accepted');
     await expectRefusal(declinePoke(POKE_ID, RECIPIENT), {
       statusCode: 409,
       code: 'MEETING_REQUEST_ALREADY_ANSWERED',
-      message: 'You already accepted this request.',
+      message: "You're already connected.",
     });
   });
 });

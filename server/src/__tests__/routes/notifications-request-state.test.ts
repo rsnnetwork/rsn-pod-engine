@@ -58,13 +58,43 @@ const bell = (id: string, type: string, link: string | null, extra: Partial<Bell
   id, user_id: ME, type, title: `${type} ${id}`, body: null, link, isRead: false, createdAt: '2026-10-25T11:43:07.000Z', ...extra,
 });
 
+const FROM_CLOSED = 'e8edae35-0000-4000-8000-000000000005';
+const FROM_BLOCKED = 'e8edae35-0000-4000-8000-000000000006';
+const FROM_BLOCKER = 'e8edae35-0000-4000-8000-000000000007';
+const ANSWERED_FROM_CLOSED = 'e8edae35-0000-4000-8000-000000000008';
+
 const requests = [
   { id: ACCEPTED, sender_id: STEFAN, recipient_id: ME, status: 'accepted' },
   { id: DECLINED, sender_id: STEFAN, recipient_id: ME, status: 'declined' },
   { id: PENDING, sender_id: STEFAN, recipient_id: ME, status: 'pending' },
   { id: SOMEONE_ELSES, sender_id: STEFAN, recipient_id: 'u-other', status: 'accepted' },
+  { id: FROM_CLOSED, sender_id: 'u-closed', recipient_id: ME, status: 'pending' },
+  { id: FROM_BLOCKED, sender_id: 'u-i-blocked', recipient_id: ME, status: 'pending' },
+  { id: FROM_BLOCKER, sender_id: 'u-blocked-me', recipient_id: ME, status: 'pending' },
+  { id: ANSWERED_FROM_CLOSED, sender_id: 'u-closed', recipient_id: ME, status: 'accepted' },
 ];
-const conversations = [{ id: 'a4e31e41-conv', user_a_id: ME, user_b_id: STEFAN }];
+const conversations = [
+  { id: 'a4e31e41-conv', user_a_id: ME, user_b_id: STEFAN },
+  { id: 'b5f42f52-conv', user_a_id: ME, user_b_id: 'u-closed' },
+];
+/** users.status, for anyone who is not active. */
+const userStatus: Record<string, string> = { 'u-closed': 'deactivated' };
+const blocks = [
+  { blocker_id: ME, blocked_id: 'u-i-blocked' },
+  { blocker_id: 'u-blocked-me', blocked_id: ME },
+];
+
+/**
+ * The request's state as the list query reads it. A request still pending that its recipient can no
+ * longer answer is 'gone': listReceivedPokes' own rule, a sender who is not active or a block either way.
+ */
+function stateOf(req: { sender_id: string; recipient_id: string; status: string }): string {
+  if (req.status !== 'pending') return req.status;
+  const closed = (userStatus[req.sender_id] ?? 'active') !== 'active';
+  const blocked = blocks.some(b => (b.blocker_id === req.recipient_id && b.blocked_id === req.sender_id)
+    || (b.blocker_id === req.sender_id && b.blocked_id === req.recipient_id));
+  return closed || blocked ? 'gone' : 'pending';
+}
 
 /** Answers the route's queries; the list query is answered the way its LEFT JOINs would be. */
 function armDatabase(bells: Bell[]) {
@@ -82,7 +112,7 @@ function armDatabase(bells: Bell[]) {
             : undefined;
           return {
             inviteStatus: null, podId: null, sessionId: null, ...b,
-            requestStatus: req?.status ?? null,
+            requestStatus: req ? stateOf(req) : null,
             requestConversationId: conv?.id ?? null,
           };
         }),
@@ -161,6 +191,42 @@ describe('GET /notifications — a meeting request row says where the request st
     const { user_id: _reader, ...messageFields } = message;
     expect(rows[0]).toEqual({ ...inviteFields, podId: null });
     expect(rows[1]).toEqual({ ...messageFields, inviteStatus: null, podId: null, sessionId: null });
+  });
+
+  // 26 Oct 2026 (H2a): the bell offered Accept on requests that could not be accepted, because the
+  // list lacked listReceivedPokes' rule (accepting refuses a block either way, and a closed sender).
+  it('a request from a closed account, or with a block between the two either way, is not offered: it reads as gone', async () => {
+    const rows = await fetchBell([
+      bell('n1', 'poke', requestBellLink(FROM_CLOSED)),
+      bell('n2', 'poke', requestBellLink(FROM_BLOCKED)),
+      bell('n3', 'poke', requestBellLink(FROM_BLOCKER)),
+      bell('n4', 'poke', requestBellLink(PENDING)),
+    ]);
+
+    expect(rows.map(r => [r.id, r.pokeStatus, r.requestState])).toEqual([
+      // Production's bell draws Accept and Decline only while pokeStatus is empty; the preview's
+      // bell draws nothing for a request whose state is null.
+      ['n1', 'gone', null],
+      ['n2', 'gone', null],
+      ['n3', 'gone', null],
+      ['n4', null, { status: 'pending', conversationId: null }],
+    ]);
+  });
+
+  it('an answered request still says how it was answered, whatever became of the sender since', async () => {
+    const rows = await fetchBell([bell('n1', 'poke', requestBellLink(ANSWERED_FROM_CLOSED))]);
+    expect(rows[0]).toMatchObject({ pokeStatus: 'accepted', requestState: { status: 'accepted', conversationId: 'b5f42f52-conv' } });
+  });
+
+  it('the list query calls a pending request gone by listReceivedPokes\' rule: a sender who is not active, or a block either way', () => {
+    armDatabase([]);
+    return request(app).get('/notifications').set(auth).then(() => {
+      const flat = String(listQuery()[0]).replace(/\s+/g, ' ');
+      expect(flat).toMatch(/LEFT JOIN users ps ON ps\.id = p\.sender_id/);
+      expect(flat).toMatch(
+        /WHEN p\.status = 'pending' AND \( ?ps\.status IS DISTINCT FROM 'active' OR EXISTS \( ?SELECT 1 FROM user_blocks b WHERE \(b\.blocker_id = n\.user_id AND b\.blocked_id = p\.sender_id\) OR \(b\.blocker_id = p\.sender_id AND b\.blocked_id = n\.user_id\) ?\) ?\) THEN 'gone'/,
+      );
+    });
   });
 
   it('still answers with the unread count beside the list', async () => {

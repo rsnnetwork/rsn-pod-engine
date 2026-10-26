@@ -964,6 +964,11 @@ describe('sendPoke — a run of line breaks cannot build a very tall request', (
 // A small model of the tables stands in for the database. Each transaction gets its
 // own client and keeps a journal, so a transaction that throws puts the model back the
 // way it was, as Postgres would, and a refused accept can be seen to change nothing.
+// Ids compare as uuids do (case does not matter), and the pair lock
+// (pg_advisory_xact_lock) is held by a transaction until it ends, so two transactions
+// that take it run one after the other, as they do in Postgres. Row locks are not
+// modelled: without the pair lock, two crossed answers interleave here statement by
+// statement, the way they can deadlock on a real database (26 Oct 2026, task H2a).
 
 interface RequestRow {
   id: string; sender_id: string; recipient_id: string; status: 'pending' | 'accepted' | 'declined';
@@ -976,6 +981,8 @@ interface World {
   bells: BellRow[];
   /** users.status by id; anyone not listed is active. */
   status: Record<string, string>;
+  /** encounter_history pairs, written lower id first as "a:b". */
+  encounters: string[];
 }
 
 const THIRD = 'u-third';
@@ -992,23 +999,53 @@ const bellFor = (r: RequestRow): BellRow => ({ user_id: r.recipient_id, type: 'p
 
 const statements = (pattern: RegExp) => mockQuery.mock.calls.filter(c => pattern.test(String(c[0])));
 
+/** Every statement a transaction of the model ran, in order, with the client that ran it. */
+interface TxRecord { client: MockClient; sql: string[] }
+let mockTransactions: TxRecord[] = [];
+
+/** A uuid column compares without regard to case. */
+const sameId = (a: unknown, b: unknown) => String(a).toLowerCase() === String(b).toLowerCase();
+
 function armWorld(world: World) {
   let journal: Array<() => void> | null = null;
   const remember = (undo: () => void) => { journal?.push(undo); };
+  // The pair locks held right now: the pair's key → the end of the transaction holding it.
+  const held = new Map<string, Promise<void>>();
+  mockTransactions = [];
   mockTransactionHook = async (cb) => {
     const mine: Array<() => void> = [];
+    const releases: Array<() => void> = [];
+    const record: TxRecord = { client: null as unknown as MockClient, sql: [] };
     const client: MockClient = {
       // mockQuery answers synchronously, so the journal it should write to can be handed over around the call.
-      query: (...args: unknown[]) => {
+      query: async (...args: unknown[]) => {
+        const sql = String(args[0]);
+        record.sql.push(sql);
+        if (/pg_advisory_xact_lock/.test(sql)) {
+          // Wait for whoever holds this pair's lock, then hold it until this transaction ends.
+          const key = (args[1] as string[]).map(id => id.toLowerCase()).sort().join(':');
+          const before = held.get(key) ?? Promise.resolve();
+          let release!: () => void;
+          const mineEnds = new Promise<void>((resolve) => { release = resolve; });
+          held.set(key, before.then(() => mineEnds));
+          releases.push(release);
+          await before;
+        }
         journal = mine;
-        try { return mockQuery(...args); } finally { journal = null; }
+        let answered: unknown;
+        try { answered = mockQuery(...args); } finally { journal = null; }
+        return answered;
       },
     };
+    record.client = client;
+    mockTransactions.push(record);
     try {
       return await cb(client);
     } catch (err) {
       for (const undo of mine.reverse()) undo();
       throw err;
+    } finally {
+      for (const release of releases) release();
     }
   };
 
@@ -1024,7 +1061,7 @@ function armWorld(world: World) {
     const none = { rows: [] as unknown[] };
     // The claim: one request, by id, still pending, sent to this member.
     if (/UPDATE user_pokes[\s\S]*WHERE id = \$1 AND recipient_id = \$2 AND status = 'pending'/.test(sql)) {
-      const r = world.requests.find(x => x.id === params[0] && x.recipient_id === params[1] && x.status === 'pending');
+      const r = world.requests.find(x => sameId(x.id, params[0]) && x.recipient_id === params[1] && x.status === 'pending');
       return Promise.resolve(r ? answer(r, params[2] as RequestRow['status']) : none);
     }
     // Accepting whatever request is still pending from one member to another.
@@ -1033,8 +1070,19 @@ function armWorld(world: World) {
       return Promise.resolve(r ? answer(r, 'accepted') : none);
     }
     if (/UPDATE user_pokes/.test(sql)) throw new Error(`a write to user_pokes the model does not expect: ${sql}`);
+    // The pair a request belongs to, read only for the member it was sent to (who then takes the pair's lock).
+    if (/SELECT sender_id FROM user_pokes WHERE id = \$1 AND recipient_id = \$2/.test(sql)) {
+      return Promise.resolve({
+        rows: world.requests.filter(x => sameId(x.id, params[0]) && x.recipient_id === params[1]).map(x => ({ sender_id: x.sender_id })),
+      });
+    }
     if (/FROM user_pokes WHERE id = \$1/.test(sql)) {
-      return Promise.resolve({ rows: world.requests.filter(x => x.id === params[0]).map(x => ({ ...x })) });
+      return Promise.resolve({ rows: world.requests.filter(x => sameId(x.id, params[0])).map(x => ({ ...x })) });
+    }
+    // A request already waiting from one member to another (a second one is refused by the unique index).
+    if (/INSERT INTO user_pokes/.test(sql)
+      && world.requests.some(x => x.sender_id === params[1] && x.recipient_id === params[2] && x.status === 'pending')) {
+      return Promise.reject(Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' }));
     }
     if (/INSERT INTO user_pokes/.test(sql)) {
       const r: RequestRow = {
@@ -1043,12 +1091,24 @@ function armWorld(world: World) {
         preferred_format: (params[5] as string | null) ?? null,
       };
       world.requests.push(r);
+      remember(() => { world.requests.splice(world.requests.indexOf(r), 1); });
       return Promise.resolve({ rows: [{ ...r }] });
     }
     if (/SELECT status FROM users WHERE id/.test(sql)) {
       return Promise.resolve({ rows: [{ status: world.status[params[0] as string] ?? 'active' }] });
     }
-    if (/FROM encounter_history/.test(sql)) return Promise.resolve(none);
+    // Who has met: written by an accept (ON CONFLICT DO NOTHING), read by a send.
+    if (/INSERT INTO encounter_history/.test(sql)) {
+      const pair = `${params[1]}:${params[2]}`;
+      if (!world.encounters.includes(pair)) {
+        world.encounters.push(pair);
+        remember(() => { world.encounters.splice(world.encounters.indexOf(pair), 1); });
+      }
+      return Promise.resolve(none);
+    }
+    if (/FROM encounter_history/.test(sql)) {
+      return Promise.resolve(world.encounters.includes(`${params[0]}:${params[1]}`) ? { rows: [{ id: 'enc-1' }] } : none);
+    }
     if (/SELECT id FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ id: params[0] }] });
     if (/INSERT INTO dm_conversations/.test(sql)) {
       const [, a, b] = params as string[];
@@ -1104,7 +1164,7 @@ function armWorld(world: World) {
 }
 
 function newWorld(requests: RequestRow[], bells: BellRow[] = requests.map(bellFor)): World {
-  return { requests, conversations: [], bells, status: {} };
+  return { requests, conversations: [], bells, status: {}, encounters: [] };
 }
 
 describe('acceptPoke and declinePoke are claims: one answer per request', () => {
@@ -1151,7 +1211,8 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
     await expect(pokeService.declinePoke('poke-1', RECIPIENT)).rejects.toMatchObject({
       statusCode: 409,
       code: 'MEETING_REQUEST_ALREADY_ANSWERED',
-      message: 'You already accepted this request.',
+      // An accepted request always connected the two (whoever's accept it was), so that is what is said.
+      message: "You're already connected.",
       details: { status: 'accepted' },
     });
     expect(world.requests[0].status).toBe('accepted');
@@ -1246,7 +1307,8 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
 
     await expect(pokeService.acceptPoke('poke-1', RECIPIENT)).rejects.toMatchObject({ statusCode: 403, code: 'AUTH_FORBIDDEN' });
 
-    expect(mockAreBlocked).toHaveBeenCalledWith(SENDER, RECIPIENT);
+    // Asked on the accept's own transaction (26 Oct 2026, H2a), not on a second connection from the pool.
+    expect(mockAreBlocked).toHaveBeenCalledWith(SENDER, RECIPIENT, mockTransactions[0].client);
     expect(world.requests[0].status).toBe('pending');
     expect(world.conversations).toHaveLength(0);
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(0);
@@ -1303,6 +1365,207 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
     const pokeId = (mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))![1] as string[])[0];
 
     expect((written[1] as string[])[4]).toBe(`/messages?poke=${pokeId}`);
+  });
+});
+
+// ─── One answer per pair at a time (26 Oct 2026, task H2a) ───────────────────
+//
+// Two people who each had a request waiting from the other, both pressing Accept at the same
+// moment, deadlocked on production's database (Postgres 40P01, a 500 for one of them): each
+// accept locked its own request, then reached for the other one. Every transaction that answers
+// a pair's requests (accept, decline, and a send that may turn into a match) now takes that
+// pair's lock first, so the two run one after the other.
+
+describe('a pair\'s requests are answered one transaction at a time', () => {
+  const PAIR_LOCK = /pg_advisory_xact_lock/;
+  const transactionOf = (pattern: RegExp) => mockTransactions.find(t => t.sql.some(s => pattern.test(s)))!;
+  const lockParams = (tx: TxRecord) => {
+    const at = tx.sql.findIndex(s => PAIR_LOCK.test(s));
+    const call = mockQuery.mock.calls.find(c => c[0] === tx.sql[at])!;
+    return [...(call[1] as string[])].sort();
+  };
+
+  it('accept takes the pair\'s lock before it claims the request, having read only whose request it is', async () => {
+    armWorld(newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]));
+
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+
+    const tx = transactionOf(/UPDATE user_pokes/);
+    const lockAt = tx.sql.findIndex(s => PAIR_LOCK.test(s));
+    expect(lockAt).toBe(1);
+    expect(tx.sql[0]).toMatch(/SELECT sender_id FROM user_pokes WHERE id = \$1 AND recipient_id = \$2/);
+    expect(lockAt).toBeLessThan(tx.sql.findIndex(s => /UPDATE user_pokes/.test(s)));
+    expect(lockParams(tx)).toEqual([RECIPIENT, SENDER].sort());
+  });
+
+  it('decline takes the same lock first', async () => {
+    armWorld(newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]));
+
+    await pokeService.declinePoke('poke-1', RECIPIENT);
+
+    const tx = transactionOf(/UPDATE user_pokes/);
+    expect(tx.sql.findIndex(s => PAIR_LOCK.test(s))).toBe(1);
+    expect(lockParams(tx)).toEqual([RECIPIENT, SENDER].sort());
+  });
+
+  it('a send takes it before it looks at anything the pair has done: meetings, their request, an earlier no, the insert', async () => {
+    armWorld(newWorld([]));
+
+    await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+
+    const tx = transactionOf(/INSERT INTO user_pokes/);
+    expect(tx.sql.findIndex(s => PAIR_LOCK.test(s))).toBe(0);
+    for (const step of [/FROM encounter_history/, /UPDATE user_pokes SET status = 'accepted'/, /status = 'declined'/, /INSERT INTO user_pokes/]) {
+      expect(tx.sql.findIndex(s => step.test(s))).toBeGreaterThan(0);
+    }
+    expect(lockParams(tx)).toEqual([RECIPIENT, SENDER].sort());
+  });
+
+  it('the lock is one per pair: the same whichever of the two takes it, whatever case an id arrives in', async () => {
+    armWorld(newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]));
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+    const lock = mockQuery.mock.calls.find(c => PAIR_LOCK.test(String(c[0])))!;
+    const flat = String(lock[0]).replace(/\s+/g, ' ');
+    // The key is built by Postgres from the two ids as uuids, the lower one first.
+    expect(flat).toMatch(/pg_advisory_xact_lock\(hashtext\('poke-pair:' \|\| least\(\$1::uuid, \$2::uuid\) \|\| ':' \|\| greatest\(\$1::uuid, \$2::uuid\)\)\)/);
+  });
+
+  it('a member the request was not sent to takes no lock: they are refused exactly as before', async () => {
+    armWorld(newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]));
+
+    await expect(pokeService.acceptPoke('poke-1', THIRD)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(pokeService.acceptPoke('poke-missing', RECIPIENT)).rejects.toMatchObject({ statusCode: 404 });
+
+    expect(statements(PAIR_LOCK)).toHaveLength(0);
+  });
+
+  it('two people accepting each other\'s request at the same moment: both answers succeed, and they are connected once', async () => {
+    const world = newWorld([pendingRequest('poke-ab', SENDER, RECIPIENT), pendingRequest('poke-ba', RECIPIENT, SENDER)]);
+    armWorld(world);
+
+    const [mine, theirs] = await Promise.allSettled([
+      pokeService.acceptPoke('poke-ba', SENDER),
+      pokeService.acceptPoke('poke-ab', RECIPIENT),
+    ]);
+    await flushPromises();
+
+    expect(mine).toMatchObject({ status: 'fulfilled', value: { conversationId: 'conv-1' } });
+    expect(theirs).toMatchObject({ status: 'fulfilled', value: { conversationId: 'conv-1' } });
+    expect(world.requests.map(r => r.status)).toEqual(['accepted', 'accepted']);
+    expect(world.conversations).toHaveLength(1);
+    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(1);
+    expect(world.bells.filter(b => b.type === 'poke').every(b => b.is_read)).toBe(true);
+    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Run `second` from inside `first`, the moment `first` runs a statement matching `at`: the two then
+   * overlap exactly there, whatever order the microtasks would otherwise have put them in.
+   */
+  async function overlap<A, B>(first: () => Promise<A>, at: RegExp, second: () => Promise<B>): Promise<[PromiseSettledResult<A>, PromiseSettledResult<B>]> {
+    const answer = mockQuery.getMockImplementation()!;
+    let started: Promise<B> | null = null;
+    mockQuery.mockImplementation((sql: string, params: unknown[]) => {
+      if (!started && at.test(String(sql))) started = second();
+      return answer(sql, params);
+    });
+    const firstSettled = await Promise.allSettled([first()]);
+    const secondSettled = started ? await Promise.allSettled([started as Promise<B>]) : [{ status: 'rejected', reason: new Error('the second action never started') } as PromiseRejectedResult];
+    return [firstSettled[0], secondSettled[0]];
+  }
+
+  it('asking someone who is accepting your request at that moment: if the ask goes first it is the match, and the accept answers with it', async () => {
+    const world = newWorld([pendingRequest('poke-ab', SENDER, RECIPIENT), pendingRequest('poke-ba', RECIPIENT, SENDER)]);
+    armWorld(world);
+
+    // The accept arrives while the ask is looking at what the pair has done.
+    const [asked, accepted] = await overlap(
+      () => pokeService.sendPoke(SENDER, RECIPIENT, 'again'),
+      /FROM encounter_history/,
+      () => pokeService.acceptPoke('poke-ab', RECIPIENT),
+    );
+    await flushPromises();
+
+    expect(asked).toMatchObject({ status: 'fulfilled', value: { status: 'accepted', conversationId: 'conv-1' } });
+    expect(accepted).toMatchObject({ status: 'fulfilled', value: { conversationId: 'conv-1' } });
+    expect(world.requests.map(r => r.status)).toEqual(['accepted', 'accepted']);
+    expect(world.conversations).toHaveLength(1);
+    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(1);
+  });
+
+  it('…and if the accept goes first, the ask is told they can already message, and leaves no request waiting', async () => {
+    const world = newWorld([pendingRequest('poke-ab', SENDER, RECIPIENT), pendingRequest('poke-ba', RECIPIENT, SENDER)]);
+    armWorld(world);
+
+    // The ask arrives while the accept is claiming the request.
+    const [accepted, asked] = await overlap(
+      () => pokeService.acceptPoke('poke-ab', RECIPIENT),
+      /UPDATE user_pokes[\s\S]*WHERE id = \$1 AND recipient_id = \$2 AND status = 'pending'/,
+      () => pokeService.sendPoke(SENDER, RECIPIENT, 'again'),
+    );
+    await flushPromises();
+
+    expect(accepted).toMatchObject({ status: 'fulfilled', value: { conversationId: 'conv-1' } });
+    expect(asked).toMatchObject({ status: 'rejected', reason: { statusCode: 400, message: 'You can already message them.' } });
+    expect(world.requests).toHaveLength(2);
+    expect(world.requests.every(r => r.status === 'accepted')).toBe(true);
+    expect(world.conversations).toHaveLength(1);
+    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+  });
+
+  it('two people asking each other at the same moment are a match: one request, accepted, one conversation', async () => {
+    const world = newWorld([]);
+    armWorld(world);
+
+    const [first, second] = await Promise.allSettled([
+      pokeService.sendPoke(SENDER, RECIPIENT, 'hi'),
+      pokeService.sendPoke(RECIPIENT, SENDER, 'hello'),
+    ]);
+    await flushPromises();
+
+    expect(first).toMatchObject({ status: 'fulfilled', value: { senderId: SENDER, status: 'pending' } });
+    expect(second).toMatchObject({ status: 'fulfilled', value: { senderId: SENDER, status: 'accepted', conversationId: 'conv-1' } });
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0]).toMatchObject({ sender_id: SENDER, status: 'accepted' });
+    expect(world.conversations).toHaveLength(1);
+  });
+
+  it('declining by an id written in capitals still marks that request\'s bell entry read', async () => {
+    const world = newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]);
+    armWorld(world);
+
+    await pokeService.declinePoke('POKE-1', RECIPIENT);
+
+    expect(world.requests[0].status).toBe('declined');
+    // The link is matched as the request's own id, as the database stores it.
+    expect(statements(/UPDATE notifications SET is_read = TRUE/).map(([, params]) => params)).toEqual([[RECIPIENT, '/messages?poke=poke-1']]);
+    expect(world.bells[0].is_read).toBe(true);
+  });
+
+  it('accepting checks for a block on the accept\'s own transaction, never on a second connection', async () => {
+    armWorld(newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]));
+    mockAreBlocked.mockResolvedValue(false);
+
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+
+    expect(mockAreBlocked).toHaveBeenCalledTimes(1);
+    expect(mockAreBlocked).toHaveBeenCalledWith(SENDER, RECIPIENT, mockTransactions[0].client);
+  });
+
+  it('declining a request that a match has already closed says what happened: they are connected', async () => {
+    const world = newWorld([pendingRequest('poke-ab', SENDER, RECIPIENT), pendingRequest('poke-ba', RECIPIENT, SENDER)]);
+    armWorld(world);
+    // SENDER accepts RECIPIENT's request, which also answers SENDER's own request to RECIPIENT.
+    await pokeService.acceptPoke('poke-ba', SENDER);
+
+    await expect(pokeService.declinePoke('poke-ab', RECIPIENT)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'MEETING_REQUEST_ALREADY_ANSWERED',
+      message: "You're already connected.",
+      details: { status: 'accepted' },
+    });
   });
 });
 

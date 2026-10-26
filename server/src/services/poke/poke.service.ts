@@ -134,6 +134,22 @@ function normalizePair(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+/**
+ * Hold this pair's lock until the transaction ends (26 Oct 2026). Two people who each had a
+ * request waiting from the other, both pressing Accept at the same moment, deadlocked on the
+ * database: each accept locked its own request, then reached for the other one to close it too,
+ * and Postgres aborted one of them (40P01, a 500). Every transaction that answers or sends a
+ * pair's requests takes this lock before it reads or writes anything of the pair's, so they run
+ * one after the other. One lock per pair: Postgres builds the key from the two ids as uuids, the
+ * lower one first, so it is the same whichever of the two takes it, whatever case an id is in.
+ */
+async function lockPair(client: PoolClient, a: string, b: string): Promise<void> {
+  await client.query(
+    `SELECT pg_advisory_xact_lock(hashtext('poke-pair:' || least($1::uuid, $2::uuid) || ':' || greatest($1::uuid, $2::uuid)))`,
+    [a, b],
+  );
+}
+
 /** The two answers a request can be given. */
 type Answer = 'accepted' | 'declined';
 
@@ -170,6 +186,10 @@ function toUserPoke(r: PokeRow): UserPoke {
  * The answer that matched nothing is told where the request stands: the same answer
  * again is already done (`won: false`, nothing is repeated), and the other answer is
  * a 409 naming the answer it already has. A request never goes back to pending.
+ *
+ * It runs first in its transaction, and takes the pair's lock (lockPair) before the
+ * claim: the pair is read for the member the request was sent to only, so anyone else
+ * takes no lock and is refused below exactly as before.
  */
 async function claimRequest(
   client: PoolClient,
@@ -177,6 +197,12 @@ async function claimRequest(
   userId: string,
   answer: Answer,
 ): Promise<{ won: boolean; row: PokeRow }> {
+  const pair = await client.query<{ sender_id: string }>(
+    `SELECT sender_id FROM user_pokes WHERE id = $1 AND recipient_id = $2`,
+    [pokeId, userId],
+  );
+  if (pair.rows[0]) await lockPair(client, pair.rows[0].sender_id, userId);
+
   const claimed = await client.query<PokeRow>(
     `UPDATE user_pokes SET status = $3, responded_at = NOW()
       WHERE id = $1 AND recipient_id = $2 AND status = 'pending'
@@ -193,9 +219,12 @@ async function claimRequest(
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, `Only the person this meeting request was sent to can ${verb} it.`);
   }
   if (row.status === answer) return { won: false, row };
+  // An accepted request connected the two, whoever's accept it was: this member's own, or a match
+  // that closed it (the other person accepted this member's request, or asked them back). "You
+  // already accepted this request." was untrue in that second case; this is true in both.
   throw new ConflictError(
     ErrorCodes.MEETING_REQUEST_ALREADY_ANSWERED,
-    `You already ${row.status} this request.`,
+    row.status === 'accepted' ? "You're already connected." : 'You already declined this request.',
     { status: row.status },
   );
 }
@@ -254,6 +283,9 @@ function cleanRequestMessage(message: string | undefined): string | null {
     .slice(0, REQUEST_MESSAGE_MAX) || null;
 }
 
+/** What a send decided, under the pair's lock: a match with the request already waiting the other way, or a new request. */
+type SendOutcome = { matched: PokeRow; connected: Connected } | { sent: PokeRow };
+
 /**
  * Send a poke. Auth rules:
  *   - Not self
@@ -263,6 +295,13 @@ function cleanRequestMessage(message: string | undefined): string | null {
  *     theirs is accepted and the conversation opens (25 Oct 2026, see below)
  *   - No request from sender → recipient that the recipient already declined
  *   - No pending poke from sender → recipient already
+ *
+ * 26 Oct 2026: everything from the encounter check to the insert is one transaction under the
+ * pair's lock (lockPair). An accept of the other person's request could otherwise connect the
+ * pair between the check and the insert (leaving a new request waiting between two people
+ * already connected, or deadlocking with this send's match), and two people asking each other
+ * at the same moment left two requests waiting side by side. Under the lock the second send
+ * finds the first and is the match.
  */
 export async function sendPoke(
   senderId: string,
@@ -282,149 +321,72 @@ export async function sendPoke(
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, "You can't send a meeting request to this person.");
   }
 
-  // Encounter check: if they've already met, DMs are open — no need to poke.
-  const [a, b] = normalizePair(senderId, recipientId);
-  const enc = await query<{ id: string }>(
-    `SELECT id FROM encounter_history WHERE user_a_id = $1 AND user_b_id = $2 LIMIT 1`,
-    [a, b],
-  );
-  if (enc.rows.length > 0) {
-    // What a member is told when the answer is "you two are already connected".
-    // The old wording said "poke", which is an internal word nobody outside the
-    // codebase uses (22 Sep 2026).
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You can already message them.');
-  }
-
-  // 25 Oct 2026: they have already asked to meet you, so wanting to meet them too
-  // is a match, as For You promises ("When someone wants to meet you too, it becomes
-  // a match"). Before this both requests sat pending side by side, each offering
-  // Accept. Checked before the decline rule below: their later request outweighs
-  // their earlier "no" to yours.
-  const matched = await answerTheirRequest(senderId, recipientId);
-  if (matched) return matched;
-
-  // 29 Sep 2026: a "no" stays a no. Before this the person who declined could
-  // be asked again from search or a profile as often as the sender liked, each
-  // time with a bell and an email. Only sender → recipient is checked: the
-  // person who said no can still ask later. It runs after the encounter check
-  // on purpose: a pair who declined and later met can already message each
-  // other, and should be told that, not reminded of an old decline.
-  const declined = await query<{ id: string }>(
-    `SELECT id FROM user_pokes
-      WHERE sender_id = $1 AND recipient_id = $2 AND status = 'declined'
-      LIMIT 1`,
-    [senderId, recipientId],
-  );
-  if (declined.rows.length > 0) {
-    throw new AppError(
-      403,
-      ErrorCodes.AUTH_FORBIDDEN,
-      'They declined your earlier request, so you cannot send another one.',
-    );
-  }
-
-  // Recipient existence check (avoid silent FK errors)
-  const recipientExists = await query<{ id: string }>(
-    `SELECT id FROM users WHERE id = $1`, [recipientId],
-  );
-  if (recipientExists.rows.length === 0) {
-    throw new NotFoundError('User', undefined, 'That member is no longer available.');
-  }
-
   const trimmedMessage = cleanRequestMessage(message);
   const pokeId = uuid();
+  let outcome: SendOutcome;
   try {
-    const result = await query<{
-      id: string; sender_id: string; recipient_id: string;
-      status: 'pending' | 'accepted' | 'declined';
-      message: string | null;
-      responded_at: Date | null;
-      created_at: Date;
-      preferred_format: MeetingFormat | null;
-    }>(
-      `INSERT INTO user_pokes (id, sender_id, recipient_id, message, status, agent_id, preferred_format)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6)
-       RETURNING id, sender_id, recipient_id, status, message, responded_at, created_at, preferred_format`,
-      [pokeId, senderId, recipientId, trimmedMessage, agentId ?? null, preferredFormat ?? null],
-    );
-    const r = result.rows[0];
-    logger.info({ senderId, recipientId, pokeId: r.id }, 'Poke sent');
+    outcome = await transaction(async (client): Promise<SendOutcome> => {
+      await lockPair(client, senderId, recipientId);
 
-    // Fire bell notification for the recipient — same pattern as invites + DMs.
-    try {
-      const senderResult = await query<{ display_name: string | null }>(
-        `SELECT display_name FROM users WHERE id = $1`, [senderId],
+      // Encounter check: if they've already met, DMs are open — no need to poke.
+      const [a, b] = normalizePair(senderId, recipientId);
+      const enc = await client.query<{ id: string }>(
+        `SELECT id FROM encounter_history WHERE user_a_id = $1 AND user_b_id = $2 LIMIT 1`,
+        [a, b],
       );
-      const senderName = senderResult.rows[0]?.display_name || 'Someone';
-
-      // pokes-notification-prefs (23 Jul 2026) — Settings "Pokes" bell toggle.
-      // Gates the notification row + its live socket push only; the email
-      // channel below is independent and gated separately inside
-      // notifyPokeReceivedByEmail, so either channel can be turned off
-      // without silencing the other.
-      if (await prefsService.shouldSendBell(recipientId, 'poke')) {
-        const notifId = uuid();
-        const notifResult = await query<{ id: string; created_at: Date }>(
-          `INSERT INTO notifications (id, user_id, type, title, body, link)
-           VALUES ($1, $2, 'poke', $3, $4, $5)
-           RETURNING id, created_at`,
-          // 4 Sep 2026 (Ali): "asked to meet you" is the product's language, "poke"
-          // was ours. The poke id rides in the link so the bell can answer the
-          // request in place and accept straight into the conversation.
-          [notifId, recipientId, `${senderName} asked to meet you`, trimmedMessage || 'Accept to start chatting.', requestBellLink(pokeId)],
-        );
-
-        // Emit via dynamic import of the io instance (same pattern as invites).
-        try {
-          const { io } = await import('../../index');
-          io.to(`user:${recipientId}`).emit('notification:new', {
-            id: notifResult.rows[0].id,
-            type: 'poke',
-            title: `${senderName} asked to meet you`,
-            body: trimmedMessage || 'Accept to start chatting.',
-            link: requestBellLink(pokeId),
-            isRead: false,
-            createdAt: notifResult.rows[0].created_at,
-          });
-          // The bell's own tag, so their bell counter refreshes. The screens
-          // (user + invites) are refreshed for both members below, whatever the
-          // bell setting is.
-          const { emitEntities } = await import('../../realtime/emit');
-          const { E } = await import('../../realtime/entities');
-          emitEntities(
-            io, [recipientId],
-            [E.userNotifications(recipientId)],
-          ).catch(() => {});
-        } catch { /* socket push is non-fatal */ }
+      if (enc.rows.length > 0) {
+        // What a member is told when the answer is "you two are already connected".
+        // The old wording said "poke", which is an internal word nobody outside the
+        // codebase uses (22 Sep 2026).
+        throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You can already message them.');
       }
 
-      // Task F2 — email the recipient, fire-and-forget, right alongside the
-      // socket push above (or independently, when poke_bell is off). Gated
-      // on notify_email + email_config + poke_email inside the helper; a
-      // rejection there is already caught internally so this can never
-      // throw or block the poke response.
-      void notifyPokeReceivedByEmail(recipientId, senderName, trimmedMessage);
-    } catch (notifErr) {
-      logger.warn({ notifErr }, 'Poke notification insert failed (non-fatal)');
-    }
+      // 25 Oct 2026: they have already asked to meet you, so wanting to meet them too
+      // is a match, as For You promises ("When someone wants to meet you too, it becomes
+      // a match"). Before this both requests sat pending side by side, each offering
+      // Accept. Checked before the decline rule below: their later request outweighs
+      // their earlier "no" to yours.
+      const theirs = await acceptPendingFrom(client, recipientId, senderId);
+      if (theirs) return { matched: theirs, connected: await connectInTx(client, theirs) };
 
-    // 29 Sep 2026: both members' screens refresh whatever the recipient's bell
-    // setting is. The bell toggle silences the notification, not the data.
-    try {
-      const { io } = await import('../../index');
-      const { emitEntities } = await import('../../realtime/emit');
-      const { E } = await import('../../realtime/entities');
-      emitEntities(io, [senderId], [E.user(senderId), E.userInvites(senderId)]).catch(() => {});
-      emitEntities(io, [recipientId], [E.user(recipientId), E.userInvites(recipientId)]).catch(() => {});
-    } catch { /* realtime is non-fatal */ }
+      // 29 Sep 2026: a "no" stays a no. Before this the person who declined could
+      // be asked again from search or a profile as often as the sender liked, each
+      // time with a bell and an email. Only sender → recipient is checked: the
+      // person who said no can still ask later. It runs after the encounter check
+      // on purpose: a pair who declined and later met can already message each
+      // other, and should be told that, not reminded of an old decline.
+      const declined = await client.query<{ id: string }>(
+        `SELECT id FROM user_pokes
+          WHERE sender_id = $1 AND recipient_id = $2 AND status = 'declined'
+          LIMIT 1`,
+        [senderId, recipientId],
+      );
+      if (declined.rows.length > 0) {
+        throw new AppError(
+          403,
+          ErrorCodes.AUTH_FORBIDDEN,
+          'They declined your earlier request, so you cannot send another one.',
+        );
+      }
 
-    return {
-      id: r.id, senderId: r.sender_id, recipientId: r.recipient_id,
-      status: r.status, message: r.message, respondedAt: r.responded_at,
-      createdAt: r.created_at, preferredFormat: r.preferred_format ?? null,
-    };
-  } catch (err: any) {
-    if (err?.code === '23505') {
+      // Recipient existence check (avoid silent FK errors)
+      const recipientExists = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE id = $1`, [recipientId],
+      );
+      if (recipientExists.rows.length === 0) {
+        throw new NotFoundError('User', undefined, 'That member is no longer available.');
+      }
+
+      const inserted = await client.query<PokeRow>(
+        `INSERT INTO user_pokes (id, sender_id, recipient_id, message, status, agent_id, preferred_format)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+         RETURNING id, sender_id, recipient_id, status, message, responded_at, created_at, preferred_format`,
+        [pokeId, senderId, recipientId, trimmedMessage, agentId ?? null, preferredFormat ?? null],
+      );
+      return { sent: inserted.rows[0] };
+    });
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === '23505') {
       // Since 22 Sep the card shows this person as already asked on every
       // search, so a member should not be able to reach this at all. It stays
       // for the race: two tabs, or a card drawn before the first ask landed.
@@ -432,6 +394,85 @@ export async function sendPoke(
     }
     throw err;
   }
+
+  if ('matched' in outcome) return announceMatch(senderId, recipientId, outcome.matched, outcome.connected);
+
+  const r = outcome.sent;
+  logger.info({ senderId, recipientId, pokeId: r.id }, 'Poke sent');
+
+  // Fire bell notification for the recipient — same pattern as invites + DMs.
+  try {
+    const senderResult = await query<{ display_name: string | null }>(
+      `SELECT display_name FROM users WHERE id = $1`, [senderId],
+    );
+    const senderName = senderResult.rows[0]?.display_name || 'Someone';
+
+    // pokes-notification-prefs (23 Jul 2026) — Settings "Pokes" bell toggle.
+    // Gates the notification row + its live socket push only; the email
+    // channel below is independent and gated separately inside
+    // notifyPokeReceivedByEmail, so either channel can be turned off
+    // without silencing the other.
+    if (await prefsService.shouldSendBell(recipientId, 'poke')) {
+      const notifId = uuid();
+      const notifResult = await query<{ id: string; created_at: Date }>(
+        `INSERT INTO notifications (id, user_id, type, title, body, link)
+         VALUES ($1, $2, 'poke', $3, $4, $5)
+         RETURNING id, created_at`,
+        // 4 Sep 2026 (Ali): "asked to meet you" is the product's language, "poke"
+        // was ours. The poke id rides in the link so the bell can answer the
+        // request in place and accept straight into the conversation.
+        [notifId, recipientId, `${senderName} asked to meet you`, trimmedMessage || 'Accept to start chatting.', requestBellLink(pokeId)],
+      );
+
+      // Emit via dynamic import of the io instance (same pattern as invites).
+      try {
+        const { io } = await import('../../index');
+        io.to(`user:${recipientId}`).emit('notification:new', {
+          id: notifResult.rows[0].id,
+          type: 'poke',
+          title: `${senderName} asked to meet you`,
+          body: trimmedMessage || 'Accept to start chatting.',
+          link: requestBellLink(pokeId),
+          isRead: false,
+          createdAt: notifResult.rows[0].created_at,
+        });
+        // The bell's own tag, so their bell counter refreshes. The screens
+        // (user + invites) are refreshed for both members below, whatever the
+        // bell setting is.
+        const { emitEntities } = await import('../../realtime/emit');
+        const { E } = await import('../../realtime/entities');
+        emitEntities(
+          io, [recipientId],
+          [E.userNotifications(recipientId)],
+        ).catch(() => {});
+      } catch { /* socket push is non-fatal */ }
+    }
+
+    // Task F2 — email the recipient, fire-and-forget, right alongside the
+    // socket push above (or independently, when poke_bell is off). Gated
+    // on notify_email + email_config + poke_email inside the helper; a
+    // rejection there is already caught internally so this can never
+    // throw or block the poke response.
+    void notifyPokeReceivedByEmail(recipientId, senderName, trimmedMessage);
+  } catch (notifErr) {
+    logger.warn({ notifErr }, 'Poke notification insert failed (non-fatal)');
+  }
+
+  // 29 Sep 2026: both members' screens refresh whatever the recipient's bell
+  // setting is. The bell toggle silences the notification, not the data.
+  try {
+    const { io } = await import('../../index');
+    const { emitEntities } = await import('../../realtime/emit');
+    const { E } = await import('../../realtime/entities');
+    emitEntities(io, [senderId], [E.user(senderId), E.userInvites(senderId)]).catch(() => {});
+    emitEntities(io, [recipientId], [E.user(recipientId), E.userInvites(recipientId)]).catch(() => {});
+  } catch { /* realtime is non-fatal */ }
+
+  return {
+    id: r.id, senderId: r.sender_id, recipientId: r.recipient_id,
+    status: r.status, message: r.message, respondedAt: r.responded_at,
+    createdAt: r.created_at, preferredFormat: r.preferred_format ?? null,
+  };
 }
 
 /** The first message of a thread opened by a request that carried no message (Task F3). */
@@ -476,8 +517,9 @@ async function connectInTx(client: PoolClient, request: PokeRow): Promise<Connec
   // 25 Oct 2026: accepting checked neither. Sending already refuses a blocked pair;
   // a request that was waiting when the block came must not open a conversation
   // either, and a member who has closed their account or been suspended cannot be
-  // connected to.
-  if (await blockService.areBlocked(senderId, accepterId)) {
+  // connected to. Asked on this transaction's own connection (26 Oct 2026), not on a
+  // second one taken from the pool while this one is held.
+  if (await blockService.areBlocked(senderId, accepterId, client)) {
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, "You can't accept a meeting request from this person.");
   }
   const sender = await client.query<{ status: string }>(`SELECT status FROM users WHERE id = $1`, [senderId]);
@@ -636,20 +678,13 @@ async function announceAccepted(request: PokeRow, done: Connected): Promise<void
 }
 
 /**
- * Asking someone who has already asked you (25 Oct 2026): their request is
- * accepted instead of a second one being added beside it. Returns their request,
- * now accepted, with the conversation that opened; null when they have not asked,
- * and the caller sends a request as usual.
+ * After asking someone who had already asked you has committed (25 Oct 2026): their
+ * request was accepted instead of a second one being added beside it, so it is
+ * announced as any accept is. Returns their request, now accepted, with the
+ * conversation that opened.
  */
-async function answerTheirRequest(senderId: string, recipientId: string): Promise<SentPoke | null> {
-  const matched = await transaction(async (client) => {
-    const theirs = await acceptPendingFrom(client, recipientId, senderId);
-    if (!theirs) return null;
-    return { row: theirs, connected: await connectInTx(client, theirs) };
-  });
-  if (!matched) return null;
-
-  await announceAccepted(matched.row, matched.connected);
+async function announceMatch(senderId: string, recipientId: string, theirs: PokeRow, connected: Connected): Promise<SentPoke> {
+  await announceAccepted(theirs, connected);
   // A match changes both members' screens and bells, as a sent request and an accept each do.
   try {
     const { io } = await import('../../index');
@@ -660,7 +695,7 @@ async function answerTheirRequest(senderId: string, recipientId: string): Promis
   } catch (err) {
     logger.warn({ err, senderId, recipientId }, 'Match entity fanout failed (non-fatal)');
   }
-  return { ...toUserPoke(matched.row), conversationId: matched.connected.conversationId };
+  return { ...toUserPoke(theirs), conversationId: connected.conversationId };
 }
 
 /**
@@ -692,12 +727,14 @@ export async function acceptPoke(
  * Decline a request. Caller must be the recipient. A claim (see claimRequest):
  * declining twice is done once, and declining an accepted request is a 409.
  * Nobody is notified: that is deliberate (a "no" is never pushed at the sender).
- * Only the decliner's own bell row for the request is marked read.
+ * Only the decliner's own bell row for the request is marked read, found by the
+ * request's own id as stored (26 Oct 2026): the id the route was given may be in
+ * capitals, which matches the request but not the link on its bell row.
  */
 export async function declinePoke(pokeId: string, userId: string): Promise<UserPoke> {
   const row = await transaction(async (client) => {
     const claim = await claimRequest(client, pokeId, userId, 'declined');
-    if (claim.won) await markRequestBellRead(client, userId, pokeId);
+    if (claim.won) await markRequestBellRead(client, userId, claim.row.id);
     return claim.row;
   });
   return toUserPoke(row);

@@ -7,7 +7,8 @@ import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
 
-type RequestStatus = 'pending' | 'accepted' | 'declined';
+/** Where a request stands for its recipient; 'gone' is a pending request they can no longer answer. */
+type RequestStatus = 'pending' | 'accepted' | 'declined' | 'gone';
 
 /** One row of the list query: the notification, its invite's state, and its meeting request's. */
 interface NotificationRow {
@@ -39,6 +40,13 @@ interface NotificationRow {
 // The request is found through the id its link carries (/messages?poke=<id>,
 // REQUEST_BELL_LINK_PATTERN): a link that does not hold a whole UUID matches
 // nothing and reads null, and only a request sent to the bell's owner counts.
+//
+// 26 Oct 2026: a request still pending that can no longer be answered is 'gone',
+// by listReceivedPokes' own rule (accepting refuses it): its sender's account is
+// not active, or a block stands between the two, whoever made it. The bell went on
+// offering Accept on those. A gone request reads pokeStatus 'gone' (production's
+// bell draws no Accept or Decline for any pokeStatus) and requestState null (the
+// preview's bell offers nothing then).
 router.get(
   '/',
   authenticate,
@@ -71,7 +79,16 @@ router.get(
                 END AS "inviteStatus",
                 i.pod_id AS "podId",
                 i.session_id AS "sessionId",
-                p.status AS "requestStatus",
+                CASE
+                  WHEN p.status = 'pending' AND (
+                    ps.status IS DISTINCT FROM 'active'
+                    OR EXISTS (
+                      SELECT 1 FROM user_blocks b
+                       WHERE (b.blocker_id = n.user_id AND b.blocked_id = p.sender_id)
+                          OR (b.blocker_id = p.sender_id AND b.blocked_id = n.user_id))
+                  ) THEN 'gone'
+                  ELSE p.status
+                END AS "requestStatus",
                 rc.id AS "requestConversationId"
          FROM notifications n
          LEFT JOIN invites i ON n.type IN ('pod_invite', 'event_invite')
@@ -82,6 +99,7 @@ router.get(
          LEFT JOIN user_pokes p ON n.type = 'poke'
            AND p.id = substring(n.link FROM $2::text)::uuid
            AND p.recipient_id = n.user_id
+         LEFT JOIN users ps ON ps.id = p.sender_id
          LEFT JOIN LATERAL (
            SELECT c.id FROM dm_conversations c
             WHERE p.status = 'accepted'
@@ -101,15 +119,17 @@ router.get(
       );
 
       // Only `poke` rows carry the request fields; every other row is sent exactly as before.
-      const notifications = result.rows.map(({ requestStatus, requestConversationId, ...row }) => (row.type === 'poke'
-        ? {
-            ...row,
-            pokeStatus: requestStatus === 'accepted' || requestStatus === 'declined' ? requestStatus : null,
-            requestState: requestStatus
-              ? { status: requestStatus, conversationId: requestStatus === 'accepted' ? requestConversationId : null }
-              : null,
-          }
-        : row));
+      const notifications = result.rows.map(({ requestStatus, requestConversationId, ...row }) => {
+        if (row.type !== 'poke') return row;
+        if (requestStatus === 'gone') return { ...row, pokeStatus: 'gone', requestState: null };
+        return {
+          ...row,
+          pokeStatus: requestStatus === 'accepted' || requestStatus === 'declined' ? requestStatus : null,
+          requestState: requestStatus
+            ? { status: requestStatus, conversationId: requestStatus === 'accepted' ? requestConversationId : null }
+            : null,
+        };
+      });
 
       const response: ApiResponse = {
         success: true,
