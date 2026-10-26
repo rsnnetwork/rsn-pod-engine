@@ -1408,6 +1408,17 @@ test.describe('REASON milestone 1', () => {
       await expect(hit, 'and the result is still there').toBeVisible({ timeout: SLOW });
       await expect(box, 'a search that is already there does not put the cursor back in the box').not.toBeFocused();
 
+      // A new search from the top bar replaces the words, and the address settles on them and stays there: the page's own
+      // write of the OLD words, a quarter of a second later, must not land on top (found by reason-m1-shell.spec.ts).
+      const top = page.getByRole('search').getByRole('textbox', { name: 'Search people' });
+      await top.fill(NAME.secretive);
+      await top.press('Enter');
+      await expect(box, 'the new words replace the old').toHaveValue(NAME.secretive);
+      for (let look = 0; look < 8; look++) {
+        expect(new URL(page.url()).searchParams.get('q'), 'the address says the new words, every time it is looked at').toBe(NAME.secretive);
+        await page.waitForTimeout(150);
+      }
+
       // Everyone who fits: ?view=all is the wider list, kept in the address.
       await visit(page, '/matches?view=all');
       await expect(page.getByText('People close to your profile'), '?view=all is the wider list').toBeVisible({ timeout: SLOW });
@@ -1450,6 +1461,48 @@ test.describe('REASON milestone 1', () => {
       }
       await expectQuiet(o, 'Back with nothing behind it');
       console.log('  ✓ A profile opened with nothing behind it goes back to the screen named in ?from=, and to For You when there is none.');
+    });
+  });
+
+  // Measured on the live app's twin of this change (26 Oct 2026), where "is anything behind this page" was the length of the
+  // browser's history: that counts other sites' pages and entries ahead as well. The router's own word for it is the key
+  // "default" on a tab's first entry. These are the two cases the length got wrong.
+  test(`${engineLabel()} phone: a profile address pasted into a tab with earlier history goes back into the app, never out of it`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const tab = await newTab(o);
+      // A page that is not the app's, as the tab's earlier history: a picture the site serves (a page from another site would
+      // say the same, but the signed-in tokens are put in every page by script, and another origin refuses that).
+      await tab.goto(`${APP}/favicon-64.png`);
+      await visit(tab, `/people/${giver.id}?from=Messages`);
+      await expectProfileOf(tab, giver, NAME.giver);
+      await tap(tab, backButton(tab), 'Back (pasted address)', { centre: false });
+      await expect(tab, 'Back goes to the screen the profile names, inside the app').toHaveURL(`${APP}/messages`);
+      await settle(tab);
+      await tab.close();
+      await expectQuiet(o, 'a pasted profile address');
+      console.log('  ✓ A profile address pasted into a tab with an earlier page goes back to the screen its ?from= names, in the app.');
+    });
+  });
+
+  test(`${engineLabel()} phone: a profile in a new tab, then its main button, then the browser's Back, then the page's Back, still goes somewhere`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      // The viewer has met this member, so the profile's main button is Continue: it opens the conversation, a new entry in this tab.
+      const tab = await newTab(o);
+      await visit(tab, `/people/${met.id}?from=Messages`);
+      await expectProfileOf(tab, met, NAME.met);
+      await tap(tab, primaryButton(tab), 'Continue', { centre: false });
+      await expect(tab, 'the conversation opens in this tab').toHaveURL(new RegExp(`/messages/new/${met.id}$`), { timeout: SLOW });
+      // The browser's Back returns to the profile, which is still the first page of this tab: nothing is behind it.
+      await tab.goBack();
+      await expectProfileOf(tab, met, NAME.met);
+      await tap(tab, backButton(tab), 'Back (after Continue)', { centre: false });
+      await expect(tab, 'the page\'s Back goes to the screen the profile names, not nowhere').toHaveURL(`${APP}/messages`, { timeout: SLOW });
+      await settle(tab);
+      await tab.close();
+      await expectQuiet(o, 'a profile in a new tab, then Continue');
+      console.log('  ✓ A profile in a new tab, then Continue, then the browser\'s Back, then the page\'s Back, goes to the screen its ?from= names.');
     });
   });
 
