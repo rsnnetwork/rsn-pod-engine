@@ -216,6 +216,30 @@ describe('screens 3 to 6, the questions', () => {
       expect(quiet).not.toContain('From LinkedIn');
     });
 
+    // Fix round 1, item 3: the first tap used to take the line (about 68px at 360) and both notes away at once, so a quick second
+    // tap could land on another tile. Now nothing LinkedIn marked is unmarked by a tap: the marks go when the member moves on.
+    it('a tap changes only what is ticked: the line and every note stay, the tile they unticked keeps its note, and nothing moves under a finger', () => {
+      const label = (key: string) => flow.QUESTIONS[3].options.find(o => o.key === key)!.label;
+      const untouched = html('q4', founderAndInvestor, { fromLinkedin: picked });
+      // They untick the investor and tick the employee: the marks are the same, because LinkedIn still picked what it picked.
+      const changed = html('q4', { ...NONE, selfKinds: ['self_founder_owner', 'self_employee'] }, { fromLinkedin: picked });
+      const structure = (markup: string) => ({
+        line: markup.includes('We picked these'),
+        notes: markup.match(/From LinkedIn/g)?.length ?? 0,
+        noted: picked.map(key => !!attr(tileOf(markup, label(key)), 'aria-describedby')),
+      });
+      expect(structure(changed)).toEqual({ line: true, notes: 2, noted: [true, true] });
+      expect(structure(changed)).toEqual(structure(untouched));
+      const investor = tileOf(changed, label('self_investor'));
+      expect(attr(investor, 'aria-checked')).toBe('false');
+      expect(investor).toContain('From LinkedIn');
+      expect(attr(tileOf(changed, label('self_employee')), 'aria-checked')).toBe('true');
+      expect(attr(tileOf(changed, label('self_employee')), 'aria-describedby')).toBeUndefined();
+      // Apart from the ticks themselves, the two screens are the same elements in the same order: no block comes or goes.
+      const elements = (markup: string) => [...markup.matchAll(/<(?!\/)(?!svg|path)([a-z0-9]+)/g)].map(m => m[1]).join(' ');
+      expect(elements(changed)).toBe(elements(untouched));
+    });
+
     it('a tile is still named by its answer alone: the note describes it, it is not part of its name', () => {
       const markup = html('q4', founderAndInvestor, { fromLinkedin: picked });
       const label = flow.QUESTIONS[3].options.find(o => o.key === 'self_founder_owner')!.label;
@@ -347,6 +371,31 @@ describe('the data contract', () => {
     expect(hook).toMatch(/export function useSignupChoice\(onServer: SignupChoice \| null\)/);
     expect(hook).toMatch(/return \[signupChoiceOf\(choice, onServer\), choose\];/);
     expect(flowSource).toMatch(/useSignupChoice\(state\.linkedin\.chosen\)/);
+  });
+
+  // Fix round 1, items 1 and 3.
+  it('LinkedIn\'s line and notes show only while LinkedIn is the choice, stay through a tap, and go when the member moves on from Q4 or chooses email', () => {
+    // Gated on the current choice, not on whether anything was touched.
+    expect(flowSource).toMatch(/fromLinkedin=\{q\.step === 'q4' \? marksFromLinkedin\(guessApplied, linkedinOn\) : \[\]\}/);
+    expect(flowSource).not.toMatch(/guessedStill\(/);
+    // Choosing email (after Back to screen 2) takes back the picks they never changed or moved on from, and the marks with them.
+    expect(flowSource).toMatch(/const dropLinkedinPicks = \(\) => \{\s*setAnswers\(a => withoutUnconfirmedPicks\(a, guessApplied, selfTouched\)\);\s*setGuessApplied\(\[\]\);\s*\};/);
+    expect(flowSource).toMatch(/choose\('email'\);\s*dropLinkedinPicks\(\);/);
+    // Moving on from Q4 with Continue makes what is ticked theirs: the marks are done with, once they are leaving.
+    expect(flowSource).toMatch(/if \(question\.step === 'q4'\) setGuessApplied\(\[\]\);\s*arrive\(\);/);
+    // And a tap on a tile is not what removes them.
+    expect(flowSource).not.toMatch(/!selfTouched \? guessedStill/);
+  });
+
+  // Fix round 1, item 2: the focused words box and its counter must clear the footer, in any engine.
+  it('the words box and its counter are brought clear of the footer when focused, and any scroll to them leaves room under them', () => {
+    const shell = read(`${dir}/OnboardingShell.tsx`);
+    expect(shell).toMatch(/data-testid="onboarding-body"\s+(?:\/\/[^\n]*\s+)?className=\{`[^`]*\bscroll-pb-\d+\b/);
+    expect(shell).toMatch(/data-testid="onboarding-footer"/);
+    const step = read(`${dir}/QuestionStep.tsx`);
+    // The box and its counter are one block, and focusing the box reveals that block, not the box alone.
+    expect(step).toMatch(/onFocus=\{\(\) => wordsBlock\.current\?\.scrollIntoView\(\{ block: 'nearest' \}\)\}/);
+    expect(step).toMatch(/onFocus=\{\(\) => specificBlock\.current\?\.scrollIntoView\(\{ block: 'nearest' \}\)\}/);
   });
 
   // 25 Oct review (ONB-01): the shared maxima are 20 so that the old build compiled; nothing on a screen reads them.

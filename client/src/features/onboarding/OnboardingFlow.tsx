@@ -31,8 +31,8 @@ import { useLeaveEdit } from './useLeaveEdit';
 import { useProfileForm } from './useProfileForm';
 import { useConfirm, useConnectLinkedin, useOnboardingV2State, useSaveDraft, useSkipLinkedin } from './useOnboardingV2';
 import {
-  LANDED, PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, guessedStill, problemMessage,
-  questionFor, questionProblem, stepAfter, stepBefore, tourOpensAfterConfirm, withKeys,
+  LANDED, PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, marksFromLinkedin, problemMessage,
+  questionFor, questionProblem, stepAfter, stepBefore, tourOpensAfterConfirm, withKeys, withoutUnconfirmedPicks,
   type ConfirmProblem, type DraftPatch, type Question, type QuestionStepKey,
 } from './flow';
 
@@ -84,6 +84,7 @@ function Flow({ state }: { state: OnboardingV2State }) {
   // A refusal about a question itself, or a failed save, said under its options.
   const [listError, setListError] = useState<string | null>(null);
   const [selfTouched, setSelfTouched] = useState(false);
+  // The picks LinkedIn made on Q4, marked (a line, a note on each tile) until they move on from the question or choose email.
   const [guessApplied, setGuessApplied] = useState<readonly string[]>([]);
   const ownWordsRef = useRef<HTMLInputElement>(null);
   const steps = useFlowSteps(state, answers);
@@ -98,6 +99,12 @@ function Flow({ state }: { state: OnboardingV2State }) {
     setAnswers(a => withKeys(a, questionFor('q4')!, picked));
     setGuessApplied(picked);
   }, [screen, guesses, selfTouched, answers]);
+
+  /** They chose email after LinkedIn picked Q4 for them: the picks they never changed or moved on from are not theirs, and the marks go. */
+  const dropLinkedinPicks = () => {
+    setAnswers(a => withoutUnconfirmedPicks(a, guessApplied, selfTouched));
+    setGuessApplied([]);
+  };
 
   const go = (step: OnboardingV2Step, from?: 'profile') => {
     setOwnWordsError(null);
@@ -181,6 +188,8 @@ function Flow({ state }: { state: OnboardingV2State }) {
       if (!canLeave(question)) return;
       void once(async () => {
         if (!edit) await keepDraft(draftPatch(question, answers, next));
+        // Moving on makes what is ticked theirs: LinkedIn's marks are done with.
+        if (question.step === 'q4') setGuessApplied([]);
         arrive();
       });
     };
@@ -229,6 +238,7 @@ function Flow({ state }: { state: OnboardingV2State }) {
         })}
         onEmail={() => void sendChoice('email', async () => {
           choose('email');
+          dropLinkedinPicks();
           // "Continue with email" is only recorded on the member's stage trail; losing that costs them nothing.
           await skip.mutateAsync().catch(() => undefined);
           await keepDraft({ step: 'q1' });
@@ -277,7 +287,7 @@ function Flow({ state }: { state: OnboardingV2State }) {
       ownWordsError={ownWordsError}
       listError={listError}
       ownWordsRef={ownWordsRef}
-      fromLinkedin={q.step === 'q4' && !selfTouched ? guessedStill(answers.selfKinds, guessApplied) : []}
+      fromLinkedin={q.step === 'q4' ? marksFromLinkedin(guessApplied, linkedinOn) : []}
       showProgress={!edit}
       footer={<FooterButtons {...questionFooter(q)} />}
     />

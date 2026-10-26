@@ -12,6 +12,7 @@ import {
   questionFor, questionProblem, firstIncomplete, stepToShow, stepAfter, stepBefore, parseEdit,
   toggleKey, confirmBody, draftPatch, profileValue, profileInput, linkedinForInput, linkedinInputProblem,
   zoneLabel, searchZones, onboardingError, answerSummary, linkedinNote, editAction, editFallback, guessedSelf, guessedStill,
+  marksFromLinkedin, withoutUnconfirmedPicks,
   withKeys, withOwnWords, isRealZone, zoneList, currentZoneName, confirmProblem,
   safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, signupChoiceOf, LANDED, isLanded, returnedKey, tourOpensAfterConfirm,
 } from '../../../../client/src/features/onboarding/flow';
@@ -336,7 +337,7 @@ describe('ticking options', () => {
     expect(guessedSelf(NONE, ['self_something_new'], false)).toBeNull();
   });
 
-  it('what LinkedIn picked is marked only while exactly that is ticked, in any order', () => {
+  it('what LinkedIn picked is still what is ticked only while exactly that is ticked, in any order', () => {
     const picked = ['self_founder_owner', 'self_investor'];
     expect(guessedStill(['self_founder_owner', 'self_investor'], picked)).toEqual(picked);
     expect(guessedStill(['self_investor', 'self_founder_owner'], picked)).toEqual(picked);
@@ -345,6 +346,29 @@ describe('ticking options', () => {
     expect(guessedStill(['self_founder_owner', 'self_employee'], picked)).toEqual([]);
     expect(guessedStill([], [])).toEqual([]);
     expect(guessedStill(['self_founder_owner'], [])).toEqual([]);
+  });
+
+  // Fix round 1, item 1: Q4 still said "We picked these from your LinkedIn" to a member who had gone back and chosen email.
+  it('LinkedIn\'s marks (the line, the notes) show only while LinkedIn is the choice', () => {
+    const picked = ['self_founder_owner', 'self_investor'];
+    expect(marksFromLinkedin(picked, true)).toEqual(picked);
+    expect(marksFromLinkedin(picked, false)).toEqual([]);
+    expect(marksFromLinkedin([], true)).toEqual([]);
+  });
+
+  it('choosing email drops the picks LinkedIn made that the member never changed or moved on from: they are not their answers', () => {
+    const picked = ['self_founder_owner', 'self_investor'];
+    const ticked: OnboardingV2Answers = { ...NONE, selfKinds: ['self_founder_owner', 'self_investor'], selfOther: 'x' };
+    // Untouched, still exactly LinkedIn's picks: gone, and nothing else of the answers is disturbed.
+    expect(withoutUnconfirmedPicks(ticked, picked, false)).toEqual({ ...ticked, selfKinds: [] });
+    expect(withoutUnconfirmedPicks({ ...ticked, selfKinds: ['self_investor', 'self_founder_owner'] }, picked, false).selfKinds).toEqual([]);
+    // Touched (they changed something): what is ticked is theirs, whatever LinkedIn once picked.
+    expect(withoutUnconfirmedPicks(ticked, picked, true)).toBe(ticked);
+    // No longer exactly the picks, or no picks to speak of (they moved on from Q4, or LinkedIn said nothing): theirs too.
+    const changed = { ...ticked, selfKinds: ['self_founder_owner', 'self_employee'] as OnboardingV2Answers['selfKinds'] };
+    expect(withoutUnconfirmedPicks(changed, picked, false)).toBe(changed);
+    expect(withoutUnconfirmedPicks(ticked, [], false)).toBe(ticked);
+    expect(withoutUnconfirmedPicks(NONE, picked, false)).toBe(NONE);
   });
 });
 

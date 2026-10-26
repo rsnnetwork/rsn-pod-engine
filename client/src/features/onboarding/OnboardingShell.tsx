@@ -60,7 +60,8 @@ export default function OnboardingShell({ pose, sheepSize = 112, progress, title
 
       <div
         data-testid="onboarding-body"
-        className={`flex flex-1 flex-col overflow-y-auto overscroll-contain py-6 ${SIDES} ${
+        // A scroll that brings a field into view (focus, a caret, an error) stops 4rem short of the footer, so the counter under it shows too.
+        className={`flex flex-1 flex-col overflow-y-auto overscroll-contain scroll-pb-16 py-6 ${SIDES} ${
           progress ? '' : 'pt-[max(env(safe-area-inset-top),1.5rem)]'
         } ${footer ? '' : 'pb-[max(env(safe-area-inset-bottom),1.5rem)]'}`}
       >
@@ -82,7 +83,7 @@ export default function OnboardingShell({ pose, sheepSize = 112, progress, title
       </div>
 
       {footer && (
-        <div className={`shrink-0 border-t border-gray-200 bg-white/95 pt-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] backdrop-blur ${SIDES}`}>
+        <div data-testid="onboarding-footer" className={`shrink-0 border-t border-gray-200 bg-white/95 pt-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] backdrop-blur ${SIDES}`}>
           <div className="mx-auto flex w-full max-w-xl items-center justify-end gap-2">{footer}</div>
         </div>
       )}

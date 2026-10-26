@@ -285,9 +285,26 @@ export function guessedSelf(a: OnboardingV2Answers, guesses: readonly string[] |
   return picked.length ? picked : null;
 }
 
-/** What LinkedIn picked, while that is exactly what is ticked (in any order): those tiles carry the note. Else none. */
+/** What LinkedIn picked, while that is exactly what is ticked (in any order). Else none. */
 export function guessedStill(selected: readonly string[], picked: readonly string[]): readonly string[] {
   return picked.length > 0 && selected.length === picked.length && picked.every(k => selected.includes(k)) ? picked : [];
+}
+
+/**
+ * What marks Q4 (the line above it, a note on each tile it picked): LinkedIn's picks, and only while LinkedIn is their
+ * choice. A tap on a tile changes what is ticked and never what is marked, so nothing moves under a finger; the marks go
+ * when they move on from the question or choose email.
+ */
+export function marksFromLinkedin(picked: readonly string[], linkedinOn: boolean): readonly string[] {
+  return linkedinOn ? picked : [];
+}
+
+/**
+ * Q4's answers once they choose email: the picks LinkedIn made that they have not changed or moved on from are nothing
+ * they confirmed, so they go. Whatever they touched is theirs and stays.
+ */
+export function withoutUnconfirmedPicks(a: OnboardingV2Answers, picked: readonly string[], touched: boolean): OnboardingV2Answers {
+  return !touched && guessedStill(a.selfKinds, picked).length > 0 ? { ...a, selfKinds: [] } : a;
 }
 
 // ── What goes to the server ──────────────────────────────────────────────────

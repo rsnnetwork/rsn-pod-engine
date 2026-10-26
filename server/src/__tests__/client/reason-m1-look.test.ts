@@ -773,6 +773,29 @@ describe('The short tour says its pictures are examples, names only the shared e
     expect(source()).toContain(`export const EXAMPLES_CAPTION = '${CAPTION}';`);
   });
 
+  // Fix round 1, item 4: the client said the most important thing is that the examples are clearly fictional, so the caption
+  // is read at a normal size, not as small print: 14px (text-sm) at least.
+  it('the caption is at least 14px, never small print, on every card', () => {
+    const { TOUR_CARDS, TourSlide } = tour();
+    const SIZE_PX: Record<string, number> = { 'text-xs': 12, 'text-sm': 14, 'text-base': 16, 'text-lg': 18, 'text-xl': 20 };
+    for (const card of TOUR_CARDS as Card[]) {
+      const html = renderToStaticMarkup(createElement(TourSlide as never, { card }));
+      const classes = html.match(new RegExp(`<p class="([^"]*)">${CAPTION.replace(/[.]/g, '\\.')}</p>`))?.[1] ?? '';
+      const size = classes.split(' ').map((c) => SIZE_PX[c] ?? (c.match(/^text-\[(\d+)px\]$/) ? Number(c.match(/^text-\[(\d+)px\]$/)![1]) : 0)).find((px) => px > 0) ?? 0;
+      expect({ card: card.title, atLeast14px: size >= 14 }).toEqual({ card: card.title, atLeast14px: true });
+    }
+  });
+
+  // Fix round 1, item 5: a list shorter than the pictures need must fail where it is read, never repeat a name inside one picture.
+  it('each picture takes its people straight from the list by place, and no person appears twice in the tour', () => {
+    const src = source();
+    expect(src).not.toMatch(/EXAMPLE_PEOPLE\.length|EXAMPLE_PEOPLE\[[^\]]*%/);
+    const shown = cards().flatMap((card) => card.words.filter((w) => /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(w)));
+    // The first five of the list, once each, in the order the pictures show them.
+    expect(shown).toEqual(EXAMPLE_PEOPLE.slice(0, 5).map((p) => p.name));
+    expect(new Set(shown).size).toBe(shown.length);
+  });
+
   it('the header says "How REASON works", on screen and as the dialog\'s name, and no word in the file says RSN', () => {
     const src = source();
     expect(src).toMatch(/aria-label="How REASON works"/);

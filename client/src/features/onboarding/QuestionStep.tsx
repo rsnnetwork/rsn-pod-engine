@@ -16,7 +16,10 @@ interface Props {
   ownWordsError: string | null;
   /** A refusal about the question itself ("Select at least one answer."), or saving it failed: said under the options. */
   listError?: string | null;
-  /** Q4: the answers picked from their LinkedIn that are still the ones ticked; each says so, and the line above them. */
+  /**
+   * Q4: the answers LinkedIn picked, which stay marked (a note on each tile, the line above them) until the member moves on.
+   * A tap changes what is ticked and never what is drawn, so nothing moves under a finger.
+   */
   fromLinkedin: readonly string[];
   /** The "Something else" box, for the flow to focus when it asks for the words. */
   ownWordsRef?: Ref<HTMLInputElement>;
@@ -30,6 +33,9 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
   const id = useId();
   const errorLine = useRef<HTMLDivElement>(null);
   const listErrorLine = useRef<HTMLParagraphElement>(null);
+  // A box and its counter are one block: focusing the box brings the whole block into view, not the box alone.
+  const wordsBlock = useRef<HTMLDivElement>(null);
+  const specificBlock = useRef<HTMLDivElement>(null);
   const selected: readonly string[] = answers[q.field];
   const ownWordsOn = selected.includes(q.ownWordsKey);
   const words = answers[q.ownWordsField] ?? '';
@@ -69,7 +75,7 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
 
       {/* Right under "Something else", the last option, so the box reads as part of it. */}
       {ownWordsOn && (
-        <div className="mt-3">
+        <div ref={wordsBlock} className="mt-3">
           <label htmlFor={`${id}-own`} className="mb-1.5 block text-sm font-medium">In your own words</label>
           <input
             id={`${id}-own`}
@@ -79,6 +85,8 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
             maxLength={OWN_WORDS_MAX}
             autoComplete="off"
             enterKeyHint="done"
+            // The browser reveals the box alone (WebKit does not scroll for a script's focus() at all), which can leave its counter under the footer.
+            onFocus={() => wordsBlock.current?.scrollIntoView({ block: 'nearest' })}
             onChange={e => onChange(withOwnWords(answers, q, e.target.value))}
             aria-invalid={!!ownWordsError}
             aria-describedby={`${id}-own-count${ownWordsError ? ` ${id}-own-error` : ''}`}
@@ -96,7 +104,7 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
       )}
 
       {q.step === 'q2' && (
-        <div className="mt-5">
+        <div ref={specificBlock} className="mt-5">
           <label htmlFor={`${id}-specific`} className="mb-1.5 block text-sm font-medium">{SPECIFIC.label}</label>
           <textarea
             id={`${id}-specific`}
@@ -104,6 +112,7 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
             rows={3}
             maxLength={SPECIFIC.max}
             placeholder={SPECIFIC.placeholder}
+            onFocus={() => specificBlock.current?.scrollIntoView({ block: 'nearest' })}
             onChange={e => onChange({ ...answers, findSpecific: e.target.value })}
             aria-describedby={`${id}-specific-count`}
             className={`block resize-none py-2.5 leading-snug ${FIELD} border-gray-300`}

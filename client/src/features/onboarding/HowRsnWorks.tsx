@@ -82,7 +82,7 @@ export function TourSlide({ card }: { card: TourCard }) {
     <>
       <h2 className="text-center font-display text-xl font-bold text-[#1a1a2e]">{card.title}</h2>
       <p className="mt-2 text-balance text-center text-sm leading-relaxed text-gray-600">{card.body}</p>
-      <p className="mt-3 text-balance text-center text-xs font-medium text-gray-600">{EXAMPLES_CAPTION}</p>
+      <p className="mt-3 text-balance text-center text-sm font-semibold text-[#1a1a2e]">{EXAMPLES_CAPTION}</p>
       <div className="mt-5 flex justify-center">{card.visual}</div>
     </>
   );
@@ -260,8 +260,9 @@ export default function HowRsnWorks({ open, mode, failed = false, closesHere = f
 //    itself shows. aria-hidden, because the card text and the caption already
 //    say what they show.
 
-/** The made-up person at this place in the list, wrapping round so a shorter list still fills every picture. */
-const exampleAt = (index: number): ExamplePerson => EXAMPLE_PEOPLE[index % EXAMPLE_PEOPLE.length];
+// The made-up people, one each, by their place in the shared list (pinned at six). A list too short for the pictures fails
+// where it is read; it never repeats a name inside one picture.
+const [suggested, alsoSuggested, matched, wantsToMeetYou, requested] = EXAMPLE_PEOPLE;
 
 /** The label on a picture, in words and white on a dark ground (about 17 to 1), so it reads without colour. */
 function ExampleTag({ className = '' }: { className?: string }) {
@@ -324,7 +325,7 @@ function SuggestionsMock() {
     <Frame tagged={false}>
       <div className="rounded-xl border-2 border-rsn-red bg-white p-3">
         <div className="flex items-center gap-3">
-          <Person person={exampleAt(0)} pose="curious" />
+          <Person person={suggested} pose="curious" />
           <ExampleTag />
         </div>
         <div className="mt-2.5 space-y-1.5">
@@ -334,7 +335,7 @@ function SuggestionsMock() {
         <div className="mt-2.5 rounded-lg bg-rsn-red py-2 text-center text-xs font-bold text-white">Meet</div>
       </div>
       <div className="mt-2 flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-2.5">
-        <Person person={exampleAt(1)} pose="thinking" />
+        <Person person={alsoSuggested} pose="thinking" />
         <ExampleTag />
       </div>
     </Frame>
@@ -343,9 +344,9 @@ function SuggestionsMock() {
 
 function MatchesMock() {
   const rows: Array<{ pose: ReasonSheepPose; person: ExamplePerson; state: string; tone: string }> = [
-    { pose: 'match', person: exampleAt(2), state: 'Matched', tone: 'bg-emerald-100 text-emerald-800' },
-    { pose: 'curious', person: exampleAt(3), state: 'Wants to meet you', tone: 'bg-rsn-red-light text-rsn-red-hover' },
-    { pose: 'thinking', person: exampleAt(4), state: 'Request sent', tone: 'bg-gray-100 text-gray-600' },
+    { pose: 'match', person: matched, state: 'Matched', tone: 'bg-emerald-100 text-emerald-800' },
+    { pose: 'curious', person: wantsToMeetYou, state: 'Wants to meet you', tone: 'bg-rsn-red-light text-rsn-red-hover' },
+    { pose: 'thinking', person: requested, state: 'Request sent', tone: 'bg-gray-100 text-gray-600' },
   ];
   return (
     <Frame>
