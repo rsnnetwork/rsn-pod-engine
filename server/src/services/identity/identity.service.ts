@@ -841,6 +841,8 @@ export async function getUsers(params: {
   status?: 'active' | 'suspended' | 'banned' | 'deactivated';
   search?: string;
   industry?: string;
+  /** Leave out anyone blocked in either direction with this member (26 Oct 2026: the admin's invite search). */
+  notBlockedWith?: string;
 }): Promise<{ users: User[]; total: number }> {
   const page = params.page || 1;
   const pageSize = Math.min(params.pageSize || 20, 100);
@@ -886,6 +888,12 @@ export async function getUsers(params: {
   if (params.industry) {
     whereClause += ` AND industry ILIKE $${paramIdx}`;
     values.push(`%${params.industry}%`);
+    paramIdx++;
+  }
+
+  if (params.notBlockedWith) {
+    whereClause += ` AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $${paramIdx} AND b.blocked_id = users.id) OR (b.blocker_id = users.id AND b.blocked_id = $${paramIdx}))`;
+    values.push(params.notBlockedWith);
     paramIdx++;
   }
 

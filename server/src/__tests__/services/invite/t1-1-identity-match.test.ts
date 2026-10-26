@@ -44,11 +44,17 @@ describe('T1-1 — invite identity-match guard', () => {
       expect(fn).toMatch(/userEmail\.trim\(\)\.toLowerCase\(\)/);
     });
 
-    it('throws IDENTITY_MISMATCH with both emails in the message', () => {
+    it('throws IDENTITY_MISMATCH with both emails in the message, the invited one masked', () => {
       expect(fn).toMatch(/IDENTITY_MISMATCH/);
       expect(fn).toMatch(/invite\.inviteeEmail/);
-      // Message references both addresses so the user knows what to do
-      expect(fn).toMatch(/sent to \$\{invite\.inviteeEmail\}.*you're logged in as \$\{userEmail\}/);
+      expect(fn).toMatch(/identityMismatchMessage\(invite\.inviteeEmail, userEmail\)/);
+      // The message names both addresses so the user knows what to do. The invited one is masked (26 Oct 2026, fix
+      // round 2): whole, it gave the address to anybody signed in who held the code. The wording is run in
+      // invite.service.test.ts; this pins where it comes from.
+      const helperStart = src.indexOf('function identityMismatchMessage');
+      const helper = src.slice(helperStart, src.indexOf('\n}', helperStart));
+      expect(helper).toMatch(/sent to \$\{maskEmail\(inviteeEmail\)\}/);
+      expect(helper).toMatch(/you're logged in as \$\{userEmail\}/);
     });
 
     it('throws BEFORE the use-count idempotent path so a different account cannot trigger re-acceptance', () => {

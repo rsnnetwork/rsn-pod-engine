@@ -77,29 +77,36 @@ const BLOCKED_EITHER_WAY = (person: string) =>
   `EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $1 AND b.blocked_id = ${person}) OR (b.blocker_id = ${person} AND b.blocked_id = $1))`;
 
 /**
- * Where a person stands against the pod or event `target` (a placeholder such as $5): a member of the pod or
- * going to the event, else the latest invite sent to their address decides. That invite is "invited" while it can
- * still be accepted (pending and not expired), "declined" when the person said no to it, and nothing otherwise: an
- * invite an organiser withdrew, or that ran out, leaves them available again. `person` names the columns holding
- * the member's id and lower-case address. The pieces are fixed text; nothing a member types reaches them.
+ * Where a person stands against the pod or event `target` (a placeholder such as $5): a member of the pod or going to
+ * the event, else what ALL the invites sent to their address for it say. They are "invited" while any of those can
+ * still be accepted (pending and not expired); "declined" when they said no to one and have not accepted one since;
+ * and otherwise available: an invite an organiser withdrew, or that ran out, leaves them available again.
+ *
+ * A decline stands until the person says yes (fix round 2). It used to be the latest invite alone, so a one-by-one
+ * invite sent after a decline, and then withdrawn or run out, made the person available to a batch again, and the
+ * bulk "Invite All" asked them once more. `person` names the columns holding the member's id and lower-case address
+ * (an address on its own has no id, and then nobody is a member or going). `inviteId` is the invite behind the state:
+ * the live one for invited, the declined one for declined. The pieces are fixed text; nothing a member types reaches them.
  */
 function standing(kind: 'pod' | 'session', target: string, person: { id: string; email: string }) {
   const present = kind === 'pod'
     ? `WHEN EXISTS (SELECT 1 FROM pod_members pm WHERE pm.pod_id = ${target} AND pm.user_id = ${person.id} AND pm.status = 'active') THEN 'member'`
     : `WHEN EXISTS (SELECT 1 FROM session_participants sp WHERE sp.session_id = ${target} AND sp.user_id = ${person.id} AND sp.status NOT IN ('removed', 'left')) THEN 'going'`;
-  const latest = kind === 'pod'
+  const mine = kind === 'pod'
     ? `i.type = 'pod' AND i.pod_id = ${target}`
     : `i.type = 'session' AND i.session_id = ${target}`;
+  const declined = 'li.declined_at IS NOT NULL AND (li.accepted_at IS NULL OR li.accepted_at < li.declined_at)';
   return {
     join: `LEFT JOIN LATERAL (
-      SELECT i.id,
-             (i.status = 'pending' AND (i.expires_at IS NULL OR i.expires_at > NOW())) AS live,
-             (i.declined_at IS NOT NULL) AS declined
+      SELECT (array_agg(i.id ORDER BY i.created_at DESC) FILTER (WHERE i.status = 'pending' AND (i.expires_at IS NULL OR i.expires_at > NOW())))[1] AS live_id,
+             (array_agg(i.id ORDER BY i.declined_at DESC) FILTER (WHERE i.declined_at IS NOT NULL))[1] AS declined_id,
+             MAX(i.declined_at) AS declined_at,
+             MAX(i.accepted_at) FILTER (WHERE i.status = 'accepted') AS accepted_at
         FROM invites i
-       WHERE ${latest} AND i.invitee_email = ${person.email}
-       ORDER BY i.created_at DESC LIMIT 1
+       WHERE ${mine} AND i.invitee_email = ${person.email}
     ) li ON true`,
-    state: `CASE ${present} WHEN li.live THEN 'invited' WHEN li.declined THEN 'declined' ELSE 'available' END`,
+    state: `CASE ${present} WHEN li.live_id IS NOT NULL THEN 'invited' WHEN ${declined} THEN 'declined' ELSE 'available' END`,
+    inviteId: `CASE WHEN li.live_id IS NOT NULL THEN li.live_id WHEN ${declined} THEN li.declined_id END`,
   };
 }
 
@@ -141,7 +148,7 @@ interface CandidateRow {
 // $1 the asker, $2 the cursor or null, $3 how many, $4 one moment only or null, $5 the pod or event being invited
 // to, then the search words. The page of people is cut first; only then is each of them looked up against the target.
 function connectionsSql(kind: 'pod' | 'session', search: string): string {
-  const { join, state } = standing(kind, '$5', { id: 'p.user_id', email: 'p.email' });
+  const { join, state, inviteId } = standing(kind, '$5', { id: 'p.user_id', email: 'p.email' });
   return `
   WITH ${CONNECTION_SIGNALS_SQL},
   page AS (
@@ -157,7 +164,7 @@ function connectionsSql(kind: 'pod' | 'session', search: string): string {
      ORDER BY pe.since DESC, u.id
      LIMIT $3)
   SELECT p.user_id, p.display_name, p.avatar_url, p.job_title, p.company, p.met, p.since,
-         ${state} AS state, li.id AS latest_invite_id
+         ${state} AS state, ${inviteId} AS latest_invite_id
     FROM page p
     ${join}
    ORDER BY p.since DESC, p.user_id`;
@@ -166,7 +173,7 @@ function connectionsSql(kind: 'pod' | 'session', search: string): string {
 // $1 the asker, $2 the cursor or null, $3 how many, $4 one moment only or null, $5 the event, $6 its pod, then the
 // search words. The members come newest first by the time they joined.
 function podMembersSql(search: string): string {
-  const { join, state } = standing('session', '$5', { id: 'p.user_id', email: 'p.email' });
+  const { join, state, inviteId } = standing('session', '$5', { id: 'p.user_id', email: 'p.email' });
   return `
   WITH page AS (
     SELECT u.id AS user_id, LOWER(u.email) AS email, u.display_name, u.avatar_url, u.job_title, u.company,
@@ -183,7 +190,7 @@ function podMembersSql(search: string): string {
      ORDER BY date_trunc('milliseconds', pm.joined_at) DESC, u.id
      LIMIT $3)
   SELECT p.user_id, p.display_name, p.avatar_url, p.job_title, p.company, p.since,
-         ${state} AS state, li.id AS latest_invite_id
+         ${state} AS state, ${inviteId} AS latest_invite_id
     FROM page p
     ${join}
    ORDER BY p.since DESC, p.user_id`;
@@ -242,6 +249,29 @@ export async function listInviteCandidates(asker: Asker, params: CandidateParams
   return { items: rows.map((row) => toCandidate(row, params.source)), nextBefore };
 }
 
+/**
+ * Which of these addresses declined an invite to this pod or event and have not accepted one since: the very rule the
+ * candidates list and the batch use for "declined" (see standing), asked of addresses on their own. Production's bulk
+ * "Invite All" asks it, so it too never asks again someone who said no (fix round 2, a ruling). One question for the
+ * whole list. Lower-case addresses come back in a set. Whether the asker may invite here is for the caller to have
+ * settled first: the answer tells who declined.
+ */
+export async function declinedAddresses(kind: 'pod' | 'session', targetId: string, emails: string[]): Promise<Set<string>> {
+  const wanted = [...new Set(emails.map((email) => email.toLowerCase()))];
+  if (wanted.length === 0) return new Set();
+  // An address on its own has no member id, so nobody here is "a member" or "going": the state is what their invites say.
+  const { join, state } = standing(kind, '$1', { id: 'NULL::uuid', email: 'e.email' });
+  const result = await query<{ email: string }>(
+    `
+  SELECT e.email
+    FROM unnest($2::text[]) AS e(email)
+    ${join}
+   WHERE ${state} = 'declined'`,
+    [targetId, wanted],
+  );
+  return new Set(result.rows.map((row) => row.email.toLowerCase()));
+}
+
 // ─── The batch ────────────────────────────────────────────────────────────────────────────────────
 
 export type BatchSummary = InviteBatchResponse & {
@@ -287,7 +317,7 @@ interface RecipientRow {
  * $1 the asker, $2 the ids, $3 the pod whose members are allowed or null, $4 the pod or event being invited to.
  */
 async function readRecipients(askerId: string, target: Target, ids: string[]): Promise<Map<string, RecipientRow>> {
-  const { join, state } = standing(target.kind, '$4', { id: 'w.id', email: 'LOWER(u.email)' });
+  const { join, state, inviteId } = standing(target.kind, '$4', { id: 'w.id', email: 'LOWER(u.email)' });
   const result = await query<RecipientRow>(
     `
   WITH wanted AS (SELECT DISTINCT unnest($2::uuid[]) AS id),
@@ -297,7 +327,7 @@ async function readRecipients(askerId: string, target: Target, ids: string[]): P
          ${BLOCKED_EITHER_WAY('w.id')} AS blocked,
          EXISTS (SELECT 1 FROM people pe WHERE pe.person_id = w.id) AS connected,
          ($3::uuid IS NOT NULL AND EXISTS (SELECT 1 FROM pod_members pm WHERE pm.pod_id = $3 AND pm.user_id = w.id AND pm.status = 'active')) AS in_pod,
-         ${state} AS state, li.id AS latest_invite_id
+         ${state} AS state, ${inviteId} AS latest_invite_id
     FROM wanted w
     LEFT JOIN users u ON u.id = w.id
     ${join}`,
@@ -393,12 +423,18 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 /**
  * The emails of a batch, one at a time, each starting at least `gapMs` after the one before, and only once the answer
- * has gone out. It uses nothing but what the batch already holds (no database), so nothing waits on a request that
- * is over, and it never rejects: every failure is logged with the person and the invite, and the rest still go.
+ * has gone out. It never rejects: every failure is logged with the person and the invite, and the rest still go.
  * Sending one at a time also keeps a send's own retries (up to 7 s when the provider says slow down) from piling
  * onto the next send.
+ *
+ * The emails go out up to half a minute after the invites were made, and a lot can happen in that time (fix round 2):
+ * an organiser withdraws one, the invitee declines or accepts in the app, a block is made, an account is closed. So
+ * each invite is read again just before its own email, and one that is no longer waiting for an answer, or whose
+ * person the sender may no longer email, is skipped (and logged). That is the one thing this asks the database, one
+ * invite at a time, after the answer; a check that cannot be made means no email rather than a guess. The pace is
+ * kept between the emails that are sent: a skipped invite costs no pause.
  */
-async function sendEmailsSlowly(context: invites.InviteContext, made: MadeInvite[], gapMs: number): Promise<void> {
+async function sendEmailsSlowly(context: invites.InviteContext, made: MadeInvite[], gapMs: number, senderId: string): Promise<void> {
   try {
     await new Promise<void>((resolve) => setImmediate(resolve));
     let lastStart: number | null = null;
@@ -406,6 +442,15 @@ async function sendEmailsSlowly(context: invites.InviteContext, made: MadeInvite
       if (lastStart !== null) {
         const wait = lastStart + gapMs - Date.now();
         if (wait > 0) await pause(wait);
+      }
+      try {
+        if (!(await invites.isStillEmailable(m.inviteId, senderId))) {
+          logger.info({ inviteeId: m.userId, inviteId: m.inviteId }, 'Batch invite email skipped (the invite is no longer waiting, or the person can no longer be emailed)');
+          continue;
+        }
+      } catch (err) {
+        logger.warn({ err, inviteeId: m.userId, inviteId: m.inviteId }, 'Batch invite email not sent: the invite could not be checked first (the invite exists and the bell was sent)');
+        continue;
       }
       lastStart = Date.now();
       try {
@@ -529,7 +574,7 @@ export async function createInvitesBatch(
     // The bells go out now, so "invited" means the invite exists and the invitee has been told in the app. The emails
     // go out after the answer, slowly (see sendEmailsSlowly).
     await ringBells(context, made);
-    if (made.length > 0) delivery = sendEmailsSlowly(context, made, options.emailGapMs ?? EMAIL_GAP_MS);
+    if (made.length > 0) delivery = sendEmailsSlowly(context, made, options.emailGapMs ?? EMAIL_GAP_MS, asker.userId);
   }
 
   const ordered = ids.map((id) => results.get(id) as InviteBatchResult);

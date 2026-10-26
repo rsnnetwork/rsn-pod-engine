@@ -234,6 +234,35 @@ export const inviteBatchLimiter = rateLimit({
 });
 
 /**
+ * Invite reminders (26 Oct 2026, POST /invites/:id/remind and /invites/remind-all/:sessionId). A reminder is an email to
+ * someone who has already been written to, and neither route had any limit, so a stuck or hostile client could write
+ * to an invitee all day. 60 an hour per member, a request being one whichever route it is: Remind All counts as one
+ * however many people it reminds. The number is roomy on purpose: production's pod page sends one request per pending
+ * invite for its own Remind All (and says "Sent 20 reminders, 5 failed" when some are refused), so it has to cover a pod
+ * with a few dozen invites waiting. Keyed per member, because both routes sign in first.
+ */
+export const INVITE_REMINDERS_PER_HOUR = 60;
+
+export const inviteReminderLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: INVITE_REMINDERS_PER_HOUR,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('invite-reminder'),
+  handler: (_req, res) => {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'You have sent a lot of reminders this hour. Please try again later.',
+      },
+    };
+    res.status(429).json(response);
+  },
+});
+
+/**
  * Onboarding chatbot limiter — bounds LLM cost/abuse on the chat + confirm
  * endpoints. Keyed per authenticated user (these routes require auth). 30
  * turns/min is generous for a 4–7 message flow while capping a runaway client.

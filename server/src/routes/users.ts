@@ -190,11 +190,14 @@ router.get(
       // as /users/search), since admins are explicitly trusted to invite
       // anyone. Regular users still see only their connected (previously-
       // met) users. Single endpoint keeps the client simple.
+      // 26 Oct 2026 (fix round 2): an admin can invite anyone, but not someone blocked either way with them, as for
+      // a member's own search; and only active accounts.
       if (hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         const result = await identityService.getUsers({
           search: q,
           pageSize: limit,
           status: 'active',
+          notBlockedWith: req.user!.userId,
         });
         const data = result.users.map(u => ({
           id: u.id,

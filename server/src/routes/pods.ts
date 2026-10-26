@@ -152,7 +152,8 @@ router.get(
           throw new ForbiddenError('Only the event host can see who to invite');
         }
       }
-      const members = await podService.getPodMembersForInvite(req.params.id, sessionId);
+      // Made for the person asking: their blocks (and the ones against them) and accounts that are not active are left out.
+      const members = await podService.getPodMembersForInvite(req.params.id, sessionId, req.user!.userId);
       res.json({ data: members });
     } catch (err) {
       next(err);

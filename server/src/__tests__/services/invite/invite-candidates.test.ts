@@ -12,7 +12,7 @@
 // code's decisions; the SQL itself is run against a real Postgres in the task report's smoke.
 
 import { InviteType, InviteBatchInput } from '@rsn/shared';
-import { inviteWorld, Answers } from '../../fixtures/invite-world';
+import { inviteWorld, Answers, WorldInvite } from '../../fixtures/invite-world';
 
 const mockQuery = jest.fn();
 const mockTransaction = jest.fn();
@@ -65,7 +65,7 @@ jest.mock('../../../index', () => ({
   io: { to: (room: string) => ({ emit: (...args: unknown[]) => mockEmit(room, ...args) }) },
 }));
 
-import { listInviteCandidates, createInvitesBatch, BatchOptions } from '../../../services/invite/invite-candidates.service';
+import { listInviteCandidates, createInvitesBatch, declinedAddresses, BatchOptions } from '../../../services/invite/invite-candidates.service';
 import { CONNECTION_SIGNALS_SQL } from '../../../services/people/connections.service';
 
 const VIEWER = 'a0000000-0000-4000-8000-000000000001';
@@ -76,6 +76,9 @@ const EVENT_POD = 'c0000000-0000-4000-8000-000000000002';
 const uid = (n: number) => `b0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 const flat = (text: unknown) => String(text).replace(/\s+/g, ' ').trim();
+// How the SQL turns a person's invites to the target into a state (standing() in the service): any invite that can
+// still be accepted is "invited"; a decline that no later acceptance has followed is "declined"; else "available".
+const STATE_RULE = "WHEN li.live_id IS NOT NULL THEN 'invited' WHEN li.declined_at IS NOT NULL AND (li.accepted_at IS NULL OR li.accepted_at < li.declined_at) THEN 'declined' ELSE 'available' END";
 const member = { userId: VIEWER, role: 'member' };
 const admin = { userId: VIEWER, role: 'admin' };
 
@@ -102,10 +105,12 @@ const candidatesStatement = () => {
 // ─── The pieces every test draws on ───────────────────────────────────────────────────────────────
 let cohosts: string[];
 let candidateRows: unknown[];
+let declinedRows: unknown[];
 
 const baseAnswers: Answers = (text) => {
   if (/FROM session_cohosts/.test(text)) return { rows: cohosts.length > 0 ? [{ '?column?': 1 }] : [] };
   if (/page AS \(/.test(text)) return { rows: candidateRows };
+  if (/unnest\(\$2::text\[\]\)/.test(text)) return { rows: declinedRows };
   return undefined;
 };
 
@@ -119,6 +124,7 @@ beforeEach(() => {
   mockEmit.mockReset();
   cohosts = [];
   candidateRows = [];
+  declinedRows = [];
   mockGetPodById.mockResolvedValue(podRow());
   mockGetMemberRole.mockResolvedValue('director');
   mockGetSessionById.mockResolvedValue(eventRow({ hostUserId: VIEWER }));
@@ -265,27 +271,59 @@ describe('listInviteCandidates: your connections', () => {
     expect(candidatesStatement().params).toEqual([VIEWER, '2026-10-01T09:30:00.000Z', 11, null, POD]);
   });
 
-  it('works out where each person stands against a POD from its members and its latest invite to that address', async () => {
+  it('works out where each person stands against a POD from its members and every invite sent to that address for it', async () => {
     await ask();
     const { sql } = candidatesStatement();
     expect(sql).toMatch(/WHEN EXISTS \(SELECT 1 FROM pod_members pm WHERE pm\.pod_id = \$5 AND pm\.user_id = p\.user_id AND pm\.status = 'active'\) THEN 'member'/);
-    expect(sql).toMatch(/WHERE i\.type = 'pod' AND i\.pod_id = \$5 AND i\.invitee_email = p\.email ORDER BY i\.created_at DESC LIMIT 1/);
-    expect(sql).toMatch(/WHEN li\.live THEN 'invited' WHEN li\.declined THEN 'declined' ELSE 'available' END AS state/);
+    expect(sql).toMatch(/FROM invites i WHERE i\.type = 'pod' AND i\.pod_id = \$5 AND i\.invitee_email = p\.email \) li ON true/);
+    expect(sql).toContain(STATE_RULE);
   });
 
   it('works out where each person stands against an EVENT from its participants (not the removed or those who left) and its invites', async () => {
     await listInviteCandidates(member, { sessionId: EVENT, source: 'connections', before: null, limit: 30 });
     const { sql, params } = candidatesStatement();
     expect(sql).toMatch(/WHEN EXISTS \(SELECT 1 FROM session_participants sp WHERE sp\.session_id = \$5 AND sp\.user_id = p\.user_id AND sp\.status NOT IN \('removed', 'left'\)\) THEN 'going'/);
-    expect(sql).toMatch(/WHERE i\.type = 'session' AND i\.session_id = \$5 AND i\.invitee_email = p\.email/);
+    expect(sql).toMatch(/FROM invites i WHERE i\.type = 'session' AND i\.session_id = \$5 AND i\.invitee_email = p\.email/);
     expect(params[4]).toBe(EVENT);
   });
 
-  it('an invite counts as pending only while it can still be accepted, and as declined only when the latest one was declined', async () => {
-    await ask();
-    const { sql } = candidatesStatement();
-    expect(sql).toMatch(/\(i\.status = 'pending' AND \(i\.expires_at IS NULL OR i\.expires_at > NOW\(\)\)\) AS live/);
-    expect(sql).toMatch(/\(i\.declined_at IS NOT NULL\) AS declined/);
+  // Fix round 2 (ruling): "declined" is that the person declined an invite to this target and has not accepted one
+  // since, not that their latest invite was declined. A later one-by-one invite that is withdrawn or runs out must not
+  // make them available to a batch again. The SQL is run against a real Postgres in the report's smoke; here its rule is read.
+  describe('the state of a person against the target is worked out from all their invites to it', () => {
+    it('reads every invite to that address for the target, not the latest only', async () => {
+      await ask();
+      const { sql } = candidatesStatement();
+      expect(sql).not.toMatch(/ORDER BY i\.created_at DESC LIMIT 1/);
+      expect(sql).toMatch(/array_agg\(i\.id ORDER BY i\.created_at DESC\) FILTER \(WHERE i\.status = 'pending' AND \(i\.expires_at IS NULL OR i\.expires_at > NOW\(\)\)\)\)\[1\] AS live_id/);
+    });
+
+    it('invited: any invite that can still be accepted (pending and not expired), whichever was made last', async () => {
+      await ask();
+      expect(candidatesStatement().sql).toMatch(/WHEN li\.live_id IS NOT NULL THEN 'invited'/);
+    });
+
+    it('declined: one was declined, and none was accepted after it', async () => {
+      await ask();
+      const { sql } = candidatesStatement();
+      expect(sql).toMatch(/MAX\(i\.declined_at\) AS declined_at/);
+      expect(sql).toMatch(/MAX\(i\.accepted_at\) FILTER \(WHERE i\.status = 'accepted'\) AS accepted_at/);
+      expect(sql).toMatch(/WHEN li\.declined_at IS NOT NULL AND \(li\.accepted_at IS NULL OR li\.accepted_at < li\.declined_at\) THEN 'declined'/);
+    });
+
+    it('a member or a guest comes first, then a live invite, then a standing decline, else available', async () => {
+      await ask();
+      const { sql } = candidatesStatement();
+      const order = ["THEN 'member'", "THEN 'invited'", "THEN 'declined'", "ELSE 'available'"].map((word) => sql.indexOf(word));
+      expect(order.every((at) => at > 0)).toBe(true);
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+    });
+
+    it('the invite shown behind the state is the live one for invited and the declined one for declined', async () => {
+      await ask();
+      expect(candidatesStatement().sql).toMatch(
+        /CASE WHEN li\.live_id IS NOT NULL THEN li\.live_id WHEN li\.declined_at IS NOT NULL AND \(li\.accepted_at IS NULL OR li\.accepted_at < li\.declined_at\) THEN li\.declined_id END AS latest_invite_id/);
+    });
   });
 
   it('shows each person as the People page does (met, or connected), with their card and the state, and the invite behind invited and declined', async () => {
@@ -444,6 +482,51 @@ describe('listInviteCandidates: the people in an event\'s pod', () => {
   it('carries no email', async () => {
     candidateRows = [candidateRow(1, { email: 'secret@example.com' })];
     expect(JSON.stringify(await ask())).not.toMatch(/@|secret/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// Who declined (fix round 2): production's "Invite All" asks it, so it too never asks someone again who said no
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+describe('declinedAddresses: who declined this pod or event and has not said yes since', () => {
+  const asked = () => {
+    const found = statementsMatching(/unnest\(\$2::text\[\]\)/);
+    expect(found).toHaveLength(1);
+    return found[0];
+  };
+
+  it('asks once for the whole list, about the target, each address once and in lower case', async () => {
+    await declinedAddresses('session', EVENT, ['A@Example.com', 'a@example.com', 'b@example.com']);
+    expect(asked().params).toEqual([EVENT, ['a@example.com', 'b@example.com']]);
+  });
+
+  it('uses the very rule the candidates list and the batch use: every invite to that address for the target, a decline that stands', async () => {
+    await declinedAddresses('session', EVENT, ['a@example.com']);
+    const { sql } = asked();
+    expect(sql).toContain(STATE_RULE);
+    expect(sql).toMatch(/FROM invites i WHERE i\.type = 'session' AND i\.session_id = \$1 AND i\.invitee_email = e\.email/);
+    expect(sql).toMatch(/= 'declined'$/);
+  });
+
+  it('for a pod it reads the pod\'s invites', async () => {
+    await declinedAddresses('pod', POD, ['a@example.com']);
+    expect(asked().sql).toMatch(/FROM invites i WHERE i\.type = 'pod' AND i\.pod_id = \$1 AND i\.invitee_email = e\.email/);
+  });
+
+  it('answers with the addresses that declined, as a set of lower-case addresses', async () => {
+    declinedRows = [{ email: 'b@example.com' }, { email: 'd@example.com' }];
+    const found = await declinedAddresses('session', EVENT, ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com']);
+    expect([...found].sort()).toEqual(['b@example.com', 'd@example.com']);
+  });
+
+  it('an empty list asks nothing', async () => {
+    expect([...(await declinedAddresses('session', EVENT, []))]).toEqual([]);
+    expect(statementsMatching(/unnest/)).toHaveLength(0);
+  });
+
+  it('names no member: a person is looked up by address alone, so it cannot call anyone a member of the pod', async () => {
+    await declinedAddresses('pod', POD, ['a@example.com']);
+    expect(asked().sql).toContain('pm.user_id = NULL::uuid');
   });
 });
 
@@ -880,12 +963,120 @@ describe('createInvitesBatch', () => {
       expect(1000 / EMAIL_GAP_MS).toBeLessThanOrEqual(2);
     });
 
-    it('send nothing more from the database once the answer is out: the pace runs on what the batch already knows', async () => {
+    // Fix round 2: the emails go out up to half a minute after the invites were made, and a lot can happen in that time:
+    // the organiser withdraws one, the invitee declines or accepts in the app, a block is made. So each invite is read
+    // again just before its own email, and an email for an invite that is no longer waiting is not sent. This is the one
+    // thing the delivery asks the database; it is asked after the answer, one invite at a time.
+    it('read each invite again just before its email, once each, and only after the answer is out', async () => {
       const result = await podBatch([person(1), person(2), person(3)], {}, { emailGapMs: 10 });
-      const asked = mockQuery.mock.calls.length;
+      expect(world.log.filter((entry) => entry === 'email-check')).toHaveLength(0);
       await result.delivery;
-      expect(mockQuery.mock.calls.length).toBe(asked);
+      expect(world.log.filter((entry) => entry === 'email-check')).toHaveLength(3);
       expect(mockSendInviteEmail).toHaveBeenCalledTimes(3);
+    });
+
+    it('read each invite just before its OWN email, not all up front: after the one before has gone', async () => {
+      const events: string[] = [];
+      const original = world.query;
+      mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (/^\s*SELECT invitee_email FROM invites WHERE id/.test(sql)) events.push(`check:${(params as string[])[0]}`);
+        return original(sql, params);
+      });
+      mockSendInviteEmail.mockImplementation(async (to: string) => { events.push(`send:${to}`); });
+      const result = await podBatch([person(1), person(2)], {}, { emailGapMs: 5 });
+      await result.delivery;
+      expect(events).toEqual(['check:invite-1', 'send:person1@example.com', 'check:invite-2', 'send:person2@example.com']);
+    });
+
+    it('an invite withdrawn while the first email is going is not emailed (it was read after, not before)', async () => {
+      const [a, b, c] = [person(1), person(2), person(3)];
+      mockSendInviteEmail.mockImplementationOnce(async () => { world.invites[2].status = 'revoked'; });
+      const result = await podBatch([a, b, c], {}, { emailGapMs: 20 });
+      await result.delivery;
+      expect(mockSendInviteEmail.mock.calls.map((call) => call[0])).toEqual(['person1@example.com', 'person2@example.com']);
+    });
+
+    it.each([
+      ['withdrawn by an organiser', (invite: WorldInvite) => { invite.status = 'revoked'; }],
+      ['declined by the invitee', (invite: WorldInvite) => { invite.status = 'revoked'; invite.declinedAt = new Date(); }],
+      ['accepted by the invitee in the app', (invite: WorldInvite) => { invite.status = 'accepted'; }],
+      ['expired', (invite: WorldInvite) => { invite.expiresAt = new Date(Date.now() - 1000); }],
+    ])('an invite %s after the answer is not emailed, the others still are, and nothing the answer said is taken back', async (_what, change) => {
+      const [a, b, c] = [person(1), person(2), person(3)];
+      const result = await podBatch([a, b, c], {}, { emailGapMs: 5 });
+      change(world.invites[1]);
+      await result.delivery;
+      expect(mockSendInviteEmail.mock.calls.map((call) => call[0]).sort()).toEqual(['person1@example.com', 'person3@example.com']);
+      // The bell was sent with the answer and stays; the outcome the answer gave stands.
+      expect(statementsMatching(/^INSERT INTO notifications/)).toHaveLength(3);
+      expect(outcomes(result)).toEqual([[a, 'invited'], [b, 'invited'], [c, 'invited']]);
+      const skipped = mockLogger.info.mock.calls.filter((call) => /email skipped/i.test(String(call[1])));
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0][0]).toMatchObject({ inviteeId: b, inviteId: result.results[1].inviteId });
+    });
+
+    describe('a block or a closed account that appears after the answer', () => {
+      const people = () => [1, 2, 3].map((n) => ({ id: uid(n), email: `person${n}@example.com`, status: 'active' as 'active' | 'suspended' | 'banned' | 'deactivated' }));
+      let members: ReturnType<typeof people>;
+      let blocks: Array<[string, string]>;
+      beforeEach(() => {
+        members = people();
+        blocks = [];
+        world = inviteWorld({ answers: batchAnswers, people: members, blocks });
+        mockQuery.mockImplementation(world.query);
+        mockTransaction.mockImplementation(world.transaction);
+      });
+
+      it.each([
+        ['the invitee blocks the sender', (id: string) => [id, VIEWER]],
+        ['the sender blocks the invitee', (id: string) => [VIEWER, id]],
+      ])('%s: that email is not sent', async (_who, block) => {
+        const ids = [person(1), person(2), person(3)];
+        const result = await podBatch(ids, {}, { emailGapMs: 5 });
+        expect(result.counts.invited).toBe(3);
+        blocks.push(block(ids[1]) as [string, string]);
+        await result.delivery;
+        expect(mockSendInviteEmail.mock.calls.map((call) => call[0]).sort()).toEqual(['person1@example.com', 'person3@example.com']);
+      });
+
+      it('an account closed, suspended or banned after the answer is not emailed either', async () => {
+        const ids = [person(1), person(2), person(3)];
+        const result = await podBatch(ids, {}, { emailGapMs: 5 });
+        members[0].status = 'deactivated';
+        members[2].status = 'banned';
+        await result.delivery;
+        expect(mockSendInviteEmail.mock.calls.map((call) => call[0])).toEqual(['person2@example.com']);
+      });
+
+      it('and a block is not told to anyone: the log names the invite and the person, and says no more', async () => {
+        const ids = [person(1)];
+        const result = await podBatch(ids, {}, { emailGapMs: 5 });
+        blocks.push([ids[0], VIEWER]);
+        await result.delivery;
+        const skipped = mockLogger.info.mock.calls.filter((call) => /email skipped/i.test(String(call[1])));
+        expect(skipped).toHaveLength(1);
+        expect(String(skipped[0][1])).not.toMatch(/block|closed|suspend|ban/i);
+      });
+    });
+
+    it('an invite that cannot be checked is not emailed on a guess: logged with the person and the invite, and the next one is still tried', async () => {
+      const original = world.query;
+      let checks = 0;
+      mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (/^\s*SELECT invitee_email FROM invites WHERE id/.test(sql)) {
+          checks += 1;
+          if (checks === 1) throw new Error('database hiccup');
+        }
+        return original(sql, params);
+      });
+      const [a, b] = [person(1), person(2)];
+      const result = await podBatch([a, b]);
+      await expect(result.delivery).resolves.toBeUndefined();
+      expect(mockSendInviteEmail.mock.calls.map((call) => call[0])).toEqual(['person2@example.com']);
+      const failures = mockLogger.warn.mock.calls.filter((call) => /email/i.test(String(call[1])));
+      expect(failures).toHaveLength(1);
+      expect(failures[0][0]).toMatchObject({ inviteeId: a, inviteId: result.results[0].inviteId });
+      expect(failures[0][0].err).toBeInstanceOf(Error);
     });
 
     it('an email that cannot be sent is logged with the person and the invite, does not undo the invite, and the rest still go', async () => {

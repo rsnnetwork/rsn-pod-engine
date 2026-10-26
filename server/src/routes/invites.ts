@@ -3,7 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate, optionalAuth } from '../middleware/auth';
-import { inviteLimiter, inviteBatchLimiter, peopleReadLimiter } from '../middleware/rateLimit';
+import { inviteLimiter, inviteBatchLimiter, inviteReminderLimiter, peopleReadLimiter } from '../middleware/rateLimit';
 import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
 import * as inviteCandidates from '../services/invite/invite-candidates.service';
@@ -307,14 +307,17 @@ router.get(
 );
 
 // ─── POST /invites/:id/remind ────────────────────────────────────────────────
+// 26 Oct 2026 (fix round 2): limited to 60 reminders an hour per member (this route and Remind All share it), and the
+// email says what the invite was for.
 
 router.post(
   '/:id/remind',
   authenticate,
+  inviteReminderLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const invite = await query<{ id: string; invitee_email: string; session_id: string; pod_id: string; status: string; code: string; expires_at: string | null; inviter_id: string }>(
-        `SELECT id, invitee_email, session_id, pod_id, status, code, expires_at, inviter_id FROM invites WHERE id = $1`, [req.params.id]
+      const invite = await query<{ id: string; invitee_email: string; type: InviteType; session_id: string | null; pod_id: string | null; circle_id: string | null; status: string; code: string; expires_at: string | null; inviter_id: string }>(
+        `SELECT id, invitee_email, type, session_id, pod_id, circle_id, status, code, expires_at, inviter_id FROM invites WHERE id = $1`, [req.params.id]
       );
       if (invite.rows.length === 0) {
         return res.status(404).json({ success: false, error: { code: 'INVITE_NOT_FOUND', message: 'Invite not found' } });
@@ -351,50 +354,15 @@ router.post(
         return res.status(409).json({ success: false, error: { code: 'INVITE_NOT_PERMITTED', message: inviteService.CANNOT_BE_INVITED } });
       }
 
-      // Re-send invite email
+      // Re-send the invite email, worded like the first one (fix round 2): the very functions that build and send it
+      // do it again, so a pod invite is a pod invite with the pod's name, a circle's names the circle, and an event's
+      // carries its title and its calendar entry, the length of which is the shared eventDurationMinutes. This used to
+      // be written out here, as an event invite whatever the invite was for.
       if (inv.invitee_email) {
-        const { default: config } = await import('../config');
-        const emailService = await import('../services/email/email.service');
-        const inviterResult = await query<{ displayName: string }>(
-          `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [req.user!.userId]
-        );
-        const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
-
-        let targetName: string | undefined;
-        let calendarEvent: any = undefined;
-        if (inv.session_id) {
-          const sr = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null }>(
-            `SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1`, [inv.session_id]
-          );
-          const session = sr.rows[0];
-          targetName = session?.title;
-
-          if (session?.scheduled_at) {
-            // 26 Oct 2026 — the same length as the first invite: the shared eventDurationMinutes.
-            const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
-            const hostResult = await query<{ display_name: string; email: string }>(
-              'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
-            );
-            const host = hostResult.rows[0];
-            calendarEvent = {
-              title: session.title,
-              description: `REASON event — ${session.title}`,
-              startTime: new Date(session.scheduled_at),
-              durationMinutes: totalMinutes,
-              organizerName: host?.display_name || 'REASON',
-              organizerEmail: host?.email,
-              sessionId: inv.session_id,
-            };
-          }
-        }
-
-        await emailService.sendInviteEmail(inv.invitee_email, {
-          inviterName,
-          type: 'session',
-          targetName,
-          inviteUrl: `${config.clientUrl}/invite/${inv.code}`,
-          calendarEvent,
+        const context = await inviteService.buildInviteContext(req.user!.userId, inv.type, {
+          podId: inv.pod_id, sessionId: inv.session_id, circleId: inv.circle_id,
         });
+        await inviteService.emailInvite(context, { code: inv.code, inviteeEmail: inv.invitee_email });
       }
 
       return res.json({ success: true, data: { reminded: true } });
@@ -410,6 +378,7 @@ router.post(
 router.post(
   '/remind-all/:sessionId',
   authenticate,
+  inviteReminderLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
@@ -439,8 +408,10 @@ router.post(
       const unreachable = await inviteService.unreachableAddresses(req.user!.userId, allPending.rows.map((inv) => inv.invitee_email));
       const pendingInvites = { rows: allPending.rows.filter((inv) => !unreachable.has(inv.invitee_email.toLowerCase())) };
 
+      // Both numbers, always: production's event page toasts "Reminders sent to ${reminded}/${total} pending invites",
+      // and without a total it read "0/undefined" (fix round 2).
       if (pendingInvites.rows.length === 0) {
-        return res.json({ success: true, data: { reminded: 0 } });
+        return res.json({ success: true, data: { reminded: 0, total: 0 } });
       }
 
       // Build calendar event context
@@ -562,9 +533,17 @@ router.get(
 
       const context = { inviterName, podName, podDescription, sessionTitle, sessionScheduledAt, sessionDescription, sessionStatus, circleName, circleDescription };
 
-      // Non-authenticated users see limited invite fields but full context
+      // Non-authenticated users see limited invite fields but full context. A signed-in caller sees the whole invite,
+      // but its address only if they have a right to it (fix round 2): the invitee, the sender, the event's host or the
+      // pod's director or host, and admins read it whole; anyone else reads it masked. The code is all it takes to ask
+      // here, so the address was otherwise open to every signed-in member who had one. Production's accept page never
+      // shows it, so no one loses anything on screen.
       const data = req.user
-        ? { ...invite, ...context }
+        ? {
+            ...invite,
+            inviteeEmail: await inviteService.inviteeAddressFor(invite, { userId: req.user.userId, email: req.user.email, role: req.user.role }),
+            ...context,
+          }
         : {
             code: invite.code,
             type: invite.type,
@@ -662,37 +641,26 @@ router.post(
 );
 
 // ─── POST /invites/:code/mark-accepted ───────────────────────────────────────
-// Force-mark an invite as accepted for the current user.
-// Used when the normal accept flow fails (already used/expired) but the user
-// has been registered via a different path. Ensures notifications & dashboard
-// reflect the real state.
+// Mark an invite as accepted for the current user.
+// Was used when the normal accept flow failed (already used/expired) but the user
+// had been registered via a different path; the client dropped that recovery in T0-4
+// and nothing calls it now. 26 Oct 2026 (fix round 2): it applies the rules accept
+// applies (the invite must still be usable, and a personal invite is marked only for
+// the person it was sent to) instead of trusting any signed-in caller with any code.
 
 router.post(
   '/:code/mark-accepted',
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const inviteResult = await query<{ id: string; status: string; pod_id: string | null; session_id: string | null }>(
-        `SELECT id, status, pod_id, session_id FROM invites WHERE code = $1`,
-        [req.params.code]
-      );
-      if (inviteResult.rows.length === 0) {
-        res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Invite not found' } });
-        return;
-      }
-      const row = inviteResult.rows[0];
-      // Update invite status to accepted and record accepting user
-      await query(
-        `UPDATE invites SET status = 'accepted', accepted_by_user_id = $1, accepted_at = COALESCE(accepted_at, NOW()) WHERE id = $2`,
-        [req.user!.userId, row.id]
-      );
+      const row = await inviteService.markInviteAccepted(req.params.code, req.user!.userId, req.user!.email);
       // Bug 30 (19 May Ali) — same fanout as /accept so the affected
       // pod / session lists repaint everywhere instantly.
-      if (row.pod_id) {
-        fanoutPodEntities(row.pod_id, [E.userPods(req.user!.userId)]).catch(() => {});
+      if (row.podId) {
+        fanoutPodEntities(row.podId, [E.userPods(req.user!.userId)]).catch(() => {});
       }
-      if (row.session_id) {
-        fanoutSessionEntities(row.pod_id, row.session_id, [E.userSessions(req.user!.userId)]).catch(() => {});
+      if (row.sessionId) {
+        fanoutSessionEntities(row.podId, row.sessionId, [E.userSessions(req.user!.userId)]).catch(() => {});
       }
       emitEntities(
         getRealtimeIo(),
@@ -799,7 +767,24 @@ router.post(
       const userId = req.user!.userId;
       const results = { sent: 0, skipped: 0, errors: 0 };
 
+      // Someone who declined an invite to this event, and has not accepted one since, is not asked again by "Invite All"
+      // (fix round 2, a ruling): they are counted as skipped, which production's page reads as "already invited". One
+      // question for the whole list. It is asked only for a caller who may invite here: for anyone else every address is
+      // refused by the invite itself, as it always was, so the answer cannot tell who declined. The single Invite for one
+      // member (POST /invites) does not ask: the organiser may still ask them again by hand.
+      let mayInvite = true;
+      try {
+        await inviteService.assertMayInviteToSession(sessionId, userId, false);
+      } catch {
+        mayInvite = false;
+      }
+      const declined = mayInvite ? await inviteCandidates.declinedAddresses('session', sessionId, emails) : new Set<string>();
+
       for (const email of emails) {
+        if (declined.has(email.toLowerCase())) {
+          results.skipped++;
+          continue;
+        }
         try {
           await inviteService.createInvite(userId, {
             type: InviteType.SESSION,

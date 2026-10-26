@@ -40,6 +40,10 @@ jest.mock('../../services/invite/invite.service', () => {
     maskEmail: actual.maskEmail,
     hideOthersAddresses: actual.hideOthersAddresses,
     CANNOT_BE_INVITED: actual.CANNOT_BE_INVITED,
+    // A reminder is worded by the same two functions as the first invite (fix round 2): they are the real ones here, so
+    // the tests read the email the member would get. They ask the stand-in database and the stand-in mail service.
+    buildInviteContext: actual.buildInviteContext,
+    emailInvite: actual.emailInvite,
   };
 });
 const mockSendInviteEmail = jest.fn();
@@ -50,9 +54,11 @@ jest.mock('../../services/email/email.service', () => ({
 
 const mockCandidates = jest.fn();
 const mockBatch = jest.fn();
+const mockDeclined = jest.fn();
 jest.mock('../../services/invite/invite-candidates.service', () => ({
   listInviteCandidates: (...args: unknown[]) => mockCandidates(...args),
   createInvitesBatch: (...args: unknown[]) => mockBatch(...args),
+  declinedAddresses: (...args: unknown[]) => mockDeclined(...args),
   BATCH_MAX: 50,
   __esModule: true,
 }));
@@ -75,7 +81,7 @@ import * as inviteService from '../../services/invite/invite.service';
 import inviteRoutes from '../../routes/invites';
 import { authenticate } from '../../middleware/auth';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
-import { inviteBatchLimiter, peopleReadLimiter } from '../../middleware/rateLimit';
+import { inviteBatchLimiter, inviteReminderLimiter, peopleReadLimiter } from '../../middleware/rateLimit';
 import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { InviteType, InviteStatus } from '@rsn/shared';
 
@@ -92,7 +98,8 @@ const auth = (sub?: string, role?: string) => ({ Authorization: `Bearer ${token(
 const POD = '5f0c3a3e-8d7b-4a57-9d0e-1f2a3b4c5d6e';
 const EVENT = '7a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8';
 const EVENT_POD = '8b2e3d4f-5061-4b72-9c83-a4b5c6d7e8f9';
-const PERSON = (n: number) => `b0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const CIRCLE = '9c3f4e50-6172-4c83-8d94-b5c6d7e8f900';
+const PERSON =(n: number) => `b0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 beforeEach(() => {
   mockDb.mockReset();
@@ -100,12 +107,19 @@ beforeEach(() => {
   mockDb.mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
   mockCandidates.mockReset();
   mockBatch.mockReset();
+  mockDeclined.mockReset();
+  // Nobody has declined, until a test says otherwise.
+  mockDeclined.mockResolvedValue(new Set<string>());
   mockFanoutPod.mockClear();
   mockFanoutSession.mockClear();
   mockEmitEntities.mockClear();
   mockSendInviteEmail.mockReset();
   mockSendInviteEmail.mockResolvedValue(undefined);
   (inviteService.createInvite as jest.Mock).mockReset();
+  (inviteService.assertMayInviteToSession as jest.Mock).mockReset();
+  (inviteService.getInviteByCode as jest.Mock).mockReset();
+  (inviteService.inviteeAddressFor as jest.Mock).mockReset();
+  (inviteService.markInviteAccepted as jest.Mock).mockReset();
   // Who runs an event's or a pod's invites: an admin, and nobody else, until a test says otherwise.
   (inviteService.eventInviteRole as jest.Mock).mockReset();
   (inviteService.eventInviteRole as jest.Mock).mockImplementation(async (_sessionId: string, _userId: string, isAdmin: boolean) => (isAdmin ? 'admin' : null));
@@ -526,6 +540,78 @@ describe('the calls production\'s client makes, unchanged', () => {
       expect(mockFanoutSession).toHaveBeenCalledTimes(1);
       expect(mockFanoutSession).toHaveBeenCalledWith(EVENT_POD, EVENT, [`session:${EVENT}:invites`]);
     });
+
+    // Fix round 2 (ruling): "Invite All" never asks again someone who said no to this event. Production's page reads
+    // `Invited ${sent} pod members!${skipped ? ` ${skipped} already invited.` : ''}`, so a decliner is part of the
+    // skipped count and nothing else in the answer changes. The single Invite per member is unchanged.
+    describe('someone who declined this event is not invited again', () => {
+      const quiet = () => mockDb.mockImplementation(async (sql: string) =>
+        /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ pod_id: EVENT_POD }] });
+
+      it('is counted as skipped, no invite is made for them, and the others still go', async () => {
+        mockDeclined.mockResolvedValue(new Set(['b@example.com', 'd@example.com']));
+        (inviteService.createInvite as jest.Mock).mockResolvedValue({ id: 'i' });
+        quiet();
+        const res = await bulk();
+        expect(res.body.data).toEqual({ sent: 3, skipped: 2, errors: 0 });
+        const invited = (inviteService.createInvite as jest.Mock).mock.calls.map((call) => call[1].inviteeEmail);
+        expect(invited).toEqual(['a@example.com', 'c@example.com', 'e@example.com']);
+      });
+
+      it('is asked once for the whole list, about this event, with the addresses as given', async () => {
+        (inviteService.createInvite as jest.Mock).mockResolvedValue({ id: 'i' });
+        quiet();
+        await bulk();
+        expect(mockDeclined).toHaveBeenCalledTimes(1);
+        expect(mockDeclined).toHaveBeenCalledWith('session', EVENT, emails);
+      });
+
+      it('is matched whatever the case of the address in the list', async () => {
+        mockDeclined.mockResolvedValue(new Set(['b@example.com']));
+        (inviteService.createInvite as jest.Mock).mockResolvedValue({ id: 'i' });
+        quiet();
+        const res = await request(app).post('/invites/bulk').set(auth()).send({ sessionId: EVENT, emails: ['A@Example.com', 'B@Example.COM'] });
+        expect(res.body.data).toEqual({ sent: 1, skipped: 1, errors: 0 });
+      });
+
+      it('everyone having declined is all skipped, nothing is sent and no screen is told', async () => {
+        mockDeclined.mockResolvedValue(new Set(emails));
+        quiet();
+        const res = await bulk();
+        expect(res.body.data).toEqual({ sent: 0, skipped: 5, errors: 0 });
+        expect(inviteService.createInvite).not.toHaveBeenCalled();
+        expect(mockFanoutSession).not.toHaveBeenCalled();
+      });
+
+      it('says nothing more than it did: the same three counts', async () => {
+        mockDeclined.mockResolvedValue(new Set(['b@example.com']));
+        (inviteService.createInvite as jest.Mock).mockResolvedValue({ id: 'i' });
+        quiet();
+        const res = await bulk();
+        expect(Object.keys(res.body.data).sort()).toEqual(['errors', 'sent', 'skipped']);
+      });
+
+      it('a question that cannot be answered is an error for the whole call, with nobody invited on a guess', async () => {
+        mockDeclined.mockRejectedValue(new Error('database hiccup'));
+        quiet();
+        const res = await bulk();
+        expect(res.status).toBe(500);
+        expect(inviteService.createInvite).not.toHaveBeenCalled();
+      });
+
+      // Without this, anyone could post an address and read from skipped-or-error whether that person had declined.
+      it('is asked only for someone who may invite to this event: for anyone else the answer cannot tell who declined', async () => {
+        (inviteService.assertMayInviteToSession as jest.Mock).mockRejectedValue(new AppError(403, 'AUTH_FORBIDDEN', 'Only the host can invite'));
+        mockDeclined.mockResolvedValue(new Set(emails));
+        (inviteService.createInvite as jest.Mock).mockRejectedValue(new AppError(403, 'AUTH_FORBIDDEN', 'Only the host can invite'));
+        quiet();
+        const res = await bulk();
+        expect(mockDeclined).not.toHaveBeenCalled();
+        // What they always got: every address refused by the invite itself, as an error.
+        expect(res.body.data).toEqual({ sent: 0, skipped: 0, errors: 5 });
+        expect(inviteService.assertMayInviteToSession).toHaveBeenCalledWith(EVENT, 'u-organiser', false);
+      });
+    });
   });
 });
 
@@ -606,6 +692,33 @@ describe('GET /invites/session/:sessionId: who may read the list of an event\'s 
     expect(JSON.stringify(res.body)).not.toMatch(/anna\.smith@|bob@/);
   });
 
+  // Fix round 2: a code opens the invite whole (GET /invites/:code), so the rows whose address is hidden carry none.
+  // Production's pages act on `id` and read `code` only from an open link (HostControls).
+  it('a co-host is given no code on the invites whose address is hidden, so no address can be got back with one: only their own invites and the open links keep theirs', async () => {
+    const res = await listAs('u-cohost', 'member', 'cohost', [
+      row({ id: 'mine', inviterId: 'u-cohost', inviteeEmail: 'mine@example.com', code: 'MINE-CODE' }),
+      row({ id: 'members', code: 'SECRET-MEMBER-CODE', inviteeEmail: 'anna.smith@example.com', inviteeName: 'Anna Smith', inviteeUserId: PERSON(1) }),
+      row({ id: 'guest', code: 'SECRET-GUEST-CODE', inviteeEmail: 'bob@mail.example.org' }),
+      row({ id: 'link', inviteeEmail: null, code: 'OPENLINK' }),
+    ]);
+    const byId = Object.fromEntries(res.body.data.map((r: { id: string }) => [r.id, r]));
+    expect(byId.mine.code).toBe('MINE-CODE');
+    expect(byId.link.code).toBe('OPENLINK');
+    expect(byId.members.code).toBe('');
+    expect(byId.guest.code).toBe('');
+    expect(JSON.stringify(res.body)).not.toMatch(/SECRET/);
+    // The page still has what it acts on.
+    expect(byId.guest.id).toBe('guest');
+  });
+
+  it('the host and an admin are given every code, as they always were: they run the invites', async () => {
+    const rows = [row({ id: 'a', code: 'CODE-A', inviterId: 'u-cohost' }), row({ id: 'b', code: 'CODE-B', inviteeEmail: 'bob@example.com' })];
+    const asHost = await listAs('u-host', 'member', 'host', rows);
+    expect(asHost.body.data.map((r: { code: string }) => r.code)).toEqual(['CODE-A', 'CODE-B']);
+    const asAdmin = await listAs('u-admin', 'admin', null, rows);
+    expect(asAdmin.body.data.map((r: { code: string }) => r.code)).toEqual(['CODE-A', 'CODE-B']);
+  });
+
   it('a co-host\'s answer still carries what the new screens need: who answered, who the member is, who sent it', async () => {
     const res = await listAs('u-cohost', 'member', 'cohost', [
       row({ inviterId: 'u-host', status: 'revoked', declinedAt: '2026-10-21T09:00:00.000Z', inviteeUserId: PERSON(1), inviteeName: 'Anna Smith' }),
@@ -633,7 +746,8 @@ describe('GET /invites/session/:sessionId: who may read the list of an event\'s 
 describe('POST /invites/:id/remind', () => {
   const INVITE = '11111111-1111-4111-8111-111111111111';
   const inviteRow = (over: Record<string, unknown> = {}) => ({
-    id: INVITE, invitee_email: 'guest@example.com', session_id: EVENT, pod_id: null, status: 'pending', code: 'CODE1', expires_at: null, ...over,
+    id: INVITE, invitee_email: 'guest@example.com', session_id: EVENT, pod_id: null, circle_id: null, type: 'session', inviter_id: 'u-host',
+    status: 'pending', code: 'CODE1', expires_at: null, ...over,
   });
   const given = (row: Record<string, unknown> | null) => {
     mockDb.mockImplementation(async (sql: string) => {
@@ -643,6 +757,8 @@ describe('POST /invites/:id/remind', () => {
       if (/SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions/.test(sql)) {
         return { rows: [{ title: 'Kickoff', scheduled_at: null, host_user_id: 'u-host', config: {}, event_format: 'video_meeting' }] };
       }
+      if (/SELECT name FROM pods WHERE id = \$1/.test(sql)) return { rows: [{ name: 'Reason circle' }] };
+      if (/SELECT name FROM circles WHERE id = \$1/.test(sql)) return { rows: [{ name: 'Book club' }] };
       return { rows: [] };
     });
   };
@@ -724,12 +840,78 @@ describe('POST /invites/:id/remind', () => {
 
   describe('a pod\'s invite', () => {
     it.each([['a director or host', true, 200], ['an ordinary member', false, 403]] as const)('%s: %i', async (_who, mayRun, status) => {
-      given(inviteRow({ session_id: null, pod_id: POD }));
+      given(inviteRow({ session_id: null, pod_id: POD, type: 'pod' }));
       (inviteService.mayRunPodInvites as jest.Mock).mockResolvedValue(mayRun);
       const res = await remind('u-someone');
       expect(res.status).toBe(status);
       expect(inviteService.mayRunPodInvites).toHaveBeenCalledWith(POD, 'u-someone', false);
       if (status === 403) expect(res.body.error.message).toBe('Only pod directors can send reminders');
+    });
+  });
+
+  // Fix round 2: every reminder used to be sent as an event invite ("has invited you to join an event"), with no name
+  // at all for a pod, a circle or the platform. It is now worded like the first invite: the same two functions build it.
+  // The calls are production's: the pod page's Remind and Remind All (one request per pending invite) and the event page's Remind.
+  describe('says what the invite was for', () => {
+    const sentEmail = () => {
+      expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
+      return mockSendInviteEmail.mock.calls[0][1];
+    };
+
+    it('a pod invite is a pod invite, with the pod\'s name, and the link of that invite', async () => {
+      given(inviteRow({ session_id: null, pod_id: POD, type: 'pod', code: 'POD-CODE' }));
+      (inviteService.mayRunPodInvites as jest.Mock).mockResolvedValue(true);
+      const res = await remind('u-director');
+      expect(res.status).toBe(200);
+      expect(sentEmail()).toMatchObject({ type: 'pod', targetName: 'Reason circle', inviterName: 'Organiser', inviteUrl: 'http://localhost:5173/invite/POD-CODE' });
+      expect(sentEmail().calendarEvent).toBeUndefined();
+      expect(mockSendInviteEmail.mock.calls[0][0]).toBe('guest@example.com');
+    });
+
+    it('an event invite is still an event invite, with the event\'s title', async () => {
+      given(inviteRow());
+      eventRole('host');
+      await remind('u-host');
+      expect(sentEmail()).toMatchObject({ type: 'session', targetName: 'Kickoff' });
+    });
+
+    it('a circle invite names the circle, and a platform invite is an invitation to REASON with no name', async () => {
+      given(inviteRow({ session_id: null, pod_id: null, circle_id: CIRCLE, type: 'circle', inviter_id: 'u-sender' }));
+      await remind('u-sender');
+      expect(sentEmail()).toMatchObject({ type: 'circle', targetName: 'Book club' });
+      mockSendInviteEmail.mockClear();
+      given(inviteRow({ session_id: null, pod_id: null, type: 'platform', inviter_id: 'u-sender' }));
+      await remind('u-sender');
+      expect(sentEmail()).toMatchObject({ type: 'platform' });
+      expect(sentEmail().targetName).toBeUndefined();
+    });
+  });
+
+  // Fix round 2: the rule for a platform or circle invite (nobody runs them; the sender or an admin reminds) had no test.
+  describe('a platform or circle invite is reminded by the person who sent it or by an admin', () => {
+    const platform = (over: Record<string, unknown> = {}) => inviteRow({ session_id: null, pod_id: null, type: 'platform', inviter_id: 'u-sender', ...over });
+
+    it('the sender reminds their own', async () => {
+      given(platform());
+      const res = await remind('u-sender');
+      expect(res.status).toBe(200);
+      expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it('an admin reminds anyone\'s', async () => {
+      given(platform());
+      expect((await remind('u-admin', 'admin')).status).toBe(200);
+    });
+
+    it('anyone else is refused in the sentence for it, and nothing is sent, even for a member of the circle', async () => {
+      given(platform({ type: 'circle', circle_id: CIRCLE }));
+      const res = await remind('u-other-member');
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatchObject({ code: 'AUTH_FORBIDDEN', message: 'Only the person who sent an invite can send reminders for it' });
+      expect(mockSendInviteEmail).not.toHaveBeenCalled();
+      // Nobody runs this invite, so neither the event's nor the pod's roles are asked.
+      expect(inviteService.eventInviteRole).not.toHaveBeenCalled();
+      expect(inviteService.mayRunPodInvites).not.toHaveBeenCalled();
     });
   });
 });
@@ -801,12 +983,23 @@ describe('POST /invites/remind-all/:sessionId', () => {
     expect(inviteService.unreachableAddresses).toHaveBeenCalledWith('u-host', ['a@example.com', 'b@example.com', 'c@example.com']);
   });
 
-  it('nobody to remind is 0, and not an error', async () => {
+  // Fix round 2: production's event page reads `{ reminded, total }` and toasts "Reminders sent to ${reminded}/${total}
+  // pending invites"; with no total it said "0/undefined". Both are always there.
+  it('nobody to remind is 0 of 0, and not an error: the answer always has both numbers production\'s toast reads', async () => {
     given({ rows: [] });
     eventRole('host');
     const res = await remindAll('u-host');
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ reminded: 0 });
+    expect(res.body.data).toEqual({ reminded: 0, total: 0 });
+  });
+
+  it('everyone left out because they cannot be invited is 0 of 0 too, with the same two numbers', async () => {
+    given();
+    eventRole('host');
+    (inviteService.unreachableAddresses as jest.Mock).mockResolvedValue(new Set(['a@example.com', 'b@example.com', 'c@example.com']));
+    const res = await remindAll('u-host');
+    expect(res.body.data).toEqual({ reminded: 0, total: 0 });
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
   });
 
   it('an event that does not exist is a 404 that says event', async () => {
@@ -842,5 +1035,211 @@ describe('DELETE /invites/:id: whoever runs the event or the pod withdraws any o
     expect(res.status).toBe(404);
     expect(mockFanoutPod).not.toHaveBeenCalled();
     expect(mockFanoutSession).not.toHaveBeenCalled();
+  });
+
+  // Fix round 2: an admin withdraws a platform or circle invite too, as they remind it. Nothing to tell any screen.
+  it('a platform or circle invite has no pod or event behind it, so withdrawing it tells no screen', async () => {
+    (inviteService.revokeInvite as jest.Mock).mockResolvedValue({ podId: null, sessionId: null });
+    const res = await request(app).delete(`/invites/${INVITE}`).set(auth('u-admin', 'admin'));
+    expect(res.status).toBe(200);
+    expect(inviteService.revokeInvite).toHaveBeenCalledWith(INVITE, 'u-admin', 'admin');
+    expect(mockFanoutPod).not.toHaveBeenCalled();
+    expect(mockFanoutSession).not.toHaveBeenCalled();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// Fix round 2: the address on an invite found by its code, and mark-accepted
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+describe('GET /invites/:code: the address on the invite', () => {
+  const invite = {
+    id: 'i1', code: 'CODE', type: 'session', inviterId: 'u-cohost', inviteeEmail: 'anna.smith@example.com', podId: null, sessionId: EVENT,
+    circleId: null, status: 'pending', maxUses: 1, useCount: 0, expiresAt: null, acceptedByUserId: null,
+  };
+  const given = (over: Record<string, unknown> = {}) => {
+    mockDb.mockImplementation(async (sql: string) => {
+      if (/SELECT status FROM users/.test(sql)) return { rows: [{ status: 'active' }] };
+      if (/display_name AS "displayName"/.test(sql)) return { rows: [{ displayName: 'Casey Cohost' }] };
+      if (/FROM sessions WHERE id = \$1/.test(sql)) return { rows: [{ title: 'Kickoff', scheduledAt: '2026-11-01T12:00:00.000Z', description: 'About it', status: 'scheduled' }] };
+      return { rows: [] };
+    });
+    (inviteService.getInviteByCode as jest.Mock).mockResolvedValue({ ...invite, ...over });
+  };
+  const addressFor = inviteService.inviteeAddressFor as jest.Mock;
+
+  it('a signed-in caller is shown the address the service says they may read: masked for someone who has no business with it', async () => {
+    given();
+    addressFor.mockResolvedValue('a•••@example.com');
+    const res = await request(app).get('/invites/CODE').set(auth('u-stranger'));
+    expect(res.status).toBe(200);
+    expect(res.body.data.inviteeEmail).toBe('a•••@example.com');
+    expect(JSON.stringify(res.body)).not.toContain('anna.smith@example.com');
+  });
+
+  it('...whole for the invitee, the one who sent it, an organiser or an admin (the service says so)', async () => {
+    given();
+    addressFor.mockResolvedValue('anna.smith@example.com');
+    const res = await request(app).get('/invites/CODE').set(auth('u-anna'));
+    expect(res.body.data.inviteeEmail).toBe('anna.smith@example.com');
+  });
+
+  it('asks as the member who is signed in: their id, the address of their account and their role', async () => {
+    given();
+    addressFor.mockResolvedValue('a•••@example.com');
+    await request(app).get('/invites/CODE').set(auth('u-someone', 'admin'));
+    expect(addressFor).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'CODE', inviteeEmail: 'anna.smith@example.com', inviterId: 'u-cohost' }),
+      { userId: 'u-someone', email: 'u-someone@example.com', role: 'admin' },
+    );
+  });
+
+  it('an open link still has no address', async () => {
+    given({ inviteeEmail: null });
+    addressFor.mockResolvedValue(null);
+    const res = await request(app).get('/invites/CODE').set(auth('u-any'));
+    expect(res.body.data.inviteeEmail).toBeNull();
+  });
+
+  it('everything else is as it was: the invite, and the context production\'s accept page shows (who invited you, and to what)', async () => {
+    given();
+    addressFor.mockResolvedValue('a•••@example.com');
+    const res = await request(app).get('/invites/CODE').set(auth('u-stranger'));
+    expect(res.body.data).toMatchObject({
+      id: 'i1', code: 'CODE', type: 'session', status: 'pending', sessionId: EVENT, inviterId: 'u-cohost',
+      inviterName: 'Casey Cohost', sessionTitle: 'Kickoff', sessionDescription: 'About it', sessionStatus: 'scheduled',
+    });
+  });
+
+  it('someone who is not signed in gets the limited answer, which never had an address, and the service is not even asked', async () => {
+    given();
+    const res = await request(app).get('/invites/CODE');
+    expect(res.status).toBe(200);
+    expect(addressFor).not.toHaveBeenCalled();
+    expect('inviteeEmail' in res.body.data).toBe(false);
+    expect(res.body.data).toMatchObject({ code: 'CODE', type: 'session', sessionId: EVENT, sessionTitle: 'Kickoff' });
+    expect(JSON.stringify(res.body)).not.toContain('anna.smith');
+  });
+
+  it('an unknown code is a 404', async () => {
+    (inviteService.getInviteByCode as jest.Mock).mockRejectedValue(new NotFoundError('Invite'));
+    expect((await request(app).get('/invites/NOPE').set(auth())).status).toBe(404);
+  });
+});
+
+describe('POST /invites/:code/mark-accepted', () => {
+  const mark = inviteService.markInviteAccepted as jest.Mock;
+  const quiet = () => mockDb.mockImplementation(async (sql: string) => (/SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [] }));
+
+  it('needs someone signed in, and asks the service nothing otherwise', async () => {
+    const res = await request(app).post('/invites/CODE/mark-accepted');
+    expect(res.status).toBe(401);
+    expect(mark).not.toHaveBeenCalled();
+  });
+
+  it('asks the service as the member who is signed in: their id and the address of their account', async () => {
+    quiet();
+    mark.mockResolvedValue({ podId: null, sessionId: null });
+    const res = await request(app).post('/invites/CODE/mark-accepted').set(auth('u-guest'));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { marked: true } });
+    expect(mark).toHaveBeenCalledWith('CODE', 'u-guest', 'u-guest@example.com');
+  });
+
+  it('tells the member\'s own invites, and the lists of the pod or event the invite was for, as an accept does', async () => {
+    quiet();
+    mark.mockResolvedValue({ podId: POD, sessionId: EVENT });
+    await request(app).post('/invites/CODE/mark-accepted').set(auth('u-guest'));
+    expect(mockFanoutPod).toHaveBeenCalledWith(POD, ['user:u-guest:pods']);
+    expect(mockFanoutSession).toHaveBeenCalledWith(POD, EVENT, ['user:u-guest:sessions']);
+    expect(mockEmitEntities).toHaveBeenCalledWith({ fake: 'io' }, ['u-guest'], ['user:u-guest:invites']);
+  });
+
+  it.each([
+    ['a withdrawn or declined invite', new AppError(400, 'INVITE_REVOKED', 'This invite has been revoked'), 400, 'INVITE_REVOKED'],
+    ['an expired one', new AppError(400, 'INVITE_EXPIRED', 'This invite has expired'), 400, 'INVITE_EXPIRED'],
+    ['one used up by someone else', new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses'), 400, 'INVITE_ALREADY_USED'],
+    ['one sent to another address', new AppError(403, 'IDENTITY_MISMATCH', 'This invite was sent to g•••@example.com, but you\'re logged in as x@example.com. Sign in to the right account to accept.'), 403, 'IDENTITY_MISMATCH'],
+    ['one that does not exist', new NotFoundError('Invite'), 404, 'INVITE_NOT_FOUND'],
+  ])('%s is refused with what the service says, and no screen is told', async (_what, refusal, status, code) => {
+    quiet();
+    mark.mockRejectedValue(refusal);
+    const res = await request(app).post('/invites/CODE/mark-accepted').set(auth('u-stranger'));
+    expect(res.status).toBe(status);
+    expect(res.body.error.code).toBe(code);
+    expect(mockFanoutPod).not.toHaveBeenCalled();
+    expect(mockFanoutSession).not.toHaveBeenCalled();
+    expect(mockEmitEntities).not.toHaveBeenCalled();
+  });
+
+  it('the refusal for another address names the invited one masked, never whole', async () => {
+    quiet();
+    mark.mockRejectedValue(new AppError(403, 'IDENTITY_MISMATCH', 'This invite was sent to g•••@example.com, but you\'re logged in as x@example.com. Sign in to the right account to accept.'));
+    const res = await request(app).post('/invites/CODE/mark-accepted').set(auth('u-stranger'));
+    expect(res.body.error.message).toContain('g•••@example.com');
+    expect(res.body.error.message).not.toContain('guest@example.com');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// Fix round 2: reminders are rate limited
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+describe('reminders are rate limited', () => {
+  const INVITE = '11111111-1111-4111-8111-111111111111';
+  const world = () => {
+    mockDb.mockImplementation(async (sql: string) => {
+      const text = sql.replace(/\s+/g, ' ').trim();
+      if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+      if (/FROM invites WHERE id = \$1/.test(text)) {
+        return { rows: [{ id: INVITE, invitee_email: 'guest@example.com', session_id: EVENT, pod_id: null, circle_id: null, type: 'session', inviter_id: 'u-host', status: 'pending', code: 'CODE1', expires_at: null }] };
+      }
+      if (/^SELECT host_user_id, title/.test(text)) return { rows: [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: null, config: {}, event_format: 'video_meeting' }] };
+      if (/^SELECT title, scheduled_at, host_user_id/.test(text)) return { rows: [{ title: 'Kickoff', scheduled_at: null, host_user_id: 'u-host', config: {}, event_format: 'video_meeting' }] };
+      if (/FROM invites WHERE session_id = \$1/.test(text)) {
+        return { rows: [{ id: 'a', invitee_email: 'a@example.com', code: 'CA' }, { id: 'b', invitee_email: 'b@example.com', code: 'CB' }, { id: 'c', invitee_email: 'c@example.com', code: 'CC' }] };
+      }
+      if (/display_name AS "displayName"/.test(text)) return { rows: [{ displayName: 'Organiser' }] };
+      return { rows: [] };
+    });
+    (inviteService.eventInviteRole as jest.Mock).mockResolvedValue('host');
+  };
+  const remindOne = (who: string) => request(app).post(`/invites/${INVITE}/remind`).set(auth(who));
+  const remindAll = (who: string) => request(app).post(`/invites/remind-all/${EVENT}`).set(auth(who));
+
+  it.each([
+    ['post', '/:id/remind'],
+    ['post', '/remind-all/:sessionId'],
+  ])('%s %s carries the reminder limiter, after authenticate and ahead of its handler', (method, path) => {
+    const handlers = handlersOf(method, path);
+    const at = handlers.indexOf(inviteReminderLimiter);
+    const signedIn = handlers.indexOf(authenticate);
+    expect(signedIn).toBeGreaterThanOrEqual(0);
+    expect(at).toBeGreaterThan(signedIn);
+    expect(at).toBeLessThan(handlers.length - 1);
+  });
+
+  // Production's pod page sends one request per pending invite for its Remind All, and says "Sent 20 reminders, 5
+  // failed" when some are refused. So the allowance is roomy: 60 an hour.
+  it('refuses the 61st reminder in an hour with a friendly 429, for that member only, and sends nothing', async () => {
+    world();
+    const heavy = 'u-heavy-reminder';
+    for (let i = 0; i < 60; i += 1) expect((await remindOne(heavy)).status).toBe(200);
+    mockSendInviteEmail.mockClear();
+    const refused = await remindOne(heavy);
+    expect(refused.status).toBe(429);
+    expect(refused.body.success).toBe(false);
+    expect(refused.body.error.message).toMatch(/^[A-Z].*\.$/);
+    expect(refused.body.error.message).not.toMatch(/RATE_LIMIT|exceeded/i);
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
+    expect((await remindOne('u-light-reminder')).status).toBe(200);
+  });
+
+  it('Remind All counts as one, however many people it reminds', async () => {
+    world();
+    const host = 'u-remind-all-host';
+    const first = await remindAll(host);
+    expect(first.body.data).toEqual({ reminded: 3, total: 3 });
+    for (let i = 0; i < 59; i += 1) expect((await remindOne(host)).status).toBe(200);
+    expect((await remindOne(host)).status).toBe(429);
+    expect((await remindAll(host)).status).toBe(429);
   });
 });

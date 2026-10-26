@@ -139,6 +139,17 @@ export async function mayRunPodInvites(podId: string, userId: string, isAdmin: b
 }
 
 /**
+ * Whether this person runs the one target an invite is for: its event's host or a co-host, or its pod's director or
+ * host. An event invite is judged by its event alone, even where an old row also carries a pod id (fix round 2); a
+ * platform or circle invite has no one who runs it. Admins are settled by the callers, which skip the lookup for them.
+ */
+async function runsTheTargetOf(invite: { session_id: string | null; pod_id: string | null }, userId: string): Promise<boolean> {
+  if (invite.session_id !== null) return (await eventInviteRole(invite.session_id, userId, false)) !== null;
+  if (invite.pod_id !== null) return mayRunPodInvites(invite.pod_id, userId, false);
+  return false;
+}
+
+/**
  * Which of these addresses must not be invited or emailed by this sender: the address of an account that is closed,
  * suspended or banned, or of a member who blocked the sender or whom the sender blocked. Addresses of people who are
  * not members are fine. Nothing here says which reason applied, so a block is never revealed (fix round 1).
@@ -203,19 +214,21 @@ const INSERT_INVITE_SQL = `
  * duplicate to guard against and is inserted at once.
  */
 export async function insertPendingInvite(row: NewInvite): Promise<InsertedInvite> {
+  // Only the target that belongs to the invite's type counts: for the lock, for the duplicate check (fix round 1) and
+  // for the row itself (fix round 2). An event invite posted with a stray podId is the event's invite, shares the
+  // event's lock, and must not hang on a pod: the pod's director would run it, because withdrawing and reminding
+  // follow the ids a row carries.
+  const podId = row.type === InviteType.POD ? row.podId : null;
+  const sessionId = row.type === InviteType.SESSION ? row.sessionId : null;
+  const circleId = row.type === InviteType.CIRCLE ? row.circleId : null;
   const values = [
-    row.code, row.type, row.inviterId, row.inviteeEmail, row.podId, row.sessionId, row.maxUses, row.expiresAt, row.circleId,
+    row.code, row.type, row.inviterId, row.inviteeEmail, podId, sessionId, row.maxUses, row.expiresAt, circleId,
   ];
   if (!row.inviteeEmail) {
     const inserted = await query<Invite>(INSERT_INVITE_SQL, values);
     return { duplicate: false, invite: inserted.rows[0] };
   }
   const email = row.inviteeEmail;
-  // Only the target that belongs to the invite's type counts, for the lock and for the duplicate check alike: an
-  // event invite posted with a stray podId is still the event's invite, and shares the event's lock (fix round 1).
-  const podId = row.type === InviteType.POD ? row.podId : null;
-  const sessionId = row.type === InviteType.SESSION ? row.sessionId : null;
-  const circleId = row.type === InviteType.CIRCLE ? row.circleId : null;
   const target = podId ?? sessionId ?? circleId ?? '';
   return transaction<InsertedInvite>(async (client) => {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${row.type}:${target}:${email}`]);
@@ -323,6 +336,23 @@ export async function emailInvite(ctx: InviteContext, invite: InviteDelivery): P
     inviteUrl: `${config.clientUrl}/invite/${invite.code}`,
     calendarEvent: ctx.calendarEvent,
   });
+}
+
+/**
+ * Whether an invite waiting for its email should still be emailed: it is still pending and has time left, and its
+ * address is one the sender may still email (no block either way since, the account not closed). A batch sends its
+ * emails up to half a minute after it made the invites, so each is read again just before it goes (fix round 2). The
+ * block question is unreachableAddresses, the one createInvite and the reminders ask. A question that could not be
+ * answered comes out as the error, for the caller to treat as "not safe to send".
+ */
+export async function isStillEmailable(inviteId: string, senderId: string): Promise<boolean> {
+  const found = await query<{ invitee_email: string | null }>(
+    `SELECT invitee_email FROM invites WHERE id = $1 AND status = 'pending' AND (expires_at IS NULL OR expires_at > NOW())`,
+    [inviteId]
+  );
+  const address = found.rows[0]?.invitee_email;
+  if (!address) return false;
+  return (await unreachableAddresses(senderId, [address])).size === 0;
 }
 
 /**
@@ -587,6 +617,49 @@ export async function getInviteByCode(code: string): Promise<Invite> {
   return result.rows[0];
 }
 
+// ─── Who reads the address on an invite found by its code ───────────────────
+//
+// 26 Oct 2026 (fix round 2). GET /invites/:code answers every signed-in caller with the whole invite, and the code is
+// all it takes to ask. A co-host (who may not read the others' addresses) was handed the codes of those invites by the
+// event's invite list, so the address went to whoever asked. Production's accept page never shows the address, so
+// masking it costs nobody anything on screen.
+
+/** The person looking at an invite, as the route knows them. */
+export interface InviteViewer {
+  userId: string;
+  email?: string | null;
+  role?: string;
+}
+
+/**
+ * Whether this person is the host of the invite's event or the director or host of its pod. A co-host is not one: they
+ * read an address on the invites they sent themselves, as in the event's invite list. An event invite is judged by its
+ * event alone, even where an old row also carries a pod id. Admins are settled by the caller.
+ */
+async function isOrganiserOf(invite: Pick<Invite, 'podId' | 'sessionId'>, userId: string): Promise<boolean> {
+  if (invite.sessionId !== null) return (await eventInviteRole(invite.sessionId, userId, false)) === 'host';
+  if (invite.podId !== null) return mayRunPodInvites(invite.podId, userId, false);
+  return false;
+}
+
+/**
+ * The address an invite shows to the person looking at it, whole for the invitee (the address of their account is the
+ * invite's), for whoever sent it, for the host of its event or the director or host of its pod, and for admins; masked
+ * ("a•••@example.com") for anyone else signed in. An open link has no address and shows none.
+ */
+export async function inviteeAddressFor(
+  invite: Pick<Invite, 'inviterId' | 'inviteeEmail' | 'podId' | 'sessionId'>,
+  viewer: InviteViewer,
+): Promise<string | null> {
+  const address = invite.inviteeEmail;
+  if (!address) return null;
+  if (invite.inviterId === viewer.userId) return address;
+  if (viewer.email && sameAddress(address, viewer.email)) return address;
+  if (isAdminRole(viewer.role)) return address;
+  if (await isOrganiserOf(invite, viewer.userId)) return address;
+  return maskEmail(address);
+}
+
 // ─── Accept Invite ──────────────────────────────────────────────────────────
 //
 // Restructured 2026-04-28 into a four-phase pipeline that holds the
@@ -751,6 +824,21 @@ function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; po
   return '/dashboard';
 }
 
+/** Whether two addresses are the same one: trimmed and lower-cased, as acceptInvite has always compared them. */
+function sameAddress(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * What a person signed in as another account than the invited one is told. The accept page shows it as it is, so it
+ * still says whom the invite is for, but with the address masked: whole, it gave the address to anybody signed in who
+ * had the code (fix round 2, the same hole as GET /invites/:code through the other door).
+ */
+function identityMismatchMessage(inviteeEmail: string, userEmail?: string): string {
+  const signedInAs = userEmail ? `, but you're logged in as ${userEmail}` : '';
+  return `This invite was sent to ${maskEmail(inviteeEmail)}${signedInAs}. Sign in to the right account to accept.`;
+}
+
 export async function acceptInvite(
   code: string,
   userId: string,
@@ -810,7 +898,7 @@ export async function acceptInvite(
         throw new AppError(
           403,
           'IDENTITY_MISMATCH',
-          `This invite was sent to ${invite.inviteeEmail}, but you're logged in as ${userEmail}. Sign in to the right account to accept.`,
+          identityMismatchMessage(invite.inviteeEmail, userEmail),
         );
       }
     }
@@ -930,6 +1018,48 @@ export async function acceptInvite(
     registeredFor: registered,
     participantStatus,
   };
+}
+
+// ─── Mark an Invite Accepted ────────────────────────────────────────────────
+//
+// 26 Oct 2026 (fix round 2). The route behind this ("force-mark an invite accepted for the current user", from the days
+// the client recovered a failed accept with it) checked neither who was asking nor what state the invite was in.
+// Anyone signed in who knew a code could turn a withdrawn or declined invite back into an accepted one, which
+// acceptInvite then admits again, and replace the record of who accepted it. Nothing in the client has called it since
+// T0-4 removed that recovery chain, so it now applies the rules acceptInvite applies and no stricter ones: the invite
+// must still be usable, and a personal invite is marked only for the person it was sent to.
+export async function markInviteAccepted(
+  code: string,
+  userId: string,
+  userEmail?: string,
+): Promise<{ podId: string | null; sessionId: string | null }> {
+  return transaction(async (client) => {
+    const found = await client.query(`SELECT ${INVITE_COLUMNS} FROM invites WHERE code = $1 FOR UPDATE`, [code]);
+    if (found.rows.length === 0) throw new NotFoundError('Invite');
+    const invite = found.rows[0] as Invite;
+
+    if (invite.status === InviteStatus.REVOKED) {
+      throw new AppError(400, 'INVITE_REVOKED', 'This invite has been revoked');
+    }
+    if (invite.status === InviteStatus.EXPIRED || (invite.expiresAt && new Date(invite.expiresAt) < new Date())) {
+      throw new AppError(400, 'INVITE_EXPIRED', 'This invite has expired');
+    }
+    // A personal invite is for the address it was sent to. acceptInvite lets a caller whose address is unknown through
+    // (legacy callers); this does not: no one relies on this path, and it is not worth a way round.
+    if (invite.inviteeEmail && !(userEmail && sameAddress(invite.inviteeEmail, userEmail))) {
+      throw new AppError(403, 'IDENTITY_MISMATCH', identityMismatchMessage(invite.inviteeEmail, userEmail || undefined));
+    }
+    if (invite.useCount >= invite.maxUses && invite.acceptedByUserId !== userId) {
+      throw new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses');
+    }
+
+    // The first accepter and the first time stay as they were: marking again changes neither.
+    await client.query(
+      `UPDATE invites SET status = 'accepted', accepted_by_user_id = COALESCE(accepted_by_user_id, $1), accepted_at = COALESCE(accepted_at, NOW()) WHERE id = $2`,
+      [userId, invite.id],
+    );
+    return { podId: invite.podId, sessionId: invite.sessionId };
+  });
 }
 
 // ─── List Invites ───────────────────────────────────────────────────────────
@@ -1114,14 +1244,18 @@ export function maskEmail(email: string): string {
  * address, as they always had). The label is the member's display name, or for someone who is no member a masked
  * address. It is never empty or null: production's pages treat a falsy inviteeEmail as an open link, and read
  * `inviteeName || inviteeEmail || 'Shareable link'` as the line to show. An open link has no address and stays null.
+ *
+ * The code goes too (fix round 2). It is all it takes to open the invite, address and all (GET /invites/:code), so a
+ * row whose address is hidden must not carry it: it is blank, and nothing on a hidden row can be acted on by code. The
+ * pages act by `id` (remind, withdraw) and read `code` only from an open link, which keeps its code.
  */
-export function hideOthersAddresses<T extends { inviteeEmail: string | null; inviteeName: string | null; inviterId: string }>(
+export function hideOthersAddresses<T extends { code: string; inviteeEmail: string | null; inviteeName: string | null; inviterId: string }>(
   rows: T[],
   viewerId: string,
 ): T[] {
   return rows.map((row) => {
     if (!row.inviteeEmail || row.inviterId === viewerId) return row;
-    return { ...row, inviteeEmail: row.inviteeName || maskEmail(row.inviteeEmail) };
+    return { ...row, inviteeEmail: row.inviteeName || maskEmail(row.inviteeEmail), code: '' };
   });
 }
 
@@ -1211,8 +1345,9 @@ export async function declineInvite(
 // event invites, so on production's event page the host's Revoke on a co-host's shareable link answered 404 ("Failed
 // to revoke invite"). Whoever runs a target's invites can withdraw any of them: for an event its host, its co-hosts
 // and admins; for a pod its director, its host and admins (they could already list and remind them). Platform and
-// circle invites stay the sender's alone. Anyone else is told the invite is not found, as before, so it is not
-// confirmed to exist.
+// circle invites stay the sender's, and (fix round 2) an admin's, which is the rule for reminding them. Each invite is
+// judged by the one target it is for: an event invite by its event, even where an old row also carries a pod id.
+// Anyone else is told the invite is not found, as before, so it is not confirmed to exist.
 export async function revokeInvite(
   inviteId: string,
   userId: string,
@@ -1225,10 +1360,7 @@ export async function revokeInvite(
   const invite = found.rows[0];
   if (!invite) throw new NotFoundError('Invite', inviteId);
 
-  const isAdmin = isAdminRole(userRole);
-  const mayWithdraw = invite.inviter_id === userId
-    || (invite.session_id !== null && (await eventInviteRole(invite.session_id, userId, isAdmin)) !== null)
-    || (invite.pod_id !== null && (await mayRunPodInvites(invite.pod_id, userId, isAdmin)));
+  const mayWithdraw = invite.inviter_id === userId || isAdminRole(userRole) || (await runsTheTargetOf(invite, userId));
   if (!mayWithdraw) throw new NotFoundError('Invite', inviteId);
 
   // Only a pending invite is withdrawn: one answered since the check above is simply not found.

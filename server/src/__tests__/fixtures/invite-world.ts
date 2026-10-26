@@ -48,7 +48,7 @@ export function inviteWorld(options: {
 } = {}) {
   const honourLocks = options.honourLocks ?? true;
   const invites: WorldInvite[] = [];
-  /** What the transactions ran, in order: `lock:<key>`, `duplicate-check`, `insert`. */
+  /** What the world was asked, in order: `lock:<key>`, `duplicate-check`, `insert`, and `email-check` (before a batch email). */
   const log: string[] = [];
   /** For each lock key, the end of the line of transactions waiting for it. */
   const lockLine = new Map<string, Promise<void>>();
@@ -95,6 +95,17 @@ export function inviteWorld(options: {
           || blocks.some(([blocker, blocked]) => (blocker === senderId && blocked === person.id) || (blocker === person.id && blocked === senderId)))
         .map((person) => ({ email: person.email }));
       return { rows, rowCount: rows.length };
+    }
+
+    // "Is this invite still waiting for an answer?": asked just before one of a batch's emails goes out (fix round 2). A
+    // test changes `invites[n].status` or `.expiresAt` after the batch has answered to play a withdrawal, a decline or
+    // an invite that ran out.
+    if (/^SELECT invitee_email FROM invites WHERE id = \$1 AND status = 'pending'/.test(text)) {
+      log.push('email-check');
+      const [id] = params as [string];
+      const now = Date.now();
+      const found = invites.find((i) => i.id === id && i.status === 'pending' && (i.expiresAt === null || i.expiresAt.getTime() > now));
+      return found ? { rows: [{ invitee_email: found.email }], rowCount: 1 } : { rows: [], rowCount: 0 };
     }
 
     if (/^INSERT INTO invites/.test(text)) {
