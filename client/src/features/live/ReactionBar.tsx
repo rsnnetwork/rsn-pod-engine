@@ -38,13 +38,16 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
   const participants = useInRoomParticipants();
   const { user } = useAuthStore();
   // 26 Oct 2026 (VID-03) — the live page's own rule for who has the host bar
-  // (liveRoles.ts): a super_admin has it too, and his reaction button sat under it.
-  const { canManage } = liveRolesOf(liveRoleFactsFor(user, hostUserId, cohosts));
+  // (liveRoles.ts): a super_admin has it too, and his reaction button sat under
+  // it. canManage decides only where the button sits.
+  const { isDirector, isCohost, canManage } = liveRolesOf(liveRoleFactsFor(user, hostUserId, cohosts));
   // Bug A (15 May Shraddha) — same fix as ChatPanel: treat the host as
   // present when they're either flagged in lobby or appear in participants.
   const hostInParticipants = !!hostUserId && participants.some(p => p.userId === hostUserId);
   const hostPresent = hostInLobby || hostInParticipants;
-  const reactionsDisabled = phase === 'lobby' && !hostPresent && !canManage;
+  // Before the host is in, only the director and co-hosts may react: the
+  // server drops anyone else's reaction then (chat-handlers.ts, handleReactionSend).
+  const reactionsDisabled = phase === 'lobby' && !hostPresent && !(isDirector || isCohost);
   // Above the host bar (people who run the event) or level with the chat
   // button, and in both cases above the iPhone home indicator, which the host
   // bar is padded by.

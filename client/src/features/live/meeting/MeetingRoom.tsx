@@ -13,7 +13,7 @@
 //   - when it ends, "Meeting ended" (MeetingEnded), or the removed message.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { LiveKitRoom, RoomAudioRenderer, useAudioPlayback, useRoomContext } from '@livekit/components-react';
 import '@livekit/components-styles';
 import { VideoPresets } from 'livekit-client';
@@ -32,10 +32,12 @@ import { ReconnectOnReturn } from '../VideoRoom';
 import { BgCameraPublisher } from '../BgCameraPublisher';
 import ChatPanel from '../ChatPanel';
 import ParticipantList from '../ParticipantList';
+import { useEventInviteLink } from '../useEventInviteLink';
 import MeetingStage from './MeetingStage';
 import MeetingControlBar from './MeetingControlBar';
 import MeetingEnded from './MeetingEnded';
-import { savedMicChoice } from './useLocalMediaToggles';
+import { clearMicChoiceMarkers } from './useLocalMediaToggles';
+import { isRetryableRoomError, ROOM_RETRY_DELAY_MS, ROOM_RETRY_LIMIT, ROOM_STABLE_MS } from './roomRetry';
 
 /** The event as GET /sessions/:id returns it (the fields the room reads). */
 export interface MeetingSession {
@@ -61,40 +63,6 @@ export interface MeetingRoomProps {
 
 /** How long the stage waits for its video room before saying so (it keeps trying). */
 const VIDEO_WAIT_MS = 15_000;
-
-interface PendingInvite { code: string; inviteeEmail: string | null; maxUses?: number; useCount?: number; expiresAt?: string | null }
-
-/**
- * The event's open invite link (18 Sep 2026: a real /invite code that registers whoever accepts it, never the
- * bare event address): one open link per event, reused while it has uses left, made the first time it is asked for.
- */
-function useEventInviteLink(sessionId: string, open: boolean, maxUses: number): { url: string; failed: boolean } {
-  const qc = useQueryClient();
-  const invites = useQuery({
-    queryKey: ['session-pending-invites', sessionId],
-    queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then((r) => (r.data.data ?? []) as PendingInvite[]),
-    enabled: open,
-    meta: { entities: [E.sessionInvites(sessionId)] },
-  });
-  const openLink = invites.data?.find((i) =>
-    !i.inviteeEmail
-    && (i.useCount ?? 0) < (i.maxUses ?? 1)
-    && (!i.expiresAt || new Date(i.expiresAt).getTime() > Date.now()));
-  const create = useMutation({
-    mutationFn: () => api.post('/invites', { type: 'session', sessionId, maxUses, expiresInHours: 168 }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['session-pending-invites', sessionId] }),
-  });
-  const { mutate: createLink } = create;
-  const asked = useRef(false);
-  useEffect(() => {
-    if (!open) { asked.current = false; return; }
-    if (invites.isLoading || invites.isError || invites.data === undefined || openLink || asked.current) return;
-    asked.current = true;
-    createLink();
-  }, [open, invites.isLoading, invites.isError, invites.data, openLink, createLink]);
-  const code: string | undefined = openLink?.code ?? create.data?.data?.data?.code;
-  return { url: code ? `${window.location.origin}/invite/${code}` : '', failed: invites.isError || create.isError };
-}
 
 function MeetingInviteDialog({ sessionId, open, onClose, maxUses }: { sessionId: string; open: boolean; onClose: () => void; maxUses: number }) {
   const { url, failed } = useEventInviteLink(sessionId, open, maxUses);
@@ -247,9 +215,18 @@ export default function MeetingRoom({ sessionId, session, isDirector, canManage,
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [roomKey, setRoomKey] = useState(0);
-  // The mic a person joins with: their own last choice (nobody is force-muted in a meeting).
-  const [joinWithMic] = useState(savedMicChoice);
+  // Connection retries spent on this room (roomRetry.ts): only a connection failure spends one, and they are
+  // counted afresh after a stable minute or when the person comes back to the page.
   const retries = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stableTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Leaving the meeting: no retry may fire after it, and its mic markers go (SIDs are never reused).
+  useEffect(() => () => {
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+    if (stableTimer.current) clearTimeout(stableTimer.current);
+    clearMicChoiceMarkers();
+  }, []);
 
   // The director's name, for "Waiting for {host} to start the meeting" and the co-host note. The host is
   // registered as a participant when the event is made, so the event's own list always has them.
@@ -274,8 +251,10 @@ export default function MeetingRoom({ sessionId, session, isDirector, canManage,
   // return, take a fresh token and connect the room again. Never for a tab that was replaced by another
   // (it would take the room back from it), nor once the meeting is over.
   const reconnectRoom = useCallback(() => {
+    retryTimer.current = null;
     const st = useSessionStore.getState();
-    if (st.phase === 'complete' || st.transitionStatus === 'evicted' || st.removedFromEvent) return;
+    if (st.phase === 'complete' || st.transitionStatus === 'evicted' || st.removedFromEvent
+      || st.sessionStatus === 'completed' || st.sessionStatus === 'cancelled') return;
     api.post(`/sessions/${sessionId}/token`, {})
       .then((res) => {
         const td = res.data?.data;
@@ -285,13 +264,41 @@ export default function MeetingRoom({ sessionId, session, isDirector, canManage,
       .finally(() => setRoomKey((k) => k + 1));
   }, [sessionId]);
 
+  // The person came back to the page: a fresh start, so the retries are counted afresh.
+  const reconnectOnReturn = useCallback(() => {
+    retries.current = 0;
+    reconnectRoom();
+  }, [reconnectRoom]);
+
+  // A connection that holds for a minute earns its retries back. Not on every connect: a connection that
+  // drops again at once would then retry for ever.
+  const onRoomConnected = () => {
+    if (stableTimer.current) clearTimeout(stableTimer.current);
+    stableTimer.current = setTimeout(() => { retries.current = 0; stableTimer.current = null; }, ROOM_STABLE_MS);
+  };
+  const onRoomDisconnected = () => {
+    if (stableTimer.current) clearTimeout(stableTimer.current);
+    stableTimer.current = null;
+  };
+  // Only a connection failure is tried again, at most ROOM_RETRY_LIMIT times, with a fresh token. A camera or
+  // microphone that cannot open is not a reason to reconnect: the person stays in, with that device off.
+  const onRoomError = (err: Error) => {
+    if (!isRetryableRoomError(err) || retries.current >= ROOM_RETRY_LIMIT || retryTimer.current) return;
+    retries.current += 1;
+    retryTimer.current = setTimeout(reconnectRoom, ROOM_RETRY_DELAY_MS);
+  };
+
   const toggleChat = () => { setPeopleOpen(false); setChatOpen(!chatOpen); };
   const togglePeople = () => { setChatOpen(false); setPeopleOpen((v) => !v); };
   const openInvite = () => setInviteOpen(true);
 
   const panel: ReactNode = chatOpen ? (
     <aside className="flex h-[45dvh] shrink-0 flex-col sm:h-auto sm:w-80" aria-label="Chat">
-      <SectionErrorBoundary name="Chat"><ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} /></SectionErrorBoundary>
+      {/* Open to everyone once the meeting runs, director there or not; the bar below already clears the
+          iPhone home indicator, so the chat adds no inset of its own. */}
+      <SectionErrorBoundary name="Chat">
+        <ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} alwaysOpen={!preStart} padBottomInset={false} />
+      </SectionErrorBoundary>
     </aside>
   ) : peopleOpen ? (
     <aside className="flex h-[45dvh] shrink-0 flex-col bg-[#292a2d] sm:h-auto sm:w-72" aria-label="People">
@@ -359,15 +366,13 @@ export default function MeetingRoom({ sessionId, session, isDirector, canManage,
         connect={true}
         // The camera is the EVENT-SCOPED engine track, published by BgCameraPublisher (as in every room).
         video={false}
-        audio={joinWithMic}
+        // The mic follows the person's last choice, applied once per connection by useLocalMediaToggles. Never
+        // through `audio`: <LiveKitRoom> re-applies it on every connection, which unmuted a person who had muted.
+        audio={false}
         className="flex min-h-0 flex-1 flex-col"
-        onConnected={() => { retries.current = 0; }}
-        // A failed connect is tried again twice with a fresh token, then left to ReconnectOnReturn.
-        onError={() => {
-          if (retries.current >= 2) return;
-          retries.current += 1;
-          setTimeout(reconnectRoom, 2000);
-        }}
+        onConnected={onRoomConnected}
+        onDisconnected={onRoomDisconnected}
+        onError={onRoomError}
         options={{
           // C2/VID-1 — the same video diet as the other two rooms: each remote video at the layer its tile
           // needs, off-screen video paused, unused layers not encoded. Audio is never affected.
@@ -384,7 +389,7 @@ export default function MeetingRoom({ sessionId, session, isDirector, canManage,
         <LiveKitPresenceSync />
         <BgCameraPublisher />
         <RoomAudioRenderer />
-        <ReconnectOnReturn onReconnect={reconnectRoom} />
+        <ReconnectOnReturn onReconnect={reconnectOnReturn} />
         {frame(
           <SectionErrorBoundary name="Meeting">
             <MeetingStage onInvite={canManage ? openInvite : undefined} notices={<AudioUnlock />} />

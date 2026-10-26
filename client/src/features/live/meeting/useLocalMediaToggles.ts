@@ -14,11 +14,16 @@
 //   - captured but not yet published reads as "starting", never as off;
 //   - a host's mute command is applied with one retry (S17), for people who do
 //     not run the event themselves.
-// Unlike the main room, nobody is force-muted on joining a meeting: the mic keeps
-// the person's own last choice (sessionStorage 'rsn_mic').
+// Nobody is force-muted on joining a meeting: the mic follows the person's own
+// last choice (sessionStorage 'rsn_mic', written by every toggle and host command).
+// That choice is applied HERE, once per room connection, never through the room's
+// `audio` prop: <LiveKitRoom> re-applies `audio` on every connection, so a room
+// connected again after an iPhone lock screen or a dropped network would unmute
+// someone who had muted (fix round 1, 26 Oct 2026).
 
 import { useCallback, useEffect, useState } from 'react';
-import { useLocalParticipant, useRoomContext } from '@livekit/components-react';
+import { useConnectionState, useLocalParticipant, useRoomContext } from '@livekit/components-react';
+import { ConnectionState } from 'livekit-client';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
 import { useBgEngine } from '@/hooks/useBgEngine';
@@ -27,6 +32,17 @@ import { turnCameraOn } from '../BgCameraPublisher';
 /** The mic choice a person joins with: their last one in this tab, else on. */
 export function savedMicChoice(): boolean {
   return sessionStorage.getItem('rsn_mic') !== 'false';
+}
+
+/**
+ * The local participant SIDs the mic choice has been applied for. A room connection has its own SID, so the choice
+ * is applied once per connection and never again when the bar re-renders or remounts (the main room's WS3/E5 lesson).
+ */
+const micChoiceAppliedFor = new Set<string>();
+
+/** On leaving the meeting: SIDs are never reused, so the markers of this meeting are dead weight. */
+export function clearMicChoiceMarkers(): void {
+  micChoiceAppliedFor.clear();
 }
 
 export interface LocalMediaToggles {
@@ -40,12 +56,13 @@ export interface LocalMediaToggles {
   toggleCam: () => Promise<void>;
 }
 
-const MIC_FAILED = "Your microphone didn't turn on. Check that this site may use it in your browser settings.";
+export const MIC_FAILED = "Your microphone didn't turn on. Check that this site may use it in your browser settings.";
 const CAMERA_FAILED = "Your camera didn't turn on. Check that this site may use it in your browser settings.";
 
 export function useLocalMediaToggles({ honourHostMute }: { honourHostMute: boolean }): LocalMediaToggles {
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled } = useLocalParticipant();
   const room = useRoomContext();
+  const connectionState = useConnectionState(room);
   const bg = useBgEngine();
   const hostMuteCommand = useSessionStore((s) => s.hostMuteCommand);
   const setHostMuteCommand = useSessionStore((s) => s.setHostMuteCommand);
@@ -56,6 +73,24 @@ export function useLocalMediaToggles({ honourHostMute }: { honourHostMute: boole
 
   useEffect(() => { setMicOn(isMicrophoneEnabled); }, [isMicrophoneEnabled]);
   useEffect(() => { setCamOn(isCameraEnabled); }, [isCameraEnabled]);
+
+  // Once this connection is up, open the mic if the person's last choice was on. A mic that cannot open (denied,
+  // missing, held by another app) is said in words and the person stays in the meeting with it off.
+  useEffect(() => {
+    if (connectionState !== ConnectionState.Connected) return;
+    const sid = localParticipant.sid;
+    if (!sid || micChoiceAppliedFor.has(sid)) return;
+    micChoiceAppliedFor.add(sid);
+    if (!savedMicChoice()) return;
+    setMicBusy(true);
+    localParticipant.setMicrophoneEnabled(true)
+      .then(() => setMicOn(true))
+      .catch(() => {
+        setMicOn(localParticipant.isMicrophoneEnabled);
+        useToastStore.getState().addToast(MIC_FAILED, 'error');
+      })
+      .finally(() => setMicBusy(false));
+  }, [connectionState, localParticipant]);
 
   // A host muted or unmuted this person: true means "mute".
   useEffect(() => {

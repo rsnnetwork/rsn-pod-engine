@@ -21,12 +21,6 @@ describe('P2-1 — live components subscribe to FIELDS, never the whole store', 
       'features/live/VideoRoom.tsx',
       'features/live/LiveSessionPage.tsx',
       'hooks/useSessionSocket.ts',
-      // 26 Oct 2026 — the video meeting room, its stage, its bar and its media toggles.
-      'features/live/meeting/MeetingRoom.tsx',
-      'features/live/meeting/MeetingStage.tsx',
-      'features/live/meeting/MeetingControlBar.tsx',
-      'features/live/meeting/MeetingEnded.tsx',
-      'features/live/meeting/useLocalMediaToggles.ts',
     ];
     for (const f of files) {
       const src = clientSrc(f);

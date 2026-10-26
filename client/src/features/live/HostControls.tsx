@@ -3,11 +3,12 @@ import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
 import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard, LogOut } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
-import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import EventPlanStrip from './EventPlanStrip';
+import { useEventInviteLink } from './useEventInviteLink';
 import { useActionLock } from '@/hooks/useActionLock';
 import { useEscapeKey } from '@/hooks/useEscapeKey';
 import HostControlCenter from './HostControlCenter';
@@ -70,53 +71,17 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
   // a real event invite, the same shareable invite the event page generates
   // (a code that registers whoever accepts it): one open link per event,
   // reused while it has uses left, created the first time the modal opens.
-  const qc = useQueryClient();
+  // 26 Oct 2026 — the same hook as the meeting room's (useEventInviteLink).
   const { data: session } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
     meta: { entities: [E.session(sessionId)] },
   });
-  const {
-    data: pendingInvites,
-    isLoading: invitesLoading,
-    isError: invitesError,
-  } = useQuery({
-    queryKey: ['session-pending-invites', sessionId],
-    queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then(r => r.data.data ?? []),
-    enabled: showInviteModal,
-    meta: { entities: [E.sessionInvites(sessionId)] },
-  });
-  const openInviteLink = (pendingInvites as Array<{
-    code: string; inviteeEmail: string | null; maxUses?: number; useCount?: number; expiresAt?: string | null;
-  }> | undefined)?.find(i =>
-    !i.inviteeEmail
-    && (i.useCount ?? 0) < (i.maxUses ?? 1)
-    && (!i.expiresAt || new Date(i.expiresAt).getTime() > Date.now()),
+  // A shareable link must cover the whole event (same cap the event page uses).
+  const { url: inviteUrl, failed: inviteLinkFailed } = useEventInviteLink(
+    sessionId, showInviteModal, session?.config?.maxParticipants ?? 500,
   );
-  const createInviteLink = useMutation({
-    mutationFn: () => api.post('/invites', {
-      type: 'session',
-      sessionId,
-      // A shareable link must cover the whole event (same cap the event page uses).
-      maxUses: session?.config?.maxParticipants ?? 500,
-      expiresInHours: 168,
-    }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['session-pending-invites', sessionId] }),
-  });
-  const inviteLinkCreateFired = useRef(false);
-  useEffect(() => {
-    if (!showInviteModal) { inviteLinkCreateFired.current = false; return; }
-    if (invitesLoading || invitesError || pendingInvites === undefined || openInviteLink) return;
-    if (inviteLinkCreateFired.current) return;
-    inviteLinkCreateFired.current = true;
-    createInviteLink.mutate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per modal open, keyed on the list settling
-  }, [showInviteModal, invitesLoading, invitesError, pendingInvites, openInviteLink]);
-  const createdCode: string | undefined = createInviteLink.data?.data?.data?.code;
-  const inviteCode = openInviteLink?.code ?? createdCode;
-  const inviteUrl = inviteCode ? `${window.location.origin}/invite/${inviteCode}` : '';
-  const inviteLinkFailed = invitesError || createInviteLink.isError;
 
   // Phase 8B.2 — Esc closes the Invite + Room modals.
   useEscapeKey(() => { setShowInviteModal(false); setInviteLinkCopied(false); }, showInviteModal);

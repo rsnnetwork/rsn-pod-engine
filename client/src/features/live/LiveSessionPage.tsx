@@ -582,7 +582,8 @@ export default function LiveSessionPage() {
                       : 'left-0 right-0 bottom-0 h-[50%]'
                   }`}
                 >
-                  <SectionErrorBoundary name="Chat"><ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} /></SectionErrorBoundary>
+                  {/* 26 Oct 2026 — for a host the host bar below already clears the iPhone home indicator. */}
+                  <SectionErrorBoundary name="Chat"><ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} padBottomInset={!isHost} /></SectionErrorBoundary>
                 </div>
               </>
             )}

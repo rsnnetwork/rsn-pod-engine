@@ -15,8 +15,9 @@ import type { TrackReferenceOrPlaceholder } from '@livekit/components-core';
 import { ConnectionState, RoomEvent, Track } from 'livekit-client';
 import { Columns2, Loader2, Mic, MicOff, Pin, PinOff, PictureInPicture2, UserPlus, Users, VideoOff } from 'lucide-react';
 import { useSessionStore } from '@/stores/sessionStore';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { VideoTile } from '../VideoRoom';
-import { planStage, type Box, type PairView, type TileFill } from './liveLayout';
+import { planStage, SIDE_BY_SIDE_QUERY, type Box, type PairView, type TileFill } from './liveLayout';
 
 export interface StageTile {
   /** The LiveKit participant sid: stable while the layout changes, so a video is never re-attached. */
@@ -148,16 +149,21 @@ function StageTileView({ tile, box, fill, inset, action }: { tile: StageTile; bo
         </span>
       )}
       {action.kind === 'pin' && (
+        // The button is the whole 44px corner; the small circle inside is what shows.
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); action.run(); }}
           aria-label={action.pinned ? `Unpin ${tile.name}` : `Pin ${tile.name}`}
           title={action.pinned ? 'Unpin' : 'Pin'}
-          className={`absolute top-2 ${action.corner === 'left' ? 'left-2' : 'right-2'} z-10 rounded-full bg-black/55 p-1.5 text-white hover:bg-black/75 after:absolute after:-inset-2 after:content-[''] ${
-            action.pinned ? 'ring-1 ring-amber-300/80 text-amber-200' : ''
-          }`}
+          className={`group/pin absolute top-0 ${action.corner === 'left' ? 'left-0' : 'right-0'} z-10 flex h-11 w-11 items-center justify-center`}
         >
-          {action.pinned ? <PinOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Pin className="h-3.5 w-3.5" aria-hidden="true" />}
+          <span
+            className={`rounded-full bg-black/55 p-1.5 text-white group-hover/pin:bg-black/75 ${
+              action.pinned ? 'ring-1 ring-amber-300/80 text-amber-200' : ''
+            }`}
+          >
+            {action.pinned ? <PinOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Pin className="h-3.5 w-3.5" aria-hidden="true" />}
+          </span>
         </button>
       )}
     </div>
@@ -190,11 +196,17 @@ export function MeetingStageView({
   tiles, producers, focusKey, pinnedKey, onPin, pairView, onPairView, connecting, holding, onInvite, notices,
 }: MeetingStageViewProps) {
   const [areaRef, size] = useBoxSize<HTMLDivElement>();
+  // Two people sit side by side by default in a window at least 1024px wide and landscape (the window decides,
+  // not the stage: a landscape tablet's stage is a few pixels narrower).
+  const wide = useMediaQuery(SIDE_BY_SIDE_QUERY);
   const stripH = producers.length > 0 ? PRODUCER_STRIP_H : 0;
   const focusIndex = focusKey ? tiles.findIndex((t) => t.key === focusKey) : -1;
   const plan = useMemo(
-    () => planStage({ width: size.w, height: Math.max(0, size.h - stripH), count: tiles.length, focusIndex: focusIndex >= 0 ? focusIndex : null, pairView }),
-    [size.w, size.h, stripH, tiles.length, focusIndex, pairView],
+    () => planStage({
+      width: size.w, height: Math.max(0, size.h - stripH), count: tiles.length,
+      focusIndex: focusIndex >= 0 ? focusIndex : null, pairView, wide,
+    }),
+    [size.w, size.h, stripH, tiles.length, focusIndex, pairView, wide],
   );
   const two = plan.layout === 'pair' || plan.layout === 'side';
   const solo = plan.layout === 'solo' ? plan.boxes[0] : null;
@@ -361,7 +373,8 @@ export default function MeetingStage({ onInvite, notices }: { onInvite?: () => v
   const [, setHoldTick] = useState(0);
   if (connected) {
     holdUntilRef.current = 0;
-    if (live.length > 1) heldRef.current = live.map(({ key, userId, name, isLocal }) => ({ key, userId, name, isLocal }));
+    // Every connected render, so someone who has already left is never held as a ghost.
+    heldRef.current = live.map(({ key, userId, name, isLocal }) => ({ key, userId, name, isLocal }));
   } else if (holdUntilRef.current === 0 && heldRef.current.length > 1) {
     holdUntilRef.current = Date.now() + HOLD_MS;
   }

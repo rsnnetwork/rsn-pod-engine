@@ -24,29 +24,36 @@ export interface StageGrid { cols: number; rows: number; tileW: number; tileH: n
 export const STAGE_GAP = 8;
 /** A camera's shape: tiles are 16:9 so a webcam picture fills them. */
 export const TILE_ASPECT = 16 / 9;
-/** Two people sit side by side by default only on a stage at least this wide (and landscape). */
+/** Two people sit side by side by default in a window at least this wide (and landscape). */
 export const SIDE_BY_SIDE_MIN_WIDTH = 1024;
 
-/** The default for two people: side by side on a stage at least 1024px wide and landscape. */
-export function sideBySideByDefault(width: number, height: number): boolean {
-  return width >= SIDE_BY_SIDE_MIN_WIDTH && width > height;
+/**
+ * The default for two people, decided by the WINDOW, not the stage (ruling, 26 Oct 2026): side by side in a window at
+ * least 1024px wide and landscape, so a landscape tablet or a small laptop counts as a computer even though its stage
+ * is a few pixels narrower; otherwise the other person large with yourself in the corner.
+ */
+export function sideBySideByDefault(windowWidth: number, windowHeight: number): boolean {
+  return windowWidth >= SIDE_BY_SIDE_MIN_WIDTH && windowWidth > windowHeight;
 }
+
+/** The same rule as a media query, for the stage to follow the window live (CSS landscape: wider than tall). */
+export const SIDE_BY_SIDE_QUERY = `(min-width: ${SIDE_BY_SIDE_MIN_WIDTH}px) and (orientation: landscape)`;
 
 export interface MeetingLayoutInput {
   /** Video tiles on the stage: the viewer's own plus every other person shown on camera. */
   visibleCount: number;
-  width: number;
-  height: number;
+  /** The window is at least 1024px wide and landscape (sideBySideByDefault). */
+  wide: boolean;
   /** The tile pinned on this screen or put in the spotlight by a host, when it is on the stage. */
   focusKey?: string | null;
-  /** The viewer's choice for two people; null or absent follows the stage. */
+  /** The viewer's choice for two people; null or absent follows the window. */
   pairView?: PairView | null;
 }
 
-export function selectMeetingLayout({ visibleCount, width, height, focusKey, pairView }: MeetingLayoutInput): MeetingLayout {
+export function selectMeetingLayout({ visibleCount, wide, focusKey, pairView }: MeetingLayoutInput): MeetingLayout {
   if (visibleCount <= 1) return 'solo';
   if (focusKey) return 'focus';
-  if (visibleCount === 2) return pairView ?? (sideBySideByDefault(width, height) ? 'side' : 'pair');
+  if (visibleCount === 2) return pairView ?? (wide ? 'side' : 'pair');
   return 'grid';
 }
 
@@ -73,11 +80,19 @@ export function computeStageGrid(width: number, height: number, n: number, gap =
   return best;
 }
 
-/** The largest box of the given shape inside width x height, centred. */
+/** The largest box of the given shape inside width x height, centred (empty when there is no room). */
 function fitCentered(width: number, height: number, aspect: number): Box {
-  const w = Math.floor(Math.min(width, height * aspect));
+  const w = Math.max(0, Math.floor(Math.min(width, height * aspect)));
   const h = Math.floor(w / aspect);
   return { x: Math.floor((width - w) / 2), y: Math.floor((height - h) / 2), w, h };
+}
+
+function areaOf(b: Box): number {
+  return b.w * b.h;
+}
+
+function intersects(a: Box, b: Box): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
 /**
@@ -93,18 +108,35 @@ export function insetSize(width: number, height: number): { w: number; h: number
   if (width > height && height <= 500) return { w: 96, h: 72 }; // a phone on its side
   if (width <= height) return width < 640 ? { w: 112, h: 144 } : { w: 144, h: 192 }; // held upright: a portrait frame
   if (width < 640) return { w: 112, h: 63 };
-  if (width < SIDE_BY_SIDE_MIN_WIDTH) return { w: 176, h: 99 };
+  if (width < 1024) return { w: 176, h: 99 };
   if (width < 1400) return { w: 208, h: 117 };
   return { w: 240, h: 135 };
 }
 
-/** The other person large, and the inset picture in the top-right corner of the stage. */
+/** Of its full size, how much the other person's frame keeps when it moves clear of the inset; below that it stays. */
+export const CLEAR_OF_INSET_MIN = 0.7;
+
+/**
+ * The other person large, and the inset picture of yourself in the top-right corner of the stage. On a landscape
+ * stage the other person's frame moves clear of the inset (below it, or to its left) whenever that keeps at least
+ * CLEAR_OF_INSET_MIN of its size, so the corner picture never covers them (fix round 1). On an upright stage they
+ * fill it and the inset sits over its corner, as on any phone call; their picture is shown whole, so a landscape
+ * camera sits in the middle, clear of the corner.
+ */
 function pairBoxes(width: number, height: number): { main: Box; inset: Box } {
   const margin = height <= 500 ? 8 : 12;
   const size = insetSize(width, height);
   const w = Math.min(size.w, Math.max(0, width - 2 * margin));
   const h = Math.min(size.h, Math.max(0, height - 2 * margin));
-  return { main: mainBox(width, height), inset: { x: width - margin - w, y: margin, w, h } };
+  const inset = { x: width - margin - w, y: margin, w, h };
+  const full = mainBox(width, height);
+  if (width <= height || !intersects(full, inset)) return { main: full, inset };
+  const top = inset.y + inset.h + STAGE_GAP;
+  const lower = fitCentered(width, height - top, TILE_ASPECT);
+  const below = { ...lower, y: lower.y + top };
+  const left = fitCentered(inset.x - STAGE_GAP, height, TILE_ASPECT);
+  const clear = areaOf(below) >= areaOf(left) ? below : left;
+  return { main: areaOf(clear) >= CLEAR_OF_INSET_MIN * areaOf(full) ? clear : full, inset };
 }
 
 /** Lays `cells` same-size tiles out as rows, each row centred and the block centred on the stage. */
@@ -131,8 +163,10 @@ export interface StagePlanInput {
   count: number;
   /** The tile pinned or spotlighted, or null. */
   focusIndex: number | null;
-  /** The viewer's choice for two people, or null for the stage's default. */
+  /** The viewer's choice for two people, or null for the window's default. */
   pairView: PairView | null;
+  /** The window is at least 1024px wide and landscape (sideBySideByDefault): two people sit side by side. */
+  wide: boolean;
 }
 
 export interface StagePlan {
@@ -177,11 +211,11 @@ function focusPlan(width: number, height: number, count: number, focusIndex: num
  * Where every tile goes for this stage: the layout (selectMeetingLayout), the boxes and how each picture fills
  * its box. The viewer's own tile (index 0) is always shown.
  */
-export function planStage({ width, height, count, focusIndex, pairView }: StagePlanInput): StagePlan {
+export function planStage({ width, height, count, focusIndex, pairView, wide }: StagePlanInput): StagePlan {
   const n = Math.max(0, Math.floor(count));
   const focus = focusIndex !== null && focusIndex >= 0 && focusIndex < n ? focusIndex : null;
   const layout = selectMeetingLayout({
-    visibleCount: n, width, height, focusKey: focus === null ? null : String(focus), pairView,
+    visibleCount: n, wide, focusKey: focus === null ? null : String(focus), pairView,
   });
   const empty: StagePlan = { layout, boxes: new Array(n).fill(null), fills: new Array(n).fill('contain'), insetIndex: null, more: null };
   if (n === 0 || width <= 0 || height <= 0) return empty;

@@ -1,14 +1,18 @@
 // ─── Who a viewer is in a live event (26 Oct 2026, VID-03) ─────────────────────
 //
-// The client had four definitions of "host", none matching the server's. On 25 Oct
-// Stefan (a super_admin attending someone else's event) saw End Event disabled with
-// "Only the host can end the event" although the server lets a super_admin end it,
-// and the reaction button sat under the host bar because ReactionBar did not count
-// him as a host. One rule now, the server's own:
-//   - ends the event for everyone: the director, or a super_admin as the override
-//     (host-actions.ts handleHostEnd);
-//   - runs it (host controls, start, invite, co-hosts): the director, a co-host or a
-//     super_admin (LiveSessionPage's isHost, the set getAllHostIds folds together).
+// The client had four definitions of "host". On 25 Oct Stefan (a super_admin
+// attending someone else's event) saw End Event disabled with "Only the host can
+// end the event" although the server lets a super_admin end it, and the reaction
+// button sat under the host bar because ReactionBar did not count him as a host.
+// The rules in one place:
+//   - canEndEvent, ends the event for everyone: the director, or a super_admin as
+//     the override. Exactly the server's rule (host-actions.ts handleHostEnd).
+//   - canManage, runs it (the host controls, start, invite, co-hosts): the
+//     director, a co-host or a super_admin. This is the live page's own host rule
+//     (its isHost), the set getAllHostIds folds together. The server's verifyHost
+//     also lets the pod's director or creator act as a host
+//     (effective-role.service canActAsHost); the live page does not know the
+//     viewer's pod role, so it shows them no host controls.
 // Pure, no React: LiveSessionPage computes the roles once and passes them down, and
 // a component outside that path (ReactionBar) reads the same rule here.
 

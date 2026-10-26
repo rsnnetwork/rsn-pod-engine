@@ -17,9 +17,13 @@ const EMOJI_PICKER_LIST = ['😀','😂','😍','🥳','🤔','👍','👏','❤
 interface ChatPanelProps {
   sessionId: string;
   onClose: () => void;
+  /** 26 Oct 2026 — a running video meeting's chat is open whether or not the host is in the room. */
+  alwaysOpen?: boolean;
+  /** Pad the input row clear of the iPhone home indicator; off where a bar below already does. */
+  padBottomInset?: boolean;
 }
 
-export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
+export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padBottomInset = true }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -49,7 +53,7 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
   const hostInParticipants = !!hostUserId && participants.some(p => p.userId === hostUserId);
   const hostPresent = hostInLobby || hostInParticipants;
   const isHostOrCohost = user?.id === hostUserId || (!!user?.id && cohosts.has(user.id));
-  const chatDisabled = scope === 'lobby' && !hostPresent && !isHostOrCohost;
+  const chatDisabled = !alwaysOpen && scope === 'lobby' && !hostPresent && !isHostOrCohost;
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -174,9 +178,10 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
       </div>
 
       {/* Input */}
-      {/* 26 Oct 2026 — on a phone the chat is a bottom sheet: its input row clears the iPhone home indicator. */}
+      {/* 26 Oct 2026 — on a phone the chat is a bottom sheet: its input row clears the iPhone home indicator,
+          unless a bar below it already does (the host bar, the meeting's bar). */}
       {phase !== 'complete' && (
-        <div className="px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-gray-200">
+        <div className={`px-4 pt-3 border-t border-gray-200 ${padBottomInset ? 'pb-[max(0.75rem,env(safe-area-inset-bottom))]' : 'pb-3'}`}>
           {chatDisabled ? (
             <p className="text-xs text-gray-400 text-center py-1">Chat available when host joins</p>
           ) : (
