@@ -13,7 +13,8 @@ const clientSrc = (rel: string) =>
 describe('Event scheduling — local timezone', () => {
   const utils = clientSrc('lib/utils.ts');
   const create = clientSrc('features/sessions/CreateSessionPage.tsx');
-  const detail = clientSrc('features/sessions/SessionDetailPage.tsx');
+  // The edit form moved out of the event page into its own react-hook-form sheet (C7, 26 Oct 2026).
+  const detail = clientSrc('features/sessions/EditEventModal.tsx');
 
   it('utils export the local datetime + timezone-label helpers', () => {
     expect(utils).toMatch(/export function toLocalDatetimeInput\(/);
@@ -31,7 +32,7 @@ describe('Event scheduling — local timezone', () => {
   });
 
   it('the edit form pre-fills LOCAL time (not UTC) — no time-shift on edit', () => {
-    expect(detail).toMatch(/setEditScheduledAt\(session\?\.scheduledAt \? toLocalDatetimeInput\(session\.scheduledAt\) : ''\)/);
-    expect(detail).not.toMatch(/setEditScheduledAt\([^)]*toISOString\(\)\.slice\(0, 16\)/);
+    expect(detail).toMatch(/editEventValues\(session, session\.scheduledAt \? toLocalDatetimeInput\(session\.scheduledAt\) : ''\)/);
+    expect(detail).not.toMatch(/toISOString\(\)\.slice\(0, 16\)/);
   });
 });

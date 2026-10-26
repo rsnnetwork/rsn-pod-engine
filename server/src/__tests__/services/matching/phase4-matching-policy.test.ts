@@ -19,11 +19,12 @@
 //      'platform_wide'.
 //   5. generateSingleRound disables the within-event excludedPairs query
 //      when matchingPolicy='none' so people CAN be re-paired.
-//   6. CreateSessionPage UI exposes all three options as radio buttons,
-//      defaulting to 'within_event'.
+//   6. The event forms (EventFormatFields, since 26 Oct 2026) expose all three
+//      options as radio buttons, defaulting to 'within_event'.
 
 import * as nodeFs from 'fs';
 import * as nodePath from 'path';
+import { eventBody, newEventValues } from '../../../../../client/src/features/sessions/event-format-form';
 
 function readShared(rel: string): string {
   return nodeFs.readFileSync(nodePath.join(__dirname, '../../../../../shared/src', rel), 'utf8');
@@ -119,29 +120,32 @@ describe('Phase 4 — matching policy 3-option chooser', () => {
     });
   });
 
-  describe('client CreateSessionPage exposes matchingPolicy as a radio selector', () => {
-    const src = readClient('features/sessions/CreateSessionPage.tsx');
+  // 26 Oct 2026 (C7) — the event forms follow the shared event definition. The matching rule is one of the
+  // speed-networking settings EventFormatFields draws (the create and the edit form alike), its default is the
+  // definition's, and the request is built by event-format-form's eventBody, which is run here.
+  describe('client event forms expose matchingPolicy as a radio selector', () => {
+    const src = readClient('features/sessions/EventFormatFields.tsx');
 
-    it('declares matchingPolicy field in SessionForm interface', () => {
-      expect(src).toMatch(/matchingPolicy:\s*['"]platform_wide['"]\s*\|\s*['"]within_event['"]\s*\|\s*['"]none['"]/);
+    it('declares the three choices the form offers', () => {
+      expect(src).toMatch(/MatchingPolicyChoice\s*=\s*['"]platform_wide['"]\s*\|\s*['"]within_event['"]\s*\|\s*['"]none['"]/);
     });
 
-    it('exports MATCHING_POLICIES array with three options + default within_event', () => {
-      expect(src).toMatch(/MATCHING_POLICIES/);
+    it('exports MATCHING_POLICIES array with three options', () => {
+      expect(src).toMatch(/export const MATCHING_POLICIES/);
       expect(src).toMatch(/value:\s*['"]platform_wide['"]/);
       expect(src).toMatch(/value:\s*['"]within_event['"]/);
       expect(src).toMatch(/value:\s*['"]none['"]/);
     });
 
-    it('form defaultValues set matchingPolicy to within_event', () => {
-      expect(src).toMatch(/matchingPolicy:\s*['"]within_event['"]/);
+    it('a new speed-networking event starts on within_event (the shared definition\'s default)', () => {
+      const pod = { id: 'p', name: 'Pod', podType: 'speed_networking', orchestrationMode: 'timed_rounds' } as never;
+      expect(newEventValues({ pod, scheduledAt: '2026-11-02T10:00' }).matchingPolicy).toBe('within_event');
     });
 
-    it('mutation body includes matchingPolicy in config', () => {
-      const mutStart = src.indexOf('mutationFn:');
-      const mutEnd = src.indexOf('onSuccess:', mutStart);
-      const mut = src.slice(mutStart, mutEnd);
-      expect(mut).toMatch(/matchingPolicy:\s*data\.matchingPolicy/);
+    it('the request carries the matchingPolicy the organiser picked, in config', () => {
+      const pod = { id: 'p', name: 'Pod', podType: 'speed_networking', orchestrationMode: 'timed_rounds' } as never;
+      const values = newEventValues({ pod, scheduledAt: '2026-11-02T10:00' });
+      expect(eventBody({ ...values, matchingPolicy: 'none' }, { isAdmin: false }).config.matchingPolicy).toBe('none');
     });
 
     it('renders a radio input for each MATCHING_POLICIES entry', () => {

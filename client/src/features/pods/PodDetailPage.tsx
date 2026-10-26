@@ -23,6 +23,7 @@ import { formatDateTime } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import CreatePodModal from './CreatePodModal';
+import EditPodModal from './EditPodModal';
 
 /** Map invite API error codes to user-friendly messages */
 function getInviteErrorMessage(err: any): string {
@@ -62,40 +63,6 @@ const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; color
   public_with_approval:{ label: 'Public with Approval', icon: UserCheck, color: 'text-indigo-400', desc: 'Anyone can find and request to join; director approves' },
 };
 
-const POD_TYPES_OPTIONS = [
-  { value: 'speed_networking',    label: 'Speed Networking' },
-  { value: 'reason',              label: 'Reason Pod' },
-  { value: 'conversational',      label: 'Conversational' },
-  { value: 'webinar',             label: 'Webinar' },
-  { value: 'physical_event',      label: 'Physical Event' },
-  { value: 'chat',                label: 'Chat Pod' },
-  { value: 'two_sided_networking', label: 'Two-Sided Networking' },
-  { value: 'one_sided_networking', label: 'One-Sided Networking' },
-];
-
-const VISIBILITY_OPTIONS = [
-  { value: 'private',              label: 'Private — invite only, hidden from browse' },
-  { value: 'invite_only',          label: 'Invite Only — discoverable but requires invite' },
-  { value: 'public_with_approval', label: 'Public with Approval — anyone can request, you approve' },
-  { value: 'public',               label: 'Public — anyone can join directly' },
-];
-
-const selectClass = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200';
-
-// ─── Edit form state ─────────────────────────────────────────────────────────
-
-interface EditForm {
-  name: string;
-  description: string;
-  podType: string;
-  orchestrationMode: string;
-  communicationMode: string;
-  visibility: string;
-  maxMembers: number | '';
-  rules: string;
-  allowMemberInvites: boolean;
-}
-
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function PodDetailPage() {
@@ -105,12 +72,8 @@ export default function PodDetailPage() {
   const { addToast } = useToastStore();
   const qc = useQueryClient();
 
+  // Edit Pod is its own sheet (EditPodModal, 26 Oct 2026): a react-hook-form form that follows the pod type.
   const [editOpen, setEditOpen] = useState(false);
-  const [editForm, setEditForm] = useState<EditForm>({
-    name: '', description: '', podType: 'speed_networking',
-    orchestrationMode: 'timed_rounds', communicationMode: 'video',
-    visibility: 'private', maxMembers: '', rules: '', allowMemberInvites: false,
-  });
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -199,19 +162,6 @@ export default function PodDetailPage() {
       api.patch(`/pods/${podId}/members/${userId}/role`, { role }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pod-members', podId] }); addToast('Member role updated', 'success'); },
     onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to update role', 'error'),
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (body: Partial<EditForm>) => api.put(`/pods/${podId}`, {
-      ...body,
-      maxMembers: body.maxMembers === '' ? null : Number(body.maxMembers),
-    }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pod', podId] });
-      addToast('Pod updated', 'success');
-      setEditOpen(false);
-    },
-    onError: () => addToast('Failed to update pod', 'error'),
   });
 
   const deleteMutation = useMutation({
@@ -336,20 +286,7 @@ export default function PodDetailPage() {
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
-  const openEdit = () => {
-    setEditForm({
-      name:              pod?.name || '',
-      description:       pod?.description || '',
-      podType:           pod?.podType || 'speed_networking',
-      orchestrationMode: pod?.orchestrationMode || 'timed_rounds',
-      communicationMode: pod?.communicationMode || 'video',
-      visibility:        pod?.visibility || 'private',
-      maxMembers:        pod?.maxMembers ?? '',
-      rules:             pod?.rules || '',
-      allowMemberInvites: pod?.allowMemberInvites ?? false,
-    });
-    setEditOpen(true);
-  };
+  const openEdit = () => setEditOpen(true);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteLink);
@@ -571,142 +508,7 @@ export default function PodDetailPage() {
       )}
 
       {/* ── Full Edit Modal ──────────────────────────────────────────────── */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Pod">
-        <form
-          onSubmit={e => {
-            e.preventDefault();
-            // Public (Open Join) — coerce allowMemberInvites=true on save so the
-            // server persists the locked-on toggle even if the user never
-            // touched the checkbox.
-            const payload = editForm.visibility === 'public'
-              ? { ...editForm, allowMemberInvites: true }
-              : editForm;
-            updateMutation.mutate(payload);
-          }}
-          className="space-y-4"
-        >
-          <Input
-            label="Pod Name"
-            value={editForm.name}
-            onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
-            required
-          />
-
-          <div>
-            <label className="block text-sm font-medium text-gray-600 mb-1">Description</label>
-            <textarea
-              className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-              rows={2}
-              value={editForm.description}
-              onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1.5">Pod Type</label>
-              <select
-                className={selectClass}
-                value={editForm.podType}
-                onChange={e => setEditForm(f => ({ ...f, podType: e.target.value }))}
-              >
-                {POD_TYPES_OPTIONS.map(t => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1.5">Visibility</label>
-              <select
-                className={selectClass}
-                value={editForm.visibility}
-                onChange={e => setEditForm(f => ({ ...f, visibility: e.target.value }))}
-              >
-                {VISIBILITY_OPTIONS.map(v => (
-                  <option key={v.value} value={v.value}>{v.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1.5">Orchestration</label>
-              <select
-                className={selectClass}
-                value={editForm.orchestrationMode}
-                onChange={e => setEditForm(f => ({ ...f, orchestrationMode: e.target.value }))}
-              >
-                <option value="timed_rounds">Timed Rounds</option>
-                <option value="free_form">Free Form</option>
-                <option value="moderated">Moderated</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1.5">Communication</label>
-              <select
-                className={selectClass}
-                value={editForm.communicationMode}
-                onChange={e => setEditForm(f => ({ ...f, communicationMode: e.target.value }))}
-              >
-                <option value="video">Video</option>
-                <option value="audio">Audio Only</option>
-                <option value="text">Text</option>
-                <option value="hybrid">Hybrid</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Input
-              label="Max Members (blank = unlimited)"
-              type="number"
-              value={editForm.maxMembers === '' ? '' : String(editForm.maxMembers)}
-              onChange={e => setEditForm(f => ({ ...f, maxMembers: e.target.value === '' ? '' : Number(e.target.value) }))}
-              placeholder="Unlimited"
-            />
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-600 mb-1">Pod Rules (optional)</label>
-              <textarea
-                className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-                rows={2}
-                placeholder="Community rules or guidelines shown to members"
-                value={editForm.rules}
-                onChange={e => setEditForm(f => ({ ...f, rules: e.target.value }))}
-              />
-            </div>
-          </div>
-
-          {/* Public (Open Join) — locked ON since anyone can join freely anyway. */}
-          {(() => {
-            const isPublicOpenJoin = editForm.visibility === 'public';
-            return (
-              <label className={`flex items-center gap-3 ${isPublicOpenJoin ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
-                <input
-                  type="checkbox"
-                  checked={isPublicOpenJoin ? true : editForm.allowMemberInvites}
-                  onChange={(e) => { if (!isPublicOpenJoin) setEditForm(f => ({ ...f, allowMemberInvites: e.target.checked })); }}
-                  disabled={isPublicOpenJoin}
-                  className="h-4 w-4 rounded border-gray-300 text-[#1a1a2e] focus:ring-[#1a1a2e] disabled:opacity-60"
-                />
-                <span className="text-sm text-gray-600">
-                  Allow members to invite others
-                  {isPublicOpenJoin && (
-                    <span className="ml-2 text-xs text-gray-400">
-                      (always on for Public Open Join — anyone can join anyway)
-                    </span>
-                  )}
-                </span>
-              </label>
-            );
-          })()}
-
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setEditOpen(false)}>Cancel</Button>
-            <Button type="submit" isLoading={updateMutation.isPending}>Save Changes</Button>
-          </div>
-        </form>
-      </Modal>
+      <EditPodModal open={editOpen} onClose={() => setEditOpen(false)} pod={pod} />
 
       {/* ── Duplicate Pod Modal (pre-filled CreatePodModal) ─────────────── */}
       <CreatePodModal

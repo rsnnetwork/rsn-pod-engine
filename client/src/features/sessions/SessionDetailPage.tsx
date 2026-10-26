@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send, Shield, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send, Shield, ShieldCheck, Radio } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -12,12 +12,18 @@ import Modal from '@/components/ui/Modal';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
-import { formatDateTime, LOCAL_TIME_LABEL, toLocalDatetimeInput, localTimezoneLabel } from '@/lib/utils';
+import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
+import { liveKindOf, resolveEventFormat } from '@rsn/shared';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
 import MessageParticipantsButton from './MessageParticipantsButton';
+import EditEventModal from './EditEventModal';
+import { eventFacts, eventFactsLine } from './event-format-form';
+
+/** The icon over each figure under an event's title. */
+const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
 
 function getInviteErrorMessage(err: any): string {
   const code = err?.response?.data?.error?.code;
@@ -40,15 +46,8 @@ export default function SessionDetailPage() {
   const { user } = useAuthStore();
   const { addToast } = useToastStore();
   const qc = useQueryClient();
+  // Edit Event is its own react-hook-form sheet that follows the event type (EditEventModal, 26 Oct 2026).
   const [editOpen, setEditOpen] = useState(false);
-  const [editTitle, setEditTitle] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editScheduledAt, setEditScheduledAt] = useState('');
-  const [editNumberOfRounds, setEditNumberOfRounds] = useState(5);
-  const [editRoundDurationMinutes, setEditRoundDurationMinutes] = useState(8);
-  const [editTimerVisibility, setEditTimerVisibility] = useState('always_visible');
-  const [editMaxParticipants, setEditMaxParticipants] = useState(500);
-  const [editMatchingTemplateId, setEditMatchingTemplateId] = useState('');
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
@@ -102,11 +101,6 @@ export default function SessionDetailPage() {
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
     meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
-  });
-
-  const { data: templates } = useQuery({
-    queryKey: ['matching-templates'],
-    queryFn: () => api.get('/matching-templates').then(r => r.data.data ?? []),
   });
 
   const isHost = session?.hostUserId === user?.id;
@@ -241,16 +235,6 @@ export default function SessionDetailPage() {
     }
   }, [session?.id, user?.id, isRegistered]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const updateMutation = useMutation({
-    mutationFn: (body: { title?: string; description?: string; scheduledAt?: string; config?: Record<string, any> }) => api.put(`/sessions/${sessionId}`, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['session', sessionId] });
-      addToast('Event updated', 'success');
-      setEditOpen(false);
-    },
-    onError: () => addToast('Failed to update event', 'error'),
-  });
-
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/sessions/${sessionId}`),
     onSuccess: () => {
@@ -260,19 +244,7 @@ export default function SessionDetailPage() {
     onError: () => addToast('Failed to delete event', 'error'),
   });
 
-  const openEdit = () => {
-    setEditTitle(session?.title || '');
-    setEditDescription(session?.description || '');
-    // LOCAL time for the datetime-local input (NOT toISOString — that's UTC and
-    // would shift the time by the viewer's offset every edit; Ali 10 Jun).
-    setEditScheduledAt(session?.scheduledAt ? toLocalDatetimeInput(session.scheduledAt) : '');
-    setEditNumberOfRounds(session?.config?.numberOfRounds ?? 5);
-    setEditRoundDurationMinutes(Math.round((session?.config?.roundDurationSeconds ?? 480) / 60));
-    setEditTimerVisibility(session?.config?.timerVisibility ?? 'always_visible');
-    setEditMaxParticipants(session?.config?.maxParticipants ?? 500);
-    setEditMatchingTemplateId(session?.config?.matchingTemplateId ?? '');
-    setEditOpen(true);
-  };
+  const openEdit = () => setEditOpen(true);
 
   const registerMutation = useMutation({
     mutationFn: () => api.post(`/sessions/${sessionId}/register`),
@@ -424,6 +396,10 @@ export default function SessionDetailPage() {
   if (!session) return <p className="text-gray-500 text-center py-20">Event not found</p>;
 
   const statusVariant = sessionStatusColor(session.status);
+  // The facts follow the event's type: a video meeting has a length, not rounds (25 Oct walkthrough).
+  const eventFormat = resolveEventFormat(session);
+  const isRoundsEvent = liveKindOf(eventFormat) === 'rounds';
+  const facts = eventFacts(eventFormat, session.config);
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -448,39 +424,34 @@ export default function SessionDetailPage() {
               <Calendar className="h-4 w-4" />
               {session.scheduledAt ? `${formatDateTime(session.scheduledAt)} ${LOCAL_TIME_LABEL}` : 'No date set'}
             </p>
+            <p className="text-gray-500 mt-1 text-sm flex items-center gap-1.5">
+              <Radio className="h-4 w-4 shrink-0" />
+              {eventFactsLine(eventFormat, session.config)}
+            </p>
           </div>
           <Badge variant={statusVariant}>{sessionStatusLabel(session.status)}</Badge>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-4 border-t border-gray-200">
+        <div className={`grid ${facts.length + 1 === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'} gap-4 mt-4 pt-4 border-t border-gray-200`}>
           <div className="text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
               <Users className="h-4 w-4" />
             </div>
             <p className="text-lg font-bold text-[#1a1a2e]">{(participants || []).length}</p>
-            <p className="text-xs text-gray-400">participants</p>
+            <p className="text-xs text-gray-400">{(participants || []).length === 1 ? 'participant' : 'participants'}</p>
           </div>
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
-              <Settings className="h-4 w-4" />
-            </div>
-            <p className="text-lg font-bold text-[#1a1a2e]">{session.config?.numberOfRounds || 5}</p>
-            <p className="text-xs text-gray-400">rounds</p>
-          </div>
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
-              <Clock className="h-4 w-4" />
-            </div>
-            <p className="text-lg font-bold text-[#1a1a2e]">{Math.floor((session.config?.roundDurationSeconds || 480) / 60)}m</p>
-            <p className="text-xs text-gray-400">per round</p>
-          </div>
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
-              <Users className="h-4 w-4" />
-            </div>
-            <p className="text-lg font-bold text-[#1a1a2e]">{session.config?.maxParticipants || 500}</p>
-            <p className="text-xs text-gray-400">max capacity</p>
-          </div>
+          {facts.map((fact) => {
+            const Icon = FACT_ICONS[fact.key] ?? Settings;
+            return (
+              <div key={fact.key} className="text-center">
+                <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <p className="text-lg font-bold text-[#1a1a2e]">{fact.value}</p>
+                <p className="text-xs text-gray-400">{fact.caption}</p>
+              </div>
+            );
+          })}
         </div>
       </Card>
 
@@ -491,8 +462,12 @@ export default function SessionDetailPage() {
           <div>
             <p className="text-sm font-medium text-amber-300">Event in progress</p>
             <p className="text-xs text-amber-400/80 mt-0.5">
-              {session.status === 'round_active' ? `Round ${session.currentRound || '?'} is currently active. ` : ''}
-              You can still join — you'll be placed in the lobby until the next round begins.
+              {isRoundsEvent ? (
+                <>
+                  {session.status === 'round_active' ? `Round ${session.currentRound || '?'} is currently active. ` : ''}
+                  You can still join — you'll be placed in the lobby until the next round begins.
+                </>
+              ) : 'You can still join. Everyone is together in the main room.'}
             </p>
           </div>
         </div>
@@ -572,20 +547,20 @@ export default function SessionDetailPage() {
                 <MessageParticipantsButton sessionId={sessionId} />
               )}
               {sessionStatusPhase(session.status) !== 'done' && (
+                // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
                 <button
                   type="button"
                   onClick={() => { setInviteLink(''); setInviteEmail(''); setInviteOpen(true); }}
-                  className="h-9 px-3 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 flex items-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                  title="Invite people to this event"
+                  className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
                 >
-                  <Mail className="h-4 w-4" /> <span className="hidden sm:inline">Invite</span>
+                  <Mail className="h-4 w-4" /> Invite people
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => duplicateMutation.mutate()}
                 disabled={duplicateMutation.isPending}
-                className="h-9 px-3 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 flex items-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors disabled:opacity-60"
+                className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors disabled:opacity-60"
                 title="Duplicate this event"
               >
                 <CopyPlus className="h-4 w-4" /> <span className="hidden sm:inline">Copy</span>
@@ -594,7 +569,7 @@ export default function SessionDetailPage() {
                 <button
                   type="button"
                   onClick={() => openEdit()}
-                  className="h-9 px-3 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 flex items-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                  className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
                   title="Edit event"
                 >
                   <Pencil className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
@@ -607,7 +582,7 @@ export default function SessionDetailPage() {
                     if (confirm('Delete this event? This cannot be undone.')) deleteMutation.mutate();
                   }}
                   disabled={deleteMutation.isPending}
-                  className="h-9 px-3 rounded-lg border border-red-200 bg-white hover:bg-red-50 flex items-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-60"
+                  className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-red-200 bg-white hover:bg-red-50 flex items-center justify-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-60"
                   title="Delete event"
                 >
                   <Trash2 className="h-4 w-4" /> <span className="hidden sm:inline">Delete</span>
@@ -1046,115 +1021,8 @@ export default function SessionDetailPage() {
         </div>
       </Modal>
 
-      {/* Edit Modal */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Event">
-        <form onSubmit={e => {
-          e.preventDefault();
-          const body: any = {};
-          if (editTitle) body.title = editTitle;
-          if (editDescription !== undefined) body.description = editDescription;
-          if (editScheduledAt) body.scheduledAt = new Date(editScheduledAt).toISOString();
-          body.config = {
-            numberOfRounds: editNumberOfRounds,
-            roundDurationSeconds: editRoundDurationMinutes * 60,
-            timerVisibility: editTimerVisibility,
-            maxParticipants: editMaxParticipants,
-            ...(editMatchingTemplateId && { matchingTemplateId: editMatchingTemplateId }),
-          };
-          updateMutation.mutate(body);
-        }} className="space-y-4">
-          <Input label="Title" value={editTitle} onChange={e => setEditTitle(e.target.value)} required />
-          <div>
-            <label className="block text-sm font-medium text-gray-600 mb-1">Description</label>
-            <textarea
-              className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-              rows={3} value={editDescription} onChange={e => setEditDescription(e.target.value)}
-            />
-          </div>
-          <div>
-            <Input label="Scheduled At" type="datetime-local" value={editScheduledAt} onChange={e => setEditScheduledAt(e.target.value)} />
-            <p className="text-xs text-gray-400 mt-1">Shown in your local time — {localTimezoneLabel()}.</p>
-          </div>
-
-          {/* Timing Configuration — matches Create Event form */}
-          <div className="border-t border-gray-200 pt-4 mt-4">
-            <h3 className="text-sm font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-              <Clock className="h-4 w-4 text-rsn-red" /> Timing Configuration
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Number of Rounds</label>
-                <input
-                  type="number" min={1} max={20} value={editNumberOfRounds}
-                  onChange={e => setEditNumberOfRounds(Number(e.target.value))}
-                  className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-                />
-                <p className="text-xs text-gray-400 mt-1">1 – 20 rounds</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Round Duration (minutes)</label>
-                <input
-                  type="number" min={1} max={60} value={editRoundDurationMinutes}
-                  onChange={e => setEditRoundDurationMinutes(Number(e.target.value))}
-                  className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-                />
-                <p className="text-xs text-gray-400 mt-1">1 – 60 minutes per round</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Timer Visibility</label>
-                <select
-                  value={editTimerVisibility}
-                  onChange={e => setEditTimerVisibility(e.target.value)}
-                  className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-                >
-                  <option value="always_visible">Always visible</option>
-                  <option value="hidden">Hidden</option>
-                  <option value="last_10s">Show last 10 seconds</option>
-                  <option value="last_30s">Show last 30 seconds</option>
-                  <option value="last_60s">Show last 60 seconds</option>
-                  <option value="last_120s">Show last 2 minutes</option>
-                </select>
-                <p className="text-xs text-gray-400 mt-1">When participants can see the countdown</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Matching Template</label>
-                <select
-                  value={editMatchingTemplateId}
-                  onChange={e => setEditMatchingTemplateId(e.target.value)}
-                  className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-                >
-                  <option value="">Default (balanced)</option>
-                  {(templates || []).map((t: any) => (
-                    <option key={t.id} value={t.id}>{t.name}{t.isDefault ? ' (default)' : ''}</option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-400 mt-1">How participants are matched — affects scoring weights</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Capacity */}
-          <div className="border-t border-gray-200 pt-4 mt-4">
-            <h3 className="text-sm font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-              <Users className="h-4 w-4 text-rsn-red" /> Capacity
-            </h3>
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">Max Participants</label>
-              <input
-                type="number" min={2} max={10000} value={editMaxParticipants}
-                onChange={e => setEditMaxParticipants(Number(e.target.value))}
-                className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-              />
-              <p className="text-xs text-gray-400 mt-1">2 – 10,000 participants</p>
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setEditOpen(false)}>Cancel</Button>
-            <Button type="submit" isLoading={updateMutation.isPending}>Save</Button>
-          </div>
-        </form>
-      </Modal>
+      {/* Edit Event: the same type picker and settings as Schedule an Event */}
+      <EditEventModal open={editOpen} onClose={() => setEditOpen(false)} session={session} podType={pod?.podType} isAdmin={isAdmin} />
     </div>
   );
 }
