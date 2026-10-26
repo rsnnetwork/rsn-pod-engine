@@ -75,7 +75,15 @@ beforeEach(() => {
 });
 
 // The entity row a locking read returns: its name, and the viewer's admin flag when they are linked.
-const LOCKED = /FROM entities e[\s\S]*FOR UPDATE/;
+// The lock is its own statement and the viewer's link is read in the next one (H2b item 10, 26 Oct 2026): an admin
+// action queued behind the actor's own demotion reads the demotion, not the flag from before the queue.
+const LOCKED = /^SELECT name FROM entities WHERE id = \$1 AND archived_at IS NULL FOR UPDATE$/;
+const ADMIN_LINK = /^SELECT is_admin FROM entity_members WHERE entity_id = \$1 AND user_id = \$2$/;
+/** The locked entity, and whether the viewer is one of its admins (null: not linked to it at all). */
+const locked = (isAdmin: boolean | null): Rule[] => [
+  [LOCKED, [{ name: 'Acme Ltd' }]],
+  [ADMIN_LINK, isAdmin === null ? [] : [{ is_admin: isAdmin }]],
+];
 const SAME_NAME = /lower\(btrim\(name\)\) = lower\(btrim\(\$1\)\)/;
 
 describe('createEntity', () => {
@@ -342,12 +350,13 @@ describe('getEntity', () => {
 });
 
 describe('updateEntity', () => {
-  const admin = (isAdmin: boolean | null) => [[LOCKED, [{ name: 'Acme Ltd', is_admin: isAdmin }]]] as Rule[];
+  const admin = (isAdmin: boolean | null) => locked(isAdmin);
 
   it('answers 404 for a missing or archived entity, and writes nothing', async () => {
     const err = await caught(updateEntity(ME, ENTITY, { about: 'x' }, true));
     expect(err).toMatchObject({ statusCode: 404, code: 'ENTITY_NOT_FOUND' });
-    expect(sqlOf(mockTx)[0]).toMatch(/e\.id = \$1 AND e\.archived_at IS NULL FOR UPDATE OF e/);
+    expect(sqlOf(mockTx)[0]).toMatch(LOCKED);
+    expect(sqlOf(mockTx)).toHaveLength(1); // no link is read for an entity that is not there
     expect(ran(mockTx, /UPDATE entities/)).toBe(false);
   });
 
@@ -406,7 +415,7 @@ describe('updateEntity', () => {
 
 describe('setMyMembership (join, or change your own role)', () => {
   const LINK = /SELECT title, is_admin FROM entity_members/;
-  const open = [[LOCKED, [{ name: 'Acme Ltd', is_admin: null }]]] as Rule[];
+  const open = locked(null);
 
   it('answers 404 for a missing or archived entity, and writes nothing', async () => {
     const err = await caught(setMyMembership(ME, ENTITY, { role: 'employee' }));
@@ -417,7 +426,9 @@ describe('setMyMembership (join, or change your own role)', () => {
   it('takes the entity\'s lock before it reads the link', async () => {
     tx(open);
     await setMyMembership(ME, ENTITY, { role: 'employee' });
-    expect(sqlOf(mockTx)[0]).toMatch(/FOR UPDATE OF e/);
+    expect(sqlOf(mockTx)[0]).toMatch(LOCKED);
+    expect(sqlOf(mockTx)[1]).toMatch(ADMIN_LINK);
+    expect(sqlOf(mockTx)[2]).toMatch(LINK);
   });
 
   it('joins as the role given, not as an admin, and marks the entity active', async () => {
@@ -460,7 +471,7 @@ describe('setMyMembership (join, or change your own role)', () => {
 });
 
 describe('leaveEntity', () => {
-  const open = [[LOCKED, [{ name: 'Acme Ltd', is_admin: null }]]] as Rule[];
+  const open = locked(null);
   const LEFT = /DELETE FROM entity_members/;
   const REST = /count\(\*\) FILTER/;
   const PROMOTE = /UPDATE entity_members SET is_admin = true/;
@@ -528,7 +539,7 @@ describe('archiveEntity', () => {
   });
 
   it.each([[false], [null]])('refuses someone who is not one of its admins (is_admin %p)', async (isAdmin) => {
-    tx([[LOCKED, [{ name: 'Acme Ltd', is_admin: isAdmin }]]]);
+    tx(locked(isAdmin));
     const err = await caught(archiveEntity(ME, ENTITY, false));
     expect(err).toMatchObject({ statusCode: 403, code: 'AUTH_FORBIDDEN' });
     expect(ran(mockTx, ARCHIVE)).toBe(false);
@@ -538,7 +549,7 @@ describe('archiveEntity', () => {
     ['one of its admins', true, false],
     ['a platform admin not linked to it', null, true],
   ] as const)('lets %s archive it, keeping every link: %#', async (_who, isAdmin, platformAdmin) => {
-    tx([[LOCKED, [{ name: 'Acme Ltd', is_admin: isAdmin }]]]);
+    tx(locked(isAdmin));
     await archiveEntity(ME, ENTITY, platformAdmin);
     expect(callTo(mockTx, ARCHIVE)![1]).toEqual([ENTITY]);
     expect(ran(mockTx, /DELETE/)).toBe(false);

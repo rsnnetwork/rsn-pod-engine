@@ -422,21 +422,32 @@ describe('deleteEventChatMessage', () => {
     ['a co-host', stored({ is_cohost: true }), 'member'],
     ['a platform admin', stored(), 'admin'],
   ])('lets %s delete it: the message is hidden, not erased, and who did it is kept', async (_who, s, role) => {
-    mockQuery.mockResolvedValueOnce({ rows: [s] }).mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    // The message under its lock, then who runs the event, then the update.
+    mockQuery.mockResolvedValueOnce({ rows: [s] }).mockResolvedValueOnce({ rows: [s] }).mockResolvedValueOnce({ rows: [], rowCount: 1 });
     expect(await deleteEventChatMessage(EVENT, MSG_A, { id: ME, role })).toEqual({ deleted: true });
     const update = callsMatching(/UPDATE event_chat_messages SET deleted_at = NOW\(\), deleted_by = \$2/);
     expect(update).toHaveLength(1);
     expect(paramsOf(update[0])).toEqual([MSG_A, ME]);
   });
 
+  it('locks the message in its own statement and reads who runs the event in the next (H2b item 10)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [stored()] }).mockResolvedValueOnce({ rows: [stored({ host_user_id: ME })] }).mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    expect(await deleteEventChatMessage(EVENT, MSG_A, { id: ME, role: 'member' })).toEqual({ deleted: true });
+    const [lock, runs] = mockQuery.mock.calls.map((c) => String(c[0]).replace(/\s+/g, ' '));
+    expect(lock).toMatch(/^SELECT sender_id, deleted_at FROM event_chat_messages WHERE id = \$1 AND session_id = \$2 FOR UPDATE$/);
+    expect(runs).toMatch(/FROM sessions s WHERE s\.id = \$1$/);
+    expect(runs).not.toMatch(/FOR UPDATE/);
+    expect(paramsOf(mockQuery.mock.calls[1])).toEqual([EVENT, ME]);
+  });
+
   it('refuses anyone else and changes nothing', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [stored()] });
+    mockQuery.mockResolvedValueOnce({ rows: [stored()] }).mockResolvedValueOnce({ rows: [stored()] });
     await expectAppError(deleteEventChatMessage(EVENT, MSG_A, { id: ME, role: 'member' }), 403, ErrorCodes.AUTH_FORBIDDEN);
     expect(callsMatching(/UPDATE event_chat_messages/)).toHaveLength(0);
   });
 
   it('a message already deleted is a quiet success that changes nothing (a double click)', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [stored({ sender_id: ME, deleted_at: new Date() })] });
+    mockQuery.mockResolvedValueOnce({ rows: [stored({ sender_id: ME, deleted_at: new Date() })] }).mockResolvedValueOnce({ rows: [stored()] });
     expect(await deleteEventChatMessage(EVENT, MSG_A, { id: ME, role: 'member' })).toEqual({ deleted: false });
     expect(callsMatching(/UPDATE event_chat_messages/)).toHaveLength(0);
   });

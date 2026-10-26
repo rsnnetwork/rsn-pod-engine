@@ -5,11 +5,12 @@ import { customAlphabet } from 'nanoid';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
-  Invite, InviteStatus, InviteType, CreateInviteInput, Session, eventDurationMinutes, resolveEventFormat, ErrorCodes,
+  Invite, InviteStatus, InviteType, CreateInviteInput, Session, ErrorCodes,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
+import { eventDurationOf } from '../session/event-duration';
 import * as circleService from '../circle/circle.service';
 import { mayInviteToCircle } from '../circle/circle-managers';
 import * as emailService from '../email/email.service';
@@ -245,6 +246,25 @@ export async function insertPendingInvite(row: NewInvite): Promise<InsertedInvit
   });
 }
 
+/**
+ * Withdraws a pending event invite made before its person was removed from the event (H2b item 24, 26 Oct 2026).
+ * The kick withdraws such invites best-effort; one it missed refused every fresh invite for the person as a
+ * duplicate until someone found and withdrew it. True when the invite was withdrawn.
+ */
+export async function withdrawInviteFromBeforeRemoval(inviteId: string): Promise<boolean> {
+  const r = await query<{ id: string }>(
+    `UPDATE invites i SET status = 'revoked'
+       FROM users u, session_participants sp
+      WHERE i.id = $1 AND i.status = 'pending' AND i.session_id IS NOT NULL
+        AND lower(u.email) = i.invitee_email
+        AND sp.session_id = i.session_id AND sp.user_id = u.id
+        AND sp.status = 'removed' AND sp.left_at > i.created_at
+      RETURNING i.id`,
+    [inviteId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 type InviteCalendarEvent = NonNullable<Parameters<typeof emailService.sendInviteEmail>[1]['calendarEvent']>;
 
 /** What one invite's email and bell say about the pod, circle or event: looked up once, so a batch asks once. */
@@ -296,8 +316,8 @@ export async function buildInviteContext(
 
     // Build calendar event data if session has a scheduled time
     if (session?.scheduled_at) {
-      // 26 Oct 2026 — the event's own length: a meeting's, or the rounds estimate (eventDurationMinutes).
-      const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
+      // 26 Oct 2026 — the event's own length: a meeting's, or the rounds estimate (eventDurationOf).
+      const totalMinutes = eventDurationOf(session);
 
       // Get host email for organizer
       const hostResult = await query<{ display_name: string; email: string }>(
@@ -593,7 +613,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
 
   // Block duplicate pending invites (checked AFTER membership so the right error shows). The check and the insert
   // run together, behind a lock for this person and target (see insertPendingInvite).
-  const inserted = await insertPendingInvite({
+  const pending = {
     code,
     type: input.type || InviteType.PLATFORM,
     inviterId: userId,
@@ -603,7 +623,14 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     circleId: input.circleId || null,
     maxUses: input.maxUses || 2,
     expiresAt,
-  });
+  };
+  let inserted = await insertPendingInvite(pending);
+  if (inserted.duplicate && pending.sessionId) {
+    // A pending event invite from before its person was removed from the event is the kick's leftover (the kick
+    // withdraws them, best-effort; H2b item 24, 26 Oct 2026): it is withdrawn now and the fresh one made, so the
+    // host can invite back someone they removed without first finding the old invite.
+    if (await withdrawInviteFromBeforeRemoval(inserted.existingId)) inserted = await insertPendingInvite(pending);
+  }
   if (inserted.duplicate) {
     throw new AppError(409, 'DUPLICATE_INVITE', 'A pending invite already exists for this user');
   }

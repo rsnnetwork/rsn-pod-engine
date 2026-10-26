@@ -75,6 +75,13 @@ export interface ConfirmOptions {
   /** Whole minutes, 5–240. */
   durationMin: number;
   type: MeetingKind;
+  /**
+   * The meeting the client saw when it pressed: the standing meeting's window key, or null for none (H2b item 9,
+   * 26 Oct 2026). When given and the standing meeting no longer matches, the confirm is refused (409,
+   * MEETING_CHANGED_SINCE_SEEN) with where things stand, so a Move pressed before the partner's own move arrived
+   * cannot quietly replace it. Left out (production's client), nothing is checked.
+   */
+  expectedWindow?: string | null;
 }
 
 /** The meetings row a booking wrote or moved (26 Oct 2026). */
@@ -609,6 +616,7 @@ async function writeConfirmation(
   conversationId: string,
   actorId: string,
   meeting: { window: string; startAt: Date | null; durationMin: number | null; type: MeetingKind | null },
+  expected?: { window: string | null },
 ): Promise<ConfirmResult> {
   await lockConversation(client, conversationId);
   const read = await client.query<ConversationRow>(
@@ -622,13 +630,29 @@ async function writeConfirmation(
 
   const over = isMeetingOver(conv.meeting_start_at, conv.meeting_duration_min);
   // Pressing Confirm twice, or the partner's press landing first: this is
-  // the same meeting, so say yes and do nothing again.
+  // the same meeting, so say yes and do nothing again. Once that meeting is
+  // over, the same window names a new meeting and is booked afresh.
   if (conv.meeting_confirmed_window === meeting.window && !over) return { already: true };
 
   const avail = await client.query<{ user_id: string; window_key: string }>(
     `SELECT user_id, window_key FROM meeting_availability WHERE conversation_id = $1`,
     [conversationId],
   );
+
+  // The client said which meeting it saw (H2b item 9, 26 Oct 2026): a standing meeting that no longer matches is
+  // answered with where things stand, under the lock, so a Move pressed before the partner's own move arrived
+  // cannot quietly replace it. A request without the field is checked as before.
+  if (expected !== undefined) {
+    const standing = conv.meeting_confirmed_window && !over ? conv.meeting_confirmed_window : null;
+    if (standing !== (expected.window ?? null)) {
+      throw new ConflictError(
+        ErrorCodes.MEETING_CHANGED_SINCE_SEEN,
+        'The meeting time changed a moment ago. Here is where it stands now.',
+        { scheduling: buildScheduling(conv, actorId, avail.rows) },
+      );
+    }
+  }
+
   const shared = avail.rows.some(r => r.user_id === actorId && r.window_key === meeting.window)
     && avail.rows.some(r => r.user_id !== actorId && r.window_key === meeting.window);
   if (!shared) {
@@ -778,7 +802,7 @@ export async function confirmInTx(
     startAt: new Date(opts.startAt),
     durationMin: opts.durationMin,
     type: opts.type,
-  });
+  }, opts.expectedWindow === undefined ? undefined : { window: opts.expectedWindow });
 }
 
 /**
@@ -878,7 +902,7 @@ export async function confirmWindow(
   conversationId: string,
   userId: string,
   windowKey: string,
-  opts: { startAt?: string | null; durationMin?: number | null; type?: MeetingKind | null } = {},
+  opts: { startAt?: string | null; durationMin?: number | null; type?: MeetingKind | null; expectedWindow?: string | null } = {},
 ): Promise<ConversationScheduling> {
   const conv = await requireParticipant(conversationId, userId);
   await assertNotBlocked(conv, userId);
@@ -887,14 +911,16 @@ export async function confirmWindow(
   }
 
   const startAt = exactStart(windowKey, opts.startAt || (isSlotKey(windowKey) ? windowKey : null));
+  const expected = opts.expectedWindow === undefined ? undefined : { window: opts.expectedWindow };
   const done = await transaction((client) => (startAt
     ? confirmInTx(client, conversationId, userId, {
         window: windowKey,
         startAt: startAt.toISOString(),
         durationMin: meetingLength(opts.durationMin),
         type: opts.type === 'audio' ? 'audio' : 'video',
+        expectedWindow: opts.expectedWindow,
       })
-    : writeConfirmation(client, conversationId, userId, { window: windowKey, startAt: null, durationMin: null, type: null })));
+    : writeConfirmation(client, conversationId, userId, { window: windowKey, startAt: null, durationMin: null, type: null }, expected)));
 
   await announceConfirmation(conversationId, userId, done);
   return getScheduling(conversationId, userId);

@@ -309,8 +309,9 @@ describe('Ship B — flip-site + wiring invariants', () => {
     const src = readSrc('services/orchestration/handlers/host-actions.ts');
     const i = src.indexOf('export async function handleHostRemoveParticipant');
     // WS2 widened this window: the kick handler gained the match-end flow
-    // (demote + survivor rating) ahead of the presence cleanup.
-    const block = src.slice(i, i + 7000);
+    // (demote + survivor rating) ahead of the presence cleanup. H2b (26 Oct 2026) widened it again: the
+    // director guard and the engine check come before the flow.
+    const block = src.slice(i, i + 8500);
     expect(block).toMatch(/presenceMap\.get\(data\.userId\)/);
     expect(block).toMatch(/deliberately|socketId/i); // documented decision
   });

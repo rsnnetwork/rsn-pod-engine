@@ -105,6 +105,7 @@ export const ErrorCodes = {
 
   // Meeting request and meeting errors
   MEETING_REQUEST_ALREADY_ANSWERED: 'MEETING_REQUEST_ALREADY_ANSWERED',  // 409; details.status is the answer it already has
+  MEETING_CHANGED_SINCE_SEEN: 'MEETING_CHANGED_SINCE_SEEN',  // 409; the meeting the client saw (expectedWindow) no longer stands; details.scheduling is where things stand now
   MEETING_TIME_NOT_SHARED: 'MEETING_TIME_NOT_SHARED',  // 409; details.scheduling is where the two people's times stand now
   MEETING_ALREADY_ENDED: 'MEETING_ALREADY_ENDED',  // 409; a meeting that is over can no longer be cancelled
   MEETING_ALREADY_STARTED: 'MEETING_ALREADY_STARTED',  // 409; a meeting under way can no longer be cancelled

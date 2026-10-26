@@ -41,7 +41,7 @@ const SESSION_ID = '22222222-2222-4222-8222-222222222222';
 const DIRECTOR = 'user-director';
 
 function pod(podType: PodType) {
-  return { id: POD_ID, name: 'Test', podType, orchestrationMode: 'free_form' };
+  return { id: POD_ID, name: 'Test', status: 'active', podType, orchestrationMode: 'free_form' };
 }
 
 /** Every query answers with one row: the INSERT/UPDATE ... RETURNING echoes a session row. */

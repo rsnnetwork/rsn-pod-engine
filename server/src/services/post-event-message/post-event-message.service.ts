@@ -1,7 +1,8 @@
 // ─── Post-Event Broadcast Message Service ────────────────────────────────────
 // Assembles recipients, previews a dry-run, creates durable jobs, and returns
 // job status.  The actual email/DM sends are performed by a separate worker that
-// reads post_event_message_jobs rows in 'pending' status.
+// reads post_event_message_jobs rows in 'pending' status, and 'processing' ones that
+// have gone silent (a run a stopped server left half done; see the worker's header).
 //
 // Two versions live side by side.  Version 1 (assembleRecipients, previewJob,
 // createJob) sends the fixed feedback template and is what production's client

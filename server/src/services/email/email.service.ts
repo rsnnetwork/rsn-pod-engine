@@ -9,6 +9,7 @@ import { generateIcsContent } from '../calendar/calendar.service';
 import { meetingTime } from '../meetings/meeting-time';
 import { query } from '../../db';
 import { isReservedTestAddress, maskAddress } from '../identity/reserved-address';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 let resend: Resend | null = null;
 
@@ -92,6 +93,60 @@ export interface SendEmailResult {
 // provider is not asked. The answer is the one a delivered email gets, marked `skipped`: a reminder keeps its hour, a
 // batch counts the email as sent and nothing is tried again. The provider's own test sink (delivered+label@resend.dev)
 // is an address like any other here and goes as before. A call to the provider from anywhere else would get round this;
+// ─── One pace for every email (H2b item 7, 26 Oct 2026) ──────────────────────────────────────────────────────
+// The provider takes two sends a second. Every email — a bulk invite, Remind all's one-at-a-time sends, a job's
+// burst, a member's single email — reaches it through one process-wide gate that releases a provider call every
+// SEND_GAP_MS at most, retries included. A burst runs its sends inside asBulkEmail(); a single email is released ahead
+// of the burst waiting behind the gate, so the answer to a member's press waits for one slot at most, never for the
+// burst. A waiter is released in its turn whatever became of the one before, so nothing is lost.
+export const SEND_GAP_MS = 500;
+export interface SendPace { now(): number; pause(ms: number): Promise<void> }
+const REAL_SEND_PACE: SendPace = { now: () => Date.now(), pause: (ms) => new Promise((r) => setTimeout(r, ms)) };
+let sendPace: SendPace = REAL_SEND_PACE;
+let lastReleaseAt = Number.NEGATIVE_INFINITY;
+const waitingToSend: Array<{ release: () => void; bulk: boolean }> = [];
+let releasing = false;
+const bulkLane = new AsyncLocalStorage<boolean>();
+
+/** Runs `send` with every email it sends in the bulk lane: behind any single email waiting its turn. */
+export function asBulkEmail<T>(send: () => Promise<T>): Promise<T> {
+  return bulkLane.run(true, send);
+}
+
+/** Resolves when this email may be offered to the provider: single emails go in ahead of the bulk lane. */
+function awaitSendTurn(bulk: boolean): Promise<void> {
+  return new Promise<void>((release) => {
+    const waiter = { release, bulk };
+    const firstBulk = bulk ? -1 : waitingToSend.findIndex((w) => w.bulk);
+    if (firstBulk === -1) waitingToSend.push(waiter);
+    else waitingToSend.splice(firstBulk, 0, waiter);
+    void releaseInTurn();
+  });
+}
+
+async function releaseInTurn(): Promise<void> {
+  if (releasing) return;
+  releasing = true;
+  try {
+    while (waitingToSend.length > 0) {
+      const wait = lastReleaseAt + SEND_GAP_MS - sendPace.now();
+      if (wait > 0) await sendPace.pause(wait);
+      lastReleaseAt = sendPace.now();
+      waitingToSend.shift()?.release();
+    }
+  } finally {
+    releasing = false;
+  }
+}
+
+/** Tests run the gate on a clock of their own; `null` puts the real one back. Either way the queue starts empty. */
+export function __setSendPaceForTests(pace: SendPace | null): void {
+  sendPace = pace ?? REAL_SEND_PACE;
+  lastReleaseAt = Number.NEGATIVE_INFINITY;
+  waitingToSend.length = 0;
+  releasing = false;
+}
+
 // email-provider-single-door.test.ts fails if one appears.
 async function sendEmail(opts: {
   to: string;
@@ -142,6 +197,7 @@ async function sendEmail(opts: {
   // Retry with exponential backoff for rate-limit and transient errors
   const MAX_RETRIES = 3;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    await awaitSendTurn(bulkLane.getStore() === true);
     const { error } = await client.emails.send(emailPayload);
 
     if (!error) {
@@ -173,7 +229,7 @@ async function sendEmail(opts: {
     }
 
     // Exponential backoff: 1s, 2s, 4s
-    await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    await sendPace.pause(1000 * Math.pow(2, attempt));
   }
 
   return { sent: false };

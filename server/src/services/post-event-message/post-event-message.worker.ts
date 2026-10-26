@@ -6,8 +6,8 @@
 //
 // Crash safety, and what happens to a send a stopped server left half done:
 //   - Only 'pending' recipients are ever selected, and each recipient's UPDATE commits on its own (no outer
-//     transaction wraps the drain loop), so a run that stops partway leaves exactly the people it had not
-//     reached as 'pending'.
+//     transaction wraps the drain loop), so a run that stops partway leaves the people it had not reached as
+//     'pending', plus at most one it had reached whose row was not yet marked (found again by its words, below).
 //   - A job is 'processing' while a worker drains it, and nothing moves it on if the process dies (Render
 //     redeploys on every push to main). The unique index allows one pending-or-processing job per event, so
 //     such a job would refuse every later send for the event, for ever. So a 'processing' job that has shown
@@ -24,6 +24,9 @@
 //     that throws while being carried on.
 //   - A Redis NX lock stops two instances starting a cycle in the same moment. If Redis is unavailable the
 //     lock is skipped (single-instance fallback).
+//   - Not fenced: a run that merely stalled (not died) and wakes after its job was picked up again carries on
+//     beside the new run. Each recipient's row is written by one UPDATE, so nobody is written to twice, but the
+//     two runs then share the people still pending until the older one reaches the end of its list.
 
 import type { Server as SocketServer } from 'socket.io';
 import { query } from '../../db';
@@ -95,7 +98,9 @@ export async function processPendingJobs(io: SocketServer): Promise<void> {
   // Postgres is already in the hot path and this probe hits an indexed status
   // column, so ask it first and touch Redis only when there is a job to guard.
   // The lock is still acquired BEFORE any row is claimed, so two instances
-  // cannot process the same job: the loser exits at the lock, as before.
+  // rarely reach the claim together; and the claim itself is one UPDATE that asks
+  // the same question again (see the header), so even without Redis two instances
+  // cannot take the same job.
   //
   // "Needs a worker" is a pending job, or a processing job gone silent (see the header): still one
   // cheap read on an idle tick, and the silence test only runs for the rare processing row.

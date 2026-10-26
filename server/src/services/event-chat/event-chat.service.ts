@@ -388,19 +388,23 @@ export async function deleteEventChatMessage(
   actor: { id: string; role?: string },
 ): Promise<{ deleted: boolean }> {
   return transaction(async (client) => {
-    const result = await client.query<{ sender_id: string | null; deleted_at: Date | null; host_user_id: string; is_cohost: boolean }>(
-      `SELECT m.sender_id, m.deleted_at, s.host_user_id,
-              EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = m.session_id AND c.user_id = $3) AS is_cohost
-         FROM event_chat_messages m
-         JOIN sessions s ON s.id = m.session_id
-        WHERE m.id = $1 AND m.session_id = $2
-        FOR UPDATE OF m`,
-      [messageId, sessionId, actor.id],
+    const locked = await client.query<{ sender_id: string | null; deleted_at: Date | null }>(
+      `SELECT sender_id, deleted_at FROM event_chat_messages WHERE id = $1 AND session_id = $2 FOR UPDATE`,
+      [messageId, sessionId],
     );
-    const message = result.rows[0];
+    const message = locked.rows[0];
     if (!message) throw new NotFoundError('Message', messageId, 'This message could not be found.');
-    const allowed = message.sender_id === actor.id || message.host_user_id === actor.id
-      || message.is_cohost || isAdminRole(actor.role);
+    // Who runs the event is read once the lock is granted, as it stands then (H2b item 10, 26 Oct 2026): joined
+    // under the message's lock, it was read as it stood before the lock.
+    const runs = await client.query<{ host_user_id: string; is_cohost: boolean }>(
+      `SELECT s.host_user_id,
+              EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost
+         FROM sessions s WHERE s.id = $1`,
+      [sessionId, actor.id],
+    );
+    const event = runs.rows[0];
+    const allowed = message.sender_id === actor.id || event?.host_user_id === actor.id
+      || event?.is_cohost === true || isAdminRole(actor.role);
     if (!allowed) throw new ForbiddenError(EVENT_CHAT_DELETE_FORBIDDEN);
     if (message.deleted_at) return { deleted: false };
     await client.query(

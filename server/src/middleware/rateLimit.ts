@@ -162,14 +162,21 @@ export const inviteLimiter = rateLimit({
   },
 });
 
-// Group chats (26 Oct 2026). Every limit is per signed-in member (the routes sign in first). Reads are
-// generous: a busy group of 50 refetches the thread and the list on every message. Messages are held to
-// 30 a minute, faster than anyone types. Read marks, leaving, adding and removing share a write allowance.
-// Starting a group has a small hourly one, and only a group that was started uses it: a refusal (too few
-// people, an event not yet over) started nothing.
+// Group chats (26 Oct 2026). Every limit is per signed-in member (the routes sign in first). Messages are
+// held to 30 a minute, faster than anyone types. Read marks, leaving, adding and removing share a write
+// allowance. Starting a group has a small hourly one, and only a group that was started uses it: a refusal
+// (too few people, an event not yet over) started nothing.
+//
+// Reads are sized for a group of 50 in a busy minute (H2b item 22, 26 Oct 2026). Every message that arrives
+// makes a member's open thread read the group three times (the thread, the group's details, the Messages
+// list); a busy minute carries about 60 messages (two a second is fast typing for fifty people), so 180
+// reads, and twice that as headroom for a member with two tabs open. The reader's own read marks no longer
+// cost a read (fanoutGroupReadMark). The limit used to be 120, and a group of twenty messages a minute hit
+// it: the thread then stopped updating until the minute passed.
+export const GROUP_READS_A_MINUTE = 400;
 export const groupReadLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: GROUP_READS_A_MINUTE,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: userOrIpKey,

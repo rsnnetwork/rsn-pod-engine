@@ -14,8 +14,21 @@ export const GROUP_CHAT_MIN_MEMBERS = 3;
 /** custom: made from people the creator has met; pod: one per pod (not in use); event: started from a completed event. */
 export type DmGroupType = 'custom' | 'pod' | 'event';
 
-/** The group's admin removes people, adds people who took part in its event, and is replaced by the earliest member when they leave. */
+/** The group's admin removes people, adds people who took part in its event, and is replaced by the earliest member with an open account when they leave. */
 export type DmGroupRole = 'admin' | 'member';
+
+/**
+ * Someone who may be added to a group started from an event (GET /groups/event/:sessionId/candidates, H2b item 23,
+ * 26 Oct 2026): they took part, their account is open, and neither they nor the viewer has blocked the other. The
+ * add and create pickers read this list, so nobody they offer is refused.
+ */
+export interface GroupCandidate {
+  id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  jobTitle: string | null;
+  company: string | null;
+}
 
 /** The latest message a member can see in a group: never one from someone either of them has blocked. */
 export interface DmGroupLastMessage {

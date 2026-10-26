@@ -15,7 +15,10 @@ jest.mock('../../../config/logger', () => ({
 }));
 jest.mock('../../../db', () => ({ query: jest.fn(), transaction: jest.fn() }));
 
-import { sendPokeReceivedEmail } from '../../../services/email/email.service';
+import { sendPokeReceivedEmail, __setSendPaceForTests } from '../../../services/email/email.service';
+
+// These tests are about the words, not the pace: the provider's gate (two sends a second) is run on an instant clock.
+beforeAll(() => __setSendPaceForTests({ now: () => Date.now(), pause: async () => {} }));
 
 /** Sends the email for a message and returns what went out. */
 async function send(introMessage: string | null): Promise<{ html: string; text: string }> {

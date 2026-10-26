@@ -227,7 +227,7 @@ describe('canMessage() — people who took part in the same completed meeting', 
 
   /**
    * The stand-in database: the user's role, whether a thread has messages, the encounter row, the format of a
-   * completed event both joined (none when absent), and either whether either person's latest rating of the
+   * completed event both joined (none when absent), and either whether one person's latest rating of the
    * other says no (`latestNo`) or the ratings themselves (`ratings`, read as the SQL is written). The
    * shared-event read finds the event only when its format is among the formats the code asks about, as the
    * SQL's `= ANY($3::text[])` would.

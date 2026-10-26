@@ -24,6 +24,7 @@ import {
 import { CONNECTION_SIGNALS_SQL, pageBySince } from '../people/connections.service';
 import { escapeLike } from '../user/user-search.service';
 import * as invites from './invite.service';
+import { asBulkEmail } from '../email/email.service';
 
 /** Who is asking, as the route knows them. */
 export interface Asker {
@@ -469,7 +470,8 @@ async function sendEmailsSlowly(
       }
       lastStart = pace.now();
       try {
-        await invites.emailInvite(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId });
+        // In the bulk lane (H2b item 7): a member's single email elsewhere goes ahead of this burst at the provider's gate.
+        await asBulkEmail(() => invites.emailInvite(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId }));
       } catch (err) {
         logger.warn({ err, inviteeId: m.userId, inviteId: m.inviteId }, 'Batch invite email failed (the invite exists and the bell was sent)');
       }

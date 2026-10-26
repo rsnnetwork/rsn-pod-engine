@@ -42,6 +42,8 @@ const debugLines = () => (logger.debug as jest.Mock).mock.calls.map((c) => Strin
 beforeEach(() => {
   jest.clearAllMocks();
   emailService.__resetDailyQuotaNoticeForTests();
+  // The provider's gate starts each test with no email just released, so the waits here are the backoff alone.
+  emailService.__setSendPaceForTests(null);
 });
 
 describe('a daily-quota refusal', () => {

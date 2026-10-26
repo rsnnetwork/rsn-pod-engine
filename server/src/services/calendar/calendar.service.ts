@@ -3,7 +3,8 @@
 // Works with Google Calendar, Outlook, Apple Calendar — no API keys needed.
 
 import { v4 as uuid } from 'uuid';
-import { eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
+import { eventDurationMinutes } from '@rsn/shared';
+import { eventDurationOf } from '../session/event-duration';
 import { query } from '../../db';
 
 interface CalendarEventData {
@@ -168,7 +169,7 @@ export async function buildSessionCalendarEvent(sessionId: string): Promise<Sess
     title: session.title,
     description: `REASON event — ${session.title}`,
     startTime: new Date(session.scheduled_at),
-    durationMinutes: eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config),
+    durationMinutes: eventDurationOf(session),
     organizerName: host?.display_name || 'REASON',
     organizerEmail: host?.email,
     sessionId,

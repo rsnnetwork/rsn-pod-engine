@@ -527,6 +527,22 @@ export async function fanoutGroupForUser(groupId: string, userId: string): Promi
   }
 }
 
+/**
+ * A member's own read mark moves only their Messages list (the unread counts: user:<id>:dms), on every tab they
+ * have open. It no longer sends the group's own tag back to the reader (H2b item 22, 26 Oct 2026): the reader
+ * then read the group again for a mark they had just made, about six reads for every message that arrived, and a
+ * busy group ran into the read limit and stopped updating. Nobody else learns of a read mark.
+ */
+export async function fanoutGroupReadMark(userId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    await emitEntities(io, [userId], [E.userDms(userId)]);
+  } catch (err) {
+    logger.warn({ err, userId }, 'fanoutGroupReadMark: failed to fan out');
+  }
+}
+
 // ─── Permissions + roster (the two surviving bespoke events) ────────────────
 //
 // Phase 5 preserves `permissions:updated` and `roster:changed` because

@@ -36,6 +36,9 @@ jest.mock('../../db', () => ({ query: jest.fn(), transaction: jest.fn() }));
 
 import * as emailService from '../../services/email/email.service';
 
+// These tests are about the words, not the pace: the provider's gate (two sends a second) is run on an instant clock.
+beforeAll(() => emailService.__setSendPaceForTests({ now: () => Date.now(), pause: async () => {} }));
+
 // ── The emails, each with every field filled in ──────────────────────────────────────────────────
 
 type Exported = typeof emailService;
@@ -134,7 +137,12 @@ const cases: Case[] = [
 ];
 
 /** Exports that build no email: the shared card and the admin switch. Anything new must be put in one list or the other. */
-const NOT_BUILDERS = ['emailCardClose', 'emailCardOpen', 'isEmailTypeEnabled'];
+// The exports that build no email: the card shell, the enabled check, the provider's gate (H2b item 7: its gap,
+// the bulk lane and the test clock) and the daily-quota notice reset (H2b item 8b).
+const NOT_BUILDERS = [
+  'SEND_GAP_MS', '__resetDailyQuotaNoticeForTests', '__setSendPaceForTests', 'asBulkEmail',
+  'emailCardClose', 'emailCardOpen', 'isEmailTypeEnabled',
+];
 
 // ── Running one ──────────────────────────────────────────────────────────────────────────────────
 

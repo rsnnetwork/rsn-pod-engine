@@ -25,7 +25,7 @@ import { validate, validateAll } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { groupCreateLimiter, groupMessageLimiter, groupReadLimiter, groupWriteLimiter } from '../middleware/rateLimit';
 import * as groupService from '../services/dm/group.service';
-import { fanoutGroupEntities, fanoutGroupForUser } from '../realtime/fanout';
+import { fanoutGroupEntities, fanoutGroupReadMark } from '../realtime/fanout';
 
 const router = Router();
 
@@ -123,6 +123,24 @@ router.get(
   }
 );
 
+// GET /groups/event/:sessionId/candidates — who may be added to a group started from this event (H2b item 23,
+// 26 Oct 2026): took part, account open, not blocked either way with the asker. The add and create pickers read it,
+// so nobody they offer is refused.
+router.get(
+  '/event/:sessionId/candidates',
+  authenticate,
+  groupReadLimiter,
+  validate(sessionParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await groupService.eventGroupCandidates({ userId: req.user!.userId, role: req.user!.role as UserRole }, req.params.sessionId);
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // GET /groups/:id — one group, its members and the cap
 router.get(
   '/:id',
@@ -184,7 +202,9 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await groupService.markGroupRead(req.params.id, req.user!.userId);
-      void fanoutGroupForUser(req.params.id, req.user!.userId);
+      // Only the reader's Messages list (H2b item 22): the group's own tag sent back to the reader made them read
+      // the group again for their own mark, and a busy group ran into the read limit.
+      void fanoutGroupReadMark(req.user!.userId);
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);
@@ -192,7 +212,7 @@ router.post(
   }
 );
 
-// POST /groups/:id/leave — leave a group (the earliest member takes over from a leaving admin)
+// POST /groups/:id/leave — leave a group (the earliest member with an open account takes over from a leaving admin)
 router.post(
   '/:id/leave',
   authenticate,

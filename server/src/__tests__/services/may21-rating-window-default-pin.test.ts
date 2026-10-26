@@ -60,10 +60,12 @@ describe('F5 (21 May Ali) — ratingWindowSeconds default 30, min 20', () => {
   });
 
   it('the invite email length takes the shared formula, whose fallback is at least 30', () => {
-    // 26 Oct 2026 — invite.service.ts no longer keeps its own copy of the length formula: it calls the
-    // shared eventDurationMinutes (one formula for the token, the calendar and every invite email).
+    // 26 Oct 2026 — invite.service.ts no longer keeps its own copy of the length formula: it reads the event's
+    // length through eventDurationOf (services/session/event-duration.ts), which is the shared eventDurationMinutes
+    // of the event's format (one formula for the token, the calendar and every invite email).
     const src = readServer('services/invite/invite.service.ts');
-    expect(src).toMatch(/eventDurationMinutes\(/);
+    expect(src).toMatch(/eventDurationOf\(/);
+    expect(readServer('services/session/event-duration.ts')).toMatch(/eventDurationMinutes\(/);
     expect(src).not.toMatch(/ratingWindowSeconds\s*\|\|\s*10\b/);
     const rules = readShared('src/events/rules.ts');
     const fallback = rules.match(/setting\(cfg, 'ratingWindowSeconds', (\d+)\)/);

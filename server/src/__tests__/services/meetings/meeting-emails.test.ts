@@ -23,7 +23,10 @@ jest.mock('../../../config/logger', () => ({
 }));
 jest.mock('../../../db', () => ({ query: jest.fn(), transaction: jest.fn() }));
 
-import { sendMeetingConfirmedEmail, sendMeetingCancelledEmail, sendMeetingReminderEmail } from '../../../services/email/email.service';
+import { sendMeetingConfirmedEmail, sendMeetingCancelledEmail, sendMeetingReminderEmail, __setSendPaceForTests } from '../../../services/email/email.service';
+
+// These tests are about the words, not the pace: the provider's gate (two sends a second) is run on an instant clock.
+beforeAll(() => __setSendPaceForTests({ now: () => Date.now(), pause: async () => {} }));
 
 interface Sent {
   subject: string;

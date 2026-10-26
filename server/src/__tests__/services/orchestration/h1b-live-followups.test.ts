@@ -285,10 +285,25 @@ function answer(sql: string, params: unknown[]): Answer {
     }
     return { rows: [], rowCount: 0 };
   }
-  // The kick's removed row for someone the event let in without one (a row that exists is left as it is).
+  // The kick's removed row for someone the event let in without one. A row that exists is left as it is, but for a
+  // removed row's left_at, which takes this kick's time (ON CONFLICT DO UPDATE ... WHERE status = 'removed', H2b item 26).
   if (sql.startsWith("INSERT INTO session_participants (session_id, user_id, status, left_at) VALUES ($1, $2, 'removed', NOW())")) {
-    if (participant(a, b)) return { rows: [], rowCount: 0 };
+    const p = participant(a, b);
+    if (p) {
+      if (/DO UPDATE SET left_at = NOW\(\) WHERE session_participants\.status = 'removed'/.test(sql) && p.status === 'removed') {
+        p.left_at = new Date();
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    }
     world.participants.push({ id: randomUUID(), session_id: a, user_id: b, status: 'removed', joined_at: null, left_at: new Date() });
+    return { rows: [], rowCount: 1 };
+  }
+  // The kick of someone the engine did not have: only a removed row's left_at moves (H2b items 25 and 26).
+  if (sql === "UPDATE session_participants SET left_at = NOW() WHERE session_id = $1 AND user_id = $2 AND status = 'removed'") {
+    const p = participant(a, b);
+    if (!p || p.status !== 'removed') return { rows: [], rowCount: 0 };
+    p.left_at = new Date();
     return { rows: [], rowCount: 1 };
   }
   // The reconciler reads every row of the event, to write memory into it.
@@ -568,6 +583,44 @@ beforeEach(() => {
 afterEach(() => {
   jest.clearAllTimers();
   activeSessions.clear();
+});
+
+// ── 0. The kick itself (H2b items 25, 26 and 27, 26 Oct 2026) ──────────────────────────────────────────
+
+describe('0. the kick itself', () => {
+  it('the event\'s director is never removed from their own event: refused, nothing changes (item 27)', async () => {
+    const t = await liveEvent();
+    await kick(t, t.host);
+    expect(t.hostSock.got).toContainEqual({
+      event: 'error',
+      payload: { code: 'DIRECTOR_TARGET', message: "The event's director cannot be removed from their own event." },
+    });
+    expect(statusOf(t.sessionId, t.host)).not.toBe('removed');
+    expect(memoryOf(t.sessionId, t.host)).not.toBe('removed');
+    expect(inRoom(t.hostSock, t.sessionId)).toBe(true);
+    expect(presentSet(t.sessionId).has(t.host)).toBe(true);
+  });
+
+  it('a kick aimed at someone the event never had bars nobody: no removed row is written for them (item 25)', async () => {
+    const t = await liveEvent();
+    const stranger = randomUUID();
+    await kick(t, stranger);
+    expect(participant(t.sessionId, stranger) ?? null).toBeNull();
+    expect(statusOf(t.sessionId, t.member)).not.toBe('removed');
+  });
+
+  it('a second kick of someone already removed stamps the removal with the second kick\'s time (item 26)', async () => {
+    const t = await liveEvent();
+    await kick(t, t.member);
+    const first = participant(t.sessionId, t.member)!.left_at as Date;
+    expect(first).toBeInstanceOf(Date);
+    await aMomentLater();
+    await kick(t, t.member);
+    const second = participant(t.sessionId, t.member)!.left_at as Date;
+    expect(second.getTime()).toBeGreaterThan(first.getTime());
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    expect(memoryOf(t.sessionId, t.member)).toBe('removed');
+  });
 });
 
 // ── 1. A host's fresh personal invite brings a kicked member back, and they stay back ────────────────

@@ -27,7 +27,7 @@ jest.mock('../../config/logger', () => ({
 jest.mock('../../db', () => ({ query: jest.fn(), transaction: jest.fn() }));
 
 import config from '../../config';
-import { sendInviteEmail } from '../../services/email/email.service';
+import { sendInviteEmail, __setSendPaceForTests } from '../../services/email/email.service';
 
 const anInvite = {
   inviterName: 'Stefan', type: 'session' as const, targetName: 'Founders Evening', inviteUrl: 'https://app.rsn.network/invite/ABC123',
@@ -36,6 +36,8 @@ const withProvider = (key: string) => { (config as { resendApiKey: string }).res
 
 beforeEach(() => {
   mockSend.mockReset();
+  // The provider's gate starts each test with no email just released, so the waits here are the backoff alone.
+  __setSendPaceForTests(null);
   withProvider('test-key');
 });
 

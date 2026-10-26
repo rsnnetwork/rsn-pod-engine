@@ -1361,6 +1361,50 @@ describe('Invite Service', () => {
       expect(stored(mockQuery.mock.calls[0][1] as unknown[])).toEqual(expected);
     });
 
+    // H2b item 24 (26 Oct 2026): a pending invite from before its person was removed from the event is the kick's
+    // leftover (the kick withdraws such invites best-effort); it used to refuse every fresh invite as a duplicate.
+    describe('a pending invite from before the person was removed from the event', () => {
+      const same = { type: InviteType.SESSION, sessionId: 'session-123', inviteeEmail: 'guest@example.com', maxUses: 1 };
+      /** The world's answer to the withdrawal: a pending event invite made before `removedAt` is withdrawn. */
+      const worldWithRemoval = (removedAt: Date) => {
+        const world: ReturnType<typeof inviteWorld> = inviteWorld({
+          answers: (text, params) => {
+            if (/^UPDATE invites i SET status = 'revoked' FROM users u, session_participants sp WHERE i\.id = \$1/.test(text)) {
+              const old = world.invites.find((i) => i.id === params[0] && i.status === 'pending' && i.sessionId && i.createdAt < removedAt);
+              if (!old) return { rows: [], rowCount: 0 };
+              old.status = 'revoked';
+              return { rows: [{ id: old.id }], rowCount: 1 };
+            }
+            return worldAnswersForEvents(text);
+          },
+        });
+        mockQuery.mockImplementation(world.query);
+        mockTransaction.mockImplementation(world.transaction);
+        return world;
+      };
+
+      it('is withdrawn, and the fresh invite is made', async () => {
+        const removedAt = new Date();
+        const world = worldWithRemoval(removedAt);
+        const old = await inviteService.createInvite('user-host', same);
+        world.invites[0].createdAt = new Date(removedAt.getTime() - 60_000); // made a minute before the kick
+        const fresh = await inviteService.createInvite('user-host', same);
+        expect(fresh.id).not.toBe(old.id);
+        expect(world.invites.map((i) => [i.id, i.status])).toEqual([[old.id, 'revoked'], [fresh.id, 'pending']]);
+        const withdrawal = mockQuery.mock.calls.map((c) => String(c[0]).replace(/\s+/g, ' ')).find((s) => /^UPDATE invites i SET status = 'revoked'/.test(s))!;
+        expect(withdrawal).toMatch(/sp\.status = 'removed' AND sp\.left_at > i\.created_at/);
+        expect(withdrawal).toMatch(/lower\(u\.email\) = i\.invitee_email/);
+      });
+
+      it('one made after the removal is still a duplicate, as before', async () => {
+        const removedAt = new Date(Date.now() - 3_600_000); // the kick was an hour ago; the invite came later
+        const world = worldWithRemoval(removedAt);
+        await inviteService.createInvite('user-host', same);
+        await expect(inviteService.createInvite('user-host', same)).rejects.toMatchObject({ code: 'DUPLICATE_INVITE', statusCode: 409 });
+        expect(world.invites.map((i) => i.status)).toEqual(['pending']);
+      });
+    });
+
     it('so two requests for one person and one event share a lock whether or not one carries a stray podId: one invite', async () => {
       const world = inviteWorld({ answers: worldAnswersForEvents });
       mockQuery.mockImplementation(world.query);

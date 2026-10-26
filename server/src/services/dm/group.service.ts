@@ -24,7 +24,7 @@ import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../mi
 import {
   ErrorCodes, GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS, UserRole, hasRoleAtLeast,
   type DmGroupDetail, type DmGroupMember, type DmGroupRole, type DmGroupSummary, type DmGroupType,
-  type GroupChatMessage, type GroupChatMessagePage,
+  type GroupCandidate, type GroupChatMessage, type GroupChatMessagePage,
 } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
@@ -65,6 +65,7 @@ export const GROUP_COPY = {
   notOrganiser: 'Only the people who ran this event can start a group chat from it.',
   notEnded: 'You can start a group chat after the event ends.',
   notAttendee: 'Only people who took part in this event can be added.',
+  notInEvent: 'Only the people who ran this event, or took part in it, can see who may be added.',
   blocked: "You can't add someone you can no longer message.",
   notMet: 'You can only add people you have met.',
   noEvent: 'New people can only be added to a group started from an event.',
@@ -233,6 +234,30 @@ async function blockedWith(db: Db, userId: string, others: string[]): Promise<Se
   return new Set(r.rows.map((row) => row.user_id));
 }
 
+/** "Ana", "Ana and Ben", "Ana, Ben and Cy". */
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? 'Someone';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * A refusal that names the people it is about (H2b item 23, 26 Oct 2026): a request that names someone who did not
+ * take part, or someone blocked either way, used to be refused whole without saying who. Same status and code as
+ * before; `details.people` carries them for the screen.
+ */
+async function refuseNaming(db: Db, userIds: string[], why: (names: string) => string): Promise<AppError> {
+  const r = await db.query<{ id: string; display_name: string | null }>(
+    `SELECT id, display_name FROM users WHERE id = ANY($1::uuid[])`,
+    [userIds],
+  );
+  const named = new Map(r.rows.map((row) => [row.id, (row.display_name ?? '').trim() || 'Someone']));
+  const people = userIds.map((id) => ({ id, name: named.get(id) ?? 'Someone' }));
+  return new AppError(403, ErrorCodes.AUTH_FORBIDDEN, why(listNames(people.map((p) => p.name))), { people });
+}
+
+const didNotTakePart = (names: string) => `${names} did not take part in this event.`;
+const cannotMessage = (names: string) => `You can't add ${names}: you can no longer message each other.`;
+
 /** Holds a group's size to 3–50 with its creator, before anything is written. */
 function checkStartingSize(othersCount: number): void {
   const total = othersCount + 1;
@@ -256,6 +281,15 @@ interface OrganiserRow {
  * Named after the event unless they name it. 3 to 50 people, the creator included.
  * `creator.role` is the account role from the verified sign-in token.
  */
+/** The event's state and title, and whether $2 ran it: its host, a co-host, or a director or host of its pod. */
+const ORGANISER_SQL = `SELECT s.status, s.title, s.host_user_id,
+              EXISTS (SELECT 1 FROM session_cohosts sc WHERE sc.session_id = s.id AND sc.user_id = $2) AS is_cohost,
+              EXISTS (SELECT 1 FROM pod_members pm
+                       WHERE pm.pod_id = s.pod_id AND pm.user_id = $2
+                         AND pm.role IN ('director', 'host') AND pm.status = 'active') AS is_pod_organiser
+         FROM sessions s
+        WHERE s.id = $1`;
+
 export async function createGroupFromEvent(
   creator: { userId: string; role: UserRole },
   sessionId: string,
@@ -266,16 +300,7 @@ export async function createGroupFromEvent(
     : [...new Set(input.memberIds)].filter((id) => id !== creator.userId);
 
   return transaction(async (client) => {
-    const event = await client.query<OrganiserRow>(
-      `SELECT s.status, s.title, s.host_user_id,
-              EXISTS (SELECT 1 FROM session_cohosts sc WHERE sc.session_id = s.id AND sc.user_id = $2) AS is_cohost,
-              EXISTS (SELECT 1 FROM pod_members pm
-                       WHERE pm.pod_id = s.pod_id AND pm.user_id = $2
-                         AND pm.role IN ('director', 'host') AND pm.status = 'active') AS is_pod_organiser
-         FROM sessions s
-        WHERE s.id = $1`,
-      [sessionId, creator.userId],
-    );
+    const event = await client.query<OrganiserRow>(ORGANISER_SQL, [sessionId, creator.userId]);
     const row = event.rows[0];
     if (!row) throw new NotFoundError('Session', sessionId, GROUP_COPY.eventNotFound);
     const isOrganiser = row.host_user_id === creator.userId || row.is_cohost || row.is_pod_organiser
@@ -290,8 +315,10 @@ export async function createGroupFromEvent(
       members = attendees.filter((id) => !blocked.has(id));
     } else {
       const tookPart = new Set(attendees);
-      if (chosen.some((id) => !tookPart.has(id))) throw new ForbiddenError(GROUP_COPY.notAttendee);
-      if ((await blockedWith(client, creator.userId, chosen)).size > 0) throw new ForbiddenError(GROUP_COPY.blocked);
+      const notThere = chosen.filter((id) => !tookPart.has(id));
+      if (notThere.length > 0) throw await refuseNaming(client, notThere, didNotTakePart);
+      const blocked = await blockedWith(client, creator.userId, chosen);
+      if (blocked.size > 0) throw await refuseNaming(client, [...blocked], cannotMessage);
       members = chosen;
     }
     checkStartingSize(members.length);
@@ -388,8 +415,10 @@ export async function addGroupMembers(
     if (fresh.length === 0) return { added: [], memberCount: already.size };
 
     const tookPart = new Set(await whoTookPart(client, group.session_id, fresh));
-    if (fresh.some((id) => !tookPart.has(id))) throw new ForbiddenError(GROUP_COPY.notAttendee);
-    if ((await blockedWith(client, adderId, fresh)).size > 0) throw new ForbiddenError(GROUP_COPY.blocked);
+    const notThere = fresh.filter((id) => !tookPart.has(id));
+    if (notThere.length > 0) throw await refuseNaming(client, notThere, didNotTakePart);
+    const blocked = await blockedWith(client, adderId, fresh);
+    if (blocked.size > 0) throw await refuseNaming(client, [...blocked], cannotMessage);
 
     const out = await insertMembers(client, groupId, fresh.map((userId) => ({ userId, role: 'member' as const })));
     logger.info({ groupId, adderId, added: out.added.length, memberCount: out.memberCount }, 'Group chat members added');
@@ -463,7 +492,7 @@ export async function leaveGroup(
       [groupId],
     );
     const newAdminId = promoted.rows[0]?.user_id ?? null;
-    logger.info({ groupId, userId, newAdminId }, 'Group chat admin left; the earliest member is admin now');
+    logger.info({ groupId, userId, newAdminId }, 'Group chat admin left; the earliest member with an open account is admin now');
     return { left: true, newAdminId };
   });
 }
@@ -796,4 +825,39 @@ export async function markGroupRead(groupId: string, userId: string): Promise<{ 
   const exists = await query<{ id: string }>(`SELECT id FROM dm_groups WHERE id = $1`, [groupId]);
   if (exists.rows.length === 0) throw groupNotFound(groupId);
   throw new ForbiddenError(GROUP_COPY.notMember);
+}
+
+// ─── Who may be added (H2b item 23, 26 Oct 2026) ─────────────────────────────
+
+/**
+ * The people a group started from this event may be given: those who took part, whose account is open, and whom
+ * the viewer can still message (neither has blocked the other), never the viewer. The add and create pickers read
+ * this list, so nobody they offer is refused. Open to the event's organisers and to anyone who took part.
+ */
+export async function eventGroupCandidates(viewer: { userId: string; role: UserRole }, sessionId: string): Promise<GroupCandidate[]> {
+  const db: Db = { query: (text: string, params?: unknown[]) => query(text, params) } as Db;
+  const event = await db.query<OrganiserRow>(ORGANISER_SQL, [sessionId, viewer.userId]);
+  const row = event.rows[0];
+  if (!row) throw new NotFoundError('Session', sessionId, GROUP_COPY.eventNotFound);
+  const isOrganiser = row.host_user_id === viewer.userId || row.is_cohost || row.is_pod_organiser
+    || hasRoleAtLeast(viewer.role, UserRole.ADMIN);
+  if (!isOrganiser && (await whoTookPart(db, sessionId, [viewer.userId])).length === 0) {
+    throw new ForbiddenError(GROUP_COPY.notInEvent);
+  }
+  const r = await db.query<{ id: string; display_name: string | null; avatar_url: string | null; job_title: string | null; company: string | null }>(
+    `SELECT u.id, u.display_name, u.avatar_url, u.job_title, u.company
+       FROM session_participants sp
+       JOIN users u ON u.id = sp.user_id
+      WHERE sp.session_id = $1
+        AND sp.joined_at IS NOT NULL
+        AND sp.status <> 'removed'
+        AND u.status = 'active'
+        AND u.id <> $2
+        AND ${notBlockedBetween('u.id', '$2')}
+      ORDER BY sp.joined_at ASC, u.id ASC`,
+    [sessionId, viewer.userId],
+  );
+  return r.rows.map((p) => ({
+    id: p.id, displayName: (p.display_name ?? '').trim() || 'Member', avatarUrl: p.avatar_url, jobTitle: p.job_title, company: p.company,
+  }));
 }

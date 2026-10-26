@@ -161,9 +161,10 @@ function answer(sql: string): unknown {
     return rows(world.lockedPost ? [world.lockedPost] : []);
   }
   if (is(/UPDATE pod_posts SET deleted_at = NOW\(\), deleted_by = \$2 WHERE id = \$1/)) return rows([]);
-  if (is(/UPDATE pod_posts p SET pinned_at = CASE WHEN \$3::boolean THEN NOW\(\) ELSE NULL END/)) {
-    return rows(world.pinnedRows > 0 ? [{ was_pinned: world.wasPinned }] : []);
+  if (is(/SELECT pinned_at FROM pod_posts WHERE id = \$1 AND pod_id = \$2 AND deleted_at IS NULL FOR UPDATE/)) {
+    return rows(world.pinnedRows > 0 ? [{ pinned_at: world.wasPinned ? new Date('2026-10-26T09:00:00.000Z') : null }] : []);
   }
+  if (is(/UPDATE pod_posts SET pinned_at = CASE WHEN \$2::boolean THEN NOW\(\) ELSE NULL END WHERE id = \$1/)) return rows([]);
   if (is(/INSERT INTO pod_post_reactions/)) return rows(world.reactionChanged ? [{ id: 'reaction-row' }] : []);
   if (is(/DELETE FROM pod_post_reactions/)) return rows(world.reactionCleared ? [{ id: 'reaction-row' }] : []);
   if (is(/FROM pod_post_reactions WHERE post_id = \$1 GROUP BY reaction/)) return rows(world.reactionRows);
@@ -407,7 +408,7 @@ describe('a pod that is not open takes no new activity, but moderation and your 
       await expect(wall.setPinned(POD, POST, viewer, false)).resolves.toBeUndefined();
       expect(calls(/UPDATE pod_posts SET deleted_at/)[0][1]).toEqual([POST, VIEWER]);
       expect(calls(/UPDATE pod_post_comments SET deleted_at/)).toHaveLength(1);
-      expect(calls(/UPDATE pod_posts p SET pinned_at/).map((c) => c[1])).toEqual([[POST, POD, true], [POST, POD, false]]);
+      expect(calls(/UPDATE pod_posts SET pinned_at/).map((c) => c[1])).toEqual([[POST, true], [POST, false]]);
       expect(mockFanout.mock.calls).toEqual([
         [POD, [E.podWallPost(POST)]], [POD, [E.podWallPost(POST)]], [POD, [E.podWallPost(POST)]], [POD, [E.podWallPost(POST)]],
       ]);
@@ -796,7 +797,7 @@ describe('setPinned', () => {
     world.member = { role, status: 'active' };
     await wall.setPinned(POD, POST, asMember, true);
     await wall.setPinned(POD, POST, asMember, false);
-    expect(calls(/UPDATE pod_posts p SET pinned_at/).map((c) => c[1])).toEqual([[POST, POD, true], [POST, POD, false]]);
+    expect(calls(/UPDATE pod_posts SET pinned_at/).map((c) => c[1])).toEqual([[POST, true], [POST, false]]);
   });
 
   it('refuses an ordinary member: 403, nothing changed', async () => {
@@ -811,12 +812,15 @@ describe('setPinned', () => {
     expect(mockFanout).not.toHaveBeenCalled();
   });
 
-  it('only touches a live post of this pod, and says whether it was pinned before', async () => {
+  it('reads whether a live post of this pod was pinned under its row lock, in the transaction that writes the pin (H2b item 11)', async () => {
+    // A pin and an unpin at the same moment used to read the state before either through a self-join, so one of
+    // them could tell the pod nothing; the lock makes the second read what the first wrote.
     world.member = { role: 'director', status: 'active' };
     await wall.setPinned(POD, POST, asMember, true);
-    expect(sqlOf(calls(/UPDATE pod_posts p SET pinned_at/)[0])).toMatch(
-      /FROM pod_posts prev WHERE p\.id = \$1 AND p\.pod_id = \$2 AND p\.deleted_at IS NULL AND prev\.id = p\.id RETURNING \(prev\.pinned_at IS NOT NULL\) AS was_pinned$/,
-    );
+    const inTx = mockTxSql.map((q) => q.replace(/\s+/g, ' ').trim());
+    expect(inTx[0]).toMatch(/^SELECT pinned_at FROM pod_posts WHERE id = \$1 AND pod_id = \$2 AND deleted_at IS NULL FOR UPDATE$/);
+    expect(inTx[1]).toMatch(/^UPDATE pod_posts SET pinned_at = CASE WHEN \$2::boolean THEN NOW\(\) ELSE NULL END WHERE id = \$1$/);
+    expect(calls(/SELECT pinned_at FROM pod_posts/)[0][1]).toEqual([POST, POD]);
   });
 
   it('tells the pod the feed and the post changed', async () => {

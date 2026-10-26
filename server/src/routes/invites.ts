@@ -13,7 +13,8 @@ import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { AppError } from '../middleware/errors';
 import { query } from '../db';
-import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse, eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
+import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse } from '@rsn/shared';
+import { eventDurationOf } from '../services/session/event-duration';
 
 const router = Router();
 
@@ -472,8 +473,8 @@ router.post(
 
       let calendarEvent: any = undefined;
       if (session.scheduled_at) {
-        // 26 Oct 2026 — the same length as the first invite: the shared eventDurationMinutes.
-        const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
+        // 26 Oct 2026 — the same length as the first invite (eventDurationOf).
+        const totalMinutes = eventDurationOf(session);
         const hostResult = await query<{ display_name: string; email: string }>(
           'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
         );
@@ -660,7 +661,8 @@ router.post(
       // just the accepter. The accepter's userPods / userSessions entities
       // ensure their own "My Pods" / "My Events" list flips too.
       if (result.registeredFor?.podId) {
-        fanoutPodEntities(result.registeredFor.podId, [E.userPods(req.user!.userId)]).catch(() => {});
+        // The pod's invite list shows this invite accepted too (H2b item 28).
+        fanoutPodEntities(result.registeredFor.podId, [E.userPods(req.user!.userId), E.podInvites(result.registeredFor.podId)]).catch(() => {});
       }
       if (result.registeredFor?.sessionId) {
         // R2-audit (20 May 2026 — live-test post-mortem). Also fanout
@@ -676,6 +678,9 @@ router.post(
           [
             E.userSessions(req.user!.userId),
             E.sessionParticipants(result.registeredFor.sessionId),
+            // The event's invite list shows this invite accepted (H2b item 28, 26 Oct 2026: ENTITIES.md said so;
+            // the route never sent it, so the host's Invitations card stayed on Invited until a reload).
+            E.sessionInvites(result.registeredFor.sessionId),
           ],
         ).catch(() => {});
       }

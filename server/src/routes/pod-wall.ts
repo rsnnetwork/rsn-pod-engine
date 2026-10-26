@@ -13,6 +13,9 @@
 // POST   /:podId/wall/comments/:commentId/like            { liked }  { likeCount, likedByMe }
 // DELETE /:podId/wall/comments/:commentId                 { ok: true }
 //
+// On a pod that is not active (archived, suspended, draft) nobody posts, comments, replies, reacts or likes; its
+// director, host and platform admins may still delete and pin, and an author may always delete their own.
+//
 // The service decides who may do what, and tells the pod's screens and rings the bells once a write has
 // been saved. The routes check the shape of what was sent. Reads are covered by the API limiter in front of
 // every route; every write also carries wallWriteLimiter.

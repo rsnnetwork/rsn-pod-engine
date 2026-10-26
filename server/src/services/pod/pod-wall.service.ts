@@ -571,16 +571,23 @@ export async function deletePost(podId: string, postId: string, viewer: WallView
 export async function setPinned(podId: string, postId: string, viewer: WallViewer, pinned: boolean): Promise<void> {
   const access = await resolveAccess(podId, viewer);
   if (!access.canModerate) throw new ForbiddenError(ONLY_MODERATORS_PIN);
-  const r = await query<{ was_pinned: boolean }>(
-    `UPDATE pod_posts p SET pinned_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END
-     FROM pod_posts prev
-     WHERE p.id = $1 AND p.pod_id = $2 AND p.deleted_at IS NULL AND prev.id = p.id
-     RETURNING (prev.pinned_at IS NOT NULL) AS was_pinned`,
-    [postId, podId, pinned],
-  );
-  const updated = r.rows[0];
-  if (!updated) throw postNotFound(postId);
-  if (pinned || updated.was_pinned) await fanoutPodWall(podId, [E.podWallPost(postId)]);
+  // Whether the post was pinned is read under its row lock, in the transaction that writes the pin (H2b item 11,
+  // 26 Oct 2026): read through a self-join in one UPDATE, a pin and an unpin at the same moment both saw the state
+  // before either, and one of them told the pod nothing.
+  const wasPinned = await transaction(async (client) => {
+    const r = await client.query<{ pinned_at: Date | null }>(
+      `SELECT pinned_at FROM pod_posts WHERE id = $1 AND pod_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+      [postId, podId],
+    );
+    const post = r.rows[0];
+    if (!post) throw postNotFound(postId);
+    await client.query(
+      `UPDATE pod_posts SET pinned_at = CASE WHEN $2::boolean THEN NOW() ELSE NULL END WHERE id = $1`,
+      [postId, pinned],
+    );
+    return post.pinned_at !== null;
+  });
+  if (pinned || wasPinned) await fanoutPodWall(podId, [E.podWallPost(postId)]);
 }
 
 // ── Reactions ────────────────────────────────────────────────────────────────

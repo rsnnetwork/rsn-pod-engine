@@ -137,10 +137,12 @@ describe('a group chat change tells each member their own two tags', () => {
     expect(emits()).toEqual(toEachMember([ADMIN, ANA, BEN_ID]));
   });
 
-  it('a read mark: only the reader\'s own tabs', async () => {
+  it('a read mark: only the reader\'s own tabs, and only their Messages list, never the group\'s tag (H2b item 22)', async () => {
+    // The group's tag sent back to the reader made them read the group again for a mark they had just made:
+    // about six reads for every message that arrived, and a busy group ran into the read limit.
     expect((await request(app).post(`/groups/${GROUP}/read`).set(as(ANA))).status).toBe(200);
     await settle();
-    expect(emits()).toEqual(toEachMember([ANA]));
+    expect(emits()).toEqual([[[ANA], [E.userDms(ANA)]]]);
   });
 
   it('someone told twice (a member who is also named as having left) hears it once', async () => {
@@ -167,5 +169,16 @@ describe('the old untyped tag is gone', () => {
 
   it('the group tag reads dm-group:<id>', () => {
     expect(E.dmGroup('g-1')).toBe('dm-group:g-1');
+  });
+});
+
+describe('the group read limit (H2b item 22)', () => {
+  const read = (rel: string) => nodeFs.readFileSync(nodePath.join(__dirname, '../../', rel), 'utf8');
+
+  it('is sized for a group of 50 in a busy minute: 3 reads a message x 60 messages, twice over for two tabs', () => {
+    const src = read('middleware/rateLimit.ts');
+    const limit = Number(/export const GROUP_READS_A_MINUTE = (\d+);/.exec(src)?.[1]);
+    expect(limit).toBeGreaterThanOrEqual(3 * 60 * 2);
+    expect(src).toMatch(/export const groupReadLimiter = rateLimit\(\{\s*windowMs: 60 \* 1000,\s*max: GROUP_READS_A_MINUTE,/);
   });
 });

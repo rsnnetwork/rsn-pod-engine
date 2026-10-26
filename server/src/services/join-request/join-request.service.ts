@@ -4,6 +4,8 @@
 import crypto from 'crypto';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
+import { E } from '../../realtime/entities';
+import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import config from '../../config';
 import { AppError, ConflictError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
@@ -97,15 +99,19 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
 
   logger.info({ email }, 'New join request submitted');
 
-  // Notify all admins about the new join request
+  // Notify all admins about the new join request, and tell each admin's bell through its tag (H2b item 6, 26 Oct 2026)
   try {
-    await query(
+    const rung = await query<{ user_id: string }>(
       `INSERT INTO notifications (user_id, type, title, body, link, created_at)
        SELECT id, 'join_request', 'New Join Request',
          $1 || ' wants to join REASON', '/admin/join-requests', NOW()
-       FROM users WHERE role IN ('admin', 'super_admin')`,
+       FROM users WHERE role IN ('admin', 'super_admin')
+       RETURNING user_id`,
       [input.fullName || email]
     );
+    const io = getRealtimeIo();
+    const adminIds = rung.rows.map((r) => r.user_id);
+    if (io && adminIds.length > 0) await emitEntities(io, adminIds, adminIds.map((id) => E.userNotifications(id)));
   } catch (notifErr) {
     logger.warn({ err: notifErr }, 'Failed to create admin notifications for join request — non-fatal');
   }
@@ -325,16 +331,21 @@ export async function reviewJoinRequest(
       }
     })().catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
 
-    // In-app notification for the approved user (only if they already have an account)
+    // In-app notification for the approved user (only if they already have an account), told to their bell through
+    // its tag (H2b item 6, 26 Oct 2026)
     try {
-      await query(
+      const rung = await query<{ user_id: string }>(
         `INSERT INTO notifications (user_id, type, title, body, link, created_at)
          SELECT id, 'approval', 'Welcome to REASON!',
            'Your request to join has been approved. Start exploring!', '/pods', NOW()
          FROM users WHERE LOWER(email) = LOWER($1)
-         LIMIT 1`,
+         LIMIT 1
+         RETURNING user_id`,
         [reviewed.email]
       );
+      const io = getRealtimeIo();
+      const approvedId = rung.rows[0]?.user_id;
+      if (io && approvedId) await emitEntities(io, [approvedId], [E.userNotifications(approvedId)]);
     } catch (notifErr) {
       logger.warn({ err: notifErr }, 'Failed to create approval notification — non-fatal');
     }

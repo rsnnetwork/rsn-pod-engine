@@ -36,6 +36,8 @@ jest.mock('../../../config/logger', () => ({
 const mockSendInviteEmail = jest.fn();
 jest.mock('../../../services/email/email.service', () => ({
   sendInviteEmail: (...args: unknown[]) => mockSendInviteEmail(...args),
+  // The bulk lane (H2b item 7) is the real service's gate; here a burst's send simply runs.
+  asBulkEmail: <T>(send: () => Promise<T>) => send(),
   __esModule: true,
 }));
 
