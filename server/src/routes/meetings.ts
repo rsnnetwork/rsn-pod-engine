@@ -4,7 +4,7 @@
 // GET  /meetings?scope=upcoming|past|cancelled&limit=1..50&before=<ISO>  { items, nextBefore }
 // GET  /meetings/summary                                                  { upcomingCount, liveNow, next }
 // GET  /meetings/:id                                                      Meeting, 404 for anyone but its two people
-// POST /meetings/:id/cancel                                               Meeting; already cancelled → 200, ended → 409
+// POST /meetings/:id/cancel                                               Meeting; already cancelled → 200, started or ended → 409
 //
 // `before` is a page's `nextBefore`. Booking and moving stay in the scheduler (routes/meeting.ts).
 // The reads are held by the API limiter in front of every /api route; cancel has an allowance of its

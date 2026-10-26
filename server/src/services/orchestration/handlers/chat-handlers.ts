@@ -475,8 +475,8 @@ export async function handleChatRequestHistory(
 /**
  * On joining an event: the chat so far, from the database. Sent only when there is something to show, since
  * production's client keeps what it has on an empty answer. While the event runs, the member who has just
- * joined its room reads it; once it is over, only the people canReadEventChat allows do (anyone can open an
- * ended event's live page, which joins its room).
+ * joined its room reads it; once it is over, only the people canReadEventChat allows do (someone registered
+ * who never came in can still open the ended event's live page, and its room).
  */
 export async function sendJoinChatHistory(socket: Socket, sessionId: string, userId: string): Promise<void> {
   try {

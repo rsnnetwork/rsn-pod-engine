@@ -515,10 +515,15 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
   return { subject, html, text };
 }
 
+/**
+ * Sends an invite email and says whether it went. The mail provider answers a refusal (a bad address, its rate limit
+ * after the retries, an outage, the network) rather than throwing, so `sent` is false for those, and with no provider
+ * configured nothing goes either (26 Oct 2026: a reminder keeps an invite's hour only for an email that went).
+ */
 export async function sendInviteEmail(
   to: string,
   data: InviteEmailData
-): Promise<void> {
+): Promise<{ sent: boolean }> {
   const { subject, html, text } = buildInviteEmail(data);
 
   if (config.resendApiKey) {
@@ -540,11 +545,11 @@ export async function sendInviteEmail(
       attachments.push({ filename: 'event.ics', content: icsContent });
     }
 
-    await sendEmail({ to, subject, html, text, attachments: attachments.length > 0 ? attachments : undefined });
-    return;
+    return sendEmail({ to, subject, html, text, attachments: attachments.length > 0 ? attachments : undefined });
   }
 
   logger.warn({ to, type: data.type }, 'No email provider — invite email skipped');
+  return { sent: false };
 }
 
 // ─── Session Registration Confirmation Email ─────────────────────────────────

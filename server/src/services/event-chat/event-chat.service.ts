@@ -101,7 +101,8 @@ export async function canReadEventChat(
   if (facts.participant_status === 'removed') return admin ? 'lobby' : null;
   if (facts.is_cohost || facts.joined) return 'all';
   // The room counts only for someone registered for the event (the pre-event lobby has no joined_at yet):
-  // joining an event's socket room checks nothing, so a stranger can be in it.
+  // the join admits only the people the event admits (H1), but someone refused only because the event is
+  // full still joins its room without a participant row.
   if (opts.inSessionRoom && facts.participant_status !== null && !isChatClosed(facts.status)) return 'all';
   return admin ? 'lobby' : null;
 }

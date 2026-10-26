@@ -677,7 +677,11 @@ export async function hardDeletePod(podId: string): Promise<void> {
 
 // ─── Pod Members for Invite ────────────────────────────────────────────────
 
-export async function getPodMembersForInvite(podId: string, sessionId: string): Promise<{
+// 26 Oct 2026 (fix round 2): the list is made for the person asking (`askerId`, the event's host, a co-host or an admin).
+// It leaves out accounts that are not active (suspended, banned or closed) and anyone blocked either way with the
+// asker, whoever made the block: they are not offered, and Invite All does not have them skipped one by one. A member
+// who declined an invite to the event is still listed: Invite All skips them, and the single Invite may ask again.
+export async function getPodMembersForInvite(podId: string, sessionId: string, askerId: string): Promise<{
   userId: string; displayName: string; email: string; avatarUrl: string | null;
 }[]> {
   const result = await query<{
@@ -688,6 +692,10 @@ export async function getPodMembersForInvite(podId: string, sessionId: string): 
     JOIN users u ON u.id = pm.user_id
     WHERE pm.pod_id = $1
       AND pm.status = 'active'
+      AND u.status = 'active'
+      AND NOT EXISTS (SELECT 1 FROM user_blocks b
+                       WHERE (b.blocker_id = $3 AND b.blocked_id = u.id)
+                          OR (b.blocker_id = u.id AND b.blocked_id = $3))
       AND pm.user_id NOT IN (
         SELECT sp.user_id FROM session_participants sp WHERE sp.session_id = $2
       )
@@ -702,7 +710,7 @@ export async function getPodMembersForInvite(podId: string, sessionId: string): 
         AND i.invitee_email IS NOT NULL
       )
     ORDER BY u.display_name
-  `, [podId, sessionId]);
+  `, [podId, sessionId, askerId]);
 
   return result.rows.map(r => ({
     userId: r.user_id,

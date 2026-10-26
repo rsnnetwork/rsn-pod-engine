@@ -209,6 +209,31 @@ export const groupCreateLimiter = rateLimit({
 });
 
 /**
+ * Inviting many people in one call (26 Oct 2026, POST /invites/batch). One batch can send 50 emails and 50 bells,
+ * so a member is held to 20 batches an hour: far more than anyone organising events needs, and well short of a
+ * runaway client. Keyed per member, because the route signs in first; the daily per-member invite allowance still
+ * counts every person invited.
+ */
+export const inviteBatchLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 20,                   // 20 batches per hour
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('invite-batch'),
+  handler: (_req, res) => {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'You have sent a lot of invitations this hour. Please try again later.',
+      },
+    };
+    res.status(429).json(response);
+  },
+});
+
+/**
  * Onboarding chatbot limiter — bounds LLM cost/abuse on the chat + confirm
  * endpoints. Keyed per authenticated user (these routes require auth). 30
  * turns/min is generous for a 4–7 message flow while capping a runaway client.

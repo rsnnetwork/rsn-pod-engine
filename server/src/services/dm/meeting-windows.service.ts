@@ -18,6 +18,8 @@ import { AppError, ConflictError, NotFoundError } from '../../middleware/errors'
 import { ErrorCodes } from '@rsn/shared';
 import * as dmService from './dm.service';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
+import { meetingTime } from '../meetings/meeting-time';
+import { CURRENT_MEETING_ID, lockConversation } from '../meetings/current-meeting';
 
 export const DAYPARTS = ['morning', 'afternoon', 'evening'] as const;
 export type Daypart = typeof DAYPARTS[number];
@@ -137,19 +139,12 @@ export function isValidWindowKey(key: string, now = new Date()): boolean {
 export function windowLabel(key: string, timeZone?: string | null): string {
   // A concrete slot is one instant; render it in the reader's timezone when we
   // know it (notifications), else UTC. The shared thread line embeds the
-  // instant itself and each client localises it.
-  const s = SLOT_RE.exec(key);
-  if (s) {
-    const date = new Date(key);
-    const fmt = (tz: string) => new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz, weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
-    }).formatToParts(date);
-    let parts: Intl.DateTimeFormatPart[];
-    try { parts = fmt(timeZone || 'UTC'); } catch { parts = fmt('UTC'); }
-    const p = (t: string) => parts.find(x => x.type === t)?.value ?? '';
-    // en-GB for real zone names (CEST, not GMT+2) but its "Sept" → our own month list.
-    const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(p('month')) - 1];
-    return `${p('weekday')} ${p('day')} ${month}, ${p('hour')}:${p('minute')} ${p('timeZoneName')}`;
+  // instant itself and each client localises it. 26 Oct 2026: written by the
+  // helper every meeting bell and email uses, which reads the day as a number:
+  // en-GB's numeric pattern pads it, and the bell said "Thu 05 Nov".
+  if (SLOT_RE.test(key)) {
+    const t = meetingTime(new Date(key), timeZone);
+    return `${t.short} ${t.zone}`;
   }
   const m = WINDOW_RE.exec(key);
   if (!m) return key;
@@ -177,7 +172,10 @@ interface ConversationRow {
   scheduler_seen_at_a: Date | null;
   scheduler_seen_at_b: Date | null;
   calls_unlocked_at: Date | null;
-  /** The meetings row the meeting_* columns describe (migration 110). */
+  /**
+   * The meetings row the meeting_* columns describe (migration 110), read through the guard
+   * (current-meeting.ts): null when the pointer names a row that no longer stands at that time.
+   */
   current_meeting_id: string | null;
 }
 
@@ -187,7 +185,7 @@ const CONVERSATION_COLUMNS = `id, user_a_id, user_b_id,
             meeting_start_at, meeting_duration_min, meeting_type,
             avail_updated_at_a, avail_updated_at_b,
             scheduler_seen_at_a, scheduler_seen_at_b,
-            calls_unlocked_at, current_meeting_id`;
+            calls_unlocked_at, ${CURRENT_MEETING_ID}`;
 
 /** Load the conversation and prove the caller belongs to it. */
 async function requireParticipant(conversationId: string, userId: string): Promise<ConversationRow> {
@@ -248,6 +246,16 @@ function buildScheduling(
 
 /** One proposal card per conversation per 10 minutes, however often they save. */
 const PROPOSAL_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * A list as it is said: "A", "A and B", "A, B and C" (26 Oct 2026). Each time in a
+ * proposal is shown as "Mon 2 Nov, 10:00" or the like, with a comma of its own, so
+ * times joined by commas alone read as one run of commas.
+ */
+function spokenList(items: string[]): string {
+  if (items.length < 2) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
 
 /** A meeting stops standing 30 minutes after it should have ended. */
 export function isMeetingOver(startAt: Date | null, durationMin: number | null, now = new Date()): boolean {
@@ -485,7 +493,7 @@ export async function setAvailability(
         // reader's own time, as it does for "Meeting confirmed". A label written
         // here was UTC: Stefan read "Sun 25 Oct, 12:00 UTC" in his inbox when he
         // had picked 13:00 (25 Oct 2026). A day part has no instant; it keeps its label.
-        const content = `You are both free: ${shown.map(k => (isSlotKey(k) ? k : windowLabel(k))).join(', ')}. Pick one to confirm.`;
+        const content = `You are both free: ${spokenList(shown.map(k => (isSlotKey(k) ? k : windowLabel(k))))}. Pick one to confirm.`;
         const sent = await dmService.insertDirectMessageOn(
           client, userId, partnerId, content, null,
           { kind: 'system', systemMeta: { type: 'meeting_proposal', slots: shown } },
@@ -591,6 +599,10 @@ function exactStart(windowKey: string, startAt: string | null | undefined): Date
  * lock: a partner who took it off a moment ago gets the confirmer a 409 with
  * where both people's times stand now, so the screen can redraw (26 Oct 2026;
  * before, a 400 checked outside any lock).
+ *
+ * The lock is its own statement and the row is read in the next one, so a
+ * Confirm that waited behind another booking reads the meeting that booking
+ * wrote and moves it, instead of writing a second one (lockConversation).
  */
 async function writeConfirmation(
   client: PoolClient,
@@ -598,12 +610,13 @@ async function writeConfirmation(
   actorId: string,
   meeting: { window: string; startAt: Date | null; durationMin: number | null; type: MeetingKind | null },
 ): Promise<ConfirmResult> {
-  const locked = await client.query<ConversationRow>(
+  await lockConversation(client, conversationId);
+  const read = await client.query<ConversationRow>(
     `SELECT ${CONVERSATION_COLUMNS}
-     FROM dm_conversations WHERE id = $1 FOR UPDATE`,
+     FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
-  const conv = locked.rows[0];
+  const conv = read.rows[0];
   if (!conv) throw new NotFoundError('Conversation', conversationId);
   const partnerId = conv.user_a_id === actorId ? conv.user_b_id : conv.user_a_id;
 
@@ -626,12 +639,11 @@ async function writeConfirmation(
     );
   }
 
-  // A DIFFERENT time while one still stands is a MOVE. Refusing it looked
-  // safer, but there is no way to cancel a meeting, so refusing left a pair
-  // who needed Thursday instead of Tuesday with no way out at all. The row
-  // lock already settles two simultaneous presses; what was missing was
-  // telling the person counting on the old time that it changed, which the
-  // card and the bell now do.
+  // A DIFFERENT time while one still stands is a MOVE of that meeting, not a
+  // second one: the same row and calendar entry at the new time (26 Oct 2026),
+  // so a pair who needed Thursday instead of Tuesday do not have to cancel and
+  // book again. The row lock settles two simultaneous presses, and the card and
+  // the bell tell the person counting on the old time that it changed.
   // Only an exact instant: the card renders this in the reader's own time,
   // and a day-part key ("2026-09-24:evening") would land on screen raw.
   const movedFrom = conv.meeting_confirmed_window && !over && conv.meeting_start_at

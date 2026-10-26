@@ -1,6 +1,7 @@
 import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwright/test';
 import { io, Socket } from 'socket.io-client';
-import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
+import { createTestUser, TestUser, pool, closePool } from '../helpers/auth';
+import { cleanup, cleanupByPrefix, idsOf, submitIntent, teardown } from '../helpers/live-ui';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import { profileLinkSelector } from '../helpers/profile-link';
 import { skipEventCheckIn } from '../helpers/event-check-in';
@@ -80,9 +81,15 @@ test.afterAll(async () => {
   for (const s of sockets) { try { s.disconnect(); } catch {} }
   try { await browser?.close(); } catch {}
   try { await endSession(host, sessionId); } catch {}
-  const result = await cleanupTestData();
-  console.log('Cleanup:', result);
-  await closePool();
+  // This spec's own three accounts and its pod, by id, and anything its own prefix made. Never cleanupTestData(): that
+  // deletes EVERY e2etest- account in the database, which against production is other people's running tests too.
+  // An account whose creation failed is undefined here and has nothing to delete; each step runs even if another fails.
+  await teardown(
+    () => cleanup(pool, { ids: [], podId }),
+    () => cleanup(pool, { ids: idsOf(host, alice, bob) }),
+    () => cleanupByPrefix(pool, 'e2etest-ws2p'),
+    () => closePool(),
+  );
 });
 
 test('clicking a participant name opens the profile in a NEW tab; the event tab survives', async () => {

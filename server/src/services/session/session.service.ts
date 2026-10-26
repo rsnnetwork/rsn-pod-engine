@@ -719,8 +719,12 @@ export async function updateParticipantStatus(
   }
 
   values.push(sessionId, userId);
+  // H1 fix round 1 — a removal is terminal: no write but the removal itself touches a removed row. The state
+  // machine refuses every move out of REMOVED, and this fallback used to make it anyway, so a kicked member's
+  // page leaving (session:leave) turned "removed" into "left" and let them back in. Re-admission by a fresh
+  // personal invite goes through registerParticipant's own UPDATE.
   await query(
-    `UPDATE session_participants SET ${setClauses.join(', ')} WHERE session_id = $${paramIdx} AND user_id = $${paramIdx + 1}`,
+    `UPDATE session_participants SET ${setClauses.join(', ')} WHERE session_id = $${paramIdx} AND user_id = $${paramIdx + 1} AND status <> 'removed'`,
     values
   );
 }

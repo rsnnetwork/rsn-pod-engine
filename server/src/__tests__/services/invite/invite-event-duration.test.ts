@@ -27,13 +27,27 @@ jest.mock('../../../config/logger', () => ({
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
-  transaction: jest.fn(),
+  // The duplicate check and the insert of a personal invite run in a transaction (26 Oct 2026): its client asks the same database.
+  transaction: async (callback: (client: { query: (...args: unknown[]) => unknown }) => unknown) =>
+    callback({ query: (...args: unknown[]) => mockQuery(...args) }),
   __esModule: true,
 }));
 
-const mockSendInviteEmail = jest.fn(async () => undefined);
+// The mail service takes every email: the reminders read its answer (fix round 4), and only an email that went is a reminder.
+const mockSendInviteEmail = jest.fn(async () => ({ sent: true }));
 jest.mock('../../../services/email/email.service', () => ({
   sendInviteEmail: (...args: unknown[]) => (mockSendInviteEmail as jest.Mock)(...args),
+  __esModule: true,
+}));
+
+// The reminder ledger keeps its hour in memory for the life of the process, and these tests remind the same invite over and
+// over, so it is stood in (an invite that has not been reminded, a member with their whole allowance). Its own rules are
+// read in invite-reminders.test.ts.
+jest.mock('../../../services/invite/invite-reminders.service', () => ({
+  reminderAllowance: async () => 300,
+  claimReminders: async (ids: string[]) => ({ claimed: ids, recent: new Map() }),
+  releaseReminders: async () => undefined,
+  countRemindersSent: async () => undefined,
   __esModule: true,
 }));
 
@@ -61,17 +75,28 @@ const SPEED_ROW = {
   config: { ...DEFAULT_SESSION_CONFIG, eventType: 'speed_networking' }, event_format: 'speed_networking',
 };
 
+const POD_ID = '6d2e8a14-7c3b-4e1f-9a5d-0b8c7e6f4a31';
+
+/** The invite a reminder is asked for: an event's unless a test says otherwise. */
+let remindedInvite: Record<string, unknown>;
+const eventInviteRow = () => ({
+  id: 'inv-1', invitee_email: 'guest@example.com', type: 'session', session_id: SESSION_ID, pod_id: null, circle_id: null,
+  inviter_id: HOST, status: 'pending', code: 'CODE1', expires_at: null,
+});
+
 /** A database that answers by what the SQL asks for. */
 function world(eventRow: Record<string, unknown>) {
   mockQuery.mockImplementation(async (sql: string) => {
     if (/SELECT status FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active' }] };
-    if (/FROM invites WHERE id = \$1/.test(sql)) {
-      return { rows: [{ id: 'inv-1', invitee_email: 'guest@example.com', session_id: SESSION_ID, pod_id: null, status: 'pending', code: 'CODE1' }] };
-    }
+    if (/FROM invites WHERE id = \$1/.test(sql)) return { rows: [remindedInvite] };
+    if (/SELECT role FROM pod_members WHERE pod_id = \$1/.test(sql)) return { rows: [{ role: 'director' }] };
+    if (/SELECT name FROM pods WHERE id = \$1/.test(sql)) return { rows: [{ name: 'Reason circle' }] };
     if (/FROM invites\s+WHERE session_id = \$1 AND status = 'pending'/.test(sql)) {
       return { rows: [{ id: 'inv-1', invitee_email: 'guest@example.com', code: 'CODE1' }] };
     }
     if (/SELECT host_user_id FROM sessions/.test(sql)) return { rows: [{ host_user_id: HOST }] };
+    // Who runs the event's invites (the host here): the reminders ask it since a co-host may remind too.
+    if (/AS is_host/.test(sql)) return { rows: [{ is_host: true, is_cohost: false }] };
     if (/FROM sessions WHERE id = \$1/.test(sql)) return { rows: [eventRow] };
     if (/INSERT INTO invites/.test(sql)) return { rows: [{ id: 'inv-1', code: 'CODE1' }] };
     if (/display_name/.test(sql)) return { rows: [{ displayName: 'Claus', display_name: 'Claus', email: 'c@example.com' }] };
@@ -97,6 +122,7 @@ const token = jwt.sign({ sub: HOST, email: 'h@example.com', role: 'member', sess
 
 beforeEach(() => {
   mockQuery.mockReset();
+  remindedInvite = eventInviteRow();
   mockSendInviteEmail.mockClear();
   mockGetSessionById.mockResolvedValue({ id: SESSION_ID, status: 'scheduled', hostUserId: HOST });
 });
@@ -136,5 +162,43 @@ describe('the reminder emails', () => {
     await request(app()).post('/invites/inv-1/remind').set('Authorization', `Bearer ${token}`);
     // 53 minutes, as the first invite; the reminder's old formula left out ratings and the closing lobby (42).
     expect(sentDuration()).toBe(53);
+  });
+});
+
+// Fix round 2: every reminder used to be written as an event invite ("has invited you to join an event"), with no name at
+// all for a pod, a circle or the platform. It is now built by the same functions as the first invite, so each kind is
+// reminded in its own words. These run the real route and the real service.
+describe('the reminder says what the invite was for', () => {
+  const remind = () => request(app()).post('/invites/inv-1/remind').set('Authorization', `Bearer ${token}`);
+  const sent = () => {
+    expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
+    return (mockSendInviteEmail as jest.Mock).mock.calls[0][1];
+  };
+
+  it('a pod invite is reminded as a pod invite, with the pod\'s name, that invite\'s link, and no calendar entry', async () => {
+    world(MEETING_ROW);
+    remindedInvite = { ...eventInviteRow(), type: 'pod', session_id: null, pod_id: POD_ID };
+    const res = await remind();
+    expect(res.status).toBe(200);
+    expect(sent()).toMatchObject({ type: 'pod', targetName: 'Reason circle', inviterName: 'Claus', inviteUrl: 'http://localhost:5173/invite/CODE1' });
+    expect(sent().calendarEvent).toBeUndefined();
+  });
+
+  it('the words the member reads for it are a pod\'s: "join a pod — Reason circle", not an event', async () => {
+    world(MEETING_ROW);
+    remindedInvite = { ...eventInviteRow(), type: 'pod', session_id: null, pod_id: POD_ID };
+    await remind();
+    const { buildInviteEmail } = jest.requireActual('../../../services/email/email.service') as typeof import('../../../services/email/email.service');
+    const { subject, text } = buildInviteEmail(sent());
+    expect(subject).toBe('Claus invited you to Reason circle');
+    expect(text).toContain('has invited you to join a pod — Reason circle on REASON.');
+    expect(text).not.toMatch(/an event/);
+  });
+
+  it('an event invite is still reminded as an event invite, with its title and its calendar entry', async () => {
+    world(MEETING_ROW);
+    await remind();
+    expect(sent()).toMatchObject({ type: 'session', targetName: 'Video meeting · Test' });
+    expect(sent().calendarEvent).toMatchObject({ durationMinutes: 90, sessionId: SESSION_ID });
   });
 });

@@ -275,9 +275,12 @@ export async function transitionParticipant(
       }
 
       values.push(sessionId, userId);
+      // H1 fix round 1 — never over a removed row (a removal is terminal). With nothing held in memory for the
+      // person (after a restart, or a kick on another instance) this transition starts from REGISTERED, so it
+      // would otherwise write a kicked member back to LEFT or the main room.
       await query(
         `UPDATE session_participants SET ${setClauses.join(', ')}
-         WHERE session_id = $${paramIdx} AND user_id = $${paramIdx + 1}`,
+         WHERE session_id = $${paramIdx} AND user_id = $${paramIdx + 1} AND status <> 'removed'`,
         values,
       );
     } catch (err) {
@@ -430,6 +433,11 @@ export async function reconcileSessionStates(sessionId: string, io?: SocketIOSer
     const memState = activeSession.participantStates.get(row.user_id);
     if (!memState) continue; // not tracked in memory yet — bootstrap will pick it up
     const projected = projectToDbStatus(memState.state as ParticipantState);
+    if (projected !== row.status && row.status === ParticipantStatus.REMOVED) {
+      // H1 fix round 1 — a removal is terminal: memory follows a removed row, never the other way round.
+      activeSession.participantStates.set(row.user_id, { state: ParticipantState.REMOVED, currentRoomId: null, updatedAt: new Date() });
+      continue;
+    }
     if (projected !== row.status) {
       diverged++;
       logger.warn(
@@ -437,8 +445,9 @@ export async function reconcileSessionStates(sessionId: string, io?: SocketIOSer
         'reconcileSessionStates: drift detected — converging DB to in-memory authoritative state',
       );
       try {
+        // H1 fix round 1 — memory never resurrects a removed row (a removal is terminal).
         await query(
-          `UPDATE session_participants SET status = $1 WHERE session_id = $2 AND user_id = $3`,
+          `UPDATE session_participants SET status = $1 WHERE session_id = $2 AND user_id = $3 AND status <> 'removed'`,
           [projected, sessionId, row.user_id],
         );
       } catch (err) {

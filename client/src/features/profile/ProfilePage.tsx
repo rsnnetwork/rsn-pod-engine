@@ -185,7 +185,8 @@ export default function ProfilePage() {
     if (!photo) return;
     params.delete('photo');
     const rest = params.toString();
-    window.history.replaceState({}, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`);
+    // The entry keeps its own state: the router counts the app's pages in it, and a profile's Back reads that count.
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`);
     if (photo === 'done') { void checkSession(); addToast('Photo added from your Google account.', 'success'); }
     else if (photo === 'none') addToast('That Google account has no photo.', 'info');
     else if (photo === 'cancelled') addToast('No problem, nothing changed.', 'info');

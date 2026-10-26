@@ -158,6 +158,17 @@ describe('POST /meetings/:id/cancel', () => {
     expect(res.body.error).toMatchObject({ code: 'MEETING_ALREADY_ENDED', message: 'This meeting has already ended.' });
   });
 
+  it('a meeting under way is a 409 MEETING_ALREADY_STARTED, said in words (26 Oct 2026)', async () => {
+    mockCancel.mockRejectedValueOnce(new ConflictError(
+      ErrorCodes.MEETING_ALREADY_STARTED, 'This meeting has already started, so it can no longer be cancelled.',
+    ));
+    const res = await request(app).post(`/meetings/${ID}/cancel`).set(me);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatchObject({
+      code: 'MEETING_ALREADY_STARTED', message: 'This meeting has already started, so it can no longer be cancelled.',
+    });
+  });
+
   it('someone else\'s meeting is a 404, and a malformed id a 400', async () => {
     mockCancel.mockRejectedValueOnce(new NotFoundError('Meeting', undefined, "We couldn't find that meeting."));
     expect((await request(app).post(`/meetings/${ID}/cancel`).set(me)).status).toBe(404);

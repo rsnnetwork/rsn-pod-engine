@@ -1,5 +1,6 @@
 // ─── Connected-Users Invite Search ───────────────────────────────────────────
 import { query } from '../../db';
+import { escapeLike } from '../user/user-search.service';
 
 export interface ConnectedUserResult {
   id: string;
@@ -21,6 +22,10 @@ export interface ConnectedUserResult {
  * Used by pod/session invite modals so inviters can only invite people they know,
  * not random searchable strangers. Non-admin callers get filtered results; admin
  * moderation flows continue to use the unfiltered /users/search endpoint.
+ *
+ * 26 Oct 2026: someone blocked in either direction is left out (the old search listed
+ * them, so a member could invite a person they had blocked), and a % or _ the member
+ * typed is matched as that character instead of widening the search.
  */
 export async function searchConnectedUsers(
   requesterId: string,
@@ -38,6 +43,9 @@ export async function searchConnectedUsers(
          WHERE (eh.user_a_id = $1 AND eh.user_b_id = u.id)
             OR (eh.user_b_id = $1 AND eh.user_a_id = u.id)
        )
+       AND NOT EXISTS (SELECT 1 FROM user_blocks b
+                        WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                           OR (b.blocker_id = u.id AND b.blocked_id = $1))
        AND (
          LOWER(COALESCE(u.display_name, '')) LIKE $2
          OR LOWER(u.email) LIKE $2
@@ -46,7 +54,7 @@ export async function searchConnectedUsers(
        )
      ORDER BY u.display_name
      LIMIT $3`,
-    [requesterId, `%${q}%`, limit],
+    [requesterId, `%${escapeLike(q)}%`, limit],
   );
   return result.rows;
 }

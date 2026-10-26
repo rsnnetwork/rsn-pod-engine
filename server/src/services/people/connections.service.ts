@@ -12,7 +12,7 @@
 import { query } from '../../db';
 import type { ConnectionList, PersonConnection } from '@rsn/shared';
 
-// How many people one moment can hold when more than a page share it (see listConnections). Only a bulk
+// How many people one moment can hold when more than a page share it (see pageBySince). Only a bulk
 // write could put that many on one millisecond; the number keeps the question bounded even then.
 const ONE_MOMENT_MAX = 500;
 
@@ -26,10 +26,12 @@ interface Row {
   since: Date;
 }
 
-// $1 the member, $2 the cursor (people strictly before it) or null, $3 how many, $4 one moment only, or null.
+// The one definition of "a connection" (26 Oct 2026): a meeting request accepted either way, a conversation, a 1:1
+// meeting both joined, an event meeting. Written once, as two CTEs that ask about the member in $1 and give one row
+// per person (`person_id`, `met`, `since`). The People page reads it here and the invite picker
+// (invite-candidates.service.ts) builds on the same text, so the two can never list different people.
 // `since` is cut to the millisecond, so the cursor a page hands out (an ISO time) names it exactly.
-const CONNECTIONS_SQL = `
-  WITH signals AS (
+export const CONNECTION_SIGNALS_SQL = `signals AS (
     SELECT CASE WHEN p.sender_id = $1 THEN p.recipient_id ELSE p.sender_id END AS person_id,
            false AS met, COALESCE(p.responded_at, p.created_at) AS at
       FROM user_pokes p
@@ -53,7 +55,11 @@ const CONNECTIONS_SQL = `
     SELECT person_id, bool_or(met) AS met, date_trunc('milliseconds', MAX(at)) AS since
       FROM signals
      GROUP BY person_id
-  )
+  )`;
+
+// $1 the member, $2 the cursor (people strictly before it) or null, $3 how many, $4 one moment only, or null.
+const CONNECTIONS_SQL = `
+  WITH ${CONNECTION_SIGNALS_SQL}
   SELECT u.id AS user_id, u.display_name, u.avatar_url, u.job_title, u.company, pe.met, pe.since
     FROM people pe
     JOIN users u ON u.id = pe.person_id
@@ -81,23 +87,33 @@ const read = async (viewerId: string, before: string | null, count: number, mome
   (await query<Row>(CONNECTIONS_SQL, [viewerId, before, count, moment])).rows;
 
 /**
- * One page of the member's connections. The next page is asked for with `before` set to `nextBefore`, and holds
- * the people strictly before it. A page therefore never ends between two people with the same time, or the next
- * one would skip the second: the people who share the time of the first person past the page wait for the next
- * page together. Only when more people than a page share one moment is the page all of them, and longer.
+ * One page of people listed newest first by `since`, from a reader that answers "this many people, optionally only
+ * those at this one moment". The next page is asked for with `before` set to `nextBefore`, and holds the people
+ * strictly before it. A page therefore never ends between two people with the same time, or the next one would
+ * skip the second: the people who share the time of the first person past the page wait for the next page
+ * together. Only when more people than a page share one moment is the page all of them, and longer. The People
+ * page and the invite picker (a member's connections, or an event's pod) page the same way, through this.
  */
+export async function pageBySince<T extends { since: Date }>(
+  limit: number,
+  readPeople: (count: number, moment: string | null) => Promise<T[]>,
+): Promise<{ rows: T[]; nextBefore: string | null }> {
+  const rows = await readPeople(limit + 1, null);
+  if (rows.length <= limit) return { rows, nextBefore: null };
+
+  const waiting = rows[limit].since.getTime();
+  const page = rows.slice(0, limit).filter((r) => r.since.getTime() !== waiting);
+  if (page.length > 0) return { rows: page, nextBefore: page[page.length - 1].since.toISOString() };
+
+  const moment = rows[limit].since.toISOString();
+  return { rows: await readPeople(ONE_MOMENT_MAX, moment), nextBefore: moment };
+}
+
+/** One page of the member's connections, newest first (see pageBySince for how pages are cut). */
 export async function listConnections(
   viewerId: string,
   { limit, before }: { limit: number; before: string | null },
 ): Promise<ConnectionList> {
-  const rows = await read(viewerId, before, limit + 1, null);
-  if (rows.length <= limit) return { items: rows.map(toItem), nextBefore: null };
-
-  const waiting = rows[limit].since.getTime();
-  const page = rows.slice(0, limit).filter((r) => r.since.getTime() !== waiting);
-  if (page.length > 0) return { items: page.map(toItem), nextBefore: page[page.length - 1].since.toISOString() };
-
-  const moment = rows[limit].since.toISOString();
-  const everyone = await read(viewerId, before, ONE_MOMENT_MAX, moment);
-  return { items: everyone.map(toItem), nextBefore: moment };
+  const { rows, nextBefore } = await pageBySince(limit, (count, moment) => read(viewerId, before, count, moment));
+  return { items: rows.map(toItem), nextBefore };
 }

@@ -5,7 +5,7 @@ import { customAlphabet } from 'nanoid';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
-  Invite, InviteStatus, InviteType, CreateInviteInput, eventDurationMinutes, resolveEventFormat,
+  Invite, InviteStatus, InviteType, CreateInviteInput, Session, eventDurationMinutes, resolveEventFormat,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
@@ -15,7 +15,7 @@ import * as emailService from '../email/email.service';
 import config from '../../config';
 
 // Generate URL-safe invite codes (12 chars, alphanumeric — higher entropy for brute-force resistance)
-const generateCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789', 12);
+export const generateCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789', 12);
 
 const INVITE_COLUMNS = `
   id, code, type, inviter_id AS "inviterId", invitee_email AS "inviteeEmail",
@@ -26,6 +26,423 @@ const INVITE_COLUMNS = `
 `;
 
 // ─── Create Invite ──────────────────────────────────────────────────────────
+
+/** Admins and super admins may invite to anything. */
+export function isAdminRole(userRole?: string): boolean {
+  return userRole === 'admin' || userRole === 'super_admin';
+}
+
+/**
+ * How many invites a member may still send today: their daily entitlement (100 unless set) against the pending
+ * invites they sent in the last day. Admins are exempt, so callers skip this for them.
+ */
+export async function dailyInviteAllowance(userId: string): Promise<{ maxPerDay: number; sentToday: number }> {
+  const entResult = await query<{ max_invites_per_day: number }>(
+    `SELECT max_invites_per_day FROM user_entitlements WHERE user_id = $1`,
+    [userId]
+  );
+  const maxPerDay = entResult.rows[0]?.max_invites_per_day ?? 100; // default 100/day
+  const countResult = await query<{ count: string }>(
+    `SELECT COUNT(*) as count FROM invites WHERE inviter_id = $1 AND created_at > NOW() - INTERVAL '1 day' AND status = 'pending'`,
+    [userId]
+  );
+  return { maxPerDay, sentToday: parseInt(countResult.rows[0].count, 10) };
+}
+
+export function inviteLimitError(maxPerDay: number): AppError {
+  return new AppError(429, 'INVITE_LIMIT_REACHED', `You can send up to ${maxPerDay} invites per day. Try again tomorrow.`);
+}
+
+/**
+ * Who may send invites to a pod: an admin, the pod's director or host, or an active member when the pod allows
+ * member invites. Returns the pod. createInvite, the candidates list and the batch all ask this, so the three can
+ * never disagree about who may invite (26 Oct 2026).
+ */
+export async function assertMayInviteToPod(podId: string, userId: string, isAdmin: boolean) {
+  const pod = await podService.getPodById(podId);
+
+  // Cannot invite to archived pods
+  if (pod.status === 'archived') {
+    throw new AppError(400, 'POD_ARCHIVED', 'Cannot invite to an archived pod');
+  }
+
+  // Directors and hosts can always invite; regular members can only invite if pod allows it
+  if (!isAdmin) {
+    const memberRole = await podService.getMemberRole(podId, userId);
+    const isDirectorOrHost = memberRole === 'director' || memberRole === 'host';
+    if (!isDirectorOrHost) {
+      // Check if pod allows member invites AND sender is an active member
+      if (!pod.allowMemberInvites) {
+        throw new AppError(403, 'AUTH_FORBIDDEN', 'Only pod directors and hosts can send pod invites');
+      }
+      if (!memberRole || memberRole !== 'member') {
+        throw new AppError(403, 'AUTH_FORBIDDEN', 'You must be a pod member to send invites');
+      }
+    }
+  }
+  return pod;
+}
+
+/**
+ * Who may send invites to an event: an admin, its host, or a co-host. Returns the event. 26 Oct 2026: a co-host
+ * was already shown whom to invite (GET /pods/:id/members/for-invite) and then refused when they sent it; only
+ * the host could. The co-host is read from session_cohosts, the one place a co-host is recorded.
+ */
+export async function assertMayInviteToSession(sessionId: string, userId: string, isAdmin: boolean): Promise<Session> {
+  const session = await sessionService.getSessionById(sessionId);
+
+  // Cannot invite to completed or cancelled events
+  if (session.status === 'completed' || session.status === 'cancelled') {
+    throw new AppError(400, 'VALIDATION_ERROR', `Cannot invite to a ${session.status} event`);
+  }
+
+  if (!isAdmin && session.hostUserId !== userId) {
+    const cohost = await query(
+      `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
+      [sessionId, userId]
+    );
+    if (cohost.rows.length === 0) {
+      throw new AppError(403, 'AUTH_FORBIDDEN', 'Only the event host or a co-host can send event invites');
+    }
+  }
+  return session;
+}
+
+/**
+ * How a person runs an event's invites (reads the list, reminds, withdraws anybody's): as an admin, as the event's
+ * host, or as a co-host (any session_cohosts row, either role). null when they do not. The same people who may send
+ * the event's invites (assertMayInviteToSession), so nobody can send an invite they cannot then manage.
+ */
+export async function eventInviteRole(
+  sessionId: string,
+  userId: string,
+  isAdmin: boolean,
+): Promise<'admin' | 'host' | 'cohost' | null> {
+  if (isAdmin) return 'admin';
+  const result = await query<{ is_host: boolean | null; is_cohost: boolean }>(
+    `SELECT (s.host_user_id = $2) AS is_host,
+            EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost
+       FROM sessions s WHERE s.id = $1`,
+    [sessionId, userId]
+  );
+  const relation = result.rows[0];
+  if (!relation) return null;
+  if (relation.is_host === true) return 'host';
+  return relation.is_cohost ? 'cohost' : null;
+}
+
+/** A pod's invites are run by its director, its host and admins: the people who can list and remind them. */
+export async function mayRunPodInvites(podId: string, userId: string, isAdmin: boolean): Promise<boolean> {
+  if (isAdmin) return true;
+  const role = await podService.getMemberRole(podId, userId);
+  return role === 'director' || role === 'host';
+}
+
+/**
+ * Whether this person runs the one target an invite is for: an event invite's event (its host or a co-host), a pod
+ * invite's pod (its director or host). A platform or circle invite has no one who runs it. The invite's TYPE decides, not
+ * whichever id happens to be set (fix round 3): an old event invite that carries a stray pod id is the event's alone,
+ * and an old pod invite that carries a stray event id is the pod's, so that event's host has no hold on it. Admins are
+ * settled by the callers, which skip the lookup for them.
+ */
+async function runsTheTargetOf(invite: { type: string; session_id: string | null; pod_id: string | null }, userId: string): Promise<boolean> {
+  if (invite.type === InviteType.SESSION && invite.session_id !== null) return (await eventInviteRole(invite.session_id, userId, false)) !== null;
+  if (invite.type === InviteType.POD && invite.pod_id !== null) return mayRunPodInvites(invite.pod_id, userId, false);
+  return false;
+}
+
+/**
+ * Which of these addresses must not be invited or emailed by this sender: the address of an account that is closed,
+ * suspended or banned, or of a member who blocked the sender or whom the sender blocked. Addresses of people who are
+ * not members are fine. Nothing here says which reason applied, so a block is never revealed (fix round 1).
+ */
+export async function unreachableAddresses(senderId: string, emails: string[]): Promise<Set<string>> {
+  if (emails.length === 0) return new Set();
+  const result = await query<{ email: string }>(
+    `SELECT u.email FROM users u
+      WHERE u.email = ANY($2::text[])
+        AND (u.status <> 'active'
+             OR EXISTS (SELECT 1 FROM user_blocks b
+                         WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                            OR (b.blocker_id = u.id AND b.blocked_id = $1)))`,
+    [senderId, emails.map((email) => email.toLowerCase())]
+  );
+  return new Set(result.rows.map((row) => row.email.toLowerCase()));
+}
+
+/** The one sentence for every person who cannot be invited, whatever the reason. */
+export const CANNOT_BE_INVITED = "This person can't be invited.";
+
+/** One new pending invite, as it is stored. */
+export interface NewInvite {
+  code: string;
+  type: InviteType;
+  inviterId: string;
+  inviteeEmail: string | null;
+  podId: string | null;
+  sessionId: string | null;
+  circleId: string | null;
+  maxUses: number;
+  expiresAt: Date | null;
+}
+
+export type InsertedInvite =
+  | { duplicate: false; invite: Invite }
+  | { duplicate: true; existingId: string };
+
+// A pending invite that has expired no longer counts: it can never be accepted, and it must not stop a fresh
+// invite to the same person (26 Oct 2026).
+const PENDING_DUPLICATE_SQL = `
+  SELECT id FROM invites
+  WHERE invitee_email = $1 AND type = $2 AND status = 'pending'
+    AND (expires_at IS NULL OR expires_at > NOW())
+    AND ($3::uuid IS NULL OR pod_id = $3)
+    AND ($4::uuid IS NULL OR session_id = $4)
+    AND ($5::uuid IS NULL OR circle_id = $5)`;
+
+const INSERT_INVITE_SQL = `
+  INSERT INTO invites (code, type, inviter_id, invitee_email, pod_id, session_id, max_uses, expires_at, circle_id)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  RETURNING ${INVITE_COLUMNS}`;
+
+/**
+ * Inserts an invite unless the same person already has a live pending one for the same target.
+ *
+ * The check and the insert used to be two separate statements, so a double click or two tabs could both pass the
+ * check and make two invites (audit 03, defect 11). They now run in one short transaction behind
+ * pg_advisory_xact_lock on type, target and address: a second request for that person waits for the first to
+ * commit, then finds its invite. No unique index is added (it could fail on duplicates already in the table), and
+ * the lock is released at commit, so it works through Neon's pooler. An open link names nobody, so it has no
+ * duplicate to guard against and is inserted at once.
+ */
+export async function insertPendingInvite(row: NewInvite): Promise<InsertedInvite> {
+  // Only the target that belongs to the invite's type counts: for the lock, for the duplicate check (fix round 1) and
+  // for the row itself (fix round 2). An event invite posted with a stray podId is the event's invite, shares the
+  // event's lock, and must not hang on a pod: the pod's director would run it, because withdrawing and reminding
+  // follow the ids a row carries.
+  const podId = row.type === InviteType.POD ? row.podId : null;
+  const sessionId = row.type === InviteType.SESSION ? row.sessionId : null;
+  const circleId = row.type === InviteType.CIRCLE ? row.circleId : null;
+  const values = [
+    row.code, row.type, row.inviterId, row.inviteeEmail, podId, sessionId, row.maxUses, row.expiresAt, circleId,
+  ];
+  if (!row.inviteeEmail) {
+    const inserted = await query<Invite>(INSERT_INVITE_SQL, values);
+    return { duplicate: false, invite: inserted.rows[0] };
+  }
+  const email = row.inviteeEmail;
+  const target = podId ?? sessionId ?? circleId ?? '';
+  return transaction<InsertedInvite>(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${row.type}:${target}:${email}`]);
+    const existing = await client.query<{ id: string }>(
+      PENDING_DUPLICATE_SQL,
+      [email, row.type, podId, sessionId, circleId]
+    );
+    if (existing.rows.length > 0) return { duplicate: true, existingId: existing.rows[0].id };
+    const inserted = await client.query<Invite>(INSERT_INVITE_SQL, values);
+    return { duplicate: false, invite: inserted.rows[0] };
+  });
+}
+
+type InviteCalendarEvent = NonNullable<Parameters<typeof emailService.sendInviteEmail>[1]['calendarEvent']>;
+
+/** What one invite's email and bell say about the pod, circle or event: looked up once, so a batch asks once. */
+export interface InviteContext {
+  type: InviteType | undefined;
+  podId: string | null;
+  sessionId: string | null;
+  inviterName: string;
+  targetName?: string;
+  calendarEvent?: InviteCalendarEvent;
+  /** When the event starts (ISO), for the bell; null for a pod, a circle or an unscheduled event. */
+  scheduledAt: string | null;
+}
+
+export async function buildInviteContext(
+  inviterId: string,
+  type: InviteType | undefined,
+  target: { podId?: string | null; sessionId?: string | null; circleId?: string | null },
+): Promise<InviteContext> {
+  const inviterResult = await query<{ displayName: string }>(
+    `SELECT display_name AS "displayName" FROM users WHERE id = $1`,
+    [inviterId]
+  );
+  const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
+
+  let targetName: string | undefined;
+  if (type === InviteType.POD && target.podId) {
+    const podResult = await query<{ name: string }>('SELECT name FROM pods WHERE id = $1', [target.podId]);
+    targetName = podResult.rows[0]?.name;
+  }
+  if (type === InviteType.CIRCLE && target.circleId) {
+    // Archived circles are not invitable, so their name does not belong in an
+    // invite email either (22 Sep 2026).
+    const circleResult = await query<{ name: string }>(
+      'SELECT name FROM circles WHERE id = $1 AND archived_at IS NULL', [target.circleId]);
+    targetName = circleResult.rows[0]?.name;
+  }
+  let calendarEvent: InviteCalendarEvent | undefined = undefined;
+  let scheduledAt: string | null = null;
+  if (type === InviteType.SESSION && target.sessionId) {
+    const sessionResult = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: Record<string, unknown>; event_format?: string | null }>(
+      'SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1', [target.sessionId]
+    );
+    const session = sessionResult.rows[0];
+    targetName = session?.title;
+    scheduledAt = session?.scheduled_at ?? null;
+
+    // Build calendar event data if session has a scheduled time
+    if (session?.scheduled_at) {
+      // 26 Oct 2026 — the event's own length: a meeting's, or the rounds estimate (eventDurationMinutes).
+      const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
+
+      // Get host email for organizer
+      const hostResult = await query<{ display_name: string; email: string }>(
+        'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
+      );
+      const host = hostResult.rows[0];
+
+      calendarEvent = {
+        title: session.title,
+        description: `REASON event — ${session.title}`,
+        startTime: new Date(session.scheduled_at),
+        durationMinutes: totalMinutes,
+        organizerName: host?.display_name || 'REASON',
+        organizerEmail: host?.email,
+        sessionId: target.sessionId,
+      };
+    }
+  }
+  return {
+    type, podId: target.podId ?? null, sessionId: target.sessionId ?? null, inviterName, targetName, calendarEvent, scheduledAt,
+  };
+}
+
+/** The two ways an invite is delivered, and who it is for: `inviteeUserId` is passed when the caller already knows who the address belongs to. */
+interface InviteDelivery {
+  code: string;
+  inviteeEmail: string;
+  inviteeUserId?: string;
+}
+
+/**
+ * The invitation email, and whether it went: the mail provider answers a refusal rather than throwing, so `sent` is
+ * false for a refused email (and with no provider), which a reminder needs to know (fix round 4); the first invite and
+ * a batch carry on either way. A failure that does throw comes out to the caller, who decides what it costs: the invite
+ * exists whatever happens to its email. It touches nothing but the mail provider (no database, no socket), so a batch
+ * can send its emails after answering, slowly, without a request still open.
+ */
+export async function emailInvite(ctx: InviteContext, invite: InviteDelivery): Promise<{ sent: boolean }> {
+  return emailService.sendInviteEmail(invite.inviteeEmail, {
+    inviterName: ctx.inviterName,
+    type: (ctx.type || 'platform') as 'pod' | 'session' | 'platform' | 'circle',
+    targetName: ctx.targetName,
+    inviteUrl: `${config.clientUrl}/invite/${invite.code}`,
+    calendarEvent: ctx.calendarEvent,
+  });
+}
+
+/**
+ * Whether an invite waiting for its email should still be emailed: it is still pending and has time left, and its
+ * address is one the sender may still email (no block either way since, the account not closed). A batch sends its
+ * emails up to half a minute after it made the invites, so each is read again just before it goes (fix round 2). That
+ * is two statements: the invite, then unreachableAddresses, the block and closed-account question that createInvite and
+ * the reminders ask. A question that could not be answered comes out as the error, for the caller to treat as "not safe
+ * to send".
+ */
+export async function isStillEmailable(inviteId: string, senderId: string): Promise<boolean> {
+  const found = await query<{ invitee_email: string | null }>(
+    `SELECT invitee_email FROM invites WHERE id = $1 AND status = 'pending' AND (expires_at IS NULL OR expires_at > NOW())`,
+    [inviteId]
+  );
+  const address = found.rows[0]?.invitee_email;
+  if (!address) return false;
+  return (await unreachableAddresses(senderId, [address])).size === 0;
+}
+
+/**
+ * The email and then, when the invitee is already a member, the bell. Never throws for an email problem: the invite
+ * exists whatever happens here, and the failure is logged.
+ */
+export async function deliverInvite(ctx: InviteContext, invite: InviteDelivery): Promise<void> {
+  // Await email send — if it fails, the invite still exists in DB but we log the failure.
+  // Previously fire-and-forget caused silent delivery failures.
+  try {
+    await emailInvite(ctx, invite);
+  } catch (err) {
+    // Don't fail the invite creation — email is best-effort but now properly logged
+    logger.warn({ err, inviteeEmail: invite.inviteeEmail }, 'Failed to send invite email (invite still created)');
+  }
+
+  await notifyInvitee(ctx, invite);
+}
+
+/**
+ * The invitee's bell, when they are already a member: a notification row, the live push, and their lists told.
+ * `inviteeUserId` saves the lookup by address when the caller knows who it is (a batch picks members by id).
+ */
+export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery): Promise<void> {
+  const { inviterName, targetName, type } = ctx;
+
+  // Create in-app notification for existing users
+  let inviteeId = invite.inviteeUserId;
+  if (!inviteeId) {
+    const inviteeUser = await query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [invite.inviteeEmail.toLowerCase()]);
+    inviteeId = inviteeUser.rows[0]?.id;
+  }
+  if (!inviteeId) return;
+
+  const notifType = type === InviteType.POD ? 'pod_invite'
+    : type === InviteType.CIRCLE ? 'circle_invite' : 'event_invite';
+  const notifTitle = type === InviteType.POD
+    ? `${inviterName} invited you to ${targetName || 'a pod'}`
+    : type === InviteType.CIRCLE
+      ? `${inviterName} invited you to ${targetName || 'a circle'}`
+      : `${inviterName} invited you to ${targetName || 'an event'}`;
+  const notifLink = `/invite/${invite.code}`;
+  // Build a richer body with event details when available
+  let notifBody = `Invite from ${inviterName}`;
+  if (type === InviteType.SESSION && ctx.sessionId) {
+    if (ctx.scheduledAt) {
+      const d = new Date(ctx.scheduledAt);
+      notifBody = `${targetName || 'Event'} · ${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+    }
+  } else if (type === InviteType.POD) {
+    notifBody = `Join ${targetName || 'this pod'} — invited by ${inviterName}`;
+  }
+  const notifResult = await query<{ id: string; created_at: string }>(
+    `INSERT INTO notifications (user_id, type, title, body, link) VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, created_at`,
+    [inviteeId, notifType, notifTitle, notifBody, notifLink]
+  ).catch(err => { logger.warn({ err }, 'Failed to create notification (non-fatal)'); return null; });
+
+  // Push real-time notification via socket so bell icon updates instantly
+  if (notifResult && notifResult.rows.length > 0) {
+    try {
+      const { io } = await import('../../index');
+      io.to(`user:${inviteeId}`).emit('notification:new', {
+        id: notifResult.rows[0].id,
+        type: notifType,
+        title: notifTitle,
+        body: notifBody,
+        link: notifLink,
+        isRead: false,
+        createdAt: notifResult.rows[0].created_at,
+        inviteStatus: 'pending',
+        podId: ctx.podId,
+        sessionId: ctx.sessionId,
+      });
+      // Phase 2 dual-emit — invitee's bell + received-invites surfaces
+      // refresh in the same tick as the bespoke event.
+      const { emitEntities } = await import('../../realtime/emit');
+      const { E } = await import('../../realtime/entities');
+      emitEntities(
+        io, [inviteeId],
+        [E.userNotifications(inviteeId), E.userInvites(inviteeId)],
+      ).catch(() => {});
+    } catch { /* socket push is non-fatal */ }
+  }
+}
 
 export async function createInvite(userId: string, input: CreateInviteInput, userRole?: string): Promise<Invite> {
   const code = generateCode();
@@ -43,23 +460,12 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     expiresAt = new Date(Date.now() + input.expiresInHours * 60 * 60 * 1000);
   }
 
-  const isAdmin = userRole === 'admin' || userRole === 'super_admin';
+  const isAdmin = isAdminRole(userRole);
 
   // ─── Entitlements: enforce max_invites_per_day ──────────────────────────
   if (!isAdmin) {
-    const entResult = await query<{ max_invites_per_day: number }>(
-      `SELECT max_invites_per_day FROM user_entitlements WHERE user_id = $1`,
-      [userId]
-    );
-    const maxPerDay = entResult.rows[0]?.max_invites_per_day ?? 100; // default 100/day
-    const countResult = await query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM invites WHERE inviter_id = $1 AND created_at > NOW() - INTERVAL '1 day' AND status = 'pending'`,
-      [userId]
-    );
-    const todayCount = parseInt(countResult.rows[0].count, 10);
-    if (todayCount >= maxPerDay) {
-      throw new AppError(429, 'INVITE_LIMIT_REACHED', `You can send up to ${maxPerDay} invites per day. Try again tomorrow.`);
-    }
+    const { maxPerDay, sentToday } = await dailyInviteAllowance(userId);
+    if (sentToday >= maxPerDay) throw inviteLimitError(maxPerDay);
   }
 
   // Block self-invites
@@ -126,27 +532,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     if (!input.podId) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Pod invite requires a pod to be selected');
     }
-    const pod = await podService.getPodById(input.podId);
-
-    // Cannot invite to archived pods
-    if (pod.status === 'archived') {
-      throw new AppError(400, 'POD_ARCHIVED', 'Cannot invite to an archived pod');
-    }
-
-    // Directors and hosts can always invite; regular members can only invite if pod allows it
-    if (!isAdmin) {
-      const memberRole = await podService.getMemberRole(input.podId, userId);
-      const isDirectorOrHost = memberRole === 'director' || memberRole === 'host';
-      if (!isDirectorOrHost) {
-        // Check if pod allows member invites AND sender is an active member
-        if (!pod.allowMemberInvites) {
-          throw new AppError(403, 'AUTH_FORBIDDEN', 'Only pod directors and hosts can send pod invites');
-        }
-        if (!memberRole || memberRole !== 'member') {
-          throw new AppError(403, 'AUTH_FORBIDDEN', 'You must be a pod member to send invites');
-        }
-      }
-    }
+    await assertMayInviteToPod(input.podId, userId, isAdmin);
 
     // Check if invitee is already a member of this pod
     if (input.inviteeEmail) {
@@ -166,17 +552,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     if (!input.sessionId) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Event invite requires an event to be selected');
     }
-    const session = await sessionService.getSessionById(input.sessionId);
-
-    // Cannot invite to completed or cancelled events
-    if (session.status === 'completed' || session.status === 'cancelled') {
-      throw new AppError(400, 'VALIDATION_ERROR', `Cannot invite to a ${session.status} event`);
-    }
-
-    // Only the session host can invite to events (admins bypass)
-    if (!isAdmin && session.hostUserId !== userId) {
-      throw new AppError(403, 'AUTH_FORBIDDEN', 'Only the event host can send event invites');
-    }
+    await assertMayInviteToSession(input.sessionId, userId, isAdmin);
 
     // Check if invitee is already an ACTIVE participant of this session.
     // #4B (June-10 debrief) — a kicked user (status='removed', or 'left') is NOT
@@ -196,165 +572,40 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     }
   }
 
-  // Block duplicate pending invites (checked AFTER membership so the right error shows)
-  if (input.inviteeEmail) {
-    const dupCheck = await query<{ id: string }>(
-      `SELECT id FROM invites
-       WHERE invitee_email = $1 AND type = $2 AND status = 'pending'
-         AND ($3::uuid IS NULL OR pod_id = $3)
-         AND ($4::uuid IS NULL OR session_id = $4)
-         AND ($5::uuid IS NULL OR circle_id = $5)`,
-      [input.inviteeEmail.toLowerCase(), input.type, input.podId || null, input.sessionId || null, input.circleId || null]
-    );
-    if (dupCheck.rows.length > 0) {
-      throw new AppError(409, 'DUPLICATE_INVITE', 'A pending invite already exists for this user');
-    }
+  // A closed account, or anyone blocked either way with the sender, is never invited or emailed: one neutral
+  // sentence for every such case, so a block is never revealed (fix round 1). A platform invite to a registered
+  // address is already turned away above, and an open link names nobody.
+  if (input.inviteeEmail && input.type && input.type !== InviteType.PLATFORM) {
+    const unreachable = await unreachableAddresses(userId, [input.inviteeEmail]);
+    if (unreachable.size > 0) throw new AppError(409, 'INVITE_NOT_PERMITTED', CANNOT_BE_INVITED);
   }
 
-  const result = await query<Invite>(
-    `INSERT INTO invites (code, type, inviter_id, invitee_email, pod_id, session_id, max_uses, expires_at, circle_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING ${INVITE_COLUMNS}`,
-    [
-      code,
-      input.type || InviteType.PLATFORM,
-      userId,
-      input.inviteeEmail?.toLowerCase() || null,
-      input.podId || null,
-      input.sessionId || null,
-      input.maxUses || 2,
-      expiresAt,
-      input.circleId || null,
-    ]
-  );
+  // Block duplicate pending invites (checked AFTER membership so the right error shows). The check and the insert
+  // run together, behind a lock for this person and target (see insertPendingInvite).
+  const inserted = await insertPendingInvite({
+    code,
+    type: input.type || InviteType.PLATFORM,
+    inviterId: userId,
+    inviteeEmail: input.inviteeEmail?.toLowerCase() || null,
+    podId: input.podId || null,
+    sessionId: input.sessionId || null,
+    circleId: input.circleId || null,
+    maxUses: input.maxUses || 2,
+    expiresAt,
+  });
+  if (inserted.duplicate) {
+    throw new AppError(409, 'DUPLICATE_INVITE', 'A pending invite already exists for this user');
+  }
 
   logger.info({ code, type: input.type, userId }, 'Invite created');
 
   // Send invite email if a recipient address was provided
   if (input.inviteeEmail) {
-    const inviterResult = await query<{ displayName: string }>(
-      `SELECT display_name AS "displayName" FROM users WHERE id = $1`,
-      [userId]
-    );
-    const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
-
-    let targetName: string | undefined;
-    if (input.type === InviteType.POD && input.podId) {
-      const podResult = await query<{ name: string }>('SELECT name FROM pods WHERE id = $1', [input.podId]);
-      targetName = podResult.rows[0]?.name;
-    }
-    if (input.type === InviteType.CIRCLE && input.circleId) {
-      // Archived circles are not invitable, so their name does not belong in an
-      // invite email either (22 Sep 2026).
-      const circleResult = await query<{ name: string }>(
-        'SELECT name FROM circles WHERE id = $1 AND archived_at IS NULL', [input.circleId]);
-      targetName = circleResult.rows[0]?.name;
-    }
-    let calendarEvent: any = undefined;
-    if (input.type === InviteType.SESSION && input.sessionId) {
-      const sessionResult = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null }>(
-        'SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1', [input.sessionId]
-      );
-      const session = sessionResult.rows[0];
-      targetName = session?.title;
-
-      // Build calendar event data if session has a scheduled time
-      if (session?.scheduled_at) {
-        // 26 Oct 2026 — the event's own length: a meeting's, or the rounds estimate (eventDurationMinutes).
-        const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
-
-        // Get host email for organizer
-        const hostResult = await query<{ display_name: string; email: string }>(
-          'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
-        );
-        const host = hostResult.rows[0];
-
-        calendarEvent = {
-          title: session.title,
-          description: `REASON event — ${session.title}`,
-          startTime: new Date(session.scheduled_at),
-          durationMinutes: totalMinutes,
-          organizerName: host?.display_name || 'REASON',
-          organizerEmail: host?.email,
-          sessionId: input.sessionId,
-        };
-      }
-    }
-
-    // Await email send — if it fails, the invite still exists in DB but we log the failure.
-    // Previously fire-and-forget caused silent delivery failures.
-    try {
-      await emailService.sendInviteEmail(input.inviteeEmail, {
-        inviterName,
-        type: (input.type || 'platform') as 'pod' | 'session' | 'platform' | 'circle',
-        targetName,
-        inviteUrl: `${config.clientUrl}/invite/${code}`,
-        calendarEvent,
-      });
-    } catch (err) {
-      // Don't fail the invite creation — email is best-effort but now properly logged
-      logger.warn({ err, inviteeEmail: input.inviteeEmail }, 'Failed to send invite email (invite still created)');
-    }
-
-    // Create in-app notification for existing users
-    const inviteeUser = await query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [input.inviteeEmail.toLowerCase()]);
-    if (inviteeUser.rows.length > 0) {
-      const notifType = input.type === InviteType.POD ? 'pod_invite'
-        : input.type === InviteType.CIRCLE ? 'circle_invite' : 'event_invite';
-      const notifTitle = input.type === InviteType.POD
-        ? `${inviterName} invited you to ${targetName || 'a pod'}`
-        : input.type === InviteType.CIRCLE
-          ? `${inviterName} invited you to ${targetName || 'a circle'}`
-          : `${inviterName} invited you to ${targetName || 'an event'}`;
-      const notifLink = `/invite/${code}`;
-      // Build a richer body with event details when available
-      let notifBody = `Invite from ${inviterName}`;
-      if (input.type === InviteType.SESSION && input.sessionId) {
-        const detailResult = await query<{ scheduled_at: string }>(`SELECT scheduled_at FROM sessions WHERE id = $1`, [input.sessionId]);
-        if (detailResult.rows[0]?.scheduled_at) {
-          const d = new Date(detailResult.rows[0].scheduled_at);
-          notifBody = `${targetName || 'Event'} · ${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
-        }
-      } else if (input.type === InviteType.POD) {
-        notifBody = `Join ${targetName || 'this pod'} — invited by ${inviterName}`;
-      }
-      const notifResult = await query<{ id: string; created_at: string }>(
-        `INSERT INTO notifications (user_id, type, title, body, link) VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, created_at`,
-        [inviteeUser.rows[0].id, notifType, notifTitle, notifBody, notifLink]
-      ).catch(err => { logger.warn({ err }, 'Failed to create notification (non-fatal)'); return null; });
-
-      // Push real-time notification via socket so bell icon updates instantly
-      if (notifResult && notifResult.rows.length > 0) {
-        try {
-          const { io } = await import('../../index');
-          const inviteeId = inviteeUser.rows[0].id;
-          io.to(`user:${inviteeId}`).emit('notification:new', {
-            id: notifResult.rows[0].id,
-            type: notifType,
-            title: notifTitle,
-            body: notifBody,
-            link: notifLink,
-            isRead: false,
-            createdAt: notifResult.rows[0].created_at,
-            inviteStatus: 'pending',
-            podId: input.podId || null,
-            sessionId: input.sessionId || null,
-          });
-          // Phase 2 dual-emit — invitee's bell + received-invites surfaces
-          // refresh in the same tick as the bespoke event.
-          const { emitEntities } = await import('../../realtime/emit');
-          const { E } = await import('../../realtime/entities');
-          emitEntities(
-            io, [inviteeId],
-            [E.userNotifications(inviteeId), E.userInvites(inviteeId)],
-          ).catch(() => {});
-        } catch { /* socket push is non-fatal */ }
-      }
-    }
+    const context = await buildInviteContext(userId, input.type, input);
+    await deliverInvite(context, { code, inviteeEmail: input.inviteeEmail });
   }
 
-  return result.rows[0];
+  return inserted.invite;
 }
 
 // ─── Get Invite by Code ─────────────────────────────────────────────────────
@@ -369,6 +620,51 @@ export async function getInviteByCode(code: string): Promise<Invite> {
     throw new NotFoundError('Invite');
   }
   return result.rows[0];
+}
+
+// ─── Who reads the address on an invite found by its code ───────────────────
+//
+// 26 Oct 2026 (fix round 2). GET /invites/:code answers every signed-in caller with the whole invite, and the code is
+// all it takes to ask. A co-host (who may not read the others' addresses) was handed the codes of those invites by the
+// event's invite list, so the address went to whoever asked. Production's accept page never shows the address, so
+// masking it costs nobody anything on screen.
+
+/** The person looking at an invite, as the route knows them. */
+export interface InviteViewer {
+  userId: string;
+  email?: string | null;
+  role?: string;
+}
+
+/**
+ * Whether this person is the host of an event invite's event, or the director or host of a pod invite's pod. A co-host
+ * is not one: they read an address on the invites they sent themselves, as in the event's invite list. The invite's
+ * TYPE decides which target counts, not whichever id is set (fix round 3): an old pod invite that carries a stray event
+ * id is the pod's, an old event invite that carries a stray pod id is the event's. A platform or circle invite has no
+ * organiser. Admins are settled by the caller.
+ */
+async function isOrganiserOf(invite: Pick<Invite, 'type' | 'podId' | 'sessionId'>, userId: string): Promise<boolean> {
+  if (invite.type === InviteType.SESSION && invite.sessionId !== null) return (await eventInviteRole(invite.sessionId, userId, false)) === 'host';
+  if (invite.type === InviteType.POD && invite.podId !== null) return mayRunPodInvites(invite.podId, userId, false);
+  return false;
+}
+
+/**
+ * The address an invite shows to the person looking at it, whole for the invitee (the address of their account is the
+ * invite's), for whoever sent it, for the host of its event or the director or host of its pod, and for admins; masked
+ * ("a•••@example.com") for anyone else signed in. An open link has no address and shows none.
+ */
+export async function inviteeAddressFor(
+  invite: Pick<Invite, 'type' | 'inviterId' | 'inviteeEmail' | 'podId' | 'sessionId'>,
+  viewer: InviteViewer,
+): Promise<string | null> {
+  const address = invite.inviteeEmail;
+  if (!address) return null;
+  if (invite.inviterId === viewer.userId) return address;
+  if (viewer.email && sameAddress(address, viewer.email)) return address;
+  if (isAdminRole(viewer.role)) return address;
+  if (await isOrganiserOf(invite, viewer.userId)) return address;
+  return maskEmail(address);
 }
 
 // ─── Accept Invite ──────────────────────────────────────────────────────────
@@ -481,12 +777,12 @@ async function applyInviteRegistration(
       out.podId = podId;
     }
 
+    // #4B (June-10 debrief) — a fresh PERSONAL invite (targeted email) is the
+    // host's way to re-admit a kicked user, so it lifts the removed-bar. A
+    // shareable/multi-use link (no inviteeEmail) must NOT silently re-admit a
+    // removed user — they stay bounced until personally re-invited.
+    const allowRemovedReadmit = !!invite.inviteeEmail;
     try {
-      // #4B (June-10 debrief) — a fresh PERSONAL invite (targeted email) is the
-      // host's way to re-admit a kicked user, so it lifts the removed-bar. A
-      // shareable/multi-use link (no inviteeEmail) must NOT silently re-admit a
-      // removed user — they stay bounced until personally re-invited.
-      const allowRemovedReadmit = !!invite.inviteeEmail;
       await sessionService.registerParticipant(invite.sessionId, userId, undefined, { allowRemovedReadmit });
     } catch (err) {
       if (err instanceof ConflictError) {
@@ -501,11 +797,17 @@ async function applyInviteRegistration(
     // Defensive idempotent INSERT to handle the rare case where
     // registerParticipant returned successfully but the row was wiped by
     // a parallel removal. ON CONFLICT preserves invariant.
+    // H1 fix round 1 — a row a kick has just made 'removed' is lifted only by a
+    // personal invite; a shared link leaves it removed (a removal is terminal).
     await query(
-      `INSERT INTO session_participants (session_id, user_id, status)
-       VALUES ($1, $2, 'registered')
-       ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
-       WHERE session_participants.status = 'removed'`,
+      allowRemovedReadmit
+        ? `INSERT INTO session_participants (session_id, user_id, status)
+           VALUES ($1, $2, 'registered')
+           ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
+           WHERE session_participants.status = 'removed'`
+        : `INSERT INTO session_participants (session_id, user_id, status)
+           VALUES ($1, $2, 'registered')
+           ON CONFLICT (session_id, user_id) DO NOTHING`,
       [invite.sessionId, userId],
     );
 
@@ -527,6 +829,21 @@ function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; po
   // Fallback for malformed invites (no podId or sessionId attached) — never
   // hit in practice, present for type completeness.
   return '/dashboard';
+}
+
+/** Whether two addresses are the same one: trimmed and lower-cased, as acceptInvite has always compared them. */
+function sameAddress(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * What a person signed in as another account than the invited one is told. The accept page shows it as it is, so it
+ * still says whom the invite is for, but with the address masked: whole, it gave the address to anybody signed in who
+ * had the code (fix round 2, the same hole as GET /invites/:code through the other door).
+ */
+function identityMismatchMessage(inviteeEmail: string, userEmail?: string): string {
+  const signedInAs = userEmail ? `, but you're logged in as ${userEmail}` : '';
+  return `This invite was sent to ${maskEmail(inviteeEmail)}${signedInAs}. Sign in to the right account to accept.`;
 }
 
 export async function acceptInvite(
@@ -588,7 +905,7 @@ export async function acceptInvite(
         throw new AppError(
           403,
           'IDENTITY_MISMATCH',
-          `This invite was sent to ${invite.inviteeEmail}, but you're logged in as ${userEmail}. Sign in to the right account to accept.`,
+          identityMismatchMessage(invite.inviteeEmail, userEmail),
         );
       }
     }
@@ -708,6 +1025,59 @@ export async function acceptInvite(
     registeredFor: registered,
     participantStatus,
   };
+}
+
+// ─── Mark an Invite Accepted ────────────────────────────────────────────────
+//
+// 26 Oct 2026 (fix round 2). The route behind this ("force-mark an invite accepted for the current user", from the days
+// the client recovered a failed accept with it) checked neither who was asking nor what state the invite was in.
+// Anyone signed in who knew a code could turn a withdrawn or declined invite back into an accepted one, which
+// acceptInvite then admits again, and replace the record of who accepted it. Nothing in the client has called it since
+// T0-4 removed that recovery chain, so it now applies the rules acceptInvite applies, in its order, and none stricter
+// but one: the invite must still be usable (not withdrawn, not expired, its event not over: fix round 3 added that last
+// check, which round 2 had left out), and a personal invite is marked only for the person it was sent to. The one place
+// it is stricter is a caller whose own address is unknown, whom accept lets through for legacy callers.
+export async function markInviteAccepted(
+  code: string,
+  userId: string,
+  userEmail?: string,
+): Promise<{ podId: string | null; sessionId: string | null }> {
+  return transaction(async (client) => {
+    const found = await client.query(`SELECT ${INVITE_COLUMNS} FROM invites WHERE code = $1 FOR UPDATE`, [code]);
+    if (found.rows.length === 0) throw new NotFoundError('Invite');
+    const invite = found.rows[0] as Invite;
+
+    if (invite.status === InviteStatus.REVOKED) {
+      throw new AppError(400, 'INVITE_REVOKED', 'This invite has been revoked');
+    }
+    if (invite.status === InviteStatus.EXPIRED || (invite.expiresAt && new Date(invite.expiresAt) < new Date())) {
+      throw new AppError(400, 'INVITE_EXPIRED', 'This invite has expired');
+    }
+    // An invite to an event that has ended is refused, as accept refuses it (fix round 3; round 2 left it out): after the
+    // invite's own state and before the identity check, in accept's order.
+    if (invite.type === InviteType.SESSION && invite.sessionId) {
+      const sessionResult = await client.query(`SELECT status FROM sessions WHERE id = $1`, [invite.sessionId]);
+      const sessionStatus = sessionResult.rows[0]?.status;
+      if (sessionStatus === 'completed' || sessionStatus === 'cancelled') {
+        throw new AppError(400, 'EVENT_ENDED', 'This event has already ended');
+      }
+    }
+    // A personal invite is for the address it was sent to. acceptInvite lets a caller whose address is unknown through
+    // (legacy callers); this does not: no one relies on this path, and it is not worth a way round.
+    if (invite.inviteeEmail && !(userEmail && sameAddress(invite.inviteeEmail, userEmail))) {
+      throw new AppError(403, 'IDENTITY_MISMATCH', identityMismatchMessage(invite.inviteeEmail, userEmail || undefined));
+    }
+    if (invite.useCount >= invite.maxUses && invite.acceptedByUserId !== userId) {
+      throw new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses');
+    }
+
+    // The first accepter and the first time stay as they were: marking again changes neither.
+    await client.query(
+      `UPDATE invites SET status = 'accepted', accepted_by_user_id = COALESCE(accepted_by_user_id, $1), accepted_at = COALESCE(accepted_at, NOW()) WHERE id = $2`,
+      [userId, invite.id],
+    );
+    return { podId: invite.podId, sessionId: invite.sessionId };
+  });
 }
 
 // ─── List Invites ───────────────────────────────────────────────────────────
@@ -831,8 +1201,14 @@ export interface SessionInviteRow {
   code: string;
   inviteeEmail: string | null;
   inviteeName: string | null;
+  /** The member the address belongs to, when it belongs to one (26 Oct 2026). */
+  inviteeUserId: string | null;
+  /** Who sent it (26 Oct 2026, fix round 1): a co-host sees an address only on the invites they sent themselves. */
+  inviterId: string;
   status: string;
   createdAt: string;
+  /** When the invitee said no (26 Oct 2026); null for an invite an organiser withdrew. A decline keeps status 'revoked'. */
+  declinedAt: string | null;
   /** 18 Sep 2026: an open link (no invitee) is reusable while it has uses
    *  left and has not expired; the live-event invite modal reads these to
    *  reuse one instead of minting a new code on every open. */
@@ -840,6 +1216,11 @@ export interface SessionInviteRow {
   useCount: number;
   expiresAt: string | null;
 }
+
+// "Pending" means an invite that can still be accepted. One whose expiry has passed keeps the status 'pending' in
+// the table, so a list of the pending ones leaves it out (fix round 1): a person invited again no longer shows twice,
+// nobody is reminded with a dead link, and the list agrees with the counts the pod and event pages already show.
+const STILL_ACCEPTABLE = 'AND (i.expires_at IS NULL OR i.expires_at > NOW())';
 
 export async function listSessionInvites(
   sessionId: string,
@@ -850,13 +1231,14 @@ export async function listSessionInvites(
 
   const result = await query<SessionInviteRow>(
     `SELECT i.id, i.code, i.invitee_email AS "inviteeEmail",
-            u.display_name AS "inviteeName",
-            i.status, i.created_at AS "createdAt",
+            u.display_name AS "inviteeName", u.id AS "inviteeUserId", i.inviter_id AS "inviterId",
+            i.status, i.created_at AS "createdAt", i.declined_at AS "declinedAt",
             i.max_uses AS "maxUses", i.use_count AS "useCount", i.expires_at AS "expiresAt"
      FROM invites i
      LEFT JOIN users u ON u.email = i.invitee_email
      WHERE i.session_id = $1 AND i.type = 'session'
        ${statusFilter}
+       ${status === 'pending' ? STILL_ACCEPTABLE : ''}
      ORDER BY i.created_at DESC`,
     params
   );
@@ -864,24 +1246,66 @@ export async function listSessionInvites(
   return result.rows;
 }
 
+/**
+ * "a•••@example.com": the first letter of an address and its domain, nothing else. Something that is not an address
+ * shows nothing of itself.
+ */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf('@');
+  if (at <= 0) return '•••';
+  return `${email.slice(0, 1)}•••${email.slice(at)}`;
+}
+
+/**
+ * The event's invites as a co-host may read them: the address on the invites they sent themselves, and on everyone
+ * else's a label in its place, because the platform's member lists carry no emails (the host and admins keep every
+ * address, as they always had). The label is the member's display name, or for someone who is no member a masked
+ * address. It is never empty or null: production's pages treat a falsy inviteeEmail as an open link, and read
+ * `inviteeName || inviteeEmail || 'Shareable link'` as the line to show. An open link has no address and stays null.
+ *
+ * The code goes too (fix round 2). It is all it takes to open the invite, address and all (GET /invites/:code), so a
+ * row whose address is hidden must not carry it: it is blank, and nothing on a hidden row can be acted on by code. The
+ * pages act by `id` (remind, withdraw) and read `code` only from an open link, which keeps its code.
+ */
+export function hideOthersAddresses<T extends { code: string; inviteeEmail: string | null; inviteeName: string | null; inviterId: string }>(
+  rows: T[],
+  viewerId: string,
+): T[] {
+  return rows.map((row) => {
+    if (!row.inviteeEmail || row.inviterId === viewerId) return row;
+    return { ...row, inviteeEmail: row.inviteeName || maskEmail(row.inviteeEmail), code: '' };
+  });
+}
+
+export interface PodInviteRow {
+  id: string;
+  code: string;
+  inviteeEmail: string | null;
+  inviteeName: string | null;
+  /** The member the address belongs to, when it belongs to one (26 Oct 2026). */
+  inviteeUserId: string | null;
+  status: string;
+  createdAt: string;
+  /** When the invitee said no (26 Oct 2026); null for an invite an organiser withdrew. A decline keeps status 'revoked'. */
+  declinedAt: string | null;
+}
+
 export async function listPodInvites(
   podId: string,
   status?: string
-): Promise<{ id: string; code: string; inviteeEmail: string | null; inviteeName: string | null; status: string; createdAt: string }[]> {
+): Promise<PodInviteRow[]> {
   const statusFilter = status ? `AND i.status = $2` : '';
   const params = status ? [podId, status] : [podId];
 
-  const result = await query<{
-    id: string; code: string; inviteeEmail: string | null;
-    inviteeName: string | null; status: string; createdAt: string;
-  }>(
+  const result = await query<PodInviteRow>(
     `SELECT i.id, i.code, i.invitee_email AS "inviteeEmail",
-            u.display_name AS "inviteeName",
-            i.status, i.created_at AS "createdAt"
+            u.display_name AS "inviteeName", u.id AS "inviteeUserId",
+            i.status, i.created_at AS "createdAt", i.declined_at AS "declinedAt"
      FROM invites i
      LEFT JOIN users u ON u.email = i.invitee_email
      WHERE i.pod_id = $1 AND i.type = 'pod'
        ${statusFilter}
+       ${status === 'pending' ? STILL_ACCEPTABLE : ''}
      ORDER BY i.created_at DESC`,
     params
   );
@@ -893,12 +1317,16 @@ export async function listPodInvites(
 
 // Bug 30 (19 May Ali) — return the affected invite's podId/sessionId so the
 // route can fan out the realtime events without re-querying.
+//
+// 26 Oct 2026: a decline is stored as 'revoked', the same value an organiser's withdrawal gets, so declined_at
+// is what tells them apart. The status stays 'revoked' on purpose: production's bell and Invites page map only
+// that value to "Declined".
 export async function declineInvite(
   code: string,
   userEmail: string,
 ): Promise<{ podId: string | null; sessionId: string | null }> {
   const result = await query<{ pod_id: string | null; session_id: string | null }>(
-    `UPDATE invites SET status = 'revoked'
+    `UPDATE invites SET status = 'revoked', declined_at = NOW()
      WHERE code = $1 AND invitee_email = $2 AND status = 'pending'
      RETURNING pod_id, session_id`,
     [code, userEmail.toLowerCase()]
@@ -930,14 +1358,50 @@ export async function declineInvite(
 
 // Bug 30 (19 May Ali) — same pattern as declineInvite: return the affected
 // IDs so the route can fan out realtime events.
+//
+// 26 Oct 2026 (fix round 1): the sender could always withdraw their own invite, and only they. Co-hosts may now send
+// event invites, so on production's event page the host's Revoke on a co-host's shareable link answered 404 ("Failed
+// to revoke invite"). Whoever runs a target's invites can withdraw any of them: for an event its host, its co-hosts
+// and admins; for a pod its director, its host and admins (they could already list and remind them). Platform and
+// circle invites stay the sender's, and (fix round 2) an admin's, which is the rule for reminding them. Each invite is
+// judged by the one target its TYPE names (fix round 3): an event invite by its event, a pod invite by its pod, even
+// where an old row also carries the other id. Anyone else is told the invite is not found, as before, so it is not
+// confirmed to exist.
+//
+// Fix round 3: the answer also says who sent the invite and, when its address belongs to a member, which member. A
+// withdrawal changes the sender's sent list and the invitee's received list whoever made it, and a platform or circle
+// invite has no pod or event whose screens could be told, so the route tells the two people themselves.
+export interface RevokedInvite {
+  podId: string | null;
+  sessionId: string | null;
+  inviterId: string;
+  /** The member the invite's address belongs to; null when it belongs to no member or the invite is an open link. */
+  inviteeUserId: string | null;
+}
+
 export async function revokeInvite(
   inviteId: string,
   userId: string,
-): Promise<{ podId: string | null; sessionId: string | null }> {
+  userRole?: string,
+): Promise<RevokedInvite> {
+  const found = await query<{ inviter_id: string; type: string; pod_id: string | null; session_id: string | null; invitee_user_id: string | null }>(
+    `SELECT i.inviter_id, i.type, i.pod_id, i.session_id, u.id AS invitee_user_id
+       FROM invites i
+       LEFT JOIN users u ON u.email = i.invitee_email
+      WHERE i.id = $1 AND i.status = 'pending'`,
+    [inviteId]
+  );
+  const invite = found.rows[0];
+  if (!invite) throw new NotFoundError('Invite', inviteId);
+
+  const mayWithdraw = invite.inviter_id === userId || isAdminRole(userRole) || (await runsTheTargetOf(invite, userId));
+  if (!mayWithdraw) throw new NotFoundError('Invite', inviteId);
+
+  // Only a pending invite is withdrawn: one answered since the check above is simply not found.
   const result = await query<{ pod_id: string | null; session_id: string | null }>(
-    `UPDATE invites SET status = 'revoked' WHERE id = $1 AND inviter_id = $2 AND status = 'pending'
+    `UPDATE invites SET status = 'revoked' WHERE id = $1 AND status = 'pending'
      RETURNING pod_id, session_id`,
-    [inviteId, userId]
+    [inviteId]
   );
 
   if (result.rowCount === 0) {
@@ -947,5 +1411,7 @@ export async function revokeInvite(
   return {
     podId: result.rows[0]?.pod_id ?? null,
     sessionId: result.rows[0]?.session_id ?? null,
+    inviterId: invite.inviter_id,
+    inviteeUserId: invite.invitee_user_id,
   };
 }

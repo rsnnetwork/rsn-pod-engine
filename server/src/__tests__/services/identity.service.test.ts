@@ -919,6 +919,33 @@ describe('Identity Service', () => {
       expect(result.users).toHaveLength(0);
       expect(result.total).toBe(0);
     });
+
+    // 26 Oct 2026 (fix round 2): the admin's invite search (GET /users/connected) lists anyone, but not people blocked
+    // either way with the admin, and an admin's own listings are unchanged.
+    it('leaves out anyone blocked either way with a member when asked to (notBlockedWith), in the count and in the page', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '1' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });
+
+      await identityService.getUsers({ search: 'tes', status: 'active', notBlockedWith: 'admin-1' });
+
+      const flat = (sql: unknown) => String(sql).replace(/\s+/g, ' ').trim();
+      const clause = /NOT EXISTS \(SELECT 1 FROM user_blocks b WHERE \(b\.blocker_id = \$(\d+) AND b\.blocked_id = users\.id\) OR \(b\.blocker_id = users\.id AND b\.blocked_id = \$\1\)\)/;
+      for (const call of mockQuery.mock.calls) {
+        const sql = flat(call[0]);
+        const found = sql.match(clause);
+        expect(found).not.toBeNull();
+        // The placeholder it uses holds the admin's id, and it is a parameter, never text in the query.
+        expect((call[1] as unknown[])[Number(found![1]) - 1]).toBe('admin-1');
+        expect(sql).not.toContain('admin-1');
+      }
+    });
+
+    it('is not asked, nothing is left out: the admin listings are as they were', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '1' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });
+      await identityService.getUsers({ search: 'tes', status: 'active' });
+      for (const call of mockQuery.mock.calls) expect(String(call[0])).not.toContain('user_blocks');
+    });
   });
 
   describe('updateUser - profile completeness', () => {

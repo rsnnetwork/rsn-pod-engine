@@ -63,6 +63,9 @@ async function openUserPage(user: TestUser, viewport?: { width: number; height: 
     localStorage.setItem('rsn_access', toks.a);
     localStorage.setItem('rsn_refresh', toks.r);
   }, { a: user.accessToken, r: user.refreshToken });
+  // The per-event check-in ("What brings you here today?", EventCheckInModal, since 25 Jun) opens once per
+  // tab and covers the page; this spec is not about it, so mark it seen for this event in every page.
+  await context.addInitScript((sid: string) => { sessionStorage.setItem(`rsn_checkin_${sid}`, '1'); }, sessionId);
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
   await gotoLive(page);

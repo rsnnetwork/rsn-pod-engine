@@ -244,19 +244,22 @@ describe('entering an event', () => {
     expect(sent.filter((s) => s.event === 'error')).toEqual([]);
   });
 
-  // Joining an event's socket room checks nothing (a private pod's refusal is swallowed after the join; gating
-  // the join itself is a separate follow-up), so the room alone must not open the history.
-  it('a stranger whose registration is refused still gets into the room, but no history, by joining or asking', async () => {
+  // H1 (26 Oct 2026): the join no longer puts a stranger in the event's room (it decides first, see
+  // h1-event-room-gate.test.ts), so they are refused once, in words, and asking for the history still answers
+  // nothing at all.
+  it('a stranger whose registration is refused is not let into the room, and gets no history by joining or asking', async () => {
     await clausSaysWelcome();
     mockRegister.mockRejectedValueOnce(Object.assign(new Error('You must be a pod member to register for sessions in a private pod'), { code: 'AUTH_FORBIDDEN' }));
     const stranger = socketFor(STRANGER, 'Stranger');
     await handleJoinSession(io, stranger, { sessionId: EVENT });
     await flush(); await flush(); await flush();
-    expect(stranger.rooms.has(sessionRoom(EVENT))).toBe(true);
+    expect(stranger.rooms.has(sessionRoom(EVENT))).toBe(false);
     await handleChatRequestHistory(io, stranger, { sessionId: EVENT });
-    const toStranger = sent.filter((s) => s.to === `socket:${STRANGER}`).map((s) => s.event);
-    expect(toStranger).not.toContain('chat:history');
-    expect(toStranger).not.toContain('error');
+    const toStranger = sent.filter((s) => s.to === `socket:${STRANGER}`);
+    expect(toStranger).toEqual([{
+      to: `socket:${STRANGER}`, event: 'error',
+      payload: { code: 'AUTH_FORBIDDEN', message: 'This event is only open to its pod\'s members.' },
+    }]);
   });
 });
 

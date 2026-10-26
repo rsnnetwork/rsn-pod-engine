@@ -166,4 +166,13 @@ describe('GET /users/connected', () => {
     expect(res.status).toBe(200);
     expect(res.body.data[0].email).toBe('any@example.com');
   });
+
+  // Fix round 2: an admin can invite anyone, but the search listed people blocked either way with them (a member's own
+  // search never did). Only active accounts, and nobody blocked either way with the admin who is asking.
+  it('an admin\'s search leaves out only active accounts and anyone blocked either way with that admin: the service is told who is asking', async () => {
+    (identityService.getUsers as jest.Mock).mockResolvedValue({ users: [], total: 0 });
+    const res = await request(app).get('/users/connected?q=any&limit=7').set('Authorization', `Bearer ${token('u-admin', 'admin')}`);
+    expect(res.status).toBe(200);
+    expect(identityService.getUsers).toHaveBeenCalledWith({ search: 'any', pageSize: 7, status: 'active', notBlockedWith: 'u-admin' });
+  });
 });

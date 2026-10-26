@@ -103,6 +103,7 @@ function fakeSocket(userId = HOST) {
   return {
     id: `socket-${userId}`,
     data: { userId, role: 'member', displayName: userId },
+    rooms: new Set<string>(),
     emit: jest.fn(),
     join: jest.fn(),
     leave: jest.fn(),
@@ -259,6 +260,12 @@ describe('the plan is not repaired when someone leaves a meeting', () => {
   function leaving(sessionId: string, format: ActiveSession['format']) {
     live(sessionId, format);
     mockGetSessionById.mockResolvedValue({ id: sessionId, status: 'lobby_open', hostUserId: HOST, format, config: {} });
+    // The guest is a participant of the event (H1: a page the event never let in has nothing to leave).
+    gMockQuery.mockImplementation(async (sql: string) => (
+      /^\s*SELECT s\.host_user_id = \$2 AS is_host/.test(sql)
+        ? { rows: [{ is_host: false, is_cohost: false, participant_status: 'in_lobby' }], rowCount: 1 }
+        : { rows: [], rowCount: 0 }
+    ));
   }
 
   it('a meeting repairs nothing', async () => {

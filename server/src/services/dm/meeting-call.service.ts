@@ -23,6 +23,7 @@ import * as blockService from '../block/block.service';
 import { isActive } from '../presence/presence.service';
 import { stampAttendance } from '../meetings/meeting.service';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
+import { CURRENT_MEETING_ID } from '../meetings/current-meeting';
 
 const CALL_TOKEN_TTL_SECONDS = 4 * 60 * 60; // a call can run a while
 // The scheduled-meeting window: you may enter from 5 min before, and it stays
@@ -47,7 +48,10 @@ interface ConvParticipants {
   calls_unlocked_at: Date | null;
   meeting_start_at: Date | null;
   meeting_duration_min: number | null;
-  /** The meetings row the conversation's meeting is (migration 110). */
+  /**
+   * The meetings row the conversation's meeting is (migration 110), read through the guard
+   * (current-meeting.ts): null when the pointer names a row that no longer stands at that time.
+   */
   current_meeting_id: string | null;
 }
 
@@ -58,7 +62,7 @@ async function requireCallParticipant(conversationId: string, userId: string): P
     calls_unlocked_at: Date | null; meeting_start_at: Date | null; meeting_duration_min: number | null;
     current_meeting_id: string | null;
   }>(
-    `SELECT id, user_a_id, user_b_id, calls_unlocked_at, meeting_start_at, meeting_duration_min, current_meeting_id
+    `SELECT id, user_a_id, user_b_id, calls_unlocked_at, meeting_start_at, meeting_duration_min, ${CURRENT_MEETING_ID}
        FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );

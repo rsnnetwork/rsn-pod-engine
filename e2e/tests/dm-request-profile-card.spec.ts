@@ -1,6 +1,6 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
+import { gotoRetry, cleanup, cleanupByPrefix, idsOf, teardown, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 import { profileHref, profileLinkSelector, profilePage } from '../helpers/profile-link';
@@ -53,9 +53,12 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   try { await browser?.close(); } catch { /* noop */ }
   for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
-  await cleanup(pool, { ids: [sender.id, recipient.id] });
-  await cleanupByPrefix(pool, 'e2etest-reqcard');
-  await pool.end().catch(() => {});
+  // An account whose creation failed is undefined here and has nothing to delete; each step runs even if another fails.
+  await teardown(
+    () => cleanup(pool, { ids: idsOf(sender, recipient) }),
+    () => cleanupByPrefix(pool, 'e2etest-reqcard'),
+    () => pool.end().catch(() => {}),
+  );
 });
 
 test('a meeting request shows the sender as a profile card, name links to their profile, and the bell link focuses it', async () => {
@@ -110,4 +113,33 @@ test('a meeting request shows the sender as a profile card, name links to their 
     await expect(panel.getByRole('button', { name: /^Decline$/i })).toBeVisible();
     await expect(panel.locator(profileLinkSelector(sender.id, 'Messages')).first()).toBeVisible();
   }
+});
+
+test('a profile opened in a NEW tab, the way a live event opens one, has a Back that goes to the dashboard instead of doing nothing', async () => {
+  test.setTimeout(120_000);
+
+  // Any signed-in page will do as the place to open the link from.
+  const page = await openAs(recipient, '/messages');
+  await expect(page.locator('a[href="/messages"]').first()).toBeAttached({ timeout: 30_000 });
+
+  // The markup ProfileLink draws inside a live event: target="_blank" and rel="noopener noreferrer".
+  await page.evaluate((href) => {
+    const a = document.createElement('a');
+    a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.id = 'e2e-newtab'; a.textContent = 'open profile in a new tab';
+    a.style.cssText = 'position:fixed;top:4px;left:4px;z-index:99999;background:#fff;padding:8px';
+    document.body.appendChild(a);
+  }, `/profile/${sender.id}`);
+  const [profileTab] = await Promise.all([
+    page.context().waitForEvent('page'),
+    page.locator('#e2e-newtab').click(),
+  ]);
+  await profileTab.waitForLoadState('domcontentloaded');
+  await expect(profileTab.getByTestId('profile-card')).toBeVisible({ timeout: 30_000 });
+  // Nothing behind it, which is why its Back used to do nothing.
+  expect(await profileTab.evaluate(() => window.history.length), 'a new tab has no history behind it').toBe(1);
+  await profileTab.getByRole('button', { name: /^Back$/ }).click();
+  await expect(profileTab).toHaveURL(`${APP}/`);
+  await profileTab.close();
+  // The tab it was opened from never moved.
+  await expect(page).toHaveURL(/\/messages/);
 });

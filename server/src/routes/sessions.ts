@@ -194,7 +194,14 @@ router.get(
         throw new NotFoundError('Session not found');
       }
 
-      const response: ApiResponse = { success: true, data: snapshot };
+      // H1 fix round 1 — hccParticipants is the Host Control Center's list: every registered person's email,
+      // platform role, state and join time. Production's client reads it only there (HostControlCenter.tsx, for
+      // the host, a co-host or a super admin), so everyone else gets it empty; the rest of the state is theirs.
+      // The same rule as the participants list's emails (admins and the event's host / co-hosts).
+      const me = req.user!.userId;
+      const runsTheEvent = hasRoleAtLeast(req.user!.role, UserRole.ADMIN)
+        || snapshot.hostUserId === me || snapshot.cohosts.includes(me);
+      const response: ApiResponse = { success: true, data: runsTheEvent ? snapshot : { ...snapshot, hccParticipants: [] } };
       res.json(response);
     } catch (err) {
       next(err);

@@ -9,6 +9,7 @@ import { Server as SocketServer } from 'socket.io';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { conversationIdInPath, memberIdInPath, messageIdInPath, reactionInPath } from '../middleware/dm-path-ids';
 import * as dmService from '../services/dm/dm.service';
 import { broadcastDmMessage } from '../services/orchestration/handlers/dm-handlers';
 import { fanoutDmConversation } from '../realtime/fanout';
@@ -46,6 +47,9 @@ const reactionBodySchema = z.object({
   emoji: z.string().min(1).max(16),
 });
 
+// 26 Oct 2026: every id in a path is checked before it reaches the database (middleware/dm-path-ids.ts):
+// an id that is not a uuid came back a 500, and is now a 400 in a member's words.
+
 // ─── GET /dm/conversations — list my conversations ────────────────────────
 
 router.get(
@@ -81,6 +85,7 @@ router.get(
 router.get(
   '/conversations/:id/messages',
   authenticate,
+  conversationIdInPath,
   validate(listQuerySchema, 'query'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -148,6 +153,7 @@ router.post(
 router.post(
   '/conversations/:id/read',
   authenticate,
+  conversationIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await dmService.markRead(req.params.id, req.user!.userId);
@@ -183,6 +189,7 @@ router.post(
 router.delete(
   '/conversations/:id',
   authenticate,
+  conversationIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await dmService.deleteConversation(req.params.id, req.user!.userId);
@@ -199,6 +206,7 @@ router.delete(
 router.get(
   '/can-message/:userId',
   authenticate,
+  memberIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await dmService.canMessage(req.user!.userId, req.params.userId);
@@ -234,6 +242,7 @@ router.get(
 router.post(
   '/messages/:id/reactions',
   authenticate,
+  messageIdInPath,
   validate(reactionBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -260,6 +269,8 @@ router.post(
 router.delete(
   '/messages/:id/reactions/:emoji',
   authenticate,
+  messageIdInPath,
+  reactionInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await dmService.removeReaction(

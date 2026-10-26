@@ -310,7 +310,8 @@ describe('cancelMeeting', () => {
     mockQuery.mockImplementation((sql: string) => {
       const s = flat(sql);
       if (/FROM meetings m JOIN users p/.test(s)) return Promise.resolve({ rows: [meeting] });
-      if (/FROM dm_conversations WHERE id = \$1 FOR UPDATE/.test(s)) {
+      // The lock (SELECT 1 … FOR UPDATE) and the read after it both find the conversation.
+      if (/FROM dm_conversations WHERE id = \$1/.test(s)) {
         return Promise.resolve({ rows: [{ meeting_confirmed_window: opts.window === undefined ? '2026-11-05T17:00:00Z' : opts.window, current_meeting_id: opts.current === undefined ? MEETING : opts.current }] });
       }
       if (/UPDATE meetings SET status = 'cancelled'/.test(s)) {
@@ -336,7 +337,9 @@ describe('cancelMeeting', () => {
     .map(([, , payload]) => (payload as { entities: string[] }).entities);
   const icsOf = (n: number) => String((mockCancelEmail.mock.calls[n][2] as { icsContent: string }).icsContent).replace(/\r\n[ \t]/g, '');
 
-  it('claims the meeting only while it is scheduled and not over, after locking the conversation as every booking does', async () => {
+  // 26 Oct 2026 (H2a): it was claimable until 30 minutes after its end, so a meeting that had been held
+  // could be cancelled afterwards, with a cancellation email to both. Now only until it starts.
+  it('claims the meeting only while it is scheduled and has not started, after locking the conversation as every booking does', async () => {
     armCancel();
 
     await cancelMeeting(A, MEETING, NOW);
@@ -344,7 +347,7 @@ describe('cancelMeeting', () => {
     const claim = calls(/UPDATE meetings SET status = 'cancelled'/);
     expect(claim).toHaveLength(1);
     expect(flat(claim[0][0])).toMatch(
-      /SET status = 'cancelled', cancelled_by = \$2, cancelled_at = NOW\(\), calendar_sequence = calendar_sequence \+ 1, updated_at = NOW\(\) WHERE id = \$1 AND status = 'scheduled' AND start_at \+ \(duration_min \+ 30\) \* INTERVAL '1 minute' >= \$3/,
+      /SET status = 'cancelled', cancelled_by = \$2, cancelled_at = NOW\(\), calendar_sequence = calendar_sequence \+ 1, updated_at = NOW\(\) WHERE id = \$1 AND status = 'scheduled' AND start_at > \$3 RETURNING/,
     );
     expect(claim[0][1]).toEqual([MEETING, A, NOW]);
     // The conversation row is locked before the meeting row, the order a booking and a move use, so a
@@ -373,6 +376,33 @@ describe('cancelMeeting', () => {
     expect(freed[0][1]).toEqual(['conv-1', A, '2026-11-05T17:00:00Z']);
     // All of it inside the cancel's transaction.
     expect(mockPoolSql.filter((s) => /UPDATE meetings|UPDATE dm_conversations|DELETE FROM meeting_availability/.test(s))).toEqual([]);
+  });
+
+  // 26 Oct 2026 (H2a): the old server can leave the pointer at a row that no longer describes the
+  // conversation's meeting; cancelling that row must not clear the meeting the conversation stands on.
+  it('reads the conversation\'s meeting through the guard: the pointer counts only while its row is scheduled at the conversation\'s time', async () => {
+    armCancel();
+
+    await cancelMeeting(A, MEETING, NOW);
+
+    const [read] = calls(/AS current_meeting_id FROM dm_conversations WHERE id = \$1/);
+    expect(flat(read[0])).toMatch(/\(SELECT m\.id FROM meetings m WHERE m\.id = dm_conversations\.current_meeting_id AND m\.status = 'scheduled' AND m\.start_at = dm_conversations\.meeting_start_at\) AS current_meeting_id/);
+  });
+
+  // 26 Oct 2026 (H2a review): with the guard inside the locking statement, a cancel that waited behind a move
+  // read the moved meeting as stale (the conversation at its newest version, the meetings as they were), so
+  // it cancelled the meeting and left the conversation naming it, production's banner and Join included.
+  it('locks the conversation in a statement of its own, then reads it with the guard: no statement does both', async () => {
+    armCancel();
+
+    await cancelMeeting(A, MEETING, NOW);
+
+    const tx = mockTxSql.map((s) => flat(s).trim());
+    const lockAt = tx.indexOf('SELECT 1 FROM dm_conversations WHERE id = $1 FOR UPDATE');
+    const readAt = tx.findIndex((s) => /AS current_meeting_id FROM dm_conversations WHERE id = \$1$/.test(s));
+    expect(lockAt).toBe(0);
+    expect(readAt).toBe(1);
+    expect(tx.filter((s) => /FOR UPDATE/.test(s) && /current_meeting_id/.test(s))).toEqual([]);
   });
 
   it('leaves a conversation that has moved on to another meeting as it is', async () => {
@@ -480,6 +510,28 @@ describe('cancelMeeting', () => {
     expect(mockInsertOn).toHaveBeenCalledTimes(1);
     expect(bells()).toHaveLength(1);
     expect(mockCancelEmail).toHaveBeenCalledTimes(2);
+  });
+
+  it('a meeting under way cannot be cancelled: 409 MEETING_ALREADY_STARTED, in words a member reads, and nothing changes', async () => {
+    // Started 10 minutes ago, 30 minutes long.
+    armCancel({ claims: 0, statusAfter: 'scheduled', meeting: { start_at: new Date(NOW.getTime() - 10 * 60_000) } });
+
+    await expect(cancelMeeting(A, MEETING, NOW)).rejects.toMatchObject({
+      statusCode: 409, code: 'MEETING_ALREADY_STARTED', message: 'This meeting has already started, so it can no longer be cancelled.',
+    });
+    expect(calls(/UPDATE dm_conversations|DELETE FROM meeting_availability/)).toHaveLength(0);
+    expect(mockInsertOn).not.toHaveBeenCalled();
+    expect(mockCancelEmail).not.toHaveBeenCalled();
+  });
+
+  it('in the 30 minutes after its end, when it can still be joined, it has ended and cannot be cancelled', async () => {
+    // A 30-minute meeting that started 45 minutes ago ended 15 minutes ago.
+    armCancel({ claims: 0, statusAfter: 'scheduled', meeting: { start_at: new Date(NOW.getTime() - 45 * 60_000) } });
+
+    await expect(cancelMeeting(A, MEETING, NOW)).rejects.toMatchObject({
+      statusCode: 409, code: ErrorCodes.MEETING_ALREADY_ENDED, message: 'This meeting has already ended.',
+    });
+    expect(mockCancelEmail).not.toHaveBeenCalled();
   });
 
   it('a meeting that has ended cannot be cancelled: 409 MEETING_ALREADY_ENDED, and nothing changes', async () => {

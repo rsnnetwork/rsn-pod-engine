@@ -187,4 +187,30 @@ export async function cleanup(pool: Pool, opts: { ids: string[]; podId?: string 
   }
 }
 
+/**
+ * The ids of the accounts that were actually made. A spec declares its accounts and creates them in beforeAll: if a later
+ * creation fails, the ones after it are still undefined when afterAll runs, and reading their `.id` throws before
+ * anything is deleted.
+ */
+export function idsOf(...users: Array<{ id: string } | undefined>): string[] {
+  return users.filter((u): u is { id: string } => !!u).map((u) => u.id);
+}
+
+/**
+ * A teardown that cannot be stopped half-way: every step runs even if an earlier one throws, as steps in a `finally`
+ * would, and the first failure is raised after the last step so the spec still reports it. An afterAll written as one
+ * run of awaits stops at its first error and leaves the rest behind (in production, live test accounts).
+ */
+export async function teardown(...steps: Array<() => Promise<unknown>>): Promise<void> {
+  let failure: { error: unknown } | undefined;
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      if (!failure) failure = { error };
+    }
+  }
+  if (failure) throw failure.error;
+}
+
 export type { Socket };

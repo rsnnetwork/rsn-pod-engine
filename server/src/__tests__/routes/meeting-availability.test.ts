@@ -40,11 +40,13 @@ app.use('/dm', meetingRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-const PATH = '/dm/conversations/conv-1/scheduling/availability';
+// A real conversation id: since 26 Oct 2026 the route refuses one that is not a uuid (dm-route-ids.test.ts).
+const CONV = 'cccccccc-0000-4000-8000-000000000001';
+const PATH = `/dm/conversations/${CONV}/scheduling/availability`;
 const SLOT = '2026-11-02T12:00:00Z';
 
 beforeEach(() => {
-  mockSetAvailability.mockReset().mockResolvedValue({ conversationId: 'conv-1', confirmed: null });
+  mockSetAvailability.mockReset().mockResolvedValue({ conversationId: CONV, confirmed: null });
 });
 
 describe('PUT …/scheduling/availability', () => {
@@ -52,22 +54,22 @@ describe('PUT …/scheduling/availability', () => {
     const res = await request(app).put(PATH).send({ windows: [SLOT] });
 
     expect(res.status).toBe(200);
-    expect(mockSetAvailability).toHaveBeenCalledWith('conv-1', 'u-a', [SLOT], { durationMin: undefined, type: undefined });
+    expect(mockSetAvailability).toHaveBeenCalledWith(CONV, 'u-a', [SLOT], { durationMin: undefined, type: undefined });
   });
 
   it('hands the length and kind sent with the save to the booking', async () => {
     const res = await request(app).put(PATH).send({ windows: [SLOT], durationMin: 45, type: 'audio' });
 
     expect(res.status).toBe(200);
-    expect(mockSetAvailability).toHaveBeenCalledWith('conv-1', 'u-a', [SLOT], { durationMin: 45, type: 'audio' });
+    expect(mockSetAvailability).toHaveBeenCalledWith(CONV, 'u-a', [SLOT], { durationMin: 45, type: 'audio' });
   });
 
   it('answers with the scheduling the service returns, confirmed meeting and all', async () => {
-    mockSetAvailability.mockResolvedValue({ conversationId: 'conv-1', confirmed: { window: SLOT, durationMin: 30, type: 'video' } });
+    mockSetAvailability.mockResolvedValue({ conversationId: CONV, confirmed: { window: SLOT, durationMin: 30, type: 'video' } });
 
     const res = await request(app).put(PATH).send({ windows: [SLOT] });
 
-    expect(res.body).toEqual({ success: true, data: { conversationId: 'conv-1', confirmed: { window: SLOT, durationMin: 30, type: 'video' } } });
+    expect(res.body).toEqual({ success: true, data: { conversationId: CONV, confirmed: { window: SLOT, durationMin: 30, type: 'video' } } });
   });
 
   it.each([

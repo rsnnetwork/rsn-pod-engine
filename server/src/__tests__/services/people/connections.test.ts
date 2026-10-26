@@ -4,7 +4,7 @@
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), transaction: jest.fn(), __esModule: true }));
 
-import { listConnections } from '../../../services/people/connections.service';
+import { listConnections, pageBySince, CONNECTION_SIGNALS_SQL } from '../../../services/people/connections.service';
 
 const VIEWER = 'a0000000-0000-4000-8000-000000000001';
 const id = (n: number) => `b0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -145,5 +145,73 @@ describe('listConnections: a page never ends between two people with the same ti
     expect([viewer, before, when]).toEqual([VIEWER, '2026-10-21T00:00:00.000Z', moment]);
     expect(typeof cap).toBe('number');
     expect(cap as number).toBeGreaterThan(2);
+  });
+});
+
+// "Connection" has one definition (26 Oct 2026). The invite picker lists the same people the People page does, so
+// the signals are written once and both queries are built from that one text.
+describe('the one definition of a connection', () => {
+  it('is exported as the signals and the one-row-per-person grouping, asked about the member in $1', () => {
+    const sql = flat(CONNECTION_SIGNALS_SQL);
+    expect(sql).toMatch(/^signals AS \(/);
+    expect(sql).toMatch(/FROM user_pokes p WHERE \(p\.sender_id = \$1 OR p\.recipient_id = \$1\) AND p\.status = 'accepted'/);
+    expect(sql).toMatch(/FROM dm_conversations c WHERE \(?c\.user_a_id = \$1 OR c\.user_b_id = \$1\)?/);
+    expect(sql).toMatch(/c\.meeting_joined_a_at IS NOT NULL AND c\.meeting_joined_b_at IS NOT NULL/);
+    expect(sql).toMatch(/FROM encounter_history e WHERE \(e\.user_a_id = \$1 OR e\.user_b_id = \$1\) AND \(e\.times_met > 0 OR e\.last_session_id IS NOT NULL\)/);
+    expect(sql).toMatch(/people AS \( SELECT person_id, bool_or\(met\) AS met, date_trunc\('milliseconds', MAX\(at\)\) AS since FROM signals GROUP BY person_id \)$/);
+  });
+
+  it('is the text listConnections asks, word for word', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await listConnections(VIEWER, { limit: 30, before: null });
+    expect(sqlOf()).toContain(flat(CONNECTION_SIGNALS_SQL));
+    // ...and nothing else about who counts is written in the query itself: the signals come first.
+    expect(sqlOf().trim().startsWith('WITH signals AS (')).toBe(true);
+  });
+});
+
+// The page rule is shared too: the invite picker pages a connection list, and a pod's members, the same way.
+describe('pageBySince', () => {
+  type Person = { id: number; since: Date };
+  const person = (id: number, iso: string): Person => ({ id, since: new Date(iso) });
+  const reader = () => jest.fn<Promise<Person[]>, [number, string | null]>();
+
+  it('a short list is one page with no next page, and is read once', async () => {
+    const read = reader().mockResolvedValue([person(1, '2026-10-20T10:00:00Z')]);
+    expect(await pageBySince(2, read)).toEqual({ rows: [person(1, '2026-10-20T10:00:00Z')], nextBefore: null });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith(3, null);
+  });
+
+  it('more than a page: the limit, and the next page starts after the last person shown', async () => {
+    const read = reader().mockResolvedValue([
+      person(1, '2026-10-20T10:00:00Z'), person(2, '2026-10-19T10:00:00Z'), person(3, '2026-10-18T10:00:00Z'),
+    ]);
+    const page = await pageBySince(2, read);
+    expect(page.rows.map((p) => p.id)).toEqual([1, 2]);
+    expect(page.nextBefore).toBe('2026-10-19T10:00:00.000Z');
+  });
+
+  it('people who share the time of the first person past the page wait for the next page, together', async () => {
+    const read = reader().mockResolvedValue([
+      person(1, '2026-10-20T10:00:00Z'), person(2, '2026-10-19T10:00:00Z'), person(3, '2026-10-18T10:00:00Z'), person(4, '2026-10-18T10:00:00Z'),
+    ]);
+    const page = await pageBySince(3, read);
+    expect(page.rows.map((p) => p.id)).toEqual([1, 2]);
+    expect(page.nextBefore).toBe('2026-10-19T10:00:00.000Z');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('more people than a page at one moment: that moment is read whole, in one more question', async () => {
+    const moment = '2026-10-18T10:00:00.000Z';
+    const read = reader()
+      .mockResolvedValueOnce([person(1, moment), person(2, moment), person(3, moment)])
+      .mockResolvedValueOnce([person(1, moment), person(2, moment), person(3, moment), person(4, moment)]);
+    const page = await pageBySince(2, read);
+    expect(page.rows.map((p) => p.id)).toEqual([1, 2, 3, 4]);
+    expect(page.nextBefore).toBe(moment);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[1][1]).toBe(moment);
+    expect(read.mock.calls[1][0]).toBeGreaterThan(2);
   });
 });

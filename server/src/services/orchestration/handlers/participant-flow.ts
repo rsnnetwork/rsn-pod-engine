@@ -19,6 +19,8 @@ import {
 } from '../state/session-state';
 import { sendJoinChatHistory } from './chat-handlers';
 import * as sessionService from '../../session/session.service';
+import { eventRoomAdmission, mayClaimBreakoutRoom } from '../../session/session-access';
+import { decideRoomEntry, refuseOnce } from '../event-room-entry';
 import * as matchingService from '../../matching/matching.service';
 import * as ratingService from '../../rating/rating.service';
 import { clearRoomTimers } from './host-actions';
@@ -455,19 +457,6 @@ export async function handleJoinSession(
 
       const session = await sessionService.getSessionById(data.sessionId);
 
-      // ── Single-session enforcement ──
-      // At 200+ participants, duplicate tabs/reconnects are common.
-      // A user can only be "present" in ONE active session at a time.
-      // If they're already in another session, remove them from the old one first.
-      for (const [existingSessionId, existingSession] of activeSessions) {
-        if (existingSessionId !== data.sessionId && existingSession.presenceMap.has(userId)) {
-          setPresence(existingSessionId, userId, null);
-          socket.leave(sessionRoom(existingSessionId));
-          logger.info({ userId, oldSessionId: existingSessionId, newSessionId: data.sessionId },
-            'User moved to new session — removed from previous session presence');
-        }
-      }
-
       // ── Single-socket enforcement for same session ──
       // If this user already has a socket in this session, evict the old one
       let activeSession = activeSessions.get(data.sessionId);
@@ -547,24 +536,15 @@ export async function handleJoinSession(
         logger.info({ sessionId: data.sessionId, userId }, 'Cancelled disconnect timeout — user reconnected');
       }
 
-      // Join socket room
-      socket.join(sessionRoom(data.sessionId));
+      // The person's own room. Every socket is already in it from its connection.
       socket.join(userRoom(userId));
-
-      // Update presence — FIX 3C: set reconnectedAt so disconnect timeout can detect reconnect
-      if (activeSession) {
-        setPresence(data.sessionId, userId, {
-          lastHeartbeat: new Date(),
-          socketId: socket.id,
-          reconnectedAt: new Date(),
-        });
-      }
 
       // Auto-register if not already a participant.
       // The host is also a participant in speed networking — they network too.
       // Pass user role so admin/super_admin can bypass pod visibility restrictions.
       const userRole = (socket.data as any)?.role as UserRole | undefined;
       let didRegister = false;
+      let registrationRefusal: string | undefined;
       try {
         await sessionService.registerParticipant(data.sessionId, userId, userRole);
         didRegister = true;
@@ -585,6 +565,59 @@ export async function handleJoinSession(
           logger.info({ sessionId: data.sessionId, userId }, 'Removed user attempted to rejoin — evicted');
           return;
         }
+        registrationRefusal = regErr?.code;
+      }
+
+      // ── H1 (26 Oct 2026): only the people this event admits join its live room ──
+      // The room carries the event's chat, reactions, presence and round events. It used to be joined above,
+      // before this registration, whose refusal was swallowed, so anyone who knew a private pod's event id was in
+      // it. Now the one rule decides (orchestration/event-room-entry.ts): host, co-host or moderator, admin, or a
+      // participant row that is not removed (left and coming back, reconnecting, a refresh, a second tab, a late
+      // joiner registered just above). A removed row gets the same terminal bounce: the registration reports a
+      // full or finished event, or a pod they are not in, before it looks at the row. Someone refused only because
+      // the event is full joins as before, on purpose. A failed read never drops someone who should be in.
+      // Anyone else gets one sentence and nothing more: not the room, not presence, no state, no history.
+      const entry = await decideRoomEntry({
+        socket, sessionId: data.sessionId, userId, role: userRole, eventStatus: session.status,
+        registration: { registered: didRegister, refusalCode: registrationRefusal },
+      });
+      if (entry.kind === 'evict') {
+        socket.leave(sessionRoom(data.sessionId));
+        socket.emit('session:evicted', { reason: 'removed_from_event' });
+        logger.info({ sessionId: data.sessionId, userId, registrationRefusal }, 'Removed user attempted to rejoin — evicted');
+        return;
+      }
+      if (entry.kind === 'refuse') {
+        socket.leave(sessionRoom(data.sessionId));
+        refuseOnce(socket, data.sessionId, entry.refusal);
+        logger.info({ sessionId: data.sessionId, userId, registrationRefusal }, 'Not admitted to the event room — refused');
+        return;
+      }
+
+      // ── Single-session enforcement ──
+      // At 200+ participants, duplicate tabs/reconnects are common.
+      // A user can only be "present" in ONE active session at a time.
+      // If they're already in another session, remove them from the old one first.
+      // H1 — only once this event has admitted them: a refused join moves nobody out of the event they are in.
+      for (const [existingSessionId, existingSession] of activeSessions) {
+        if (existingSessionId !== data.sessionId && existingSession.presenceMap.has(userId)) {
+          setPresence(existingSessionId, userId, null);
+          socket.leave(sessionRoom(existingSessionId));
+          logger.info({ userId, oldSessionId: existingSessionId, newSessionId: data.sessionId },
+            'User moved to new session — removed from previous session presence');
+        }
+      }
+
+      // Join socket room
+      socket.join(sessionRoom(data.sessionId));
+
+      // Update presence — FIX 3C: set reconnectedAt so disconnect timeout can detect reconnect
+      if (activeSession) {
+        setPresence(data.sessionId, userId, {
+          lastHeartbeat: new Date(),
+          socketId: socket.id,
+          reconnectedAt: new Date(),
+        });
       }
 
       // Phase 2.5D (5 May spec) — late-joiner future-only repair.
@@ -1125,9 +1158,19 @@ export async function handleLeaveSession(
     const userId = getUserIdFromSocket(socket);
     if (!userId) return;
 
+    const wasInRoom = socket.rooms.has(sessionRoom(data.sessionId));
     socket.leave(sessionRoom(data.sessionId));
 
     setPresence(data.sessionId, userId, null);
+
+    // H1 fix round 1 — a page the event never let in (no participant row, not the host, a co-host or an admin)
+    // has nothing to leave: no status write, no canonical entry, no plan repair, nobody told. Someone let in over
+    // capacity has no row either; their leaving only refreshes everyone's list. A failed read leaves as before.
+    const admission = await eventRoomAdmission(data.sessionId, userId, socket.data?.role).catch(() => null);
+    if (admission === 'refused') {
+      if (wasInRoom) scheduleParticipantListBroadcast(io, data.sessionId);
+      return;
+    }
 
     // Check if leaving user is host
     const session = await sessionService.getSessionById(data.sessionId).catch(() => null);
@@ -1216,14 +1259,19 @@ export function handleHeartbeat(
   data: { sessionId: string }
 ): void {
   const userId = getUserIdFromSocket(socket);
-  if (!userId) return;
+  const sessionId = data?.sessionId;
+  if (!userId || !sessionId) return;
+  // H1 (26 Oct 2026) — a heartbeat keeps someone present only while their socket is in the event's room,
+  // which the join puts it in only once the event has admitted them. A refused page still heartbeats every
+  // 15 s, and this used to mark its person present (in the presence map and on every member's roster).
+  if (!socket.rooms.has(sessionRoom(sessionId))) return;
 
-  const activeSession = activeSessions.get(data.sessionId);
+  const activeSession = activeSessions.get(sessionId);
   if (activeSession) {
     // Preserve reconnectedAt — overwriting it causes the disconnect timeout
     // to miss the reconnection and falsely mark the user as no_show (FIX 15A)
     const existing = activeSession.presenceMap.get(userId);
-    setPresence(data.sessionId, userId, {
+    setPresence(sessionId, userId, {
       lastHeartbeat: new Date(),
       socketId: socket.id,
       reconnectedAt: existing?.reconnectedAt,
@@ -1240,10 +1288,14 @@ export async function handleReady(
   data: { sessionId: string }
 ): Promise<void> {
   const userId = getUserIdFromSocket(socket);
-  if (!userId) return;
+  const sessionId = data?.sessionId;
+  if (!userId || !sessionId) return;
+  // H1 fix round 1 — only a socket the event let into its room may mark its person ready (production's client
+  // never sends this; a crafted one from anyone else used to write a status, and an in-memory state for them).
+  if (!socket.rooms.has(sessionRoom(sessionId))) return;
 
   await sessionService.updateParticipantStatus(
-    data.sessionId, userId, ParticipantStatus.IN_LOBBY
+    sessionId, userId, ParticipantStatus.IN_LOBBY
   );
 }
 
@@ -1266,10 +1318,17 @@ export async function handleRoomJoined(
   data: { sessionId: string; matchId: string; roomId: string },
 ): Promise<void> {
   const userId = getUserIdFromSocket(socket);
-  if (!userId || !data.sessionId || !data.matchId || !data.roomId) return;
+  if (!userId || !data?.sessionId || !data.matchId || !data.roomId) return;
 
   const activeSession = activeSessions.get(data.sessionId);
   if (!activeSession) return;
+
+  // H1 fix round 1 — the client names the room, and the room's chat and reactions then reach whoever is recorded
+  // in it. Only someone in that match (or the host, a co-host or an admin visiting it) may say they are there.
+  if (!(await mayClaimBreakoutRoom(data.sessionId, data.matchId, data.roomId, userId, socket.data?.role))) {
+    logger.warn({ sessionId: data.sessionId, userId, matchId: data.matchId }, 'presence:room_joined ignored: not in that match');
+    return;
+  }
 
   // Phase 2D (5 May spec) — single chokepoint for roomParticipants writes.
   // setRoomAssignment is the existing wrapper that handles map init +

@@ -3,14 +3,17 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate, optionalAuth } from '../middleware/auth';
-import { inviteLimiter } from '../middleware/rateLimit';
+import { inviteLimiter, inviteBatchLimiter, peopleReadLimiter } from '../middleware/rateLimit';
 import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
+import * as inviteCandidates from '../services/invite/invite-candidates.service';
+import * as inviteReminders from '../services/invite/invite-reminders.service';
 import { fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
+import { AppError } from '../middleware/errors';
 import { query } from '../db';
-import { ApiResponse, InviteType, InviteStatus, eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
+import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse, eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
 
 const router = Router();
 
@@ -26,6 +29,55 @@ const createInviteSchema = z.object({
   maxUses: z.number().int().min(1).max(1_000_000).optional(),
   expiresInHours: z.number().positive().max(720).optional(), // max 30 days
 });
+
+// Postgres reads an upper-case uuid as the same id, but the services compare ids as plain strings, so ids are
+// lower-cased here (as in routes/people.ts).
+const lowerUuid = z.string().uuid().transform((s) => s.toLowerCase());
+
+// The connections picker's list, a page at a time: 30 people unless fewer are asked for, never more than 50.
+// `before` is the nextBefore of the page already shown, an ISO time.
+const CANDIDATES_PAGE = 30;
+const CANDIDATES_PAGE_MAX = 50;
+const candidatesQuery = z.object({
+  podId: lowerUuid.optional(),
+  sessionId: lowerUuid.optional(),
+  source: z.enum(['connections', 'pod']).default('connections'),
+  q: z.string().trim().max(100).optional(),
+  before: z.string().datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).optional()
+    .transform((n) => Math.min(n ?? CANDIDATES_PAGE, CANDIDATES_PAGE_MAX)),
+}).superRefine((value, ctx) => {
+  if (Boolean(value.podId) === Boolean(value.sessionId)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['podId'], message: 'Name either podId or sessionId' });
+  }
+  if (value.source === 'pod' && !value.sessionId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['source'], message: 'The pod list is for inviting to an event' });
+  }
+});
+type CandidatesQuery = z.infer<typeof candidatesQuery>;
+
+// Up to 50 people in one call. "Everyone in the pod" (events only) may stand in for naming them.
+const batchInviteSchema = z.object({
+  type: z.enum(['pod', 'session']),
+  podId: lowerUuid.optional(),
+  sessionId: lowerUuid.optional(),
+  inviteeUserIds: z.array(lowerUuid).max(inviteCandidates.BATCH_MAX).default([]),
+  allPodMembers: z.boolean().optional(),
+}).superRefine((value, ctx) => {
+  if (value.type === 'pod' && !value.podId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['podId'], message: 'Choose the pod to invite to' });
+  }
+  if (value.type === 'session' && !value.sessionId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sessionId'], message: 'Choose the event to invite to' });
+  }
+  if (value.allPodMembers && value.type !== 'session') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['allPodMembers'], message: 'Everyone in the pod is for inviting to an event' });
+  }
+  if (value.inviteeUserIds.length === 0 && !value.allPodMembers) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['inviteeUserIds'], message: 'Choose at least one person to invite' });
+  }
+});
+type BatchInviteBody = z.infer<typeof batchInviteSchema>;
 
 // ─── POST /invites ──────────────────────────────────────────────────────────
 
@@ -50,6 +102,41 @@ router.post(
       }
       const response: ApiResponse = { success: true, data: invite };
       res.status(201).json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /invites/batch ────────────────────────────────────────────────────
+// 26 Oct 2026: up to 50 people in one call, one outcome each, the same person never invited twice (the service
+// takes the lock). Registered with the fixed paths, ahead of every /:code route. The pod's or the event's screens
+// are told once for the whole batch, not once per invitee; each invitee's own bell is pushed by the service.
+
+router.post(
+  '/batch',
+  authenticate,
+  inviteBatchLimiter,
+  validate(batchInviteSchema),
+  auditMiddleware('create_invite_batch', 'invite'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const body: BatchInviteBody = req.body;
+      const batch = await inviteCandidates.createInvitesBatch({ userId: req.user!.userId, role: req.user!.role }, body);
+      // The emails go out after this answer, two a second at most (see createInvitesBatch). Nothing here waits for them;
+      // the promise never rejects, and says so by logging each failure itself.
+      batch.delivery.catch(() => {});
+      if (batch.counts.invited > 0) {
+        const { podId, sessionId } = batch.target;
+        if (sessionId) {
+          fanoutSessionEntities(podId, sessionId, [E.sessionInvites(sessionId)]).catch(() => {});
+        } else {
+          fanoutPodEntities(podId).catch(() => {});
+        }
+      }
+      const data: InviteBatchResponse = { results: batch.results, counts: batch.counts };
+      if (batch.remaining !== undefined) data.remaining = batch.remaining;
+      res.json({ success: true, data } as ApiResponse);
     } catch (err) {
       next(err);
     }
@@ -122,6 +209,39 @@ router.get(
   }
 );
 
+// ─── GET /invites/candidates ────────────────────────────────────────────────
+// 26 Oct 2026: the people an organiser can invite to a pod or an event, with where each stands against it (member,
+// going, invited, declined, or available). `source=connections` is the asker's own connections, `source=pod` the
+// people in the event's pod. 403 unless the asker may send an invite there. Registered ahead of GET /:code, or
+// "candidates" would be read as an invite code. A read: it emits nothing.
+
+router.get(
+  '/candidates',
+  authenticate,
+  peopleReadLimiter,
+  validate(candidatesQuery, 'query'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // validate() has replaced req.query with the parsed value; Express still types it as raw strings.
+      const asked: CandidatesQuery = req.query as unknown as CandidatesQuery;
+      const data = await inviteCandidates.listInviteCandidates(
+        { userId: req.user!.userId, role: req.user!.role },
+        {
+          podId: asked.podId,
+          sessionId: asked.sessionId,
+          source: asked.source,
+          q: asked.q,
+          before: asked.before ?? null,
+          limit: asked.limit,
+        },
+      );
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── GET /invites/session/:sessionId ─────────────────────────────────────────
 
 router.get(
@@ -132,21 +252,24 @@ router.get(
       const { sessionId } = req.params;
       const status = req.query.status as string | undefined;
 
-      // Only host or admin can view session invites
+      // Only the host, a co-host or an admin can view an event's invites (26 Oct 2026: co-hosts send them now, so
+      // they see who has answered).
       const sessionResult = await query<{ host_user_id: string }>(
         `SELECT host_user_id FROM sessions WHERE id = $1`, [sessionId]
       );
       if (sessionResult.rows.length === 0) {
-        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Session not found' } });
+        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Event not found' } });
       }
-      const isHost = sessionResult.rows[0].host_user_id === req.user!.userId;
-      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
-      if (!isHost && !isAdmin) {
-        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can view session invites' } });
+      const role = await inviteService.eventInviteRole(sessionId, req.user!.userId, inviteService.isAdminRole(req.user!.role));
+      if (!role) {
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can view this event\'s invites' } });
       }
 
       const invites = await inviteService.listSessionInvites(sessionId, status);
-      const response: ApiResponse = { success: true, data: invites };
+      // The host and admins see every address, as they always did. A co-host sees one only on the invites they sent
+      // themselves: the platform's member lists carry no emails, so on the rest a label stands in its place.
+      const data = role === 'cohost' ? inviteService.hideOthersAddresses(invites, req.user!.userId) : invites;
+      const response: ApiResponse = { success: true, data };
       return res.json(response);
     } catch (err) {
       return next(err);
@@ -186,87 +309,93 @@ router.get(
 );
 
 // ─── POST /invites/:id/remind ────────────────────────────────────────────────
+// 26 Oct 2026 (fix round 2): the email says what the invite was for. (Fix round 3): an invite reminded in the last hour
+// is not emailed again (a 200 that says so), and a member sends at most 300 reminder emails an hour, this route and
+// Remind All counted together; see invite-reminders.service.ts. The invite's TYPE says who may remind it. (Fix round 4):
+// an email the mail provider did not take keeps no hour, counts nothing and is a 503 (not 502: Cloudflare can swap an origin 502 for its own page, and the sentence must reach the member).
+
+const reminderAllowanceSpent = () =>
+  new AppError(429, 'RATE_LIMIT_EXCEEDED', 'You have sent a lot of reminders this hour. Please try again later.');
+const reminderNotSent = () =>
+  new AppError(503, 'SERVICE_UNAVAILABLE', 'We could not send the reminder just now. Please try again.');
 
 router.post(
   '/:id/remind',
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const invite = await query<{ id: string; invitee_email: string; session_id: string; pod_id: string; status: string; code: string }>(
-        `SELECT id, invitee_email, session_id, pod_id, status, code FROM invites WHERE id = $1`, [req.params.id]
+      const invite = await query<{ id: string; invitee_email: string; type: InviteType; session_id: string | null; pod_id: string | null; circle_id: string | null; status: string; code: string; expires_at: string | null; inviter_id: string }>(
+        `SELECT id, invitee_email, type, session_id, pod_id, circle_id, status, code, expires_at, inviter_id FROM invites WHERE id = $1`, [req.params.id]
       );
       if (invite.rows.length === 0) {
         return res.status(404).json({ success: false, error: { code: 'INVITE_NOT_FOUND', message: 'Invite not found' } });
       }
       const inv = invite.rows[0];
+
+      // Whoever runs the invite's event (its host, a co-host, an admin) or pod (its director, host, an admin) can
+      // remind, whoever sent the invite (fix round 1: a co-host sends event invites, and the host reminds them too).
+      // Asked before anything is said about the invite, so someone who may not learns nothing of it. The invite's TYPE
+      // decides which target counts, not whichever id is set first (fix round 3).
+      const isAdmin = inviteService.isAdminRole(req.user!.role);
+      if (inv.type === InviteType.SESSION && inv.session_id) {
+        if (!(await inviteService.eventInviteRole(inv.session_id, req.user!.userId, isAdmin))) {
+          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can send reminders' } });
+        }
+      } else if (inv.type === InviteType.POD && inv.pod_id) {
+        if (!(await inviteService.mayRunPodInvites(inv.pod_id, req.user!.userId, isAdmin))) {
+          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only pod directors can send reminders' } });
+        }
+      } else if (inv.inviter_id !== req.user!.userId && !isAdmin) {
+        // A platform or circle invite belongs to the person who sent it. (This route used to check nothing for them:
+        // anyone signed in who knew the invite's id could have it re-sent.)
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the person who sent an invite can send reminders for it' } });
+      }
+
       if (inv.status !== 'pending') {
         return res.status(400).json({ success: false, error: { code: 'INVITE_NOT_PENDING', message: 'Invite is no longer pending' } });
       }
-
-      // Only host/director/admin can remind
-      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
-      if (inv.session_id) {
-        const sessionResult = await query<{ host_user_id: string }>(
-          `SELECT host_user_id FROM sessions WHERE id = $1`, [inv.session_id]
-        );
-        const isHost = sessionResult.rows[0]?.host_user_id === req.user!.userId;
-        if (!isHost && !isAdmin) {
-          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can send reminders' } });
-        }
-      } else if (inv.pod_id) {
-        const podMemberResult = await query<{ role: string }>(
-          `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`, [inv.pod_id, req.user!.userId]
-        );
-        const isDirector = podMemberResult.rows[0]?.role === 'director' || podMemberResult.rows[0]?.role === 'host';
-        if (!isDirector && !isAdmin) {
-          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only pod directors can send reminders' } });
-        }
+      // An invite whose expiry has passed keeps the status 'pending', but its link is dead: no reminder for it.
+      if (inv.expires_at && new Date(inv.expires_at).getTime() <= Date.now()) {
+        return res.status(400).json({ success: false, error: { code: 'INVITE_EXPIRED', message: 'This invite has expired' } });
+      }
+      // A closed account, or anyone blocked either way with the sender, is never emailed: one neutral sentence.
+      if (inv.invitee_email && (await inviteService.unreachableAddresses(req.user!.userId, [inv.invitee_email])).size > 0) {
+        return res.status(409).json({ success: false, error: { code: 'INVITE_NOT_PERMITTED', message: inviteService.CANNOT_BE_INVITED } });
       }
 
-      // Re-send invite email
+      // Re-send the invite email, worded like the first one (fix round 2): the very functions that build and send it
+      // do it again, so a pod invite is a pod invite with the pod's name, a circle's names the circle, and an event's
+      // carries its title and its calendar entry, the length of which is the shared eventDurationMinutes. This used to
+      // be written out here, as an event invite whatever the invite was for.
       if (inv.invitee_email) {
-        const { default: config } = await import('../config');
-        const emailService = await import('../services/email/email.service');
-        const inviterResult = await query<{ displayName: string }>(
-          `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [req.user!.userId]
-        );
-        const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
-
-        let targetName: string | undefined;
-        let calendarEvent: any = undefined;
-        if (inv.session_id) {
-          const sr = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null }>(
-            `SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1`, [inv.session_id]
-          );
-          const session = sr.rows[0];
-          targetName = session?.title;
-
-          if (session?.scheduled_at) {
-            // 26 Oct 2026 — the same length as the first invite: the shared eventDurationMinutes.
-            const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
-            const hostResult = await query<{ display_name: string; email: string }>(
-              'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
-            );
-            const host = hostResult.rows[0];
-            calendarEvent = {
-              title: session.title,
-              description: `REASON event — ${session.title}`,
-              startTime: new Date(session.scheduled_at),
-              durationMinutes: totalMinutes,
-              organizerName: host?.display_name || 'REASON',
-              organizerEmail: host?.email,
-              sessionId: inv.session_id,
-            };
-          }
+        // The member's allowance first, then this invite's hour (fix round 3), after every refusal above, so a refusal
+        // never uses up either. An invite reminded within the hour is not emailed again; the answer is still a 200,
+        // because the invitee has had a reminder in the hour, and says so. Production's pages show "Reminder sent!".
+        if ((await inviteReminders.reminderAllowance(req.user!.userId)) <= 0) throw reminderAllowanceSpent();
+        const { claimed, recent } = await inviteReminders.claimReminders([inv.id]);
+        if (claimed.length === 0) {
+          const remindedAt = recent.get(inv.id) ?? null;
+          return res.json({
+            success: true,
+            data: { reminded: false, recentlyReminded: true, remindedAt: remindedAt ? remindedAt.toISOString() : null },
+          });
         }
-
-        await emailService.sendInviteEmail(inv.invitee_email, {
-          inviterName,
-          type: 'session',
-          targetName,
-          inviteUrl: `${config.clientUrl}/invite/${inv.code}`,
-          calendarEvent,
-        });
+        // The claim is kept only for an email that went (fix round 4). The mail provider answers a refusal (a bad address,
+        // its limit after the retries, an outage) rather than throwing, so its answer is read as well as a throw: either
+        // way no email went out, the invite has not been "reminded within the hour", and nothing is counted.
+        let sent = false;
+        try {
+          const context = await inviteService.buildInviteContext(req.user!.userId, inv.type, {
+            podId: inv.pod_id, sessionId: inv.session_id, circleId: inv.circle_id,
+          });
+          sent = (await inviteService.emailInvite(context, { code: inv.code, inviteeEmail: inv.invitee_email })).sent;
+        } finally {
+          if (!sent) await inviteReminders.releaseReminders([inv.id]);
+        }
+        // Said as a failure, as a send that throws is: production's pages show "Failed to send reminder" (the pod page
+        // counts it among the failed) rather than "Reminder sent!" for an email nobody will get.
+        if (!sent) throw reminderNotSent();
+        await inviteReminders.countRemindersSent(req.user!.userId, 1);
       }
 
       return res.json({ success: true, data: { reminded: true } });
@@ -277,7 +406,9 @@ router.post(
 );
 
 // ─── POST /invites/remind-all/:sessionId ─────────────────────────────────────
-// Bulk remind: resend invite emails to ALL pending invites for a session
+// Bulk remind: resend invite emails to the pending invites of a session. Fix round 3: an invite reminded within the last
+// hour is skipped and not counted, and at most as many are reminded as the member has reminder emails left for the hour.
+// Fix round 4: nothing is claimed until everything the emails need is in hand, and `reminded` counts only emails that went.
 
 router.post(
   '/remind-all/:sessionId',
@@ -286,32 +417,48 @@ router.post(
     try {
       const { sessionId } = req.params;
 
-      // Only host/admin can bulk remind
+      // Only the host, a co-host or an admin can bulk remind (26 Oct 2026: co-hosts send event invites, so they remind them)
       const sessionResult = await query<{ host_user_id: string; title: string; scheduled_at: string | null; config: any; event_format?: string | null }>(
         `SELECT host_user_id, title, scheduled_at, config, event_format FROM sessions WHERE id = $1`, [sessionId]
       );
       if (sessionResult.rows.length === 0) {
-        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Session not found' } });
+        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Event not found' } });
       }
       const session = sessionResult.rows[0];
-      const isHost = session.host_user_id === req.user!.userId;
-      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
-      if (!isHost && !isAdmin) {
-        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can send reminders' } });
+      if (!(await inviteService.eventInviteRole(sessionId, req.user!.userId, inviteService.isAdminRole(req.user!.role)))) {
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can send reminders' } });
       }
 
-      // Get all pending invites for this session (only those with an email to send to)
-      const pendingInvites = await query<{ id: string; invitee_email: string; code: string }>(
+      // Get all pending invites for this session (only those with an email to send to). An invite whose expiry has
+      // passed keeps the status 'pending' but its link is dead, so nobody is reminded with it.
+      // Oldest first, so a member short of allowance reminds the invites that have waited longest (fix round 3).
+      const allPending = await query<{ id: string; invitee_email: string; code: string }>(
         `SELECT id, invitee_email, code FROM invites
-         WHERE session_id = $1 AND status = 'pending' AND invitee_email IS NOT NULL AND invitee_email != ''`,
+         WHERE session_id = $1 AND status = 'pending' AND invitee_email IS NOT NULL AND invitee_email != ''
+           AND (expires_at IS NULL OR expires_at > NOW())
+         ORDER BY created_at`,
         [sessionId]
       );
+      // A closed account, or anyone blocked either way with the sender, is never emailed. They are left out without
+      // a word (and not counted), so a block is never revealed. Left out before anything is claimed, so a block never
+      // uses up an invite's hour.
+      const unreachable = await inviteService.unreachableAddresses(req.user!.userId, allPending.rows.map((inv) => inv.invitee_email));
+      const eligible = allPending.rows.filter((inv) => !unreachable.has(inv.invitee_email.toLowerCase()));
 
-      if (pendingInvites.rows.length === 0) {
-        return res.json({ success: true, data: { reminded: 0 } });
+      // Both numbers, always: production's event page toasts "Reminders sent to ${reminded}/${total} pending invites",
+      // and without a total it read "0/undefined" (fix round 2). `recentlyReminded` (fix round 3) is how many were left
+      // out because they were reminded within the hour; the page ignores it.
+      if (eligible.length === 0) {
+        return res.json({ success: true, data: { reminded: 0, total: 0, recentlyReminded: 0 } });
       }
 
-      // Build calendar event context
+      // The member's allowance of reminder emails for the hour, then the invites that are due: the ones reminded within
+      // the hour are left out of both numbers, and no more are claimed than the member has emails left.
+      const allowance = await inviteReminders.reminderAllowance(req.user!.userId);
+      if (allowance <= 0) throw reminderAllowanceSpent();
+
+      // Everything the emails need is in hand BEFORE any invite is claimed (fix round 4): a question that fails here (the
+      // sender's name, the host for the calendar entry) fails the call with nothing claimed, so pressing again reminds them.
       const inviterResult = await query<{ displayName: string }>(
         `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [req.user!.userId]
       );
@@ -336,28 +483,48 @@ router.post(
         };
       }
 
-      // Send reminders in parallel (batched)
       const { default: appConfig } = await import('../config');
       const emailService = await import('../services/email/email.service');
-      let sentCount = 0;
-      const BATCH = 10;
-      for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
-        const batch = pendingInvites.rows.slice(i, i + BATCH);
-        const results = await Promise.allSettled(
-          batch.map(inv =>
-            emailService.sendInviteEmail(inv.invitee_email, {
-              inviterName,
-              type: 'session',
-              targetName: session.title,
-              inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
-              calendarEvent,
-            })
-          )
-        );
-        sentCount += results.filter(r => r.status === 'fulfilled').length;
+
+      const { claimed, recent } = await inviteReminders.claimReminders(eligible.map((inv) => inv.id), allowance);
+      const claimedIds = new Set(claimed);
+      const pendingInvites = { rows: eligible.filter((inv) => claimedIds.has(inv.id)) };
+      const total = eligible.length - recent.size;
+      if (pendingInvites.rows.length === 0) {
+        return res.json({ success: true, data: { reminded: 0, total, recentlyReminded: recent.size } });
       }
 
-      return res.json({ success: true, data: { reminded: sentCount, total: pendingInvites.rows.length } });
+      // Send reminders in parallel (batched). A claim is kept only for an email that went (fix round 4): the mail provider
+      // answers a refusal rather than throwing, so its answer is read, not just whether the send threw. Every other claim
+      // is given back, whatever stopped the sends, so its invite is not "reminded within the hour"; only the emails that
+      // went count against the member's allowance (fix round 3) and in `reminded`.
+      const emailed = new Set<string>();
+      try {
+        const BATCH = 10;
+        for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
+          const batch = pendingInvites.rows.slice(i, i + BATCH);
+          const results = await Promise.allSettled(
+            batch.map(inv =>
+              emailService.sendInviteEmail(inv.invitee_email, {
+                inviterName,
+                type: 'session',
+                targetName: session.title,
+                inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
+                calendarEvent,
+              })
+            )
+          );
+          results.forEach((result, at) => {
+            if (result.status === 'fulfilled' && result.value.sent) emailed.add(batch[at].id);
+          });
+        }
+      } finally {
+        const notSent = claimed.filter((id) => !emailed.has(id));
+        if (notSent.length > 0) await inviteReminders.releaseReminders(notSent);
+      }
+      await inviteReminders.countRemindersSent(req.user!.userId, emailed.size);
+
+      return res.json({ success: true, data: { reminded: emailed.size, total, recentlyReminded: recent.size } });
     } catch (err) {
       return next(err);
     }
@@ -430,9 +597,17 @@ router.get(
 
       const context = { inviterName, podName, podDescription, sessionTitle, sessionScheduledAt, sessionDescription, sessionStatus, circleName, circleDescription };
 
-      // Non-authenticated users see limited invite fields but full context
+      // Non-authenticated users see limited invite fields but full context. A signed-in caller sees the whole invite,
+      // but its address only if they have a right to it (fix round 2): the invitee, the sender, the event's host or the
+      // pod's director or host, and admins read it whole; anyone else reads it masked. The code is all it takes to ask
+      // here, so the address was otherwise open to every signed-in member who had one. Production's accept page never
+      // shows it, so no one loses anything on screen.
       const data = req.user
-        ? { ...invite, ...context }
+        ? {
+            ...invite,
+            inviteeEmail: await inviteService.inviteeAddressFor(invite, { userId: req.user.userId, email: req.user.email, role: req.user.role }),
+            ...context,
+          }
         : {
             code: invite.code,
             type: invite.type,
@@ -530,37 +705,26 @@ router.post(
 );
 
 // ─── POST /invites/:code/mark-accepted ───────────────────────────────────────
-// Force-mark an invite as accepted for the current user.
-// Used when the normal accept flow fails (already used/expired) but the user
-// has been registered via a different path. Ensures notifications & dashboard
-// reflect the real state.
+// Mark an invite as accepted for the current user.
+// Was used when the normal accept flow failed (already used/expired) but the user
+// had been registered via a different path; the client dropped that recovery in T0-4
+// and nothing calls it now. 26 Oct 2026 (fix round 2): it applies the rules accept
+// applies (the invite must still be usable, and a personal invite is marked only for
+// the person it was sent to) instead of trusting any signed-in caller with any code.
 
 router.post(
   '/:code/mark-accepted',
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const inviteResult = await query<{ id: string; status: string; pod_id: string | null; session_id: string | null }>(
-        `SELECT id, status, pod_id, session_id FROM invites WHERE code = $1`,
-        [req.params.code]
-      );
-      if (inviteResult.rows.length === 0) {
-        res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Invite not found' } });
-        return;
-      }
-      const row = inviteResult.rows[0];
-      // Update invite status to accepted and record accepting user
-      await query(
-        `UPDATE invites SET status = 'accepted', accepted_by_user_id = $1, accepted_at = COALESCE(accepted_at, NOW()) WHERE id = $2`,
-        [req.user!.userId, row.id]
-      );
+      const row = await inviteService.markInviteAccepted(req.params.code, req.user!.userId, req.user!.email);
       // Bug 30 (19 May Ali) — same fanout as /accept so the affected
       // pod / session lists repaint everywhere instantly.
-      if (row.pod_id) {
-        fanoutPodEntities(row.pod_id, [E.userPods(req.user!.userId)]).catch(() => {});
+      if (row.podId) {
+        fanoutPodEntities(row.podId, [E.userPods(req.user!.userId)]).catch(() => {});
       }
-      if (row.session_id) {
-        fanoutSessionEntities(row.pod_id, row.session_id, [E.userSessions(req.user!.userId)]).catch(() => {});
+      if (row.sessionId) {
+        fanoutSessionEntities(row.podId, row.sessionId, [E.userSessions(req.user!.userId)]).catch(() => {});
       }
       emitEntities(
         getRealtimeIo(),
@@ -600,7 +764,8 @@ router.post(
         fanoutPodEntities(declined.podId).catch(() => {});
       }
       if (declined.sessionId) {
-        fanoutSessionEntities(declined.podId, declined.sessionId).catch(() => {});
+        // 26 Oct 2026: the event's invites tag too, so an organiser's list flips to "declined" without a refresh.
+        fanoutSessionEntities(declined.podId, declined.sessionId, [E.sessionInvites(declined.sessionId)]).catch(() => {});
       }
       emitEntities(
         getRealtimeIo(),
@@ -623,14 +788,21 @@ router.delete(
   auditMiddleware('revoke_invite', 'invite'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const revoked = await inviteService.revokeInvite(req.params.id, req.user!.userId);
+      const revoked = await inviteService.revokeInvite(req.params.id, req.user!.userId, req.user!.role);
       // Bug 30 (19 May Ali) — same fanout so the pending-invites surface
       // repaints everywhere on revoke.
       if (revoked.podId) {
         fanoutPodEntities(revoked.podId).catch(() => {});
       }
       if (revoked.sessionId) {
-        fanoutSessionEntities(revoked.podId, revoked.sessionId).catch(() => {});
+        fanoutSessionEntities(revoked.podId, revoked.sessionId, [E.sessionInvites(revoked.sessionId)]).catch(() => {});
+      }
+      // Fix round 3 (every mutation emits): the sender's sent list and, when the address is a member's, that member's
+      // received list change whoever withdrew the invite. A platform or circle invite has no pod or event whose screens
+      // could be told, and an organiser withdrawing someone else's invite tells only the event's or pod's. Each person
+      // is sent their own tag and no one else's.
+      for (const person of new Set([revoked.inviterId, revoked.inviteeUserId])) {
+        if (person) emitEntities(getRealtimeIo(), [person], [E.userInvites(person)]).catch(() => {});
       }
       const response: ApiResponse = { success: true, data: { message: 'Invite revoked' } };
       res.json(response);
@@ -647,6 +819,15 @@ const bulkInviteSchema = z.object({
   emails: z.array(z.string().email()).min(1).max(500),
 });
 
+// Someone who already has a pending invite, is already going, or is already in the pod is skipped, not an error.
+// (The route used to look for 'INVITE_EXISTS' and 'CONFLICT', which nothing throws, so every duplicate was
+// counted as an error: audit 03, defect 7.)
+// A person who cannot be invited at all (a closed account, or a block either way) is skipped the same way, with no
+// word about why: INVITE_NOT_PERMITTED is the one code createInvite gives for every such case.
+const BULK_SKIP_CODES: ReadonlySet<string> = new Set([
+  'DUPLICATE_INVITE', 'SESSION_ALREADY_REGISTERED', 'POD_MEMBER_EXISTS', 'INVITE_NOT_PERMITTED',
+]);
+
 router.post(
   '/bulk',
   authenticate,
@@ -657,7 +838,28 @@ router.post(
       const userId = req.user!.userId;
       const results = { sent: 0, skipped: 0, errors: 0 };
 
+      // Someone who declined an invite to this event, and has not accepted one since, is not asked again by "Invite All"
+      // (fix round 2, a ruling): they are counted as skipped, which production's page reads as "already invited". One
+      // question for the whole list. It is asked only for a caller who may invite here: for anyone else every address is
+      // refused by the invite itself, as it always was, so the answer cannot tell who declined. The single Invite for one
+      // member (POST /invites) does not ask: the organiser may still ask them again by hand.
+      let mayInvite = true;
+      try {
+        await inviteService.assertMayInviteToSession(sessionId, userId, false);
+      } catch (err) {
+        // Only a refusal (a 4xx: not the host or a co-host, no such event, a finished event) means "may not invite". A
+        // failure to find out, a database error above all, is a failure of the call (fix round 3): asking nobody about
+        // decliners on a guess would invite them again.
+        if (!(err instanceof AppError) || err.statusCode >= 500) throw err;
+        mayInvite = false;
+      }
+      const declined = mayInvite ? await inviteCandidates.declinedAddresses('session', sessionId, emails) : new Set<string>();
+
       for (const email of emails) {
+        if (declined.has(email.toLowerCase())) {
+          results.skipped++;
+          continue;
+        }
         try {
           await inviteService.createInvite(userId, {
             type: InviteType.SESSION,
@@ -666,9 +868,9 @@ router.post(
             maxUses: 1,
           });
           results.sent++;
-        } catch (err: any) {
+        } catch (err) {
           // Skip already-invited, already-registered, etc
-          if (err?.code === 'INVITE_EXISTS' || err?.code === 'SESSION_ALREADY_REGISTERED' || err?.code === 'CONFLICT') {
+          if (BULK_SKIP_CODES.has((err as { code?: string }).code ?? '')) {
             results.skipped++;
           } else {
             results.errors++;
