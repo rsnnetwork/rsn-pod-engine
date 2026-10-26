@@ -74,7 +74,7 @@ export async function startSession(host: TestUser, sessionId: string) {
 }
 
 export async function endSession(host: TestUser, sessionId: string) {
-  return apiRequest(host, 'POST', `/sessions/${sessionId}/end`);
+  return apiRequest(host, 'POST', `/sessions/${sessionId}/host/end`);
 }
 
 export { apiRequest };
