@@ -684,6 +684,137 @@ test('an open card whose meeting changes under it closes and says where the meet
   }
 });
 
+test('a card opened on a time on another day ends on that time in the timeline, and a Save says what it did at once', async () => {
+  test.setTimeout(240_000);
+  // The time a card opens on is scrolled to after its day opens (the day's own first time used to win, leaving a
+  // later time off-screen at phone widths). And a Save no longer waits for the panel's refresh to say what it did.
+  const mo = await createTestUser('mlmo');
+  const ni = await createTestUser('mlni');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Mo', mo.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Ni', ni.id]);
+    const sent = await apiAs(mo, 'POST', '/pokes', { recipientId: ni.id, message: 'Coffee?' });
+    expect((await apiAs(ni, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [mo.id, ni.id],
+    )).rows[0].id;
+    const d1 = futureSlot(2, 10);
+    const early = futureSlot(3, 8);
+    const late = futureSlot(3, 18);
+    const free = futureSlot(3, 20);
+    for (const u of [mo, ni]) await apiAs(u, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [d1, early, late] });
+
+    const TZ = 'Europe/Copenhagen';
+    const page = await openAs(ni, `/messages/${conv}`, { width: 390, height: 844 }, TZ);
+    await openScheduler(page);
+    // The panel opens on the first day both can (d1); the late time is on the next day, ten hours after its first.
+    const lateChip = page.getByRole('button', { name: `Confirm ${labelIn(late, TZ)}` });
+    await stillAt(lateChip);
+    await tapReachable(page, lateChip, 'Ni: the late time');
+    await expect(page.getByTestId('confirm-card')).toContainText(labelIn(late, TZ));
+    const grid = page.getByTestId('slot-grid');
+    const cell = page.locator(`[data-slot="${late}"]`);
+    await expect.poll(async () => {
+      const [g, c] = [await grid.boundingBox(), await cell.boundingBox()];
+      return !!g && !!c && c.y >= g.y - 1 && c.y + c.height <= g.y + g.height + 1;
+    }, { message: 'the late time is in view in the timeline', timeout: 5_000 }).toBe(true);
+    await tapReachable(page, page.getByTestId('confirm-card').getByRole('button', { name: 'Cancel' }), 'Ni: Cancel');
+
+    // A Save while the panel's own refresh is slow: what it did is said at once, and the pick stays picked meanwhile.
+    await reachSlot(page, free, 'Ni: a free time');
+    const scheduling = `**/api/dm/conversations/${conv}/scheduling`;
+    await page.route(scheduling, async r => {
+      if (r.request().method() === 'GET') await new Promise(resolve => setTimeout(resolve, 15_000));
+      await r.continue().catch(() => undefined);
+    });
+    await tapReachable(page, page.getByRole('button', { name: /Save and send availability/i }), 'Ni: Save');
+    await expect(toast(page, 'You can both meet. Confirm a time.')).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator(`[data-slot="${free}"]`)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: /Save and send availability/i })).toHaveCount(0);
+    await page.unroute(scheduling);
+    const saved = await apiAs(ni, 'GET', `/dm/conversations/${conv}/scheduling`);
+    expect(saved.json.data.mine).toEqual(expect.arrayContaining([d1, early, late, free]));
+    console.log('  ✓ the card on another day ended on its time; the save said what it did without waiting');
+  } finally {
+    await cleanup(pool, { ids: [mo.id, ni.id] });
+  }
+});
+
+test('a card opened before the panel heard the member\'s own Move follows it quietly, and a refusal that would only repeat keeps Move waiting', async () => {
+  test.setTimeout(240_000);
+  const os = await createTestUser('mlos');
+  const pa = await createTestUser('mlpa');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Os', os.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Pa', pa.id]);
+    const sent = await apiAs(os, 'POST', '/pokes', { recipientId: pa.id, message: 'Coffee?' });
+    expect((await apiAs(pa, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [os.id, pa.id],
+    )).rows[0].id;
+    const t1 = futureSlot(6, 9);
+    const t2 = futureSlot(6, 13);
+    const t3 = futureSlot(6, 17);
+    const put = (u: TestUser, windows: string[]) => apiAs(u, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows });
+    await put(os, [t1]);
+    await apiAs(pa, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [t1], durationMin: 45, type: 'audio' });
+    await put(os, [t1, t2, t3]);
+    await put(pa, [t1, t2, t3]);
+
+    const TZ = 'Europe/Copenhagen';
+    const page = await openAs(pa, `/messages/${conv}?schedule=1`, { width: 390, height: 844 }, TZ);
+    await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    const card = page.getByTestId('confirm-card');
+    const move = card.getByRole('button', { name: 'Move meeting' });
+
+    // 1. Pa moves the meeting to t2. The panel's refresh is held, so it still shows the meeting at t1 and offers t3;
+    // Pa opens Move to t3 in that moment. When the panel hears back, the card stays: Pa's own Move is not news.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const scheduling = `**/api/dm/conversations/${conv}/scheduling`;
+    await page.route(scheduling, async r => {
+      if (r.request().method() === 'GET') await held;
+      await r.continue().catch(() => undefined);
+    });
+    const t2Chip = page.getByRole('button', { name: `Confirm ${labelIn(t2, TZ)}` });
+    await stillAt(t2Chip);
+    await tapReachable(page, t2Chip, 'Pa: t2');
+    await tapReachable(page, move, 'Pa: Move to t2');
+    await expect(toast(page, `Meeting moved: ${labelIn(t2, TZ)}`)).toBeVisible({ timeout: 20_000 });
+    await tapReachable(page, page.getByRole('button', { name: `Confirm ${labelIn(t3, TZ)}` }), 'Pa: t3, before the panel heard');
+    await expect(card).toContainText(labelIn(t3, TZ));
+    release();
+    await page.unroute(scheduling);
+    await expect(page.getByText(`Meeting confirmed — ${labelIn(t2, TZ)}`, { exact: false })).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(1_500);
+    await expect(card).toContainText(labelIn(t3, TZ));
+    await expect(page.getByText(/^Your meeting is now on /)).toHaveCount(0);
+    await expect(card.locator('#meeting-minutes')).toHaveValue('45');
+
+    // 2. Os blocks Pa. Move to t3 is refused with the server's reason; pressing again would only repeat it, so the
+    // reason stays on the card and Move waits. Once the block is gone and something changes, Move is back.
+    await pool.query(`INSERT INTO user_blocks (id, blocker_id, blocked_id) VALUES (gen_random_uuid(), $1, $2)`, [os.id, pa.id]);
+    await tapReachable(page, move, 'Pa: Move to t3 (blocked)');
+    await expect(page.getByRole('alert').getByText(/^You can no longer arrange a meeting with this person\. Your meeting stays on /))
+      .toBeVisible({ timeout: 20_000 });
+    await expect(card.getByTestId('confirm-card-reason')).toHaveText('You can no longer arrange a meeting with this person.');
+    await expect(move).toBeDisabled();
+    await page.waitForTimeout(2_000);
+    await expect(move).toBeDisabled();
+    await pool.query(`DELETE FROM user_blocks WHERE blocker_id=$1 AND blocked_id=$2`, [os.id, pa.id]);
+    await put(os, [t1, t2, t3, futureSlot(6, 19)]);
+    await expect(move).toBeEnabled({ timeout: 30_000 });
+    await tapReachable(page, move, 'Pa: Move to t3');
+    await expect(toast(page, `Meeting moved: ${labelIn(t3, TZ)}`)).toBeVisible({ timeout: 20_000 });
+    console.log('  ✓ the card followed Pa\'s own Move quietly; the block kept Move waiting until something changed');
+  } finally {
+    await pool.query(`DELETE FROM user_blocks WHERE blocker_id = ANY($1::uuid[]) OR blocked_id = ANY($1::uuid[])`, [[os.id, pa.id]]);
+    await cleanup(pool, { ids: [os.id, pa.id] });
+  }
+});
+
 test('a save that books the agreed time books it with the length and kind it carried', async () => {
   const x = await createTestUser('mlbookx');
   const y = await createTestUser('mlbooky');
