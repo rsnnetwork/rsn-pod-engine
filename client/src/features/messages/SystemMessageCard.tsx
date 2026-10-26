@@ -52,11 +52,16 @@ interface Props {
   /** The thread's current meeting has ended. A card can also be over on its
    *  own terms (an older meeting under a newer one); either makes it over. */
   meetingOver?: boolean;
+  /** The thread's meeting as it stands now, once the scheduling has loaded
+   *  (null: none stands, it was cancelled). A card for another time is history. */
+  currentMeeting?: { startAt: string | null } | null;
 }
+
+const sameInstant = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && Date.parse(a) === Date.parse(b);
 
 export default function SystemMessageCard({
   content, meta, liveSlots, onPickSlot, onOpenScheduler, meetingConfirmed, onAddToCalendar,
-  onCallNow, callsUnlocked, meetingOver,
+  onCallNow, callsUnlocked, meetingOver, currentMeeting,
 }: Props) {
   const navigate = useNavigate();
 
@@ -69,6 +74,11 @@ export default function SystemMessageCard({
     // way in while the banner above it says the meeting ended, so either one
     // being over settles it.
     const over = !!meetingOver || isMeetingOver(meta.startAt, meta.durationMin);
+    // 26 Oct 2026: a meeting can be moved (Reschedule) or cancelled. The card
+    // for a time that no longer stands says so and offers nothing to press;
+    // its Join used to open the room for a time nobody was keeping.
+    const replaced = !over && currentMeeting !== undefined && !(currentMeeting && sameInstant(currentMeeting.startAt, meta.startAt));
+    const settled = over || replaced;
     return (
       // The deck puts the sheep in message threads, matched pose, on exactly
       // this moment: "MATCHED - match found; meeting confirmed in the chat."
@@ -76,7 +86,7 @@ export default function SystemMessageCard({
       // the calendar tick comes back.
       <Shell
         tone="confirmed"
-        icon={over
+        icon={settled
           ? <CalendarCheck className="h-4 w-4 text-emerald-600" />
           : <SheepAvatar pose="matched" size={44} />}
       >
@@ -92,8 +102,13 @@ export default function SystemMessageCard({
         <p className="text-[11px] text-emerald-700">
           {meta.durationMin} minutes · {meta.meetingType === 'audio' ? 'Audio call' : 'Video call'} · your local time
         </p>
+        {replaced && (
+          <p className="mt-1 text-[11px] font-medium text-gray-700" data-testid="meeting-card-replaced">
+            {currentMeeting === null ? 'This meeting was cancelled.' : 'This meeting moved to another time.'}
+          </p>
+        )}
         <div className="mt-1.5 flex flex-wrap justify-center gap-2">
-          {!over && (
+          {!settled && (
             <button
               type="button"
               onClick={() => navigate(meta.joinPath)}
@@ -111,7 +126,7 @@ export default function SystemMessageCard({
               {meta.meetingType === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
             </button>
           )}
-          {onAddToCalendar && !over && (
+          {onAddToCalendar && !settled && (
             <button
               type="button"
               onClick={onAddToCalendar}

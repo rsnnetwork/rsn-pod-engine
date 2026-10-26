@@ -110,7 +110,7 @@ export function ThreadMeetingBanner({ conversationId, onCallNow }: { conversatio
           {over ? 'Meeting ended' : whenWithZone(c.startAt, zone)}
         </span>
         <span className={`block truncate text-[11px] ${over ? 'text-gray-500' : 'text-emerald-700'}`}>
-          {over ? `${callWord} · ${whenWithZone(c.startAt, zone)}` : `${callWord} · ${c.durationMin} min · your local time`}
+          {over ? `${callWord} · ${whenWithZone(c.startAt, zone)}` : `${callWord} · ${c.durationMin} min`}
         </span>
       </span>
     </>
@@ -180,6 +180,8 @@ interface SchedulerProps {
   onClose?: () => void;
   /** Open the confirm card on this time (the thread card's time). `at` lets the same time be asked for twice. */
   confirmRequest?: { slot: string; at: number } | null;
+  /** Opened by Reschedule: bring the times into view and put the focus on the one it opens on, for the first pick. */
+  focusFirstPick?: boolean;
 }
 
 // Unsaved picks, the typed length and the kind survive the panel unmounting
@@ -188,7 +190,7 @@ interface SchedulerProps {
 const drafts = new Map<string, { staged: Set<string> | null; duration: string; kind: 'audio' | 'video' }>();
 
 const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function MeetingScheduler(
-  { conversationId, onClose, confirmRequest },
+  { conversationId, onClose, confirmRequest, focusFirstPick },
   ref,
 ) {
   const { addToast } = useToastStore();
@@ -290,6 +292,7 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
   // Opening a day: scroll its timeline to what matters — a time you both
   // can, else yours, else theirs, else the first time from the working day on.
   // Runs per day, not per tap, so toggling never jumps.
+  const pickFocused = useRef(false);
   useEffect(() => {
     const box = gridRef.current;
     if (!box || !data) return;
@@ -302,6 +305,16 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
       shown[0];
     const el = target ? box.querySelector<HTMLElement>(`[data-slot="${target}"]`) : null;
     if (el) box.scrollTop = Math.max(0, el.offsetTop - 4);
+    // Reschedule opened the panel for a new pick: a time that can be picked
+    // (not the booked one it opened on, the time just after it) comes into the
+    // panel's frame (the panel scrolls, never an ancestor) and takes the focus.
+    const pick = target === bookedKey ? shown[shown.indexOf(target) + 1] ?? shown.find(k => k !== bookedKey) : target;
+    const pickEl = pick ? box.querySelector<HTMLElement>(`[data-slot="${pick}"]`) : null;
+    if (focusFirstPick && !pickFocused.current && pickEl && pick) {
+      pickFocused.current = true;
+      setScrollTo({ key: pick, panel: true });
+      pickEl.focus({ preventScroll: true });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- per day opened (and once the times load), not per tap
   }, [current.dayKey, !!data]);
 
@@ -463,6 +476,23 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
     draftRef.current = { staged: null, duration: durationText, kind: meetingKind };
   };
 
+  // Both picked one new time while a meeting stood (Reschedule): move it there,
+  // keeping its length and kind. Their times are already sent either way.
+  const moveAfterSave = async (key: string, meeting: Scheduling['confirmed']) => {
+    try {
+      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, {
+        window: key, durationMin: meeting?.durationMin ?? 30, type: meeting?.type ?? 'video',
+      });
+      await refreshThread();
+      addToast(saveMessage({ kind: 'move', to: key }, zone), 'success');
+      onClose?.();
+    } catch (err) {
+      // Stay open: the new time is shared, so the move step is right here to try again.
+      await queryClient.invalidateQueries({ queryKey: ['meetingScheduling', conversationId] });
+      addToast(schedulerError(err, 'Your times are sent, but the meeting did not move. Pick the new time above to move it.'), 'error');
+    }
+  };
+
   // Saving SENDS: the thread gets a line either way (19 Sep: "we both have
   // saved our availability?" / "I have no clue!!!"), and since 25 Oct the save
   // that leaves one shared time books it. The answer says which happened.
@@ -477,9 +507,14 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
         ...(durationOk ? { durationMin } : {}),
         type: meetingKind,
       });
-      const outcome = saveOutcome(before, res.data.data as Scheduling, Date.now());
+      const after = res.data.data as Scheduling;
+      const outcome = saveOutcome(before, after, Date.now());
       await refreshThread();
       forgetDraft();
+      if (outcome.kind === 'move') {
+        await moveAfterSave(outcome.to, after.confirmed);
+        return;
+      }
       addToast(saveMessage(outcome, zone), 'success');
       if (outcome.kind === 'overlap') {
         // Two or more times you both can, and nothing booked: picking one is

@@ -189,6 +189,9 @@ export default function MessagesPage() {
   const [schedulerOpen, setSchedulerOpen] = useState(false);
   // A time on a proposal card asks the panel for that time's confirm card (26 Oct 2026).
   const [confirmRequest, setConfirmRequest] = useState<{ slot: string; at: number } | null>(null);
+  // Opened by Reschedule (a meeting's page, ?schedule=1): offered to every pair,
+  // also one that has met, and opened ready for the first pick.
+  const [rescheduling, setRescheduling] = useState(false);
   // The open panel decides whether it may close: with unsaved times it asks first.
   const schedulerRef = useRef<SchedulerHandle>(null);
   // Task E4 — report entry point for the thread's conversation partner.
@@ -598,6 +601,7 @@ export default function MessagesPage() {
   const openScheduler = () => {
     if (schedulerOpen) { closeScheduler(); return; }
     setConfirmRequest(null);
+    setRescheduling(false);
     setSchedulerOpen(true);
     markSchedulerSeen();
   };
@@ -617,18 +621,20 @@ export default function MessagesPage() {
   useEffect(() => {
     setSchedulerOpen(false);
     setConfirmRequest(null);
+    setRescheduling(false);
   }, [activeId]);
 
   // Reschedule on a meeting's page opens this chat with ?schedule=1: open the
-  // panel, once, then drop the flag so Back or a refresh does not open it again.
+  // panel, once, then drop the flag by replacing the entry, so Back or a
+  // refresh does not open it again. It opens for every pair: one that has met
+  // has calls instead of the scheduler, and Reschedule would land on nothing.
   const wantsScheduler = searchParams.get('schedule') === '1';
   useEffect(() => {
     if (!wantsScheduler || !activeId || !scheduling) return;
-    if (!scheduling.callsUnlocked) {
-      setConfirmRequest(null);
-      setSchedulerOpen(true);
-      markSchedulerSeen();
-    }
+    setConfirmRequest(null);
+    setRescheduling(true);
+    setSchedulerOpen(true);
+    markSchedulerSeen();
     const next = new URLSearchParams(searchParams);
     next.delete('schedule');
     setSearchParams(next, { replace: true });
@@ -1351,20 +1357,22 @@ export default function MessagesPage() {
             )}
 
             {/* Availability grid — collapsible so the thread stays primary. Gone
-                once calls are unlocked (the first meeting has happened).
+                once calls are unlocked (the first meeting has happened), except
+                when Reschedule opened it (26 Oct 2026).
                 min-h-0: this column has a fixed height and clips its overflow,
                 so the panel must be allowed to shrink and scroll inside itself.
                 Without it the panel kept its full height and pushed "Confirm
                 meeting", Save and the message box past the clip edge on any
                 laptop-height window (Stefan + Shradha, 19 Sep 2026). */}
-            {activeConv && !callsUnlocked && schedulerOpen && (
+            {activeConv && schedulerOpen && (!callsUnlocked || rescheduling) && (
               <div data-scheduler-panel className="flex min-h-0 flex-col">
                 <MeetingScheduler
                   key={activeConv.conversationId}
                   ref={schedulerRef}
                   conversationId={activeConv.conversationId}
                   confirmRequest={confirmRequest}
-                  onClose={() => { setSchedulerOpen(false); setConfirmRequest(null); }}
+                  focusFirstPick={rescheduling}
+                  onClose={() => { setSchedulerOpen(false); setConfirmRequest(null); setRescheduling(false); }}
                 />
               </div>
             )}
@@ -1420,6 +1428,7 @@ export default function MessagesPage() {
                             onCallNow={startCall}
                             callsUnlocked={callsUnlocked}
                             meetingOver={confirmedMeetingOver}
+                            currentMeeting={scheduling ? (scheduling.confirmed ? { startAt: scheduling.confirmed.startAt ?? null } : null) : undefined}
                           />
                         </div>,
                       );

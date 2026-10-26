@@ -270,6 +270,7 @@ export function confirmedMessage(at: string, zone: string, moved: boolean): stri
 
 export type SaveOutcome =
   | { kind: 'confirmed'; startAt: string }
+  | { kind: 'move'; to: string }
   | { kind: 'overlap' }
   | { kind: 'sent' };
 
@@ -277,8 +278,11 @@ export type SaveOutcome =
  * What a Save did, read from the scheduling the save itself answered with, against what the panel held before it.
  * Since 25 Oct 2026 a save that leaves exactly one shared time books it, so the answer can carry a meeting that was
  * not there before: that is "confirmed". With no meeting standing and times both can still confirm, it is "overlap"
- * and the confirm step stays in front of the person. Anything else only sent their times. A meeting that already
- * stood is not news, and moving one is a Confirm, never a save.
+ * and the confirm step stays in front of the person. Anything else only sent their times.
+ *
+ * A meeting that already stood is not news. Moving it (Reschedule, 26 Oct 2026) is agreed the way it was booked:
+ * the save that makes exactly ONE more time shared by both is "move", and the panel moves the meeting there; two or
+ * more new shared times leave the choice to the person ("overlap", with the move step open).
  */
 export function saveOutcome(before: SchedulingLike | undefined, after: SchedulingLike, now: number): SaveOutcome {
   const meeting = after.confirmed;
@@ -286,15 +290,24 @@ export function saveOutcome(before: SchedulingLike | undefined, after: Schedulin
     const prior = before?.confirmed;
     const already = !!prior && meetingStands(prior, now) && prior.window === meeting.window;
     if (!already) return { kind: 'confirmed', startAt: meeting.startAt };
+    const others = (s: SchedulingLike | undefined) => confirmable(s?.overlap ?? [], now).filter((k) => k !== meeting.window);
+    const was = new Set(others(before));
+    const fresh = others(after).filter((k) => !was.has(k));
+    if (fresh.length === 1) return { kind: 'move', to: fresh[0] };
+    return fresh.length > 1 ? { kind: 'overlap' } : { kind: 'sent' };
   }
   if (!meetingStands(meeting, now) && confirmable(after.overlap, now).length > 0) return { kind: 'overlap' };
   return { kind: 'sent' };
 }
 
-/** The toast after a Save. */
+/** The toast after a Save (for "move", once the meeting has moved). */
 export function saveMessage(outcome: SaveOutcome, zone: string): string {
-  if (outcome.kind === 'confirmed') return confirmedMessage(outcome.startAt, zone, false);
-  return outcome.kind === 'overlap' ? SAVE_OVERLAP : SAVE_SENT;
+  switch (outcome.kind) {
+    case 'confirmed': return confirmedMessage(outcome.startAt, zone, false);
+    case 'move': return confirmedMessage(outcome.to, zone, true);
+    case 'overlap': return SAVE_OVERLAP;
+    default: return SAVE_SENT;
+  }
 }
 
 // ---- cells -------------------------------------------------------------------------------------------------------

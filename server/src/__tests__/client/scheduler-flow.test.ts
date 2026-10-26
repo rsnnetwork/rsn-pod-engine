@@ -243,9 +243,28 @@ describe('what a Save says it did, read from the answer the save itself got', ()
     expect(SAVE_SENT).toBe('Sent. They can see when you are free.');
   });
 
-  it('a meeting that already stood is not news, and moving it stays a Confirm: the save just sends', () => {
-    expect(saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), sched(['2026-10-25T12:00:00Z', '2026-10-25T15:00:00Z'], booked), now))
+  it('a meeting that already stood is not news: a save that shares nothing new just sends', () => {
+    expect(saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), sched(['2026-10-25T12:00:00Z'], booked), now))
       .toEqual({ kind: 'sent' });
+  });
+
+  it('Reschedule: with a meeting standing, the save that makes ONE more time shared moves the meeting there', () => {
+    // Both picked 15:00 while 13:00 stood: that is the new agreement, the way the first one was.
+    expect(saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], booked), now))
+      .toEqual({ kind: 'move', to: '2026-10-25T14:00:00Z' });
+    expect(saveMessage({ kind: 'move', to: '2026-10-25T14:00:00Z' }, CPH)).toBe('Meeting moved: Sun 25 Oct, 15:00');
+  });
+
+  it('Reschedule: two or more new shared times leave the choice to the person (the move step stays open); old ones are not new', () => {
+    expect(saveOutcome(
+      sched(['2026-10-25T12:00:00Z'], booked),
+      sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z', '2026-10-25T16:00:00Z'], booked), now,
+    )).toEqual({ kind: 'overlap' });
+    // 14:00 was already shared before this save: nothing moves.
+    expect(saveOutcome(
+      sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], booked),
+      sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], booked), now,
+    )).toEqual({ kind: 'sent' });
   });
 
   it('only shared times still ahead count; once a meeting has ended, a new one booked by the save is news again', () => {
@@ -325,7 +344,7 @@ describe('the scheduler on screen', () => {
 
   it('reads the Save\'s own answer to say what happened, and stays open when there is a time to confirm', () => {
     const src = scheduler();
-    expect(src).toMatch(/const outcome = saveOutcome\(before, res\.data\.data as Scheduling, Date\.now\(\)\)/);
+    expect(src).toMatch(/const after = res\.data\.data as Scheduling;\s*const outcome = saveOutcome\(before, after, Date\.now\(\)\)/);
     expect(src).toMatch(/addToast\(saveMessage\(outcome, zone\), 'success'\)/);
     expect(src).toMatch(/if \(outcome\.kind === 'overlap'\)/);
   });
@@ -373,8 +392,33 @@ describe('the thread: the card\'s time opens the confirm step for that time, and
     expect(card()).toMatch(/\(liveSlots \?\? meta\.slots\)\.filter\(s => Date\.parse\(s\) > Date\.now\(\)\)/);
   });
 
-  it('Reschedule from a meeting\'s page opens the scheduler (/messages/:id?schedule=1)', () => {
-    expect(page()).toMatch(/searchParams\.get\('schedule'\) === '1'/);
+  it('Reschedule from a meeting\'s page opens the scheduler (/messages/:id?schedule=1), once, for every pair', () => {
+    const src = page();
+    expect(src).toMatch(/searchParams\.get\('schedule'\) === '1'/);
+    // Also a pair that has met: calls are unlocked and the scheduler is otherwise not offered to them.
+    expect(src).toMatch(/activeConv && schedulerOpen && \(!callsUnlocked \|\| rescheduling\) && \(/);
+    expect(src).toMatch(/setRescheduling\(true\);/);
+    // The flag is dropped by replacing the entry, so Back does not open it again.
+    expect(src).toMatch(/next\.delete\('schedule'\);\s*setSearchParams\(next, \{ replace: true \}\);/);
+    // It opens with a time in view and in focus, ready for the first pick.
+    expect(src).toMatch(/focusFirstPick=\{rescheduling\}/);
+    expect(scheduler()).toMatch(/if \(focusFirstPick && !pickFocused\.current && pickEl && pick\) \{/);
+    expect(scheduler()).toMatch(/pickEl\.focus\(\{ preventScroll: true \}\);/);
+    // Not the booked time it opens on: the one after it.
+    expect(scheduler()).toMatch(/const pick = target === bookedKey \? shown\[shown\.indexOf\(target\) \+ 1\]/);
+  });
+
+  it('a meeting card for a time that no longer stands (moved, or cancelled) says so and offers no Join', () => {
+    expect(card()).toMatch(/const replaced = !over && currentMeeting !== undefined && !\(currentMeeting && sameInstant\(currentMeeting\.startAt, meta\.startAt\)\);/);
+    expect(card()).toMatch(/\{!settled && \(/);
+    expect(card()).toMatch(/'This meeting was cancelled\.' : 'This meeting moved to another time\.'/);
+    expect(page()).toMatch(/currentMeeting=\{scheduling \? \(scheduling\.confirmed \? \{ startAt: scheduling\.confirmed\.startAt \?\? null \} : null\) : undefined\}/);
+  });
+
+  it('a save that agrees one new time while a meeting stands moves it there, keeping its length and kind', () => {
+    const src = scheduler();
+    expect(src).toMatch(/if \(outcome\.kind === 'move'\) \{\s*await moveAfterSave\(outcome\.to, after\.confirmed\);/);
+    expect(src).toMatch(/durationMin: meeting\?\.durationMin \?\? 30, type: meeting\?\.type \?\? 'video'/);
   });
 
   it('the pinned meeting links to its own page once it has one', () => {
