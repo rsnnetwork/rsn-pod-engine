@@ -13,7 +13,7 @@ import { localTimezoneLabel } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import { EVENT_FORMATS, liveKindOf } from '@rsn/shared';
 import type { EventFormat } from '@rsn/shared';
-import { meetingLengthsFor, rangeHint, serverFieldErrors, sessionBody, fieldMessage } from './event-form';
+import { fieldMessage, maySchedule, meetingLengthsFor, namedPodOffer, podOptions, rangeHint, serverFieldErrors, sessionBody } from './event-form';
 import type { PodRow, SessionForm } from './event-form';
 import { FieldError, selectClass } from './form-parts';
 import RoundsSettings from './RoundsSettings';
@@ -87,13 +87,14 @@ export default function CreateSessionPage() {
   // Admins can create events in any pod; others need director/host role. Kept as one array until the list or the role
   // changes: filtering afresh on every render gave anything that depended on it a new value each time.
   const pods = useMemo<PodRow[]>(
-    () => (isAdmin ? (allPods ?? []) : (allPods ?? []).filter((p: PodRow) => p.memberRole === 'director' || p.memberRole === 'host')),
+    () => (allPods ?? []).filter((p: PodRow) => maySchedule(p, isAdmin)),
     [allPods, isAdmin],
   );
 
+  const urlPodId = params.get('podId') || '';
   const { register, handleSubmit, setValue, getValues, setError, watch, formState: { errors } } = useForm<SessionForm>({
     defaultValues: {
-      podId: params.get('podId') || '',
+      podId: urlPodId,
       // Filled in once the format is known (useEventFormat), never with a guess that is then replaced.
       title: '',
       scheduledAt: getDefaultScheduledAt(),
@@ -107,21 +108,25 @@ export default function CreateSessionPage() {
     },
   });
 
-  // The pod's type decides which formats it holds. The list above is the first twenty pods, so a pod the address names
-  // that it lacks is read by itself (the same read the pod's own page makes).
+  // The list above is the server's first page, the twenty newest pods, so a pod the address names can fall outside it (an
+  // older one, which the pod page links to). It is read by itself (the same read the pod's own page makes), for its type
+  // and its name, and offered in the select so it can be chosen and the form submitted. The read is keyed by the address's
+  // pod, not the chosen one: choosing another pod does not take it out of the select.
   const podId = watch('podId');
-  const listedPod = pods.find((p) => p.id === podId);
-  const { data: fetchedPod, isLoading: podFetching } = useQuery({
-    queryKey: ['pod', podId],
-    queryFn: () => api.get(`/pods/${podId}`).then(r => r.data.data),
-    enabled: !!podId && !!allPods && !listedPod,
+  const { data: namedPod, isLoading: namedPodLoading } = useQuery({
+    queryKey: ['pod', urlPodId],
+    queryFn: () => api.get(`/pods/${urlPodId}`).then(r => r.data.data),
+    enabled: !!urlPodId && !!allPods && !pods.some((p) => p.id === urlPodId),
     retry: false,
-    meta: { entities: podId ? [E.pod(podId)] : [] },
+    meta: { entities: urlPodId ? [E.pod(urlPodId)] : [] },
   });
-  const pod: PodRow | undefined = listedPod ?? fetchedPod;
-  // A pod is chosen and we are still finding out what it is. (A pod that cannot be read ends this: the form carries on
-  // with the formats on offer.)
-  const podPending = !!podId && !pod && (podsLoading || podFetching);
+  const options = useMemo(() => podOptions(pods, namedPodOffer(namedPod, isAdmin)), [pods, namedPod, isAdmin]);
+
+  // The pod's type decides which formats it holds.
+  const pod = options.find((p) => p.id === podId);
+  // A pod is chosen and we are still finding out what it is. (A pod that cannot be read, or one the member may not
+  // schedule in, ends this: the form carries on with the formats on offer.)
+  const podPending = !!podId && !pod && (podsLoading || namedPodLoading);
 
   const ev = useEventFormat({ podType: pod?.podType, podName: pod?.name ?? '', pending: podPending, getValues, setValue });
   const { format } = ev;
@@ -173,7 +178,7 @@ export default function CreateSessionPage() {
                 className={selectClass}
               >
                 <option value="">Select a pod</option>
-                {pods.map((p) => (
+                {options.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>

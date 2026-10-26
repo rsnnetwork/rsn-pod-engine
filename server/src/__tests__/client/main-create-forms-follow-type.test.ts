@@ -239,12 +239,49 @@ describe('L3 - the event form\'s rules (event-form.ts)', () => {
     fieldMessage: (format: string, key: string, value: unknown) => string | true;
     sessionBody: (data: Record<string, unknown>) => Body;
     serverFieldErrors: (error: unknown) => { fields: Array<{ name: string; message: string }>; format: string | null; toast: string | null };
+    maySchedule: (pod: { memberRole?: string | null }, isAdmin: boolean) => boolean;
+    namedPodOffer: (named: Pod | undefined, isAdmin: boolean) => Pod | undefined;
+    podOptions: (pods: Pod[], offered: Pod | undefined) => Pod[];
   }
+  interface Pod { id: string; name: string; podType: string; memberRole?: string | null; status?: string }
   const rules = (): Rules => loadClientModule(EVENT_FORM, {}) as unknown as Rules;
   const form = {
     podId: 'p1', title: 'Our check-in', description: '', scheduledAt: '2026-10-30T10:00', numberOfRounds: 3, roundDurationSeconds: 300,
     durationMinutes: 90, maxParticipants: 20, timerVisibility: 'always_visible', matchingTemplateId: '', matchingPolicy: 'within_event',
   };
+
+  it('a member may schedule where the server lets them: an admin anywhere, anyone else as the pod\'s director or host', () => {
+    const { maySchedule } = rules();
+    expect(maySchedule({ memberRole: 'director' }, false)).toBe(true);
+    expect(maySchedule({ memberRole: 'host' }, false)).toBe(true);
+    expect(maySchedule({ memberRole: 'member' }, false)).toBe(false);
+    expect(maySchedule({ memberRole: null }, false)).toBe(false);
+    expect(maySchedule({}, false)).toBe(false);
+    expect(maySchedule({ memberRole: null }, true)).toBe(true);
+  });
+
+  it('a pod the list is too short to hold is offered when the address names it, if the member may schedule there and it is active', () => {
+    // The form's list is the 20 newest pods (the server's page size, newest first), so an older pod the pod page links
+    // to (/sessions/new?podId=) is read by id. It is offered as an option so it can be chosen and the form submitted.
+    const { namedPodOffer, podOptions } = rules();
+    const older = { id: 'old', name: 'Older pod', podType: 'reason', memberRole: 'director', status: 'active' };
+    expect(namedPodOffer(older, false)).toBe(older);
+    expect(namedPodOffer({ ...older, memberRole: 'host' }, false)).toEqual({ ...older, memberRole: 'host' });
+    expect(namedPodOffer({ ...older, memberRole: null }, true)).toEqual({ ...older, memberRole: null });
+    // Not one the member may schedule in (the server would refuse with "Only pod directors and hosts can create sessions").
+    expect(namedPodOffer({ ...older, memberRole: 'member' }, false)).toBeUndefined();
+    expect(namedPodOffer({ ...older, memberRole: null }, false)).toBeUndefined();
+    // Not an active pod, which is what the list is made of, even for an admin.
+    expect(namedPodOffer({ ...older, status: 'archived' }, true)).toBeUndefined();
+    expect(namedPodOffer({ ...older, status: undefined }, true)).toBeUndefined();
+    expect(namedPodOffer(undefined, true)).toBeUndefined();
+
+    const listed = [{ id: 'a', name: 'A', podType: 'chat' }, { id: 'b', name: 'B', podType: 'reason' }];
+    expect(podOptions(listed, older).map((p) => p.id)).toEqual(['a', 'b', 'old']);
+    // Already in the list: not twice, and the same array comes back.
+    expect(podOptions(listed, listed[1])).toBe(listed);
+    expect(podOptions(listed, undefined)).toBe(listed);
+  });
 
   it('the format follows the pod until the organiser picks one its type holds', () => {
     const { formatFor, offeredFor } = rules();
@@ -341,16 +378,21 @@ describe('L3 - the event form\'s rules (event-form.ts)', () => {
 describe('L3 - CreateSessionPage follows the pod\'s type and the chosen format', () => {
   const src = readClientSource(SESSION_PAGE);
 
-  /** `podType` null: no pod named in the address. `loading`: the lists are still arriving. */
-  function drawPage(podType: string | null, opts: { loading?: boolean } = {}): string {
-    const pods = podType ? [{ id: 'p1', name: 'Test', podType, memberRole: 'director' }] : [];
+  /**
+   * `podType` null: no pod named in the address. `loading`: the lists are still arriving. `listed: false`: the address
+   * names the pod but the list does not hold it, as for a pod older than the newest twenty; `named` is what reading it
+   * by id answers. `admin`: the member is an admin.
+   */
+  function drawPage(podType: string | null, opts: { loading?: boolean; listed?: boolean; named?: Record<string, unknown>; admin?: boolean } = {}): string {
+    const pods = podType && opts.listed !== false ? [{ id: 'p1', name: 'Test', podType, memberRole: 'director' }] : [];
     const mod = loadClientModule(SESSION_PAGE, {
       'react-router-dom': { useNavigate: () => () => undefined, useSearchParams: () => [new URLSearchParams(podType ? 'podId=p1' : ''), () => undefined] },
       '@tanstack/react-query': {
         useMutation: () => ({ mutate: () => undefined, isPending: false }),
         useQuery: ({ queryKey }: { queryKey: unknown[] }) => {
           if (queryKey[0] === 'my-pods') return opts.loading ? { data: undefined, isLoading: true } : { data: pods, isLoading: false };
-          return { data: queryKey[0] === 'pod' ? undefined : [], isLoading: false };
+          if (queryKey[0] === 'pod') return { data: opts.named, isLoading: false };
+          return { data: [], isLoading: false };
         },
       },
       '@/components/ui/Card': { __esModule: true, default: ({ children, ...rest }: { children?: ReactNode }) => createElement('section', rest, children) },
@@ -360,7 +402,7 @@ describe('L3 - CreateSessionPage follows the pod\'s type and the chosen format',
       },
       '@/components/ui/Button': { Button: ({ children }: { children?: ReactNode }) => createElement('button', null, children) },
       '@/stores/toastStore': { useToastStore: () => ({ addToast: () => undefined }) },
-      '@/stores/authStore': { useAuthStore: () => ({ user: { id: 'u1', role: 'member' } }) },
+      '@/stores/authStore': { useAuthStore: () => ({ user: { id: 'u1', role: opts.admin ? 'admin' : 'member' } }) },
       'lucide-react': iconStandIns,
       '@/lib/api': { __esModule: true, default: { get: () => undefined, post: () => undefined } },
       '@/lib/utils': { localTimezoneLabel: () => 'GMT+0 (test)' },
@@ -445,6 +487,30 @@ describe('L3 - CreateSessionPage follows the pod\'s type and the chosen format',
     expect(drawPage('reason')).toMatch(/<option value="p1" selected="">Test<\/option>/);
   });
 
+  it('an older pod, named in the address but past the newest twenty the list holds, is still an option, chosen, and the form follows its type (a director, and an admin)', () => {
+    // The pod page links to /sessions/new?podId=<id>. The list is the 20 newest pods, so an older pod is not in it: the
+    // page reads the pod by id (for its type and title) and used to leave the select on "Select a pod", where the
+    // required check stopped the submit.
+    const older = { id: 'p1', name: 'Older pod', podType: 'reason', memberRole: 'director', status: 'active' };
+    for (const [who, named, admin] of [['a director', older, false], ['an admin', { ...older, memberRole: null }, true]] as const) {
+      const html = drawPage('reason', { listed: false, named, admin });
+      expect({ who, chosen: /<option value="p1" selected="">Older pod<\/option>/.test(html) }).toEqual({ who, chosen: true });
+      expect(optionsOf(html, '<select name="podId"')).toEqual(['Select a pod', 'Older pod']);
+      // And the form follows that pod as it would a listed one: a Reason pod holds a video meeting and speed networking.
+      expect(optionsOf(html, '<select data-testid="event-format-select"')).toEqual(['Video meeting', 'Speed networking']);
+      expect(html).not.toMatch(/data-testid="(format|settings)-pending"/);
+    }
+  });
+
+  it('a pod the member may not schedule in, or one that is not active, is not offered however the address names it', () => {
+    const named = { id: 'p1', name: 'Not for scheduling', podType: 'reason', memberRole: 'member', status: 'active' };
+    const asMember = drawPage('reason', { listed: false, named });
+    expect(optionsOf(asMember, '<select name="podId"')).toEqual(['Select a pod']);
+    expect(asMember).not.toContain('Not for scheduling');
+    const archived = drawPage('reason', { listed: false, named: { ...named, memberRole: null, status: 'archived' }, admin: true });
+    expect(optionsOf(archived, '<select name="podId"')).toEqual(['Select a pod']);
+  });
+
   it('keeps the list of pods one array until the list or the role changes, and nothing re-sets the pod by effect', () => {
     // A member's list is filtered. Filtered afresh on every render it was a new value each time, and an effect that
     // depended on it and set the (watched) pod ran after every render, for good: 2,400 React commits in 2 seconds, on the
@@ -453,8 +519,12 @@ describe('L3 - CreateSessionPage follows the pod\'s type and the chosen format',
     expect(src).toMatch(/\[allPods, isAdmin\]/);
     expect(src).not.toMatch(/setValue\('podId'/);
     expect(src).toMatch(/value=\{podId\}/);
-    // The fallback read of a pod the list lacks gives up at once: a pod that cannot be read must not hold a placeholder.
-    expect(src).toMatch(/enabled: !!podId && !!allPods && !listedPod,\s*retry: false,/);
+    // The read of the pod the address names, when the list lacks it, gives up at once: a pod that cannot be read must not
+    // hold a placeholder. It is keyed by the address's pod, not the chosen one, so choosing another pod does not take
+    // the named one out of the select.
+    expect(src).toMatch(/enabled: !!urlPodId && !!allPods && !pods\.some\(\(p\) => p\.id === urlPodId\),\s*retry: false,/);
+    expect(src).toMatch(/queryKey: \['pod', urlPodId\]/);
+    expect(src).toMatch(/podOptions\(pods, namedPodOffer\(namedPod, isAdmin\)\)/);
   });
 
   it('the page posts what sessionBody builds, and says a refusal at its field with setError, not in a bare toast', () => {

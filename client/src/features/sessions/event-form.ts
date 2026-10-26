@@ -32,6 +32,26 @@ export interface PodRow {
   name: string;
   podType: PodType;
   memberRole?: string | null;
+  status?: string;
+}
+
+/** Whether this member may schedule an event in the pod: an admin in any pod, anyone else as its director or host (the server's own rule). */
+export function maySchedule(pod: Pick<PodRow, 'memberRole'>, isAdmin: boolean): boolean {
+  return isAdmin || pod.memberRole === 'director' || pod.memberRole === 'host';
+}
+
+/**
+ * The pod the address names, if the select may offer it. The form's list is the server's first page of active pods, the
+ * twenty newest, so an older pod is not in it; the pod is read by id instead, and offered only where the list would
+ * have: an active pod the member may schedule in.
+ */
+export function namedPodOffer(named: PodRow | undefined, isAdmin: boolean): PodRow | undefined {
+  return named && named.status === 'active' && maySchedule(named, isAdmin) ? named : undefined;
+}
+
+/** What the select lists: the pods, then the pod the address names when the list is too short to hold it. */
+export function podOptions(pods: PodRow[], offered: PodRow | undefined): PodRow[] {
+  return offered && !pods.some((p) => p.id === offered.id) ? [...pods, offered] : pods;
 }
 
 /** What the picker offers before a pod is chosen: every format that is on offer, never one that is only defined. */
