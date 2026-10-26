@@ -24,6 +24,7 @@ import * as dmService from '../dm/dm.service';
 import { meetingJoinPath } from '../dm/meeting-windows.service';
 import { emitMeetingChanged } from './meeting-tags';
 import { meetingTime } from './meeting-time';
+import { CURRENT_MEETING_ID } from './current-meeting';
 
 /** A meeting row with the other person's columns, as every read here selects it. */
 interface MeetingRow {
@@ -188,30 +189,44 @@ type CancelOutcome =
 /** An instant as the thread writes it, so every client renders it in its reader's own time. */
 const threadInstant = (at: Date) => at.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
+/** The refusal for a meeting that has started: still under way, or ended (its grace period included). */
+function tooLateToCancel(meeting: { start_at: Date; duration_min: number }, now: Date): ConflictError {
+  const endsAt = meeting.start_at.getTime() + meeting.duration_min * 60_000;
+  return now.getTime() < endsAt
+    ? new ConflictError(ErrorCodes.MEETING_ALREADY_STARTED, 'This meeting has already started, so it can no longer be cancelled.')
+    : new ConflictError(ErrorCodes.MEETING_ALREADY_ENDED, 'This meeting has already ended.');
+}
+
 /**
  * Cancel a meeting, once. In one transaction, with the conversation row locked first (the order
  * every booking and move takes, so a cancel and a move of the same meeting settle in turn):
- *   - the row is claimed only while it is scheduled and has not ended;
+ *   - the row is claimed only while it is scheduled and has not started;
  *   - the conversation's meeting_* columns are cleared, so production's banner and Join go away;
  *   - the time is taken off the canceller's own list, so a later save cannot book it again;
  *   - a "Meeting cancelled" card goes into the thread.
  * Then the other person's bell, both people's screens, and a cancellation email to each.
- * A meeting already cancelled answers as it stands and repeats nothing; an ended one is a 409.
+ * A meeting already cancelled answers as it stands and repeats nothing; one that has started is a
+ * 409, which says whether it is under way or has ended.
+ *
+ * 26 Oct 2026: it was claimable until 30 minutes after its end (the time it can still be joined), so
+ * a meeting that had been held could be cancelled afterwards, emailing both people a cancellation.
  */
 export async function cancelMeeting(userId: string, meetingId: string, now = new Date()): Promise<Meeting> {
   const found = await loadVisible(userId, meetingId);
   const partnerId = found.user_a_id === userId ? found.user_b_id : found.user_a_id;
 
   const outcome = await transaction<CancelOutcome>(async (client) => {
+    // The pointer through its guard: a row the old server left it naming (current-meeting.ts) is not
+    // the conversation's meeting, so cancelling that row leaves the conversation's meeting standing.
     const conv = await client.query<{ meeting_confirmed_window: string | null; current_meeting_id: string | null }>(
-      `SELECT meeting_confirmed_window, current_meeting_id FROM dm_conversations WHERE id = $1 FOR UPDATE`,
+      `SELECT meeting_confirmed_window, ${CURRENT_MEETING_ID} FROM dm_conversations WHERE id = $1 FOR UPDATE`,
       [found.conversation_id],
     );
     const claimed = await client.query<MeetingRow>(
       `UPDATE meetings
           SET status = 'cancelled', cancelled_by = $2, cancelled_at = NOW(),
               calendar_sequence = calendar_sequence + 1, updated_at = NOW()
-        WHERE id = $1 AND status = 'scheduled' AND start_at + (duration_min + ${MEETING_GRACE_MIN}) * INTERVAL '1 minute' >= $3
+        WHERE id = $1 AND status = 'scheduled' AND start_at > $3
         RETURNING ${OWN_COLUMNS}`,
       [meetingId, userId, now],
     );
@@ -220,7 +235,7 @@ export async function cancelMeeting(userId: string, meetingId: string, now = new
       if (!current.rows[0]) throw new NotFoundError('Meeting', undefined, "We couldn't find that meeting.");
       const row = { ...found, ...current.rows[0] };
       if (row.status === 'cancelled') return { won: false, row };
-      throw new ConflictError(ErrorCodes.MEETING_ALREADY_ENDED, 'This meeting has already ended.');
+      throw tooLateToCancel(row, now);
     }
     const row = { ...found, ...claimed.rows[0] };
 

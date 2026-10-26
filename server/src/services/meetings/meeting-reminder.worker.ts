@@ -7,11 +7,19 @@
 // better than reminding twice; a move clears reminder_sent_at, so a moved meeting is reminded again.
 //
 // Both people get a bell. Each also gets an email when their notify_email switch is on and the admin
-// email_config switch for 'meeting_reminder' is too (that one fails open, like every email type).
+// email_config switch for 'meeting_reminder' is too (migration 117 gives admins that switch; a type
+// with no row fails open, like every email type).
 // No reminder is sent for a meeting booked or moved inside the last 10 minutes (the confirmation was
 // just in front of them), for one with a closed account, or for a pair a block stands between.
+//
+// 26 Oct 2026: the meeting is read again right before anything is sent, under its row lock, and the
+// bells are written in that same transaction. Before, the reminder went out from the row the claim
+// returned, so a meeting cancelled or moved in the moment after the claim was still announced as
+// starting in 10 minutes. Now a cancel or a move either waits for the bells or wins outright, and a
+// meeting moved after its claim gets the claim back, so it is reminded at its new time.
 
-import { query } from '../../db';
+import type { PoolClient } from 'pg';
+import { query, transaction } from '../../db';
 import config from '../../config';
 import logger from '../../config/logger';
 import type { MeetingKind } from '@rsn/shared';
@@ -34,6 +42,8 @@ interface DueMeeting {
   kind: MeetingKind;
   /** When it was booked, or last moved. */
   updated_at: Date;
+  /** This claim's own stamp on reminder_sent_at, as text: a Date would drop its microseconds. */
+  claimed_at: string;
 }
 
 interface Person {
@@ -43,6 +53,43 @@ interface Person {
   timezone: string | null;
   status: string;
   notify_email: boolean;
+}
+
+/** A reminder bell as written. */
+interface BellRow {
+  id: string;
+  user_id: string;
+  created_at: Date;
+}
+
+/**
+ * Does the meeting still stand as it was claimed? Read under its row lock, on the transaction that
+ * then writes the bells: still scheduled, still at the claimed time, still under this claim, and
+ * still the meeting its conversation names at that time (current-meeting.ts: the server before
+ * 26 Oct can leave a row behind that its conversation has moved away from). A meeting moved since
+ * the claim gets the claim back, so it is reminded at its new time; only this claim is given back,
+ * never one another run has taken since.
+ */
+async function standsAsClaimed(client: PoolClient, meeting: DueMeeting): Promise<boolean> {
+  const found = await client.query<{ status: string; start_at: Date; claimed_at: string | null; named: boolean }>(
+    `SELECT m.status, m.start_at, m.reminder_sent_at::text AS claimed_at,
+            (c.current_meeting_id IS NOT DISTINCT FROM m.id AND c.meeting_start_at IS NOT DISTINCT FROM m.start_at) AS named
+       FROM meetings m
+       JOIN dm_conversations c ON c.id = m.conversation_id
+      WHERE m.id = $1
+        FOR UPDATE OF m`,
+    [meeting.id],
+  );
+  const current = found.rows[0];
+  if (!current || current.status !== 'scheduled') return false;
+  if (current.start_at.getTime() !== meeting.start_at.getTime()) {
+    await client.query(
+      `UPDATE meetings SET reminder_sent_at = NULL WHERE id = $1 AND reminder_sent_at = $2::timestamptz`,
+      [meeting.id, meeting.claimed_at],
+    );
+    return false;
+  }
+  return current.claimed_at === meeting.claimed_at && current.named;
 }
 
 /** Claim and remind every meeting that is due. Returns how many were claimed. */
@@ -56,7 +103,8 @@ export async function processMeetingReminders(now = new Date()): Promise<number>
          ORDER BY start_at
          LIMIT 50
          FOR UPDATE SKIP LOCKED)
-      RETURNING id, conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, updated_at`,
+      RETURNING id, conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, updated_at,
+                reminder_sent_at::text AS claimed_at`,
     [now],
   );
   for (const meeting of claimed.rows) {
@@ -97,17 +145,32 @@ async function remind(meeting: DueMeeting, now: Date): Promise<void> {
   };
   const bells = [bellFor(a, b), bellFor(b, a)];
 
+  // Whether the re-read found the meeting standing as claimed: then it is reminded, by email as well,
+  // even if writing the bells fails. A re-read that fails sends nothing, and the claim is not retried.
+  let stood = false;
+  let rang: BellRow[] = [];
   try {
-    const inserted = await query<{ id: string; user_id: string; created_at: Date }>(
-      `INSERT INTO notifications (id, user_id, type, title, body, link)
-       VALUES (gen_random_uuid(), $1, 'meeting_reminder', $2, $3, $4), (gen_random_uuid(), $5, 'meeting_reminder', $6, $7, $8)
-       RETURNING id, user_id, created_at`,
-      bells.flatMap((bell) => [bell.userId, bell.title, bell.body, link]),
-    );
+    rang = await transaction(async (client) => {
+      if (!(await standsAsClaimed(client, meeting))) return [];
+      stood = true;
+      const inserted = await client.query<BellRow>(
+        `INSERT INTO notifications (id, user_id, type, title, body, link)
+         VALUES (gen_random_uuid(), $1, 'meeting_reminder', $2, $3, $4), (gen_random_uuid(), $5, 'meeting_reminder', $6, $7, $8)
+         RETURNING id, user_id, created_at`,
+        bells.flatMap((bell) => [bell.userId, bell.title, bell.body, link]),
+      );
+      return inserted.rows;
+    });
+  } catch (err) {
+    logger.warn({ err, meetingId: meeting.id }, 'meeting reminder bells failed (non-fatal)');
+  }
+  if (!stood) return;
+
+  try {
     const { io } = await import('../../index');
     const { emitEntities } = await import('../../realtime/emit');
     const { E } = await import('../../realtime/entities');
-    for (const row of inserted.rows) {
+    for (const row of rang) {
       const bell = bells.find((x) => x.userId === row.user_id);
       if (!bell) continue;
       io.to(`user:${row.user_id}`).emit('notification:new', {
@@ -116,7 +179,7 @@ async function remind(meeting: DueMeeting, now: Date): Promise<void> {
       await emitEntities(io, [row.user_id], [E.userNotifications(row.user_id)]);
     }
   } catch (err) {
-    logger.warn({ err, meetingId: meeting.id }, 'meeting reminder bells failed (non-fatal)');
+    logger.warn({ err, meetingId: meeting.id }, 'meeting reminder bell push failed (non-fatal)');
   }
   await emitMeetingChanged(meeting.id, [a.id, b.id]);
 

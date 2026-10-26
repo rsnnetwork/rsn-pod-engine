@@ -8,7 +8,13 @@
 // of them, so it is claimed without a reminder; so is one with a closed account or a block between.
 
 const mockQuery = jest.fn();
-jest.mock('../../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), transaction: jest.fn(), __esModule: true }));
+// 26 Oct 2026 (H2a): the re-read before sending and the bells it lets through are one transaction.
+const mockTxSql: string[] = [];
+jest.mock('../../../db', () => ({
+  query: (...a: unknown[]) => mockQuery(...a),
+  transaction: (cb: Function) => cb({ query: (...a: unknown[]) => { mockTxSql.push(a[0] as string); return mockQuery(...a); } }),
+  __esModule: true,
+}));
 jest.mock('../../../config', () => ({ __esModule: true, default: { clientUrl: 'https://app.rsn.network' } }));
 const mockWarn = jest.fn();
 jest.mock('../../../config/logger', () => ({
@@ -37,10 +43,23 @@ const START = new Date('2026-11-05T17:00:00Z'); // 9.5 minutes away
 const A = 'aaaaaaaa-0000-4000-8000-000000000001';
 const B = 'bbbbbbbb-0000-4000-8000-000000000002';
 
+/** The claim's own stamp on reminder_sent_at, as text so it compares to the microsecond. */
+const CLAIMED_AT = '2026-11-05 16:50:30.123456+00';
+
 const due = (extra: Record<string, unknown> = {}) => ({
   id: 'mtg-1', conversation_id: 'conv-1', user_a_id: A, user_b_id: B,
   start_at: START, duration_min: 30, kind: 'video', updated_at: new Date('2026-11-04T09:00:00Z'),
+  claimed_at: CLAIMED_AT,
   ...extra,
+});
+
+/**
+ * The meeting as the re-read just before sending finds it. By default it still stands exactly as
+ * claimed: scheduled, at the claimed time, still under this run's claim, and named by its conversation.
+ */
+let reread: Record<string, unknown> | null = null;
+const standing = (extra: Record<string, unknown> = {}) => ({
+  status: 'scheduled', start_at: START, claimed_at: CLAIMED_AT, named: true, ...extra,
 });
 
 const person = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -51,7 +70,9 @@ const person = (id: string, extra: Record<string, unknown> = {}) => ({
 /** The database: each run's claim hands out what `claims` holds next; people as given. */
 function arm(claims: Array<Array<Record<string, unknown>>>, people: Array<Record<string, unknown>> = [person(A), person(B)]) {
   mockQuery.mockImplementation((sql: string) => {
-    if (/UPDATE meetings SET reminder_sent_at/.test(sql)) return Promise.resolve({ rows: claims.shift() ?? [] });
+    if (/UPDATE meetings SET reminder_sent_at = NOW\(\)/.test(sql)) return Promise.resolve({ rows: claims.shift() ?? [] });
+    if (/UPDATE meetings SET reminder_sent_at = NULL/.test(sql)) return Promise.resolve({ rows: [] });
+    if (/FROM meetings m\s+JOIN dm_conversations c/.test(sql)) return Promise.resolve({ rows: reread ? [reread] : [] });
     if (/FROM users WHERE id = ANY/.test(sql)) return Promise.resolve({ rows: people });
     if (/INSERT INTO notifications/.test(sql)) {
       return Promise.resolve({ rows: [{ id: 'n-a', user_id: A, created_at: NOW }, { id: 'n-b', user_id: B, created_at: NOW }] });
@@ -68,6 +89,8 @@ const tagsSentTo = (userId: string) => mockEmits
 
 beforeEach(() => {
   mockQuery.mockReset();
+  mockTxSql.length = 0;
+  reread = standing();
   mockEmits.length = 0;
   mockWarn.mockClear();
   mockAreBlocked.mockReset().mockResolvedValue(false);
@@ -88,7 +111,8 @@ describe('processMeetingReminders', () => {
       + " WHERE status = 'scheduled' AND reminder_sent_at IS NULL"
       + " AND start_at > $1 AND start_at <= $1::timestamptz + INTERVAL '10 minutes'"
       + ' ORDER BY start_at LIMIT 50 FOR UPDATE SKIP LOCKED)'
-      + ' RETURNING id, conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, updated_at',
+      + ' RETURNING id, conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, updated_at,'
+      + ' reminder_sent_at::text AS claimed_at',
     );
     expect(params).toEqual([NOW]);
   });
@@ -210,5 +234,97 @@ describe('processMeetingReminders', () => {
     expect(bellRows()).toHaveLength(2);
     expect((bellRows()[1][1] as string[])[3]).toBe('/messages/conv-2');
     expect(mockWarn).toHaveBeenCalledWith(expect.objectContaining({ meetingId: 'mtg-broken' }), expect.any(String));
+  });
+});
+
+// ─── Only a meeting that still stands is reminded (26 Oct 2026, task H2a) ─────
+//
+// The reminder was sent from the row the claim returned, so a meeting cancelled or moved in the moment
+// after the claim was still announced as starting in 10 minutes, at a time that no longer held. The
+// meeting is read again right before anything is sent, under its row lock, and the bells are written
+// in that same transaction, so a cancel or a move waits for them or wins outright.
+
+describe('the reminder re-reads the meeting before it sends', () => {
+  const unclaims = () => mockQuery.mock.calls.filter((c) => /UPDATE meetings SET reminder_sent_at = NULL/.test(c[0] as string));
+
+  it('reads it again under its row lock, with what its conversation says, and writes the bells in that same transaction', async () => {
+    arm([[due()]]);
+
+    await processMeetingReminders(NOW);
+
+    const reads = mockQuery.mock.calls.filter((c) => /FROM meetings m\s+JOIN dm_conversations c/.test(c[0] as string));
+    expect(reads).toHaveLength(1);
+    expect(flat(reads[0][0])).toBe(
+      'SELECT m.status, m.start_at, m.reminder_sent_at::text AS claimed_at,'
+      + ' (c.current_meeting_id IS NOT DISTINCT FROM m.id AND c.meeting_start_at IS NOT DISTINCT FROM m.start_at) AS named'
+      + ' FROM meetings m JOIN dm_conversations c ON c.id = m.conversation_id WHERE m.id = $1 FOR UPDATE OF m',
+    );
+    expect(reads[0][1]).toEqual(['mtg-1']);
+    const readAt = mockTxSql.findIndex((s) => /FROM meetings m\s+JOIN dm_conversations c/.test(s));
+    const bellsAt = mockTxSql.findIndex((s) => /INSERT INTO notifications/.test(s));
+    expect(readAt).toBeGreaterThanOrEqual(0);
+    expect(bellsAt).toBeGreaterThan(readAt);
+    expect(bellRows()).toHaveLength(1);
+  });
+
+  it('a meeting cancelled just after the claim is not reminded: no bell, no email, nothing on anyone\'s screen', async () => {
+    arm([[due()]]);
+    reread = standing({ status: 'cancelled' });
+
+    expect(await processMeetingReminders(NOW)).toBe(1);
+
+    expect(bellRows()).toHaveLength(0);
+    expect(mockReminderEmail).not.toHaveBeenCalled();
+    expect(mockEmits).toEqual([]);
+    // A cancelled meeting is never reminded, so its claim stays as it is.
+    expect(unclaims()).toHaveLength(0);
+  });
+
+  it('a meeting moved just after the claim is not reminded at the old time, and the claim is given back for its new time', async () => {
+    arm([[due()]]);
+    reread = standing({ start_at: new Date('2026-11-05T19:00:00Z') });
+
+    await processMeetingReminders(NOW);
+
+    expect(bellRows()).toHaveLength(0);
+    expect(mockReminderEmail).not.toHaveBeenCalled();
+    const given = unclaims();
+    expect(given).toHaveLength(1);
+    // Only this run's own claim is given back: another run may have claimed the meeting at its new time.
+    expect(flat(given[0][0])).toBe('UPDATE meetings SET reminder_sent_at = NULL WHERE id = $1 AND reminder_sent_at = $2::timestamptz');
+    expect(given[0][1]).toEqual(['mtg-1', CLAIMED_AT]);
+    expect(mockTxSql.some((s) => /UPDATE meetings SET reminder_sent_at = NULL/.test(s))).toBe(true);
+  });
+
+  it('a meeting its conversation no longer names at that time (one the old server moved away from) is not reminded', async () => {
+    arm([[due()]]);
+    reread = standing({ named: false });
+
+    await processMeetingReminders(NOW);
+
+    expect(bellRows()).toHaveLength(0);
+    expect(mockReminderEmail).not.toHaveBeenCalled();
+    expect(unclaims()).toHaveLength(0);
+  });
+
+  it('a meeting claimed again since (moved and moved back, then claimed by another run) is left to that run', async () => {
+    arm([[due()]]);
+    reread = standing({ claimed_at: '2026-11-05 16:51:30.5+00' });
+
+    await processMeetingReminders(NOW);
+
+    expect(bellRows()).toHaveLength(0);
+    expect(mockReminderEmail).not.toHaveBeenCalled();
+    expect(unclaims()).toHaveLength(0);
+  });
+
+  it('a meeting deleted since the claim is not reminded', async () => {
+    arm([[due()]]);
+    reread = null;
+
+    await processMeetingReminders(NOW);
+
+    expect(bellRows()).toHaveLength(0);
+    expect(mockReminderEmail).not.toHaveBeenCalled();
   });
 });

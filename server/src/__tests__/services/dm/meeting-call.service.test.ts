@@ -241,6 +241,15 @@ describe('getCallToken', () => {
     await getCallToken('conv-1', 'u-a', 'video');
     expect(mockQuery.mock.calls.some(c => /SET meeting_joined/.test(c[0] as string))).toBe(false);
   });
+
+  // 26 Oct 2026 (H2a): the old server can leave the pointer at a row that no longer describes the
+  // conversation's meeting (one already over when it booked the next, say); attendance is never
+  // stamped on such a row.
+  it('reads the conversation\'s meeting through the guard: the pointer counts only while its row is scheduled at the conversation\'s time', async () => {
+    await getCallToken('conv-1', 'u-a', 'video');
+    const read = mockQuery.mock.calls.map(c => String(c[0]).replace(/\s+/g, ' ')).find(s => /FROM dm_conversations WHERE id = \$1/.test(s))!;
+    expect(read).toMatch(/\(SELECT m\.id FROM meetings m WHERE m\.id = dm_conversations\.current_meeting_id AND m\.status = 'scheduled' AND m\.start_at = dm_conversations\.meeting_start_at\) AS current_meeting_id/);
+  });
 });
 
 describe('isPartnerOnline', () => {

@@ -1151,6 +1151,27 @@ describe('the meetings row a booking writes', () => {
     const [params] = sqlCalls(/INSERT INTO meetings/).map(c => c[1] as unknown[]);
     expect(params[9]).toEqual(standingStart);
   });
+
+  // 26 Oct 2026 (H2a): the server before 26 Oct books and moves meetings on the conversation alone. While it
+  // still answers during a deploy, or after a rollback, it leaves current_meeting_id naming a row that no
+  // longer describes the meeting (over, cancelled, or at the time it moved away from). Every read of the
+  // pointer takes it through a guard, so such a row is never moved, linked or stamped as the meeting.
+  it('the scheduling read and the booking\'s locked read take the pointer only while its row is scheduled at the conversation\'s time', async () => {
+    const slot = futureSlot(2, 13);
+    armBooking(both(slot), both(slot));
+
+    await getScheduling('conv-1', 'u-a');
+    await confirmWindow('conv-1', 'u-a', slot);
+
+    const reads = mockQuery.mock.calls.map(c => String(c[0]).replace(/\s+/g, ' '))
+      .filter(s => /FROM dm_conversations WHERE id = \$1/.test(s) && /current_meeting_id/.test(s));
+    expect(reads.some(s => /FOR UPDATE/.test(s))).toBe(true);
+    expect(reads.some(s => !/FOR UPDATE/.test(s))).toBe(true);
+    for (const sql of reads) {
+      expect(sql).toMatch(/\(SELECT m\.id FROM meetings m WHERE m\.id = dm_conversations\.current_meeting_id AND m\.status = 'scheduled' AND m\.start_at = dm_conversations\.meeting_start_at\) AS current_meeting_id/);
+      expect(sql).not.toMatch(/calls_unlocked_at, current_meeting_id/);
+    }
+  });
 });
 
 describe('isMeetingOver', () => {

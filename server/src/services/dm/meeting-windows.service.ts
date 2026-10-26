@@ -19,6 +19,7 @@ import { ErrorCodes } from '@rsn/shared';
 import * as dmService from './dm.service';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
 import { meetingTime } from '../meetings/meeting-time';
+import { CURRENT_MEETING_ID } from '../meetings/current-meeting';
 
 export const DAYPARTS = ['morning', 'afternoon', 'evening'] as const;
 export type Daypart = typeof DAYPARTS[number];
@@ -171,7 +172,10 @@ interface ConversationRow {
   scheduler_seen_at_a: Date | null;
   scheduler_seen_at_b: Date | null;
   calls_unlocked_at: Date | null;
-  /** The meetings row the meeting_* columns describe (migration 110). */
+  /**
+   * The meetings row the meeting_* columns describe (migration 110), read through the guard
+   * (current-meeting.ts): null when the pointer names a row that no longer stands at that time.
+   */
   current_meeting_id: string | null;
 }
 
@@ -181,7 +185,7 @@ const CONVERSATION_COLUMNS = `id, user_a_id, user_b_id,
             meeting_start_at, meeting_duration_min, meeting_type,
             avail_updated_at_a, avail_updated_at_b,
             scheduler_seen_at_a, scheduler_seen_at_b,
-            calls_unlocked_at, current_meeting_id`;
+            calls_unlocked_at, ${CURRENT_MEETING_ID}`;
 
 /** Load the conversation and prove the caller belongs to it. */
 async function requireParticipant(conversationId: string, userId: string): Promise<ConversationRow> {
@@ -630,12 +634,11 @@ async function writeConfirmation(
     );
   }
 
-  // A DIFFERENT time while one still stands is a MOVE. Refusing it looked
-  // safer, but there is no way to cancel a meeting, so refusing left a pair
-  // who needed Thursday instead of Tuesday with no way out at all. The row
-  // lock already settles two simultaneous presses; what was missing was
-  // telling the person counting on the old time that it changed, which the
-  // card and the bell now do.
+  // A DIFFERENT time while one still stands is a MOVE of that meeting, not a
+  // second one: the same row and calendar entry at the new time (26 Oct 2026),
+  // so a pair who needed Thursday instead of Tuesday do not have to cancel and
+  // book again. The row lock settles two simultaneous presses, and the card and
+  // the bell tell the person counting on the old time that it changed.
   // Only an exact instant: the card renders this in the reader's own time,
   // and a day-part key ("2026-09-24:evening") would land on screen raw.
   const movedFrom = conv.meeting_confirmed_window && !over && conv.meeting_start_at
