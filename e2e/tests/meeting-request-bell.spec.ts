@@ -26,7 +26,8 @@ import { launchBrowser, contextOptions } from '../helpers/engine';
 // 26 Oct 2026 (the preview's bell): the bell reads its list through React Query,
 // refreshed by the member's notifications tag, so a bell left OPEN on another
 // device turns to Accepted by itself; the other answer pressed on a bell that has
-// not caught up says "You already accepted this request."; and the Messages list
+// not caught up says what the server says ("You already accepted this request.",
+// or "You're already connected." once hardening H2a ships); and the Messages list
 // card and the focused card share one answer in flight.
 
 let browser: Browser;
@@ -256,8 +257,14 @@ test('pressing the other answer on a bell that has not caught up says which answ
     // Hold the bell's list where it is (a phone that lost its connection for a moment), and accept elsewhere.
     await page.route('**/api/notifications', (route) => (route.request().method() === 'GET' ? route.abort() : route.continue()));
     expect((await apiAs(late, 'POST', `/pokes/${p.json.data.id}/accept`)).status).toBe(200);
+    // What the server says to a Decline now, in its own words: "You already accepted this request." today, and
+    // "You're already connected." once hardening H2a ships (the preview calls production's API). The bell says the same.
+    const refusal = await apiAs(late, 'POST', `/pokes/${p.json.data.id}/decline`);
+    expect(refusal.status).toBe(409);
+    const said = refusal.json?.error?.message as string;
+    expect(['You already accepted this request.', "You're already connected."]).toContain(said);
     await page.getByRole('button', { name: /^Decline$/ }).click();
-    await expect(page.getByRole('status').getByText('You already accepted this request.', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('status').getByText(said, { exact: true })).toBeVisible({ timeout: 15_000 });
     const row = await pool.query(`SELECT status FROM user_pokes WHERE id = $1`, [p.json.data.id]);
     expect(row.rows[0].status, 'the stale Decline changed nothing').toBe('accepted');
 
@@ -267,7 +274,7 @@ test('pressing the other answer on a bell that has not caught up says which answ
     await reopenBellOn(page);
     await expect(page.getByText(/^Accepted$/)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole('button', { name: /^Decline$/ })).toHaveCount(0);
-    console.log('  ✓ the stale Decline was told "You already accepted this request." and the entry redrew as Accepted.');
+    console.log(`  ✓ the stale Decline was told "${said}" and the entry redrew as Accepted.`);
   } finally {
     await cleanup(pool, { ids: [late.id] });
   }
@@ -328,7 +335,8 @@ test('a double click on Accept answers once: one request to the server, one trip
     await expect(page).toHaveURL(/\/messages\/[0-9a-f-]{36}/, { timeout: 30_000 });
     await page.waitForTimeout(2_000);
     expect(answers, 'one answer sent').toHaveLength(1);
-    await expect(page.getByText('You already accepted this request.')).toHaveCount(0);
+    // No second answer, so no "already answered" sentence, in either of the server's wordings.
+    await expect(page.getByText(/^(You already accepted this request\.|You're already connected\.)$/)).toHaveCount(0);
     await expect(page.getByRole('alert').getByText(/\S/)).toHaveCount(0);
     expect((await pool.query(`SELECT status FROM user_pokes WHERE id = $1`, [pokeId])).rows[0].status).toBe('accepted');
     console.log('  ✓ a double click sent one answer and went into the conversation once.');
