@@ -23,6 +23,10 @@ function bareAddress(recipient: string): string {
 
 /** True when `email` (or the address inside a display name around it) is on a reserved domain or one of its subdomains. */
 export function isReservedTestAddress(email: string | null | undefined): boolean {
+  // Several addresses joined into one (a comma or a semicolon between them) are never reserved as a whole: the
+  // provider takes or refuses them together, and a reserved one among them must not make the real ones vanish
+  // (H2b item 16, 26 Oct 2026).
+  if (/[,;]/.test(email ?? '')) return false;
   const address = bareAddress(email ?? '').toLowerCase();
   const at = address.lastIndexOf('@');
   if (at < 0) return false;

@@ -85,6 +85,12 @@ const REAL: Array<[string, string]> = [
   ['a hyphenated look-alike', 'ana@my-example.org'],
   ['a display name on a real address', '"Ana" <ana@gmail.com>'],
   ['a reserved address in the display name only', '"ana@x.invalid" <ana@gmail.com>'],
+  // H2b item 16 (26 Oct 2026): the guard reads the domain after the LAST @, so a quoted local part with an @ in it is
+  // still judged by its real domain; and several addresses joined into one `to` are never treated as reserved (the
+  // provider would refuse or deliver them as a whole; a reserved one among them must not make the real ones vanish).
+  ['a quoted local part with an @ in it', '"ana@x.invalid"@gmail.com'],
+  ['several addresses joined with a comma, one of them reserved', 'ana@gmail.com, bo@x.invalid'],
+  ['several addresses joined with a semicolon, one of them reserved', 'ana@gmail.com; bo@rsn-e2e.invalid'],
 ];
 
 beforeEach(() => {

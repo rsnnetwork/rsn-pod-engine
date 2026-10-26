@@ -389,7 +389,9 @@ router.post(
         // way no email went out, the invite has not been "reminded within the hour", and nothing is counted.
         let sent = false;
         try {
-          const context = await inviteService.buildInviteContext(req.user!.userId, inv.type, {
+          // The email names the invite's own inviter (H2b item 8, 26 Oct 2026): a co-host reminding the host's invite
+          // used to read "{co-host} invited you". The presser still spends their own allowance (above).
+          const context = await inviteService.buildInviteContext(inv.inviter_id, inv.type, {
             podId: inv.pod_id, sessionId: inv.session_id, circleId: inv.circle_id,
           });
           sent = (await inviteService.emailInvite(context, { code: inv.code, inviteeEmail: inv.invitee_email })).sent;

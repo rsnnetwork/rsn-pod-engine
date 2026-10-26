@@ -42,11 +42,19 @@ const statusSchema = z.object({
 });
 
 /** Rescore without making the caller wait. Never rejects into the request. */
+/** The agents being rescored right now: a second read of the dashboard while one runs starts no second rescoring. */
+const rescoring = new Set<string>();
+
 function rescoreInBackground(agent: { id: string; userId: string; wantText: string; label: string }): void {
+  // One at a time per agent (H2b item 14, 26 Oct 2026): the dashboard polls and a second tab reads too, and each read
+  // used to start another search over the whole member base for the same unscored agent.
+  if (rescoring.has(agent.id)) return;
+  rescoring.add(agent.id);
   agentMatching
     .recomputeAgent(agent)
     .then((n) => fanoutUserEntity(agent.userId).catch(() => { void n; }))
-    .catch((err) => logger.warn({ err, agentId: agent.id }, 'background agent rescore failed'));
+    .catch((err) => logger.warn({ err, agentId: agent.id }, 'background agent rescore failed'))
+    .finally(() => rescoring.delete(agent.id));
 }
 
 // GET /agents — the dashboard: every agent with its live count.
