@@ -353,6 +353,51 @@ test.describe.serial('meeting + call', () => {
   });
 });
 
+// Its own pair, outside the serial run above. The page used to read the meeting's start once, as it loaded, so a
+// countdown opened before a move kept counting to the old time; it reads the scheduler's live query now.
+test('4b) a countdown opened before the meeting moved opens the room at its new time, without a reload', async () => {
+  test.setTimeout(120_000);
+  const cy = await createTestUser('mcallmva');
+  const di = await createTestUser('mcallmvb');
+  try {
+    const sent = await apiAs(cy, 'POST', '/pokes', { recipientId: di.id, message: 'Coffee?' });
+    expect((await apiAs(di, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const convId = await convBetween(cy.id, di.id);
+    // Booked three days out: the page opens on a countdown.
+    const FAR = futureWindowKey(3, 'afternoon');
+    await apiAs(cy, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [FAR] });
+    const booked = await apiAs(di, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [FAR] });
+    expect(booked.json.data.confirmed?.window).toBe(FAR);
+    const tokenCalls: string[] = [];
+    const page = await openAs(cy, `/meet/${convId}?kind=video&scheduled=1`, (p) => {
+      p.on('request', (r) => { if (r.url().includes('/call-token')) tokenCalls.push(r.url()); });
+    });
+    await expect(page.getByText(/Your meeting starts in/i)).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByText(/it opens automatically 5 minutes before/)).toBeVisible();
+    await page.waitForTimeout(1500);
+    expect(tokenCalls, 'no room token while the countdown waits').toHaveLength(0);
+
+    // Di moves it to two minutes from now (inside the join window) while Cy's countdown is open.
+    const now = await serverNowMs();
+    const KEY = dayKeyAt(now);
+    const SPARE = dayKeyAt(now + 60 * 60_000);
+    await apiAs(cy, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [FAR, KEY, SPARE] });
+    await apiAs(di, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [FAR, KEY, SPARE] });
+    const moved = await apiAs(di, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
+      window: KEY, startAt: new Date(now + 2 * 60_000).toISOString(), durationMin: 30, type: 'video',
+    });
+    expect(moved.status).toBe(200);
+
+    // The same page, no reload: the countdown gives way to the room, on one token minted on the way in.
+    await expect(page.getByText(/^Video call$/)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/Your meeting starts in/i)).toHaveCount(0);
+    expect(tokenCalls, 'one room token, minted on the way in').toHaveLength(1);
+    await page.close();
+  } finally {
+    await cleanup(pool, { ids: [cy.id, di.id] });
+  }
+});
+
 // Its own pair, outside the serial run above, so nothing before it can keep it from running.
 test('9) one person leaves the room and comes back in; the other stays in it and is never sent away', async () => {
   test.setTimeout(240_000);
