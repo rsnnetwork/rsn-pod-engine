@@ -25,6 +25,26 @@ export function knownSource(from: string | null): KnownSource | null {
 export const personHref = (userId: string, from: KnownSource): string =>
   `/people/${encodeURIComponent(userId)}?from=${encodeURIComponent(from)}`;
 
+/**
+ * Where Back goes from a profile that has nothing behind it in its tab (a link from an email, a name opened from the live
+ * event in a new tab): the screen the link was on (CON-01, 25 Oct 2026; it used to be For You for everyone). People covers
+ * Matches, Find people, the searches and the people met, whose first tab is Your connections; the rail's recent
+ * connections and a path through another profile sit on For You.
+ */
+export const BACK_FALLBACK: Record<KnownSource, string> = {
+  'For You': '/',
+  People: '/connections',
+  Messages: '/messages',
+  Connections: '/',
+  'Your path': '/',
+  Circles: '/circles',
+  Pods: '/pods',
+  Events: '/sessions',
+};
+
+/** The screen Back falls back to; For You when the profile does not say where it was opened from. */
+export const backFallback = (source: KnownSource | null): string => (source ? BACK_FALLBACK[source] : '/');
+
 const MEMBER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A member id, in either case. Anything else (a crafted address, a typo) is no member's, and needs no request. */

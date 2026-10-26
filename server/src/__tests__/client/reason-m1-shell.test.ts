@@ -134,15 +134,20 @@ describe('REASON shell: faults found by looking at it', () => {
     // A sticky top bar would hide the Admin bulk bars, which stick to the top of <main>.
     expect(read('features/reason/shell/ShellTopbar.tsx')).not.toMatch(/\bsticky\b/);
   });
-  it('<main> is the scroll area, so it is what keeps its place between pages: it goes back to the top when the path changes, and only then (a ?tab= or ?q= change is the same page)', () => {
+  it('<main> is the scroll area, so it is what keeps its place between pages: a new page opens at its top, Back returns to the place the member left, and a ?tab= or ?q= change is the same page (CON-01)', () => {
     const shell = read('features/reason/shell/ReasonShell.tsx');
-    expect(shell).toMatch(/import \{ useLayoutEffect, useRef \} from 'react';/);
+    expect(shell).toMatch(/import \{ useRef \} from 'react';/);
     expect(shell).toMatch(/const main = useRef<HTMLElement>\(null\);/);
-    // Before paint (no frame is drawn mid-list), instant (the app scrolls smoothly), and keyed on the path alone.
-    expect(shell).toMatch(/useLayoutEffect\(\(\) => \{\s*main\.current\?\.scrollTo\(\{ top: 0, left: 0, behavior: 'instant' \}\);\s*\}, \[pathname\]\);/);
+    expect(shell).toMatch(/useMainScrollMemory\(main\);/);
+    // The path is still what the nav reads; the scroll no longer waits on it alone, or on every location.
     expect(shell).toMatch(/const \{ pathname \} = useLocation\(\);/);
-    // The whole location, or its search, would send a member back to the top on every tab or filter.
-    expect(shell).not.toMatch(/\}, \[[^\]]*\b(location|search|searchParams)\b[^\]]*\]\)/);
+    expect(shell).not.toMatch(/scrollTo\(/);
+    // Before paint (no frame is drawn mid-list), instant (the app scrolls smoothly), and the rules are run in
+    // reason-m1-scroll-memory.test.ts: top for a new path, the saved place for Back, no jump for a search-only change.
+    const hook = read('features/reason/shell/useMainScrollMemory.ts');
+    expect(hook).toMatch(/useLayoutEffect\(/);
+    expect(read('features/reason/shell/scroll-memory.ts')).toMatch(/behavior: 'instant'/);
+    expect(hook).toMatch(/scrollTo\(\{ top: 0, left: 0, behavior: 'instant' \}\)/);
   });
   it('the rail scrolls on a short window, so the account block stays on screen', () => {
     const side = read('features/reason/shell/ShellSidebar.tsx');
@@ -235,7 +240,8 @@ describe('REASON shell: faults found by looking at it', () => {
     expect(search).toMatch(/import \{ Link, useSearchParams \} from 'react-router-dom'/);
     expect(search).toMatch(/const urlQuery = searchParams\.get\('q'\) \?\? ''/);
     expect(search).toMatch(/useState\(urlQuery\)/);
-    expect(search).toMatch(/useEffect\(\(\) => \{ setQ\(urlQuery\); \}, \[urlQuery\]\)/);
+    // A new ?q= from outside is followed (CON-01: the page now writes ?q= itself, and must not follow its own write).
+    expect(search).toMatch(/useEffect\(\(\) => \{\s*if \(urlQuery === written\.current\) return;\s*written\.current = urlQuery;\s*setQ\(urlQuery\);\s*\}, \[urlQuery\]\)/);
   });
   it('preview builds report to Sentry as "preview", not "production"', () => {
     const sentry = read('lib/sentry.ts');

@@ -61,22 +61,18 @@ interface PeopleMetData {
 // both the "existing conversation" and "compose new" cases via the
 // /messages/new/:userId route.
 function MessagePartnerButton({ userId, displayName }: { userId: string; displayName: string }) {
-  // UX3 (June-10 debrief) — open the conversation in a NEW TAB instead of
-  // navigating away from the recap, so the recap stays put.
-  const openConversation = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    window.open(`/messages/new/${userId}`, '_blank', 'noopener,noreferrer');
-  };
+  // CON-01 (25 Oct 2026) — the conversation opens in THIS tab, and Back returns to the recap. UX3 (June-10 debrief)
+  // opened a new tab to keep the recap, but a new tab has no history behind it (a Back that does nothing); this is a
+  // post-event page, not the call, so nothing is lost by leaving it. The live end screen keeps its new tab.
   return (
-    <button
-      onClick={openConversation}
+    <Link
+      to={`/messages/new/${userId}`}
       title={`Message ${displayName || 'this user'}`}
-      className="shrink-0 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
+      className="shrink-0 inline-flex min-h-[44px] items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
       data-testid={`recap-dm-button-${userId}`}
     >
       <MessageSquare className="h-3.5 w-3.5" /> Message
-    </button>
+    </Link>
   );
 }
 

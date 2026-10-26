@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -29,6 +29,7 @@ const EMPTY = <span className="text-sm italic text-gray-300">Not shared yet</spa
 export default function PublicProfilePage() {
   const { userId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const qc = useQueryClient();
   const { user: currentUser } = useAuthStore();
   const currentUserId = currentUser?.id;
@@ -121,12 +122,21 @@ export default function PublicProfilePage() {
     },
   });
 
+  // 25 Oct 2026 (CON-01): a tab with nothing behind it, a profile opened in a new tab from the live event or from an
+  // emailed link, used to get a Back that did nothing. It goes to the dashboard now. A full page load from inside the
+  // app (the pod, event and recap pages link here with a plain <a href>) starts the router with the key "default" too,
+  // but its tab has history, so that still goes back to the page the member left.
+  const goBack = () => {
+    if (location.key !== 'default' || window.history.length > 1) navigate(-1);
+    else navigate('/', { replace: true });
+  };
+
   if (isLoading) return <PageLoader />;
   if (error || !user) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-12 text-center">
         <h2 className="text-xl font-semibold text-gray-700">User not found</h2>
-        <Button onClick={() => navigate(-1)} variant="secondary" className="mt-4">Go Back</Button>
+        <Button onClick={goBack} variant="secondary" className="mt-4">Go Back</Button>
       </div>
     );
   }
@@ -140,7 +150,7 @@ export default function PublicProfilePage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
       <button
-        onClick={() => navigate(-1)}
+        onClick={goBack}
         className="mb-4 inline-flex min-h-[44px] items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
       >
         <ArrowLeft className="h-4 w-4" /> Back

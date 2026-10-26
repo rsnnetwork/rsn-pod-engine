@@ -9,7 +9,7 @@
 // Being findable is not the same as being open: bio, contact details and
 // messaging keep the gates they had before, on the profile page.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Search as SearchIcon } from 'lucide-react';
@@ -41,12 +41,26 @@ function useSettled(value: string, ms = 250): string {
 }
 
 export default function SearchPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const urlQuery = searchParams.get('q') ?? '';
   const [q, setQ] = useState(urlQuery);
-  // The top search bar lands here with ?q=; follow it when a new search arrives.
-  useEffect(() => { setQ(urlQuery); }, [urlQuery]);
+  // The last ?q= this page itself put in the address (or found there when it opened).
+  const written = useRef(urlQuery);
+  // The top search bar lands here with ?q=; follow it when a new search arrives. The page's own write, below, is not a new
+  // search: following that would put back what the member typed a moment ago over what they have typed since.
+  useEffect(() => {
+    if (urlQuery === written.current) return;
+    written.current = urlQuery;
+    setQ(urlQuery);
+  }, [urlQuery]);
   const term = useSettled(q.trim());
+  // The search is in the address, so Back from a profile returns to it, words and results (CON-01, 25 Oct 2026). One
+  // write per pause, replacing the entry: typing never adds a step to the history.
+  useEffect(() => {
+    if (term === written.current) return;
+    written.current = term;
+    setSearchParams(term ? { q: term } : {}, { replace: true });
+  }, [term, setSearchParams]);
   const [asked, setAsked] = useState<Set<string>>(new Set());
   const { addToast } = useToastStore();
 
@@ -82,7 +96,7 @@ export default function SearchPage() {
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search people..."
           aria-label="Search people"
-          autoFocus
+          autoFocus={!urlQuery}
           autoComplete="off"
           className="min-h-[44px] w-full rounded-lg border-2 border-gray-300 bg-white pl-9 pr-3 text-base text-[#1a1a2e] focus:border-rsn-red focus:outline-none"
         />

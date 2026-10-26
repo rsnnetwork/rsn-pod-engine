@@ -189,12 +189,15 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     });
 
     it('SessionComplete + RecapPage open /messages/new/:userId directly — no prompt() flow', () => {
-      // UX3 (June-10) — the helpers now open the conversation in a NEW TAB
+      // UX3 (June-10) — the helpers opened the conversation in a NEW TAB
       // (window.open) instead of navigating away from the recap, but still go
       // straight to /messages/new/:userId. The earlier prompt-then-create flow
       // is forbidden because it surfaces a jarring native dialog first.
+      // CON-01 (25 Oct 2026) — the recap page is a post-event page, so its
+      // helper is a Link in the same tab (Back returns to the recap); the live
+      // end screen keeps the new tab.
       expect(sessionComplete).toMatch(/window\.open\(`\/messages\/new\/\$\{userId\}`/);
-      expect(recapPage).toMatch(/window\.open\(`\/messages\/new\/\$\{userId\}`/);
+      expect(recapPage).toMatch(/to=\{`\/messages\/new\/\$\{userId\}`\}/);
       // Forbid the regression to the prompt() flow.
       expect(sessionComplete).not.toMatch(/prompt\(`Send your first message/);
       expect(recapPage).not.toMatch(/prompt\(`Send your first message/);

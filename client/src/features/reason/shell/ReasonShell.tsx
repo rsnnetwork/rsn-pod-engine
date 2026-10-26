@@ -7,7 +7,7 @@
 // gives it, the Admin bulk bars stick to the top of <main> (a sticky top bar
 // outside it would hide them), and a page that is wider than the screen scrolls
 // inside <main> instead of dragging the whole window sideways.
-import { useLayoutEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
@@ -21,17 +21,17 @@ import ShellTopbar from './ShellTopbar';
 import MobileNav from './MobileNav';
 import PeopleTabs, { PEOPLE_TABS } from './PeopleTabs';
 import AdminTabs from './AdminTabs';
+import useMainScrollMemory from './useMainScrollMemory';
 import { NAV_BY_KEY, onAdmin } from './nav';
 
 export default function ReasonShell() {
   const { pathname } = useLocation();
   const main = useRef<HTMLElement>(null);
   // <main> is the scroll area, so it is what keeps its place when the page inside it changes: opening For You after
-  // scrolling Circles landed mid-list. A page opens at its top. Only the path decides (?tab= and ?q= are the same
-  // page), it is done before paint so no frame is drawn mid-list, and instantly (the app scrolls smoothly otherwise).
-  useLayoutEffect(() => {
-    main.current?.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-  }, [pathname]);
+  // scrolling Circles landed mid-list. A page opens at its top, and Back (from another page, or from a profile, which is
+  // outside the shell) returns to the place the member left (CON-01). Only the path decides whether a page is a new one
+  // (?tab=, ?q= and ?view= are the same page); it is done before paint so no frame is drawn mid-list.
+  useMainScrollMemory(main);
   const user = useAuthStore((s) => s.user);
   const userId = user?.id as string | undefined;
   const { data: unread } = useQuery({

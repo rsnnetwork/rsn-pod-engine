@@ -24,7 +24,7 @@ import MeetSheet from './MeetSheet';
 import OutcomeSheet from './OutcomeSheet';
 import { STATE_LABEL } from './labels';
 import {
-  MOVE_RESPONSE, isMemberId, knownSource, loadFailedText, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
+  MOVE_RESPONSE, backFallback, isMemberId, knownSource, loadFailedText, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
 } from './profile-text';
 import { blockMember, errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
 
@@ -166,10 +166,12 @@ export default function HumanProfilePage() {
     meta: { entities: me && userId ? [E.user(me), E.user(userId), E.userInvites(me), E.userDms(me), E.userBlocks(me), E.userEntities(userId), E.userEntities(me)] : [] },
   });
 
-  // The first screen of the app in this tab (a link opened from an email, say): going back would leave
-  // the app, so go to For You instead. `replace` keeps the browser's own Back button from returning here.
+  // The first screen of the app in this tab (a link opened from an email, a name opened from the live event in a new
+  // tab): going back would leave the app, so go to the screen the link was on (CON-01), For You when it does not say.
+  // `replace` keeps the browser's own Back button from returning here. Everywhere else the profile is opened in the tab
+  // that was looking at the list, so Back is the browser's own step back, which returns to it.
   const back = () => {
-    if (location.key === 'default') navigate('/', { replace: true });
+    if (location.key === 'default') navigate(backFallback(source), { replace: true });
     else navigate(-1);
   };
 
