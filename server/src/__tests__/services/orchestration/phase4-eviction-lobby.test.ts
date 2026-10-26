@@ -52,11 +52,8 @@ jest.mock('../../../services/orchestration/state/session-state', () => ({
   userRoom: (id: string) => `user:${id}`,
   persistSessionState: jest.fn(async () => {}),
   clearPersistedState: jest.fn(async () => {}),
-  cleanupChatMessages: jest.fn(),
   disconnectTimeouts: new Map(),
   sessionLocks: new Map(),
-  chatMessages: new Map(),
-  MAX_CHAT_MESSAGES: 50,
 }));
 jest.mock('../../../services/orchestration/state/session-fsm', () => ({
   canTransitionSession: jest.fn(() => true),

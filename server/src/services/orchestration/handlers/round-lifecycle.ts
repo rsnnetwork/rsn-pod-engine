@@ -13,7 +13,6 @@ import { SessionStatus, ParticipantStatus, formatRule, resolveEventFormat } from
 import {
   ActiveSession, activeSessions, withSessionGuard,
   sessionRoom, userRoom, persistSessionState, clearPersistedState,
-  cleanupChatMessages,
 } from '../state/session-state';
 import { canTransitionSession } from '../state/session-fsm';
 import { startSegmentTimer, clearSessionTimers, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
@@ -34,6 +33,7 @@ import * as emailService from '../../email/email.service';
 // can refresh React-Query keys without bespoke listeners.
 import { emitEntities } from '../../../realtime/emit';
 import { E } from '../../../realtime/entities';
+import { fanoutSessionCompleted } from '../../../realtime/fanout';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 
@@ -1145,8 +1145,9 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     // legitimately (explicit leave), and stamps NOW() on rows that
     // didn't have it. F4 (21 May) — moved post-emit so it doesn't gate
     // the host's UI transition; the recap doesn't depend on
-    // session_participants.status for anything time-critical.
-    query(
+    // session_participants.status for anything time-critical. Started
+    // without await; the completion fan-out below waits for it (26 Oct).
+    const swept = query(
       `UPDATE session_participants
          SET status = 'left',
              left_at = COALESCE(left_at, NOW())
@@ -1188,6 +1189,12 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
       logger.info({ sessionId, format: completedFormat }, 'No recap email: this event has no ratings');
     }
 
+    // 26 Oct 2026 — tell every open page of this event (those who already left included) that it has ended
+    // and its chat is complete, once the sweep has marked everyone left, so a refetch reads the final roster.
+    // session:completed went out above, so no screen waits on this. Never throws.
+    await swept;
+    await fanoutSessionCompleted(sessionId);
+
     // Phase A4 (10 May spec) — AWAIT LiveKit cleanup before tearing down
     // in-memory state. Pre-fix this was fire-and-forget, so when the in-memory
     // ActiveSession was deleted in finally{} the LiveKit room could outlive
@@ -1201,9 +1208,9 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
   } catch (err) {
     logger.error({ err, sessionId }, 'Error completing session');
   } finally {
-    // Always clean up to prevent memory leak, even on error
+    // Always clean up to prevent memory leak, even on error. (The event's chat is not in memory: it stays
+    // in the database with the event.)
     activeSessions.delete(sessionId);
-    cleanupChatMessages(sessionId);
     clearPersistedState(sessionId).catch(() => {});
     // Tier-1 A1: clear dashboard coalesce state so any pending trailing
     // emit doesn't fire after the session is gone.

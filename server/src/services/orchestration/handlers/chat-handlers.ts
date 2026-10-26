@@ -1,55 +1,106 @@
 // ─── Chat Handlers ─────────────────────────────────────────────────────────
 // Extracted from orchestration.service.ts — chat message sending, per-message
-// reactions, and floating emoji reactions.
+// reactions, floating emoji reactions, and the chat history.
 //
 // These handlers are independent of the session state machine (no withSessionGuard).
+//
+// 26 Oct 2026 — the event chat is kept in Postgres (services/event-chat): each message is stored before
+// anyone receives it, and the history and reactions are read back from there. There is no copy in memory or
+// in Redis any more, so a restart or a deploy in the middle of an event loses nothing.
 
 import { Server as SocketServer, Socket } from 'socket.io';
+import { z } from 'zod';
 import logger from '../../../config/logger';
 import { query } from '../../../db';
-import { SessionStatus } from '@rsn/shared';
+import { SessionStatus, ErrorCodes } from '@rsn/shared';
+import type { ChatSendAck } from '@rsn/shared';
+import { AppError } from '../../../middleware/errors';
 import {
   activeSessions, sessionRoom, userRoom, getUserIdFromSocket,
-  ChatMessage, chatMessages, MAX_CHAT_MESSAGES,
 } from '../state/session-state';
 import * as sessionService from '../../session/session.service';
+import {
+  CHAT_REACTION_EMOJIS, EVENT_CHAT_CLOSED, EVENT_CHAT_MAX_LENGTH, EVENT_CHAT_ROOM_ID_MAX, EVENT_CHAT_SEND_FAILED,
+  EVENT_CHAT_TOO_FAST, NewEventChatMessage, canReadEventChat, chatBlockedUserIds, isChatClosed, isUuid,
+  listLiveChatHistory, persistEventChatMessage, takeChatHistorySlot, takeChatReactSlot, takeChatSendSlot,
+  toggleEventChatReaction,
+} from '../../event-chat/event-chat.service';
 // matchingService removed — using direct queries for room-scoped chat
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
-const CHAT_REACTION_EMOJIS = ['heart', 'clap', 'thumbs_up'];
-
 const VALID_REACTIONS = ['raise_hand', 'heart', 'clap', 'thumbs_up', 'fire', 'laugh', 'surprise', 'wave', 'party', 'hundred'];
+
+/** chat:send. clientId (new clients only) stores a retried message once. */
+const chatSendSchema = z.object({
+  sessionId: z.string().min(1),
+  message: z.string(),
+  scope: z.enum(['lobby', 'room']),
+  clientId: z.string().uuid().optional(),
+});
+
+/** chat:request_history. Production's client also sends a matchId, no longer needed: a room message records who it reached. */
+const historyRequestSchema = z.object({ sessionId: z.string().uuid() });
 
 // ─── Chat Send ─────────────────────────────────────────────────────────────
 
 export async function handleChatSend(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string; message: string; scope: 'lobby' | 'room' }
+  data: { sessionId: string; message: string; scope: 'lobby' | 'room'; clientId?: string },
+  ack?: (res: ChatSendAck) => void,
 ): Promise<void> {
+  // A refusal reaches the sender alone: through the acknowledgement when the client sent one (new clients),
+  // otherwise as the `error` event production's client shows.
+  const refuse = (code: string, message: string) => {
+    if (ack) ack({ ok: false, code, message });
+    else socket.emit('error', { code, message });
+  };
   try {
     const userId = getUserIdFromSocket(socket);
     if (!userId) {
-      socket.emit('error', { code: 'UNAUTHORIZED', message: 'Not authenticated' });
+      refuse('UNAUTHORIZED', 'Not authenticated');
       return;
     }
 
-    const { sessionId, message, scope } = data;
-
-    // Validate message
-    if (!message || typeof message !== 'string' || message.trim().length === 0) return;
-    const trimmed = message.trim().slice(0, 500); // Cap at 500 chars
+    // A malformed or empty message is ignored, as it always was; a client that asked for an answer gets one.
+    const parsed = chatSendSchema.safeParse(data);
+    if (!parsed.success) {
+      ack?.({ ok: false, code: ErrorCodes.VALIDATION_ERROR, message: 'That message could not be sent. Try again.' });
+      return;
+    }
+    const { sessionId, scope, clientId } = parsed.data;
+    const text = parsed.data.message.trim();
+    if (text.length === 0) {
+      ack?.({ ok: false, code: ErrorCodes.VALIDATION_ERROR, message: 'Write a message first.' });
+      return;
+    }
 
     // Verify user is in the session room
     const rooms = socket.rooms;
     if (!rooms.has(sessionRoom(sessionId))) {
-      socket.emit('error', { code: 'NOT_IN_SESSION', message: 'You are not in this session' });
+      refuse('NOT_IN_SESSION', 'You are not in this event.');
       return;
     }
 
+    // At most 10 messages in any 10 seconds, counted before any work on the text or the database.
+    if (!takeChatSendSlot(userId)) {
+      refuse(ErrorCodes.RATE_LIMIT_EXCEEDED, EVENT_CHAT_TOO_FAST);
+      return;
+    }
+
+    // Cut to 500 characters as the database counts them (one emoji is one). 500 characters fit in 1,000 code
+    // units, so only those are split into characters, however long the message that was sent.
+    const trimmed = Array.from(text.slice(0, EVENT_CHAT_MAX_LENGTH * 2)).slice(0, EVENT_CHAT_MAX_LENGTH).join('');
+
     // Determine if sender is host/co-host
     const session = await sessionService.getSessionById(sessionId).catch(() => null);
+    // The chat closes when the event ends. A late send used to re-create the event's chat in memory, where it
+    // leaked; now it is refused here, and the store refuses it too (it checks the event row it writes beside).
+    if (session && isChatClosed(session.status)) {
+      refuse(ErrorCodes.EVENT_ENDED, EVENT_CHAT_CLOSED);
+      return;
+    }
     const isHost = session?.hostUserId === userId;
     const cohostResult = isHost ? { rows: [] } : await query<{ user_id: string }>(
       `SELECT user_id FROM session_cohosts WHERE session_id = $1 AND user_id = $2`, [sessionId, userId]
@@ -63,29 +114,25 @@ export async function handleChatSend(
     if (!isHost && !isCohost && scope === 'lobby') {
       const hostPresent = activeSession?.presenceMap.has(session?.hostUserId || '');
       if (!hostPresent) {
-        socket.emit('error', { code: 'CHAT_DISABLED', message: 'Chat is available once the host joins' });
+        refuse('CHAT_DISABLED', 'Chat is available once the host joins');
         return;
       }
     }
 
     const displayName = (socket.data as any)?.displayName || 'Unknown';
-    const chatMsg: ChatMessage = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      userId,
-      displayName,
-      message: trimmed,
-      timestamp: new Date().toISOString(),
+    // The message as it is stored; a room message gains its room and audience below. Each of the three ways
+    // out (lobby, room, sender only) stores it first and sends the stored message only once that has worked.
+    const chatMsg: NewEventChatMessage = {
+      sessionId,
+      senderId: userId,
+      senderName: displayName,
+      senderIsHost: isHost,
       scope,
-      isHost,
-      reactions: {},
+      content: trimmed,
+      clientId: clientId ?? null,
     };
-
-    // Store message in memory
-    if (!chatMessages.has(sessionId)) chatMessages.set(sessionId, []);
-    const msgs = chatMessages.get(sessionId)!;
-    msgs.push(chatMsg);
-    // Keep only the last MAX_CHAT_MESSAGES
-    if (msgs.length > MAX_CHAT_MESSAGES) msgs.splice(0, msgs.length - MAX_CHAT_MESSAGES);
+    // People blocked either way are skipped, so what is sent agrees with what the history shows.
+    const blocked = await chatBlockedUserIds(userId);
 
     if (scope === 'lobby') {
       // Broadcast to lobby users only — exclude users in active breakout rooms
@@ -96,12 +143,17 @@ export async function handleChatSend(
       );
       const inBreakout = new Set(activeMatchedRes.rows.map(r => r.pid).filter(Boolean));
       const socketsInSession = await io.in(sessionRoom(sessionId)).fetchSockets();
-      for (const sk of socketsInSession) {
-        const uid = (sk.data as any)?.userId;
-        if (!inBreakout.has(uid)) {
-          sk.emit('chat:message', chatMsg);
+      const { message: stored, created } = await persistEventChatMessage(chatMsg);
+      // A retried clientId was sent the first time: nothing goes out again.
+      if (created) {
+        for (const sk of socketsInSession) {
+          const uid = (sk.data as any)?.userId;
+          if (!inBreakout.has(uid) && !blocked.has(uid)) {
+            sk.emit('chat:message', stored);
+          }
         }
       }
+      ack?.({ ok: true, id: stored.id, duplicate: !created });
     } else {
       // Room scope: resolve recipients via in-memory roomParticipants FIRST
       // (the source of truth for "who is in which LiveKit room right now"),
@@ -131,6 +183,7 @@ export async function handleChatSend(
       //   4. socket.emit-self only (the truly-orphan sender path — kept as
       //      a safety net so we never throw the message away).
       let resolvedRoomId: string | null = null;
+      let resolvedMatchId: string | null = null;
       const recipientIds: Set<string> = new Set();
 
       const { readCanonical } = await import('../state/canonical-state');
@@ -138,6 +191,7 @@ export async function handleChatSend(
       const senderLoc = canonDoc?.participants[userId]?.location;
       if (senderLoc?.type === 'breakout') {
         resolvedRoomId = senderLoc.roomId;
+        resolvedMatchId = senderLoc.matchId;
         for (const [uid, p] of Object.entries(canonDoc!.participants)) {
           if (p.location.type === 'breakout' && p.location.roomId === senderLoc.roomId) {
             recipientIds.add(uid);
@@ -150,6 +204,7 @@ export async function handleChatSend(
         // The in-memory presence map. Find every userId
         // currently in the same LiveKit room.
         resolvedRoomId = senderRoomEntry.roomId;
+        resolvedMatchId = senderRoomEntry.matchId;
         for (const [uid, info] of activeSession!.roomParticipants!) {
           if (info.roomId === senderRoomEntry.roomId) recipientIds.add(uid);
         }
@@ -173,29 +228,55 @@ export async function handleChatSend(
         if (matchRes.rows[0]) {
           const m = matchRes.rows[0];
           resolvedRoomId = m.room_id || null;
+          resolvedMatchId = m.id;
           for (const pid of [m.participant_a_id, m.participant_b_id, m.participant_c_id]) {
             if (pid) recipientIds.add(pid);
           }
         }
       }
 
+      // A client names its own room (presence:room_joined) and the id is stored with the message: one longer
+      // than any real room id is refused without a word (a client that asked for an answer gets one).
+      if (resolvedRoomId !== null && resolvedRoomId.length > EVENT_CHAT_ROOM_ID_MAX) {
+        logger.warn({ sessionId, userId, length: resolvedRoomId.length }, 'Chat message refused: its room id is too long');
+        ack?.({ ok: false, code: ErrorCodes.VALIDATION_ERROR, message: EVENT_CHAT_SEND_FAILED });
+        return;
+      }
+
       if (resolvedRoomId !== null && recipientIds.size > 0) {
         // Phase 8A.4 — guarantee non-undefined roomId for room-scope
-        // messages so reactions can resolve the parent match later.
+        // messages: the client shows a room message only in its own room.
         chatMsg.roomId = resolvedRoomId || chatMsg.roomId || undefined;
-        for (const pid of recipientIds) {
-          io.to(userRoom(pid)).emit('chat:message', chatMsg);
+        // Stored with exactly who it reaches (blocked people skipped): the history and the reactions on it
+        // reach the same people later.
+        const delivered = [...recipientIds].filter((pid) => !blocked.has(pid));
+        const { message: stored, created } = await persistEventChatMessage({
+          ...chatMsg, matchId: resolvedMatchId, audienceIds: delivered,
+        });
+        if (created) {
+          for (const pid of delivered) {
+            io.to(userRoom(pid)).emit('chat:message', stored);
+          }
         }
+        ack?.({ ok: true, id: stored.id, duplicate: !created });
       } else {
         // Truly orphan: the sender isn't in any tracked room and has no
         // matching DB row. Honour the request locally so they at least see
-        // their own message rendered, but nothing more.
-        socket.emit('chat:message', chatMsg);
+        // their own message rendered, but nothing more. Stored for them alone.
+        const { message: stored, created } = await persistEventChatMessage({ ...chatMsg, audienceIds: [userId] });
+        if (created) socket.emit('chat:message', stored);
+        ack?.({ ok: true, id: stored.id, duplicate: !created });
       }
     }
   } catch (err: any) {
+    // The event has ended (found when storing): the sender is told why, and nothing was sent to anyone.
+    if (err instanceof AppError) {
+      refuse(err.code, err.message);
+      return;
+    }
+    // The store failed: nothing was sent to anyone, and the sender is told.
     logger.error({ err }, 'Error handling chat message');
-    socket.emit('error', { code: 'CHAT_FAILED', message: 'Failed to send message' });
+    refuse('CHAT_FAILED', EVENT_CHAT_SEND_FAILED);
   }
 }
 
@@ -210,42 +291,28 @@ export async function handleChatReact(
     const userId = getUserIdFromSocket(socket);
     if (!userId) return;
 
-    const { sessionId, messageId, emoji } = data;
+    const { sessionId, messageId, emoji } = data ?? ({} as Partial<typeof data>);
     if (!sessionId || !messageId || !emoji) return;
-    if (!CHAT_REACTION_EMOJIS.includes(emoji)) return;
+    if (!(CHAT_REACTION_EMOJIS as readonly string[]).includes(emoji)) return;
+    // A message from before chat was kept had a made-up id: nothing is stored to react to.
+    if (!isUuid(messageId)) return;
+    if (!socket.rooms.has(sessionRoom(sessionId))) return;
+    // 20 reactions per member in any 10 seconds; one over is dropped without a word.
+    if (!takeChatReactSlot(userId)) return;
 
-    const msgs = chatMessages.get(sessionId);
-    if (!msgs) return;
+    // Toggle in the database: add if not present, remove if already reacted.
+    const result = await toggleEventChatReaction({ sessionId, messageId, userId, emoji });
+    if (!result) return;
 
-    const msg = msgs.find(m => m.id === messageId);
-    if (!msg) return;
-
-    // Toggle: add if not present, remove if already reacted
-    if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
-    const idx = msg.reactions[emoji].indexOf(userId);
-    if (idx >= 0) {
-      msg.reactions[emoji].splice(idx, 1);
-      if (msg.reactions[emoji].length === 0) delete msg.reactions[emoji];
-    } else {
-      msg.reactions[emoji].push(userId);
-    }
-
-    // Scope reaction broadcast: lobby messages go to all, room messages only to room
-    if (msg.scope === 'room' && msg.roomId) {
-      // Find participants of the match that owns this room message
-      const roomMatchRes = await query<{ participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null }>(
-        `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches WHERE room_id = $1 LIMIT 1`,
-        [msg.roomId]
-      );
-      if (roomMatchRes.rows[0]) {
-        const pids = [roomMatchRes.rows[0].participant_a_id, roomMatchRes.rows[0].participant_b_id, roomMatchRes.rows[0].participant_c_id]
-          .filter((id): id is string => !!id);
-        for (const pid of pids) {
-          io.to(userRoom(pid)).emit('chat:reaction_update', { messageId, reactions: msg.reactions });
-        }
+    // The update reaches whoever has the message: the people a room message was stored as reaching (exact,
+    // including a host who visited the room), or the whole event for a lobby message.
+    const update = { messageId, reactions: result.reactions };
+    if (result.scope === 'room') {
+      for (const pid of result.audienceIds ?? []) {
+        io.to(userRoom(pid)).emit('chat:reaction_update', update);
       }
     } else {
-      io.to(sessionRoom(sessionId)).emit('chat:reaction_update', { messageId, reactions: msg.reactions });
+      io.to(sessionRoom(sessionId)).emit('chat:reaction_update', update);
     }
   } catch (err) {
     logger.error({ err }, 'Error handling chat reaction');
@@ -372,27 +439,52 @@ export async function handleReactionSend(
 //
 // This handler lets the client request a fresh chat history snapshot on
 // demand (typically: when the chat panel mounts, or when the local message
-// count is behind the server's notification count). Returns lobby-scoped
-// messages by default; if the client is in a breakout match the room
-// messages for THAT match are also included.
+// count is behind the server's notification count).
+//
+// 26 Oct 2026 — read from the database: the event's lobby messages and the room messages this member was
+// sent (the last 200, oldest first). X3: it used to answer any signed-in socket that named an event. Now it
+// answers anyone canReadEventChat allows (who took part, the hosts; someone registered whose socket is in the
+// room while the chat is open; an admin, lobby messages only). Anyone else gets no answer at all: production's
+// chat panel asks when it mounts, before its session:join reaches the server, and an `error` here was a red
+// toast on nearly every first entry. The join sends the history a moment later.
 export async function handleChatRequestHistory(
-  _io: import('socket.io').Server,
-  socket: import('socket.io').Socket,
+  _io: SocketServer,
+  socket: Socket,
   data: { sessionId: string; matchId?: string },
 ): Promise<void> {
   try {
-    const userId = (socket.data as any)?.userId;
-    if (!userId || !data?.sessionId) return;
-    const allHistory = chatMessages.get(data.sessionId) || [];
-    // Lobby messages are visible to everyone in the session. Room messages
-    // are visible only to the requested match's participants.
-    const visible = allHistory.filter(m => {
-      if (m.scope === 'lobby' || !m.scope) return true;
-      if (m.scope === 'room' && data.matchId && (m as any).matchId === data.matchId) return true;
-      return false;
+    const userId = getUserIdFromSocket(socket);
+    const parsed = historyRequestSchema.safeParse(data);
+    if (!userId || !parsed.success) return;
+    // 20 requests per member in any 10 seconds; one over is dropped without a word.
+    if (!takeChatHistorySlot(userId)) return;
+    const { sessionId } = parsed.data;
+    const access = await canReadEventChat(userId, socket.data?.role, sessionId, {
+      inSessionRoom: socket.rooms.has(sessionRoom(sessionId)),
     });
-    socket.emit('chat:history', { messages: visible });
+    if (!access) return;
+    const messages = await listLiveChatHistory(sessionId, userId, access);
+    socket.emit('chat:history', { messages });
   } catch (err) {
+    // An event that does not exist answers nothing.
+    if (err instanceof AppError) return;
     logger.error({ err }, 'Error handling chat:request_history');
+  }
+}
+
+/**
+ * On joining an event: the chat so far, from the database. Sent only when there is something to show, since
+ * production's client keeps what it has on an empty answer. While the event runs, the member who has just
+ * joined its room reads it; once it is over, only the people canReadEventChat allows do (anyone can open an
+ * ended event's live page, which joins its room).
+ */
+export async function sendJoinChatHistory(socket: Socket, sessionId: string, userId: string): Promise<void> {
+  try {
+    const access = await canReadEventChat(userId, socket.data?.role, sessionId, { inSessionRoom: true });
+    if (!access) return;
+    const messages = await listLiveChatHistory(sessionId, userId, access);
+    if (messages.length > 0) socket.emit('chat:history', { messages });
+  } catch (err) {
+    logger.warn({ err, sessionId, userId }, 'Could not send the chat history on join (non-fatal)');
   }
 }

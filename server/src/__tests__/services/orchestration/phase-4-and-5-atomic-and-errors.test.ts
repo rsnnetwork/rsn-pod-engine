@@ -11,7 +11,10 @@
 //   4B — chat:request_history socket event force-fetches authoritative
 //        chat history on demand. ChatPanel emits this on mount so a
 //        message that was missed locally (race / disconnect / scope) is
-//        recovered when the panel opens.
+//        recovered when the panel opens. Since 26 Oct 2026 it reads the
+//        history from the database, and only for a socket in the event or
+//        someone allowed to read its chat (X3); the behaviour is tested in
+//        event-chat-handlers.test.ts and event-chat-kept.test.ts.
 //
 //   5A — error: socket events fire toasts via useToastStore with code-
 //        specific friendly text. Critical errors also keep the legacy
@@ -100,12 +103,19 @@ describe('Phase 4 + 5 — Atomic room ops, chat reliability, error toasts, test 
       expect(panelSrc).toMatch(/socket\.emit\(['"]chat:request_history['"][^\)]*sessionId/);
     });
 
-    it('handler scopes room messages to the requesting user\'s matchId', () => {
+    // X3 (26 Oct 2026 audit): the handler answered any signed-in socket that named an event, and its room
+    // filter compared a matchId messages never had. It now checks membership before reading anything, and
+    // reads from the database, where a room message records who it reached.
+    it('handler checks the socket is in the event, or may read its chat, before reading the history from the database', () => {
       const fnStart = handlerSrc.indexOf('export async function handleChatRequestHistory(');
-      const fnEnd = handlerSrc.indexOf('\n}\n', fnStart);
+      const fnEnd = handlerSrc.indexOf('\n}', fnStart);
       const fn = handlerSrc.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/m\.scope\s*===\s*['"]room['"]/);
-      expect(fn).toMatch(/data\.matchId/);
+      expect(fn).toMatch(/socket\.rooms\.has\(sessionRoom\(sessionId\)\)/);
+      expect(fn).toMatch(/canReadEventChat\(/);
+      const refusedAt = fn.indexOf('if (!access)');
+      const readAt = fn.indexOf('listLiveChatHistory(');
+      expect(refusedAt).toBeGreaterThan(-1);
+      expect(readAt).toBeGreaterThan(refusedAt);
     });
   });
 
