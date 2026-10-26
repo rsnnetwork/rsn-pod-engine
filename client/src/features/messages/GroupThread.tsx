@@ -97,11 +97,14 @@ export default function GroupThread({ groupId }: { groupId: string }) {
 
   // A change to the group landing while the earlier page is on its way (a message, the member's own read mark) starts
   // a refetch that drops the page fetch in flight, so the page is asked for again until it has come (untilEarlierPage);
-  // the place is noted again before each ask, since the refetch may have added to the list meanwhile.
+  // the place is noted again before each ask, since the refetch may have added to the list meanwhile. The ask never
+  // cancels a refetch in flight either (cancelRefetch: false): it yields to it, the pages do not grow, and the next ask
+  // brings the page. With the default, the page fetch dropped the refetch carrying a new message, the thread kept the
+  // old newest message, no read mark fired, and the message stayed hidden (seen on the preview, 26 Oct 2026).
   const showEarlier = () => {
     const el = scroller.current;
     void untilEarlierPage(
-      () => thread.fetchNextPage(),
+      () => thread.fetchNextPage({ cancelRefetch: false }),
       thread.data?.pages.length ?? 0,
       () => { if (el) keepPlace.current = { height: el.scrollHeight, top: el.scrollTop }; },
     );

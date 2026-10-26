@@ -543,7 +543,11 @@ describe('the group thread', () => {
   it('"Show earlier messages" asks for the page again when a change to the group dropped it, noting the place before each ask', () => {
     const earlier = blockFrom(thread, 'const showEarlier');
     expect(earlier).toMatch(/untilEarlierPage\(/);
-    expect(earlier).toMatch(/\(\) => thread\.fetchNextPage\(\)/);
+    // The ask must not cancel a refetch a change just started (the mirror race, found on the preview on 26 Oct 2026):
+    // with cancelRefetch the page fetch dropped the refetch carrying the new message, the thread kept the old newest
+    // message, so no read mark fired and the message stayed hidden. Without it the ask yields to the refetch, the
+    // pages do not grow, and the next ask brings the page.
+    expect(earlier).toMatch(/\(\) => thread\.fetchNextPage\(\{ cancelRefetch: false \}\)/);
     expect(earlier).toMatch(/thread\.data\?\.pages\.length \?\? 0/);
     expect(earlier).toMatch(/keepPlace\.current = \{ height: el\.scrollHeight, top: el\.scrollTop \}/);
   });
@@ -567,7 +571,7 @@ describe('the group thread', () => {
   });
 
   it('"Show earlier messages" loads the page before, from a 44px button', () => {
-    expect(thread).toMatch(/fetchNextPage\(\)/);
+    expect(thread).toMatch(/fetchNextPage\(\{ cancelRefetch: false \}\)/);
     expect(thread).toMatch(/SHOW_EARLIER/);
   });
 
