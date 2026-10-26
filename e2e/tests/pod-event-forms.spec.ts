@@ -132,6 +132,14 @@ test(`B: an event from a Reason pod follows its type, asks before dropping round
   await schedule.click();
   await page.waitForURL(/\/sessions\/[0-9a-f-]{36}\?invite=1$/, { timeout: 30_000 });
   const sessionId = new URL(page.url()).pathname.split('/').pop()!;
+  // ?invite=1 opens the invite sheet on arrival (C9, 26 Oct 2026), on the event's pod; "Done" closes it and drops the
+  // ?invite=1, and the page's own "Invite people" button is there to open it again.
+  const sheet = page.getByRole('dialog', { name: 'Invite people' });
+  await expect(sheet).toBeVisible({ timeout: 30_000 });
+  await expect(sheet.getByRole('button', { name: /^This pod/ })).toHaveAttribute('aria-pressed', 'true');
+  await sheet.getByRole('button', { name: 'Done' }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(page).not.toHaveURL(/invite=1/);
   await expect(page.getByText('Video meeting · 60 min · up to 25')).toBeVisible({ timeout: 30_000 });
   const invite = page.getByRole('button', { name: 'Invite people' });
   await expectReachable(page, invite, 'Invite people');

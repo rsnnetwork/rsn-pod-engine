@@ -4,7 +4,7 @@ import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 
 // HEADED end-to-end coverage for the "RSN test 9 june" punch list:
-//   #1 invite "Search by name or email" text is visible (not white-on-white)
+//   #1 the invite search text is visible (not white-on-white)
 //   #2 participants (and host) never see internal "plan updated"/"plan ready"
 //   #4 co-host promote/demote gives INSTANT feedback + real powers
 //   #5 a shareable invite link covers the whole event (not capped at 10)
@@ -154,7 +154,7 @@ test('#3: a super_admin (not the director) always sees host controls', async () 
 });
 
 // ── #1 — invite search input text is visible (dark, not white-on-white) ───────
-test('#1: the invite "Search by name or email" input renders dark, readable text', async () => {
+test('#1: the invite search input renders dark, readable text', async () => {
   test.setTimeout(90_000);
   const context = await browser.newContext();
   await login(context, host);
@@ -162,8 +162,8 @@ test('#1: the invite "Search by name or email" input renders dark, readable text
   try {
     await page.goto(`${APP}/sessions/${sessionId}`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4000);
-    // Open the invite/people area if it's behind a button, then locate the search input.
-    const search = page.getByPlaceholder('Search by name or email...').first();
+    // The invite sheet (26 Oct 2026) opens from "Invite people"; its search finds your connections by name, role or company.
+    const search = page.getByPlaceholder('Search by name, role or company').first();
     if (!(await search.count())) {
       // Try an "Invite" / add control to reveal it.
       await page.getByRole('button', { name: /invite/i }).first().click().catch(() => {});

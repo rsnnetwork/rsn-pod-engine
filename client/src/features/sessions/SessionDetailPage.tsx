@@ -1,14 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send, Shield, ShieldCheck, Radio } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
-import Input from '@/components/ui/Input';
-import Modal from '@/components/ui/Modal';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
@@ -23,27 +20,14 @@ import StartGroupChatCard from './StartGroupChatCard';
 import EventChatHistory from './EventChatHistory';
 import EditEventModal from './EditEventModal';
 import { eventFacts, eventFactsLine } from './event-format-form';
+import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
+import InviteStatusList from '@/features/invites/InviteStatusList';
 
 /** The icon over each figure under an event's title. */
 const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
 
 /** A way back off the event page: a link, 44px tall. */
 const BACK_LINK = 'inline-flex min-h-[44px] items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition-colors';
-
-function getInviteErrorMessage(err: any): string {
-  const code = err?.response?.data?.error?.code;
-  const message = err?.response?.data?.error?.message;
-  switch (code) {
-    case 'DUPLICATE_INVITE': return 'This person already has a pending invite';
-    case 'SELF_INVITE': return 'You cannot send an invite to yourself';
-    case 'ALREADY_REGISTERED': return 'This person already has an account on the platform';
-    case 'POD_MEMBER_EXISTS': return 'This person is already a member of this pod';
-    case 'SESSION_ALREADY_REGISTERED': return 'This person is already a participant of this event';
-    case 'POD_ARCHIVED': return 'Cannot send invites to an archived pod';
-    case 'AUTH_FORBIDDEN': return message || 'You do not have permission to send this invite';
-    default: return message || 'Failed to send invite. Please try again';
-  }
-}
 
 export default function SessionDetailPage() {
   const { sessionId } = useParams();
@@ -53,16 +37,12 @@ export default function SessionDetailPage() {
   const qc = useQueryClient();
   // Edit Event is its own react-hook-form sheet that follows the event type (EditEventModal, 26 Oct 2026).
   const [editOpen, setEditOpen] = useState(false);
+  // The invite sheet (features/invites, 26 Oct 2026). A new event lands here with ?invite=1 (Schedule an Event), and
+  // the sheet is open on arrival for whoever may invite.
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteLink, setInviteLink] = useState('');
-  const [copied, setCopied] = useState(false);
-  const [userSearch, setUserSearch] = useState('');
-  const debouncedUserSearch = useDebouncedValue(userSearch, 300);
-  const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const askedToInvite = searchParams.get('invite') === '1';
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
-  const [showPendingInvites, setShowPendingInvites] = useState(false);
-  const [invitingMember, setInvitingMember] = useState<string | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
 
   // Close overflow menu on Escape only — click-outside handled by backdrop overlay
@@ -124,6 +104,20 @@ export default function SessionDetailPage() {
   // renders only while the event can still happen / is happening.
   const sessionOver = session?.status === 'completed' || session?.status === 'cancelled';
   const canManageCohosts = !sessionOver && (isHost || user?.role === 'super_admin' || viewerIsCohost);
+  // Who may invite (the server's rule: the host, a co-host, an admin), while the event can still take people.
+  const mayInvite = (isHost || isAdmin || viewerIsCohost) && (phase === 'pre' || phase === 'live');
+  const pickerOpen = inviteOpen || (askedToInvite && mayInvite);
+  const closePicker = () => {
+    setInviteOpen(false);
+    // Closed once, it stays closed: the address no longer asks for it, so a refresh does not open it again.
+    if (askedToInvite) {
+      setSearchParams((now) => {
+        const next = new URLSearchParams(now);
+        next.delete('invite');
+        return next;
+      }, { replace: true });
+    }
+  };
   const [cohostBusy, setCohostBusy] = useState<string | null>(null);
   const toggleCohost = async (targetUserId: string, currentlyCohost: boolean) => {
     setCohostBusy(targetUserId);
@@ -145,68 +139,14 @@ export default function SessionDetailPage() {
     enabled: !!sessionId && (isHost || isAdmin),
     meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
-  const { data: pendingInvites } = useQuery({
-    queryKey: ['session-pending-invites', sessionId],
-    queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then(r => r.data.data ?? []),
-    enabled: !!sessionId && (isHost || isAdmin),
-    meta: { entities: sessionId ? [E.session(sessionId), E.sessionInvites(sessionId)] : [] },
-  });
-
-  const { data: podMembers, refetch: refetchPodMembers } = useQuery({
-    queryKey: ['pod-members-for-invite', session?.podId, sessionId],
-    queryFn: () => api.get(`/pods/${session?.podId}/members/for-invite?sessionId=${sessionId}`).then(r => r.data.data),
-    enabled: !!session?.podId && !!sessionId && isHost,
-    meta: { entities: session?.podId ? [E.pod(session.podId), E.podMembers(session.podId)] : [] },
-  });
-
-  const invitePodMember = async (userId: string, email: string) => {
-    setInvitingMember(userId);
-    try {
-      await api.post('/invites', {
-        type: 'session',
-        sessionId,
-        inviteeEmail: email,
-        maxUses: 1,
-      });
-      addToast('Invite sent!', 'success');
-      refetchPodMembers();
-    } catch (err: any) {
-      addToast(err?.response?.data?.error?.message || 'Failed to invite', 'error');
-    } finally {
-      setInvitingMember(null);
-    }
-  };
-
-  const remindMutation = useMutation({
-    mutationFn: (inviteId: string) => api.post(`/invites/${inviteId}/remind`),
-    onSuccess: () => addToast('Reminder sent!', 'success'),
-    onError: () => addToast('Failed to send reminder', 'error'),
-  });
-
-  const remindAllMutation = useMutation({
-    mutationFn: () => api.post(`/invites/remind-all/${sessionId}`),
-    onSuccess: (res) => {
-      const { reminded, total } = res.data.data;
-      addToast(`Reminders sent to ${reminded}/${total} pending invites`, 'success');
-    },
-    onError: () => addToast('Failed to send bulk reminders', 'error'),
-  });
-
-  // #6 (9 Jun, Ali) — revoke a pending invite from the event page. The backend
-  // marks it revoked; the accept flow already blocks a revoked link
-  // (WHERE status NOT IN ('revoked','expired')). Re-inviting the same person
-  // then works, because a revoked invite is no longer 'pending' (so the
-  // duplicate-pending guard doesn't fire).
-  const revokeInviteMutation = useMutation({
-    mutationFn: (inviteId: string) => api.delete(`/invites/${inviteId}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['session-pending-invites', sessionId] });
-      qc.invalidateQueries({ queryKey: ['session', sessionId] });
-      addToast('Invite revoked — the old link no longer works. You can re-invite them.', 'success');
-    },
-    onError: () => addToast('Failed to revoke invite', 'error'),
-  });
-
+  // The server's "All" counts pending invites as well. They are listed on the Invitations card now, not below.
+  const participantTotal: number | undefined = participantCounts
+    ? participantCounts.total - (participantCounts.pendingInvites ?? 0)
+    : undefined;
+  // The people going (the server's rule: registered and not removed or left), apart from the host: the card's "Going".
+  const goingIds: string[] = (participants || [])
+    .filter((p: { userId: string; status: string }) => p.status !== 'removed' && p.status !== 'left' && p.userId !== session?.hostUserId)
+    .map((p: { userId: string }) => p.userId);
   const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
   const isMember = !!pod?.memberRole || isAdmin;
   const isRestrictedPod = pod?.visibility === 'invite_only' || pod?.visibility === 'private';
@@ -275,31 +215,6 @@ export default function SessionDetailPage() {
     },
   });
 
-  const createSessionInviteMutation = useMutation({
-    mutationFn: (body: { inviteeEmail?: string }) =>
-      // A direct email invite is single-use; a SHAREABLE link must cover the
-      // whole event, not an arbitrary 10 (Ali, 9 Jun — couldn't invite a large
-      // group). Cap it at the event's capacity (maxParticipants, default 500).
-      api.post('/invites', {
-        type: 'session',
-        sessionId,
-        maxUses: body.inviteeEmail ? 1 : (session?.config?.maxParticipants ?? 500),
-        expiresInHours: 168,
-        ...body,
-      }),
-    onSuccess: (res: any, variables) => {
-      const code = res.data?.data?.code;
-      if (code) setInviteLink(`${window.location.origin}/invite/${code}`);
-      if (variables.inviteeEmail) {
-        addToast(`Invite sent to ${variables.inviteeEmail}`, 'success');
-        setInviteEmail('');
-      } else {
-        addToast('Invite link generated!', 'success');
-      }
-    },
-    onError: (err: any) => addToast(getInviteErrorMessage(err), 'error'),
-  });
-
   const duplicateMutation = useMutation({
     mutationFn: () => api.post('/sessions', {
       podId: session?.podId,
@@ -315,47 +230,6 @@ export default function SessionDetailPage() {
     },
     onError: () => addToast('Failed to duplicate event', 'error'),
   });
-
-  // Search connected users (people the host has met in a previous event) — debounced to avoid API spam
-  const { data: searchResults } = useQuery({
-    queryKey: ['connected-user-search', debouncedUserSearch],
-    queryFn: () => api.get(`/users/connected?q=${encodeURIComponent(debouncedUserSearch)}`).then(r => r.data.data ?? []),
-    enabled: debouncedUserSearch.length >= 1 && isHost,
-  });
-
-  // People picked from the "met before" list are invited by user id — the
-  // list no longer carries emails (9 Sep 2026); the server resolves them.
-  const bulkInviteMutation = useMutation({
-    mutationFn: async (users: { id: string; displayName?: string }[]) => {
-      const results: { name: string; ok: boolean; msg?: string }[] = [];
-      for (const u of users) {
-        const name = u.displayName || 'Member';
-        try {
-          await api.post('/invites', { type: 'session', sessionId, maxUses: 1, inviteeUserId: u.id });
-          results.push({ name, ok: true });
-        } catch (err: any) {
-          const msg = err?.response?.data?.error?.message || 'Failed to send invite';
-          results.push({ name, ok: false, msg });
-        }
-      }
-      return results;
-    },
-    onSuccess: (results) => {
-      qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
-      const succeeded = results.filter(r => r.ok);
-      const failed = results.filter(r => !r.ok);
-      if (succeeded.length > 0) addToast(`${succeeded.length} invite(s) sent!`, 'success');
-      failed.forEach(r => addToast(`${r.name}: ${r.msg}`, 'error'));
-      setSelectedUsers([]);
-      setUserSearch('');
-    },
-  });
-
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(inviteLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const unregisterMutation = useMutation({
     mutationFn: () => api.delete(`/sessions/${sessionId}/register`),
@@ -566,50 +440,55 @@ export default function SessionDetailPage() {
           )}
 
           {/* Overflow menu for host/admin. Host Controls button intentionally removed —
-              live host controls live inside the /live page once the host clicks Enter Live Event. */}
-          {(isHost || isAdmin) && sessionStatusPhase(session.status) !== 'cancelled' && (
+              live host controls live inside the /live page once the host clicks Enter Live Event.
+              Co-hosts send invites too (26 Oct 2026), so they get the invite button and nothing else here. */}
+          {(isHost || isAdmin || mayInvite) && sessionStatusPhase(session.status) !== 'cancelled' && (
             <div className="ml-auto flex items-center gap-2 flex-wrap">
-              {sessionStatusPhase(session.status) !== 'done' && (
+              {mayInvite && (
                 // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
                 <button
                   type="button"
-                  onClick={() => { setInviteLink(''); setInviteEmail(''); setInviteOpen(true); }}
+                  onClick={() => setInviteOpen(true)}
                   className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
                 >
                   <Mail className="h-4 w-4" /> Invite people
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => duplicateMutation.mutate()}
-                disabled={duplicateMutation.isPending}
-                className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors disabled:opacity-60"
-                title="Duplicate this event"
-              >
-                <CopyPlus className="h-4 w-4" /> <span className="hidden sm:inline">Copy</span>
-              </button>
-              {sessionStatusPhase(session.status) === 'pre' && (
-                <button
-                  type="button"
-                  onClick={() => openEdit()}
-                  className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                  title="Edit event"
-                >
-                  <Pencil className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
-                </button>
-              )}
-              {sessionStatusPhase(session.status) !== 'live' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (confirm('Delete this event? This cannot be undone.')) deleteMutation.mutate();
-                  }}
-                  disabled={deleteMutation.isPending}
-                  className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-red-200 bg-white hover:bg-red-50 flex items-center justify-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-60"
-                  title="Delete event"
-                >
-                  <Trash2 className="h-4 w-4" /> <span className="hidden sm:inline">Delete</span>
-                </button>
+              {(isHost || isAdmin) && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => duplicateMutation.mutate()}
+                    disabled={duplicateMutation.isPending}
+                    className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors disabled:opacity-60"
+                    title="Duplicate this event"
+                  >
+                    <CopyPlus className="h-4 w-4" /> <span className="hidden sm:inline">Copy</span>
+                  </button>
+                  {sessionStatusPhase(session.status) === 'pre' && (
+                    <button
+                      type="button"
+                      onClick={() => openEdit()}
+                      className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                      title="Edit event"
+                    >
+                      <Pencil className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
+                    </button>
+                  )}
+                  {sessionStatusPhase(session.status) !== 'live' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm('Delete this event? This cannot be undone.')) deleteMutation.mutate();
+                      }}
+                      disabled={deleteMutation.isPending}
+                      className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-red-200 bg-white hover:bg-red-50 flex items-center justify-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-60"
+                      title="Delete event"
+                    >
+                      <Trash2 className="h-4 w-4" /> <span className="hidden sm:inline">Delete</span>
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -631,17 +510,28 @@ export default function SessionDetailPage() {
         </div>
       )}
 
+      {/* Who is invited and who declined, for the people who run the event, while it can still take people. It
+          replaces the "Pending Invites" chip and the grey rows that sat at the end of the participants. */}
+      {mayInvite && sessionId && (
+        <InviteStatusList
+          target={{ type: 'session', sessionId, podId: session.podId ?? null }}
+          present={goingIds}
+          presentCount={goingIds.length}
+          onInvite={() => setInviteOpen(true)}
+        />
+      )}
+
       {/* Participants */}
       <div id="participants" className="scroll-mt-4 animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-          <Users className="h-5 w-5 text-rsn-red" /> Participants ({participantCounts?.total ?? (participants || []).filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId).length})
+          <Users className="h-5 w-5 text-rsn-red" /> Participants ({participantTotal ?? (participants || []).filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId).length})
         </h2>
 
         {/* Status summary row (host/admin only) */}
         {(isHost || isAdmin) && participantCounts && (
           <div className="flex flex-wrap gap-2 mb-3">
             {[
-              { key: null, label: 'All', count: participantCounts.total, color: 'bg-gray-100 text-gray-700 border-gray-200' },
+              { key: null, label: 'All', count: participantTotal, color: 'bg-gray-100 text-gray-700 border-gray-200' },
               ...(participantCounts.registered > 0 ? [{ key: 'registered', label: 'Registered', count: participantCounts.registered, color: 'bg-blue-50 text-blue-700 border-blue-200' }] : []),
               ...(participantCounts.checked_in > 0 ? [{ key: 'checked_in', label: 'Checked In', count: participantCounts.checked_in, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }] : []),
               ...(participantCounts.in_lobby > 0 ? [{ key: 'in_lobby', label: 'In Main Room', count: participantCounts.in_lobby, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }] : []),
@@ -649,26 +539,16 @@ export default function SessionDetailPage() {
               ...(participantCounts.disconnected > 0 ? [{ key: 'disconnected', label: 'Disconnected', count: participantCounts.disconnected, color: 'bg-amber-50 text-amber-700 border-amber-200' }] : []),
               ...(participantCounts.left > 0 ? [{ key: 'left', label: 'Left', count: participantCounts.left, color: 'bg-gray-100 text-gray-500 border-gray-200' }] : []),
               ...(participantCounts.no_show > 0 ? [{ key: 'no_show', label: 'No Show', count: participantCounts.no_show, color: 'bg-red-50 text-red-600 border-red-200' }] : []),
-              ...(participantCounts.pendingInvites > 0 ? [{ key: 'pending_invite', label: 'Pending Invites', count: participantCounts.pendingInvites, color: 'bg-purple-50 text-purple-700 border-purple-200' }] : []),
             ].map((tab: any) => (
               <button
                 key={tab.key ?? 'all'}
-                onClick={() => {
-                  if (tab.key === 'pending_invite') {
-                    setShowPendingInvites(!showPendingInvites);
-                    setStatusFilter(null);
-                  } else {
-                    setShowPendingInvites(false);
-                    setStatusFilter(tab.key);
-                  }
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                  (tab.key === 'pending_invite' ? showPendingInvites : statusFilter === tab.key)
+                onClick={() => setStatusFilter(tab.key)}
+                className={`flex min-h-[44px] items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                  statusFilter === tab.key
                     ? 'ring-2 ring-rsn-red/30 border-rsn-red ' + tab.color
                     : tab.color + ' hover:opacity-80'
                 }`}
               >
-                {tab.key === 'pending_invite' && <Send className="h-3 w-3" />}
                 <span>{tab.label}</span>
                 <span className="font-bold">{tab.count}</span>
               </button>
@@ -676,81 +556,7 @@ export default function SessionDetailPage() {
           </div>
         )}
 
-        {/* Pending invites list (shown when tab is active) */}
-        {showPendingInvites && (
-          <div className="mb-4">
-            {!pendingInvites || pendingInvites.length === 0 ? (
-              <Card>
-                <p className="text-gray-400 text-sm text-center py-4">No pending invites</p>
-              </Card>
-            ) : (
-              <div className="space-y-2">
-                {/* Remind All button */}
-                {pendingInvites.filter((inv: any) => inv.inviteeEmail).length > 1 && (
-                  <div className="flex justify-end mb-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => remindAllMutation.mutate()}
-                      isLoading={remindAllMutation.isPending}
-                      className="!border-purple-300 !text-purple-700 hover:!bg-purple-100"
-                    >
-                      <Send className="h-3.5 w-3.5 mr-1" /> Remind All ({pendingInvites.filter((inv: any) => inv.inviteeEmail).length})
-                    </Button>
-                  </div>
-                )}
-                <div className="grid gap-2">
-                {pendingInvites.map((inv: any) => (
-                  <Card key={inv.id} className="!p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 text-xs font-bold">
-                          {(inv.inviteeName || inv.inviteeEmail || '?').charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-800">{inv.inviteeName || inv.inviteeEmail || 'Shareable link'}</p>
-                          {inv.inviteeName && inv.inviteeEmail && (
-                            <p className="text-xs text-gray-400">{inv.inviteeEmail}</p>
-                          )}
-                          <p className="text-xs text-gray-400">Sent {new Date(inv.createdAt).toLocaleDateString()}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="warning" className="text-xs">Pending</Badge>
-                        {inv.inviteeEmail && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => remindMutation.mutate(inv.id)}
-                            isLoading={remindMutation.isPending}
-                          >
-                            <Send className="h-3 w-3 mr-1" /> Remind
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                          onClick={() => {
-                            if (confirm('Revoke this invite? The old link will stop working. You can re-invite them afterwards.')) {
-                              revokeInviteMutation.mutate(inv.id);
-                            }
-                          }}
-                          isLoading={revokeInviteMutation.isPending}
-                        >
-                          <Trash2 className="h-3 w-3 mr-1" /> Revoke
-                        </Button>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {!showPendingInvites && ((participants || []).length === 0 ? (
+        {(participants || []).length === 0 ? (
           <Card>
             <p className="text-gray-400 text-sm text-center py-4">No participants yet. Be the first to register!</p>
           </Card>
@@ -831,233 +637,20 @@ export default function SessionDetailPage() {
                 </Card>
               );
             })}
-            {/* Show pending invites in "All" view so the count matches */}
-            {statusFilter === null && (isHost || isAdmin) && pendingInvites && pendingInvites.length > 0 && pendingInvites.map((inv: any) => (
-              <Card key={`inv-${inv.id}`} className="!p-4 opacity-70">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 text-xs font-bold">
-                      {(inv.inviteeName || inv.inviteeEmail || '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-500">{inv.inviteeName || inv.inviteeEmail || 'Invited user'}</p>
-                      <p className="text-xs text-gray-400">Invite pending</p>
-                    </div>
-                  </div>
-                  <Badge variant="warning" className="text-xs">Invite Pending</Badge>
-                </div>
-              </Card>
-            ))}
           </div>
-        ))}
+        )}
       </div>
 
-      {/* Invite to Session Modal */}
-      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="Invite to Event">
-        <div className="space-y-5">
-          {/* Pod Members — invite individually or all at once */}
-          {session?.podId && isHost && (
-            <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-[#1a1a2e]">Invite Pod Members</h3>
-                  <p className="text-xs text-gray-500">Invite members from this event's pod.</p>
-                </div>
-                {podMembers && podMembers.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={async () => {
-                      setInvitingMember('all');
-                      try {
-                        const emails = podMembers.map((m: any) => m.email);
-                        const res = await api.post('/invites/bulk', { sessionId, emails });
-                        const r = res.data?.data;
-                        addToast(`Invited ${r?.sent || 0} pod members!${r?.skipped ? ` ${r.skipped} already invited.` : ''}`, 'success');
-                        refetchPodMembers();
-                      } catch (err: any) {
-                        addToast(err?.response?.data?.error?.message || 'Failed to invite', 'error');
-                      } finally {
-                        setInvitingMember(null);
-                      }
-                    }}
-                    disabled={invitingMember === 'all'}
-                    isLoading={invitingMember === 'all'}
-                  >
-                    Invite All ({podMembers.length})
-                  </Button>
-                )}
-              </div>
-              {!podMembers ? (
-                <p className="text-xs text-gray-400">Loading...</p>
-              ) : podMembers.length === 0 ? (
-                <p className="text-xs text-gray-400">All pod members have already been invited or registered.</p>
-              ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {podMembers.map((m: any) => (
-                    <div key={m.userId} className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50 transition-colors">
-                      <div className="flex items-center gap-3">
-                        {m.avatarUrl ? (
-                          <img src={m.avatarUrl} alt="" className="h-8 w-8 rounded-full object-cover" />
-                        ) : (
-                          <div className="h-8 w-8 rounded-full bg-gray-100 flex items-center justify-center text-sm text-gray-600 font-medium">
-                            {m.displayName?.[0]?.toUpperCase() || '?'}
-                          </div>
-                        )}
-                        <div>
-                          <span className="text-sm text-gray-800 font-medium">{m.displayName || 'Unknown'}</span>
-                          <p className="text-xs text-gray-400">{m.email}</p>
-                        </div>
-                      </div>
-                      <Button
-                        size="sm"
-                        onClick={() => invitePodMember(m.userId, m.email)}
-                        disabled={invitingMember === m.userId}
-                        isLoading={invitingMember === m.userId}
-                      >
-                        Invite
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Option 1: Send Email Invite */}
-          <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 1 — Send Email Invite</h3>
-            <p className="text-xs text-gray-500">Enter their email and we'll send the invite directly.</p>
-            <Input label="Email Address" type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="user@example.com" />
-            <Button
-              onClick={() => createSessionInviteMutation.mutate({ inviteeEmail: inviteEmail || undefined })}
-              isLoading={createSessionInviteMutation.isPending}
-              disabled={!inviteEmail}
-              className="w-full"
-            >
-              <Mail className="h-4 w-4 mr-2" /> Send Invite Email
-            </Button>
-          </div>
-
-          {/* Option 2: Invite platform users */}
-          {isHost && (
-            <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-              <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 2 — Invite Platform Users</h3>
-              <p className="text-xs text-gray-500">Search for existing users and invite them directly.</p>
-              <div className="relative">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                <input
-                  value={userSearch}
-                  onChange={e => setUserSearch(e.target.value)}
-                  placeholder="Search by name or email..."
-                  className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
-                />
-              </div>
-              {debouncedUserSearch.length >= 1 && searchResults && searchResults.length === 0 && (
-                <p className="text-xs text-gray-400 text-center py-2">No connected users match. You can only invite people you've met in a previous event.</p>
-              )}
-              {searchResults && searchResults.length > 0 && (
-                <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
-                  {/* Select All */}
-                  {(() => {
-                    const invitable = searchResults.filter((u: any) => !(participants || []).some((p: any) => p.userId === u.id));
-                    const allSelected = invitable.length > 0 && invitable.every((u: any) => selectedUsers.some(s => s.id === u.id));
-                    return invitable.length > 1 ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (allSelected) {
-                            const invitableIds = new Set(invitable.map((u: any) => u.id));
-                            setSelectedUsers(prev => prev.filter(s => !invitableIds.has(s.id)));
-                          } else {
-                            const existing = new Set(selectedUsers.map(s => s.id));
-                            const toAdd = invitable.filter((u: any) => !existing.has(u.id));
-                            setSelectedUsers(prev => [...prev, ...toAdd]);
-                          }
-                        }}
-                        className="w-full flex items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-gray-500 bg-gray-50 hover:bg-gray-100 transition-colors"
-                      >
-                        <div className={`h-4 w-4 rounded border ${allSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center`}>
-                          {allSelected && <Check className="h-3 w-3 text-white" />}
-                        </div>
-                        Select All ({invitable.length})
-                      </button>
-                    ) : null;
-                  })()}
-                  {searchResults.map((u: any) => {
-                    const isParticipant = (participants || []).some((p: any) => p.userId === u.id);
-                    const isSelected = !isParticipant && selectedUsers.some(s => s.id === u.id);
-                    return (
-                      <button
-                        key={u.id}
-                        type="button"
-                        disabled={isParticipant}
-                        onClick={() => !isParticipant && setSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
-                        className={`w-full flex items-center gap-3 px-3 py-2 text-left text-sm transition-colors ${isParticipant ? 'opacity-60 cursor-not-allowed bg-gray-50' : isSelected ? 'bg-rsn-red-light hover:bg-rsn-red-100' : 'hover:bg-gray-50'}`}
-                      >
-                        {!isParticipant && (
-                          <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center`}>
-                            {isSelected && <Check className="h-3 w-3 text-white" />}
-                          </div>
-                        )}
-                        <span className={`font-medium truncate ${isParticipant ? 'text-gray-400' : 'text-gray-800'}`}>{u.displayName || u.email}</span>
-                        {isParticipant && (
-                          <span className="ml-auto text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 shrink-0">Already registered</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {selectedUsers.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs text-gray-500">{selectedUsers.length} user(s) selected</p>
-                  <Button
-                    size="sm"
-                    onClick={() => bulkInviteMutation.mutate(selectedUsers)}
-                    isLoading={bulkInviteMutation.isPending}
-                    className="w-full"
-                  >
-                    <Mail className="h-4 w-4 mr-2" /> Send {selectedUsers.length} Invite(s)
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-gray-200" />
-            <span className="text-xs font-medium text-gray-400 uppercase">or</span>
-            <div className="h-px flex-1 bg-gray-200" />
-          </div>
-
-          {/* Option 3: Generate Shareable Link */}
-          <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 3 — Generate Shareable Link</h3>
-            <p className="text-xs text-gray-500">Create a reusable link to share manually (up to {session?.config?.maxParticipants ?? 500} uses — the event capacity; expires in 7 days). Change the limit by changing this event's Max Participants.</p>
-            {!inviteLink ? (
-              <Button
-                variant="secondary"
-                onClick={() => createSessionInviteMutation.mutate({})}
-                isLoading={createSessionInviteMutation.isPending}
-                className="w-full"
-              >
-                <Copy className="h-4 w-4 mr-2" /> Generate Link
-              </Button>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex gap-2">
-                  <input readOnly value={inviteLink} className="flex-1 rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm" />
-                  <Button variant="secondary" onClick={handleCopyLink}>
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <p className="text-xs text-gray-400">Link copied or ready to share. Up to 10 uses, expires in 7 days.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </Modal>
+      {/* Invite people: the invite sheet (the event's pod, your connections, by email, a link) */}
+      {sessionId && (
+        <InvitePickerSheet
+          open={pickerOpen}
+          onClose={closePicker}
+          target={{ type: 'session', sessionId, podId: session.podId ?? null }}
+          podName={pod?.name}
+          linkCap={session.config?.maxParticipants}
+        />
+      )}
 
       {/* Edit Event: the same type picker and settings as Schedule an Event */}
       <EditEventModal open={editOpen} onClose={() => setEditOpen(false)} session={session} podType={pod?.podType} isAdmin={isAdmin} />

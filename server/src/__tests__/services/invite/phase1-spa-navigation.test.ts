@@ -141,17 +141,24 @@ describe('Phase 1 — SPA navigation + name-fallback architecture', () => {
       expect(block).toMatch(/addToast/);
     });
 
-    it('PodDetailPage Remind All tells the truth about send failures (no blanket success toast)', () => {
-      const src = readClient('features/pods/PodDetailPage.tsx');
-      // Pre-fix: forEach with .catch(() => {}) followed by an unconditional
-      // success toast. Post-fix: Promise.allSettled + accurate toast.
-      const idx = src.indexOf('Remind All');
-      expect(idx).toBeGreaterThan(-1);
-      const remindBlockStart = src.lastIndexOf('onClick={', idx);
-      const remindBlockEnd = src.indexOf('}}', remindBlockStart);
-      const block = src.slice(remindBlockStart, remindBlockEnd + 200);
-      expect(block).toMatch(/Promise\.allSettled/);
-      expect(block).toMatch(/failed/);
+    it('the pod page\'s Remind all tells the truth about send failures (no blanket success toast)', () => {
+      // 26 Oct 2026 (C9): the pod's pending invites, and their Remind all, moved from PodDetailPage into
+      // InviteStatusList (always on screen for the pod's director and host). A pod has no remind-all route, so
+      // each invite is reminded on its own, one at a time half a second apart (settleInTurn; fix round 1 of C9,
+      // 26 Oct 2026: the mail provider takes about two sends a second and dropped reminders fired together).
+      // Pre-fix: forEach with .catch(() => {}) followed by an unconditional success toast. Post-fix: every answer
+      // counted (sent, reminded within the hour, failed), and the toast says what happened (remindAllSentence).
+      const src = readClient('features/invites/InviteStatusList.tsx');
+      const start = src.indexOf('const remindEveryoneInPod');
+      expect(start).toBeGreaterThan(-1);
+      const block = src.slice(start, src.indexOf('\n  };', start));
+      expect(block).toMatch(/settleInTurn\(/);
+      expect(block).toMatch(/tallyReminders\(/);
+      expect(block).toMatch(/remindAllSentence\(/);
+      expect(block).not.toMatch(/\.catch\(\(\)\s*=>\s*\{\s*\}\)/);
+      // The tally counts the rejected answers as failed, so one that did not go is never called sent.
+      const logic = readClient('features/invites/invite-status.ts');
+      expect(logic).toMatch(/status === 'rejected'/);
     });
   });
 });

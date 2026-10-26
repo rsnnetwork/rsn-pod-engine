@@ -1,11 +1,10 @@
 import { useState, type MouseEvent } from 'react';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio,
-  Pencil, Trash2, UserPlus, Lock, Mail, Copy, Check, UserCheck, X,
-  Clock, CopyPlus, Search, XCircle, Send, Inbox, AlertTriangle, MessagesSquare,
+  Pencil, Trash2, UserPlus, Lock, Mail, UserCheck, X,
+  Clock, CopyPlus, XCircle, AlertTriangle, MessagesSquare,
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
@@ -13,7 +12,6 @@ import { sessionStatusLabel, sessionStatusColor } from '@/features/sessions/stat
 import Avatar from '@/components/ui/Avatar';
 import ProfileCard from '@/components/ui/ProfileCard';
 import { Button } from '@/components/ui/Button';
-import Input from '@/components/ui/Input';
 import Modal from '@/components/ui/Modal';
 import { PageLoader, Skeleton } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
@@ -28,24 +26,8 @@ import PodWall from './PodWall';
 import { orchestrationLabel, podStatusLabel } from './pod-header-text';
 import { podEventsInOrder } from './pod-event-order';
 import { isForbidden, retryUnlessAnswered } from '@/components/wall/wall-logic';
-
-/** Map invite API error codes to user-friendly messages */
-function getInviteErrorMessage(err: any): string {
-  const code = err?.response?.data?.error?.code;
-  const message = err?.response?.data?.error?.message;
-  switch (code) {
-    case 'DUPLICATE_INVITE':          return 'This person already has a pending invite';
-    case 'SELF_INVITE':               return 'You cannot send an invite to yourself';
-    case 'ALREADY_REGISTERED':        return 'This person already has an account on the platform';
-    case 'POD_MEMBER_EXISTS':         return 'This person is already a member of this pod';
-    case 'SESSION_ALREADY_REGISTERED':return 'This person is already a participant of this event';
-    case 'POD_ARCHIVED':              return 'Cannot send invites to an archived pod';
-    case 'AUTH_FORBIDDEN':            return message || 'You do not have permission to send this invite';
-    case 'VALIDATION_ERROR':          return message || 'Please check the form and try again';
-    case 'RATE_LIMIT_EXCEEDED':       return 'Too many invites sent. Please wait and try again';
-    default:                          return message || 'Failed to send invite. Please try again';
-  }
-}
+import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
+import InviteStatusList from '@/features/invites/InviteStatusList';
 
 // ─── Label / icon maps ──────────────────────────────────────────────────────
 
@@ -97,13 +79,8 @@ export default function PodDetailPage() {
   // Edit Pod is its own sheet (EditPodModal, 26 Oct 2026): a react-hook-form form that follows the pod type.
   const [editOpen, setEditOpen] = useState(false);
 
+  // "Invite members": the invite sheet (features/invites, 26 Oct 2026), the people chosen from your connections.
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteLink, setInviteLink] = useState('');
-  const [copied, setCopied] = useState(false);
-  const [podUserSearch, setPodUserSearch] = useState('');
-  const debouncedPodSearch = useDebouncedValue(podUserSearch, 300);
-  const [podSelectedUsers, setPodSelectedUsers] = useState<any[]>([]);
 
   const [memberStatusFilter, setMemberStatusFilter] = useState<string | null>(null);
   // Duplicate pod: open CreatePodModal pre-filled
@@ -152,25 +129,11 @@ export default function PodDetailPage() {
   // Refused all the same: this page's copy of the pod still named a role the member has just lost.
   const eventsRefused = isForbidden(sessionsError);
 
-  const { data: podSearchResults } = useQuery({
-    queryKey: ['connected-user-search', debouncedPodSearch],
-    queryFn: () => api.get(`/users/connected?q=${encodeURIComponent(debouncedPodSearch)}`).then(r => r.data.data ?? []),
-    enabled: debouncedPodSearch.length >= 1,
-  });
-
   const { data: podMemberCounts } = useQuery({
     queryKey: ['pod-member-counts', podId],
     queryFn: () => api.get(`/pods/${podId}/member-counts`).then(r => r.data.data),
     enabled: !!podId,
     meta: { entities: podId ? [E.pod(podId), E.podMembers(podId)] : [] },
-  });
-
-  const [showPodPendingInvites, setShowPodPendingInvites] = useState(false);
-  const { data: podPendingInvites } = useQuery({
-    queryKey: ['pod-pending-invites', podId],
-    queryFn: () => api.get(`/invites/pod/${podId}?status=pending`).then(r => r.data.data ?? []),
-    enabled: !!podId && showPodPendingInvites,
-    meta: { entities: podId ? [E.pod(podId), E.podInvites(podId)] : [] },
   });
 
   // ─── Mutations ─────────────────────────────────────────────────────────────
@@ -265,64 +228,9 @@ export default function PodDetailPage() {
     onError: () => addToast('Failed to reject request', 'error'),
   });
 
-  const createInviteMutation = useMutation({
-    mutationFn: (data: { inviteeEmail?: string }) => api.post('/invites', {
-      type: 'pod', podId,
-      inviteeEmail: data.inviteeEmail || undefined,
-      // Shareable pod link covers the pod capacity (max_members), not a hard 10
-      // (Ali, 9 Jun). Falls back to 500 when the pod has no member cap.
-      maxUses: data.inviteeEmail ? 1 : ((pod as any)?.maxMembers ?? 500),
-      expiresInHours: 168,
-    }),
-    onSuccess: (res, variables) => {
-      const code = res.data.data?.code;
-      if (code) setInviteLink(`${window.location.origin}/invite/${code}`);
-      if (variables.inviteeEmail) {
-        addToast(`Invite sent to ${variables.inviteeEmail}`, 'success');
-        setInviteEmail('');
-      } else {
-        addToast('Invite link generated!', 'success');
-      }
-    },
-    onError: (err: any) => addToast(getInviteErrorMessage(err), 'error'),
-  });
-
-  // People picked from the "met before" list are invited by user id — the
-  // list no longer carries emails (9 Sep 2026); the server resolves them.
-  const bulkPodInviteMutation = useMutation({
-    mutationFn: async (users: { id: string; displayName?: string }[]) => {
-      const results: { name: string; ok: boolean; msg?: string }[] = [];
-      for (const u of users) {
-        const name = u.displayName || 'Member';
-        try {
-          await api.post('/invites', { type: 'pod', podId, maxUses: 1, inviteeUserId: u.id, expiresInHours: 168 });
-          results.push({ name, ok: true });
-        } catch (err: any) {
-          results.push({ name, ok: false, msg: err?.response?.data?.error?.message || 'Failed' });
-        }
-      }
-      return results;
-    },
-    onSuccess: (results) => {
-      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
-      const succeeded = results.filter(r => r.ok);
-      const failed    = results.filter(r => !r.ok);
-      if (succeeded.length > 0) addToast(`${succeeded.length} invite(s) sent!`, 'success');
-      failed.forEach(r => addToast(`${r.name}: ${r.msg}`, 'error'));
-      setPodSelectedUsers([]);
-      setPodUserSearch('');
-    },
-  });
-
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   const openEdit = () => setEditOpen(true);
-
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(inviteLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   // The wall found the pod closed before this page's own copy said so (the archive route tells the pod's screens a
   // moment before it saves the new status): read the pod again, so the badge, the buttons and the wall agree.
@@ -376,8 +284,10 @@ export default function PodDetailPage() {
   // Stefan (2 Jul) — pending requesters aren't members yet. They live in
   // the Pending Requests section only, so every count in the Members
   // section excludes them (the duplicate "Pending Approval" chip is gone).
+  // 26 Oct 2026: pending invites are not members either. The server's total counts them, and they are listed by the
+  // Invitations card now, not among the members, so they are taken out of this count too.
   const memberTotal = podMemberCounts
-    ? podMemberCounts.total - (podMemberCounts.pending_approval || 0)
+    ? podMemberCounts.total - (podMemberCounts.pending_approval || 0) - (podMemberCounts.pendingInvites || 0)
     : pod.memberCount ?? activeMembers.length;
 
   const myMembership     = membersList.find((m: any) => m.userId === user?.id);
@@ -515,8 +425,8 @@ export default function PodDetailPage() {
             </Button>
           )}
           {(isDirectorOrHost || (isMember && pod?.allowMemberInvites)) && (
-            <Button variant="secondary" onClick={() => { setInviteLink(''); setInviteEmail(''); setInviteOpen(true); }}>
-              <Mail className="h-4 w-4 mr-2" /> Invite Members
+            <Button variant="secondary" onClick={() => setInviteOpen(true)}>
+              <Mail className="h-4 w-4 mr-2" /> Invite members
             </Button>
           )}
           {isDirector && (
@@ -560,145 +470,16 @@ export default function PodDetailPage() {
         initialValues={duplicateInitialValues}
       />
 
-      {/* ── Invite Members Modal ────────────────────────────────────────── */}
-      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="Invite Members to Pod">
-        <div className="space-y-5">
-          <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 1 — Send Email Invite</h3>
-            <p className="text-xs text-gray-500">Enter their email and we'll send the invite directly.</p>
-            <Input label="Email Address" type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="user@example.com" />
-            <Button
-              onClick={() => createInviteMutation.mutate({ inviteeEmail: inviteEmail || undefined })}
-              isLoading={createInviteMutation.isPending}
-              disabled={!inviteEmail}
-              className="w-full"
-            >
-              <Mail className="h-4 w-4 mr-2" /> Send Invite Email
-            </Button>
-          </div>
-
-          <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 2 — Invite Platform Users</h3>
-            <p className="text-xs text-gray-500">Search existing users and invite them directly.</p>
-            <div className="relative">
-              <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-              <input
-                value={podUserSearch}
-                onChange={e => setPodUserSearch(e.target.value)}
-                placeholder="Search by name or email..."
-                // White-on-white fix — the raw input had no explicit text colour, so
-                // typed text inherited the cascade (invisible against the light field).
-                className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
-              />
-            </div>
-            {podUserSearch.length >= 1 && podSearchResults && podSearchResults.length === 0 && (
-              <p className="text-xs text-gray-400 text-center py-2">No connected users match. You can only invite people you've met in a previous event.</p>
-            )}
-            {podSearchResults && podSearchResults.length > 0 && (
-              <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
-                {/* Select All */}
-                {(() => {
-                  const invitable = podSearchResults.filter((u: any) => u.id !== user?.id && !activeMembers.some((m: any) => m.userId === u.id));
-                  const allSelected = invitable.length > 0 && invitable.every((u: any) => podSelectedUsers.some(s => s.id === u.id));
-                  return invitable.length > 1 ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (allSelected) {
-                          const invitableIds = new Set(invitable.map((u: any) => u.id));
-                          setPodSelectedUsers(prev => prev.filter(s => !invitableIds.has(s.id)));
-                        } else {
-                          const existing = new Set(podSelectedUsers.map(s => s.id));
-                          const toAdd = invitable.filter((u: any) => !existing.has(u.id));
-                          setPodSelectedUsers(prev => [...prev, ...toAdd]);
-                        }
-                      }}
-                      className="w-full flex items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-gray-500 bg-gray-50 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className={`h-4 w-4 rounded border ${allSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center`}>
-                        {allSelected && <Check className="h-3 w-3 text-white" />}
-                      </div>
-                      Select All ({invitable.length})
-                    </button>
-                  ) : null;
-                })()}
-                {podSearchResults.filter((u: any) => u.id !== user?.id).map((u: any) => {
-                  const alreadyMember = activeMembers.some((m: any) => m.userId === u.id);
-                  const isSelected = !alreadyMember && podSelectedUsers.some(s => s.id === u.id);
-                  return (
-                    <button
-                      key={u.id}
-                      type="button"
-                      disabled={alreadyMember}
-                      onClick={() => !alreadyMember && setPodSelectedUsers(prev =>
-                        isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u]
-                      )}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                        alreadyMember ? 'opacity-60 cursor-not-allowed bg-gray-50'
-                        : isSelected ? 'bg-rsn-red-light hover:bg-rsn-red-100'
-                        : 'hover:bg-gray-50'
-                      }`}
-                    >
-                      {!alreadyMember && (
-                        <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
-                          {isSelected && <Check className="h-3 w-3 text-white" />}
-                        </div>
-                      )}
-                      <span className={`font-medium truncate ${alreadyMember ? 'text-gray-400' : 'text-gray-800'}`}>
-                        {u.displayName || u.email}
-                      </span>
-                      {alreadyMember && (
-                        <span className="ml-auto text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 shrink-0">
-                          Already a member
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {podSelectedUsers.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs text-gray-500">{podSelectedUsers.length} user(s) selected</p>
-                <Button
-                  size="sm"
-                  onClick={() => bulkPodInviteMutation.mutate(podSelectedUsers)}
-                  isLoading={bulkPodInviteMutation.isPending}
-                  className="w-full"
-                >
-                  <Mail className="h-4 w-4 mr-2" /> Send {podSelectedUsers.length} Invite(s)
-                </Button>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-gray-200" />
-            <span className="text-xs font-medium text-gray-400 uppercase">or</span>
-            <div className="h-px flex-1 bg-gray-200" />
-          </div>
-
-          <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 3 — Generate Shareable Link</h3>
-            <p className="text-xs text-gray-500">Create a reusable link (up to 10 uses, expires in 7 days).</p>
-            {!inviteLink ? (
-              <Button variant="secondary" onClick={() => createInviteMutation.mutate({})} isLoading={createInviteMutation.isPending} className="w-full">
-                <Copy className="h-4 w-4 mr-2" /> Generate Link
-              </Button>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex gap-2">
-                  <input readOnly value={inviteLink} className="flex-1 rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm" />
-                  <Button variant="secondary" onClick={handleCopyLink}>
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <p className="text-xs text-gray-400">Ready to share. Up to 10 uses, expires in 7 days.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </Modal>
+      {/* ── Invite members: the invite sheet (your connections, by email, a link) ─────── */}
+      {podId && (
+        <InvitePickerSheet
+          open={inviteOpen}
+          onClose={() => setInviteOpen(false)}
+          target={{ type: 'pod', podId }}
+          podName={pod.name}
+          linkCap={pod.maxMembers}
+        />
+      )}
 
       {/* ── Join Rules Modal ───────────────────────────────────────────── */}
       <Modal open={showJoinRules} onClose={() => setShowJoinRules(false)} title="Pod Rules">
@@ -909,21 +690,12 @@ export default function PodDetailPage() {
                   ...(podMemberCounts.invited > 0 ? [{ key: 'invited', label: 'Invited', count: podMemberCounts.invited, color: 'bg-blue-50 text-blue-700 border-blue-200' }] : []),
                   ...(podMemberCounts.declined > 0 ? [{ key: 'declined', label: 'Declined', count: podMemberCounts.declined, color: 'bg-red-50 text-red-600 border-red-200' }] : []),
                   ...(podMemberCounts.left > 0 ? [{ key: 'left', label: 'Left', count: podMemberCounts.left, color: 'bg-gray-100 text-gray-500 border-gray-200' }] : []),
-                  ...(podMemberCounts.pendingInvites > 0 ? [{ key: 'pending_invite', label: 'Pending Invites', count: podMemberCounts.pendingInvites, color: 'bg-purple-50 text-purple-700 border-purple-200' }] : []),
                 ].map((tab: any) => (
                   <button
                     key={tab.key ?? 'all'}
-                    onClick={() => {
-                      if (tab.key === 'pending_invite') {
-                        setShowPodPendingInvites(!showPodPendingInvites);
-                        setMemberStatusFilter(null);
-                      } else {
-                        setShowPodPendingInvites(false);
-                        setMemberStatusFilter(tab.key);
-                      }
-                    }}
+                    onClick={() => setMemberStatusFilter(tab.key)}
                     className={`flex min-h-[44px] items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                      (tab.key === 'pending_invite' ? showPodPendingInvites : memberStatusFilter === tab.key)
+                      memberStatusFilter === tab.key
                         ? 'ring-2 ring-rsn-red/30 border-rsn-red ' + tab.color
                         : tab.color + ' hover:opacity-80'
                     }`}
@@ -990,108 +762,20 @@ export default function PodDetailPage() {
               )}
             </div>
           </section>
-        </div>
-      </div>
 
-      {/* ── Pending Pod Invites Banner (directors only) ─────────────────── */}
-      {isDirectorOrHost && podMemberCounts?.pendingInvites > 0 && !showPodPendingInvites && (
-        <Card className="animate-fade-in-up border-purple-200 bg-purple-50">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Send className="h-4 w-4 text-purple-600" />
-              <p className="text-sm text-purple-800 font-medium">
-                {podMemberCounts.pendingInvites} Pending Invite{podMemberCounts.pendingInvites > 1 ? 's' : ''}</p>
-              <p className="text-xs text-purple-600">{podMemberCounts.pendingInvites} {podMemberCounts.pendingInvites > 1 ? "people haven't" : "person hasn't"} accepted their invite yet.</p>
-            </div>
-            <Button size="sm" variant="ghost" onClick={() => setShowPodPendingInvites(true)} className="text-purple-700">
-              <Eye className="h-4 w-4 mr-1" /> View & Remind
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      {/* ── Pending Pod Invites List ──────────────────────────────────────── */}
-      {showPodPendingInvites && (
-        <div className="animate-fade-in-up">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold text-[#1a1a2e] flex items-center gap-2">
-              <Inbox className="h-5 w-5 text-purple-600" /> Pending Pod Invites ({podPendingInvites?.length ?? 0})
-            </h2>
-            <Button size="sm" variant="ghost" onClick={() => setShowPodPendingInvites(false)}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-          {!podPendingInvites || podPendingInvites.length === 0 ? (
-            <Card><p className="text-gray-400 text-sm text-center py-3">No pending invites</p></Card>
-          ) : (
-            <div className="space-y-2">
-              {podPendingInvites.filter((inv: any) => inv.inviteeEmail).length > 1 && (
-                <div className="flex justify-end mb-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={async () => {
-                      // Send reminders in parallel; tally successes vs failures
-                      // so the toast tells the user the truth instead of always
-                      // claiming success when half the emails actually 500'd.
-                      const targets = podPendingInvites.filter((i: any) => i.inviteeEmail);
-                      const results = await Promise.allSettled(
-                        targets.map((inv: any) => api.post(`/invites/${inv.id}/remind`))
-                      );
-                      const ok = results.filter(r => r.status === 'fulfilled').length;
-                      const failed = results.length - ok;
-                      if (failed === 0) {
-                        addToast(`Reminders sent to ${ok} pending invites`, 'success');
-                      } else if (ok === 0) {
-                        addToast(`Failed to send any reminders — try again`, 'error');
-                      } else {
-                        addToast(`Sent ${ok} reminders, ${failed} failed`, 'info');
-                      }
-                    }}
-                    className="!border-purple-300 !text-purple-700 hover:!bg-purple-100"
-                  >
-                    <Send className="h-3.5 w-3.5 mr-1" /> Remind All ({podPendingInvites.filter((i: any) => i.inviteeEmail).length})
-                  </Button>
-                </div>
-              )}
-              <div className="grid gap-2">
-              {podPendingInvites.map((inv: any) => (
-                <Card key={inv.id} className="!p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 text-xs font-bold">
-                        {(inv.inviteeName || inv.inviteeEmail || '?').charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-800">{inv.inviteeName || inv.inviteeEmail || 'Shareable link'}</p>
-                        {inv.inviteeName && inv.inviteeEmail && (
-                          <p className="text-xs text-gray-400">{inv.inviteeEmail}</p>
-                        )}
-                        <p className="text-xs text-gray-400">Sent {new Date(inv.createdAt).toLocaleDateString()}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="warning" className="text-xs">Pending</Badge>
-                      {inv.inviteeEmail && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            api.post(`/invites/${inv.id}/remind`).then(() => addToast('Reminder sent!', 'success')).catch(() => addToast('Failed to send reminder', 'error'));
-                          }}
-                        >
-                          <Send className="h-3 w-3 mr-1" /> Remind
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-              ))}
-              </div>
-            </div>
+          {/* ── Invitations: who is invited, who declined (the pod's director, host and admins), for any pod that is not
+               archived: a draft or suspended pod can be invited to (the button above shows; the server refuses only an
+               archived pod), so its organisers see the card too. ─────── */}
+          {isDirectorOrHost && pod.status !== 'archived' && podId && (
+            <InviteStatusList
+              target={{ type: 'pod', podId }}
+              present={activeMembers.map((m: { userId: string }) => m.userId)}
+              presentCount={activeMembers.length}
+              onInvite={() => setInviteOpen(true)}
+            />
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -1,9 +1,10 @@
 import { test, expect, chromium, Browser } from '@playwright/test';
-import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
+import { createTestUser, TestUser, closePool, pool } from '../helpers/auth';
+import { cleanup } from '../helpers/live-ui';
 import { createPod } from '../helpers/api';
 
-// HEADED prod verification — the Pod invite "Search existing users" input text
-// must be readable (was white-on-white). Open the modal, type, assert dark text.
+// HEADED prod verification — the Pod invite search input text must be readable (was white-on-white). Open the
+// invite sheet ("Invite members", 26 Oct 2026: your connections, searched by name, role or company), type, assert dark text.
 const APP = process.env.E2E_APP_URL || 'https://app.rsn.network';
 
 let host: TestUser;
@@ -21,7 +22,8 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   try { await browser?.close(); } catch {}
-  console.log('Cleanup:', await cleanupTestData());
+  // Its own member and pod, by id: the global sweep deleted every test account on the database, other runs' too.
+  if (host) await cleanup(pool, { ids: [host.id], podId });
   await closePool();
 });
 
@@ -30,12 +32,12 @@ test('Pod invite search input shows dark, readable text (not white-on-white)', a
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await ctx.addInitScript((t: { a: string; r: string }) => { localStorage.setItem('rsn_access', t.a); localStorage.setItem('rsn_refresh', t.r); }, { a: host.accessToken, r: host.refreshToken });
   const page = await ctx.newPage();
-  console.log('  >>> opening the pod page + invite modal <<<');
+  console.log('  >>> opening the pod page + invite sheet <<<');
   await gotoRetry(page, `${APP}/pods/${podId}`);
   await page.waitForTimeout(4000);
 
   await page.getByRole('button', { name: /Invite Members/i }).first().click();
-  const search = page.getByPlaceholder('Search by name or email...').first();
+  const search = page.getByPlaceholder('Search by name, role or company').first();
   await expect(search, 'the invite search input should be present').toBeVisible({ timeout: 15_000 });
 
   await search.fill('Zubair');
