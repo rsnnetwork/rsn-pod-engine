@@ -1,12 +1,12 @@
 // The confirm card: one time both people saved, with the meeting's length and kind, and the one button that books it
 // ("Confirm meeting") or, with a meeting already standing, moves it there ("Move meeting"). Length and kind live here,
 // the one place they are used (26 Oct 2026: a bare number box at the top of the panel read as "choose the hour").
-// A time that stops being free for both while the card is open stays on the card with the reason, and the button
-// waits until it is shared again.
+// What stands in the way (the time stopped being free for both, or it has started) stays on the card with the reason,
+// and the button waits until it is gone.
 
 import type { RefObject } from 'react';
 import { Check, Phone, Video } from 'lucide-react';
-import { MAX_DURATION, MIN_DURATION, NOT_SHARED, meetingLength, slotLabel } from './scheduler-flow';
+import { MAX_DURATION, MIN_DURATION, meetingLength, slotLabel } from './scheduler-flow';
 
 interface Props {
   cardRef: RefObject<HTMLDivElement>;
@@ -16,8 +16,8 @@ interface Props {
   zoneText: string;
   /** A meeting stands: this card moves it. */
   moving: boolean;
-  /** Both people still have this time saved. */
-  stillShared: boolean;
+  /** What stands in the way of the button, or null. */
+  reason: string | null;
   durationText: string;
   onDuration: (text: string) => void;
   kind: 'audio' | 'video';
@@ -33,7 +33,7 @@ interface Props {
 }
 
 export default function SchedulerConfirmCard({
-  cardRef, slot, zone, zoneText, moving, stillShared, durationText, onDuration, kind, onKind,
+  cardRef, slot, zone, zoneText, moving, reason, durationText, onDuration, kind, onKind,
   busy, sendingThis, canRemove, onConfirm, onCancel, onRemove,
 }: Props) {
   const minutes = meetingLength(durationText);
@@ -82,13 +82,13 @@ export default function SchedulerConfirmCard({
           ? `${label} · ${minutes} min · ${kind === 'audio' ? 'Audio' : 'Video'} call`
           : `Length must be ${MIN_DURATION}–${MAX_DURATION} minutes.`}
       </p>
-      {!stillShared && (
-        <p className="text-xs font-medium text-rsn-red" role="status" data-testid="confirm-card-not-shared">{NOT_SHARED}</p>
+      {reason && (
+        <p className="text-xs font-medium text-rsn-red" role="status" data-testid="confirm-card-reason">{reason}</p>
       )}
       <div className="flex gap-2">
         <button
           onClick={onConfirm}
-          disabled={busy || minutes === null || !stillShared}
+          disabled={busy || minutes === null || reason !== null}
           className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-emerald-600 text-sm font-medium text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
         >
           <Check className="h-4 w-4" />

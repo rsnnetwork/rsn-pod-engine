@@ -7,7 +7,7 @@
 // use ("Sun 25 Oct, 13:00"), with the zone named on screen.
 
 import { MEETING_GRACE_MIN } from '@rsn/shared';
-import { CONNECTION_LOST, memberSentence } from '../reason/errors';
+import { errorMessage } from '../reason/errors';
 
 export const SLOT_MINUTES = 30;
 const SLOT_MS = SLOT_MINUTES * 60_000;
@@ -24,6 +24,7 @@ export const SAVE_SENT = 'Sent. They can see when you are free.';
 export const SAVE_OVERLAP = 'You can both meet. Confirm a time.';
 export const ASK_SEND = 'Send your times?';
 export const NOT_SHARED = 'That time is no longer free for both of you.';
+export const STARTED_TIME = 'That time has started. Pick a later one.';
 
 // ---- slots -------------------------------------------------------------------------------------------------------
 
@@ -163,6 +164,17 @@ function shortZone(ms: number, zone: string): string {
 /** "Sun 25 Oct, 13:00 CET": a meeting's time where no line around it names the zone. */
 export function whenWithZone(at: string, zone: string): string {
   return `${slotLabel(at, zone)} ${shortZone(Date.parse(at), zone)}`.trim();
+}
+
+// A slot as the server writes it into a thread line, with or without milliseconds.
+const ISO_INSTANT_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z/g;
+
+/**
+ * A thread line like "📅 Meeting confirmed: 2026-09-10T13:30:00Z · 20 min video call" is one shared text for both
+ * people; each reader sees the instant on their own clock, with the zone. The thread bubble and the inbox preview.
+ */
+export function localizeMeetingText(text: string, zone: string = viewerZone()): string {
+  return text.replace(ISO_INSTANT_RE, (iso) => whenWithZone(iso, zone));
 }
 
 /** A calendar day on the day strip: "Sun" over "25 Oct". */
@@ -347,6 +359,35 @@ export function cardSeed(
   return { duration: String(meeting.durationMin ?? 30), kind: meeting.type === 'audio' ? 'audio' : 'video' };
 }
 
+/** The meeting is as it was: the same time, length and kind, or none on either side (one that has ended is none). */
+export function sameMeeting(a: ConfirmedLike | null | undefined, b: ConfirmedLike | null | undefined, now: number): boolean {
+  const x = a && meetingStands(a, now) ? a : null;
+  const y = b && meetingStands(b, now) ? b : null;
+  if (!x || !y) return !x && !y;
+  return x.window === y.window && x.startAt === y.startAt
+    && (x.durationMin ?? null) === (y.durationMin ?? null) && (x.type ?? null) === (y.type ?? null);
+}
+
+/**
+ * Why an open card closed itself: the meeting changed under it (booked, moved, changed or cancelled, usually by the
+ * partner), so its choice is gone. "Booked for {time}." when the meeting landed on the card's own time.
+ */
+export function cardClosedText(slot: string, meeting: ConfirmedLike | null | undefined, zone: string, now: number): string {
+  if (!meeting || !meetingStands(meeting, now)) return 'Your meeting was cancelled.';
+  if (meeting.window === slot) return `Booked for ${slotLabel(slot, zone)}.`;
+  return `Your meeting is now on ${slotLabel(meeting.startAt ?? meeting.window, zone)}.`;
+}
+
+/**
+ * What stands in the way of the card's button, or null. A time that has started cannot be booked. "No longer free for
+ * both" is said only when an answer from the server newer than the card shows one of them no longer has it saved: the
+ * answer the card opened on (a save whose refetch failed, say) is no evidence either way.
+ */
+export function cardBlock(slot: string, c: { now: number; bothSaved: boolean; freshSinceOpen: boolean }): string | null {
+  if (hasStarted(slot, c.now)) return STARTED_TIME;
+  return c.freshSinceOpen && !c.bothSaved ? NOT_SHARED : null;
+}
+
 // ---- cells -------------------------------------------------------------------------------------------------------
 
 /**
@@ -392,9 +433,7 @@ export function cellAriaLabel(state: CellState, time: string): string {
 // ---- failures ----------------------------------------------------------------------------------------------------
 
 interface FailedRequest {
-  isAxiosError?: unknown;
-  request?: unknown;
-  response?: { status?: number; data?: { error?: { code?: unknown; message?: unknown } } };
+  response?: { status?: number; data?: { error?: { code?: unknown; message?: unknown; details?: unknown } } };
 }
 
 /** The 409 a confirm gets when the time stopped being free for both while the card was open. */
@@ -403,26 +442,32 @@ export function isTimeNotShared(err: unknown): boolean {
   return failed.response?.status === 409 && failed.response.data?.error?.code === 'MEETING_TIME_NOT_SHARED';
 }
 
-/** One sentence for a failed save or confirm: the server's own when it is fit to show, else the caller's. */
-export function schedulerError(err: unknown, fallback: string): string {
-  const failed = (err ?? {}) as FailedRequest;
-  const response = failed.response;
-  if (!response) return failed.isAxiosError === true || failed.request != null ? CONNECTION_LOST : fallback;
-  if (response.status === 400 || response.status === 403 || response.status === 409) {
-    return memberSentence(response.data?.error?.message) ?? fallback;
-  }
-  return fallback;
-}
+const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 
 /**
- * The sentence for a Confirm or a Move that failed. Nothing changed on the server, so a Move says where the meeting
- * still is: "That time is no longer free for both of you. Your meeting stays on Thu 29 Oct, 10:00." when the partner
- * took the time back, "Could not move the meeting. It stays on Thu 29 Oct, 10:00. Try again." for anything else.
+ * The sentence for a Confirm or a Move that failed. Nothing changed on the server.
+ *   - The time was taken back (409): where the meeting is, as the refusal itself says in `details.scheduling` (the
+ *     panel's cached meeting may be what is out of date): "That time is no longer free for both of you. Your meeting
+ *     is on Fri 30 Oct, 12:00."
+ *   - No answer, or the server's own fault: "Could not move the meeting. It stays on Thu 29 Oct, 10:00. Try again."
+ *   - Any other refusal (blocked, a time in the past, too many tries): the server's own reason, through the one shared
+ *     extractor, and for a Move where the meeting stays. Trying again would not help, so it does not say to.
  */
-export function confirmFailure(err: unknown, c: { moving: boolean; stays: string | null; zone: string }): string {
-  if (!c.moving) return isTimeNotShared(err) ? NOT_SHARED : schedulerError(err, 'Could not confirm that time. Try again.');
+export function confirmFailure(
+  err: unknown, c: { moving: boolean; stays: string | null; zone: string; now: number },
+): string {
+  const response = ((err ?? {}) as FailedRequest).response;
+  if (isTimeNotShared(err)) {
+    const told = (response?.data?.error?.details as { scheduling?: SchedulingLike } | undefined)?.scheduling?.confirmed;
+    const meeting = told && meetingStands(told, c.now) ? told : null;
+    return meeting ? `${NOT_SHARED} Your meeting is on ${slotLabel(meeting.startAt ?? meeting.window, c.zone)}.` : NOT_SHARED;
+  }
   const where = c.stays ? `on ${slotLabel(c.stays, c.zone)}` : 'where it was';
-  return isTimeNotShared(err)
-    ? `${NOT_SHARED} Your meeting stays ${where}.`
-    : `Could not move the meeting. It stays ${where}. Try again.`;
+  if (!response || (response.status ?? 0) >= 500) {
+    return c.moving
+      ? `Could not move the meeting. It stays ${where}. Try again.`
+      : errorMessage(err, 'Could not confirm that time. Try again.');
+  }
+  const why = sentence(errorMessage(err, c.moving ? 'Could not move the meeting.' : 'Could not confirm that time.'));
+  return c.moving ? `${why} Your meeting stays ${where}.` : why;
 }

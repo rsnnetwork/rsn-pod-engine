@@ -11,9 +11,9 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
-import MeetingScheduler, { localizeMeetingText, type SchedulerHandle } from './MeetingScheduler';
+import MeetingScheduler, { type SchedulerHandle } from './MeetingScheduler';
 import ThreadMeetingBanner from './ThreadMeetingBanner';
-import { confirmable, isMeetingOver } from './scheduler-flow';
+import { confirmable, isMeetingOver, localizeMeetingText } from './scheduler-flow';
 import SystemMessageCard, { type DmMessageKind, type DmSystemMeta } from './SystemMessageCard';
 import { CallRequestModal, CallWaitingCard, IncomingCallCard } from './CallRequest';
 import Linkify from '@/components/ui/Linkify';
