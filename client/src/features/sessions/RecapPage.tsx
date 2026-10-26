@@ -167,7 +167,7 @@ function LateRatingForm({
       >
         <Handshake className={`h-4 w-4 ${meetAgain ? 'text-indigo-400' : 'text-gray-500'}`} />
       </button>
-      <Button size="sm" onClick={submit} isLoading={submitting} disabled={rating === 0} className="shrink-0">
+      <Button onClick={submit} isLoading={submitting} disabled={rating === 0} className="shrink-0">
         Rate
       </Button>
     </div>
@@ -275,7 +275,7 @@ export default function RecapPage() {
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center space-y-3">
           <p className="text-gray-500">Could not load event recap.</p>
-          <Button size="sm" variant="secondary" onClick={fetchRecap}>Retry</Button>
+          <Button variant="secondary" onClick={fetchRecap}>Retry</Button>
         </div>
       </div>
     );
@@ -283,14 +283,15 @@ export default function RecapPage() {
 
   return (
     <div className="max-w-3xl mx-auto py-8 px-4 space-y-6">
-      {/* Header */}
+      {/* Header. The way back is the event's own page, wherever the recap was opened from (COM-05): a step back in
+          the browser's history went to the ended live event, or out of the app from a link. */}
       <div className="flex items-center justify-between">
-        <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors">
+        <Link to={`/sessions/${sessionId}`} className="inline-flex min-h-[44px] items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition-colors">
           <ArrowLeft className="h-4 w-4" />
-          <span className="text-sm">Back</span>
-        </button>
+          Event details
+        </Link>
         {isHost && (
-          <Button variant="secondary" size="sm" onClick={handleExport} isLoading={exportLoading}>
+          <Button variant="secondary" onClick={handleExport} isLoading={exportLoading}>
             <Download className="h-4 w-4 mr-1" /> Export
           </Button>
         )}
@@ -545,20 +546,21 @@ export default function RecapPage() {
       {data && data.connections.length === 0 && (
         <Card className="text-center py-8">
           <Users className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500">No connections recorded for this session.</p>
+          <p className="text-gray-500">No connections recorded for this event.</p>
         </Card>
       )}
 
       {/* Host-only: full event recap */}
       {isHost && <HostRecapSection sessionId={sessionId!} />}
 
-      <div className="flex justify-center gap-3">
+      {/* Stacked full width on a phone, where two padded buttons side by side were wider than the screen. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
         {session?.podId && (
-          <Button onClick={() => navigate(`/pods/${session.podId}`)} variant="secondary" className="px-8">
-            Back to Pod
+          <Button onClick={() => navigate(`/pods/${session.podId}`)} variant="secondary" className="w-full sm:w-auto sm:px-8">
+            Back to pod
           </Button>
         )}
-        <Button onClick={() => navigate('/sessions')} className="px-8">
+        <Button onClick={() => navigate('/sessions')} className="w-full sm:w-auto sm:px-8">
           Back to Events
         </Button>
       </div>
@@ -629,7 +631,7 @@ function HostRecapSection({ sessionId }: { sessionId: string }) {
       <div className="border-t border-gray-200 pt-6 mt-2">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-gray-800">Host Recap — Full Breakdown</h2>
-          <Button size="sm" variant="secondary" onClick={exportCSV}>
+          <Button variant="secondary" onClick={exportCSV}>
             <Download className="h-4 w-4 mr-1" /> Export CSV
           </Button>
         </div>

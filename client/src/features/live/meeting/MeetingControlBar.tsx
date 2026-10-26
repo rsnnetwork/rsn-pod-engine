@@ -13,7 +13,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CircleStop, Loader2, MessageCircle, Mic, MicOff, PhoneOff, Play, Users, Video, VideoOff } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
-import { getSocket, disconnectSocket } from '@/lib/socket';
+import { getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useActionLock } from '@/hooks/useActionLock';
 import { useLocalMediaToggles } from './useLocalMediaToggles';
@@ -115,10 +115,12 @@ export default function MeetingControlBar({
     });
   };
 
+  // The app's one live connection stays up (C10, COM-05): the server takes this socket out of the event's room on
+  // session:leave. Cutting it as well left the guest's event page on the room's stale list ("Reconnecting…") and
+  // without bells, the "Ended" flip or the organiser's message until the token rotated.
   const leaveMeeting = () => {
     setConfirm(null);
     getSocket()?.emit('session:leave', { sessionId });
-    disconnectSocket();
     useSessionStore.getState().reset();
     navigate(`/sessions/${sessionId}`, { replace: true });
   };

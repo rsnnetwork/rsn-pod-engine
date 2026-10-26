@@ -24,7 +24,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Radio, Users, Shuffle, Mic, ArrowLeftRight, CheckCircle2, Lock } from 'lucide-react';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
-import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
+import { connectSocket, getSocket } from '@/lib/socket';
 import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
 
@@ -158,6 +158,10 @@ export default function LiveSessionPage() {
     return () => clearInterval(id);
   }, [isHost, session?.status, refetch]);
 
+  // COM-05 (25 Oct 2026): Leave lands on the event's own page, replacing the live page so Back does not walk into
+  // it again. The app's one live connection stays up: the server takes this socket out of the event's room on
+  // session:leave, and cutting the connection here stopped every bell, the "Ended" flip and the post-event messages
+  // until the token rotated (and left the event page showing the live room's stale list).
   const handleLeave = () => {
     const inActivePhase = phase === 'matched' || phase === 'rating';
     const message = inActivePhase
@@ -165,9 +169,8 @@ export default function LiveSessionPage() {
       : 'Leave this event?';
     if (!confirm(message)) return;
     getSocket()?.emit('session:leave', { sessionId: sessionId! });
-    disconnectSocket();
     reset();
-    navigate('/sessions');
+    navigate(`/sessions/${sessionId}`, { replace: true });
   };
 
   if (!sessionId) return <PageLoader />;
@@ -199,8 +202,10 @@ export default function LiveSessionPage() {
     // 26 Oct 2026 — padded clear of the notch and, on its side, the rounded corners.
     <div className="h-[100dvh] bg-white flex flex-col overflow-x-hidden min-w-0 pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Phase 2 (matching) — quick per-event check-in (intention + openness).
-          Members only — never the host (it must not cover the host controls). */}
-      {!isHost && <EventCheckInModal />}
+          Members only — never the host (it must not cover the host controls). Not once the event is over (C10): it
+          opens once per tab, so an ended event opened in a new tab asked "What brings you here today?" over the
+          end screen's way out. */}
+      {!isHost && phase !== 'complete' && <EventCheckInModal />}
       {/* Toasts: the live event route is NOT inside AppLayout (App.tsx), so the
           app-wide ToastContainer there never mounts during an event — toasts
           (e.g. the BG auto-disable notice) fired into the void (Ali, 2026-06-08:
@@ -225,9 +230,11 @@ export default function LiveSessionPage() {
           — for hosts, co-hosts and participants alike. */}
       <div className="flex items-center gap-2 px-4 py-1.5 bg-white border-b border-gray-200">
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          {/* The pod is named, not linked: a link here left the event without its leave (a full reload of the page).
+              The way out is the leave button, which lands on the event page, and that page goes back to the pod. */}
           {session?.podId && session?.podName && (
             <span className="hidden sm:inline text-xs text-gray-400 shrink-0">
-              <a href={`/pods/${session.podId}`} className="hover:text-gray-600 transition-colors">{session.podName}</a>
+              {session.podName}
               <span className="mx-1">/</span>
             </span>
           )}

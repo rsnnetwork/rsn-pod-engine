@@ -39,4 +39,17 @@ describe('WS3/G3+G4 — leave buttons are distinct and not duplicated', () => {
     const src = readClient('features/live/VideoRoom.tsx');
     expect(src).not.toMatch(/not be able to rejoin/);
   });
+
+  // COM-05 (25 Oct 2026, Stefan): Leave Event dropped him on the events list and cut the app's one live
+  // connection, so no bell, no "Ended" and no message reached him until the token rotated. The server takes
+  // the socket out of the event's room on session:leave; the connection itself belongs to the whole app.
+  it('Leave Event keeps the app\'s live connection and lands on the event page, replacing the live page', () => {
+    const src = readClient('features/live/LiveSessionPage.tsx').replace(/\r\n/g, '\n');
+    const start = src.indexOf('const handleLeave');
+    const leave = src.slice(start, src.indexOf('\n  };\n', start));
+    expect(leave).toMatch(/session:leave/);
+    expect(leave).not.toMatch(/disconnectSocket/);
+    expect(leave).toMatch(/navigate\(`\/sessions\/\$\{sessionId\}`, \{ replace: true \}\)/);
+    expect(leave).not.toMatch(/navigate\('\/sessions'\)/);
+  });
 });

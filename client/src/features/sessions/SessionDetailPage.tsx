@@ -18,12 +18,16 @@ import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
-import MessageParticipantsButton from './MessageParticipantsButton';
+import MessageParticipantsPanel from './MessageParticipantsPanel';
+import EventChatHistory from './EventChatHistory';
 import EditEventModal from './EditEventModal';
 import { eventFacts, eventFactsLine } from './event-format-form';
 
 /** The icon over each figure under an event's title. */
 const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
+
+/** A way back off the event page: a link, 44px tall. */
+const BACK_LINK = 'inline-flex min-h-[44px] items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition-colors';
 
 function getInviteErrorMessage(err: any): string {
   const code = err?.response?.data?.error?.code;
@@ -105,6 +109,8 @@ export default function SessionDetailPage() {
 
   const isHost = session?.hostUserId === user?.id;
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+  // Where the event is in its life: before, live, done (completed) or cancelled.
+  const phase = sessionStatusPhase(session?.status);
 
   // S16 (Ali, 6 Jun) — co-host management lives HERE too, not only in the
   // live page's participant drawer: the host plans co-hosts before the
@@ -221,6 +227,9 @@ export default function SessionDetailPage() {
   // worked when it didn't, then the Register button appeared mysteriously.
   useEffect(() => {
     if (explicitlyUnregisteredRef.current) return;
+    // An event that has ended or was cancelled takes nobody (the server refuses, and the refusal showed as an error
+    // to anyone opening it who had not registered: a pod member reading the chat, someone following a link).
+    if (phase === 'done' || phase === 'cancelled') return;
     if (session && user && participants && !isRegistered && !autoRegistering && sessionId) {
       setAutoRegistering(true);
       api.post(`/sessions/${sessionId}/register`).then(() => {
@@ -368,12 +377,13 @@ export default function SessionDetailPage() {
   // 403 — user isn't registered, not a pod member, and the pod isn't public.
   // Show a clean access-denied card instead of the broken "0 participants" fallback.
   if ((sessionError as any)?.response?.status === 403) {
+    // The way out goes home (For You): the old one went to a dashboard address that has no page.
     return (
       <div className="max-w-3xl mx-auto space-y-6">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/dashboard')} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
-            <ArrowLeft className="h-4 w-4" /> Back to Dashboard
-          </button>
+          <Link to="/" className={BACK_LINK}>
+            <ArrowLeft className="h-4 w-4" /> Back to For You
+          </Link>
         </div>
         <Card className="animate-fade-in-up">
           <div className="flex flex-col items-center text-center py-10 px-4">
@@ -384,8 +394,8 @@ export default function SessionDetailPage() {
             <p className="text-gray-500 text-sm max-w-md">
               You don't have access to this event. Ask the host for an invite or join the pod to see details.
             </p>
-            <Button variant="primary" onClick={() => navigate('/dashboard')} className="mt-6">
-              Back to Dashboard
+            <Button variant="primary" onClick={() => navigate('/')} className="mt-6">
+              Back to For You
             </Button>
           </div>
         </Card>
@@ -400,19 +410,34 @@ export default function SessionDetailPage() {
   const eventFormat = resolveEventFormat(session);
   const isRoundsEvent = liveKindOf(eventFormat) === 'rounds';
   const facts = eventFacts(eventFormat, session.config);
+  // The people who may run the event: its host and co-hosts, the pod's director or host, admins. The server has the
+  // last word (the panel hides itself for anyone else); this only spares everyone else a loading card.
+  const mayRunEvent = isHost || viewerIsCohost || isAdmin || pod?.memberRole === 'director' || pod?.memberRole === 'host';
+  const showAfterEventTools = phase === 'done' && mayRunEvent;
+  // A video meeting has no rounds to recap: its recap is who took part, further down this page.
+  const openRecap = () => {
+    if (isRoundsEvent) navigate(`/sessions/${sessionId}/recap`);
+    else document.getElementById('participants')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/sessions')} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
-          <ArrowLeft className="h-4 w-4" /> Back to Events
-        </button>
-        {session?.podId && pod && (
-          <button onClick={() => navigate(`/pods/${session.podId}`)} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
-            <ArrowLeft className="h-4 w-4" /> Back to Pod
-          </button>
+      {/* Back: to the pod first, then the events list. One path after any event (COM-05): the live event, then this
+          page (the recap, the chat, message everyone), then the pod. */}
+      <nav aria-label="Back" className="flex flex-wrap items-center gap-x-5">
+        {session.podId && pod ? (
+          <>
+            <Link to={`/pods/${session.podId}`} className={BACK_LINK}>
+              <ArrowLeft className="h-4 w-4" /> Back to pod
+            </Link>
+            <Link to="/sessions" className={BACK_LINK}>Events</Link>
+          </>
+        ) : (
+          <Link to="/sessions" className={BACK_LINK}>
+            <ArrowLeft className="h-4 w-4" /> Back to Events
+          </Link>
         )}
-      </div>
+      </nav>
 
       {/* Session Info */}
       <Card className="animate-fade-in-up">
@@ -533,9 +558,9 @@ export default function SessionDetailPage() {
               <Play className="h-4 w-4 mr-2" /> Enter Live Event
             </Button>
           )}
-          {sessionStatusPhase(session.status) === 'done' && (
-            <Button variant="primary" className="btn-glow" onClick={() => navigate(`/sessions/${sessionId}/recap`)}>
-              View Recap
+          {phase === 'done' && (
+            <Button variant="primary" className="btn-glow" onClick={openRecap}>
+              {isRoundsEvent ? 'View recap' : 'Who took part'}
             </Button>
           )}
 
@@ -543,9 +568,6 @@ export default function SessionDetailPage() {
               live host controls live inside the /live page once the host clicks Enter Live Event. */}
           {(isHost || isAdmin) && sessionStatusPhase(session.status) !== 'cancelled' && (
             <div className="ml-auto flex items-center gap-2 flex-wrap">
-              {session.status === 'completed' && sessionId && (
-                <MessageParticipantsButton sessionId={sessionId} />
-              )}
               {sessionStatusPhase(session.status) !== 'done' && (
                 // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
                 <button
@@ -593,8 +615,23 @@ export default function SessionDetailPage() {
         </div>
       </div>
 
+      {/* After the event, for the people who run it: message everyone who took part. The group chat (task C12) is
+          started from here too, as another card in this column. */}
+      {showAfterEventTools && sessionId && (
+        <div data-testid="after-event-tools" className="grid gap-3 empty:hidden animate-fade-in-up stagger-1">
+          <MessageParticipantsPanel sessionId={sessionId} />
+        </div>
+      )}
+
+      {/* The event's chat: kept with it once it has ended; inside the live event while it runs. */}
+      {sessionId && (phase === 'done' || phase === 'live') && (
+        <div className="animate-fade-in-up stagger-2">
+          <EventChatHistory sessionId={sessionId} live={phase === 'live'} canEnterLive={isRegistered || isHost} />
+        </div>
+      )}
+
       {/* Participants */}
-      <div className="animate-fade-in-up stagger-2">
+      <div id="participants" className="scroll-mt-4 animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
           <Users className="h-5 w-5 text-rsn-red" /> Participants ({participantCounts?.total ?? (participants || []).filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId).length})
         </h2>

@@ -6,7 +6,8 @@ import { createPod, addPodMember, createSession, registerForSession, endSession 
 // HEADED smoke UX3 (#UX3 June-10 debrief), changed by CON-01 (25 Oct 2026, Stefan and Claus): the recap "Message"
 // action used to open a NEW TAB (window.open) to keep the recap, but a new tab has no history behind it, so Back there did
 // nothing. The recap is a post-event page, not the call, so it now opens the conversation in the SAME tab and Back
-// returns to the recap. (The live event's end screen keeps its new tab, and says so.)
+// returns to the recap. (The live event's end screen keeps its new tab, and says so.) COM-05 (26 Oct 2026): the recap's
+// own way back is "← Event details", the event's page, not a step of the browser's history.
 const SERVER = process.env.E2E_SERVER_URL || 'https://api.rsn.network';
 const APP = process.env.E2E_APP_URL || 'https://app.rsn.network';
 
@@ -125,6 +126,16 @@ test('UX3 + CON-01: the recap Message action opens the conversation in this tab,
   await expect(page, 'Back returns to the recap').toHaveURL(recapUrlBefore, { timeout: 30_000 });
   await expect(page.locator('[data-testid^="recap-dm-button-"]').first(), 'the recap is showing').toBeVisible({ timeout: 25_000 });
 
+  // COM-05 (26 Oct 2026): the recap's way back is the event's own page ("← Event details"), not a step of history,
+  // and that page holds what is kept from the event: it has ended, and its chat card is there (nobody chatted here).
+  const toEvent = page.getByRole('link', { name: 'Event details' });
+  await expect(toEvent, 'the recap links back to the event').toHaveAttribute('href', `/sessions/${sessionId}`);
+  expect((await toEvent.boundingBox())!.height, 'the link is at least 44px tall').toBeGreaterThanOrEqual(44);
+  await toEvent.click();
+  await expect(page, 'Event details opens the event page').toHaveURL(new RegExp(`/sessions/${sessionId}$`), { timeout: 30_000 });
+  await expect(page.getByText(/^Ended$/).first(), 'the event page says it ended').toBeVisible({ timeout: 25_000 });
+  await expect(page.getByTestId('event-chat-empty'), 'the chat card').toHaveText('No messages were sent during this event.', { timeout: 25_000 });
+
   await ctx.close();
-  console.log('  ✓ recap Message opened the conversation in this tab, and Back returned to the recap');
+  console.log('  ✓ recap Message opened the conversation in this tab, Back returned to the recap, and Event details opened the event');
 });

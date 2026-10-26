@@ -1,7 +1,8 @@
 import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwright/test';
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
-import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
+import { createPod, addPodMember, createSession, registerForSession, endSession, apiRequest } from '../helpers/api';
+import { skipEventCheckIn } from '../helpers/event-check-in';
 import { Pool } from 'pg';
 
 // HEADED edge-case smoke for WS2/WS3 against PRODUCTION — the cases the main
@@ -14,6 +15,9 @@ import { Pool } from 'pg';
 //   pair1 — LEAVE EVENT BUTTON: P1a clicks the real top-bar "Leave Event"
 //           mid-round (match >30s old by then); P1b sees the waiting banner,
 //           then at grace expiry the "didn't return" form ('completed').
+//           P1a lands on the event's own page (COM-05, 26 Oct 2026), which
+//           turns to "Ended" without a reload when the event ends, and P1a's
+//           bell still rings: Leave no longer cuts the app's connection.
 //   pair3 — DOUBLE-LEAVE RACE + "DIDN'T WORK": both members click
 //           "Back to Main Room" SIMULTANEOUSLY; FOR-UPDATE serialization
 //           must give both a coherent exit (a rating form or main room, no
@@ -85,6 +89,8 @@ async function openUserPage(user: TestUser, sessionId: string): Promise<{ contex
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
   await gotoLive(page, sessionId);
+  // The event check-in question covers the top bar (and Leave Event) until it is skipped.
+  await skipEventCheckIn(page);
   return { context, page };
 }
 
@@ -230,8 +236,10 @@ test('edges: cancelled room (no form), Leave-Event grace, double-leave race + di
   const p1aPage = sessions.get(P1a.id)!.page;
   const p1bPage = sessions.get(P1b.id)!.page;
   await p1aPage.getByText('Leave Event', { exact: true }).first().click();
-  // The leaver's page navigates away (to /sessions) — that's the event exit.
-  await p1aPage.waitForURL(/\/sessions/, { timeout: 20_000 }).catch(() => {});
+  // COM-05 (26 Oct 2026): the leaver lands on the event's own page, not the events list, and keeps the app's live
+  // connection (checked at the end of this test, when the event ends).
+  await expect(p1aPage, 'the leaver lands on the event page').toHaveURL(new RegExp(`/sessions/${sessionId}$`), { timeout: 20_000 });
+  await p1aPage.evaluate(() => { (window as unknown as { __notReloaded?: boolean }).__notReloaded = true; });
   console.log(`  P1a now at: ${p1aPage.url()}`);
   await expect(p1bPage.getByText(/Waiting for your partner to reconnect/i).first(), 'P1b waiting banner after partner Leave Event')
     .toBeVisible({ timeout: 20_000 });
@@ -285,6 +293,15 @@ test('edges: cancelled room (no form), Leave-Event grace, double-leave race + di
   }
 
   try { await endSession(host, sessionId); } catch {}
+  // COM-05: P1a's event page, never reloaded since the leave, turns to Ended on its own (the completion tags reach a
+  // connection that survived Leave Event), and a message still reaches its bell.
+  await expect(p1aPage.getByText(/^Ended$/).first(), 'P1a sees Ended without reloading').toBeVisible({ timeout: 30_000 });
+  expect(await p1aPage.evaluate(() => (window as unknown as { __notReloaded?: boolean }).__notReloaded), 'P1a was not reloaded').toBe(true);
+  await apiRequest(host, 'POST', '/dm/messages', { toUserId: P1a.id, content: 'Thank you for coming.' });
+  await expect.poll(async () => Number((await p1aPage.getByRole('button', { name: 'Notifications' }).innerText().catch(() => '')).trim()) || 0, {
+    timeout: 30_000, message: 'P1a\'s bell counts the message',
+  }).toBeGreaterThan(0);
+  console.log('  ✓ P1a: Ended without a reload, and the bell still rings');
   for (const s of sessions.values()) { await s.context.close().catch(() => {}); }
   console.log('✓ EDGE SMOKE 1 complete: cancelled-no-form, Leave-Event grace, double-leave race, didnt-work flag');
 });
@@ -467,6 +484,8 @@ test('edges: trio browser-close → grace demote → reopen gets the late-return
   const reopened = await sessions.get(closer.id)!.context.newPage();
   reopened.on('dialog', (d) => { d.accept().catch(() => {}); });
   await gotoLive(reopened, sessionId);
+  // A new tab asks the check-in question again (it is kept per tab).
+  await skipEventCheckIn(reopened);
 
   // The late-return rating form must appear — and cover BOTH partners.
   await expect(reopened.getByText(/How was your chat with/i).first(),
