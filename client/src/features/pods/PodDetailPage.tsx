@@ -763,8 +763,10 @@ export default function PodDetailPage() {
             </div>
           </section>
 
-          {/* ── Invitations: who is invited, who declined (the pod's director, host and admins) ─────── */}
-          {isDirectorOrHost && pod.status === 'active' && podId && (
+          {/* ── Invitations: who is invited, who declined (the pod's director, host and admins), for any pod that is not
+               archived: a draft or suspended pod can be invited to (the button above shows; the server refuses only an
+               archived pod), so its organisers see the card too. ─────── */}
+          {isDirectorOrHost && pod.status !== 'archived' && podId && (
             <InviteStatusList
               target={{ type: 'pod', podId }}
               present={activeMembers.map((m: { userId: string }) => m.userId)}

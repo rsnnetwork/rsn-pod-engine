@@ -84,14 +84,19 @@ export function targetTags(target: InviteTarget): string[] {
 }
 
 /**
- * What a candidates list follows: the pod or event (an invite made, accepted, declined or withdrawn; someone joining),
- * the event's pod when the list is its members, and the member's own connections (a request accepted, a conversation
- * started) and blocks (either way), which change who is listed at all.
+ * What a candidates list follows: the pod or event and its invites (one made, accepted, declined or withdrawn), the
+ * event's pod when the list is its members, and the member's own new connections (a request accepted) and blocks
+ * (either way), which change who is listed at all. Each tag reads every loaded page again, against 60 reads a minute
+ * shared with People, so nothing that fires for other reasons is followed: not the member's own record or messages
+ * (user:<me>, user:<me>:dms go on every message and read receipt) and not the event's participants (every join while
+ * an event is live). A person who became a guest meanwhile is answered "already going" when sent to.
  */
 export function candidateEntities(target: InviteTarget, source: InviteCandidateSource, me: string | undefined): string[] {
-  const tags = targetTags(target);
+  const tags = target.type === 'pod'
+    ? [E.pod(target.podId), E.podMembers(target.podId), E.podInvites(target.podId)]
+    : [E.session(target.sessionId), E.sessionInvites(target.sessionId)];
   if (source === 'pod' && target.type === 'session' && target.podId) tags.push(E.podMembers(target.podId));
-  if (me) tags.push(...(source === 'connections' ? [E.user(me), E.userInvites(me), E.userDms(me), E.userBlocks(me)] : [E.userBlocks(me)]));
+  if (me) tags.push(...(source === 'connections' ? [E.userInvites(me), E.userBlocks(me)] : [E.userBlocks(me)]));
   return tags;
 }
 

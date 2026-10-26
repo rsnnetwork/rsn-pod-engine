@@ -16,8 +16,8 @@ import { Skeleton } from '@/components/ui/Spinner';
 import { cn } from '@/lib/utils';
 import { inviteErrorSentence, targetTags, type InviteTarget, type Notice } from './invite-picker';
 import {
-  CHOOSE_PEOPLE, LOAD_FAILED, NOBODY_INVITED, NOT_REMINDED, NOT_WITHDRAWN, SHAREABLE_LINK, STATUS_TITLE, WITHDRAWN, WITHDRAW_CONFIRM,
-  dayOf, inviteStatusGroups, personLine, remindAllSentence, remindSentence, statusSummary, tallyReminders,
+  CHOOSE_PEOPLE, LOAD_FAILED, NOBODY_INVITED, NOT_REMINDED, NOT_WITHDRAWN, REMIND_GAP_MS, SHAREABLE_LINK, STATUS_TITLE, WITHDRAWN, WITHDRAW_CONFIRM,
+  dayOf, inviteStatusGroups, personLine, remindAllSentence, remindSentence, settleInTurn, statusSummary, tallyReminders,
   type InviteListRow,
 } from './invite-status';
 import { invalidateTags } from './useInviteCandidates';
@@ -54,11 +54,14 @@ function PodInviteStatus({ podId, ...props }: Props & { podId: string }) {
     queryFn: () => api.get(`/invites/pod/${podId}`).then((r) => (r.data.data ?? []) as InviteListRow[]),
     meta: { entities: [E.pod(podId), E.podInvites(podId)] },
   });
-  // A pod has no remind-all route: each invite is reminded on its own, and every answer is counted, so a reminder that
-  // did not go is never called sent.
+  // A pod has no remind-all route: each invite is reminded on its own, one at a time half a second apart (every reminder
+  // is an email, and the provider drops sends that arrive together), and every answer is counted, so a reminder that did
+  // not go is never called sent.
   const remindEveryoneInPod = async (rows: InviteListRow[]): Promise<Notice> => {
-    const results = await Promise.allSettled(
-      rows.map((row) => api.post(`/invites/${row.id}/remind`).then((r) => r.data.data as ReminderAnswer)),
+    const results = await settleInTurn(
+      rows,
+      (row) => api.post(`/invites/${row.id}/remind`).then((r) => r.data.data as ReminderAnswer),
+      REMIND_GAP_MS,
     );
     return remindAllSentence(tallyReminders(results));
   };

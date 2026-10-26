@@ -156,3 +156,31 @@ export function tallyReminders(
   }
   return { reminded, total: reminded + failed, recentlyReminded };
 }
+
+/** The pause between two reminders of a pod's Remind all: the mail provider takes about two sends a second. */
+export const REMIND_GAP_MS = 500;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * Runs `run` for each item in turn, one at a time, pausing `gapMs` between two (not after the last), and keeps every
+ * answer as Promise.allSettled would: a failure is recorded and the rest still run. The pod's Remind all sends its
+ * reminders this way, because every reminder is an email and the provider drops sends that arrive together.
+ */
+export async function settleInTurn<T, R>(
+  items: readonly T[],
+  run: (item: T) => Promise<R>,
+  gapMs: number,
+  wait: (ms: number) => Promise<void> = sleep,
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (i > 0) await wait(gapMs);
+    try {
+      results.push({ status: 'fulfilled', value: await run(items[i]) });
+    } catch (reason) {
+      results.push({ status: 'rejected', reason });
+    }
+  }
+  return results;
+}

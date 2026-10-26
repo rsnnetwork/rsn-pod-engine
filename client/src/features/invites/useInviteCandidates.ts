@@ -12,7 +12,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { batchBody, candidateEntities, candidateParams, emailInviteBody, linkBody, targetTags, type InviteTarget } from './invite-picker';
 
 /** Everything the sheet has read for one pod or event, whatever the list and the search. */
-const targetKey = (target: InviteTarget) => ['invite-candidates', target.type, target.type === 'pod' ? target.podId : target.sessionId] as const;
+export const targetKey = (target: InviteTarget) => ['invite-candidates', target.type, target.type === 'pod' ? target.podId : target.sessionId] as const;
 
 /** Every query that declares one of these tags is read again, as the app does when the server sends them. */
 export function invalidateTags(qc: QueryClient, tags: readonly string[]): void {
@@ -25,10 +25,15 @@ export function invalidateTags(qc: QueryClient, tags: readonly string[]): void {
   });
 }
 
+/** How long a list read stays fresh: the server allows 60 candidate reads a minute per member, shared with People. */
+const CANDIDATES_FRESH_MS = 60_000;
+
 /**
  * One list of the sheet: your connections (`connections`) or the event's pod (`pod`), searched by `q` (blank to
  * browse). While a new search is on its way the last answer for the same list stays on screen; another list starts
- * from nothing, so the pod's members are never shown under "Your connections".
+ * from nothing, so the pod's members are never shown under "Your connections". A list is read again only when a tag it
+ * follows arrives or a minute has passed, never on focus, and every loaded page is forgotten when the sheet closes, so
+ * each opening reads one page (a refetch re-reads every page loaded so far).
  */
 export function useInviteCandidates(target: InviteTarget, source: InviteCandidateSource, q: string, enabled: boolean) {
   const me = useAuthStore((s) => s.user?.id as string | undefined);
@@ -39,6 +44,8 @@ export function useInviteCandidates(target: InviteTarget, source: InviteCandidat
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextBefore ?? undefined,
     enabled,
+    staleTime: CANDIDATES_FRESH_MS,
+    refetchOnWindowFocus: false,
     placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[3] === source ? previous : undefined),
     meta: { entities: candidateEntities(target, source, me) },
   });

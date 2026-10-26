@@ -26,8 +26,8 @@ import {
   type InviteTarget,
 } from '../../../../client/src/features/invites/invite-picker';
 import {
-  STATUS_TITLE, WITHDRAW_CONFIRM,
-  inviteStatusGroups, personLine, remindAllSentence, remindSentence, statusSummary, tallyReminders,
+  REMIND_GAP_MS, STATUS_TITLE, WITHDRAW_CONFIRM,
+  inviteStatusGroups, personLine, remindAllSentence, remindSentence, settleInTurn, statusSummary, tallyReminders,
   type InviteListRow,
 } from '../../../../client/src/features/invites/invite-status';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
@@ -73,13 +73,13 @@ describe('the picker: what it asks the server for', () => {
       .toEqual({ sessionId: 's1', source: 'connections', q: 'x', before: '2026-10-26T10:00:00.000Z', limit: 30 });
   });
 
-  it('follows the tags the server sends for the pod or event, its pod\'s members, and your own connections and blocks', () => {
-    expect(candidateEntities(POD, 'connections', 'me')).toEqual(expect.arrayContaining([
-      'pod:p1', 'pod:p1:members', 'pod:p1:invites', 'user:me', 'user:me:invites', 'user:me:dms', 'user:me:blocks',
-    ]));
-    expect(candidateEntities(EVENT, 'pod', 'me')).toEqual(expect.arrayContaining([
-      'session:s1', 'session:s1:participants', 'session:s1:invites', 'pod:p1:members', 'user:me:blocks',
-    ]));
+  it('follows the tags that change who is listed, and no others (fix round 1: each tag re-reads every loaded page against 60 reads a minute)', () => {
+    // The pod or event and its invites, the event's pod when the list is its members, and the member's own new
+    // connections (a request accepted) and blocks. Not the member's own record or messages (user:me and user:me:dms
+    // fire on every message and read receipt), and not the event's participants (every join while an event is live).
+    expect(candidateEntities(POD, 'connections', 'me')).toEqual(['pod:p1', 'pod:p1:members', 'pod:p1:invites', 'user:me:invites', 'user:me:blocks']);
+    expect(candidateEntities(EVENT, 'pod', 'me')).toEqual(['session:s1', 'session:s1:invites', 'pod:p1:members', 'user:me:blocks']);
+    expect(candidateEntities(EVENT, 'connections', 'me')).toEqual(['session:s1', 'session:s1:invites', 'user:me:invites', 'user:me:blocks']);
     // Before the member is known there is still something to follow: the pod or event itself.
     expect(candidateEntities(POD, 'connections', undefined)).toEqual(['pod:p1', 'pod:p1:members', 'pod:p1:invites']);
   });
@@ -327,6 +327,44 @@ describe('the organisers\' list: reminders and withdrawing, in words', () => {
   });
 });
 
+// Fix round 1: the pod's Remind all fired every reminder at once; the mail provider takes about two sends a second and
+// drops the rest, so most of a big pod's reminders came back "not sent". They go one at a time now, half a second apart.
+describe('the pod page reminds one invite at a time, half a second apart', () => {
+  it('runs each in turn, in order, pausing between them and not after the last; a failure is kept and the rest still run', async () => {
+    const order: string[] = [];
+    const pauses: number[] = [];
+    const run = jest.fn(async (id: string) => {
+      order.push(`start ${id}`);
+      if (id === 'b') throw new Error('503');
+      await Promise.resolve();
+      order.push(`end ${id}`);
+      return { reminded: true };
+    });
+    const wait = jest.fn(async (ms: number) => { pauses.push(ms); });
+    const results = await settleInTurn(['a', 'b', 'c'], run, 500, wait);
+    expect(order).toEqual(['start a', 'end a', 'start b', 'start c', 'end c']);
+    expect(pauses).toEqual([500, 500]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
+    expect(tallyReminders(results)).toEqual({ reminded: 2, total: 3, recentlyReminded: 0 });
+  });
+
+  it('nothing to remind: no call and no pause', async () => {
+    const run = jest.fn(async () => ({ reminded: true }));
+    const wait = jest.fn(async () => {});
+    expect(await settleInTurn([], run, 500, wait)).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it('the pod page uses it, half a second apart, and no longer fires them all at once', () => {
+    const list = read('features/invites/InviteStatusList.tsx');
+    expect(REMIND_GAP_MS).toBe(500);
+    expect(list).toMatch(/settleInTurn\(\s*rows,\s*\(row\) => api\.post\(`\/invites\/\$\{row\.id\}\/remind`\)/);
+    expect(list).toMatch(/REMIND_GAP_MS,?\s*\)/);
+    expect(list).not.toMatch(/Promise\.allSettled/);
+  });
+});
+
 // ─── The wiring, pinned by its source ────────────────────────────────────────────────────────────
 
 describe('the sheet is the REASON Sheet, with the footer the brief asks for', () => {
@@ -384,6 +422,23 @@ describe('the data layer: candidates as a useInfiniteQuery that declares its tag
     expect(hooks).toMatch(/meta: \{ entities: candidateEntities\(target, source, me\) \}/);
   });
 
+  it('reads each list once a minute at most and not on focus (fix round 1: the budget is 60 reads a minute, shared with People)', () => {
+    const q = hooks.slice(hooks.indexOf('export function useInviteCandidates'));
+    expect(hooks).toMatch(/const CANDIDATES_FRESH_MS = 60_000;/);
+    expect(q).toMatch(/staleTime: CANDIDATES_FRESH_MS,/);
+    expect(q).toMatch(/refetchOnWindowFocus: false,/);
+    // Not gcTime 0: a search is another query, and the browsed pages must still be there when the search is cleared
+    // (gcTime 0 forgot them the moment the search began, so "Show more" twice and then a cleared search showed one page).
+    expect(q).not.toMatch(/gcTime/);
+    expect(hooks).toMatch(/export const targetKey = /);
+  });
+
+  it('forgets every page the sheet read when the sheet closes, so each opening reads one page (a refetch re-reads every page loaded so far)', () => {
+    const sheet = read('features/invites/InvitePickerSheet.tsx');
+    expect(sheet).toMatch(/import \{ targetKey, [^}]*\} from '\.\/useInviteCandidates';/);
+    expect(sheet).toMatch(/useEffect\(\(\) => \(\) => \{ qc\.removeQueries\(\{ queryKey: forget\.current \}\); \}, \[qc\]\);/);
+  });
+
   it('sends a batch to /invites/batch, an email or a link to /invites, and refetches what the server\'s fan-out names', () => {
     expect(hooks).toMatch(/api\.post\('\/invites\/batch', batchBody\(/);
     expect(hooks).toMatch(/api\.post\('\/invites', emailInviteBody\(/);
@@ -430,8 +485,10 @@ describe('the pod page and the event page open the sheet and show the list', () 
     expect(pod).toMatch(/linkCap=\{pod\.maxMembers\}/);
   });
 
-  it('the pod\'s list is there for its director and host, with no chip to reveal it; the members count no longer counts invites', () => {
-    expect(pod).toMatch(/isDirectorOrHost && pod\.status === 'active' && podId && \(\s*<InviteStatusList\b/);
+  it('the pod\'s list is there for its director and host of any pod that is not archived, with no chip to reveal it; the members count no longer counts invites', () => {
+    // Fix round 1: a draft or suspended pod can be invited to (the button shows, the server refuses only an archived
+    // pod), so its organisers see the card too.
+    expect(pod).toMatch(/isDirectorOrHost && pod\.status !== 'archived' && podId && \(\s*<InviteStatusList\b/);
     expect(pod).not.toMatch(/showPodPendingInvites|Pending Pod Invites|View & Remind/);
     expect(pod).toMatch(/- \(podMemberCounts\.pendingInvites \|\| 0\)/);
   });

@@ -8,6 +8,7 @@
 // Declined and cannot be chosen again. After a send the rows change in place and the sheet stays open until "Done".
 // "Invite by email" and "Share a link" (whose note says the link's real cap) are for anyone else.
 import { useEffect, useId, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { Check, Copy, Link2, Mail, Search, X } from 'lucide-react';
 import type { InviteCandidate, InviteCandidateSource, InviteCandidateState } from '@rsn/shared';
@@ -27,7 +28,7 @@ import {
   inviteEveryoneLabel, linkCap, pickerTitle, podSegmentLabel, sendLabel, shareLinkNote, stateAfter, stateLabel,
   type EmailValues, type InviteTarget,
 } from './invite-picker';
-import { useInviteByEmail, useInviteCandidates, useSendInvites, useShareLink } from './useInviteCandidates';
+import { targetKey, useInviteByEmail, useInviteCandidates, useSendInvites, useShareLink } from './useInviteCandidates';
 
 interface Props {
   open: boolean;
@@ -59,6 +60,11 @@ export default function InvitePickerSheet(props: Props) {
 
 function OpenPicker({ onClose, target, podName, linkCap: capacity }: Props) {
   const addToast = useToastStore((s) => s.addToast);
+  const qc = useQueryClient();
+  // Every page the sheet read is forgotten when it closes, so the next opening reads one page: a refetch re-reads every
+  // page loaded so far, against 60 reads a minute. While it is open the pages stay, so a cleared search shows them again.
+  const forget = useRef(targetKey(target));
+  useEffect(() => () => { qc.removeQueries({ queryKey: forget.current }); }, [qc]);
   const hasPod = target.type === 'session' && !!target.podId;
   const [segment, setSegment] = useState<InviteCandidateSource>(target.type === 'session' && target.podId ? 'pod' : 'connections');
   const [search, setSearch] = useState('');
