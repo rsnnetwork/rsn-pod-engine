@@ -6,6 +6,9 @@
 //      thrown out again within half a minute of coming back.
 //   2. registerParticipant's re-register write had no removal guard. An invite accept and the REST register run
 //      outside the event's guard, so a kick landing between its read and its write was undone.
+//   Fix round 1: a personal invite lifts only a removal made before the host made it (an older invite, one the kick's
+//   withdrawal missed or one accepted again, never undoes a later kick); memory follows the database after the
+//   invite's writes, whatever the registration answered; a kick writes a removed row for someone who had none.
 //   3. presence:room_joined accepted a match that had ended: a late signal for the room a member was moved out of
 //      put them back in it, and their room chat went to the room they had left.
 //   4. A running video meeting's chat and reactions waited for the director: a guest's message was refused with
@@ -225,10 +228,11 @@ function answer(sql: string, params: unknown[]): Answer {
   if (sql === "SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')") {
     return { rows: [{ count: String(world.participants.filter((p) => p.session_id === a && !['removed', 'left', 'no_show'].includes(p.status)).length) }] };
   }
-  if (sql === 'SELECT id, status FROM session_participants WHERE session_id = $1 AND user_id = $2'
+  // The registration's read of the person's row (with when a removal of theirs was made), and the plain re-read.
+  if (sql === 'SELECT id, status, left_at FROM session_participants WHERE session_id = $1 AND user_id = $2'
       || sql === 'SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2') {
     const p = participant(a, b);
-    return { rows: p ? [{ id: p.id, status: p.status }] : [] };
+    return { rows: p ? [{ id: p.id, status: p.status, left_at: p.left_at ?? null }] : [] };
   }
   // The video token's read of the person's row.
   if (sql === 'SELECT * FROM session_participants WHERE session_id = $1 AND user_id = $2') {
@@ -236,39 +240,56 @@ function answer(sql: string, params: unknown[]): Answer {
     return { rows: p ? [{ ...p }] : [] };
   }
   // A status write: the state machine's, the legacy fallback's and the reconciler's all start this way. One that
-  // carries the removal guard leaves a removed row as it is, as Postgres would.
+  // carries the removal guard leaves a removed row as it is, as Postgres would. A removal or a leave is stamped with
+  // the time of the write (NOW()) or the time it is given (the reconciler finishing a kick passes the kick's own, $2).
   if (sql.startsWith('UPDATE session_participants SET status = $1')) {
     const p = participant(params[params.length - 2], params[params.length - 1]);
     if (!p || (sql.includes("status <> 'removed'") && p.status === 'removed')) return { rows: [], rowCount: 0 };
     p.status = params[0];
     if (['in_lobby', 'checked_in'].includes(p.status) && !p.joined_at) p.joined_at = new Date();
+    if (sql.includes('left_at = NOW()')) p.left_at = new Date();
+    else if (sql.includes('left_at = $2')) p.left_at = params[1];
+    else if (sql.includes('left_at = NULL')) p.left_at = null;
     return { rows: [], rowCount: 1 };
   }
-  // The registration's re-register write. When it carries the removal guard, a removed row is written only for a
-  // host's fresh personal invite ($3), as Postgres would evaluate it against the row as it is at write time.
+  // The registration's re-register write, its guard as Postgres evaluates it against the row at write time: a removed
+  // row is written only for a host's personal invite ($3) made after its removal (a removal with no time on it, any).
   if (sql.startsWith("UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE")) {
     const p = participant(a, b);
     if (!p) return { rows: [], rowCount: 0 };
-    const guarded = sql.includes("(status <> 'removed' OR $3::boolean)");
-    if (guarded && p.status === 'removed' && params[2] !== true) return { rows: [], rowCount: 0 };
+    const invitedAt = params[2] as Date | null;
+    if (p.status === 'removed' && !(invitedAt && (!p.left_at || p.left_at < invitedAt))) return { rows: [], rowCount: 0 };
     p.status = 'registered';
+    p.left_at = null;
     return { rows: [{ ...p }], rowCount: 1 };
   }
   if (sql.startsWith('INSERT INTO session_participants (session_id, user_id, status, acting_as_host)')) {
     if (participant(a, b)) return { rows: [], rowCount: 0 };
-    const p = { id: randomUUID(), session_id: a, user_id: b, status: 'registered', joined_at: null };
+    const p = { id: randomUUID(), session_id: a, user_id: b, status: 'registered', joined_at: null, left_at: null };
     world.participants.push(p);
     return { rows: [{ ...p }], rowCount: 1 };
   }
-  // The invite accept's insert for a row that vanished meanwhile (a personal invite's lifts a removed row).
+  // The invite accept's insert for a row that vanished meanwhile. A personal invite's ($3) lifts a removed row whose
+  // removal was made before the invite; a shared link's leaves it.
   if (sql.startsWith("INSERT INTO session_participants (session_id, user_id, status) VALUES ($1, $2, 'registered')")) {
     const p = participant(a, b);
     if (!p) {
-      world.participants.push({ id: randomUUID(), session_id: a, user_id: b, status: 'registered', joined_at: null });
+      world.participants.push({ id: randomUUID(), session_id: a, user_id: b, status: 'registered', joined_at: null, left_at: null });
       return { rows: [], rowCount: 1 };
     }
-    if (/DO UPDATE SET status = 'registered'/.test(sql) && p.status === 'removed') { p.status = 'registered'; return { rows: [], rowCount: 1 }; }
+    const invitedAt = params[2] as Date | undefined;
+    if (/DO UPDATE SET status = 'registered'/.test(sql) && p.status === 'removed' && invitedAt && (!p.left_at || p.left_at < invitedAt)) {
+      p.status = 'registered';
+      p.left_at = null;
+      return { rows: [], rowCount: 1 };
+    }
     return { rows: [], rowCount: 0 };
+  }
+  // The kick's removed row for someone the event let in without one (a row that exists is left as it is).
+  if (sql.startsWith("INSERT INTO session_participants (session_id, user_id, status, left_at) VALUES ($1, $2, 'removed', NOW())")) {
+    if (participant(a, b)) return { rows: [], rowCount: 0 };
+    world.participants.push({ id: randomUUID(), session_id: a, user_id: b, status: 'removed', joined_at: null, left_at: new Date() });
+    return { rows: [], rowCount: 1 };
   }
   // The reconciler reads every row of the event, to write memory into it.
   if (sql === 'SELECT user_id, status, joined_at FROM session_participants WHERE session_id = $1') {
@@ -450,7 +471,7 @@ function person(name: string, role = 'member'): string {
 const emailOf = (userId: string) => world.users.get(userId)!.email as string;
 
 /** An event in a private pod; the host is the pod's director and registered, as createSession does. */
-function event(opts: { status?: string; format?: string } = {}) {
+function event(opts: { status?: string; format?: string; maxParticipants?: number } = {}) {
   const podId = randomUUID();
   const sessionId = randomUUID();
   const host = person('Host');
@@ -458,7 +479,7 @@ function event(opts: { status?: string; format?: string } = {}) {
   world.podMembers.push({ pod_id: podId, user_id: host, role: 'director', status: 'active' });
   world.sessions.set(sessionId, {
     id: sessionId, pod_id: podId, host_user_id: host, status: opts.status ?? 'lobby_open', current_round: 1,
-    config: {}, event_format: opts.format ?? 'speed_networking',
+    config: opts.maxParticipants ? { maxParticipants: opts.maxParticipants } : {}, event_format: opts.format ?? 'speed_networking',
   });
   register(sessionId, host);
   return { podId, sessionId, host };
@@ -467,7 +488,10 @@ function podMember(podId: string, userId: string) {
   world.podMembers.push({ pod_id: podId, user_id: userId, role: 'member', status: 'active' });
 }
 function register(sessionId: string, userId: string, status = 'registered') {
-  world.participants.push({ id: randomUUID(), session_id: sessionId, user_id: userId, status, joined_at: status === 'registered' ? null : new Date() });
+  world.participants.push({
+    id: randomUUID(), session_id: sessionId, user_id: userId, status,
+    joined_at: status === 'registered' ? null : new Date(), left_at: null,
+  });
 }
 
 /** An invite the host sends: personal (to the member's address) or a shared link (no address). */
@@ -500,7 +524,7 @@ function expectAdmitted(s: FakeSocket, sessionId: string) {
 }
 
 /** A running private event: its host, a member and a partner are in the main room. */
-async function liveEvent(opts: { status?: string; format?: string } = {}) {
+async function liveEvent(opts: { status?: string; format?: string; maxParticipants?: number } = {}) {
   const ev = event(opts);
   const member = person('Member');
   const partner = person('Partner');
@@ -556,6 +580,8 @@ describe('1. a kicked member re-admitted by a fresh personal invite stays in (th
     expect(memoryOf(t.sessionId, t.member)).toBe('removed');
     expect(t.memberSock.got).toContainEqual({ event: 'host:participant_removed', payload: { userId: t.member, reason: 'h1b' } });
 
+    // The host invites them back afterwards (a moment later: the invite is newer than the removal).
+    await aMomentLater();
     const code = invite(t.sessionId, t.host, emailOf(t.member));
     const accepted = await acceptInvite(code, t.member, emailOf(t.member));
     expect(accepted.participantStatus).toBe('registered');
@@ -593,6 +619,7 @@ describe('1. a kicked member re-admitted by a fresh personal invite stays in (th
   it('re-admitted before they open the event page, they are still let in after a reconciler tick', async () => {
     const t = await liveEvent();
     await kick(t, t.member);
+    await aMomentLater();
     await acceptInvite(invite(t.sessionId, t.host, emailOf(t.member)), t.member, emailOf(t.member));
     await reconcileSessionStates(t.sessionId, io);
     expect(statusOf(t.sessionId, t.member)).toBe('registered');
@@ -635,47 +662,139 @@ describe('1. a kicked member re-admitted by a fresh personal invite stays in (th
     expect(statusOf(t.sessionId, t.member)).toBe('in_lobby');
   });
 
-  it('a kick that races the accept, landing just before the invite\'s own insert: the invite wins, and memory follows', async () => {
+  it('a kick that lands during the accept, after the invite was made, stands: the invite\'s own insert leaves it', async () => {
     const t = await liveEvent();
     await kick(t, t.member);
-    // H1's rule: a personal invite's own insert lifts a row a kick has just removed. Here the host's kick lands after
-    // registerParticipant has taken them back, right before that insert.
+    await aMomentLater();
+    const code = invite(t.sessionId, t.host, emailOf(t.member));
+    await aMomentLater();
+    // registerParticipant takes them back (the first kick is older than the invite); then the host kicks them again,
+    // right before the invite's own insert. That kick is newer than the invite: the insert must not lift it.
     before.match = (sql) => sql.startsWith("INSERT INTO session_participants (session_id, user_id, status) VALUES ($1, $2, 'registered')");
     before.then = () => {
-      participant(t.sessionId, t.member)!.status = 'removed';
+      const p = participant(t.sessionId, t.member)!;
+      p.status = 'removed';
+      p.left_at = new Date();
       activeSessions.get(t.sessionId)!.participantStates!.set(t.member, { state: 'removed', currentRoomId: null, updatedAt: new Date() });
     };
-    const accepted = await acceptInvite(invite(t.sessionId, t.host, emailOf(t.member)), t.member, emailOf(t.member));
-    expect(accepted.participantStatus).toBe('registered');
+    const accepted = await acceptInvite(code, t.member, emailOf(t.member));
+    expect(accepted.participantStatus).toBe('removed');
     expect(memoryOf(t.sessionId, t.member)).toBe('removed');
 
     const back = connect(t.member);
     await join(back, t.sessionId);
-    expectAdmitted(back, t.sessionId);
-    expect(statusOf(t.sessionId, t.member)).toBe('in_lobby');
-
-    // The reconciler follows the database: they stay in (it used to write the removal back over them).
+    expect(back.got).toEqual([EVICTED]);
     await aMomentLater();
     await reconcileSessionStates(t.sessionId, io);
-    expect(statusOf(t.sessionId, t.member)).toBe('in_lobby');
-    expect(memoryOf(t.sessionId, t.member)).toBe('in_main_room');
-    await expect(sessionService.generateLiveKitToken(t.sessionId, t.member)).resolves.toMatchObject({ token: 'livekit-token' });
-    expect(await getEligibleParticipants(t.sessionId, [t.host], presentSet(t.sessionId))).toContain(t.member);
-    await reconcileSessionStates(t.sessionId, io);
-    expect(statusOf(t.sessionId, t.member)).toBe('in_lobby');
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    expect(memoryOf(t.sessionId, t.member)).toBe('removed');
+    await expect(sessionService.generateLiveKitToken(t.sessionId, t.member)).rejects.toThrow('User is not a participant in this event');
   });
 
-  it('a kick whose own database write failed is still written by the reconciler (only the kick writes a removal)', async () => {
+  it('a personal invite made before the kick never undoes it: accepted after it (its withdrawal failed), or accepted again', async () => {
     const t = await liveEvent();
-    failOnce.match = (sql, params) => sql.startsWith('UPDATE session_participants SET status = $1') && params[0] === 'removed';
+    // Two personal invites the host made before the kick: one the member came in through, and one still pending.
+    const usedCode = invite(t.sessionId, t.host, emailOf(t.member));
+    Object.assign(world.invites.find((i) => i.code === usedCode)!, { status: 'accepted', use_count: 1, accepted_by_user_id: t.member, accepted_at: new Date() });
+    const pendingCode = invite(t.sessionId, t.host, emailOf(t.member));
+    await aMomentLater();
+    // The kick's withdrawal of their personal invites fails (it is best-effort): both stay usable.
+    failOnce.match = (sql) => sql.startsWith("UPDATE invites SET status = 'revoked'");
     await kick(t, t.member);
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    expect(world.invites.filter((i) => i.session_id === t.sessionId && i.invitee_email).map((i) => i.status)).toEqual(['accepted', 'pending']);
+
+    await expect(acceptInvite(pendingCode, t.member, emailOf(t.member))).rejects.toMatchObject({ code: 'REMOVED_FROM_EVENT' });
+    // Accepted again and again (the idempotent re-accept a script can loop): never lifts it.
+    for (let i = 0; i < 3; i++) {
+      await expect(acceptInvite(usedCode, t.member, emailOf(t.member))).rejects.toMatchObject({ code: 'REMOVED_FROM_EVENT' });
+    }
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
     expect(memoryOf(t.sessionId, t.member)).toBe('removed');
-    expect(statusOf(t.sessionId, t.member)).toBe('in_lobby');
+    await aMomentLater();
     await reconcileSessionStates(t.sessionId, io);
     expect(statusOf(t.sessionId, t.member)).toBe('removed');
     const back = connect(t.member);
     await join(back, t.sessionId);
     expect(back.got).toEqual([EVICTED]);
+
+    // An invite the host makes after the kick is the one way back.
+    const freshCode = invite(t.sessionId, t.host, emailOf(t.member));
+    expect((await acceptInvite(freshCode, t.member, emailOf(t.member))).participantStatus).toBe('registered');
+    expect(memoryOf(t.sessionId, t.member)).toBe('registered');
+    const again = connect(t.member);
+    await join(again, t.sessionId);
+    expectAdmitted(again, t.sessionId);
+  });
+
+  it('a kick whose own database write failed is still written by the reconciler, with the kick\'s own time', async () => {
+    const t = await liveEvent();
+    failOnce.match = (sql, params) => sql.startsWith('UPDATE session_participants SET status = $1') && params[0] === 'removed';
+    await kick(t, t.member);
+    expect(memoryOf(t.sessionId, t.member)).toBe('removed');
+    expect(statusOf(t.sessionId, t.member)).toBe('in_lobby');
+    const kickedAt = activeSessions.get(t.sessionId)!.unsavedRemovals!.get(t.member)!;
+    await aMomentLater();
+    await reconcileSessionStates(t.sessionId, io);
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    // Stamped with the kick's time, not the reconciler's: an invite the host made in between is newer than the removal.
+    expect(participant(t.sessionId, t.member)!.left_at.getTime()).toBe(kickedAt);
+    const back = connect(t.member);
+    await join(back, t.sessionId);
+    expect(back.got).toEqual([EVICTED]);
+  });
+
+  for (const row of ['in_lobby', 'in_round'] as const) {
+    it(`a kick whose own write failed (row still ${row}), then a personal invite made after it: back in, the removal never written over them`, async () => {
+      const t = await liveEvent();
+      participant(t.sessionId, t.member)!.status = row;
+      failOnce.match = (sql, params) => sql.startsWith('UPDATE session_participants SET status = $1') && params[0] === 'removed';
+      await kick(t, t.member);
+      expect(statusOf(t.sessionId, t.member)).toBe(row);
+      expect(memoryOf(t.sessionId, t.member)).toBe('removed');
+      await aMomentLater();
+      // (Made directly: the invite form turns away someone whose row is live, but nothing on the accept relies on it.)
+      const code = invite(t.sessionId, t.host, emailOf(t.member));
+      // Their row was never removed, so the registration answers "already registered", which the accept passes on.
+      await expect(acceptInvite(code, t.member, emailOf(t.member))).rejects.toMatchObject({ code: 'SESSION_ALREADY_REGISTERED' });
+      // Memory follows the database anyway: nothing of the kick is left to write.
+      expect(memoryOf(t.sessionId, t.member)).toBe(row === 'in_lobby' ? 'in_main_room' : 'in_breakout');
+      expect(activeSessions.get(t.sessionId)!.unsavedRemovals?.has(t.member) ?? false).toBe(false);
+      await aMomentLater();
+      await reconcileSessionStates(t.sessionId, io);
+      expect(statusOf(t.sessionId, t.member)).toBe(row);
+      expect(memoryOf(t.sessionId, t.member)).not.toBe('removed');
+    });
+  }
+
+  it('a full event: someone let in without a row is kicked, gets a removed row, is refused, and a personal invite made after the kick takes them back in', async () => {
+    const t = await liveEvent({ maxParticipants: 3 }); // the host, the member and the partner fill it
+    const extra = person('Extra');
+    podMember(t.podId, extra);
+    const extraSock = connect(extra);
+    await join(extraSock, t.sessionId);
+    expectAdmitted(extraSock, t.sessionId);
+    expect(statusOf(t.sessionId, extra)).toBeNull(); // in the room, refused a row only because the event is full
+
+    await kick(t, extra);
+    expect(statusOf(t.sessionId, extra)).toBe('removed');
+    const refused = connect(extra);
+    await join(refused, t.sessionId);
+    expect(refused.got).toEqual([EVICTED]);
+    await expect(sessionService.generateLiveKitToken(t.sessionId, extra)).rejects.toThrow('User is not a participant in this event');
+
+    await aMomentLater();
+    const accepted = await acceptInvite(invite(t.sessionId, t.host, emailOf(extra)), extra, emailOf(extra));
+    expect(accepted.participantStatus).toBe('registered');
+    expect(memoryOf(t.sessionId, extra)).toBe('registered');
+    const back = connect(extra);
+    await join(back, t.sessionId);
+    expectAdmitted(back, t.sessionId);
+    await aMomentLater();
+    await reconcileSessionStates(t.sessionId, io);
+    expect(statusOf(t.sessionId, extra)).toBe('in_lobby');
+    expect(memoryOf(t.sessionId, extra)).toBe('in_main_room');
+    await expect(sessionService.generateLiveKitToken(t.sessionId, extra)).resolves.toMatchObject({ token: 'livekit-token' });
   });
 });
 
@@ -687,10 +806,12 @@ describe('2. registerParticipant\'s re-register write keeps a removal the host m
     const t = await liveEvent();
     await handleLeaveSession(io, asSocket(t.memberSock), { sessionId: t.sessionId });
     expect(statusOf(t.sessionId, t.member)).toBe('left');
-    after.match = (sql, params) => sql === 'SELECT id, status FROM session_participants WHERE session_id = $1 AND user_id = $2' && params[1] === t.member;
+    after.match = (sql, params) => sql === 'SELECT id, status, left_at FROM session_participants WHERE session_id = $1 AND user_id = $2' && params[1] === t.member;
     after.then = () => {
       // The kick's own writes, committed between the two statements (it holds the event's guard; this does not).
-      participant(t.sessionId, t.member)!.status = 'removed';
+      const p = participant(t.sessionId, t.member)!;
+      p.status = 'removed';
+      p.left_at = new Date();
       activeSessions.get(t.sessionId)!.participantStates!.set(t.member, { state: 'removed', currentRoomId: null, updatedAt: new Date() });
     };
     return t;
@@ -716,29 +837,37 @@ describe('2. registerParticipant\'s re-register write keeps a removal the host m
     expect(back.got).toEqual([EVICTED]);
   });
 
-  it('a host\'s fresh personal invite accepted at that moment re-admits them (the one way back, as the invite\'s own insert does)', async () => {
+  it('a personal invite made before a kick that lands at that moment does not undo it: the kick is the newer decision', async () => {
     const t = await leftMemberKickedMidRegistration();
     const code = invite(t.sessionId, t.host, emailOf(t.member));
-    await acceptInvite(code, t.member, emailOf(t.member));
-    expect(statusOf(t.sessionId, t.member)).toBe('registered');
-    expect(memoryOf(t.sessionId, t.member)).toBe('registered');
+    await aMomentLater();
+    await expect(acceptInvite(code, t.member, emailOf(t.member))).rejects.toMatchObject({ code: 'REMOVED_FROM_EVENT' });
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    expect(memoryOf(t.sessionId, t.member)).toBe('removed');
+    await aMomentLater();
     await reconcileSessionStates(t.sessionId, io);
-    expect(statusOf(t.sessionId, t.member)).toBe('registered');
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    const back = connect(t.member);
+    await join(back, t.sessionId);
+    expect(back.got).toEqual([EVICTED]);
   });
 
-  it('the write itself carries the rule: a removed row is written only for a personal invite\'s re-admission', async () => {
+  it('the write itself carries the rule: a removed row is written only when its removal predates a personal invite', async () => {
     const t = await liveEvent();
     await handleLeaveSession(io, asSocket(t.memberSock), { sessionId: t.sessionId });
     await handleLeaveSession(io, asSocket(t.partnerSock), { sessionId: t.sessionId });
     mockQuery.mockClear();
+    const invitedAt = new Date();
     await sessionService.registerParticipant(t.sessionId, t.member);
-    await sessionService.registerParticipant(t.sessionId, t.partner, undefined, { allowRemovedReadmit: true });
+    await sessionService.registerParticipant(t.sessionId, t.partner, undefined, { personalInviteCreatedAt: invitedAt });
     const writes = mockQuery.mock.calls
       .map(([sql, params]) => ({ sql: String(sql).replace(/\s+/g, ' '), params: params as unknown[] }))
       .filter((c) => c.sql.includes("UPDATE session_participants SET status = 'registered', left_at = NULL"));
     expect(writes).toHaveLength(2);
-    for (const w of writes) expect(w.sql).toContain("WHERE session_id = $1 AND user_id = $2 AND (status <> 'removed' OR $3::boolean)");
-    expect(writes.map((w) => w.params)).toEqual([[t.sessionId, t.member, false], [t.sessionId, t.partner, true]]);
+    for (const w of writes) {
+      expect(w.sql).toContain("WHERE session_id = $1 AND user_id = $2 AND (status <> 'removed' OR ($3::timestamptz IS NOT NULL AND (left_at IS NULL OR left_at < $3::timestamptz)))");
+    }
+    expect(writes.map((w) => w.params)).toEqual([[t.sessionId, t.member, null], [t.sessionId, t.partner, invitedAt]]);
   });
 });
 

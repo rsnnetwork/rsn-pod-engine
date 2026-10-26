@@ -732,6 +732,21 @@ export interface AcceptInviteResult {
   participantStatus?: string;
 }
 
+/**
+ * H1b fix round 1 (26 Oct 2026) — after a host's personal invite to a live event has been accepted, the event's memory
+ * follows the database (readmitAfterPersonalInvite): a removal it holds from before the invite was made is lifted
+ * when the database has the person in the event and not removed. Never throws: it runs in a `finally`, and the
+ * reconciler follows the database at its next tick anyway.
+ */
+async function followDatabaseAfterPersonalInvite(sessionId: string, userId: string, invitedAt: Date): Promise<void> {
+  try {
+    const { readmitAfterPersonalInvite } = await import('../orchestration/state/participant-state-machine');
+    await readmitAfterPersonalInvite(sessionId, userId, invitedAt);
+  } catch (err) {
+    logger.warn({ err, sessionId, userId }, 'Could not bring the live event\'s memory in line after a personal invite');
+  }
+}
+
 async function applyInviteRegistration(
   invite: Invite,
   userId: string,
@@ -781,35 +796,46 @@ async function applyInviteRegistration(
     // host's way to re-admit a kicked user, so it lifts the removed-bar. A
     // shareable/multi-use link (no inviteeEmail) must NOT silently re-admit a
     // removed user — they stay bounced until personally re-invited.
-    const allowRemovedReadmit = !!invite.inviteeEmail;
+    // H1b fix round 1 (26 Oct 2026) — "fresh" is exact: it lifts only a removal
+    // made before the host made the invite. An older invite (one the kick's
+    // withdrawal missed, or one accepted again) never undoes a later kick.
+    const personalInviteCreatedAt = invite.inviteeEmail ? new Date(invite.createdAt) : undefined;
     try {
-      await sessionService.registerParticipant(invite.sessionId, userId, undefined, { allowRemovedReadmit });
-    } catch (err) {
-      if (err instanceof ConflictError) {
-        // Already registered — fine, idempotent.
-      } else {
-        // Capacity, status, or other validation error — bubble up so the
-        // tx rolls back and the user gets a definitive error.
-        throw err;
+      try {
+        await sessionService.registerParticipant(invite.sessionId, userId, undefined, { personalInviteCreatedAt });
+      } catch (err) {
+        if (err instanceof ConflictError) {
+          // Already registered — fine, idempotent.
+        } else {
+          // Capacity, status, or other validation error — bubble up so the
+          // tx rolls back and the user gets a definitive error.
+          throw err;
+        }
       }
-    }
 
-    // Defensive idempotent INSERT to handle the rare case where
-    // registerParticipant returned successfully but the row was wiped by
-    // a parallel removal. ON CONFLICT preserves invariant.
-    // H1 fix round 1 — a row a kick has just made 'removed' is lifted only by a
-    // personal invite; a shared link leaves it removed (a removal is terminal).
-    await query(
-      allowRemovedReadmit
-        ? `INSERT INTO session_participants (session_id, user_id, status)
-           VALUES ($1, $2, 'registered')
-           ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
-           WHERE session_participants.status = 'removed'`
-        : `INSERT INTO session_participants (session_id, user_id, status)
-           VALUES ($1, $2, 'registered')
-           ON CONFLICT (session_id, user_id) DO NOTHING`,
-      [invite.sessionId, userId],
-    );
+      // Defensive idempotent INSERT to handle the rare case where
+      // registerParticipant returned successfully but the row was wiped by
+      // a parallel removal. ON CONFLICT preserves invariant.
+      // H1 fix round 1 — a row a kick has just made 'removed' is lifted only by a
+      // personal invite; a shared link leaves it removed (a removal is terminal).
+      // H1b fix round 1 — and only when that removal was made before the invite.
+      await query(
+        personalInviteCreatedAt
+          ? `INSERT INTO session_participants (session_id, user_id, status)
+             VALUES ($1, $2, 'registered')
+             ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
+             WHERE session_participants.status = 'removed'
+               AND (session_participants.left_at IS NULL OR session_participants.left_at < $3::timestamptz)`
+          : `INSERT INTO session_participants (session_id, user_id, status)
+             VALUES ($1, $2, 'registered')
+             ON CONFLICT (session_id, user_id) DO NOTHING`,
+        personalInviteCreatedAt ? [invite.sessionId, userId, personalInviteCreatedAt] : [invite.sessionId, userId],
+      );
+    } finally {
+      // H1b fix round 1 — whatever the registration answered (an "already registered" included: a kick whose own
+      // write never reached the database leaves the row as it was), the live event's memory follows the database.
+      if (personalInviteCreatedAt) await followDatabaseAfterPersonalInvite(invite.sessionId, userId, personalInviteCreatedAt);
+    }
 
     out.sessionId = invite.sessionId;
   }

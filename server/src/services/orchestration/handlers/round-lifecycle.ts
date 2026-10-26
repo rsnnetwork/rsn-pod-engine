@@ -137,6 +137,9 @@ export async function recoverActiveSessions(io: SocketServer): Promise<void> {
             }])
           ),
           manuallyLeftRound: new Set(data.manuallyLeftRound || []),
+          // H1b fix round 1 — kicks the database had not taken yet, each with the kick's own time.
+          unsavedRemovals: new Map(Object.entries(data.unsavedRemovals || {})
+            .map(([userId, kickedAt]): [string, number] => [userId, Number(kickedAt)])),
         };
 
         activeSessions.set(sessionId, activeSession);

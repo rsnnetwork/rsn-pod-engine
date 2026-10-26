@@ -290,6 +290,18 @@ export async function listSessions(params: {
 
 // ─── Participant Registration ───────────────────────────────────────────────
 
+/**
+ * H1b fix round 1 (26 Oct 2026) — whether a host's personal invite made at `invitedAt` lifts a removal stamped
+ * `leftAt`: only an invite made after the removal does (the one way back from a kick); a kick made after the invite
+ * stands. A removal with no time on it (written before every removal was stamped) is lifted by any personal invite,
+ * so nobody is locked out for good.
+ */
+function liftedByPersonalInvite(leftAt: Date | null | undefined, invitedAt: Date | null): boolean {
+  if (!invitedAt) return false;
+  if (!leftAt) return true;
+  return new Date(leftAt).getTime() < invitedAt.getTime();
+}
+
 // S15 (live-test 2026-06-06) — isNewRegistration distinguishes a FRESH
 // registration from a re-activation (a 'left'/'no_show' row flipping back to
 // 'registered'). The live page auto-registers on every mount, so "Join Live
@@ -301,12 +313,15 @@ export async function registerParticipant(
   userId: string,
   userRole?: UserRole,
   // #4B (June-10 debrief) — a kicked (status='removed') user is normally barred
-  // from re-entry. The ONLY way back is a FRESH, personal invite from the host:
-  // the invite-accept path sets allowRemovedReadmit=true for a targeted-email
-  // invite, which lifts the bar and re-registers them. Every other caller
-  // (direct join, socket reconnect, shared link) leaves it false → still bounced.
-  options?: { allowRemovedReadmit?: boolean },
+  // from re-entry. The ONLY way back is a FRESH, personal invite from the host.
+  // H1b fix round 1 (26 Oct 2026): "fresh" is exact. The invite-accept path
+  // passes when the host made the targeted-email invite, and only a removal made
+  // before that moment is lifted: a kick made after it (an old invite the kick's
+  // withdrawal missed, or one accepted again) stands. Every other caller (direct
+  // join, socket reconnect, shared link) passes nothing → still bounced.
+  options?: { personalInviteCreatedAt?: Date },
 ): Promise<SessionParticipant & { isNewRegistration: boolean }> {
+  const invitedAt = options?.personalInviteCreatedAt ?? null;
   const participant = await transaction(async (client) => {
     // Read session without lock — ON CONFLICT handles concurrent inserts safely.
     // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously.
@@ -365,19 +380,28 @@ export async function registerParticipant(
       [sessionId]
     );
     const currentCount = parseInt(countResult.rows[0].count, 10);
+    const full = !!config.maxParticipants && currentCount >= config.maxParticipants;
 
-    if (config.maxParticipants && currentCount >= config.maxParticipants) {
+    // A full event refuses at once, as before; only a host's personal invite looks at the row first (below).
+    if (full && !invitedAt) {
       throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
     }
 
-    // Check for existing registration
-    const existing = await client.query(
-      `SELECT id, status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+    // Check for existing registration (with when a removal of theirs was made)
+    const existing = await client.query<{ id: string; status: string; left_at: Date | null }>(
+      `SELECT id, status, left_at FROM session_participants WHERE session_id = $1 AND user_id = $2`,
       [sessionId, userId]
     );
+    // H1b fix round 1 — a removal this host's personal invite lifts: one made before the invite. Such a person was in
+    // the event, so taking them back is not held to its capacity (a full event would otherwise keep them out for good:
+    // their removed row bars the way in that someone refused only for capacity has).
+    const readmits = existing.rows[0]?.status === 'removed' && liftedByPersonalInvite(existing.rows[0].left_at, invitedAt);
+    if (full && !readmits) {
+      throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
+    }
 
     if (existing.rows.length > 0) {
-      const existingStatus = existing.rows[0].status as string;
+      const existingStatus = existing.rows[0].status;
       if (['registered', 'checked_in', 'in_lobby', 'in_round'].includes(existingStatus)) {
         throw new ConflictError('SESSION_ALREADY_REGISTERED', 'You are already registered for this event');
       }
@@ -386,21 +410,22 @@ export async function registerParticipant(
       // back to 'registered', so a kicked user could walk back into the
       // event (the socket join path auto-registers on page load). REMOVED
       // is terminal in the participant state machine; honor it here too.
-      // #4B — EXCEPT when re-admitted by a fresh personal host invite
-      // (allowRemovedReadmit); then we fall through to the re-register UPDATE.
-      if (existingStatus === 'removed' && !options?.allowRemovedReadmit) {
+      // #4B — EXCEPT when re-admitted by a personal host invite made after the
+      // removal (readmits); then we fall through to the re-register UPDATE.
+      if (existingStatus === 'removed' && !readmits) {
         throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, 'You have been removed from this event by the host');
       }
       // Re-register. H1b (26 Oct 2026) — guarded like every other status write. An invite accept and the REST register
       // run outside the event's guard, so a kick could land between the read above and this write, which used to undo
-      // it. A removed row is written only for a host's fresh personal invite (allowRemovedReadmit, the one way back:
-      // the same rule as the invite accept's own insert); otherwise nothing is written and the person is told they
-      // were removed.
+      // it. A removed row is written only when its removal was made before the host's personal invite being accepted
+      // ($3, the one way back; the invite accept's own insert keeps the same rule): a kick made after the invite stands,
+      // nothing is written, and the person is told they were removed.
       const result = await client.query<SessionParticipant>(
         `UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE
-         WHERE session_id = $1 AND user_id = $2 AND (status <> 'removed' OR $3::boolean)
+         WHERE session_id = $1 AND user_id = $2
+           AND (status <> 'removed' OR ($3::timestamptz IS NOT NULL AND (left_at IS NULL OR left_at < $3::timestamptz)))
          RETURNING ${PARTICIPANT_COLUMNS}`,
-        [sessionId, userId, !!options?.allowRemovedReadmit]
+        [sessionId, userId, invitedAt]
       );
       if (result.rows[0]) return { ...result.rows[0], isNewRegistration: false };
       const reread = await client.query<{ status: string }>(
@@ -473,11 +498,9 @@ export async function registerParticipant(
   try {
     const { activeSessions } = await import('../orchestration/state/session-state');
     if (activeSessions.has(sessionId)) {
-      const { transitionParticipant, readmitParticipant, ParticipantState } = await import('../orchestration/state/participant-state-machine');
-      // H1b — a host's fresh personal invite has registered them: a removal memory holds for them in this event is
-      // lifted, as the database's was (the state machine's one way out of REMOVED). Before, memory stayed REMOVED and
-      // the reconciler wrote the removal back within 30 seconds.
-      if (options?.allowRemovedReadmit) readmitParticipant(sessionId, userId);
+      // A removal memory holds is lifted by the invite path once its own writes are done (readmitAfterPersonalInvite):
+      // the transition below is refused for it, as every way out of REMOVED is.
+      const { transitionParticipant, ParticipantState } = await import('../orchestration/state/participant-state-machine');
       await transitionParticipant(sessionId, userId, ParticipantState.REGISTERED, { persistToDb: false });
     }
   } catch (err) {

@@ -3,10 +3,11 @@
 // registerParticipant reads the person's row, then writes it back to 'registered' (someone who left and is coming
 // back). The invite accept and the REST register run outside the event's guard, so a host's kick can commit between
 // the two. That write used to be unguarded and made the row 'registered' again, undoing the kick. It is now guarded as
-// every other status write is: a removed row is written only for a host's fresh personal invite (the one way back),
-// so a kick that lands there stands and the person is told they were removed. The fake databases in the unit tests
-// copy how Postgres re-checks an UPDATE that waited for a row; this proves it on Postgres: the kick holds the row,
-// the registration's write waits for it, and once the kick commits Postgres re-reads the row and the guard decides.
+// every other status write is: a removed row is written only for a host's personal invite made after the removal
+// (fix round 1: "fresh" is exact, compared with the removal's left_at), so a kick that lands there stands and the
+// person is told they were removed. The fake databases in the unit tests copy how Postgres re-checks an UPDATE that
+// waited for a row; this proves it on Postgres: the kick holds the row, the registration's write waits for it, and
+// once the kick commits Postgres re-reads the row and the guard decides.
 //
 // Two real sessions on a real Postgres: one holds the kick's write open while the other, the real service,
 // re-registers; then what was stored is read back. Everything happens in a schema of its own, made from the real
@@ -46,8 +47,15 @@ suite('a kick between the registration\'s read and its write stands (real Postgr
     `SELECT status FROM ${schema}.session_participants WHERE session_id = $1 AND user_id = $2`, [event, member],
   )).rows[0]?.status ?? null;
 
-  /** A running event in a private pod, and a member of the pod who took part in it and left. */
-  async function aMemberWhoLeft(): Promise<{ event: string; member: string }> {
+  const leftAtOf = async (event: string, member: string) => (await admin.query(
+    `SELECT left_at FROM ${schema}.session_participants WHERE session_id = $1 AND user_id = $2`, [event, member],
+  )).rows[0]?.left_at as Date | null;
+
+  /**
+   * A running event in a private pod (`capacity` people at most, the host registered), and a member of the pod who took
+   * part in it and left.
+   */
+  async function aMemberWhoLeft(capacity = 500): Promise<{ event: string; member: string; host: string }> {
     const [host, member, pod, event] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
     for (const [id, name] of [[host, 'Host'], [member, 'Member']]) {
       await admin.query(
@@ -61,14 +69,28 @@ suite('a kick between the registration\'s read and its write stands (real Postgr
       [pod, host, member],
     );
     await admin.query(
-      `INSERT INTO ${schema}.sessions (id, pod_id, title, status, host_user_id) VALUES ($1, $2, 'Race event', 'lobby_open', $3)`,
-      [event, pod, host],
+      `INSERT INTO ${schema}.sessions (id, pod_id, title, status, host_user_id, config)
+       VALUES ($1, $2, 'Race event', 'lobby_open', $3, jsonb_build_object('maxParticipants', $4::int))`,
+      [event, pod, host, capacity],
+    );
+    await admin.query(
+      `INSERT INTO ${schema}.session_participants (session_id, user_id, status) VALUES ($1, $2, 'in_lobby')`,
+      [event, host],
     );
     await admin.query(
       `INSERT INTO ${schema}.session_participants (session_id, user_id, status, left_at) VALUES ($1, $2, 'left', NOW())`,
       [event, member],
     );
-    return { event, member };
+    return { event, member, host };
+  }
+
+  /** The host's kick, committed: the row removed and stamped, as transitionParticipant writes it. */
+  async function kicked(event: string, member: string): Promise<Date> {
+    await admin.query(
+      `UPDATE ${schema}.session_participants SET status = 'removed', left_at = NOW() WHERE session_id = $1 AND user_id = $2`,
+      [event, member],
+    );
+    return (await leftAtOf(event, member))!;
   }
 
   /**
@@ -147,11 +169,45 @@ suite('a kick between the registration\'s read and its write stands (real Postgr
     expect(await statusOf(event, member)).toBe('removed');
   }, 30_000);
 
-  it('a host\'s fresh personal invite waits for the kick too, then takes them back: the one way back', async () => {
+  it('a personal invite made before the kick waits for it too, then leaves them removed: the kick is the newer decision', async () => {
     const { event, member } = await aMemberWhoLeft();
+    // An invite the host made a while before the kick (the kick's left_at is its own NOW(), taken later).
+    const invitedAt = new Date(Date.now() - 60_000);
     const outcome = await kickLandingMidway(event, member,
-      () => sessions.registerParticipant(event, member, undefined, { allowRemovedReadmit: true }));
-    expect(outcome).toMatchObject({ status: 'registered', isNewRegistration: false });
+      () => sessions.registerParticipant(event, member, undefined, { personalInviteCreatedAt: invitedAt }));
+    expect(outcome).toBeInstanceOf(Error);
+    expect(outcome).toMatchObject({ statusCode: 403, code: 'REMOVED_FROM_EVENT' });
+    expect(await statusOf(event, member)).toBe('removed');
+  }, 30_000);
+
+  it('a personal invite made after the kick takes them back: the one way back', async () => {
+    const { event, member } = await aMemberWhoLeft();
+    const kickAt = await kicked(event, member);
+    await expect(sessions.registerParticipant(event, member)).rejects.toMatchObject({ code: 'REMOVED_FROM_EVENT' });
+    await expect(sessions.registerParticipant(event, member, undefined, { personalInviteCreatedAt: new Date(kickAt.getTime() - 1000) }))
+      .rejects.toMatchObject({ code: 'REMOVED_FROM_EVENT' });
+    await expect(sessions.registerParticipant(event, member, undefined, { personalInviteCreatedAt: new Date(kickAt.getTime() + 1000) }))
+      .resolves.toMatchObject({ status: 'registered', isNewRegistration: false });
+    expect(await statusOf(event, member)).toBe('registered');
+    expect(await leftAtOf(event, member)).toBeNull();
+  }, 30_000);
+
+  it('a removal with no time on it (written before every removal was stamped) is lifted by a personal invite, not by a page', async () => {
+    const { event, member } = await aMemberWhoLeft();
+    await admin.query(`UPDATE ${schema}.session_participants SET status = 'removed', left_at = NULL WHERE session_id = $1 AND user_id = $2`, [event, member]);
+    await expect(sessions.registerParticipant(event, member)).rejects.toMatchObject({ code: 'REMOVED_FROM_EVENT' });
+    await expect(sessions.registerParticipant(event, member, undefined, { personalInviteCreatedAt: new Date() }))
+      .resolves.toMatchObject({ status: 'registered' });
+  }, 30_000);
+
+  it('a full event: a personal invite made after the kick still takes them back; nobody else is let past its capacity', async () => {
+    const { event, member } = await aMemberWhoLeft(1); // the host fills it
+    const kickAt = await kicked(event, member);
+    await expect(sessions.registerParticipant(event, member)).rejects.toMatchObject({ code: 'SESSION_FULL' });
+    await expect(sessions.registerParticipant(event, member, undefined, { personalInviteCreatedAt: new Date(kickAt.getTime() - 1000) }))
+      .rejects.toMatchObject({ code: 'SESSION_FULL' });
+    await expect(sessions.registerParticipant(event, member, undefined, { personalInviteCreatedAt: new Date(kickAt.getTime() + 1000) }))
+      .resolves.toMatchObject({ status: 'registered' });
     expect(await statusOf(event, member)).toBe('registered');
   }, 30_000);
 

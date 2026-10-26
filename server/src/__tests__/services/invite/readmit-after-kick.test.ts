@@ -11,16 +11,27 @@ describe('#4B — kicked user re-admitted only by a fresh personal invite', () =
   const inviteSvc = read('services/invite/invite.service.ts');
   const hostActions = read('services/orchestration/handlers/host-actions.ts');
 
-  it('registerParticipant takes an allowRemovedReadmit option and gates the REMOVED bar on it', () => {
-    expect(sessionSvc).toMatch(/allowRemovedReadmit\?\s*:\s*boolean/);
-    // The removed bar must only throw when re-admit is NOT allowed.
-    expect(sessionSvc).toMatch(/existingStatus === 'removed'\s*&&\s*!options\?\.allowRemovedReadmit/);
+  it('registerParticipant takes when the personal invite was made, and gates the REMOVED bar on a removal before it', () => {
+    // H1b fix round 1 — "fresh" is exact: the invite's time, not a boolean.
+    expect(sessionSvc).toMatch(/personalInviteCreatedAt\?\s*:\s*Date/);
+    // The removed bar throws unless this invite lifts the removal (made after it).
+    expect(sessionSvc).toMatch(/readmits = existing\.rows\[0\]\?\.status === 'removed' && liftedByPersonalInvite\(existing\.rows\[0\]\.left_at, invitedAt\)/);
+    expect(sessionSvc).toMatch(/existingStatus === 'removed'\s*&&\s*!readmits/);
     expect(sessionSvc).toMatch(/REMOVED_FROM_EVENT/);
   });
 
   it('invite-accept lifts the bar ONLY for a personal (targeted-email) invite, never a shared link', () => {
-    expect(inviteSvc).toMatch(/allowRemovedReadmit\s*=\s*!!invite\.inviteeEmail/);
-    expect(inviteSvc).toMatch(/registerParticipant\([^)]*\{\s*allowRemovedReadmit\s*\}/s);
+    expect(inviteSvc).toMatch(/personalInviteCreatedAt = invite\.inviteeEmail \? new Date\(invite\.createdAt\) : undefined/);
+    expect(inviteSvc).toMatch(/registerParticipant\([^)]*\{\s*personalInviteCreatedAt\s*\}/s);
+  });
+
+  it('the accept\'s own insert lifts a removed row only when its removal was made before the personal invite', () => {
+    // H1b fix round 1 — the unit tests' fake databases evaluate this rule themselves, so the SQL carries it here too:
+    // a kick made after the invite (left_at >= $3) is left as it is by the insert's DO UPDATE.
+    expect(inviteSvc).toMatch(
+      /DO UPDATE SET status = 'registered', left_at = NULL\s+WHERE session_participants\.status = 'removed'\s+AND \(session_participants\.left_at IS NULL OR session_participants\.left_at < \$3::timestamptz\)/,
+    );
+    expect(inviteSvc).toMatch(/personalInviteCreatedAt \? \[invite\.sessionId, userId, personalInviteCreatedAt\] : \[invite\.sessionId, userId\]/);
   });
 
   it('the host can create a fresh invite for a kicked user (removed/left not counted as an active participant)', () => {

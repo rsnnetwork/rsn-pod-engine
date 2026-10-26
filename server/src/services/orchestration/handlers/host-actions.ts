@@ -989,6 +989,21 @@ export async function handleHostRemoveParticipant(
     await sessionService.updateParticipantStatus(
       data.sessionId, data.userId, ParticipantStatus.REMOVED
     );
+    // H1b fix round 1 (26 Oct 2026) — a removal is a row. Someone the event let in without one (refused only because
+    // it was full) gets a removed row, stamped with the kick's time, so every later gate (the join, a registration,
+    // the video token, a personal invite made before now) sees them as removed. A row that exists was written by the
+    // transition above and is left as it is. Best-effort, as the rest of the kick's housekeeping: if it fails, the
+    // removal stays unsaved in memory and the reconciler writes it once a row appears.
+    try {
+      await query(
+        `INSERT INTO session_participants (session_id, user_id, status, left_at)
+         VALUES ($1, $2, 'removed', NOW())
+         ON CONFLICT (session_id, user_id) DO NOTHING`,
+        [data.sessionId, data.userId],
+      );
+    } catch (err) {
+      logger.warn({ err, sessionId: data.sessionId, userId: data.userId }, 'Kick: could not write a removed row for someone without one');
+    }
 
     // #4B (June-10 debrief) — kill the kicked user's OLD personal invite link(s)
     // so the only way back in is a FRESH invite from the host. Targets only the
