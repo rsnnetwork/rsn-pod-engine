@@ -19,8 +19,8 @@ import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 
 let browser: Browser;
 let host: TestUser;
+let admin: TestUser;
 const ctxs: BrowserContext[] = [];
-const podIds: string[] = [];
 const run = Date.now().toString().slice(-7);
 
 async function apiAs(u: TestUser, method: string, path: string, body?: unknown) {
@@ -32,13 +32,48 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
   return { status: res.status, json: await res.json().catch(() => null) };
 }
 
-async function openAs(u: TestUser, path: string): Promise<Page> {
+async function openAs(u: TestUser, path: string, opts: { countCommits?: boolean; delayPodsMs?: number; watchRoundsCard?: boolean } = {}): Promise<Page> {
   const ctx = await browser.newContext(contextOptions({ width: 1100, height: 900 }));
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
     localStorage.setItem('rsn_refresh', t.r);
     localStorage.setItem('rsn_tokens', JSON.stringify({ access: t.a, refresh: t.r }));
   }, { a: u.accessToken, r: u.refreshToken });
+  if (opts.countCommits) {
+    // React reports every commit to the DevTools hook if one is on the page. A stand-in that only counts them tells
+    // whether a page ever settles, which no look at the markup can (a render loop keeps the page "working").
+    await ctx.addInitScript(() => {
+      let commits = 0;
+      const w = window as unknown as { __commits: () => number; __REACT_DEVTOOLS_GLOBAL_HOOK__: unknown };
+      w.__commits = () => commits;
+      w.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+        supportsFiber: true, isDisabled: false, renderers: new Map(),
+        inject: () => 1, checkDCE: () => undefined, setStrictMode: () => undefined,
+        onCommitFiberRoot: () => { commits += 1; }, onCommitFiberUnmount: () => undefined, onPostCommitFiberRoot: () => undefined,
+      };
+    });
+  }
+  if (opts.watchRoundsCard) {
+    // Notes if speed networking's settings were EVER drawn, even for one frame: a look at the page afterwards cannot tell.
+    await ctx.addInitScript(() => {
+      const w = window as unknown as { __roundsDrawn: boolean };
+      w.__roundsDrawn = false;
+      new MutationObserver((records) => {
+        for (const r of records) {
+          for (const n of Array.from(r.addedNodes)) {
+            if (n instanceof Element && (n.matches('[data-testid="timing-card"]') || n.querySelector('[data-testid="timing-card"]'))) w.__roundsDrawn = true;
+          }
+        }
+      }).observe(document, { childList: true, subtree: true });
+    });
+  }
+  if (opts.delayPodsMs) {
+    // The list of pods arrives late, as it can on a slow phone: the pod named in the address is not known yet.
+    await ctx.route(/\/api\/pods\?status=active/, async (route) => {
+      await new Promise((r) => setTimeout(r, opts.delayPodsMs));
+      await route.continue();
+    });
+  }
   ctxs.push(ctx);
   await primePreview(ctx);
   const page = await ctx.newPage();
@@ -47,13 +82,14 @@ async function openAs(u: TestUser, path: string): Promise<Page> {
   return page;
 }
 
+/** How many times React has committed on this page so far (needs openAs with countCommits). */
+const commitsSoFar = (page: Page) => page.evaluate(() => (window as unknown as { __commits: () => number }).__commits());
+
 /** A pod made by the API, so the event form has somewhere to schedule. */
-async function podOfType(podType: string, name: string): Promise<string> {
-  const res = await apiAs(host, 'POST', '/pods', { name, podType, visibility: 'private' });
+async function podOfType(podType: string, name: string, as: TestUser = host): Promise<string> {
+  const res = await apiAs(as, 'POST', '/pods', { name, podType, visibility: 'private' });
   expect(res.status, `pod created: ${JSON.stringify(res.json)}`).toBe(201);
-  const id = res.json.data.id as string;
-  podIds.push(id);
-  return id;
+  return res.json.data.id as string;
 }
 
 const noSideScroll = async (page: Page) => {
@@ -63,6 +99,7 @@ const noSideScroll = async (page: Page) => {
 
 test.beforeAll(async () => {
   host = await createTestUser('formshost');
+  admin = await createTestUser('formsadmin', 'admin');
   console.log(`[create-forms-follow-type] engine=${engineLabel()} app=${APP}`);
   browser = await launchBrowser();
 });
@@ -70,9 +107,12 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
   try { await browser?.close(); } catch { /* noop */ }
-  for (const id of podIds) await cleanup(pool, { ids: [], podId: id });
-  await cleanup(pool, { ids: [host.id] });
-  await cleanupByPrefix(pool, 'e2etest-formshost');
+  // Every pod these accounts own, however it was made. A pod a failed test never got to note would stay, and
+  // pods.created_by stops its owner being deleted: a live test account left in production.
+  const owned = await pool.query<{ id: string }>(`SELECT id FROM pods WHERE created_by = ANY($1)`, [[host.id, admin.id]]);
+  for (const { id } of owned.rows) await cleanup(pool, { ids: [], podId: id });
+  await cleanup(pool, { ids: [host.id, admin.id] });
+  await cleanupByPrefix(pool, 'e2etest-forms');
   await pool.end().catch(() => {});
 });
 
@@ -107,7 +147,6 @@ test('choosing a Reason pod sets Freeform, says so when a choice is replaced, an
   await page.locator('form button[type="submit"]').click();
   await expect(page).toHaveURL(/\/pods\/[0-9a-f-]{36}$/, { timeout: 30_000 });
   const id = page.url().split('/').pop()!;
-  podIds.push(id);
 
   const row = (await pool.query(`SELECT pod_type, orchestration_mode, communication_mode FROM pods WHERE id = $1`, [id])).rows[0];
   expect(row).toEqual({ pod_type: 'reason', orchestration_mode: 'free_form', communication_mode: 'video' });
@@ -210,4 +249,121 @@ test('a Chat pod holds video meetings only, so the format is said and not offere
   await expect(page.getByTestId('event-format-select')).toHaveCount(0);
   await expect(page.getByText('Number of Rounds')).toHaveCount(0);
   await noSideScroll(page);
+});
+
+test('the event form settles for a pod director who arrives from the pod page, and for an admin: it does not re-render forever', async () => {
+  test.setTimeout(180_000);
+  // A plain member who directs the pod, arriving the way the pod page's "Schedule Event" sends them (?podId=), and an
+  // admin. The member's list of pods is filtered on every render; a form that reacted to that never stopped.
+  const memberPod = await podOfType('reason', `E2E Idle pod ${run}`);
+  const adminPod = await podOfType('reason', `E2E Idle admin pod ${run}`, admin);
+  for (const [who, podId, label] of [[host, memberPod, 'a member'], [admin, adminPod, 'an admin']] as const) {
+    const page = await openAs(who, `/sessions/new?podId=${podId}`, { countCommits: true });
+    await expect(page.getByTestId('event-format-select')).toHaveValue('video_meeting', { timeout: 40_000 });
+    await page.waitForTimeout(1500); // the page has finished loading
+    const before = await commitsSoFar(page);
+    await page.waitForTimeout(2000);
+    const during = (await commitsSoFar(page)) - before;
+    expect(during, `${label}: React committed ${during} times in 2 seconds of nothing happening`).toBeLessThan(25);
+    // And it is still a form someone can use: the pod named in the address is the one chosen.
+    await expect(page.locator('select[name="podId"]')).toHaveValue(podId);
+  }
+});
+
+test('a refusal from the server is said at the field it is about, in its words, and not in a toast', async () => {
+  test.setTimeout(180_000);
+  const podId = await podOfType('reason', `E2E Refusal pod ${run}`);
+  const page = await openAs(host, `/sessions/new?podId=${podId}`);
+  await expect(page.getByTestId('event-format-select')).toHaveValue('video_meeting', { timeout: 40_000 });
+
+  // What the server's own checks answer (400, the setting by name). The page's checks stop a bad value first, so the
+  // answer is stood in for here, exactly as the server words it.
+  let refusal: Record<string, string[]> = { maxParticipants: ['Capacity must be between 2 and 100 people.'] };
+  await page.route(/\/api\/sessions$/, (route) => route.request().method() !== 'POST' ? route.continue() : route.fulfill({
+    status: 400, contentType: 'application/json',
+    body: JSON.stringify({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: refusal } }),
+  }));
+
+  await page.locator('form button[type="submit"]').click();
+  const capacity = page.getByTestId('capacity-card');
+  await expect(capacity).toContainText('Capacity must be between 2 and 100 people.');
+  // Said at the field, so no toast saying "Validation failed" as well; and the form stayed, to be fixed.
+  await expect(page.getByText('Validation failed')).toHaveCount(0);
+  await expect(page).toHaveURL(/\/sessions\/new/);
+
+  // A format the pod does not hold belongs at the picker.
+  refusal = { format: ["Speed networking isn't available in Chat pods."] };
+  await page.locator('form button[type="submit"]').click();
+  await expect(page.getByTestId('event-format-select').locator('xpath=ancestor::div[1]')).toContainText("Speed networking isn't available in Chat pods.");
+  await expect(page.getByText('Validation failed')).toHaveCount(0);
+
+  // A refusal with no field to say it at is the one thing that is a toast.
+  refusal = {};
+  await page.locator('form button[type="submit"]').click();
+  await expect(page.getByText('Validation failed')).toBeVisible();
+});
+
+test('a note about a capacity that was changed is at Capacity, and goes once the capacity is edited', async () => {
+  test.setTimeout(180_000);
+  const podId = await podOfType('reason', `E2E Capacity pod ${run}`);
+  const page = await openAs(host, `/sessions/new?podId=${podId}`);
+  const format = page.getByTestId('event-format-select');
+  await expect(format).toHaveValue('video_meeting', { timeout: 40_000 });
+  const capacity = page.locator('input[name="maxParticipants"]');
+
+  // 300 is fine for speed networking and not for a meeting: switching back replaces it, and says so at Capacity.
+  await format.selectOption('speed_networking');
+  await capacity.fill('300');
+  await format.selectOption('video_meeting');
+  await expect(capacity).toHaveValue('25');
+  await expect(page.getByTestId('capacity-card').getByTestId('capacity-notice')).toContainText('Capacity changed to 25 people');
+  // It is not at Event Type, where the format's own notes go.
+  await expect(page.getByTestId('event-format-notice')).toHaveCount(0);
+
+  // The member edits the capacity: the note has done its job.
+  await capacity.fill('30');
+  await expect(page.getByTestId('capacity-notice')).toHaveCount(0);
+  await expect(capacity).toHaveValue('30');
+});
+
+test('while the pod named in the address is being found, a placeholder is held, and speed networking\'s settings are never drawn', async () => {
+  test.setTimeout(180_000);
+  const podId = await podOfType('reason', `E2E Pending pod ${run}`);
+  const page = await openAs(host, `/sessions/new?podId=${podId}`, { delayPodsMs: 2500, watchRoundsCard: true });
+
+  // The list of pods is on its way: the form holds a place for the format's settings, and says what it waits for.
+  await expect(page.getByTestId('format-pending')).toBeVisible();
+  await expect(page.getByTestId('settings-pending')).toBeVisible();
+  await expect(page.getByText('Number of Rounds')).toHaveCount(0);
+  await expect(page.getByTestId('capacity-card')).toHaveCount(0);
+
+  // Then the meeting's own settings, in place of the placeholder.
+  await expect(page.getByTestId('meeting-card')).toBeVisible({ timeout: 40_000 });
+  await expect(page.getByTestId('event-format-select')).toHaveValue('video_meeting');
+  await expect(page.locator('input[name="maxParticipants"]')).toHaveValue('25');
+  await expect(page.locator('input[name="title"]')).toHaveValue(/^Video meeting · E2E Pending pod /);
+  await expect(page.getByTestId('format-pending')).toHaveCount(0);
+  // And speed networking's settings were not drawn at any moment on the way, which no look afterwards can show.
+  expect(await page.evaluate(() => (window as unknown as { __roundsDrawn: boolean }).__roundsDrawn), 'the rounds card was drawn, then swapped away').toBe(false);
+});
+
+test('a duplicate of a Chat pod made a Reason pod is by video, not text carried over from a control that is gone', async () => {
+  test.setTimeout(180_000);
+  const source = await podOfType('chat', `E2E Duplicate source ${run}`);
+  const page = await openAs(host, `/pods/${source}`);
+  await page.getByRole('button', { name: /Duplicate/i }).first().click();
+  await expect(page.getByRole('heading', { name: 'Duplicate Pod' })).toBeVisible({ timeout: 40_000 });
+
+  // The copy starts as the source was: a Chat pod, on Freeform.
+  await expect(page.locator('select[name="podType"]')).toHaveValue('chat');
+  await page.locator('select[name="podType"]').selectOption('reason');
+  await expect(page.getByTestId('pod-orchestration-select')).toHaveValue('free_form');
+
+  const posted: { json?: Record<string, unknown> } = {};
+  page.on('request', (r) => { if (r.method() === 'POST' && /\/api\/pods$/.test(r.url())) posted.json = r.postDataJSON(); });
+  await page.locator('form button[type="submit"]').click();
+  await expect(page.getByText('Pod duplicated!')).toBeVisible({ timeout: 30_000 });
+  expect(posted.json).toMatchObject({ podType: 'reason', orchestrationMode: 'free_form', communicationMode: 'video' });
+  const copy = (await pool.query(`SELECT pod_type, communication_mode FROM pods WHERE created_by = $1 AND name LIKE '%(copy)'`, [host.id])).rows[0];
+  expect(copy).toEqual({ pod_type: 'reason', communication_mode: 'video' });
 });

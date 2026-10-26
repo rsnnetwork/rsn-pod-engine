@@ -1,6 +1,7 @@
 import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwright/test';
 import { io, Socket } from 'socket.io-client';
-import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
+import { createTestUser, TestUser, pool, closePool } from '../helpers/auth';
+import { cleanup, cleanupByPrefix, submitIntent } from '../helpers/live-ui';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 
 // HEADED smoke for WS2/S3 (name-click safety) against PRODUCTION:
@@ -78,8 +79,10 @@ test.afterAll(async () => {
   for (const s of sockets) { try { s.disconnect(); } catch {} }
   try { await browser?.close(); } catch {}
   try { await endSession(host, sessionId); } catch {}
-  const result = await cleanupTestData();
-  console.log('Cleanup:', result);
+  // This spec's own three accounts and its pod, by id, and anything its own prefix made. Never cleanupTestData(): that
+  // deletes EVERY e2etest- account in the database, which against production is other people's running tests too.
+  await cleanup(pool, { ids: [host.id, alice.id, bob.id], podId });
+  await cleanupByPrefix(pool, 'e2etest-ws2p');
   await closePool();
 });
 
@@ -90,6 +93,9 @@ test('clicking a participant name opens the profile in a NEW tab; the event tab 
   const bobSession = await openUserPage(bob);
   const alicePage = aliceSession.page;
   await alicePage.waitForTimeout(9000); // lobby mounts
+  // The per-event check-in ("What brings you here?") covers the page until it is answered, for everyone who joins.
+  await submitIntent(alicePage);
+  await submitIntent(bobSession.page);
 
   // Open the participant list drawer (Users icon button in the top bar).
   await alicePage.locator('button:has(svg.lucide-users)').first().click();
