@@ -118,10 +118,10 @@ export default function ParticipantList({ onClose, sessionId, isHost = false }: 
 
           return (
             <div key={p.userId} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-white/5 group">
-              {/* WS2/S3 — ProfileLink opens a NEW TAB: a same-tab navigation
+              {/* WS2/S3 — ProfileLink newTab opens a NEW TAB: a same-tab navigation
                   here tore down the socket + LiveKit and ejected the clicker
                   from the live event. */}
-              <ProfileLink userId={p.userId} className="flex items-center gap-2.5 flex-1 min-w-0">
+              <ProfileLink newTab userId={p.userId} className="flex items-center gap-2.5 flex-1 min-w-0">
                 <Avatar name={p.displayName || 'User'} size="sm" />
                 <span className="text-sm text-gray-300 truncate">{p.displayName || 'User'}</span>
               </ProfileLink>

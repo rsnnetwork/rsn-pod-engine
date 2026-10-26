@@ -257,9 +257,9 @@ export default function SessionComplete({ sessionId }: Props) {
                 <div className="space-y-3">
                   {mutualConnections.map(c => (
                     <div key={c.userId} className="flex items-center gap-3 p-2 rounded-lg bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 transition-colors">
-                      <ProfileLink userId={c.userId} className="flex items-center gap-3 flex-1 min-w-0">
+                      <ProfileLink newTab userId={c.userId} className="flex items-center gap-3 flex-1 min-w-0">
                         <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                        <div className="flex-1 min-w-0">
+                        <div className="min-w-0">
                           <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
                           {(c.jobTitle || c.company) && (
                             <p className="text-xs text-gray-500 truncate">
@@ -287,9 +287,9 @@ export default function SessionComplete({ sessionId }: Props) {
               const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
               const row = (c: Connection) => (
                 <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100">
-                  <ProfileLink userId={c.userId} className="flex items-center gap-3 flex-1 min-w-0">
+                  <ProfileLink newTab userId={c.userId} className="flex items-center gap-3 flex-1 min-w-0">
                     <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                    <div className="flex-1 min-w-0">
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
                         <InterestBadge connection={c} />

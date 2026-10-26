@@ -386,8 +386,9 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
           >
             <div className="flex items-start gap-3">
               {/* 7 Sep 2026 (Ali): the request is a profile card — avatar and
-                  name open the sender's profile (new tab) so the recipient can
-                  check who is asking before accepting. */}
+                  name open the sender's profile in this tab (Back returns to the
+                  request) so the recipient can check who is asking before
+                  accepting. */}
               <ProfileLink userId={r.senderId} title={`View ${r.senderDisplayName || 'this member'}'s profile`} className="shrink-0">
                 <Avatar src={r.senderAvatarUrl || undefined} name={r.senderDisplayName || 'Member'} size="md" />
               </ProfileLink>
