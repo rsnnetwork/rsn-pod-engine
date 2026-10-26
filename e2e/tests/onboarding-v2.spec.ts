@@ -166,6 +166,20 @@ async function nothingInTheWay(page: Page, where: string) {
   await expect(page.getByText(/You've chosen|Untick one|Select up to/), `${where}: a line about a limit`).toHaveCount(0);
 }
 
+/**
+ * Where the line (if any) and every tile are, and how tall, in the scroll area's own coordinates: scrolling itself changes
+ * nothing, but anything that comes, goes or changes height does. A tap must leave this exactly as it was.
+ */
+async function layoutOfTheQuestion(page: Page) {
+  return page.getByTestId('onboarding-body').evaluate((body) => {
+    const origin = body.getBoundingClientRect().top - body.scrollTop;
+    return [...body.querySelectorAll('[role="status"], [role="checkbox"]')].map((el) => {
+      const r = el.getBoundingClientRect();
+      return { what: el.getAttribute('role'), top: Math.round((r.top - origin) * 10) / 10, height: Math.round(r.height * 10) / 10 };
+    });
+  });
+}
+
 /** LinkedIn picked nothing on this question: no line above the options, and no tile says "From LinkedIn". */
 async function nothingFromLinkedin(page: Page, where: string) {
   await expect(page.getByText(PICKED_LINE), `${where}: the line about LinkedIn's picks`).toHaveCount(0);
@@ -477,11 +491,92 @@ test('LinkedIn found: details filled in and marked, Q4 picked from the role and 
   });
 });
 
-test('LinkedIn can suggest several descriptions: each is ticked and marked, and what they change is what is saved', async () => {
+// Fix round 1 (26 Oct): the line (about 68px at 360) and both notes used to go together on the first tap, so a quick second
+// tap could land on another tile. The marks stay while they are on the question and go when they move on.
+for (const size of [{ width: 360, height: 740 }, { width: 390, height: 844 }]) {
+  test(`LinkedIn can suggest several descriptions (${size.width}x${size.height}): each is ticked and marked, a tap moves nothing, and what they change is what is saved`, async () => {
+    test.setTimeout(240_000);
+    const url = `https://www.linkedin.com/in/ob2-several-${size.width}-${Date.now()}`;
+    const me = await freshMember(`ob2several${size.width}`, url);
+    // Two things in the member's own words: Q4 lists the founder answer first and the investor answer fourth.
+    await seedFoundLookup(me, url, undefined, { currentRole: 'Founder & CEO | Angel investor', headline: 'Building Crumb Bakery' });
+    const page = await openAs(me, '/onboarding', size);
+    await throughWelcome(page);
+    await press(page, 'Continue with LinkedIn');
+    await press(page, 'Continue');
+    await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
+    await tick(page, 'I would like to meet investors.');
+    await press(page, 'Continue');
+    await tick(page, 'I am looking to raise funding.');
+    await press(page, 'Continue');
+    await tick(page, 'I can give advice and mentoring.');
+    await press(page, 'Continue');
+
+    // Both are ticked, the line is above the options, and each ticked tile carries the note: nothing else does.
+    await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+    await expect(page.getByText(PICKED_LINE, { exact: true })).toBeVisible();
+    const founder = tile(page, 'I am a founder or business owner.');
+    const investor = tile(page, 'I am an investor.');
+    const employee = tile(page, 'I work for a company or organisation.');
+    await expect(founder).toHaveAttribute('aria-checked', 'true');
+    await expect(investor).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(2);
+    for (const picked of [founder, investor]) {
+      await expect(picked.getByText(FROM_LINKEDIN, { exact: true })).toBeVisible();
+      await expect(picked).toHaveAccessibleDescription(FROM_LINKEDIN);
+    }
+    await expect(page.getByText(FROM_LINKEDIN, { exact: true })).toHaveCount(2);
+    await expect(employee).not.toHaveAccessibleDescription(FROM_LINKEDIN);
+    await nothingInTheWay(page, 'Q4 with two picked');
+    // The line sits above the first option.
+    const line = (await page.getByText(PICKED_LINE, { exact: true }).boundingBox())!;
+    const first = (await founder.boundingBox())!;
+    expect(line.y + line.height, 'the line is above the options').toBeLessThanOrEqual(first.y);
+    await page.screenshot({ path: `${SHOTS}/${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-q4-several-from-linkedin-${size.width}.png` });
+
+    // The first tap (one of LinkedIn's picks unticked) moves nothing: the line and both notes stay, and every tile is where it
+    // was and as tall as it was, so the second tap lands where the finger meant.
+    const before = await layoutOfTheQuestion(page);
+    expect(before.filter((x) => x.what === 'status')).toHaveLength(1);
+    await tick(page, 'I am an investor.');
+    await expect(investor).toHaveAttribute('aria-checked', 'false');
+    expect(await layoutOfTheQuestion(page), 'the first tap moved something').toEqual(before);
+    await expect(page.getByText(PICKED_LINE, { exact: true })).toBeVisible();
+    await expect(page.getByText(FROM_LINKEDIN, { exact: true })).toHaveCount(2);
+    // The founder, still ticked from LinkedIn, keeps its note; so does the investor, unticked, so its tile does not shrink.
+    await expect(founder.getByText(FROM_LINKEDIN, { exact: true })).toBeVisible();
+    await expect(investor.getByText(FROM_LINKEDIN, { exact: true })).toBeVisible();
+    // The second tap (their own answer ticked) moves nothing either.
+    await tick(page, 'I work for a company or organisation.');
+    await expect(employee).toHaveAttribute('aria-checked', 'true');
+    expect(await layoutOfTheQuestion(page), 'the second tap moved something').toEqual(before);
+    await expect(employee).not.toHaveAccessibleDescription(FROM_LINKEDIN);
+    await nothingInTheWay(page, 'Q4 after two taps');
+
+    await press(page, 'Continue');
+    await expect(heading(page, "Here's how others will see you")).toBeVisible();
+    await expect(page.getByTestId('answer-q4')).toContainText('Founder or business owner · Employee');
+    // They moved on, so what is ticked is theirs: opened again, the question says nothing about LinkedIn.
+    await tapInView(page, page.getByRole('button', { name: 'Edit: How would you describe yourself?' }), 'Edit Q4');
+    await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+    await nothingFromLinkedin(page, 'Q4 opened again after moving on');
+    await expect(founder).toHaveAttribute('aria-checked', 'true');
+    await expect(employee).toHaveAttribute('aria-checked', 'true');
+    await press(page, 'Continue');
+    await expect(heading(page, "Here's how others will see you")).toBeVisible();
+    await press(page, 'Show me my matches');
+    await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/');
+    const row = (await pool.query<{ self_kinds: string[] }>(`SELECT self_kinds FROM users WHERE id = $1`, [me.id])).rows[0];
+    expect(row.self_kinds).toEqual(['self_founder_owner', 'self_employee']);
+  });
+}
+
+// Fix round 1, item 1: LinkedIn, then Back to screen 2 and "Continue with email" used to leave Q4 saying "We picked these from
+// your LinkedIn" (with the picks ticked) to a member who had said no to LinkedIn.
+test('choosing email after LinkedIn had picked the answers leaves Q4 with no line, no notes and nothing ticked for them', async () => {
   test.setTimeout(240_000);
-  const url = `https://www.linkedin.com/in/ob2-several-${Date.now()}`;
-  const me = await freshMember('ob2several', url);
-  // Two things in the member's own words: Q4 lists the founder answer first and the investor answer fourth.
+  const url = `https://www.linkedin.com/in/ob2-switch-${Date.now()}`;
+  const me = await freshMember('ob2switch', url);
   await seedFoundLookup(me, url, undefined, { currentRole: 'Founder & CEO | Angel investor', headline: 'Building Crumb Bakery' });
   const page = await openAs(me);
   await throughWelcome(page);
@@ -494,40 +589,48 @@ test('LinkedIn can suggest several descriptions: each is ticked and marked, and 
   await press(page, 'Continue');
   await tick(page, 'I can give advice and mentoring.');
   await press(page, 'Continue');
-
-  // Both are ticked, the line is above the options, and each ticked tile carries the note: nothing else does.
   await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
   await expect(page.getByText(PICKED_LINE, { exact: true })).toBeVisible();
-  const founder = tile(page, 'I am a founder or business owner.');
-  const investor = tile(page, 'I am an investor.');
-  await expect(founder).toHaveAttribute('aria-checked', 'true');
-  await expect(investor).toHaveAttribute('aria-checked', 'true');
-  await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(2);
-  for (const picked of [founder, investor]) {
-    await expect(picked.getByText(FROM_LINKEDIN, { exact: true })).toBeVisible();
-    await expect(picked).toHaveAccessibleDescription(FROM_LINKEDIN);
-  }
   await expect(page.getByText(FROM_LINKEDIN, { exact: true })).toHaveCount(2);
-  await expect(tile(page, 'I work for a company or organisation.')).not.toHaveAccessibleDescription(FROM_LINKEDIN);
-  await nothingInTheWay(page, 'Q4 with two picked');
-  // The line sits above the first option.
-  const line = (await page.getByText(PICKED_LINE, { exact: true }).boundingBox())!;
-  const first = (await founder.boundingBox())!;
-  expect(line.y + line.height, 'the line is above the options').toBeLessThanOrEqual(first.y);
-  await page.screenshot({ path: `${SHOTS}/${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-q4-several-from-linkedin.png` });
 
-  // Changing one makes the answer theirs: the line and the notes go, and what they ticked is what is kept.
-  await tick(page, 'I am an investor.');
-  await tick(page, 'I work for a company or organisation.');
-  await nothingFromLinkedin(page, 'Q4 after a change');
-  await expect(investor).toHaveAttribute('aria-checked', 'false');
+  // Back, all the way to screen 2 (Q4 was never confirmed: no Continue on it), and "Continue with email" instead.
+  for (const title of ['What can you offer others?', 'What are you hoping to find?', 'Who would you like to meet?']) {
+    await press(page, 'Back');
+    await expect(heading(page, title)).toBeVisible();
+  }
+  await press(page, 'Back');
+  await expect(heading(page, "Let's get you started")).toBeVisible();
+  await press(page, 'Continue with email');
+
+  // What they answered on Q1 to Q3 is still there; on Q4 nothing is ticked for them and LinkedIn is not mentioned.
+  await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
+  await expect(tile(page, 'I would like to meet investors.')).toHaveAttribute('aria-checked', 'true');
+  await press(page, 'Continue');
+  await expect(tile(page, 'I am looking to raise funding.')).toHaveAttribute('aria-checked', 'true');
+  await press(page, 'Continue');
+  await expect(tile(page, 'I can give advice and mentoring.')).toHaveAttribute('aria-checked', 'true');
+  await press(page, 'Continue');
+  await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+  await nothingFromLinkedin(page, 'Q4 after switching to email');
+  await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(0);
+  // A refresh finds the same: nothing of LinkedIn's was kept anywhere.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(heading(page, 'How would you describe yourself?')).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(2000);
+  await nothingFromLinkedin(page, 'Q4 after switching to email, refreshed');
+  await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(0);
+
+  // They answer it themselves: that, and only that, is saved, and screen 7 offers nothing from LinkedIn.
+  await page.evaluate(() => document.fonts.ready.then(() => true));
+  await tick(page, 'I lead a team or part of an organisation.');
   await press(page, 'Continue');
   await expect(heading(page, "Here's how others will see you")).toBeVisible();
-  await expect(page.getByTestId('answer-q4')).toContainText('Founder or business owner · Employee');
+  await expect(page.getByLabel('Role', { exact: true })).toHaveValue('');
+  await expect(page.getByText('From your LinkedIn')).toHaveCount(0);
   await press(page, 'Show me my matches');
   await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/');
   const row = (await pool.query<{ self_kinds: string[] }>(`SELECT self_kinds FROM users WHERE id = $1`, [me.id])).rows[0];
-  expect(row.self_kinds).toEqual(['self_founder_owner', 'self_employee']);
+  expect(row.self_kinds).toEqual(['self_manager_leader']);
 });
 
 test('a role LinkedIn only inferred from the rest of the page picks no description, though it still fills in the role', async () => {
@@ -1312,26 +1415,58 @@ test('the whole flow works on a 360px phone: every button reachable and at least
 });
 
 // With the phone keyboard up the window is short. The lists are longer now (nine answers), so "Something else" is
-// further down: the words box and Continue must both still be on screen, at 360 as well as 390.
+// further down: the words box and Continue must both still be on screen, at 360 as well as 390. Fix round 1 (26 Oct): and
+// the box's bottom ring and its counter, too: in WebKit the box sat flush against the footer with the counter under it.
 for (const width of [360, 390]) {
-  test(`with the phone keyboard up (a ${width}px window 420px tall), the words box and Continue are both on screen, on the first question and the last`, async () => {
+  test(`with the phone keyboard up (a ${width}px window 420px tall), the words box, its counter and Continue are all on screen, on the first question, the second and the last`, async () => {
     test.setTimeout(180_000);
     const me = await freshMember(`ob2kbd${width}`);
     const page = await openAs(me, '/onboarding', { width, height: 420 });
     await throughWelcome(page);
     await press(page, 'Continue with email');
     await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
+    const scrollArea = page.getByTestId('onboarding-body');
+    const RING = 2; // the focus ring is drawn outside the box
 
-    /** "Something else" ticked, the box focused and filled, and the box and Continue both whole inside the window. */
+    /**
+     * A field (with its ring) and its counter, whole, under the top of the scroll area and above the footer's top edge.
+     * Read from inside the page, never through a locator: in WebKit Playwright scrolls an element into view before it
+     * measures or fills it, which would hide exactly what is being checked (where the page itself left the box).
+     */
+    const clearOfTheFooter = async (field: string, counter: RegExp, where: string) => {
+      const at = await page.evaluate(({ field, counter }) => {
+        const edges = (el: Element | null | undefined) => { const r = el?.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom } : null; };
+        const count = [...document.querySelectorAll('span, p')].find((el) => new RegExp(counter).test(el.textContent ?? ''));
+        return {
+          foot: edges(document.querySelector('[data-testid="onboarding-footer"]')),
+          area: edges(document.querySelector('[data-testid="onboarding-body"]')),
+          box: edges(document.querySelector(field)),
+          count: edges(count),
+        };
+      }, { field, counter: counter.source });
+      expect(at.foot && at.area && at.box && at.count, `${where}: the box, its counter or the footer is not on the page`).toBeTruthy();
+      expect(at.box!.top, `${where}: the box starts above the scroll area`).toBeGreaterThanOrEqual(at.area!.top);
+      expect(at.box!.bottom + RING, `${where}: the box's bottom ring runs under the footer`).toBeLessThanOrEqual(at.foot!.top);
+      expect(at.count!.bottom, `${where}: the counter is below the fold, under the footer`).toBeLessThanOrEqual(at.foot!.top);
+    };
+
+    /** "Something else" ticked, the box focused, filled and scrolled to, and the box, its counter and Continue all whole. */
     const typeInWords = async (words: string) => {
       const other = tile(page, "Something else. I'd like to say it in my own words.");
       await other.scrollIntoViewIfNeeded();
       await tapReachable(page, other, '"Something else"');
       const own = page.getByLabel('In your own words');
+      const counter = /^\d+\/120$/;
+      await scrollArea.evaluate((el) => { el.scrollTop = 0; });
+      const box = 'input[maxlength="120"]';
       await own.focus();
+      await clearOfTheFooter(box, counter, 'focused');
       await own.fill(words);
-      await own.scrollIntoViewIfNeeded();
-      await expectReachable(page, own, 'the words box');
+      await clearOfTheFooter(box, counter, 'typed in');
+      // A scroll that brings only the box into view (the way a browser follows a caret) leaves room for its counter too.
+      await scrollArea.evaluate((el) => { el.scrollTop = 0; });
+      await page.evaluate(() => document.querySelector('input[maxlength="120"]')!.scrollIntoView({ block: 'nearest' }));
+      await clearOfTheFooter(box, counter, 'scrolled to');
       await expectReachable(page, button(page, 'Continue'), 'Continue');
       await noSidewaysScroll(page, 'a short window');
     };
@@ -1340,6 +1475,13 @@ for (const width of [360, 390]) {
     await press(page, 'Continue');
     await expect(heading(page, 'What are you hoping to find?')).toBeVisible();
     await tick(page, 'I am looking to raise funding.');
+    // The question's other box, "anything specific", has its counter under it too.
+    const specific = page.getByLabel("Is there anything specific you're looking for? (optional)");
+    await scrollArea.evaluate((el) => { el.scrollTop = 0; });
+    await specific.focus();
+    await clearOfTheFooter('textarea', /^\d+\/300$/, 'the specific box, focused');
+    await specific.fill('A lead investor for a seed round');
+    await clearOfTheFooter('textarea', /^\d+\/300$/, 'the specific box, typed in');
     await press(page, 'Continue');
     await expect(heading(page, 'What can you offer others?')).toBeVisible();
     await tick(page, 'I can give advice and mentoring.');
