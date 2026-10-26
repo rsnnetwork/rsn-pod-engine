@@ -18,6 +18,8 @@ import { loadClientModule, readClientSource, iconStandIns } from './load-client-
 const POD_MODAL = 'features/pods/CreatePodModal.tsx';
 const POD_FORM = 'features/pods/pod-form.ts';
 const SESSION_PAGE = 'features/sessions/CreateSessionPage.tsx';
+const EVENT_FORM = 'features/sessions/event-form.ts';
+const EVENT_HOOK = 'features/sessions/useEventFormat.ts';
 
 /** Markup as a person reads it: the escapes React writes put back. */
 const unescape = (text: string): string => text.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
@@ -226,17 +228,130 @@ describe('L3 - CreatePodModal reads the shared tables and no longer carries spee
   });
 });
 
+// ── The event form's rules, run (event-form.ts) ────────────────────────────────────────────────────────
+describe('L3 - the event form\'s rules (event-form.ts)', () => {
+  interface Body { podId: string; title: string; description?: string; scheduledAt: string; format: string; config: Record<string, unknown> }
+  interface Rules {
+    formatFor: (picked: string | null, podType: string | undefined) => string;
+    offeredFor: (podType: string | undefined) => string[];
+    switchNotice: (picked: string | null, podType: string | undefined, format: string) => string | null;
+    meetingLengthsFor: (format: string) => number[];
+    fieldMessage: (format: string, key: string, value: unknown) => string | true;
+    sessionBody: (data: Record<string, unknown>) => Body;
+    serverFieldErrors: (error: unknown) => { fields: Array<{ name: string; message: string }>; format: string | null; toast: string | null };
+  }
+  const rules = (): Rules => loadClientModule(EVENT_FORM, {}) as unknown as Rules;
+  const form = {
+    podId: 'p1', title: 'Our check-in', description: '', scheduledAt: '2026-10-30T10:00', numberOfRounds: 3, roundDurationSeconds: 300,
+    durationMinutes: 90, maxParticipants: 20, timerVisibility: 'always_visible', matchingTemplateId: '', matchingPolicy: 'within_event',
+  };
+
+  it('the format follows the pod until the organiser picks one its type holds', () => {
+    const { formatFor, offeredFor } = rules();
+    expect(offeredFor('reason')).toEqual(['video_meeting', 'speed_networking']);
+    expect(offeredFor('chat')).toEqual(['video_meeting']);
+    // Before a pod is chosen: the formats on offer, never voice, webinar or in person.
+    expect(offeredFor(undefined)).toEqual(['speed_networking', 'video_meeting']);
+    expect(formatFor(null, 'reason')).toBe('video_meeting');
+    expect(formatFor('speed_networking', 'reason')).toBe('speed_networking');
+    expect(formatFor('speed_networking', 'chat')).toBe('video_meeting');
+    expect(formatFor('video_meeting', undefined)).toBe('video_meeting');
+    expect(formatFor(null, undefined)).toBe('speed_networking');
+  });
+
+  it('says it in its own words when a pod cannot hold the format that was picked, and nothing when nothing moved', () => {
+    const { switchNotice } = rules();
+    expect(switchNotice('speed_networking', 'chat', 'video_meeting')).toBe("Changed to Video meeting: Speed networking isn't available in this pod.");
+    expect(switchNotice('speed_networking', 'reason', 'speed_networking')).toBeNull();
+    expect(switchNotice(null, 'chat', 'video_meeting')).toBeNull();
+    expect(switchNotice('speed_networking', undefined, 'speed_networking')).toBeNull();
+    // Not the shared refusal copy cut up with a pattern.
+    const source = readClientSource(EVENT_FORM);
+    expect(source).not.toMatch(/formatRefusal/);
+    expect(source).not.toMatch(/ Choose /);
+  });
+
+  it('a meeting\'s lengths are the ones inside its limits, and out-of-range values are said in the definition\'s words', () => {
+    const { meetingLengthsFor, fieldMessage } = rules();
+    expect(meetingLengthsFor('video_meeting')).toEqual([15, 30, 45, 60, 90, 120, 180, 240]);
+    expect(fieldMessage('video_meeting', 'maxParticipants', 500)).toBe('Capacity must be between 2 and 100 people.');
+    expect(fieldMessage('video_meeting', 'maxParticipants', 20)).toBe(true);
+    expect(fieldMessage('speed_networking', 'numberOfRounds', 25)).toBe('Number of rounds must be between 1 and 20.');
+    expect(fieldMessage('speed_networking', 'numberOfRounds', NaN)).toBe('Number of rounds must be a number.');
+  });
+
+  it('what is posted for speed networking is what it always was, with the format at the top', () => {
+    const body = rules().sessionBody({ ...form, format: 'speed_networking', matchingTemplateId: 't1', description: 'Notes' });
+    expect(body).toEqual({
+      podId: 'p1', title: 'Our check-in', description: 'Notes', scheduledAt: new Date('2026-10-30T10:00').toISOString(), format: 'speed_networking',
+      config: {
+        eventType: 'speed_networking', numberOfRounds: 3, roundDurationSeconds: 300, maxParticipants: 20,
+        timerVisibility: 'always_visible', matchingPolicy: 'within_event', matchingTemplateId: 't1',
+      },
+    });
+    // No template chosen: none is sent. No description: none is sent.
+    const plain = rules().sessionBody({ ...form, format: 'speed_networking' });
+    expect(plain.config).not.toHaveProperty('matchingTemplateId');
+    expect(plain.description).toBeUndefined();
+  });
+
+  it('what is posted for a video meeting is its length and capacity and no round settings at all', () => {
+    const body = rules().sessionBody({ ...form, format: 'video_meeting' });
+    expect(body.format).toBe('video_meeting');
+    expect(body.config).toEqual({ eventType: 'video_meeting', durationMinutes: 90, maxParticipants: 20 });
+  });
+
+  it('a refusal is said at the field it is about, in the server\'s words, and only what has no field becomes a toast', () => {
+    const { serverFieldErrors } = rules();
+    const refusal = (details: unknown, message = 'Capacity must be between 2 and 100 people.') => ({ response: { data: { error: { code: 'VALIDATION_ERROR', message, details } } } });
+    // The definition's own checks answer by setting.
+    expect(serverFieldErrors(refusal({ maxParticipants: ['Capacity must be between 2 and 100 people.'] }))).toEqual({
+      fields: [{ name: 'maxParticipants', message: 'Capacity must be between 2 and 100 people.' }], format: null, toast: null,
+    });
+    // The round length is minutes to the server and seconds on this form.
+    expect(serverFieldErrors(refusal({ roundMinutes: ['Round length must be between 1 and 60 minutes.'] })).fields).toEqual([
+      { name: 'roundDurationSeconds', message: 'Round length must be between 1 and 60 minutes.' },
+    ]);
+    // A schema check names the path inside the config.
+    expect(serverFieldErrors(refusal({ 'config.numberOfRounds': ['Number must be less than or equal to 20'] })).fields[0].name).toBe('numberOfRounds');
+    // A format the pod does not hold belongs at the picker.
+    expect(serverFieldErrors(refusal({ format: ["Speed networking isn't available in Chat pods."] }, "Speed networking isn't available in Chat pods."))).toEqual({
+      fields: [], format: "Speed networking isn't available in Chat pods.", toast: null,
+    });
+    // Several at once: each at its own field.
+    expect(serverFieldErrors(refusal({ maxParticipants: ['a'], durationMinutes: ['b'] })).fields.map((f) => f.name)).toEqual(['maxParticipants', 'durationMinutes']);
+  });
+
+  it('what has no field is a toast: an unknown setting, no details at all, or no answer from the server', () => {
+    const { serverFieldErrors } = rules();
+    const refusal = (details: unknown, message: string) => ({ response: { data: { error: { code: 'X', message, details } } } });
+    expect(serverFieldErrors(refusal({ somethingElse: ['x'] }, 'That did not work.'))).toEqual({ fields: [], format: null, toast: 'That did not work.' });
+    expect(serverFieldErrors(refusal(undefined, 'Only pod directors and hosts can create sessions'))).toEqual({
+      fields: [], format: null, toast: 'Only pod directors and hosts can create sessions',
+    });
+    expect(serverFieldErrors(new Error('Network Error'))).toEqual({ fields: [], format: null, toast: 'Failed to create event' });
+    // A placed one and one that could not be placed: both are said, the second in a toast.
+    const mixed = serverFieldErrors(refusal({ maxParticipants: ['Capacity must be between 2 and 100 people.'], odd: ['y'] }, 'Validation failed'));
+    expect(mixed.fields).toHaveLength(1);
+    expect(mixed.toast).toBe('Validation failed');
+  });
+});
+
 // ── The event form, drawn ──────────────────────────────────────────────────────────────────────────────
 describe('L3 - CreateSessionPage follows the pod\'s type and the chosen format', () => {
   const src = readClientSource(SESSION_PAGE);
 
-  function drawPage(podType: string | null): string {
+  /** `podType` null: no pod named in the address. `loading`: the lists are still arriving. */
+  function drawPage(podType: string | null, opts: { loading?: boolean } = {}): string {
     const pods = podType ? [{ id: 'p1', name: 'Test', podType, memberRole: 'director' }] : [];
     const mod = loadClientModule(SESSION_PAGE, {
       'react-router-dom': { useNavigate: () => () => undefined, useSearchParams: () => [new URLSearchParams(podType ? 'podId=p1' : ''), () => undefined] },
       '@tanstack/react-query': {
         useMutation: () => ({ mutate: () => undefined, isPending: false }),
-        useQuery: ({ queryKey }: { queryKey: unknown[] }) => ({ data: queryKey[0] === 'my-pods' ? pods : queryKey[0] === 'pod' ? undefined : [] }),
+        useQuery: ({ queryKey }: { queryKey: unknown[] }) => {
+          if (queryKey[0] === 'my-pods') return opts.loading ? { data: undefined, isLoading: true } : { data: pods, isLoading: false };
+          return { data: queryKey[0] === 'pod' ? undefined : [], isLoading: false };
+        },
       },
       '@/components/ui/Card': { __esModule: true, default: ({ children, ...rest }: { children?: ReactNode }) => createElement('section', rest, children) },
       '@/components/ui/Input': {
@@ -293,6 +408,28 @@ describe('L3 - CreateSessionPage follows the pod\'s type and the chosen format',
     expect(optionsOf(html, '<select data-testid="event-format-select"')).toEqual(['Speed networking', 'Video meeting']);
   });
 
+  it('while a pod named in the address is still being found, a placeholder is held: speed networking\'s settings are not drawn and swapped away', () => {
+    const html = drawPage('reason', { loading: true });
+    expect(html).toContain('data-testid="format-pending"');
+    expect(html).toContain('data-testid="settings-pending"');
+    expect(html).toContain('aria-busy="true"');
+    // Nothing of any format is drawn yet: not the rounds, not the meeting's length, not a capacity for either.
+    for (const testId of ['event-format-select', 'event-format-fixed', 'timing-card', 'meeting-card', 'capacity-card', 'meeting-length']) {
+      expect(html).not.toContain(`data-testid="${testId}"`);
+    }
+    expect(words(html)).not.toContain('Number of Rounds');
+    expect(words(html)).not.toContain('Max Participants');
+    // What a person who cannot see it is told.
+    expect(words(html)).toContain("Loading this pod's event types");
+  });
+
+  it('with no pod named, there is nothing to wait for: the generic form is drawn at once, even while the list arrives', () => {
+    const html = drawPage(null, { loading: true });
+    expect(html).not.toContain('data-testid="format-pending"');
+    expect(html).toContain('data-testid="event-format-select"');
+    expect(html).toContain('data-testid="timing-card"');
+  });
+
   it('capacity follows the format\'s own limits: 2 to 100 for a meeting, 2 to 10,000 for speed networking', () => {
     expect(words(drawPage('reason'))).toContain('2 – 100 participants');
     expect(words(drawPage('speed_networking'))).toContain('2 – 10,000 participants');
@@ -316,41 +453,68 @@ describe('L3 - CreateSessionPage follows the pod\'s type and the chosen format',
     expect(src).toMatch(/\[allPods, isAdmin\]/);
     expect(src).not.toMatch(/setValue\('podId'/);
     expect(src).toMatch(/value=\{podId\}/);
+    // The fallback read of a pod the list lacks gives up at once: a pod that cannot be read must not hold a placeholder.
+    expect(src).toMatch(/enabled: !!podId && !!allPods && !listedPod,\s*retry: false,/);
   });
 
-  it('the body carries the format at the top level, and round settings only for a rounds format', () => {
-    const body = src.slice(src.indexOf('mutationFn:'), src.indexOf('onSuccess:'));
-    expect(body).toMatch(/format:\s*data\.format/);
-    expect(body).toMatch(/liveKindOf\(data\.format\) === 'rounds'/);
-    // The round settings are in the rounds branch only; the meeting branch has its length and capacity.
-    const [roundsBranch, meetingBranch] = body.split(/:\s*\{\s*eventType/);
-    expect(roundsBranch).toMatch(/numberOfRounds:\s*data\.numberOfRounds/);
-    expect(roundsBranch).toMatch(/matchingPolicy:\s*data\.matchingPolicy/);
-    expect(meetingBranch).toMatch(/durationMinutes:\s*data\.durationMinutes/);
-    expect(meetingBranch).not.toMatch(/numberOfRounds|roundDurationSeconds|matchingPolicy|timerVisibility/);
+  it('the page posts what sessionBody builds, and says a refusal at its field with setError, not in a bare toast', () => {
+    expect(src).toMatch(/mutationFn:[^\n]*sessionBody\(data\)/);
+    expect(src).toMatch(/serverFieldErrors\(err\)/);
+    expect(src).toMatch(/setError\(f\.name, \{ type: 'server', message: f\.message \}, \{ shouldFocus: i === 0 \}\)/);
+    expect(src).not.toMatch(/error\?\.message \|\| 'Failed to create event'/);
+  });
+
+  it('a note about a capacity that was changed is at Capacity, and a note about a format that was changed is at Event Type', () => {
+    const cardAt = src.indexOf('data-testid="capacity-card"');
+    const capacityNoteAt = src.indexOf('data-testid="capacity-notice"');
+    const formatNoteAt = src.indexOf('data-testid="event-format-notice"');
+    expect(cardAt).toBeGreaterThan(0);
+    expect(capacityNoteAt).toBeGreaterThan(cardAt);
+    expect(formatNoteAt).toBeGreaterThan(0);
+    expect(formatNoteAt).toBeLessThan(cardAt);
+    // The capacity note is done with once the organiser edits capacity.
+    expect(src).toMatch(/onChange: \(\) => ev\.touch\('maxParticipants'\)/);
+    expect(readClientSource(EVENT_HOOK)).toMatch(/if \(field === 'maxParticipants'\) setCapacityNotices\(\[\]\);/);
+  });
+
+  it('the page stays a page: the form\'s rules are in event-form.ts and its state in useEventFormat.ts', () => {
+    for (const name of ['formatFor', 'rangeHint', 'roundSeconds', 'fieldMessage', 'switchNotice', 'sessionBody', 'serverFieldErrors']) {
+      expect(src).not.toMatch(new RegExp(`function ${name}\\b`));
+    }
+    expect(src).not.toMatch(/useRef|useEffect/);
+    expect(src).toMatch(/useEventFormat\(/);
+    expect(src.split('\n').length).toBeLessThan(380);
   });
 
   it('every field is at least 44px tall for a finger: the select class and each text field carry min-h-[44px]', () => {
-    expect(src).toMatch(/const selectClass = 'w-full min-h-\[44px\] /);
+    // The class the page and the rounds card both use is one constant, in form-parts.tsx.
+    expect(readClientSource('features/sessions/form-parts.tsx')).toMatch(/export const selectClass = 'w-full min-h-\[44px\] /);
+    expect(src).toMatch(/import \{ FieldError, selectClass \} from '\.\/form-parts';/);
+    expect(readClientSource('features/sessions/RoundsSettings.tsx')).toMatch(/import \{ FieldError, selectClass \} from '\.\/form-parts';/);
     const inputs = src.match(/<Input\b[\s\S]*?\/>/g) ?? [];
     expect(inputs.length).toBeGreaterThanOrEqual(2);
     for (const tag of inputs) expect(tag).toContain('min-h-[44px]');
   });
 
   it('reads the shared definition, with no list of event types of its own', () => {
-    expect(src).toMatch(/from '@rsn\/shared'/);
+    const all = [src, readClientSource(EVENT_FORM), readClientSource(EVENT_HOOK)].join('\n');
+    expect(all).toMatch(/from '@rsn\/shared'/);
     for (const name of ['eventFormatsForPod', 'defaultEventFormat', 'defaultTitle', 'liveKindOf', 'applyFormatChange']) {
-      expect(src).toContain(name);
+      expect(all).toContain(name);
     }
     expect(src).not.toMatch(/const EVENT_TYPES/);
-    expect(src).not.toMatch(/eventType:\s*['"]speed_networking['"]/);
+    expect(all).not.toMatch(/eventType:\s*['"]speed_networking['"]/);
   });
 
-  it('the title starts as the format and the pod ("Video meeting · Test") until the organiser writes their own', () => {
-    expect(src).toMatch(/const podName = pod\?\.name \?\? ''/);
-    expect(src).toMatch(/defaultTitle\(format, podName\)/);
+  it('the title starts as the format and the pod ("Video meeting · Test") until the organiser writes their own, and is not guessed while the pod is unknown', () => {
+    const hook = readClientSource(EVENT_HOOK);
+    expect(src).toMatch(/podName: pod\?\.name \?\? ''/);
+    expect(hook).toMatch(/defaultTitle\(format, podName\)/);
     // Typing a title of their own is what stops it following.
-    expect(src).toMatch(/register\('title', \{[^}]*onChange/);
-    expect(src).toMatch(/if \(!touched\.current\.has\('title'\)\) setValue\('title'/);
+    expect(src).toMatch(/register\('title', \{[^}]*onChange: \(\) => ev\.touch\('title'\)/);
+    expect(hook).toMatch(/if \(!touched\.current\.has\('title'\)\) setValue\('title'/);
+    // Nothing follows a format that is not known yet.
+    expect(hook.match(/if \(pending\) return;/g)).toHaveLength(2);
+    expect(src).toMatch(/title: '',/);
   });
 });

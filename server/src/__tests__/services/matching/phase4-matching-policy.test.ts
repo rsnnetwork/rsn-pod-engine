@@ -121,16 +121,20 @@ describe('Phase 4 — matching policy 3-option chooser', () => {
 
   describe('client CreateSessionPage exposes matchingPolicy as a radio selector', () => {
     const src = readClient('features/sessions/CreateSessionPage.tsx');
+    // 26 Oct 2026: the form's type and the body it posts moved out of the page, into event-form.ts (the form's rules),
+    // and the rounds card (the policy options, drawn as radios) into RoundsSettings.tsx.
+    const rules = readClient('features/sessions/event-form.ts');
+    const rounds = readClient('features/sessions/RoundsSettings.tsx');
 
     it('declares matchingPolicy field in SessionForm interface', () => {
-      expect(src).toMatch(/matchingPolicy:\s*['"]platform_wide['"]\s*\|\s*['"]within_event['"]\s*\|\s*['"]none['"]/);
+      expect(rules).toMatch(/matchingPolicy:\s*['"]platform_wide['"]\s*\|\s*['"]within_event['"]\s*\|\s*['"]none['"]/);
     });
 
     it('exports MATCHING_POLICIES array with three options + default within_event', () => {
-      expect(src).toMatch(/MATCHING_POLICIES/);
-      expect(src).toMatch(/value:\s*['"]platform_wide['"]/);
-      expect(src).toMatch(/value:\s*['"]within_event['"]/);
-      expect(src).toMatch(/value:\s*['"]none['"]/);
+      expect(rounds).toMatch(/MATCHING_POLICIES/);
+      expect(rounds).toMatch(/value:\s*['"]platform_wide['"]/);
+      expect(rounds).toMatch(/value:\s*['"]within_event['"]/);
+      expect(rounds).toMatch(/value:\s*['"]none['"]/);
     });
 
     it('form defaultValues set matchingPolicy to within_event', () => {
@@ -138,15 +142,18 @@ describe('Phase 4 — matching policy 3-option chooser', () => {
     });
 
     it('mutation body includes matchingPolicy in config', () => {
-      const mutStart = src.indexOf('mutationFn:');
-      const mutEnd = src.indexOf('onSuccess:', mutStart);
-      const mut = src.slice(mutStart, mutEnd);
-      expect(mut).toMatch(/matchingPolicy:\s*data\.matchingPolicy/);
+      // The page posts what sessionBody builds, and sessionBody puts the policy in a rounds event's config.
+      expect(src).toMatch(/mutationFn:[^\n]*sessionBody\(data\)/);
+      const bodyStart = rules.indexOf('export function sessionBody');
+      const body = rules.slice(bodyStart, rules.indexOf('\n}\n', bodyStart));
+      expect(body).toMatch(/matchingPolicy:\s*data\.matchingPolicy/);
     });
 
     it('renders a radio input for each MATCHING_POLICIES entry', () => {
       // The map renders <input type="radio" ... {...register('matchingPolicy')} />
-      expect(src).toMatch(/MATCHING_POLICIES\.map[\s\S]+?type="radio"[\s\S]+?register\(['"]matchingPolicy['"]/);
+      expect(rounds).toMatch(/MATCHING_POLICIES\.map[\s\S]+?type="radio"[\s\S]+?register\(['"]matchingPolicy['"]/);
+      // And the page draws that card for a rounds format.
+      expect(src).toMatch(/<RoundsSettings /);
     });
   });
 });
