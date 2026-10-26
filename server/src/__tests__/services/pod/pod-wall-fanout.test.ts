@@ -74,6 +74,25 @@ describe('the realtime vocabulary', () => {
     expect(md).toMatch(/\| `pod:<podId>:wall` \|/);
     expect(md).toMatch(/\| `pod-wall-post:<postId>` \|/);
   });
+
+  // The feed answers more than the posts: its `viewer` flags depend on the pod's status and the member's
+  // role and status, and its items on the viewer's blocks. Those change under tags the wall does not send,
+  // so a screen has to declare them as well, and the vocabulary says so where a screen author looks.
+  describe('ENTITIES.md says what else the wall\'s queries depend on', () => {
+    const md = nodeFs.readFileSync(nodePath.join(__dirname, '../../../../../ENTITIES.md'), 'utf8');
+    const row = (tag: string) => md.split('\n').find((line) => line.startsWith(`| \`${tag}\` |`)) ?? '';
+
+    it('the wall\'s own row names the full set the feed and a single post declare', () => {
+      const wall = row('pod:<podId>:wall');
+      for (const tag of ['pod:<podId>:wall', 'pod:<podId>', 'pod:<podId>:members', 'user:<userId>:blocks']) {
+        expect(wall).toContain(`\`${tag}\``);
+      }
+    });
+
+    it.each(['pod:<podId>', 'pod:<podId>:members', 'user:<userId>:blocks'])('the row for %s names the pod wall among the queries that use it', (tag) => {
+      expect(row(tag)).toMatch(/pod wall/i);
+    });
+  });
 });
 
 describe('fanoutPodWall', () => {

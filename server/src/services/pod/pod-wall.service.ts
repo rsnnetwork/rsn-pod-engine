@@ -11,22 +11,27 @@
 //   * Only ACTIVE members read and write, on every kind of pod, public ones too. Someone who cannot see a
 //     private pod at all is told it does not exist (404); anyone else is told how to get in (403).
 //     A platform admin reads and moderates without being a member, and does not post.
-//   * A pod that is not open (archived, suspended, draft) is read-only: nothing is added, deleted or pinned.
-//   * The pod's director or host, and platform admins, delete any post or comment and pin.
+//   * A pod that is not open (archived, suspended, draft) can still be read but takes no new posts, comments,
+//     replies, reactions or likes, from anyone, the director included. Moderation and your own words are
+//     never switched off: the pod's director or host and platform admins still delete any post or comment
+//     and pin and unpin, and an author still deletes their own posts and comments.
+//   * The pod's director or host, and platform admins, delete any post or comment and pin, in any state of
+//     the pod.
 //   * Nothing leaves the pod: there is no sharing.
 //   * Unlike the circle wall, every change reaches open screens by entity tag (fanoutPodWall: the active
 //     members only), and every bell is pushed live over the socket and honours the member's group-bell
 //     setting. No email.
 //
 // Services return data and never touch req/res. A write tells the pod once it has been saved: a retried
-// submit, a refusal and a change that changed nothing tell nobody.
+// submit, a refusal and a change that changed nothing (the same reaction sent again, a reaction cleared that
+// was not there, a like of a comment already liked) tell nobody.
 
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import type {
-  PodWallComment, PodWallFeed, PodWallPost, WallCommentCreated, WallCommentLike, WallReactionSummary,
+  PodWallComment, PodWallCommentList, PodWallFeed, PodWallPost, WallCommentCreated, WallCommentLike, WallReactionSummary,
 } from '@rsn/shared';
 import { canViewPod } from '../pods/pod-access';
 import { E } from '../../realtime/entities';
@@ -88,11 +93,9 @@ interface WallAccess {
   isMember: boolean;
   /** The pod is open: not archived, suspended or a draft. */
   isOpen: boolean;
-  /** The pod's director or host, or a platform admin, whatever state the pod is in. */
-  moderates: boolean;
   /** An active member of an open pod: post, comment, reply, react and like. */
   canPost: boolean;
-  /** A moderator of an open pod: delete anyone's post or comment, and pin. */
+  /** The pod's director or host, or a platform admin: delete anyone's post or comment, and pin, whatever state the pod is in. */
   canModerate: boolean;
 }
 
@@ -122,20 +125,19 @@ async function resolveAccess(podId: string, viewer: WallViewer): Promise<WallAcc
   }
 
   const isOpen = pod.status === 'active';
-  const moderates = isAdmin || (isMember && (pod.member_role === 'director' || pod.member_role === 'host'));
   return {
     podName: pod.name,
     podStatus: pod.status,
     viewerName: pod.viewer_name,
     isMember,
     isOpen,
-    moderates,
     canPost: isMember && isOpen,
-    canModerate: moderates && isOpen,
+    // Moderation is never switched off by the pod's state: a moderator can still clear what should not be there.
+    canModerate: isAdmin || (isMember && (pod.member_role === 'director' || pod.member_role === 'host')),
   };
 }
 
-/** A pod that is not open takes no new activity of any kind. */
+/** A pod that is not open takes no new posts, comments, replies, reactions or likes. Deleting and pinning are not those. */
 function requireOpenPod(access: WallAccess): void {
   if (access.isOpen) return;
   if (access.podStatus === 'archived') throw new AppError(409, ErrorCodes.POD_ARCHIVED, POD_ARCHIVED);
@@ -231,12 +233,24 @@ const POST_SELECT = `
          (SELECT r.reaction FROM pod_post_reactions r WHERE r.post_id = p.id AND r.user_id = $2) AS my_reaction
   FROM pod_posts p JOIN users u ON u.id = p.author_id`;
 
-/** A comment's author blocked either way by the viewer. $2 is the viewer, as in BLOCK_FILTER. */
-const COMMENT_AUTHOR_NOT_BLOCKED = `
+/**
+ * The comments (alias `c`) a viewer may see: the author is not blocked by the viewer or blocking them, and the
+ * comment is either top-level or answers a comment that is still there and whose author is not blocked either
+ * way either. A reply under a comment the viewer cannot see would hang from nothing, so it is hidden with it,
+ * and cannot be answered or liked by that viewer. `viewer` is the SQL placeholder that holds the viewer's id.
+ */
+const commentVisibleTo = (viewer: '$2' | '$3') => `
   AND NOT EXISTS (
     SELECT 1 FROM user_blocks b
-    WHERE (b.blocker_id = $2 AND b.blocked_id = c.author_id)
-       OR (b.blocker_id = c.author_id AND b.blocked_id = $2))`;
+    WHERE (b.blocker_id = ${viewer} AND b.blocked_id = c.author_id)
+       OR (b.blocker_id = c.author_id AND b.blocked_id = ${viewer}))
+  AND (c.parent_comment_id IS NULL OR EXISTS (
+    SELECT 1 FROM pod_post_comments pc
+    WHERE pc.id = c.parent_comment_id AND pc.deleted_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM user_blocks pb
+        WHERE (pb.blocker_id = ${viewer} AND pb.blocked_id = pc.author_id)
+           OR (pb.blocker_id = pc.author_id AND pb.blocked_id = ${viewer}))))`;
 
 // A feed cursor is "<epoch_ms>_<post id>" of the last post served; the next page is everything older by
 // (created_at, id). Posts are stamped to the millisecond when they are made (see createPost), so a cursor
@@ -529,10 +543,13 @@ export async function createPost(
   return loadPost(podId, postId, viewer.userId);
 }
 
-/** The author deletes their own post; the pod's director or host and platform admins delete any. */
+/**
+ * The author deletes their own post; the pod's director or host and platform admins delete any. The pod's
+ * state never matters: taking back your own words, and clearing what should not be there, are not switched
+ * off by an archived, suspended or draft pod.
+ */
 export async function deletePost(podId: string, postId: string, viewer: WallViewer): Promise<void> {
   const access = await resolveAccess(podId, viewer);
-  requireOpenPod(access);
   await transaction(async (client) => {
     const r = await client.query<{ author_id: string; deleted_at: Date | null }>(
       `SELECT author_id, deleted_at FROM pod_posts WHERE id = $1 AND pod_id = $2 FOR UPDATE`,
@@ -546,18 +563,24 @@ export async function deletePost(podId: string, postId: string, viewer: WallView
   await fanoutPodWall(podId, [E.podWallPost(postId)]);
 }
 
-/** Pin or unpin: the pod's director or host, and platform admins. The feed shows the last three pinned. */
+/**
+ * Pin or unpin: the pod's director or host, and platform admins, in any state of the pod. The feed shows the
+ * last three pinned. Pinning a post that is already pinned moves it to the front of the strip; unpinning one
+ * that is not pinned changes nothing and tells nobody.
+ */
 export async function setPinned(podId: string, postId: string, viewer: WallViewer, pinned: boolean): Promise<void> {
   const access = await resolveAccess(podId, viewer);
-  if (!access.moderates) throw new ForbiddenError(ONLY_MODERATORS_PIN);
-  requireOpenPod(access);
-  const r = await query(
-    `UPDATE pod_posts SET pinned_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END
-     WHERE id = $1 AND pod_id = $2 AND deleted_at IS NULL`,
+  if (!access.canModerate) throw new ForbiddenError(ONLY_MODERATORS_PIN);
+  const r = await query<{ was_pinned: boolean }>(
+    `UPDATE pod_posts p SET pinned_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END
+     FROM pod_posts prev
+     WHERE p.id = $1 AND p.pod_id = $2 AND p.deleted_at IS NULL AND prev.id = p.id
+     RETURNING (prev.pinned_at IS NOT NULL) AS was_pinned`,
     [postId, podId, pinned],
   );
-  if (r.rowCount === 0) throw postNotFound(postId);
-  await fanoutPodWall(podId, [E.podWallPost(postId)]);
+  const updated = r.rows[0];
+  if (!updated) throw postNotFound(postId);
+  if (pinned || updated.was_pinned) await fanoutPodWall(podId, [E.podWallPost(postId)]);
 }
 
 // ── Reactions ────────────────────────────────────────────────────────────────
@@ -581,7 +604,8 @@ async function reactionSummary(postId: string, viewerId: string): Promise<WallRe
 
 /**
  * Set (or with null, clear) the member's one reaction on a post. The author hears about it once an hour
- * per post, and not about their own.
+ * per post, and not about their own. Sending the reaction the member already has, or clearing one that is
+ * not there, changes nothing: the counts are answered, and nobody is told or rung.
  */
 export async function reactToPost(
   podId: string,
@@ -596,13 +620,18 @@ export async function reactToPost(
   requireMemberOfOpenPod(access);
   const post = await loadPostHead(podId, postId, viewer.userId);
 
+  let changed: boolean;
   if (reaction) {
-    await query(
+    // The update is skipped when the row already says this, and a statement that wrote no row returns none.
+    const set = await query<{ id: string }>(
       `INSERT INTO pod_post_reactions (post_id, user_id, reaction) VALUES ($1, $2, $3)
-       ON CONFLICT (post_id, user_id) DO UPDATE SET reaction = EXCLUDED.reaction, created_at = NOW()`,
+       ON CONFLICT (post_id, user_id) DO UPDATE SET reaction = EXCLUDED.reaction, created_at = NOW()
+         WHERE pod_post_reactions.reaction IS DISTINCT FROM EXCLUDED.reaction
+       RETURNING id`,
       [postId, viewer.userId, reaction],
     );
-    if (post.authorId !== viewer.userId) {
+    changed = set.rows.length > 0;
+    if (changed && post.authorId !== viewer.userId) {
       await ringOne(podId, post.authorId, viewer.userId, {
         type: 'pod_reaction',
         title: `${nameOf(access)} reacted to your post`,
@@ -611,16 +640,24 @@ export async function reactToPost(
       }, REACTION_BELL_DEDUPE_MINUTES);
     }
   } else {
-    await query(`DELETE FROM pod_post_reactions WHERE post_id = $1 AND user_id = $2`, [postId, viewer.userId]);
+    const cleared = await query<{ id: string }>(
+      `DELETE FROM pod_post_reactions WHERE post_id = $1 AND user_id = $2 RETURNING id`,
+      [postId, viewer.userId],
+    );
+    changed = cleared.rows.length > 0;
   }
-  await fanoutPodWall(podId, [E.podWallPost(postId)]);
+  if (changed) await fanoutPodWall(podId, [E.podWallPost(postId)]);
   return reactionSummary(postId, viewer.userId);
 }
 
 // ── Comments ─────────────────────────────────────────────────────────────────
 
-/** A post's comments, oldest first, without the authors the viewer is blocked from either way. */
-export async function listComments(podId: string, postId: string, viewer: WallViewer): Promise<PodWallComment[]> {
+/**
+ * A post's comments and replies together, oldest first, without the authors the viewer is blocked from
+ * either way and without the replies under a comment the viewer cannot see. At most 400 are shown: when the
+ * post has more, `truncated` is true so the screen can say the newest are not in the list.
+ */
+export async function listComments(podId: string, postId: string, viewer: WallViewer): Promise<PodWallCommentList> {
   await resolveAccess(podId, viewer);
   await loadPostHead(podId, postId, viewer.userId);
   const r = await query<CommentRow>(
@@ -630,13 +667,12 @@ export async function listComments(podId: string, postId: string, viewer: WallVi
             EXISTS (SELECT 1 FROM pod_comment_likes l WHERE l.comment_id = c.id AND l.user_id = $2) AS liked_by_me
      FROM pod_post_comments c JOIN users u ON u.id = c.author_id
      WHERE c.post_id = $1 AND c.deleted_at IS NULL
-       AND (c.parent_comment_id IS NULL OR EXISTS (
-         SELECT 1 FROM pod_post_comments pc WHERE pc.id = c.parent_comment_id AND pc.deleted_at IS NULL))
-       ${COMMENT_AUTHOR_NOT_BLOCKED}
-     ORDER BY c.created_at ASC, c.id ASC LIMIT ${COMMENTS_SHOWN}`,
-    [postId, viewer.userId],
+       ${commentVisibleTo('$2')}
+     ORDER BY c.created_at ASC, c.id ASC LIMIT $3`,
+    // One more than is shown, to know whether there is more.
+    [postId, viewer.userId, COMMENTS_SHOWN + 1],
   );
-  return r.rows.map(mapComment);
+  return { comments: r.rows.slice(0, COMMENTS_SHOWN).map(mapComment), truncated: r.rows.length > COMMENTS_SHOWN };
 }
 
 /**
@@ -666,10 +702,7 @@ export async function addComment(
     const parent = await query<{ id: string; author_id: string; parent_comment_id: string | null }>(
       `SELECT c.id, c.author_id, c.parent_comment_id FROM pod_post_comments c
        WHERE c.id = $1 AND c.post_id = $2 AND c.deleted_at IS NULL
-         AND NOT EXISTS (
-           SELECT 1 FROM user_blocks b
-           WHERE (b.blocker_id = $3 AND b.blocked_id = c.author_id)
-              OR (b.blocker_id = c.author_id AND b.blocked_id = $3))`,
+         ${commentVisibleTo('$3')}`,
       [input.parentCommentId, postId, viewer.userId],
     );
     const answered = parent.rows[0];
@@ -720,22 +753,24 @@ export async function likeComment(
     `SELECT c.post_id FROM pod_post_comments c JOIN pod_posts p ON p.id = c.post_id
      WHERE c.id = $1 AND p.pod_id = $3 AND c.deleted_at IS NULL AND p.deleted_at IS NULL
        ${BLOCK_FILTER}
-       ${COMMENT_AUTHOR_NOT_BLOCKED}`,
+       ${commentVisibleTo('$2')}`,
     [commentId, viewer.userId, podId],
   );
   const postId = target.rows[0]?.post_id;
   if (!postId) throw commentNotFound(commentId);
 
-  if (liked) {
-    await query(
-      `INSERT INTO pod_comment_likes (comment_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+  // A statement that wrote no row (already liked, or never liked) returns none: nothing changed.
+  const written = liked
+    ? await query<{ id: string }>(
+      `INSERT INTO pod_comment_likes (comment_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING id`,
+      [commentId, viewer.userId],
+    )
+    : await query<{ id: string }>(
+      `DELETE FROM pod_comment_likes WHERE comment_id = $1 AND user_id = $2 RETURNING id`,
       [commentId, viewer.userId],
     );
-  } else {
-    await query(`DELETE FROM pod_comment_likes WHERE comment_id = $1 AND user_id = $2`, [commentId, viewer.userId]);
-  }
   // A like shows in the thread only. The feed does not change, so no member refetches theirs.
-  await fanoutPodWall(podId, [E.podWallPost(postId)], { wall: false });
+  if (written.rows.length > 0) await fanoutPodWall(podId, [E.podWallPost(postId)], { wall: false });
 
   const n = await query<{ like_count: number; liked_by_me: boolean | null }>(
     `SELECT count(*)::int AS like_count, bool_or(user_id = $2) AS liked_by_me
@@ -746,12 +781,12 @@ export async function likeComment(
 }
 
 /**
- * Delete a comment: its author, the pod's director or host, or a platform admin. Its replies go with it, and
- * the post's count drops by all of them. Answers the post, which names the thread to tell.
+ * Delete a comment: its author, the pod's director or host, or a platform admin, in any state of the pod (see
+ * deletePost). Its replies go with it, and the post's count drops by all of them. Answers the post, which
+ * names the thread to tell.
  */
 export async function deleteComment(podId: string, commentId: string, viewer: WallViewer): Promise<{ postId: string }> {
   const access = await resolveAccess(podId, viewer);
-  requireOpenPod(access);
   const postId = await transaction(async (client) => {
     const r = await client.query<{ author_id: string; post_id: string; deleted_at: Date | null }>(
       `SELECT c.author_id, c.post_id, c.deleted_at

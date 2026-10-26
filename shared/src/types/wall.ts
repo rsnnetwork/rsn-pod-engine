@@ -78,14 +78,26 @@ export interface PodWallComment extends WallComment {
 
 /**
  * What the viewer may do on this pod's wall right now; the server decides, the screen only shows it.
- * A pod that is archived (or suspended, or still a draft) is read-only: both are false there, for everyone.
- * A member may always delete their own post or comment while `canPost` is true.
+ * A pod that is not open (archived, suspended or still a draft) takes no new posts, comments, replies,
+ * reactions or likes from anyone, so `canPost` is false there. Moderation and your own words are never
+ * switched off: `canModerate` stays true for the pod's director, host and platform admins whatever the pod's
+ * state, and a member can always delete their own post or comment (`authorId` is the viewer's).
  */
 export interface PodWallViewer {
-  /** Post, comment, reply, react, like and delete your own: an active member of an open pod. */
+  /** Post, comment, reply, react and like: an active member of an open pod. */
   canPost: boolean;
-  /** Delete anyone's post or comment, and pin: the pod's director or host, or a platform admin, of an open pod. */
+  /** Delete anyone's post or comment, and pin or unpin: the pod's director or host, or a platform admin. */
   canModerate: boolean;
+}
+
+/**
+ * GET /pods/:podId/wall/posts/:postId/comments: a post's comments and replies together, oldest first, at most
+ * 400. When the post has more than that `truncated` is true and the newest are not in the list; the screen
+ * should say so.
+ */
+export interface PodWallCommentList {
+  comments: PodWallComment[];
+  truncated: boolean;
 }
 
 /** GET /pods/:podId/wall/posts. `pinned` is on the first page only; at most three are shown. */

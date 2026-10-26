@@ -101,7 +101,7 @@ beforeEach(() => {
   mockDelete.mockResolvedValue(undefined);
   mockPin.mockResolvedValue(undefined);
   mockReact.mockResolvedValue({ reactionCount: 1, reactions: { like: 1 }, myReaction: 'like' });
-  mockComments.mockResolvedValue([]);
+  mockComments.mockResolvedValue({ comments: [], truncated: false });
   mockAddComment.mockResolvedValue({ id: COMMENT, createdAt: '2026-10-26T10:05:00.000Z', parentCommentId: null });
   mockLike.mockResolvedValue({ likeCount: 1, likedByMe: true });
   mockDeleteComment.mockResolvedValue({ postId: POST });
@@ -299,11 +299,11 @@ describe('comments', () => {
   const me = as('u-comments');
   const viewer = { userId: 'u-comments', role: 'member' };
 
-  it('GET lists a post\'s comments', async () => {
-    mockComments.mockResolvedValueOnce([{ id: COMMENT }]);
+  it('GET lists a post\'s comments, and says whether there are more than are shown', async () => {
+    mockComments.mockResolvedValueOnce({ comments: [{ id: COMMENT }], truncated: true });
     const res = await request(app).get(`${base}/posts/${POST}/comments`).set(me);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, data: [{ id: COMMENT }] });
+    expect(res.body).toEqual({ success: true, data: { comments: [{ id: COMMENT }], truncated: true } });
     expect(mockComments).toHaveBeenCalledWith(POD, POST, viewer);
   });
 
