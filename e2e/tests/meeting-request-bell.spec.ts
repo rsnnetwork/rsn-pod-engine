@@ -22,6 +22,13 @@ import { launchBrowser, contextOptions } from '../helpers/engine';
 // buttons back. The server now says where each request stands, so after an
 // answer, closing the bell and opening it again must read Accepted or Declined,
 // with no Accept button left anywhere in it.
+//
+// 26 Oct 2026 (the preview's bell): the bell reads its list through React Query,
+// refreshed by the member's notifications tag, so a bell left OPEN on another
+// device turns to Accepted by itself; the other answer pressed on a bell that has
+// not caught up says what the server says ("You already accepted this request.",
+// or "You're already connected." once hardening H2a ships); and the Messages list
+// card and the focused card share one answer in flight.
 
 let browser: Browser;
 let sender: TestUser;
@@ -198,6 +205,144 @@ test('a request accepted on the Messages card reads Accepted in the bell, with n
   const n = await pool.query(`SELECT is_read FROM notifications WHERE user_id = $1 AND type = 'poke' AND link = $2`, [carder.id, `/messages?poke=${pokeId}`]);
   expect(n.rows[0].is_read, 'an answered request is no longer unread').toBe(true);
   console.log('  ✓ accepted on the card; the bell says Accepted and offers no Accept.');
+});
+
+test('a bell left open on another device turns to Accepted by itself, and the sender\'s open bell gets the news, when the request is accepted on the Messages card', async () => {
+  test.setTimeout(180_000);
+  const two = await createTestUser('mrbelltwodev');
+  try {
+    await pool.query(`UPDATE users SET display_name = 'Two Devices' WHERE id = $1`, [two.id]);
+    const p = await apiAs(sender, 'POST', '/pokes', { recipientId: two.id, message: 'Shall we meet?' });
+    expect(p.status).toBe(201);
+
+    // The phone: the bell open on the request, and left alone from here on.
+    const phone = await openAs(two, '/', { width: 390, height: 844 });
+    await bellButton(phone).click();
+    await expect(phone.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+    await expect(phone.getByRole('button', { name: /^Accept$/ })).toBeVisible();
+    // The sender's laptop, its bell open too.
+    const senderDesk = await openAs(sender, '/', { width: 1280, height: 900 });
+    await bellButton(senderDesk).click();
+    await expect(senderDesk.getByRole('heading', { name: 'Notifications' })).toBeVisible({ timeout: 30_000 });
+
+    // The laptop: accept on the Messages card.
+    const desk = await openAs(two, '/messages', { width: 1280, height: 900 });
+    const card = desk.locator(`[data-testid="meeting-request"][data-sender-id="${sender.id}"]`);
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    await card.getByRole('button', { name: /^Accept$/ }).click();
+    await expect(desk).toHaveURL(/\/messages\/[0-9a-f-]{36}/, { timeout: 30_000 });
+
+    // Nobody touched the phone: its open bell now reads Accepted, with nothing left to press. Live: well inside
+    // the 30 s poll the bell also has (the old bell flipped only on that poll, 25 s or more after the answer).
+    await expect(phone.getByText(/^Accepted$/)).toBeVisible({ timeout: 10_000 });
+    await expect(phone.getByRole('button', { name: /^Accept$/ })).toHaveCount(0);
+    // And the sender's open bell has the answer.
+    await expect(senderDesk.getByText('Two Devices accepted your meeting request')).toBeVisible({ timeout: 30_000 });
+    console.log('  ✓ accepted on one device; the bell open on the other turned to Accepted, and the sender was told, live.');
+  } finally {
+    await cleanup(pool, { ids: [two.id] });
+  }
+});
+
+test('pressing the other answer on a bell that has not caught up says which answer the request already has', async () => {
+  test.setTimeout(120_000);
+  const late = await createTestUser('mrbelllate');
+  try {
+    const p = await apiAs(sender, 'POST', '/pokes', { recipientId: late.id, message: 'Coffee?' });
+    expect(p.status).toBe(201);
+    const page = await openAs(late, '/', { width: 390, height: 844 });
+    await bellButton(page).click();
+    await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+
+    // Hold the bell's list where it is (a phone that lost its connection for a moment), and accept elsewhere.
+    await page.route('**/api/notifications', (route) => (route.request().method() === 'GET' ? route.abort() : route.continue()));
+    expect((await apiAs(late, 'POST', `/pokes/${p.json.data.id}/accept`)).status).toBe(200);
+    // What the server says to a Decline now, in its own words: "You already accepted this request." today, and
+    // "You're already connected." once hardening H2a ships (the preview calls production's API). The bell says the same.
+    const refusal = await apiAs(late, 'POST', `/pokes/${p.json.data.id}/decline`);
+    expect(refusal.status).toBe(409);
+    const said = refusal.json?.error?.message as string;
+    expect(['You already accepted this request.', "You're already connected."]).toContain(said);
+    await page.getByRole('button', { name: /^Decline$/ }).click();
+    await expect(page.getByRole('status').getByText(said, { exact: true })).toBeVisible({ timeout: 15_000 });
+    const row = await pool.query(`SELECT status FROM user_pokes WHERE id = $1`, [p.json.data.id]);
+    expect(row.rows[0].status, 'the stale Decline changed nothing').toBe('accepted');
+
+    // Back on the network, the entry reads what the server says.
+    await page.unroute('**/api/notifications');
+    await closeBell(page);
+    await reopenBellOn(page);
+    await expect(page.getByText(/^Accepted$/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: /^Decline$/ })).toHaveCount(0);
+    console.log(`  ✓ the stale Decline was told "${said}" and the entry redrew as Accepted.`);
+  } finally {
+    await cleanup(pool, { ids: [late.id] });
+  }
+});
+
+test('the Messages list card and the focused card share one answer: while one is answering, the other offers no second answer', async () => {
+  test.setTimeout(120_000);
+  const dual = await createTestUser('mrbelldual');
+  try {
+    const p = await apiAs(sender, 'POST', '/pokes', { recipientId: dual.id, message: 'Coffee?' });
+    expect(p.status).toBe(201);
+    const pokeId = p.json.data.id;
+    // A laptop width: the list card on the left and the focused card on the right, both on screen.
+    const page = await openAs(dual, `/messages?poke=${pokeId}`, { width: 1280, height: 900 });
+    const listCard = page.locator(`[data-testid="meeting-request"][data-poke-id="${pokeId}"]`);
+    const focused = page.getByTestId('focused-meeting-request');
+    await expect(listCard).toBeVisible({ timeout: 30_000 });
+    await expect(focused).toBeVisible({ timeout: 30_000 });
+    // Every way into the sender's profile on both cards (avatar, name, "View full profile") is at least 44px to press.
+    for (const link of await page.locator('[data-testid="meeting-request"] a, [data-testid="focused-meeting-request"] a').all()) {
+      const box = await link.boundingBox();
+      expect(box?.height ?? 0, `profile link "${(await link.textContent())?.trim() || 'avatar'}"`).toBeGreaterThanOrEqual(44);
+    }
+
+    // Slow the answer down so the moment in between can be seen.
+    await page.route('**/api/pokes/*/accept', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await route.continue();
+    });
+    await listCard.getByRole('button', { name: /^Accept$/ }).click();
+    await expect(focused.getByRole('button', { name: /Accept/ })).toBeDisabled();
+    await expect(focused.getByRole('button', { name: /Decline/ })).toBeDisabled();
+    await expect(page).toHaveURL(/\/messages\/[0-9a-f-]{36}/, { timeout: 30_000 });
+    const row = await pool.query(`SELECT status FROM user_pokes WHERE id = $1`, [pokeId]);
+    expect(row.rows[0].status).toBe('accepted');
+    console.log('  ✓ one answer in flight: the focused card waited while the list card answered.');
+  } finally {
+    await cleanup(pool, { ids: [dual.id] });
+  }
+});
+
+test('a double click on Accept answers once: one request to the server, one trip into the conversation, no second toast', async () => {
+  test.setTimeout(120_000);
+  const twice = await createTestUser('mrbelltwice');
+  try {
+    const p = await apiAs(sender, 'POST', '/pokes', { recipientId: twice.id, message: 'Coffee?' });
+    expect(p.status).toBe(201);
+    const pokeId = p.json.data.id;
+    const page = await openAs(twice, '/');
+    const answers: string[] = [];
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && /\/api\/pokes\/[^/]+\/(accept|decline)$/.test(new URL(r.url()).pathname)) answers.push(r.url());
+    });
+    await bellButton(page).click();
+    await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+    // Two presses in the same instant, before the page can redraw: the button's disabled state only comes a render later.
+    await page.getByRole('button', { name: /^Accept$/ }).first().evaluate((el: HTMLElement) => { el.click(); el.click(); });
+    await expect(page).toHaveURL(/\/messages\/[0-9a-f-]{36}/, { timeout: 30_000 });
+    await page.waitForTimeout(2_000);
+    expect(answers, 'one answer sent').toHaveLength(1);
+    // No second answer, so no "already answered" sentence, in either of the server's wordings.
+    await expect(page.getByText(/^(You already accepted this request\.|You're already connected\.)$/)).toHaveCount(0);
+    await expect(page.getByRole('alert').getByText(/\S/)).toHaveCount(0);
+    expect((await pool.query(`SELECT status FROM user_pokes WHERE id = $1`, [pokeId])).rows[0].status).toBe('accepted');
+    console.log('  ✓ a double click sent one answer and went into the conversation once.');
+  } finally {
+    await cleanup(pool, { ids: [twice.id] });
+  }
 });
 
 test('asking someone who has already asked you is a match: one request, accepted, and one conversation', async () => {

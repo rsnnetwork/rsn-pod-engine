@@ -99,8 +99,10 @@ async function connect(x: TestUser, y: TestUser): Promise<string> {
 
 /** Scroll the panel the way a person would: wheel over it, outside the timeline. */
 async function wheelPanel(page: Page, dy: number): Promise<void> {
-  const label = await page.locator('label[for="meeting-minutes"]').boundingBox();
-  expect(label, 'the meeting length label anchors the wheel').not.toBeNull();
+  // The time-zone line sits at the top of the panel, above the times (the length
+  // box that used to anchor this moved into the confirm card on 26 Oct 2026).
+  const label = await page.getByTestId('scheduler-zone').boundingBox();
+  expect(label, 'the time-zone line anchors the wheel').not.toBeNull();
   await page.mouse.move(label!.x + 4, Math.max(1, label!.y + 4));
   await page.mouse.wheel(0, dy);
   await page.waitForTimeout(400);
@@ -198,13 +200,15 @@ test('every scheduler action can be pressed without scrolling, at every window s
     const inReach = await expectReachable(page, slot, 'probe').then(() => true, () => false);
     if (!inReach) await wheelPanel(page, 220);
     await press(slot, inReach ? 'a free time in the grid' : 'a free time in the grid (after one scroll of the panel)');
-    // Hold the thread column itself: sending closes the panel (21 Sep), so
-    // after that there is no [data-scheduler-panel] left to reach it through.
+    // Hold the thread column itself: a save that books or only sends closes the
+    // panel (21 Sep), so after that there is no [data-scheduler-panel] left to reach it through.
     const column = await page.locator('[data-scheduler-panel]')
       .evaluateHandle(el => el.parentElement as HTMLElement);
-    // 5. Unsaved picks → Save is pinned in reach.
+    // 5. Unsaved picks → Save is pinned in reach. Two times are still shared and
+    //    nothing is booked, so the save says so and keeps the confirm step in front of you.
     await press(page.getByRole('button', { name: /Save and send availability/i }), '"Save availability" button');
-    await expect(page.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('status').getByText('You can both meet. Confirm a time.', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await reach(page.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first(), 'the shared times, after Save');
 
     // 6. Nothing above may ever scroll the thread column itself: it clips its
     //    overflow, so a scrolled column slides the header and the name away.
@@ -231,7 +235,7 @@ test('on a laptop-height window, picking the green time and pressing Confirm cre
   await tapReachable(page, page.getByRole('button', { name: /^Confirm meeting$/ }), '"Confirm meeting" button');
 
   // The meeting exists: toast, pinned banner with Join, a line in the thread, and the row in the DB.
-  await expect(page.getByText(/Meeting confirmed!/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('status').getByText(/^Meeting confirmed: \w{3} \d{1,2} \w{3}, \d{2}:\d{2}$/)).toBeVisible({ timeout: 20_000 });
   const thread = page.locator('[data-message-id]').filter({ hasText: 'Meeting confirmed' }).first();
   await expect(thread).toBeVisible({ timeout: 20_000 });
   const row = (await pool.query<{ meeting_start_at: Date | null }>(
@@ -310,7 +314,8 @@ test('second saver: my Save picks the one time they offered, books it, and the m
   console.log(`  375x548  panel scrolled to ${Math.round(scrolled)} before Save`);
   expect(scrolled, 'the panel is scrolled away from its top').toBeGreaterThan(40);
   await tapReachable(page, page.getByRole('button', { name: /Save and send availability/i }), '"Save availability" button');
-  await expect(page.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
+  // The save says what it did: it booked the one time both picked.
+  await expect(page.getByRole('status').getByText(/^Meeting confirmed: \w{3} \d{1,2} \w{3}, \d{2}:\d{2}$/)).toBeVisible({ timeout: 15_000 });
 
   // Sending is where this job ends, so the panel hands the thread back (21 Sep).
   // The guarantee is unchanged: what comes next has to be in front of this

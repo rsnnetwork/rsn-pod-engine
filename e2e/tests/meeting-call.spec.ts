@@ -1,4 +1,4 @@
-import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
+import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
@@ -17,6 +17,9 @@ import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 //   6. A declined request is recorded and the caller is told.
 //   7. Ended meeting → "Call now" (unlocked), stale link → "ended".
 //   8. Presence: partner online → offline when they close the app.
+//   9. One person leaves the room and comes back in; the other stays in it
+//      (26 Oct 2026: leaving used to end the call for both). Needs a real
+//      LiveKit server and WebRTC: Chromium against the preview or production.
 // No LLM — safe across engines. Two-way LiveKit MEDIA is not asserted (no
 // camera/mic headlessly); token mint, room mount, gating and rails are.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,7 +38,7 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
   return { status: res.status, json: await res.json().catch(() => null) };
 }
 
-async function openAs(u: TestUser, path: string): Promise<Page> {
+async function openAs(u: TestUser, path: string, beforeLoad?: (page: Page) => void): Promise<Page> {
   const ctx = await browser.newContext(contextOptions({ width: 1200, height: 950 }));
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
@@ -46,6 +49,8 @@ async function openAs(u: TestUser, path: string): Promise<Page> {
   await primePreview(ctx);
   const page = await ctx.newPage();
   page.on('pageerror', () => {});
+  // A listener that must see the page's very first requests goes on before it loads.
+  beforeLoad?.(page);
   await gotoRetry(page, `${APP}${path}`);
   return page;
 }
@@ -223,14 +228,23 @@ test.describe.serial('meeting + call', () => {
     await page.close();
   });
 
-  test('4) a scheduled meeting opened early shows a countdown, with a join-now escape', async () => {
+  test('4) a scheduled meeting opened early shows a countdown, with a join-now escape, and its token is minted only on the way in', async () => {
     test.setTimeout(90_000);
     const convId = await convBetween(a.id, b.id);
-    const page = await openAs(a, `/meet/${convId}?kind=video&scheduled=1`);
+    // 26 Oct 2026: the token used to be minted when the page loaded, so a page
+    // opened early entered later on a token from outside the meeting's window and
+    // the server never counted that person as there. It is minted on the way in.
+    const tokenCalls: string[] = [];
+    const page = await openAs(a, `/meet/${convId}?kind=video&scheduled=1`, (p) => {
+      p.on('request', (r) => { if (r.url().includes('/call-token')) tokenCalls.push(r.url()); });
+    });
     await expect(page.getByText(/Your meeting starts in/i)).toBeVisible({ timeout: 25_000 });
     await expect(page.getByRole('button', { name: /Join now anyway/i })).toBeVisible();
+    await page.waitForTimeout(1500);
+    expect(tokenCalls, 'no room token while the countdown waits').toHaveLength(0);
     await page.getByRole('button', { name: /Join now anyway/i }).click();
     await expect(page.getByText(/^Video call$/)).toBeVisible({ timeout: 15_000 });
+    expect(tokenCalls, 'one room token, minted on the way in').toHaveLength(1);
     await page.close();
   });
 
@@ -337,4 +351,119 @@ test.describe.serial('meeting + call', () => {
     await expect.poll(async () => (await apiAs(x, 'GET', '/dm/presence')).json.data.online[y.id], { timeout: 30_000 }).toBe(false);
     await cleanup(pool, { ids: [x.id, y.id] });
   });
+});
+
+// Its own pair, outside the serial run above. The page used to read the meeting's start once, as it loaded, so a
+// countdown opened before a move kept counting to the old time; it reads the scheduler's live query now.
+test('4b) a countdown opened before the meeting moved opens the room at its new time, without a reload', async () => {
+  test.setTimeout(120_000);
+  const cy = await createTestUser('mcallmva');
+  const di = await createTestUser('mcallmvb');
+  try {
+    const sent = await apiAs(cy, 'POST', '/pokes', { recipientId: di.id, message: 'Coffee?' });
+    expect((await apiAs(di, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const convId = await convBetween(cy.id, di.id);
+    // Booked three days out: the page opens on a countdown.
+    const FAR = futureWindowKey(3, 'afternoon');
+    await apiAs(cy, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [FAR] });
+    const booked = await apiAs(di, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [FAR] });
+    expect(booked.json.data.confirmed?.window).toBe(FAR);
+    const tokenCalls: string[] = [];
+    const page = await openAs(cy, `/meet/${convId}?kind=video&scheduled=1`, (p) => {
+      p.on('request', (r) => { if (r.url().includes('/call-token')) tokenCalls.push(r.url()); });
+    });
+    await expect(page.getByText(/Your meeting starts in/i)).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByText(/it opens automatically 5 minutes before/)).toBeVisible();
+    await page.waitForTimeout(1500);
+    expect(tokenCalls, 'no room token while the countdown waits').toHaveLength(0);
+
+    // Di moves it to two minutes from now (inside the join window) while Cy's countdown is open.
+    const now = await serverNowMs();
+    const KEY = dayKeyAt(now);
+    const SPARE = dayKeyAt(now + 60 * 60_000);
+    await apiAs(cy, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [FAR, KEY, SPARE] });
+    await apiAs(di, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [FAR, KEY, SPARE] });
+    const moved = await apiAs(di, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
+      window: KEY, startAt: new Date(now + 2 * 60_000).toISOString(), durationMin: 30, type: 'video',
+    });
+    expect(moved.status).toBe(200);
+
+    // The same page, no reload: the countdown gives way to the room, on one token minted on the way in.
+    await expect(page.getByText(/^Video call$/)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/Your meeting starts in/i)).toHaveCount(0);
+    expect(tokenCalls, 'one room token, minted on the way in').toHaveLength(1);
+    await page.close();
+  } finally {
+    await cleanup(pool, { ids: [cy.id, di.id] });
+  }
+});
+
+// Its own pair, outside the serial run above, so nothing before it can keep it from running.
+test('9) one person leaves the room and comes back in; the other stays in it and is never sent away', async () => {
+  test.setTimeout(240_000);
+  test.skip(process.env.E2E_ENGINE === 'webkit', "Playwright's WebKit on Windows has no WebRTC, so it cannot join a LiveKit room");
+  test.skip(/127\.0\.0\.1|localhost/.test(SERVER), 'needs a real LiveKit server; the local API only mocks one');
+  const ana = await createTestUser('mcallrja');
+  const bo = await createTestUser('mcallrjb');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Rejoin Ana', ana.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Rejoin Bo', bo.id]);
+    const sent = await apiAs(ana, 'POST', '/pokes', { recipientId: bo.id, message: 'Coffee?' });
+    expect((await apiAs(bo, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const convId = await convBetween(ana.id, bo.id);
+    // A meeting two minutes from now, both inside its window: the room opens for both, with no time gate.
+    await holdFirstMeeting(ana, bo, convId);
+    const media = await chromium.launch({
+      headless: process.env.E2E_HEADED === '0',
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+    });
+    try {
+      const enter = async (u: TestUser): Promise<Page> => {
+        const ctx = await media.newContext({ viewport: { width: 390, height: 844 }, permissions: ['microphone'] });
+        await ctx.addInitScript((t: { a: string; r: string }) => {
+          localStorage.setItem('rsn_access', t.a);
+          localStorage.setItem('rsn_refresh', t.r);
+          localStorage.setItem('rsn_tokens', JSON.stringify({ access: t.a, refresh: t.r }));
+        }, { a: u.accessToken, r: u.refreshToken });
+        await primePreview(ctx);
+        const page = await ctx.newPage();
+        page.on('pageerror', () => {});
+        await gotoRetry(page, `${APP}/meet/${convId}?kind=audio`);
+        await expect(page.getByText(/^Audio call$/)).toBeVisible({ timeout: 30_000 });
+        return page;
+      };
+      const tiles = (p: Page) => p.locator('.lk-participant-tile');
+      const anaPage = await enter(ana);
+      const boPage = await enter(bo);
+      await expect(tiles(anaPage)).toHaveCount(2, { timeout: 45_000 });
+      await expect(tiles(boPage)).toHaveCount(2, { timeout: 45_000 });
+
+      // Ana leaves. Bo is told who left, and stays: no timer takes him back to the chat.
+      await anaPage.getByRole('button', { name: 'Leave call and go back to chat' }).click();
+      await expect(anaPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });
+      const notice = boPage.getByTestId('partner-left');
+      await expect(notice).toContainText('Rejoin Ana left the call', { timeout: 30_000 });
+      await boPage.waitForTimeout(6_000);
+      await expect(boPage).toHaveURL(new RegExp(`/meet/${convId}`));
+      await expect(boPage.getByText(/^Audio call$/)).toBeVisible();
+      await notice.getByRole('button', { name: 'Wait', exact: true }).click();
+      await expect(notice).toHaveCount(0);
+
+      // Ana comes back in, and each sees the other again.
+      await gotoRetry(anaPage, `${APP}/meet/${convId}?kind=audio`);
+      await expect(tiles(boPage)).toHaveCount(2, { timeout: 45_000 });
+      await expect(tiles(anaPage)).toHaveCount(2, { timeout: 45_000 });
+
+      // She leaves once more; this time Bo leaves too, from the notice.
+      await anaPage.getByRole('button', { name: 'Leave call and go back to chat' }).click();
+      await expect(notice).toBeVisible({ timeout: 30_000 });
+      await notice.getByRole('button', { name: 'Leave', exact: true }).click();
+      await expect(boPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });
+      console.log('  ✓ Ana left and came back; Bo stayed in the room until he chose to leave');
+    } finally {
+      await media.close().catch(() => {});
+    }
+  } finally {
+    await cleanup(pool, { ids: [ana.id, bo.id] });
+  }
 });

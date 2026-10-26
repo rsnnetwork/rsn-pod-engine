@@ -3,24 +3,39 @@
 // A full-page call on REASON for a scheduled meeting or a "Meet now". Reached from
 // the chat meeting card, the Join button, the bell "X is calling", or the email
 // link. Uses the same LiveKit stack the events use. Leaving returns to the chat.
+//
+// 26 Oct 2026: one person leaving no longer ends the call for the other (they
+// are told, and can wait for them to come back in), and the room's token is
+// minted as the person goes in, not when the page loads. The meeting's time
+// is read from the same query the scheduler and the thread read, so a move
+// made while this page waits on its countdown moves the countdown too.
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { LiveKitRoom, RoomAudioRenderer, ParticipantTile, ControlBar, useTracks, useRoomContext, type TrackReference } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track, RoomEvent, type RemoteParticipant } from 'livekit-client';
+import { Track } from 'livekit-client';
 import { ArrowLeft, CalendarClock, Maximize2, Minimize2, PhoneOff } from 'lucide-react';
+import { MEETING_JOIN_EARLY_MIN } from '@rsn/shared';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 import { PageLoader } from '@/components/ui/Spinner';
+import { errorMessage } from '@/features/reason/errors';
+import { leftCallText, watchPartner } from './call-presence';
+import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
+import { schedulingKey, type Scheduling } from './scheduling-types';
 
 /** A stable key for a track reference (participant + source + track sid). */
 function trackId(t: TrackReference | { participant?: { identity?: string }; source?: string; publication?: { trackSid?: string } }): string {
   return `${t.participant?.identity ?? '?'}:${t.source ?? '?'}:${t.publication?.trackSid ?? 'ph'}`;
 }
 
-// You can enter a scheduled meeting from 5 minutes before its start; earlier
-// than that, you land on a countdown (but can still force your way in).
-const EARLY_JOIN_MS = 5 * 60 * 1000;
+// A scheduled meeting can be entered from MEETING_JOIN_EARLY_MIN minutes before
+// its start (the shared rule the meetings list and the meeting's page use);
+// earlier than that, you land on a countdown (but can still force your way in).
+// Its room stays open until isMeetingOver says the meeting has ended.
+const EARLY_JOIN_MS = MEETING_JOIN_EARLY_MIN * 60_000;
 
 /** "2h 15m", "14m 30s", "less than a minute". */
 function untilLabel(ms: number): string {
@@ -113,16 +128,48 @@ function CallStage() {
   );
 }
 
-// When the other person leaves (they hung up), the call is over for both — we
-// surface a small "call ended" note and return to the chat (Ali, 8 Sep 2026).
-function CallEndWatcher({ onRemoteLeft }: { onRemoteLeft: (name: string) => void }) {
+// When the other person leaves, the call goes on for whoever is still in it
+// (26 Oct 2026). It used to end for both: this swapped the room for a "Call
+// ended" screen and went back to the chat 3.5 s later, so Script B's "leave
+// and rejoin without ending the other person's meeting" could not be done.
+// Now the one still here is told who left, and chooses: Wait (stay in the
+// room; the notice clears by itself when they come back in) or Leave.
+function CallEndWatcher({ onLeave }: { onLeave: () => void }) {
   const room = useRoomContext();
-  useEffect(() => {
-    const handler = (p: RemoteParticipant) => onRemoteLeft(p?.name || 'The other person');
-    room.on(RoomEvent.ParticipantDisconnected, handler);
-    return () => { room.off(RoomEvent.ParticipantDisconnected, handler); };
-  }, [room, onRemoteLeft]);
-  return null;
+  // Who left ('' when the room has no name for them); null while nobody has, or once they are back.
+  const [leftName, setLeftName] = useState<string | null>(null);
+  useEffect(() => watchPartner(room, setLeftName), [room]);
+  if (leftName === null) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-3">
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="partner-left"
+        className="pointer-events-auto w-full max-w-sm rounded-xl border border-white/15 bg-[#14141f]/95 p-4 text-center shadow-lg"
+      >
+        <PhoneOff className="mx-auto h-5 w-5 text-white/70" aria-hidden="true" />
+        <p className="mt-2 text-base font-semibold">{leftCallText(leftName)}</p>
+        <p className="mt-1 text-sm text-white/70">Wait for them to come back, or leave too.</p>
+        <div className="mt-3 flex justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => setLeftName(null)}
+            className="inline-flex min-h-[44px] min-w-[88px] items-center justify-center rounded-lg bg-white/10 px-4 text-sm font-medium text-white hover:bg-white/20"
+          >
+            Wait
+          </button>
+          <button
+            type="button"
+            onClick={onLeave}
+            className="inline-flex min-h-[44px] min-w-[88px] items-center justify-center rounded-lg bg-rsn-red px-4 text-sm font-medium text-white hover:opacity-90"
+          >
+            Leave
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function MeetPage() {
@@ -133,55 +180,58 @@ export default function MeetPage() {
   // gated (it's happening right now).
   const isScheduled = params.get('scheduled') === '1';
   const navigate = useNavigate();
-  const [conn, setConn] = useState<{ token: string; url: string } | null>(null);
+  // The token belongs to one room and kind: `room` keeps it from being reused if the page moves to another call.
+  const [conn, setConn] = useState<{ token: string; url: string; room: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [startAt, setStartAt] = useState<Date | null>(null);
-  const [durationMin, setDurationMin] = useState<number | null>(null);
-  const [scheduleChecked, setScheduleChecked] = useState(!isScheduled);
   const [now, setNow] = useState<number>(Date.now());
   const [forceJoin, setForceJoin] = useState(false);
-  const [remoteEnded, setRemoteEnded] = useState<string | null>(null);
 
   const leave = useCallback(() => navigate(`/messages/${conversationId}`), [navigate, conversationId]);
-  const handleRemoteLeft = useCallback((name: string) => setRemoteEnded(name), []);
 
-  // Once the other person leaves, show the note briefly, then return to chat.
-  useEffect(() => {
-    if (!remoteEnded) return;
-    const t = setTimeout(leave, 3500);
-    return () => clearTimeout(t);
-  }, [remoteEnded, leave]);
+  // A scheduled meeting's start and length: the scheduler's own query, kept live
+  // by the dm-conversation entity, so a move (or a cancel) reaches a page that is
+  // already open. The page decides on a fresh read (never on what an earlier
+  // page left in the cache); with no schedule to read (none, or the request
+  // failed) it does not gate, and the server says whether there is a meeting.
+  const schedule = useQuery<Scheduling>({
+    queryKey: schedulingKey(conversationId ?? ''),
+    queryFn: () => api.get(`/dm/conversations/${conversationId}/scheduling`).then(r => r.data.data),
+    enabled: isScheduled && !!conversationId,
+    refetchOnMount: 'always',
+    meta: { entities: conversationId ? [E.dmConversation(conversationId)] : [] },
+  });
+  const meeting = isScheduled ? schedule.data?.confirmed ?? null : null;
+  const startMs = meeting?.startAt ? Date.parse(meeting.startAt) : null;
+  const scheduleChecked = !isScheduled || schedule.isFetchedAfterMount;
+  const roomKey = `${conversationId}:${kind}`;
+  const live = conn && conn.room === roomKey ? conn : null;
+
+  // A scheduled meeting opened early waits on a countdown; one long over says
+  // so. Once the person is in the room, neither takes them out of it again.
+  const gated = isScheduled && !forceJoin && !live;
+  const waiting = gated && startMs !== null && now < startMs - EARLY_JOIN_MS;
+  const ended = gated && isMeetingOver(meeting?.startAt, meeting?.durationMin, now);
+  // The room's token is minted as the person goes in: once the start time is
+  // known, after the countdown or "Join now anyway". Minted on page load, a page
+  // opened early entered later on a token from outside the meeting's window,
+  // and the server never counted that person as there (calls never unlocked).
+  const entering = scheduleChecked && !waiting && !ended;
 
   useEffect(() => {
+    if (!entering) return;
     let cancelled = false;
     (async () => {
       try {
         const { data } = await api.post(`/dm/conversations/${conversationId}/call-token`, { kind });
-        if (!cancelled) setConn({ token: data.data.token, url: data.data.url });
-      } catch (e: any) {
-        if (!cancelled) setError(e?.response?.data?.error?.message || 'Could not start the call. Try again from the chat.');
+        if (!cancelled) setConn({ token: data.data.token, url: data.data.url, room: `${conversationId}:${kind}` });
+      } catch (e) {
+        if (!cancelled) setError(errorMessage(e, 'Could not start the call. Try again from the chat.'));
       }
     })();
     return () => { cancelled = true; };
-  }, [conversationId, kind]);
-
-  // For a scheduled meeting, learn its start time so we can gate early joins.
-  useEffect(() => {
-    if (!isScheduled) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data } = await api.get(`/dm/conversations/${conversationId}/scheduling`);
-        const s = data?.data?.confirmed?.startAt;
-        if (!cancelled && s) { setStartAt(new Date(s)); setDurationMin(data?.data?.confirmed?.durationMin ?? null); }
-      } catch { /* no schedule info → don't gate */ }
-      finally { if (!cancelled) setScheduleChecked(true); }
-    })();
-    return () => { cancelled = true; };
-  }, [conversationId, isScheduled]);
+  }, [entering, conversationId, kind]);
 
   // Tick the countdown while we're waiting for a scheduled meeting to open.
-  const waiting = isScheduled && !forceJoin && !!startAt && now < startAt.getTime() - EARLY_JOIN_MS;
   useEffect(() => {
     if (!waiting) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -202,12 +252,9 @@ export default function MeetPage() {
     );
   }
 
-  // A scheduled meeting whose window has fully ended (30 min past its end) —
-  // don't drop into an empty room; point them back to the chat to call now.
-  const MEETING_GRACE_MS = 30 * 60 * 1000;
-  const ended = isScheduled && !forceJoin && !!startAt
-    && now > startAt.getTime() + ((durationMin ?? 30) * 60_000) + MEETING_GRACE_MS;
-  if (ended) {
+  // A scheduled meeting whose window has fully ended (isMeetingOver) — don't
+  // drop into an empty room; point them back to the chat to call now.
+  if (ended && meeting?.startAt) {
     return (
       <div
         className="flex min-h-[100dvh] flex-col items-center justify-center gap-5 bg-[#0b0b12] px-6 text-center text-white"
@@ -218,9 +265,7 @@ export default function MeetPage() {
         </div>
         <div className="space-y-1">
           <p className="text-lg font-semibold">This meeting has ended</p>
-          <p className="text-sm text-white/50">
-            {startAt.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}
-          </p>
+          <p className="text-sm text-white/50">{whenWithZone(meeting.startAt, viewerZone())}</p>
         </div>
         <p className="max-w-xs text-xs text-white/40">You can start a new call from the chat.</p>
         <button onClick={leave} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-white/10 px-4 text-sm font-medium hover:bg-white/20">
@@ -232,12 +277,9 @@ export default function MeetPage() {
 
   // A scheduled meeting opened early — show a countdown, but never trap the user:
   // they can join now anyway, or go back.
-  if (waiting) {
-    const startMs = startAt!.getTime();
+  if (waiting && meeting?.startAt && startMs !== null) {
     const remaining = startMs - now;
-    const localTime = startAt!.toLocaleString([], {
-      weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-    });
+    const localTime = whenWithZone(meeting.startAt, viewerZone());
     return (
       <div
         className="flex min-h-[100dvh] flex-col items-center justify-center gap-5 bg-[#0b0b12] px-6 text-center text-white"
@@ -252,7 +294,7 @@ export default function MeetPage() {
           <p className="text-white/50 text-sm">{localTime}</p>
         </div>
         <p className="max-w-xs text-xs text-white/40">
-          You can wait here — it opens automatically 5 minutes before — or join now if you're ready early.
+          You can wait here — it opens automatically {MEETING_JOIN_EARLY_MIN} minutes before — or join now if you're ready early.
         </p>
         <div className="flex flex-col items-center gap-3">
           <button
@@ -269,30 +311,9 @@ export default function MeetPage() {
     );
   }
 
-  // The other person hung up — the call is over for both. Show a small note,
-  // then go back to the chat.
-  if (remoteEnded) {
-    return (
-      <div
-        className="flex min-h-[100dvh] flex-col items-center justify-center gap-5 bg-[#0b0b12] px-6 text-center text-white"
-        style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
-      >
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
-          <PhoneOff className="h-7 w-7 text-white/70" />
-        </div>
-        <div className="space-y-1">
-          <p className="text-lg font-semibold">Call ended</p>
-          <p className="text-sm text-white/50">{remoteEnded} left the call.</p>
-        </div>
-        <button onClick={leave} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-white/10 px-4 text-sm font-medium hover:bg-white/20">
-          <ArrowLeft className="h-4 w-4" /> Back to chat
-        </button>
-      </div>
-    );
-  }
-
-  // Don't flash into the room before we know a scheduled meeting's start time.
-  if (!conn || (isScheduled && !scheduleChecked)) {
+  // Don't flash into the room before we know a scheduled meeting's start time,
+  // or before its token is here.
+  if (!live || (isScheduled && !scheduleChecked)) {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
   }
 
@@ -318,17 +339,17 @@ export default function MeetPage() {
       </div>
 
       <LiveKitRoom
-        token={conn.token}
-        serverUrl={conn.url}
+        token={live.token}
+        serverUrl={live.url}
         connect
         video={kind === 'video'}
         audio
         onDisconnected={leave}
-        style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'transparent' }}
+        style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'transparent' }}
       >
         <CallStage />
         <RoomAudioRenderer />
-        <CallEndWatcher onRemoteLeft={handleRemoteLeft} />
+        <CallEndWatcher onLeave={leave} />
         <div className="shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
           <ControlBar variation="minimal" />
         </div>

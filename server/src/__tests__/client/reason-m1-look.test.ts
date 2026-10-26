@@ -435,15 +435,16 @@ describe('The bell panel\'s text reads at 4.5:1 on white and on the unread tint 
     expect(luminance(body)).toBeLessThan(luminance(time));
   });
 
-  it('the loading and empty lines, and every status label, read too', () => {
-    for (const line of ['Loading\\.\\.\\.', 'No notifications yet']) {
+  it('the loading, error and empty lines, and every status label, read too', () => {
+    for (const line of ['Loading\\.\\.\\.', 'We could not load your notifications\\.', 'No notifications yet']) {
       const colour = textColour(classesOf(new RegExp(`<p className="([^"]*)">${line}</p>`)));
       expect(contrast(colour, '#ffffff')).toBeGreaterThanOrEqual(4.5);
     }
     const labels = [...bell().matchAll(/color: '(text-[a-z]+-\d+)'/g)].map((m) => m[1]);
-    // Accepted, Declined, Expired on an invite, and the two words under a meeting request.
-    const poke = classesOf(/n\.pokeStatus === 'accepted' \? '(text-[a-z]+-\d+)' : '(?:text-[a-z]+-\d+)'/);
-    const pokeDeclined = classesOf(/n\.pokeStatus === 'accepted' \? '(?:text-[a-z]+-\d+)' : '(text-[a-z]+-\d+)'/);
+    // Accepted, Declined, Expired on an invite, and the two words under a meeting request (drawn from the server's
+    // requestState since 26 Oct 2026).
+    const poke = classesOf(/view\.label === 'Accepted' \? '(text-[a-z]+-\d+)' : '(?:text-[a-z]+-\d+)'/);
+    const pokeDeclined = classesOf(/view\.label === 'Accepted' \? '(?:text-[a-z]+-\d+)' : '(text-[a-z]+-\d+)'/);
     expect(labels).toHaveLength(3);
     for (const cls of [...labels, poke, pokeDeclined]) {
       for (const ground of grounds()) expect({ cls, ratio: contrast(textColour(cls), ground) >= 4.5 }).toEqual({ cls, ratio: true });
@@ -469,8 +470,9 @@ describe('The bell\'s Accept buttons read at 4.5:1, resting and hovered (polish 
     const token = cls.match(/^(?:bg|text)-reason-([a-z-]+)$/);
     return token ? reasonToken(token[1]) : hexOf(cls);
   };
-  // Both Accept buttons in the panel: the one on a pod or event invite, and the one on a meeting request.
-  const accepts = () => [...bell().matchAll(/onClick=\{\(\) => (handleAccept\w+)\(n\)\}\s*disabled=\{isActing\}\s*className="([^"]*)"/g)]
+  // Both Accept buttons in the panel: the one on a pod or event invite, and the one on a meeting request (its own
+  // component since 26 Oct 2026, which knows its request, so its handler takes no row).
+  const accepts = () => [...bell().matchAll(/onClick=\{\(\) => (handleAccept\w+)\((?:n)?\)\}\s*disabled=\{isActing\}\s*className="([^"]*)"/g)]
     .map((m) => ({ handler: m[1], classes: m[2].split(/\s+/) }));
 
   it('there are two Accept buttons, and both are checked below', () => {
@@ -532,8 +534,8 @@ describe('Every button in the bell panel is a 44px touch target (pre-review adju
       .map((m) => ({ label: (m[1] ?? m[2]).replace(/\s+/g, ' ').slice(0, 60), classes: (m[1] ?? m[2]).split(/\s+/) }));
   };
 
-  it('finds the six: Mark all read, the row, and Accept and Decline on an invite and on a meeting request', () => {
-    expect(panelButtons()).toHaveLength(6);
+  it('finds the seven: Mark all read, Try again when the list failed, the row, and Accept and Decline on an invite and on a meeting request', () => {
+    expect(panelButtons()).toHaveLength(7);
   });
 
   it('each of them is min-h-[44px], so a thumb can hit it, and the bell button itself is 44px square', () => {

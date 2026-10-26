@@ -1,4 +1,4 @@
-import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
+import { test, expect, Browser, BrowserContext, Page, Locator } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
@@ -18,8 +18,11 @@ import { expectReachable, tapReachable } from '../helpers/viewport-fit';
 // 25 Oct 2026 (Stefan and Claus on production): both saved the same time, the
 // server said "pick a time to confirm", nobody found the control that books,
 // and no meeting existed. The same time picked by both is now the agreement:
-// the save that leaves exactly one shared time books it. Two or more shared
-// times still get the proposal card and the Confirm step (the second test).
+// the save that leaves exactly one shared time books it, and says so ("Meeting
+// confirmed: Sun 25 Oct, 13:00"). Two or more shared times still get the
+// proposal card, whose time opens the confirm card for that very time (the
+// second test); "the green" in the timeline does the same, and nothing picked
+// or typed is dropped without a word (the third).
 // ─────────────────────────────────────────────────────────────────────────────
 
 let browser: Browser;
@@ -69,6 +72,24 @@ async function openScheduler(page: Page): Promise<void> {
 }
 
 const cards = (page: Page) => page.getByTestId('system-message-card');
+/** Toasts that are not errors (a success or a note) live in the page's status region. */
+const toast = (page: Page, text: string) => page.getByRole('status').getByText(text, { exact: true });
+/** Error toasts live in the alert region. */
+const alertToast = (page: Page, text: string) => page.getByRole('alert').getByText(text, { exact: true });
+/** An instant as the server writes a slot key: "2026-10-29T09:00:00Z". */
+const slotOf = (at: string) => new Date(at).toISOString().replace('.000Z', 'Z');
+
+/** A time on a reader's own clock, 24-hour, as the scheduler and the cards write it: "13:00". */
+function timeIn(slot: string, tz: string): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(slot));
+}
+/** Its day and time, "Sun 25 Oct, 13:00" (the toasts and the confirm card). */
+function labelIn(slot: string, tz: string): string {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', month: 'numeric', day: 'numeric' })
+    .formatToParts(new Date(slot)).map(x => [x.type, x.value]));
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${p.weekday} ${Number(p.day)} ${months[Number(p.month) - 1]}, ${timeIn(slot, tz)}`;
+}
 
 /**
  * The timeline shows ONE day at a time, and opens on the first day that has
@@ -90,18 +111,35 @@ async function selectDayFor(page: Page, slot: string): Promise<void> {
   throw new Error(`no day in the strip holds ${slot}`);
 }
 
+/**
+ * Wait until a target has stopped moving. A wheel scroll is animated, and a tap
+ * measured while the panel is still gliding lands on the time next to it.
+ */
+async function stillAt(target: Locator): Promise<void> {
+  let last = '';
+  for (let i = 0; i < 20; i++) {
+    const box = await target.boundingBox();
+    const at = box ? `${Math.round(box.x)},${Math.round(box.y)}` : 'none';
+    if (at === last) return;
+    last = at;
+    await target.page().waitForTimeout(100);
+  }
+}
+
 /** Bring a time into reach, scrolling the panel the way a person would. */
 async function reachSlot(page: Page, slot: string, label: string): Promise<void> {
   await selectDayFor(page, slot);
   const target = page.locator(`[data-slot="${slot}"]`);
   for (let i = 0; i < 8; i++) {
+    await stillAt(target);
     if (await expectReachable(page, target, 'probe').then(() => true, () => false)) break;
-    const anchor = await page.locator('label[for="meeting-minutes"]').boundingBox();
+    const anchor = await page.getByTestId('scheduler-zone').boundingBox();
     if (!anchor) break;
     await page.mouse.move(anchor.x + 4, Math.max(1, anchor.y + 4));
     await page.mouse.wheel(0, 120);
     await page.waitForTimeout(250);
   }
+  await stillAt(target);
   await tapReachable(page, target, label);
 }
 
@@ -146,9 +184,13 @@ test('two people go from silence to a booked meeting, each step arriving on both
 
   // ── 1. Ana shares her times. The thread says so, on BOTH screens.
   await openScheduler(anaPage);
+  // The zone is named over the times, and nothing that has started is offered.
+  await expect(anaPage.getByTestId('scheduler-zone')).toHaveText(/^Times in your time zone: Central European (Standard |Summer )?Time \(CES?T\)$/);
+  const offered = await anaPage.locator('[data-slot]').evaluateAll(els => els.map(e => e.getAttribute('data-slot') ?? ''));
+  expect(offered.every(k => Date.parse(k) > Date.now()), 'only times still ahead are offered').toBe(true);
   await reachSlot(anaPage, SLOT, 'Ana: the time she can meet');
   await tapReachable(anaPage, anaPage.getByRole('button', { name: /Save and send availability/i }), 'Ana: "Save and send availability"');
-  await expect(anaPage.getByText(/Sent — they can see when you are free/i)).toBeVisible({ timeout: 20_000 });
+  await expect(toast(anaPage, 'Sent. They can see when you are free.')).toBeVisible({ timeout: 20_000 });
 
   await expect(cards(boPage).filter({ hasText: /shared times they can meet/i }))
     .toBeVisible({ timeout: 30_000 });
@@ -161,8 +203,15 @@ test('two people go from silence to a booked meeting, each step arriving on both
   // ── 2. Bo picks the same time and saves. That is the agreement: the meeting
   //       is booked by the save itself, and both are told, with nothing more to press.
   await openScheduler(boPage);
+  const boCell = boPage.locator(`[data-slot="${SLOT}"]`);
+  await selectDayFor(boPage, SLOT);
+  await expect(boCell).toHaveAttribute('aria-label', `${timeIn(SLOT, 'Asia/Karachi')}, they can`);
   await reachSlot(boPage, SLOT, 'Bo: the same time, from a different timezone');
+  // Picked but not sent: it is still his own pick, not yet the agreement.
+  await expect(boCell).toHaveAttribute('aria-label', `${timeIn(SLOT, 'Asia/Karachi')}, you both can, not sent yet`);
   await tapReachable(boPage, boPage.getByRole('button', { name: /Save and send availability/i }), 'Bo: "Save and send availability"');
+  // The save says what it did, in Bo's own time.
+  await expect(toast(boPage, `Meeting confirmed: ${labelIn(SLOT, 'Asia/Karachi')}`)).toBeVisible({ timeout: 20_000 });
 
   // Sending ended the job: the panel is gone and the chat is back, with the
   // card the save wrote in it. Nothing traps them any more.
@@ -182,14 +231,16 @@ test('two people go from silence to a booked meeting, each step arriving on both
   await expect(boCard.getByRole('button', { name: /Join meeting/i })).toBeVisible();
   await expect(boCard.getByRole('button', { name: /Add to calendar/i })).toBeVisible();
 
-  const localIn = (tz: string) => new Date(SLOT).toLocaleString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
-  await expect(boCard).toContainText(localIn('Asia/Karachi').replace(/^0/, ''));
-  await expect(cards(anaPage).filter({ hasText: confirmed })).toContainText(localIn('Europe/Oslo').replace(/^0/, ''));
-  console.log(`  ✓ same meeting, Oslo ${localIn('Europe/Oslo')} and Karachi ${localIn('Asia/Karachi')}`);
+  await expect(boCard).toContainText(labelIn(SLOT, 'Asia/Karachi'));
+  await expect(cards(anaPage).filter({ hasText: confirmed })).toContainText(labelIn(SLOT, 'Europe/Oslo'));
+  console.log(`  ✓ same meeting, Oslo ${labelIn(SLOT, 'Europe/Oslo')} and Karachi ${labelIn(SLOT, 'Asia/Karachi')}`);
   // Nobody sees a raw timestamp.
   await expect(boCard).not.toContainText(/\d{4}-\d{2}-\d{2}T/);
-  // Production's scheduler shows the meeting with Join as soon as the scheduling says it is confirmed.
-  await expect(anaPage.getByTestId('thread-meeting-banner').getByRole('button', { name: /^Join$/ })).toBeVisible({ timeout: 30_000 });
+  // The pinned banner shows the meeting with Join as soon as the scheduling says it is confirmed,
+  // and opens the meeting's own page.
+  const anaBanner = anaPage.getByTestId('thread-meeting-banner');
+  await expect(anaBanner.getByRole('button', { name: /^Join$/ })).toBeVisible({ timeout: 30_000 });
+  await expect(anaBanner.locator('a[href^="/meetings/"]')).toBeVisible();
 
   // ── 4. The database holds ONE meeting, booked by Bo's save, 30 minutes of
   //       video (production's scheduler sends no length), ONE confirmation card,
@@ -216,7 +267,7 @@ test('two people go from silence to a booked meeting, each step arriving on both
   expect(anaBell.rows.map(r => r.title)).toEqual(['Meeting time confirmed']);
 });
 
-test('when two times are shared, the card leads to Confirm, and Confirm books the time picked', async () => {
+test('when two times are shared, the card\'s time opens the confirm card on that time, and Confirm books it', async () => {
   test.setTimeout(240_000);
   // Its own pair: two shared times are not an agreement on one, so nothing is booked by the saves.
   const cy = await createTestUser('mlcy');
@@ -243,11 +294,16 @@ test('when two times are shared, the card leads to Confirm, and Confirm books th
     const proposal = /You are both free/i;
     await expect(cards(diPage).filter({ hasText: proposal })).toBeVisible({ timeout: 30_000 });
 
-    // Di confirms from the card in the chat, on a phone: the card's time, the green chip, Confirm meeting.
-    await tapReachable(diPage, cards(diPage).filter({ hasText: proposal }).getByRole('button').first(), 'Di: the proposed time');
+    // Di confirms from the card in the chat, on a phone: the card's time opens the
+    // confirm card for THAT time (on 25 Oct it threw the time away and only opened
+    // the panel), then Confirm meeting.
+    const cardTime = cards(diPage).filter({ hasText: proposal }).getByRole('button', { name: labelIn(early, 'Asia/Karachi') });
+    await tapReachable(diPage, cardTime, 'Di: the proposed time');
     await expect(diPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
-    await tapReachable(diPage, diPage.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first(), 'Di: green time chip');
-    await tapReachable(diPage, diPage.getByRole('button', { name: /^Confirm meeting$/ }), 'Di: "Confirm meeting"');
+    const confirmCard = diPage.getByTestId('confirm-card');
+    await expect(confirmCard).toContainText(labelIn(early, 'Asia/Karachi'));
+    await tapReachable(diPage, confirmCard.getByRole('button', { name: /^Confirm meeting$/ }), 'Di: "Confirm meeting"');
+    await expect(toast(diPage, `Meeting confirmed: ${labelIn(early, 'Asia/Karachi')}`)).toBeVisible({ timeout: 20_000 });
 
     const confirmed = /Meeting confirmed/i;
     await expect(cards(diPage).filter({ hasText: confirmed })).toBeVisible({ timeout: 30_000 });
@@ -267,6 +323,495 @@ test('when two times are shared, the card leads to Confirm, and Confirm books th
     console.log('  ✓ two shared times: one proposal card, then Confirm booked the time picked');
   } finally {
     await cleanup(pool, { ids: [cy.id, di.id] });
+  }
+});
+
+test('"the green" in the timeline opens the confirm card, and nothing picked or typed is dropped without a word', async () => {
+  test.setTimeout(240_000);
+  // 25 Oct: in the reopened panel "the green" 13:00 cell was a toggle, and tapping
+  // it took back the pick that had made it green. A time typed into "Another time"
+  // and left vanished, and a tap outside the panel threw unsent picks away silently.
+  const ev = await createTestUser('mlev');
+  const fi = await createTestUser('mlfi');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Ev', ev.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Fi', fi.id]);
+    const sent = await apiAs(ev, 'POST', '/pokes', { recipientId: fi.id, message: 'Coffee?' });
+    expect((await apiAs(fi, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [ev.id, fi.id],
+    )).rows[0].id;
+    const green = futureSlot(2, 11);
+    const other = futureSlot(2, 15);
+    const free = futureSlot(2, 17, 30);
+    await apiAs(ev, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [green, other] });
+    await apiAs(fi, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [green, other] });
+
+    const TZ = 'Asia/Karachi';
+    const page = await openAs(fi, `/messages/${conv}`, { width: 390, height: 844 }, TZ);
+    await openScheduler(page);
+
+    // The green cell is the confirm control: it opens the card for its own time and removes nothing.
+    await selectDayFor(page, green);
+    const cell = page.locator(`[data-slot="${green}"]`);
+    await expect(cell).toHaveAttribute('aria-label', `Confirm ${timeIn(green, TZ)}, you both can`);
+    await reachSlot(page, green, 'Fi: the green time');
+    const confirmCard = page.getByTestId('confirm-card');
+    await expect(confirmCard).toContainText(labelIn(green, TZ));
+    await expect(cell).toHaveAttribute('aria-label', `Confirm ${timeIn(green, TZ)}, you both can`);
+    // Its length and kind live on the card.
+    await expect(confirmCard.locator('#meeting-minutes')).toHaveValue('30');
+    await expect(confirmCard.getByRole('button', { name: 'Video' })).toHaveAttribute('aria-pressed', 'true');
+    await tapReachable(page, confirmCard.getByRole('button', { name: 'Cancel' }), 'Fi: Cancel');
+
+    // An unsent pick, then a tap outside the panel: it asks, and Discard means discard.
+    await reachSlot(page, free, 'Fi: a free time');
+    await page.getByPlaceholder(/^(Type a message\.\.\.|Message…)$/).click();
+    await expect(page.getByText('Send your times?', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('meeting-scheduler')).toBeVisible();
+    await tapReachable(page, page.getByRole('button', { name: 'Discard', exact: true }), 'Fi: Discard');
+    await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0);
+    await openScheduler(page);
+    await selectDayFor(page, free);
+    await expect(page.locator(`[data-slot="${free}"]`)).toHaveAttribute('aria-pressed', 'false');
+
+    // A typed time, then Escape from the box: it asks, and the press on Discard is the answer, the first time.
+    // (The box used to lose the focus on that press, add the time, and take the question away under the pointer.)
+    const typedBox = page.locator('#custom-time');
+    await typedBox.fill(timeIn(free, TZ));
+    await typedBox.press('Escape');
+    await expect(page.getByText('Send your times?', { exact: true })).toBeVisible();
+    await tapReachable(page, page.getByRole('button', { name: 'Discard', exact: true }), 'Fi: Discard after Escape');
+    await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0);
+    await openScheduler(page);
+    await selectDayFor(page, free);
+    await expect(page.locator(`[data-slot="${free}"]`)).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#custom-time')).toHaveValue('');
+
+    // A typed time with neither Add time nor Enter: it counts as unsent, and Save sends it.
+    await page.locator('#custom-time').fill(timeIn(free, TZ));
+    await tapReachable(page, page.getByRole('button', { name: /Save and send availability/i }), 'Fi: Save');
+    // Two times are shared and nothing is booked, so the panel stays on the confirm step.
+    await expect(toast(page, 'You can both meet. Confirm a time.')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('overlap-list')).toBeVisible();
+    const saved = await apiAs(fi, 'GET', `/dm/conversations/${conv}/scheduling`);
+    expect(saved.json.data.mine).toEqual(expect.arrayContaining([green, other, free]));
+    const row = (await pool.query<{ meeting_start_at: Date | null }>(`SELECT meeting_start_at FROM dm_conversations WHERE id=$1`, [conv])).rows[0];
+    expect(row.meeting_start_at, 'nothing was booked by any of this').toBeNull();
+    console.log('  ✓ the green cell opened the confirm card; an unsent pick was asked about; a typed time was sent');
+  } finally {
+    await cleanup(pool, { ids: [ev.id, fi.id] });
+  }
+});
+
+test('Reschedule (?schedule=1) opens the scheduler ready for a pick, even for a pair that has met; one new time picked by both opens the Move card, and Move moves the meeting with its length and kind', async () => {
+  test.setTimeout(240_000);
+  // A meeting's page (Events) has Reschedule, which opens the chat with ?schedule=1.
+  // Once a pair has met, the chat offers calls and no scheduler, so Reschedule
+  // would have landed on nothing. It opens the scheduler for every pair, once
+  // (the flag is replaced, so Back does not open it again). A save never moves
+  // a meeting (the server's rule): the save that leaves one new time both can
+  // opens the Move card on it, with the meeting's own length and kind, and the
+  // meeting moves when that person presses Move.
+  const gu = await createTestUser('mlgu');
+  const ha = await createTestUser('mlha');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Gu', gu.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Ha', ha.id]);
+    const sent = await apiAs(gu, 'POST', '/pokes', { recipientId: ha.id, message: 'Coffee?' });
+    expect((await apiAs(ha, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [gu.id, ha.id],
+    )).rows[0].id;
+    const first = futureSlot(3, 9);
+    const moved = futureSlot(3, 17);
+    await apiAs(gu, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [first] });
+    const booked = await apiAs(ha, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, {
+      windows: [first], durationMin: 45, type: 'audio',
+    });
+    expect(booked.json.data.confirmed?.window, 'one shared time books the meeting').toBe(first);
+    expect([booked.json.data.confirmed.durationMin, booked.json.data.confirmed.type]).toEqual([45, 'audio']);
+    const meetingId = booked.json.data.confirmed.meetingId as string;
+    expect(meetingId).toBeTruthy();
+    // They have met before: calls are open, so the chat shows calls, not the scheduler.
+    await pool.query(`UPDATE dm_conversations SET calls_unlocked_at = NOW() WHERE id = $1`, [conv]);
+
+    const TZ = 'Asia/Karachi';
+    // Gu, on a phone, presses Reschedule.
+    const guPage = await openAs(gu, '/messages', { width: 390, height: 844 }, TZ);
+    await gotoRetry(guPage, `${APP}/messages/${conv}?schedule=1`);
+    await expect(guPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    await expect(guPage).not.toHaveURL(/schedule=1/);
+    // Ready for the first pick: a time that can be picked has the focus (not the booked one).
+    await expect.poll(() => guPage.evaluate(() => document.activeElement?.getAttribute('data-slot') ?? null), { timeout: 10_000 })
+      .not.toBeNull();
+    expect(await guPage.evaluate(() => document.activeElement?.getAttribute('data-slot'))).not.toBe(first);
+    await expect(guPage.locator(`[data-slot="${first}"]`)).toHaveAttribute('aria-label', `${timeIn(first, TZ)}, your meeting`);
+    await reachSlot(guPage, moved, 'Gu: the new time');
+    await tapReachable(guPage, guPage.getByRole('button', { name: /Save and send availability/i }), 'Gu: Save');
+    await expect(toast(guPage, 'Sent. They can see when you are free.')).toBeVisible({ timeout: 20_000 });
+    // Back does not open it again: the flag was replaced, not added.
+    await guPage.goBack();
+    await expect(guPage).toHaveURL(/\/messages$/);
+    await guPage.goForward();
+    await expect(guPage).toHaveURL(new RegExp(`/messages/${conv}$`));
+    await expect(guPage.getByTestId('thread-meeting-banner')).toBeVisible({ timeout: 20_000 });
+    await expect(guPage.getByTestId('meeting-scheduler')).toHaveCount(0);
+
+    // Ha, on a laptop, presses Reschedule too, picks the same new time, and saves. The save moves nothing: it says
+    // the move is there to make, and opens the Move card on that time with the meeting's 45 minutes of audio.
+    const haPage = await openAs(ha, `/messages/${conv}?schedule=1`, { width: 1280, height: 800 }, TZ);
+    await expect(haPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    await reachSlot(haPage, moved, 'Ha: the same new time');
+    // The panel cannot refresh after this save (its read fails): the card opens on the save's own answer and must not
+    // claim the time is no longer shared.
+    const scheduling = `**/api/dm/conversations/${conv}/scheduling`;
+    await haPage.route(scheduling, r => (r.request().method() === 'GET' ? r.abort() : r.continue()));
+    await tapReachable(haPage, haPage.getByRole('button', { name: /Save and send availability/i }), 'Ha: Save');
+    await expect(toast(haPage, `You can both meet at ${labelIn(moved, TZ)}. Move the meeting there?`)).toBeVisible({ timeout: 20_000 });
+    await expect(haPage.getByText(/^Meeting (confirmed|moved): /)).toHaveCount(0);
+    const moveCard = haPage.getByTestId('confirm-card');
+    await expect(moveCard).toContainText(labelIn(moved, TZ));
+    await expect(moveCard.locator('#meeting-minutes')).toHaveValue('45');
+    await expect(moveCard.getByRole('button', { name: 'Audio' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(moveCard.getByTestId('confirm-card-reason')).toHaveCount(0);
+    await expect(moveCard.getByRole('button', { name: 'Move meeting' })).toBeEnabled();
+    await haPage.unroute(scheduling);
+    expect(slotOf((await apiAs(gu, 'GET', `/meetings/${meetingId}`)).json.data.startAt), 'the save itself moved nothing').toBe(first);
+    await tapReachable(haPage, moveCard.getByRole('button', { name: 'Move meeting' }), 'Ha: Move meeting');
+    await expect(toast(haPage, `Meeting moved: ${labelIn(moved, TZ)}`)).toBeVisible({ timeout: 20_000 });
+    await expect(haPage.getByTestId('confirm-card')).toHaveCount(0);
+
+    // The same meeting record, at the new time, still 45 minutes of audio.
+    const record = await apiAs(gu, 'GET', `/meetings/${meetingId}`);
+    expect(record.status).toBe(200);
+    expect(slotOf(record.json.data.startAt)).toBe(moved);
+    expect([record.json.data.durationMin, record.json.data.kind]).toEqual([45, 'audio']);
+    // Gu's open chat shows the new time without a reload; the card for the old time says it moved and offers no Join.
+    await expect(guPage.getByTestId('thread-meeting-banner')).toContainText(labelIn(moved, TZ), { timeout: 30_000 });
+    await expect(guPage.getByTestId('thread-meeting-banner')).toContainText('Audio call · 45 min');
+    const oldCard = cards(guPage).filter({ has: guPage.getByText('Meeting confirmed', { exact: true }) });
+    await expect(oldCard.getByTestId('meeting-card-replaced')).toHaveText('This meeting moved to another time.', { timeout: 30_000 });
+    await expect(oldCard.getByRole('button', { name: /Join meeting/i })).toHaveCount(0);
+    await expect(cards(guPage).filter({ has: guPage.getByText('Meeting moved', { exact: true }) }).getByRole('button', { name: /Join meeting/i })).toBeVisible();
+    console.log('  ✓ Reschedule opened the scheduler for a pair that has met; the save opened the Move card; Move moved it, 45 min audio');
+  } finally {
+    await cleanup(pool, { ids: [gu.id, ha.id] });
+  }
+});
+
+test('a Move that fails leaves the meeting where it was, says so, and keeps the card open to try again', async () => {
+  test.setTimeout(240_000);
+  // Two failures: the connection drops as Move is pressed, and the partner takes
+  // the time back before the panel has heard (the server's 409). Neither moves
+  // anything; each says where the meeting still is, and the card stays for a retry.
+  const iv = await createTestUser('mliv');
+  const jo = await createTestUser('mljo');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Iv', iv.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Jo', jo.id]);
+    const sent = await apiAs(iv, 'POST', '/pokes', { recipientId: jo.id, message: 'Coffee?' });
+    expect((await apiAs(jo, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [iv.id, jo.id],
+    )).rows[0].id;
+    const first = futureSlot(4, 10);
+    const later = futureSlot(4, 16);
+    const put = (u: TestUser, windows: string[], extra: Record<string, unknown> = {}) =>
+      apiAs(u, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows, ...extra });
+    await put(iv, [first]);
+    const booked = await put(jo, [first], { durationMin: 45, type: 'audio' });
+    const meetingId = booked.json.data.confirmed.meetingId as string;
+    // Both add a later time; a save never moves the meeting, so it stays on the first.
+    await put(iv, [first, later]);
+    await put(jo, [first, later]);
+    const where = async () => {
+      const m = (await apiAs(iv, 'GET', `/meetings/${meetingId}`)).json.data;
+      return [slotOf(m.startAt), m.durationMin, m.kind];
+    };
+    expect(await where()).toEqual([first, 45, 'audio']);
+
+    const TZ = 'Europe/Copenhagen';
+    const page = await openAs(jo, `/messages/${conv}?schedule=1`, { width: 390, height: 844 }, TZ);
+    await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('Move it to another time you both can:', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await tapReachable(page, page.getByRole('button', { name: `Confirm ${labelIn(later, TZ)}` }), 'Jo: the later time');
+    const card = page.getByTestId('confirm-card');
+    const move = card.getByRole('button', { name: 'Move meeting' });
+    await expect(card.locator('#meeting-minutes')).toHaveValue('45');
+    await expect(card.getByRole('button', { name: 'Audio' })).toHaveAttribute('aria-pressed', 'true');
+
+    // 1. The connection drops as Move is pressed, while the panel's own refresh is slow (a bad connection): the toast
+    // and the button come back at once, not after the refresh.
+    await page.route('**/scheduling/confirm', r => r.abort('internetdisconnected'));
+    await page.route(`**/api/dm/conversations/${conv}/scheduling`, async r => {
+      if (r.request().method() === 'GET') await new Promise(resolve => setTimeout(resolve, 15_000));
+      await r.continue().catch(() => undefined);
+    });
+    await tapReachable(page, move, 'Jo: Move (offline)');
+    await expect(alertToast(page, `Could not move the meeting. It stays on ${labelIn(first, TZ)}. Try again.`)).toBeVisible({ timeout: 3_000 });
+    await expect(move).toBeEnabled({ timeout: 3_000 });
+    await expect(card).toBeVisible();
+    expect(await where()).toEqual([first, 45, 'audio']);
+    await page.unroute('**/scheduling/confirm');
+    await page.unroute(`**/api/dm/conversations/${conv}/scheduling`);
+
+    // 2. Iv takes the later time back, and Jo presses Move before the panel has heard (it is shown the times as they
+    // were until the press reaches the server). The server refuses with its 409, which says where the meeting is.
+    const stale = (await apiAs(jo, 'GET', `/dm/conversations/${conv}/scheduling`)).json;
+    let pressed = false;
+    await page.route(`**/api/dm/conversations/${conv}/scheduling`, r => (
+      !pressed && r.request().method() === 'GET'
+        ? r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(stale) })
+        : r.continue()
+    ));
+    await page.route('**/scheduling/confirm', r => { pressed = true; return r.continue(); });
+    await put(iv, [first]);
+    await page.waitForTimeout(1_500);
+    await tapReachable(page, move, 'Jo: Move (the time was taken back)');
+    await expect(alertToast(page, `That time is no longer free for both of you. Your meeting is on ${labelIn(first, TZ)}.`))
+      .toBeVisible({ timeout: 20_000 });
+    // The card stays, says why, and waits: Move comes back only if the time is shared again.
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId('confirm-card-reason')).toHaveText('That time is no longer free for both of you.', { timeout: 20_000 });
+    await expect(move).toBeDisabled();
+    expect(await where()).toEqual([first, 45, 'audio']);
+    await page.unroute(`**/api/dm/conversations/${conv}/scheduling`);
+    await page.unroute('**/scheduling/confirm');
+
+    // 3. Iv adds it back: the card, still open, offers Move again, and this time it moves; the failures said before
+    // are taken down, so "Meeting moved" is not read under them.
+    await put(iv, [first, later]);
+    await expect(card.getByTestId('confirm-card-reason')).toHaveCount(0, { timeout: 30_000 });
+    await expect(move).toBeEnabled();
+    await tapReachable(page, move, 'Jo: Move (retry)');
+    await expect(toast(page, `Meeting moved: ${labelIn(later, TZ)}`)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole('alert').getByText(/Could not move the meeting|no longer free for both/)).toHaveCount(0);
+    expect(await where()).toEqual([later, 45, 'audio']);
+    console.log('  ✓ a dropped Move and a refused Move each left the meeting in place with the card open; the retry moved it');
+  } finally {
+    await cleanup(pool, { ids: [iv.id, jo.id] });
+  }
+});
+
+test('an open card whose meeting changes under it closes and says where the meeting is, and a refusal names the server\'s time', async () => {
+  test.setTimeout(240_000);
+  // On 26 Oct a card kept offering its choice after the partner booked or moved the meeting: on the card's own time
+  // it said "no longer free for both" under a summary showing the meeting at that very time; elsewhere, Move would
+  // quietly undo the partner's move, with the card's old length and kind.
+  const ki = await createTestUser('mlki');
+  const lu = await createTestUser('mllu');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Ki', ki.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Lu', lu.id]);
+    const sent = await apiAs(ki, 'POST', '/pokes', { recipientId: lu.id, message: 'Coffee?' });
+    expect((await apiAs(lu, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [ki.id, lu.id],
+    )).rows[0].id;
+    const x = futureSlot(5, 10);
+    const y = futureSlot(5, 14);
+    const z = futureSlot(5, 17);
+    const put = (u: TestUser, windows: string[]) => apiAs(u, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows });
+    const confirmAs = (u: TestUser, at: string, durationMin = 30, type = 'video') =>
+      apiAs(u, 'POST', `/dm/conversations/${conv}/scheduling/confirm`, { window: at, durationMin, type });
+    await put(ki, [x, y, z]);
+    await put(lu, [x, y, z]);
+
+    const TZ = 'Europe/Copenhagen';
+    const page = await openAs(lu, `/messages/${conv}?schedule=1`, { width: 390, height: 844 }, TZ);
+    await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    const card = page.getByTestId('confirm-card');
+
+    // 1. Both pressed the same time: Ki's Confirm lands first. Lu's card on that time closes and says it is booked.
+    await tapReachable(page, page.getByRole('button', { name: `Confirm ${labelIn(x, TZ)}` }), 'Lu: x');
+    await expect(card).toContainText(labelIn(x, TZ));
+    expect((await confirmAs(ki, x, 45, 'audio')).status).toBe(200);
+    await expect(toast(page, `Booked for ${labelIn(x, TZ)}.`)).toBeVisible({ timeout: 30_000 });
+    await expect(card).toHaveCount(0);
+    await expect(page.getByText('That time is no longer free for both of you.', { exact: true })).toHaveCount(0);
+
+    // 2. Both pressed Move to the same time: Ki's Move lands first; Lu's Move card on y closes the same way.
+    await tapReachable(page, page.getByRole('button', { name: `Confirm ${labelIn(y, TZ)}` }), 'Lu: y');
+    await expect(card.getByRole('button', { name: 'Move meeting' })).toBeVisible();
+    await expect(card.locator('#meeting-minutes')).toHaveValue('45');
+    expect((await confirmAs(ki, y, 45, 'audio')).status).toBe(200);
+    await expect(toast(page, `Booked for ${labelIn(y, TZ)}.`)).toBeVisible({ timeout: 30_000 });
+    await expect(card).toHaveCount(0);
+
+    // 3. Lu opens Move to z, and Ki moves the meeting to x instead, as 60 minutes of video: Lu's card (still on the
+    // old length and kind) closes and names the new time; Move can no longer undo Ki's change.
+    await tapReachable(page, page.getByRole('button', { name: `Confirm ${labelIn(z, TZ)}` }), 'Lu: z');
+    await expect(card.locator('#meeting-minutes')).toHaveValue('45');
+    expect((await confirmAs(ki, x, 60, 'video')).status).toBe(200);
+    await expect(toast(page, `Your meeting is now on ${labelIn(x, TZ)}.`)).toBeVisible({ timeout: 30_000 });
+    await expect(card).toHaveCount(0);
+    const meetingId = (await apiAs(ki, 'GET', `/dm/conversations/${conv}/scheduling`)).json.data.confirmed.meetingId as string;
+    const where = async () => {
+      const m = (await apiAs(ki, 'GET', `/meetings/${meetingId}`)).json.data;
+      return [slotOf(m.startAt), m.durationMin, m.kind];
+    };
+    expect(await where()).toEqual([x, 60, 'video']);
+
+    // 4. Lu opens Move to z (seeded 60, video). Before Lu's panel hears, Ki moves the meeting to y and takes z back.
+    // Lu's Move is refused, and the refusal names y, where the meeting is, not x, the panel's cached time.
+    await tapReachable(page, page.getByRole('button', { name: `Confirm ${labelIn(z, TZ)}` }), 'Lu: z again');
+    await expect(card.locator('#meeting-minutes')).toHaveValue('60');
+    const stale = (await apiAs(lu, 'GET', `/dm/conversations/${conv}/scheduling`)).json;
+    let pressed = false;
+    await page.route(`**/api/dm/conversations/${conv}/scheduling`, r => (
+      !pressed && r.request().method() === 'GET'
+        ? r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(stale) })
+        : r.continue()
+    ));
+    await page.route('**/scheduling/confirm', r => { pressed = true; return r.continue(); });
+    expect((await confirmAs(ki, y, 60, 'video')).status).toBe(200);
+    await put(ki, [x, y]);
+    await page.waitForTimeout(1_500);
+    await tapReachable(page, card.getByRole('button', { name: 'Move meeting' }), 'Lu: Move to z');
+    await expect(alertToast(page, `That time is no longer free for both of you. Your meeting is on ${labelIn(y, TZ)}.`))
+      .toBeVisible({ timeout: 20_000 });
+    expect(await where()).toEqual([y, 60, 'video']);
+    await page.unroute(`**/api/dm/conversations/${conv}/scheduling`);
+    await page.unroute('**/scheduling/confirm');
+    console.log('  ✓ booked onto the card, moved onto it, moved elsewhere: each card closed and said where; the refusal named the server\'s time');
+  } finally {
+    await cleanup(pool, { ids: [ki.id, lu.id] });
+  }
+});
+
+test('a card opened on a time on another day ends on that time in the timeline, and a Save says what it did at once', async () => {
+  test.setTimeout(240_000);
+  // The time a card opens on is scrolled to after its day opens (the day's own first time used to win, leaving a
+  // later time off-screen at phone widths). And a Save no longer waits for the panel's refresh to say what it did.
+  const mo = await createTestUser('mlmo');
+  const ni = await createTestUser('mlni');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Mo', mo.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Ni', ni.id]);
+    const sent = await apiAs(mo, 'POST', '/pokes', { recipientId: ni.id, message: 'Coffee?' });
+    expect((await apiAs(ni, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [mo.id, ni.id],
+    )).rows[0].id;
+    const d1 = futureSlot(2, 10);
+    const early = futureSlot(3, 8);
+    const late = futureSlot(3, 18);
+    const free = futureSlot(3, 20);
+    for (const u of [mo, ni]) await apiAs(u, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [d1, early, late] });
+
+    const TZ = 'Europe/Copenhagen';
+    const page = await openAs(ni, `/messages/${conv}`, { width: 390, height: 844 }, TZ);
+    await openScheduler(page);
+    // The panel opens on the first day both can (d1); the late time is on the next day, ten hours after its first.
+    const lateChip = page.getByRole('button', { name: `Confirm ${labelIn(late, TZ)}` });
+    await stillAt(lateChip);
+    await tapReachable(page, lateChip, 'Ni: the late time');
+    await expect(page.getByTestId('confirm-card')).toContainText(labelIn(late, TZ));
+    const grid = page.getByTestId('slot-grid');
+    const cell = page.locator(`[data-slot="${late}"]`);
+    await expect.poll(async () => {
+      const [g, c] = [await grid.boundingBox(), await cell.boundingBox()];
+      return !!g && !!c && c.y >= g.y - 1 && c.y + c.height <= g.y + g.height + 1;
+    }, { message: 'the late time is in view in the timeline', timeout: 5_000 }).toBe(true);
+    await tapReachable(page, page.getByTestId('confirm-card').getByRole('button', { name: 'Cancel' }), 'Ni: Cancel');
+
+    // A Save while the panel's own refresh is slow: what it did is said at once, and the pick stays picked meanwhile.
+    await reachSlot(page, free, 'Ni: a free time');
+    const scheduling = `**/api/dm/conversations/${conv}/scheduling`;
+    await page.route(scheduling, async r => {
+      if (r.request().method() === 'GET') await new Promise(resolve => setTimeout(resolve, 15_000));
+      await r.continue().catch(() => undefined);
+    });
+    await tapReachable(page, page.getByRole('button', { name: /Save and send availability/i }), 'Ni: Save');
+    await expect(toast(page, 'You can both meet. Confirm a time.')).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator(`[data-slot="${free}"]`)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: /Save and send availability/i })).toHaveCount(0);
+    await page.unroute(scheduling);
+    const saved = await apiAs(ni, 'GET', `/dm/conversations/${conv}/scheduling`);
+    expect(saved.json.data.mine).toEqual(expect.arrayContaining([d1, early, late, free]));
+    console.log('  ✓ the card on another day ended on its time; the save said what it did without waiting');
+  } finally {
+    await cleanup(pool, { ids: [mo.id, ni.id] });
+  }
+});
+
+test('a card opened before the panel heard the member\'s own Move follows it quietly, and a refusal that would only repeat keeps Move waiting', async () => {
+  test.setTimeout(240_000);
+  const os = await createTestUser('mlos');
+  const pa = await createTestUser('mlpa');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Os', os.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Pa', pa.id]);
+    const sent = await apiAs(os, 'POST', '/pokes', { recipientId: pa.id, message: 'Coffee?' });
+    expect((await apiAs(pa, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [os.id, pa.id],
+    )).rows[0].id;
+    const t1 = futureSlot(6, 9);
+    const t2 = futureSlot(6, 13);
+    const t3 = futureSlot(6, 17);
+    const put = (u: TestUser, windows: string[]) => apiAs(u, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows });
+    await put(os, [t1]);
+    await apiAs(pa, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [t1], durationMin: 45, type: 'audio' });
+    await put(os, [t1, t2, t3]);
+    await put(pa, [t1, t2, t3]);
+
+    const TZ = 'Europe/Copenhagen';
+    const page = await openAs(pa, `/messages/${conv}?schedule=1`, { width: 390, height: 844 }, TZ);
+    await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    const card = page.getByTestId('confirm-card');
+    const move = card.getByRole('button', { name: 'Move meeting' });
+
+    // 1. Pa moves the meeting to t2. The panel's refresh is held, so it still shows the meeting at t1 and offers t3;
+    // Pa opens Move to t3 in that moment. When the panel hears back, the card stays: Pa's own Move is not news.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const scheduling = `**/api/dm/conversations/${conv}/scheduling`;
+    await page.route(scheduling, async r => {
+      if (r.request().method() === 'GET') await held;
+      await r.continue().catch(() => undefined);
+    });
+    const t2Chip = page.getByRole('button', { name: `Confirm ${labelIn(t2, TZ)}` });
+    await stillAt(t2Chip);
+    await tapReachable(page, t2Chip, 'Pa: t2');
+    await tapReachable(page, move, 'Pa: Move to t2');
+    await expect(toast(page, `Meeting moved: ${labelIn(t2, TZ)}`)).toBeVisible({ timeout: 20_000 });
+    await tapReachable(page, page.getByRole('button', { name: `Confirm ${labelIn(t3, TZ)}` }), 'Pa: t3, before the panel heard');
+    await expect(card).toContainText(labelIn(t3, TZ));
+    release();
+    await page.unroute(scheduling);
+    await expect(page.getByText(`Meeting confirmed — ${labelIn(t2, TZ)}`, { exact: false })).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(1_500);
+    await expect(card).toContainText(labelIn(t3, TZ));
+    await expect(page.getByText(/^Your meeting is now on /)).toHaveCount(0);
+    await expect(card.locator('#meeting-minutes')).toHaveValue('45');
+
+    // 2. Os blocks Pa. Move to t3 is refused with the server's reason; pressing again would only repeat it, so the
+    // reason stays on the card and Move waits. Once the block is gone and something changes, Move is back.
+    await pool.query(`INSERT INTO user_blocks (id, blocker_id, blocked_id) VALUES (gen_random_uuid(), $1, $2)`, [os.id, pa.id]);
+    await tapReachable(page, move, 'Pa: Move to t3 (blocked)');
+    await expect(page.getByRole('alert').getByText(/^You can no longer arrange a meeting with this person\. Your meeting stays on /))
+      .toBeVisible({ timeout: 20_000 });
+    await expect(card.getByTestId('confirm-card-reason')).toHaveText('You can no longer arrange a meeting with this person.');
+    await expect(move).toBeDisabled();
+    await page.waitForTimeout(2_000);
+    await expect(move).toBeDisabled();
+    await pool.query(`DELETE FROM user_blocks WHERE blocker_id=$1 AND blocked_id=$2`, [os.id, pa.id]);
+    await put(os, [t1, t2, t3, futureSlot(6, 19)]);
+    await expect(move).toBeEnabled({ timeout: 30_000 });
+    await tapReachable(page, move, 'Pa: Move to t3');
+    await expect(toast(page, `Meeting moved: ${labelIn(t3, TZ)}`)).toBeVisible({ timeout: 20_000 });
+    console.log('  ✓ the card followed Pa\'s own Move quietly; the block kept Move waiting until something changed');
+  } finally {
+    await pool.query(`DELETE FROM user_blocks WHERE blocker_id = ANY($1::uuid[]) OR blocked_id = ANY($1::uuid[])`, [[os.id, pa.id]]);
+    await cleanup(pool, { ids: [os.id, pa.id] });
   }
 });
 

@@ -10,7 +10,7 @@
 
 import { CalendarCheck, CalendarClock, Clock, Video, Phone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { isMeetingOver } from './MeetingScheduler';
+import { isMeetingOver, slotLabel, viewerZone } from './scheduler-flow';
 import SheepAvatar from '@/components/brand/SheepAvatar';
 
 export type DmMessageKind = 'user' | 'system';
@@ -25,19 +25,21 @@ export type DmSystemMeta =
       movedFrom?: string;
     };
 
-/** One instant, in the reader's own timezone. */
+/** One instant, in the reader's own time zone, in the form the scheduler and the emails use: "Sun 25 Oct, 13:00". */
 export function localWhen(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  if (isNaN(Date.parse(iso))) return iso;
+  return slotLabel(iso, viewerZone());
 }
 
 interface Props {
   content: string;
   meta?: DmSystemMeta | null;
-  /** Live overlap from the scheduler, so a proposal card never offers a time
-   *  that has since been taken off the table. Falls back to the stored slots. */
+  /** The times both still share, from the scheduler, so a proposal card never
+   *  offers a time that has since been taken off the table. Undefined until
+   *  the scheduling has loaded; the card's own stored times stand in till then. */
   liveSlots?: string[];
+  /** A time on a proposal card: opens the scheduler on that time's confirm
+   *  card (26 Oct 2026; it used to drop the time and only open the panel). */
   onPickSlot?: (slot: string) => void;
   onOpenScheduler?: () => void;
   /** Hidden once a meeting is set: the proposal has been answered. */
@@ -50,11 +52,16 @@ interface Props {
   /** The thread's current meeting has ended. A card can also be over on its
    *  own terms (an older meeting under a newer one); either makes it over. */
   meetingOver?: boolean;
+  /** The thread's meeting as it stands now, once the scheduling has loaded
+   *  (null: none stands, it was cancelled). A card for another time is history. */
+  currentMeeting?: { startAt: string | null } | null;
 }
+
+const sameInstant = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && Date.parse(a) === Date.parse(b);
 
 export default function SystemMessageCard({
   content, meta, liveSlots, onPickSlot, onOpenScheduler, meetingConfirmed, onAddToCalendar,
-  onCallNow, callsUnlocked, meetingOver,
+  onCallNow, callsUnlocked, meetingOver, currentMeeting,
 }: Props) {
   const navigate = useNavigate();
 
@@ -67,6 +74,11 @@ export default function SystemMessageCard({
     // way in while the banner above it says the meeting ended, so either one
     // being over settles it.
     const over = !!meetingOver || isMeetingOver(meta.startAt, meta.durationMin);
+    // 26 Oct 2026: a meeting can be moved (Reschedule) or cancelled. The card
+    // for a time that no longer stands says so and offers nothing to press;
+    // its Join used to open the room for a time nobody was keeping.
+    const replaced = !over && currentMeeting !== undefined && !(currentMeeting && sameInstant(currentMeeting.startAt, meta.startAt));
+    const settled = over || replaced;
     return (
       // The deck puts the sheep in message threads, matched pose, on exactly
       // this moment: "MATCHED - match found; meeting confirmed in the chat."
@@ -74,7 +86,7 @@ export default function SystemMessageCard({
       // the calendar tick comes back.
       <Shell
         tone="confirmed"
-        icon={over
+        icon={settled
           ? <CalendarCheck className="h-4 w-4 text-emerald-600" />
           : <SheepAvatar pose="matched" size={44} />}
       >
@@ -90,8 +102,13 @@ export default function SystemMessageCard({
         <p className="text-[11px] text-emerald-700">
           {meta.durationMin} minutes · {meta.meetingType === 'audio' ? 'Audio call' : 'Video call'} · your local time
         </p>
+        {replaced && (
+          <p className="mt-1 text-[11px] font-medium text-gray-700" data-testid="meeting-card-replaced">
+            {currentMeeting === null ? 'This meeting was cancelled.' : 'This meeting moved to another time.'}
+          </p>
+        )}
         <div className="mt-1.5 flex flex-wrap justify-center gap-2">
-          {!over && (
+          {!settled && (
             <button
               type="button"
               onClick={() => navigate(meta.joinPath)}
@@ -109,7 +126,7 @@ export default function SystemMessageCard({
               {meta.meetingType === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
             </button>
           )}
-          {onAddToCalendar && !over && (
+          {onAddToCalendar && !settled && (
             <button
               type="button"
               onClick={onAddToCalendar}
@@ -126,18 +143,22 @@ export default function SystemMessageCard({
   if (meta?.type === 'meeting_proposal') {
     // Once a meeting is set the card has served its purpose; leave the text so
     // the history still reads, but drop the times nobody should pick any more.
-    const slots = (liveSlots?.length ? liveSlots : meta.slots).slice(0, 3);
+    // The same for a time that has started, or that one of them took back.
+    // data-scheduler-trigger: these buttons open or point the scheduler, so the
+    // panel's "tap outside closes it" must not treat them as outside.
+    const slots = (liveSlots ?? meta.slots).filter(s => Date.parse(s) > Date.now()).slice(0, 3);
     return (
       <Shell tone="proposal" icon={<Clock className="h-4 w-4 text-emerald-600" />}>
         <p className="text-sm text-[#1a1a2e]">You are both free. Pick one to confirm.</p>
-        {!meetingConfirmed && slots.length > 0 && (
+        {!meetingConfirmed && (slots.length > 0 || onOpenScheduler) && (
           <div className="mt-1.5 flex flex-wrap justify-center gap-1.5">
             {slots.map(s => (
               <button
                 key={s}
                 type="button"
+                data-scheduler-trigger
                 onClick={() => onPickSlot?.(s)}
-                className="inline-flex min-h-[44px] items-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+                className="inline-flex min-h-[44px] items-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
               >
                 {localWhen(s)}
               </button>
@@ -145,8 +166,9 @@ export default function SystemMessageCard({
             {onOpenScheduler && (
               <button
                 type="button"
+                data-scheduler-trigger
                 onClick={onOpenScheduler}
-                className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
+                className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 hover:bg-gray-50"
               >
                 See all times
               </button>
@@ -165,6 +187,7 @@ export default function SystemMessageCard({
         <div className="mt-1.5 flex justify-center">
           <button
             type="button"
+            data-scheduler-trigger
             onClick={onOpenScheduler}
             className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >

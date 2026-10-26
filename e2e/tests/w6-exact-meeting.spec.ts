@@ -103,19 +103,15 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   if (await more.isVisible().catch(() => false)) {
     await more.click();
   }
-  const openScheduler = async () => {
-    if (await more.isVisible().catch(() => false)) await more.click();
-    await findTime.filter({ visible: true }).first().click();
-    await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
-  };
   await findTime.filter({ visible: true }).first().click();
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
 
-  // The length is typed up front, visible the moment the panel opens (Ali,
-  // 9 Sep: "what if the user only has 10 minutes").
-  const minutes = page.locator('#meeting-minutes');
-  await expect(minutes).toBeVisible();
-  await minutes.fill('10');
+  // A time on this browser's clock, 24-hour, as the scheduler and the cards write it.
+  const clock = (iso: string) => new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+
+  // The length is chosen on the confirm card, the one place it is used (26 Oct
+  // 2026: a bare number box at the top of the panel read as "choose the hour").
+  await expect(page.locator('#meeting-minutes')).toHaveCount(0);
 
   // 9 Sep 2026: the overlap IS a concrete time. The grid shows it green on the
   // right day, the chip is labelled in local time, and confirming asks only
@@ -139,38 +135,40 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   await page.locator('#custom-time').fill('06:30');
   await page.getByRole('button', { name: /^Add time$/ }).click();
   await expect(early).toHaveAttribute('aria-pressed', 'true');
+  // The press added it, and no error claims the box was empty (the box's own blur used to add it first).
+  await page.waitForTimeout(300);
+  await expect(page.getByRole('alert').getByText('Enter a time like 21:30.')).toHaveCount(0);
   await expect.poll(inFrame, { message: 'the typed time is scrolled into the frame' }).toBe(true);
   await page.screenshot({ path: `shots/meeting/15-timeline-typed-time-${engineLabel()}.png` }).catch(() => {});
-  await expect(early).toContainText(new Date(EARLY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+  await expect(early).toContainText(clock(EARLY));
 
-  // The panel closes on a click anywhere outside it (the composer here) and
-  // on Escape; reopening brings back the unsaved pick and the typed length.
+  // A click outside the panel (the composer here) with that pick not sent no
+  // longer drops it without a word (26 Oct 2026): the panel stays, the pick
+  // stays, and it asks. Escape asks the same.
   await page.getByPlaceholder(/Type a message/i).click();
-  await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0);
-  await openScheduler();
+  await expect(page.getByText('Send your times?', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('meeting-scheduler')).toBeVisible();
   await expect(page.locator(`[data-slot="${EARLY}"]`)).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#meeting-minutes')).toHaveValue('10');
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0);
-  await openScheduler();
-  await expect(page.locator(`[data-slot="${EARLY}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('meeting-scheduler')).toBeVisible();
+  await expect(page.getByText('Send your times?', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: /Save and send availability/i }).click();
-  await expect(page.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  // Two times are shared and nothing is booked: the save says so, and the panel stays on the confirm step.
+  await expect(page.getByRole('status').getByText('You can both meet. Confirm a time.', { exact: true })).toBeVisible({ timeout: 15_000 });
   const saved = await apiAs(a, 'GET', `/dm/conversations/${convId}/scheduling`);
   expect(saved.json.data.mine).toContain(EARLY);
   expect(saved.json.data.mine).toContain(KEY);
 
-  // Sending hands the thread back (21 Sep), so come back in to confirm a time.
-  await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0, { timeout: 15_000 });
-  await openScheduler();
-  const chip = page.getByRole('button', { name: /^Confirm / }).first();
-  const localLabel = new Date(KEY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  await expect(page.getByTestId('meeting-scheduler')).toBeVisible();
+  const chip = page.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first();
+  const localLabel = clock(KEY);
   await page.screenshot({ path: `shots/meeting/13-scheduler-slots-${engineLabel()}.png` }).catch(() => {});
   await expect(chip).toContainText(localLabel);
   await chip.click();
   await page.screenshot({ path: `shots/meeting/14-confirm-card-${engineLabel()}.png` }).catch(() => {});
-  // The 10 typed at the top is what the confirm shows.
+  // The length typed on the card is what the confirm shows.
+  await page.locator('#meeting-minutes').fill('10');
   await expect(page.getByTestId('confirm-summary')).toContainText(`${localLabel} · 10 min · Video call`);
   // Out-of-range lengths are refused before the request is ever sent.
   await page.locator('#meeting-minutes').fill('3');

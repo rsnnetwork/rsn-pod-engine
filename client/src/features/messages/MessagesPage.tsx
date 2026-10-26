@@ -7,11 +7,13 @@
 // dm:conversation_updated. Updates React Query cache so the inbox sort
 // + thread view update without polling.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
-import MeetingScheduler, { ThreadMeetingBanner, isMeetingOver, localizeMeetingText } from './MeetingScheduler';
+import MeetingScheduler, { type SchedulerHandle } from './MeetingScheduler';
+import ThreadMeetingBanner from './ThreadMeetingBanner';
+import { confirmable, isMeetingOver, localizeMeetingText } from './scheduler-flow';
 import SystemMessageCard, { type DmMessageKind, type DmSystemMeta } from './SystemMessageCard';
 import { CallRequestModal, CallWaitingCard, IncomingCallCard } from './CallRequest';
 import Linkify from '@/components/ui/Linkify';
@@ -173,7 +175,7 @@ export default function MessagesPage() {
     userId?: string;
   }>();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   // The 'X asked to meet you' bell links here as /messages?poke=<id>. Focus that
   // specific request so the recipient sees whose profile to check, instead of
   // landing on the generic page (7 Sep 2026, Ali).
@@ -186,6 +188,13 @@ export default function MessagesPage() {
   const [showEmoji, setShowEmoji] = useState(false);
   // REASON Phase 2 — "Find a time" panel (availability windows) per thread.
   const [schedulerOpen, setSchedulerOpen] = useState(false);
+  // A time on a proposal card asks the panel for that time's confirm card (26 Oct 2026).
+  const [confirmRequest, setConfirmRequest] = useState<{ slot: string; at: number } | null>(null);
+  // Opened by Reschedule (a meeting's page, ?schedule=1): offered to every pair,
+  // also one that has met, and opened ready for the first pick.
+  const [rescheduling, setRescheduling] = useState(false);
+  // The open panel decides whether it may close: with unsaved times it asks first.
+  const schedulerRef = useRef<SchedulerHandle>(null);
   // Task E4 — report entry point for the thread's conversation partner.
   const [reportOpen, setReportOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -573,35 +582,86 @@ export default function MessagesPage() {
     return null;
   };
 
-  // Opening the scheduler clears the dot (marks it seen server-side).
-  const openScheduler = () => {
-    const willOpen = !schedulerOpen;
-    setSchedulerOpen(willOpen);
-    if (willOpen && activeId) {
-      api.post(`/dm/conversations/${activeId}/scheduling/seen`)
-        .then(() => qc.invalidateQueries({ queryKey: ['meetingScheduling', activeId] }))
-        .catch(() => {});
-    }
+  // Opening the scheduler clears the dot (marks it seen server-side). The dot
+  // is a nicety: if marking it fails, the panel is open all the same.
+  const markSchedulerSeen = () => {
+    if (!activeId) return;
+    api.post(`/dm/conversations/${activeId}/scheduling/seen`)
+      .then(() => qc.invalidateQueries({ queryKey: ['meetingScheduling', activeId] }))
+      .catch(() => {});
   };
+
+  // Asking the panel to close, not closing it: with times not sent it says
+  // "Send your times?" instead (26 Oct 2026; they used to be dropped silently).
+  const closeScheduler = useCallback(() => {
+    if (!schedulerRef.current) { setSchedulerOpen(false); return; }
+    schedulerRef.current.requestClose();
+  }, []);
+
+  // The header's calendar button opens the panel, and closes it again.
+  const openScheduler = () => {
+    if (schedulerOpen) { closeScheduler(); return; }
+    setConfirmRequest(null);
+    setRescheduling(false);
+    setSchedulerOpen(true);
+    markSchedulerSeen();
+  };
+
+  // A thread card's button: a proposal's time opens the panel on that time's
+  // confirm card; "See all times" and "Add my times" just open it.
+  const openSchedulerOn = (slot: string | null) => {
+    if (slot) setConfirmRequest({ slot, at: Date.now() });
+    if (schedulerOpen) return;
+    if (!slot) setConfirmRequest(null);
+    setSchedulerOpen(true);
+    markSchedulerSeen();
+  };
+
+  // Another conversation: its own panel, closed (an unsent pick stays as that
+  // conversation's draft and is back when its panel opens again).
+  useEffect(() => {
+    setSchedulerOpen(false);
+    setConfirmRequest(null);
+    setRescheduling(false);
+  }, [activeId]);
+
+  // Reschedule on a meeting's page opens this chat with ?schedule=1: open the
+  // panel, once, then drop the flag by replacing the entry, so Back or a
+  // refresh does not open it again. It opens for every pair: one that has met
+  // has calls instead of the scheduler, and Reschedule would land on nothing.
+  const wantsScheduler = searchParams.get('schedule') === '1';
+  useEffect(() => {
+    if (!wantsScheduler || !activeId || !scheduling) return;
+    setConfirmRequest(null);
+    setRescheduling(true);
+    setSchedulerOpen(true);
+    markSchedulerSeen();
+    const next = new URLSearchParams(searchParams);
+    next.delete('schedule');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the flag is there and the scheduling has loaded
+  }, [wantsScheduler, activeId, scheduling]);
 
   // The scheduler closes on a click anywhere outside it, or Escape (Ali,
   // 9 Sep) — like a menu. Its toggle is excluded so the click that closes
-  // it doesn't reopen it. Unsaved picks survive (the panel keeps a draft).
+  // it doesn't reopen it, and so are the thread cards' buttons that open or
+  // point it (a card's time pressed with the panel open used to close it and
+  // reopen it empty, which looked like nothing happened).
   useEffect(() => {
     if (!schedulerOpen) return;
     const onPointer = (e: PointerEvent) => {
       const t = e.target as Element | null;
-      if (t?.closest('[data-scheduler-panel],[data-scheduler-toggle]')) return;
-      setSchedulerOpen(false);
+      if (t?.closest('[data-scheduler-panel],[data-scheduler-toggle],[data-scheduler-trigger]')) return;
+      closeScheduler();
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSchedulerOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeScheduler(); };
     document.addEventListener('pointerdown', onPointer, true);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('pointerdown', onPointer, true);
       document.removeEventListener('keydown', onKey);
     };
-  }, [schedulerOpen]);
+  }, [schedulerOpen, closeScheduler]);
 
   // Feature 18 — derive an "effective active context" so the thread view and
   // composer can render uniformly whether we're in an existing thread or
@@ -1298,15 +1358,23 @@ export default function MessagesPage() {
             )}
 
             {/* Availability grid — collapsible so the thread stays primary. Gone
-                once calls are unlocked (the first meeting has happened).
+                once calls are unlocked (the first meeting has happened), except
+                when Reschedule opened it (26 Oct 2026).
                 min-h-0: this column has a fixed height and clips its overflow,
                 so the panel must be allowed to shrink and scroll inside itself.
                 Without it the panel kept its full height and pushed "Confirm
                 meeting", Save and the message box past the clip edge on any
                 laptop-height window (Stefan + Shradha, 19 Sep 2026). */}
-            {activeConv && !callsUnlocked && schedulerOpen && (
+            {activeConv && schedulerOpen && (!callsUnlocked || rescheduling) && (
               <div data-scheduler-panel className="flex min-h-0 flex-col">
-                <MeetingScheduler conversationId={activeConv.conversationId} onClose={() => setSchedulerOpen(false)} />
+                <MeetingScheduler
+                  key={activeConv.conversationId}
+                  ref={schedulerRef}
+                  conversationId={activeConv.conversationId}
+                  confirmRequest={confirmRequest}
+                  focusFirstPick={rescheduling}
+                  onClose={() => { setSchedulerOpen(false); setConfirmRequest(null); setRescheduling(false); }}
+                />
               </div>
             )}
 
@@ -1353,14 +1421,15 @@ export default function MessagesPage() {
                           <SystemMessageCard
                             content={localizeMeetingText(m.content)}
                             meta={m.systemMeta}
-                            liveSlots={(scheduling?.overlap ?? []).filter(k => new Date(k).getTime() > Date.now())}
+                            liveSlots={scheduling ? confirmable(scheduling.overlap ?? [], Date.now()) : undefined}
                             meetingConfirmed={!!scheduling?.confirmed}
-                            onOpenScheduler={() => setSchedulerOpen(true)}
-                            onPickSlot={() => setSchedulerOpen(true)}
+                            onOpenScheduler={() => openSchedulerOn(null)}
+                            onPickSlot={(slot) => openSchedulerOn(slot)}
                             onAddToCalendar={m.systemMeta?.type === 'meeting_confirmed' ? downloadMeetingIcs : undefined}
                             onCallNow={startCall}
                             callsUnlocked={callsUnlocked}
                             meetingOver={confirmedMeetingOver}
+                            currentMeeting={scheduling ? (scheduling.confirmed ? { startAt: scheduling.confirmed.startAt ?? null } : null) : undefined}
                           />
                         </div>,
                       );

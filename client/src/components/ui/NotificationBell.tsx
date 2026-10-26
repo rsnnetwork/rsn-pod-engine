@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Bell, Check, CheckCircle, X, Loader2 } from 'lucide-react';
 // Note: createPortal renders to document.body, but the portal CHILDREN still
@@ -7,10 +7,14 @@ import { Bell, Check, CheckCircle, X, Loader2 } from 'lucide-react';
 // The old comment claiming otherwise was wrong; window.location.href was the
 // lazy workaround that caused the page-reload UX everyone complained about.
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useToastStore } from '@/stores/toastStore';
+import { useAuthStore } from '@/stores/authStore';
 import { getSocket } from '@/lib/socket';
+import { E } from '@/realtime/entities';
 import api from '@/lib/api';
+import { bellRequestView, type BellRequestView, type RequestStateLike } from '@/features/messages/request-answer';
+import { useRequestAnswer } from '@/features/messages/useRequestAnswer';
 
 interface Notification {
   id: string;
@@ -23,18 +27,20 @@ interface Notification {
   inviteStatus?: string | null; // 'pending' | 'accepted' | 'revoked' | 'expired'
   podId?: string | null;
   sessionId?: string | null;
-  /** 4 Sep 2026: a meeting request acted on from the bell, local state only. */
-  pokeStatus?: 'accepted' | 'declined';
+  /** Where the meeting request behind a `poke` row stands, as the server says (25 Oct 2026). */
+  requestState?: RequestStateLike | null;
+  /** The older field for the same answer, read only from a server that sends no requestState. */
+  pokeStatus?: 'accepted' | 'declined' | null;
+}
+
+/** GET /notifications: the last 20, and how many are unread. */
+interface NotificationList {
+  notifications: Notification[];
+  unreadCount: number;
 }
 
 const INVITE_TYPES = ['pod_invite', 'event_invite'];
-
-/** A meeting request's id travels in its link: `/messages?poke={id}` (4 Sep 2026). */
-function extractPokeId(link?: string): string | null {
-  if (!link) return null;
-  const match = link.match(/^\/messages\?poke=([0-9a-fA-F-]{36})$/);
-  return match ? match[1] : null;
-}
+const NOTIFICATIONS_KEY = ['notifications'] as const;
 
 /** Extract invite code from `/invite/{code}` link */
 function extractInviteCode(link?: string): string | null {
@@ -47,6 +53,9 @@ function extractInviteCode(link?: string): string | null {
 function getDestination(n: Notification): string | null {
   if (n.sessionId) return `/sessions/${n.sessionId}`;
   if (n.podId) return `/pods/${n.podId}`;
+  // A meeting request goes to the conversation once accepted, else to the request.
+  const request = bellRequestView(n);
+  if (request) return request.destination;
   // For non-invite notifications, use the link directly
   if (n.link && !n.link.startsWith('/invite/')) return n.link;
   // For invite notifications, navigate to the invite page so user can see details
@@ -54,12 +63,25 @@ function getDestination(n: Notification): string | null {
   return null;
 }
 
+/**
+ * The list as it will be once a change lands, drawn at once (an optimistic
+ * update). A bell fetch already on its way is cancelled first, so its older
+ * answer cannot land on top and briefly undo the change. The server's answer
+ * replaces it: every caller invalidates after.
+ */
+async function patchList(qc: QueryClient, change: (n: Notification) => Notification) {
+  await qc.cancelQueries({ queryKey: NOTIFICATIONS_KEY });
+  qc.setQueryData<NotificationList>(NOTIFICATIONS_KEY, (old) => {
+    if (!old) return old;
+    const notifications = old.notifications.map(change);
+    const readNow = old.notifications.filter((n, i) => !n.isRead && notifications[i].isRead).length;
+    return { notifications, unreadCount: Math.max(0, old.unreadCount - readNow) };
+  });
+}
+
 export default function NotificationBell() {
   // Auth store removed — onboarding check moved to ProtectedRoute
   const [open, setOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [dropPos, setDropPos] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -67,60 +89,56 @@ export default function NotificationBell() {
   const navigate = useNavigate();
   const { addToast } = useToastStore();
   const qc = useQueryClient();
+  const me = useAuthStore((s) => s.user?.id) as string | undefined;
 
   // Outside click handled by portal backdrop — no separate listener needed
 
-  const fetchNotifications = async () => {
-    setLoading(true);
-    try {
-      const res = await api.get('/notifications');
-      setNotifications(res.data.data.notifications);
-      setUnreadCount(res.data.data.unreadCount);
-    } catch { /* ignore */ }
-    setLoading(false);
-  };
-
-  // Fetch on mount + poll every 30s for pages without socket.
-  // P2-2 — PAUSED inside a live event: nobody reads notifications mid-round,
-  // and the poll was ~240 useless requests per user over a 2h event, each one
-  // waking the tab. The socket listener below still updates the badge live;
-  // leaving the event re-runs this effect → immediate fetch + poll resumes.
+  // P2-2 — the poll is PAUSED inside a live event: nobody reads notifications
+  // mid-round, and it was ~240 useless requests per user over a 2h event, each
+  // one waking the tab. A pushed notification still refreshes the list there.
   const { pathname } = useLocation();
   const inLiveEvent = pathname.startsWith('/session/') && pathname.includes('/live');
+
+  // 26 Oct 2026: the list is React Query's, keyed ['notifications'] and
+  // refreshed by the member's notifications tag, which the server emits for a
+  // request answered anywhere (this tab, another tab, another device). It used
+  // to live in this component's state and forget any answer it had not made
+  // itself, so an accepted request offered Accept again (25 Oct).
+  const { data, isPending, isError, refetch } = useQuery({
+    queryKey: NOTIFICATIONS_KEY,
+    queryFn: () => api.get('/notifications').then((r) => r.data.data as NotificationList),
+    enabled: !!me,
+    refetchInterval: inLiveEvent ? false : 30_000,
+    meta: { entities: me ? [E.userNotifications(me)] : [] },
+  });
+  const notifications = data?.notifications ?? [];
+  const unreadCount = data?.unreadCount ?? 0;
+
+  // Fetch the bell's list now: on opening it, and when a notification is pushed.
+  const fetchNotifications = useCallback(() => { void refetch(); }, [refetch]);
+
+  // Leaving a live event catches up at once instead of waiting out the poll.
+  // On the first render the list is already on its way, and this joins it.
   useEffect(() => {
     if (inLiveEvent) return;
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 30000);
-    return () => clearInterval(interval);
+    void refetch({ cancelRefetch: false });
   }, [inLiveEvent]);
 
-  // Bug 32 (19 May Ali) — listen for real-time notifications via socket,
-  // BUT only for the bell's own local component state (the dropdown list
-  // + unread counter). All React-Query cache invalidation moved to
-  // `useLegacyInvalidationBridge`, mounted at the App root so it works on
-  // every page — not just pages wrapped by AppLayout. Pre-fix, users on
-  // live-event / invite-accept / onboarding pages received socket
-  // broadcasts that no listener reacted to.
+  // Bug 32 (19 May Ali) — two thin socket listeners. notification:new: a
+  // notification was pushed to this member (not every sender of one emits the
+  // notifications tag as well). pod:membership_updated (Bug 3, 18 May Stefan):
+  // an approval or rejection notification may have arrived with it. Both only
+  // fetch the bell's own list; every other query is refreshed by entity tags.
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
-    const handler = (data: Notification) => {
-      setNotifications(prev => [data, ...prev].slice(0, 20));
-      setUnreadCount(prev => prev + 1);
-    };
-    socket.on('notification:new', handler);
-    // Bug 3 (18 May Stefan) — when pod membership flips, the bell must
-    // also re-pull its own notification list so any approval/rejection
-    // notification appears in the dropdown without waiting for the 30s
-    // poll. This is local-state-only; cache invalidation belongs to the
-    // bridge.
-    const membershipRefetchHandler = () => { fetchNotifications(); };
-    socket.on('pod:membership_updated', membershipRefetchHandler);
+    socket.on('notification:new', fetchNotifications);
+    socket.on('pod:membership_updated', fetchNotifications);
     return () => {
-      socket.off('notification:new', handler);
-      socket.off('pod:membership_updated', membershipRefetchHandler);
+      socket.off('notification:new', fetchNotifications);
+      socket.off('pod:membership_updated', fetchNotifications);
     };
-  }, []);
+  }, [fetchNotifications]);
 
   const handleOpen = () => {
     if (!open && btnRef.current) {
@@ -137,22 +155,23 @@ export default function NotificationBell() {
   const markRead = async (id: string) => {
     // Mark-read failures are non-critical (UX nicety) — log to console for
     // dev visibility but don't toast: the user has already moved on. The
-    // optimistic UI update below is the user-visible truth either way.
+    // optimistic update below shows it read at once; the refetch after is the truth.
+    await patchList(qc, (n) => (n.id === id ? { ...n, isRead: true } : n));
     try { await api.post(`/notifications/${id}/read`); }
     catch (err) { console.warn('mark notification read failed', err); }
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
-    setUnreadCount(prev => Math.max(0, prev - 1));
+    qc.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
   };
 
   const markAllRead = async () => {
+    await patchList(qc, (n) => ({ ...n, isRead: true }));
     try { await api.post('/notifications/read-all'); }
     catch (err) { console.warn('mark all notifications read failed', err); }
-    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
-    setUnreadCount(0);
+    qc.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
   };
 
   /** Invalidate all caches that display invite/membership data */
   const invalidateInviteCaches = () => {
+    qc.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
     qc.invalidateQueries({ queryKey: ['received-invites'] });
     qc.invalidateQueries({ queryKey: ['my-pods'] });
     qc.invalidateQueries({ queryKey: ['my-sessions'] });
@@ -224,7 +243,7 @@ export default function NotificationBell() {
     if (success) {
       addToast('Invite accepted!', 'success');
       if (!n.isRead) markRead(n.id);
-      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
+      await patchList(qc, (x) => (x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
       invalidateInviteCaches();
       setOpen(false);
       // SPA navigation — no more page reload (the white-flash UX everyone hated).
@@ -236,57 +255,6 @@ export default function NotificationBell() {
     setActionLoading(null);
   };
 
-  // 4 Sep 2026 (Ali): a meeting request must be answerable from the bell, and
-  // accepting must land straight in the conversation with the person who asked.
-  // The accept endpoint already returns the conversation id.
-  const handleAcceptPoke = async (n: Notification) => {
-    const pokeId = extractPokeId(n.link);
-    if (!pokeId) return;
-    setActionLoading(n.id);
-    try {
-      const res = await api.post(`/pokes/${pokeId}/accept`);
-      const conversationId: string | undefined = res.data?.data?.conversationId;
-      if (!n.isRead) markRead(n.id);
-      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, pokeStatus: 'accepted', isRead: true } : x));
-      qc.invalidateQueries({ queryKey: ['conversations'] });
-      // 22 Sep 2026: this said ['pending-pokes'], a key nothing uses. Both the
-      // inbox band and the focused card read ['pokes-received'], so answering
-      // from the bell left the request sitting there as though nothing had
-      // happened until the next reload.
-      qc.invalidateQueries({ queryKey: ['pokes-received'] });
-      setOpen(false);
-      navigate(conversationId ? `/messages/${conversationId}` : '/messages');
-    } catch (err: any) {
-      const code = err?.response?.data?.error?.code;
-      if (code === 'POKE_ALREADY_RESPONDED' || err?.response?.status === 409) {
-        setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, pokeStatus: 'accepted', isRead: true } : x));
-        setOpen(false);
-        navigate('/messages');
-      } else {
-        addToast(err?.response?.data?.error?.message || 'Could not accept that request', 'error');
-      }
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleDeclinePoke = async (n: Notification) => {
-    const pokeId = extractPokeId(n.link);
-    if (!pokeId) return;
-    setActionLoading(n.id);
-    try {
-      await api.post(`/pokes/${pokeId}/decline`);
-      if (!n.isRead) markRead(n.id);
-      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, pokeStatus: 'declined', isRead: true } : x));
-      qc.invalidateQueries({ queryKey: ['pokes-received'] });
-      addToast('Request declined', 'info');
-    } catch (err: any) {
-      addToast(err?.response?.data?.error?.message || 'Could not decline that request', 'error');
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
   const handleDeclineInvite = async (n: Notification) => {
     const code = extractInviteCode(n.link);
     if (!code) return;
@@ -295,7 +263,7 @@ export default function NotificationBell() {
       await api.post(`/invites/${code}/decline`);
       addToast('Invite declined', 'info');
       if (!n.isRead) markRead(n.id);
-      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: 'revoked', isRead: true } : x));
+      await patchList(qc, (x) => (x.id === n.id ? { ...x, inviteStatus: 'revoked', isRead: true } : x));
       invalidateInviteCaches();
     } catch {
       addToast('Failed to decline invite', 'error');
@@ -309,6 +277,7 @@ export default function NotificationBell() {
    * - Invite (accepted) → go to the pod/session
    * - Invite (pending) → do nothing (use Accept/Decline buttons)
    * - Invite (declined/expired) → toast, no navigation
+   * - Meeting request → the conversation once accepted, else the request
    * - Other notification types → navigate to link destination
    */
   const handleClick = async (n: Notification) => {
@@ -412,10 +381,21 @@ export default function NotificationBell() {
 
           {/* List: up to 20rem, and smaller when the panel is capped, scrolling inside what is left */}
           <div className="min-h-0 flex-1 overflow-y-auto max-h-80">
-            {loading && notifications.length === 0 && (
+            {isPending && !isError && (
               <p className="text-sm text-gray-500 text-center py-6">Loading...</p>
             )}
-            {!loading && notifications.length === 0 && (
+            {isError && !data && (
+              <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+                <p className="text-sm text-gray-600">We could not load your notifications.</p>
+                <button
+                  onClick={fetchNotifications}
+                  className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-4 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+            {data && notifications.length === 0 && (
               <p className="text-sm text-gray-500 text-center py-6">No notifications yet</p>
             )}
             {notifications.map(n => {
@@ -423,6 +403,7 @@ export default function NotificationBell() {
               const statusLabel = getInviteStatusLabel(n);
               const isActing = actionLoading === n.id;
               const isClickable = true; // All notifications are clickable — navigate to destination
+              const request = bellRequestView(n);
 
               return (
                 <div
@@ -476,32 +457,8 @@ export default function NotificationBell() {
                       </button>
                     </div>
                   )}
-                  {/* Meeting request: answer it here, accept lands in the conversation. */}
-                  {n.type === 'poke' && extractPokeId(n.link) && !n.pokeStatus && (
-                    <div className="flex items-center gap-2 mt-2 ml-4" data-testid={`poke-actions-${n.id}`}>
-                      <button
-                        onClick={() => handleAcceptPoke(n)}
-                        disabled={isActing}
-                        className="flex min-h-[44px] items-center gap-1 rounded-full bg-reason-green-fill px-4 text-xs font-medium text-white transition-colors hover:bg-reason-green-fill-hover disabled:opacity-50"
-                      >
-                        {isActing ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
-                        Accept
-                      </button>
-                      <button
-                        onClick={() => handleDeclinePoke(n)}
-                        disabled={isActing}
-                        className="flex min-h-[44px] items-center gap-1 rounded-full bg-gray-100 px-4 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-50"
-                      >
-                        <X className="h-3 w-3" />
-                        Decline
-                      </button>
-                    </div>
-                  )}
-                  {n.type === 'poke' && n.pokeStatus && (
-                    <p className={`ml-4 mt-1 text-[10px] font-medium ${n.pokeStatus === 'accepted' ? 'text-emerald-700' : 'text-gray-500'}`}>
-                      {n.pokeStatus === 'accepted' ? 'Accepted' : 'Declined'}
-                    </p>
-                  )}
+                  {/* Meeting request: what the server says it is, answered here; accept lands in the conversation. */}
+                  {request && <BellRequestActions n={n} view={request} onDone={() => setOpen(false)} />}
                 </div>
               );
             })}
@@ -511,5 +468,57 @@ export default function NotificationBell() {
         document.body
       )}
     </div>
+  );
+}
+
+/**
+ * A meeting request's row in the bell (4 Sep 2026, Ali: "accept or reject inside the bell, and once accepted it should
+ * take me directly into the chat"). Waiting: Accept and Decline. Answered, here or anywhere else: "Accepted" or
+ * "Declined", from the server, with nothing left to press. Busy while ANY surface is answering this request.
+ */
+function BellRequestActions({ n, view, onDone }: { n: Notification; view: BellRequestView; onDone: () => void }) {
+  const navigate = useNavigate();
+  const { addToast } = useToastStore();
+  // Accepting again what is already accepted is a 200 with the same
+  // conversation, so a stale row lands in the thread too. The other answer
+  // given elsewhere is a 409: the hook says so and the row redraws.
+  const { answer, busy: isActing, answering } = useRequestAnswer(view.requestId, {
+    onAccepted: (result) => {
+      onDone();
+      navigate(result.conversationId ? `/messages/${result.conversationId}` : '/messages');
+    },
+    onDeclined: () => addToast('Request declined', 'info'),
+  });
+
+  const handleAcceptPoke = () => answer('accept');
+  const handleDeclinePoke = () => answer('decline');
+
+  if (view.canAnswer) {
+    return (
+      <div className="flex items-center gap-2 mt-2 ml-4" data-testid={`poke-actions-${n.id}`}>
+        <button
+          onClick={() => handleAcceptPoke()}
+          disabled={isActing}
+          className="flex min-h-[44px] items-center gap-1 rounded-full bg-reason-green-fill px-4 text-xs font-medium text-white transition-colors hover:bg-reason-green-fill-hover disabled:opacity-50"
+        >
+          {answering === 'accept' ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
+          Accept
+        </button>
+        <button
+          onClick={() => handleDeclinePoke()}
+          disabled={isActing}
+          className="flex min-h-[44px] items-center gap-1 rounded-full bg-gray-100 px-4 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-50"
+        >
+          {answering === 'decline' ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+          Decline
+        </button>
+      </div>
+    );
+  }
+  if (!view.label) return null;
+  return (
+    <p className={`ml-4 mt-1 text-[10px] font-medium ${view.label === 'Accepted' ? 'text-emerald-700' : 'text-gray-500'}`}>
+      {view.label}
+    </p>
   );
 }

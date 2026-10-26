@@ -152,7 +152,7 @@ describe('the words the client asked for, screen by screen (19 Oct feedback)', (
   });
 
   it('a calendar file is saved as reason-meeting.ics, from the thread and from the scheduler (lower case, so the scan above cannot see it)', () => {
-    for (const page of ['features/messages/MessagesPage.tsx', 'features/messages/MeetingScheduler.tsx']) {
+    for (const page of ['features/messages/MessagesPage.tsx', 'features/messages/useSchedulerActions.ts']) {
       const downloads = source(page);
       expect(downloads).toContain("a.download = 'reason-meeting.ics';");
       expect(downloads).not.toContain('rsn-meeting.ics');
