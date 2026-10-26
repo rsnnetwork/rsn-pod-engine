@@ -292,7 +292,7 @@ test('edges: cancelled room (no form), Leave-Event grace, double-leave race + di
     console.log('  (both raced straight to main — no form to exercise didnt-work here)');
   }
 
-  try { await endSession(host, sessionId); } catch {}
+  await endSession(host, sessionId);
   // COM-05: P1a's event page, never reloaded since the leave, turns to Ended on its own (the completion tags reach a
   // connection that survived Leave Event), and a message still reaches its bell.
   await expect(p1aPage.getByText(/^Ended$/).first(), 'P1a sees Ended without reloading').toBeVisible({ timeout: 30_000 });
