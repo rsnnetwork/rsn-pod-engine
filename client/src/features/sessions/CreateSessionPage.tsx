@@ -1,5 +1,5 @@
 import { useForm } from 'react-hook-form';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
@@ -128,8 +128,12 @@ export default function CreateSessionPage() {
     queryFn: () => api.get('/admin/templates').then(r => r.data.data ?? []),
   });
 
-  // Admins can create events in any pod; others need director/host role
-  const pods: PodRow[] = isAdmin ? (allPods || []) : (allPods || []).filter((p: PodRow) => p.memberRole === 'director' || p.memberRole === 'host');
+  // Admins can create events in any pod; others need director/host role. Kept as one array until the list or the role
+  // changes: filtering afresh on every render gave anything that depended on it a new value each time.
+  const pods = useMemo<PodRow[]>(
+    () => (isAdmin ? (allPods ?? []) : (allPods ?? []).filter((p: PodRow) => p.memberRole === 'director' || p.memberRole === 'host')),
+    [allPods, isAdmin],
+  );
 
   const { register, handleSubmit, setValue, getValues, watch, formState: { errors } } = useForm<SessionForm>({
     defaultValues: {
@@ -145,20 +149,6 @@ export default function CreateSessionPage() {
       matchingPolicy: 'within_event',
     },
   });
-
-  // Pre-select pod from URL param once pods are loaded
-  // defaultValues only works on first render — if pods load after mount,
-  // the <select> shows "Select a pod" even though podId is in form state.
-  // This useEffect syncs the dropdown once pods data is available.
-  const urlPodId = params.get('podId');
-  useEffect(() => {
-    if (urlPodId && pods && pods.length > 0) {
-      const podExists = pods.some((p) => p.id === urlPodId);
-      if (podExists) {
-        setValue('podId', urlPodId);
-      }
-    }
-  }, [urlPodId, pods, setValue]);
 
   // The pod's type decides which formats it holds. The list above is the first twenty pods, so a pod the address names
   // that it lacks is read by itself (the same read the pod's own page makes).
@@ -258,8 +248,11 @@ export default function CreateSessionPage() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1.5">Pod</label>
+              {/* Controlled by the form's podId: a pod named in the address shows once its option arrives, with no effect
+                  to push it in. (An effect that did, watching a value it set and a list it rebuilt, ran after every render.) */}
               <select
                 {...register('podId', { required: 'Select a pod' })}
+                value={podId}
                 className={selectClass}
               >
                 <option value="">Select a pod</option>

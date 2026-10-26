@@ -291,6 +291,20 @@ describe('L3 - CreateSessionPage follows the pod\'s type and the chosen format',
     }
   });
 
+  it('a pod named in the address is the one chosen in the Pod select as it is drawn, with no effect to put it there', () => {
+    expect(drawPage('reason')).toMatch(/<option value="p1" selected="">Test<\/option>/);
+  });
+
+  it('keeps the list of pods one array until the list or the role changes, and nothing re-sets the pod by effect', () => {
+    // A member's list is filtered. Filtered afresh on every render it was a new value each time, and an effect that
+    // depended on it and set the (watched) pod ran after every render, for good: 2,400 React commits in 2 seconds, on the
+    // form a plain pod director reaches from the pod page. The e2e counts commits; these keep the cause out.
+    expect(src).toMatch(/useMemo<PodRow\[\]>\(/);
+    expect(src).toMatch(/\[allPods, isAdmin\]/);
+    expect(src).not.toMatch(/setValue\('podId'/);
+    expect(src).toMatch(/value=\{podId\}/);
+  });
+
   it('the body carries the format at the top level, and round settings only for a rounds format', () => {
     const body = src.slice(src.indexOf('mutationFn:'), src.indexOf('onSuccess:'));
     expect(body).toMatch(/format:\s*data\.format/);
