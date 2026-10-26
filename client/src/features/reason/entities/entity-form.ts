@@ -6,7 +6,6 @@
 // The server checks everything again (Zod on the route); these checks only answer at once, next to the field.
 // Whether a website is a real address is left to the server, which says so for that field.
 import { z } from 'zod';
-import type { FieldErrors, FieldValues, Resolver } from 'react-hook-form';
 import { ENTITY_KINDS, ENTITY_LIMITS, ENTITY_ROLES, type EntityInfo, type EntityKind, type EntityRole } from '@rsn/shared';
 import { tidyName } from './entity-text';
 
@@ -44,21 +43,10 @@ export type CreateFormValues = z.infer<typeof createSchema>;
 export type RoleFormValues = z.infer<typeof roleSchema>;
 
 /**
- * react-hook-form's resolver for a Zod schema: the first problem of each field, in the schema's words, or the
- * schema's (tidied) values. The project has no @hookform/resolvers, and this is all of it that the forms need.
+ * react-hook-form's resolver for a Zod schema. It lives in lib/form-resolver.ts since 26 Oct 2026 (the pod and event
+ * forms use it too) and is re-exported here, so the entity sheets keep importing it from this file.
  */
-export function formResolver<T extends FieldValues>(schema: z.ZodType<T, z.ZodTypeDef, unknown>): Resolver<T> {
-  return async (values) => {
-    const parsed = schema.safeParse(values);
-    if (parsed.success) return { values: parsed.data, errors: {} };
-    const errors: Record<string, { type: string; message: string }> = {};
-    for (const issue of parsed.error.issues) {
-      const field = issue.path[0];
-      if (typeof field === 'string' && !(field in errors)) errors[field] = { type: issue.code, message: issue.message };
-    }
-    return { values: {}, errors: errors as FieldErrors<T> };
-  };
-}
+export { formResolver } from '../../../lib/form-resolver';
 
 /** The create form as it opens: a company, and you as its founder (the brief's defaults). */
 export function createDefaults(startName = ''): CreateFormValues {

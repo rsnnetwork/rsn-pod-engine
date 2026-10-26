@@ -9,7 +9,7 @@ import { Clock, Users } from 'lucide-react';
 import { formatRule, liveKindOf } from '@rsn/shared';
 import type { EventFieldRule, EventFormat } from '@rsn/shared';
 import { cn } from '@/lib/utils';
-import { lengthOptions, settingProblem, type EventFormValues, type EventSettingKey } from './event-format-form';
+import { lengthOptions, type EventFormValues, type EventSettingKey } from './event-format-form';
 
 export type MatchingPolicyChoice = 'platform_wide' | 'within_event' | 'none';
 
@@ -29,7 +29,7 @@ export const MATCHING_POLICIES: { value: MatchingPolicyChoice; label: string; de
   {
     value: 'none',
     label: 'No restriction',
-    description: 'People can be matched again, even if they met before. Useful for smaller groups, curated sessions, or when repeated conversations are valuable.',
+    description: 'People can be matched again, even if they met before. Useful for smaller groups, curated events, or when repeated conversations are valuable.',
     hint: 'Best for small groups or repeat-attendance pods.',
   },
 ];
@@ -43,8 +43,10 @@ const TIMER_LABELS: Record<string, string> = {
   last_120s: 'Show last 2 minutes',
 };
 
-/** A control on the event forms: 44px tall, and scrolled clear of the sticky bar when the summary focuses it. */
-export const EVENT_FIELD = 'w-full min-h-[44px] rounded-xl border bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 scroll-mt-24 scroll-mb-44';
+/** Room above and below a control when the browser scrolls it into view (Tab, focus): clear of the top bar and the sticky bar. */
+export const FIELD_SCROLL_MARGINS = 'scroll-mt-24 scroll-mb-44';
+/** A control on the event forms: 44px tall, with the scroll margins above. */
+export const EVENT_FIELD = `w-full min-h-[44px] rounded-xl border bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 ${FIELD_SCROLL_MARGINS}`;
 export const EVENT_LABEL = 'block text-sm font-medium text-gray-600 mb-1.5';
 export const fieldBorder = (error?: string) => (error ? 'border-red-500' : 'border-gray-200');
 const ERROR_LINE = 'text-xs text-red-500 mt-1';
@@ -85,7 +87,7 @@ export function EventTypePicker({ name, formats, value, onChoose, error, notices
   }, [question]);
 
   return (
-    <fieldset aria-describedby={error ? errorId : undefined} className="min-w-0">
+    <fieldset data-field aria-describedby={error ? errorId : undefined} className="min-w-0">
       <legend className={EVENT_LABEL}>Event type</legend>
       {hint && <p className="mb-2 text-xs text-gray-500">{hint}</p>}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -160,7 +162,7 @@ interface FieldFrameProps {
 
 function Field({ id, label, hint, error, labelHidden, children }: FieldFrameProps) {
   return (
-    <div className="min-w-0">
+    <div data-field className="min-w-0">
       <label htmlFor={id} className={labelHidden ? 'sr-only' : EVENT_LABEL}>{label}</label>
       {children}
       {hint && <p id={`${id}-hint`} className={HINT_LINE}>{hint}</p>}
@@ -207,10 +209,10 @@ export default function EventFormatFields({
   const rule = formatRule(format);
   const fields = rule.fields;
   const err = (key: EventSettingKey) => errors[key]?.message;
-  // Each setting is checked against the type the form holds when it is checked, in the definition's words.
+  // The form's schema checks each setting against the type the form holds (event-format-form.ts); a setting the
+  // organiser changes counts as chosen.
   const setting = (key: EventSettingKey, extra: { valueAsNumber?: true } = {}): UseFormRegisterReturn => register(key, {
     ...extra,
-    validate: (value: unknown, values: EventFormValues) => settingProblem(values.format, key, value) ?? true,
     onChange: () => onTouched(key),
   });
 
@@ -273,7 +275,7 @@ export default function EventFormatFields({
             )}
           </div>
           {fields.matchingPolicy && (
-            <fieldset className="min-w-0">
+            <fieldset data-field className="min-w-0">
               <legend className="mb-1 block text-sm font-medium text-gray-600">{fields.matchingPolicy.label}</legend>
               <p className="mb-3 text-xs text-gray-500">Control whether people who&apos;ve met before can be paired again.</p>
               <div className="space-y-2">
@@ -283,10 +285,7 @@ export default function EventFormatFields({
                       type="radio"
                       value={p.value}
                       className="mt-0.5 h-4 w-4 shrink-0 accent-[#1a1a2e] scroll-mt-24 scroll-mb-44"
-                      {...register('matchingPolicy', {
-                        validate: (value: unknown, values: EventFormValues) => settingProblem(values.format, 'matchingPolicy', value) ?? true,
-                        onChange: () => onTouched('matchingPolicy'),
-                      })}
+                      {...register('matchingPolicy', { onChange: () => onTouched('matchingPolicy') })}
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm font-medium text-[#1a1a2e]">{p.label}</span>

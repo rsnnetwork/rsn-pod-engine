@@ -8,7 +8,7 @@ import type { UseFormReturn } from 'react-hook-form';
 import type { OrchestrationMode, PodType } from '@rsn/shared';
 import Input from '@/components/ui/Input';
 import PodTypeFields, { POD_FIELD, POD_LABEL } from './PodTypeFields';
-import { POD_NAME_MAX, changeType, maxMembersProblem, podNameProblem, sizeHint, type PodFormValues } from './pod-type-form';
+import { POD_NAME_MAX, changeType, sizeHint, type PodFormValues } from './pod-type-form';
 
 const VISIBILITY_OPTIONS = [
   { value: 'private', label: 'Private', desc: 'Invite only, hidden from browse' },
@@ -70,7 +70,7 @@ export default function PodFormFields({ form, chosen: startChosen, initialNotice
         maxLength={POD_NAME_MAX}
         placeholder="e.g. Frontend Devs"
         error={errors.name?.message}
-        {...register('name', { validate: (v) => podNameProblem(v) ?? true })}
+        {...register('name')}
       />
 
       <div>
@@ -112,7 +112,7 @@ export default function PodFormFields({ form, chosen: startChosen, initialNotice
             inputMode="numeric"
             placeholder="No limit"
             error={errors.maxMembers?.message}
-            {...register('maxMembers', { validate: (v) => maxMembersProblem(v) ?? true })}
+            {...register('maxMembers')}
           />
           {hint && <p className="mt-1 text-xs text-gray-500">{hint}</p>}
         </div>

@@ -9,6 +9,7 @@
 // 25 Oct walkthrough: a "Video meeting" in a Reason pod was created with five 8-minute rounds and ran as speed
 // networking, and the title's "Required" sat three screens above the button on a phone.
 
+import { z } from 'zod';
 import {
   EVENT_FORMAT_KEYS, applyFormatChange, checkEventInput, defaultEventFormat, defaultTitle, defaultsFor,
   effectiveOrchestration, eventFormatsForPod, fieldsFor, formatRule, liveKindOf, resolveEventFormat, valuesFromConfig,
@@ -39,6 +40,11 @@ export interface EventFormValues {
 export type EventSettingKey =
   'numberOfRounds' | 'roundMinutes' | 'timerVisibility' | 'matchingPolicy' | 'matchingTemplateId' | 'maxParticipants' | 'durationMinutes';
 
+/** Every setting an event form holds, of every type: a switch of type puts them all back, the schema checks them all. */
+export const SETTING_KEYS: EventSettingKey[] = [
+  'numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'matchingTemplateId', 'maxParticipants', 'durationMinutes',
+];
+
 /** A pod as the event forms need it. */
 export interface EventPod {
   id: string;
@@ -53,6 +59,8 @@ export const TITLE_MAX = 300;
 /** The server's limit on a description. */
 export const DESCRIPTION_MAX = 2000;
 export const CHECK_SETTINGS = "Check the event's settings and try again.";
+export const DATE_REQUIRED = 'Choose a date and time.';
+export const POD_REQUIRED = 'Choose a pod.';
 
 /** Every type the forms may offer today, in the table's order. */
 const OFFERED: EventFormat[] = EVENT_FORMAT_KEYS.filter((f) => formatRule(f).available);
@@ -162,11 +170,17 @@ export function switchFormat(
   touched: ReadonlySet<string>,
 ): { values: EventFormValues; notices: string[]; confirm: string | null } {
   const r = applyFormatChange(values, next, touched);
-  return {
-    values: r.values as EventFormValues,
-    notices: r.needsConfirm ? r.notices.slice(0, -1) : r.notices,
-    confirm: r.needsConfirm ? r.notices[r.notices.length - 1] : null,
-  };
+  if (!r.needsConfirm) return { values: r.values as EventFormValues, notices: r.notices, confirm: null };
+  // The question names the round length as people read it ("1.7 min", not "1.6666666666666667 min"), from a copy of
+  // the values: the form keeps the exact length, so the stored seconds do not change.
+  const asked = applyFormatChange({ ...values, roundMinutes: readableMinutes(values.roundMinutes) }, next, touched).notices;
+  return { values: r.values as EventFormValues, notices: r.notices.slice(0, -1), confirm: asked[asked.length - 1] };
+}
+
+/** Minutes to one decimal at most, for reading; a length that would read as 0 keeps its own value. */
+function readableMinutes(m: number): number {
+  const rounded = Math.round(Number(m) * 10) / 10;
+  return rounded > 0 ? rounded : m;
 }
 
 /**
@@ -203,6 +217,37 @@ export function titleProblem(title: string): string | null {
   const t = (title ?? '').trim();
   if (!t) return TITLE_REQUIRED;
   return t.length > TITLE_MAX ? `Keep the title to ${TITLE_MAX} characters.` : null;
+}
+
+// ---- the forms' Zod schemas ----------------------------------------------------------------------
+
+/** Each problem of an event form's values, at its field, in the rules' words above (the same words as the server's). */
+function eventIssues(values: EventFormValues, ctx: z.RefinementCtx, o: { pod: boolean }): void {
+  const say = (field: string, message: string | null) => {
+    if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message });
+  };
+  if (o.pod) say('podId', values.podId ? null : POD_REQUIRED);
+  say('title', titleProblem(values.title));
+  say('scheduledAt', values.scheduledAt ? null : DATE_REQUIRED);
+  // Only the chosen type's settings are checked: settingProblem says nothing about another type's field.
+  for (const key of SETTING_KEYS) say(key, settingProblem(values.format, key, values[key]));
+}
+
+/** The form's values as they are: the refinements check them and nothing is stripped or changed. */
+const eventFormValues = z.custom<EventFormValues>((v) => typeof v === 'object' && v !== null);
+
+/** Schedule an Event's schema, handed to react-hook-form through formResolver (lib/form-resolver.ts). */
+export const newEventSchema = eventFormValues.superRefine((v, ctx) => eventIssues(v, ctx, { pod: true }));
+
+/** Edit Event's schema. The date is required here too: an emptied date used to save "successfully" and keep the old one. */
+export const eventChangesSchema = eventFormValues.superRefine((v, ctx) => eventIssues(v, ctx, { pod: false }));
+
+/** The fields an event form draws for a type, the pod picker aside: a problem with any other goes beside the button. */
+export function shownEventKeys(format: EventFormat, isAdmin: boolean): string[] {
+  return [
+    'format', 'title', 'description', 'scheduledAt',
+    ...fieldsFor(format).filter((key) => isAdmin || !formatRule(format).fields[key]?.adminOnly),
+  ];
 }
 
 export interface NewEventBody {
@@ -295,8 +340,8 @@ function shown(text: unknown): string | null {
 const REQUEST_FIELD_WORDS: Record<string, (said: string) => string> = {
   title: (said) => (/at most|too long/i.test(said) ? `Keep the title to ${TITLE_MAX} characters.` : TITLE_REQUIRED),
   description: () => 'Keep the description to 2,000 characters.',
-  scheduledAt: () => 'Choose a date and time.',
-  podId: () => 'Choose a pod.',
+  scheduledAt: () => DATE_REQUIRED,
+  podId: () => POD_REQUIRED,
   format: () => 'Choose an event type.',
 };
 
@@ -403,6 +448,16 @@ export function problemSummary(keys: string[], format: EventFormat): ProblemSumm
 
 const minutes = (n: unknown) => `${Number(n)} min`;
 
+/**
+ * A round length for reading, from minutes: to one decimal at most ("1.7" for 100 seconds), or in seconds under a
+ * minute ("30"). Only what is shown is rounded; the stored seconds stay as they are.
+ */
+function roundLength(value: unknown, minuteUnit: string, secondUnit: string): string {
+  const m = Number(value);
+  if (m > 0 && m < 1) return `${Math.round(m * 60)}${secondUnit}`;
+  return `${readableMinutes(m)}${minuteUnit}`;
+}
+
 export interface EventFact {
   key: string;
   value: string;
@@ -415,7 +470,7 @@ export function eventFacts(format: EventFormat, config: object | null | undefine
   const facts: EventFact[] = [];
   if (liveKindOf(format) === 'rounds') {
     facts.push({ key: 'numberOfRounds', value: String(v.numberOfRounds), caption: 'rounds' });
-    facts.push({ key: 'roundMinutes', value: `${Number(v.roundMinutes)}m`, caption: 'per round' });
+    facts.push({ key: 'roundMinutes', value: roundLength(v.roundMinutes, 'm', 's'), caption: 'per round' });
   } else if (v.durationMinutes !== undefined) {
     facts.push({ key: 'durationMinutes', value: minutes(v.durationMinutes), caption: 'length' });
   }
@@ -429,7 +484,7 @@ export function eventFactsLine(format: EventFormat, config: object | null | unde
   const parts = [formatRule(format).label];
   if (liveKindOf(format) === 'rounds') {
     const rounds = Number(v.numberOfRounds);
-    parts.push(`${rounds} ${rounds === 1 ? 'round' : 'rounds'} × ${minutes(v.roundMinutes)}`);
+    parts.push(`${rounds} ${rounds === 1 ? 'round' : 'rounds'} × ${roundLength(v.roundMinutes, ' min', ' s')}`);
   } else if (v.durationMinutes !== undefined) {
     parts.push(minutes(v.durationMinutes));
   }

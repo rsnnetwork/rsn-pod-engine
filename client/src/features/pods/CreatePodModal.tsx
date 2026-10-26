@@ -11,8 +11,9 @@ import FormSummary from '@/components/ui/FormSummary';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
+import { formResolver } from '@/lib/form-resolver';
 import PodFormFields from './PodFormFields';
-import { newPodValues, podBody, podProblemSummary, podProblems, type PodField, type PodFormValues, type PodSource } from './pod-type-form';
+import { newPodValues, podBody, podProblemSummary, podProblems, podFormSchema, type PodField, type PodFormValues, type PodSource } from './pod-type-form';
 
 interface Props {
   open: boolean;
@@ -36,7 +37,8 @@ function CreatePodSheet({ onClose, initialValues }: { onClose: () => void; initi
   const formId = useId();
   // Once per opening: the page passes a fresh initialValues object on every render.
   const [start] = useState(() => newPodValues(initialValues));
-  const form = useForm<PodFormValues>({ defaultValues: start.values });
+  // Checked by the pod schema (name, max members), in the same words as before, through the shared resolver.
+  const form = useForm<PodFormValues>({ defaultValues: start.values, resolver: formResolver(podFormSchema) });
   const { handleSubmit, setError, setFocus, formState: { errors } } = form;
   const [formError, setFormError] = useState<string | null>(null);
   // A ref, not isPending: a double tap lands before React draws the button as disabled.

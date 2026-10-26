@@ -35,7 +35,8 @@ export default function FormSummary({ summary, message, onGoTo, className }: Pro
               >
                 {item.label}
               </button>
-              {i < summary.items.length - 1 && <span aria-hidden="true">,</span>}
+              {/* Against the label: the button's own padding would put a space before the comma. */}
+              {i < summary.items.length - 1 && <span aria-hidden="true" className="-ml-1">,</span>}
             </span>
           ))}
         </p>

@@ -7,11 +7,10 @@
 // 25 Oct walkthrough: the form defaulted to speed networking whatever the pod, a "Video meeting" was created with five
 // 8-minute rounds, and the title's "Required" sat three screens above the button on a phone.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { useForm, type FieldPath } from 'react-hook-form';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Settings } from 'lucide-react';
-import { POD_TYPES, defaultTitle, fieldsFor, formatRule } from '@rsn/shared';
+import { POD_TYPES, defaultTitle } from '@rsn/shared';
 import type { EventFormat, OrchestrationMode, PodType } from '@rsn/shared';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
@@ -22,12 +21,12 @@ import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 import { cn, isAdmin as isAdminRole, localTimezoneLabel } from '@/lib/utils';
 import { E } from '@/realtime/entities';
-import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, fieldBorder, type TemplateOption } from './EventFormatFields';
+import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder, type TemplateOption } from './EventFormatFields';
 import {
-  DESCRIPTION_MAX, TITLE_MAX, autoTitle, eventBody, eventProblems, newEventValues, nextQuarterHour, offeredFormats,
-  podChangeFormat, problemSummary, switchFormat, titleProblem,
-  type EventFormValues, type EventPod, type EventSettingKey, type NewEventBody,
+  DESCRIPTION_MAX, TITLE_MAX, autoTitle, eventBody, newEventSchema, newEventValues, nextQuarterHour, offeredFormats,
+  podChangeFormat, shownEventKeys, type EventPod, type NewEventBody,
 } from './event-format-form';
+import { useEventFormatForm } from './useEventFormatForm';
 
 interface PodRow {
   id: string;
@@ -37,10 +36,6 @@ interface PodRow {
   memberRole?: string | null;
   status?: string;
 }
-
-const SETTING_KEYS: EventSettingKey[] = [
-  'numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'matchingTemplateId', 'maxParticipants', 'durationMinutes',
-];
 
 const CREATE_COPY = {
   fallback: 'Could not schedule the event just now. Try again in a moment.',
@@ -186,92 +181,36 @@ interface FormProps {
 function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, back }: FormProps) {
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
-  const pickerName = useId();
   const podFieldId = useId();
   const descriptionId = useId();
   const [start] = useState(() => newEventValues({ pod: toEventPod(fixedPod ?? null), scheduledAt: nextQuarterHour(new Date()) }));
-  // shouldFocusError off: the form takes the member to the first problem itself (goTo), centred in the window, so the
-  // field is not left under the sticky bar.
-  const { register, handleSubmit, watch, setValue, getValues, setError, clearErrors, formState: { errors } } = useForm<EventFormValues>({
-    defaultValues: start,
-    shouldFocusError: false,
-  });
-  // The settings the organiser set: a switch of type keeps them, or asks before dropping them.
-  const touched = useRef(new Set<string>());
-  const formatChosen = useRef(false);
   const lastAutoTitle = useRef(start.title);
-  const [notices, setNotices] = useState<string[]>([]);
-  const [asking, setAsking] = useState<{ format: EventFormat; question: string } | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
-  // A ref, not isPending: a double tap lands before React draws the button as disabled.
-  const sending = useRef(false);
-  const formRef = useRef<HTMLFormElement>(null);
+  const ev = useEventFormatForm({
+    defaultValues: start,
+    schema: newEventSchema,
+    copy: CREATE_COPY,
+    shownKeys: (f) => [...(fixedPod ? [] : ['podId']), ...shownEventKeys(f, isAdmin)],
+    onSwitched: (f) => refreshTitle(f),
+  });
+  const { register, watch, setValue, getValues, clearErrors, formState: { errors } } = ev.form;
+  const podOf = (id: string) => fixedPod ?? pods.find((p) => p.id === id) ?? null;
+  const pod = podOf(watch('podId'));
 
-  const format = watch('format');
-  const podId = watch('podId');
-  const durationMinutes = watch('durationMinutes');
-  const pod = fixedPod ?? pods.find((p) => p.id === podId) ?? null;
-  const formats = offeredFormats(pod?.podType ?? null);
-
-  /** The fields this form draws right now: a problem with any other goes beside the button. */
-  const shownKeys = (f: EventFormat): string[] => [
-    ...(fixedPod ? [] : ['podId']), 'format', 'title', 'description', 'scheduledAt',
-    ...fieldsFor(f).filter((key) => isAdmin || !formatRule(f).fields[key]?.adminOnly),
-  ];
-
-  const refreshTitle = (nextFormat: EventFormat, forPod: PodRow | null) => {
-    const auto = defaultTitle(nextFormat, forPod?.name ?? '');
+  /** The filled-in title follows the type and the pod until the member writes their own. */
+  function refreshTitle(nextFormat: EventFormat) {
+    const auto = defaultTitle(nextFormat, podOf(getValues('podId'))?.name ?? '');
     const next = autoTitle(getValues('title'), lastAutoTitle.current, auto);
     lastAutoTitle.current = auto;
     if (next !== getValues('title')) {
       setValue('title', next);
       clearErrors('title');
     }
-  };
-
-  /** A switch of type into the form: the new settings, nothing the old type's fields said, an untouched title refilled. */
-  const apply = (values: EventFormValues, said: string[], forPod: PodRow | null) => {
-    for (const key of SETTING_KEYS) setValue(key, values[key]);
-    setValue('format', values.format);
-    clearErrors([...SETTING_KEYS, 'format']);
-    setNotices(said);
-    refreshTitle(values.format, forPod);
-  };
-
-  const chooseFormat = (next: EventFormat) => {
-    if (next === getValues('format')) {
-      setAsking(null);
-      return;
-    }
-    formatChosen.current = true;
-    const r = switchFormat(getValues(), next, touched.current);
-    if (r.confirm) {
-      setAsking({ format: next, question: r.confirm });
-      return;
-    }
-    setAsking(null);
-    apply(r.values, r.notices, pod);
-  };
-
-  const continueSwitch = () => {
-    if (!asking) return;
-    // From the form as it is now: anything typed while the question was showing is kept.
-    const r = switchFormat(getValues(), asking.format, touched.current);
-    setAsking(null);
-    apply(r.values, r.notices, pod);
-  };
+  }
 
   /** A pod chosen (or its type changed while the form is open): the type follows it, with a notice when it must change. */
   const followPod = (nextPod: PodRow | null, chosen: boolean) => {
-    const { format: nextFormat, notice } = podChangeFormat(getValues('format'), toEventPod(nextPod), chosen);
-    setAsking(null);
-    if (nextFormat !== getValues('format')) {
-      const r = switchFormat(getValues(), nextFormat, touched.current);
-      apply(r.values, notice ? [notice, ...r.notices] : r.notices, nextPod);
-    } else {
-      setNotices(notice ? [notice] : []);
-      refreshTitle(nextFormat, nextPod);
-    }
+    const { format: next, notice } = podChangeFormat(getValues('format'), toEventPod(nextPod), chosen);
+    ev.followFormat(next, notice);
   };
 
   // The pod's type can change while the form is open (its director edits it; the pod query is told at once): a type
@@ -281,16 +220,6 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
     if (podType && !offeredFormats(podType).includes(getValues('format'))) followPod(pod, true);
     // Only a change of the pod's type matters here; the form's own state is read when it runs.
   }, [podType]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /**
-   * Focus a field with a problem and bring it to the middle of the window, clear of the sticky bar. Found by its name
-   * in this form (react-hook-form's setFocus waits a tick, so the field could not be centred after it).
-   */
-  const goTo = (key: string) => {
-    const field = formRef.current?.querySelector<HTMLElement>(key === 'format' ? `input[name="${pickerName}"]:checked` : `[name="${key}"]`);
-    field?.focus({ preventScroll: true });
-    field?.scrollIntoView({ block: 'center' });
-  };
 
   const create = useMutation({
     networkMode: 'always',
@@ -304,38 +233,15 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
       }
       navigate(`/sessions/${id}?invite=1`);
     },
-    onError: (err) => {
-      const current = getValues('format');
-      const { fields, form: message } = eventProblems(err, current, CREATE_COPY);
-      const shown = shownKeys(current);
-      const elsewhere: string[] = [];
-      for (const [key, words] of Object.entries(fields)) {
-        if (shown.includes(key)) setError(key as FieldPath<EventFormValues>, { type: 'server', message: words });
-        else elsewhere.push(words);
-      }
-      setFormError([message, ...elsewhere].filter(Boolean).join(' ') || null);
-      const first = problemSummary(Object.keys(fields).filter((key) => shown.includes(key)), current)?.items[0];
-      if (first) goTo(first.key);
-    },
-    onSettled: () => { sending.current = false; },
+    onError: ev.refused,
+    onSettled: ev.settled,
   });
-
-  const submit = handleSubmit((values) => {
-    if (sending.current) return;
-    sending.current = true;
-    setFormError(null);
-    create.mutate(eventBody(values, { isAdmin }));
-  }, (invalid) => {
-    const first = problemSummary(Object.keys(invalid), getValues('format'))?.items[0];
-    if (first) goTo(first.key);
-  });
-
-  const summary = problemSummary(Object.keys(errors).filter((key) => shownKeys(format).includes(key)), format);
+  const submit = ev.onSubmit((values) => create.mutate(eventBody(values, { isAdmin })));
   const typeLabel = pod ? POD_TYPES[pod.podType]?.label : undefined;
 
   return (
-    // noValidate: the browser does not judge the form; every problem is said at its field, in REASON's words.
-    <form ref={formRef} onSubmit={(e) => { clearErrors('format'); return submit(e); }} noValidate className="space-y-6">
+    // noValidate: the browser does not judge the form; the schema says every problem at its field, in REASON's words.
+    <form ref={ev.formRef} onSubmit={submit} noValidate className="space-y-6">
       <Card className="animate-fade-in-up">
         <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-800 mb-4">
           <Settings className="h-5 w-5 text-rsn-red" /> Basic Info
@@ -355,10 +261,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
                 id={podFieldId}
                 className={cn(EVENT_FIELD, fieldBorder(errors.podId?.message))}
                 aria-invalid={errors.podId ? true : undefined}
-                {...register('podId', {
-                  validate: (v) => (v ? true : 'Choose a pod.'),
-                  onChange: (e) => followPod(pods.find((p) => p.id === e.target.value) ?? null, formatChosen.current),
-                })}
+                {...register('podId', { onChange: (e) => followPod(podOf(e.target.value), ev.formatChosen.current) })}
               >
                 <option value="">Select a pod</option>
                 {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -367,23 +270,15 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
             </div>
           )}
 
-          <EventTypePicker
-            name={pickerName}
-            formats={formats}
-            value={format}
-            onChoose={chooseFormat}
-            error={errors.format?.message}
-            notices={notices}
-            confirm={asking ? { question: asking.question, onContinue: continueSwitch, onCancel: () => setAsking(null) } : null}
-            hint={pod ? undefined : 'Choose a pod to see the event types it holds.'}
-          />
+          <EventTypePicker {...ev.picker(offeredFormats(pod?.podType ?? null), pod ? undefined : 'Choose a pod to see the event types it holds.')} />
 
           <Input
             label="Title"
             maxLength={TITLE_MAX}
             placeholder="What will you discuss?"
             error={errors.title?.message}
-            {...register('title', { validate: (v) => titleProblem(v) ?? true })}
+            className={FIELD_SCROLL_MARGINS}
+            {...register('title')}
           />
 
           <div>
@@ -401,12 +296,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
           </div>
 
           <div>
-            <Input
-              label="Date and time"
-              type="datetime-local"
-              error={errors.scheduledAt?.message}
-              {...register('scheduledAt', { validate: (v) => (v ? true : 'Choose a date and time.') })}
-            />
+            <Input label="Date and time" type="datetime-local" error={errors.scheduledAt?.message} className={FIELD_SCROLL_MARGINS} {...register('scheduledAt')} />
             <p className="text-xs text-gray-400 mt-1">
               Shown in your local time — {localTimezoneLabel()}. Each person sees the event in their own timezone.
             </p>
@@ -416,14 +306,14 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
 
       <Card className="animate-fade-in-up stagger-1">
         <EventFormatFields
-          format={format}
+          format={ev.format}
           register={register}
           errors={errors}
-          durationMinutes={durationMinutes}
+          durationMinutes={watch('durationMinutes')}
           isAdmin={isAdmin}
           templates={templates}
           templatesLoading={templatesLoading}
-          onTouched={(key) => touched.current.add(key)}
+          onTouched={ev.touch}
         />
       </Card>
 
@@ -431,9 +321,9 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
           and 12px above the foot of the window (and its safe area) from 721px, where there is no bottom bar. A sticky
           offset is measured inside <main>'s bottom padding (ReasonShell: 96px plus the safe area on a phone, 40px from
           721px), hence the negative offsets: 72px (the 69px bar and a gap) less 96px; 12px plus the safe area less 40px. */}
-      <div className="sticky bottom-[-24px] z-20 min-[721px]:bottom-[calc(env(safe-area-inset-bottom)_-_28px)]">
+      <div ref={ev.barRef} className="sticky bottom-[-24px] z-20 min-[721px]:bottom-[calc(env(safe-area-inset-bottom)_-_28px)]">
         <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 rounded-2xl border border-gray-200 bg-white/95 px-4 py-2.5 shadow-lg backdrop-blur">
-          <FormSummary className="basis-full sm:basis-auto sm:flex-1" summary={summary} message={formError} onGoTo={goTo} />
+          <FormSummary className="basis-full sm:basis-auto sm:flex-1" summary={ev.summary} message={ev.formError} onGoTo={ev.goTo} />
           <Button variant="ghost" type="button" onClick={() => navigate(back)}>Cancel</Button>
           <Button type="submit" isLoading={create.isPending} className="btn-glow">Schedule Event</Button>
         </div>

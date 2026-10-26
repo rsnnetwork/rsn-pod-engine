@@ -11,6 +11,7 @@
 // A setting follows the type until the member sets it; one they chose stays while the new type allows it, and is
 // replaced, with a notice, when it does not: never silently. Communication is never asked: it follows the type.
 
+import { z } from 'zod';
 import { ORCHESTRATION_MODES, POD_TYPES, applyTypeChange, effectiveOrchestration, podTypeRule } from '@rsn/shared';
 import type { CommunicationMode, OrchestrationMode, PodType } from '@rsn/shared';
 import { errorMessage } from '../reason/errors';
@@ -164,6 +165,18 @@ export function maxMembersProblem(text: string): string | null {
   const n = Number(t);
   return n >= 1 && n <= 10000 ? null : MAX_MEMBERS_PROBLEM;
 }
+
+/**
+ * The pod forms' schema (Create a Pod, Duplicate Pod, Edit Pod), handed to react-hook-form through formResolver
+ * (lib/form-resolver.ts): each problem at its field, in the words of the checks above. The values pass through as they
+ * are, so nothing the forms send is stripped.
+ */
+export const podFormSchema = z.custom<PodFormValues>((v) => typeof v === 'object' && v !== null).superRefine((v, ctx) => {
+  const problems: [keyof PodFormValues, string | null][] = [['name', podNameProblem(v.name)], ['maxMembers', maxMembersProblem(v.maxMembers)]];
+  for (const [field, message] of problems) {
+    if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message });
+  }
+});
 
 export interface NewPodBody {
   name: string;

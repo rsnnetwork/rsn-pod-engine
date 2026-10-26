@@ -8,7 +8,7 @@
 // freeform, but that should be automatic when I choose Reason pod" (Claus, 2:46:24). They set Free Form by hand.
 import {
   POD_NAME_REQUIRED, TYPE_CHANGE_NOTE, changeType, editPodValues, maxMembersProblem, newPodValues, orchestrationChoice,
-  podBody, podChanges, podNameProblem, podProblems, podTypeChoices, sizeHint,
+  podBody, podChanges, podFormSchema, podNameProblem, podProblems, podTypeChoices, sizeHint,
 } from '../../../../client/src/features/pods/pod-type-form';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
 
@@ -193,5 +193,25 @@ describe('a refused pod form', () => {
     expect(podProblems(refused(403, { code: 'AUTH_FORBIDDEN', message: 'Insufficient permissions' }), COPY).form).toBe(COPY.forbidden);
     expect(podProblems(refused(500, { code: 'INTERNAL_ERROR', message: 'x' }), COPY).form).toBe(COPY.fallback);
     expect(podProblems(Object.assign(new Error('Network Error'), { isAxiosError: true, code: 'ERR_NETWORK' }), COPY).form).toBe(CONNECTION_LOST);
+  });
+});
+
+// ---- fix round 1 (26 Oct): the pod forms' Zod schema (Create, Duplicate, Edit) ----
+
+describe("the pod forms' schema says what the field checks said, and keeps every value", () => {
+  const issues = (values: Parameters<typeof podChanges>[0]) => {
+    const r = podFormSchema.safeParse(values);
+    return r.success ? [] : r.error.issues.map((i) => [String(i.path[0]), i.message]);
+  };
+
+  it('a blank name and a max of 0 are said at their fields', () => {
+    const { values } = newPodValues();
+    expect(issues({ ...values, name: ' ', maxMembers: '0' })).toEqual([['name', POD_NAME_REQUIRED], ['maxMembers', 'Max members must be a whole number from 1 to 10,000.']]);
+  });
+
+  it('a filled-in pod passes with its values as they were (the hidden communication too)', () => {
+    const { values } = editPodValues({ name: 'Deep', podType: 'chat', orchestrationMode: 'free_form', communicationMode: 'text', visibility: 'private', maxMembers: 10, rules: 'Be kind' });
+    const r = podFormSchema.safeParse(values);
+    expect(r.success && r.data).toEqual(values);
   });
 });

@@ -90,25 +90,23 @@ describe('Schedule an Event follows the event type', () => {
     expect(page).toMatch(/In \{fixedPod\.name\}/);
   });
 
-  it('the title is filled in, required in these words, and capped at the server\'s 300 characters', () => {
-    expect(page).toMatch(/titleProblem\(/);
+  it('the title is filled in, required in these words (the schema), and capped at the server\'s 300 characters', () => {
+    expect(page).toMatch(/schema: newEventSchema/);
     expect(page).toMatch(/maxLength=\{TITLE_MAX\}/);
     expect(page).toMatch(/autoTitle\(/);
   });
 
   it('the browser does not judge the form (noValidate): every problem is said at its field, with the summary beside the sticky submit', () => {
-    expect(page).toMatch(/<form ref=\{formRef\} onSubmit=[\s\S]{0,120}noValidate/);
+    expect(page).toMatch(/<form ref=\{ev\.formRef\} onSubmit=\{submit\} noValidate/);
     expect(page).toMatch(/<FormSummary/);
     // Just above the phone's bottom bar; 12px above the foot of the window and its safe area from 721px. Sticky offsets
     // are measured inside <main>'s bottom padding (96px plus the safe area on a phone, 40px from 721px), hence negative.
-    expect(page).toMatch(/sticky bottom-\[-24px\]/);
+    expect(page).toMatch(/<div ref=\{ev\.barRef\} className="sticky bottom-\[-24px\]/);
     expect(page).toMatch(/min-\[721px\]:bottom-\[calc\(env\(safe-area-inset-bottom\)_-_28px\)\]/);
-    expect(page).toMatch(/shouldFocusError: false/);
-    expect(page).toMatch(/scrollIntoView\(\{ block: 'center' \}\)/);
   });
 
-  it('a refusal is mapped to its field (both shapes, eventProblems), never shown as a raw toast', () => {
-    expect(page).toMatch(/eventProblems\(/);
+  it('a refusal is mapped to its field (both shapes, through the shared hook), never shown as a raw toast', () => {
+    expect(page).toMatch(/onError: ev\.refused/);
     expect(page).not.toMatch(/addToast\(msg, 'error'\)/);
   });
 
@@ -132,7 +130,7 @@ describe('the event page', () => {
     expect(edit).toMatch(/<EventFormatFields/);
     expect(edit).toMatch(/<EventTypePicker/);
     expect(edit).toMatch(/eventChanges\(/);
-    expect(edit).toMatch(/eventProblems\(/);
+    expect(edit).toMatch(/onError: ev\.refused/);
   });
 
   it('no call to the /matching-templates route that does not exist; the edit form asks /admin/templates, for admins', () => {
@@ -158,5 +156,69 @@ describe('the event page', () => {
 
   it('the other host buttons are 44px tap targets as well', () => {
     expect(page).not.toMatch(/className="h-9 px-3/);
+  });
+});
+
+// Fix round 1 (26 Oct): the house rule "every form is react-hook-form with a Zod resolver", and one hook for both event
+// forms so create and edit cannot drift apart again.
+describe('every C7 form is react-hook-form with a Zod schema through formResolver; the event forms share one hook', () => {
+  const files = {
+    createPod: read('features/pods/CreatePodModal.tsx'),
+    editPod: read('features/pods/EditPodModal.tsx'),
+    podFields: read('features/pods/PodFormFields.tsx'),
+    createEvent: read('features/sessions/CreateSessionPage.tsx'),
+    editEvent: read('features/sessions/EditEventModal.tsx'),
+    eventFields: read('features/sessions/EventFormatFields.tsx'),
+    hook: read('features/sessions/useEventFormatForm.ts'),
+  };
+
+  it('the pod forms hand their schema to the shared resolver', () => {
+    for (const src of [files.createPod, files.editPod]) expect(src).toMatch(/resolver: formResolver\(podFormSchema\)/);
+  });
+
+  it('the event forms hand theirs to the shared hook, which hands it to the resolver', () => {
+    expect(files.createEvent).toMatch(/useEventFormatForm\(\{[\s\S]{0,120}schema: newEventSchema/);
+    expect(files.editEvent).toMatch(/useEventFormatForm\(\{[\s\S]{0,120}schema: eventChangesSchema/);
+    expect(files.hook).toMatch(/useForm<EventFormValues>\(\{ defaultValues, resolver: formResolver\(schema\), shouldFocusError: false \}\)/);
+  });
+
+  it('no field checks itself any more (no register-level validate callbacks)', () => {
+    for (const [name, src] of Object.entries(files)) expect([name, /validate:/.test(src)]).toEqual([name, false]);
+  });
+
+  it('the switch, its question, goTo, the refusal mapping and the submit guard are written once, in the hook', () => {
+    for (const src of [files.createEvent, files.editEvent]) {
+      expect(src).not.toMatch(/SETTING_KEYS/);
+      expect(src).not.toMatch(/const (chooseFormat|continueSwitch|goTo|apply) = /);
+      expect(src).not.toMatch(/eventProblems\(/);
+      expect(src).not.toMatch(/sending\.current/);
+    }
+    for (const step of ['chooseFormat', 'continueSwitch', 'followFormat', 'goTo', 'onSubmit', 'refused']) {
+      expect(files.hook).toMatch(new RegExp(`const ${step} = `));
+    }
+    expect(files.hook).toMatch(/sending\.current = true/);
+  });
+
+  it('NewEventForm is under 200 lines', () => {
+    const lines = files.createEvent.split('\n');
+    const start = lines.findIndex((l) => l.startsWith('function NewEventForm'));
+    const end = lines.findIndex((l, i) => i > start && l === '}');
+    expect(start).toBeGreaterThan(-1);
+    expect(end - start + 1).toBeLessThan(200);
+  });
+
+  it('a field with a problem is brought into view clear of the sticky bar; Title and the date keep the scroll margins', () => {
+    expect(files.hook).toMatch(/bringIntoView\(field, barRef\.current\)/);
+    expect(files.eventFields).toMatch(/FIELD_SCROLL_MARGINS = 'scroll-mt-24 scroll-mb-44'/);
+    for (const src of [files.createEvent, files.editEvent]) {
+      expect(src).toMatch(/label="Title"[\s\S]{0,160}className=\{FIELD_SCROLL_MARGINS\}/);
+      expect(src).toMatch(/label="Date and time"[\s\S]{0,120}className=\{FIELD_SCROLL_MARGINS\}/);
+    }
+  });
+
+  it('the matching rules say "event", never "session"', () => {
+    const policies = files.eventFields.slice(files.eventFields.indexOf('export const MATCHING_POLICIES'), files.eventFields.indexOf('const TIMER_LABELS'));
+    expect(policies).not.toMatch(/session/i);
+    expect(policies).toMatch(/curated events/);
   });
 });

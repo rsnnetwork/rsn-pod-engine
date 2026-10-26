@@ -11,8 +11,9 @@ import FormSummary from '@/components/ui/FormSummary';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
+import { formResolver } from '@/lib/form-resolver';
 import PodFormFields from './PodFormFields';
-import { editPodValues, podChanges, podProblemSummary, podProblems, type PodField, type PodFormValues, type PodSource } from './pod-type-form';
+import { editPodValues, podChanges, podProblemSummary, podProblems, podFormSchema, type PodField, type PodFormValues, type PodSource } from './pod-type-form';
 
 interface Props {
   open: boolean;
@@ -36,7 +37,8 @@ function EditPodSheet({ onClose, pod }: { onClose: () => void; pod: Props['pod']
   const addToast = useToastStore((s) => s.addToast);
   const formId = useId();
   const [start] = useState(() => editPodValues(pod));
-  const form = useForm<PodFormValues>({ defaultValues: start.values });
+  // Checked by the pod schema (name, max members), in the same words as before, through the shared resolver.
+  const form = useForm<PodFormValues>({ defaultValues: start.values, resolver: formResolver(podFormSchema) });
   const { handleSubmit, setError, setFocus, formState: { errors } } = form;
   const [formError, setFormError] = useState<string | null>(null);
   const sending = useRef(false);

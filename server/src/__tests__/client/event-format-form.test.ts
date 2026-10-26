@@ -7,10 +7,13 @@
 // 25 Oct walkthrough: a "Video meeting" in a Reason pod was created with five 8-minute rounds and ran as speed
 // networking; the title's "Required" sat three screens above the button on a phone.
 import {
-  TITLE_REQUIRED, autoTitle, editEventValues, eventBody, eventChanges, eventFacts, eventFactsLine, eventProblems,
-  lengthOptions, newEventValues, nextQuarterHour, offeredFormats, podChangeFormat, problemSummary, settingProblem,
-  startingFormat, switchFormat, titleProblem, type EventFormValues,
+  DATE_REQUIRED, POD_REQUIRED, SETTING_KEYS, TITLE_REQUIRED, autoTitle, editEventValues, eventBody, eventChanges,
+  eventChangesSchema, eventFacts, eventFactsLine, eventProblems, lengthOptions, newEventSchema, newEventValues,
+  nextQuarterHour, offeredFormats, podChangeFormat, problemSummary, settingProblem, shownEventKeys, startingFormat,
+  switchFormat, titleProblem, type EventFormValues,
 } from '../../../../client/src/features/sessions/event-format-form';
+import { formResolver } from '../../../../client/src/lib/form-resolver';
+import { formResolver as entityFormResolver } from '../../../../client/src/features/reason/entities/entity-form';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
 
 const reasonPod = { id: 'pod-1', name: 'Test', podType: 'reason', orchestrationMode: 'free_form' } as const;
@@ -392,5 +395,95 @@ describe('the meeting length choices', () => {
 
   it('a stored length that is not a preset is kept as a choice, so the form shows the truth', () => {
     expect(lengthOptions('video_meeting', 75).map((o) => o.value)).toEqual([15, 30, 45, 60, 75, 90, 120, 180, 240]);
+  });
+});
+
+// ---- fix round 1 (26 Oct): the Zod schemas behind the forms, the shared keys, readable round lengths ----
+
+/** What a schema says about some values: each problem's field and words, in order. */
+const problemsOf = (schema: typeof newEventSchema, values: EventFormValues) => {
+  const r = schema.safeParse(values);
+  return r.success ? [] : r.error.issues.map((i) => [String(i.path[0]), i.message]);
+};
+
+describe("the event forms' Zod schemas say what the field checks said, at the same fields", () => {
+  const meeting = () => newEventValues({ pod: reasonPod as never, scheduledAt: '2026-11-02T10:00' });
+  const rounds = () => newEventValues({ pod: speedPod as never, scheduledAt: '2026-11-02T10:00' });
+
+  it('a filled-in new event passes, and its values come back as they were (nothing stripped)', () => {
+    const v = { ...rounds(), matchingTemplateId: 'tpl-1' };
+    const r = newEventSchema.safeParse(v);
+    expect(r.success).toBe(true);
+    expect(r.success && r.data).toEqual(v);
+  });
+
+  it('an empty title, date and pod are said at their fields, in the forms\' words', () => {
+    expect(problemsOf(newEventSchema, { ...meeting(), title: '  ', scheduledAt: '', podId: '' })).toEqual([
+      ['podId', POD_REQUIRED], ['title', TITLE_REQUIRED], ['scheduledAt', DATE_REQUIRED],
+    ]);
+    expect(DATE_REQUIRED).toBe('Choose a date and time.');
+    expect(POD_REQUIRED).toBe('Choose a pod.');
+  });
+
+  it("only the chosen type's settings are checked, in the definition's words", () => {
+    // A video meeting holding speed-networking values the organiser left behind: not checked, not sent.
+    expect(problemsOf(newEventSchema, { ...meeting(), numberOfRounds: 99, roundMinutes: 0 })).toEqual([]);
+    expect(problemsOf(newEventSchema, { ...meeting(), maxParticipants: 500 })).toEqual([['maxParticipants', 'Capacity must be between 2 and 100 people.']]);
+    expect(problemsOf(newEventSchema, { ...rounds(), numberOfRounds: 2.5, roundMinutes: Number.NaN })).toEqual([
+      ['numberOfRounds', 'Number of rounds must be a whole number.'], ['roundMinutes', 'Round length must be a number.'],
+    ]);
+  });
+
+  it('Edit Event requires the date too (an emptied date used to save and keep the old one), and never the pod', () => {
+    const { values } = editEventValues({ podId: '', title: 'Mixer', format: 'video_meeting', config: { durationMinutes: 45, maxParticipants: 20 } }, '');
+    expect(problemsOf(eventChangesSchema, values)).toEqual([['scheduledAt', DATE_REQUIRED]]);
+    expect(problemsOf(eventChangesSchema, { ...values, scheduledAt: '2026-11-02T10:00' })).toEqual([]);
+  });
+
+  it('through formResolver: the first problem of each field, keyed by field, as react-hook-form reads it', async () => {
+    const resolve = formResolver(newEventSchema);
+    const refused = await resolve({ ...meeting(), title: '', maxParticipants: 500 }, undefined, { fields: {}, shouldUseNativeValidation: false } as never);
+    expect(refused.values).toEqual({});
+    expect(Object.fromEntries(Object.entries(refused.errors).map(([k, e]) => [k, (e as { message: string }).message]))).toEqual({
+      title: TITLE_REQUIRED, maxParticipants: 'Capacity must be between 2 and 100 people.',
+    });
+    const fine = await resolve(meeting(), undefined, { fields: {}, shouldUseNativeValidation: false } as never);
+    expect(fine).toEqual({ values: meeting(), errors: {} });
+  });
+
+  it('the resolver moved to lib/form-resolver.ts is the one the entity forms import (re-exported, not copied)', () => {
+    expect(entityFormResolver).toBe(formResolver);
+  });
+});
+
+describe('what both event forms share', () => {
+  it('every setting key, once: what a switch puts back and what the schema checks', () => {
+    expect(SETTING_KEYS).toEqual(['numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'matchingTemplateId', 'maxParticipants', 'durationMinutes']);
+  });
+
+  it("the fields a form draws for a type: the admin-only template only for admins", () => {
+    expect(shownEventKeys('video_meeting', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'durationMinutes', 'maxParticipants']);
+    expect(shownEventKeys('speed_networking', false)).not.toContain('matchingTemplateId');
+    expect(shownEventKeys('speed_networking', true)).toContain('matchingTemplateId');
+  });
+});
+
+describe('a round length that is not whole minutes reads rounded; the stored seconds are kept', () => {
+  it('100 seconds reads "1.7 min" on the line and "1.7m" on the tile, 30 seconds "30 s"', () => {
+    expect(eventFactsLine('speed_networking', { numberOfRounds: 4, roundDurationSeconds: 100, maxParticipants: 120 })).toBe('Speed networking · 4 rounds × 1.7 min · up to 120');
+    expect(eventFacts('speed_networking', { roundDurationSeconds: 100 })[1]).toEqual({ key: 'roundMinutes', value: '1.7m', caption: 'per round' });
+    expect(eventFactsLine('speed_networking', { roundDurationSeconds: 30 })).toBe('Speed networking · 5 rounds × 30 s · up to 500');
+    expect(eventFacts('speed_networking', { roundDurationSeconds: 30 })[1].value).toBe('30s');
+    expect(eventFactsLine('speed_networking', { roundDurationSeconds: 450 })).toBe('Speed networking · 5 rounds × 7.5 min · up to 500');
+  });
+
+  it('the switch question reads the rounded length while the form keeps the exact one', () => {
+    const { values, touched } = editEventValues({ title: 'Old', format: 'speed_networking', config: { numberOfRounds: 6, roundDurationSeconds: 100 } }, '2026-11-02T10:00');
+    expect(values.roundMinutes).toBeCloseTo(100 / 60, 10);
+    const r = switchFormat(values, 'video_meeting', touched);
+    expect(r.confirm).toBe('Switching to Video meeting removes the round settings (6 rounds × 1.7 min). Continue?');
+    expect(r.values.roundMinutes).toBe(values.roundMinutes);
+    // Saved again as speed networking, untouched: the same 100 seconds go back.
+    expect(eventChanges(values, { isAdmin: false }).config.roundMinutes).toBe(values.roundMinutes);
   });
 });
