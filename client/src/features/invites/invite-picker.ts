@@ -88,8 +88,8 @@ export function targetTags(target: InviteTarget): string[] {
  * event's pod when the list is its members, and the member's own new connections (a request accepted) and blocks
  * (either way), which change who is listed at all. Each tag reads every loaded page again, against 60 reads a minute
  * shared with People, so nothing that fires for other reasons is followed: not the member's own record or messages
- * (user:<me>, user:<me>:dms go on every message and read receipt) and not the event's participants (every join while
- * an event is live). A person who became a guest meanwhile is answered "already going" when sent to.
+ * (user:<me>, user:<me>:dms go on every message and read receipt). The event's tag itself (session:<id>) stays, and
+ * comes with every participant change too: an invitee who accepts sends only that tag, so it is what tells the list.
  */
 export function candidateEntities(target: InviteTarget, source: InviteCandidateSource, me: string | undefined): string[] {
   const tags = target.type === 'pod'
