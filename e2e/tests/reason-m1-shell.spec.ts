@@ -1005,16 +1005,25 @@ test('10 unread count: the Messages link says how many messages are waiting (bar
 // Stefan, 25 Oct 2026: "there should be a little number on Events, like Messages has a count". One meeting between the
 // two throwaway members, written straight into their own conversation (the request and booking steps send bells and
 // emails, and the preview talks to production), is upcoming in two days, then moved to two minutes from now, when it can
-// be joined. It goes with the conversation when cleanup() removes the two members.
+// be joined. It is written as already reminded, so the server's reminder worker never picks it up, and it is deleted by
+// its id when the test ends, pass or fail, before the two members are.
 test('11 meetings count: the Events link names the upcoming meetings, with a live dot while one can be joined (bar, rail and sidebar)', async () => {
   test.setTimeout(400_000);
   const id = await thread();
   const booked = await pool.query<{ id: string }>(
-    `INSERT INTO meetings (conversation_id, user_a_id, user_b_id, start_at, duration_min, kind)
-     VALUES ($1, LEAST($2::uuid, $3::uuid), GREATEST($2::uuid, $3::uuid), NOW() + INTERVAL '2 days', 30, 'video') RETURNING id`,
+    `INSERT INTO meetings (conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, reminder_sent_at)
+     VALUES ($1, LEAST($2::uuid, $3::uuid), GREATEST($2::uuid, $3::uuid), NOW() + INTERVAL '2 days', 30, 'video', NOW()) RETURNING id`,
     [id, member.id, unfinished.id],
   );
   const meetingId = booked.rows[0].id;
+  try {
+    await countAndDot(meetingId);
+  } finally {
+    await pool.query(`DELETE FROM meetings WHERE id = $1`, [meetingId]);
+  }
+});
+
+async function countAndDot(meetingId: string): Promise<void> {
   const sizesToCheck = sizes([{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 800 }]);
   const eventsLink = (page: Page, width: number) =>
     (modeOf(width) === 'phone' ? page.getByRole('navigation', { name: 'Main' }) : sidebar(page)).locator('a[href="/sessions"]');
@@ -1052,4 +1061,4 @@ test('11 meetings count: the Events link names the upcoming meetings, with a liv
       expect(errors, `${where}: script errors`).toEqual([]);
     });
   }
-});
+}
