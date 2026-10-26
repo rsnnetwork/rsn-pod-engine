@@ -227,4 +227,49 @@ describe('L2 — hasEarlierAppPage: where Back goes in each way a profile is rea
     expect(rule()({}, 'default')).toBe(false);
     expect(rule()('not an object', 'default')).toBe(false);
   });
+
+  it('a count that is not a whole number says nothing, so the key decides (an entry whose state was replaced behind the router\'s back)', () => {
+    // Replacing an entry's state with an empty object drops the router's idx, and every page opened after it counted on
+    // from nothing: idx NaN. NaN is a number and NaN > 0 is false, so a profile with a page of the app behind it sent
+    // Back to the dashboard. Only a whole number is the router's count.
+    expect(rule()({ usr: null, key: 'a1b2', idx: NaN }, 'a1b2')).toBe(true);
+    expect(rule()({ idx: NaN }, 'default')).toBe(false);
+    expect(rule()({ idx: Infinity }, 'k9')).toBe(true);
+    expect(rule()({ idx: 1.5 }, 'default')).toBe(false);
+    expect(rule()({ idx: '2' }, 'k9')).toBe(true);
+    // A whole number is still believed, whatever the key says.
+    expect(rule()({ idx: 0 }, 'k9')).toBe(false);
+    expect(rule()({ idx: 3 }, 'default')).toBe(true);
+  });
+});
+
+describe('L2 — nothing writes a history entry behind the router\'s back', () => {
+  it('the photo return strips ?photo= from the address and keeps the entry\'s own state, so the router\'s count of the app\'s pages survives', () => {
+    const src = readClient('features/profile/ProfilePage.tsx');
+    expect(src).toMatch(/window\.history\.replaceState\(window\.history\.state, ''/);
+    expect(src).not.toMatch(/replaceState\(\s*\{\s*\}/);
+  });
+
+  it('no file in the client replaces an entry with a state of its own or pushes an entry: the router does that, and counts', () => {
+    // The router keeps { usr, key, idx } in each entry. An entry written with anything else loses idx, and a profile's
+    // Back, which reads it, cannot tell the first page of a tab from the fifth. replaceState may only hand back the
+    // state the entry already has; pushState is never needed (navigate() pushes, with the count).
+    const offenders: string[] = [];
+    const call = /\bhistory\.(replaceState|pushState)\(\s*([^,)]*)/g;
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(path.join(CLIENT_SRC, dir), { withFileTypes: true })) {
+        const rel = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(rel); continue; }
+        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+        const text = readClient(rel);
+        call.lastIndex = 0;
+        for (let m = call.exec(text); m; m = call.exec(text)) {
+          const keepsState = m[1] === 'replaceState' && m[2].trim() === 'window.history.state';
+          if (!keepsState) offenders.push(`${rel}: history.${m[1]}(${m[2].trim()}, ...)`);
+        }
+      }
+    };
+    walk('.');
+    expect(offenders).toEqual([]);
+  });
 });
