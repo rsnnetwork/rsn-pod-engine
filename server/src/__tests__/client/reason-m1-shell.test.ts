@@ -256,12 +256,14 @@ describe('REASON shell: faults found by looking at it', () => {
 
 // Left open by the reviews of the shell and Messages, closed before a client looks at it (task P2).
 describe('REASON shell and Messages: fixes before a client reviews it (P2)', () => {
-  it('Messages hides the inbox list on a phone while a new message is written, as for an open thread (stacked above the compose panel it pushed the message box under the bottom bar)', () => {
+  it('Messages hides the inbox list on a phone while a new message is written, as for an open thread or group chat (stacked above the compose panel it pushed the message box under the bottom bar)', () => {
     const page = read('features/messages/MessagesPage.tsx');
+    // The thread pane shows for a conversation, a new message, and (26 Oct 2026, C12) a group chat.
+    expect(page).toMatch(/const threadShown = !!activeId \|\| isComposeMode \|\| !!groupId;/);
     // The list pane (lg:w-80) is hidden below lg whenever the thread pane is showing...
-    expect(page).toMatch(/lg:w-80 lg:flex-shrink-0[^`]*\$\{\(activeId \|\| isComposeMode\) \? 'hidden lg:flex' : 'flex'\}/);
+    expect(page).toMatch(/lg:w-80 lg:flex-shrink-0[^`]*\$\{threadShown \? 'hidden lg:flex' : 'flex'\}/);
     // ...and the thread pane shows itself on exactly that condition, so the two can never both stack on a phone.
-    expect(page).toMatch(/flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden \$\{\(activeId \|\| isComposeMode\) \? 'flex' : 'hidden lg:flex'\}/);
+    expect(page).toMatch(/flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden \$\{threadShown \? 'flex' : 'hidden lg:flex'\}/);
   });
   it('the compose panel keeps a Back to inbox while it waits for the person to load, since the list beside it is gone on a phone', () => {
     const page = read('features/messages/MessagesPage.tsx');
