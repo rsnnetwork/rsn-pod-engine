@@ -21,7 +21,10 @@ import { expectReachable } from '../helpers/viewport-fit';
 //      the bottom bar, 44px, reachable. Still none of speed networking's chrome.
 //   3. A guest's own host:end_session is refused (FORBIDDEN); the event stays live.
 //   4. A muted guest who loads the page again comes back muted (the mic choice is
-//      applied once per room connection, never re-opened by the room itself).
+//      applied once per room connection, never re-opened by the room itself);
+//      and a muted guest whose network drops until the room gives up, then comes
+//      back, is still muted after the room connects again on its own (the browser's
+//      `online` event, ReconnectOnReturn, a fresh token, the room remounted).
 //   5. The guest leaves (the event page) while the director stays, and rejoins.
 //   6. Four people, one of them in a browser that may use only the camera: equal
 //      tiles, nothing scrolls; that person is told their microphone did not turn
@@ -176,7 +179,7 @@ test.afterAll(async () => {
 });
 
 test('VID-01..04: a two-person video meeting fits every screen, has one way out, and ends for everyone', async () => {
-  test.setTimeout(720_000);
+  test.setTimeout(960_000);
 
   // 1. Before the start.
   const dirPage = await openLive(director, 'director', { width: 1280, height: 720 });
@@ -264,6 +267,37 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   await expect(micButton(guestPage)).toHaveAttribute('aria-label', 'Mic on', { timeout: 15_000 });
   await expect(guestMuted, 'unmuted again, the director sees it').toHaveCount(0, { timeout: 20_000 });
 
+  // 4b. The room's own way back, not a page load (fix round 2): the guest mutes, then loses the network until the
+  // room gives up, and gets it back. Chromium's offline mode stalls an open socket rather than closing it, so the
+  // room notices through its signal ping timeout, then its ten quick retries are all refused while offline (about
+  // a minute in all). Back online, the browser's `online` event makes ReconnectOnReturn connect the room again on a
+  // fresh token, remounting it by key: the guest is still muted, and the director sees it.
+  const guestTokenPosts: string[] = [];
+  guestPage.on('request', (r) => { if (r.method() === 'POST' && /\/sessions\/[^/]+\/token$/.test(new URL(r.url()).pathname)) guestTokenPosts.push(r.url()); });
+  // In front before the network drops: a window that gains focus while offline would try to connect early.
+  await guestPage.bringToFront();
+  await micButton(guestPage).click();
+  await expect(micButton(guestPage)).toHaveAttribute('aria-label', 'Mic off', { timeout: 15_000 });
+  await expect(guestMuted, 'the director sees the guest muted').toBeVisible({ timeout: 20_000 });
+  await expect(stage(guestPage), 'the guest is in the room').toHaveAttribute('data-room', 'connected', { timeout: 30_000 });
+  await guestPage.context().setOffline(true);
+  await expect(stage(guestPage), 'offline: the room gives up').toHaveAttribute('data-room', 'disconnected', { timeout: 180_000 });
+  const tokensAtReturn = guestTokenPosts.length;
+  await guestPage.context().setOffline(false);
+  await expect.poll(() => guestTokenPosts.length, { timeout: 30_000, message: 'back online: a fresh token for the room' })
+    .toBeGreaterThan(tokensAtReturn);
+  await expect(stage(guestPage), 'the guest is back in the room').toHaveAttribute('data-room', 'connected', { timeout: 60_000 });
+  await expectLayout(guestPage, 'pair', 'guest, network back', 60_000);
+  await expect.poll(() => playingTiles(guestPage), { timeout: 90_000, message: 'guest: both cameras after the network came back' }).toBe(2);
+  await wait(3000); // past the moment the mic choice is applied
+  await expect(micButton(guestPage), 'still muted after the room connected again on its own').toHaveAttribute('aria-label', 'Mic off');
+  await expect(guestMuted, 'the director sees the guest still muted').toBeVisible({ timeout: 30_000 });
+  await wait(3000);
+  await expect(guestMuted, 'and still muted a moment later').toBeVisible();
+  await micButton(guestPage).click();
+  await expect(micButton(guestPage)).toHaveAttribute('aria-label', 'Mic on', { timeout: 15_000 });
+  await expect(guestMuted, 'unmuted, the director sees it').toHaveCount(0, { timeout: 20_000 });
+
   // 5. The guest leaves: the event page, the meeting carries on for the director; then the guest comes back.
   await guestPage.getByTestId('meeting-leave').click();
   const dialog = guestPage.getByRole('alertdialog', { name: 'Leave the meeting?' });
@@ -329,5 +363,5 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   await expect.poll(statusOf, { timeout: 30_000, message: 'the event is completed' }).toBe('completed');
   await guestPage.screenshot({ path: 'test-results/vm1to1-guest-ended.png' });
   expect(pageErrors, 'no page has thrown').toEqual([]);
-  console.log('  ✓ VID-01..04: two people fit six screens, one way out, a guest cannot end it, a mute survives connecting again, four people in an even grid, a mic that cannot open leaves the room steady, ended for everyone.');
+  console.log('  ✓ VID-01..04: two people fit six screens, one way out, a guest cannot end it, a mute survives a reload and a reconnect of the room itself, four people in an even grid, a mic that cannot open leaves the room steady, ended for everyone.');
 });
