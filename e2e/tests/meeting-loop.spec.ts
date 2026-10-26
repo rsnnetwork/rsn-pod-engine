@@ -388,6 +388,80 @@ test('"the green" in the timeline opens the confirm card, and nothing picked or 
   }
 });
 
+test('Reschedule (?schedule=1) opens the scheduler ready for a pick, even for a pair that has met, and one new time picked by both moves the meeting', async () => {
+  test.setTimeout(240_000);
+  // A meeting's page (Events) has Reschedule, which opens the chat with ?schedule=1.
+  // Once a pair has met, the chat offers calls and no scheduler, so Reschedule
+  // would have landed on nothing. It opens the scheduler for every pair, once
+  // (the flag is replaced, so Back does not open it again), and the time both
+  // then pick moves the meeting: the same agreement that booked it.
+  const gu = await createTestUser('mlgu');
+  const ha = await createTestUser('mlha');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Gu', gu.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Ha', ha.id]);
+    const sent = await apiAs(gu, 'POST', '/pokes', { recipientId: ha.id, message: 'Coffee?' });
+    expect((await apiAs(ha, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [gu.id, ha.id],
+    )).rows[0].id;
+    const first = futureSlot(3, 9);
+    const moved = futureSlot(3, 17);
+    await apiAs(gu, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [first] });
+    const booked = await apiAs(ha, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [first] });
+    expect(booked.json.data.confirmed?.window, 'one shared time books the meeting').toBe(first);
+    const meetingId = booked.json.data.confirmed.meetingId as string;
+    expect(meetingId).toBeTruthy();
+    // They have met before: calls are open, so the chat shows calls, not the scheduler.
+    await pool.query(`UPDATE dm_conversations SET calls_unlocked_at = NOW() WHERE id = $1`, [conv]);
+
+    const TZ = 'Asia/Karachi';
+    // Gu, on a phone, presses Reschedule.
+    const guPage = await openAs(gu, '/messages', { width: 390, height: 844 }, TZ);
+    await gotoRetry(guPage, `${APP}/messages/${conv}?schedule=1`);
+    await expect(guPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    await expect(guPage).not.toHaveURL(/schedule=1/);
+    // Ready for the first pick: a time that can be picked has the focus (not the booked one).
+    await expect.poll(() => guPage.evaluate(() => document.activeElement?.getAttribute('data-slot') ?? null), { timeout: 10_000 })
+      .not.toBeNull();
+    expect(await guPage.evaluate(() => document.activeElement?.getAttribute('data-slot'))).not.toBe(first);
+    await expect(guPage.locator(`[data-slot="${first}"]`)).toHaveAttribute('aria-label', `${timeIn(first, TZ)}, your meeting`);
+    await reachSlot(guPage, moved, 'Gu: the new time');
+    await tapReachable(guPage, guPage.getByRole('button', { name: /Save and send availability/i }), 'Gu: Save');
+    await expect(toast(guPage, 'Sent. They can see when you are free.')).toBeVisible({ timeout: 20_000 });
+    // Back does not open it again: the flag was replaced, not added.
+    await guPage.goBack();
+    await expect(guPage).toHaveURL(/\/messages$/);
+    await guPage.goForward();
+    await expect(guPage).toHaveURL(new RegExp(`/messages/${conv}$`));
+    await expect(guPage.getByTestId('thread-meeting-banner')).toBeVisible({ timeout: 20_000 });
+    await expect(guPage.getByTestId('meeting-scheduler')).toHaveCount(0);
+
+    // Ha, on a laptop, presses Reschedule too, picks the same new time, and saves: the meeting moves there.
+    const haPage = await openAs(ha, `/messages/${conv}?schedule=1`, { width: 1280, height: 800 }, TZ);
+    await expect(haPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+    await reachSlot(haPage, moved, 'Ha: the same new time');
+    await tapReachable(haPage, haPage.getByRole('button', { name: /Save and send availability/i }), 'Ha: Save');
+    await expect(toast(haPage, `Meeting moved: ${labelIn(moved, TZ)}`)).toBeVisible({ timeout: 20_000 });
+
+    // The same meeting record, at the new time, 30 minutes of video as before.
+    const record = await apiAs(gu, 'GET', `/meetings/${meetingId}`);
+    expect(record.status).toBe(200);
+    expect(new Date(record.json.data.startAt).toISOString().replace('.000Z', 'Z')).toBe(moved);
+    expect([record.json.data.durationMin, record.json.data.kind]).toEqual([30, 'video']);
+    // Gu's open chat shows the new time without a reload; the card for the old time says it moved and offers no Join.
+    await expect(guPage.getByTestId('thread-meeting-banner')).toContainText(labelIn(moved, TZ), { timeout: 30_000 });
+    const oldCard = cards(guPage).filter({ has: guPage.getByText('Meeting confirmed', { exact: true }) });
+    await expect(oldCard.getByTestId('meeting-card-replaced')).toHaveText('This meeting moved to another time.', { timeout: 30_000 });
+    await expect(oldCard.getByRole('button', { name: /Join meeting/i })).toHaveCount(0);
+    await expect(cards(guPage).filter({ has: guPage.getByText('Meeting moved', { exact: true }) }).getByRole('button', { name: /Join meeting/i })).toBeVisible();
+    console.log('  ✓ Reschedule opened the scheduler for a pair that has met; one new time picked by both moved the meeting');
+  } finally {
+    await cleanup(pool, { ids: [gu.id, ha.id] });
+  }
+});
+
 test('a save that books the agreed time books it with the length and kind it carried', async () => {
   const x = await createTestUser('mlbookx');
   const y = await createTestUser('mlbooky');
