@@ -1,12 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { POD_TYPES } from '@rsn/shared';
 import Modal from '@/components/ui/Modal';
 import Input from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
+import { startingPodForm, afterTypeChange, orchestrationOptions, orchestrationLine, type PodForm } from './pod-form';
 
 interface Props {
   open: boolean;
@@ -15,28 +17,6 @@ interface Props {
   initialValues?: Partial<PodForm>;
 }
 
-interface PodForm {
-  name: string;
-  description: string;
-  podType: string;
-  orchestrationMode: string;
-  communicationMode: string;
-  visibility: string;
-  maxMembers: number | '';
-  allowMemberInvites?: boolean;
-}
-
-const POD_TYPES = [
-  { value: 'speed_networking',   label: 'Speed Networking',      desc: '1-on-1 timed rounds, structured networking' },
-  { value: 'reason',             label: 'Reason Pod',            desc: 'People gathered for a shared purpose or cause' },
-  { value: 'conversational',     label: 'Conversational',        desc: 'Small group open conversations' },
-  { value: 'webinar',            label: 'Webinar',               desc: 'Presentation-style with a host speaker' },
-  { value: 'physical_event',     label: 'Physical Event',        desc: 'In-person gathering supported digitally' },
-  { value: 'chat',               label: 'Chat Pod',              desc: 'Text-based async community' },
-  { value: 'two_sided_networking', label: 'Two-Sided Networking', desc: 'Two distinct groups meeting each other (e.g. founders ↔ investors)' },
-  { value: 'one_sided_networking', label: 'One-Sided Networking', desc: 'One group networking among themselves' },
-];
-
 const VISIBILITY_OPTIONS = [
   { value: 'private',              label: 'Private',                desc: 'Invite only, hidden from browse' },
   { value: 'invite_only',          label: 'Invite Only',            desc: 'Discoverable but requires an invite link' },
@@ -44,33 +24,55 @@ const VISIBILITY_OPTIONS = [
   { value: 'public',               label: 'Public (Open Join)',      desc: 'Anyone can join immediately' },
 ];
 
-const selectClass = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200';
-
-const DEFAULT_VALUES: PodForm = {
-  name:              '',
-  description:       '',
-  podType:           'speed_networking',
-  orchestrationMode: 'timed_rounds',
-  communicationMode: 'video',
-  visibility:        'private',
-  maxMembers:        '',
-  allowMemberInvites: false,
-};
+const selectClass = 'w-full min-h-[44px] rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200';
 
 export default function CreatePodModal({ open, onClose, initialValues }: Props) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { addToast } = useToastStore();
-  const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<PodForm>({
-    defaultValues: DEFAULT_VALUES,
+
+  // 26 Oct 2026 (Stefan and Claus, 25 Oct: "orchestration should follow the pod type"): what the type decides (how its
+  // events run, what it communicates by) comes from the shared pod-type table, not from defaults written here. A
+  // setting the member chooses by hand stays while a new type allows it; when it does not, it is replaced and the
+  // member is told, under the field.
+  // The form starts from the CONTENT of the pod to copy, not from the object: the pod page builds a new one each time it
+  // draws, and a form that reset with each of them lost what the member was typing.
+  const initialKey = JSON.stringify(initialValues ?? null);
+  const start = useMemo(() => startingPodForm(JSON.parse(initialKey) ?? undefined), [initialKey]);
+  const chosen = useRef(new Set(start.chosen));
+  const [notices, setNotices] = useState(start.notices);
+
+  const { register, handleSubmit, reset, watch, setValue, getValues, formState: { errors } } = useForm<PodForm>({
+    defaultValues: start.values,
   });
 
-  // When initialValues change (e.g. duplicate pod opens), reset the form with new values
+  // Start clean, and start again when the form closes or the pod to copy changes. Never as it opens: that reset runs a
+  // moment after the form is on screen, and could land after the first thing typed and wipe it (the form used to
+  // reset on open, and lost a name typed at once 2 times in 20).
   useEffect(() => {
-    if (open) {
-      reset({ ...DEFAULT_VALUES, ...initialValues });
-    }
-  }, [open, initialValues, reset]);
+    if (open) return;
+    chosen.current = new Set(start.chosen);
+    setNotices(start.notices);
+    reset(start.values);
+  }, [open, start, reset]);
+
+  const followType = (nextType: string) => {
+    const next = afterTypeChange(getValues(), nextType, chosen.current);
+    chosen.current = next.chosen;
+    setValue('orchestrationMode', next.values.orchestrationMode);
+    setValue('communicationMode', next.values.communicationMode);
+    setNotices(next.notices);
+  };
+
+  const pickOrchestration = (mode: string) => {
+    chosen.current.add('orchestrationMode');
+    setValue('orchestrationMode', mode);
+    setNotices([]);
+  };
+
+  const podType = watch('podType');
+  const orchestration = watch('orchestrationMode');
+  const modes = orchestrationOptions(podType);
 
   // When visibility flips to Public (Open Join), force allowMemberInvites=true.
   // Anyone can already join freely, so locking the toggle ON is consistent —
@@ -97,7 +99,10 @@ export default function CreatePodModal({ open, onClose, initialValues }: Props) 
       const newPodId = res.data?.data?.id;
       qc.invalidateQueries({ queryKey: ['my-pods'] });
       addToast(initialValues ? 'Pod duplicated!' : 'Pod created!', 'success');
-      reset(DEFAULT_VALUES);
+      const fresh = startingPodForm();
+      chosen.current = new Set(fresh.chosen);
+      setNotices(fresh.notices);
+      reset(fresh.values);
       onClose();
       if (newPodId && !initialValues) {
         navigate(`/pods/${newPodId}`);
@@ -116,6 +121,7 @@ export default function CreatePodModal({ open, onClose, initialValues }: Props) 
           {...register('name', { required: 'Required' })}
           error={errors.name?.message}
           placeholder="e.g. Frontend Devs"
+          className="min-h-[44px]"
         />
 
         <div>
@@ -130,34 +136,41 @@ export default function CreatePodModal({ open, onClose, initialValues }: Props) 
 
         <div>
           <label className="block text-sm font-medium text-gray-600 mb-1.5">Pod Type</label>
-          <select {...register('podType')} className={selectClass}>
-            {POD_TYPES.map(t => (
-              <option key={t.value} value={t.value}>{t.label} — {t.desc}</option>
+          <select {...register('podType', { onChange: (e) => followType(e.target.value) })} className={selectClass}>
+            {Object.entries(POD_TYPES).map(([value, rule]) => (
+              <option key={value} value={value}>{rule.label} — {rule.summary}</option>
             ))}
           </select>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-600 mb-1.5">Orchestration</label>
-            <select {...register('orchestrationMode')} className={selectClass}>
-              <option value="timed_rounds">Timed Rounds</option>
-              <option value="free_form">Free Form</option>
-              <option value="moderated">Moderated</option>
+        <div>
+          <label htmlFor={modes.length > 1 ? 'pod-orchestration-select' : undefined} className="block text-sm font-medium text-gray-600 mb-1.5">Orchestration</label>
+          {modes.length > 1 ? (
+            <select
+              data-testid="pod-orchestration-select"
+              id="pod-orchestration-select"
+              value={orchestration}
+              onChange={(e) => pickOrchestration(e.target.value)}
+              className={selectClass}
+            >
+              {modes.map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
             </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-600 mb-1.5">Communication</label>
-            <select {...register('communicationMode')} className={selectClass}>
-              <option value="video">Video</option>
-              <option value="audio">Audio Only</option>
-              <option value="text">Text</option>
-              <option value="hybrid">Hybrid</option>
-            </select>
-          </div>
+          ) : (
+            <p
+              data-testid="pod-orchestration"
+              className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-600"
+            >
+              {orchestrationLine(orchestration)}
+            </p>
+          )}
+          {notices.map(n => (
+            <p key={n} role="status" data-testid="pod-orchestration-notice" className="mt-1.5 text-xs text-amber-700">{n}</p>
+          ))}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-1.5">Visibility</label>
             <select {...register('visibility')} className={selectClass}>
@@ -171,6 +184,7 @@ export default function CreatePodModal({ open, onClose, initialValues }: Props) 
             type="number"
             {...register('maxMembers', { valueAsNumber: false })}
             placeholder="Unlimited"
+            className="min-h-[44px]"
           />
         </div>
 
