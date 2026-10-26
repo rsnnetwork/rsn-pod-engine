@@ -39,6 +39,9 @@ async function signedIn(): Promise<BrowserContext> {
 async function open(ctx: BrowserContext, path: string): Promise<Page> {
   const page = await ctx.newPage();
   await page.goto(`${APP}${path}`, { waitUntil: 'domcontentloaded' });
+  // Headed WebKit can lay out the first page at its own window height before the phone size applies (one run measured
+  // a fixed sheet's footer at 896px on an 844px window): measure only once the page has the size asked for.
+  await page.waitForFunction((h) => window.innerHeight === h, PHONE.height);
   return page;
 }
 
@@ -106,6 +109,8 @@ test(`B: an event from a Reason pod follows its type, asks before dropping round
   const schedule = page.getByRole('button', { name: 'Schedule Event' });
   await schedule.click();
   await expect(page.getByText('Give your event a title')).toBeVisible();
+  // The form places the field two frames after its message is drawn (clear of the sticky bar): let it land.
+  await page.waitForTimeout(250);
   const summary = page.getByRole('alert').filter({ hasText: 'Fix 1 thing:' });
   await expectReachable(page, summary.getByRole('button', { name: 'Title' }), 'the summary beside the button');
   await expectReachable(page, schedule, 'Schedule Event');
