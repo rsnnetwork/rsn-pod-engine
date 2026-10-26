@@ -755,8 +755,9 @@ describe('1. a kicked member re-admitted by a fresh personal invite stays in (th
       await aMomentLater();
       // (Made directly: the invite form turns away someone whose row is live, but nothing on the accept relies on it.)
       const code = invite(t.sessionId, t.host, emailOf(t.member));
-      // Their row was never removed, so the registration answers "already registered", which the accept passes on.
-      await expect(acceptInvite(code, t.member, emailOf(t.member))).rejects.toMatchObject({ code: 'SESSION_ALREADY_REGISTERED' });
+      // Their row was never removed, so the registration answers "already registered", which the accept takes as
+      // success (H2b, 26 Oct 2026: the branch written for it runs now that instanceof holds): they land on the event.
+      expect((await acceptInvite(code, t.member, emailOf(t.member))).participantStatus).toBe(row);
       // Memory follows the database anyway: nothing of the kick is left to write.
       expect(memoryOf(t.sessionId, t.member)).toBe(row === 'in_lobby' ? 'in_main_room' : 'in_breakout');
       expect(activeSessions.get(t.sessionId)!.unsavedRemovals?.has(t.member) ?? false).toBe(false);
