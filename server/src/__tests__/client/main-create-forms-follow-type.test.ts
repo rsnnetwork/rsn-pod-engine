@@ -111,6 +111,19 @@ describe('L3 - the pod form follows the pod type (pod-form.ts)', () => {
     expect(notices[0]).toMatch(/^Changed to Freeform: Reason pods don't use timed rounds\.$/);
   });
 
+  it('a duplicate starts as a copy, but once its type changes its communication is the new type\'s: nobody can choose it here', () => {
+    const { startingPodForm, afterTypeChange } = form();
+    // A copy of a Chat pod starts with its source's communication...
+    const { values, chosen } = startingPodForm({ name: 'Copy', podType: 'chat', orchestrationMode: 'free_form', communicationMode: 'text' });
+    expect(values.communicationMode).toBe('text');
+    // ...and as a Reason pod it is by video, not text carried over from a control that is gone.
+    const asReason = afterTypeChange(values, 'reason', chosen);
+    expect(asReason.values).toEqual({ podType: 'reason', orchestrationMode: 'free_form', communicationMode: 'video' });
+    expect(asReason.chosen.has('communicationMode')).toBe(false);
+    // And on to a Physical Event: hybrid.
+    expect(afterTypeChange({ ...values, ...asReason.values }, 'physical_event', asReason.chosen).values.communicationMode).toBe('hybrid');
+  });
+
   it('offers only the modes the type allows: Reason has Freeform and Moderated, Speed Networking has timed rounds alone', () => {
     const { orchestrationOptions, orchestrationLine } = form();
     expect(orchestrationOptions('reason')).toEqual([

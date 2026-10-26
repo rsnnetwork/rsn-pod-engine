@@ -30,8 +30,9 @@ const START_TYPE = 'speed_networking';
 
 /**
  * The form as it opens. A new pod is a speed-networking pod on that type's own orchestration and communication. A
- * duplicate carries the source pod's choices, which count as chosen, read through its type: an old Reason pod saved
- * on timed rounds opens as Freeform, with the notice saying so.
+ * duplicate starts as a copy: the source pod's orchestration counts as chosen, read through its type (an old Reason
+ * pod saved on timed rounds opens as Freeform, with the notice saying so), and its communication is kept as it was,
+ * until the type changes (see afterTypeChange).
  */
 export function startingPodForm(initial?: Partial<PodForm>): { values: PodForm; notices: string[]; chosen: Set<string> } {
   const base: PodForm = {
@@ -60,8 +61,11 @@ export function afterTypeChange(
   nextType: string,
   chosen: ReadonlySet<string>,
 ): { values: TypeFollowing; notices: string[]; chosen: Set<string> } {
-  const { values, notices } = applyTypeChange(current, nextType as PodType, chosen);
+  // Communication is nobody's choice on this form (its control is gone), so a type change gives the new type's own,
+  // even to a duplicate that started with its source's.
   const stillChosen = new Set(chosen);
+  stillChosen.delete('communicationMode');
+  const { values, notices } = applyTypeChange(current, nextType as PodType, stillChosen);
   if (notices.length > 0) stillChosen.delete('orchestrationMode');
   return {
     values: { podType: values.podType, orchestrationMode: values.orchestrationMode, communicationMode: values.communicationMode },
