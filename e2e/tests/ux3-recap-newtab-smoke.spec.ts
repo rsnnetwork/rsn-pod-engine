@@ -3,8 +3,10 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool, pool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 
-// HEADED prod smoke UX3 (#UX3 June-10 debrief) — the recap "Message" action must
-// open in a NEW TAB (window.open) instead of navigating away from the recap.
+// HEADED smoke UX3 (#UX3 June-10 debrief), changed by CON-01 (25 Oct 2026, Stefan and Claus): the recap "Message"
+// action used to open a NEW TAB (window.open) to keep the recap, but a new tab has no history behind it, so Back there did
+// nothing. The recap is a post-event page, not the call, so it now opens the conversation in the SAME tab and Back
+// returns to the recap. (The live event's end screen keeps its new tab, and says so.)
 const SERVER = process.env.E2E_SERVER_URL || 'https://api.rsn.network';
 const APP = process.env.E2E_APP_URL || 'https://app.rsn.network';
 
@@ -48,7 +50,7 @@ test.afterAll(async () => {
   await closePool();
 });
 
-test('UX3: the recap Message action opens the conversation in a new tab', async () => {
+test('UX3 + CON-01: the recap Message action opens the conversation in this tab, and Back returns to the recap', async () => {
   test.setTimeout(150_000);
 
   // Drive a 1-round event to completion so m1 and m2 have a recap connection.
@@ -106,18 +108,23 @@ test('UX3: the recap Message action opens the conversation in a new tab', async 
   await expect(msgBtn, 'recap should show a Message button for the connection').toBeVisible({ timeout: 25_000 });
   await msgBtn.scrollIntoViewIfNeeded().catch(() => {});
 
-  // Clicking it must open a NEW TAB (popup), not navigate the recap away.
-  const recapUrlBefore = page.url();
-  const popupPromise = ctx.waitForEvent('page', { timeout: 10_000 });
-  await msgBtn.click();
-  const popup = await popupPromise;
-  await popup.waitForLoadState('domcontentloaded').catch(() => {});
-  console.log('  new tab url:', popup.url());
-  expect(popup.url(), 'new tab should open the compose route for the partner').toContain(`/messages/new/${m2.id}`);
-  // The recap tab must NOT have navigated away.
-  expect(page.url(), 'the recap tab stays put').toBe(recapUrlBefore);
+  // The button is a link in this tab: no arrow, nothing about a new tab, and a finger-sized target.
+  await expect(msgBtn, 'the recap Message is a link').toHaveAttribute('href', `/messages/new/${m2.id}`);
+  await expect(msgBtn).not.toHaveAttribute('target', '_blank');
+  await expect(msgBtn).not.toContainText('opens in a new tab');
+  expect((await msgBtn.boundingBox())!.height, 'the Message link is at least 44px tall').toBeGreaterThanOrEqual(44);
 
-  await popup.close().catch(() => {});
+  // Clicking it opens the compose route for the partner in THIS tab, and no second tab appears.
+  const recapUrlBefore = page.url();
+  await msgBtn.click();
+  await expect(page, 'the compose route for the partner opens in this tab').toHaveURL(new RegExp(`/messages/new/${m2.id}`), { timeout: 30_000 });
+  expect(ctx.pages().length, 'no second tab was opened').toBe(1);
+
+  // Back returns to the recap, which is still the recap.
+  await page.goBack();
+  await expect(page, 'Back returns to the recap').toHaveURL(recapUrlBefore, { timeout: 30_000 });
+  await expect(page.locator('[data-testid^="recap-dm-button-"]').first(), 'the recap is showing').toBeVisible({ timeout: 25_000 });
+
   await ctx.close();
-  console.log('  ✓ recap Message opened a new tab and left the recap intact');
+  console.log('  ✓ recap Message opened the conversation in this tab, and Back returned to the recap');
 });
