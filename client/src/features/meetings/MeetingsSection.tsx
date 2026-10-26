@@ -10,14 +10,17 @@ import { cn } from '@/lib/utils';
 import ReasonSheep from '@/features/reason/brand/ReasonSheep';
 import { CONNECTION_LOST } from '@/features/reason/errors';
 import MeetingCard from './MeetingCard';
-import { useMeetingList, useNow } from './useMeetings';
-import { EMPTY_MEETINGS, NO_CANCELLED_MEETINGS, NO_PAST_MEETINGS, nextChangeAt } from './meeting-words';
+import { CARD_FRAME } from './MeetingParts';
+import { useMeetingClock, useMeetingList } from './useMeetings';
+import { EMPTY_MEETINGS, NO_CANCELLED_MEETINGS, NO_PAST_MEETINGS } from './meeting-words';
 
 const GRID = 'grid gap-3 min-[1024px]:grid-cols-2';
 const BUTTON = 'inline-flex min-h-[44px] items-center rounded-[11px] px-4 text-[13px] font-bold';
 const EMPTY: Record<MeetingScope, string> = { upcoming: EMPTY_MEETINGS, past: NO_PAST_MEETINGS, cancelled: NO_CANCELLED_MEETINGS };
-// The countdown on a card ("Starts in 25 min") moves by the minute; Join itself opens at its exact moment.
-const TICK_MS = 30_000;
+// The room of one card with a one-line title and one line of words (153px from 721px; 149px on a phone, where it fills
+// the room), which loading, an empty list, an error and the list itself all keep: the events below stay where they are
+// when the answer arrives. Only a card that needs a second line for its title or its chip makes the list taller.
+const SLOT = 'min-h-[153px]';
 
 /** The meetings of every page loaded so far, each once: a meeting moved between two pages' reads could be on both. */
 function everyOnce(pages: MeetingList[]): Meeting[] {
@@ -30,7 +33,7 @@ export default function MeetingsSection({ scope }: { scope: MeetingScope }) {
   const heading = useRef<HTMLHeadingElement>(null);
   const { data, isPending, isError, fetchStatus, refetch, hasNextPage, fetchNextPage, isFetchingNextPage, isFetchNextPageError } = useMeetingList(scope);
   const listed = data ? everyOnce(data.pages) : [];
-  const now = useNow(TICK_MS, (at) => nextChangeAt(listed, at));
+  const now = useMeetingClock(listed);
   // A meeting that closes while Upcoming is open leaves it at that moment; Past lists it the next time it is read.
   const meetings = scope === 'upcoming' ? listed.filter((m) => meetingPhase(m, now) !== 'ended') : listed;
 
@@ -55,7 +58,7 @@ export default function MeetingsSection({ scope }: { scope: MeetingScope }) {
       <h2 ref={heading} id="meetings-title" tabIndex={-1} className="mb-3 font-reason text-[18px] font-extrabold tracking-[-0.02em] text-reason-ink outline-none">Your meetings</h2>
       <div className="min-w-0 font-reason text-reason-ink">
         {cannotLoad ? (
-          <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl border border-reason-line bg-white p-4">
+          <div role="alert" className={cn('flex flex-col items-start justify-center gap-3 rounded-2xl border border-reason-line bg-white p-4', SLOT)}>
             <div>
               <p className="text-[15px] font-bold">We could not load your meetings just now.</p>
               {fetchStatus === 'paused' && <p className="mt-1 text-[13px] text-reason-muted">{CONNECTION_LOST}</p>}
@@ -63,12 +66,23 @@ export default function MeetingsSection({ scope }: { scope: MeetingScope }) {
             <button type="button" onClick={tryAgain} className={cn(BUTTON, 'bg-reason-red text-white hover:bg-reason-red-hover')}>Try again</button>
           </div>
         ) : isPending ? (
-          <div className={GRID} aria-busy="true">
-            <p className="sr-only">Loading your meetings</p>
-            {[0, 1].map((i) => <Skeleton key={i} className="h-[136px]" />)}
+          // One card, the likeliest answer, in a card's own frame.
+          <div className={GRID}>
+            <div aria-busy="true" className={cn(CARD_FRAME, SLOT)}>
+              <p className="sr-only">Loading your meetings</p>
+              <div className="grid grid-cols-[48px_minmax(0,1fr)] items-start gap-3">
+                <Skeleton className="h-12 w-12" />
+                <div className="min-w-0 space-y-2.5 pt-1">
+                  <Skeleton className="h-4 w-[70%]" />
+                  <Skeleton className="h-3 w-[85%]" />
+                  <Skeleton className="h-3 w-[55%]" />
+                </div>
+              </div>
+              <Skeleton className="mt-auto h-11" />
+            </div>
           </div>
         ) : meetings.length === 0 ? (
-          <div className="flex items-start gap-3 rounded-2xl bg-reason-warm p-3.5">
+          <div className={cn('flex items-center gap-3 rounded-2xl bg-reason-warm p-3.5', SLOT)}>
             <ReasonSheep pose="hopeful" className="h-[52px] w-[52px] shrink-0" />
             <div className="min-w-0">
               <p className="text-[14px] font-bold">{EMPTY[scope]}</p>
@@ -79,7 +93,7 @@ export default function MeetingsSection({ scope }: { scope: MeetingScope }) {
           </div>
         ) : (
           <>
-            <div className={GRID}>
+            <div className={cn(GRID, SLOT)}>
               {meetings.map((m) => <MeetingCard key={m.id} meeting={m} now={now} />)}
             </div>
             {isFetchNextPageError && (

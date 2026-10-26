@@ -26,6 +26,20 @@ const FILTERS: Array<{ key: EventFilter; label: string }> = [
 /** ?filter= is part of the address, so anyone can write anything into it: Upcoming unless it names another filter. */
 const toFilter = (value: string | null): EventFilter => (value === 'past' || value === 'cancelled' ? value : 'upcoming');
 
+/** What the list reads of each event GET /sessions returns (its times arrive as ISO strings). */
+interface EventRow {
+  id: string;
+  title: string | null;
+  status: string;
+  scheduledAt: string | null;
+  hostUserId: string;
+  podName?: string | null;
+  hostDisplayName?: string | null;
+}
+
+/** What the page reads of each of the member's pods: whether they may run events in it. */
+interface PodRole { memberRole?: string | null }
+
 /** Upcoming is still to come or under way (a live event included), Past has ended, Cancelled is cancelled. */
 function inFilter(status: string, filter: EventFilter): boolean {
   const phase = sessionStatusPhase(status);
@@ -45,17 +59,17 @@ export default function SessionsPage() {
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['my-sessions'],
-    queryFn: () => api.get('/sessions').then(r => r.data.data ?? []),
+    queryFn: () => api.get('/sessions').then(r => (r.data.data ?? []) as EventRow[]),
     meta: { entities: currentUserId ? [E.userSessions(currentUserId)] : [] },
   });
 
   const { data: myPods } = useQuery({
     queryKey: ['my-pods'],
-    queryFn: () => api.get('/pods?status=active').then(r => r.data.data ?? []),
+    queryFn: () => api.get('/pods?status=active').then(r => (r.data.data ?? []) as PodRole[]),
     meta: { entities: currentUserId ? [E.userPods(currentUserId)] : [] },
   });
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
-  const canCreateEvent = isAdmin || (myPods || []).some((p: any) => p.memberRole === 'director' || p.memberRole === 'host');
+  const canCreateEvent = isAdmin || (myPods ?? []).some((p) => p.memberRole === 'director' || p.memberRole === 'host');
 
   // statusVariant retained for legacy 'active' / 'in_progress' values that may appear
   // in the API payload alongside the official enum; for canonical statuses, prefer
@@ -65,7 +79,7 @@ export default function SessionsPage() {
     return sessionStatusColor(s);
   };
 
-  const filtered = (data || []).filter((s: any) => inFilter(s.status, filter));
+  const filtered = (data ?? []).filter((s) => inFilter(s.status, filter));
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -145,7 +159,7 @@ export default function SessionsPage() {
           />
         ) : (
           <div className="grid gap-4 animate-fade-in-up">
-            {filtered.map((s: any) => {
+            {filtered.map((s) => {
               const isHost = s.hostUserId === user?.id;
               return (
                 <Card key={s.id} hover onClick={() => navigate(`/sessions/${s.id}`)} className="card-hover">

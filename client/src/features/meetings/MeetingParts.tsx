@@ -18,7 +18,8 @@ const CHIP_LOOK: Record<MeetingChip, string> = {
 
 export function PhaseChip({ chip, className }: { chip: MeetingChip; className?: string }) {
   return (
-    <span className={cn('inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-extrabold', CHIP_LOOK[chip], className)}>
+    // 20px tall, the height of a card's title line, so a chip beside the title never makes the card taller.
+    <span className={cn('inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-extrabold leading-4', CHIP_LOOK[chip], className)}>
       {chip === 'Live now' && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[#147a4f] motion-safe:animate-pulse" />}
       {chip}
     </span>
@@ -26,6 +27,9 @@ export function PhaseChip({ chip, className }: { chip: MeetingChip; className?: 
 }
 
 export const ACTION = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[11px] px-4 text-[14px] font-bold';
+
+/** A meeting card's frame. The list's loading skeleton is drawn in the same one, so it takes the room a card takes. */
+export const CARD_FRAME = 'flex flex-col gap-3 rounded-[15px] border border-reason-line bg-white p-3 min-[721px]:p-3.5';
 
 interface JoinProps {
   meeting: Meeting;

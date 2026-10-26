@@ -1,11 +1,12 @@
 // client/src/features/meetings/MeetingDetailPage.tsx
 // A meeting's own page (26 Oct 2026, CON-04/05), inside the shell under Events: who, when (in the reader's own time,
-// the zone named), how, and why (the words on the request that connected the two); then Join from 5 minutes before,
-// Add to calendar, Reschedule, Cancel, and the conversation. On a phone Join sits in a bar above the bottom bar.
+// the zone named), how, and why (the words on the request that connected the two); then Join (open by the shared rule,
+// MEETING_JOIN_EARLY_MIN before the start), Add to calendar, Reschedule, Cancel, and the conversation. On a phone Join
+// sits in a bar on top of the bottom bar.
 import { useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CalendarClock, CalendarPlus, MessageCircle, Phone, Video } from 'lucide-react';
-import type { Meeting } from '@rsn/shared';
+import { MEETING_JOIN_EARLY_MIN, type Meeting } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import { Skeleton } from '@/components/ui/Spinner';
 import api from '@/lib/api';
@@ -16,15 +17,12 @@ import Sheet from '@/features/reason/ui/Sheet';
 import { CONNECTION_LOST } from '@/features/reason/errors';
 import { isGone, personHref } from '@/features/reason/human/profile-text';
 import { ACTION, JoinOrCountdown, PhaseChip } from './MeetingParts';
-import { useCancelMeeting, useMeeting, useNow } from './useMeetings';
+import { useCancelMeeting, useMeeting, useMeetingClock } from './useMeetings';
 import {
-  canJoin, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError, meetingLine, meetingTimes, nextChangeAt,
-  MEETING_GONE,
+  canJoin, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError, meetingLine, meetingTimes, MEETING_GONE,
 } from './meeting-words';
 
 const SECONDARY = 'border border-reason-line bg-white text-[#2d3440] hover:bg-[#f5f6f7]';
-// The countdown ("Starts in 25 min") moves by the minute; Join itself opens at its exact moment.
-const TICK_MS = 30_000;
 
 export default function MeetingDetailPage() {
   const { meetingId = '' } = useParams();
@@ -53,7 +51,7 @@ export default function MeetingDetailPage() {
 }
 
 function MeetingView({ meeting }: { meeting: Meeting }) {
-  const now = useNow(TICK_MS, (at) => nextChangeAt([meeting], at));
+  const now = useMeetingClock([meeting]);
   const [confirming, setConfirming] = useState(false);
   const chip = meetingChip(meeting, now);
   // Still to come or under way: it can be joined, added to a calendar, moved or cancelled.
@@ -191,7 +189,7 @@ function JoinBar({ meeting, now }: { meeting: Meeting; now: number }) {
   return (
     <div className="sticky bottom-[-27px] z-10 -ml-[max(13px,env(safe-area-inset-left))] -mr-[max(13px,env(safe-area-inset-right))] mt-4 border-t border-reason-line bg-white/95 pb-2.5 pl-[max(13px,env(safe-area-inset-left))] pr-[max(13px,env(safe-area-inset-right))] pt-2.5 backdrop-blur-lg min-[721px]:hidden">
       <JoinOrCountdown meeting={meeting} now={now} className="w-full" />
-      {!canJoin(meeting, now) && <p className="mt-1 text-center text-[12px] text-reason-muted">Join opens 5 minutes before the start.</p>}
+      {!canJoin(meeting, now) && <p className="mt-1 text-center text-[12px] text-reason-muted">Join opens {MEETING_JOIN_EARLY_MIN} minutes before the start.</p>}
     </div>
   );
 }

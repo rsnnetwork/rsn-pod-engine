@@ -81,7 +81,8 @@ export function firstLine(text: string | null | undefined): string | null {
   return text.split(/\r?\n/).map((line) => line.trim()).find((line) => line.length > 0) ?? null;
 }
 
-type Timed = Pick<Meeting, 'status' | 'startAt' | 'durationMin'>;
+/** What the phase of a meeting is worked out from. */
+export type Timed = Pick<Meeting, 'status' | 'startAt' | 'durationMin'>;
 
 /** Join is open from 5 minutes before the start until 30 minutes after the end; never for a cancelled meeting. */
 export function canJoin(meeting: Timed, now: number): boolean {

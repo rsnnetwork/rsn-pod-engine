@@ -13,7 +13,7 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import { shouldRetry } from '@/features/reason/human/profile-text';
-import { eventsBadge, isMeetingId, tickDelay, type EventsBadge } from './meeting-words';
+import { eventsBadge, isMeetingId, nextChangeAt, tickDelay, type EventsBadge, type Timed } from './meeting-words';
 
 export const meetingKeys = {
   all: ['meetings'] as const,
@@ -96,6 +96,14 @@ export function useNow(every: number | null, wakeAtFor?: (now: number) => number
     return () => window.clearTimeout(timer);
   }, [now, every, wakeAt]);
   return now;
+}
+
+/** The countdown on a meeting ("Starts in 25 min") moves by the minute, so its screens redraw this often. */
+export const COUNTDOWN_TICK_MS = 30_000;
+
+/** The time for screens that show meetings: every half minute for the countdown, and at the moment Join opens or closes. */
+export function useMeetingClock(meetings: Timed[]): number {
+  return useNow(COUNTDOWN_TICK_MS, (at) => nextChangeAt(meetings, at));
 }
 
 /**

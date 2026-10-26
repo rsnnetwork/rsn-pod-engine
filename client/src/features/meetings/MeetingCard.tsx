@@ -7,7 +7,7 @@ import { Link } from 'react-router-dom';
 import type { Meeting } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
-import { ACTION, JoinOrCountdown, PhaseChip } from './MeetingParts';
+import { ACTION, CARD_FRAME, JoinOrCountdown, PhaseChip } from './MeetingParts';
 import { firstLine, meetingChip, meetingLine } from './meeting-words';
 
 export default function MeetingCard({ meeting, now }: { meeting: Meeting; now: number }) {
@@ -22,7 +22,8 @@ export default function MeetingCard({ meeting, now }: { meeting: Meeting; now: n
       data-meeting-id={meeting.id}
       aria-labelledby={headingId}
       className={cn(
-        'relative flex flex-col gap-3 rounded-[15px] border border-reason-line bg-white p-3 transition-colors [container-type:inline-size] hover:border-[#d5d8de] hover:bg-reason-soft min-[721px]:p-3.5',
+        CARD_FRAME,
+        'relative transition-colors [container-type:inline-size] hover:border-[#d5d8de] hover:bg-reason-soft',
         over && 'bg-reason-soft',
       )}
     >
@@ -43,8 +44,9 @@ export default function MeetingCard({ meeting, now }: { meeting: Meeting; now: n
         </div>
       </div>
       {/* Sized to the card, not the window (a container query): a card as narrow as a phone's (half a row from 1024px)
-          shares its row between the two buttons; a wide one lines them up under the text. */}
-      <div className="relative z-[1] flex flex-wrap gap-2 [@container(min-width:26rem)]:pl-[60px]">
+          shares its row between the two buttons; a wide one lines them up under the text. At the card's foot, so two
+          cards side by side, or one card filling the list's room, keep their buttons on one line. */}
+      <div className="relative z-[1] mt-auto flex flex-wrap gap-2 [@container(min-width:26rem)]:pl-[60px]">
         <JoinOrCountdown meeting={meeting} now={now} label={`Join the meeting with ${name}`} className="flex-1 [@container(min-width:26rem)]:flex-none" />
         <Link
           to={`/messages/${encodeURIComponent(meeting.conversationId)}`}

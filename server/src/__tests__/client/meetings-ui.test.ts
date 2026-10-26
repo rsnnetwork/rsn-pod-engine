@@ -311,6 +311,13 @@ describe('Events: "Your meetings" above the events, one filter for both, kept in
     expect(src).toMatch(/min-h-\[44px\]/);
   });
 
+  it('reads each event as a typed row: no `any` on the page', () => {
+    const src = page();
+    expect(src).not.toMatch(/\bany\b/);
+    expect(src).toMatch(/queryFn: \(\) => api\.get\('\/sessions'\)\.then\(r => \(r\.data\.data \?\? \[\]\) as EventRow\[\]\)/);
+    expect(src).toMatch(/const filtered = \(data \?\? \[\]\)\.filter\(\(s\) => inFilter\(s\.status, filter\)\);/);
+  });
+
   it('puts the meetings first, then the events', () => {
     const src = page();
     const meetings = src.indexOf('<MeetingsSection scope={filter} />');
@@ -329,6 +336,34 @@ describe('a meeting on Events', () => {
     expect(src).toMatch(/aria-busy="true"/);
     expect(src).toMatch(/We could not load your meetings just now\./);
     expect(src).toMatch(/EMPTY_MEETINGS/);
+  });
+
+  // Review, 26 Oct: two 136px skeletons against an empty line of about 100px and a card of about 150px moved "Pod
+  // events" when the list arrived. Loading, empty and error now each hold the room of one card, the likeliest answer.
+  it('while the list loads it holds the room of one card, and the empty line and the error keep that room, so the events below stay put', () => {
+    const src = section();
+    const slot = src.match(/^const SLOT = '(min-h-\[\d+px\])';$/m);
+    expect(slot).not.toBeNull();
+    // One card-shaped skeleton, not a row of blocks.
+    expect(src).not.toMatch(/\[0, 1\]\.map/);
+    expect(src).toMatch(/<div aria-busy="true" className=\{cn\(CARD_FRAME, SLOT\)\}>/);
+    expect(read('features/meetings/MeetingCard.tsx')).toMatch(/\bCARD_FRAME\b/);
+    expect(src).toMatch(/<div className=\{cn\('flex items-center gap-3 rounded-2xl bg-reason-warm p-3\.5', SLOT\)\}>/);
+    expect(src).toMatch(/<div role="alert" className=\{cn\('flex flex-col items-start justify-center gap-3 rounded-2xl border border-reason-line bg-white p-4', SLOT\)\}>/);
+    // ...and so does the list itself: one short card fills that room rather than leaving the events to move up.
+    expect(src).toMatch(/<div className=\{cn\(GRID, SLOT\)\}>\s*\{meetings\.map/);
+    expect(read('features/meetings/MeetingCard.tsx')).toMatch(/<div className="relative z-\[1\] mt-auto flex flex-wrap gap-2/);
+  });
+
+  it('the countdown runs on one clock, defined once and shared by the list and the page', () => {
+    const hooks = read('features/meetings/useMeetings.ts');
+    expect(hooks).toMatch(/^export const COUNTDOWN_TICK_MS = 30_000;$/m);
+    expect(hooks).toMatch(/export function useMeetingClock\(meetings: Timed\[\]\): number \{\s*return useNow\(COUNTDOWN_TICK_MS, \(at\) => nextChangeAt\(meetings, at\)\);\s*\}/);
+    for (const file of ['MeetingsSection.tsx', 'MeetingDetailPage.tsx']) {
+      const src = read(`features/meetings/${file}`);
+      expect({ file, ownTick: /TICK_MS\s*=|30_000/.test(src) }).toEqual({ file, ownTick: false });
+      expect({ file, sharedClock: /useMeetingClock\(/.test(src) }).toEqual({ file, sharedClock: true });
+    }
   });
 
   it('a card: "Meeting with {name}", the time line, the first line of why, the chip, Join or when it starts, and Open chat', () => {
@@ -398,6 +433,15 @@ describe('the meeting\'s page', () => {
     for (const side of ['left', 'right']) expect(shell).toMatch(new RegExp(`p${side[0]}-\\[max\\(13px,env\\(safe-area-inset-${side}\\)\\)\\]`));
     expect(bar![0]).toMatch(/-ml-\[max\(13px,env\(safe-area-inset-left\)\)\] -mr-\[max\(13px,env\(safe-area-inset-right\)\)\]/);
     expect(bar![0]).toMatch(/pl-\[max\(13px,env\(safe-area-inset-left\)\)\] pr-\[max\(13px,env\(safe-area-inset-right\)\)\]/);
+  });
+
+  it('the phone bar says when Join opens from the shared rule, never a number of its own', () => {
+    const src = detail();
+    expect(src).toMatch(/import \{[^}]*\bMEETING_JOIN_EARLY_MIN\b[^}]*\} from '@rsn\/shared';/);
+    expect(src).toMatch(/Join opens \{MEETING_JOIN_EARLY_MIN\} minutes before the start\./);
+    // Comments may say it; nothing the page draws may.
+    const drawn = src.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(drawn).not.toMatch(/\b5 minutes\b/);
   });
 });
 
