@@ -11,7 +11,7 @@
 //
 // Runs against production's client by default, a preview with E2E_APP_URL (+ E2E_VERCEL_SHARE), or the local stack
 // through run-local-spec.sh. Its own members only (e2etest-…), deleted by id with what they made.
-import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { createTestUser, pool, type TestUser } from '../helpers/auth';
 import { apiRequest } from '../helpers/api';
 import { APP, cleanup } from '../helpers/live-ui';
@@ -43,6 +43,18 @@ async function open(ctx: BrowserContext, path: string): Promise<Page> {
   // a fixed sheet's footer at 896px on an 844px window): measure only once the page has the size asked for.
   await page.waitForFunction((h) => window.innerHeight === h, PHONE.height);
   return page;
+}
+
+/** Polls a field until two readings in a row put it at the same place, its bottom above the sticky bar's top. */
+async function landedClearOf(field: Locator, bar: Locator): Promise<void> {
+  let lastTop = Number.NaN;
+  await expect.poll(async () => {
+    const [f, b] = await Promise.all([field.boundingBox(), bar.boundingBox()]);
+    if (!f || !b) return false;
+    const still = Math.round(f.y) === lastTop;
+    lastTop = Math.round(f.y);
+    return still && f.y + f.height <= b.y;
+  }, { message: 'the field settles clear of the sticky bar', intervals: [50, 50, 100, 100, 200] }).toBe(true);
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -109,8 +121,8 @@ test(`B: an event from a Reason pod follows its type, asks before dropping round
   const schedule = page.getByRole('button', { name: 'Schedule Event' });
   await schedule.click();
   await expect(page.getByText('Give your event a title')).toBeVisible();
-  // The form places the field two frames after its message is drawn (clear of the sticky bar): let it land.
-  await page.waitForTimeout(250);
+  // The form places the field two frames after its message is drawn: wait until it has stopped moving, clear of the bar.
+  await landedClearOf(title, schedule.locator('xpath=ancestor::div[contains(@class,"sticky")][1]'));
   const summary = page.getByRole('alert').filter({ hasText: 'Fix 1 thing:' });
   await expectReachable(page, summary.getByRole('button', { name: 'Title' }), 'the summary beside the button');
   await expectReachable(page, schedule, 'Schedule Event');
