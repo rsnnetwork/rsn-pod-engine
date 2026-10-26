@@ -1,6 +1,6 @@
 import { test, expect, chromium, webkit, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { createTestUser, pool, type TestUser } from '../helpers/auth';
-import { createPod, addPodMember, createSession, registerForSession } from '../helpers/api';
+import { createPod, addPodMember, createSession, registerForSession, apiRequest } from '../helpers/api';
 import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { expectReachable } from '../helpers/viewport-fit';
@@ -20,6 +20,9 @@ import { expectReachable } from '../helpers/viewport-fit';
 //      took part), stops at 50 ("This group is full (50 people)."), and starts a group of 49. In the members sheet the
 //      organiser adds one more (the 51st cannot be chosen, and says why); the group is full at 50, and the server
 //      refuses a 51st add with the same sentence.
+//   6. A long group (two pages) whose details arrive after its messages still opens at its newest message, and
+//      "Show earlier messages" keeps the place being read. The group is marked read once on opening with something
+//      unread, once for a burst of three messages, and not at all on opening it again with nothing unread.
 // Throwaway members (@rsn-e2e.invalid, no email sent), their pod, events and groups are deleted by id. Runs on the local
 // stack, the preview (E2E_VERCEL_SHARE) or production; E2E_ENGINE=webkit for Safari's engine.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -30,6 +33,7 @@ const ENGINE = process.env.E2E_ENGINE === 'webkit' ? 'webkit' : 'chromium';
 const RUN = Date.now().toString(36);
 const TITLE = `E2E group chat ${RUN}`;
 const FULL_TITLE = `E2E full group ${RUN}`;
+const LONG_GROUP = `Long thread ${RUN}`;
 const HELLO = `Thank you both for coming, next steps soon ${RUN}`;
 const REPLY = `Thanks Claus, count me in ${RUN}`;
 const FULL = 'This group is full (50 people).';
@@ -215,6 +219,8 @@ test('an organiser starts a group chat; the others see it and its messages live,
 
   // The organiser writes; both see it arrive, with an unread count on the row and on the Messages tab.
   const box = clausPage.getByRole('textbox', { name: 'Message' });
+  // The box is a tap target too: at least 44px tall (one row measured 42px here before 26 Oct 2026).
+  expect((await box.boundingBox())?.height ?? 0, 'the message box is at least 44px tall @390').toBeGreaterThanOrEqual(44);
   await box.fill(HELLO);
   await expectReachable(clausPage, clausPage.getByRole('button', { name: 'Send message' }), 'Send @390');
   await box.press('Enter');
@@ -366,6 +372,82 @@ test('a group chat holds 50 people: the start sheet asks to choose, stops at 50,
   await expect(members.getByTestId('group-member').filter({ hasText: guest(1) })).toHaveCount(0);
   await expect(members.getByRole('button', { name: 'Add people' })).toBeVisible();
   await expect(page.getByTestId('group-member-count')).toHaveText('49 of 50');
+
+  expect(pageErrors, 'no page errors').toEqual([]);
+});
+
+test('a long group opens at its newest message even when its details come after its messages; earlier messages keep the place; one read mark per burst, none when all is read', async () => {
+  test.setTimeout(240_000);
+  // Three people, and sixty messages from the two others: Stefan has sixty unread, on two pages.
+  const created = await apiRequest(organiser, 'POST', `/groups/from-event/${eventId}`, { name: LONG_GROUP, memberIds: [stefan.id, ines.id] });
+  const groupId: string = created.data.id;
+  groupIds.push(groupId);
+  await pool.query(
+    `INSERT INTO direct_messages (group_id, from_user_id, content, created_at)
+     SELECT $1, CASE WHEN i % 2 = 0 THEN $2::uuid ELSE $3::uuid END, 'Note ' || i || ' ' || $4, NOW() + (i || ' milliseconds')::interval
+       FROM generate_series(1, 60) AS i`,
+    [groupId, organiser.id, ines.id, RUN],
+  );
+  const note = (page: Page, i: number) => page.getByText(`Note ${i} ${RUN}`, { exact: true });
+
+  const page = await open(stefan, 'stefan-long', '/messages', { width: 360, height: 740 });
+  await expect(groupRow(page, LONG_GROUP)).toBeVisible({ timeout: 40_000 });
+  const reads: string[] = [];
+  page.on('request', (r) => { if (r.method() === 'POST' && r.url().endsWith(`/api/groups/${groupId}/read`)) reads.push(r.url()); });
+  // The group's details come a second and a half after its messages, as on a slow connection.
+  await page.route(`**/api/groups/${groupId}`, async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue().catch(() => {});
+  });
+  await groupRow(page, LONG_GROUP).click();
+  await expect(note(page, 60), 'the newest message is in view').toBeInViewport({ timeout: 20_000 });
+  await expect(note(page, 11), 'not the oldest of the page').not.toBeInViewport();
+  await page.unrouteAll({ behavior: 'wait' });
+  await expect.poll(() => reads.length, { message: 'one read mark on opening with sixty unread', timeout: 10_000 }).toBe(1);
+
+  // "Show earlier messages" from the top: the earlier page goes above, and the place being read stays in view. A change
+  // to the group landing while that page is on its way (here the organiser's message, while the page takes 1.5 s)
+  // used to drop the page without a word: the refetch the change starts cancels the page fetch in flight (React
+  // Query), so nothing appeared and the button sat there. The page is asked for again until it has come.
+  const scroll = page.getByTestId('group-thread-scroll');
+  await scroll.evaluate((el) => { el.scrollTop = 0; });
+  await expect(note(page, 11)).toBeInViewport();
+  let slowedOnce = false;
+  await page.route(new RegExp(`/api/groups/${groupId}/messages\\?.*\\bbefore=`), async (route) => {
+    if (!slowedOnce) {
+      slowedOnce = true;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    await route.continue().catch(() => {});
+  });
+  await page.getByRole('button', { name: 'Show earlier messages' }).click();
+  await apiRequest(organiser, 'POST', `/groups/${groupId}/messages`, { content: `Meanwhile ${RUN}` });
+  await expect(note(page, 1), 'the earlier page arrives although a message landed meanwhile').toBeAttached({ timeout: 20_000 });
+  await expect(page.getByText(`Meanwhile ${RUN}`, { exact: true })).toBeAttached();
+  await page.unrouteAll({ behavior: 'wait' });
+  // That message is unread: one read mark for it (the earlier page itself marks nothing).
+  await expect.poll(() => reads.length, { message: 'one read mark for the message that landed meanwhile', timeout: 10_000 }).toBe(2);
+  await expect(note(page, 11), 'the place being read stays in view').toBeInViewport();
+  await expect(note(page, 1), 'the earlier page is above it').not.toBeInViewport();
+  await noSidewaysScroll(page, 'long group @360');
+
+  // A burst of three while Stefan reads at the end: they arrive live, and the group is marked read once for all three.
+  await scroll.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await Promise.all([1, 2, 3].map((i) => apiRequest(organiser, 'POST', `/groups/${groupId}/messages`, { content: `Burst ${i} ${RUN}` })));
+  for (const i of [1, 2, 3]) await expect(page.getByText(`Burst ${i} ${RUN}`, { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => reads.length, { message: 'one read mark for the burst', timeout: 10_000 }).toBe(3);
+  await page.waitForTimeout(2500);
+  expect(reads.length, 'still one read mark for the burst').toBe(3);
+  await expect(anyUnreadTab(page), 'read: no count on the Messages tab').toHaveCount(0, { timeout: 20_000 });
+
+  // Opened again with nothing unread: no read mark.
+  await page.getByRole('link', { name: 'Back to inbox' }).click();
+  await groupRow(page, LONG_GROUP).click();
+  await expect(page.getByTestId('group-messages')).toContainText(`Burst 3 ${RUN}`, { timeout: 20_000 });
+  await page.waitForTimeout(2500);
+  expect(reads.length, 'nothing unread: no read mark on opening').toBe(3);
+  const narrowBox = page.getByRole('textbox', { name: 'Message' });
+  expect((await narrowBox.boundingBox())?.height ?? 0, 'the message box is at least 44px tall @360').toBeGreaterThanOrEqual(44);
 
   expect(pageErrors, 'no page errors').toEqual([]);
 });
