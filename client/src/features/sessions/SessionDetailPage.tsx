@@ -6,6 +6,7 @@ import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings,
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
+import ProfileLink from '@/components/ui/ProfileLink';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Modal from '@/components/ui/Modal';
@@ -758,13 +759,13 @@ export default function SessionDetailPage() {
               return (
                 <Card key={`host-${hostRow.userId}`} className="!p-4 border-rsn-red/30 bg-rsn-red/5">
                   <div className="flex items-center justify-between">
-                    <a href={`/profile/${hostRow.userId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                    <ProfileLink userId={hostRow.userId} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                       <Avatar src={hostRow.avatarUrl} name={hostRow.displayName || hostRow.email || 'Host'} size="sm" />
                       <div>
                         <p className="text-sm font-medium text-gray-800">{hostRow.displayName || hostRow.email || 'Host'}</p>
                         <p className="text-xs text-gray-400">Host / Director</p>
                       </div>
-                    </a>
+                    </ProfileLink>
                     <Badge variant="brand" className="text-xs">Host</Badge>
                   </div>
                 </Card>
@@ -784,13 +785,13 @@ export default function SessionDetailPage() {
               return (
                 <Card key={p.userId || p.id} className="!p-4">
                   <div className="flex items-center justify-between">
-                    <a href={`/profile/${p.userId || p.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
+                    <ProfileLink userId={p.userId || p.id} className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
                       <Avatar src={p.avatarUrl} name={p.displayName || p.email || 'User'} size="sm" />
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-gray-800 truncate">{p.displayName || p.email || 'Participant'}</p>
                         <p className="text-xs text-gray-400">{p.isCohost ? 'Co-Host' : statusLabel}</p>
                       </div>
-                    </a>
+                    </ProfileLink>
                     {/* S16 — pre-event co-host management on the event page.
                         Same semantics as the live drawer's shield toggle. */}
                     <div className="flex items-center gap-2 shrink-0">

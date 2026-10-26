@@ -5,6 +5,7 @@ import { Handshake, Users, Calendar, ThumbsUp, MessageSquare } from 'lucide-reac
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
+import ProfileLink from '@/components/ui/ProfileLink';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
@@ -68,7 +69,7 @@ export default function EncounterHistoryPage() {
           {(encounters || []).map((e: any, i: number) => (
             <Card key={e.id || i} className="card-hover">
               <div className="flex items-center justify-between">
-                <a href={`/profile/${e.otherUserId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                <ProfileLink userId={e.otherUserId} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                   <div className="relative">
                     <Avatar src={e.avatarUrl} name={e.displayName || e.otherUserName || e.email || 'User'} size="md" />
                     {e.mutual && (
@@ -87,7 +88,7 @@ export default function EncounterHistoryPage() {
                       </p>
                     )}
                   </div>
-                </a>
+                </ProfileLink>
                 <div className="flex items-center gap-2">
                   {e.rating && (
                     <div className="flex items-center gap-1 text-emerald-500">
