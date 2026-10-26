@@ -42,6 +42,8 @@ const WIDTHS = [
   { width: 1440, height: 900 },
 ];
 const PHONE = { width: 390, height: 844 };
+/** The production API has a mail provider; the scratch API on this machine has none. */
+const API_HAS_MAIL = /onrender\.com|rsn\.network/.test(SERVER);
 const PLACEHOLDER = 'Search by name, role or company';
 
 // 61 people seeded by SQL. Nobody else's name, role or company holds "cla", so "Cla" finds exactly Claus and Clara.
@@ -379,10 +381,13 @@ test('the pod page: browse 30 at a time, find Claus by "Cla", choose people as c
   await expect(card.getByText('Declined (2)')).toBeVisible({ timeout: 20_000 });
   await expect(card.getByText('Invited (5)')).toBeVisible();
 
-  // A reminder the local API cannot email (no mail provider) says so in the server's own sentence.
+  // The card answers a reminder the way the server did. The production API (behind the preview) counts an email to an
+  // address reserved for testing as sent and never offers it to the mail provider; the scratch API has no mail provider
+  // and says so in its own sentence (26 Oct 2026: the preview run expected the scratch sentence and failed).
   const clausRow = card.locator('li', { hasText: CLAUS });
   await clausRow.getByRole('button', { name: 'Remind' }).click();
-  await expect(page.getByText('We could not send the reminder just now. Please try again.')).toBeVisible({ timeout: 20_000 });
+  const reminderSentence = API_HAS_MAIL ? 'Reminder sent.' : 'We could not send the reminder just now. Please try again.';
+  await expect(page.getByText(reminderSentence)).toBeVisible({ timeout: 20_000 });
 
   // Withdraw asks first, then the invite is gone from the card and the database.
   acceptNextDialog(page);
