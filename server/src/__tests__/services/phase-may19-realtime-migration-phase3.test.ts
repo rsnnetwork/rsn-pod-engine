@@ -25,7 +25,7 @@ function readClient(rel: string): string {
 describe('Realtime migration Phase 3 — client meta.entities', () => {
   // ── 3a — Pod surfaces ──────────────────────────────────────────────────
   describe('3a — Pod surfaces', () => {
-    it('PodDetailPage.tsx imports E and tags pod/pod-members/pod-sessions/pod-pending-invites', () => {
+    it('PodDetailPage.tsx imports E and tags pod/pod-members/pod-sessions; its pending invites keep their key and tag', () => {
       const src = readClient('features/pods/PodDetailPage.tsx');
       expect(src).toMatch(/from\s*['"]@\/realtime\/entities['"]/);
       expect(src).toMatch(/import\s*\{\s*E\s*\}\s*from\s*['"]@\/realtime\/entities['"]/);
@@ -36,7 +36,12 @@ describe('Realtime migration Phase 3 — client meta.entities', () => {
       expect(membersBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podMembers\(podId\)/);
       const sessionsBlock = src.slice(src.indexOf("queryKey: ['pod-sessions', podId]"));
       expect(sessionsBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podSessions\(podId\)/);
-      const invitesBlock = src.slice(src.indexOf("queryKey: ['pod-pending-invites', podId]"));
+      // 26 Oct 2026 (C9): the pod's pending invites are read by the organisers' list the page draws
+      // (InviteStatusList), with the same key and tag.
+      expect(src).toMatch(/<InviteStatusList\b/);
+      const list = readClient('features/invites/InviteStatusList.tsx');
+      expect(list).toMatch(/import\s*\{\s*E\s*\}\s*from\s*['"]@\/realtime\/entities['"]/);
+      const invitesBlock = list.slice(list.indexOf("queryKey: ['pod-pending-invites', podId]"));
       expect(invitesBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podInvites\(podId\)/);
     });
 
@@ -60,17 +65,15 @@ describe('Realtime migration Phase 3 — client meta.entities', () => {
       expect(receivedBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.userInvites\(currentUserId\)/);
     });
 
-    it('CreateInviteModal.tsx imports E and tags my-pods/my-sessions', () => {
-      const src = readClient('features/invites/CreateInviteModal.tsx');
-      expect(src).toMatch(/from\s*['"]@\/realtime\/entities['"]/);
-      const podsBlock = src.slice(src.indexOf("queryKey: ['my-pods']"));
-      expect(podsBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.userPods\(currentUserId\)/);
+    it('CreateInviteModal.tsx no longer exists (nothing rendered it; C9 deleted it, 26 Oct 2026)', () => {
+      const file = nodePath.join(__dirname, '../../../../client/src/features/invites/CreateInviteModal.tsx');
+      expect(nodeFs.existsSync(file)).toBe(false);
     });
   });
 
   // ── 3b — Session surfaces ──────────────────────────────────────────────
   describe('3b — Session surfaces', () => {
-    it('SessionDetailPage.tsx imports E and tags session/participants/participant-counts/pending-invites', () => {
+    it('SessionDetailPage.tsx imports E and tags session/participants/participant-counts; its pending invites keep their key and tag', () => {
       const src = readClient('features/sessions/SessionDetailPage.tsx');
       expect(src).toMatch(/from\s*['"]@\/realtime\/entities['"]/);
       const sessionBlock = src.slice(src.indexOf("queryKey: ['session', sessionId]"));
@@ -79,7 +82,11 @@ describe('Realtime migration Phase 3 — client meta.entities', () => {
       expect(participantsBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.sessionParticipants\(sessionId\)/);
       const countsBlock = src.slice(src.indexOf("queryKey: ['session-participant-counts', sessionId]"));
       expect(countsBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.sessionParticipants\(sessionId\)/);
-      const invitesBlock = src.slice(src.indexOf("queryKey: ['session-pending-invites', sessionId]"));
+      // 26 Oct 2026 (C9): the event's pending invites are read by the organisers' list the page draws
+      // (InviteStatusList), with the same key and tag.
+      expect(src).toMatch(/<InviteStatusList\b/);
+      const list = readClient('features/invites/InviteStatusList.tsx');
+      const invitesBlock = list.slice(list.indexOf("queryKey: ['session-pending-invites', sessionId]"));
       expect(invitesBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.sessionInvites\(sessionId\)/);
     });
 
