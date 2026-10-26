@@ -445,6 +445,27 @@ export function isTimeNotShared(err: unknown): boolean {
 const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 
 /**
+ * A refusal that pressing again would only repeat (a block, a time in the past, a request the server will not take):
+ * its reason, for the card to keep showing, with its button waiting, until something changes. No answer, the server's
+ * own fault and too many tries are worth another press; a time taken back the card states itself.
+ */
+export function lastingRefusal(err: unknown): string | null {
+  const response = ((err ?? {}) as FailedRequest).response;
+  const status = response?.status ?? 0;
+  if (!response || status < 400 || status >= 500 || status === 429 || isTimeNotShared(err)) return null;
+  return sentence(errorMessage(err, 'That time cannot be booked.'));
+}
+
+/** What this member's own Confirm or Move just sent: the meeting the server has now, before the panel has heard. */
+export interface OwnConfirm { window: string; durationMin: number; type: 'audio' | 'video' }
+
+/** The meeting the panel reads is the one this member just sent: the same time, length and kind. */
+export function isOwnConfirm(meeting: ConfirmedLike | null | undefined, own: OwnConfirm | null, now: number): boolean {
+  if (!own || !meeting || !meetingStands(meeting, now)) return false;
+  return meeting.window === own.window && meeting.durationMin === own.durationMin && (meeting.type ?? 'video') === own.type;
+}
+
+/**
  * The sentence for a Confirm or a Move that failed. Nothing changed on the server.
  *   - The time was taken back (409): where the meeting is, as the refusal itself says in `details.scheduling` (the
  *     panel's cached meeting may be what is out of date): "That time is no longer free for both of you. Your meeting

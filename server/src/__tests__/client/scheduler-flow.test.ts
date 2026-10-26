@@ -15,7 +15,7 @@ import {
   addDays, cardSeed, cellAriaLabel, cellLabels, cellState, cellText, confirmFailure, confirmable, confirmedMessage,
   dayKeyOf, dayLabel, dayParts,
   daySlots, isMeetingOver, isSlotKey, isTimeNotShared, meetingLength, meetingStands, saveMessage, saveOutcome,
-  STARTED_TIME, cardBlock, cardClosedText, localizeMeetingText, sameMeeting,
+  STARTED_TIME, cardBlock, cardClosedText, isOwnConfirm, lastingRefusal, localizeMeetingText, sameMeeting,
   slotLabel, slotTime, typedSlot, upcomingDays, whenWithZone, zoneLine, zoneName,
   type SchedulingLike,
 } from '../../../../client/src/features/messages/scheduler-flow';
@@ -415,6 +415,43 @@ describe('a Move or a Confirm that fails says why, and where the meeting is', ()
   });
 });
 
+describe('a refusal that pressing again would only repeat keeps the card\'s button waiting', () => {
+  const answer = (status: number, code: string, message: string) => ({ response: { status, data: { error: { code, message } } } });
+
+  it('a block, a time in the past or another refusal: its reason, for the card to keep showing', () => {
+    expect(lastingRefusal(answer(403, 'AUTH_FORBIDDEN', 'You can no longer arrange a meeting with this person')))
+      .toBe('You can no longer arrange a meeting with this person.');
+    expect(lastingRefusal(answer(400, 'VALIDATION_ERROR', 'Meeting time must be in the future'))).toBe('Meeting time must be in the future.');
+    expect(lastingRefusal(answer(409, 'SOMETHING_ELSE', 'That meeting cannot change now.'))).toBe('That meeting cannot change now.');
+  });
+
+  it('no answer, the server\'s own fault, too many tries, or a time taken back (the card says that itself): try again', () => {
+    expect(lastingRefusal({ isAxiosError: true, request: {} })).toBeNull();
+    expect(lastingRefusal(answer(503, 'UNAVAILABLE', 'down'))).toBeNull();
+    expect(lastingRefusal(answer(429, 'RATE_LIMITED', 'Too many requests'))).toBeNull();
+    expect(lastingRefusal(answer(409, 'MEETING_TIME_NOT_SHARED', NOT_SHARED))).toBeNull();
+  });
+});
+
+describe('the member\'s own Confirm or Move, as the panel later hears it back', () => {
+  const now = at('2026-10-26T08:00:00Z');
+  const own = { window: '2026-10-29T09:00:00Z', durationMin: 45, type: 'audio' as const };
+  const meeting = (window: string, durationMin: number, type: 'audio' | 'video') =>
+    ({ window, startAt: window.replace('Z', '.000Z'), durationMin, type });
+
+  it('is the same time, length and kind this member just sent', () => {
+    expect(isOwnConfirm(meeting('2026-10-29T09:00:00Z', 45, 'audio'), own, now)).toBe(true);
+  });
+
+  it('anything else is someone else\'s change (or none was sent)', () => {
+    expect(isOwnConfirm(meeting('2026-10-29T15:00:00Z', 45, 'audio'), own, now)).toBe(false);
+    expect(isOwnConfirm(meeting('2026-10-29T09:00:00Z', 30, 'audio'), own, now)).toBe(false);
+    expect(isOwnConfirm(meeting('2026-10-29T09:00:00Z', 45, 'video'), own, now)).toBe(false);
+    expect(isOwnConfirm(null, own, now)).toBe(false);
+    expect(isOwnConfirm(meeting('2026-10-29T09:00:00Z', 45, 'audio'), null, now)).toBe(false);
+  });
+});
+
 describe('when a request fails', () => {
   const answer = (status: number, code: string, message: string) => ({ response: { status, data: { error: { code, message } } } });
 
@@ -518,13 +555,25 @@ describe('the scheduler on screen', () => {
     const save = handler(container(), 'save');
     // The meeting as the server last said it, and the times this save adds, are taken before the request…
     expect(save).toMatch(/const known = data\.confirmed;/);
-    expect(save).toMatch(/const added = windows\.filter\(w => !savedMine\.has\(w\)\);/);
+    // (Against what the server has, by its last answer: a second save before the panel's refresh counts nothing twice.)
+    expect(save).toMatch(/const added = windows\.filter\(w => !saved\.has\(w\)\);/);
     // …and the outcome is read from the save's own answer, which says who booked or moved the meeting.
     expect(save).toMatch(/const after = res\.data\.data as Scheduling;\s*const outcome = saveOutcome\(after, \{ me, known, added \}, Date\.now\(\)\);/);
     expect(save).not.toMatch(/saveOutcome\(before/);
     expect(save).toMatch(/addToast\(saveMessage\(outcome, zone\), asks \? 'info' : 'success'\);/);
     // With a choice to make (times to confirm, or where to move the meeting) the panel stays open on it.
     expect(save).toMatch(/if \(outcome\.kind === 'overlap' \|\| outcome\.kind === 'move-choice'\) \{/);
+  });
+
+  it('a Save says what it did at once: its own answer stands for the saved times, and the refresh is not waited on', () => {
+    const save = handler(container(), 'save');
+    expect(save).not.toMatch(/await refreshThread\(\)/);
+    expect(save).toMatch(/forgetDraft\(after\);\s*const asks = [^;]+;\s*addToast\(saveMessage\(outcome, zone\), asks \? 'info' : 'success'\);\s*void refreshThread\(\);/);
+    // The draft stands on that answer until a read newer than it lands, so the picks never flick back meanwhile.
+    const draftSrc = part('useSchedulerDraft.ts');
+    expect(draftSrc).toMatch(/const saved: ReadonlySet<string> = answered && answered\.at > dataUpdatedAt \? answered\.mine : savedMine;/);
+    expect(draftSrc).toMatch(/setAnswered\(answer \? \{ mine: new Set\(answer\.mine\.filter\(isSlotKey\)\), at: Date\.now\(\) \} : null\);/);
+    expect(container()).toMatch(/saved=\{saved\}/);
   });
 
   it('never drops a typed "Another time": it is added on blur and on Enter, counts as unsaved, and rides with Save', () => {
@@ -583,16 +632,19 @@ describe('the scheduler on screen', () => {
     // The failure is said first, from the refusal itself, and the refresh is not waited on (no await anywhere in the catch).
     const failure = confirm.slice(confirm.indexOf('} catch (err) {'), confirm.indexOf('} finally {'));
     expect(failure).toMatch(/const message = confirmFailure\(err, \{ moving, stays, zone, now: Date\.now\(\) \}\);/);
-    expect(failure).toMatch(/addToast\(message, 'error'\);\s*void queryClient\.invalidateQueries\(\{ queryKey: schedulingKey\(conversationId\) \}\);/);
+    const toastAt = failure.indexOf("addToast(message, 'error');");
+    expect(toastAt).toBeGreaterThan(-1);
+    expect(failure.indexOf('void queryClient.invalidateQueries({ queryKey: schedulingKey(conversationId) });')).toBeGreaterThan(toastAt);
     expect(failure).not.toMatch(/await/);
     // A retry that works takes the failures it followed down.
-    expect(confirm).toMatch(/setFinalizing\(null\);\s*dismissFailures\(\);/);
+    expect(confirm).toMatch(/ownConfirm\.current = \{ window: key, durationMin, type: meetingKind \};\s*dismissFailures\(\);/);
     expect(handler(container(), 'dismissFailures')).toMatch(/failureToasts\.current\.includes\(t\.message\)\) removeToast\(t\.id\)/);
   });
 
   it('the card states what stands in its way only when it is true: started, or no longer saved by both on a newer answer', () => {
     const src = container();
-    expect(src).toMatch(/const cardReason = finalizing\s*\?\s*cardBlock\(finalizing, \{\s*now,\s*bothSaved: savedMine\.has\(finalizing\) && theirSet\.has\(finalizing\),\s*freshSinceOpen: !!cardBasis\.current && dataUpdatedAt > cardBasis\.current\.openedAt,/);
+    expect(src).toMatch(/:\s*cardBlock\(finalizing, \{\s*now,\s*bothSaved: savedMine\.has\(finalizing\) && theirSet\.has\(finalizing\),\s*freshSinceOpen: !!cardBasis\.current && dataUpdatedAt > cardBasis\.current\.openedAt,/);
+    expect(src).toMatch(/const cardReason = !finalizing\s*\?\s*null/);
     expect(src).toMatch(/reason=\{act\.cardReason\}/);
     // Not "is it confirmable", which also drops the booked time and made a card on its own meeting say "no longer free".
     expect(src).not.toMatch(/stillShared/);
@@ -603,9 +655,45 @@ describe('the scheduler on screen', () => {
 
   it('a card whose meeting changes under it closes and says where the meeting is; this member\'s own request is not that', () => {
     const src = container();
-    expect(handler(src, 'showCard')).toMatch(/cardBasis\.current = \{ meeting: meeting \?\? null, openedAt: Date\.now\(\) \};/);
-    const effect = src.slice(src.indexOf('const basis = cardBasis.current;'));
-    expect(effect).toMatch(/^const basis = cardBasis\.current;\s*if \(!finalizing \|\| !basis \|\| !data \|\| confirming \|\| saving\) return;\s*if \(sameMeeting\(basis\.meeting, data\.confirmed, now\)\) return;\s*setFinalizing\(null\);\s*addToast\(cardClosedText\(finalizing, data\.confirmed, zone, now\), 'info'\);/);
+    expect(handler(src, 'showCard')).toMatch(/cardBasis\.current = \{ meeting: meeting \?\? null, seed, openedAt: Date\.now\(\) \};/);
+    const effect = src.slice(src.indexOf('const caughtUp = '));
+    expect(effect).toMatch(/^const caughtUp = isOwnConfirm\(data\.confirmed, ownConfirm\.current, now\);\s*if \(caughtUp\) ownConfirm\.current = null;\s*const basis = cardBasis\.current;\s*if \(!finalizing \|\| !basis \|\| confirming \|\| saving\) return;\s*if \(sameMeeting\(basis\.meeting, data\.confirmed, now\)\) return;/);
+    expect(effect).toMatch(/setFinalizing\(null\);\s*addToast\(cardClosedText\(finalizing, data\.confirmed, zone, now\), 'info'\);/);
+  });
+
+  it('the panel catching up with the member\'s OWN Move is not someone else\'s change: an open card follows it quietly', () => {
+    const src = container();
+    // Remembered when the Move succeeds, before the panel has heard it back…
+    expect(handler(src, 'confirm')).toMatch(/setFinalizing\(null\);\s*ownConfirm\.current = \{ window: key, durationMin, type: meetingKind \};/);
+    // …and a card opened on the meeting as it was takes the new one as its basis (and its length and kind, if untouched),
+    // with no "Your meeting is now on …".
+    const effect = src.slice(src.indexOf('const caughtUp = '));
+    const rebase = effect.slice(effect.indexOf('if (caughtUp) {'), effect.indexOf('setFinalizing(null);'));
+    expect(rebase).toMatch(/cardBasis\.current = \{ \.\.\.basis, meeting: data\.confirmed, seed \};\s*return;/);
+    expect(rebase).toMatch(/const untouched = !basis\.seed \|\| \(durationText === basis\.seed\.duration && meetingKind === basis\.seed\.kind\);/);
+    expect(rebase).not.toMatch(/addToast/);
+  });
+
+  it('a refusal pressing again would only repeat keeps its reason on the card and the button waiting, until the data changes', () => {
+    const src = container();
+    expect(handler(src, 'confirm')).toMatch(/const lasting = lastingRefusal\(err\);\s*if \(lasting\) setRefusal\(\{ slot: key, text: lasting, on: queryClient\.getQueryData<Scheduling>\(schedulingKey\(conversationId\)\) \}\);/);
+    expect(src).toMatch(/refusal && refusal\.slot === finalizing && refusal\.on === data\s*\?\s*refusal\.text/);
+    expect(handler(src, 'showCard')).toMatch(/setRefusal\(null\);/);
+  });
+
+  it('a time revealed on a day just opened is scrolled to last: the reveal runs after the day-open scroll', () => {
+    const scroll = part('useSchedulerScroll.ts');
+    const dayOpen = scroll.indexOf('// Opening a day: scroll its timeline to what matters');
+    const revealAt = scroll.indexOf('// A typed or pointed-at time: bring it into view and flash it');
+    expect(dayOpen).toBeGreaterThan(-1);
+    expect(revealAt).toBeGreaterThan(dayOpen);
+    // useReveal only holds the state; it declares no effect of its own that could run before the day opens.
+    const useReveal = scroll.slice(scroll.indexOf('export function useReveal()'), scroll.indexOf('export type RevealState'));
+    expect(useReveal).not.toMatch(/useEffect|useLayoutEffect/);
+    // And the panel asks for the reveal state before the day-open scroll exists, then hands it over.
+    const panel = part('MeetingScheduler.tsx');
+    expect(panel.indexOf('const revealState = useReveal();')).toBeLessThan(panel.indexOf('useSchedulerScroll({'));
+    expect(panel).toMatch(/useSchedulerScroll\(\{[^}]*revealState,/);
   });
 });
 

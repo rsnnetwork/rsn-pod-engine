@@ -20,51 +20,26 @@ function floorOf(panel: HTMLElement, bar: HTMLElement | null): number {
 }
 
 /**
- * Bring a time into view and flash it so the eye lands on it. `panel`: bring it into the panel's frame too, clear of
- * the Save bar (a typed time); not for a confirm card, which keeps the top of the panel.
+ * The time to bring into view next, and the one flashing. `panel`: bring it into the panel's frame too, clear of the
+ * Save bar (a typed time); not for a confirm card, which keeps the top of the panel. Only the state lives here, so the
+ * actions can ask for a reveal before useSchedulerScroll exists; the scroll itself is useSchedulerScroll's, after a
+ * newly opened day has scrolled to its own first time.
  */
-export function useReveal({ panelRef, gridRef, saveBarRef }: Frame) {
-  const [scrollTo, setScrollTo] = useState<{ key: string; panel: boolean } | null>(null);
+export function useReveal() {
+  const [pending, setPending] = useState<{ key: string; panel: boolean } | null>(null);
   const [flashKey, setFlashKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!scrollTo) return;
-    const box = gridRef.current;
-    const el = box?.querySelector<HTMLElement>(`[data-slot="${scrollTo.key}"]`);
-    if (box && el) {
-      const top = el.offsetTop - 4;
-      const bottom = el.offsetTop + el.offsetHeight + 4;
-      if (top < box.scrollTop || bottom > box.scrollTop + box.clientHeight) {
-        box.scrollTop = Math.max(0, top - Math.round((box.clientHeight - el.offsetHeight) / 2));
-      }
-      // On a small phone the timeline is taller than the panel's frame: scroll
-      // the panel so the time is above the pinned Save bar.
-      const panel = panelRef.current;
-      if (scrollTo.panel && panel) {
-        const frameTop = panel.getBoundingClientRect().top;
-        const floor = floorOf(panel, saveBarRef.current);
-        const cell = el.getBoundingClientRect();
-        if (cell.bottom > floor) panel.scrollTop += cell.bottom - floor + 8;
-        else if (cell.top < frameTop) panel.scrollTop -= frameTop - cell.top + 8;
-      }
-    }
-    setFlashKey(scrollTo.key);
-    setScrollTo(null);
-    const t = setTimeout(() => setFlashKey(null), 1600);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- per time revealed; the refs are stable
-  }, [scrollTo]);
-
   return {
-    flashKey,
+    pending, setPending, flashKey, setFlashKey,
     /** Bring a time into view (and into the panel's frame when `panel`), and flash it. */
-    reveal: (key: string, panel: boolean) => setScrollTo({ key, panel }),
+    reveal: (key: string, panel: boolean) => setPending({ key, panel }),
   };
 }
 
+export type RevealState = ReturnType<typeof useReveal>;
+
 interface Options extends Frame {
   confirmCardRef: RefObject<HTMLDivElement>;
-  reveal: (key: string, panel: boolean) => void;
+  revealState: RevealState;
   /** The day on screen, its times, and whether the scheduling has loaded. */
   dayKey: string;
   daySlots: readonly string[];
@@ -82,7 +57,8 @@ interface Options extends Frame {
 }
 
 export function useSchedulerScroll(o: Options) {
-  const { panelRef, gridRef, saveBarRef, confirmCardRef, bookedKey, focusFirstPick, reveal } = o;
+  const { panelRef, gridRef, saveBarRef, confirmCardRef, bookedKey, focusFirstPick, revealState } = o;
+  const { pending, setPending, setFlashKey, reveal } = revealState;
 
   // Opening a day: scroll its timeline to what matters — a time you both
   // can, else yours, else theirs, else the first time from the working day on.
@@ -112,6 +88,37 @@ export function useSchedulerScroll(o: Options) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- per day opened (and once the times load), not per tap
   }, [o.dayKey, o.loaded]);
+
+  // A typed or pointed-at time: bring it into view and flash it so the eye lands on it. Declared AFTER the day-open
+  // effect above, so it runs after it in the same commit: a card opened on a time on another day ends on that time,
+  // not on the new day's first one.
+  useEffect(() => {
+    if (!pending) return;
+    const box = gridRef.current;
+    const el = box?.querySelector<HTMLElement>(`[data-slot="${pending.key}"]`);
+    if (box && el) {
+      const top = el.offsetTop - 4;
+      const bottom = el.offsetTop + el.offsetHeight + 4;
+      if (top < box.scrollTop || bottom > box.scrollTop + box.clientHeight) {
+        box.scrollTop = Math.max(0, top - Math.round((box.clientHeight - el.offsetHeight) / 2));
+      }
+      // On a small phone the timeline is taller than the panel's frame: scroll
+      // the panel so the time is above the pinned Save bar.
+      const panel = panelRef.current;
+      if (pending.panel && panel) {
+        const frameTop = panel.getBoundingClientRect().top;
+        const floor = floorOf(panel, saveBarRef.current);
+        const cell = el.getBoundingClientRect();
+        if (cell.bottom > floor) panel.scrollTop += cell.bottom - floor + 8;
+        else if (cell.top < frameTop) panel.scrollTop -= frameTop - cell.top + 8;
+      }
+    }
+    setFlashKey(pending.key);
+    setPending(null);
+    const t = setTimeout(() => setFlashKey(null), 1600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- per time revealed; the refs and setters are stable
+  }, [pending]);
 
   // The confirm card opens at the top of the panel. Bring the whole card —
   // its button above all — inside the panel's own frame, clear of the pinned

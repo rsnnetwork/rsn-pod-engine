@@ -9,7 +9,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { errorMessage } from '@/features/reason/errors';
 import {
   NOT_SHARED, cardBlock, cardClosedText, cardSeed, confirmFailure, confirmable, confirmedMessage, dayKeyOf,
-  meetingLength, sameMeeting, saveMessage, saveOutcome, type CellState,
+  isOwnConfirm, lastingRefusal, meetingLength, sameMeeting, saveMessage, saveOutcome, type CellState, type OwnConfirm,
 } from './scheduler-flow';
 import { schedulingKey, type Scheduling } from './scheduling-types';
 import type { SchedulerData } from './useSchedulerData';
@@ -32,15 +32,20 @@ interface ActionOptions {
 export function useSchedulerActions(o: ActionOptions) {
   const { conversationId, zone, me, onClose, model, draft, selectDay, reveal, panelRef, confirmRequest } = o;
   const { data, savedMine, theirSet, bookedKey, standing, now, dataUpdatedAt } = model;
-  const { mine, typed, unsaved, setAsking, durationText, meetingKind, setDurationText, setMeetingKind, forgetDraft, toggle } = draft;
+  const { mine, saved, typed, unsaved, setAsking, durationText, meetingKind, setDurationText, setMeetingKind, forgetDraft, toggle } = draft;
   const addToast = useToastStore(s => s.addToast);
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   // The shared time being confirmed (or the standing meeting being moved to).
   const [finalizing, setFinalizing] = useState<string | null>(null);
-  // The meeting the open card was opened on, and when: the card's choice only holds while that meeting does.
-  const cardBasis = useRef<{ meeting: Scheduling['confirmed']; openedAt: number } | null>(null);
+  // The meeting the open card was opened on, the length and kind it seeded, and when.
+  const cardBasis = useRef<{ meeting: Scheduling['confirmed']; seed: { duration: string; kind: string } | null; openedAt: number } | null>(null);
+  // A refusal pressing again would only repeat: its reason stays on the card, its button waits, until the
+  // scheduling the panel reads changes (a new answer from the server is a new object; the same answer is not).
+  const [refusal, setRefusal] = useState<{ slot: string; text: string; on: Scheduling | undefined } | null>(null);
+  // This member's own Confirm or Move that succeeded, until the panel has heard it back.
+  const ownConfirm = useRef<OwnConfirm | null>(null);
   // Failures said for this card, taken down once a retry succeeds.
   const failureToasts = useRef<string[]>([]);
 
@@ -49,7 +54,8 @@ export function useSchedulerActions(o: ActionOptions) {
   const showCard = (slot: string, meeting: Scheduling['confirmed'] | undefined) => {
     const seed = cardSeed(meeting, Date.now());
     if (seed) { setDurationText(seed.duration); setMeetingKind(seed.kind); }
-    cardBasis.current = { meeting: meeting ?? null, openedAt: Date.now() };
+    cardBasis.current = { meeting: meeting ?? null, seed, openedAt: Date.now() };
+    setRefusal(null);
     setAsking(false);
     setFinalizing(slot);
     selectDay(dayKeyOf(slot, zone));
@@ -60,23 +66,37 @@ export function useSchedulerActions(o: ActionOptions) {
   // changed its length or kind, or cancelled it): the card's choice is gone, and
   // Move would quietly undo their change. Close it and say where the meeting is.
   // This member's own Save or Confirm on its way is not that: its answer decides.
+  // Nor is the panel catching up with this member's own Move: a card opened
+  // before it heard (on the meeting as it was) quietly follows the meeting.
   useEffect(() => {
+    if (!data) return;
+    const caughtUp = isOwnConfirm(data.confirmed, ownConfirm.current, now);
+    if (caughtUp) ownConfirm.current = null;
     const basis = cardBasis.current;
-    if (!finalizing || !basis || !data || confirming || saving) return;
+    if (!finalizing || !basis || confirming || saving) return;
     if (sameMeeting(basis.meeting, data.confirmed, now)) return;
+    if (caughtUp) {
+      const seed = cardSeed(data.confirmed, now);
+      const untouched = !basis.seed || (durationText === basis.seed.duration && meetingKind === basis.seed.kind);
+      if (seed && untouched) { setDurationText(seed.duration); setMeetingKind(seed.kind); }
+      cardBasis.current = { ...basis, meeting: data.confirmed, seed };
+      return;
+    }
     setFinalizing(null);
     addToast(cardClosedText(finalizing, data.confirmed, zone, now), 'info');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- per answer from the server, or once a request settles
   }, [data, confirming, saving]);
 
   // What stands in the way of the card's button, said only when it is true.
-  const cardReason = finalizing
-    ? cardBlock(finalizing, {
-      now,
-      bothSaved: savedMine.has(finalizing) && theirSet.has(finalizing),
-      freshSinceOpen: !!cardBasis.current && dataUpdatedAt > cardBasis.current.openedAt,
-    })
-    : null;
+  const cardReason = !finalizing
+    ? null
+    : refusal && refusal.slot === finalizing && refusal.on === data
+      ? refusal.text
+      : cardBlock(finalizing, {
+        now,
+        bothSaved: savedMine.has(finalizing) && theirSet.has(finalizing),
+        freshSinceOpen: !!cardBasis.current && dataUpdatedAt > cardBasis.current.openedAt,
+      });
 
   // The confirm card for a time both have saved: from a green cell, a chip, or
   // the thread card's time. A time that is no longer shared is said so, not opened.
@@ -135,7 +155,7 @@ export function useSchedulerActions(o: ActionOptions) {
     setSaving(true);
     const known = data.confirmed;
     const windows = typed && !mine.has(typed) ? [...mine, typed] : [...mine];
-    const added = windows.filter(w => !savedMine.has(w));
+    const added = windows.filter(w => !saved.has(w));
     try {
       const res = await api.put(`/dm/conversations/${conversationId}/scheduling/availability`, {
         windows,
@@ -144,10 +164,12 @@ export function useSchedulerActions(o: ActionOptions) {
       });
       const after = res.data.data as Scheduling;
       const outcome = saveOutcome(after, { me, known, added }, Date.now());
-      await refreshThread();
-      forgetDraft();
+      // Said at once, from the save's own answer, which also stands for the member's saved times until the panel
+      // reads the server again; that refresh follows without anyone waiting on it.
+      forgetDraft(after);
       const asks = outcome.kind === 'move' || outcome.kind === 'move-choice';
       addToast(saveMessage(outcome, zone), asks ? 'info' : 'success');
+      void refreshThread();
       if (outcome.kind === 'move') {
         // A save never moves a meeting: the Move card opens on the new time, and the member decides.
         showCard(outcome.to, after.confirmed);
@@ -191,6 +213,7 @@ export function useSchedulerActions(o: ActionOptions) {
       // renders it in its own timezone.
       await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: key, durationMin, type: meetingKind });
       setFinalizing(null);
+      ownConfirm.current = { window: key, durationMin, type: meetingKind };
       dismissFailures();
       addToast(confirmedMessage(key, zone, moving), 'success');
       void refreshThread();
@@ -198,6 +221,9 @@ export function useSchedulerActions(o: ActionOptions) {
       const message = confirmFailure(err, { moving, stays, zone, now: Date.now() });
       failureToasts.current.push(message);
       addToast(message, 'error');
+      // Pressing again would only repeat this refusal: Move waits, its reason on the card, until something changes.
+      const lasting = lastingRefusal(err);
+      if (lasting) setRefusal({ slot: key, text: lasting, on: queryClient.getQueryData<Scheduling>(schedulingKey(conversationId)) });
       void queryClient.invalidateQueries({ queryKey: schedulingKey(conversationId) });
     } finally {
       setConfirming(null);

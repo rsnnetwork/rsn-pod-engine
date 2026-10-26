@@ -60,17 +60,20 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
 
   const model = useSchedulerData(conversationId, zone, selectedDay);
   const { data, query, now, current, visible, savedMine, theirSet, bookedKey, confirmables, standing } = model;
-  const { flashKey, reveal } = useReveal({ panelRef, gridRef, saveBarRef });
-  const draft = useSchedulerDraft({ conversationId, data, savedMine, dayKey: current.dayKey, zone, now, reveal });
-  const { mine, unsaved, asking, addTypedTime } = draft;
+  const revealState = useReveal();
+  const { flashKey, reveal } = revealState;
+  const draft = useSchedulerDraft({
+    conversationId, data, savedMine, dataUpdatedAt: model.dataUpdatedAt, dayKey: current.dayKey, zone, now, reveal,
+  });
+  const { mine, saved, unsaved, asking, addTypedTime } = draft;
   const act = useSchedulerActions({
     conversationId, zone, me, onClose, model, draft, selectDay: setSelectedDay, reveal, panelRef, confirmRequest,
   });
   const { finalizing, confirming, pressCell, requestClose } = act;
   const headline = !data ? 'none' : data.confirmed ? 'confirmed' : confirmables.length > 0 ? 'overlap' : 'none';
   useSchedulerScroll({
-    panelRef, gridRef, saveBarRef, confirmCardRef, reveal, dayKey: current.dayKey, daySlots: current.slots,
-    loaded: !!data, saved: savedMine, theirs: theirSet, bookedKey, zone, focusFirstPick, finalizing, headline,
+    panelRef, gridRef, saveBarRef, confirmCardRef, revealState, dayKey: current.dayKey, daySlots: current.slots,
+    loaded: !!data, saved, theirs: theirSet, bookedKey, zone, focusFirstPick, finalizing, headline,
   });
   useImperativeHandle(ref, () => ({ requestClose }));
   const [showAllOverlap, setShowAllOverlap] = useState(false);
@@ -124,7 +127,7 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
               onKind={draft.setMeetingKind}
               busy={confirming !== null}
               sendingThis={confirming === finalizing}
-              canRemove={savedMine.has(finalizing)}
+              canRemove={saved.has(finalizing)}
               onConfirm={() => act.confirm(finalizing)}
               onCancel={() => act.setFinalizing(null)}
               onRemove={() => act.removeTime(finalizing)}
@@ -153,7 +156,7 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
           slots={visible}
           labels={cellLabels(visible, zone)}
           mine={mine}
-          saved={savedMine}
+          saved={saved}
           theirs={theirSet}
           booked={bookedKey}
           flashKey={flashKey}

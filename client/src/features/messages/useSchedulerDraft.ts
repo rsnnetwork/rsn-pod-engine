@@ -13,6 +13,8 @@ interface DraftOptions {
   conversationId: string;
   data: Scheduling | undefined;
   savedMine: ReadonlySet<string>;
+  /** When the server last answered a read of the scheduling. */
+  dataUpdatedAt: number;
   /** The day on screen: a typed time is a time on it. */
   dayKey: string;
   zone: string;
@@ -20,7 +22,7 @@ interface DraftOptions {
   reveal: (key: string, panel: boolean) => void;
 }
 
-export function useSchedulerDraft({ conversationId, data, savedMine, dayKey, zone, now, reveal }: DraftOptions) {
+export function useSchedulerDraft({ conversationId, data, savedMine, dataUpdatedAt, dayKey, zone, now, reveal }: DraftOptions) {
   const addToast = useToastStore(s => s.addToast);
   const [staged, setStaged] = useState<Set<string> | null>(() => drafts.get(conversationId)?.staged ?? null);
   const [durationText, setDurationText] = useState(() => drafts.get(conversationId)?.duration ?? '30');
@@ -28,6 +30,9 @@ export function useSchedulerDraft({ conversationId, data, savedMine, dayKey, zon
   const [customTime, setCustomTime] = useState('');
   // "Send your times?" is showing: someone tried to close the panel with times not sent.
   const [asking, setAsking] = useState(false);
+  // The member's own saved times as their last save's answer gives them, until a read newer than that answer lands:
+  // the save does not wait for the panel's refresh, and the picks must not flick back to the old ones meanwhile.
+  const [answered, setAnswered] = useState<{ mine: Set<string>; at: number } | null>(null);
   const draftRef = useRef({ staged, duration: durationText, kind: meetingKind });
   draftRef.current = { staged, duration: durationText, kind: meetingKind };
   useEffect(() => () => { drafts.set(conversationId, draftRef.current); }, [conversationId]);
@@ -39,13 +44,14 @@ export function useSchedulerDraft({ conversationId, data, savedMine, dayKey, zon
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new answer from the server re-stages; staged is what this sets
   }, [data]);
 
-  const mine = staged ?? savedMine;
+  const saved: ReadonlySet<string> = answered && answered.at > dataUpdatedAt ? answered.mine : savedMine;
+  const mine = staged ?? saved;
   // A time typed into "Another time" counts as picked as soon as it is a time:
   // it is added on blur and on Enter, and Save carries it if neither came.
   const typedKey = customTime ? typedSlot(dayKey, customTime, zone) : null;
   const typed = typedKey && !hasStarted(typedKey, now) && !mine.has(typedKey) ? typedKey : null;
   const stagedChanged = staged !== null &&
-    (staged.size !== savedMine.size || [...savedMine].some(w => !staged.has(w)));
+    (staged.size !== saved.size || [...saved].some(w => !staged.has(w)));
   const unsaved = stagedChanged || typed !== null;
 
   const toggle = (key: string) => {
@@ -74,17 +80,19 @@ export function useSchedulerDraft({ conversationId, data, savedMine, dayKey, zon
     reveal(key, true);
   };
 
-  // Forget what was not sent: this panel's state and the draft kept for it.
-  const forgetDraft = () => {
+  // Forget what was not sent: this panel's state and the draft kept for it. After a save, its answer stands for what
+  // the member has saved until the panel reads the server again.
+  const forgetDraft = (answer?: Scheduling) => {
     setStaged(null);
     setCustomTime('');
     setAsking(false);
+    setAnswered(answer ? { mine: new Set(answer.mine.filter(isSlotKey)), at: Date.now() } : null);
     drafts.delete(conversationId);
     draftRef.current = { staged: null, duration: durationText, kind: meetingKind };
   };
 
   return {
-    mine, typed, unsaved, asking, setAsking, customTime, setCustomTime,
+    mine, saved, typed, unsaved, asking, setAsking, customTime, setCustomTime,
     durationText, setDurationText, meetingKind, setMeetingKind,
     toggle, unpick, addTypedTime, forgetDraft,
   };
