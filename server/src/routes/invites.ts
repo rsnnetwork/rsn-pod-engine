@@ -121,6 +121,9 @@ router.post(
     try {
       const body: BatchInviteBody = req.body;
       const batch = await inviteCandidates.createInvitesBatch({ userId: req.user!.userId, role: req.user!.role }, body);
+      // The emails go out after this answer, two a second at most (see createInvitesBatch). Nothing here waits for them;
+      // the promise never rejects, and says so by logging each failure itself.
+      batch.delivery.catch(() => {});
       if (batch.counts.invited > 0) {
         const { podId, sessionId } = batch.target;
         if (sessionId) {
@@ -247,30 +250,24 @@ router.get(
       const { sessionId } = req.params;
       const status = req.query.status as string | undefined;
 
-      // Only the host, a co-host or an admin can view session invites (26 Oct 2026: co-hosts send them now, so
-      // they see who has answered)
+      // Only the host, a co-host or an admin can view an event's invites (26 Oct 2026: co-hosts send them now, so
+      // they see who has answered).
       const sessionResult = await query<{ host_user_id: string }>(
         `SELECT host_user_id FROM sessions WHERE id = $1`, [sessionId]
       );
       if (sessionResult.rows.length === 0) {
-        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Session not found' } });
+        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Event not found' } });
       }
-      const isHost = sessionResult.rows[0].host_user_id === req.user!.userId;
-      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
-      let isCohost = false;
-      if (!isHost && !isAdmin) {
-        const cohost = await query(
-          `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
-          [sessionId, req.user!.userId]
-        );
-        isCohost = cohost.rows.length > 0;
-      }
-      if (!isHost && !isAdmin && !isCohost) {
-        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can view session invites' } });
+      const role = await inviteService.eventInviteRole(sessionId, req.user!.userId, inviteService.isAdminRole(req.user!.role));
+      if (!role) {
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can view this event\'s invites' } });
       }
 
       const invites = await inviteService.listSessionInvites(sessionId, status);
-      const response: ApiResponse = { success: true, data: invites };
+      // The host and admins see every address, as they always did. A co-host sees one only on the invites they sent
+      // themselves: the platform's member lists carry no emails, so on the rest a label stands in its place.
+      const data = role === 'cohost' ? inviteService.hideOthersAddresses(invites, req.user!.userId) : invites;
+      const response: ApiResponse = { success: true, data };
       return res.json(response);
     } catch (err) {
       return next(err);
@@ -316,35 +313,42 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const invite = await query<{ id: string; invitee_email: string; session_id: string; pod_id: string; status: string; code: string }>(
-        `SELECT id, invitee_email, session_id, pod_id, status, code FROM invites WHERE id = $1`, [req.params.id]
+      const invite = await query<{ id: string; invitee_email: string; session_id: string; pod_id: string; status: string; code: string; expires_at: string | null; inviter_id: string }>(
+        `SELECT id, invitee_email, session_id, pod_id, status, code, expires_at, inviter_id FROM invites WHERE id = $1`, [req.params.id]
       );
       if (invite.rows.length === 0) {
         return res.status(404).json({ success: false, error: { code: 'INVITE_NOT_FOUND', message: 'Invite not found' } });
       }
       const inv = invite.rows[0];
+
+      // Whoever runs the invite's event (its host, a co-host, an admin) or pod (its director, host, an admin) can
+      // remind, whoever sent the invite (fix round 1: a co-host sends event invites, and the host reminds them too).
+      // Asked before anything is said about the invite, so someone who may not learns nothing of it.
+      const isAdmin = inviteService.isAdminRole(req.user!.role);
+      if (inv.session_id) {
+        if (!(await inviteService.eventInviteRole(inv.session_id, req.user!.userId, isAdmin))) {
+          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can send reminders' } });
+        }
+      } else if (inv.pod_id) {
+        if (!(await inviteService.mayRunPodInvites(inv.pod_id, req.user!.userId, isAdmin))) {
+          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only pod directors can send reminders' } });
+        }
+      } else if (inv.inviter_id !== req.user!.userId && !isAdmin) {
+        // A platform or circle invite belongs to the person who sent it. (This route used to check nothing for them:
+        // anyone signed in who knew the invite's id could have it re-sent.)
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the person who sent an invite can send reminders for it' } });
+      }
+
       if (inv.status !== 'pending') {
         return res.status(400).json({ success: false, error: { code: 'INVITE_NOT_PENDING', message: 'Invite is no longer pending' } });
       }
-
-      // Only host/director/admin can remind
-      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
-      if (inv.session_id) {
-        const sessionResult = await query<{ host_user_id: string }>(
-          `SELECT host_user_id FROM sessions WHERE id = $1`, [inv.session_id]
-        );
-        const isHost = sessionResult.rows[0]?.host_user_id === req.user!.userId;
-        if (!isHost && !isAdmin) {
-          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can send reminders' } });
-        }
-      } else if (inv.pod_id) {
-        const podMemberResult = await query<{ role: string }>(
-          `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`, [inv.pod_id, req.user!.userId]
-        );
-        const isDirector = podMemberResult.rows[0]?.role === 'director' || podMemberResult.rows[0]?.role === 'host';
-        if (!isDirector && !isAdmin) {
-          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only pod directors can send reminders' } });
-        }
+      // An invite whose expiry has passed keeps the status 'pending', but its link is dead: no reminder for it.
+      if (inv.expires_at && new Date(inv.expires_at).getTime() <= Date.now()) {
+        return res.status(400).json({ success: false, error: { code: 'INVITE_EXPIRED', message: 'This invite has expired' } });
+      }
+      // A closed account, or anyone blocked either way with the sender, is never emailed: one neutral sentence.
+      if (inv.invitee_email && (await inviteService.unreachableAddresses(req.user!.userId, [inv.invitee_email])).size > 0) {
+        return res.status(409).json({ success: false, error: { code: 'INVITE_NOT_PERMITTED', message: inviteService.CANNOT_BE_INVITED } });
       }
 
       // Re-send invite email
@@ -410,26 +414,30 @@ router.post(
     try {
       const { sessionId } = req.params;
 
-      // Only host/admin can bulk remind
+      // Only the host, a co-host or an admin can bulk remind (26 Oct 2026: co-hosts send event invites, so they remind them)
       const sessionResult = await query<{ host_user_id: string; title: string; scheduled_at: string | null; config: any; event_format?: string | null }>(
         `SELECT host_user_id, title, scheduled_at, config, event_format FROM sessions WHERE id = $1`, [sessionId]
       );
       if (sessionResult.rows.length === 0) {
-        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Session not found' } });
+        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Event not found' } });
       }
       const session = sessionResult.rows[0];
-      const isHost = session.host_user_id === req.user!.userId;
-      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
-      if (!isHost && !isAdmin) {
-        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can send reminders' } });
+      if (!(await inviteService.eventInviteRole(sessionId, req.user!.userId, inviteService.isAdminRole(req.user!.role)))) {
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can send reminders' } });
       }
 
-      // Get all pending invites for this session (only those with an email to send to)
-      const pendingInvites = await query<{ id: string; invitee_email: string; code: string }>(
+      // Get all pending invites for this session (only those with an email to send to). An invite whose expiry has
+      // passed keeps the status 'pending' but its link is dead, so nobody is reminded with it.
+      const allPending = await query<{ id: string; invitee_email: string; code: string }>(
         `SELECT id, invitee_email, code FROM invites
-         WHERE session_id = $1 AND status = 'pending' AND invitee_email IS NOT NULL AND invitee_email != ''`,
+         WHERE session_id = $1 AND status = 'pending' AND invitee_email IS NOT NULL AND invitee_email != ''
+           AND (expires_at IS NULL OR expires_at > NOW())`,
         [sessionId]
       );
+      // A closed account, or anyone blocked either way with the sender, is never emailed. They are left out without
+      // a word (and not counted), so a block is never revealed.
+      const unreachable = await inviteService.unreachableAddresses(req.user!.userId, allPending.rows.map((inv) => inv.invitee_email));
+      const pendingInvites = { rows: allPending.rows.filter((inv) => !unreachable.has(inv.invitee_email.toLowerCase())) };
 
       if (pendingInvites.rows.length === 0) {
         return res.json({ success: true, data: { reminded: 0 } });
@@ -748,7 +756,7 @@ router.delete(
   auditMiddleware('revoke_invite', 'invite'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const revoked = await inviteService.revokeInvite(req.params.id, req.user!.userId);
+      const revoked = await inviteService.revokeInvite(req.params.id, req.user!.userId, req.user!.role);
       // Bug 30 (19 May Ali) — same fanout so the pending-invites surface
       // repaints everywhere on revoke.
       if (revoked.podId) {
@@ -775,7 +783,11 @@ const bulkInviteSchema = z.object({
 // Someone who already has a pending invite, is already going, or is already in the pod is skipped, not an error.
 // (The route used to look for 'INVITE_EXISTS' and 'CONFLICT', which nothing throws, so every duplicate was
 // counted as an error: audit 03, defect 7.)
-const BULK_SKIP_CODES: ReadonlySet<string> = new Set(['DUPLICATE_INVITE', 'SESSION_ALREADY_REGISTERED', 'POD_MEMBER_EXISTS']);
+// A person who cannot be invited at all (a closed account, or a block either way) is skipped the same way, with no
+// word about why: INVITE_NOT_PERMITTED is the one code createInvite gives for every such case.
+const BULK_SKIP_CODES: ReadonlySet<string> = new Set([
+  'DUPLICATE_INVITE', 'SESSION_ALREADY_REGISTERED', 'POD_MEMBER_EXISTS', 'INVITE_NOT_PERMITTED',
+]);
 
 router.post(
   '/bulk',

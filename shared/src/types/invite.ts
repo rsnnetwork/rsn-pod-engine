@@ -89,6 +89,8 @@ export type InviteBatchOutcome =
   | 'already_member'
   | 'already_going'
   | 'already_invited'
+  /** They said no to an invite to this very pod or event: a batch never invites them again. */
+  | 'declined'
   | 'not_allowed'
   | 'failed';
 

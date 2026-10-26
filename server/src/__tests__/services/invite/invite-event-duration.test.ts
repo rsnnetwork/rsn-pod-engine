@@ -74,6 +74,8 @@ function world(eventRow: Record<string, unknown>) {
       return { rows: [{ id: 'inv-1', invitee_email: 'guest@example.com', code: 'CODE1' }] };
     }
     if (/SELECT host_user_id FROM sessions/.test(sql)) return { rows: [{ host_user_id: HOST }] };
+    // Who runs the event's invites (the host here): the reminders ask it since a co-host may remind too.
+    if (/AS is_host/.test(sql)) return { rows: [{ is_host: true, is_cohost: false }] };
     if (/FROM sessions WHERE id = \$1/.test(sql)) return { rows: [eventRow] };
     if (/INSERT INTO invites/.test(sql)) return { rows: [{ id: 'inv-1', code: 'CODE1' }] };
     if (/display_name/.test(sql)) return { rows: [{ displayName: 'Claus', display_name: 'Claus', email: 'c@example.com' }] };

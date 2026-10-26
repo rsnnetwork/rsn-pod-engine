@@ -30,7 +30,23 @@ jest.mock('../../db', () => ({
   transaction: jest.fn(),
   __esModule: true,
 }));
-jest.mock('../../services/invite/invite.service');
+// The invite service is stood in, except for the small pure helpers the routes lean on (who is an admin, how an address
+// is hidden, the one sentence for a person who cannot be invited): those are the real ones.
+jest.mock('../../services/invite/invite.service', () => {
+  const actual = jest.requireActual('../../services/invite/invite.service');
+  return {
+    ...(jest.createMockFromModule('../../services/invite/invite.service') as Record<string, unknown>),
+    isAdminRole: actual.isAdminRole,
+    maskEmail: actual.maskEmail,
+    hideOthersAddresses: actual.hideOthersAddresses,
+    CANNOT_BE_INVITED: actual.CANNOT_BE_INVITED,
+  };
+});
+const mockSendInviteEmail = jest.fn();
+jest.mock('../../services/email/email.service', () => ({
+  sendInviteEmail: (...args: unknown[]) => mockSendInviteEmail(...args),
+  __esModule: true,
+}));
 
 const mockCandidates = jest.fn();
 const mockBatch = jest.fn();
@@ -87,7 +103,16 @@ beforeEach(() => {
   mockFanoutPod.mockClear();
   mockFanoutSession.mockClear();
   mockEmitEntities.mockClear();
+  mockSendInviteEmail.mockReset();
+  mockSendInviteEmail.mockResolvedValue(undefined);
   (inviteService.createInvite as jest.Mock).mockReset();
+  // Who runs an event's or a pod's invites: an admin, and nobody else, until a test says otherwise.
+  (inviteService.eventInviteRole as jest.Mock).mockReset();
+  (inviteService.eventInviteRole as jest.Mock).mockImplementation(async (_sessionId: string, _userId: string, isAdmin: boolean) => (isAdmin ? 'admin' : null));
+  (inviteService.mayRunPodInvites as jest.Mock).mockReset();
+  (inviteService.mayRunPodInvites as jest.Mock).mockImplementation(async (_podId: string, _userId: string, isAdmin: boolean) => isAdmin);
+  (inviteService.unreachableAddresses as jest.Mock).mockReset();
+  (inviteService.unreachableAddresses as jest.Mock).mockResolvedValue(new Set<string>());
 });
 
 type Layer = { route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: unknown }> } };
@@ -219,11 +244,12 @@ describe('GET /invites/candidates', () => {
 // ═════════════════════════════════════════════════════════════════════════════════════════════════
 describe('POST /invites/batch', () => {
   const counts = (over: Record<string, number> = {}) =>
-    ({ invited: 0, already_member: 0, already_going: 0, already_invited: 0, not_allowed: 0, failed: 0, ...over });
+    ({ invited: 0, already_member: 0, already_going: 0, already_invited: 0, declined: 0, not_allowed: 0, failed: 0, ...over });
   const summary = (over: Record<string, unknown> = {}) => ({
     results: [{ userId: PERSON(1), outcome: 'invited', inviteId: 'inv-1' }],
     counts: counts({ invited: 1 }),
     target: { podId: POD, sessionId: null },
+    delivery: Promise.resolve(),
     ...over,
   });
   // A batch is limited to 20 an hour per member, refused ones included, so each request here is a member of its own.
@@ -238,6 +264,25 @@ describe('POST /invites/batch', () => {
       success: true,
       data: { results: [{ userId: PERSON(1), outcome: 'invited', inviteId: 'inv-1' }], counts: counts({ invited: 1 }) },
     });
+  });
+
+  it('answers without waiting for the emails (they go out after the answer), and sends none of the service\'s bookkeeping', async () => {
+    mockBatch.mockResolvedValueOnce(summary({ delivery: new Promise<void>(() => { /* never settles */ }) }));
+    const res = await send({ type: 'pod', podId: POD, inviteeUserIds: [PERSON(1)] });
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.data).sort()).toEqual(['counts', 'results']);
+  });
+
+  it('tells the outcome of someone who declined, as the service says it', async () => {
+    mockBatch.mockResolvedValueOnce(summary({
+      results: [{ userId: PERSON(1), outcome: 'declined', inviteId: 'inv-old' }],
+      counts: counts({ declined: 1 }),
+    }));
+    const res = await send({ type: 'pod', podId: POD, inviteeUserIds: [PERSON(1)] });
+    expect(res.body.data.results).toEqual([{ userId: PERSON(1), outcome: 'declined', inviteId: 'inv-old' }]);
+    expect(res.body.data.counts.declined).toBe(1);
+    // Nobody was invited, so no screen is told anything.
+    expect(mockFanoutPod).not.toHaveBeenCalled();
   });
 
   it('asks the service as the member who is signed in, with the ids in lower case', async () => {
@@ -422,6 +467,15 @@ describe('the calls production\'s client makes, unchanged', () => {
     expect(res.body.error.code).toBe('DUPLICATE_INVITE');
   });
 
+  it('POST /invites refuses a closed account or a block (either way) with a 409 and one neutral sentence, and tells no screen', async () => {
+    (inviteService.createInvite as jest.Mock).mockRejectedValue(new AppError(409, 'INVITE_NOT_PERMITTED', "This person can't be invited."));
+    const res = await request(app).post('/invites').set(auth()).send({ type: 'pod', podId: POD, inviteeEmail: 'guest@example.com' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatchObject({ code: 'INVITE_NOT_PERMITTED', message: "This person can't be invited." });
+    expect(mockFanoutPod).not.toHaveBeenCalled();
+    expect(mockFanoutSession).not.toHaveBeenCalled();
+  });
+
   describe('POST /invites/bulk', () => {
     const emails = ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'e@example.com'];
     const bulk = () => request(app).post('/invites/bulk').set(auth()).send({ sessionId: EVENT, emails });
@@ -447,6 +501,21 @@ describe('the calls production\'s client makes, unchanged', () => {
         /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ pod_id: EVENT_POD }] });
       const res = await bulk();
       expect(res.body.data).toEqual({ sent: 1, skipped: 3, errors: 1 });
+    });
+
+    // Fix round 1 (ruling): a closed account or a block (either way) is never invited. The pod member list that feeds
+    // "Invite All" does not filter blocks, so the invite itself refuses, and the bulk call skips them without a word
+    // about why: a block is never revealed.
+    it('counts a person who cannot be invited (closed, or blocked either way) as skipped, with nothing in the answer to say why', async () => {
+      (inviteService.createInvite as jest.Mock)
+        .mockRejectedValueOnce(new AppError(409, 'INVITE_NOT_PERMITTED', "This person can't be invited."))
+        .mockRejectedValueOnce(new AppError(409, 'INVITE_NOT_PERMITTED', "This person can't be invited."))
+        .mockResolvedValue({ id: 'i' });
+      mockDb.mockImplementation(async (sql: string) =>
+        /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ pod_id: EVENT_POD }] });
+      const res = await bulk();
+      expect(res.body.data).toEqual({ sent: 3, skipped: 2, errors: 0 });
+      expect(Object.keys(res.body.data).sort()).toEqual(['errors', 'sent', 'skipped']);
     });
 
     it('tells the event\'s screens once if anything went out', async () => {
@@ -490,34 +559,288 @@ describe('declining and withdrawing tell the invite list of the event too', () =
 });
 
 describe('GET /invites/session/:sessionId: who may read the list of an event\'s invites', () => {
-  const listAs = (sub: string, role: string, answers: { host: string; cohost: boolean }) => {
+  const row = (over: Record<string, unknown>) => ({
+    id: 'i1', code: 'c1', inviteeEmail: 'anna.smith@example.com', inviteeName: null, inviteeUserId: null, inviterId: 'u-host',
+    status: 'pending', createdAt: '2026-10-21T08:00:00.000Z', declinedAt: null, maxUses: 1, useCount: 0, expiresAt: null, ...over,
+  });
+  const listAs = (sub: string, role: string, relation: 'host' | 'cohost' | null, rows: unknown[] = [row({})], eventExists = true) => {
     mockDb.mockImplementation(async (sql: string) => {
       if (/SELECT status FROM users/.test(sql)) return { rows: [{ status: 'active' }] };
-      if (/SELECT host_user_id FROM sessions/.test(sql)) return { rows: [{ host_user_id: answers.host }] };
-      if (/FROM session_cohosts/.test(sql)) return { rows: answers.cohost ? [{ '?column?': 1 }] : [] };
+      if (/SELECT host_user_id FROM sessions/.test(sql)) return { rows: eventExists ? [{ host_user_id: 'u-host' }] : [] };
       return { rows: [] };
     });
-    (inviteService.listSessionInvites as jest.Mock).mockResolvedValue([{ id: 'i1', status: 'revoked', declinedAt: '2026-10-21T08:00:00.000Z', inviteeUserId: PERSON(1) }]);
-    return request(app).get(`/invites/session/${EVENT}?status=revoked`).set(auth(sub, role));
+    (inviteService.eventInviteRole as jest.Mock).mockImplementation(async (_s: string, _u: string, isAdmin: boolean) => (isAdmin ? 'admin' : relation));
+    (inviteService.listSessionInvites as jest.Mock).mockResolvedValue(rows);
+    return request(app).get(`/invites/session/${EVENT}?status=pending`).set(auth(sub, role));
   };
 
-  it('the host reads it', async () => {
-    expect((await listAs('u-host', 'member', { host: 'u-host', cohost: false })).status).toBe(200);
-  });
-
-  it('a co-host reads it: they send the invites, so they see who answered', async () => {
-    const res = await listAs('u-cohost', 'member', { host: 'u-host', cohost: true });
+  it('the host reads it, with every address', async () => {
+    const res = await listAs('u-host', 'member', 'host', [row({ inviterId: 'u-cohost' }), row({ id: 'i2', inviteeEmail: 'bob@example.com' })]);
     expect(res.status).toBe(200);
-    expect(res.body.data[0]).toMatchObject({ declinedAt: '2026-10-21T08:00:00.000Z', inviteeUserId: PERSON(1) });
+    expect(res.body.data.map((r: { inviteeEmail: string }) => r.inviteeEmail)).toEqual(['anna.smith@example.com', 'bob@example.com']);
+    expect(inviteService.listSessionInvites).toHaveBeenCalledWith(EVENT, 'pending');
   });
 
-  it('an admin reads it', async () => {
-    expect((await listAs('u-admin', 'admin', { host: 'u-host', cohost: false })).status).toBe(200);
+  it('an admin reads it, with every address', async () => {
+    const res = await listAs('u-admin', 'admin', null, [row({ inviterId: 'u-cohost' })]);
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].inviteeEmail).toBe('anna.smith@example.com');
   });
 
-  it('anyone else is refused', async () => {
-    const res = await listAs('u-stranger', 'member', { host: 'u-host', cohost: false });
+  // Fix round 1 (ruling): the platform's member lists carry no emails; a co-host sees an address only on the invites
+  // they sent themselves.
+  it('a co-host reads it, with their own invites\' addresses and a label in place of everyone else\'s', async () => {
+    const res = await listAs('u-cohost', 'member', 'cohost', [
+      row({ id: 'mine', inviterId: 'u-cohost', inviteeEmail: 'mine@example.com' }),
+      row({ id: 'members', inviteeEmail: 'anna.smith@example.com', inviteeName: 'Anna Smith', inviteeUserId: PERSON(1) }),
+      row({ id: 'guest', inviteeEmail: 'bob@mail.example.org' }),
+      row({ id: 'link', inviteeEmail: null, code: 'OPENLINK' }),
+    ]);
+    expect(res.status).toBe(200);
+    const byId = Object.fromEntries(res.body.data.map((r: { id: string }) => [r.id, r]));
+    expect(byId.mine.inviteeEmail).toBe('mine@example.com');
+    expect(byId.members.inviteeEmail).toBe('Anna Smith');
+    expect(byId.guest.inviteeEmail).toBe('b•••@mail.example.org');
+    // An open link is still told apart from a personal invite by having no address (the live-event Invite modal reuses it).
+    expect(byId.link.inviteeEmail).toBeNull();
+    expect(JSON.stringify(res.body)).not.toMatch(/anna\.smith@|bob@/);
+  });
+
+  it('a co-host\'s answer still carries what the new screens need: who answered, who the member is, who sent it', async () => {
+    const res = await listAs('u-cohost', 'member', 'cohost', [
+      row({ inviterId: 'u-host', status: 'revoked', declinedAt: '2026-10-21T09:00:00.000Z', inviteeUserId: PERSON(1), inviteeName: 'Anna Smith' }),
+    ]);
+    expect(res.body.data[0]).toMatchObject({ declinedAt: '2026-10-21T09:00:00.000Z', inviteeUserId: PERSON(1), inviterId: 'u-host', inviteeName: 'Anna Smith' });
+  });
+
+  it('anyone else is refused, in the words an event\'s organiser reads, and nothing is listed', async () => {
+    const res = await listAs('u-stranger', 'member', null);
     expect(res.status).toBe(403);
+    expect(res.body.error.message).toBe('Only the host or a co-host can view this event\'s invites');
     expect(inviteService.listSessionInvites).not.toHaveBeenCalled();
+  });
+
+  it('an event that does not exist is a 404 that says event', async () => {
+    const res = await listAs('u-host', 'member', 'host', [], false);
+    expect(res.status).toBe(404);
+    expect(res.body.error.message).toBe('Event not found');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// Fix round 1: whoever runs an event's invites can remind and withdraw any of them
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+describe('POST /invites/:id/remind', () => {
+  const INVITE = '11111111-1111-4111-8111-111111111111';
+  const inviteRow = (over: Record<string, unknown> = {}) => ({
+    id: INVITE, invitee_email: 'guest@example.com', session_id: EVENT, pod_id: null, status: 'pending', code: 'CODE1', expires_at: null, ...over,
+  });
+  const given = (row: Record<string, unknown> | null) => {
+    mockDb.mockImplementation(async (sql: string) => {
+      if (/SELECT status FROM users/.test(sql)) return { rows: [{ status: 'active' }] };
+      if (/FROM invites WHERE id = \$1/.test(sql)) return { rows: row ? [row] : [] };
+      if (/display_name AS "displayName"/.test(sql)) return { rows: [{ displayName: 'Organiser' }] };
+      if (/SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions/.test(sql)) {
+        return { rows: [{ title: 'Kickoff', scheduled_at: null, host_user_id: 'u-host', config: {}, event_format: 'video_meeting' }] };
+      }
+      return { rows: [] };
+    });
+  };
+  const eventRole = (role: 'host' | 'cohost' | null) =>
+    (inviteService.eventInviteRole as jest.Mock).mockImplementation(async (_s: string, _u: string, isAdmin: boolean) => (isAdmin ? 'admin' : role));
+  const remind = (sub = 'u-organiser', role = 'member') => request(app).post(`/invites/${INVITE}/remind`).set(auth(sub, role));
+
+  it.each([['the host', 'host'], ['a co-host', 'cohost']] as const)('%s reminds an invite to their event, whoever sent it', async (_who, relation) => {
+    given(inviteRow());
+    eventRole(relation);
+    const res = await remind('u-someone');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ reminded: true });
+    expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
+    expect(mockSendInviteEmail.mock.calls[0][0]).toBe('guest@example.com');
+  });
+
+  it('an admin reminds any event\'s', async () => {
+    given(inviteRow());
+    const res = await remind('u-admin', 'admin');
+    expect(res.status).toBe(200);
+    expect(inviteService.eventInviteRole).toHaveBeenCalledWith(EVENT, 'u-admin', true);
+  });
+
+  it('the role is asked about the event the INVITE belongs to: a co-host of another event, or an ordinary member, is refused and nothing is sent', async () => {
+    given(inviteRow());
+    eventRole(null);
+    const res = await remind('u-cohost-of-another-event');
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toBe('Only the host or a co-host can send reminders');
+    expect(inviteService.eventInviteRole).toHaveBeenCalledWith(EVENT, 'u-cohost-of-another-event', false);
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
+  });
+
+  it('is refused for someone who may not, before it says anything about the invite (not whether it is still pending)', async () => {
+    given(inviteRow({ status: 'accepted' }));
+    eventRole(null);
+    expect((await remind('u-ordinary')).status).toBe(403);
+  });
+
+  it('an invite that is no longer pending is a 400', async () => {
+    given(inviteRow({ status: 'revoked' }));
+    eventRole('host');
+    const res = await remind('u-host');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVITE_NOT_PENDING');
+  });
+
+  it('an invite whose expiry has passed is not reminded: the link in the email would be dead', async () => {
+    given(inviteRow({ expires_at: new Date(Date.now() - 60_000).toISOString() }));
+    eventRole('host');
+    const res = await remind('u-host');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatchObject({ code: 'INVITE_EXPIRED', message: 'This invite has expired' });
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
+  });
+
+  it('an invite that still has time is reminded', async () => {
+    given(inviteRow({ expires_at: new Date(Date.now() + 3_600_000).toISOString() }));
+    eventRole('host');
+    expect((await remind('u-host')).status).toBe(200);
+  });
+
+  it('a person who cannot be invited (closed, or blocked either way) is not emailed: 409 and the one neutral sentence', async () => {
+    given(inviteRow());
+    eventRole('host');
+    (inviteService.unreachableAddresses as jest.Mock).mockResolvedValue(new Set(['guest@example.com']));
+    const res = await remind('u-host');
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatchObject({ code: 'INVITE_NOT_PERMITTED', message: "This person can't be invited." });
+    expect(inviteService.unreachableAddresses).toHaveBeenCalledWith('u-host', ['guest@example.com']);
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
+  });
+
+  it('an invite that does not exist is a 404', async () => {
+    given(null);
+    expect((await remind('u-host')).status).toBe(404);
+  });
+
+  describe('a pod\'s invite', () => {
+    it.each([['a director or host', true, 200], ['an ordinary member', false, 403]] as const)('%s: %i', async (_who, mayRun, status) => {
+      given(inviteRow({ session_id: null, pod_id: POD }));
+      (inviteService.mayRunPodInvites as jest.Mock).mockResolvedValue(mayRun);
+      const res = await remind('u-someone');
+      expect(res.status).toBe(status);
+      expect(inviteService.mayRunPodInvites).toHaveBeenCalledWith(POD, 'u-someone', false);
+      if (status === 403) expect(res.body.error.message).toBe('Only pod directors can send reminders');
+    });
+  });
+});
+
+describe('POST /invites/remind-all/:sessionId', () => {
+  const pending = [
+    { id: 'a', invitee_email: 'a@example.com', code: 'CA' },
+    { id: 'b', invitee_email: 'b@example.com', code: 'CB' },
+    { id: 'c', invitee_email: 'c@example.com', code: 'CC' },
+  ];
+  let pendingSql = '';
+  const given = (opts: { eventExists?: boolean; rows?: typeof pending } = {}) => {
+    pendingSql = '';
+    mockDb.mockImplementation(async (sql: string) => {
+      const text = sql.replace(/\s+/g, ' ').trim();
+      if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+      if (/FROM sessions WHERE id = \$1/.test(text) && /host_user_id, title/.test(text)) {
+        return { rows: opts.eventExists === false ? [] : [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: null, config: {}, event_format: 'video_meeting' }] };
+      }
+      if (/FROM invites WHERE session_id = \$1/.test(text)) { pendingSql = text; return { rows: opts.rows ?? pending }; }
+      if (/display_name AS "displayName"/.test(text)) return { rows: [{ displayName: 'Organiser' }] };
+      return { rows: [] };
+    });
+  };
+  const eventRole = (role: 'host' | 'cohost' | null) =>
+    (inviteService.eventInviteRole as jest.Mock).mockImplementation(async (_s: string, _u: string, isAdmin: boolean) => (isAdmin ? 'admin' : role));
+  const remindAll = (sub = 'u-organiser', role = 'member') => request(app).post(`/invites/remind-all/${EVENT}`).set(auth(sub, role));
+
+  it.each([['the host', 'host'], ['a co-host', 'cohost']] as const)('%s reminds everyone with a live pending invite', async (_who, relation) => {
+    given();
+    eventRole(relation);
+    const res = await remindAll('u-someone');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ reminded: 3, total: 3 });
+    expect(mockSendInviteEmail).toHaveBeenCalledTimes(3);
+  });
+
+  it('an admin may', async () => {
+    given();
+    expect((await remindAll('u-admin', 'admin')).status).toBe(200);
+    expect(inviteService.eventInviteRole).toHaveBeenCalledWith(EVENT, 'u-admin', true);
+  });
+
+  it('an ordinary member, or a co-host of another event, may not, and nothing is sent', async () => {
+    given();
+    eventRole(null);
+    const res = await remindAll('u-cohost-of-another-event');
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toBe('Only the host or a co-host can send reminders');
+    expect(inviteService.eventInviteRole).toHaveBeenCalledWith(EVENT, 'u-cohost-of-another-event', false);
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
+  });
+
+  it('leaves out the invites whose expiry has passed, in the query itself', async () => {
+    given();
+    eventRole('host');
+    await remindAll('u-host');
+    expect(pendingSql).toContain("status = 'pending'");
+    expect(pendingSql).toContain('(expires_at IS NULL OR expires_at > NOW())');
+  });
+
+  it('leaves out, without a word, anyone who cannot be invited (closed, or blocked either way): they are not emailed and not counted', async () => {
+    given();
+    eventRole('host');
+    (inviteService.unreachableAddresses as jest.Mock).mockResolvedValue(new Set(['b@example.com']));
+    const res = await remindAll('u-host');
+    expect(res.body.data).toEqual({ reminded: 2, total: 2 });
+    expect(mockSendInviteEmail.mock.calls.map((call) => call[0]).sort()).toEqual(['a@example.com', 'c@example.com']);
+    expect(inviteService.unreachableAddresses).toHaveBeenCalledWith('u-host', ['a@example.com', 'b@example.com', 'c@example.com']);
+  });
+
+  it('nobody to remind is 0, and not an error', async () => {
+    given({ rows: [] });
+    eventRole('host');
+    const res = await remindAll('u-host');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ reminded: 0 });
+  });
+
+  it('an event that does not exist is a 404 that says event', async () => {
+    given({ eventExists: false });
+    eventRole('host');
+    const res = await remindAll('u-host');
+    expect(res.status).toBe(404);
+    expect(res.body.error.message).toBe('Event not found');
+  });
+});
+
+describe('DELETE /invites/:id: whoever runs the event or the pod withdraws any of its invites', () => {
+  const INVITE = '11111111-1111-4111-8111-111111111111';
+
+  it('asks the service as the member who is signed in, with their role, and tells the event\'s invites tag', async () => {
+    (inviteService.revokeInvite as jest.Mock).mockResolvedValue({ podId: null, sessionId: EVENT });
+    const res = await request(app).delete(`/invites/${INVITE}`).set(auth('u-host', 'member'));
+    expect(res.status).toBe(200);
+    expect(inviteService.revokeInvite).toHaveBeenCalledWith(INVITE, 'u-host', 'member');
+    expect(mockFanoutSession).toHaveBeenCalledWith(null, EVENT, [`session:${EVENT}:invites`]);
+  });
+
+  it('passes an admin\'s role on', async () => {
+    (inviteService.revokeInvite as jest.Mock).mockResolvedValue({ podId: POD, sessionId: null });
+    await request(app).delete(`/invites/${INVITE}`).set(auth('u-admin', 'admin'));
+    expect(inviteService.revokeInvite).toHaveBeenCalledWith(INVITE, 'u-admin', 'admin');
+    expect(mockFanoutPod).toHaveBeenCalledWith(POD);
+  });
+
+  it('for someone who may not, the service says not found and that is the answer: nothing is told to any screen', async () => {
+    (inviteService.revokeInvite as jest.Mock).mockRejectedValue(new NotFoundError('Invite', INVITE));
+    const res = await request(app).delete(`/invites/${INVITE}`).set(auth('u-ordinary'));
+    expect(res.status).toBe(404);
+    expect(mockFanoutPod).not.toHaveBeenCalled();
+    expect(mockFanoutSession).not.toHaveBeenCalled();
   });
 });

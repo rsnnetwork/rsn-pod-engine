@@ -12,7 +12,7 @@
 import { query } from '../../db';
 import type { ConnectionList, PersonConnection } from '@rsn/shared';
 
-// How many people one moment can hold when more than a page share it (see listConnections). Only a bulk
+// How many people one moment can hold when more than a page share it (see pageBySince). Only a bulk
 // write could put that many on one millisecond; the number keeps the question bounded even then.
 const ONE_MOMENT_MAX = 500;
 

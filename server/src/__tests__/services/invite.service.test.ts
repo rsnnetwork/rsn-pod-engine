@@ -28,10 +28,41 @@ jest.mock('../../services/email/email.service', () => ({
   __esModule: true,
 }));
 
+// The invitee's bell is pushed through the live socket server; the entry point is not loaded here.
+const mockIoEmit = jest.fn();
+jest.mock('../../index', () => ({
+  io: { to: (room: string) => ({ emit: (...args: unknown[]) => mockIoEmit(room, ...args) }) },
+}));
+
 import * as inviteService from '../../services/invite/invite.service';
+import * as emailService from '../../services/email/email.service';
 import { inviteWorld } from '../fixtures/invite-world';
 
 const flatSql = (sql: unknown) => String(sql).replace(/\s+/g, ' ').trim();
+
+// What the rest of the database says while a pod (or an event) invite is made, for the tests that run the
+// create path against the in-memory invites table (fixtures/invite-world.ts).
+const worldAnswersForPods = (sql: string) => {
+  if (/max_invites_per_day/.test(sql)) return { rows: [{ max_invites_per_day: 100 }] };
+  if (/COUNT\(\*\) as count FROM invites/.test(sql)) return { rows: [{ count: '0' }] };
+  if (/SELECT email FROM users WHERE id = \$1/.test(sql)) return { rows: [{ email: 'host@example.com' }] };
+  if (/WHERE pods\.id = \$1/.test(sql)) return { rows: [{ id: 'pod-123', name: 'Test', status: 'active' }] };
+  if (/SELECT role FROM pod_members/.test(sql)) return { rows: [{ role: 'director' }] };
+  if (/display_name AS "displayName"/.test(sql)) return { rows: [{ displayName: 'Host User' }] };
+  if (/SELECT name FROM pods/.test(sql)) return { rows: [{ name: 'Test Pod' }] };
+  return { rows: [] };
+};
+const worldAnswersForEvents = (sql: string) => {
+  if (/max_invites_per_day/.test(sql)) return { rows: [{ max_invites_per_day: 100 }] };
+  if (/COUNT\(\*\) as count FROM invites/.test(sql)) return { rows: [{ count: '0' }] };
+  if (/SELECT email FROM users WHERE id = \$1/.test(sql)) return { rows: [{ email: 'host@example.com' }] };
+  if (/SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions/.test(sql)) {
+    return { rows: [{ title: 'Test Session', scheduled_at: null, host_user_id: 'user-host', config: {}, event_format: 'speed_networking' }] };
+  }
+  if (/FROM sessions WHERE id = \$1/.test(sql)) return { rows: [{ id: 'session-123', status: 'scheduled', hostUserId: 'user-host' }] };
+  if (/display_name AS "displayName"/.test(sql)) return { rows: [{ displayName: 'Host User' }] };
+  return { rows: [] };
+};
 
 const mockInvite = {
   id: 'invite-123',
@@ -91,6 +122,8 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
       // 7. Check existing member — SELECT u.id FROM users JOIN pod_members
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // 7b. Is the address a closed account's, or a blocked person's? No
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // 8a. Advisory lock for this type, pod and address (the transaction's first statement)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
       // 8. Duplicate pending invite check — SELECT id FROM invites
@@ -129,6 +162,8 @@ describe('Invite Service', () => {
       // 6. podService.getMemberRole
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
       // 7. Existing member check
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // 7b. Is the address a closed account's, or a blocked person's? No
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // 8a. Advisory lock
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
@@ -189,6 +224,8 @@ describe('Invite Service', () => {
       // 6. podService.getMemberRole
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
       // 7. Check existing member
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // 7b. Is the address a closed account's, or a blocked person's? No
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // 8a. Advisory lock
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
@@ -574,6 +611,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active' }], rowCount: 1 }); // pod
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });         // caller's role
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                             // already a member?
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });  // not a closed account, not blocked
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });                             // advisory lock
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                             // duplicate pending?
       mockQuery.mockResolvedValueOnce({ rows: insertedRows, rowCount: insertedRows.length }); // INSERT
@@ -609,6 +647,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-123', status: 'scheduled', hostUserId: 'user-host' }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // already a participant?
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });  // not a closed account, not blocked
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // lock
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // duplicate
       mockQuery.mockResolvedValueOnce({ rows: [{ ...mockInvite, type: InviteType.SESSION }], rowCount: 1 }); // INSERT
@@ -645,20 +684,10 @@ describe('Invite Service', () => {
       expect(mockQuery.mock.calls.some((call) => /pg_advisory_xact_lock/.test(String(call[0])))).toBe(false);
     });
 
-    // The database stand-in: pg_advisory_xact_lock queues transactions per key, and every statement yields, so
-    // two requests that are not serialised really interleave.
-    const worldAnswers = (sql: string) => {
-      if (/max_invites_per_day/.test(sql)) return { rows: [{ max_invites_per_day: 100 }] };
-      if (/COUNT\(\*\) as count FROM invites/.test(sql)) return { rows: [{ count: '0' }] };
-      if (/SELECT email FROM users WHERE id = \$1/.test(sql)) return { rows: [{ email: 'host@example.com' }] };
-      if (/WHERE pods\.id = \$1/.test(sql)) return { rows: [{ id: 'pod-123', name: 'Test', status: 'active' }] };
-      if (/SELECT role FROM pod_members/.test(sql)) return { rows: [{ role: 'director' }] };
-      if (/display_name AS "displayName"/.test(sql)) return { rows: [{ displayName: 'Host User' }] };
-      if (/SELECT name FROM pods/.test(sql)) return { rows: [{ name: 'Test Pod' }] };
-      return { rows: [] };
-    };
+    // The database stand-in (worldAnswersForPods, above): pg_advisory_xact_lock queues transactions per key, and
+    // every statement yields, so two requests that are not serialised really interleave.
     const useWorld = (honourLocks: boolean) => {
-      const world = inviteWorld({ honourLocks, answers: worldAnswers });
+      const world = inviteWorld({ honourLocks, answers: worldAnswersForPods });
       mockQuery.mockImplementation(world.query);
       mockTransaction.mockImplementation(world.transaction);
       return world;
@@ -732,6 +761,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-123', status: 'scheduled', hostUserId: 'user-host' }], rowCount: 1 });
       if (cohostRows) mockQuery.mockResolvedValueOnce({ rows: cohostRows, rowCount: cohostRows.length });      // is a co-host?
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                                              // already a participant?
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });  // not a closed account, not blocked
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });                                              // lock
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                                              // duplicate
       mockQuery.mockResolvedValueOnce({ rows: [sessionInvite], rowCount: 1 });                                 // INSERT
@@ -796,11 +826,396 @@ describe('Invite Service', () => {
     });
 
     it('an organiser withdrawing an invite is not a decline: declined_at stays empty', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ inviter_id: 'user-host', pod_id: null, session_id: 'session-1' }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [{ pod_id: null, session_id: 'session-1' }], rowCount: 1 });
       await inviteService.revokeInvite('invite-1', 'user-host');
-      const sql = flatSql(mockQuery.mock.calls[0][0]);
-      expect(sql).toMatch(/SET status = 'revoked' WHERE id = \$1 AND inviter_id = \$2 AND status = 'pending'/);
+      const sql = flatSql(mockQuery.mock.calls[1][0]);
+      expect(sql).toMatch(/^UPDATE invites SET status = 'revoked' WHERE id = \$1 AND status = 'pending' RETURNING pod_id, session_id$/);
       expect(sql).not.toMatch(/declined_at/);
+    });
+  });
+
+  // ─── Fix round 1 (26 Oct 2026): whoever runs an event's invites can withdraw any of them ─────────
+  // A co-host may send event invites, and on production's unchanged event page the host's Revoke on a co-host's
+  // shareable link answered 404 ("Failed to revoke invite"): only the sender could withdraw. The host, the event's
+  // co-hosts and admins now manage every invite to their event; a pod's directors, hosts and admins every invite to
+  // their pod (they could already list and remind them). Anyone else can withdraw only what they sent themselves.
+  describe('revokeInvite: who may withdraw an invite', () => {
+    const invite = (over: Record<string, unknown> = {}) => ({ inviter_id: 'user-sender', pod_id: null, session_id: null, ...over });
+    /** The invite is found pending; then `relation` answers the role lookup; then the update lands. */
+    const queue = (found: Record<string, unknown> | null, relation?: Record<string, unknown> | null) => {
+      mockQuery.mockResolvedValueOnce({ rows: found ? [found] : [], rowCount: found ? 1 : 0 });
+      if (relation !== undefined) mockQuery.mockResolvedValueOnce({ rows: relation ? [relation] : [], rowCount: relation ? 1 : 0 });
+    };
+    const lands = (row: Record<string, unknown>) => mockQuery.mockResolvedValueOnce({ rows: [row], rowCount: 1 });
+    const updates = () => mockQuery.mock.calls.filter((call) => /^UPDATE invites/.test(flatSql(call[0])));
+
+    it('the sender withdraws their own invite, whatever it is for, with no role looked up', async () => {
+      queue(invite({ inviter_id: 'user-ann', session_id: 'session-1' }));
+      lands({ pod_id: null, session_id: 'session-1' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-ann', 'member')).resolves.toEqual({ podId: null, sessionId: 'session-1' });
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(flatSql(mockQuery.mock.calls[0][0])).toBe("SELECT inviter_id, pod_id, session_id FROM invites WHERE id = $1 AND status = 'pending'");
+      expect(mockQuery.mock.calls[0][1]).toEqual(['invite-1']);
+    });
+
+    it('the host withdraws the shareable link a co-host made (the case production\'s event page hit as a 404)', async () => {
+      queue(invite({ inviter_id: 'user-cohost', session_id: 'session-1' }), { is_host: true, is_cohost: false });
+      lands({ pod_id: null, session_id: 'session-1' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-host', 'member')).resolves.toEqual({ podId: null, sessionId: 'session-1' });
+      expect(updates()).toHaveLength(1);
+      expect(updates()[0][1]).toEqual(['invite-1']);
+    });
+
+    it('a co-host withdraws an invite the host or another co-host sent', async () => {
+      queue(invite({ inviter_id: 'user-host', session_id: 'session-1' }), { is_host: false, is_cohost: true });
+      lands({ pod_id: null, session_id: 'session-1' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-cohost', 'member')).resolves.toMatchObject({ sessionId: 'session-1' });
+    });
+
+    it('the role is looked up for the event the INVITE belongs to, so a co-host of one event holds no power over another\'s', async () => {
+      queue(invite({ session_id: 'event-b' }), null);
+      await expect(inviteService.revokeInvite('invite-1', 'user-cohost-of-a', 'member')).rejects.toMatchObject({ statusCode: 404 });
+      expect(flatSql(mockQuery.mock.calls[1][0])).toMatch(/\(s\.host_user_id = \$2\) AS is_host, EXISTS \(SELECT 1 FROM session_cohosts c WHERE c\.session_id = s\.id AND c\.user_id = \$2\) AS is_cohost FROM sessions s WHERE s\.id = \$1/);
+      expect(mockQuery.mock.calls[1][1]).toEqual(['event-b', 'user-cohost-of-a']);
+      expect(updates()).toHaveLength(0);
+    });
+
+    it('an ordinary participant or member cannot withdraw someone else\'s event invite: not found, and nothing is written', async () => {
+      queue(invite({ session_id: 'session-1' }), { is_host: false, is_cohost: false });
+      await expect(inviteService.revokeInvite('invite-1', 'user-nobody', 'member')).rejects.toMatchObject({ statusCode: 404, code: 'INVITE_NOT_FOUND' });
+      expect(updates()).toHaveLength(0);
+    });
+
+    it('an admin withdraws any event invite or pod invite, without a role being looked up', async () => {
+      queue(invite({ session_id: 'session-1' }));
+      lands({ pod_id: null, session_id: 'session-1' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-admin', 'admin')).resolves.toMatchObject({ sessionId: 'session-1' });
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      mockQuery.mockClear();
+      queue(invite({ pod_id: 'pod-1' }));
+      lands({ pod_id: 'pod-1', session_id: null });
+      await expect(inviteService.revokeInvite('invite-2', 'user-admin', 'super_admin')).resolves.toMatchObject({ podId: 'pod-1' });
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['director', 'host'])('a pod %s withdraws any invite to their pod (they could already list and remind them)', async (role) => {
+      queue(invite({ inviter_id: 'user-member', pod_id: 'pod-1' }), { role });
+      lands({ pod_id: 'pod-1', session_id: null });
+      await expect(inviteService.revokeInvite('invite-1', 'user-director', 'member')).resolves.toEqual({ podId: 'pod-1', sessionId: null });
+      expect(flatSql(mockQuery.mock.calls[1][0])).toBe("SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'");
+      expect(mockQuery.mock.calls[1][1]).toEqual(['pod-1', 'user-director']);
+    });
+
+    it('a plain pod member (who may send invites when the pod lets them) withdraws only their own', async () => {
+      queue(invite({ inviter_id: 'user-other-member', pod_id: 'pod-1' }), { role: 'member' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-member', 'member')).rejects.toMatchObject({ statusCode: 404 });
+      expect(updates()).toHaveLength(0);
+      mockQuery.mockClear();
+      queue(invite({ inviter_id: 'user-member', pod_id: 'pod-1' }));
+      lands({ pod_id: 'pod-1', session_id: null });
+      await expect(inviteService.revokeInvite('invite-2', 'user-member', 'member')).resolves.toMatchObject({ podId: 'pod-1' });
+    });
+
+    it('someone who is not in the pod at all cannot', async () => {
+      queue(invite({ pod_id: 'pod-1' }), null);
+      await expect(inviteService.revokeInvite('invite-1', 'user-outsider', 'member')).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it('a platform or circle invite stays the sender\'s alone, even for an admin', async () => {
+      queue(invite({ inviter_id: 'user-ann' }));
+      await expect(inviteService.revokeInvite('invite-1', 'user-admin', 'admin')).rejects.toMatchObject({ statusCode: 404 });
+      expect(updates()).toHaveLength(0);
+    });
+
+    it('an invite that is not pending (answered, withdrawn, or no such invite) is not found', async () => {
+      queue(null);
+      await expect(inviteService.revokeInvite('invite-1', 'user-ann', 'member')).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it('an invite accepted or withdrawn between the check and the update is not found either: the update itself only touches a pending one', async () => {
+      queue(invite({ inviter_id: 'user-ann', session_id: 'session-1' }));
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await expect(inviteService.revokeInvite('invite-1', 'user-ann', 'member')).rejects.toMatchObject({ statusCode: 404 });
+    });
+  });
+
+  describe('who runs an event\'s invites, and a pod\'s', () => {
+    it('an admin runs any event\'s, with no lookup', async () => {
+      await expect(inviteService.eventInviteRole('session-1', 'user-admin', true)).resolves.toBe('admin');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the host', { is_host: true, is_cohost: false }, 'host'],
+      ['a co-host (either role: co_host or moderator)', { is_host: false, is_cohost: true }, 'cohost'],
+      ['the host who is also a co-host', { is_host: true, is_cohost: true }, 'host'],
+      ['anyone else', { is_host: false, is_cohost: false }, null],
+    ])('%s', async (_who, row, expected) => {
+      mockQuery.mockResolvedValueOnce({ rows: [row], rowCount: 1 });
+      await expect(inviteService.eventInviteRole('session-1', 'user-x', false)).resolves.toBe(expected);
+      expect(mockQuery.mock.calls[0][1]).toEqual(['session-1', 'user-x']);
+    });
+
+    it('an event that does not exist is run by no one but an admin', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await expect(inviteService.eventInviteRole('gone', 'user-x', false)).resolves.toBeNull();
+    });
+
+    it('a pod\'s invites are run by its director, its host and admins', async () => {
+      await expect(inviteService.mayRunPodInvites('pod-1', 'user-admin', true)).resolves.toBe(true);
+      expect(mockQuery).not.toHaveBeenCalled();
+      for (const [role, expected] of [['director', true], ['host', true], ['member', false]] as const) {
+        mockQuery.mockResolvedValueOnce({ rows: [{ role }], rowCount: 1 });
+        await expect(inviteService.mayRunPodInvites('pod-1', 'user-x', false)).resolves.toBe(expected);
+      }
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await expect(inviteService.mayRunPodInvites('pod-1', 'user-x', false)).resolves.toBe(false);
+    });
+  });
+
+  // ─── Fix round 1: blocked people and closed accounts are never invited or emailed ─────────────────
+  // The batch already left them out. Production's own calls (a typed email, the bulk "Invite All", fed by a pod
+  // member list that does not filter blocks) did not. One neutral sentence for every case, so a block is never revealed.
+  describe('an address that must not be invited', () => {
+    it('is looked up as one question: a closed, suspended or banned account, or a block either way with the sender', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'blocked@example.com' }], rowCount: 1 });
+      const found = await inviteService.unreachableAddresses('user-host', ['Blocked@Example.com', 'fine@example.com']);
+      expect([...found]).toEqual(['blocked@example.com']);
+      const [sql, params] = mockQuery.mock.calls[0];
+      expect(flatSql(sql)).toBe(
+        "SELECT u.email FROM users u WHERE u.email = ANY($2::text[]) AND (u.status <> 'active' OR EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $1 AND b.blocked_id = u.id) OR (b.blocker_id = u.id AND b.blocked_id = $1)))",
+      );
+      expect(params).toEqual(['user-host', ['blocked@example.com', 'fine@example.com']]);
+    });
+
+    it('asks nothing when there is no address', async () => {
+      expect([...(await inviteService.unreachableAddresses('user-host', []))]).toEqual([]);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    const POD_INVITE = { type: InviteType.POD, podId: 'pod-123', inviteeEmail: 'guest@example.com', maxUses: 1 } as const;
+    /** The queue of a pod invite up to the check, then the answer of the check. */
+    const queueUntilTheCheck = (unreachable: boolean) => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      mockQuery.mockResolvedValueOnce({ rows: unreachable ? [{ email: 'guest@example.com' }] : [], rowCount: unreachable ? 1 : 0 });
+    };
+    const nothingWasSent = () => {
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockQuery.mock.calls.some((call) => /INSERT INTO invites|pg_advisory/.test(String(call[0])))).toBe(false);
+    };
+
+    it('a pod invite to such an address is refused with 409 and one neutral sentence, and nothing is written or emailed', async () => {
+      queueUntilTheCheck(true);
+      await expect(inviteService.createInvite('user-host', POD_INVITE)).rejects.toMatchObject({
+        statusCode: 409, code: 'INVITE_NOT_PERMITTED', message: "This person can't be invited.",
+      });
+      nothingWasSent();
+    });
+
+    it('an event invite and a circle invite are refused the same way', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-123', status: 'scheduled', hostUserId: 'user-host' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'guest@example.com' }], rowCount: 1 });
+      await expect(inviteService.createInvite('user-host', { type: InviteType.SESSION, sessionId: 'session-123', inviteeEmail: 'guest@example.com' }))
+        .rejects.toMatchObject({ statusCode: 409, message: "This person can't be invited." });
+      nothingWasSent();
+
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'member@example.com' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'circle-1' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'guest@example.com' }], rowCount: 1 });
+      await expect(inviteService.createInvite('user-member', { type: InviteType.CIRCLE, circleId: 'circle-1', inviteeEmail: 'guest@example.com' }, 'member'))
+        .rejects.toMatchObject({ statusCode: 409, message: "This person can't be invited." });
+      nothingWasSent();
+    });
+
+    it('an invite by member id is refused too: the address it resolves to is the one checked', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'guest@example.com' }], rowCount: 1 });
+      queueUntilTheCheck(true);
+      await expect(inviteService.createInvite('user-host', { type: InviteType.POD, podId: 'pod-123', inviteeUserId: 'user-guest' }))
+        .rejects.toMatchObject({ statusCode: 409, message: "This person can't be invited." });
+      expect(mockQuery.mock.calls.at(-1)![1]).toEqual(['user-host', ['guest@example.com']]);
+    });
+
+    it('someone who may not invite here is refused for that, first: the check never tells them anything about the invitee', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'outsider@example.com' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active', allowMemberInvites: false }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await expect(inviteService.createInvite('user-outsider', POD_INVITE, 'member')).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockQuery.mock.calls.some((call) => /user_blocks/.test(String(call[0])))).toBe(false);
+    });
+
+    it('a platform invite and an open link look nobody up (a registered address is already turned away, and a link names no one)', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-123', status: 'scheduled', hostUserId: 'user-host' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...mockInvite, type: InviteType.SESSION, inviteeEmail: null }], rowCount: 1 });
+      await inviteService.createInvite('user-host', { type: InviteType.SESSION, sessionId: 'session-123' });
+      expect(mockQuery.mock.calls.some((call) => /user_blocks/.test(String(call[0])))).toBe(false);
+    });
+
+    it('someone who is fine is invited as before', async () => {
+      queueUntilTheCheck(false);
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      mockQuery.mockResolvedValueOnce({ rows: [mockInvite], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'Host User' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Test Pod' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await expect(inviteService.createInvite('user-host', POD_INVITE)).resolves.toEqual(mockInvite);
+    });
+
+    it('someone who declined an earlier invite can still be invited by this call: only the batch holds a no against them', async () => {
+      const world = inviteWorld({ answers: worldAnswersForPods });
+      mockQuery.mockImplementation(world.query);
+      mockTransaction.mockImplementation(world.transaction);
+      await inviteService.createInvite('user-host', POD_INVITE);
+      world.invites[0].status = 'revoked';
+      world.invites[0].declinedAt = new Date();
+      await inviteService.createInvite('user-host', POD_INVITE);
+      expect(world.invites).toHaveLength(2);
+    });
+
+    // Against members and blocks that exist (the in-memory stand-in answers "which of these addresses are closed, or
+    // blocked either way with the sender"), so each direction of a block is its own case.
+    describe('with real members and real blocks', () => {
+      const SENDER = 'user-host';
+      const people = [
+        { id: 'p-fine', email: 'fine@example.com', status: 'active' as const },
+        { id: 'p-closed', email: 'closed@example.com', status: 'deactivated' as const },
+        { id: 'p-suspended', email: 'suspended@example.com', status: 'suspended' as const },
+        { id: 'p-banned', email: 'banned@example.com', status: 'banned' as const },
+        { id: 'p-i-blocked', email: 'iblocked@example.com', status: 'active' as const },
+        { id: 'p-blocked-me', email: 'blockedme@example.com', status: 'active' as const },
+        { id: 'p-others-block', email: 'third@example.com', status: 'active' as const },
+      ];
+      const blocks: Array<[string, string]> = [[SENDER, 'p-i-blocked'], ['p-blocked-me', SENDER], ['someone-else', 'p-others-block']];
+      const refused = [
+        ['someone the sender blocked', 'iblocked@example.com'],
+        ['someone who blocked the sender', 'blockedme@example.com'],
+        ['a closed account', 'closed@example.com'],
+        ['a suspended account', 'suspended@example.com'],
+        ['a banned account', 'banned@example.com'],
+      ];
+      const use = (answers: (sql: string) => { rows: unknown[] }) => {
+        const world = inviteWorld({ answers, people, blocks });
+        mockQuery.mockImplementation(world.query);
+        mockTransaction.mockImplementation(world.transaction);
+        return world;
+      };
+      const podInvite = (email: string) => inviteService.createInvite(SENDER, { type: InviteType.POD, podId: 'pod-123', inviteeEmail: email, maxUses: 1 });
+      const eventInvite = (email: string) => inviteService.createInvite(SENDER, { type: InviteType.SESSION, sessionId: 'session-123', inviteeEmail: email, maxUses: 1 });
+
+      it.each(refused)('a pod invite to %s is refused (409, one neutral sentence), and nothing is made or emailed', async (_who, email) => {
+        const world = use(worldAnswersForPods);
+        await expect(podInvite(email)).rejects.toMatchObject({ statusCode: 409, code: 'INVITE_NOT_PERMITTED', message: "This person can't be invited." });
+        expect(world.invites).toHaveLength(0);
+        expect((emailService.sendInviteEmail as jest.Mock)).not.toHaveBeenCalled();
+      });
+
+      it.each(refused)('an event invite to %s is refused the same way (this is also the path of the bulk "Invite All")', async (_who, email) => {
+        const world = use(worldAnswersForEvents);
+        await expect(eventInvite(email)).rejects.toMatchObject({ statusCode: 409, code: 'INVITE_NOT_PERMITTED', message: "This person can't be invited." });
+        expect(world.invites).toHaveLength(0);
+      });
+
+      it('the sentence is the same for every reason, so a block is never told apart from a closed account', async () => {
+        use(worldAnswersForPods);
+        const sentences = new Set<string>();
+        for (const [, email] of refused) {
+          await podInvite(email).catch((err) => sentences.add(`${err.statusCode} ${err.code} ${err.message}`));
+        }
+        expect([...sentences]).toEqual(["409 INVITE_NOT_PERMITTED This person can't be invited."]);
+      });
+
+      it('a member in good standing, and one blocked only by somebody else, are invited as usual', async () => {
+        const world = use(worldAnswersForPods);
+        await podInvite('fine@example.com');
+        await podInvite('third@example.com');
+        expect(world.invites.map((i) => i.email)).toEqual(['fine@example.com', 'third@example.com']);
+      });
+
+      it('an address that belongs to no member is invited as usual (they may be about to join)', async () => {
+        const world = use(worldAnswersForPods);
+        await podInvite('nobody-yet@example.com');
+        expect(world.invites).toHaveLength(1);
+      });
+
+      it('the block is read for the sender who is asking: the same person is fine for a sender they have no block with', async () => {
+        const world = use(worldAnswersForPods);
+        await inviteService.createInvite('user-other-director', { type: InviteType.POD, podId: 'pod-123', inviteeEmail: 'iblocked@example.com', maxUses: 1 });
+        expect(world.invites).toHaveLength(1);
+      });
+    });
+  });
+
+  // ─── Fix round 1: the lock and the duplicate check follow the invite's own target ─────────────────
+  describe('the lock key and the duplicate check use the target that matches the invite\'s type', () => {
+    it('an event invite posted with a stray podId is locked and checked as the event\'s invite, not the pod\'s', async () => {
+      const clientQuery = jest.fn((...args: unknown[]) => mockQuery(...args));
+      mockTransaction.mockImplementation(async (cb: Function) => cb({ query: clientQuery }));
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-123', status: 'scheduled', hostUserId: 'user-host' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // participant
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // unreachable
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // lock
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // duplicate
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...mockInvite, type: InviteType.SESSION }], rowCount: 1 });
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 }); // the email and the bell
+
+      await inviteService.createInvite('user-host', { type: InviteType.SESSION, sessionId: 'session-123', podId: 'stray-pod', inviteeEmail: 'guest@example.com' });
+
+      expect(clientQuery.mock.calls[0][1]).toEqual(['session:session-123:guest@example.com']);
+      expect(clientQuery.mock.calls[1][1]).toEqual(['guest@example.com', 'session', null, 'session-123', null]);
+    });
+
+    it('a pod invite posted with a stray sessionId is the pod\'s, and a circle invite the circle\'s', async () => {
+      const clientQuery = jest.fn((...args: unknown[]) => mockQuery(...args));
+      mockTransaction.mockImplementation(async (cb: Function) => cb({ query: clientQuery }));
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // already a member?
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // unreachable?
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 }); // lock
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // duplicate
+      mockQuery.mockResolvedValueOnce({ rows: [mockInvite], rowCount: 1 }); // INSERT
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });     // the email and the bell
+      await inviteService.createInvite('user-host', { type: InviteType.POD, podId: 'pod-123', sessionId: 'stray-session', inviteeEmail: 'guest@example.com' });
+      expect(clientQuery.mock.calls[0][1]).toEqual(['pod:pod-123:guest@example.com']);
+      expect(clientQuery.mock.calls[1][1]).toEqual(['guest@example.com', 'pod', 'pod-123', null, null]);
+    });
+
+    it('so two requests for one person and one event share a lock whether or not one carries a stray podId: one invite', async () => {
+      const world = inviteWorld({ answers: worldAnswersForEvents });
+      mockQuery.mockImplementation(world.query);
+      mockTransaction.mockImplementation(world.transaction);
+      const clean = inviteService.createInvite('user-host', { type: InviteType.SESSION, sessionId: 'session-123', inviteeEmail: 'guest@example.com', maxUses: 1 });
+      const stray = inviteService.createInvite('user-host', { type: InviteType.SESSION, sessionId: 'session-123', podId: 'stray-pod', inviteeEmail: 'guest@example.com', maxUses: 1 });
+      const [a, b] = await Promise.allSettled([clean, stray]);
+      expect(world.invites).toHaveLength(1);
+      expect([a.status, b.status].sort()).toEqual(['fulfilled', 'rejected']);
+      const refused = [a, b].find((o): o is PromiseRejectedResult => o.status === 'rejected');
+      expect(refused?.reason).toMatchObject({ code: 'DUPLICATE_INVITE' });
     });
   });
 
@@ -833,6 +1248,158 @@ describe('Invite Service', () => {
       expect(sql).toContain('u.id AS "inviteeUserId"');
       expect(rows[0].declinedAt).toBe('2026-10-21T08:00:00.000Z');
       expect(rows[1].declinedAt).toBeNull();
+    });
+  });
+
+  // ─── Fix round 1: the email and the bell are two steps ────────────────────────────────────────────
+  // A batch rings the bells while it answers and sends the emails afterwards, one at a time (Resend's default limit
+  // is 2 requests a second per team). createInvite still does both, the email first, exactly as before.
+  describe('delivering an invite: the email and the bell', () => {
+    const context = {
+      type: InviteType.POD, podId: 'pod-123', sessionId: null, inviterName: 'Host User', targetName: 'Test Pod', scheduledAt: null,
+    };
+    const invite = { code: 'ABC123XYZ456', inviteeEmail: 'guest@example.com', inviteeUserId: 'user-guest' };
+    const sendInviteEmail = emailService.sendInviteEmail as jest.Mock;
+
+    beforeEach(() => {
+      sendInviteEmail.mockReset();
+      sendInviteEmail.mockResolvedValue(undefined);
+      mockIoEmit.mockReset();
+    });
+
+    it('emailInvite sends the email and touches nothing else: no database, no socket', async () => {
+      await inviteService.emailInvite(context, invite);
+      expect(sendInviteEmail).toHaveBeenCalledTimes(1);
+      expect(sendInviteEmail).toHaveBeenCalledWith('guest@example.com', expect.objectContaining({
+        inviterName: 'Host User', type: 'pod', targetName: 'Test Pod', inviteUrl: 'http://localhost:5173/invite/ABC123XYZ456',
+      }));
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockIoEmit).not.toHaveBeenCalled();
+    });
+
+    it('emailInvite lets a failure out, for the caller to log: the invite exists whatever happens to its email', async () => {
+      sendInviteEmail.mockRejectedValueOnce(new Error('mail provider is down'));
+      await expect(inviteService.emailInvite(context, invite)).rejects.toThrow('mail provider is down');
+    });
+
+    it('notifyInvitee rings the bell of a member known by id: a row, the live push and the lists told, no email, no lookup by address', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'notification-1', created_at: '2026-10-26T09:00:00.000Z' }], rowCount: 1 });
+      await inviteService.notifyInvitee(context, invite);
+      expect(sendInviteEmail).not.toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery.mock.calls[0][1]).toEqual(['user-guest', 'pod_invite', 'Host User invited you to Test Pod', 'Join Test Pod — invited by Host User', '/invite/ABC123XYZ456']);
+      expect(mockIoEmit).toHaveBeenCalledWith('user:user-guest', 'notification:new', expect.objectContaining({ type: 'pod_invite', podId: 'pod-123', inviteStatus: 'pending' }));
+      expect(mockIoEmit).toHaveBeenCalledWith('user:user-guest', 'entity:changed', { entities: ['user:user-guest:notifications', 'user:user-guest:invites'] });
+    });
+
+    it('notifyInvitee finds a member by address when the id is not known, and does nothing for an address that is no member', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await inviteService.notifyInvitee(context, { code: 'C', inviteeEmail: 'Nobody@Example.com' });
+      expect(flatSql(mockQuery.mock.calls[0][0])).toBe('SELECT id FROM users WHERE email = $1');
+      expect(mockQuery.mock.calls[0][1]).toEqual(['nobody@example.com']);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockIoEmit).not.toHaveBeenCalled();
+    });
+
+    it('deliverInvite does both, the email first', async () => {
+      const order: string[] = [];
+      sendInviteEmail.mockImplementation(async () => { order.push('email'); });
+      mockQuery.mockImplementation(async (sql: string) => {
+        order.push(/INSERT INTO notifications/.test(sql) ? 'bell' : 'lookup');
+        return { rows: [{ id: 'notification-1', created_at: 'x' }], rowCount: 1 };
+      });
+      await inviteService.deliverInvite(context, invite);
+      expect(order).toEqual(['email', 'bell']);
+    });
+  });
+
+  // ─── Fix round 1: an expired invite is not "pending" in anyone's list ─────────────────────────────
+  // A re-invited person showed twice (the dead invite and the live one), and Remind All emailed a dead link.
+  // Production's pages ask for ?status=pending (PodDetailPage:177, SessionDetailPage:148) and count with the same rule
+  // (getMemberStatusCounts, getSessionParticipantCounts), so the list now agrees with its own count.
+  describe('the lists of pending invites', () => {
+    const EXPIRY = 'AND (i.expires_at IS NULL OR i.expires_at > NOW())';
+
+    it.each([
+      ['an event\'s', () => inviteService.listSessionInvites('session-123', 'pending'), ['session-123', 'pending']],
+      ['a pod\'s', () => inviteService.listPodInvites('pod-123', 'pending'), ['pod-123', 'pending']],
+    ])('%s leaves out the ones whose expiry has passed', async (_which, list, params) => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await list();
+      const [sql, askedWith] = mockQuery.mock.calls[0];
+      expect(flatSql(sql)).toContain(EXPIRY);
+      expect(askedWith).toEqual(params);
+    });
+
+    it.each([
+      ['an event\'s revoked ones', () => inviteService.listSessionInvites('session-123', 'revoked')],
+      ['an event\'s whole history', () => inviteService.listSessionInvites('session-123')],
+      ['a pod\'s revoked ones', () => inviteService.listPodInvites('pod-123', 'revoked')],
+      ['a pod\'s whole history', () => inviteService.listPodInvites('pod-123')],
+    ])('%s are not filtered by expiry: history is history', async (_which, list) => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await list();
+      expect(flatSql(mockQuery.mock.calls[0][0])).not.toContain('expires_at > NOW()');
+    });
+
+    it('says who sent each invite, so a co-host\'s view can show their own addresses and hide the rest', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await inviteService.listSessionInvites('session-123', 'pending');
+      expect(flatSql(mockQuery.mock.calls[0][0])).toContain('i.inviter_id AS "inviterId"');
+    });
+  });
+
+  // ─── Fix round 1: a co-host sees addresses only on the invites they sent ───────────────────────────
+  // The platform rule is that member lists carry no emails; the host and admins see every address (they could before).
+  // The label is never empty and never null: production's page reads `inviteeName || inviteeEmail || 'Shareable link'`
+  // and treats a falsy inviteeEmail as an open link, so a hidden personal invite must stay truthy.
+  describe('what a co-host sees in place of an address', () => {
+    it.each([
+      ['anna.smith@example.com', 'a•••@example.com'],
+      ['Z@Example.org', 'Z•••@Example.org'],
+      ['bob@mail.example.co.uk', 'b•••@mail.example.co.uk'],
+    ])('masks %s as %s: the first letter and the domain, nothing else', (address, masked) => {
+      expect(inviteService.maskEmail(address)).toBe(masked);
+    });
+
+    it.each(['', 'not-an-address', '@example.com'])('shows nothing of %j when it is not an address', (text) => {
+      expect(inviteService.maskEmail(text)).toBe('•••');
+    });
+
+    const row = (over: Record<string, unknown>) => ({
+      id: 'i', code: 'c', inviteeEmail: 'anna.smith@example.com', inviteeName: null, inviteeUserId: null, inviterId: 'user-host',
+      status: 'pending', createdAt: 'x', declinedAt: null, maxUses: 1, useCount: 0, expiresAt: null, ...over,
+    });
+
+    it('keeps the address on an invite the viewer sent themselves', () => {
+      const [mine] = inviteService.hideOthersAddresses([row({ inviterId: 'user-cohost' })], 'user-cohost');
+      expect(mine.inviteeEmail).toBe('anna.smith@example.com');
+    });
+
+    it('shows a member as their display name, and anyone else as a masked address, on the invites others sent', () => {
+      const rows = inviteService.hideOthersAddresses([
+        row({ id: 'member', inviteeName: 'Anna Smith', inviteeUserId: 'user-anna' }),
+        row({ id: 'guest', inviteeEmail: 'bob@example.com' }),
+      ], 'user-cohost');
+      expect(rows.map((r) => r.inviteeEmail)).toEqual(['Anna Smith', 'b•••@example.com']);
+      // The member's own name field is untouched: a new screen can read it directly.
+      expect(rows[0].inviteeName).toBe('Anna Smith');
+    });
+
+    it('never leaves a hidden personal invite empty (it would read as an open link), and never an address', () => {
+      const rows = inviteService.hideOthersAddresses([
+        row({ id: 'a' }), row({ id: 'b', inviteeName: 'Anna Smith' }), row({ id: 'c', inviteeEmail: 'x@y.z' }), row({ id: 'd', inviteeEmail: 'odd' }),
+      ], 'user-cohost');
+      for (const hidden of rows) {
+        expect(typeof hidden.inviteeEmail).toBe('string');
+        expect((hidden.inviteeEmail as string).length).toBeGreaterThan(0);
+        expect(hidden.inviteeEmail).not.toMatch(/nna\.smith|^bob@|^x@|^odd$/);
+      }
+    });
+
+    it('leaves open links alone: no address to hide, and they must stay falsy', () => {
+      const [link] = inviteService.hideOthersAddresses([row({ inviteeEmail: null })], 'user-cohost');
+      expect(link.inviteeEmail).toBeNull();
     });
   });
 

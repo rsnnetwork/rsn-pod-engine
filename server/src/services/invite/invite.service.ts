@@ -108,6 +108,58 @@ export async function assertMayInviteToSession(sessionId: string, userId: string
   return session;
 }
 
+/**
+ * How a person runs an event's invites (reads the list, reminds, withdraws anybody's): as an admin, as the event's
+ * host, or as a co-host (any session_cohosts row, either role). null when they do not. The same people who may send
+ * the event's invites (assertMayInviteToSession), so nobody can send an invite they cannot then manage.
+ */
+export async function eventInviteRole(
+  sessionId: string,
+  userId: string,
+  isAdmin: boolean,
+): Promise<'admin' | 'host' | 'cohost' | null> {
+  if (isAdmin) return 'admin';
+  const result = await query<{ is_host: boolean | null; is_cohost: boolean }>(
+    `SELECT (s.host_user_id = $2) AS is_host,
+            EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost
+       FROM sessions s WHERE s.id = $1`,
+    [sessionId, userId]
+  );
+  const relation = result.rows[0];
+  if (!relation) return null;
+  if (relation.is_host === true) return 'host';
+  return relation.is_cohost ? 'cohost' : null;
+}
+
+/** A pod's invites are run by its director, its host and admins: the people who can list and remind them. */
+export async function mayRunPodInvites(podId: string, userId: string, isAdmin: boolean): Promise<boolean> {
+  if (isAdmin) return true;
+  const role = await podService.getMemberRole(podId, userId);
+  return role === 'director' || role === 'host';
+}
+
+/**
+ * Which of these addresses must not be invited or emailed by this sender: the address of an account that is closed,
+ * suspended or banned, or of a member who blocked the sender or whom the sender blocked. Addresses of people who are
+ * not members are fine. Nothing here says which reason applied, so a block is never revealed (fix round 1).
+ */
+export async function unreachableAddresses(senderId: string, emails: string[]): Promise<Set<string>> {
+  if (emails.length === 0) return new Set();
+  const result = await query<{ email: string }>(
+    `SELECT u.email FROM users u
+      WHERE u.email = ANY($2::text[])
+        AND (u.status <> 'active'
+             OR EXISTS (SELECT 1 FROM user_blocks b
+                         WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                            OR (b.blocker_id = u.id AND b.blocked_id = $1)))`,
+    [senderId, emails.map((email) => email.toLowerCase())]
+  );
+  return new Set(result.rows.map((row) => row.email.toLowerCase()));
+}
+
+/** The one sentence for every person who cannot be invited, whatever the reason. */
+export const CANNOT_BE_INVITED = "This person can't be invited.";
+
 /** One new pending invite, as it is stored. */
 export interface NewInvite {
   code: string;
@@ -159,12 +211,17 @@ export async function insertPendingInvite(row: NewInvite): Promise<InsertedInvit
     return { duplicate: false, invite: inserted.rows[0] };
   }
   const email = row.inviteeEmail;
-  const target = row.podId ?? row.sessionId ?? row.circleId ?? '';
+  // Only the target that belongs to the invite's type counts, for the lock and for the duplicate check alike: an
+  // event invite posted with a stray podId is still the event's invite, and shares the event's lock (fix round 1).
+  const podId = row.type === InviteType.POD ? row.podId : null;
+  const sessionId = row.type === InviteType.SESSION ? row.sessionId : null;
+  const circleId = row.type === InviteType.CIRCLE ? row.circleId : null;
+  const target = podId ?? sessionId ?? circleId ?? '';
   return transaction<InsertedInvite>(async (client) => {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${row.type}:${target}:${email}`]);
     const existing = await client.query<{ id: string }>(
       PENDING_DUPLICATE_SQL,
-      [email, row.type, row.podId, row.sessionId, row.circleId]
+      [email, row.type, podId, sessionId, circleId]
     );
     if (existing.rows.length > 0) return { duplicate: true, existingId: existing.rows[0].id };
     const inserted = await client.query<Invite>(INSERT_INVITE_SQL, values);
@@ -246,31 +303,51 @@ export async function buildInviteContext(
   };
 }
 
-/**
- * The invitee's email and, when they are already a member, their bell. Never throws for a delivery problem: the
- * invite exists whatever happens here, and a failure is logged. `inviteeUserId` is passed when the caller already
- * knows who the address belongs to (a batch picks members by id), which saves the lookup.
- */
-export async function deliverInvite(
-  ctx: InviteContext,
-  invite: { code: string; inviteeEmail: string; inviteeUserId?: string },
-): Promise<void> {
-  const { inviterName, targetName, calendarEvent, type } = ctx;
+/** The two ways an invite is delivered, and who it is for: `inviteeUserId` is passed when the caller already knows who the address belongs to. */
+interface InviteDelivery {
+  code: string;
+  inviteeEmail: string;
+  inviteeUserId?: string;
+}
 
+/**
+ * The invitation email. A failure comes out to the caller, who decides what it costs: the invite exists whatever
+ * happens to its email. It touches nothing but the mail provider (no database, no socket), so a batch can send
+ * its emails after answering, slowly, without a request still open.
+ */
+export async function emailInvite(ctx: InviteContext, invite: InviteDelivery): Promise<void> {
+  await emailService.sendInviteEmail(invite.inviteeEmail, {
+    inviterName: ctx.inviterName,
+    type: (ctx.type || 'platform') as 'pod' | 'session' | 'platform' | 'circle',
+    targetName: ctx.targetName,
+    inviteUrl: `${config.clientUrl}/invite/${invite.code}`,
+    calendarEvent: ctx.calendarEvent,
+  });
+}
+
+/**
+ * The email and then, when the invitee is already a member, the bell. Never throws for an email problem: the invite
+ * exists whatever happens here, and the failure is logged.
+ */
+export async function deliverInvite(ctx: InviteContext, invite: InviteDelivery): Promise<void> {
   // Await email send — if it fails, the invite still exists in DB but we log the failure.
   // Previously fire-and-forget caused silent delivery failures.
   try {
-    await emailService.sendInviteEmail(invite.inviteeEmail, {
-      inviterName,
-      type: (type || 'platform') as 'pod' | 'session' | 'platform' | 'circle',
-      targetName,
-      inviteUrl: `${config.clientUrl}/invite/${invite.code}`,
-      calendarEvent,
-    });
+    await emailInvite(ctx, invite);
   } catch (err) {
     // Don't fail the invite creation — email is best-effort but now properly logged
     logger.warn({ err, inviteeEmail: invite.inviteeEmail }, 'Failed to send invite email (invite still created)');
   }
+
+  await notifyInvitee(ctx, invite);
+}
+
+/**
+ * The invitee's bell, when they are already a member: a notification row, the live push, and their lists told.
+ * `inviteeUserId` saves the lookup by address when the caller knows who it is (a batch picks members by id).
+ */
+export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery): Promise<void> {
+  const { inviterName, targetName, type } = ctx;
 
   // Create in-app notification for existing users
   let inviteeId = invite.inviteeUserId;
@@ -458,6 +535,14 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
         throw new AppError(409, 'SESSION_ALREADY_REGISTERED', 'This user is already a participant of this event');
       }
     }
+  }
+
+  // A closed account, or anyone blocked either way with the sender, is never invited or emailed: one neutral
+  // sentence for every such case, so a block is never revealed (fix round 1). A platform invite to a registered
+  // address is already turned away above, and an open link names nobody.
+  if (input.inviteeEmail && input.type && input.type !== InviteType.PLATFORM) {
+    const unreachable = await unreachableAddresses(userId, [input.inviteeEmail]);
+    if (unreachable.size > 0) throw new AppError(409, 'INVITE_NOT_PERMITTED', CANNOT_BE_INVITED);
   }
 
   // Block duplicate pending invites (checked AFTER membership so the right error shows). The check and the insert
@@ -970,6 +1055,8 @@ export interface SessionInviteRow {
   inviteeName: string | null;
   /** The member the address belongs to, when it belongs to one (26 Oct 2026). */
   inviteeUserId: string | null;
+  /** Who sent it (26 Oct 2026, fix round 1): a co-host sees an address only on the invites they sent themselves. */
+  inviterId: string;
   status: string;
   createdAt: string;
   /** When the invitee said no (26 Oct 2026); null for an invite an organiser withdrew. A decline keeps status 'revoked'. */
@@ -982,6 +1069,11 @@ export interface SessionInviteRow {
   expiresAt: string | null;
 }
 
+// "Pending" means an invite that can still be accepted. One whose expiry has passed keeps the status 'pending' in
+// the table, so a list of the pending ones leaves it out (fix round 1): a person invited again no longer shows twice,
+// nobody is reminded with a dead link, and the list agrees with the counts the pod and event pages already show.
+const STILL_ACCEPTABLE = 'AND (i.expires_at IS NULL OR i.expires_at > NOW())';
+
 export async function listSessionInvites(
   sessionId: string,
   status?: string
@@ -991,18 +1083,46 @@ export async function listSessionInvites(
 
   const result = await query<SessionInviteRow>(
     `SELECT i.id, i.code, i.invitee_email AS "inviteeEmail",
-            u.display_name AS "inviteeName", u.id AS "inviteeUserId",
+            u.display_name AS "inviteeName", u.id AS "inviteeUserId", i.inviter_id AS "inviterId",
             i.status, i.created_at AS "createdAt", i.declined_at AS "declinedAt",
             i.max_uses AS "maxUses", i.use_count AS "useCount", i.expires_at AS "expiresAt"
      FROM invites i
      LEFT JOIN users u ON u.email = i.invitee_email
      WHERE i.session_id = $1 AND i.type = 'session'
        ${statusFilter}
+       ${status === 'pending' ? STILL_ACCEPTABLE : ''}
      ORDER BY i.created_at DESC`,
     params
   );
 
   return result.rows;
+}
+
+/**
+ * "a•••@example.com": the first letter of an address and its domain, nothing else. Something that is not an address
+ * shows nothing of itself.
+ */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf('@');
+  if (at <= 0) return '•••';
+  return `${email.slice(0, 1)}•••${email.slice(at)}`;
+}
+
+/**
+ * The event's invites as a co-host may read them: the address on the invites they sent themselves, and on everyone
+ * else's a label in its place, because the platform's member lists carry no emails (the host and admins keep every
+ * address, as they always had). The label is the member's display name, or for someone who is no member a masked
+ * address. It is never empty or null: production's pages treat a falsy inviteeEmail as an open link, and read
+ * `inviteeName || inviteeEmail || 'Shareable link'` as the line to show. An open link has no address and stays null.
+ */
+export function hideOthersAddresses<T extends { inviteeEmail: string | null; inviteeName: string | null; inviterId: string }>(
+  rows: T[],
+  viewerId: string,
+): T[] {
+  return rows.map((row) => {
+    if (!row.inviteeEmail || row.inviterId === viewerId) return row;
+    return { ...row, inviteeEmail: row.inviteeName || maskEmail(row.inviteeEmail) };
+  });
 }
 
 export interface PodInviteRow {
@@ -1033,6 +1153,7 @@ export async function listPodInvites(
      LEFT JOIN users u ON u.email = i.invitee_email
      WHERE i.pod_id = $1 AND i.type = 'pod'
        ${statusFilter}
+       ${status === 'pending' ? STILL_ACCEPTABLE : ''}
      ORDER BY i.created_at DESC`,
     params
   );
@@ -1085,14 +1206,36 @@ export async function declineInvite(
 
 // Bug 30 (19 May Ali) — same pattern as declineInvite: return the affected
 // IDs so the route can fan out realtime events.
+//
+// 26 Oct 2026 (fix round 1): the sender could always withdraw their own invite, and only they. Co-hosts may now send
+// event invites, so on production's event page the host's Revoke on a co-host's shareable link answered 404 ("Failed
+// to revoke invite"). Whoever runs a target's invites can withdraw any of them: for an event its host, its co-hosts
+// and admins; for a pod its director, its host and admins (they could already list and remind them). Platform and
+// circle invites stay the sender's alone. Anyone else is told the invite is not found, as before, so it is not
+// confirmed to exist.
 export async function revokeInvite(
   inviteId: string,
   userId: string,
+  userRole?: string,
 ): Promise<{ podId: string | null; sessionId: string | null }> {
+  const found = await query<{ inviter_id: string; pod_id: string | null; session_id: string | null }>(
+    `SELECT inviter_id, pod_id, session_id FROM invites WHERE id = $1 AND status = 'pending'`,
+    [inviteId]
+  );
+  const invite = found.rows[0];
+  if (!invite) throw new NotFoundError('Invite', inviteId);
+
+  const isAdmin = isAdminRole(userRole);
+  const mayWithdraw = invite.inviter_id === userId
+    || (invite.session_id !== null && (await eventInviteRole(invite.session_id, userId, isAdmin)) !== null)
+    || (invite.pod_id !== null && (await mayRunPodInvites(invite.pod_id, userId, isAdmin)));
+  if (!mayWithdraw) throw new NotFoundError('Invite', inviteId);
+
+  // Only a pending invite is withdrawn: one answered since the check above is simply not found.
   const result = await query<{ pod_id: string | null; session_id: string | null }>(
-    `UPDATE invites SET status = 'revoked' WHERE id = $1 AND inviter_id = $2 AND status = 'pending'
+    `UPDATE invites SET status = 'revoked' WHERE id = $1 AND status = 'pending'
      RETURNING pod_id, session_id`,
-    [inviteId, userId]
+    [inviteId]
   );
 
   if (result.rowCount === 0) {

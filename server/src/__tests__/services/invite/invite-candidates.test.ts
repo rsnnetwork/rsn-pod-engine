@@ -27,8 +27,9 @@ jest.mock('../../../config', () => ({
   __esModule: true,
 }));
 
+const mockLogger = { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() };
 jest.mock('../../../config/logger', () => ({
-  default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  default: mockLogger,
   __esModule: true,
 }));
 
@@ -64,7 +65,7 @@ jest.mock('../../../index', () => ({
   io: { to: (room: string) => ({ emit: (...args: unknown[]) => mockEmit(room, ...args) }) },
 }));
 
-import { listInviteCandidates, createInvitesBatch } from '../../../services/invite/invite-candidates.service';
+import { listInviteCandidates, createInvitesBatch, BatchOptions } from '../../../services/invite/invite-candidates.service';
 import { CONNECTION_SIGNALS_SQL } from '../../../services/people/connections.service';
 
 const VIEWER = 'a0000000-0000-4000-8000-000000000001';
@@ -505,10 +506,25 @@ describe('createInvitesBatch', () => {
     standings.set(uid(n), { email: `person${n}@example.com`, ...over });
     return uid(n);
   };
-  const podBatch = (ids: string[], over: Record<string, unknown> = {}) =>
-    createInvitesBatch(member, { type: 'pod', podId: POD, inviteeUserIds: ids, ...over } as InviteBatchInput);
-  const eventBatch = (ids: string[], over: Record<string, unknown> = {}) =>
-    createInvitesBatch(member, { type: 'session', sessionId: EVENT, inviteeUserIds: ids, ...over } as InviteBatchInput);
+  // The emails of a batch go out after its answer, half a second apart; the tests do not wait for that (gap 0), apart from
+  // the ones about the pace itself.
+  const quick: BatchOptions = { emailGapMs: 0 };
+  // A test that does not wait for its batch's emails must not leave them to run into the next test: every delivery
+  // started here is awaited when the test is over.
+  let deliveries: Promise<void>[] = [];
+  afterEach(async () => {
+    await Promise.all(deliveries);
+    deliveries = [];
+  });
+  const run = async (asker: { userId: string; role: string }, input: InviteBatchInput, options: BatchOptions) => {
+    const result = await createInvitesBatch(asker, input, options);
+    deliveries.push(result.delivery);
+    return result;
+  };
+  const podBatch = (ids: string[], over: Record<string, unknown> = {}, options: BatchOptions = quick) =>
+    run(member, { type: 'pod', podId: POD, inviteeUserIds: ids, ...over } as InviteBatchInput, options);
+  const eventBatch = (ids: string[], over: Record<string, unknown> = {}, options: BatchOptions = quick) =>
+    run(member, { type: 'session', sessionId: EVENT, inviteeUserIds: ids, ...over } as InviteBatchInput, options);
   const outcomes = (r: Awaited<ReturnType<typeof createInvitesBatch>>) => r.results.map((x) => [x.userId, x.outcome]);
 
   // ── Who may send ─────────────────────────────────────────────────────────────────────────────
@@ -586,23 +602,57 @@ describe('createInvitesBatch', () => {
       expect(world.invites).toHaveLength(0);
     });
 
-    it('someone who declined can be invited again: the organiser decides, the server does not hold a no against them', async () => {
+    // Fix round 1 (ruling): someone who said no to this very pod or event must not be emailed again by a bulk action.
+    // They can still ask to join. POST /invites, one person at a time, is unchanged.
+    it('someone who declined this pod is not invited again: the outcome is declined, naming their invite, and no invite, bell or email is made', async () => {
       const id = person(1, { state: 'declined', latestInviteId: 'inv-old' });
-      expect(outcomes(await podBatch([id]))).toEqual([[id, 'invited']]);
+      const result = await podBatch([id]);
+      expect(result.results).toEqual([{ userId: id, outcome: 'declined', inviteId: 'inv-old' }]);
+      expect(result.counts.declined).toBe(1);
+      expect(world.invites).toHaveLength(0);
+      await result.delivery;
+      expect(mockSendInviteEmail).not.toHaveBeenCalled();
+      expect(statementsMatching(/^INSERT INTO notifications/)).toHaveLength(0);
+    });
+
+    it('...and the same for an event', async () => {
+      const id = person(1, { state: 'declined', latestInviteId: 'inv-old' });
+      const result = await eventBatch([id]);
+      expect(outcomes(result)).toEqual([[id, 'declined']]);
+      expect(world.invites).toHaveLength(0);
+    });
+
+    it('a declined person among others is counted, and the others are still invited', async () => {
+      const ids = [person(1), person(2, { state: 'declined', latestInviteId: 'inv-old' }), person(3)];
+      const result = await podBatch(ids);
+      expect(outcomes(result)).toEqual([[ids[0], 'invited'], [ids[1], 'declined'], [ids[2], 'invited']]);
+      expect(result.counts).toMatchObject({ invited: 2, declined: 1 });
+      expect(world.invites).toHaveLength(2);
+    });
+
+    it('a decline is not told to a sender who has no business with that person: not_allowed, as for a pending invite', async () => {
+      const id = person(1, { connected: false, inPod: false, state: 'declined', latestInviteId: 'inv-old' });
+      expect(outcomes(await podBatch([id]))).toEqual([[id, 'not_allowed']]);
+    });
+
+    it('an admin is held to it too: the organiser may ask the person to join again some other way, the bulk action does not', async () => {
+      const id = person(1, { connected: false, state: 'declined', latestInviteId: 'inv-old' });
+      const result = await run(admin, { type: 'pod', podId: POD, inviteeUserIds: [id] }, quick);
+      expect(outcomes(result)).toEqual([[id, 'declined']]);
     });
 
     it('a mix of people gets one outcome each, in the order asked, and the counts add up', async () => {
-      const ids = [person(1), person(2, { state: 'member' }), person(3, { state: 'invited' }), person(4, { blocked: true }), person(5)];
+      const ids = [person(1), person(2, { state: 'member' }), person(3, { state: 'invited' }), person(4, { blocked: true }), person(5), person(6, { state: 'declined' })];
       const result = await podBatch(ids);
       expect(outcomes(result)).toEqual([
-        [ids[0], 'invited'], [ids[1], 'already_member'], [ids[2], 'already_invited'], [ids[3], 'not_allowed'], [ids[4], 'invited'],
+        [ids[0], 'invited'], [ids[1], 'already_member'], [ids[2], 'already_invited'], [ids[3], 'not_allowed'], [ids[4], 'invited'], [ids[5], 'declined'],
       ]);
-      expect(result.counts).toEqual({ invited: 2, already_member: 1, already_going: 0, already_invited: 1, not_allowed: 1, failed: 0 });
+      expect(result.counts).toEqual({ invited: 2, already_member: 1, already_going: 0, already_invited: 1, declined: 1, not_allowed: 1, failed: 0 });
       expect(Object.values(result.counts).reduce((a, b) => a + b, 0)).toBe(ids.length);
     });
 
     it('the counts always list every outcome, zero included', async () => {
-      expect((await podBatch([person(1)])).counts).toEqual({ invited: 1, already_member: 0, already_going: 0, already_invited: 0, not_allowed: 0, failed: 0 });
+      expect((await podBatch([person(1)])).counts).toEqual({ invited: 1, already_member: 0, already_going: 0, already_invited: 0, declined: 0, not_allowed: 0, failed: 0 });
     });
   });
 
@@ -642,7 +692,7 @@ describe('createInvitesBatch', () => {
     it('an admin may invite any active member who has not blocked them or been blocked', async () => {
       const stranger = person(1, { connected: false, inPod: false });
       const blocked = person(2, { connected: false, blocked: true });
-      const result = await createInvitesBatch(admin, { type: 'pod', podId: POD, inviteeUserIds: [stranger, blocked] });
+      const result = await run(admin, { type: 'pod', podId: POD, inviteeUserIds: [stranger, blocked] }, quick);
       expect(outcomes(result)).toEqual([[stranger, 'invited'], [blocked, 'not_allowed']]);
     });
 
@@ -681,6 +731,7 @@ describe('createInvitesBatch', () => {
       expect(result.results).toHaveLength(1);
       expect(world.invites).toHaveLength(1);
       expect(result.counts.invited).toBe(1);
+      await result.delivery;
       expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
     });
 
@@ -693,6 +744,7 @@ describe('createInvitesBatch', () => {
       // The one who lost the race is pointed at the invite that exists.
       const loser = first.results[0].outcome === 'already_invited' ? first : second;
       expect(loser.results[0].inviteId).toBe(world.invites[0].id);
+      await Promise.all([first.delivery, second.delivery]);
       expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
     });
 
@@ -746,7 +798,7 @@ describe('createInvitesBatch', () => {
     it('an admin has no allowance, and is not asked about it', async () => {
       allowance = { max: 1, sent: 1 };
       const ids = [person(1), person(2)];
-      const result = await createInvitesBatch(admin, { type: 'pod', podId: POD, inviteeUserIds: ids });
+      const result = await run(admin, { type: 'pod', podId: POD, inviteeUserIds: ids }, quick);
       expect(result.counts.invited).toBe(2);
       expect(statementsMatching(/max_invites_per_day/)).toHaveLength(0);
     });
@@ -756,7 +808,8 @@ describe('createInvitesBatch', () => {
   describe('what each person is sent', () => {
     it('each invited person gets the email, and the bell if they are a member, pushed live', async () => {
       const ids = [person(1), person(2)];
-      await podBatch(ids);
+      const result = await podBatch(ids);
+      await result.delivery;
       expect(mockSendInviteEmail).toHaveBeenCalledTimes(2);
       const sent = mockSendInviteEmail.mock.calls.map((c) => c[0]).sort();
       expect(sent).toEqual(['person1@example.com', 'person2@example.com']);
@@ -777,17 +830,103 @@ describe('createInvitesBatch', () => {
       expect(statementsMatching(/SELECT id FROM users WHERE email/)).toHaveLength(0);
     });
 
-    it('an email that cannot be sent does not undo the invite', async () => {
-      mockSendInviteEmail.mockRejectedValueOnce(new Error('mail provider is down'));
-      const id = person(1);
-      expect(outcomes(await podBatch([id]))).toEqual([[id, 'invited']]);
-      expect(world.invites).toHaveLength(1);
-    });
-
     it('a person who cannot be invited is sent nothing at all', async () => {
-      await podBatch([person(1, { blocked: true }), person(2, { state: 'member' })]);
+      const result = await podBatch([person(1, { blocked: true }), person(2, { state: 'member' })]);
+      await result.delivery;
       expect(mockSendInviteEmail).not.toHaveBeenCalled();
       expect(statementsMatching(/^INSERT INTO notifications/)).toHaveLength(0);
+    });
+  });
+
+  // ── Fix round 1 (ruling): the emails go out after the answer, two a second at most ───────────────
+  // Resend's default limit is 2 requests a second per team, and one send retries for up to 7 seconds on its own
+  // (1, 2, 4 s). Fifty emails fired together, ten at a time, could be dropped without a trace. So a batch answers as
+  // soon as the invites exist and the bells are sent, and then sends its emails one at a time, half a second apart.
+  describe('the emails of a batch', () => {
+    it('go out after the answer: the invites exist and the bells are sent when it comes back, the emails are still on their way', async () => {
+      const ids = [person(1), person(2), person(3), person(4)];
+      const result = await podBatch(ids, {}, { emailGapMs: 40 });
+      expect(result.counts.invited).toBe(4);
+      expect(world.invites).toHaveLength(4);
+      // "invited" means the invitee has been told in the app...
+      expect(statementsMatching(/^INSERT INTO notifications/)).toHaveLength(4);
+      for (const id of ids) expect(mockEmit).toHaveBeenCalledWith(`user:${id}`, 'notification:new', expect.objectContaining({ type: 'pod_invite' }));
+      // ...and the answer did not wait for the mail: at most the first is out.
+      expect(mockSendInviteEmail.mock.calls.length).toBeLessThan(4);
+      await result.delivery;
+      expect(mockSendInviteEmail).toHaveBeenCalledTimes(4);
+    });
+
+    it('go one at a time, each starting at least the gap after the one before (at 500 ms: never more than 2 a second)', async () => {
+      const starts: number[] = [];
+      const inFlight = { now: 0, most: 0 };
+      mockSendInviteEmail.mockImplementation(async () => {
+        starts.push(Date.now());
+        inFlight.now += 1; inFlight.most = Math.max(inFlight.most, inFlight.now);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight.now -= 1;
+      });
+      const result = await podBatch([person(1), person(2), person(3), person(4), person(5)], {}, { emailGapMs: 40 });
+      await result.delivery;
+      expect(starts).toHaveLength(5);
+      for (let i = 1; i < starts.length; i += 1) expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(36);
+      expect(inFlight.most).toBe(1);
+    });
+
+    it('are paced at half a second by default: two a second at most', async () => {
+      // The default is not run (it would take seconds); it is read from where it is set.
+      const { EMAIL_GAP_MS } = await import('../../../services/invite/invite-candidates.service');
+      expect(EMAIL_GAP_MS).toBe(500);
+      expect(1000 / EMAIL_GAP_MS).toBeLessThanOrEqual(2);
+    });
+
+    it('send nothing more from the database once the answer is out: the pace runs on what the batch already knows', async () => {
+      const result = await podBatch([person(1), person(2), person(3)], {}, { emailGapMs: 10 });
+      const asked = mockQuery.mock.calls.length;
+      await result.delivery;
+      expect(mockQuery.mock.calls.length).toBe(asked);
+      expect(mockSendInviteEmail).toHaveBeenCalledTimes(3);
+    });
+
+    it('an email that cannot be sent is logged with the person and the invite, does not undo the invite, and the rest still go', async () => {
+      mockSendInviteEmail.mockRejectedValueOnce(new Error('mail provider is down'));
+      const [a, b, c] = [person(1), person(2), person(3)];
+      const result = await podBatch([a, b, c]);
+      expect(outcomes(result)).toEqual([[a, 'invited'], [b, 'invited'], [c, 'invited']]);
+      await result.delivery;
+      expect(world.invites).toHaveLength(3);
+      expect(mockSendInviteEmail).toHaveBeenCalledTimes(3);
+      const failures = mockLogger.warn.mock.calls.filter((call) => /email/i.test(String(call[1])));
+      expect(failures).toHaveLength(1);
+      expect(failures[0][0]).toMatchObject({ inviteeId: a, inviteId: result.results[0].inviteId });
+      expect(failures[0][0].err).toBeInstanceOf(Error);
+    });
+
+    it('every failure is logged, and the delivery still ends normally: a promise nobody waits for must never reject', async () => {
+      mockSendInviteEmail.mockRejectedValue(new Error('mail provider is down'));
+      const result = await podBatch([person(1), person(2)]);
+      await expect(result.delivery).resolves.toBeUndefined();
+      expect(mockLogger.warn.mock.calls.filter((call) => /email/i.test(String(call[1])))).toHaveLength(2);
+    });
+
+    it('a batch with nobody to email has a delivery that is already done', async () => {
+      const result = await podBatch([person(1, { state: 'member' })]);
+      await expect(result.delivery).resolves.toBeUndefined();
+      expect(mockSendInviteEmail).not.toHaveBeenCalled();
+    });
+
+    it('a bell that cannot be sent is logged, and its email still goes: the invite exists', async () => {
+      const original = world.query;
+      mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+        if (/^\s*INSERT INTO notifications/.test(sql)) throw new Error('database hiccup');
+        return original(sql, params);
+      });
+      const id = person(1);
+      const result = await podBatch([id]);
+      expect(outcomes(result)).toEqual([[id, 'invited']]);
+      await result.delivery;
+      expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn.mock.calls.some((call) => /notification/i.test(String(call[1])))).toBe(true);
     });
   });
 

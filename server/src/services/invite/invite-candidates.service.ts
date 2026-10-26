@@ -37,13 +37,21 @@ export const BATCH_MAX = 50;
 /** A pod invite from the picker lasts a week, as the old pod invite modal made it. An event invite ends with the event. */
 const POD_INVITE_HOURS = 168;
 
-/** Emails and bells go out this many at a time, so 50 invites do not wait on 50 mail round trips one after another. */
-const DELIVERY_CONCURRENCY = 10;
+/** Bells (a row and a socket push, no mail provider) go out this many at a time. */
+const BELLS_AT_ONCE = 10;
+
+/**
+ * A batch's emails start this far apart: two a second at most. Resend's default limit is 2 requests a second per
+ * team, the account's own limit is not known here, and one send already retries on its own for up to 7 seconds
+ * (1, 2 and 4 s) when it is told to slow down. Fifty emails started together, ten at a time, could be dropped without
+ * a trace; one at a time, half a second apart, they arrive. Fifty people take about 25 seconds, after the answer.
+ */
+export const EMAIL_GAP_MS = 500;
 
 /** Search words beyond this are ignored, as in the member search. */
 const MAX_SEARCH_WORDS = 6;
 
-const OUTCOMES: InviteBatchOutcome[] = ['invited', 'already_member', 'already_going', 'already_invited', 'not_allowed', 'failed'];
+const OUTCOMES: InviteBatchOutcome[] = ['invited', 'already_member', 'already_going', 'already_invited', 'declined', 'not_allowed', 'failed'];
 
 // ─── The target: the pod or event being invited to ────────────────────────────────────────────────
 
@@ -239,7 +247,26 @@ export async function listInviteCandidates(asker: Asker, params: CandidateParams
 export type BatchSummary = InviteBatchResponse & {
   /** The pod or event the invites went to, so the route can tell the screens that show it, once. */
   target: { podId: string; sessionId: string | null };
+  /**
+   * The batch's emails, going out after the answer: settles when the last one has been tried. It never rejects (each
+   * failure is logged with the person and the invite), so a caller that does not wait for it loses nothing. It is
+   * not part of what the route sends.
+   */
+  delivery: Promise<void>;
 };
+
+export interface BatchOptions {
+  /** How far apart the emails start. The default is EMAIL_GAP_MS; the tests do not wait half a second per person. */
+  emailGapMs?: number;
+}
+
+/** An invite the batch made, with what its bell and its email need. */
+interface MadeInvite {
+  userId: string;
+  email: string;
+  code: string;
+  inviteId: string;
+}
 
 interface RecipientRow {
   user_id: string;
@@ -338,7 +365,58 @@ function decide(userId: string, row: RecipientRow | undefined, asker: { id: stri
       ? { userId, outcome: 'already_invited', inviteId: row.latest_invite_id }
       : { userId, outcome: 'already_invited' };
   }
+  // Someone who said no to an invite to this very pod or event is not emailed again by a bulk action. They can still
+  // ask to join; POST /invites, one person at a time, is unchanged (fix round 1).
+  if (row.state === 'declined') {
+    return row.latest_invite_id
+      ? { userId, outcome: 'declined', inviteId: row.latest_invite_id }
+      : { userId, outcome: 'declined' };
+  }
   return { userId, outcome: 'create', email: row.email };
+}
+
+/** The bells of the invites just made, ten at a time. A failure is logged: the invite exists, and its email is still to go. */
+async function ringBells(context: invites.InviteContext, made: MadeInvite[]): Promise<void> {
+  for (let from = 0; from < made.length; from += BELLS_AT_ONCE) {
+    const group = made.slice(from, from + BELLS_AT_ONCE);
+    const settled = await Promise.allSettled(group.map((m) =>
+      invites.notifyInvitee(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId })));
+    settled.forEach((outcome, at) => {
+      if (outcome.status === 'rejected') {
+        logger.warn({ err: outcome.reason, inviteeId: group[at].userId, inviteId: group[at].inviteId }, 'Batch invite bell failed (invite still created)');
+      }
+    });
+  }
+}
+
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The emails of a batch, one at a time, each starting at least `gapMs` after the one before, and only once the answer
+ * has gone out. It uses nothing but what the batch already holds (no database), so nothing waits on a request that
+ * is over, and it never rejects: every failure is logged with the person and the invite, and the rest still go.
+ * Sending one at a time also keeps a send's own retries (up to 7 s when the provider says slow down) from piling
+ * onto the next send.
+ */
+async function sendEmailsSlowly(context: invites.InviteContext, made: MadeInvite[], gapMs: number): Promise<void> {
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    let lastStart: number | null = null;
+    for (const m of made) {
+      if (lastStart !== null) {
+        const wait = lastStart + gapMs - Date.now();
+        if (wait > 0) await pause(wait);
+      }
+      lastStart = Date.now();
+      try {
+        await invites.emailInvite(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId });
+      } catch (err) {
+        logger.warn({ err, inviteeId: m.userId, inviteId: m.inviteId }, 'Batch invite email failed (the invite exists and the bell was sent)');
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, 'Batch invite emails stopped before the last one');
+  }
 }
 
 /** The ids as asked, lower case, each once, in the order first named. */
@@ -350,12 +428,20 @@ function distinctIds(ids: string[]): string[] {
  * Invites up to 50 people to a pod or an event in one call, with one outcome for each. Whether the asker may invite
  * here is decided once, for the whole request (403). Each person is then checked: an account that is not active,
  * someone blocked either way, and anyone the asker has no connection to (an admin's reach is any active member; an
- * event also reaches its pod's members) is `not_allowed`; the members and the guests already there, and those with
- * a live invite, are told so; the rest are invited. The same person is never invited twice: the same id repeated is
- * one invite, and two batches that name them at the same moment make one invite between them (the second reports
- * `already_invited`), through the lock insertPendingInvite takes. Email and bell go out as for any invite.
+ * event also reaches its pod's members) is `not_allowed`; the members and the guests already there, those with a
+ * live invite, and those who declined this very pod or event (a bulk action never asks them again) are told so; the
+ * rest are invited. The same person is never invited twice: the same id repeated is one invite, and two batches that
+ * name them at the same moment make one invite between them (the second reports `already_invited`), through the lock
+ * insertPendingInvite takes.
+ *
+ * "Invited" means the invite exists and the invitee's bell has been sent, both before this returns. The emails go out
+ * after it, one at a time, no faster than two a second; `delivery` settles when the last has been tried.
  */
-export async function createInvitesBatch(asker: Asker, input: InviteBatchInput): Promise<BatchSummary> {
+export async function createInvitesBatch(
+  asker: Asker,
+  input: InviteBatchInput,
+  options: BatchOptions = {},
+): Promise<BatchSummary> {
   if (input.allPodMembers && input.type !== 'session') {
     throw new ValidationError('"Everyone in the pod" is for inviting to an event');
   }
@@ -389,6 +475,7 @@ export async function createInvitesBatch(asker: Asker, input: InviteBatchInput):
   }
 
   const toCreate = decisions.filter((d): d is Extract<Decision, { outcome: 'create' }> => d.outcome === 'create');
+  let delivery: Promise<void> = Promise.resolve();
   if (toCreate.length > 0) {
     // A member's daily allowance counts the invites they make here too. None left is one plain refusal for the whole
     // request; part-way through, the people it does not stretch to are reported failed.
@@ -406,7 +493,7 @@ export async function createInvitesBatch(asker: Asker, input: InviteBatchInput):
       { podId: target.kind === 'pod' ? target.podId : null, sessionId: target.sessionId },
     );
 
-    const made: Array<{ userId: string; email: string; code: string }> = [];
+    const made: MadeInvite[] = [];
     for (const decision of toCreate) {
       if (left <= 0) {
         results.set(decision.userId, { userId: decision.userId, outcome: 'failed' });
@@ -432,23 +519,17 @@ export async function createInvitesBatch(asker: Asker, input: InviteBatchInput):
         }
         left -= 1;
         results.set(decision.userId, { userId: decision.userId, outcome: 'invited', inviteId: inserted.invite.id });
-        made.push({ userId: decision.userId, email: decision.email, code });
+        made.push({ userId: decision.userId, email: decision.email, code, inviteId: inserted.invite.id });
       } catch (err) {
         logger.warn({ err, askerId: asker.userId, inviteeId: decision.userId }, 'Batch invite could not be created');
         results.set(decision.userId, { userId: decision.userId, outcome: 'failed' });
       }
     }
 
-    for (let from = 0; from < made.length; from += DELIVERY_CONCURRENCY) {
-      const group = made.slice(from, from + DELIVERY_CONCURRENCY);
-      const settled = await Promise.allSettled(group.map((m) =>
-        invites.deliverInvite(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId })));
-      settled.forEach((outcome, at) => {
-        if (outcome.status === 'rejected') {
-          logger.warn({ err: outcome.reason, inviteeId: group[at].userId }, 'Batch invite delivery failed (invite still created)');
-        }
-      });
-    }
+    // The bells go out now, so "invited" means the invite exists and the invitee has been told in the app. The emails
+    // go out after the answer, slowly (see sendEmailsSlowly).
+    await ringBells(context, made);
+    if (made.length > 0) delivery = sendEmailsSlowly(context, made, options.emailGapMs ?? EMAIL_GAP_MS);
   }
 
   const ordered = ids.map((id) => results.get(id) as InviteBatchResult);
@@ -457,7 +538,7 @@ export async function createInvitesBatch(asker: Asker, input: InviteBatchInput):
 
   logger.info({ askerId: asker.userId, type: input.type, targetId: target.id, counts }, 'Invite batch sent');
 
-  const summary: BatchSummary = { results: ordered, counts, target: { podId: target.podId, sessionId: target.sessionId } };
+  const summary: BatchSummary = { results: ordered, counts, target: { podId: target.podId, sessionId: target.sessionId }, delivery };
   if (remaining !== undefined) summary.remaining = remaining;
   return summary;
 }

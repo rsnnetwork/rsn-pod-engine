@@ -32,7 +32,20 @@ export type Answers = (sql: string, params: unknown[]) => Answer;
 const flat = (sql: string) => sql.replace(/\s+/g, ' ').trim();
 const yieldToLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-export function inviteWorld(options: { honourLocks?: boolean; answers?: Answers } = {}) {
+/** A member of the in-memory platform, for the question "may this address be invited by this sender?". */
+export interface WorldPerson {
+  id: string;
+  email: string;
+  status: 'active' | 'suspended' | 'banned' | 'deactivated';
+}
+
+export function inviteWorld(options: {
+  honourLocks?: boolean;
+  answers?: Answers;
+  /** The members and the blocks (blocker, blocked) that unreachableAddresses reads. */
+  people?: WorldPerson[];
+  blocks?: Array<[string, string]>;
+} = {}) {
   const honourLocks = options.honourLocks ?? true;
   const invites: WorldInvite[] = [];
   /** What the transactions ran, in order: `lock:<key>`, `duplicate-check`, `insert`. */
@@ -68,6 +81,19 @@ export function inviteWorld(options: { honourLocks?: boolean; answers?: Answers 
           && (sessionId === null || i.sessionId === sessionId)
           && (circleId === null || i.circleId === circleId))
         .map((i) => ({ id: i.id }));
+      return { rows, rowCount: rows.length };
+    }
+
+    // "Which of these addresses must not be invited by this sender": a member who is not active, or who is blocked
+    // either way with the sender. Written out here the way the question is asked, not copied from the SQL's shape.
+    if (/^SELECT u\.email FROM users u WHERE u\.email = ANY\(\$2::text\[\]\)/.test(text)) {
+      const [senderId, emails] = params as [string, string[]];
+      const blocks = options.blocks ?? [];
+      const rows = (options.people ?? [])
+        .filter((person) => emails.includes(person.email))
+        .filter((person) => person.status !== 'active'
+          || blocks.some(([blocker, blocked]) => (blocker === senderId && blocked === person.id) || (blocker === person.id && blocked === senderId)))
+        .map((person) => ({ email: person.email }));
       return { rows, rowCount: rows.length };
     }
 
