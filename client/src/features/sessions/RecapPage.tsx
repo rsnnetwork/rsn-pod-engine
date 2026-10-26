@@ -68,7 +68,7 @@ function MessagePartnerButton({ userId, displayName }: { userId: string; display
     <Link
       to={`/messages/new/${userId}`}
       title={`Message ${displayName || 'this user'}`}
-      className="shrink-0 inline-flex min-h-[44px] items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
+      className="ml-auto shrink-0 inline-flex min-h-[44px] items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
       data-testid={`recap-dm-button-${userId}`}
     >
       <MessageSquare className="h-3.5 w-3.5" /> Message
@@ -436,8 +436,8 @@ export default function RecapPage() {
           </h3>
           <div className="space-y-3">
             {data.mutualConnections.map(c => (
-              <div key={c.userId} className="flex items-center gap-3 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
-                <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 flex-1 min-w-0">
+              <div key={c.userId} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
+                <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 grow basis-full min-w-0 sm:basis-0">
                   <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -484,8 +484,8 @@ export default function RecapPage() {
         const bonusAdded = data.bonusRoundsAdded ?? 0;
         const isBonus = (r: number) => bonusAdded > 0 && data.totalRounds > 0 && r > data.totalRounds - bonusAdded;
         const row = (c: typeof data.connections[number]) => (
-          <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
-            <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 flex-1 min-w-0">
+          <div key={`${c.userId}-${c.roundNumber}`} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
+            <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 grow basis-full min-w-0 sm:basis-0">
               <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">

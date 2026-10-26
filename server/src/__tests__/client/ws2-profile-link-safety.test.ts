@@ -169,22 +169,21 @@ describe('WS2/S3 + CON-01 — ProfileLink: the same tab by default, a marked new
 describe('CON-01 — a profile\'s Back goes back, and goes somewhere when there is nothing behind it', () => {
   const page = readClient('features/profile/PublicProfilePage.tsx');
 
-  it('Back and "Go Back" are one function: navigate(-1) when the tab has history, else the dashboard, replacing the entry', () => {
+  it('Back and "Go Back" are one function: navigate(-1) when the router has an entry behind this one, else the dashboard, replacing the entry', () => {
     // One place decides. No button calls navigate(-1) itself.
     expect(page).not.toMatch(/onClick=\{\(\) => navigate\(-1\)\}/);
     expect(page.match(/onClick=\{goBack\}/g)).toHaveLength(2);
     const fn = page.slice(page.indexOf('const goBack'), page.indexOf('};', page.indexOf('const goBack')));
-    expect(fn).toMatch(/location\.key !== 'default'/);
-    expect(fn).toMatch(/window\.history\.length > 1/);
-    expect(fn).toMatch(/navigate\(-1\)/);
+    expect(fn).toMatch(/if \(location\.key !== 'default'\) navigate\(-1\);/);
     expect(fn).toMatch(/navigate\('\/', \{ replace: true \}\)/);
   });
 
-  it('a profile reached by a full page load from inside the app still goes back (its router key is "default" but the tab has history)', () => {
-    // A raw <a href> reloads the document, so the router starts with the key "default" there. Only a tab with a single
-    // entry has nowhere to go back to.
-    const fn = page.slice(page.indexOf('const goBack'), page.indexOf('};', page.indexOf('const goBack')));
-    expect(fn).toMatch(/location\.key !== 'default'\s*\|\|\s*window\.history\.length > 1/);
+  it('the router says whether anything is behind a profile, never the length of the browser history: that counts the entries ahead as well as behind, and another site\'s as well as this app\'s', () => {
+    // Measured on the live app's twin of this change: a profile URL pasted into a tab with earlier history went Back out of
+    // the site, and a profile opened in a new tab, then Message, then the browser's Back, then the page's Back, did nothing.
+    for (const rel of ['features/profile/PublicProfilePage.tsx', 'features/reason/human/HumanProfilePage.tsx']) {
+      expect({ rel, byLength: /history\.length/.test(readClient(rel).replace(/\/\/.*$/gm, '')) }).toEqual({ rel, byLength: false });
+    }
   });
 
   it('the page reads the router location, and the message button still opens the compose screen in this tab', () => {
@@ -200,5 +199,34 @@ describe('CON-01 — a profile\'s Back goes back, and goes somewhere when there 
     expect(fn).toMatch(/navigate\(-1\)/);
     // It does not send everyone to For You any more.
     expect(fn).not.toMatch(/navigate\('\/', \{ replace: true \}\)/);
+  });
+});
+
+describe('CON-01 — every link to a profile is an in-app link, so what is behind a profile is the page it was opened from', () => {
+  // A raw <a href> (or window.location) is a full page load: the router starts again with the key "default", so the profile
+  // looks like the first page of a tab and its Back goes to the dashboard, not to the pod, event or recap it was opened from.
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith('.tsx') ? [path.join(dir, e.name)] : []));
+  const code = (file: string) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  it('the scan reads what it should: the old page\'s route, the Human Profile\'s and a window.location move are found, a link component is not', () => {
+    const anchor = /\bhref=\{?[`'"]\/(profile|people)\//;
+    expect(anchor.test('<a href="/profile/1">')).toBe(true);
+    expect(anchor.test('<a className="x" href={`/people/${id}?from=Pods`}>')).toBe(true);
+    expect(anchor.test('<Link to={`/people/${id}`}>')).toBe(false);
+    expect(anchor.test('<a href={href} target="_blank">')).toBe(false);
+  });
+
+  it('no file writes href="/profile/..." or href="/people/...", or moves the window there', () => {
+    const offenders: string[] = [];
+    let files = 0;
+    for (const file of walk(CLIENT_SRC)) {
+      files += 1;
+      const src = code(file);
+      if (/\bhref=\{?[`'"]\/(profile|people)\//.test(src)) offenders.push(`${path.relative(CLIENT_SRC, file)}: raw href`);
+      if (/location\.(href\s*=|assign\()\s*[`'"]\/(profile|people)\//.test(src)) offenders.push(`${path.relative(CLIENT_SRC, file)}: window.location`);
+    }
+    expect(files).toBeGreaterThan(150);
+    expect(offenders).toEqual([]);
   });
 });

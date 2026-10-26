@@ -55,12 +55,17 @@ export default function SearchPage() {
   }, [urlQuery]);
   const term = useSettled(q.trim());
   // The search is in the address, so Back from a profile returns to it, words and results (CON-01, 25 Oct 2026). One
-  // write per pause, replacing the entry: typing never adds a step to the history.
+  // write per pause, replacing the entry: typing never adds a step to the history. It runs when the settled term changes
+  // and for no other reason (the setter is read through a ref, as its identity changes with every address): a new search
+  // from the top bar sets the address first, and the old term, which only settles a moment later, must not be written
+  // over it.
+  const writeAddress = useRef(setSearchParams);
+  writeAddress.current = setSearchParams;
   useEffect(() => {
     if (term === written.current) return;
     written.current = term;
-    setSearchParams(term ? { q: term } : {}, { replace: true });
-  }, [term, setSearchParams]);
+    writeAddress.current(term ? { q: term } : {}, { replace: true });
+  }, [term]);
   const [asked, setAsked] = useState<Set<string>>(new Set());
   const { addToast } = useToastStore();
 

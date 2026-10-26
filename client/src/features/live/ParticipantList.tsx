@@ -122,7 +122,7 @@ export default function ParticipantList({ onClose, sessionId, isHost = false }: 
                   here tore down the socket + LiveKit and ejected the clicker
                   from the live event. */}
               <ProfileLink newTab from="Events" userId={p.userId} className="flex items-center gap-2.5 flex-1 min-w-0">
-                <Avatar name={p.displayName || 'User'} size="sm" />
+                <Avatar name={p.displayName || 'User'} size="sm" className="shrink-0" />
                 <span className="text-sm text-gray-300 truncate">{p.displayName || 'User'}</span>
               </ProfileLink>
               {isPHost && (

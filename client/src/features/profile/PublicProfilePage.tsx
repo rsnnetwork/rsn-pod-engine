@@ -123,11 +123,12 @@ export default function PublicProfilePage() {
   });
 
   // 25 Oct 2026 (CON-01): a tab with nothing behind it, a profile opened in a new tab from the live event or from an
-  // emailed link, used to get a Back that did nothing. It goes to the dashboard now. A full page load from inside the
-  // app (the pod, event and recap pages link here with a plain <a href>) starts the router with the key "default" too,
-  // but its tab has history, so that still goes back to the page the member left.
+  // emailed link, used to get a Back that did nothing. It goes to the dashboard now. The router gives the first entry of a
+  // tab the key "default", and that is the one test of "nothing behind it in the app": the length of the browser's history
+  // cannot say, because it counts the entries ahead as well as behind, and another site's as well as this app's. So every
+  // link to a profile must be an in-app link (ProfileLink), or the page it came from is not behind this one.
   const goBack = () => {
-    if (location.key !== 'default' || window.history.length > 1) navigate(-1);
+    if (location.key !== 'default') navigate(-1);
     else navigate('/', { replace: true });
   };
 
