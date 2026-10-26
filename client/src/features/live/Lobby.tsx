@@ -1002,7 +1002,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
  * Mount this once inside the lobby <LiveKitRoom> (after the user joins).
  * Renders nothing; effect-only.
  */
-function LiveKitPresenceSync() {
+export function LiveKitPresenceSync() {
   const livekitParticipants = useParticipants();
   const connectionState = useConnectionState();
   const setLiveRoomParticipants = useSessionStore(s => s.setLiveRoomParticipants);
@@ -1479,8 +1479,9 @@ function DeviceTest() {
  * Participant-only waiting room shown before the host starts the event.
  * Camera-first layout: video preview is the primary content,
  * status overlay is secondary — matches how Google Meet / FaceTime handle pre-call.
+ * A video meeting (meeting/MeetingRoom) shows it too, with its own `waitingLabel`.
  */
-function PreLobbyWaitingRoom({ isHost = false, sessionId }: { isHost?: boolean; sessionId?: string }) {
+export function PreLobbyWaitingRoom({ isHost = false, sessionId, waitingLabel }: { isHost?: boolean; sessionId?: string; waitingLabel?: string }) {
   const participants = useSessionStore(s => s.participants);
   const hostUserId = useSessionStore(s => s.hostUserId);
   const cohosts = useSessionStore(s => s.cohosts);
@@ -1571,12 +1572,12 @@ function PreLobbyWaitingRoom({ isHost = false, sessionId }: { isHost?: boolean; 
             {hostOnline === true ? (
               <div className="inline-flex items-center gap-2 bg-green-50 border border-green-200 px-4 py-2 rounded-full">
                 <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-sm font-medium text-green-700">Host is here — event starting soon</span>
+                <span className="text-sm font-medium text-green-700">{waitingLabel ?? 'Host is here — event starting soon'}</span>
               </div>
             ) : hostOnline === false ? (
               <div className="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 px-4 py-2 rounded-full">
                 <span className="h-2 w-2 rounded-full bg-gray-400" />
-                <span className="text-sm font-medium text-gray-600">Waiting for host to start the event</span>
+                <span className="text-sm font-medium text-gray-600">{waitingLabel ?? 'Waiting for host to start the event'}</span>
               </div>
             ) : (
               <div className="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 px-4 py-2 rounded-full">

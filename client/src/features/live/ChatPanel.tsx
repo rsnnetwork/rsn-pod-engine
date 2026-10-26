@@ -145,9 +145,11 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
             <span className="hidden sm:inline text-[10px] text-gray-400">temporary — clears at round end</span>
           )}
         </div>
+        {/* 26 Oct 2026 — a 44px target, named for screen readers. */}
         <button
           onClick={onClose}
-          className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+          aria-label="Close chat"
+          className="-mr-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
         >
           <X className="h-4 w-4" />
         </button>
@@ -172,8 +174,9 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
       </div>
 
       {/* Input */}
+      {/* 26 Oct 2026 — on a phone the chat is a bottom sheet: its input row clears the iPhone home indicator. */}
       {phase !== 'complete' && (
-        <div className="px-4 py-3 border-t border-gray-200">
+        <div className="px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-gray-200">
           {chatDisabled ? (
             <p className="text-xs text-gray-400 text-center py-1">Chat available when host joins</p>
           ) : (
@@ -212,7 +215,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
         </div>
       )}
       <div className="flex items-center gap-2">
-        <button onClick={() => setShowEmoji(!showEmoji)} className="p-2 text-gray-400 hover:text-gray-600 transition-colors">
+        <button onClick={() => setShowEmoji(!showEmoji)} aria-label="Add an emoji" className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 transition-colors">
           <Smile className="h-4 w-4" />
         </button>
         <input

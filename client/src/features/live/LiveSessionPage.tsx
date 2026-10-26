@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { liveKindOf, resolveEventFormat } from '@rsn/shared';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
@@ -15,6 +16,8 @@ import MatchingOverlay from './MatchingOverlay';
 import EventCheckInModal from './EventCheckInModal';
 import ReactionBar from './ReactionBar';
 import ParticipantList from './ParticipantList';
+import MeetingRoom from './meeting/MeetingRoom';
+import { liveRolesOf } from './liveRoles';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 import ToastContainer from '@/components/ui/Toast';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -78,7 +81,7 @@ export default function LiveSessionPage() {
     };
   }, []);
 
-  const { data: session, refetch } = useQuery({
+  const { data: session, refetch, isError: sessionFailed } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
@@ -110,6 +113,9 @@ export default function LiveSessionPage() {
   const canToggleActingAsHost = false;
   const showJoinAsBanner = false;
   const mustPickRole = false;
+  // 26 Oct 2026 (VID-03) — who may end the event for everyone (the director, or a super_admin: the server's
+  // own rule in handleHostEnd) and who runs it, computed once here and passed down (liveRoles.ts).
+  const { canEndEvent, canManage } = liveRolesOf({ isDirector: isOriginalHost, isCohost, isSuperAdmin });
 
   useSessionSocket(sessionId!);
 
@@ -166,12 +172,32 @@ export default function LiveSessionPage() {
 
   if (!sessionId) return <PageLoader />;
 
+  // 26 Oct 2026 (VID-04) — the event's format decides the room, read once from the event itself. Until it is
+  // known nothing renders, so a video meeting never flashes the speed-networking grid.
+  if (!session) return sessionFailed ? <LiveEventUnavailable onRetry={() => { void refetch(); }} /> : <PageLoader />;
+  if (liveKindOf(resolveEventFormat(session)) !== 'rounds') {
+    return (
+      <SectionErrorBoundary name="Meeting room">
+        <MeetingRoom
+          sessionId={sessionId}
+          session={session}
+          isDirector={isOriginalHost}
+          canEndEvent={canEndEvent}
+          canManage={canManage}
+          mediaError={mediaError}
+          onDismissMediaError={() => setMediaError(false)}
+        />
+      </SectionErrorBoundary>
+    );
+  }
+
   return (
     // Phase 7-audit fix — overflow-x-hidden on the root prevents any
     // child overflow (host bar, event plan strip) from forcing the
     // viewport wider on mobile. min-w-0 lets flex children shrink
     // below their content width instead of pushing the parent.
-    <div className="h-[100dvh] bg-white flex flex-col overflow-x-hidden min-w-0">
+    // 26 Oct 2026 — padded clear of the notch and, on its side, the rounded corners.
+    <div className="h-[100dvh] bg-white flex flex-col overflow-x-hidden min-w-0 pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       {/* Phase 2 (matching) — quick per-event check-in (intention + openness).
           Members only — never the host (it must not cover the host controls). */}
       {!isHost && <EventCheckInModal />}
@@ -597,7 +623,7 @@ export default function LiveSessionPage() {
         // mid-event and they lost all event control. The boundary degrades to
         // a localized fallback instead.
         <SectionErrorBoundary name="Host controls">
-          <HostControls sessionId={sessionId} />
+          <HostControls sessionId={sessionId} canEndEvent={canEndEvent} onLeave={handleLeave} />
         </SectionErrorBoundary>
       )}
     </div>
@@ -717,6 +743,37 @@ function TopBarParticipantCount() {
       <Users className="h-3 w-3" />
       {text}
     </span>
+  );
+}
+
+/* ─── The event could not be read (26 Oct 2026) ──────────────────────────── */
+
+// The room depends on the event's format, so without the event there is no room
+// to show: say so, with a way to try again and a way back.
+function LiveEventUnavailable({ onRetry }: { onRetry: () => void }) {
+  const navigate = useNavigate();
+  return (
+    <div className="min-h-[100dvh] flex items-center justify-center bg-white px-6">
+      <div className="max-w-sm text-center">
+        <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-4" />
+        <h2 className="text-lg font-semibold text-gray-900 mb-2">We couldn't load this event</h2>
+        <p className="text-sm text-gray-500 mb-6">Check your connection and try again.</p>
+        <div className="flex flex-col-reverse sm:flex-row gap-2 justify-center">
+          <button
+            onClick={() => navigate('/sessions')}
+            className="min-h-[44px] px-4 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Back to events
+          </button>
+          <button
+            onClick={onRetry}
+            className="min-h-[44px] px-4 rounded-xl bg-rsn-red text-sm font-medium text-white hover:bg-rsn-red-hover"
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
