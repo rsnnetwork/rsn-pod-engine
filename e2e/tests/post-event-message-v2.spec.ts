@@ -16,9 +16,13 @@
 import { test, expect } from '@playwright/test';
 import { pool, createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 
-const API_BASE =
-  process.env.E2E_API_URL ||
-  (process.env.E2E_SERVER_URL ? `${process.env.E2E_SERVER_URL}/api` : 'http://localhost:3001/api');
+// E2E_API_URL may name the server with or without its /api (the preview and production runners give the bare host, as
+// every other spec's SERVER helper expects); either way the calls go to /api (26 Oct 2026: without this, the preview
+// runner's bare host made every call here a 404).
+const withApi = (base: string) => (/\/api\/?$/.test(base) ? base.replace(/\/$/, '') : `${base.replace(/\/$/, '')}/api`);
+const API_BASE = process.env.E2E_API_URL
+  ? withApi(process.env.E2E_API_URL)
+  : (process.env.E2E_SERVER_URL ? `${process.env.E2E_SERVER_URL}/api` : 'http://localhost:3001/api');
 
 interface ApiResult<T = unknown> {
   status: number;
