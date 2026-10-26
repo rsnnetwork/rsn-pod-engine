@@ -3,6 +3,7 @@ import { getSocket } from '@/lib/socket';
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { Hand, Heart, ThumbsUp } from 'lucide-react';
+import { liveRoleFactsFor, liveRolesOf } from './liveRoles';
 
 const REACTIONS = [
   { type: 'raise_hand', icon: Hand, label: 'Raise Hand', emoji: '✋' },
@@ -36,12 +37,22 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
   // lockstep for every viewer.
   const participants = useInRoomParticipants();
   const { user } = useAuthStore();
-  const isHostOrCohost = user?.id === hostUserId || (!!user?.id && cohosts.has(user.id));
+  // 26 Oct 2026 (VID-03) — the live page's own rule for who has the host bar
+  // (liveRoles.ts): a super_admin has it too, and his reaction button sat under
+  // it. canManage decides only where the button sits.
+  const { isDirector, isCohost, canManage } = liveRolesOf(liveRoleFactsFor(user, hostUserId, cohosts));
   // Bug A (15 May Shraddha) — same fix as ChatPanel: treat the host as
   // present when they're either flagged in lobby or appear in participants.
   const hostInParticipants = !!hostUserId && participants.some(p => p.userId === hostUserId);
   const hostPresent = hostInLobby || hostInParticipants;
-  const reactionsDisabled = phase === 'lobby' && !hostPresent && !isHostOrCohost;
+  // Before the host is in, only the director and co-hosts may react: the
+  // server drops anyone else's reaction then (chat-handlers.ts, handleReactionSend).
+  const reactionsDisabled = phase === 'lobby' && !hostPresent && !(isDirector || isCohost);
+  // Above the host bar (people who run the event) or level with the chat
+  // button, and in both cases above the iPhone home indicator, which the host
+  // bar is padded by.
+  const floatAt = canManage ? 'bottom-[calc(11rem+env(safe-area-inset-bottom,0px))]' : 'bottom-[calc(6rem+env(safe-area-inset-bottom,0px))]';
+  const buttonAt = canManage ? 'bottom-[calc(11rem+env(safe-area-inset-bottom,0px))]' : 'bottom-[calc(5rem+env(safe-area-inset-bottom,0px))]';
 
   // Listen for incoming reactions
   useEffect(() => {
@@ -89,7 +100,7 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
   return (
     <>
       {/* Floating reaction animations */}
-      <div className={`fixed ${isHostOrCohost ? 'bottom-44' : 'bottom-24'} left-0 right-0 pointer-events-none z-30`}>
+      <div className={`fixed ${floatAt} left-0 right-0 pointer-events-none z-30`}>
         {floatingReactions.map(r => (
           <div
             key={r.id}
@@ -104,11 +115,11 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
 
       {/* Reaction toggle button + popup panel.
           For hosts / co-hosts the EVENT PLAN strip + host action bar
-          stack at the bottom; bumping bottom-20 → bottom-44 keeps the
-          button clear. Participants don't see the EVENT PLAN strip,
-          so they keep the original tighter offset. */}
+          stack at the bottom; the higher offset keeps the button clear.
+          Participants don't see the EVENT PLAN strip, so they keep the
+          original tighter offset. */}
       {!reactionsDisabled && (
-        <div className={`fixed ${isHostOrCohost ? 'bottom-44' : 'bottom-20'} left-4 z-20`}>
+        <div className={`fixed ${buttonAt} left-4 z-20`}>
           {showPanel && (
             <div className="absolute bottom-12 left-0 flex items-center gap-1 bg-white shadow-xl border border-gray-200 rounded-2xl px-2 py-1.5 mb-2">
               {REACTIONS.map(({ type, emoji, label }) => (

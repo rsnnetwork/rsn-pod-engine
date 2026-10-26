@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/authStore';
 import ProfileLink from '@/components/ui/ProfileLink';
 import { getSocket } from '@/lib/socket';
 import Linkify from '@/components/ui/Linkify';
+import { useChatSend } from './useChatSend';
 
 const CHAT_EMOJIS = [
   { type: 'heart', emoji: '❤️' },
@@ -17,9 +18,13 @@ const EMOJI_PICKER_LIST = ['😀','😂','😍','🥳','🤔','👍','👏','❤
 interface ChatPanelProps {
   sessionId: string;
   onClose: () => void;
+  /** 26 Oct 2026 — a running video meeting's chat is open whether or not the host is in the room. */
+  alwaysOpen?: boolean;
+  /** Pad the input row clear of the iPhone home indicator; off where a bar below already does. */
+  padBottomInset?: boolean;
 }
 
-export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
+export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padBottomInset = true }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -49,7 +54,7 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
   const hostInParticipants = !!hostUserId && participants.some(p => p.userId === hostUserId);
   const hostPresent = hostInLobby || hostInParticipants;
   const isHostOrCohost = user?.id === hostUserId || (!!user?.id && cohosts.has(user.id));
-  const chatDisabled = scope === 'lobby' && !hostPresent && !isHostOrCohost;
+  const chatDisabled = !alwaysOpen && scope === 'lobby' && !hostPresent && !isHostOrCohost;
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -87,17 +92,17 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
     inputRef.current?.focus();
   }, []);
 
+  // 26 Oct 2026 (fix round 2) — the words leave the box only once the server says the message went out; a
+  // refused message keeps them and says why, beside the box (useChatSend).
+  const { send, sending, notice, clearNotice } = useChatSend(sessionId, scope, input, setInput);
   const handleSend = useCallback(() => {
-    const trimmed = input.trim();
-    if (!trimmed) return;
-
-    const socket = getSocket();
-    if (!socket) return;
-
-    socket.emit('chat:send', { sessionId, message: trimmed, scope });
-    setInput('');
+    send();
     inputRef.current?.focus();
-  }, [input, sessionId, scope]);
+  }, [send]);
+  const typeMessage = useCallback((value: string) => {
+    setInput(value);
+    clearNotice();
+  }, [clearNotice]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -145,9 +150,11 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
             <span className="hidden sm:inline text-[10px] text-gray-400">temporary — clears at round end</span>
           )}
         </div>
+        {/* 26 Oct 2026 — a 44px target, named for screen readers. */}
         <button
           onClick={onClose}
-          className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+          aria-label="Close chat"
+          className="-mr-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
         >
           <X className="h-4 w-4" />
         </button>
@@ -172,19 +179,27 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
       </div>
 
       {/* Input */}
+      {/* 26 Oct 2026 — on a phone the chat is a bottom sheet: its input row clears the iPhone home indicator,
+          unless a bar below it already does (the host bar, the meeting's bar). */}
       {phase !== 'complete' && (
-        <div className="px-4 py-3 border-t border-gray-200">
+        <div className={`px-4 pt-3 border-t border-gray-200 ${padBottomInset ? 'pb-[max(0.75rem,env(safe-area-inset-bottom))]' : 'pb-3'}`}>
           {chatDisabled ? (
             <p className="text-xs text-gray-400 text-center py-1">Chat available when host joins</p>
           ) : (
-            <ChatInputWithEmoji
-              inputRef={inputRef}
-              input={input}
-              setInput={setInput}
-              handleKeyDown={handleKeyDown}
-              handleSend={handleSend}
-              scope={scope}
-            />
+            <>
+              {notice && (
+                <p role="alert" data-testid="chat-send-notice" className="mb-2 px-1 text-xs text-red-600">{notice}</p>
+              )}
+              <ChatInputWithEmoji
+                inputRef={inputRef}
+                input={input}
+                setInput={typeMessage}
+                handleKeyDown={handleKeyDown}
+                handleSend={handleSend}
+                scope={scope}
+                sending={sending}
+              />
+            </>
           )}
         </div>
       )}
@@ -192,13 +207,15 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
   );
 }
 
-function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSend, scope }: {
+function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSend, scope, sending }: {
   inputRef: any;
   input: string;
   setInput: (v: string) => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
   handleSend: () => void;
   scope: string;
+  /** A message is on its way: the button waits (the box stays usable, so a phone's keyboard stays up). */
+  sending: boolean;
 }) {
   const [showEmoji, setShowEmoji] = useState(false);
   return (
@@ -212,7 +229,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
         </div>
       )}
       <div className="flex items-center gap-2">
-        <button onClick={() => setShowEmoji(!showEmoji)} className="p-2 text-gray-400 hover:text-gray-600 transition-colors">
+        <button onClick={() => setShowEmoji(!showEmoji)} aria-label="Add an emoji" className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 transition-colors">
           <Smile className="h-4 w-4" />
         </button>
         <input
@@ -231,7 +248,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
         />
         {/* WS3/S11 — 44px tap target (was p-2 ≈ 32px, below the mobile
             minimum; caught by the mobile event smoke). */}
-        <button onClick={handleSend} disabled={!input.trim()} aria-label="Send message"
+        <button onClick={handleSend} disabled={!input.trim() || sending} aria-busy={sending || undefined} aria-label="Send message"
           className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
           <Send className="h-4 w-4" />
         </button>

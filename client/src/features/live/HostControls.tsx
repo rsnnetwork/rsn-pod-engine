@@ -1,21 +1,32 @@
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
-import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
-import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
+import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard, LogOut } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
-import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import EventPlanStrip from './EventPlanStrip';
+import { useEventInviteLink } from './useEventInviteLink';
 import { useActionLock } from '@/hooks/useActionLock';
 import { useEscapeKey } from '@/hooks/useEscapeKey';
 import HostControlCenter from './HostControlCenter';
 
-interface Props { sessionId: string; }
+interface Props {
+  sessionId: string;
+  /** The director, or a super_admin (LiveSessionPage, liveRoles.ts): the server's own rule for ending the event. */
+  canEndEvent: boolean;
+  /** The page's own leave (its confirm, session:leave, back to Events). */
+  onLeave: () => void;
+}
 
-export default function HostControls({ sessionId }: Props) {
+// 26 Oct 2026 (VID-03) — every control in the bar is a 44px target, and End Event is the only red one: the
+// actions that move the event forward are green (on 25 Oct a red button beside End Event looked the same).
+const BAR_TARGET = 'min-h-[44px]';
+const BAR_GO = 'min-h-[44px] bg-reason-green-fill hover:bg-reason-green-fill-hover';
+
+export default function HostControls({ sessionId, canEndEvent, onLeave }: Props) {
   // F3 (21 May Ali) — eligibility counts + the "in main room" tally must
   // use realtime LiveKit room presence, not the drift-prone socket
   // roster. Matching against a stale roster could let the host start a
@@ -60,53 +71,17 @@ export default function HostControls({ sessionId }: Props) {
   // a real event invite, the same shareable invite the event page generates
   // (a code that registers whoever accepts it): one open link per event,
   // reused while it has uses left, created the first time the modal opens.
-  const qc = useQueryClient();
+  // 26 Oct 2026 — the same hook as the meeting room's (useEventInviteLink).
   const { data: session } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
     meta: { entities: [E.session(sessionId)] },
   });
-  const {
-    data: pendingInvites,
-    isLoading: invitesLoading,
-    isError: invitesError,
-  } = useQuery({
-    queryKey: ['session-pending-invites', sessionId],
-    queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then(r => r.data.data ?? []),
-    enabled: showInviteModal,
-    meta: { entities: [E.sessionInvites(sessionId)] },
-  });
-  const openInviteLink = (pendingInvites as Array<{
-    code: string; inviteeEmail: string | null; maxUses?: number; useCount?: number; expiresAt?: string | null;
-  }> | undefined)?.find(i =>
-    !i.inviteeEmail
-    && (i.useCount ?? 0) < (i.maxUses ?? 1)
-    && (!i.expiresAt || new Date(i.expiresAt).getTime() > Date.now()),
+  // A shareable link must cover the whole event (same cap the event page uses).
+  const { url: inviteUrl, failed: inviteLinkFailed } = useEventInviteLink(
+    sessionId, showInviteModal, session?.config?.maxParticipants ?? 500,
   );
-  const createInviteLink = useMutation({
-    mutationFn: () => api.post('/invites', {
-      type: 'session',
-      sessionId,
-      // A shareable link must cover the whole event (same cap the event page uses).
-      maxUses: session?.config?.maxParticipants ?? 500,
-      expiresInHours: 168,
-    }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['session-pending-invites', sessionId] }),
-  });
-  const inviteLinkCreateFired = useRef(false);
-  useEffect(() => {
-    if (!showInviteModal) { inviteLinkCreateFired.current = false; return; }
-    if (invitesLoading || invitesError || pendingInvites === undefined || openInviteLink) return;
-    if (inviteLinkCreateFired.current) return;
-    inviteLinkCreateFired.current = true;
-    createInviteLink.mutate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per modal open, keyed on the list settling
-  }, [showInviteModal, invitesLoading, invitesError, pendingInvites, openInviteLink]);
-  const createdCode: string | undefined = createInviteLink.data?.data?.data?.code;
-  const inviteCode = openInviteLink?.code ?? createdCode;
-  const inviteUrl = inviteCode ? `${window.location.origin}/invite/${inviteCode}` : '';
-  const inviteLinkFailed = invitesError || createInviteLink.isError;
 
   // Phase 8B.2 — Esc closes the Invite + Room modals.
   useEscapeKey(() => { setShowInviteModal(false); setInviteLinkCopied(false); }, showInviteModal);
@@ -120,13 +95,12 @@ export default function HostControls({ sessionId }: Props) {
   const isInRound = sessionStatus === 'round_active' || sessionStatus === 'round_rating' || phase === 'matched' || phase === 'rating';
 
   // S19 (Ali, 6 Jun — live-test b1) — ending the EVENT is the director's
-  // call alone. A co-host ended b1 and recap emails went out mid-test.
+  // call. A co-host ended b1 and recap emails went out mid-test.
   // Co-hosts keep every other control (start/end round, rooms, mute…);
   // the End Event button renders DISABLED for them with the why.
-  // (hostUserId is read from the store further down, near hostsSet.)
-  const { user } = useAuthStore();
-  const directorUserId = useSessionStore(s => s.hostUserId);
-  const isDirector = !!user?.id && user.id === directorUserId;
+  // 26 Oct 2026 (VID-03) — a super_admin may end it too, as the server has
+  // always allowed (handleHostEnd); Stefan saw it disabled on 25 Oct. The
+  // rule arrives as canEndEvent, computed once in LiveSessionPage.
 
   // Phase 7B.3 — click-lock against double-fires (Stefan #10).
   const { runLocked } = useActionLock();
@@ -832,8 +806,9 @@ export default function HostControls({ sessionId }: Props) {
           Phase 7-audit fix — mobile-responsive. Wrapping flex layout so
           buttons line-break instead of pushing the page wider than the
           viewport. On small screens, button labels collapse to icon-only
-          via the .sm:inline rule below. */}
-      <div className="p-3 sm:p-4">
+          via the .sm:inline rule below.
+          26 Oct 2026 — padded clear of the iPhone home indicator. */}
+      <div className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-[max(1rem,env(safe-area-inset-bottom))]">
         <div className="max-w-4xl mx-auto flex flex-wrap items-center justify-between gap-y-2 gap-x-3">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
             <div className="flex items-center gap-2 text-xs text-gray-400">
@@ -878,7 +853,7 @@ export default function HostControls({ sessionId }: Props) {
           <div className="flex flex-wrap gap-1.5 sm:gap-2 justify-end">
             {/* Start Event */}
             {!sessionStarted && (
-              <Button size="sm" onClick={startSession}>
+              <Button size="sm" onClick={startSession} className={BAR_GO}>
                 <Play className="h-4 w-4 mr-1" /> Start Event
               </Button>
             )}
@@ -947,7 +922,7 @@ export default function HostControls({ sessionId }: Props) {
                   <button
                     type="button"
                     onClick={() => useToastStore.getState().addToast(matchPeopleHint, 'info')}
-                    className="text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg inline-flex items-center gap-1 hover:bg-gray-50"
+                    className={`${BAR_TARGET} text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg inline-flex items-center gap-1 hover:bg-gray-50`}
                     title={matchPeopleHint}
                     aria-label={matchPeopleHint}
                   >
@@ -956,7 +931,7 @@ export default function HostControls({ sessionId }: Props) {
                 );
               }
               return (
-                <Button size="sm" variant="secondary" onClick={generateMatches} disabled={generating}>
+                <Button size="sm" variant="secondary" onClick={generateMatches} disabled={generating} className={BAR_TARGET}>
                   {generating ? (
                     <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Matching...</>
                   ) : (
@@ -969,20 +944,20 @@ export default function HostControls({ sessionId }: Props) {
             {/* After preview: Confirm Matches → Start Round (two-step) */}
             {matchPreview && !matchesConfirmed && (
               <>
-                <Button size="sm" onClick={confirmMatches}>
+                <Button size="sm" onClick={confirmMatches} className={BAR_GO}>
                   <Check className="h-4 w-4 mr-1" /> Confirm Matches
                 </Button>
-                <Button size="sm" variant="ghost" onClick={cancelPreview}>
+                <Button size="sm" variant="ghost" onClick={cancelPreview} className={BAR_TARGET}>
                   <X className="h-4 w-4 mr-1" /> Cancel
                 </Button>
               </>
             )}
             {matchPreview && matchesConfirmed && (
               <>
-                <Button size="sm" onClick={confirmRound} className="animate-pulse">
+                <Button size="sm" onClick={confirmRound} className={`${BAR_GO} animate-pulse`}>
                   <Play className="h-4 w-4 mr-1" /> Start Round
                 </Button>
-                <Button size="sm" variant="ghost" onClick={cancelPreview}>
+                <Button size="sm" variant="ghost" onClick={cancelPreview} className={BAR_TARGET}>
                   <X className="h-4 w-4 mr-1" /> Cancel
                 </Button>
               </>
@@ -995,7 +970,7 @@ export default function HostControls({ sessionId }: Props) {
                 actual session state, so showing the button when an algorithm
                 round is in flight — even mid-transition — is safe. */}
             {hasActiveAlgorithmRound && (
-              <Button size="sm" variant="secondary" onClick={togglePause}>
+              <Button size="sm" variant="secondary" onClick={togglePause} className={BAR_TARGET}>
                 {isPaused ? <><Play className="h-4 w-4 mr-1" /> Resume</> : <><Pause className="h-4 w-4 mr-1" /> Pause</>}
               </Button>
             )}
@@ -1005,7 +980,7 @@ export default function HostControls({ sessionId }: Props) {
             {hasActiveAlgorithmRound && (
               <Button size="sm" variant="secondary" onClick={() => runLocked('extend_round', () => {
                 socket?.emit('host:extend_round', { sessionId, additionalSeconds: 120 });
-              })} title="Add 2 minutes to the current round">
+              })} title="Add 2 minutes to the current round" className={BAR_TARGET}>
                 <Clock className="h-4 w-4 mr-1" /> +2 min
               </Button>
             )}
@@ -1014,7 +989,7 @@ export default function HostControls({ sessionId }: Props) {
                 handleHostEnd (host-actions.ts:434) detects ROUND_ACTIVE and
                 routes to endRound() → rating window flow. */}
             {hasActiveAlgorithmRound && (
-              <Button size="sm" variant="secondary" onClick={endCurrentRound} title="End round early — goes to rating">
+              <Button size="sm" variant="secondary" onClick={endCurrentRound} title="End round early — goes to rating" className={BAR_TARGET}>
                 <SkipForward className="h-4 w-4 mr-1" /> End Round
               </Button>
             )}
@@ -1033,6 +1008,7 @@ export default function HostControls({ sessionId }: Props) {
                   socket?.emit('host:force_close_rating', { sessionId });
                 })}
                 title="Close the rating window now and continue (skips any pending ratings)"
+                className={BAR_TARGET}
               >
                 <SkipForward className="h-4 w-4 mr-1" /> Skip Ratings
               </Button>
@@ -1044,29 +1020,48 @@ export default function HostControls({ sessionId }: Props) {
                 the event from ONE operational surface. */}
 
             {/* 9 May iter — Control Center button restored to the host
-                bar (red, last action before End Event). Click → opens
-                the windowed Control Center centred + large enough that
-                no dragging is needed for the everyday view. Drag,
-                minimize, maximize all still available from the title bar.
+                bar. Click → opens the windowed Control Center centred +
+                large enough that no dragging is needed for the everyday
+                view. Drag, minimize, maximize all still available from the
+                title bar.
                 C1 (27 May audit) — no longer gated on sessionStarted:
                 hosts need the Control Center BEFORE the event starts
                 (assign co-hosts, review the roster). Round-specific tabs
-                render their own empty states pre-round. */}
+                render their own empty states pre-round.
+                26 Oct 2026 (VID-03) — no longer red: on 25 Oct it sat next
+                to End Event looking the same. End Event is the only red
+                button, with Leave just before it. */}
             <Button
               size="sm"
-              variant="danger"
+              variant="secondary"
               onClick={() => setShowControlCenter(true)}
               title="Open Host Control Center"
+              className={BAR_TARGET}
             >
               <LayoutDashboard className="h-4 w-4 mr-1" /> Control Center
+            </Button>
+
+            {/* 26 Oct 2026 (VID-03) — "When I think of leave event, it should be
+                down by End Event … and before End Event." The same leave as
+                the top bar's (confirm, then back to Events); the event carries
+                on for everyone else, the director's leave included. */}
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={onLeave}
+              title="Leave the event (it carries on for everyone else)"
+              className={BAR_TARGET}
+            >
+              <LogOut className="h-4 w-4 mr-1" /> Leave
             </Button>
 
             <Button
               size="sm"
               variant="danger"
               onClick={endEvent}
-              disabled={!isDirector}
-              title={isDirector ? 'End this event for everyone' : 'Only the host can end the event'}
+              disabled={!canEndEvent}
+              title={canEndEvent ? 'End this event for everyone' : 'Only the host can end the event'}
+              className={BAR_TARGET}
             >
               <Square className="h-4 w-4 mr-1" /> End Event
             </Button>

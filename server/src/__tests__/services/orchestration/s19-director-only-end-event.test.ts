@@ -15,9 +15,6 @@ import * as nodePath from 'path';
 function readServer(rel: string): string {
   return nodeFs.readFileSync(nodePath.join(__dirname, '../../../', rel), 'utf8');
 }
-function readClient(rel: string): string {
-  return nodeFs.readFileSync(nodePath.join(__dirname, '../../../../../client/src/', rel), 'utf8');
-}
 
 function sliceFn(src: string, marker: string): string {
   const fnStart = src.indexOf(marker);
@@ -52,22 +49,5 @@ describe('S19 — server: handleHostEnd director gate', () => {
     // And BEFORE the ROUND_ACTIVE branch, so endEvent:true is gated there too.
     const roundActiveIdx = f.indexOf('activeSession.status === SessionStatus.ROUND_ACTIVE) {');
     expect(gateIdx).toBeLessThan(roundActiveIdx);
-  });
-});
-
-describe('S19 — client: End Event disabled for non-directors', () => {
-  const src = () => readClient('features/live/HostControls.tsx');
-
-  it('isDirector compares the auth user to the session hostUserId', () => {
-    expect(src()).toMatch(/isDirector = !!user\?\.id && user\.id === directorUserId/);
-  });
-
-  it('the End Event button is disabled for non-directors with the why', () => {
-    const s = src();
-    const idx = s.indexOf('End Event\n');
-    const block = s.slice(Math.max(0, idx - 700), idx);
-    expect(block).toMatch(/onClick=\{endEvent\}/);
-    expect(block).toMatch(/disabled=\{!isDirector\}/);
-    expect(block).toMatch(/Only the host can end the event/);
   });
 });

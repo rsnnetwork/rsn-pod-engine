@@ -67,7 +67,7 @@ const TileReaction = memo(function TileReaction({ userId }: { userId?: string })
   );
 });
 
-function VideoTile({ trackRef, label, isWaiting, isPinned, userId, fillMode = 'contain' }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean; userId?: string; fillMode?: 'contain' | 'cover' }) {
+export function VideoTile({ trackRef, label, isWaiting, isPinned, userId, fillMode = 'contain' }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean; userId?: string; fillMode?: 'contain' | 'cover' }) {
   // UX2 (June-10 debrief) — camera "on" means a published video track that is
   // NOT muted. Turning a camera off mutes (not unpublishes) the track, so a
   // track-presence-only check left a muted (off) camera still showing video in
@@ -520,7 +520,7 @@ function PartnerWaitingBanner({ sessionId }: { sessionId: string }) {
 // hard Disconnected state — transient blips are left to the SDK's own
 // auto-reconnect so we never thrash a healthy or already-reconnecting link.
 // Debounced so a burst of focus/visibility/online events fires at most once.
-function ReconnectOnReturn({ onReconnect }: { onReconnect: () => void }) {
+export function ReconnectOnReturn({ onReconnect }: { onReconnect: () => void }) {
   const room = useRoomContext();
   const cbRef = useRef(onReconnect);
   cbRef.current = onReconnect;

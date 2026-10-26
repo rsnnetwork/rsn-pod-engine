@@ -101,9 +101,11 @@ export default function ParticipantList({ onClose, sessionId, isHost = false }: 
             {participants.length}
           </span>
         </div>
+        {/* 26 Oct 2026 — a 44px target, named for screen readers. */}
         <button
           onClick={onClose}
-          className="p-1 text-gray-400 hover:text-gray-900 rounded-lg hover:bg-gray-100 transition-colors"
+          aria-label="Close the people list"
+          className="-mr-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-gray-900 rounded-lg hover:bg-gray-100 transition-colors"
         >
           <X className="h-4 w-4" />
         </button>
@@ -161,7 +163,7 @@ export default function ParticipantList({ onClose, sessionId, isHost = false }: 
                     onClick={() => toggleCohost(p.userId)}
                     title={isCohost ? 'Remove co-host' : 'Make co-host'}
                     aria-label={isCohost ? `Remove ${p.displayName || 'user'} as co-host` : `Make ${p.displayName || 'user'} a co-host`}
-                    className={`p-1.5 rounded-lg transition-colors shrink-0 ${
+                    className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg transition-colors shrink-0 ${
                       isCohost ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-400 hover:bg-white/10'
                     }`}
                   >

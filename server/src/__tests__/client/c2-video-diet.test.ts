@@ -17,10 +17,11 @@ function readClient(rel: string): string {
   return fs.readFileSync(path.join(__dirname, '../../../../client/src', rel), 'utf8');
 }
 
-const ROOMS = ['features/live/Lobby.tsx', 'features/live/VideoRoom.tsx'];
+// 26 Oct 2026 — the video meeting's own room (meeting/MeetingRoom.tsx) keeps the same diet.
+const ROOMS = ['features/live/Lobby.tsx', 'features/live/VideoRoom.tsx', 'features/live/meeting/MeetingRoom.tsx'];
 
-describe('C2 / VID-1 — adaptiveStream + dynacast + pinned simulcast on both rooms', () => {
-  it('both <LiveKitRoom> options enable adaptiveStream and dynacast', () => {
+describe('C2 / VID-1 — adaptiveStream + dynacast + pinned simulcast on all three rooms', () => {
+  it('every <LiveKitRoom> options enable adaptiveStream and dynacast', () => {
     for (const rel of ROOMS) {
       const src = readClient(rel);
       expect(src).toMatch(/adaptiveStream: true/);
@@ -28,7 +29,7 @@ describe('C2 / VID-1 — adaptiveStream + dynacast + pinned simulcast on both ro
     }
   });
 
-  it('both rooms pin the simulcast sub-layers [h180, h360] and cap the top layer at 24fps', () => {
+  it('every room pins the simulcast sub-layers [h180, h360] and cap the top layer at 24fps', () => {
     for (const rel of ROOMS) {
       const src = readClient(rel);
       expect(src).toMatch(/videoSimulcastLayers: \[VideoPresets\.h180, VideoPresets\.h360\]/);
@@ -36,14 +37,14 @@ describe('C2 / VID-1 — adaptiveStream + dynacast + pinned simulcast on both ro
     }
   });
 
-  it('VideoPresets is imported from livekit-client in both rooms', () => {
+  it('VideoPresets is imported from livekit-client in every room', () => {
     for (const rel of ROOMS) {
       const src = readClient(rel);
       expect(src).toMatch(/import \{[^}]*VideoPresets[^}]*\} from 'livekit-client'/);
     }
   });
 
-  it('AUDIO CONTRACT — RoomAudioRenderer stays mounted in both rooms (all mics always rendered)', () => {
+  it('AUDIO CONTRACT — RoomAudioRenderer stays mounted in every room (all mics always rendered)', () => {
     for (const rel of ROOMS) {
       expect(readClient(rel)).toMatch(/<RoomAudioRenderer \/>/);
     }
