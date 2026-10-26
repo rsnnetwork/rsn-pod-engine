@@ -204,6 +204,8 @@ describe('every C7 form is react-hook-form with a Zod schema through formResolve
     const start = lines.findIndex((l) => l.startsWith('function NewEventForm'));
     const end = lines.findIndex((l, i) => i > start && l === '}');
     expect(start).toBeGreaterThan(-1);
+    // Found, and after its start: a missing closing brace (-1) must not pass as a short function.
+    expect(end).toBeGreaterThan(start);
     expect(end - start + 1).toBeLessThan(200);
   });
 

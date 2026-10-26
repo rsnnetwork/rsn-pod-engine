@@ -7,12 +7,13 @@
 // Chromium. A React Profiler counts every commit: once the forms have drawn and the parent has stopped re-rendering
 // them with fresh props, the count must not move at all.
 //
-// It needs Playwright's Chromium, as the e2e specs do. Where none is installed (the CI image installs none), the suite
-// is skipped and says so; every local and pre-ship run of the full suite has it.
+// It needs Playwright's Chromium, as the e2e specs do, and esbuild, which comes with Vite (no dependency of its own).
+// Where either is missing (the CI image installs no browser) the suite is skipped and says so on stderr; every local
+// and pre-ship run of the full suite has both. esbuild is loaded only once both are known to be there, so a Vite that
+// stops shipping it skips this suite rather than failing it.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { build, type Plugin } from 'esbuild';
 import { chromium, type Browser, type Page } from 'playwright';
 
 const ROOT = path.resolve(__dirname, '../../../..');
@@ -27,16 +28,33 @@ const chromiumPath = (() => {
     return null;
   }
 })();
-if (!chromiumPath) {
-  // The one place a skipped run must not be quiet.
-  process.stderr.write('c7-forms-render-loop: skipped, no Playwright Chromium here (npx playwright install chromium)\n');
+const esbuildFound = (() => {
+  try {
+    require.resolve('esbuild');
+    return true;
+  } catch {
+    return false;
+  }
+})();
+// The one place a skipped run must not be quiet.
+if (!chromiumPath) process.stderr.write('c7-forms-render-loop: skipped, no Playwright Chromium here (npx playwright install chromium)\n');
+if (!esbuildFound) process.stderr.write('c7-forms-render-loop: skipped, no esbuild here (it comes with Vite)\n');
+const describeWhenReady = chromiumPath && esbuildFound ? describe : describe.skip;
+
+/** The parts of esbuild's plugin API used here, typed locally so this file never needs esbuild to compile. */
+interface ResolveArgs { path: string; kind: string }
+interface PluginBuild {
+  onResolve(options: { filter: RegExp }, callback: (args: ResolveArgs) => unknown): void;
+  resolve(target: string, options: { resolveDir: string; kind: string }): Promise<{ path: string; errors: unknown[] }>;
 }
-const describeWithChromium = chromiumPath ? describe : describe.skip;
+interface Bundler { build(options: Record<string, unknown>): Promise<unknown> }
+/** A module by name, at run time: a literal import would make esbuild's absence a compile error, not a skip. */
+const load = (name: string): unknown => require(name);
 
 /** The client's `@/` imports, from client/src, except the API and the auth store, which the harness stands in. */
-const clientAlias: Plugin = {
+const clientAlias = {
   name: 'client-alias',
-  setup(b) {
+  setup(b: PluginBuild) {
     b.onResolve({ filter: /^@\/lib\/api$/ }, () => ({ path: path.join(HARNESS, 'stubs', 'api.ts') }));
     b.onResolve({ filter: /^@\/stores\/authStore$/ }, () => ({ path: path.join(HARNESS, 'stubs', 'authStore.ts') }));
     b.onResolve({ filter: /^@\// }, async (args) => {
@@ -90,12 +108,15 @@ async function watch(page: Page): Promise<{ drawn: boolean; settled: boolean; mo
   return { drawn, settled: stillFor >= 600, mount, idle: (await commits(page)) - mount };
 }
 
-describeWithChromium('the C7 forms settle, then sit still: no render loop, loud or quiet', () => {
-  let browser: Browser;
+describeWhenReady('the C7 forms settle, then sit still: no render loop, loud or quiet', () => {
+  let browser: Browser | undefined;
   let page: string;
+  /** The bundle's folder, removed in afterAll (which runs even when beforeAll fails). */
+  let out = '';
 
   beforeAll(async () => {
-    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'c7-render-loop-'));
+    out = fs.mkdtempSync(path.join(os.tmpdir(), 'c7-render-loop-'));
+    const { build } = load('esbuild') as Bundler;
     await build({
       entryPoints: [path.join(HARNESS, 'harness.tsx')],
       bundle: true,
@@ -117,12 +138,16 @@ describeWithChromium('the C7 forms settle, then sit still: no render loop, loud 
   }, 120_000);
 
   afterAll(async () => {
-    await browser?.close();
+    await browser?.close().catch(() => undefined);
+    // The bundle is about 1.7 MB: never leave one behind, not even when the build or the browser failed.
+    if (out) fs.rmSync(out, { recursive: true, force: true });
   });
 
   it('every form, for a non-admin director with and without ?podId=, an admin and in StrictMode', async () => {
+    const chrome = browser;
+    if (!chrome) throw new Error('Chromium did not start');
     const results = await Promise.all(SCENARIOS.map(async (scenario) => {
-      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      const ctx = await chrome.newContext({ viewport: { width: 390, height: 844 } });
       const tab = await ctx.newPage();
       const errors: string[] = [];
       tab.on('pageerror', (e) => errors.push(String(e)));
