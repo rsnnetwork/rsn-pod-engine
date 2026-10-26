@@ -47,6 +47,7 @@ import userRoutes from './routes/users';
 import onboardingRoutes from './routes/onboarding';
 import onboardingV2Routes from './routes/onboarding-v2';
 import podRoutes from './routes/pods';
+import podWallRoutes from './routes/pod-wall';
 import sessionRoutes from './routes/sessions';
 import inviteRoutes from './routes/invites';
 import ratingRoutes from './routes/ratings';
@@ -332,6 +333,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/onboarding/v2', onboardingV2Routes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/pods', podRoutes);
+app.use('/api/pods', podWallRoutes); // a pod's wall: /:podId/wall/…, a path shape the pods router does not use
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/invites', inviteRoutes);
 app.use('/api/ratings', ratingRoutes);

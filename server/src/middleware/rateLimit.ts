@@ -239,6 +239,21 @@ export const peopleWriteLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// The pod wall (26 Oct 2026). Every write to a pod's wall (a post, a comment or reply, a reaction, a like, a
+// delete, a pin) is counted per member, on top of the service's own caps of 6 posts and 20 comments a minute.
+// Each write tells every active member's open screen and may ring bells, so a runaway client is stopped at 60 a
+// minute. Reads are not counted here: the API limiter in front of every route covers them, and a screen that
+// refetches whenever the wall changes must not be locked out of the wall it is drawing.
+export const wallWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('wall-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // Entities (21 Oct 2026). Reads are limited like the person brief, because any entity, and any member's
 // entities, can be asked for by id. Edits, joins and leaves share a write allowance. Creating has a small
 // hourly one of its own, because every new entity claims a name that nobody else can then take. Only an

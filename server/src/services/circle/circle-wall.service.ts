@@ -78,7 +78,10 @@ async function requireCircleMember(circleId: string, userId: string, what = 'pos
   }
 }
 
-async function assertRate(userId: string, table: string, perMin: number, what: string): Promise<void> {
+/** The tables a wall counts a member's recent writes in. Named, never typed in, because the name is written into the SQL. */
+export type RateCountedTable = 'circle_posts' | 'circle_post_comments' | 'pod_posts' | 'pod_post_comments';
+
+export async function assertRate(userId: string, table: RateCountedTable, perMin: number, what: string): Promise<void> {
   const r = await query<{ c: string }>(
     `SELECT count(*)::text AS c FROM ${table}
      WHERE author_id = $1 AND created_at > NOW() - INTERVAL '1 minute'`,
@@ -269,7 +272,7 @@ function mapPost(row: any): WallPost {
   };
 }
 
-const BLOCK_FILTER = `
+export const BLOCK_FILTER = `
   AND NOT EXISTS (
     SELECT 1 FROM user_blocks b
     WHERE (b.blocker_id = $2 AND b.blocked_id = p.author_id)
