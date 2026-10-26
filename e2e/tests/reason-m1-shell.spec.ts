@@ -23,10 +23,13 @@
 //                      windows about 640px tall); on a short landscape phone the page area scrolls
 //                      and the box is fully inside the window once it is scrolled to its end
 //   8  old pages       Circles, Events, Messages, Settings, Pods and Support render inside
-//                      the shell with no script errors
+//                      the shell with no script errors; Events opens with Your meetings (empty)
+//                      above the events
 //   9  account menu    Invite and Log out stay reachable (Admin only for admins); the account
 //                      button and More are marked current on Invite
 //  10  unread count    the Messages link names its unread count (bar, rail and sidebar)
+//  11  meetings count  the Events link names the upcoming meetings, with a live dot while one
+//                      can be joined (bar, rail and sidebar)
 //
 // Two throwaway members, no admin. Both are created in the database this run talks to and
 // removed by exact id in afterAll. The preview reads and writes PRODUCTION data, so nothing
@@ -314,8 +317,10 @@ async function expectChrome(page: Page, width: number, where: string): Promise<v
   const links = aside.getByRole('navigation', { name: 'Main' }).getByRole('link');
   await expect(links, `${where}: seven main entries`).toHaveCount(7);
   await expect(aside.getByRole('link', { name: 'Introductions' }), `${where}: no Introductions tab`).toHaveCount(0);
-  // An entry is named by its label; Messages adds its unread count when there is one ("Messages, 3 unread").
-  expect(await links.evaluateAll((els) => els.map((e) => (e.getAttribute('aria-label') ?? '').replace(/, \d+ unread$/, ''))), `${where}: every entry is named`).toEqual(MAIN);
+  // An entry is named by its label; Messages adds its unread count when there is one ("Messages, 3 unread"), and Events
+  // its upcoming meetings ("Events, 1 upcoming meeting", then ", live now" while one can be joined).
+  const label = (name: string) => name.replace(/, \d+ unread$/, '').replace(/, \d+ upcoming meetings?(, live now)?$/, '');
+  expect(await links.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? '')).then((names) => names.map(label)), `${where}: every entry is named`).toEqual(MAIN);
   const words = (await links.evaluateAll((els) => els.map((e) => (e as HTMLElement).innerText.trim())));
   if (mode === 'rail') {
     expect(words, `${where}: the rail shows icons, not words`).toEqual(MAIN.map(() => ''));
@@ -892,6 +897,12 @@ test('8 old pages: Circles, Events, Messages, Settings, Pods and Support render 
         await visit(page, p.route, size.width);
         await expect(p.see(page).first(), `${where}: the page's own heading is inside the shell`).toBeVisible({ timeout: 25_000 });
         await expect(page.getByRole('main'), `${where}: inside the shell's page area`).toBeVisible();
+        if (p.route === '/sessions') {
+          // 26 Oct 2026: the member's meetings sit above the events. This member has none yet.
+          await expect(page.getByRole('heading', { name: 'Your meetings', level: 2 }), `${where}: Your meetings`).toBeVisible({ timeout: 20_000 });
+          await expect(page.getByText('No meetings yet. When you and someone agree a time, it appears here.', { exact: true }), `${where}: the empty line`).toBeVisible();
+          await expect(page.getByRole('heading', { name: 'Pod events', level: 2 }), `${where}: then the events`).toBeVisible();
+        }
         await expect(page.locator('header').first(), `${where}: the top bar`).toBeVisible();
         await expectContained(page, where);
         console.log(`  ✓ ${where}: renders inside the shell.`);
@@ -982,6 +993,62 @@ test('10 unread count: the Messages link says how many messages are waiting (bar
       await expect(link, `${where}: the Messages link names its unread count`).toBeVisible({ timeout: 20_000 });
       await expectTapSize([{ name: 'Messages link', loc: link }], where);
       console.log(`  ✓ ${where}: the ${modeOf(size.width)} Messages link reads "Messages, 1 unread".`);
+      expect(errors, `${where}: script errors`).toEqual([]);
+    });
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// 11. The Events link names the upcoming meetings
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+// Stefan, 25 Oct 2026: "there should be a little number on Events, like Messages has a count". One meeting between the
+// two throwaway members, written straight into their own conversation (the request and booking steps send bells and
+// emails, and the preview talks to production), is upcoming in two days, then moved to two minutes from now, when it can
+// be joined. It goes with the conversation when cleanup() removes the two members.
+test('11 meetings count: the Events link names the upcoming meetings, with a live dot while one can be joined (bar, rail and sidebar)', async () => {
+  test.setTimeout(400_000);
+  const id = await thread();
+  const booked = await pool.query<{ id: string }>(
+    `INSERT INTO meetings (conversation_id, user_a_id, user_b_id, start_at, duration_min, kind)
+     VALUES ($1, LEAST($2::uuid, $3::uuid), GREATEST($2::uuid, $3::uuid), NOW() + INTERVAL '2 days', 30, 'video') RETURNING id`,
+    [id, member.id, unfinished.id],
+  );
+  const meetingId = booked.rows[0].id;
+  const sizesToCheck = sizes([{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 800 }]);
+  const eventsLink = (page: Page, width: number) =>
+    (modeOf(width) === 'phone' ? page.getByRole('navigation', { name: 'Main' }) : sidebar(page)).locator('a[href="/sessions"]');
+
+  for (const size of sizesToCheck) {
+    const where = `${size.width}px, in two days`;
+    await using(member, size, async ({ page, errors }) => {
+      await visit(page, '/circles', size.width);
+      const link = eventsLink(page, size.width);
+      await expect(link, `${where}: the Events link names the meeting`).toHaveAttribute('aria-label', 'Events, 1 upcoming meeting', { timeout: 20_000 });
+      await expect(link.locator('i'), `${where}: the number on Events`).toHaveText('1');
+      await expect(link.locator('[data-live-now]'), `${where}: no live dot two days out`).toHaveCount(0);
+      await expectTapSize([{ name: 'Events link', loc: link }], where);
+      console.log(`  ✓ ${where}: the ${modeOf(size.width)} Events link reads "Events, 1 upcoming meeting", with the number 1 and no live dot.`);
+      expect(errors, `${where}: script errors`).toEqual([]);
+    });
+  }
+
+  await pool.query(`UPDATE meetings SET start_at = NOW() + INTERVAL '2 minutes' WHERE id = $1`, [meetingId]);
+  for (const size of sizesToCheck) {
+    const where = `${size.width}px, two minutes out`;
+    await using(member, size, async ({ page, errors }) => {
+      await visit(page, '/circles', size.width);
+      const link = eventsLink(page, size.width);
+      await expect(link, `${where}: the Events link says it can be joined`).toHaveAttribute('aria-label', 'Events, 1 upcoming meeting, live now', { timeout: 20_000 });
+      await expect(link.locator('[data-live-now]'), `${where}: the live dot`).toBeVisible();
+      // The dot is drawn on the icon, inside the link, and clear of the number.
+      const dot = await link.locator('[data-live-now]').boundingBox();
+      const count = await link.locator('i').boundingBox();
+      const box = await link.boundingBox();
+      expect(dot && box && dot.x >= box.x && dot.x + dot.width <= box.x + box.width && dot.y >= box.y, `${where}: the dot is inside the link`).toBe(true);
+      expect(dot && count && (dot.x + dot.width <= count.x || dot.y + dot.height <= count.y), `${where}: the dot does not sit on the number`).toBe(true);
+      await page.screenshot({ path: path.join(SHOTS, `11-events-live-dot-${size.width}-${engineLabel().replace(/[^a-z0-9]+/gi, '-')}.png`) });
+      console.log(`  ✓ ${where}: the ${modeOf(size.width)} Events link reads "Events, 1 upcoming meeting, live now", with the live dot.`);
       expect(errors, `${where}: script errors`).toEqual([]);
     });
   }
