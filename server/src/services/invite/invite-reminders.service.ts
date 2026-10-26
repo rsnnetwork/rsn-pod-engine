@@ -90,6 +90,19 @@ const memoryStore: Store = {
 
 // ─── Redis ──────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Adds to a count, then gives it its life if it has none (TTL -1), in one script that Redis runs whole (fix round 4). It
+ * was two commands, SET ... NX then INCRBY: when the count's hour ran out between them, INCRBY made a new count with no
+ * end, and that member's allowance never came back. Read after the INCRBY, the TTL also gives an end to a count found
+ * without one, and a count that has one keeps it (later emails do not stretch the hour).
+ */
+const ADD_TO_COUNT_SCRIPT = `
+local count = redis.call('INCRBY', KEYS[1], ARGV[1])
+if redis.call('TTL', KEYS[1]) == -1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return count`;
+
 const redisStore = (redis: Redis): Store => ({
   async setIfAbsent(key, value, ttlSeconds) {
     return (await redis.set(key, value, 'EX', ttlSeconds, 'NX')) === 'OK';
@@ -101,9 +114,7 @@ const redisStore = (redis: Redis): Store => ({
     if (keys.length > 0) await redis.del(...keys);
   },
   async add(key, by, ttlSeconds) {
-    // The count is made WITH its life first, then added to: a count can never be left without an end.
-    await redis.set(key, '0', 'EX', ttlSeconds, 'NX');
-    await redis.incrby(key, by);
+    await redis.eval(ADD_TO_COUNT_SCRIPT, 1, key, by, ttlSeconds);
   },
 });
 

@@ -1093,6 +1093,19 @@ describe('createInvitesBatch', () => {
       expect(failures[0][0].err).toBeInstanceOf(Error);
     });
 
+    // Fix round 4: the invite email now says whether it went (the provider answers a refusal rather than throwing). A batch
+    // does what it always did with a refused email: the send has logged the refusal itself, and the invite stands.
+    it('an email the provider refuses (an answer, not an error) changes nothing: every invite stands, the rest still go, and the batch logs no failure of its own', async () => {
+      mockSendInviteEmail.mockResolvedValueOnce({ sent: false });
+      const [a, b, c] = [person(1), person(2), person(3)];
+      const result = await podBatch([a, b, c]);
+      expect(outcomes(result)).toEqual([[a, 'invited'], [b, 'invited'], [c, 'invited']]);
+      await result.delivery;
+      expect(world.invites).toHaveLength(3);
+      expect(mockSendInviteEmail).toHaveBeenCalledTimes(3);
+      expect(mockLogger.warn.mock.calls.filter((call) => /email/i.test(String(call[1])))).toHaveLength(0);
+    });
+
     it('every failure is logged, and the delivery still ends normally: a promise nobody waits for must never reject', async () => {
       mockSendInviteEmail.mockRejectedValue(new Error('mail provider is down'));
       const result = await podBatch([person(1), person(2)]);

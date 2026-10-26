@@ -23,7 +23,12 @@ import {
   REMINDER_COOLDOWN_SECONDS, REMINDER_EMAILS_PER_HOUR,
 } from '../../../services/invite/invite-reminders.service';
 
-/** The few commands the ledger uses, with Redis's rules: SET ... EX n NX sets only a key that is not there, keys end. */
+/**
+ * The few commands the ledger uses, with Redis's rules: SET ... EX n NX sets only a key that is not there, keys end, INCRBY
+ * keeps the end a key has and gives a new key none, and a script runs whole, with nothing between its steps.
+ * `onceAnswered` runs once, right after the next command is answered: a test moves the clock there to land between two
+ * commands.
+ */
 function fakeRedis() {
   const keys = new Map<string, { value: string; expiresAt: number | null }>();
   const commands: string[] = [];
@@ -34,24 +39,31 @@ function fakeRedis() {
   };
   return {
     keys, commands, failing: false,
+    onceAnswered: null as (() => void) | null,
+    answered<T>(reply: T): T {
+      const then = this.onceAnswered;
+      this.onceAnswered = null;
+      then?.();
+      return reply;
+    },
     async set(key: string, value: string, ...options: Array<string | number>) {
       if (this.failing) throw new Error('Redis is down');
       commands.push(`set ${key} ${options.join(' ')}`);
       const ex = options.indexOf('EX');
       const nx = options.includes('NX');
-      if (nx && alive(key)) return null;
+      if (nx && alive(key)) return this.answered(null);
       keys.set(key, { value, expiresAt: ex >= 0 ? Date.now() + Number(options[ex + 1]) * 1000 : null });
-      return 'OK';
+      return this.answered('OK');
     },
     async get(key: string) {
       if (this.failing) throw new Error('Redis is down');
       commands.push(`get ${key}`);
-      return alive(key)?.value ?? null;
+      return this.answered(alive(key)?.value ?? null);
     },
     async del(...names: string[]) {
       if (this.failing) throw new Error('Redis is down');
       commands.push(`del ${names.join(' ')}`);
-      return names.filter((name) => keys.delete(name)).length;
+      return this.answered(names.filter((name) => keys.delete(name)).length);
     },
     async incrby(key: string, by: number) {
       if (this.failing) throw new Error('Redis is down');
@@ -59,7 +71,22 @@ function fakeRedis() {
       const entry = alive(key);
       const next = Number(entry?.value ?? 0) + by;
       keys.set(key, { value: String(next), expiresAt: entry ? entry.expiresAt : null });
-      return next;
+      return this.answered(next);
+    },
+    /**
+     * EVAL of the one script the ledger runs, run whole as Redis runs a script: INCRBY, then EXPIRE when TTL says the
+     * count has no end (-1). Any other script is refused, so a change to the script has to be made to this model too.
+     */
+    async eval(script: string, numKeys: number, ...args: Array<string | number>) {
+      if (this.failing) throw new Error('Redis is down');
+      commands.push(`eval ${numKeys} ${args.join(' ')}`);
+      const steps = (script.match(/redis\.call\('\w+'/g) ?? []).map((call) => call.slice("redis.call('".length, -1));
+      if (steps.join(' ') !== 'INCRBY TTL EXPIRE' || !/== -1/.test(script)) throw new Error(`The fake Redis does not know this script: ${script}`);
+      const [key, by, ttlSeconds] = args.map(String);
+      const entry = alive(key);
+      const count = Number(entry?.value ?? 0) + Number(by);
+      keys.set(key, { value: String(count), expiresAt: entry?.expiresAt ?? Date.now() + Number(ttlSeconds) * 1000 });
+      return this.answered(count);
     },
   };
 }
@@ -260,15 +287,36 @@ describe('what is written to Redis', () => {
     expect(redis.keys.get(key)).toEqual({ value: String(new Date('2026-10-26T08:00:00.000Z').getTime()), expiresAt: Date.now() + 3600 * 1000 });
   });
 
-  it('a member\'s count is made WITH its hour before anything is added to it, so no count can be left without an end', async () => {
+  // Fix round 4: the count used to be made with its hour (SET ... NX) and then added to (INCRBY): two commands. When the hour
+  // ran out between them, INCRBY made a new count with no end, and that member's allowance never came back. Adding is now
+  // one script, which Redis runs whole.
+  it('a member\'s count is added to and given its hour in ONE command, a script Redis runs whole', async () => {
     const who = member();
     await countRemindersSent(who, 7);
     const key = `rsn:invite-reminders-sent:${who}`;
-    const made = redis.commands.findIndex((c) => c === `set ${key} EX 3600 NX`);
-    const added = redis.commands.findIndex((c) => c === `incrby ${key} 7`);
-    expect(made).toBeGreaterThanOrEqual(0);
-    expect(added).toBeGreaterThan(made);
-    expect(redis.keys.get(key)?.expiresAt).toBe(Date.now() + 3600 * 1000);
+    expect(redis.commands).toEqual([`eval 1 ${key} 7 3600`]);
+    expect(redis.keys.get(key)).toEqual({ value: '7', expiresAt: Date.now() + 3600 * 1000 });
+  });
+
+  it('a count whose hour runs out while it is being added to is never left without an end, so the allowance comes back', async () => {
+    const who = member();
+    const key = `rsn:invite-reminders-sent:${who}`;
+    await countRemindersSent(who, 100);
+    at('2026-10-26T08:59:59.999Z');
+    // The hour ends right after the next command is answered: between two commands, if adding took two.
+    redis.onceAnswered = () => at('2026-10-26T09:00:00.001Z');
+    await countRemindersSent(who, 5);
+    expect(redis.keys.get(key)?.expiresAt).not.toBeNull();
+    at('2026-10-26T10:00:01.000Z');
+    await expect(reminderAllowance(who)).resolves.toBe(REMINDER_EMAILS_PER_HOUR);
+  });
+
+  it('a count found without an end, however it came to be, is given its hour at the next email', async () => {
+    const who = member();
+    const key = `rsn:invite-reminders-sent:${who}`;
+    redis.keys.set(key, { value: '40', expiresAt: null });
+    await countRemindersSent(who, 2);
+    expect(redis.keys.get(key)).toEqual({ value: '42', expiresAt: Date.now() + 3600 * 1000 });
   });
 
   it('only what a claim lost is read back for its time (one read each), and nothing for a claim that won', async () => {

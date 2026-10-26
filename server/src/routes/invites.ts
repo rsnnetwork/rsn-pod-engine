@@ -311,10 +311,13 @@ router.get(
 // ─── POST /invites/:id/remind ────────────────────────────────────────────────
 // 26 Oct 2026 (fix round 2): the email says what the invite was for. (Fix round 3): an invite reminded in the last hour
 // is not emailed again (a 200 that says so), and a member sends at most 300 reminder emails an hour, this route and
-// Remind All counted together; see invite-reminders.service.ts. The invite's TYPE says who may remind it.
+// Remind All counted together; see invite-reminders.service.ts. The invite's TYPE says who may remind it. (Fix round 4):
+// an email the mail provider did not take keeps no hour, counts nothing and is a 502.
 
 const reminderAllowanceSpent = () =>
   new AppError(429, 'RATE_LIMIT_EXCEEDED', 'You have sent a lot of reminders this hour. Please try again later.');
+const reminderNotSent = () =>
+  new AppError(502, 'SERVICE_UNAVAILABLE', 'We could not send the reminder just now. Please try again.');
 
 router.post(
   '/:id/remind',
@@ -377,16 +380,21 @@ router.post(
             data: { reminded: false, recentlyReminded: true, remindedAt: remindedAt ? remindedAt.toISOString() : null },
           });
         }
+        // The claim is kept only for an email that went (fix round 4). The mail provider answers a refusal (a bad address,
+        // its limit after the retries, an outage) rather than throwing, so its answer is read as well as a throw: either
+        // way no email went out, the invite has not been "reminded within the hour", and nothing is counted.
+        let sent = false;
         try {
           const context = await inviteService.buildInviteContext(req.user!.userId, inv.type, {
             podId: inv.pod_id, sessionId: inv.session_id, circleId: inv.circle_id,
           });
-          await inviteService.emailInvite(context, { code: inv.code, inviteeEmail: inv.invitee_email });
-        } catch (err) {
-          // No email went out, so the invite has not been "reminded within the hour".
-          await inviteReminders.releaseReminders([inv.id]);
-          throw err;
+          sent = (await inviteService.emailInvite(context, { code: inv.code, inviteeEmail: inv.invitee_email })).sent;
+        } finally {
+          if (!sent) await inviteReminders.releaseReminders([inv.id]);
         }
+        // Said as a failure, as a send that throws is: production's pages show "Failed to send reminder" (the pod page
+        // counts it among the failed) rather than "Reminder sent!" for an email nobody will get.
+        if (!sent) throw reminderNotSent();
         await inviteReminders.countRemindersSent(req.user!.userId, 1);
       }
 
@@ -400,6 +408,7 @@ router.post(
 // ─── POST /invites/remind-all/:sessionId ─────────────────────────────────────
 // Bulk remind: resend invite emails to the pending invites of a session. Fix round 3: an invite reminded within the last
 // hour is skipped and not counted, and at most as many are reminded as the member has reminder emails left for the hour.
+// Fix round 4: nothing is claimed until everything the emails need is in hand, and `reminded` counts only emails that went.
 
 router.post(
   '/remind-all/:sessionId',
@@ -447,15 +456,9 @@ router.post(
       // the hour are left out of both numbers, and no more are claimed than the member has emails left.
       const allowance = await inviteReminders.reminderAllowance(req.user!.userId);
       if (allowance <= 0) throw reminderAllowanceSpent();
-      const { claimed, recent } = await inviteReminders.claimReminders(eligible.map((inv) => inv.id), allowance);
-      const claimedIds = new Set(claimed);
-      const pendingInvites = { rows: eligible.filter((inv) => claimedIds.has(inv.id)) };
-      const total = eligible.length - recent.size;
-      if (pendingInvites.rows.length === 0) {
-        return res.json({ success: true, data: { reminded: 0, total, recentlyReminded: recent.size } });
-      }
 
-      // Build calendar event context
+      // Everything the emails need is in hand BEFORE any invite is claimed (fix round 4): a question that fails here (the
+      // sender's name, the host for the calendar entry) fails the call with nothing claimed, so pressing again reminds them.
       const inviterResult = await query<{ displayName: string }>(
         `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [req.user!.userId]
       );
@@ -480,36 +483,48 @@ router.post(
         };
       }
 
-      // Send reminders in parallel (batched)
       const { default: appConfig } = await import('../config');
       const emailService = await import('../services/email/email.service');
-      let sentCount = 0;
-      const notSent: string[] = [];
-      const BATCH = 10;
-      for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
-        const batch = pendingInvites.rows.slice(i, i + BATCH);
-        const results = await Promise.allSettled(
-          batch.map(inv =>
-            emailService.sendInviteEmail(inv.invitee_email, {
-              inviterName,
-              type: 'session',
-              targetName: session.title,
-              inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
-              calendarEvent,
-            })
-          )
-        );
-        results.forEach((result, at) => {
-          if (result.status === 'fulfilled') sentCount += 1;
-          else notSent.push(batch[at].id);
-        });
-      }
-      // An email that was not sent leaves its invite not "reminded within the hour"; the ones that went count against
-      // the member's allowance (fix round 3).
-      if (notSent.length > 0) await inviteReminders.releaseReminders(notSent);
-      await inviteReminders.countRemindersSent(req.user!.userId, sentCount);
 
-      return res.json({ success: true, data: { reminded: sentCount, total, recentlyReminded: recent.size } });
+      const { claimed, recent } = await inviteReminders.claimReminders(eligible.map((inv) => inv.id), allowance);
+      const claimedIds = new Set(claimed);
+      const pendingInvites = { rows: eligible.filter((inv) => claimedIds.has(inv.id)) };
+      const total = eligible.length - recent.size;
+      if (pendingInvites.rows.length === 0) {
+        return res.json({ success: true, data: { reminded: 0, total, recentlyReminded: recent.size } });
+      }
+
+      // Send reminders in parallel (batched). A claim is kept only for an email that went (fix round 4): the mail provider
+      // answers a refusal rather than throwing, so its answer is read, not just whether the send threw. Every other claim
+      // is given back, whatever stopped the sends, so its invite is not "reminded within the hour"; only the emails that
+      // went count against the member's allowance (fix round 3) and in `reminded`.
+      const emailed = new Set<string>();
+      try {
+        const BATCH = 10;
+        for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
+          const batch = pendingInvites.rows.slice(i, i + BATCH);
+          const results = await Promise.allSettled(
+            batch.map(inv =>
+              emailService.sendInviteEmail(inv.invitee_email, {
+                inviterName,
+                type: 'session',
+                targetName: session.title,
+                inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
+                calendarEvent,
+              })
+            )
+          );
+          results.forEach((result, at) => {
+            if (result.status === 'fulfilled' && result.value.sent) emailed.add(batch[at].id);
+          });
+        }
+      } finally {
+        const notSent = claimed.filter((id) => !emailed.has(id));
+        if (notSent.length > 0) await inviteReminders.releaseReminders(notSent);
+      }
+      await inviteReminders.countRemindersSent(req.user!.userId, emailed.size);
+
+      return res.json({ success: true, data: { reminded: emailed.size, total, recentlyReminded: recent.size } });
     } catch (err) {
       return next(err);
     }

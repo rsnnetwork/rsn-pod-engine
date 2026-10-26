@@ -33,7 +33,8 @@ jest.mock('../../../db', () => ({
   __esModule: true,
 }));
 
-const mockSendInviteEmail = jest.fn(async () => undefined);
+// The mail service takes every email: the reminders read its answer (fix round 4), and only an email that went is a reminder.
+const mockSendInviteEmail = jest.fn(async () => ({ sent: true }));
 jest.mock('../../../services/email/email.service', () => ({
   sendInviteEmail: (...args: unknown[]) => (mockSendInviteEmail as jest.Mock)(...args),
   __esModule: true,

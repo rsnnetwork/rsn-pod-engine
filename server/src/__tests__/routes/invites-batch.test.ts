@@ -137,7 +137,8 @@ beforeEach(() => {
   mockFanoutSession.mockClear();
   mockEmitEntities.mockClear();
   mockSendInviteEmail.mockReset();
-  mockSendInviteEmail.mockResolvedValue(undefined);
+  // The mail service takes every email, until a test says otherwise: the reminders read its answer (fix round 4).
+  mockSendInviteEmail.mockResolvedValue({ sent: true });
   (inviteService.createInvite as jest.Mock).mockReset();
   (inviteService.assertMayInviteToSession as jest.Mock).mockReset();
   (inviteService.getInviteByCode as jest.Mock).mockReset();
@@ -1376,6 +1377,32 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
   };
   const remindOne = (who = 'u-host', role = 'member') => request(app).post(`/invites/${INVITE}/remind`).set(auth(who, role));
   const remindAll = (who = 'u-host', role = 'member') => request(app).post(`/invites/remind-all/${EVENT}`).set(auth(who, role));
+  /** The answer production's pages turn into "Failed to send reminder": an email the mail provider did not take (fix round 4). */
+  const NOT_SENT = { code: 'SERVICE_UNAVAILABLE', message: 'We could not send the reminder just now. Please try again.' };
+
+  /**
+   * A ledger that remembers, as the real one does: an invite claimed and not given back stays "reminded within the hour", so
+   * a test can press twice and see whether a failed first press left anything claimed. Returns the invites it holds.
+   */
+  const rememberingLedger = () => {
+    const held = new Set<string>();
+    mockClaim.mockImplementation(async (ids: string[], limit: number = Number.POSITIVE_INFINITY) => {
+      const claimed: string[] = [];
+      const recent = new Map<string, Date | null>();
+      for (const id of ids) {
+        if (claimed.length >= limit) break;
+        if (held.has(id)) {
+          recent.set(id, null);
+        } else {
+          held.add(id);
+          claimed.push(id);
+        }
+      }
+      return { claimed, recent };
+    });
+    mockRelease.mockImplementation(async (ids: string[]) => { ids.forEach((id) => held.delete(id)); });
+    return held;
+  };
 
   beforeEach(() => {
     world();
@@ -1437,6 +1464,46 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
       expect(res.status).toBe(500);
       expect(mockRelease).toHaveBeenCalledWith([INVITE]);
       expect(mockCountSent).not.toHaveBeenCalled();
+    });
+
+    it('a database failure while the email is being built gives the claim back too, and nothing is sent or counted', async () => {
+      mockDb.mockImplementation(async (sql: string) => {
+        const text = sql.replace(/\s+/g, ' ').trim();
+        if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+        if (/FROM invites WHERE id = \$1/.test(text)) return { rows: [row()] };
+        if (/display_name AS "displayName"/.test(text)) throw new Error('database hiccup');
+        return { rows: [] };
+      });
+      const res = await remindOne();
+      expect(res.status).toBe(500);
+      expect(mockRelease).toHaveBeenCalledWith([INVITE]);
+      expect(mockSendInviteEmail).not.toHaveBeenCalled();
+      expect(mockCountSent).not.toHaveBeenCalled();
+    });
+
+    // Fix round 4: the mail provider's library never throws for a refusal (a bad address, its limit after the retries, an
+    // outage, the network): it answers, and the send says { sent: false }. Such a reminder was read as sent: it kept the
+    // invite's hour, used up the member's allowance and answered "reminded". These give the send that real answer.
+    it('an email the provider refuses (an answer, not an error) gives the claim back, counts nothing, and is said as a failure', async () => {
+      mockSendInviteEmail.mockResolvedValueOnce({ sent: false });
+      const res = await remindOne();
+      expect(res.status).toBe(502);
+      expect(res.body).toEqual({ success: false, error: NOT_SENT });
+      expect(sentTo()).toEqual(['guest@example.com']);
+      expect(mockRelease).toHaveBeenCalledWith([INVITE]);
+      expect(mockCountSent).not.toHaveBeenCalled();
+    });
+
+    it('...so the invite is not "reminded within the hour": pressed again, it is emailed, and only that email is counted', async () => {
+      const held = rememberingLedger();
+      mockSendInviteEmail.mockResolvedValueOnce({ sent: false });
+      expect((await remindOne()).status).toBe(502);
+      expect(held.size).toBe(0);
+      const again = await remindOne();
+      expect(again.status).toBe(200);
+      expect(again.body.data).toEqual({ reminded: true });
+      expect(sentTo()).toEqual(['guest@example.com', 'guest@example.com']);
+      expect(mockCountSent.mock.calls).toEqual([['u-host', 1]]);
     });
 
     it.each([
@@ -1523,6 +1590,84 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
       expect(res.body.data).toEqual({ reminded: 2, total: 3, recentlyReminded: 0 });
       expect(mockRelease).toHaveBeenCalledWith(['a']);
       expect(mockCountSent).toHaveBeenCalledWith('u-host', 2);
+    });
+
+    // Fix round 4: the provider answers a refusal ({ sent: false }), it does not throw; `reminded` counts only emails that went.
+    it('an email the provider refuses (an answer, not an error) gives its claim back and is not counted: the rest still go', async () => {
+      mockSendInviteEmail.mockResolvedValueOnce({ sent: false });
+      const res = await remindAll();
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ reminded: 2, total: 3, recentlyReminded: 0 });
+      expect(mockRelease).toHaveBeenCalledWith(['a']);
+      expect(mockCountSent).toHaveBeenCalledWith('u-host', 2);
+    });
+
+    it('every email refused: 0 of 3, every claim given back, nothing counted against the member', async () => {
+      mockSendInviteEmail.mockResolvedValue({ sent: false });
+      const res = await remindAll();
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ reminded: 0, total: 3, recentlyReminded: 0 });
+      expect(mockRelease).toHaveBeenCalledWith(['a', 'b', 'c']);
+      expect(mockCountSent.mock.calls.filter(([, emails]) => emails > 0)).toEqual([]);
+    });
+
+    it('a send that throws and one the provider refuses are both given back, and only the one that went is counted', async () => {
+      mockSendInviteEmail.mockRejectedValueOnce(new Error('mail provider is down')).mockResolvedValueOnce({ sent: false });
+      const res = await remindAll();
+      expect(res.body.data).toEqual({ reminded: 1, total: 3, recentlyReminded: 0 });
+      expect(mockRelease).toHaveBeenCalledWith(['a', 'b']);
+      expect(mockCountSent).toHaveBeenCalledWith('u-host', 1);
+    });
+
+    it('...pressed again, the refused ones are reminded: none of them was left "reminded within the hour"', async () => {
+      const held = rememberingLedger();
+      mockSendInviteEmail.mockResolvedValueOnce({ sent: false }).mockResolvedValueOnce({ sent: false });
+      expect((await remindAll()).body.data).toEqual({ reminded: 1, total: 3, recentlyReminded: 0 });
+      expect([...held]).toEqual(['c']);
+      expect((await remindAll()).body.data).toEqual({ reminded: 2, total: 2, recentlyReminded: 1 });
+      expect(sentTo()).toEqual(['a@example.com', 'b@example.com', 'c@example.com', 'a@example.com', 'b@example.com']);
+    });
+
+    // Fix round 4: what the emails need (the sender's name, the host for the calendar entry) was asked AFTER the invites
+    // were claimed, outside anything that gave the claims back: a database hiccup there was a 500 that left every invite
+    // "reminded within the hour", and the next press said 0/0.
+    describe('a failure before the emails go leaves no invite claimed', () => {
+      const scheduledEventWorld = (failsOnce: RegExp) => {
+        let failed = false;
+        mockDb.mockImplementation(async (sql: string) => {
+          const text = sql.replace(/\s+/g, ' ').trim();
+          if (!failed && failsOnce.test(text)) {
+            failed = true;
+            throw new Error('database hiccup');
+          }
+          if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+          if (/^SELECT host_user_id, title/.test(text)) {
+            return { rows: [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: '2026-11-01T12:00:00.000Z', config: { durationMinutes: 60 }, event_format: 'video_meeting' }] };
+          }
+          if (/FROM invites WHERE session_id = \$1/.test(text)) return { rows: PENDING };
+          if (/display_name AS "displayName"/.test(text)) return { rows: [{ displayName: 'Organiser' }] };
+          if (/^SELECT display_name, email FROM users/.test(text)) return { rows: [{ display_name: 'Host', email: 'host@example.com' }] };
+          return { rows: [] };
+        });
+      };
+
+      it.each([
+        ['the sender\'s name', /display_name AS "displayName"/],
+        ['the host, for the calendar entry', /^SELECT display_name, email FROM users/],
+      ])('a database failure reading %s fails the call with nothing claimed, so the next press reminds every invite', async (_what, failsOnce) => {
+        const held = rememberingLedger();
+        scheduledEventWorld(failsOnce);
+        const first = await remindAll();
+        expect(first.status).toBe(500);
+        expect(held.size).toBe(0);
+        expect(mockSendInviteEmail).not.toHaveBeenCalled();
+        expect(mockCountSent).not.toHaveBeenCalled();
+        const second = await remindAll();
+        expect(second.status).toBe(200);
+        expect(second.body.data).toEqual({ reminded: 3, total: 3, recentlyReminded: 0 });
+        expect(sentTo()).toEqual(['a@example.com', 'b@example.com', 'c@example.com']);
+        expect(mockSendInviteEmail.mock.calls[0][1].calendarEvent).toMatchObject({ organizerEmail: 'host@example.com', durationMinutes: 60 });
+      });
     });
 
     it('nobody to remind touches nothing: 0 of 0, the ledger is not asked', async () => {

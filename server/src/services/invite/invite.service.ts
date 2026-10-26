@@ -326,12 +326,14 @@ interface InviteDelivery {
 }
 
 /**
- * The invitation email. A failure comes out to the caller, who decides what it costs: the invite exists whatever
- * happens to its email. It touches nothing but the mail provider (no database, no socket), so a batch can send
- * its emails after answering, slowly, without a request still open.
+ * The invitation email, and whether it went: the mail provider answers a refusal rather than throwing, so `sent` is
+ * false for a refused email (and with no provider), which a reminder needs to know (fix round 4); the first invite and
+ * a batch carry on either way. A failure that does throw comes out to the caller, who decides what it costs: the invite
+ * exists whatever happens to its email. It touches nothing but the mail provider (no database, no socket), so a batch
+ * can send its emails after answering, slowly, without a request still open.
  */
-export async function emailInvite(ctx: InviteContext, invite: InviteDelivery): Promise<void> {
-  await emailService.sendInviteEmail(invite.inviteeEmail, {
+export async function emailInvite(ctx: InviteContext, invite: InviteDelivery): Promise<{ sent: boolean }> {
+  return emailService.sendInviteEmail(invite.inviteeEmail, {
     inviterName: ctx.inviterName,
     type: (ctx.type || 'platform') as 'pod' | 'session' | 'platform' | 'circle',
     targetName: ctx.targetName,

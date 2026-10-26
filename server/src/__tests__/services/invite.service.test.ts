@@ -36,6 +36,7 @@ jest.mock('../../index', () => ({
 
 import * as inviteService from '../../services/invite/invite.service';
 import * as emailService from '../../services/email/email.service';
+import logger from '../../config/logger';
 import { inviteWorld } from '../fixtures/invite-world';
 
 const flatSql = (sql: unknown) => String(sql).replace(/\s+/g, ' ').trim();
@@ -1412,6 +1413,13 @@ describe('Invite Service', () => {
       await expect(inviteService.emailInvite(context, invite)).rejects.toThrow('mail provider is down');
     });
 
+    // Fix round 4: the mail provider answers a refusal (a bad address, its limit after the retries, an outage) rather than
+    // throwing, and a reminder has to know whether its email went. emailInvite passes the mail service's answer on.
+    it.each([[true], [false]])('emailInvite says whether the email went, as the mail service answered (sent: %s)', async (sent) => {
+      sendInviteEmail.mockResolvedValueOnce({ sent });
+      await expect(inviteService.emailInvite(context, invite)).resolves.toEqual({ sent });
+    });
+
     it('notifyInvitee rings the bell of a member known by id: a row, the live push and the lists told, no email, no lookup by address', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'notification-1', created_at: '2026-10-26T09:00:00.000Z' }], rowCount: 1 });
       await inviteService.notifyInvitee(context, invite);
@@ -1440,6 +1448,14 @@ describe('Invite Service', () => {
       });
       await inviteService.deliverInvite(context, invite);
       expect(order).toEqual(['email', 'bell']);
+    });
+
+    it('deliverInvite, the first invite\'s path, carries on as before when the email did not go: the bell still rings, and it throws and logs nothing', async () => {
+      sendInviteEmail.mockResolvedValueOnce({ sent: false });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'notification-1', created_at: 'x' }], rowCount: 1 });
+      await expect(inviteService.deliverInvite(context, invite)).resolves.toBeUndefined();
+      expect(mockIoEmit).toHaveBeenCalledWith('user:user-guest', 'notification:new', expect.objectContaining({ type: 'pod_invite' }));
+      expect(logger.warn).not.toHaveBeenCalled();
     });
   });
 
