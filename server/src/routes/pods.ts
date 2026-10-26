@@ -12,7 +12,7 @@ import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { canViewPod } from '../services/pods/pod-access';
 import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast } from '@rsn/shared';
-import { ForbiddenError, NotFoundError } from '../middleware/errors';
+import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
 
 const router = Router();
@@ -127,34 +127,41 @@ router.get(
 // ─── GET /pods/:id/members/for-invite ───────────────────────────────────────
 // MUST be before /:id to avoid Express matching /:id first
 
+// 26 Oct 2026 (fix round 3): the pod in the path has to be the event's own pod. The route used to check only that the
+// caller hosts or co-hosts the event, so any pod director or host who ran an event of their own could list ANY pod's
+// active members, with their addresses. Production's event page always asks for its own event's pod (session.podId), so
+// nothing it does changes. The address goes to the event's host and to admins (the event page shows this list to the
+// host); a co-host who asks is given names and ids only, as in the event's invite list.
 router.get(
   '/:id/members/for-invite',
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const sessionId = req.query.sessionId as string;
-      if (!sessionId) {
-        res.status(400).json({ error: { message: 'sessionId required' } });
-        return;
-      }
-      // This list carries emails (the host invites by address), so it is for
-      // the event's host / co-hosts and admins only (9 Sep 2026).
-      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
-        const host = await query<{ host_user_id: string }>(
-          `SELECT host_user_id FROM sessions WHERE id = $1`, [sessionId],
-        );
-        const isHost = host.rows[0]?.host_user_id === req.user!.userId;
-        const cohost = isHost ? null : await query(
+      const asked = z.string().uuid().safeParse(req.query.sessionId);
+      if (!asked.success) throw new ValidationError('Choose the event to invite to');
+      const sessionId = asked.data;
+      const isAdmin = hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+
+      const event = await query<{ host_user_id: string; pod_id: string | null }>(
+        `SELECT host_user_id, pod_id FROM sessions WHERE id = $1`, [sessionId],
+      );
+      const found = event.rows[0];
+      const isHost = found?.host_user_id === req.user!.userId;
+      // Who runs no such event is refused first (403, as before), so a stranger learns nothing about the event.
+      if (!isAdmin && !isHost) {
+        const cohost = await query(
           `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
           [sessionId, req.user!.userId],
         );
-        if (!isHost && !cohost?.rows.length) {
+        if (cohost.rows.length === 0) {
           throw new ForbiddenError('Only the event host can see who to invite');
         }
       }
+      if (!found || found.pod_id !== req.params.id.toLowerCase()) throw new NotFoundError('Event');
+
       // Made for the person asking: their blocks (and the ones against them) and accounts that are not active are left out.
       const members = await podService.getPodMembersForInvite(req.params.id, sessionId, req.user!.userId);
-      res.json({ data: members });
+      res.json({ data: isAdmin || isHost ? members : withoutEmail(members) });
     } catch (err) {
       next(err);
     }

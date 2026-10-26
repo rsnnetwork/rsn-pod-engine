@@ -835,13 +835,18 @@ describe('Invite Service', () => {
     });
   });
 
-  // ─── Fix round 1 (26 Oct 2026): whoever runs an event's invites can withdraw any of them ─────────
-  // A co-host may send event invites, and on production's unchanged event page the host's Revoke on a co-host's
+  // 26 Oct 2026 (fix round 1): co-hosts send event invites now, so on production's event page the host's Revoke on a co-host's
   // shareable link answered 404 ("Failed to revoke invite"): only the sender could withdraw. The host, the event's
-  // co-hosts and admins now manage every invite to their event; a pod's directors, hosts and admins every invite to
+  // co-hosts and admins manage every invite to their event; a pod's directors, hosts and admins every invite to
   // their pod (they could already list and remind them). Anyone else can withdraw only what they sent themselves.
+  // Fix round 3: each invite is judged by its `type` (an old pod invite carrying a stray event id is the pod's), and the
+  // answer says who sent it and which member it was for, so the route can tell their screens.
   describe('revokeInvite: who may withdraw an invite', () => {
-    const invite = (over: Record<string, unknown> = {}) => ({ inviter_id: 'user-sender', pod_id: null, session_id: null, ...over });
+    const invite = (over: Record<string, unknown> = {}) => ({
+      inviter_id: 'user-sender', type: 'platform', pod_id: null, session_id: null, invitee_user_id: null, ...over,
+    });
+    const eventInvite = (over: Record<string, unknown> = {}) => invite({ type: 'session', session_id: 'session-1', ...over });
+    const podInvite = (over: Record<string, unknown> = {}) => invite({ type: 'pod', pod_id: 'pod-1', ...over });
     /** The invite is found pending; then `relation` answers the role lookup; then the update lands. */
     const queue = (found: Record<string, unknown> | null, relation?: Record<string, unknown> | null) => {
       mockQuery.mockResolvedValueOnce({ rows: found ? [found] : [], rowCount: found ? 1 : 0 });
@@ -849,32 +854,48 @@ describe('Invite Service', () => {
     };
     const lands = (row: Record<string, unknown>) => mockQuery.mockResolvedValueOnce({ rows: [row], rowCount: 1 });
     const updates = () => mockQuery.mock.calls.filter((call) => /^UPDATE invites/.test(flatSql(call[0])));
+    const roleLookups = () => mockQuery.mock.calls.map((call) => flatSql(call[0])).filter((sql) => /is_host|SELECT role FROM pod_members/.test(sql));
 
     it('the sender withdraws their own invite, whatever it is for, with no role looked up', async () => {
-      queue(invite({ inviter_id: 'user-ann', session_id: 'session-1' }));
+      queue(eventInvite({ inviter_id: 'user-ann' }));
       lands({ pod_id: null, session_id: 'session-1' });
-      await expect(inviteService.revokeInvite('invite-1', 'user-ann', 'member')).resolves.toEqual({ podId: null, sessionId: 'session-1' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-ann', 'member'))
+        .resolves.toEqual({ podId: null, sessionId: 'session-1', inviterId: 'user-ann', inviteeUserId: null });
       expect(mockQuery).toHaveBeenCalledTimes(2);
-      expect(flatSql(mockQuery.mock.calls[0][0])).toBe("SELECT inviter_id, pod_id, session_id FROM invites WHERE id = $1 AND status = 'pending'");
       expect(mockQuery.mock.calls[0][1]).toEqual(['invite-1']);
     });
 
-    it('the host withdraws the shareable link a co-host made (the case production\'s event page hit as a 404)', async () => {
-      queue(invite({ inviter_id: 'user-cohost', session_id: 'session-1' }), { is_host: true, is_cohost: false });
+    it('reads the invite with the member its address belongs to, in the same question', async () => {
+      queue(eventInvite({ inviter_id: 'user-ann' }));
       lands({ pod_id: null, session_id: 'session-1' });
-      await expect(inviteService.revokeInvite('invite-1', 'user-host', 'member')).resolves.toEqual({ podId: null, sessionId: 'session-1' });
+      await inviteService.revokeInvite('invite-1', 'user-ann', 'member');
+      expect(flatSql(mockQuery.mock.calls[0][0])).toBe(
+        "SELECT i.inviter_id, i.type, i.pod_id, i.session_id, u.id AS invitee_user_id FROM invites i LEFT JOIN users u ON u.email = i.invitee_email WHERE i.id = $1 AND i.status = 'pending'");
+    });
+
+    it('says who sent it and which member it was for, whoever withdrew it: the screens of both are to be told', async () => {
+      queue(eventInvite({ inviter_id: 'user-cohost', invitee_user_id: 'user-guest' }), { is_host: true, is_cohost: false });
+      lands({ pod_id: null, session_id: 'session-1' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-host', 'member'))
+        .resolves.toEqual({ podId: null, sessionId: 'session-1', inviterId: 'user-cohost', inviteeUserId: 'user-guest' });
+    });
+
+    it('the host withdraws the shareable link a co-host made (the case production\'s event page hit as a 404)', async () => {
+      queue(eventInvite({ inviter_id: 'user-cohost' }), { is_host: true, is_cohost: false });
+      lands({ pod_id: null, session_id: 'session-1' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-host', 'member')).resolves.toMatchObject({ podId: null, sessionId: 'session-1' });
       expect(updates()).toHaveLength(1);
       expect(updates()[0][1]).toEqual(['invite-1']);
     });
 
     it('a co-host withdraws an invite the host or another co-host sent', async () => {
-      queue(invite({ inviter_id: 'user-host', session_id: 'session-1' }), { is_host: false, is_cohost: true });
+      queue(eventInvite({ inviter_id: 'user-host' }), { is_host: false, is_cohost: true });
       lands({ pod_id: null, session_id: 'session-1' });
       await expect(inviteService.revokeInvite('invite-1', 'user-cohost', 'member')).resolves.toMatchObject({ sessionId: 'session-1' });
     });
 
     it('the role is looked up for the event the INVITE belongs to, so a co-host of one event holds no power over another\'s', async () => {
-      queue(invite({ session_id: 'event-b' }), null);
+      queue(eventInvite({ session_id: 'event-b' }), null);
       await expect(inviteService.revokeInvite('invite-1', 'user-cohost-of-a', 'member')).rejects.toMatchObject({ statusCode: 404 });
       expect(flatSql(mockQuery.mock.calls[1][0])).toMatch(/\(s\.host_user_id = \$2\) AS is_host, EXISTS \(SELECT 1 FROM session_cohosts c WHERE c\.session_id = s\.id AND c\.user_id = \$2\) AS is_cohost FROM sessions s WHERE s\.id = \$1/);
       expect(mockQuery.mock.calls[1][1]).toEqual(['event-b', 'user-cohost-of-a']);
@@ -882,43 +903,44 @@ describe('Invite Service', () => {
     });
 
     it('an ordinary participant or member cannot withdraw someone else\'s event invite: not found, and nothing is written', async () => {
-      queue(invite({ session_id: 'session-1' }), { is_host: false, is_cohost: false });
+      queue(eventInvite(), { is_host: false, is_cohost: false });
       await expect(inviteService.revokeInvite('invite-1', 'user-nobody', 'member')).rejects.toMatchObject({ statusCode: 404, code: 'INVITE_NOT_FOUND' });
       expect(updates()).toHaveLength(0);
     });
 
     it('an admin withdraws any event invite or pod invite, without a role being looked up', async () => {
-      queue(invite({ session_id: 'session-1' }));
+      queue(eventInvite());
       lands({ pod_id: null, session_id: 'session-1' });
       await expect(inviteService.revokeInvite('invite-1', 'user-admin', 'admin')).resolves.toMatchObject({ sessionId: 'session-1' });
       expect(mockQuery).toHaveBeenCalledTimes(2);
       mockQuery.mockClear();
-      queue(invite({ pod_id: 'pod-1' }));
+      queue(podInvite());
       lands({ pod_id: 'pod-1', session_id: null });
       await expect(inviteService.revokeInvite('invite-2', 'user-admin', 'super_admin')).resolves.toMatchObject({ podId: 'pod-1' });
       expect(mockQuery).toHaveBeenCalledTimes(2);
     });
 
     it.each(['director', 'host'])('a pod %s withdraws any invite to their pod (they could already list and remind them)', async (role) => {
-      queue(invite({ inviter_id: 'user-member', pod_id: 'pod-1' }), { role });
+      queue(podInvite({ inviter_id: 'user-member' }), { role });
       lands({ pod_id: 'pod-1', session_id: null });
-      await expect(inviteService.revokeInvite('invite-1', 'user-director', 'member')).resolves.toEqual({ podId: 'pod-1', sessionId: null });
+      await expect(inviteService.revokeInvite('invite-1', 'user-director', 'member'))
+        .resolves.toEqual({ podId: 'pod-1', sessionId: null, inviterId: 'user-member', inviteeUserId: null });
       expect(flatSql(mockQuery.mock.calls[1][0])).toBe("SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'");
       expect(mockQuery.mock.calls[1][1]).toEqual(['pod-1', 'user-director']);
     });
 
     it('a plain pod member (who may send invites when the pod lets them) withdraws only their own', async () => {
-      queue(invite({ inviter_id: 'user-other-member', pod_id: 'pod-1' }), { role: 'member' });
+      queue(podInvite({ inviter_id: 'user-other-member' }), { role: 'member' });
       await expect(inviteService.revokeInvite('invite-1', 'user-member', 'member')).rejects.toMatchObject({ statusCode: 404 });
       expect(updates()).toHaveLength(0);
       mockQuery.mockClear();
-      queue(invite({ inviter_id: 'user-member', pod_id: 'pod-1' }));
+      queue(podInvite({ inviter_id: 'user-member' }));
       lands({ pod_id: 'pod-1', session_id: null });
       await expect(inviteService.revokeInvite('invite-2', 'user-member', 'member')).resolves.toMatchObject({ podId: 'pod-1' });
     });
 
     it('someone who is not in the pod at all cannot', async () => {
-      queue(invite({ pod_id: 'pod-1' }), null);
+      queue(podInvite(), null);
       await expect(inviteService.revokeInvite('invite-1', 'user-outsider', 'member')).rejects.toMatchObject({ statusCode: 404 });
     });
 
@@ -926,13 +948,14 @@ describe('Invite Service', () => {
     it('a platform or circle invite is withdrawn by the person who sent it or by an admin: the rule for reminding it', async () => {
       queue(invite({ inviter_id: 'user-ann' }));
       lands({ pod_id: null, session_id: null });
-      await expect(inviteService.revokeInvite('invite-1', 'user-admin', 'admin')).resolves.toEqual({ podId: null, sessionId: null });
+      await expect(inviteService.revokeInvite('invite-1', 'user-admin', 'admin'))
+        .resolves.toEqual({ podId: null, sessionId: null, inviterId: 'user-ann', inviteeUserId: null });
       expect(updates()).toHaveLength(1);
       expect(mockQuery).toHaveBeenCalledTimes(2);
       mockQuery.mockClear();
-      queue(invite({ inviter_id: 'user-ann' }));
+      queue(invite({ type: 'circle', inviter_id: 'user-ann' }));
       lands({ pod_id: null, session_id: null });
-      await expect(inviteService.revokeInvite('invite-2', 'user-ann', 'member')).resolves.toEqual({ podId: null, sessionId: null });
+      await expect(inviteService.revokeInvite('invite-2', 'user-ann', 'member')).resolves.toMatchObject({ inviterId: 'user-ann' });
     });
 
     it('...and by nobody else: another member, even one who belongs to the circle or the pod of the same name, is told it is not found', async () => {
@@ -945,7 +968,7 @@ describe('Invite Service', () => {
     // Fix round 2: rows made before a stray id was dropped at creation can carry a pod id on an event invite. The pod's
     // director had a hold on those through the pod id; an event invite is run by its event.
     it('an event invite that carries a stray pod id is run by its event alone: the pod\'s director cannot withdraw it', async () => {
-      queue(invite({ inviter_id: 'user-ann', session_id: 'session-1', pod_id: 'stray-pod' }), { is_host: false, is_cohost: false });
+      queue(eventInvite({ inviter_id: 'user-ann', pod_id: 'stray-pod' }), { is_host: false, is_cohost: false });
       await expect(inviteService.revokeInvite('invite-1', 'user-pod-director', 'member')).rejects.toMatchObject({ statusCode: 404 });
       // Found, then the event's role; the pod's role was never asked, and nothing was written.
       expect(mockQuery).toHaveBeenCalledTimes(2);
@@ -953,9 +976,32 @@ describe('Invite Service', () => {
     });
 
     it('...while the event\'s own host still withdraws it', async () => {
-      queue(invite({ inviter_id: 'user-ann', session_id: 'session-1', pod_id: 'stray-pod' }), { is_host: true, is_cohost: false });
+      queue(eventInvite({ inviter_id: 'user-ann', pod_id: 'stray-pod' }), { is_host: true, is_cohost: false });
       lands({ pod_id: 'stray-pod', session_id: 'session-1' });
       await expect(inviteService.revokeInvite('invite-1', 'user-host', 'member')).resolves.toMatchObject({ sessionId: 'session-1' });
+    });
+
+    // Fix round 3: the target is the one the invite's TYPE names, not whichever id happens to be set first. An old pod
+    // invite that carries a stray event id is the pod's: its director runs it, and that event's host does not.
+    it('a pod invite that carries a stray event id is run by its pod: the pod\'s director withdraws it, asked about the pod and not the event', async () => {
+      queue(podInvite({ inviter_id: 'user-member', session_id: 'stray-event' }), { role: 'director' });
+      lands({ pod_id: 'pod-1', session_id: 'stray-event' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-director', 'member')).resolves.toMatchObject({ podId: 'pod-1' });
+      expect(roleLookups()).toEqual(["SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'"]);
+    });
+
+    it('...and that event\'s host does not: they are only asked about the pod, and it is not found', async () => {
+      queue(podInvite({ inviter_id: 'user-member', session_id: 'stray-event' }), { role: 'member' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-event-host', 'member')).rejects.toMatchObject({ statusCode: 404 });
+      expect(roleLookups()).toEqual(["SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'"]);
+      expect(updates()).toHaveLength(0);
+    });
+
+    it('an invite whose type names a target it does not carry has no one who runs it but its sender and admins', async () => {
+      queue(invite({ type: 'session', inviter_id: 'user-ann', pod_id: 'pod-1' }));
+      await expect(inviteService.revokeInvite('invite-1', 'user-director', 'member')).rejects.toMatchObject({ statusCode: 404 });
+      expect(roleLookups()).toEqual([]);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
     it('an invite that is not pending (answered, withdrawn, or no such invite) is not found', async () => {
@@ -964,7 +1010,7 @@ describe('Invite Service', () => {
     });
 
     it('an invite accepted or withdrawn between the check and the update is not found either: the update itself only touches a pending one', async () => {
-      queue(invite({ inviter_id: 'user-ann', session_id: 'session-1' }));
+      queue(eventInvite({ inviter_id: 'user-ann' }));
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       await expect(inviteService.revokeInvite('invite-1', 'user-ann', 'member')).rejects.toMatchObject({ statusCode: 404 });
     });
@@ -1636,6 +1682,29 @@ describe('Invite Service', () => {
       eventRole(null);
       await expect(inviteService.inviteeAddressFor(eventInvite(), viewer({ email: undefined }))).resolves.toBe(MASKED);
     });
+
+    // Fix round 3: the target is the one the invite's TYPE names, not whichever id is set first. An old pod invite that
+    // carries a stray event id is the pod's: its director reads it whole, and that event's host does not.
+    it('a pod invite that carries a stray event id is judged by its pod: the pod\'s director reads it whole, asked about the pod and not the event', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+      await expect(inviteService.inviteeAddressFor(podInvite({ sessionId: 'stray-event' }), viewer({ userId: 'user-director' }))).resolves.toBe(FULL);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(flatSql(mockQuery.mock.calls[0][0])).toBe("SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'");
+      expect(mockQuery.mock.calls[0][1]).toEqual(['pod-1', 'user-director']);
+    });
+
+    it('...and the host of that stray event reads it masked: they are only asked about the pod', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
+      await expect(inviteService.inviteeAddressFor(podInvite({ sessionId: 'stray-event' }), viewer({ userId: 'user-event-host' }))).resolves.toBe(MASKED);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(flatSql(mockQuery.mock.calls[0][0])).not.toMatch(/is_host/);
+    });
+
+    it('an invite whose type names a target it does not carry has no organiser: only the sender, the invitee and admins read it whole, with no lookup', async () => {
+      await expect(inviteService.inviteeAddressFor(eventInvite({ sessionId: null, podId: 'pod-1' }), viewer({ userId: 'user-director' }))).resolves.toBe(MASKED);
+      await expect(inviteService.inviteeAddressFor(podInvite({ podId: null, sessionId: 'session-1' }), viewer({ userId: 'user-host' }))).resolves.toBe(MASKED);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
   });
 
   describe('acceptInvite: signed in as another account than the one invited', () => {
@@ -1764,6 +1833,57 @@ describe('Invite Service', () => {
       found(pending({ inviteeEmail: 'Guest@Example.com ' }));
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
       await expect(mark('guest@example.com')).resolves.toBeDefined();
+    });
+
+    // Fix round 3: acceptInvite also refuses an invite to an event that has ended (400 EVENT_ENDED), after the expiry
+    // checks and before the identity check. Round 2 said "the same checks, in the same order" and left this one out.
+    describe('an invite to an event that has ended', () => {
+      const eventInvite = (over: Record<string, unknown> = {}) => pending({ type: InviteType.SESSION, sessionId: 'session-1', podId: null, ...over });
+      const eventIs = (status: string) => mockQuery.mockResolvedValueOnce({ rows: [{ status }], rowCount: 1 });
+
+      it.each(['completed', 'cancelled'])('is refused when the event is %s (400 EVENT_ENDED), as accept refuses it, and nothing is written', async (status) => {
+        found(eventInvite());
+        eventIs(status);
+        await expect(mark()).rejects.toMatchObject({ statusCode: 400, code: 'EVENT_ENDED', message: 'This event has already ended' });
+        expect(writes()).toHaveLength(0);
+        expect(flatSql(mockQuery.mock.calls[1][0])).toBe('SELECT status FROM sessions WHERE id = $1');
+        expect(mockQuery.mock.calls[1][1]).toEqual(['session-1']);
+      });
+
+      it('is refused for an open link to a finished event too', async () => {
+        found(eventInvite({ inviteeEmail: null }));
+        eventIs('completed');
+        await expect(mark('whoever@example.org', 'user-any')).rejects.toMatchObject({ code: 'EVENT_ENDED' });
+        expect(writes()).toHaveLength(0);
+      });
+
+      it('is refused before the identity check, in accept\'s order: a stranger holding the code is told the event has ended, not whom it was for', async () => {
+        found(eventInvite());
+        eventIs('cancelled');
+        await expect(mark('stranger@example.org', 'user-stranger')).rejects.toMatchObject({ statusCode: 400, code: 'EVENT_ENDED' });
+      });
+
+      it('an event that has not ended is marked as before, and the event is looked up once', async () => {
+        found(eventInvite());
+        eventIs('scheduled');
+        mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+        await expect(mark()).resolves.toEqual({ podId: null, sessionId: 'session-1' });
+        expect(mockQuery).toHaveBeenCalledTimes(3);
+        expect(writes()).toHaveLength(1);
+      });
+
+      it('a pod invite asks nothing about any event: the invite and the update are the only two statements', async () => {
+        found(pending({ sessionId: 'stray-event' }));
+        mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+        await expect(mark()).resolves.toBeDefined();
+        expect(mockQuery).toHaveBeenCalledTimes(2);
+      });
+
+      it('an invite withdrawn or expired for a finished event is told so first, as accept does (the state before the event)', async () => {
+        found(eventInvite({ status: InviteStatus.REVOKED }));
+        await expect(mark()).rejects.toMatchObject({ code: 'INVITE_REVOKED' });
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

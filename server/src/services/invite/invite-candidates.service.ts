@@ -430,9 +430,10 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * The emails go out up to half a minute after the invites were made, and a lot can happen in that time (fix round 2):
  * an organiser withdraws one, the invitee declines or accepts in the app, a block is made, an account is closed. So
  * each invite is read again just before its own email, and one that is no longer waiting for an answer, or whose
- * person the sender may no longer email, is skipped (and logged). That is the one thing this asks the database, one
- * invite at a time, after the answer; a check that cannot be made means no email rather than a guess. The pace is
- * kept between the emails that are sent: a skipped invite costs no pause.
+ * person the sender may no longer email, is skipped (and logged). That is all this asks the database: two statements
+ * for each invite (the invite itself, then whether the sender may still email its address), one invite at a time, after
+ * the answer; a check that cannot be made means no email rather than a guess. The pace is kept between the emails that
+ * are sent: a skipped invite costs no pause.
  */
 async function sendEmailsSlowly(context: invites.InviteContext, made: MadeInvite[], gapMs: number, senderId: string): Promise<void> {
   try {

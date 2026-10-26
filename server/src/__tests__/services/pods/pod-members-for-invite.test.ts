@@ -99,6 +99,11 @@ describe('getPodMembersForInvite', () => {
   });
 });
 
+// Fix round 3: the route checked that the caller hosts (or co-hosts) the event, but never that the event belongs to the pod
+// in the path, so any pod director or host who ran an event of their own could list ANY pod's active members with their
+// addresses. Production's event page always asks for its own event's pod (`session.podId`), so nothing it does changes.
+// The address is for the event's host and for admins (the event page shows this list to the host); a co-host who asks
+// is given names and ids and no address, as in the event's invite list.
 describe('GET /pods/:id/members/for-invite', () => {
   const app = express();
   app.use(express.json());
@@ -108,43 +113,105 @@ describe('GET /pods/:id/members/for-invite', () => {
 
   const token = (sub: string, role = 'member') => jwt.sign({ sub, email: `${sub}@example.com`, role, sessionId: 's-1' }, JWT_SECRET, { expiresIn: '1h' });
   const POD = '5f0c3a3e-8d7b-4a57-9d0e-1f2a3b4c5d6e';
+  const OTHER_POD = '9d1c2b3a-4e5f-4a6b-8c7d-0e1f2a3b4c5d';
   const EVENT = '7a1d2c3e-4f50-4a61-8b72-93a4b5c6d7e8';
+  const NO_EVENT = '00000000-0000-4000-8000-000000000000';
+  const ann = { userId: 'u-ann', displayName: 'Ann', email: 'ann@example.com', avatarUrl: 'https://a/ann.png' };
+  const bob = { userId: 'u-bob', displayName: 'Bob', email: 'bob@example.com', avatarUrl: null };
   // Mocks are restored before every test, so the spy is made inside each one.
   let list: jest.SpyInstance;
 
-  /** The database: every account is active; the event is hosted by u-host, with u-cohost as a co-host. */
+  /** The database: every account is active; EVENT belongs to POD and is hosted by u-host, with u-cohost as a co-host. */
   const world = () => mockDb.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = flatSql(sql);
     if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
-    if (/SELECT host_user_id FROM sessions/.test(text)) return { rows: [{ host_user_id: 'u-host' }] };
+    if (/SELECT host_user_id, pod_id FROM sessions WHERE id = \$1/.test(text)) {
+      return { rows: params[0] === EVENT ? [{ host_user_id: 'u-host', pod_id: POD }] : [] };
+    }
     if (/FROM session_cohosts/.test(text)) return { rows: params[1] === 'u-cohost' ? [{ '?column?': 1 }] : [] };
     return { rows: [] };
   });
+  const ask = (sub: string, role = 'member', podId = POD, sessionId: string | null = EVENT) =>
+    request(app).get(`/pods/${podId}/members/for-invite${sessionId === null ? '' : `?sessionId=${sessionId}`}`).set('Authorization', `Bearer ${token(sub, role)}`);
 
   beforeEach(() => {
-    list = jest.spyOn(podService, 'getPodMembersForInvite').mockResolvedValue([]);
+    list = jest.spyOn(podService, 'getPodMembersForInvite').mockResolvedValue([ann, bob]);
     world();
   });
 
-  it.each([['the host', 'u-host', 'member'], ['a co-host', 'u-cohost', 'member'], ['an admin', 'u-admin', 'admin']])(
-    '%s is given the list, made for them: the service is told who is asking, so their blocks and the ones against them are left out',
+  it.each([['the host', 'u-host', 'member'], ['an admin', 'u-admin', 'admin']])(
+    '%s is given the members with their addresses, made for them: the service is told who is asking, so their blocks and the ones against them are left out',
     async (_who, sub, role) => {
-      const res = await request(app).get(`/pods/${POD}/members/for-invite?sessionId=${EVENT}`).set('Authorization', `Bearer ${token(sub, role)}`);
+      const res = await ask(sub, role);
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ data: [] });
+      expect(res.body).toEqual({ data: [ann, bob] });
       expect(list).toHaveBeenCalledWith(POD, EVENT, sub);
     },
   );
 
+  it('a co-host is given names and ids and no address: the same rule as the event\'s invite list', async () => {
+    const res = await ask('u-cohost');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([
+      { userId: 'u-ann', displayName: 'Ann', avatarUrl: 'https://a/ann.png' },
+      { userId: 'u-bob', displayName: 'Bob', avatarUrl: null },
+    ]);
+    expect(JSON.stringify(res.body)).not.toMatch(/@example\.com|email/);
+    expect(list).toHaveBeenCalledWith(POD, EVENT, 'u-cohost');
+  });
+
   it('anyone else is refused, and nothing is listed', async () => {
-    const res = await request(app).get(`/pods/${POD}/members/for-invite?sessionId=${EVENT}`).set('Authorization', `Bearer ${token('u-stranger')}`);
+    const res = await ask('u-stranger');
     expect(res.status).toBe(403);
     expect(list).not.toHaveBeenCalled();
   });
 
-  it('needs the event', async () => {
-    const res = await request(app).get(`/pods/${POD}/members/for-invite`).set('Authorization', `Bearer ${token('u-host')}`);
-    expect(res.status).toBe(400);
+  // The pod must be the event's pod ─────────────────────────────────────────────────────────────
+  it.each([['the host', 'u-host', 'member'], ['a co-host', 'u-cohost', 'member'], ['an admin', 'u-admin', 'admin']])(
+    'an event of ANOTHER pod is not found for %s: the members of the pod in the path are not listed',
+    async (_who, sub, role) => {
+      const res = await ask(sub, role, OTHER_POD);
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
+      expect(list).not.toHaveBeenCalled();
+      expect(JSON.stringify(res.body)).not.toMatch(/@example\.com/);
+    },
+  );
+
+  it('the refusal for someone who runs no such event comes first, so a stranger learns nothing about whether the event belongs to the pod', async () => {
+    const res = await ask('u-stranger', 'member', OTHER_POD);
+    expect(res.status).toBe(403);
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it('an event that does not exist: 403 for someone who runs no event (as before), 404 for an admin', async () => {
+    expect((await ask('u-host', 'member', POD, NO_EVENT)).status).toBe(403);
+    expect((await ask('u-admin', 'admin', POD, NO_EVENT)).status).toBe(404);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('the pod in the path may be written in capitals: it is still the event\'s pod', async () => {
+    const res = await ask('u-host', 'member', POD.toUpperCase());
+    expect(res.status).toBe(200);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pod id that is not an id at all is simply not the event\'s pod (404), and never reaches the database as one', async () => {
+    const res = await ask('u-host', 'member', 'not-a-pod');
+    expect(res.status).toBe(404);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('needs the event, and an id: 400 for a missing or a malformed one, nothing listed', async () => {
+    expect((await ask('u-host', 'member', POD, null)).status).toBe(400);
+    expect((await ask('u-host', 'member', POD, 'not-an-event')).status).toBe(400);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('asks the event once, with the pod, for the host and for everyone else: one lookup of the event', async () => {
+    await ask('u-host');
+    const lookups = mockDb.mock.calls.filter((call) => /FROM sessions WHERE id = \$1/.test(flatSql(call[0])));
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0][1]).toEqual([EVENT]);
   });
 });

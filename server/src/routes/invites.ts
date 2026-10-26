@@ -3,13 +3,15 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate, optionalAuth } from '../middleware/auth';
-import { inviteLimiter, inviteBatchLimiter, inviteReminderLimiter, peopleReadLimiter } from '../middleware/rateLimit';
+import { inviteLimiter, inviteBatchLimiter, peopleReadLimiter } from '../middleware/rateLimit';
 import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
 import * as inviteCandidates from '../services/invite/invite-candidates.service';
+import * as inviteReminders from '../services/invite/invite-reminders.service';
 import { fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
+import { AppError } from '../middleware/errors';
 import { query } from '../db';
 import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse, eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
 
@@ -307,13 +309,16 @@ router.get(
 );
 
 // ─── POST /invites/:id/remind ────────────────────────────────────────────────
-// 26 Oct 2026 (fix round 2): limited to 60 reminders an hour per member (this route and Remind All share it), and the
-// email says what the invite was for.
+// 26 Oct 2026 (fix round 2): the email says what the invite was for. (Fix round 3): an invite reminded in the last hour
+// is not emailed again (a 200 that says so), and a member sends at most 300 reminder emails an hour, this route and
+// Remind All counted together; see invite-reminders.service.ts. The invite's TYPE says who may remind it.
+
+const reminderAllowanceSpent = () =>
+  new AppError(429, 'RATE_LIMIT_EXCEEDED', 'You have sent a lot of reminders this hour. Please try again later.');
 
 router.post(
   '/:id/remind',
   authenticate,
-  inviteReminderLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const invite = await query<{ id: string; invitee_email: string; type: InviteType; session_id: string | null; pod_id: string | null; circle_id: string | null; status: string; code: string; expires_at: string | null; inviter_id: string }>(
@@ -326,13 +331,14 @@ router.post(
 
       // Whoever runs the invite's event (its host, a co-host, an admin) or pod (its director, host, an admin) can
       // remind, whoever sent the invite (fix round 1: a co-host sends event invites, and the host reminds them too).
-      // Asked before anything is said about the invite, so someone who may not learns nothing of it.
+      // Asked before anything is said about the invite, so someone who may not learns nothing of it. The invite's TYPE
+      // decides which target counts, not whichever id is set first (fix round 3).
       const isAdmin = inviteService.isAdminRole(req.user!.role);
-      if (inv.session_id) {
+      if (inv.type === InviteType.SESSION && inv.session_id) {
         if (!(await inviteService.eventInviteRole(inv.session_id, req.user!.userId, isAdmin))) {
           return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can send reminders' } });
         }
-      } else if (inv.pod_id) {
+      } else if (inv.type === InviteType.POD && inv.pod_id) {
         if (!(await inviteService.mayRunPodInvites(inv.pod_id, req.user!.userId, isAdmin))) {
           return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only pod directors can send reminders' } });
         }
@@ -359,10 +365,29 @@ router.post(
       // carries its title and its calendar entry, the length of which is the shared eventDurationMinutes. This used to
       // be written out here, as an event invite whatever the invite was for.
       if (inv.invitee_email) {
-        const context = await inviteService.buildInviteContext(req.user!.userId, inv.type, {
-          podId: inv.pod_id, sessionId: inv.session_id, circleId: inv.circle_id,
-        });
-        await inviteService.emailInvite(context, { code: inv.code, inviteeEmail: inv.invitee_email });
+        // The member's allowance first, then this invite's hour (fix round 3), after every refusal above, so a refusal
+        // never uses up either. An invite reminded within the hour is not emailed again; the answer is still a 200,
+        // because the invitee has had a reminder in the hour, and says so. Production's pages show "Reminder sent!".
+        if ((await inviteReminders.reminderAllowance(req.user!.userId)) <= 0) throw reminderAllowanceSpent();
+        const { claimed, recent } = await inviteReminders.claimReminders([inv.id]);
+        if (claimed.length === 0) {
+          const remindedAt = recent.get(inv.id) ?? null;
+          return res.json({
+            success: true,
+            data: { reminded: false, recentlyReminded: true, remindedAt: remindedAt ? remindedAt.toISOString() : null },
+          });
+        }
+        try {
+          const context = await inviteService.buildInviteContext(req.user!.userId, inv.type, {
+            podId: inv.pod_id, sessionId: inv.session_id, circleId: inv.circle_id,
+          });
+          await inviteService.emailInvite(context, { code: inv.code, inviteeEmail: inv.invitee_email });
+        } catch (err) {
+          // No email went out, so the invite has not been "reminded within the hour".
+          await inviteReminders.releaseReminders([inv.id]);
+          throw err;
+        }
+        await inviteReminders.countRemindersSent(req.user!.userId, 1);
       }
 
       return res.json({ success: true, data: { reminded: true } });
@@ -373,12 +398,12 @@ router.post(
 );
 
 // ─── POST /invites/remind-all/:sessionId ─────────────────────────────────────
-// Bulk remind: resend invite emails to ALL pending invites for a session
+// Bulk remind: resend invite emails to the pending invites of a session. Fix round 3: an invite reminded within the last
+// hour is skipped and not counted, and at most as many are reminded as the member has reminder emails left for the hour.
 
 router.post(
   '/remind-all/:sessionId',
   authenticate,
-  inviteReminderLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
@@ -397,21 +422,37 @@ router.post(
 
       // Get all pending invites for this session (only those with an email to send to). An invite whose expiry has
       // passed keeps the status 'pending' but its link is dead, so nobody is reminded with it.
+      // Oldest first, so a member short of allowance reminds the invites that have waited longest (fix round 3).
       const allPending = await query<{ id: string; invitee_email: string; code: string }>(
         `SELECT id, invitee_email, code FROM invites
          WHERE session_id = $1 AND status = 'pending' AND invitee_email IS NOT NULL AND invitee_email != ''
-           AND (expires_at IS NULL OR expires_at > NOW())`,
+           AND (expires_at IS NULL OR expires_at > NOW())
+         ORDER BY created_at`,
         [sessionId]
       );
       // A closed account, or anyone blocked either way with the sender, is never emailed. They are left out without
-      // a word (and not counted), so a block is never revealed.
+      // a word (and not counted), so a block is never revealed. Left out before anything is claimed, so a block never
+      // uses up an invite's hour.
       const unreachable = await inviteService.unreachableAddresses(req.user!.userId, allPending.rows.map((inv) => inv.invitee_email));
-      const pendingInvites = { rows: allPending.rows.filter((inv) => !unreachable.has(inv.invitee_email.toLowerCase())) };
+      const eligible = allPending.rows.filter((inv) => !unreachable.has(inv.invitee_email.toLowerCase()));
 
       // Both numbers, always: production's event page toasts "Reminders sent to ${reminded}/${total} pending invites",
-      // and without a total it read "0/undefined" (fix round 2).
+      // and without a total it read "0/undefined" (fix round 2). `recentlyReminded` (fix round 3) is how many were left
+      // out because they were reminded within the hour; the page ignores it.
+      if (eligible.length === 0) {
+        return res.json({ success: true, data: { reminded: 0, total: 0, recentlyReminded: 0 } });
+      }
+
+      // The member's allowance of reminder emails for the hour, then the invites that are due: the ones reminded within
+      // the hour are left out of both numbers, and no more are claimed than the member has emails left.
+      const allowance = await inviteReminders.reminderAllowance(req.user!.userId);
+      if (allowance <= 0) throw reminderAllowanceSpent();
+      const { claimed, recent } = await inviteReminders.claimReminders(eligible.map((inv) => inv.id), allowance);
+      const claimedIds = new Set(claimed);
+      const pendingInvites = { rows: eligible.filter((inv) => claimedIds.has(inv.id)) };
+      const total = eligible.length - recent.size;
       if (pendingInvites.rows.length === 0) {
-        return res.json({ success: true, data: { reminded: 0, total: 0 } });
+        return res.json({ success: true, data: { reminded: 0, total, recentlyReminded: recent.size } });
       }
 
       // Build calendar event context
@@ -443,6 +484,7 @@ router.post(
       const { default: appConfig } = await import('../config');
       const emailService = await import('../services/email/email.service');
       let sentCount = 0;
+      const notSent: string[] = [];
       const BATCH = 10;
       for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
         const batch = pendingInvites.rows.slice(i, i + BATCH);
@@ -457,10 +499,17 @@ router.post(
             })
           )
         );
-        sentCount += results.filter(r => r.status === 'fulfilled').length;
+        results.forEach((result, at) => {
+          if (result.status === 'fulfilled') sentCount += 1;
+          else notSent.push(batch[at].id);
+        });
       }
+      // An email that was not sent leaves its invite not "reminded within the hour"; the ones that went count against
+      // the member's allowance (fix round 3).
+      if (notSent.length > 0) await inviteReminders.releaseReminders(notSent);
+      await inviteReminders.countRemindersSent(req.user!.userId, sentCount);
 
-      return res.json({ success: true, data: { reminded: sentCount, total: pendingInvites.rows.length } });
+      return res.json({ success: true, data: { reminded: sentCount, total, recentlyReminded: recent.size } });
     } catch (err) {
       return next(err);
     }
@@ -733,6 +782,13 @@ router.delete(
       if (revoked.sessionId) {
         fanoutSessionEntities(revoked.podId, revoked.sessionId, [E.sessionInvites(revoked.sessionId)]).catch(() => {});
       }
+      // Fix round 3 (every mutation emits): the sender's sent list and, when the address is a member's, that member's
+      // received list change whoever withdrew the invite. A platform or circle invite has no pod or event whose screens
+      // could be told, and an organiser withdrawing someone else's invite tells only the event's or pod's. Each person
+      // is sent their own tag and no one else's.
+      for (const person of new Set([revoked.inviterId, revoked.inviteeUserId])) {
+        if (person) emitEntities(getRealtimeIo(), [person], [E.userInvites(person)]).catch(() => {});
+      }
       const response: ApiResponse = { success: true, data: { message: 'Invite revoked' } };
       res.json(response);
     } catch (err) {
@@ -775,7 +831,11 @@ router.post(
       let mayInvite = true;
       try {
         await inviteService.assertMayInviteToSession(sessionId, userId, false);
-      } catch {
+      } catch (err) {
+        // Only a refusal (a 4xx: not the host or a co-host, no such event, a finished event) means "may not invite". A
+        // failure to find out, a database error above all, is a failure of the call (fix round 3): asking nobody about
+        // decliners on a guess would invite them again.
+        if (!(err instanceof AppError) || err.statusCode >= 500) throw err;
         mayInvite = false;
       }
       const declined = mayInvite ? await inviteCandidates.declinedAddresses('session', sessionId, emails) : new Set<string>();

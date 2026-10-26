@@ -39,6 +39,17 @@ jest.mock('../../../services/email/email.service', () => ({
   __esModule: true,
 }));
 
+// The reminder ledger keeps its hour in memory for the life of the process, and these tests remind the same invite over and
+// over, so it is stood in (an invite that has not been reminded, a member with their whole allowance). Its own rules are
+// read in invite-reminders.test.ts.
+jest.mock('../../../services/invite/invite-reminders.service', () => ({
+  reminderAllowance: async () => 300,
+  claimReminders: async (ids: string[]) => ({ claimed: ids, recent: new Map() }),
+  releaseReminders: async () => undefined,
+  countRemindersSent: async () => undefined,
+  __esModule: true,
+}));
+
 const mockGetSessionById = jest.fn();
 jest.mock('../../../services/session/session.service', () => ({
   getSessionById: (...args: unknown[]) => mockGetSessionById(...args),

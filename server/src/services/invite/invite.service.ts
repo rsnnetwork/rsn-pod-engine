@@ -139,13 +139,15 @@ export async function mayRunPodInvites(podId: string, userId: string, isAdmin: b
 }
 
 /**
- * Whether this person runs the one target an invite is for: its event's host or a co-host, or its pod's director or
- * host. An event invite is judged by its event alone, even where an old row also carries a pod id (fix round 2); a
- * platform or circle invite has no one who runs it. Admins are settled by the callers, which skip the lookup for them.
+ * Whether this person runs the one target an invite is for: an event invite's event (its host or a co-host), a pod
+ * invite's pod (its director or host). A platform or circle invite has no one who runs it. The invite's TYPE decides, not
+ * whichever id happens to be set (fix round 3): an old event invite that carries a stray pod id is the event's alone,
+ * and an old pod invite that carries a stray event id is the pod's, so that event's host has no hold on it. Admins are
+ * settled by the callers, which skip the lookup for them.
  */
-async function runsTheTargetOf(invite: { session_id: string | null; pod_id: string | null }, userId: string): Promise<boolean> {
-  if (invite.session_id !== null) return (await eventInviteRole(invite.session_id, userId, false)) !== null;
-  if (invite.pod_id !== null) return mayRunPodInvites(invite.pod_id, userId, false);
+async function runsTheTargetOf(invite: { type: string; session_id: string | null; pod_id: string | null }, userId: string): Promise<boolean> {
+  if (invite.type === InviteType.SESSION && invite.session_id !== null) return (await eventInviteRole(invite.session_id, userId, false)) !== null;
+  if (invite.type === InviteType.POD && invite.pod_id !== null) return mayRunPodInvites(invite.pod_id, userId, false);
   return false;
 }
 
@@ -341,9 +343,10 @@ export async function emailInvite(ctx: InviteContext, invite: InviteDelivery): P
 /**
  * Whether an invite waiting for its email should still be emailed: it is still pending and has time left, and its
  * address is one the sender may still email (no block either way since, the account not closed). A batch sends its
- * emails up to half a minute after it made the invites, so each is read again just before it goes (fix round 2). The
- * block question is unreachableAddresses, the one createInvite and the reminders ask. A question that could not be
- * answered comes out as the error, for the caller to treat as "not safe to send".
+ * emails up to half a minute after it made the invites, so each is read again just before it goes (fix round 2). That
+ * is two statements: the invite, then unreachableAddresses, the block and closed-account question that createInvite and
+ * the reminders ask. A question that could not be answered comes out as the error, for the caller to treat as "not safe
+ * to send".
  */
 export async function isStillEmailable(inviteId: string, senderId: string): Promise<boolean> {
   const found = await query<{ invitee_email: string | null }>(
@@ -632,13 +635,15 @@ export interface InviteViewer {
 }
 
 /**
- * Whether this person is the host of the invite's event or the director or host of its pod. A co-host is not one: they
- * read an address on the invites they sent themselves, as in the event's invite list. An event invite is judged by its
- * event alone, even where an old row also carries a pod id. Admins are settled by the caller.
+ * Whether this person is the host of an event invite's event, or the director or host of a pod invite's pod. A co-host
+ * is not one: they read an address on the invites they sent themselves, as in the event's invite list. The invite's
+ * TYPE decides which target counts, not whichever id is set (fix round 3): an old pod invite that carries a stray event
+ * id is the pod's, an old event invite that carries a stray pod id is the event's. A platform or circle invite has no
+ * organiser. Admins are settled by the caller.
  */
-async function isOrganiserOf(invite: Pick<Invite, 'podId' | 'sessionId'>, userId: string): Promise<boolean> {
-  if (invite.sessionId !== null) return (await eventInviteRole(invite.sessionId, userId, false)) === 'host';
-  if (invite.podId !== null) return mayRunPodInvites(invite.podId, userId, false);
+async function isOrganiserOf(invite: Pick<Invite, 'type' | 'podId' | 'sessionId'>, userId: string): Promise<boolean> {
+  if (invite.type === InviteType.SESSION && invite.sessionId !== null) return (await eventInviteRole(invite.sessionId, userId, false)) === 'host';
+  if (invite.type === InviteType.POD && invite.podId !== null) return mayRunPodInvites(invite.podId, userId, false);
   return false;
 }
 
@@ -648,7 +653,7 @@ async function isOrganiserOf(invite: Pick<Invite, 'podId' | 'sessionId'>, userId
  * ("a•••@example.com") for anyone else signed in. An open link has no address and shows none.
  */
 export async function inviteeAddressFor(
-  invite: Pick<Invite, 'inviterId' | 'inviteeEmail' | 'podId' | 'sessionId'>,
+  invite: Pick<Invite, 'type' | 'inviterId' | 'inviteeEmail' | 'podId' | 'sessionId'>,
   viewer: InviteViewer,
 ): Promise<string | null> {
   const address = invite.inviteeEmail;
@@ -1026,8 +1031,10 @@ export async function acceptInvite(
 // the client recovered a failed accept with it) checked neither who was asking nor what state the invite was in.
 // Anyone signed in who knew a code could turn a withdrawn or declined invite back into an accepted one, which
 // acceptInvite then admits again, and replace the record of who accepted it. Nothing in the client has called it since
-// T0-4 removed that recovery chain, so it now applies the rules acceptInvite applies and no stricter ones: the invite
-// must still be usable, and a personal invite is marked only for the person it was sent to.
+// T0-4 removed that recovery chain, so it now applies the rules acceptInvite applies, in its order, and none stricter
+// but one: the invite must still be usable (not withdrawn, not expired, its event not over: fix round 3 added that last
+// check, which round 2 had left out), and a personal invite is marked only for the person it was sent to. The one place
+// it is stricter is a caller whose own address is unknown, whom accept lets through for legacy callers.
 export async function markInviteAccepted(
   code: string,
   userId: string,
@@ -1043,6 +1050,15 @@ export async function markInviteAccepted(
     }
     if (invite.status === InviteStatus.EXPIRED || (invite.expiresAt && new Date(invite.expiresAt) < new Date())) {
       throw new AppError(400, 'INVITE_EXPIRED', 'This invite has expired');
+    }
+    // An invite to an event that has ended is refused, as accept refuses it (fix round 3; round 2 left it out): after the
+    // invite's own state and before the identity check, in accept's order.
+    if (invite.type === InviteType.SESSION && invite.sessionId) {
+      const sessionResult = await client.query(`SELECT status FROM sessions WHERE id = $1`, [invite.sessionId]);
+      const sessionStatus = sessionResult.rows[0]?.status;
+      if (sessionStatus === 'completed' || sessionStatus === 'cancelled') {
+        throw new AppError(400, 'EVENT_ENDED', 'This event has already ended');
+      }
     }
     // A personal invite is for the address it was sent to. acceptInvite lets a caller whose address is unknown through
     // (legacy callers); this does not: no one relies on this path, and it is not worth a way round.
@@ -1346,15 +1362,31 @@ export async function declineInvite(
 // to revoke invite"). Whoever runs a target's invites can withdraw any of them: for an event its host, its co-hosts
 // and admins; for a pod its director, its host and admins (they could already list and remind them). Platform and
 // circle invites stay the sender's, and (fix round 2) an admin's, which is the rule for reminding them. Each invite is
-// judged by the one target it is for: an event invite by its event, even where an old row also carries a pod id.
-// Anyone else is told the invite is not found, as before, so it is not confirmed to exist.
+// judged by the one target its TYPE names (fix round 3): an event invite by its event, a pod invite by its pod, even
+// where an old row also carries the other id. Anyone else is told the invite is not found, as before, so it is not
+// confirmed to exist.
+//
+// Fix round 3: the answer also says who sent the invite and, when its address belongs to a member, which member. A
+// withdrawal changes the sender's sent list and the invitee's received list whoever made it, and a platform or circle
+// invite has no pod or event whose screens could be told, so the route tells the two people themselves.
+export interface RevokedInvite {
+  podId: string | null;
+  sessionId: string | null;
+  inviterId: string;
+  /** The member the invite's address belongs to; null when it belongs to no member or the invite is an open link. */
+  inviteeUserId: string | null;
+}
+
 export async function revokeInvite(
   inviteId: string,
   userId: string,
   userRole?: string,
-): Promise<{ podId: string | null; sessionId: string | null }> {
-  const found = await query<{ inviter_id: string; pod_id: string | null; session_id: string | null }>(
-    `SELECT inviter_id, pod_id, session_id FROM invites WHERE id = $1 AND status = 'pending'`,
+): Promise<RevokedInvite> {
+  const found = await query<{ inviter_id: string; type: string; pod_id: string | null; session_id: string | null; invitee_user_id: string | null }>(
+    `SELECT i.inviter_id, i.type, i.pod_id, i.session_id, u.id AS invitee_user_id
+       FROM invites i
+       LEFT JOIN users u ON u.email = i.invitee_email
+      WHERE i.id = $1 AND i.status = 'pending'`,
     [inviteId]
   );
   const invite = found.rows[0];
@@ -1377,5 +1409,7 @@ export async function revokeInvite(
   return {
     podId: result.rows[0]?.pod_id ?? null,
     sessionId: result.rows[0]?.session_id ?? null,
+    inviterId: invite.inviter_id,
+    inviteeUserId: invite.invitee_user_id,
   };
 }
