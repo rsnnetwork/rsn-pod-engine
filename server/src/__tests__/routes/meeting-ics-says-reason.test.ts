@@ -31,13 +31,19 @@ jest.mock('../../services/dm/meeting-windows.service', () => ({
 }));
 jest.mock('../../services/dm/meeting-call.service', () => ({ __esModule: true }));
 jest.mock('../../services/presence/presence.service', () => ({ areActive: jest.fn(), __esModule: true }));
-jest.mock('../../db', () => ({
-  query: jest.fn().mockResolvedValue({
+// The two people, and (26 Oct 2026) the meeting's own row: the SEQUENCE its invite is at and who booked it.
+const mockMeetingRow = jest.fn();
+const mockQuery = jest.fn((sql: string, params?: unknown[]) => {
+  if (/FROM meetings WHERE id = \$1/.test(sql)) return Promise.resolve({ rows: mockMeetingRow(params?.[0]) });
+  return Promise.resolve({
     rows: [
       { id: 'u-a', display_name: 'Ana', email: 'ana@example.com' },
       { id: 'u-b', display_name: 'Bo', email: 'bo@example.com' },
     ],
-  }),
+  });
+});
+jest.mock('../../db', () => ({
+  query: (sql: string, params?: unknown[]) => mockQuery(sql, params),
   __esModule: true,
 }));
 
@@ -56,8 +62,36 @@ describe('GET /dm/conversations/:id/meeting.ics', () => {
   beforeEach(() => {
     mockScheduling.mockReset().mockResolvedValue({
       partnerId: 'u-b',
-      confirmed: { startAt: '2026-11-05T17:00:00.000Z', durationMin: 30, type: 'video' },
+      confirmed: { startAt: '2026-11-05T17:00:00.000Z', durationMin: 30, type: 'video', meetingId: null },
     });
+    mockMeetingRow.mockReset().mockReturnValue([]);
+  });
+
+  // 26 Oct 2026: the in-app file was built with no UID, so it got a random one, and accepting the
+  // emailed invite and then pressing "Add to calendar" left two entries in the same calendar. It now
+  // carries the meeting's own identity, the SEQUENCE its invite is at, and the organizer the invite named.
+  it('carries the meeting\'s own calendar identity and SEQUENCE, as the emails do, so adding it never makes a second entry', async () => {
+    mockScheduling.mockResolvedValue({
+      partnerId: 'u-b',
+      confirmed: { startAt: '2026-11-05T17:00:00.000Z', durationMin: 30, type: 'video', meetingId: 'mtg-1' },
+    });
+    mockMeetingRow.mockReturnValue([{ calendar_sequence: 2, confirmed_by: 'u-b' }]);
+
+    const res = await request(app).get('/dm/conversations/c-1/meeting.ics');
+
+    const ics = unfold(res.text);
+    expect(ics).toContain('\r\nUID:meeting-mtg-1@rsn.network\r\n');
+    expect(ics).toContain('\r\nSEQUENCE:2\r\n');
+    expect(ics).toContain('\r\nORGANIZER;CN=Bo:mailto:bo@example.com\r\n');
+    expect(mockMeetingRow).toHaveBeenCalledWith('mtg-1');
+  });
+
+  it('a meeting the old server booked without a row still downloads, as before', async () => {
+    const res = await request(app).get('/dm/conversations/c-1/meeting.ics');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('\r\nSEQUENCE:0\r\n');
+    expect(res.text).not.toContain('UID:meeting-');
+    expect(mockMeetingRow).not.toHaveBeenCalled();
   });
 
   it('is downloaded as reason-meeting.ics', async () => {

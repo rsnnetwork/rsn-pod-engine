@@ -7,10 +7,15 @@
 
 const mockQuery = jest.fn();
 const mockSendMessage = jest.fn();
+// 26 Oct 2026: a booking writes the meetings row and the conversation's meeting_* columns together.
+// Every statement is answered by mockQuery; these record where it ran, so a test can tell the
+// transaction's writes from a statement run on the pool outside it.
+const mockTxSql: string[] = [];
+const mockPoolSql: string[] = [];
 
 jest.mock('../../../db', () => ({
-  query: (...args: unknown[]) => mockQuery(...args),
-  transaction: (cb: Function) => cb({ query: (...a: unknown[]) => mockQuery(...a) }),
+  query: (...args: unknown[]) => { mockPoolSql.push(args[0] as string); return mockQuery(...args); },
+  transaction: (cb: Function) => cb({ query: (...a: unknown[]) => { mockTxSql.push(a[0] as string); return mockQuery(...a); } }),
   __esModule: true,
 }));
 jest.mock('../../../config/logger', () => ({
@@ -32,8 +37,10 @@ jest.mock('../../../services/block/block.service', () => ({
   areBlocked: (...args: unknown[]) => mockAreBlocked(...args),
   __esModule: true,
 }));
+/** What reached each socket room, as [room, event, payload]. */
+const mockEmits: Array<[string, string, unknown]> = [];
 jest.mock('../../../index', () => ({
-  io: { to: () => ({ emit: () => {} }) },
+  io: { to: (room: string) => ({ emit: (event: string, payload: unknown) => { mockEmits.push([room, event, payload]); } }) },
   __esModule: true,
 }));
 // confirmWindow now fans the confirmation message out through broadcastDmMessage
@@ -55,6 +62,7 @@ const mockGoogleInputs: Array<Record<string, unknown>> = [];
 jest.mock('../../../services/calendar/calendar.service', () => ({
   generateIcsContent: (input: Record<string, unknown>) => { mockIcsInputs.push(input); return 'ICSCONTENT'; },
   buildGoogleCalendarUrl: (input: Record<string, unknown>) => { mockGoogleInputs.push(input); return 'https://calendar.google.com/x'; },
+  meetingCalendarUid: (meetingId: string) => `meeting-${meetingId}`,
   __esModule: true,
 }));
 jest.mock('../../../services/email/email.service', () => ({
@@ -64,7 +72,7 @@ jest.mock('../../../services/email/email.service', () => ({
 
 import {
   isValidWindowKey, windowLabel, getScheduling, setAvailability, confirmWindow,
-  markSchedulerSeen, HORIZON_DAYS, meetingUid, isMeetingOver, isPastKey,
+  markSchedulerSeen, HORIZON_DAYS, isMeetingOver, isPastKey,
 } from '../../../services/dm/meeting-windows.service';
 
 const NOW = new Date('2026-07-19T12:00:00Z');
@@ -99,6 +107,9 @@ function armConv(availRows: Array<{ user_id: string; window_key: string }>, conv
 
 beforeEach(() => {
   mockQuery.mockReset();
+  mockTxSql.length = 0;
+  mockPoolSql.length = 0;
+  mockEmits.length = 0;
   mockSendMessage.mockReset();
   mockInsertOn.mockClear();
   mockInsertOn.mockResolvedValue({ message: { id: 'm1' }, conversationId: 'conv-1' });
@@ -159,18 +170,30 @@ function armBooking(
   before: Array<{ user_id: string; window_key: string }>,
   after: Array<{ user_id: string; window_key: string }>,
   conv: Record<string, unknown> = CONV,
+  meetings: {
+    /** The accepted request that connected the pair, if any (26 Oct 2026: the meeting's context). */
+    request?: { id: string; message: string | null } | null;
+    /** What moving the standing meetings row returns; nothing when it is no longer scheduled. */
+    moved?: { id: string; calendar_sequence: number; confirmed_by: string | null } | null;
+  } = {},
 ) {
   const row: Record<string, unknown> = { ...conv };
   let reads = 0;
   mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
     if (/UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(sql)) {
-      const [, window, by, startAt, durationMin, type] = params;
+      const [, window, by, startAt, durationMin, type, currentMeetingId] = params;
       Object.assign(row, {
         meeting_confirmed_window: window, meeting_confirmed_by: by, meeting_confirmed_at: new Date(),
         meeting_start_at: startAt, meeting_duration_min: durationMin, meeting_type: type, meeting_proposed_key: null,
+        current_meeting_id: currentMeetingId,
       });
       return Promise.resolve({ rows: [] });
     }
+    if (/FROM user_pokes/.test(sql)) return Promise.resolve({ rows: meetings.request ? [meetings.request] : [] });
+    if (/INSERT INTO meetings/.test(sql)) {
+      return Promise.resolve({ rows: [{ id: 'mtg-new', calendar_sequence: 0, confirmed_by: params[8] }] });
+    }
+    if (/UPDATE meetings/.test(sql)) return Promise.resolve({ rows: meetings.moved ? [meetings.moved] : [] });
     if (/FROM dm_conversations WHERE id/.test(sql)) return Promise.resolve({ rows: [{ ...row }] });
     if (/FROM meeting_availability/.test(sql)) {
       reads += 1;
@@ -521,7 +544,7 @@ describe('setAvailability — agreeing a time books it', () => {
     expect(cardContent()).toBe(`📅 Meeting confirmed: ${slot} · 30 min video call`);
     expect(cardMeta()).toEqual({
       type: 'meeting_confirmed', startAt: new Date(slot).toISOString(), durationMin: 30,
-      meetingType: 'video', joinPath: '/meet/conv-1?scheduled=1&kind=video',
+      meetingType: 'video', joinPath: '/meet/conv-1?scheduled=1&kind=video', meetingId: 'mtg-new',
     });
     expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
     // The partner's bell says the time is confirmed; there is no "pick a time" bell at all.
@@ -895,14 +918,218 @@ describe('confirmWindow', () => {
   });
 });
 
-// ── The calendar file's identity (21 Sep 2026) ───────────────────────────────
-describe('meetingUid', () => {
-  it('is the same for the same meeting, and different for a different time', () => {
-    const t1 = new Date('2026-09-24T13:00:00Z');
-    const t2 = new Date('2026-09-24T14:00:00Z');
-    expect(meetingUid('conv-1', t1)).toBe(meetingUid('conv-1', t1));
-    expect(meetingUid('conv-1', t1)).not.toBe(meetingUid('conv-1', t2));
-    expect(meetingUid('conv-1', t1)).not.toBe(meetingUid('conv-2', t1));
+// ── A confirmed meeting is a row of its own (26 Oct 2026, CON-04/05) ─────────
+//
+// Stefan and Claus agreed a time and nothing appeared under Events. Every booking (Confirm, or a save
+// that agrees a time) now writes one meetings row, in the SAME transaction as the conversation's
+// meeting_* columns that production's client reads, and points the conversation at it. A move updates
+// that row (same calendar identity, one SEQUENCE up) instead of overwriting the meeting's history.
+describe('the meetings row a booking writes', () => {
+  const both = (slot: string) => [{ user_id: 'u-b', window_key: slot }, { user_id: 'u-a', window_key: slot }];
+  /** The statements matching `pattern`, with the parameters each was run with. */
+  const sqlCalls = (pattern: RegExp) => mockQuery.mock.calls.filter(c => pattern.test(c[0] as string));
+  /** What the Nth confirmation email was asked to say. */
+  const emailData = (n = 0) => mockSendMtgEmail.mock.calls[n][2] as Record<string, unknown>;
+  /** The entity tags each user's room was sent, in order. */
+  const tagsSentTo = (userId: string) => mockEmits
+    .filter(([room, event]) => room === `user:${userId}` && event === 'entity:changed')
+    .map(([, , payload]) => (payload as { entities: string[] }).entities);
+
+  beforeEach(() => {
+    mockSendMtgEmail.mockClear();
+    mockIcsInputs.length = 0;
+  });
+
+  it('confirm writes one meetings row (context = the accepted request\'s message, request_id) and points the conversation at it, in the same transaction as meeting_*', async () => {
+    const slot = futureSlot(2, 13);
+    armBooking(both(slot), both(slot), CONV, { request: { id: 'poke-9', message: 'Coffee about your seed round?' } });
+
+    await confirmWindow('conv-1', 'u-a', slot);
+
+    // The request that connected the pair, whichever of them sent it.
+    const lookup = sqlCalls(/FROM user_pokes/);
+    expect(lookup).toHaveLength(1);
+    expect(String(lookup[0][0])).toMatch(/status = 'accepted'/);
+    expect(String(lookup[0][0])).toMatch(/sender_id = \$1 AND recipient_id = \$2\) OR \(sender_id = \$2 AND recipient_id = \$1/);
+    expect(lookup[0][1]).toEqual(['u-a', 'u-b']);
+    // One row: the pair, the request and its note, the time, 30 minutes of video, booked by the confirmer.
+    const inserts = sqlCalls(/INSERT INTO meetings/);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0][1]).toEqual(['conv-1', 'u-a', 'u-b', 'poke-9', 'Coffee about your seed round?', new Date(slot), 30, 'video', 'u-a', null]);
+    // The conversation's columns are written as before, and now name the meeting they describe.
+    expect(confirmations()).toHaveLength(1);
+    expect((confirmations()[0][1] as unknown[]).slice(1, 7)).toEqual([slot, 'u-a', new Date(slot), 30, 'video', 'mtg-new']);
+    // All of it inside the one transaction: the meeting never exists without the conversation saying so.
+    const booking = /FROM user_pokes|INSERT INTO meetings|UPDATE dm_conversations\s+SET meeting_confirmed_window|INSERT INTO direct_messages/;
+    expect(mockTxSql.filter(s => /FROM user_pokes|INSERT INTO meetings|UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(s))).toHaveLength(3);
+    expect(mockPoolSql.filter(s => booking.test(s))).toEqual([]);
+  });
+
+  it('a save that agrees a time (the auto-confirm) writes the same row, inside the save\'s own transaction', async () => {
+    const slot = futureSlot(3, 9, 30);
+    armBooking([{ user_id: 'u-b', window_key: slot }], both(slot), CONV, { request: { id: 'poke-2', message: 'Hello' } });
+
+    await setAvailability('conv-1', 'u-a', [slot], { durationMin: 20, type: 'audio' });
+
+    const inserts = sqlCalls(/INSERT INTO meetings/);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0][1]).toEqual(['conv-1', 'u-a', 'u-b', 'poke-2', 'Hello', new Date(slot), 20, 'audio', 'u-a', null]);
+    expect(mockTxSql.filter(s => /INSERT INTO meetings/.test(s))).toHaveLength(1);
+    expect((confirmations()[0][1] as unknown[])[6]).toBe('mtg-new');
+  });
+
+  it('a pair connected without a request (they met at an event) gets a meeting with no context', async () => {
+    const slot = futureSlot(2, 15);
+    armBooking(both(slot), both(slot), CONV, { request: null });
+
+    await confirmWindow('conv-1', 'u-a', slot);
+
+    const [params] = sqlCalls(/INSERT INTO meetings/).map(c => c[1] as unknown[]);
+    expect(params.slice(3, 5)).toEqual([null, null]);
+  });
+
+  it('a request note made of spaces is no context at all', async () => {
+    const slot = futureSlot(2, 16);
+    armBooking(both(slot), both(slot), CONV, { request: { id: 'poke-3', message: '   ' } });
+
+    await confirmWindow('conv-1', 'u-a', slot);
+
+    const [params] = sqlCalls(/INSERT INTO meetings/).map(c => c[1] as unknown[]);
+    expect(params.slice(3, 5)).toEqual(['poke-3', null]);
+  });
+
+  it('the card in the thread and the scheduling both name the meeting, so a screen can open its page', async () => {
+    const slot = futureSlot(2, 17);
+    armBooking(both(slot), both(slot));
+
+    const scheduling = await confirmWindow('conv-1', 'u-a', slot);
+
+    expect(cardMeta()).toMatchObject({ type: 'meeting_confirmed', meetingId: 'mtg-new' });
+    expect(scheduling.confirmed?.meetingId).toBe('mtg-new');
+  });
+
+  it('a move updates the same row: the new time, length and kind, moved_from the old start, one SEQUENCE up and a reminder again; no second row', async () => {
+    const standingStart = new Date(Date.now() + 2 * 86_400_000);
+    standingStart.setUTCMinutes(0, 0, 0);
+    const standing = standingStart.toISOString().replace('.000Z', 'Z');
+    const next = futureSlot(4, 10);
+    armBooking(
+      both(next), both(next),
+      { ...CONV, meeting_confirmed_window: standing, meeting_start_at: standingStart, meeting_duration_min: 30, current_meeting_id: 'mtg-1' },
+      { moved: { id: 'mtg-1', calendar_sequence: 2, confirmed_by: 'u-b' } },
+    );
+
+    await confirmWindow('conv-1', 'u-a', next, { durationMin: 45, type: 'audio' });
+
+    expect(sqlCalls(/INSERT INTO meetings/)).toHaveLength(0);
+    const moves = sqlCalls(/UPDATE meetings/);
+    expect(moves).toHaveLength(1);
+    const move = String(moves[0][0]).replace(/\s+/g, ' ');
+    expect(move).toMatch(/SET start_at = \$2, duration_min = \$3, kind = \$4, moved_from = start_at, calendar_sequence = calendar_sequence \+ 1, reminder_sent_at = NULL, updated_at = NOW\(\)/);
+    expect(move).toMatch(/WHERE id = \$1 AND status = 'scheduled'/);
+    expect(moves[0][1]).toEqual(['mtg-1', new Date(next), 45, 'audio']);
+    // The conversation goes on naming the same meeting; the move happened in the booking's transaction.
+    expect((confirmations()[0][1] as unknown[])[6]).toBe('mtg-1');
+    expect(mockTxSql.filter(s => /UPDATE meetings/.test(s))).toHaveLength(1);
+    // The card and the bell say it moved, as before.
+    expect(cardMeta()).toMatchObject({ type: 'meeting_confirmed', movedFrom: standingStart.toISOString(), meetingId: 'mtg-1' });
+  });
+
+  it('a moved meeting\'s invite keeps its calendar identity, goes one SEQUENCE up, and stays organised by whoever booked it first', async () => {
+    const standingStart = new Date(Date.now() + 2 * 86_400_000);
+    standingStart.setUTCMinutes(30, 0, 0);
+    const next = futureSlot(5, 11);
+    armBooking(
+      both(next), both(next),
+      { ...CONV, meeting_confirmed_window: standingStart.toISOString().replace('.000Z', 'Z'), meeting_start_at: standingStart, meeting_duration_min: 30, current_meeting_id: 'mtg-1' },
+      { moved: { id: 'mtg-1', calendar_sequence: 1, confirmed_by: 'u-b' } },
+    );
+
+    await confirmWindow('conv-1', 'u-a', next);
+
+    expect(mockIcsInputs).toHaveLength(2);
+    for (const ics of mockIcsInputs) {
+      expect(ics).toMatchObject({ uid: 'meeting-mtg-1', sequence: 1, organizerName: 'Stefan', organizerEmail: 'stefan@example.com' });
+    }
+    // Both people are told it moved.
+    expect(mockSendMtgEmail).toHaveBeenCalledTimes(2);
+    expect(emailData(0)).toMatchObject({ moved: true });
+    expect(emailData(1)).toMatchObject({ moved: true });
+  });
+
+  it('a new meeting\'s invite is meeting-<id> at SEQUENCE 0, and the email links Events', async () => {
+    const slot = futureSlot(2, 18);
+    armBooking(both(slot), both(slot));
+
+    await confirmWindow('conv-1', 'u-a', slot);
+
+    expect(mockIcsInputs.map(i => [i.uid, i.sequence])).toEqual([['meeting-mtg-new', 0], ['meeting-mtg-new', 0]]);
+    expect(emailData(0)).toMatchObject({ moved: false, eventsUrl: expect.stringMatching(/\/sessions$/) });
+  });
+
+  it('tells both people\'s screens: each gets their own meetings list and the meeting', async () => {
+    const slot = futureSlot(2, 19);
+    armBooking(both(slot), both(slot));
+
+    await confirmWindow('conv-1', 'u-a', slot);
+
+    expect(tagsSentTo('u-a')).toContainEqual(['user:u-a:meetings', 'meeting:mtg-new']);
+    expect(tagsSentTo('u-b')).toContainEqual(['user:u-b:meetings', 'meeting:mtg-new']);
+    // Neither is sent the other's list.
+    expect(tagsSentTo('u-a').flat()).not.toContain('user:u-b:meetings');
+  });
+
+  it('confirming the meeting that already stands writes no meetings row and tells nobody again', async () => {
+    const slot = futureSlot(2, 20);
+    armBooking(both(slot), both(slot), {
+      ...CONV, meeting_confirmed_window: slot, meeting_start_at: new Date(slot), meeting_duration_min: 30, current_meeting_id: 'mtg-1',
+    });
+
+    await confirmWindow('conv-1', 'u-a', slot);
+
+    expect(sqlCalls(/INSERT INTO meetings|UPDATE meetings/)).toHaveLength(0);
+    expect(tagsSentTo('u-a')).toEqual([]);
+  });
+
+  it('a legacy day-part confirm has no time to put under Events: no row, and the conversation names no meeting', async () => {
+    const windowKey = futureKey(2, 'evening');
+    armBooking(both(windowKey), both(windowKey));
+
+    await confirmWindow('conv-1', 'u-a', windowKey);
+
+    expect(sqlCalls(/INSERT INTO meetings|UPDATE meetings/)).toHaveLength(0);
+    expect((confirmations()[0][1] as unknown[])[6]).toBeNull();
+  });
+
+  it('a day part confirmed over a timed meeting that still stands cancels that meeting\'s row, so Events never shows it as coming', async () => {
+    const windowKey = futureKey(3, 'morning');
+    const standingStart = new Date(Date.now() + 86_400_000);
+    armBooking(both(windowKey), both(windowKey), {
+      ...CONV, meeting_confirmed_window: standingStart.toISOString(), meeting_start_at: standingStart, meeting_duration_min: 30, current_meeting_id: 'mtg-1',
+    });
+
+    await confirmWindow('conv-1', 'u-a', windowKey);
+
+    const cancels = sqlCalls(/UPDATE meetings/);
+    expect(cancels).toHaveLength(1);
+    expect(String(cancels[0][0]).replace(/\s+/g, ' ')).toMatch(/SET status = 'cancelled', cancelled_by = \$2, cancelled_at = NOW\(\), updated_at = NOW\(\) WHERE id = \$1 AND status = 'scheduled'/);
+    expect(cancels[0][1]).toEqual(['mtg-1', 'u-a']);
+    expect((confirmations()[0][1] as unknown[])[6]).toBeNull();
+  });
+
+  it('a timed meeting that stands without a row of its own (booked by the old server while this one deployed) is booked as a new row that says what it moved from', async () => {
+    const standingStart = new Date(Date.now() + 2 * 86_400_000);
+    standingStart.setUTCMinutes(0, 0, 0);
+    const next = futureSlot(4, 14);
+    armBooking(both(next), both(next), {
+      ...CONV, meeting_confirmed_window: standingStart.toISOString().replace('.000Z', 'Z'), meeting_start_at: standingStart, meeting_duration_min: 30, current_meeting_id: null,
+    });
+
+    await confirmWindow('conv-1', 'u-a', next);
+
+    expect(sqlCalls(/UPDATE meetings/)).toHaveLength(0);
+    const [params] = sqlCalls(/INSERT INTO meetings/).map(c => c[1] as unknown[]);
+    expect(params[9]).toEqual(standingStart);
   });
 });
 

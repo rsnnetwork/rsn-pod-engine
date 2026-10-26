@@ -121,6 +121,15 @@ const cases: Case[] = [
     googleCalendarUrl: 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=REASON%20meeting',
     icsContent: 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n',
     joinUrl: `${APP}/meet/c1?scheduled=1&kind=video`, kind: 'video',
+    eventsUrl: `${APP}/sessions`, moved: true,
+  }]),
+  email('sendMeetingCancelledEmail', 'a cancelled meeting', ['to', 'recipientDisplayName', 'data'], ['ana@example.com', 'Ana', {
+    partnerName: 'Bo', cancellerName: 'Bo', cancelledByMe: false, startAt: STARTS, durationMin: 30, kind: 'video',
+    recipientTimezone: 'Europe/Berlin', threadUrl: `${APP}/messages/c1`, icsContent: 'BEGIN:VCALENDAR\r\nMETHOD:CANCEL\r\nEND:VCALENDAR\r\n',
+  }]),
+  email('sendMeetingReminderEmail', 'a meeting reminder', ['to', 'recipientDisplayName', 'data'], ['ana@example.com', 'Ana', {
+    partnerName: 'Bo', startAt: STARTS, durationMin: 30, kind: 'audio', recipientTimezone: 'Europe/Berlin', minutesToGo: 10,
+    joinUrl: `${APP}/meet/c1?scheduled=1&kind=audio`, eventsUrl: `${APP}/sessions`,
   }]),
 ];
 
@@ -223,10 +232,11 @@ const variants = cases.flatMap((c) => stringPaths(c.args).flatMap((path) =>
 
 /**
  * The fields where any text that is not a real value stops the email, plain words included, so nothing is
- * sent and there is no HTML to read. A meeting's time is written in the recipient's time zone, and Intl
- * refuses a time zone it does not know.
+ * sent and there is no HTML to read. None since 26 Oct 2026: a meeting's time is written in the recipient's
+ * time zone, and a zone Intl does not know (it used to stop the confirmation email) now reads as UTC,
+ * named, so the email still goes out.
  */
-const REFUSED_WHATEVER_IT_HOLDS = ['a confirmed meeting: data.recipientTimezone'];
+const REFUSED_WHATEVER_IT_HOLDS: string[] = [];
 
 describe('the check itself', () => {
   it('sees markup that got into the HTML', () => {
@@ -254,7 +264,7 @@ describe('every email is fed hostile text in every field', () => {
     expect(stringPaths(c.args).length).toBeGreaterThan(0);
   });
 
-  it('the only field that stops an email whatever it holds is the time zone of a meeting', async () => {
+  it('no field stops an email whatever it holds: a meeting\'s time zone no calendar knows reads as UTC', async () => {
     const refused: string[] = [];
     for (const c of cases) {
       for (const path of stringPaths(c.args)) {

@@ -307,6 +307,67 @@ describe('T0-3 — buildSessionStateSnapshot', () => {
   });
 });
 
+// 26 Oct 2026 — the snapshot says what kind of event this is, so a client draws a meeting as a meeting.
+// A meeting reports totalRounds 0: production's live page then shows no "Round x of N" and no
+// "All rounds complete" (both need totalRounds > 0).
+describe('26 Oct — the event format on the snapshot', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    activeSessions.clear();
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+  });
+
+  it('a video meeting: format, a meeting live kind, its length, when it is due to end, and no rounds', async () => {
+    const startedAt = new Date('2026-11-01T12:00:00.000Z');
+    mockGetSessionById.mockResolvedValue(makeSession({
+      format: 'video_meeting', startedAt, scheduledAt: new Date('2026-11-01T11:55:00.000Z'),
+      config: { durationMinutes: 90, maxParticipants: 8, eventType: 'video_meeting' },
+    }));
+
+    const snapshot = await buildSessionStateSnapshot(SESSION_ID, null);
+    expect(snapshot).toMatchObject({
+      format: 'video_meeting',
+      live: 'meeting',
+      durationMinutes: 90,
+      scheduledEndAt: '2026-11-01T13:30:00.000Z',
+      totalRounds: 0,
+    });
+  });
+
+  it('a scheduled meeting is due to end its length after its scheduled start', async () => {
+    mockGetSessionById.mockResolvedValue(makeSession({
+      status: 'scheduled', format: 'video_meeting', startedAt: null,
+      scheduledAt: new Date('2026-11-01T12:00:00.000Z'), config: { eventType: 'video_meeting' },
+    }));
+    const snapshot = await buildSessionStateSnapshot(SESSION_ID, null);
+    expect(snapshot).toMatchObject({ durationMinutes: 60, scheduledEndAt: '2026-11-01T13:00:00.000Z' });
+  });
+
+  it('speed networking keeps its rounds, and says it runs in rounds', async () => {
+    mockGetSessionById.mockResolvedValue(makeSession({ format: 'speed_networking', scheduledAt: null, startedAt: null }));
+    const snapshot = await buildSessionStateSnapshot(SESSION_ID, null);
+    expect(snapshot).toMatchObject({ format: 'speed_networking', live: 'rounds', totalRounds: 5, scheduledEndAt: null });
+  });
+
+  it('a running event follows the format the live engine runs it as', async () => {
+    mockGetSessionById.mockResolvedValue(makeSession({ format: 'speed_networking' }));
+    activeSessions.set(SESSION_ID, {
+      sessionId: SESSION_ID, hostUserId: 'host-1', status: 'lobby_open' as any, currentRound: 0,
+      config: { numberOfRounds: 5 } as any, timer: null, timerSyncInterval: null, timerEndsAt: null,
+      isPaused: false, pausedTimeRemaining: null, presenceMap: new Map(), pendingRoundNumber: null,
+      manuallyLeftRound: new Set(), format: 'video_meeting',
+    });
+    const snapshot = await buildSessionStateSnapshot(SESSION_ID, null);
+    expect(snapshot).toMatchObject({ format: 'video_meeting', live: 'meeting', totalRounds: 0 });
+  });
+
+  it('an event row without a format (a test fixture, an old cached row) reads as speed networking', async () => {
+    mockGetSessionById.mockResolvedValue(makeSession());
+    const snapshot = await buildSessionStateSnapshot(SESSION_ID, null);
+    expect(snapshot).toMatchObject({ format: 'speed_networking', live: 'rounds', totalRounds: 5 });
+  });
+});
+
 // ───────────────────────────────────────────────────────────────────────────
 // Source-pattern test: GET /api/sessions/:id/state route is wired and gated
 // ───────────────────────────────────────────────────────────────────────────

@@ -301,6 +301,20 @@ export const bannerWriteLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// Cancelling a meeting (26 Oct 2026). Each cancel rings the other person, emails both and posts a card in
+// their thread, so a runaway client is stopped at 10 an hour. Keyed per member: the route signs in first.
+// Only a cancel that happened counts: a refusal (a meeting not found, or already over) changed nothing.
+export const meetingCancelLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('meeting-cancel'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have cancelled a lot of meetings this hour. Try again later.' } },
+});
+
 // The banner picture itself. It is public (an <img> sends no token), so it is counted per network address.
 // Each banner's URL is versioned and cached for a day, so one person opening profiles asks for each only once,
 // and a refused picture only means the page draws the default banner in its place.
@@ -312,4 +326,28 @@ export const bannerReadLimiter = rateLimit({
   keyGenerator: userOrIpKey,
   store: buildStore('banner-read'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// "Message all participants" (26 Oct 2026). One send writes a private message to everyone who took part, so
+// the route holds a person to 10 sends an hour across all their events, on top of the rule that decides
+// the real limit (3 per event per sender per 24 hours). Counted per signed-in person and not per network
+// address: the people who run events often share one office. Every attempt counts, so a script cannot
+// probe the rule for free.
+export const postEventMessageLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('post-event-message'),
+  handler: (_req, res) => {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'You have sent a lot of messages this hour. Please try again later.',
+      },
+    };
+    res.status(429).json(response);
+  },
 });

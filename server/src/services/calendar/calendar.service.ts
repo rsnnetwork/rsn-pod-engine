@@ -3,6 +3,7 @@
 // Works with Google Calendar, Outlook, Apple Calendar — no API keys needed.
 
 import { v4 as uuid } from 'uuid';
+import { eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
 import { query } from '../../db';
 
 interface CalendarEventData {
@@ -22,6 +23,21 @@ interface CalendarEventData {
    *  calendar" left two entries, and a later reschedule could never update
    *  the first. Pass something derived from the meeting itself. */
   uid?: string;
+  /** RFC 5545 SEQUENCE: a calendar applies a file for an entry it holds only when this is higher (26 Oct
+   *  2026). A meeting starts at 0 and goes one up on each move and on cancel. Default 0. */
+  sequence?: number;
+  /** REQUEST (the default) adds or updates the entry; CANCEL removes the entry with the same UID. */
+  method?: 'REQUEST' | 'CANCEL';
+}
+
+/**
+ * One meeting's calendar identity, the same in every copy of its file: both emails, every move, the
+ * cancellation and the in-app "Add to calendar". Built from the meeting's own id, never its time, so a
+ * moved meeting updates the entry already in each calendar instead of adding a second one (26 Oct 2026).
+ * generateIcsContent adds the @rsn.network.
+ */
+export function meetingCalendarUid(meetingId: string): string {
+  return `meeting-${meetingId}`;
 }
 
 /**
@@ -32,13 +48,14 @@ export function generateIcsContent(data: CalendarEventData): string {
   const end = formatIcsDate(new Date(data.startTime.getTime() + data.durationMinutes * 60 * 1000));
   const now = formatIcsDate(new Date());
   const uid = `${data.uid ?? uuid()}@rsn.network`;
+  const cancelling = data.method === 'CANCEL';
 
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//RSN//Pod Engine//EN',
     'CALSCALE:GREGORIAN',
-    'METHOD:REQUEST',
+    `METHOD:${cancelling ? 'CANCEL' : 'REQUEST'}`,
     'BEGIN:VEVENT',
     `UID:${uid}`,
     `DTSTAMP:${now}`,
@@ -62,21 +79,26 @@ export function generateIcsContent(data: CalendarEventData): string {
   for (const a of data.attendees ?? []) {
     if (!a.email) continue;
     const cn = a.name ? `;CN=${escapeIcsText(a.name)}` : '';
-    lines.push(`ATTENDEE${cn};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${a.email}`);
+    // A cancellation asks nobody for an answer.
+    const answer = cancelling ? '' : ';PARTSTAT=NEEDS-ACTION;RSVP=TRUE';
+    lines.push(`ATTENDEE${cn};ROLE=REQ-PARTICIPANT${answer}:mailto:${a.email}`);
   }
 
-  lines.push(
-    'SEQUENCE:0',
-    'STATUS:CONFIRMED',
-    'TRANSP:OPAQUE',
-    'BEGIN:VALARM',
-    'TRIGGER:-PT15M',
-    'ACTION:DISPLAY',
-    'DESCRIPTION:Event starting in 15 minutes',
-    'END:VALARM',
-    'END:VEVENT',
-    'END:VCALENDAR',
-  );
+  lines.push(`SEQUENCE:${data.sequence ?? 0}`);
+  if (cancelling) {
+    lines.push('STATUS:CANCELLED', 'TRANSP:TRANSPARENT');
+  } else {
+    lines.push(
+      'STATUS:CONFIRMED',
+      'TRANSP:OPAQUE',
+      'BEGIN:VALARM',
+      'TRIGGER:-PT15M',
+      'ACTION:DISPLAY',
+      'DESCRIPTION:Event starting in 15 minutes',
+      'END:VALARM',
+    );
+  }
+  lines.push('END:VEVENT', 'END:VCALENDAR');
 
   // RFC 5545 §3.1: lines longer than 75 octets must be folded (CRLF + space).
   // Outlook/Apple reject or truncate an unfolded long DESCRIPTION.
@@ -114,23 +136,13 @@ export interface SessionCalendarEvent {
 }
 
 /**
- * Estimate a session's wall-clock duration in minutes from its round config:
- * rounds × (round + rating) + (rounds − 1) transitions + closing lobby.
- * Mirrors the computation the emailed-invite path uses so the invite and the
- * self-registration confirmation produce the same calendar block.
+ * Estimate a speed-networking event's wall-clock duration in minutes from its round config:
+ * rounds × (round + rating) + (rounds − 1) transitions + closing lobby. Since 26 Oct 2026 this is the
+ * speed-networking case of the shared eventDurationMinutes, the one formula every calendar entry, invite
+ * email and LiveKit token lifetime uses.
  */
-export function computeSessionDurationMinutes(cfg: any): number {
-  const rounds = cfg?.numberOfRounds || 5;
-  const roundDuration = cfg?.roundDurationSeconds || 480;
-  const ratingWindow = cfg?.ratingWindowSeconds || 30;
-  const transitionDuration = cfg?.transitionDurationSeconds || 30;
-  const closingLobby = cfg?.closingLobbyDurationSeconds || 120;
-  const totalSeconds =
-    (rounds * roundDuration) +
-    (rounds * ratingWindow) +
-    (Math.max(0, rounds - 1) * transitionDuration) +
-    closingLobby;
-  return Math.ceil(totalSeconds / 60);
+export function computeSessionDurationMinutes(cfg: object | null | undefined): number {
+  return eventDurationMinutes('speed_networking', cfg);
 }
 
 /**
@@ -140,8 +152,8 @@ export function computeSessionDurationMinutes(cfg: any): number {
  * the self-registration confirmation email.
  */
 export async function buildSessionCalendarEvent(sessionId: string): Promise<SessionCalendarEvent | undefined> {
-  const r = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any }>(
-    'SELECT title, scheduled_at, host_user_id, config FROM sessions WHERE id = $1',
+  const r = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null }>(
+    'SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1',
     [sessionId],
   );
   const session = r.rows[0];
@@ -156,7 +168,7 @@ export async function buildSessionCalendarEvent(sessionId: string): Promise<Sess
     title: session.title,
     description: `REASON event — ${session.title}`,
     startTime: new Date(session.scheduled_at),
-    durationMinutes: computeSessionDurationMinutes(session.config || {}),
+    durationMinutes: eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config),
     organizerName: host?.display_name || 'REASON',
     organizerEmail: host?.email,
     sessionId,

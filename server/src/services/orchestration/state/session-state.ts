@@ -5,7 +5,7 @@
 import { Socket } from 'socket.io';
 import logger from '../../../config/logger';
 import { query } from '../../../db';
-import { SessionStatus, SessionConfig } from '@rsn/shared';
+import { SessionStatus, SessionConfig, EventFormat, ErrorCodes, formatRule, liveKindOf } from '@rsn/shared';
 import { getRedisClient } from '../../redis/redis.client';
 import { shadowWriteCanonical } from './canonical-shadow';
 
@@ -15,6 +15,12 @@ export interface ActiveSession {
   sessionId: string;
   hostUserId: string;
   config: SessionConfig;
+  /**
+   * 26 Oct 2026 — what the engine runs this event as (sessions.event_format), set wherever an ActiveSession is
+   * made. Missing means speed networking: a session started, or written to Redis, before formats existed.
+   * Read it through activeFormat().
+   */
+  format?: EventFormat;
   currentRound: number;
   status: SessionStatus;
   timer: NodeJS.Timeout | null;
@@ -221,6 +227,7 @@ async function persistToRedis(sessionId: string, session: ActiveSession): Promis
       sessionId: session.sessionId,
       hostUserId: session.hostUserId,
       config: session.config,
+      format: activeFormat(session),
       currentRound: session.currentRound,
       status: session.status,
       timerEndsAt: session.timerEndsAt?.toISOString() || null,
@@ -292,6 +299,33 @@ export function userRoom(userId: string): string {
 
 export function getUserIdFromSocket(socket: Socket): string | null {
   return (socket.data as any)?.userId || null;
+}
+
+// ─── Event Format (26 Oct 2026) ─────────────────────────────────────────────
+
+/** The format the engine runs an event as; one held without a format (from before formats) is speed networking. */
+export function activeFormat(activeSession: Pick<ActiveSession, 'format'> | undefined): EventFormat {
+  return activeSession?.format ?? 'speed_networking';
+}
+
+/**
+ * Round, matching and breakout actions exist only where the event's format has them. On any other event
+ * (a video meeting: everyone in the main room until the director ends it) this emits NOT_A_ROUNDS_EVENT
+ * to the caller and returns true, and the handler stops before touching anything. Returns false for an
+ * event that has them, and for one not running here (the handler's own "not active" answer follows).
+ */
+export function refuseIfFormatLacks(socket: Socket, sessionId: string, need: 'rounds' | 'breakouts'): boolean {
+  const format = activeFormat(activeSessions.get(sessionId));
+  const has = need === 'rounds' ? liveKindOf(format) === 'rounds' : formatRule(format).breakouts;
+  if (has) return false;
+  socket.emit('error', {
+    code: ErrorCodes.NOT_A_ROUNDS_EVENT,
+    message: format === 'video_meeting'
+      ? 'This is a video meeting, so there are no rounds. Everyone stays in the main room.'
+      : 'This event has no rounds. Everyone stays in the main room.',
+  });
+  logger.info({ sessionId, format, need }, 'Refused a round action on an event without rounds');
+  return true;
 }
 
 // ─── Chat Helpers ───────────────────────────────────────────────────────────

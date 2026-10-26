@@ -62,6 +62,10 @@ export * from './onboarding/example-people';
 import { EXAMPLE_PEOPLE as _EXAMPLE_PEOPLE } from './onboarding/example-people';
 export const EXAMPLE_PEOPLE = _EXAMPLE_PEOPLE;
 export * from './types/post-event-message';
+// A real VALUE the "message everyone" screen counts with, so it needs its own statically analysable
+// named export for Rollup's CJS interop, same as OPENINGS above (26 Oct 2026).
+import { POST_EVENT_MESSAGE_LIMITS as _POST_EVENT_MESSAGE_LIMITS } from './types/post-event-message';
+export const POST_EVENT_MESSAGE_LIMITS = _POST_EVENT_MESSAGE_LIMITS;
 export * from './identity/displayName';
 // A member's own words, as a page shows them (21 Oct 2026): one rule for the brief another member reads and for your
 // own profile. Real VALUES (functions) the client calls, so each has its own named export, same as OPENINGS above.
@@ -102,3 +106,53 @@ export const ENTITY_KIND_LABELS = _ENTITY_KIND_LABELS;
 export const ENTITY_LIMITS = _ENTITY_LIMITS;
 export const ENTITY_ROLES = _ENTITY_ROLES;
 export const ENTITY_ROLE_LABELS = _ENTITY_ROLE_LABELS;
+// Event formats and pod types (26 Oct 2026): the one definition every pod and event form reads and the server
+// enforces, with its rules. Real VALUES the client renders and calls, so each has its own named export, same
+// as OPENINGS above.
+export * from './events/definitions';
+export * from './events/rules';
+import {
+  EVENT_FORMATS as _EVENT_FORMATS, EVENT_FORMAT_KEYS as _EVENT_FORMAT_KEYS, POD_TYPES as _POD_TYPES,
+  ORCHESTRATION_MODES as _ORCHESTRATION_MODES,
+} from './events/definitions';
+import {
+  formatRule as _formatRule, podTypeRule as _podTypeRule, isEventFormat as _isEventFormat, liveKindOf as _liveKindOf,
+  effectiveOrchestration as _effectiveOrchestration, eventFormatsForPod as _eventFormatsForPod,
+  defaultEventFormat as _defaultEventFormat, fieldsFor as _fieldsFor, defaultsFor as _defaultsFor,
+  defaultTitle as _defaultTitle, checkEventInput as _checkEventInput, normaliseConfig as _normaliseConfig,
+  valuesFromConfig as _valuesFromConfig, eventDurationMinutes as _eventDurationMinutes,
+  applyTypeChange as _applyTypeChange, applyFormatChange as _applyFormatChange,
+  resolveEventFormat as _resolveEventFormat, formatRefusal as _formatRefusal,
+} from './events/rules';
+export const EVENT_FORMATS = _EVENT_FORMATS;
+export const EVENT_FORMAT_KEYS = _EVENT_FORMAT_KEYS;
+export const POD_TYPES = _POD_TYPES;
+export const ORCHESTRATION_MODES = _ORCHESTRATION_MODES;
+export const formatRule = _formatRule;
+export const podTypeRule = _podTypeRule;
+export const isEventFormat = _isEventFormat;
+export const liveKindOf = _liveKindOf;
+export const effectiveOrchestration = _effectiveOrchestration;
+export const eventFormatsForPod = _eventFormatsForPod;
+export const defaultEventFormat = _defaultEventFormat;
+export const fieldsFor = _fieldsFor;
+export const defaultsFor = _defaultsFor;
+export const defaultTitle = _defaultTitle;
+export const checkEventInput = _checkEventInput;
+export const normaliseConfig = _normaliseConfig;
+export const valuesFromConfig = _valuesFromConfig;
+export const eventDurationMinutes = _eventDurationMinutes;
+export const applyTypeChange = _applyTypeChange;
+export const applyFormatChange = _applyFormatChange;
+export const resolveEventFormat = _resolveEventFormat;
+export const formatRefusal = _formatRefusal;
+export * from './types/meeting';
+// Real VALUES the client uses (the Events meetings and the meeting page redraw their phase as the clock
+// moves), so each needs its own statically analysable named export, same as OPENINGS above.
+import {
+  MEETING_JOIN_EARLY_MIN as _MEETING_JOIN_EARLY_MIN, MEETING_GRACE_MIN as _MEETING_GRACE_MIN,
+  meetingPhase as _meetingPhase,
+} from './types/meeting';
+export const MEETING_JOIN_EARLY_MIN = _MEETING_JOIN_EARLY_MIN;
+export const MEETING_GRACE_MIN = _MEETING_GRACE_MIN;
+export const meetingPhase = _meetingPhase;

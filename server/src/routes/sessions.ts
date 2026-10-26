@@ -17,7 +17,9 @@ import { buildSessionStateSnapshot } from '../services/session/session-state-sna
 // 27 May — live main-room presence (heartbeat) to gate the event-plan "not matched" counts.
 import { activeSessions } from '../services/orchestration/state/session-state';
 import { getCanonicalConnectedSet } from '../services/orchestration/state/canonical-state';
-import { ApiResponse, SessionStatus, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import {
+  ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
+} from '@rsn/shared';
 import { ForbiddenError, NotFoundError } from '../middleware/errors';
 import { query } from '../db';
 import config from '../config';
@@ -30,11 +32,16 @@ const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
+// 26 Oct 2026 — the event's format, from the shared definition. Optional: production's old form sends
+// config.eventType instead, which the service reads (option O1).
+const eventFormatSchema = z.enum(EVENT_FORMAT_KEYS as [EventFormat, ...EventFormat[]]);
+
 export const createSessionSchema = z.object({
   podId: z.string().uuid(),
   title: z.string().min(1).max(300),
   description: z.string().max(2000).optional(),
   scheduledAt: z.string().datetime().nullable(),
+  format: eventFormatSchema.optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -57,6 +64,11 @@ export const createSessionSchema = z.object({
     matchingPolicy: z.enum(['platform_wide', 'within_event', 'none', 'cooldown']).optional(),
     // Phase 2 (matching) — months a pair stays un-rematchable under 'cooldown'.
     cooldownMonths: z.coerce.number().int().min(1).max(60).optional(),
+    // 26 Oct 2026 — the event forms' own fields: a meeting's length, and the round length in minutes (stored
+    // as roundDurationSeconds). Only their shape is checked here: their limits are the shared definition's,
+    // checked by the service on every path (old body included), so a refusal reads in the definition's words.
+    durationMinutes: z.number().int().optional(),
+    roundMinutes: z.number().finite().optional(),
   }).optional(),
 });
 
@@ -64,6 +76,7 @@ export const updateSessionSchema = z.object({
   title: z.string().min(1).max(300).optional(),
   description: z.string().max(2000).optional(),
   scheduledAt: z.string().datetime().optional(),
+  format: eventFormatSchema.optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -86,6 +99,11 @@ export const updateSessionSchema = z.object({
     matchingPolicy: z.enum(['platform_wide', 'within_event', 'none', 'cooldown']).optional(),
     // Phase 2 (matching) — months a pair stays un-rematchable under 'cooldown'.
     cooldownMonths: z.coerce.number().int().min(1).max(60).optional(),
+    // 26 Oct 2026 — the event forms' own fields: a meeting's length, and the round length in minutes (stored
+    // as roundDurationSeconds). Only their shape is checked here: their limits are the shared definition's,
+    // checked by the service on every path (old body included), so a refusal reads in the definition's words.
+    durationMinutes: z.number().int().optional(),
+    roundMinutes: z.number().finite().optional(),
   }).optional(),
 });
 
@@ -914,8 +932,8 @@ router.get(
       const userId = req.user!.userId;
       const userRole = req.user!.role as UserRole;
 
-      const sessionResult = await query<{ host_user_id: string; pod_id: string; config: any }>(
-        `SELECT host_user_id, pod_id, config FROM sessions WHERE id = $1`,
+      const sessionResult = await query<{ host_user_id: string; pod_id: string; config: any; event_format: string | null }>(
+        `SELECT host_user_id, pod_id, config, event_format FROM sessions WHERE id = $1`,
         [sessionId],
       );
       if (sessionResult.rows.length === 0) {
@@ -943,6 +961,15 @@ router.get(
       }
 
       const config = typeof session.config === 'string' ? JSON.parse(session.config as unknown as string) : session.config;
+
+      // 26 Oct 2026 — a video meeting has no rounds, so nothing is planned. Production's live page hides the
+      // Event Plan strip when the plan is empty.
+      if (liveKindOf(resolveEventFormat({ format: session.event_format, config })) !== 'rounds') {
+        const empty: ApiResponse = { success: true, data: { rounds: [], totalRounds: 0 } };
+        res.json(empty);
+        return;
+      }
+
       const totalRounds: number = config?.numberOfRounds || 5;
 
       const matchesResult = await query<{

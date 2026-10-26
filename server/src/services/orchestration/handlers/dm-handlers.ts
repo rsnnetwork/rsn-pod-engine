@@ -172,7 +172,10 @@ export async function broadcastDmMessage(
   // skips the "sent you a message" bell + offline email. Used by system-message
   // paths that carry their OWN, more specific notification: the meeting-confirmed
   // bell (confirmWindow) and the poke_accepted bell (acceptPoke). 7 Sep 2026.
-  options: { notify?: boolean } = {},
+  // bellTitle replaces "<name> sent you a message" for a message that is not a one-to-one note:
+  // "Claus messaged everyone from ‘test’" says why a stranger wrote. The bell stays a
+  // direct_message and still opens the thread. 26 Oct 2026.
+  options: { notify?: boolean; bellTitle?: string } = {},
 ): Promise<void> {
   const shouldNotify = options.notify !== false;
   // Real-time fan-out: emit to BOTH users' rooms so any open tab updates.
@@ -220,11 +223,14 @@ export async function broadcastDmMessage(
   // Bell notification — same pattern as invites so the bell icon counts
   // DMs alongside invite events consistently.
   try {
-    const senderResult = await query<{ display_name: string | null }>(
-      `SELECT display_name FROM users WHERE id = $1`, [fromUserId],
-    );
-    const senderName = senderResult.rows[0]?.display_name || 'Someone';
-    const notifTitle = `${senderName} sent you a message`;
+    let notifTitle = options.bellTitle;
+    if (!notifTitle) {
+      const senderResult = await query<{ display_name: string | null }>(
+        `SELECT display_name FROM users WHERE id = $1`, [fromUserId],
+      );
+      const senderName = senderResult.rows[0]?.display_name || 'Someone';
+      notifTitle = `${senderName} sent you a message`;
+    }
     // For attachment-only messages, the bell body falls back to a short
     // descriptor so the bell shows useful text instead of an empty bubble.
     const notifBody = message.content && message.content.trim().length > 0

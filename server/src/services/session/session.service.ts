@@ -6,10 +6,12 @@ import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
   Session, SessionParticipant, SessionConfig, SessionStatus,
-  ParticipantStatus, CreateSessionInput, UpdateSessionInput,
-  DEFAULT_SESSION_CONFIG, UserRole, hasRoleAtLeast, ErrorCode,
+  ParticipantStatus, CreateSessionInput, UpdateSessionInput, SessionConfigInput, EventInputIssue,
+  UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType,
+  resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
+  liveKindOf, eventDurationMinutes,
 } from '@rsn/shared';
-import { NotFoundError, ConflictError, ForbiddenError, AppError } from '../../middleware/errors';
+import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
@@ -20,8 +22,53 @@ const SESSION_COLUMNS = `
   current_round AS "currentRound", config, host_user_id AS "hostUserId",
   lobby_room_id AS "lobbyRoomId",
   host_visibility_mode AS "hostVisibilityMode",
+  event_format AS "format",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
+
+/** The states an event is live in (started, not yet over). */
+const LIVE_STATUSES: SessionStatus[] = [
+  SessionStatus.LOBBY_OPEN, SessionStatus.ROUND_ACTIVE, SessionStatus.ROUND_RATING,
+  SessionStatus.ROUND_TRANSITION, SessionStatus.CLOSING_LOBBY,
+];
+
+// ─── Event format (26 Oct 2026) ─────────────────────────────────────────────
+
+/** Refuses a format the pod's type does not hold, or one not offered yet: 400 EVENT_FORMAT_NOT_ALLOWED, at the field. */
+function assertFormatAllowed(podType: PodType, format: EventFormat): void {
+  const refusal = formatRefusal(podType, format);
+  if (refusal) throw new AppError(400, ErrorCodes.EVENT_FORMAT_NOT_ALLOWED, refusal, { format: [refusal] });
+}
+
+/** 400 VALIDATION_ERROR when there is anything to say, each problem at its field. */
+function throwIfIssues(issues: EventInputIssue[]): void {
+  if (issues.length === 0) return;
+  const details: Record<string, string[]> = {};
+  for (const issue of issues) (details[issue.field] ??= []).push(issue.message);
+  throw new ValidationError(issues[0].message, details);
+}
+
+/** An explicit format: every setting the event will be stored with must be inside the format's limits. */
+function assertEventInput(format: EventFormat, storedConfig: Record<string, unknown>): void {
+  throwIfIssues(checkEventInput(format, valuesFromConfig(format, storedConfig)));
+}
+
+/**
+ * The settings only the new event forms send: a round length in minutes and a meeting's length. Production's
+ * old form never sends them, so they are checked even when no format is sent; its own settings (a "Video
+ * Meeting" for 500 people, by default) stay unchecked on that path, exactly as before. A setting the event's
+ * format does not have is not checked here: normaliseConfig never stores it.
+ */
+const FORM_ONLY_SETTINGS = ['roundMinutes', 'durationMinutes'] as const;
+
+function assertFormOnlySettings(format: EventFormat, config: SessionConfigInput | undefined): void {
+  if (!config) return;
+  const sent: Record<string, unknown> = {};
+  for (const key of FORM_ONLY_SETTINGS) {
+    if (config[key] !== undefined) sent[key] = config[key];
+  }
+  throwIfIssues(checkEventInput(format, sent));
+}
 
 const PARTICIPANT_COLUMNS = `
   session_participants.id, session_id AS "sessionId", user_id AS "userId", session_participants.status,
@@ -34,7 +81,7 @@ const PARTICIPANT_COLUMNS = `
 
 export async function createSession(userId: string, input: CreateSessionInput, userRole?: UserRole): Promise<Session> {
   // Verify pod exists (will throw NotFoundError if not)
-  await podService.getPodById(input.podId);
+  const pod = await podService.getPodById(input.podId);
 
   // Admins can create sessions in any pod; others must be director or host
   const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
@@ -45,16 +92,21 @@ export async function createSession(userId: string, input: CreateSessionInput, u
     }
   }
 
-  const sessionConfig: SessionConfig = {
-    ...DEFAULT_SESSION_CONFIG,
-    ...(input.config || {}),
-  };
+  // 26 Oct 2026 — the event's format. An explicit one must be held by the pod's type and offered, with its
+  // settings inside the format's limits. Production's old form sends none: an offered config.eventType is
+  // honoured with no pod or limit check (option O1), anything else is speed networking, exactly as before.
+  const explicit = input.format !== undefined;
+  const format = input.format ?? resolveEventFormat({ config: input.config });
+  if (explicit) assertFormatAllowed(pod.podType, format);
+  const sessionConfig = normaliseConfig(format, input.config);
+  if (explicit) assertEventInput(format, sessionConfig);
+  else assertFormOnlySettings(format, input.config);
 
   const sessionId = uuid();
 
   const result = await query<Session>(
-    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING ${SESSION_COLUMNS}`,
     [
       sessionId,
@@ -64,6 +116,7 @@ export async function createSession(userId: string, input: CreateSessionInput, u
       input.scheduledAt,
       JSON.stringify(sessionConfig),
       userId,
+      format,
     ]
   );
 
@@ -104,6 +157,17 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     throw new AppError(400, 'SESSION_ALREADY_STARTED', 'Cannot update an event that has already started');
   }
 
+  // 26 Oct 2026 — a scheduled event may switch to another format its pod holds. Keeping its format needs no
+  // pod check, so an event survives a later change of its pod's type. Production's old edit form sends no
+  // format: the event keeps the one it has.
+  const currentFormat = resolveEventFormat(session);
+  const nextFormat = input.format ?? currentFormat;
+  const formatChanges = nextFormat !== currentFormat;
+  if (formatChanges) {
+    const pod = await podService.getPodById(session.podId);
+    assertFormatAllowed(pod.podType, nextFormat);
+  }
+
   const setClauses: string[] = [];
   const values: unknown[] = [];
   let paramIdx = 1;
@@ -126,13 +190,23 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     paramIdx++;
   }
 
-  if (input.config) {
+  if (input.config || formatChanges) {
     const currentConfig = typeof session.config === 'string'
       ? JSON.parse(session.config as unknown as string)
       : session.config;
-    const newConfig = { ...currentConfig, ...input.config };
+    // An edit keeps every setting it does not change; a format switch starts from the new format's defaults.
+    const merged = formatChanges ? { ...input.config } : { ...currentConfig, ...input.config };
+    const newConfig = normaliseConfig(nextFormat, merged);
+    if (input.format !== undefined) assertEventInput(nextFormat, newConfig);
+    else assertFormOnlySettings(nextFormat, input.config);
     setClauses.push(`config = $${paramIdx}`);
     values.push(JSON.stringify(newConfig));
+    paramIdx++;
+  }
+
+  if (formatChanges) {
+    setClauses.push(`event_format = $${paramIdx}`);
+    values.push(nextFormat);
     paramIdx++;
   }
 
@@ -199,6 +273,7 @@ export async function listSessions(params: {
             s.started_at AS "startedAt", s.ended_at AS "endedAt", s.status,
             s.current_round AS "currentRound", s.config, s.host_user_id AS "hostUserId",
             s.lobby_room_id AS "lobbyRoomId", s.created_at AS "createdAt", s.updated_at AS "updatedAt",
+            s.event_format AS "format",
             p.name AS "podName",
             u.display_name AS "hostDisplayName"
      FROM sessions s
@@ -712,6 +787,16 @@ export async function deleteSession(sessionId: string, userId: string, userRole?
     throw new AppError(400, 'SESSION_IN_PROGRESS', 'Cannot delete an event that is currently in progress');
   }
 
+  // 26 Oct 2026 — marking a LIVE event cancelled told nobody in it and closed none of its rooms (only End
+  // Event, through completeSession, does that), and admins attend events as ordinary participants. A platform
+  // admin is refused; a super_admin keeps the override for an emergency.
+  if (isAdmin && userRole !== UserRole.SUPER_ADMIN && LIVE_STATUSES.includes(session.status)) {
+    throw new ConflictError(
+      ErrorCodes.SESSION_IN_PROGRESS,
+      'This event is live. End it from the live event first, then delete it.',
+    );
+  }
+
   // Soft-delete: mark as cancelled
   await query(`UPDATE sessions SET status = 'cancelled', updated_at = NOW() WHERE id = $1`, [sessionId]);
   logger.info({ sessionId, userId }, 'Session deleted (cancelled)');
@@ -731,6 +816,33 @@ export async function hardDeleteSession(sessionId: string): Promise<void> {
   });
 
   logger.info({ sessionId }, 'Session permanently deleted by admin');
+}
+
+/**
+ * How long a LiveKit token for this event lives: the event's remaining time plus 10 minutes, kept between 30
+ * minutes and 4 hours. Speed networking counts the rounds left, exactly as it always has. A meeting counts its
+ * length down from its start (26 Oct 2026: the rounds formula gave a 90-minute meeting a 55-minute token).
+ */
+export function livekitTokenTtlSeconds(
+  session: { format?: unknown; config?: unknown; currentRound?: number | null; startedAt?: Date | string | null },
+  nowMs: number = Date.now(),
+): number {
+  const sessionConfig = (typeof session.config === 'string' ? JSON.parse(session.config) : session.config ?? {}) as Partial<SessionConfig>;
+  const format = resolveEventFormat({ format: session.format, config: sessionConfig });
+  let estimatedRemainingSeconds: number;
+  if (liveKindOf(format) === 'rounds') {
+    const roundsRemaining = Math.max(1, (sessionConfig.numberOfRounds || 5) - (session.currentRound || 0));
+    const roundDuration = sessionConfig.roundDurationSeconds || 480;
+    // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
+    const ratingWindow = sessionConfig.ratingWindowSeconds || 30;
+    estimatedRemainingSeconds = roundsRemaining * (roundDuration + ratingWindow + 30) + 600;
+  } else {
+    const elapsedSeconds = session.startedAt
+      ? Math.max(0, (nowMs - new Date(session.startedAt).getTime()) / 1000)
+      : 0;
+    estimatedRemainingSeconds = Math.round(eventDurationMinutes(format, sessionConfig) * 60 - elapsedSeconds + 600);
+  }
+  return Math.max(1800, Math.min(14400, estimatedRemainingSeconds)); // 30 min to 4 hours
 }
 
 export async function generateLiveKitToken(sessionId: string, userId: string, roomId?: string): Promise<{ token: string; livekitUrl: string }> {
@@ -773,13 +885,7 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
     const displayName = nameResult.rows[0]?.display_name || 'User';
 
     // Dynamic TTL: remaining event time + 10 min buffer (minimum 30 min, max 4 hours)
-    const sessionConfig = typeof session.config === 'string' ? JSON.parse(session.config as unknown as string) : session.config;
-    const roundsRemaining = Math.max(1, (sessionConfig?.numberOfRounds || 5) - (session.currentRound || 0));
-    const roundDuration = sessionConfig?.roundDurationSeconds || 480;
-    // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
-    const ratingWindow = sessionConfig?.ratingWindowSeconds || 30;
-    const estimatedRemainingSeconds = roundsRemaining * (roundDuration + ratingWindow + 30) + 600;
-    const ttl = Math.max(1800, Math.min(14400, estimatedRemainingSeconds)); // 30 min to 4 hours
+    const ttl = livekitTokenTtlSeconds(session);
 
     // Generate LiveKit access token
     const at = new AccessToken(config.livekitApiKey, config.livekitApiSecret, {

@@ -13,11 +13,12 @@ import {
   SessionStatus, ParticipantStatus,
   MatchStatus, UserRole,
   resolveDisplayName, placeholderName,
+  resolveEventFormat, liveKindOf,
 } from '@rsn/shared';
 import {
   ActiveSession, activeSessions, withSessionGuard, withMatchGenerationLock,
   sessionRoom, userRoom, getUserIdFromSocket, persistSessionState,
-  emitRatingWindowOnce,
+  emitRatingWindowOnce, activeFormat, refuseIfFormatLacks,
 } from '../state/session-state';
 import { startSegmentTimer, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
 // WS2 (27 May remaining work) — shared survivor flow for early room ends.
@@ -337,6 +338,7 @@ export async function handleHostStart(
       sessionId: data.sessionId,
       hostUserId: session.hostUserId,
       config,
+      format: resolveEventFormat(session),
       currentRound: 0,
       status: SessionStatus.LOBBY_OPEN,
       timer: null,
@@ -391,52 +393,56 @@ export async function handleHostStart(
     // then promotes pre-planned matches to active without re-running the
     // engine. Failure here is non-fatal: if planning fails we log it, the
     // legacy per-round path still works, and Sentry will surface the issue.
-    try {
-      // Phase 7A.2 (7 May spec) — exclude host + cohosts from the pre-plan
-      // so they don't end up paired as regular participants in any round.
-      const planExcludeIds = await getAllHostIds(data.sessionId, session.hostUserId);
-      // Phase 8A.2 (8 May spec) — Stefan #2 (Wazim case): also pass the
-      // presenceMap so registered-but-never-connected users are filtered
-      // out of the schedule. Pre-fix the pre-plan only checked
-      // session_participants.status, so anyone whose status was still
-      // 'registered'/'in_lobby' got in even if they never opened the
-      // event page on a live socket.
-      const activeSessionForPlan = activeSessions.get(data.sessionId);
-      // Ship B — canonical-first presence for the pre-plan gate; legacy
-      // heartbeat map when canonical is unavailable (fail-open).
-      const presentForPlan = activeSessionForPlan
-        ? (await getCanonicalConnectedSet(data.sessionId))
-          ?? new Set(activeSessionForPlan.presenceMap.keys())
-        : undefined;
-      const planOutput = await matchingService.generateSessionSchedule(
-        data.sessionId,
-        undefined,
-        planExcludeIds,
-        presentForPlan,
-      );
-      const totalPairs = planOutput.rounds.reduce((sum, r) => sum + r.pairs.length, 0);
-      logger.info(
-        { sessionId: data.sessionId, rounds: planOutput.rounds.length, totalPairs, durationMs: planOutput.durationMs },
-        'Pre-event plan generated (Phase 2.5A)',
-      );
-      io.to(sessionRoom(data.sessionId)).emit('host:event_plan_generated', {
-        sessionId: data.sessionId,
-        roundCount: planOutput.rounds.length,
-        totalPairs,
-      });
-      // Phase 2 dual-emit — plan + session for event-plan / host-state
-      // re-queries on every participant's open lobby.
-      emitSessionRoomEntities(
-        io, data.sessionId,
-        [E.session(data.sessionId), E.sessionPlan(data.sessionId)],
-      ).catch(() => {});
-    } catch (planErr: any) {
-      logger.warn(
-        { err: planErr, sessionId: data.sessionId },
-        'Pre-event plan generation failed — falling back to legacy session-by-session matching',
-      );
-      // Don't block event start — host can still trigger per-round matching
-      // via the existing host:generate_matches button (legacy fallback).
+    // 26 Oct 2026 — only a rounds event has a plan. A video meeting is everyone in the main room until the
+    // director ends it: nothing to plan, no scheduled match rows, no host:event_plan_generated.
+    if (liveKindOf(activeFormat(activeSession)) === 'rounds') {
+      try {
+        // Phase 7A.2 (7 May spec) — exclude host + cohosts from the pre-plan
+        // so they don't end up paired as regular participants in any round.
+        const planExcludeIds = await getAllHostIds(data.sessionId, session.hostUserId);
+        // Phase 8A.2 (8 May spec) — Stefan #2 (Wazim case): also pass the
+        // presenceMap so registered-but-never-connected users are filtered
+        // out of the schedule. Pre-fix the pre-plan only checked
+        // session_participants.status, so anyone whose status was still
+        // 'registered'/'in_lobby' got in even if they never opened the
+        // event page on a live socket.
+        const activeSessionForPlan = activeSessions.get(data.sessionId);
+        // Ship B — canonical-first presence for the pre-plan gate; legacy
+        // heartbeat map when canonical is unavailable (fail-open).
+        const presentForPlan = activeSessionForPlan
+          ? (await getCanonicalConnectedSet(data.sessionId))
+            ?? new Set(activeSessionForPlan.presenceMap.keys())
+          : undefined;
+        const planOutput = await matchingService.generateSessionSchedule(
+          data.sessionId,
+          undefined,
+          planExcludeIds,
+          presentForPlan,
+        );
+        const totalPairs = planOutput.rounds.reduce((sum, r) => sum + r.pairs.length, 0);
+        logger.info(
+          { sessionId: data.sessionId, rounds: planOutput.rounds.length, totalPairs, durationMs: planOutput.durationMs },
+          'Pre-event plan generated (Phase 2.5A)',
+        );
+        io.to(sessionRoom(data.sessionId)).emit('host:event_plan_generated', {
+          sessionId: data.sessionId,
+          roundCount: planOutput.rounds.length,
+          totalPairs,
+        });
+        // Phase 2 dual-emit — plan + session for event-plan / host-state
+        // re-queries on every participant's open lobby.
+        emitSessionRoomEntities(
+          io, data.sessionId,
+          [E.session(data.sessionId), E.sessionPlan(data.sessionId)],
+        ).catch(() => {});
+      } catch (planErr: any) {
+        logger.warn(
+          { err: planErr, sessionId: data.sessionId },
+          'Pre-event plan generation failed — falling back to legacy session-by-session matching',
+        );
+        // Don't block event start — host can still trigger per-round matching
+        // via the existing host:generate_matches button (legacy fallback).
+      }
     }
 
     // Host-controlled lobby: no auto-timer. Host must click "Start Round" manually.
@@ -464,6 +470,8 @@ export async function handleHostStartRound(
       socket.emit('error', { code: 'INVALID_STATE', message: 'Session is not active' });
       return;
     }
+    // 26 Oct 2026 — a video meeting has no rounds to start.
+    if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
 
     // #4 (26 May live test) — host force-advance from a stuck ROUND_RATING.
     // If the all-rated early-close never fired (skips / leavers / re-match
@@ -1666,6 +1674,8 @@ export async function handleHostMoveToRoom(
   return withSessionGuard(data.sessionId, async () => {
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
+    // 26 Oct 2026 — no breakout rooms in a video meeting.
+    if (refuseIfFormatLacks(socket, data.sessionId, 'breakouts')) return;
 
     const activeSession = activeSessions.get(data.sessionId);
     if (!activeSession || activeSession.status !== SessionStatus.ROUND_ACTIVE) {
@@ -2442,6 +2452,7 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
     sessionId,
     hostUserId: session.hostUserId,
     config,
+    format: resolveEventFormat(session),
     currentRound: 0,
     status: SessionStatus.LOBBY_OPEN,
     timer: null,
@@ -2725,6 +2736,8 @@ export async function handleHostCreateBreakout(
         socket.emit('error', { code: 'INVALID_STATE', message: 'Event is not active' });
         return;
       }
+      // 26 Oct 2026 — no breakout rooms in a video meeting.
+      if (refuseIfFormatLacks(socket, data.sessionId, 'breakouts')) return;
 
       const { sessionId, participantIds = [] } = data;
       if (participantIds.length > 3) {

@@ -28,6 +28,7 @@ import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import * as blockService from '../block/block.service';
+import { BroadcastBlockedError } from './broadcast-errors';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,14 @@ export type DmMessageKind = 'user' | 'system';
 export type DmSystemMeta =
   | { type: 'availability_shared' }
   | { type: 'meeting_proposal'; slots: string[] }
-  | { type: 'meeting_confirmed'; startAt: string; durationMin: number; meetingType: 'audio' | 'video'; joinPath: string };
+  | {
+      type: 'meeting_confirmed'; startAt: string; durationMin: number; meetingType: 'audio' | 'video'; joinPath: string;
+      /** The start it replaced, when it moved a meeting that still stood. */
+      movedFrom?: string;
+      /** Its meetings row (26 Oct 2026). */
+      meetingId?: string;
+    }
+  | { type: 'meeting_cancelled'; meetingId: string; startAt: string; durationMin: number; meetingType: 'audio' | 'video' };
 
 export interface DmMessage {
   id: string;
@@ -369,10 +377,12 @@ export async function insertDirectMessageOn(
 }
 
 /**
- * Send a DM as part of an authorized broadcast. Skips canMessage() because the
- * caller (post-event-message job creation) has already authorized the sender
- * for this audience. Still validates content length. Returns the same shape as
- * sendMessage so the caller can broadcast via broadcastDmMessage().
+ * Send a DM as part of an authorized broadcast. Skips the "have you met" gate of
+ * canMessage() because the caller (post-event-message job creation) has already
+ * authorized the sender for this audience, but never skips a block: a block, in
+ * either direction, is the one thing a person says to stop hearing from someone.
+ * Still validates content length. Returns the same shape as sendMessage so the
+ * caller can broadcast via broadcastDmMessage().
  */
 export async function sendBroadcastMessage(
   fromUserId: string,
@@ -388,6 +398,9 @@ export async function sendBroadcastMessage(
   }
   if (trimmed.length > 4000) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message too long (max 4000 characters)');
+  }
+  if (await blockService.areBlocked(fromUserId, toUserId)) {
+    throw new BroadcastBlockedError();
   }
   return insertDirectMessage(fromUserId, toUserId, trimmed, null);
 }

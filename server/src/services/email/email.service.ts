@@ -6,6 +6,7 @@ import { v4 as uuid } from 'uuid';
 import config from '../../config';
 import logger from '../../config/logger';
 import { generateIcsContent } from '../calendar/calendar.service';
+import { meetingTime } from '../meetings/meeting-time';
 import { query } from '../../db';
 
 let resend: Resend | null = null;
@@ -1160,6 +1161,10 @@ export interface MeetingConfirmedEmailData {
   /** W-meet: the REASON call link + kind, so they can join from the email. */
   joinUrl?: string;
   kind?: 'audio' | 'video';
+  /** 26 Oct 2026: "See it in Events", where every meeting is listed. */
+  eventsUrl?: string;
+  /** The meeting moved to this time from another (the subject and first line say so). */
+  moved?: boolean;
 }
 
 export async function sendMeetingConfirmedEmail(
@@ -1167,22 +1172,21 @@ export async function sendMeetingConfirmedEmail(
   recipientDisplayName: string,
   data: MeetingConfirmedEmailData,
 ): Promise<void> {
-  const tz = data.recipientTimezone || undefined;
-  const when = data.startAt.toLocaleString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-    ...(tz ? { timeZone: tz } : {}),
-  });
-  const subject = `Meeting confirmed with ${data.partnerName}`;
+  // 26 Oct 2026: the time goes in the subject, in the recipient's own zone, with the zone named.
+  const t = meetingTime(data.startAt, data.recipientTimezone);
+  const when = `${t.long} (${t.zone})`;
+  const heading = data.moved ? 'Meeting moved' : 'Meeting confirmed';
+  const subject = `${heading}: ${data.partnerName} on ${t.short} (${t.zone})`;
+  const firstLine = data.moved ? 'has moved.' : 'is confirmed.';
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"></head>
     <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         ${emailCardOpen()}
-          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting confirmed</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">${heading}</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(recipientDisplayName)},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            Your meeting with <strong>${escapeHtml(data.partnerName)}</strong> is confirmed.
+            Your meeting with <strong>${escapeHtml(data.partnerName)}</strong> ${firstLine}
           </p>
           <div style="background:#f0fdf4;border-left:3px solid #16a34a;border-radius:6px;padding:12px 16px;margin:0 0 20px 0;">
             <p style="color:#166534;font-size:15px;line-height:1.5;margin:0;"><strong>${escapeHtml(when)}</strong></p>
@@ -1196,19 +1200,139 @@ export async function sendMeetingConfirmedEmail(
             <a href="${escapeAttr(data.googleCalendarUrl)}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Google Calendar</a>
           </div>
           <p style="color:#9ca3af;font-size:13px;text-align:center;margin:0 0 16px 0;">The calendar invite is attached (.ics) — open it to add the meeting to any calendar.</p>
+          ${data.eventsUrl ? `<div style="text-align:center;margin:8px 0;">
+            <a href="${escapeAttr(data.eventsUrl)}" style="color:#DE322E;font-size:14px;font-weight:600;">See it in Events</a>
+          </div>` : ''}
           <div style="text-align:center;margin:8px 0;">
             <a href="${escapeAttr(data.threadUrl)}" style="color:#DE322E;font-size:14px;">Open the conversation</a>
           </div>
         ${emailCardClose()}
       </div>
     </body></html>`;
-  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} is confirmed.\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\nOpen the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nREASON — Meet people you have a reason to know.`;
+  const eventsLine = data.eventsUrl ? `See it in Events: ${data.eventsUrl}\n` : '';
+  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} ${firstLine}\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\n${eventsLine}Open the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nREASON — Meet people you have a reason to know.`;
 
   if (config.resendApiKey) {
     await sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent, contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });
     return;
   }
   logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-confirmed email skipped');
+}
+
+// ─── Meeting-cancelled email (26 Oct 2026) ──────────────────────────────────
+// Sent to BOTH people when either cancels. The attached calendar file is a METHOD:CANCEL with the
+// meeting's own UID and the next SEQUENCE, so the entry the confirmation added leaves every calendar.
+// Like the confirmation, it is not held back by notify_email or email_config: the confirmation always
+// put the entry in the calendar, so the cancellation must always be able to take it out.
+export interface MeetingCancelledEmailData {
+  /** The other person. */
+  partnerName: string;
+  /** Who cancelled: the recipient themselves, or the other person. */
+  cancellerName: string;
+  cancelledByMe: boolean;
+  startAt: Date;
+  durationMin: number;
+  kind: 'audio' | 'video';
+  recipientTimezone?: string | null;
+  threadUrl: string;
+  icsContent: string;
+}
+
+export async function sendMeetingCancelledEmail(
+  to: string,
+  recipientDisplayName: string,
+  data: MeetingCancelledEmailData,
+): Promise<void> {
+  const t = meetingTime(data.startAt, data.recipientTimezone);
+  const when = `${t.long} (${t.zone})`;
+  const subject = `Meeting cancelled: ${data.partnerName} on ${t.short} (${t.zone})`;
+  const whoHtml = data.cancelledByMe
+    ? `You cancelled your meeting with <strong>${escapeHtml(data.partnerName)}</strong>.`
+    : `<strong>${escapeHtml(data.cancellerName)}</strong> cancelled your meeting.`;
+  const whoText = data.cancelledByMe
+    ? `You cancelled your meeting with ${data.partnerName}.`
+    : `${data.cancellerName} cancelled your meeting.`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting cancelled</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(recipientDisplayName)},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">${whoHtml}</p>
+          <div style="background:#f8f9fa;border-left:3px solid #9ca3af;border-radius:6px;padding:12px 16px;margin:0 0 20px 0;">
+            <p style="color:#374151;font-size:15px;line-height:1.5;margin:0;"><strong>${escapeHtml(when)}</strong></p>
+            <p style="color:#6b7280;font-size:13px;line-height:1.5;margin:6px 0 0 0;">${data.kind === 'audio' ? 'Audio call' : 'Video call'} · ${data.durationMin} minutes</p>
+          </div>
+          <p style="color:#9ca3af;font-size:13px;text-align:center;margin:0 0 16px 0;">The attached calendar file (.ics) removes the meeting from your calendar.</p>
+          <div style="text-align:center;margin:8px 0;">
+            <a href="${escapeAttr(data.threadUrl)}" style="color:#DE322E;font-size:14px;font-weight:600;">Open the conversation</a>
+          </div>
+          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">You can pick a new time there.</p>
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+  const text = `Hey ${recipientDisplayName},\n\n${whoText}\n\n${when}\n${data.kind === 'audio' ? 'Audio call' : 'Video call'} · ${data.durationMin} minutes\n\nOpen the conversation to pick a new time: ${data.threadUrl}\n\n(The attached .ics file removes the meeting from your calendar.)\n\nREASON — Meet people you have a reason to know.`;
+
+  if (config.resendApiKey) {
+    await sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent, contentType: 'text/calendar; charset=utf-8; method=CANCEL' }] });
+    return;
+  }
+  logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-cancelled email skipped');
+}
+
+// ─── Meeting-reminder email (26 Oct 2026) ───────────────────────────────────
+// Sent to each person 10 minutes before a meeting by meeting-reminder.worker.ts, which checks the
+// recipient's notify_email switch and the admin email_config switch first. This only renders and sends.
+export interface MeetingReminderEmailData {
+  partnerName: string;
+  startAt: Date;
+  durationMin: number;
+  kind: 'audio' | 'video';
+  recipientTimezone?: string | null;
+  /** 10 when the reminder goes out on time; fewer when it is late (the server was restarting). */
+  minutesToGo: number;
+  joinUrl: string;
+  eventsUrl: string;
+}
+
+export async function sendMeetingReminderEmail(
+  to: string,
+  recipientDisplayName: string,
+  data: MeetingReminderEmailData,
+): Promise<void> {
+  const t = meetingTime(data.startAt, data.recipientTimezone);
+  const when = `${t.long} (${t.zone})`;
+  const subject = `Your meeting with ${data.partnerName} starts in ${data.minutesToGo === 1 ? '1 minute' : `${data.minutesToGo} minutes`}`;
+  const callLine = `${data.kind === 'audio' ? 'Audio call' : 'Video call'} · ${data.durationMin} minutes`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting reminder</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(recipientDisplayName)},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">${escapeHtml(subject)}.</p>
+          <div style="background:#f0fdf4;border-left:3px solid #16a34a;border-radius:6px;padding:12px 16px;margin:0 0 20px 0;">
+            <p style="color:#166534;font-size:15px;line-height:1.5;margin:0;"><strong>${escapeHtml(when)}</strong></p>
+            <p style="color:#374151;font-size:13px;line-height:1.5;margin:6px 0 0 0;">${callLine}</p>
+          </div>
+          <div style="text-align:center;margin:20px 0 8px 0;">
+            <a href="${escapeAttr(data.joinUrl)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Join the call</a>
+          </div>
+          <div style="text-align:center;margin:12px 0 0 0;">
+            <a href="${escapeAttr(data.eventsUrl)}" style="color:#DE322E;font-size:14px;">See it in Events</a>
+          </div>
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+  const text = `Hey ${recipientDisplayName},\n\n${subject}.\n\n${when}\n${callLine}\n\nJoin the call: ${data.joinUrl}\nSee it in Events: ${data.eventsUrl}\n\nREASON — Meet people you have a reason to know.`;
+
+  if (config.resendApiKey) {
+    await sendEmail({ to, subject, html, text });
+    return;
+  }
+  logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-reminder email skipped');
 }
 
 // Every value an email puts into its HTML goes through one of these (21 Oct 2026). Names, event, pod and

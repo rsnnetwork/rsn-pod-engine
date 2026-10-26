@@ -73,6 +73,47 @@ describe('Pod Service', () => {
       // Verify second call is inserting into pod_members
       expect(mockQuery.mock.calls[1][0]).toContain('INSERT INTO pod_members');
     });
+
+    // 26 Oct 2026 (Claus, 25 Oct): "orchestration should follow the pod type". With no orchestration or
+    // communication in the body, the type's own defaults are stored; nothing is rejected, because
+    // production's form still posts any combination it likes.
+    it('gives a Reason pod sent without an orchestration Freeform, and its communication from the type', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [mockPod], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+      await podService.createPod('user-123', { name: 'Test', podType: PodType.REASON });
+
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      const params = mockQuery.mock.calls[0][1] as unknown[];
+      expect(params[3]).toBe(PodType.REASON);
+      expect(params[4]).toBe(OrchestrationMode.FREE_FORM);
+      expect(params[5]).toBe(CommunicationMode.VIDEO);
+    });
+
+    it('derives a chat pod’s orchestration and communication, and keeps whatever the body chose', async () => {
+      mockQuery.mockResolvedValue({ rows: [mockPod], rowCount: 1 });
+
+      await podService.createPod('user-123', { name: 'Chat', podType: PodType.CHAT });
+      let params = mockQuery.mock.calls[0][1] as unknown[];
+      expect(params[4]).toBe(OrchestrationMode.FREE_FORM);
+      expect(params[5]).toBe(CommunicationMode.TEXT);
+
+      mockQuery.mockClear();
+      await podService.createPod('user-123', {
+        name: 'Old form', podType: PodType.REASON,
+        orchestrationMode: OrchestrationMode.TIMED_ROUNDS, communicationMode: CommunicationMode.VIDEO,
+      });
+      params = mockQuery.mock.calls[0][1] as unknown[];
+      expect(params[4]).toBe(OrchestrationMode.TIMED_ROUNDS);
+      expect(params[5]).toBe(CommunicationMode.VIDEO);
+    });
+
+    it('still defaults a pod sent with nothing but a name to a speed-networking pod with timed rounds and video', async () => {
+      mockQuery.mockResolvedValue({ rows: [mockPod], rowCount: 1 });
+      await podService.createPod('user-123', { name: 'Plain' });
+      const params = mockQuery.mock.calls[0][1] as unknown[];
+      expect(params.slice(3, 6)).toEqual([PodType.SPEED_NETWORKING, OrchestrationMode.TIMED_ROUNDS, CommunicationMode.VIDEO]);
+    });
   });
 
   describe('listPods', () => {

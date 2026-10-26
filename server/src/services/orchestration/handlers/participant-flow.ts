@@ -9,11 +9,13 @@
 import { Server as SocketServer, Socket } from 'socket.io';
 import logger from '../../../config/logger';
 import { query } from '../../../db';
-import { SessionStatus, ParticipantStatus, UserRole, resolveDisplayName, placeholderName } from '@rsn/shared';
+import {
+  SessionStatus, ParticipantStatus, UserRole, resolveDisplayName, placeholderName, resolveEventFormat, liveKindOf,
+} from '@rsn/shared';
 import {
   ActiveSession, activeSessions, disconnectTimeouts, withSessionGuard, withMatchGenerationLock,
   sessionRoom, userRoom, getUserIdFromSocket,
-  chatMessages, emitRatingWindowOnce,
+  chatMessages, emitRatingWindowOnce, activeFormat,
 } from '../state/session-state';
 import * as sessionService from '../../session/session.service';
 import * as matchingService from '../../matching/matching.service';
@@ -82,6 +84,8 @@ async function maybeRepairFutureRounds(
   // regular pre-plan" assumption only holds while status === SCHEDULED.
   if (activeSession.status === SessionStatus.SCHEDULED) return;
   if (activeSession.status === SessionStatus.COMPLETED) return;
+  // 26 Oct 2026 — a video meeting has no plan to repair: a join or a leave runs no matching.
+  if (liveKindOf(activeFormat(activeSession)) !== 'rounds') return;
 
   const now = Date.now();
   const last = _futureRepairThrottle.get(sessionId) || 0;
@@ -517,6 +521,7 @@ export async function handleJoinSession(
             sessionId: data.sessionId,
             hostUserId: session.hostUserId,
             config,
+            format: resolveEventFormat(session),
             currentRound: (session as any).currentRound || 0,
             status: session.status as SessionStatus,
             timer: null,

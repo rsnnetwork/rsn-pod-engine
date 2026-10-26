@@ -7,7 +7,7 @@ import logger from '../../config/logger';
 import {
   Pod, PodMember, CreatePodInput, UpdatePodInput,
   PodType, PodStatus, PodMemberRole, PodMemberStatus,
-  OrchestrationMode, CommunicationMode, PodVisibility, PodJoinConfig,
+  PodVisibility, PodJoinConfig, podTypeRule,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError } from '../../middleware/errors';
 import { UserRole, hasRoleAtLeast } from '@rsn/shared';
@@ -30,6 +30,11 @@ const MEMBER_COLUMNS = `
 
 export async function createPod(userId: string, input: CreatePodInput): Promise<Pod> {
   const podId = uuid();
+  // 26 Oct 2026 (Claus, 25 Oct: "orchestration should follow the pod type") — an orchestration or
+  // communication the body leaves out comes from the type's definition (a Reason pod is Freeform). Nothing is
+  // refused: production's form still posts any combination, and an old pod reads through effectiveOrchestration.
+  const podType = input.podType || PodType.SPEED_NETWORKING;
+  const typeRule = podTypeRule(podType);
 
   const result = await query<Pod>(
     `INSERT INTO pods (id, name, description, pod_type, orchestration_mode, communication_mode, visibility, status, max_members, rules, created_by, allow_member_invites)
@@ -39,9 +44,9 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
       podId,
       input.name,
       input.description || null,
-      input.podType || PodType.SPEED_NETWORKING,
-      input.orchestrationMode || OrchestrationMode.TIMED_ROUNDS,
-      input.communicationMode || CommunicationMode.VIDEO,
+      podType,
+      input.orchestrationMode || typeRule.orchestration.default,
+      input.communicationMode || typeRule.communication,
       input.visibility || PodVisibility.INVITE_ONLY,
       input.maxMembers || null,
       input.rules || null,

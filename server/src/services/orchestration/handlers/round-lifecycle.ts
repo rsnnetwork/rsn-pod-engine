@@ -9,7 +9,7 @@ import { Server as SocketServer } from 'socket.io';
 import logger from '../../../config/logger';
 import { config } from '../../../config';
 import { query } from '../../../db';
-import { SessionStatus, ParticipantStatus } from '@rsn/shared';
+import { SessionStatus, ParticipantStatus, formatRule, resolveEventFormat } from '@rsn/shared';
 import {
   ActiveSession, activeSessions, withSessionGuard,
   sessionRoom, userRoom, persistSessionState, clearPersistedState,
@@ -119,6 +119,8 @@ export async function recoverActiveSessions(io: SocketServer): Promise<void> {
           sessionId: data.sessionId,
           hostUserId: data.hostUserId,
           config: data.config,
+          // 26 Oct 2026 — an entry written before formats existed has none, and so runs as speed networking.
+          format: resolveEventFormat({ format: data.format }),
           currentRound: data.currentRound,
           status: data.status as SessionStatus,
           timer: null,
@@ -167,9 +169,9 @@ export async function recoverActiveSessions(io: SocketServer): Promise<void> {
   const activeStatuses = ['lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
   const result = await query<{
     id: string; status: string; host_user_id: string; config: any; current_round: number;
-    active_state: any; lobby_room_id: string;
+    active_state: any; lobby_room_id: string; event_format: string | null;
   }>(
-    `SELECT id, status, host_user_id, config, current_round, active_state, lobby_room_id
+    `SELECT id, status, host_user_id, config, current_round, active_state, lobby_room_id, event_format
      FROM sessions WHERE status = ANY($1) AND active_state IS NOT NULL`,
     [activeStatuses]
   );
@@ -189,6 +191,7 @@ export async function recoverActiveSessions(io: SocketServer): Promise<void> {
       currentRound: state?.currentRound || row.current_round || 0,
       hostUserId: row.host_user_id,
       config,
+      format: resolveEventFormat({ format: row.event_format }),
       presenceMap: new Map(),
       manuallyLeftRound: new Set(),
       timer: null,
@@ -1028,10 +1031,10 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
   // This sits AFTER the synchronous in-memory flip above, never before it:
   // S18 was an in-flight round-end reading a stale status across an await and
   // re-broadcasting round_rating over a finished event.
-  const claimed = await query<{ id: string }>(
+  const claimed = await query<{ id: string; event_format?: string | null }>(
     `UPDATE sessions SET status = 'completed', ended_at = NOW()
       WHERE id = $1 AND status NOT IN ('completed', 'cancelled')
-      RETURNING id`,
+      RETURNING id, event_format`,
     [sessionId],
   );
   if (claimed.rows.length === 0) {
@@ -1173,9 +1176,17 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     );
 
     // Fire-and-forget: send recap emails to all participants
-    sendRecapEmails(sessionId).catch(emailErr => {
-      logger.error({ err: emailErr, sessionId }, 'Error sending recap emails (non-fatal)');
-    });
+    // 26 Oct 2026 — only to formats that rate: the recap is people met, mutual connections and ratings.
+    // A video meeting has none of those, so it sends no recap email (an attendance recap comes later).
+    // The format comes from the claimed row, so an event this server no longer holds is read right too.
+    const completedFormat = resolveEventFormat({ format: claimed.rows[0]?.event_format ?? activeSession?.format });
+    if (formatRule(completedFormat).recap === 'ratings') {
+      sendRecapEmails(sessionId).catch(emailErr => {
+        logger.error({ err: emailErr, sessionId }, 'Error sending recap emails (non-fatal)');
+      });
+    } else {
+      logger.info({ sessionId, format: completedFormat }, 'No recap email: this event has no ratings');
+    }
 
     // Phase A4 (10 May spec) — AWAIT LiveKit cleanup before tearing down
     // in-memory state. Pre-fix this was fire-and-forget, so when the in-memory

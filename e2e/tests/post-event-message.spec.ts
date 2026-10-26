@@ -215,6 +215,17 @@ test.beforeAll(async () => {
      ON CONFLICT (session_id, user_id) DO NOTHING`,
     [sessionId, noshow.id],
   );
+
+  // 7. The event matched people. Since 26 Oct 2026 a person is judged by rounds only when the event
+  //    had a match: a video meeting has none and so no rounds to count, and judging its attendees by
+  //    rounds told every one of them they "weren't able to get into the conversations". This is a
+  //    speed-networking event, so it gets the match row that makes "joined but 0 rounds" mean what the
+  //    could_not_join message says. (The session delete in afterAll takes the match with it.)
+  await pool.query(
+    `INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, status)
+     VALUES ($1, 1, $2, $3, 'completed')`,
+    [sessionId, stayed.id, early.id],
+  );
 });
 
 // ─── afterAll — complete teardown by ID ───────────────────────────────────────
