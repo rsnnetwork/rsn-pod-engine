@@ -10,6 +10,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { requireRole } from '../middleware/rbac';
 import { circleReadLimiter, circleWriteLimiter, wallWriteLimiter } from '../middleware/rateLimit';
 import { fanoutCircleChange } from '../realtime/fanout';
@@ -46,8 +47,8 @@ router.get('/of-pod/:podId', authenticate, circleReadLimiter, async (req: Reques
   } catch (err) { next(err); }
 });
 
-// GET /circles/:id — detail (any member)
-router.get('/:id', authenticate, circleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
+// GET /circles/:id — detail (any member). A malformed id is a 400 in a member's words (26 Oct 2026).
+router.get('/:id', authenticate, circleReadLimiter, uuidInPath('id', PATH_REFUSALS.circle), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await circleService.getCircleDetail(req.params.id, req.user!.userId);
     res.json({ success: true, data } satisfies ApiResponse);

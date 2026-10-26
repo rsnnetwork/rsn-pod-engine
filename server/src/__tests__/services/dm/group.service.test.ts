@@ -11,8 +11,8 @@
 // The database is a stand-in that answers by what the SQL asks. Statements inside a transaction go to
 // `tx`, reads outside one to `pool`. The concurrent-add test uses a fuller stand-in that keeps the group's
 // members and grants its row lock (SELECT … FOR UPDATE) to one transaction at a time, as Postgres does, and
-// makes a transaction's inserts visible to the other only when it commits. AppError subclasses fail
-// `instanceof` (errors.ts sets the prototype to AppError's), so errors are matched by status, code and message.
+// makes a transaction's inserts visible to the other only when it commits. Errors are matched by status,
+// code and message: what the route answers.
 
 type Rows = Array<Record<string, unknown>>;
 type Answer = Rows | Error | { rows: Rows; rowCount: number };

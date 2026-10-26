@@ -4,8 +4,9 @@
 // not lift the removal. registerParticipant enforces that. After it succeeds, acceptInvite runs a defensive upsert
 // for a row that vanished meanwhile, and that upsert also wrote `status = 'registered'` over a row a kick had just
 // made `removed` (a kick landing between the two queries). It now lifts a removed row only for a personal invite.
-// (Every ConflictError from the registration is rethrown, not swallowed: AppError resets each instance's prototype,
-// so `instanceof ConflictError` is false; the upsert runs only after a registration that succeeded.)
+// (The upsert runs only after a registration that succeeded or answered "already registered"; every other refusal
+// of the registration is rethrown — H2b, 26 Oct 2026: `instanceof ConflictError` holds now, so the branch reads the
+// code too.)
 // H1b fix round 1 (26 Oct 2026): "fresh" is exact. The registration is told when the host made the personal invite,
 // and the upsert lifts a removed row only when its removal (left_at) was made before then: a kick that lands during
 // the accept, after the invite was made, stands.

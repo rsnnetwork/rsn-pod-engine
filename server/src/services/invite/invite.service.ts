@@ -5,7 +5,7 @@ import { customAlphabet } from 'nanoid';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
-  Invite, InviteStatus, InviteType, CreateInviteInput, Session, eventDurationMinutes, resolveEventFormat,
+  Invite, InviteStatus, InviteType, CreateInviteInput, Session, eventDurationMinutes, resolveEventFormat, ErrorCodes,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
@@ -775,8 +775,8 @@ async function applyInviteRegistration(
     try {
       await podService.addMember(invite.podId, userId);
     } catch (err) {
-      // Already a member — that's fine, the invite still resolves to "you're in".
-      if (!(err instanceof ConflictError)) throw err;
+      // Already a member — that's fine, the invite still resolves to "you're in". A full pod is a refusal.
+      if (!(err instanceof ConflictError && err.code === ErrorCodes.POD_MEMBER_EXISTS)) throw err;
     }
     out.podId = invite.podId;
   }
@@ -792,13 +792,13 @@ async function applyInviteRegistration(
       try {
         await podService.addMember(podId, userId);
       } catch (err) {
-        // Already a member is fine — the invite still resolves to "you're in".
-        // #4B — swallow by error CODE as well as instanceof: addMember throws its
-        // ConflictError from inside its own transaction, and the instanceof check
-        // proved unreliable across that boundary (a re-invited but still-pod-member
-        // kicked user hit POD_MEMBER_EXISTS here, blocking the re-admit below).
+        // Already a member is fine — the invite still resolves to "you're in" — and so is a full pod:
+        // registerParticipant decides whether the event needs its pod. These are the only two
+        // ConflictErrors addMember throws. (#4B read them by code because `instanceof ConflictError` was
+        // false for every ConflictError until 26 Oct 2026; a re-invited, still-pod-member kicked user hit
+        // POD_MEMBER_EXISTS here, blocking the re-admit below.)
         const code = (err as { code?: string } | undefined)?.code;
-        if (!(err instanceof ConflictError) && code !== 'POD_MEMBER_EXISTS' && code !== 'POD_FULL') throw err;
+        if (code !== ErrorCodes.POD_MEMBER_EXISTS && code !== ErrorCodes.POD_FULL) throw err;
       }
       out.podId = podId;
     }
@@ -815,13 +815,9 @@ async function applyInviteRegistration(
       try {
         await sessionService.registerParticipant(invite.sessionId, userId, undefined, { personalInviteCreatedAt });
       } catch (err) {
-        if (err instanceof ConflictError) {
-          // Already registered — fine, idempotent.
-        } else {
-          // Capacity, status, or other validation error — bubble up so the
-          // tx rolls back and the user gets a definitive error.
-          throw err;
-        }
+        // Already registered — fine, idempotent. Capacity (SESSION_FULL, also a ConflictError), status, or
+        // other validation error — bubble up so the user gets a definitive error and nobody is written in below.
+        if (!(err instanceof ConflictError && err.code === ErrorCodes.SESSION_ALREADY_REGISTERED)) throw err;
       }
 
       // Defensive idempotent INSERT to handle the rare case where

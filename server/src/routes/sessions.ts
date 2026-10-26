@@ -3,6 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as sessionService from '../services/session/session.service';
@@ -140,10 +141,12 @@ router.post(
 );
 
 // ─── GET /sessions/:id ──────────────────────────────────────────────────────
+// A malformed id is a 400 in a member's words, not a Postgres 500 (26 Oct 2026).
 
 router.get(
   '/:id',
   authenticate,
+  uuidInPath('id', PATH_REFUSALS.event),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const canView = await canViewSession(req.user!.userId, req.params.id, req.user!.role);

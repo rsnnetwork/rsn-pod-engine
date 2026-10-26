@@ -5,9 +5,8 @@
 // person's list; leaving, including the last admin and the last person.
 //
 // The database is a stand-in that answers by what the SQL asks. Statements inside a transaction go to
-// `tx`, reads outside one to `pool`, so a test can say which writes happened together. AppError
-// subclasses fail `instanceof` (errors.ts sets the prototype to AppError's), so errors are matched by
-// status, code, message and details.
+// `tx`, reads outside one to `pool`, so a test can say which writes happened together. Errors are
+// matched by status, code, message and details: what the route answers.
 
 type Rows = Array<Record<string, unknown>>;
 type Result = { rows: Rows; rowCount: number };

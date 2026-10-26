@@ -7,7 +7,7 @@ import logger from '../../config/logger';
 import {
   Session, SessionParticipant, SessionConfig, SessionStatus,
   ParticipantStatus, CreateSessionInput, UpdateSessionInput, SessionConfigInput, EventInputIssue,
-  UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType,
+  UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType, PodStatus,
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
   liveKindOf, eventDurationMinutes,
 } from '@rsn/shared';
@@ -79,17 +79,30 @@ const PARTICIPANT_COLUMNS = `
 
 // ─── Session CRUD ───────────────────────────────────────────────────────────
 
+/** Why a pod that is not active takes no new event, in a member's words. */
+function podNotActiveSentence(status: PodStatus): string {
+  if (status === PodStatus.ARCHIVED) return 'This pod is archived, so no new events can be scheduled in it.';
+  if (status === PodStatus.SUSPENDED) return 'This pod is suspended, so no new events can be scheduled in it.';
+  return 'This pod is not open yet, so no events can be scheduled in it.';
+}
+
 export async function createSession(userId: string, input: CreateSessionInput, userRole?: UserRole): Promise<Session> {
   // Verify pod exists (will throw NotFoundError if not)
   const pod = await podService.getPodById(input.podId);
 
-  // Admins can create sessions in any pod; others must be director or host
+  // Admins can create events in any pod; others must be director or host
   const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
   if (!isAdmin) {
     const memberRole = await podService.getMemberRole(input.podId, userId);
     if (!memberRole || !['director', 'host'].includes(memberRole)) {
-      throw new ForbiddenError('Only pod directors and hosts can create sessions');
+      throw new ForbiddenError('Only pod directors and hosts can create events');
     }
+  }
+
+  // Only an active pod takes a new event (H2b item 5, 26 Oct 2026). The forms offer active pods only; this is the
+  // server's own check, so an archived, suspended or draft pod's id scheduled nothing.
+  if (pod.status !== PodStatus.ACTIVE) {
+    throw new ConflictError(ErrorCodes.POD_NOT_ACTIVE, podNotActiveSentence(pod.status));
   }
 
   // 26 Oct 2026 — the event's format. An explicit one must be held by the pod's type and offered, with its
@@ -138,7 +151,7 @@ export async function getSessionById(sessionId: string): Promise<Session> {
   );
 
   if (result.rows.length === 0) {
-    throw new NotFoundError('Session', sessionId);
+    throw new NotFoundError('Event', sessionId);
   }
   return result.rows[0];
 }
@@ -149,7 +162,7 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   // Admin/super_admin or session host can update
   const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
   if (!isAdmin && session.hostUserId !== userId) {
-    throw new ForbiddenError('Only the session host can update the session');
+    throw new ForbiddenError('Only the host of the event can change it');
   }
 
   // Cannot update once started
@@ -330,7 +343,7 @@ export async function registerParticipant(
       [sessionId]
     );
     if (sessionResult.rows.length === 0) {
-      throw new NotFoundError('Session', sessionId);
+      throw new NotFoundError('Event', sessionId);
     }
     const session = sessionResult.rows[0];
 
@@ -366,7 +379,7 @@ export async function registerParticipant(
       } else if ((podVisibility === 'invite_only' || podVisibility === 'private') && !isMember) {
         // For private/invite-only pods, only allow if user has a valid (accepted) invite
         // User must go through acceptInvite() first which adds them to pod + marks invite
-        throw new ForbiddenError('You must be a pod member to register for sessions in a private pod');
+        throw new ForbiddenError('You must be a pod member to register for events in a private pod');
       }
     }
 
@@ -823,7 +836,7 @@ export async function deleteSession(sessionId: string, userId: string, userRole?
   // Admin/super_admin can delete any session; otherwise only session host
   const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
   if (!isAdmin && session.hostUserId !== userId) {
-    throw new ForbiddenError('Only the session host can delete the session');
+    throw new ForbiddenError('Only the host of the event can delete it');
   }
 
   // Admins can delete in any state; non-admins only scheduled or completed

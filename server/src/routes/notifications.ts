@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { query } from '../db';
 import { fanoutOwnNotifications } from '../realtime/fanout';
 import { REQUEST_BELL_LINK_PATTERN } from '../services/poke/request-link';
@@ -166,10 +167,11 @@ router.post(
   }
 );
 
-// POST /notifications/:id/read — mark one as read
+// POST /notifications/:id/read — mark one as read. A malformed id is a 400 in a member's words (26 Oct 2026).
 router.post(
   '/:id/read',
   authenticate,
+  uuidInPath('id', PATH_REFUSALS.notification),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await query(

@@ -14,6 +14,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import * as agentRepo from '../services/matching/agent.repo';
 import * as agentMatching from '../services/matching/agent-matching.service';
 import * as platformMatch from '../services/matching/platform-match.service';
@@ -83,8 +84,8 @@ router.post('/', authenticate, validate(createSchema), async (req: Request, res:
   } catch (err) { next(err); }
 });
 
-// GET /agents/:id — one agent plus the people it found.
-router.get('/:id', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+// GET /agents/:id — one agent plus the people it found. A malformed id is a 400 in a member's words (26 Oct 2026).
+router.get('/:id', authenticate, uuidInPath('id', PATH_REFUSALS.agent), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const agent = await agentRepo.getAgent(req.params.id, req.user!.userId);
     if (!agent) throw new NotFoundError('Agent', req.params.id);

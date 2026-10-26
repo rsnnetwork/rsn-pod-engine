@@ -219,13 +219,16 @@ describe('T0-4 — atomic invite acceptance', () => {
       expect(src).toMatch(/async function applyInviteRegistration\([\s\S]+?invite:\s*Invite,\s*userId:\s*string,?/);
     });
 
-    it('handles ConflictError as already-member (no-op for that step)', () => {
+    it('handles "already in" as a no-op for that step, and only that: a full pod or a full event still refuses', () => {
       const helperStart = src.indexOf('async function applyInviteRegistration');
       const helperEnd = src.indexOf('\n}\n', helperStart);
       const helper = src.slice(helperStart, helperEnd);
-      // Both pod and session paths swallow ConflictError
-      const conflictHandlers = (helper.match(/if\s*\(!?\(?err instanceof ConflictError\)/g) || []).length;
-      expect(conflictHandlers).toBeGreaterThanOrEqual(2);
+      // A pod invite: only "already a member" (26 Oct 2026: the branch runs now that instanceof holds).
+      expect(helper).toMatch(/err instanceof ConflictError && err\.code === ErrorCodes\.POD_MEMBER_EXISTS/);
+      // An event invite's pod step: the two ConflictErrors addMember throws, by name.
+      expect(helper).toMatch(/code !== ErrorCodes\.POD_MEMBER_EXISTS && code !== ErrorCodes\.POD_FULL/);
+      // An event invite's registration: only "already registered".
+      expect(helper).toMatch(/err instanceof ConflictError && err\.code === ErrorCodes\.SESSION_ALREADY_REGISTERED/);
     });
 
     it('rethrows non-ConflictError so the transaction rolls back', () => {

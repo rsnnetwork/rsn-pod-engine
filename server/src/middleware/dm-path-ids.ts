@@ -6,31 +6,24 @@
 // member reads (production's client shows the message, the preview the first detail). A well-formed id in
 // capitals names the same row, and is lower-cased, so the tags a service sends for it match the ones each
 // screen listens for. Each check reads one part of the path and passes the others through untouched.
+// The checks themselves are path-ids.ts's, which the routes outside /api/dm use too.
 
 import { z } from 'zod';
-import { validate } from './validate';
+import { PATH_REFUSALS, checkPathPart, uuidInPath } from './path-ids';
 
 /** What each refusal says. */
 export const DM_PATH_REFUSALS = {
   conversation: "We couldn't find that conversation.",
   callRequest: "We couldn't find that call request.",
   message: "We couldn't find that message.",
-  member: "We couldn't find that member.",
+  member: PATH_REFUSALS.member,
   reaction: "That reaction isn't available.",
 } as const;
 
-/** Check one part of the path, refusing with `sentence`; the path's other parts are kept as they are. */
-function checkPathPart(name: string, part: z.ZodTypeAny, sentence: string) {
-  return validate(z.object({ [name]: part }).passthrough(), 'params', sentence);
-}
-
-/** A uuid, lower-cased. */
-const uuid = (sentence: string) => z.string().uuid(sentence).transform((s) => s.toLowerCase());
-
-export const conversationIdInPath = checkPathPart('id', uuid(DM_PATH_REFUSALS.conversation), DM_PATH_REFUSALS.conversation);
-export const callRequestIdInPath = checkPathPart('id', uuid(DM_PATH_REFUSALS.callRequest), DM_PATH_REFUSALS.callRequest);
-export const messageIdInPath = checkPathPart('id', uuid(DM_PATH_REFUSALS.message), DM_PATH_REFUSALS.message);
-export const memberIdInPath = checkPathPart('userId', uuid(DM_PATH_REFUSALS.member), DM_PATH_REFUSALS.member);
+export const conversationIdInPath = uuidInPath('id', DM_PATH_REFUSALS.conversation);
+export const callRequestIdInPath = uuidInPath('id', DM_PATH_REFUSALS.callRequest);
+export const messageIdInPath = uuidInPath('id', DM_PATH_REFUSALS.message);
+export const memberIdInPath = uuidInPath('userId', DM_PATH_REFUSALS.member);
 
 /** The service checks a reaction against its list; this refuses only one too long to be on it, as the body's check does. */
 export const reactionInPath = checkPathPart(
