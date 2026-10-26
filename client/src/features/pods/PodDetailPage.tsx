@@ -17,7 +17,7 @@ import { PageLoader, Skeleton } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
-import { formatDateTime } from '@/lib/utils';
+import { formatDateTime, isAdmin } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import CreatePodModal from './CreatePodModal';
@@ -26,6 +26,10 @@ import PodWall from './PodWall';
 import { orchestrationLabel, podStatusLabel } from './pod-header-text';
 import { podEventsInOrder } from './pod-event-order';
 import { isForbidden, retryUnlessAnswered } from '@/components/wall/wall-logic';
+
+/** The most events the page reads (the route's largest page); the heading says "and more" past it. */
+const EVENTS_PAGE = 100;
+const eventsCount = (n: number): string => (n >= EVENTS_PAGE ? `${EVENTS_PAGE} and more` : String(n));
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -118,12 +122,14 @@ export default function PodDetailPage() {
 
   // The server lists a pod's events to its active members (the only ones it names a role for) and to admins, and
   // answers 403 to anyone else, so nobody else asks.
-  const mayReadEvents = !!pod?.memberRole || user?.role === 'admin' || user?.role === 'super_admin';
+  const mayReadEvents = !!pod?.memberRole || isAdmin(user?.role);
   const {
     data: podSessions, isError: sessionsFailed, error: sessionsError, refetch: refetchSessions,
   } = useQuery({
     queryKey: ['pod-sessions', podId],
-    queryFn: () => api.get(`/sessions?podId=${podId}`).then(r => (r.data.data ?? []) as PodEventRow[]),
+    // The route's largest page (P1 item 15, 26 Oct 2026): the default page of twenty, newest first, dropped a busy
+    // pod's soonest upcoming events; past a hundred the heading says "and more".
+    queryFn: () => api.get(`/sessions?podId=${podId}&pageSize=${EVENTS_PAGE}`).then(r => (r.data.data ?? []) as PodEventRow[]),
     enabled: !!podId && mayReadEvents,
     retry: retryUnlessAnswered,
     meta: { entities: podId ? [E.pod(podId), E.podSessions(podId)] : [] },
@@ -293,7 +299,7 @@ export default function PodDetailPage() {
     : pod.memberCount ?? activeMembers.length;
 
   const myMembership     = membersList.find((m: any) => m.userId === user?.id);
-  const isAdminUser      = user?.role === 'admin' || user?.role === 'super_admin';
+  const isAdminUser      = isAdmin(user?.role);
   const isMember         = myMembership?.status === 'active' || !!pod.memberRole || isAdminUser;
   // An active member of the pod. The server names a member role only for an active member.
   const isActiveMember   = myMembership?.status === 'active' || !!pod.memberRole;
@@ -325,12 +331,14 @@ export default function PodDetailPage() {
 
       {/* Pod Header */}
       <Card className="animate-fade-in-up">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#1a1a2e]">{pod.name}</h1>
-            <p className="text-gray-500 mt-1">{pod.description || 'No description'}</p>
+        {/* The name and description may shrink and break inside the row (P1 item 16): a long unbroken name used to
+            widen the page at 360. */}
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold text-[#1a1a2e] break-words">{pod.name}</h1>
+            <p className="text-gray-500 mt-1 break-words">{pod.description || 'No description'}</p>
           </div>
-          <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{podStatusLabel(pod.status)}</Badge>
+          <Badge variant={pod.status === 'active' ? 'success' : 'default'} className="shrink-0">{podStatusLabel(pod.status)}</Badge>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-4 pt-4 border-t border-gray-200">
@@ -631,7 +639,9 @@ export default function PodDetailPage() {
           {/* ── Events ──────────────────────────────────────────────────── */}
           <section id="pod-events" className="scroll-mt-4 animate-fade-in-up stagger-2">
             <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-              <Calendar className="h-5 w-5 text-rsn-red" /> Events{podSessions ? ` (${podSessions.length})` : ''}
+              {/* No count for someone who may not read the events: a just-removed member kept a cached "Events (3)"
+                  above "Members see the pod's events here." (P1 item 15). */}
+              <Calendar className="h-5 w-5 text-rsn-red" /> Events{podSessions && mayReadEvents && !eventsRefused ? ` (${eventsCount(podSessions.length)})` : ''}
             </h2>
             {!mayReadEvents || eventsRefused ? (
               <Card className="!p-4">

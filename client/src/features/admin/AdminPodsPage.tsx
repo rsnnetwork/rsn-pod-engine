@@ -9,6 +9,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
 import { isAdmin } from '@/lib/utils';
+import { podStatusLabel } from '../pods/pod-header-text';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -63,21 +64,23 @@ export default function AdminPodsPage() {
         ))}
       </div>
 
-      <div className="grid gap-4 animate-fade-in-up">
+      <div className="grid grid-cols-1 gap-4 animate-fade-in-up">
         {(!data || data.length === 0) ? (
           <Card className="text-center py-8">
             <p className="text-gray-500">No pods found</p>
           </Card>
         ) : data.map((pod: any) => (
-          <Card key={pod.id}>
+          // A grid item keeps its min-content width (a long unbroken name) unless it may shrink (P1 item 2).
+          <Card key={pod.id} className="min-w-0">
             <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-semibold text-gray-800 hover:text-rsn-red cursor-pointer" onClick={() => navigate(`/pods/${pod.id}`)}>{pod.name}</h3>
-                  <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{pod.status}</Badge>
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-2 mb-1">
+                  <h3 className="min-w-0 break-words font-semibold text-gray-800 hover:text-rsn-red cursor-pointer" onClick={() => navigate(`/pods/${pod.id}`)}>{pod.name}</h3>
+                  {/* The same human words the pod's own page uses (P1 item 3): Active, Archived, Suspended, Draft. */}
+                  <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{podStatusLabel(pod.status)}</Badge>
                   <Badge variant="info">{pod.visibility}</Badge>
                 </div>
-                <p className="text-sm text-gray-500">{pod.description || 'No description'}</p>
+                <p className="text-sm text-gray-500 break-words">{pod.description || 'No description'}</p>
                 <p className="text-xs text-gray-400 mt-1">
                   Members: {pod.memberCount || '—'} · Events: {pod.sessionCount || '—'} · Type: {pod.type}
                 </p>
