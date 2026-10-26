@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio,
   Pencil, Trash2, UserPlus, Lock, Mail, Copy, Check, UserCheck, X,
-  Clock, CopyPlus, Search, XCircle, Send, Inbox, AlertTriangle,
+  Clock, CopyPlus, Search, XCircle, Send, Inbox, AlertTriangle, MessagesSquare,
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
@@ -15,7 +15,7 @@ import ProfileCard from '@/components/ui/ProfileCard';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Modal from '@/components/ui/Modal';
-import { PageLoader } from '@/components/ui/Spinner';
+import { PageLoader, Skeleton } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
@@ -24,6 +24,10 @@ import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import CreatePodModal from './CreatePodModal';
 import EditPodModal from './EditPodModal';
+import PodWall from './PodWall';
+import { orchestrationLabel, podStatusLabel } from './pod-header-text';
+import { podEventsInOrder } from './pod-event-order';
+import { isForbidden, retryUnlessAnswered } from '@/components/wall/wall-logic';
 
 /** Map invite API error codes to user-friendly messages */
 function getInviteErrorMessage(err: any): string {
@@ -63,11 +67,29 @@ const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; color
   public_with_approval:{ label: 'Public with Approval', icon: UserCheck, color: 'text-indigo-400', desc: 'Anyone can find and request to join; director approves' },
 };
 
+/** What the page lists of each of the pod's events. */
+interface PodEventRow {
+  id: string;
+  title: string | null;
+  scheduledAt: string | null;
+  status: string;
+}
+
+// The sections a phone's chip row jumps to; the ids are on the sections below.
+const SECTIONS = [
+  { id: 'pod-discussion', label: 'Discussion' },
+  { id: 'pod-events', label: 'Events' },
+  { id: 'pod-members', label: 'Members' },
+] as const;
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function PodDetailPage() {
   const { podId } = useParams();
   const navigate = useNavigate();
+  // ?post=<id>: a bell about the pod's wall, or a shared address, lands on one post and the wall scrolls to it.
+  const [searchParams] = useSearchParams();
+  const highlightPostId = searchParams.get('post') || undefined;
   const { user } = useAuthStore();
   const { addToast } = useToastStore();
   const qc = useQueryClient();
@@ -115,12 +137,20 @@ export default function PodDetailPage() {
     meta: { entities: podId ? [E.pod(podId), E.podSessions(podId)] : [] },
   });
 
-  const { data: podSessions } = useQuery({
+  // The server lists a pod's events to its active members (the only ones it names a role for) and to admins, and
+  // answers 403 to anyone else, so nobody else asks.
+  const mayReadEvents = !!pod?.memberRole || user?.role === 'admin' || user?.role === 'super_admin';
+  const {
+    data: podSessions, isError: sessionsFailed, error: sessionsError, refetch: refetchSessions,
+  } = useQuery({
     queryKey: ['pod-sessions', podId],
-    queryFn: () => api.get(`/sessions?podId=${podId}`).then(r => r.data.data ?? []),
-    enabled: !!podId,
+    queryFn: () => api.get(`/sessions?podId=${podId}`).then(r => (r.data.data ?? []) as PodEventRow[]),
+    enabled: !!podId && mayReadEvents,
+    retry: retryUnlessAnswered,
     meta: { entities: podId ? [E.pod(podId), E.podSessions(podId)] : [] },
   });
+  // Refused all the same: this page's copy of the pod still named a role the member has just lost.
+  const eventsRefused = isForbidden(sessionsError);
 
   const { data: podSearchResults } = useQuery({
     queryKey: ['connected-user-search', debouncedPodSearch],
@@ -294,6 +324,17 @@ export default function PodDetailPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // The wall found the pod closed before this page's own copy said so (the archive route tells the pod's screens a
+  // moment before it saves the new status): read the pod again, so the badge, the buttons and the wall agree.
+  const refreshPod = () => { void qc.invalidateQueries({ queryKey: ['pod', podId], exact: true }); };
+
+  // A chip scrolls its section into view. A plain address with #section would add a history entry and leave <main>,
+  // the page's scroll area, where it is.
+  const jumpTo = (e: MouseEvent<HTMLAnchorElement>, id: string) => {
+    e.preventDefault();
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   // ─── Render guards ─────────────────────────────────────────────────────────
 
   if (isLoading) return <PageLoader />;
@@ -342,6 +383,8 @@ export default function PodDetailPage() {
   const myMembership     = membersList.find((m: any) => m.userId === user?.id);
   const isAdminUser      = user?.role === 'admin' || user?.role === 'super_admin';
   const isMember         = myMembership?.status === 'active' || !!pod.memberRole || isAdminUser;
+  // An active member of the pod. The server names a member role only for an active member.
+  const isActiveMember   = myMembership?.status === 'active' || !!pod.memberRole;
   const isPending        = myMembership?.status === 'pending_approval';
   const isDirector       = myMembership?.role === 'director' || pod.memberRole === 'director' || isAdminUser;
   const isDirectorOrHost = isDirector || myMembership?.role === 'host' || pod.memberRole === 'host';
@@ -363,8 +406,8 @@ export default function PodDetailPage() {
   // ─── JSX ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      <button onClick={() => navigate('/pods')} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
+    <div className="max-w-3xl mx-auto space-y-6 lg:max-w-6xl">
+      <button onClick={() => navigate('/pods')} className="flex min-h-[44px] items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
         <ArrowLeft className="h-4 w-4" /> Back to Pods
       </button>
 
@@ -375,7 +418,7 @@ export default function PodDetailPage() {
             <h1 className="text-2xl font-bold text-[#1a1a2e]">{pod.name}</h1>
             <p className="text-gray-500 mt-1">{pod.description || 'No description'}</p>
           </div>
-          <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{pod.status}</Badge>
+          <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{podStatusLabel(pod.status)}</Badge>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-4 pt-4 border-t border-gray-200">
@@ -408,12 +451,12 @@ export default function PodDetailPage() {
           </div>
         )}
 
-        {pod.orchestrationMode && (
-          <div className="flex gap-2 mt-3">
-            <Badge variant="brand">{pod.orchestrationMode?.replace(/_/g, ' ')}</Badge>
-            {pod.communicationMode && <Badge>{pod.communicationMode}</Badge>}
-          </div>
-        )}
+        {/* How the pod's events run, in plain words and read through the pod's type (an old Reason pod saved on timed
+            rounds says Freeform). This printed the stored column, "timed rounds", and a communication mode that
+            nothing reads and the forms no longer ask for. */}
+        <div className="flex gap-2 mt-3">
+          <Badge variant="brand">{orchestrationLabel(pod)}</Badge>
+        </div>
       </Card>
 
       {/* Actions */}
@@ -657,8 +700,63 @@ export default function PodDetailPage() {
         </div>
       </Modal>
 
+      {/* ── Join Rules Modal ───────────────────────────────────────────── */}
+      <Modal open={showJoinRules} onClose={() => setShowJoinRules(false)} title="Pod Rules">
+        <div className="space-y-4">
+          {pod?.joinConfig?.rulesText && (
+            <div className="rounded-xl bg-gray-50 p-4 text-sm text-gray-700 whitespace-pre-wrap">
+              {pod.joinConfig.rulesText}
+            </div>
+          )}
+          {pod?.joinConfig?.agreementText && (
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rulesAgreed}
+                onChange={e => setRulesAgreed(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
+              />
+              <span className="text-sm text-gray-700">{pod.joinConfig.agreementText}</span>
+            </label>
+          )}
+          {!pod?.joinConfig?.agreementText && (
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rulesAgreed}
+                onChange={e => setRulesAgreed(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
+              />
+              <span className="text-sm text-gray-700">I have read and agree to the pod rules</span>
+            </label>
+          )}
+          <Button
+            disabled={!rulesAgreed}
+            isLoading={requestJoinMutation.isPending}
+            onClick={() => { requestJoinMutation.mutate(); setShowJoinRules(false); }}
+            className="w-full"
+          >
+            Submit Request
+          </Button>
+        </div>
+      </Modal>
+
       {/* ── Circles this pod belongs to (REASON P3b) ────────────────────── */}
       <PodCircleChips podId={podId} />
+
+      {/* ── Jump to a section (phone and tablet; from 1024px the sections sit side by side) ── */}
+      <nav aria-label="Jump to a section" className="flex flex-wrap gap-2 lg:hidden">
+        {SECTIONS.map((s) => (
+          <a
+            key={s.id}
+            href={`#${s.id}`}
+            onClick={(e) => jumpTo(e, s.id)}
+            className="inline-flex min-h-[44px] items-center rounded-full border border-gray-200 bg-white px-4 text-sm font-medium text-[#1a1a2e] transition-colors hover:bg-gray-50"
+          >
+            {s.label}
+          </a>
+        ))}
+      </nav>
 
       {/* ── Pending Join Requests ───────────────────────────────────────── */}
       {isDirectorOrHost && pendingMembers.length > 0 && (
@@ -678,10 +776,10 @@ export default function PodDetailPage() {
                     </div>
                   </Link>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => approveMutation.mutate(m.userId)} className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition-all" title="Approve">
+                    <button onClick={() => approveMutation.mutate(m.userId)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition-all" title="Approve" aria-label="Approve">
                       <UserCheck className="h-4 w-4" />
                     </button>
-                    <button onClick={() => rejectMutation.mutate(m.userId)} className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-all" title="Reject">
+                    <button onClick={() => rejectMutation.mutate(m.userId)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-red-400 hover:bg-red-500/10 transition-all" title="Reject" aria-label="Reject">
                       <X className="h-4 w-4" />
                     </button>
                   </div>
@@ -725,173 +823,173 @@ export default function PodDetailPage() {
         </div>
       )}
 
-      {/* ── Events ──────────────────────────────────────────────────────── */}
-      {podSessions && podSessions.length > 0 && (
-        <div className="animate-fade-in-up stagger-2">
+      {/* ── Discussion beside Events and Members ────────────────────────── */}
+      {/* One column on a phone and a tablet (Discussion, Events, Members, in that order); from 1024px two: the
+          discussion on the left, the pod's events and members beside it. min-w-0 on both columns, because a
+          grid column does not shrink below its content and one long unbroken word would widen the page. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+        <section id="pod-discussion" className="min-w-0 scroll-mt-4">
           <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-            <Calendar className="h-5 w-5 text-rsn-red" /> Events ({podSessions.length})
+            <MessagesSquare className="h-5 w-5 text-rsn-red" /> Discussion
           </h2>
-          <div className="grid gap-2">
-            {podSessions.map((s: any) => (
-              <Card
-                key={s.id}
-                className="!p-4 cursor-pointer hover:border-gray-300 transition-colors"
-                onClick={() => navigate(`/sessions/${s.id}`)}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-[#1a1a2e]">{s.title || 'Untitled Event'}</p>
-                    <p className="text-xs text-gray-400">
-                      {s.scheduledAt ? formatDateTime(s.scheduledAt) : 'No date set'}
-                    </p>
-                  </div>
-                  {/* This showed the raw column value, so a member read
-                      "round_transition" here (21 Sep 2026). One helper names
-                      every state in plain words now. 'active' was never a
-                      real status, so the old colour test never matched. */}
-                  <Badge variant={sessionStatusColor(s.status)}>
-                    {sessionStatusLabel(s.status)}
-                  </Badge>
-                </div>
+          {podId && (
+            <PodWall
+              podId={podId}
+              podStatus={pod.status}
+              isMember={isMember}
+              isActiveMember={isActiveMember}
+              highlightPostId={highlightPostId}
+              onPodStatusStale={refreshPod}
+            />
+          )}
+        </section>
+
+        <div className="min-w-0 space-y-6">
+          {/* ── Events ──────────────────────────────────────────────────── */}
+          <section id="pod-events" className="scroll-mt-4 animate-fade-in-up stagger-2">
+            <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
+              <Calendar className="h-5 w-5 text-rsn-red" /> Events{podSessions ? ` (${podSessions.length})` : ''}
+            </h2>
+            {!mayReadEvents || eventsRefused ? (
+              <Card className="!p-4">
+                <p className="text-center text-sm text-gray-500">Members see the pod's events here.</p>
               </Card>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Join Rules Modal ───────────────────────────────────────────── */}
-      <Modal open={showJoinRules} onClose={() => setShowJoinRules(false)} title="Pod Rules">
-        <div className="space-y-4">
-          {pod?.joinConfig?.rulesText && (
-            <div className="rounded-xl bg-gray-50 p-4 text-sm text-gray-700 whitespace-pre-wrap">
-              {pod.joinConfig.rulesText}
-            </div>
-          )}
-          {pod?.joinConfig?.agreementText && (
-            <label className="flex items-start gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={rulesAgreed}
-                onChange={e => setRulesAgreed(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
-              />
-              <span className="text-sm text-gray-700">{pod.joinConfig.agreementText}</span>
-            </label>
-          )}
-          {!pod?.joinConfig?.agreementText && (
-            <label className="flex items-start gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={rulesAgreed}
-                onChange={e => setRulesAgreed(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
-              />
-              <span className="text-sm text-gray-700">I have read and agree to the pod rules</span>
-            </label>
-          )}
-          <Button
-            disabled={!rulesAgreed}
-            isLoading={requestJoinMutation.isPending}
-            onClick={() => { requestJoinMutation.mutate(); setShowJoinRules(false); }}
-            className="w-full"
-          >
-            Submit Request
-          </Button>
-        </div>
-      </Modal>
-
-      {/* ── Members ────────────────────────────────────────────────────────── */}
-      <div className="animate-fade-in-up stagger-2">
-        <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-          <Users className="h-5 w-5 text-rsn-red" /> Members ({memberTotal})
-        </h2>
-
-        {/* Status summary tabs (director/host only) */}
-        {isDirectorOrHost && podMemberCounts && (
-          <div className="flex flex-wrap gap-2 mb-3">
-            {[
-              { key: null, label: 'All', count: memberTotal, color: 'bg-gray-100 text-gray-700 border-gray-200' },
-              ...(podMemberCounts.active > 0 ? [{ key: 'active', label: 'Active', count: podMemberCounts.active, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }] : []),
-              ...(podMemberCounts.invited > 0 ? [{ key: 'invited', label: 'Invited', count: podMemberCounts.invited, color: 'bg-blue-50 text-blue-700 border-blue-200' }] : []),
-              ...(podMemberCounts.declined > 0 ? [{ key: 'declined', label: 'Declined', count: podMemberCounts.declined, color: 'bg-red-50 text-red-600 border-red-200' }] : []),
-              ...(podMemberCounts.left > 0 ? [{ key: 'left', label: 'Left', count: podMemberCounts.left, color: 'bg-gray-100 text-gray-500 border-gray-200' }] : []),
-              ...(podMemberCounts.pendingInvites > 0 ? [{ key: 'pending_invite', label: 'Pending Invites', count: podMemberCounts.pendingInvites, color: 'bg-purple-50 text-purple-700 border-purple-200' }] : []),
-            ].map((tab: any) => (
-              <button
-                key={tab.key ?? 'all'}
-                onClick={() => {
-                  if (tab.key === 'pending_invite') {
-                    setShowPodPendingInvites(!showPodPendingInvites);
-                    setMemberStatusFilter(null);
-                  } else {
-                    setShowPodPendingInvites(false);
-                    setMemberStatusFilter(tab.key);
-                  }
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                  (tab.key === 'pending_invite' ? showPodPendingInvites : memberStatusFilter === tab.key)
-                    ? 'ring-2 ring-rsn-red/30 border-rsn-red ' + tab.color
-                    : tab.color + ' hover:opacity-80'
-                }`}
-              >
-                <span>{tab.label}</span>
-                <span className="font-bold">{tab.count}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* grid-cols-1, not an auto track: an auto track grows to the longest truncated job title
-            in it, and the page then scrolls sideways on a phone. */}
-        <div className="grid grid-cols-1 gap-2">
-          {(memberStatusFilter === null ? activeMembers : membersList.filter((m: any) => m.status === memberStatusFilter)).map((m: any) => (
-            <Card key={m.userId || m.id} className="!p-3">
-              <div className="flex items-center justify-between">
-                <Link to={personHref(m.userId || m.id, 'Pods')} className="flex-1 min-w-0 hover:opacity-80 transition-opacity">
-                  <ProfileCard
-                    compact
-                    user={{
-                      id: m.userId || m.id,
-                      displayName: m.displayName || 'Member',
-                      avatarUrl: m.avatarUrl,
-                      jobTitle: m.jobTitle,
-                      company: m.company,
-                    }}
-                    badge={m.role === 'director' ? 'director' : m.role === 'host' ? 'host' : undefined}
-                    badgeVariant={m.role === 'director' ? 'brand' : 'info'}
-                  />
-                </Link>
-                <div className="flex items-center gap-2 shrink-0">
-                  {isDirector && m.userId !== user?.id && m.role !== 'director' && (
-                    <button
-                      onClick={() => changeRoleMutation.mutate({
-                        userId: m.userId,
-                        role: m.role === 'host' ? 'member' : 'host',
-                      })}
-                      className="px-2 py-1 rounded-lg text-xs font-medium text-rsn-red hover:bg-rsn-red-light border border-rsn-red-200 transition-all"
-                      title={m.role === 'host' ? 'Demote to member' : 'Promote to host'}
-                    >
-                      {m.role === 'host' ? 'Demote' : 'Make Host'}
-                    </button>
-                  )}
-                  {isDirector && m.userId !== user?.id && (
-                    <button
-                      onClick={() => removeMemberMutation.mutate(m.userId)}
-                      className="p-1.5 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all"
-                      title="Remove member"
-                    >
-                      <UserMinus className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
+            ) : sessionsFailed && !podSessions ? (
+              <Card className="!p-4 text-center">
+                <p className="text-sm text-gray-600">We could not load the events just now.</p>
+                <Button variant="ghost" onClick={() => void refetchSessions()} className="mx-auto mt-2 min-h-[44px]">Try again</Button>
+              </Card>
+            ) : !podSessions ? (
+              <Skeleton className="h-16" />
+            ) : podSessions.length > 0 ? (
+              <div className="grid grid-cols-1 gap-2">
+                {podEventsInOrder(podSessions).map((s) => (
+                  <Card
+                    key={s.id}
+                    className="!p-4 cursor-pointer hover:border-gray-300 transition-colors"
+                    onClick={() => navigate(`/sessions/${s.id}`)}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="break-words text-sm font-medium text-[#1a1a2e]">{s.title || 'Untitled Event'}</p>
+                        <p className="text-xs text-gray-400">
+                          {s.scheduledAt ? formatDateTime(s.scheduledAt) : 'No date set'}
+                        </p>
+                      </div>
+                      {/* This showed the raw column value, so a member read
+                          "round_transition" here (21 Sep 2026). One helper names
+                          every state in plain words now. 'active' was never a
+                          real status, so the old colour test never matched. */}
+                      <Badge variant={sessionStatusColor(s.status)} className="shrink-0">
+                        {sessionStatusLabel(s.status)}
+                      </Badge>
+                    </div>
+                  </Card>
+                ))}
               </div>
-            </Card>
-          ))}
-          {activeMembers.length === 0 && (
-            <Card><p className="text-gray-400 text-sm text-center py-4">
-              {isMember ? 'No members yet' : 'To access pod details, please join the pod.'}
-            </p></Card>
-          )}
+            ) : (
+              <Card className="!p-4">
+                <p className="text-center text-sm text-gray-400">No events yet.</p>
+              </Card>
+            )}
+          </section>
+
+          {/* ── Members ──────────────────────────────────────────────────── */}
+          <section id="pod-members" className="scroll-mt-4 animate-fade-in-up stagger-2">
+            <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
+              <Users className="h-5 w-5 text-rsn-red" /> Members ({memberTotal})
+            </h2>
+
+            {/* Status summary tabs (director/host only) */}
+            {isDirectorOrHost && podMemberCounts && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {[
+                  { key: null, label: 'All', count: memberTotal, color: 'bg-gray-100 text-gray-700 border-gray-200' },
+                  ...(podMemberCounts.active > 0 ? [{ key: 'active', label: 'Active', count: podMemberCounts.active, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }] : []),
+                  ...(podMemberCounts.invited > 0 ? [{ key: 'invited', label: 'Invited', count: podMemberCounts.invited, color: 'bg-blue-50 text-blue-700 border-blue-200' }] : []),
+                  ...(podMemberCounts.declined > 0 ? [{ key: 'declined', label: 'Declined', count: podMemberCounts.declined, color: 'bg-red-50 text-red-600 border-red-200' }] : []),
+                  ...(podMemberCounts.left > 0 ? [{ key: 'left', label: 'Left', count: podMemberCounts.left, color: 'bg-gray-100 text-gray-500 border-gray-200' }] : []),
+                  ...(podMemberCounts.pendingInvites > 0 ? [{ key: 'pending_invite', label: 'Pending Invites', count: podMemberCounts.pendingInvites, color: 'bg-purple-50 text-purple-700 border-purple-200' }] : []),
+                ].map((tab: any) => (
+                  <button
+                    key={tab.key ?? 'all'}
+                    onClick={() => {
+                      if (tab.key === 'pending_invite') {
+                        setShowPodPendingInvites(!showPodPendingInvites);
+                        setMemberStatusFilter(null);
+                      } else {
+                        setShowPodPendingInvites(false);
+                        setMemberStatusFilter(tab.key);
+                      }
+                    }}
+                    className={`flex min-h-[44px] items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      (tab.key === 'pending_invite' ? showPodPendingInvites : memberStatusFilter === tab.key)
+                        ? 'ring-2 ring-rsn-red/30 border-rsn-red ' + tab.color
+                        : tab.color + ' hover:opacity-80'
+                    }`}
+                  >
+                    <span>{tab.label}</span>
+                    <span className="font-bold">{tab.count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* grid-cols-1, not an auto track: an auto track grows to the longest truncated job title
+                in it, and the page then scrolls sideways on a phone. */}
+            <div className="grid grid-cols-1 gap-2">
+              {(memberStatusFilter === null ? activeMembers : membersList.filter((m: any) => m.status === memberStatusFilter)).map((m: any) => (
+                <Card key={m.userId || m.id} className="!p-3">
+                  {/* A director's two controls take the row from the name in the 320px column: they wrap under it. */}
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                    <Link to={personHref(m.userId || m.id, 'Pods')} className="min-w-0 flex-[1_1_14rem] hover:opacity-80 transition-opacity">
+                      <ProfileCard
+                        compact
+                        user={{
+                          id: m.userId || m.id,
+                          displayName: m.displayName || 'Member',
+                          avatarUrl: m.avatarUrl,
+                          jobTitle: m.jobTitle,
+                          company: m.company,
+                        }}
+                        badge={m.role === 'director' ? 'director' : m.role === 'host' ? 'host' : undefined}
+                        badgeVariant={m.role === 'director' ? 'brand' : 'info'}
+                      />
+                    </Link>
+                    <div className="ml-auto flex items-center gap-2 shrink-0">
+                      {isDirector && m.userId !== user?.id && m.role !== 'director' && (
+                        <button
+                          onClick={() => changeRoleMutation.mutate({
+                            userId: m.userId,
+                            role: m.role === 'host' ? 'member' : 'host',
+                          })}
+                          className="min-h-[44px] px-2 py-1 rounded-lg text-xs font-medium text-rsn-red hover:bg-rsn-red-light border border-rsn-red-200 transition-all"
+                          title={m.role === 'host' ? 'Demote to member' : 'Promote to host'}
+                        >
+                          {m.role === 'host' ? 'Demote' : 'Make Host'}
+                        </button>
+                      )}
+                      {isDirector && m.userId !== user?.id && (
+                        <button
+                          onClick={() => removeMemberMutation.mutate(m.userId)}
+                          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                          title="Remove member"
+                          aria-label="Remove member"
+                        >
+                          <UserMinus className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+              {activeMembers.length === 0 && (
+                <Card><p className="text-gray-400 text-sm text-center py-4">
+                  {isMember ? 'No members yet' : 'To access pod details, please join the pod.'}
+                </p></Card>
+              )}
+            </div>
+          </section>
         </div>
       </div>
 
