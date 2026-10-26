@@ -64,6 +64,27 @@ describe('validate middleware', () => {
     expect(err.details).toHaveProperty('email');
   });
 
+  // 26 Oct 2026 (H2a): production's client shows a refusal's message as a toast, and "Validation failed"
+  // means nothing to a member. A route can say what went wrong in their words; the details are kept.
+  it('says the sentence the route gives instead of "Validation failed", and keeps the details', () => {
+    const schema = z.object({ id: z.string().uuid("We couldn't find that conversation.") });
+    const req = createRequest({ params: { id: 'undefined' } });
+
+    validate(schema, 'params', "We couldn't find that conversation.")(req, res, next);
+
+    const err = next.mock.calls[0][0] as any;
+    expect(err).toMatchObject({
+      statusCode: 400, code: 'VALIDATION_ERROR', message: "We couldn't find that conversation.",
+      details: { id: ["We couldn't find that conversation."] },
+    });
+  });
+
+  it('still says "Validation failed" when the route gives no sentence of its own', () => {
+    const req = createRequest({ params: { id: 'x' } });
+    validate(z.object({ id: z.string().uuid() }), 'params')(req, res, next);
+    expect((next.mock.calls[0][0] as any).message).toBe('Validation failed');
+  });
+
   it('should collect multiple field errors', () => {
     const schema = z.object({
       email: z.string().email(),

@@ -46,6 +46,20 @@ const reactionBodySchema = z.object({
   emoji: z.string().min(1).max(16),
 });
 
+// 26 Oct 2026: every id in a path is checked before it reaches the database, where an id that is not a
+// uuid (the word "undefined", say) failed the cast and came back a 500. Now it is a 400 in a member's
+// words. A well-formed id in capitals names the same row, and is lower-cased so that the tags sent for
+// it match the ones each screen listens for.
+const CONVERSATION_GONE = "We couldn't find that conversation.";
+const MESSAGE_GONE = "We couldn't find that message.";
+const MEMBER_GONE = "We couldn't find that member.";
+const idParam = (sentence: string) => z.string().uuid(sentence).transform((s) => s.toLowerCase());
+const conversationParams = validate(z.object({ id: idParam(CONVERSATION_GONE) }), 'params', CONVERSATION_GONE);
+const messageParams = validate(z.object({ id: idParam(MESSAGE_GONE) }), 'params', MESSAGE_GONE);
+// The emoji is checked against the allow-list by the service, as the body's is.
+const reactionParams = validate(z.object({ id: idParam(MESSAGE_GONE), emoji: z.string().min(1).max(16) }), 'params', MESSAGE_GONE);
+const memberParams = validate(z.object({ userId: idParam(MEMBER_GONE) }), 'params', MEMBER_GONE);
+
 // ─── GET /dm/conversations — list my conversations ────────────────────────
 
 router.get(
@@ -81,6 +95,7 @@ router.get(
 router.get(
   '/conversations/:id/messages',
   authenticate,
+  conversationParams,
   validate(listQuerySchema, 'query'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -148,6 +163,7 @@ router.post(
 router.post(
   '/conversations/:id/read',
   authenticate,
+  conversationParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await dmService.markRead(req.params.id, req.user!.userId);
@@ -183,6 +199,7 @@ router.post(
 router.delete(
   '/conversations/:id',
   authenticate,
+  conversationParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await dmService.deleteConversation(req.params.id, req.user!.userId);
@@ -199,6 +216,7 @@ router.delete(
 router.get(
   '/can-message/:userId',
   authenticate,
+  memberParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await dmService.canMessage(req.user!.userId, req.params.userId);
@@ -234,6 +252,7 @@ router.get(
 router.post(
   '/messages/:id/reactions',
   authenticate,
+  messageParams,
   validate(reactionBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -260,6 +279,7 @@ router.post(
 router.delete(
   '/messages/:id/reactions/:emoji',
   authenticate,
+  reactionParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await dmService.removeReaction(

@@ -58,6 +58,10 @@ app.use(errorHandler);
 /** The calendar file as a calendar app reads it: folded lines joined back together. */
 const unfold = (ics: string) => ics.replace(/\r\n[ \t]/g, '');
 
+// A real conversation id: since 26 Oct 2026 the route refuses one that is not a uuid (dm-route-ids.test.ts).
+const CONV = 'cccccccc-0000-4000-8000-000000000001';
+const ICS_PATH = `/dm/conversations/${CONV}/meeting.ics`;
+
 describe('GET /dm/conversations/:id/meeting.ics', () => {
   beforeEach(() => {
     mockScheduling.mockReset().mockResolvedValue({
@@ -77,7 +81,7 @@ describe('GET /dm/conversations/:id/meeting.ics', () => {
     });
     mockMeetingRow.mockReturnValue([{ calendar_sequence: 2, confirmed_by: 'u-b' }]);
 
-    const res = await request(app).get('/dm/conversations/c-1/meeting.ics');
+    const res = await request(app).get(ICS_PATH);
 
     const ics = unfold(res.text);
     expect(ics).toContain('\r\nUID:meeting-mtg-1@rsn.network\r\n');
@@ -87,7 +91,7 @@ describe('GET /dm/conversations/:id/meeting.ics', () => {
   });
 
   it('a meeting the old server booked without a row still downloads, as before', async () => {
-    const res = await request(app).get('/dm/conversations/c-1/meeting.ics');
+    const res = await request(app).get(ICS_PATH);
     expect(res.status).toBe(200);
     expect(res.text).toContain('\r\nSEQUENCE:0\r\n');
     expect(res.text).not.toContain('UID:meeting-');
@@ -95,17 +99,17 @@ describe('GET /dm/conversations/:id/meeting.ics', () => {
   });
 
   it('is downloaded as reason-meeting.ics', async () => {
-    const res = await request(app).get('/dm/conversations/c-1/meeting.ics');
+    const res = await request(app).get(ICS_PATH);
     expect(res.status).toBe(200);
     expect(res.headers['content-disposition']).toBe('attachment; filename="reason-meeting.ics"');
     expect(res.headers['content-type']).toMatch(/^text\/calendar/);
   });
 
   it('creates a "REASON meeting" that says it is a call on REASON with the other person', async () => {
-    const res = await request(app).get('/dm/conversations/c-1/meeting.ics');
+    const res = await request(app).get(ICS_PATH);
     const ics = unfold(res.text);
     expect(ics).toContain('SUMMARY:REASON meeting');
-    expect(ics).toContain('DESCRIPTION:A 1:1 video call on REASON with Bo. Join: https://app.rsn.network/meet/c-1?scheduled=1&kind=video');
+    expect(ics).toContain(`DESCRIPTION:A 1:1 video call on REASON with Bo. Join: https://app.rsn.network/meet/${CONV}?scheduled=1&kind=video`);
   });
 
   it('says an audio call is an audio call', async () => {
@@ -113,12 +117,12 @@ describe('GET /dm/conversations/:id/meeting.ics', () => {
       partnerId: 'u-b',
       confirmed: { startAt: '2026-11-05T17:00:00.000Z', durationMin: 30, type: 'audio' },
     });
-    const res = await request(app).get('/dm/conversations/c-1/meeting.ics');
+    const res = await request(app).get(ICS_PATH);
     expect(unfold(res.text)).toContain('DESCRIPTION:A 1:1 audio call on REASON with Bo.');
   });
 
   it('writes RSN nowhere a person reads, only in the program identifier of the file', async () => {
-    const res = await request(app).get('/dm/conversations/c-1/meeting.ics');
+    const res = await request(app).get(ICS_PATH);
     const people = unfold(res.text).split('\r\n').filter((line) => !line.startsWith('PRODID:')).join('\r\n');
     expect(people).not.toMatch(/\bRSN\b/);
   });

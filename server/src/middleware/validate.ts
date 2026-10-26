@@ -8,8 +8,13 @@ type ValidationTarget = 'body' | 'params' | 'query';
 /**
  * Creates a validation middleware that validates the specified request property
  * against a Zod schema. Throws a ValidationError with detailed field errors.
+ *
+ * `message` is what the refusal says instead of "Validation failed" (26 Oct 2026):
+ * production's client shows a refusal's message to the member as it is, so a route
+ * whose refusal a member can meet (an id in a link that names nothing) says it in
+ * their words. The field details are sent as before.
  */
-export function validate(schema: ZodSchema, target: ValidationTarget = 'body') {
+export function validate(schema: ZodSchema, target: ValidationTarget = 'body', message = 'Validation failed') {
   return (req: Request, _res: Response, next: NextFunction): void => {
     try {
       const data = schema.parse(req[target]);
@@ -27,7 +32,7 @@ export function validate(schema: ZodSchema, target: ValidationTarget = 'body') {
           details[path].push(issue.message);
         }
 
-        next(new ValidationError('Validation failed', details));
+        next(new ValidationError(message, details));
         return;
       }
 

@@ -21,6 +21,20 @@ import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
 
+// 26 Oct 2026: every id in a path is checked before it reaches the database. "undefined" sent as a
+// conversation id went to Postgres, which cannot read it as a uuid, and came back a 500. Now it is a
+// 400 that says, in a member's words, what production's client shows as its toast or on the call
+// screen. A well-formed id in capitals names the same row, and is lower-cased so that the tags the
+// services send match the ones each screen listens for.
+const CONVERSATION_GONE = "We couldn't find that conversation.";
+const CALL_REQUEST_GONE = "We couldn't find that call request.";
+const conversationParams = validate(
+  z.object({ id: z.string().uuid(CONVERSATION_GONE).transform((s) => s.toLowerCase()) }), 'params', CONVERSATION_GONE,
+);
+const callRequestParams = validate(
+  z.object({ id: z.string().uuid(CALL_REQUEST_GONE).transform((s) => s.toLowerCase()) }), 'params', CALL_REQUEST_GONE,
+);
+
 // GET /dm/conversations/:id/meeting.ics — the confirmed meeting as a universal
 // calendar file (Google, Outlook, Apple…) for the in-app "Add to calendar"
 // (Stefan, 9 Sep 2026: "it says Google Calendar — calendar could be anything").
@@ -28,6 +42,7 @@ const router = Router();
 router.get(
   '/conversations/:id/meeting.ics',
   authenticate,
+  conversationParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const me = req.user!.userId;
@@ -123,6 +138,7 @@ const confirmBodySchema = z.object({
 router.get(
   '/conversations/:id/scheduling',
   authenticate,
+  conversationParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await meetingService.getScheduling(req.params.id, req.user!.userId);
@@ -137,6 +153,7 @@ router.get(
 router.put(
   '/conversations/:id/scheduling/availability',
   authenticate,
+  conversationParams,
   validate(availabilityBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -155,6 +172,7 @@ router.put(
 router.post(
   '/conversations/:id/scheduling/confirm',
   authenticate,
+  conversationParams,
   validate(confirmBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -175,6 +193,7 @@ router.post(
 router.post(
   '/conversations/:id/scheduling/seen',
   authenticate,
+  conversationParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await meetingService.markSchedulerSeen(req.params.id, req.user!.userId);
@@ -189,6 +208,7 @@ router.post(
 router.post(
   '/conversations/:id/call-token',
   authenticate,
+  conversationParams,
   validate(callBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -204,6 +224,7 @@ router.post(
 router.post(
   '/conversations/:id/call/request',
   authenticate,
+  conversationParams,
   validate(callRequestBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -220,6 +241,7 @@ router.post(
 router.get(
   '/conversations/:id/call/pending',
   authenticate,
+  conversationParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await callService.getPendingCallRequest(req.params.id, req.user!.userId);
@@ -232,6 +254,7 @@ router.get(
 router.post(
   '/call/requests/:id/accept',
   authenticate,
+  callRequestParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await callService.acceptCallRequest(req.params.id, req.user!.userId);
@@ -242,6 +265,7 @@ router.post(
 router.post(
   '/call/requests/:id/decline',
   authenticate,
+  callRequestParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await callService.declineCallRequest(req.params.id, req.user!.userId);
@@ -252,6 +276,7 @@ router.post(
 router.post(
   '/call/requests/:id/cancel',
   authenticate,
+  callRequestParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await callService.cancelCallRequest(req.params.id, req.user!.userId);
@@ -264,6 +289,7 @@ router.post(
 router.get(
   '/conversations/:id/partner-presence',
   authenticate,
+  conversationParams,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const online = await callService.isPartnerOnline(req.params.id, req.user!.userId);
