@@ -16,7 +16,8 @@ export const MAIN_NAV: NavItem[] = [
   { key: 'entities', label: 'Entities', to: '/entities', match: under('/entities') },
   { key: 'circles', label: 'Circles', to: '/circles', match: under('/circles') },
   { key: 'pods', label: 'Pods', to: '/pods', match: under('/pods') },
-  { key: 'events', label: 'Events', to: '/sessions', match: under('/sessions') },
+  // A meeting's own page (/meetings/:id, 26 Oct 2026) sits under Events with the events.
+  { key: 'events', label: 'Events', to: '/sessions', match: under('/sessions', '/meetings') },
   { key: 'messages', label: 'Messages', to: '/messages', match: under('/messages') },
 ];
 
