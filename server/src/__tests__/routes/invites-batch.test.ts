@@ -1487,7 +1487,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
     it('an email the provider refuses (an answer, not an error) gives the claim back, counts nothing, and is said as a failure', async () => {
       mockSendInviteEmail.mockResolvedValueOnce({ sent: false });
       const res = await remindOne();
-      expect(res.status).toBe(502);
+      expect(res.status).toBe(503);
       expect(res.body).toEqual({ success: false, error: NOT_SENT });
       expect(sentTo()).toEqual(['guest@example.com']);
       expect(mockRelease).toHaveBeenCalledWith([INVITE]);
@@ -1497,7 +1497,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
     it('...so the invite is not "reminded within the hour": pressed again, it is emailed, and only that email is counted', async () => {
       const held = rememberingLedger();
       mockSendInviteEmail.mockResolvedValueOnce({ sent: false });
-      expect((await remindOne()).status).toBe(502);
+      expect((await remindOne()).status).toBe(503);
       expect(held.size).toBe(0);
       const again = await remindOne();
       expect(again.status).toBe(200);

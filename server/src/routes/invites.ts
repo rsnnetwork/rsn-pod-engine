@@ -312,12 +312,12 @@ router.get(
 // 26 Oct 2026 (fix round 2): the email says what the invite was for. (Fix round 3): an invite reminded in the last hour
 // is not emailed again (a 200 that says so), and a member sends at most 300 reminder emails an hour, this route and
 // Remind All counted together; see invite-reminders.service.ts. The invite's TYPE says who may remind it. (Fix round 4):
-// an email the mail provider did not take keeps no hour, counts nothing and is a 502.
+// an email the mail provider did not take keeps no hour, counts nothing and is a 503 (not 502: Cloudflare can swap an origin 502 for its own page, and the sentence must reach the member).
 
 const reminderAllowanceSpent = () =>
   new AppError(429, 'RATE_LIMIT_EXCEEDED', 'You have sent a lot of reminders this hour. Please try again later.');
 const reminderNotSent = () =>
-  new AppError(502, 'SERVICE_UNAVAILABLE', 'We could not send the reminder just now. Please try again.');
+  new AppError(503, 'SERVICE_UNAVAILABLE', 'We could not send the reminder just now. Please try again.');
 
 router.post(
   '/:id/remind',
