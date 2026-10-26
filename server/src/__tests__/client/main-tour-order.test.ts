@@ -26,8 +26,10 @@ interface Card { title: string; body: string; visual: ReactElement }
 // The sheep draws the file it would show, so the pictures can be read as well as the words.
 const SheepStandIn = ({ pose }: { pose: string }) => createElement('img', { src: `/sheep/${pose}.png`, alt: '', 'data-pose': pose });
 
-function loadTour(): { TOUR_CARDS: Card[]; TourSlide?: (props: { card: Card }) => ReactElement } {
+/** The tour, run. `people` stands in for the shared list, to see what a shorter one draws. */
+function loadTour(people?: ReadonlyArray<{ name: string; role: string }>): { TOUR_CARDS: Card[]; TourSlide?: (props: { card: Card }) => ReactElement } {
   return loadClientModule(TOUR, {
+    ...(people ? { '@rsn/shared': { EXAMPLE_PEOPLE: people } } : {}),
     'framer-motion': { motion: { div: 'div' }, AnimatePresence: Fragment, useReducedMotion: () => true },
     'lucide-react': iconStandIns,
     '@/components/ui/Button': { Button: () => null },
@@ -149,5 +151,41 @@ describe('L1 - the tour on production: words first, then a caption, then a label
     };
     expect(bodyOf('function Frame(')).toMatch(/aria-hidden/);
     expect(bodyOf('function ExampleTag(')).toMatch(/>Example</);
+  });
+});
+
+describe('L1 - the tour does not depend on how many people the shared list has', () => {
+  // Stefan can swap the made-up names without a code review, and a list that ends up shorter than the pictures draw must
+  // not blank the tour: it is shown to every member right after onboarding.
+  const pictures = (people: ReadonlyArray<{ name: string; role: string }>) => {
+    const { TOUR_CARDS } = loadTour(people);
+    return TOUR_CARDS.map((card) => words(renderToStaticMarkup(card.visual)));
+  };
+  const named = (n: number) => EXAMPLE_PEOPLE.slice(0, n);
+
+  it('the shared list has at least the people the pictures draw (3: two suggestions, three matches), so every picture is complete', () => {
+    expect(EXAMPLE_PEOPLE.length).toBeGreaterThanOrEqual(3);
+    for (const person of EXAMPLE_PEOPLE) {
+      expect(person.name.trim()).not.toBe('');
+      expect(person.role.trim()).not.toBe('');
+    }
+  });
+
+  it('draws fewer people, never throws, when the list is shorter: two, one, or none', () => {
+    for (const n of [2, 1, 0]) {
+      const all = pictures(named(n));
+      expect(all).toHaveLength(4);
+      // Suggestions still has its button, and each picture still says Example.
+      expect(all[0]).toContain('I want to meet');
+      for (const text of all) expect(text.filter((w) => w === 'Example').length).toBeGreaterThanOrEqual(1);
+      for (const person of named(n)) expect(all[0].concat(all[1])).toContain(person.name);
+      for (const person of EXAMPLE_PEOPLE.slice(n)) expect(all[0].concat(all[1])).not.toContain(person.name);
+    }
+  });
+
+  it('with the full list it draws two suggestions and three matches, as before', () => {
+    const [suggestions, matches] = pictures(EXAMPLE_PEOPLE);
+    for (const person of EXAMPLE_PEOPLE.slice(0, 2)) expect(suggestions).toContain(person.name);
+    for (const person of EXAMPLE_PEOPLE.slice(0, 3)) expect(matches).toContain(person.name);
   });
 });

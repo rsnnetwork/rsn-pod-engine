@@ -274,30 +274,37 @@ function PersonLine({ person, pose, dim = false }: { person: ExamplePerson; pose
   );
 }
 
+// The pictures draw as many of the shared list as it has (two here, three below), never more: a list someone shortens
+// shows fewer people and never blanks the tour, which every member sees right after onboarding. With nobody to tag,
+// the frame itself says Example.
 function SuggestionsMock() {
   const [first, second] = EXAMPLE_PEOPLE;
   return (
-    <Frame tagged={false}>
+    <Frame tagged={!first}>
       <div className="rounded-lg border-2 border-rsn-red bg-white p-2.5">
-        <PersonLine person={first} pose="wave" />
-        <div className="mt-2 rounded-md bg-rsn-red py-1.5 text-center text-[10px] font-medium text-white">
+        {first && <PersonLine person={first} pose="wave" />}
+        <div className={`${first ? 'mt-2 ' : ''}rounded-md bg-rsn-red py-1.5 text-center text-[10px] font-medium text-white`}>
           I want to meet
         </div>
       </div>
-      <div className="mt-2 rounded-lg border border-gray-200 bg-white p-2.5">
-        <PersonLine person={second} pose="listening" dim />
-      </div>
+      {second && (
+        <div className="mt-2 rounded-lg border border-gray-200 bg-white p-2.5">
+          <PersonLine person={second} pose="listening" dim />
+        </div>
+      )}
     </Frame>
   );
 }
 
+/** The three states a match picture shows, for the first three people in the shared list. */
+const MATCH_STATES: Array<{ pose: SheepPose; state: string; tone: string }> = [
+  { pose: 'matched', state: 'Matched', tone: 'bg-emerald-100 text-emerald-700' },
+  { pose: 'thinking', state: 'Asked, waiting', tone: 'bg-gray-100 text-gray-600' },
+  { pose: 'wave', state: 'Wants to meet you', tone: 'bg-rsn-red-light text-rsn-red' },
+];
+
 function MatchesMock() {
-  const [first, second, third] = EXAMPLE_PEOPLE;
-  const rows: Array<{ person: ExamplePerson; pose: SheepPose; state: string; tone: string }> = [
-    { person: first, pose: 'matched', state: 'Matched', tone: 'bg-emerald-100 text-emerald-700' },
-    { person: second, pose: 'thinking', state: 'Asked, waiting', tone: 'bg-gray-100 text-gray-600' },
-    { person: third, pose: 'wave', state: 'Wants to meet you', tone: 'bg-rsn-red-light text-rsn-red' },
-  ];
+  const rows = EXAMPLE_PEOPLE.slice(0, MATCH_STATES.length).map((person, i) => ({ person, ...MATCH_STATES[i] }));
   return (
     <Frame>
       <div className="space-y-1.5">
