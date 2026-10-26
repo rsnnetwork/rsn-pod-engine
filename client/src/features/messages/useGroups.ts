@@ -13,8 +13,7 @@ import type { DmGroupDetail, DmGroupSummary, GroupChatMessage, GroupChatMessageP
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
-import { shouldRetry } from '@/features/reason/human/profile-text';
-import { groupUnreadTotal, type EventPerson } from './group-chat-text';
+import { groupReadRetry, groupReadRetryDelay, groupUnreadTotal, type EventPerson } from './group-chat-text';
 
 export const groupKeys = {
   list: ['dm-groups'] as const,
@@ -48,8 +47,9 @@ export function useMyGroups() {
     queryKey: groupKeys.list,
     queryFn: fetchGroups,
     enabled: !!me,
-    // The inbox waits for this list beside the conversations, so a failure is said after one more try, not three.
-    retry: shouldRetry,
+    // A 429 waits the limit's window out (twice at most) while what was read stays shown; any other 4xx is an answer.
+    retry: groupReadRetry,
+    retryDelay: groupReadRetryDelay,
     meta: { entities: me ? [E.userDms(me), E.userBlocks(me)] : [] },
   });
 }
@@ -61,7 +61,8 @@ export function useGroupUnreadTotal(): number {
     queryKey: groupKeys.list,
     queryFn: fetchGroups,
     enabled: !!me,
-    retry: shouldRetry,
+    retry: groupReadRetry,
+    retryDelay: groupReadRetryDelay,
     select: groupUnreadTotal,
     meta: { entities: me ? [E.userDms(me), E.userBlocks(me)] : [] },
   });
@@ -69,10 +70,10 @@ export function useGroupUnreadTotal(): number {
 }
 
 /**
- * One group as its member sees it, with its members and the cap. A 4xx is an answer (gone, not in it): not asked again.
- * Every change that moves it sends dm-group:<id> (with user:<id>:dms), so it follows the group's own tag and blocks, as
- * ENTITIES.md lists it; user:<id>:dms alone is news of any conversation or group, and would only read it again for nothing
- * (the server allows 120 group reads a minute per member).
+ * One group as its member sees it, with its members and the cap. A 4xx is an answer (gone, not in it) and is not asked
+ * again, except a 429, which waits the limit out. Every change that moves it sends dm-group:<id> (with user:<id>:dms),
+ * so it follows the group's own tag and blocks, as ENTITIES.md lists it; user:<id>:dms alone is news of any conversation
+ * or group, and would only read it again for nothing (the server allows 120 group reads a minute per member).
  */
 export function useGroup(groupId: string | undefined) {
   const me = useMe();
@@ -80,7 +81,8 @@ export function useGroup(groupId: string | undefined) {
     queryKey: groupKeys.detail(groupId ?? ''),
     queryFn: () => fetchGroup(groupId ?? ''),
     enabled: !!me && isGroupId(groupId),
-    retry: shouldRetry,
+    retry: groupReadRetry,
+    retryDelay: groupReadRetryDelay,
     meta: { entities: groupId && me ? [E.dmGroup(groupId), E.userBlocks(me)] : [] },
   });
 }
@@ -94,7 +96,8 @@ export function useGroupMessages(groupId: string | undefined) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: GroupChatMessagePage) => last.nextCursor ?? undefined,
     enabled: !!me && isGroupId(groupId),
-    retry: shouldRetry,
+    retry: groupReadRetry,
+    retryDelay: groupReadRetryDelay,
     meta: { entities: groupId && me ? [E.dmGroup(groupId), E.userBlocks(me)] : [] },
   });
 }

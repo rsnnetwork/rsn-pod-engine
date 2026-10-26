@@ -16,7 +16,10 @@ import {
   GROUP_FULL, GROUP_LIMIT, GROUP_TOO_SMALL, addLabel, clusterGroupMessages, groupErrorSentence, groupLoadProblem, groupPreview,
   groupUnreadTotal, memberCountLabel, mergeInbox, newestFromOthers, ofMax, roomLeft, sendSchema, startBody,
   startChosen, startProblem, threadInOrder, tookPart, addSchema, startSchema, byName, membersInOrder,
+  START_MANY, MARK_READ_DEBOUNCE_MS, readMarkKey, isRateLimited, rateLimitWaitMs, groupReadRetry, groupReadRetryDelay,
+  EARLIER_PAGE_TRIES, untilEarlierPage,
 } from '../../../../client/src/features/messages/group-chat-text';
+import { PANEL_TITLE } from '../../../../client/src/features/sessions/post-event-panel';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
 import { iconStandIns, loadClientModule, readClientSource } from './load-client-module';
 
@@ -42,6 +45,15 @@ function blockFrom(src: string, marker: string): string {
     else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
   }
   throw new Error(`unclosed block: ${marker}`);
+}
+
+/** The first className="…" after `marker` (the element the marker opens). */
+function classAfter(src: string, marker: string): string {
+  const at = src.indexOf(marker);
+  if (at < 0) throw new Error(`marker not found: ${marker}`);
+  const m = src.slice(at).match(/className="([^"]*)"/);
+  if (!m) throw new Error(`no className after: ${marker}`);
+  return m[1];
 }
 
 /** A client file's text, or '' when it is not there yet (so each test fails on its own expectations). */
@@ -71,6 +83,16 @@ describe('the product says how big a group chat can be', () => {
       expect(s).not.toMatch(/session/i);
       expect(s).not.toMatch(/\bRSN\b/);
     }
+  });
+
+  it('the start sheet points to the message-everyone panel by its own title, so the two cannot drift apart', () => {
+    expect(PANEL_TITLE).toBe('Message everyone who took part');
+    expect(START_MANY).toBe('More than 49 people took part. Choose up to 49, or use Message everyone who took part to reach them all.');
+    expect(read('features/messages/group-chat-text.ts')).toMatch(/or use \$\{PANEL_TITLE\} to reach them all\./);
+  });
+
+  it('keeps no sentence that no screen says', () => {
+    expect('MEMBERS_FAILED' in words).toBe(false);
   });
 
   it('counts people as people', () => {
@@ -239,6 +261,124 @@ describe('what went wrong, said plainly', () => {
   });
 });
 
+// ── The read budget: the server allows 120 group reads a minute per member ────
+
+describe('the read mark: once per burst, and never for a group already read', () => {
+  const base = { loaded: true, seen: true, unread: 3, groupId: 'g-1', newestOther: 'm-9', marked: null };
+
+  it('marks up to the newest message someone else wrote while something is unread', () => {
+    expect(readMarkKey(base)).toBe('g-1:m-9');
+  });
+
+  it('a group opened with nothing unread is not marked', () => {
+    expect(readMarkKey({ ...base, unread: 0 })).toBeNull();
+  });
+
+  it('not before the group has loaded, and never from a tab in the background', () => {
+    expect(readMarkKey({ ...base, loaded: false })).toBeNull();
+    expect(readMarkKey({ ...base, seen: false })).toBeNull();
+  });
+
+  it('a message already marked is not marked again; a newer one is', () => {
+    expect(readMarkKey({ ...base, marked: 'g-1:m-9' })).toBeNull();
+    expect(readMarkKey({ ...base, marked: 'g-1:m-8' })).toBe('g-1:m-9');
+  });
+
+  it('one mark per burst: it waits a second, and each newer message starts the second again', () => {
+    expect(MARK_READ_DEBOUNCE_MS).toBe(1000);
+  });
+});
+
+describe('a read refused for going too fast keeps what is shown, and is tried again after the limit\'s window', () => {
+  const limited = (headers: Record<string, string> = {}) =>
+    ({ response: { status: 429, headers, data: { error: { message: 'Slow down a moment, then try again.' } } } });
+
+  it('tells a 429 from any other refusal', () => {
+    expect(isRateLimited(limited())).toBe(true);
+    expect(isRateLimited({ response: { status: 403 } })).toBe(false);
+    expect(isRateLimited(new Error('x'))).toBe(false);
+    expect(isRateLimited(null)).toBe(false);
+  });
+
+  it('waits as long as the server asks when the browser may read it, else the limit\'s window of a minute', () => {
+    expect(rateLimitWaitMs(limited({ 'retry-after': '12' }))).toBe(12_000);
+    expect(rateLimitWaitMs(limited({ 'ratelimit-reset': '30' }))).toBe(30_000);
+    // Cross-origin, the browser does not show these headers to the page: the window it is.
+    expect(rateLimitWaitMs(limited())).toBe(60_000);
+    expect(rateLimitWaitMs(limited({ 'retry-after': 'soon' }))).toBe(60_000);
+  });
+
+  it('a 429 is tried twice more, each after the wait; any other 4xx is an answer; a lost connection or a 5xx gets one more try', () => {
+    expect(groupReadRetry(0, limited())).toBe(true);
+    expect(groupReadRetry(1, limited())).toBe(true);
+    expect(groupReadRetry(2, limited())).toBe(false);
+    expect(groupReadRetry(0, { response: { status: 404 } })).toBe(false);
+    expect(groupReadRetry(0, { response: { status: 403 } })).toBe(false);
+    expect(groupReadRetry(0, { response: { status: 500 } })).toBe(true);
+    expect(groupReadRetry(1, { response: { status: 500 } })).toBe(false);
+    expect(groupReadRetryDelay(0, limited({ 'retry-after': '5' }))).toBe(5_000);
+    expect(groupReadRetryDelay(1, limited())).toBe(60_000);
+    expect(groupReadRetryDelay(0, { response: { status: 500 } })).toBe(1_000);
+    expect(groupReadRetryDelay(1, { response: { status: 500 } })).toBe(2_000);
+  });
+});
+
+// A change to the group landing while the earlier page is on its way (a message, the member's own read mark) starts a
+// refetch of what is shown, and React Query drops the page fetch in flight for it: the pages do not grow, and nothing
+// appears. Found by the group-chat spec in WebKit on 26 Oct 2026.
+describe('an earlier page asked for while a change to the group lands is asked for again until it has come', () => {
+  type Answer = { data?: { pages: unknown[] }; hasNextPage: boolean; isFetchNextPageError: boolean };
+  const answer = (pages: number, over: Partial<Answer> = {}): Answer =>
+    ({ data: { pages: Array.from({ length: pages }, (_v, i) => i) }, hasNextPage: true, isFetchNextPageError: false, ...over });
+  const asking = (...answers: Answer[]) => {
+    let i = 0;
+    return jest.fn(async () => answers[Math.min(i++, answers.length - 1)]);
+  };
+
+  it('one ask when the page comes', async () => {
+    const came = answer(2);
+    const ask = asking(came);
+    expect(await untilEarlierPage(ask, 1)).toBe(came);
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again while the pages did not grow and more is to come (the fetch was dropped), until the page comes', async () => {
+    const dropped = answer(1);
+    const came = answer(2);
+    const ask = asking(dropped, dropped, came);
+    expect(await untilEarlierPage(ask, 1)).toBe(came);
+    expect(ask).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops when there is nothing earlier, and when the page fetch failed (the thread says so itself)', async () => {
+    const nothing = answer(1, { hasNextPage: false });
+    const askNothing = asking(nothing);
+    expect(await untilEarlierPage(askNothing, 1)).toBe(nothing);
+    expect(askNothing).toHaveBeenCalledTimes(1);
+    const failed = answer(1, { isFetchNextPageError: true });
+    const askFailed = asking(failed);
+    expect(await untilEarlierPage(askFailed, 1)).toBe(failed);
+    expect(askFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after three asks', async () => {
+    expect(EARLIER_PAGE_TRIES).toBe(3);
+    const dropped = answer(1);
+    const ask = asking(dropped);
+    expect(await untilEarlierPage(ask, 1)).toBe(dropped);
+    expect(ask).toHaveBeenCalledTimes(3);
+  });
+
+  it('runs what is given before each ask (the thread notes where the reader is, so a dropped ask does not keep an old place)', async () => {
+    const before = jest.fn();
+    const ask = asking(answer(1), answer(2));
+    await untilEarlierPage(ask, 1, before);
+    expect(before).toHaveBeenCalledTimes(2);
+    expect(before.mock.invocationCallOrder[0]).toBeLessThan(ask.mock.invocationCallOrder[0]);
+    expect(before.mock.invocationCallOrder[1]).toBeLessThan(ask.mock.invocationCallOrder[1]);
+  });
+});
+
 // ── Choosing people: starting a group from an event, and adding to one ────────
 
 const person = (userId: string, over: Partial<{ status: string; joinedAt: string | null; displayName: string }> = {}) => ({
@@ -313,11 +453,18 @@ describe('who can be chosen: the people who took part in the event', () => {
 describe('every group query declares the tags the server sends (the realtime check does not read infinite queries)', () => {
   const hooks = read('features/messages/useGroups.ts');
 
+  // Every group read waits a 429 out and keeps what it had (groupReadRetry and groupReadRetryDelay, run above).
+  const retriesGroupReads = (q: string) => {
+    expect(q).toMatch(/retry: groupReadRetry,/);
+    expect(q).toMatch(/retryDelay: groupReadRetryDelay,/);
+  };
+
   it('the list (and the inbox) follows the member\'s Messages and blocks', () => {
     const q = blockFrom(hooks, 'export function useMyGroups');
     expect(q).toMatch(/queryKey: groupKeys\.list,/);
     expect(q).toMatch(/meta: \{ entities: me \? \[E\.userDms\(me\), E\.userBlocks\(me\)\] : \[\] \}/);
     expect(hooks).toMatch(/list: \['dm-groups'\] as const/);
+    retriesGroupReads(q);
   });
 
   it('the Messages badge reads the same list, as the sum of its unread', () => {
@@ -325,14 +472,15 @@ describe('every group query declares the tags the server sends (the realtime che
     expect(q).toMatch(/queryKey: groupKeys\.list,/);
     expect(q).toMatch(/select: groupUnreadTotal/);
     expect(q).toMatch(/meta: \{ entities: me \? \[E\.userDms\(me\), E\.userBlocks\(me\)\] : \[\] \}/);
+    retriesGroupReads(q);
   });
 
-  it('a group\'s details and members follow the group and blocks (as ENTITIES.md lists them); a 4xx is not asked again', () => {
+  it('a group\'s details and members follow the group and blocks (as ENTITIES.md lists them); a 4xx other than 429 is not asked again', () => {
     const q = blockFrom(hooks, 'export function useGroup(');
     // Every change that moves them (a message, a read mark, an add, a leave, a removal, a hand-over) sends dm-group:<id>
     // with user:<id>:dms, so the group's own tag is enough; user:<id>:dms alone is any conversation's or group's news.
     expect(q).toMatch(/meta: \{ entities: groupId && me \? \[E\.dmGroup\(groupId\), E\.userBlocks\(me\)\] : \[\] \}/);
-    expect(q).toMatch(/retry: shouldRetry/);
+    retriesGroupReads(q);
     expect(q).toMatch(/enabled: !!me && isGroupId\(groupId\)/);
   });
 
@@ -341,7 +489,7 @@ describe('every group query declares the tags the server sends (the realtime che
     expect(q).toMatch(/useInfiniteQuery\(\{/);
     expect(q).toMatch(/meta: \{ entities: groupId && me \? \[E\.dmGroup\(groupId\), E\.userBlocks\(me\)\] : \[\] \}/);
     expect(q).toMatch(/getNextPageParam: \(last(?:: GroupChatMessagePage)?\) => last\.nextCursor \?\? undefined/);
-    expect(q).toMatch(/retry: shouldRetry/);
+    retriesGroupReads(q);
     expect(hooks).toMatch(/params: \{ limit: GROUP_PAGE_SIZE, \.\.\.\(before \? \{ before \} : \{\}\) \}/);
     expect(hooks).toMatch(/const GROUP_PAGE_SIZE = 50;/);
     expect(q).not.toMatch(/refetchInterval/);
@@ -367,19 +515,46 @@ describe('the group thread', () => {
     expect(thread).toMatch(/aria-haspopup="dialog"/);
   });
 
-  it('marks the group read when it opens and when someone else\'s newer message arrives, only while the page is seen', () => {
+  it('marks the group read once per burst, only with something unread, and only while the page is seen', () => {
     expect(thread).toMatch(/const newestOther = newestFromOthers\(messages, myUserId\);/);
-    const effect = blockFrom(thread, 'useEffect(() => {\n    if (!readable');
-    expect(effect).toMatch(/if \(!readable \|\| !pageSeen\) return;/);
-    expect(effect).toMatch(/const mark = `\$\{groupId\}:\$\{newestOther \?\? ''\}`;/);
-    expect(effect).toMatch(/markRead\(undefined, \{ onError: \(\) => \{ marked\.current = null; \} \}\);/);
+    expect(thread).toMatch(/const unread = detail\.data\?\.unreadCount \?\? 0;/);
+    const effect = blockFrom(thread, 'useEffect(() => {\n    const mark = readMarkKey(');
+    expect(effect).toMatch(/readMarkKey\(\{ loaded: readable, seen: pageSeen, unread, groupId, newestOther, marked: marked\.current \}\)/);
+    expect(effect).toMatch(/if \(!mark\) return;/);
+    // The debounce: the mark waits a second, and the effect's clean-up cancels it when a newer message comes first.
+    expect(effect).toMatch(/const timer = window\.setTimeout\(\(\) => \{[\s\S]*?markRead\(undefined, \{ onError: \(\) => \{ marked\.current = null; \} \}\);[\s\S]*?\}, MARK_READ_DEBOUNCE_MS\);/);
+    expect(effect).toMatch(/return \(\) => window\.clearTimeout\(timer\);/);
     // Every value it reads is a dependency (the mutation's mutate is stable), so no lint rule is switched off for it.
-    expect(thread).toMatch(/\}, \[readable, pageSeen, groupId, newestOther, markRead\]\);/);
+    expect(thread).toMatch(/\}, \[readable, pageSeen, unread, groupId, newestOther, markRead\]\);/);
     expect(thread).not.toMatch(/eslint-disable/);
     // The page is seen while it is in front of the member: read from the document, and followed as it changes.
     const seen = blockFrom(thread, 'function usePageSeen');
     expect(seen).toMatch(/document\.visibilityState === 'visible'/);
     expect(seen).toMatch(/addEventListener\('visibilitychange'/);
+  });
+
+  it('opens at the newest message even when the details come after the messages: the first scroll waits for the list to be drawn', () => {
+    // The list is drawn only once both have arrived; "shown" makes the effect run then, not only when a page changes.
+    expect(thread).toMatch(/const shown = !!detail\.data && !!thread\.data;/);
+    expect(thread).toMatch(/\}, \[shown, newest\?\.id, newest\?\.fromUserId, pagesLength, myUserId\]\);/);
+    expect(thread).toMatch(/data-testid="group-thread-scroll"/);
+  });
+
+  it('"Show earlier messages" asks for the page again when a change to the group dropped it, noting the place before each ask', () => {
+    const earlier = blockFrom(thread, 'const showEarlier');
+    expect(earlier).toMatch(/untilEarlierPage\(/);
+    expect(earlier).toMatch(/\(\) => thread\.fetchNextPage\(\)/);
+    expect(earlier).toMatch(/thread\.data\?\.pages\.length \?\? 0/);
+    expect(earlier).toMatch(/keepPlace\.current = \{ height: el\.scrollHeight, top: el\.scrollTop \}/);
+  });
+
+  it('a first read refused for going too fast says so, with Try again, while it is tried again after the window', () => {
+    expect(thread).toMatch(/isRateLimited\(detail\.failureReason\) \|\| isRateLimited\(thread\.failureReason\)/);
+  });
+
+  it('the message box is 44px tall on every width, and Enter does not send while a word is still being composed', () => {
+    expect(classAfter(thread, '<textarea').split(/\s+/)).toContain('min-h-[44px]');
+    expect(thread).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !e\.nativeEvent\.isComposing\)/);
   });
 
   it('has a loading, an empty and three error states, each with a way back to Messages', () => {
@@ -445,6 +620,22 @@ describe('the members sheet', () => {
   });
 });
 
+describe('the group screens share one class for their text buttons, 44px tall', () => {
+  it('one string, in one place', () => {
+    expect(read('features/messages/buttons.ts')).toMatch(/export const TEXT_BUTTON = '[^']*\bmin-h-\[44px\][^']*';/);
+  });
+
+  it.each([
+    ['the thread', 'features/messages/GroupThread.tsx'],
+    ['the members sheet', 'features/messages/GroupMembersSheet.tsx'],
+    ['the start card', 'features/sessions/StartGroupChatCard.tsx'],
+  ])('%s uses it, and keeps no copy of its own', (_name, file) => {
+    const src = read(file);
+    expect(src).toMatch(/import \{ TEXT_BUTTON \} from '[^']*buttons';/);
+    expect(src).not.toMatch(/const BUTTON = /);
+  });
+});
+
 describe('Messages: groups in the inbox, a group open at /messages/g/:groupId', () => {
   const page = read('features/messages/MessagesPage.tsx');
   const app = read('App.tsx');
@@ -468,6 +659,18 @@ describe('Messages: groups in the inbox, a group open at /messages/g/:groupId', 
     expect(page).toMatch(/mergeInbox\(inboxData, groups\.data \?\? \[\]\)/);
     expect(page).toMatch(/<GroupInboxRow/);
     expect(page).toMatch(/GROUPS_FAILED/);
+  });
+
+  it('a group list that could not be read is said only when there is none to show; a 429 being waited out does not hold the inbox up', () => {
+    expect(page).toMatch(/const groupsUnavailable = !groups\.data && \(groups\.isError \|\| isRateLimited\(groups\.failureReason\)\);/);
+    expect(page).toMatch(/\{groupsUnavailable && \(/);
+    expect(page).toMatch(/inboxData === undefined \|\| \(groups\.isPending && !groupsUnavailable\) \?/);
+    expect(page).not.toMatch(/\{groups\.isError && \(/);
+  });
+
+  it('the one-to-one message box is 44px tall too, and Enter does not send mid-composition', () => {
+    expect(classAfter(page, '<textarea').split(/\s+/)).toContain('min-h-[44px]');
+    expect(page).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !e\.nativeEvent\.isComposing\)/);
   });
 });
 

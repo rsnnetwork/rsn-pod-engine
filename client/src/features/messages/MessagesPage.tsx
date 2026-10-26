@@ -21,7 +21,7 @@ import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
 import GroupThread from './GroupThread';
 import GroupInboxRow from './GroupInboxRow';
 import { useMyGroups } from './useGroups';
-import { GROUPS_FAILED, TRY_AGAIN, mergeInbox } from './group-chat-text';
+import { GROUPS_FAILED, TRY_AGAIN, isRateLimited, mergeInbox } from './group-chat-text';
 import { dayHeaderLabel, formatRelative, sameLocalDay, timeOnly } from './message-time';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -1001,6 +1001,9 @@ export default function MessagesPage() {
 
   // One list: the conversations and the group chats, the latest activity first (26 Oct 2026, C12).
   const inboxRows = inboxData ? mergeInbox(inboxData, groups.data ?? []) : [];
+  // The group list could not be read: it failed, or a 429 is being waited out. Said, with a retry, only when there is no
+  // list to show; a list already shown stays as it was until the next read succeeds.
+  const groupsUnavailable = !groups.data && (groups.isError || isRateLimited(groups.failureReason));
 
   return (
     <div ref={fillRef} className="flex min-h-0 flex-col lg:flex-row gap-4" style={{ height: fillHeight ?? 'calc(100dvh - 100px)' }}>
@@ -1017,7 +1020,7 @@ export default function MessagesPage() {
               'poke' notification links to, so the accept must live here. */}
           <MeetingRequests myUserId={myUserId} focusPokeId={focusPokeId} />
           {/* Group chats that could not be read are said, with a retry; the conversations still show. */}
-          {groups.isError && (
+          {groupsUnavailable && (
             <div role="alert" className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-1 text-xs text-gray-600">
               <span>{GROUPS_FAILED}</span>
               <button
@@ -1029,7 +1032,7 @@ export default function MessagesPage() {
               </button>
             </div>
           )}
-          {inboxData === undefined || groups.isPending ? (
+          {inboxData === undefined || (groups.isPending && !groupsUnavailable) ? (
             <div className="flex items-center justify-center py-12"><Spinner /></div>
           ) : inboxRows.length === 0 ? (
             <div className="text-center py-12 px-4 text-sm text-gray-500">
@@ -1825,14 +1828,16 @@ export default function MessagesPage() {
                     setShowEmoji(false);
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
+                    // Not while a word is still being composed (Japanese, Chinese, Korean input): there Enter picks the word.
+                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       submitMessage();
                     }
                   }}
                   rows={1}
                   placeholder={pendingImage ? 'Add a caption (optional)...' : narrowPhone ? 'Message…' : 'Type a message...'}
-                  className="flex-1 min-w-0 resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
+                  // At least 44px tall on every width (26 Oct 2026): one row measured 42px on a phone and 38px from 640px.
+                  className="flex-1 min-w-0 min-h-[44px] resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
                   maxLength={4000}
                 />
                 <Button

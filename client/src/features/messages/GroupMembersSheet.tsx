@@ -8,6 +8,7 @@ import Sheet from '@/features/reason/ui/Sheet';
 import { personHref } from '@/features/reason/human/profile-text';
 import { formResolver } from '@/lib/form-resolver';
 import { useToastStore } from '@/stores/toastStore';
+import { TEXT_BUTTON } from './buttons';
 import PeopleChoices from './PeopleChoices';
 import { useAddGroupMembers, useEventPeople, useLeaveGroup, useRemoveGroupMember } from './useGroups';
 import {
@@ -24,9 +25,8 @@ import {
 // the group's event, never past 50. Every change shows in every member's open screens through dm-group:<id>.
 // The REASON sheet: a bottom sheet on a phone, portalled to the page.
 
-const BUTTON = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60';
-const QUIET = `${BUTTON} border border-gray-300 bg-white text-gray-700 hover:bg-gray-50`;
-const DANGER = `${BUTTON} bg-red-600 text-white hover:bg-red-700`;
+const QUIET = `${TEXT_BUTTON} border border-gray-300 bg-white text-gray-700 hover:bg-gray-50`;
+const DANGER = `${TEXT_BUTTON} bg-red-600 text-white hover:bg-red-700`;
 
 interface Props {
   open: boolean;
@@ -76,7 +76,7 @@ export default function GroupMembersSheet({ open, onClose, group, myUserId }: Pr
       </div>
     </div>
   ) : (
-    <button type="button" onClick={() => setAskLeave(true)} className={`${BUTTON} border border-red-200 bg-white text-red-600 hover:bg-red-50`}>
+    <button type="button" onClick={() => setAskLeave(true)} className={`${TEXT_BUTTON} border border-red-200 bg-white text-red-600 hover:bg-red-50`}>
       <LogOut className="h-4 w-4" aria-hidden="true" /> {LEAVE}
     </button>
   );
@@ -239,7 +239,7 @@ function AddPeopleForm({ group, candidates, onDone }: { group: DmGroupDetail; ca
       {refusal && <p role="alert" className="mt-2 text-sm text-red-600">{refusal}</p>}
       <div className="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <button type="button" onClick={onDone} disabled={add.isPending} className={QUIET}>{CANCEL}</button>
-        <button type="submit" disabled={chosen.length === 0 || add.isPending} className={`${BUTTON} bg-rsn-red text-white hover:bg-rsn-red-hover`}>
+        <button type="submit" disabled={chosen.length === 0 || add.isPending} className={`${TEXT_BUTTON} bg-rsn-red text-white hover:bg-rsn-red-hover`}>
           {add.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
           {chosen.length > 0 ? addLabel(chosen.length) : ADD_PEOPLE}
         </button>

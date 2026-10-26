@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS } from '@rsn/shared';
 import type { DmGroupLastMessage, DmGroupMember, DmGroupSummary, GroupChatMessage, GroupChatMessagePage } from '@rsn/shared';
 import { CONNECTION_LOST, memberSentence } from '../reason/errors';
+import { shouldRetry, statusOf } from '../reason/human/profile-text';
+import { PANEL_TITLE } from '../sessions/post-event-panel';
 import { sameLocalDay } from './message-time';
 
 // ── The cap, said in the product ──
@@ -21,7 +23,8 @@ export const GROUP_TOO_SMALL = `A group chat needs at least ${GROUP_CHAT_MIN_MEM
 export const START_TITLE = 'Start a group chat';
 export const START_INTRO = 'Talk with the people who took part, all together, in Messages.';
 export const START_SUBMIT = 'Start group chat';
-export const START_MANY = `More than ${GROUP_CHAT_MAX_MEMBERS - 1} people took part. Choose up to ${GROUP_CHAT_MAX_MEMBERS - 1}, or use Message everyone who took part to reach them all.`;
+// Points to the panel beside the card by its own title, so the two cannot drift apart.
+export const START_MANY = `More than ${GROUP_CHAT_MAX_MEMBERS - 1} people took part. Choose up to ${GROUP_CHAT_MAX_MEMBERS - 1}, or use ${PANEL_TITLE} to reach them all.`;
 export const START_FAILED = 'The group chat could not be started. Try again.';
 export const PEOPLE_LEGEND = 'People who took part';
 export const PEOPLE_FAILED = "We couldn't load who took part.";
@@ -46,7 +49,6 @@ export const MESSAGE_PLACEHOLDER_SHORT = 'Message…';
 
 // ── The members sheet ──
 export const MEMBERS_TITLE = 'Members';
-export const MEMBERS_FAILED = "We couldn't load the members.";
 export const ADMIN = 'Admin';
 export const YOU = 'You';
 export const CANCEL = 'Cancel';
@@ -165,6 +167,87 @@ export function newestFromOthers(messages: GroupChatMessage[], myUserId: string 
   return null;
 }
 
+// ── The read budget ──────────────────────────────────────────────────────────
+// The server allows 120 group reads a minute per member, and every change to a group (a message, and the member's own
+// read mark) has their list, the group's details and its thread read again. So the open thread marks the group read
+// once per burst of messages, and not at all when nothing is unread; and a read refused for going too fast keeps what
+// is shown and is tried again once the limit's window has passed.
+
+/** How long the read mark waits for the burst to end: each newer message starts the wait again. */
+export const MARK_READ_DEBOUNCE_MS = 1000;
+
+/**
+ * What the open thread should mark read now, as "{group}:{newest message from someone else}", or null: before the group
+ * and its messages have loaded, from a tab in the background, when nothing from anyone else is unread (a group opened
+ * already read), or when that newest message has been marked already.
+ */
+export function readMarkKey(input: {
+  loaded: boolean;
+  seen: boolean;
+  unread: number;
+  groupId: string;
+  newestOther: string | null;
+  marked: string | null;
+}): string | null {
+  if (!input.loaded || !input.seen || input.unread === 0) return null;
+  const key = `${input.groupId}:${input.newestOther ?? ''}`;
+  return key === input.marked ? null : key;
+}
+
+/** A read the server refused for going too fast. */
+export function isRateLimited(err: unknown): boolean {
+  return statusOf(err) === 429;
+}
+
+/** The group limits' window, when the browser does not show the page how long to wait (it does not, cross-origin). */
+const RATE_WINDOW_MS = 60_000;
+
+/** How long the server asked to wait (Retry-After, or RateLimit-Reset, in seconds), else the limits' window. */
+export function rateLimitWaitMs(err: unknown): number {
+  const headers = asFailed(err).response?.headers;
+  // axios gives response headers by their lower-case names.
+  const header = (name: string) => (headers && typeof headers === 'object' ? (headers as Record<string, unknown>)[name] : undefined);
+  const seconds = Number(header('retry-after') ?? header('ratelimit-reset'));
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : RATE_WINDOW_MS;
+}
+
+/** Group reads: a 429 is tried twice more; any other 4xx is an answer; a lost connection or a 5xx gets one more try. */
+export function groupReadRetry(failures: number, err: unknown): boolean {
+  return isRateLimited(err) ? failures < 2 : shouldRetry(failures, err);
+}
+
+/** A 429 waits the limit out; anything else waits as React Query does by default (1 s, then 2 s…). */
+export function groupReadRetryDelay(failures: number, err: unknown): number {
+  return isRateLimited(err) ? rateLimitWaitMs(err) : Math.min(1000 * 2 ** failures, 30_000);
+}
+
+/** How often the earlier page is asked for when a change to the group lands while it is on its way. */
+export const EARLIER_PAGE_TRIES = 3;
+
+interface EarlierPageAnswer { data?: { pages: unknown[] }; hasNextPage: boolean; isFetchNextPageError: boolean }
+
+/**
+ * Asks for the earlier page until it has come. A change to the group landing while the page is on its way (a message,
+ * the member's own read mark) starts a refetch of what is shown, and React Query drops the page fetch in flight for it:
+ * the pages do not grow, and nothing would appear under "Show earlier messages". So the page is asked for again, three
+ * times at most; `before` runs ahead of each ask (the thread notes where the reader is). It stops when the pages have
+ * grown, when there is nothing earlier, or when the fetch failed (the thread says so itself).
+ */
+export async function untilEarlierPage<T extends EarlierPageAnswer>(
+  ask: () => Promise<T>,
+  had: number,
+  before: () => void = () => {},
+): Promise<T> {
+  let answer: T;
+  let asked = 0;
+  do {
+    before();
+    answer = await ask();
+    asked += 1;
+  } while ((answer.data?.pages.length ?? 0) <= had && answer.hasNextPage && !answer.isFetchNextPageError && asked < EARLIER_PAGE_TRIES);
+  return answer;
+}
+
 export interface GroupCluster { senderId: string; messages: GroupChatMessage[] }
 
 /** Messages one person sent within a minute of each other, on the same day, are drawn together under one name. */
@@ -189,7 +272,7 @@ export function clusterGroupMessages(messages: GroupChatMessage[]): GroupCluster
 interface FailedRequest {
   isAxiosError?: unknown;
   request?: unknown;
-  response?: { status?: number; data?: { error?: { message?: unknown; details?: unknown } } };
+  response?: { status?: number; headers?: unknown; data?: { error?: { message?: unknown; details?: unknown } } };
 }
 
 const asFailed = (err: unknown): FailedRequest => (typeof err === 'object' && err !== null ? err : {}) as FailedRequest;

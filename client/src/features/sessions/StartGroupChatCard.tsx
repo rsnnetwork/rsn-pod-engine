@@ -6,6 +6,7 @@ import { GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS } from '@rsn/shared';
 import Sheet from '@/features/reason/ui/Sheet';
 import { formResolver } from '@/lib/form-resolver';
 import { useAuthStore } from '@/stores/authStore';
+import { TEXT_BUTTON } from '@/features/messages/buttons';
 import PeopleChoices from '@/features/messages/PeopleChoices';
 import { useEventPeople, useMyGroups, useStartGroupChat } from '@/features/messages/useGroups';
 import {
@@ -22,7 +23,6 @@ import {
 // took part the organiser picks up to 49, and is pointed to the message-everyone panel for the rest. The groups already
 // started from this event are linked here, so a second press is a choice, not an accident.
 
-const BUTTON = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60';
 // min-w-0: the card is an item of the event page's grid, which would otherwise grow to fit a long group name on one line
 // and push both after-event cards past the edge of a phone.
 const CARD = 'min-w-0 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm';
@@ -49,7 +49,7 @@ export default function StartGroupChatCard({ sessionId }: { sessionId: string })
         <button
           type="button"
           onClick={() => { void people.refetch(); }}
-          className={`${BUTTON} mt-3 w-full border border-gray-300 bg-white text-gray-800 hover:bg-gray-50 sm:w-auto`}
+          className={`${TEXT_BUTTON} mt-3 w-full border border-gray-300 bg-white text-gray-800 hover:bg-gray-50 sm:w-auto`}
         >
           {TRY_AGAIN}
         </button>
@@ -95,7 +95,7 @@ export default function StartGroupChatCard({ sessionId }: { sessionId: string })
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className={`${BUTTON} mt-4 w-full bg-rsn-red text-white hover:bg-rsn-red-hover sm:w-auto`}
+          className={`${TEXT_BUTTON} mt-4 w-full bg-rsn-red text-white hover:bg-rsn-red-hover sm:w-auto`}
         >
           <Users className="h-4 w-4" aria-hidden="true" /> {START_TITLE}
         </button>
@@ -133,7 +133,7 @@ function StartSheet({ sessionId, candidates, onClose }: { sessionId: string; can
 
   const footer = (
     <>
-      <button type="button" onClick={close} disabled={start.isPending} className={`${BUTTON} border border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}>
+      <button type="button" onClick={close} disabled={start.isPending} className={`${TEXT_BUTTON} border border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}>
         {CANCEL}
       </button>
       <button
@@ -141,7 +141,7 @@ function StartSheet({ sessionId, candidates, onClose }: { sessionId: string; can
         form="start-group-form"
         disabled={start.isPending || problem !== null}
         aria-describedby={problem ? 'start-group-problem' : undefined}
-        className={`${BUTTON} bg-rsn-red text-white hover:bg-rsn-red-hover`}
+        className={`${TEXT_BUTTON} bg-rsn-red text-white hover:bg-rsn-red-hover`}
       >
         {start.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
         {START_SUBMIT}

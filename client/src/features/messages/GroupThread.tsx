@@ -10,25 +10,25 @@ import { formResolver } from '@/lib/form-resolver';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
+import { TEXT_BUTTON } from './buttons';
 import GroupMembersSheet from './GroupMembersSheet';
 import { dayHeaderLabel, sameLocalDay, timeOnly } from './message-time';
 import { isGroupId, useGroup, useGroupMessages, useMarkGroupRead, useSendGroupMessage } from './useGroups';
 import {
   BACK_TO_MESSAGES, EARLIER_FAILED, GROUP_EMPTY, GROUP_FAILED, GROUP_GONE, GROUP_MESSAGE_MAX, MESSAGE_PLACEHOLDER,
   MESSAGE_PLACEHOLDER_SHORT, NOT_IN_GROUP, SEND_FAILED, SHOW_EARLIER, TRY_AGAIN,
-  clusterGroupMessages, groupErrorSentence, groupLoadProblem, newestFromOthers, ofMax, sendSchema, threadInOrder,
-  type SendValues,
+  MARK_READ_DEBOUNCE_MS, clusterGroupMessages, groupErrorSentence, groupLoadProblem, isRateLimited, newestFromOthers,
+  ofMax, readMarkKey, sendSchema, threadInOrder, untilEarlierPage, type SendValues,
 } from './group-chat-text';
 
 // ─── A group chat, open in Messages (26 Oct 2026, C12, COM-04) ───
 //
 // The right pane of Messages at /messages/g/:groupId, laid out as a one-to-one thread is: the header (the group's name
 // and "{n} of 50", which opens its members), the messages a page at a time with "Show earlier messages" above them, and
-// the message box. Others' messages arrive live (dm-group:<id>). The group is marked read when it opens and again when a
-// newer message from someone else arrives, while the page is in front of the member, so the unread counts in the inbox
-// and on the Messages badge clear without a reload.
+// the message box. Others' messages arrive live (dm-group:<id>). The group is marked read when it opens with something
+// unread and again after a burst of newer messages from others, while the page is in front of the member, so the unread
+// counts in the inbox and on the Messages badge clear without a reload.
 
-const BUTTON = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60';
 const BACK = '-ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg hover:bg-gray-100 lg:hidden';
 /** How close to the end the member must be reading for a new message to scroll into view. */
 const NEAR_BOTTOM_PX = 80;
@@ -56,25 +56,32 @@ export default function GroupThread({ groupId }: { groupId: string }) {
   const newestOther = newestFromOthers(messages, myUserId);
   const readable = detail.isSuccess && thread.isSuccess;
 
-  // Read when the group opens, and again when someone else's newer message arrives; never from a tab in the background.
-  // A mark that fails is not the member's to put right: the count stays until the next one, so it is not reported.
+  // Read when the group opens with something unread, and when someone else's newer message arrives; never from a tab in
+  // the background, and once per burst (readMarkKey and MARK_READ_DEBOUNCE_MS: each mark costs the member's group reads).
+  // The clean-up cancels a waiting mark when a newer message comes first, so a burst ends in one mark. A mark that fails
+  // is not the member's to put right: the next one tries again, so it is not reported.
   const marked = useRef<string | null>(null);
+  const unread = detail.data?.unreadCount ?? 0;
   useEffect(() => {
-    if (!readable || !pageSeen) return;
-    const mark = `${groupId}:${newestOther ?? ''}`;
-    if (marked.current === mark) return;
-    marked.current = mark;
-    markRead(undefined, { onError: () => { marked.current = null; } });
-  }, [readable, pageSeen, groupId, newestOther, markRead]);
+    const mark = readMarkKey({ loaded: readable, seen: pageSeen, unread, groupId, newestOther, marked: marked.current });
+    if (!mark) return;
+    const timer = window.setTimeout(() => {
+      marked.current = mark;
+      markRead(undefined, { onError: () => { marked.current = null; } });
+    }, MARK_READ_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [readable, pageSeen, unread, groupId, newestOther, markRead]);
 
   // A new message at the end (or the first page) comes into view while the member reads near the end, and always when it
-  // is their own; an earlier page loaded above keeps the place they were reading.
+  // is their own; an earlier page loaded above keeps the place they were reading. The list is drawn only once the group's
+  // details and its messages have both arrived, in either order: "shown" runs the first scroll then.
   const scroller = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const keepPlace = useRef<{ height: number; top: number } | null>(null);
   const pagesSeen = useRef(0);
   const pagesLength = thread.data?.pages.length ?? 0;
   const newest = messages[messages.length - 1];
+  const shown = !!detail.data && !!thread.data;
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
@@ -86,12 +93,18 @@ export default function GroupThread({ groupId }: { groupId: string }) {
       return;
     }
     if (nearBottom.current || newest?.fromUserId === myUserId) el.scrollTop = el.scrollHeight;
-  }, [newest?.id, newest?.fromUserId, pagesLength, myUserId]);
+  }, [shown, newest?.id, newest?.fromUserId, pagesLength, myUserId]);
 
+  // A change to the group landing while the earlier page is on its way (a message, the member's own read mark) starts
+  // a refetch that drops the page fetch in flight, so the page is asked for again until it has come (untilEarlierPage);
+  // the place is noted again before each ask, since the refetch may have added to the list meanwhile.
   const showEarlier = () => {
     const el = scroller.current;
-    if (el) keepPlace.current = { height: el.scrollHeight, top: el.scrollTop };
-    void thread.fetchNextPage();
+    void untilEarlierPage(
+      () => thread.fetchNextPage(),
+      thread.data?.pages.length ?? 0,
+      () => { if (el) keepPlace.current = { height: el.scrollHeight, top: el.scrollTop }; },
+    );
   };
 
   if (!isGroupId(groupId)) return <ThreadProblem text={GROUP_GONE} />;
@@ -101,7 +114,10 @@ export default function GroupThread({ groupId }: { groupId: string }) {
   if (problem === 'gone') return <ThreadProblem text={GROUP_GONE} />;
   if (problem === 'not-member') return <ThreadProblem text={NOT_IN_GROUP} />;
   if (!detail.data || !thread.data) {
-    if (problem === 'failed') {
+    // A first read refused for going too fast is tried again once the limit's window has passed; until then it is said,
+    // with Try again, rather than left loading for a minute.
+    const limited = isRateLimited(detail.failureReason) || isRateLimited(thread.failureReason);
+    if (problem === 'failed' || limited) {
       return <ThreadProblem text={GROUP_FAILED} onRetry={() => { void detail.refetch(); void thread.refetch(); }} />;
     }
     return <ThreadLoading />;
@@ -113,6 +129,7 @@ export default function GroupThread({ groupId }: { groupId: string }) {
       <ThreadHeader group={group} onMembers={() => setMembersOpen(true)} />
       <div
         ref={scroller}
+        data-testid="group-thread-scroll"
         onScroll={(e) => {
           const el = e.currentTarget;
           nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
@@ -124,7 +141,7 @@ export default function GroupThread({ groupId }: { groupId: string }) {
             type="button"
             onClick={showEarlier}
             disabled={thread.isFetchingNextPage}
-            className={`${BUTTON} mb-2 w-full border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100`}
+            className={`${TEXT_BUTTON} mb-2 w-full border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100`}
           >
             {thread.isFetchingNextPage && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
             {SHOW_EARLIER}
@@ -248,13 +265,14 @@ function GroupComposer({ groupId }: { groupId: string }) {
           placeholder={narrowPhone ? MESSAGE_PLACEHOLDER_SHORT : MESSAGE_PLACEHOLDER}
           {...register('content')}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            // Not while a word is still being composed (Japanese, Chinese, Korean input): there Enter picks the word.
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void submit();
             }
           }}
-          // 16px on a phone, so iOS does not zoom in on the box.
-          className="max-h-32 min-w-0 flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-1 focus:ring-rsn-red"
+          // 16px on a phone, so iOS does not zoom in on the box; at least 44px tall on every width, like the Send beside it.
+          className="max-h-32 min-h-[44px] min-w-0 flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-1 focus:ring-rsn-red"
         />
         <button
           type="submit"
@@ -300,11 +318,11 @@ function ThreadProblem({ text, onRetry }: { text: string; onRetry?: () => void }
         <p className="text-sm text-gray-700">{text}</p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           {onRetry && (
-            <button type="button" onClick={onRetry} className={`${BUTTON} border border-gray-300 bg-white text-gray-800 hover:bg-gray-50`}>
+            <button type="button" onClick={onRetry} className={`${TEXT_BUTTON} border border-gray-300 bg-white text-gray-800 hover:bg-gray-50`}>
               {TRY_AGAIN}
             </button>
           )}
-          <Link to="/messages" className={`${BUTTON} text-rsn-red hover:bg-rsn-red/5`}>{BACK_TO_MESSAGES}</Link>
+          <Link to="/messages" className={`${TEXT_BUTTON} text-rsn-red hover:bg-rsn-red/5`}>{BACK_TO_MESSAGES}</Link>
         </div>
       </div>
     </div>
