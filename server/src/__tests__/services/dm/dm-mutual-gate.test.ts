@@ -29,6 +29,7 @@ jest.mock('../../../services/block/block.service', () => ({
 import * as nodeFs from 'fs';
 import * as nodePath from 'path';
 import { canMessage } from '../../../services/dm/dm.service';
+import { EVENT_FORMAT_KEYS, liveKindOf } from '@rsn/shared';
 
 function readServer(rel: string): string {
   return nodeFs.readFileSync(nodePath.join(__dirname, '../../../', rel), 'utf8');
@@ -178,11 +179,18 @@ describe('canMessage() — existing invariants still hold', () => {
   });
 });
 
-// ─── X2 (26 Oct 2026): taking part in the same completed event counts as having met ─────────────────────
+// ─── X2 (26 Oct 2026): taking part in the same completed meeting counts as having met ─────────────────────
+//
+// Fix round 1 (26 Oct): only a meeting-format event counts (the formats whose live kind is 'meeting' in
+// @rsn/shared: a video meeting, a voice meeting, a webinar), and only an explicit "no" stands in its way:
+// either person's latest rating of the other saying they do not want to meet again. A pair matched in speed
+// networking and never rated has an encounter row that reads "not mutual" only by default
+// (mutual_meet_again is NOT NULL DEFAULT FALSE), and is treated like strangers who shared the meeting.
 
-describe('canMessage() — people who took part in the same completed event', () => {
+describe('canMessage() — people who took part in the same completed meeting', () => {
   const ME = 'a0000000-0000-4000-8000-000000000001';
   const THEM = 'b0000000-0000-4000-8000-000000000002';
+  const MEETING_FORMATS = EVENT_FORMAT_KEYS.filter((f) => liveKindOf(f) === 'meeting');
 
   /** canMessage's body, ending at the first closing brace on a line of its own, whatever the line ending. */
   const body = (() => {
@@ -192,15 +200,29 @@ describe('canMessage() — people who took part in the same completed event', ()
   })();
   const flat = (sql: unknown) => String(sql).replace(/\s+/g, ' ');
   const TOGETHER = /FROM session_participants a JOIN session_participants b ON b\.session_id = a\.session_id/;
+  const SAID_NO = /FROM ratings r/;
+  const asked = (re: RegExp) => mockQuery.mock.calls.find((c) => re.test(flat(c[0])));
 
-  /** The stand-in database: the user's role, whether a thread has messages, the encounter row, a shared event. */
-  function db(opts: { role?: string; messages?: number; encounter?: { mutual_meet_again: boolean } | null; together?: boolean }) {
-    mockQuery.mockImplementation(async (sql: string) => {
+  /**
+   * The stand-in database: the user's role, whether a thread has messages, the encounter row, the format of a
+   * completed event both joined (none when absent), and whether either person's latest rating of the other
+   * says no. The shared-event read finds the event only when its format is among the formats the code asks
+   * about, as the SQL's `= ANY($3::text[])` would.
+   */
+  function db(opts: {
+    role?: string; messages?: number; encounter?: { mutual_meet_again: boolean } | null;
+    sharedEvent?: string; latestNo?: boolean;
+  }) {
+    mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
       const text = flat(sql);
       if (/FROM users WHERE id/.test(text)) return { rows: [{ role: opts.role ?? 'member' }] };
       if (/FROM dm_conversations c JOIN direct_messages/.test(text)) return { rows: [{ msg_count: String(opts.messages ?? 0) }] };
       if (/FROM encounter_history/.test(text)) return { rows: opts.encounter ? [opts.encounter] : [] };
-      if (TOGETHER.test(text)) return { rows: opts.together ? [{ '?column?': 1 }] : [] };
+      if (TOGETHER.test(text)) {
+        const formats = (params[2] ?? []) as string[];
+        return { rows: opts.sharedEvent && formats.includes(opts.sharedEvent) ? [{ '?column?': 1 }] : [] };
+      }
+      if (SAID_NO.test(text)) return { rows: opts.latestNo ? [{ '?column?': 1 }] : [] };
       return { rows: [] };
     });
   }
@@ -211,45 +233,85 @@ describe('canMessage() — people who took part in the same completed event', ()
     mockAreBlocked.mockResolvedValue(false);
   });
 
-  it('two people who both joined the same completed event, with no encounter row, may write to each other', async () => {
-    db({ encounter: null, together: true });
+  it('the formats that count are exactly the meeting formats of the shared definition', () => {
+    expect([...MEETING_FORMATS].sort()).toEqual(['video_meeting', 'voice_meeting', 'webinar']);
+    expect(MEETING_FORMATS).not.toContain('speed_networking');
+    expect(MEETING_FORMATS).not.toContain('physical_event');
+  });
+
+  it.each(['video_meeting', 'voice_meeting'])('two people who both joined the same completed %s, with no encounter row, may write to each other', async (format) => {
+    db({ encounter: null, sharedEvent: format });
     expect(await canMessage(ME, THEM)).toEqual({ allowed: true });
   });
 
-  it('asks whether both joined (not only registered), neither was removed, and the event is completed', async () => {
-    db({ encounter: null, together: true });
+  it.each(['speed_networking', 'physical_event'])('a completed %s event is not a meeting: two of its people with no encounter row still get no_encounter', async (format) => {
+    db({ encounter: null, sharedEvent: format });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'no_encounter' });
+  });
+
+  it('asks whether both joined (not only registered), neither was removed, and the event is a completed meeting, by the shared list', async () => {
+    db({ encounter: null, sharedEvent: 'video_meeting' });
     await canMessage(ME, THEM);
-    const call = mockQuery.mock.calls.find((c) => TOGETHER.test(flat(c[0])))!;
+    const call = asked(TOGETHER)!;
     const sql = flat(call[0]);
     expect(sql).toMatch(/a\.user_id = \$1 AND b\.user_id = \$2/);
     expect(sql).toMatch(/a\.joined_at IS NOT NULL AND b\.joined_at IS NOT NULL/);
     expect(sql).toMatch(/a\.status <> 'removed' AND b\.status <> 'removed'/);
     expect(sql).toMatch(/JOIN sessions s ON s\.id = a\.session_id/);
     expect(sql).toMatch(/s\.status = 'completed'/);
+    expect(sql).toMatch(/s\.event_format = ANY\(\$3::text\[\]\)/);
+    expect(call[1]).toEqual([ME, THEM, MEETING_FORMATS]);
+  });
+
+  it('a pair matched but never rated (their encounter row says not mutual only by default) who shared a meeting may write', async () => {
+    db({ encounter: { mutual_meet_again: false }, sharedEvent: 'video_meeting', latestNo: false });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: true });
+  });
+
+  it('an explicit no in either person\'s latest rating of the other still refuses, shared meeting or not', async () => {
+    db({ encounter: { mutual_meet_again: false }, sharedEvent: 'video_meeting', latestNo: true });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'not_mutual' });
+  });
+
+  it('reads the "no" from the ratings: each person\'s latest rating of the other, in both directions', async () => {
+    db({ encounter: { mutual_meet_again: false }, sharedEvent: 'video_meeting' });
+    await canMessage(ME, THEM);
+    const call = asked(SAID_NO)!;
+    const sql = flat(call[0]);
+    expect(sql).toMatch(/SELECT DISTINCT ON \(r\.from_user_id\) r\.meet_again FROM ratings r/);
+    expect(sql).toMatch(/WHERE \(r\.from_user_id = \$1 AND r\.to_user_id = \$2\) OR \(r\.from_user_id = \$2 AND r\.to_user_id = \$1\)/);
+    expect(sql).toMatch(/ORDER BY r\.from_user_id, r\.created_at DESC, r\.id DESC/);
+    expect(sql).toMatch(/WHERE latest\.meet_again = FALSE/);
     expect(call[1]).toEqual([ME, THEM]);
   });
 
-  it('without a shared completed event (one of them only registered, say) the answer is still no_encounter', async () => {
-    db({ encounter: null, together: false });
+  it('with no shared meeting, a pair that is not mutual is still not_mutual, and strangers still get no_encounter, without reading ratings', async () => {
+    db({ encounter: { mutual_meet_again: false } });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'not_mutual' });
+    db({ encounter: null });
     expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'no_encounter' });
+    expect(asked(SAID_NO)).toBeUndefined();
   });
 
-  it('an encounter where one of them said no to meeting again still wins: attending the event does not override it', async () => {
-    db({ encounter: { mutual_meet_again: false }, together: true });
-    expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'not_mutual' });
-    expect(mockQuery.mock.calls.some((c) => TOGETHER.test(flat(c[0])))).toBe(false);
+  it('a mutual encounter needs no shared meeting', async () => {
+    db({ encounter: { mutual_meet_again: true } });
+    expect(await canMessage(ME, THEM)).toEqual({ allowed: true });
+    expect(asked(TOGETHER)).toBeUndefined();
   });
 
   it('a block still wins over everything', async () => {
     mockAreBlocked.mockResolvedValue(true);
-    db({ encounter: null, together: true });
+    db({ encounter: null, sharedEvent: 'video_meeting' });
     expect(await canMessage(ME, THEM)).toEqual({ allowed: false, reason: 'blocked' });
   });
 
-  it('is asked only once the encounter row is known to be missing: after reading it, before answering no_encounter', () => {
+  it('is asked after the encounter read and its mutual check, before either refusal', () => {
     const together = body.search(/FROM session_participants a/);
+    const mutualCheck = body.search(/encounter\?\.mutual_meet_again/);
+    expect(mutualCheck).toBeGreaterThan(-1);
     expect(together).toBeGreaterThan(body.indexOf('FROM encounter_history'));
-    expect(together).toBeGreaterThan(body.search(/encounterResult\.rows\.length === 0/));
+    expect(together).toBeGreaterThan(mutualCheck);
+    expect(together).toBeLessThan(body.search(/reason:\s*['"]not_mutual['"]/));
     expect(together).toBeLessThan(body.search(/reason:\s*['"]no_encounter['"]/));
   });
 });

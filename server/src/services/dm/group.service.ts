@@ -422,9 +422,9 @@ export async function removeGroupMember(
 }
 
 /**
- * A member leaves. When the last admin leaves, the earliest member becomes admin (everyone added when the
- * group started joined at the same moment; among them the choice is fixed by id). Leaving a group one is no
- * longer in changes nothing, so a second press of Leave is not an error.
+ * A member leaves. When the last admin with an open account leaves, the earliest member with an open account
+ * becomes admin (everyone added when the group started joined at the same moment; among them the choice is
+ * fixed by id). Leaving a group one is no longer in changes nothing, so a second press of Leave is not an error.
  */
 export async function leaveGroup(
   groupId: string,
@@ -439,15 +439,26 @@ export async function leaveGroup(
     if (gone.rows.length === 0) return { left: false, newAdminId: null };
     if (gone.rows[0].role !== 'admin') return { left: true, newAdminId: null };
 
+    // An admin whose account is closed cannot act, so they do not count as one who stays, and they are
+    // passed over for the hand-over while anyone with an open account is left.
     const adminStays = await client.query(
-      `SELECT 1 FROM dm_group_members WHERE group_id = $1 AND role = 'admin' LIMIT 1`,
+      `SELECT 1
+         FROM dm_group_members m
+         JOIN users u ON u.id = m.user_id
+        WHERE m.group_id = $1 AND m.role = 'admin' AND u.status = 'active'
+        LIMIT 1`,
       [groupId],
     );
     if (adminStays.rows.length > 0) return { left: true, newAdminId: null };
 
     const promoted = await client.query<{ user_id: string }>(
       `UPDATE dm_group_members SET role = 'admin'
-        WHERE id = (SELECT id FROM dm_group_members WHERE group_id = $1 ORDER BY joined_at ASC, id ASC LIMIT 1)
+        WHERE id = (SELECT m.id
+                      FROM dm_group_members m
+                      JOIN users u ON u.id = m.user_id
+                     WHERE m.group_id = $1
+                     ORDER BY (u.status = 'active') DESC, m.joined_at ASC, m.id ASC
+                     LIMIT 1)
         RETURNING user_id`,
       [groupId],
     );
@@ -657,9 +668,11 @@ interface SummaryRow {
 }
 
 /**
- * Each group a member is in, as they see it. The unread count is others' messages since they last read
- * the group (or joined it, when they never have); it and the last message leave out anyone blocked with
- * the member, either way. $1 is the member; `oneGroup` narrows the read to group $2.
+ * Each group a member is in, as they see it. A member sees only what was written since they (last) joined:
+ * leaving deletes their membership row and an add writes a new one, so its joined_at is always the latest
+ * join. The unread count is others' messages since they last read the group (or joined it, when they never
+ * have); it and the last message leave out anyone blocked with the member, either way. A group with nothing
+ * for them to read yet sorts by when they joined it. $1 is the member; `oneGroup` narrows the read to group $2.
  */
 function summarySql(oneGroup: boolean): string {
   return `SELECT g.id, g.name, g.type, g.pod_id, g.session_id, g.created_by, g.created_at,
@@ -678,13 +691,14 @@ function summarySql(oneGroup: boolean): string {
       SELECT d.content, d.created_at, d.from_user_id
         FROM direct_messages d
        WHERE d.group_id = g.id
+         AND d.created_at >= me.joined_at
          AND ${notBlockedBetween('me.user_id', 'd.from_user_id')}
        ORDER BY d.created_at DESC, d.id DESC
        LIMIT 1
     ) last ON TRUE
     LEFT JOIN users lu ON lu.id = last.from_user_id
    WHERE me.user_id = $1${oneGroup ? ' AND g.id = $2' : ''}
-   ORDER BY COALESCE(last.created_at, g.created_at) DESC, g.id DESC
+   ORDER BY COALESCE(last.created_at, me.joined_at) DESC, g.id DESC
    LIMIT ${LIST_MAX}`;
 }
 
@@ -731,7 +745,8 @@ export async function getGroup(groupId: string, userId: string): Promise<DmGroup
 }
 
 /**
- * A page of a group's messages, newest first, without any from someone blocked with the reader either way.
+ * A page of a group's messages, newest first, without any from someone blocked with the reader either way,
+ * and none from before the reader (last) joined the group: someone added later, or added again, starts there.
  * `before` is a message id: the page holds messages strictly older than it, by (created_at, id), so a page
  * never repeats or skips a message however many share a moment. Page size 1–100, 50 by default.
  */
@@ -749,7 +764,9 @@ export async function listGroupMessages(
     `SELECT d.id, d.from_user_id, d.content, d.created_at, u.display_name, u.avatar_url, u.status
        FROM direct_messages d
        JOIN users u ON u.id = d.from_user_id
+       JOIN dm_group_members me ON me.group_id = d.group_id AND me.user_id = $2
       WHERE d.group_id = $1
+        AND d.created_at >= me.joined_at
         AND ${notBlockedBetween('$2', 'd.from_user_id')}
         AND ($3::uuid IS NULL OR (d.created_at, d.id) < (SELECT c.created_at, c.id FROM direct_messages c WHERE c.id = $3::uuid AND c.group_id = $1))
       ORDER BY d.created_at DESC, d.id DESC

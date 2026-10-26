@@ -102,14 +102,14 @@ const MEMBER_IDS = /SELECT user_id FROM dm_group_members WHERE group_id = \$1$/;
 const ROLE_OF = /SELECT role FROM dm_group_members WHERE group_id = \$1 AND user_id = \$2/;
 const INSERT_MEMBERS = /INSERT INTO dm_group_members/;
 const DELETE_MEMBER = /DELETE FROM dm_group_members WHERE group_id = \$1 AND user_id = \$2 RETURNING role/;
-const ANY_ADMIN = /FROM dm_group_members WHERE group_id = \$1 AND role = 'admin'/;
+const ANY_ADMIN = /FROM dm_group_members m JOIN users u ON u\.id = m\.user_id WHERE m\.group_id = \$1 AND m\.role = 'admin'/;
 const PROMOTE = /UPDATE dm_group_members SET role = 'admin'/;
 const SENDER = /FROM dm_group_members m JOIN users u ON u\.id = m\.user_id WHERE m\.group_id = \$1 AND m\.user_id = \$2/;
 const INSERT_MESSAGE = /INSERT INTO direct_messages/;
 const TOUCH = /UPDATE dm_groups SET last_message_at/;
 const BELLS = /INSERT INTO notifications/;
 const ACCESS = /FROM dm_groups g LEFT JOIN dm_group_members me ON me\.group_id = g\.id AND me\.user_id = \$2 WHERE g\.id = \$1/;
-const THREAD = /FROM direct_messages d JOIN users u ON u\.id = d\.from_user_id WHERE d\.group_id = \$1/;
+const THREAD = /FROM direct_messages d JOIN users u ON u\.id = d\.from_user_id JOIN dm_group_members me ON me\.group_id = d\.group_id AND me\.user_id = \$2 WHERE d\.group_id = \$1/;
 const SUMMARY = /FROM dm_group_members me JOIN dm_groups g ON g\.id = me\.group_id/;
 const MEMBERS = /FROM dm_group_members m JOIN users u ON u\.id = m\.user_id WHERE m\.group_id = \$1 ORDER BY/;
 const READ_MARK = /UPDATE dm_group_members SET last_read_at = NOW\(\)/;
@@ -507,19 +507,27 @@ describe('leaveGroup', () => {
     expect(indexOf(mockTx, LOCK)).toBe(0);
   });
 
-  it('the admin leaves and no admin is left: the earliest member becomes admin', async () => {
+  it('the admin leaves and no admin is left: the earliest member becomes admin, passing over a closed account', async () => {
     leaving('admin', [[ANY_ADMIN, []], [PROMOTE, [{ user_id: B }]]]);
     expect(await leaveGroup(GROUP, CREATOR)).toEqual({ left: true, newAdminId: B });
     const promote = callTo(mockTx, PROMOTE)!;
-    expect(flat(promote[0])).toMatch(/WHERE id = \(SELECT id FROM dm_group_members WHERE group_id = \$1 ORDER BY joined_at ASC, id ASC LIMIT 1\)/);
+    expect(flat(promote[0])).toMatch(
+      /WHERE id = \(SELECT m\.id FROM dm_group_members m JOIN users u ON u\.id = m\.user_id WHERE m\.group_id = \$1 ORDER BY \(u\.status = 'active'\) DESC, m\.joined_at ASC, m\.id ASC LIMIT 1\)/,
+    );
     expect(promote[1]).toEqual([GROUP]);
     expect(indexOf(mockTx, PROMOTE)).toBeGreaterThan(indexOf(mockTx, DELETE_MEMBER));
   });
 
-  it('an admin leaves while another admin stays: nobody is promoted', async () => {
+  it('an admin leaves while another admin with an open account stays: nobody is promoted', async () => {
     leaving('admin', [[ANY_ADMIN, [{ '?column?': 1 }]]]);
     expect(await leaveGroup(GROUP, CREATOR)).toEqual({ left: true, newAdminId: null });
     expect(ran(mockTx, PROMOTE)).toBe(false);
+  });
+
+  it('an admin whose account is closed does not count as one who stays', async () => {
+    leaving('admin', [[ANY_ADMIN, []], [PROMOTE, [{ user_id: B }]]]);
+    await leaveGroup(GROUP, CREATOR);
+    expect(flat(callTo(mockTx, ANY_ADMIN)![0])).toMatch(/AND m\.role = 'admin' AND u\.status = 'active'/);
   });
 
   it('the last one out leaves nobody to promote', async () => {
@@ -685,6 +693,15 @@ describe('listGroupMessages', () => {
     expect(read[1]).toEqual([GROUP, B, null, 51]);
   });
 
+  it('a member added later, or added again, reads only from when they last joined: nothing from before', async () => {
+    pool([member(), [THREAD, []]]);
+    await listGroupMessages(GROUP, B, {});
+    const sql = flat(callTo(mockPool, THREAD)![0]);
+    // Their own membership row, so its joined_at is the latest join (leaving deletes the row; a re-add writes a new one).
+    expect(sql).toMatch(/JOIN dm_group_members me ON me\.group_id = d\.group_id AND me\.user_id = \$2/);
+    expect(sql).toMatch(/WHERE d\.group_id = \$1 AND d\.created_at >= me\.joined_at/);
+  });
+
   it('pages by keyset: before a message means strictly older than it, ties broken by id, in the same group', async () => {
     pool([member(), [THREAD, []]]);
     await listGroupMessages(GROUP, B, { before: MSG, limit: 20 });
@@ -771,10 +788,17 @@ describe('listMyGroups', () => {
     expect(sql.match(blocked)).toHaveLength(2);
   });
 
-  it('puts the most recent activity first and reads a bounded list', async () => {
+  it('the last message is never one from before the member (last) joined the group', async () => {
+    pool([[SUMMARY, [summaryRow()]]]);
+    await listMyGroups(B);
+    const sql = flat(callTo(mockPool, SUMMARY)![0]);
+    expect(sql).toMatch(/LEFT JOIN LATERAL \( SELECT d\.content, d\.created_at, d\.from_user_id FROM direct_messages d WHERE d\.group_id = g\.id AND d\.created_at >= me\.joined_at AND NOT EXISTS/);
+  });
+
+  it('puts the most recent activity first (for a member with nothing to read yet, when they joined) and reads a bounded list', async () => {
     pool([[SUMMARY, []]]);
     await listMyGroups(B);
-    expect(flat(callTo(mockPool, SUMMARY)![0])).toMatch(/ORDER BY COALESCE\(last\.created_at, g\.created_at\) DESC, g\.id DESC LIMIT 100/);
+    expect(flat(callTo(mockPool, SUMMARY)![0])).toMatch(/ORDER BY COALESCE\(last\.created_at, me\.joined_at\) DESC, g\.id DESC LIMIT 100/);
   });
 });
 
