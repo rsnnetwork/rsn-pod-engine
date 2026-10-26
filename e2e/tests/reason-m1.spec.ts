@@ -23,6 +23,12 @@
 //                         their data; a mistyped address does not even ask the server
 //   Back                  a profile opened by a direct link in a fresh tab goes back to For You; one opened
 //                         from a card goes back to where it came from; a made-up ?from= is never printed
+//   Back, the place       (CON-01, 25 Oct) Back from a profile returns For You to the pixel and the card to where it
+//                         was, by the page's Back and the browser's; the typed search (?q=) and "everyone who fits"
+//                         (?view=all) are in the address and come back; a profile with nothing behind it (a fresh tab, a
+//                         pasted address, a new tab taken through its main button, a first page reached by a replace)
+//                         goes back to the screen its ?from= names; a restore that gives up on a slow page leaves the
+//                         saved place alone, so the next Back still lands on it
 //   Failures              For You and a profile forced to 500 show their error and Try again, and Try again
 //                         recovers; with no connection a Save fails at once, and nothing loaded shows the
 //                         error state with the connection sentence (never "no one to suggest") and fills in
@@ -705,6 +711,28 @@ async function expectProfileOf(page: Page, who: TestUser, name: string): Promise
 const scrollWindowTo = (page: Page, where: 'top' | 'bottom'): Promise<void> =>
   page.evaluate((w) => window.scrollTo({ top: w === 'top' ? 0 : document.documentElement.scrollHeight, left: 0, behavior: 'instant' as ScrollBehavior }), where);
 
+/** Where a member is on a page of the shell: how far the page area (<main>) is scrolled and how much room it has, and where `target` sits in the window. */
+async function pageAreaPlace(page: Page, target: Locator): Promise<{ top: number; room: number; cardTop: number }> {
+  const area = await page.evaluate(() => {
+    const m = document.querySelector('main');
+    return { top: m ? m.scrollTop : 0, room: m ? m.scrollHeight - m.clientHeight : 0 };
+  });
+  const box = await target.boundingBox();
+  if (!box) throw new Error('the card is not drawn, so its place cannot be read');
+  return { ...area, cardTop: box.y };
+}
+
+/** Back put the member where they were: <main> is as far down as it was, and the card they opened sits where it did. Pixels, give or take three. */
+async function expectPlace(page: Page, target: Locator, want: { top: number; cardTop: number }, where: string): Promise<void> {
+  await expect(target, `${where}: the card is drawn`).toBeVisible({ timeout: SLOW });
+  await expect.poll(async () => {
+    const now = await pageAreaPlace(page, target).catch(() => null);
+    return now ? Math.abs(now.top - want.top) : Number.POSITIVE_INFINITY;
+  }, { message: `${where}: <main> is back at ${want.top}px`, timeout: 10_000, intervals: [100, 200, 400] }).toBeLessThanOrEqual(3);
+  const now = await pageAreaPlace(page, target);
+  expect(Math.abs(now.cardTop - want.cardTop), `${where}: the card sits where it did, ${Math.round(want.cardTop)}px from the top of the window (now ${Math.round(now.cardTop)}px)`).toBeLessThanOrEqual(3);
+}
+
 // With the page scrolled to its end, the last section ends above the fixed move bar.
 async function expectClearOfMoveBar(page: Page, where: string): Promise<void> {
   const m = await untilSized(page, () => page.evaluate(() => {
@@ -1312,6 +1340,238 @@ test.describe('REASON milestone 1', () => {
       await expectPeople(page, [giver, longName, secretive], 'back on For You');
       await expectQuiet(o, 'Back');
       console.log('  ✓ Back: a direct link in a fresh tab goes to For You; from a card it returns to For You; a made-up ?from= is not printed and a known one is named.');
+    });
+  });
+
+  // CON-01 (25 Oct 2026, Stefan and Claus): Back must return to the exact place. The shell's page area (<main>) is what
+  // scrolls, and it was sent to the top whenever the shell came back from a profile, so a member who had scrolled For You
+  // and opened someone lost their place. The place is read from the page, not guessed: how far <main> is scrolled, and
+  // where the card they opened sits in the window.
+  test(`${engineLabel()} phone: Back from a profile returns to the exact place on For You, by the page's Back and by the browser's`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const { page } = o;
+      await visit(page, '/');
+      await expectPeople(page, [giver, longName, secretive], 'For You');
+      const last = page.locator('[data-person-id]').last();
+      const lastId = (await last.getAttribute('data-person-id')) ?? '';
+      ours(lastId);
+      await last.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }));
+      await holdsStill(page, last);
+      const place = await pageAreaPlace(page, last);
+      expect(place.room, 'For You has to be longer than the window for this test to mean anything').toBeGreaterThan(200);
+      expect(place.top, 'the page area is scrolled').toBeGreaterThan(100);
+
+      // The page's own Back.
+      await last.locator('h3 a').first().click();
+      await expect(page, 'the card opens the profile').toHaveURL(/\/people\/[0-9a-f-]+\?from=For%20You$/);
+      // The profile's own Back: For You has an h1 too, so a heading would be found on the page being left.
+      await expect(backButton(page), 'the profile is drawn').toBeVisible({ timeout: SLOW });
+      await tap(page, backButton(page), 'Back (page)', { centre: false });
+      await expect(page, 'Back returns to For You').toHaveURL(`${APP}/`);
+      await expectPlace(page, last, place, 'after the page\'s Back');
+
+      // The browser's own Back, a second time round: the place saved by the first visit must not have been lost.
+      await last.locator('h3 a').first().click();
+      await expect(page).toHaveURL(/\/people\/[0-9a-f-]+\?from=For%20You$/);
+      await expect(backButton(page), 'the profile is drawn').toBeVisible({ timeout: SLOW });
+      await page.goBack();
+      await expect(page, 'the browser\'s Back returns to For You').toHaveURL(`${APP}/`);
+      await expectPlace(page, last, place, 'after the browser\'s Back');
+
+      // An address typed in is a new page, not Back: it starts at its top, whatever place was saved for the address.
+      await visit(page, '/');
+      await expectPeople(page, [giver, longName, secretive], 'a page loaded by its address');
+      expect((await pageAreaPlace(page, last)).top, 'a page loaded by its address starts at its top').toBe(0);
+      await expectQuiet(o, 'Back restores the place');
+      console.log(`  ✓ Back to For You restores <main> to ${place.top}px and the card to ${Math.round(place.cardTop)}px from the top of the window, by the page's Back and the browser's.`);
+    });
+  });
+
+  test(`${engineLabel()} phone: the typed search and "everyone who fits" are in the address, so Back from a profile returns to them`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const { page } = o;
+      // Find people: the settled term is written to ?q= (replacing the entry), and a profile's Back returns to the search.
+      await visit(page, '/search');
+      const box = page.getByRole('main').getByPlaceholder(/Search people/i);
+      const entries = await page.evaluate(() => window.history.length);
+      await box.fill(NAME.giver);
+      const searchUrl = `${APP}/search?${new URLSearchParams({ q: NAME.giver }).toString()}`;
+      await expect(page, 'the typed search is in the address').toHaveURL(searchUrl, { timeout: 10_000 });
+      expect(await page.evaluate(() => window.history.length), 'typing replaced the entry: it did not push a step').toBe(entries);
+      const hit = page.locator(`[data-testid="search-result-${ours(giver.id)}"]`);
+      await expect(hit, 'the search finds the member').toBeVisible({ timeout: SLOW });
+      await hit.getByRole('link', { name: NAME.giver, exact: true }).click();
+      await expectProfileOf(page, giver, NAME.giver);
+      await tap(page, backButton(page), 'Back (search)', { centre: false });
+      await expect(page, 'Back returns to the same search').toHaveURL(searchUrl);
+      await expect(box, 'the words are still in the box').toHaveValue(NAME.giver);
+      await expect(hit, 'and the result is still there').toBeVisible({ timeout: SLOW });
+      await expect(box, 'a search that is already there does not put the cursor back in the box').not.toBeFocused();
+
+      // A new search from the top bar replaces the words, and the address settles on them and stays there: the page's own
+      // write of the OLD words, a quarter of a second later, must not land on top (found by reason-m1-shell.spec.ts).
+      const top = page.getByRole('search').getByRole('textbox', { name: 'Search people' });
+      await top.fill(NAME.secretive);
+      await top.press('Enter');
+      await expect(box, 'the new words replace the old').toHaveValue(NAME.secretive);
+      for (let look = 0; look < 8; look++) {
+        expect(new URL(page.url()).searchParams.get('q'), 'the address says the new words, every time it is looked at').toBe(NAME.secretive);
+        await page.waitForTimeout(150);
+      }
+
+      // Everyone who fits: ?view=all is the wider list, kept in the address.
+      await visit(page, '/matches?view=all');
+      await expect(page.getByText('People close to your profile'), '?view=all is the wider list').toBeVisible({ timeout: SLOW });
+      const first = page.getByRole('main').locator('a[href^="/people/"]').first();
+      await expect(first, 'the wider list shows people').toBeVisible({ timeout: SLOW });
+      await first.click();
+      await expect(page).toHaveURL(/\/people\/[0-9a-f-]+\?from=People$/);
+      await expect(backButton(page), 'the profile is drawn').toBeVisible({ timeout: SLOW });
+      await tap(page, backButton(page), 'Back (matches)', { centre: false });
+      await expect(page, 'Back returns to the wider list').toHaveURL(`${APP}/matches?view=all`);
+      await expect(page.getByText('People close to your profile'), 'and it is still the wider list').toBeVisible({ timeout: SLOW });
+      await page.getByRole('button', { name: 'Back to your matches' }).click();
+      await expect(page, 'leaving the wider list takes ?view=all out of the address').toHaveURL(`${APP}/matches`);
+      await expect(page.getByText('People who fit what you\'re looking for')).toBeVisible();
+      await expectQuiet(o, 'the view is in the address');
+      console.log('  ✓ ?q= and ?view=all are in the address: Back from a profile returns to the same search and the same list.');
+    });
+  });
+
+  test(`${engineLabel()} phone: a profile with nothing behind it goes back to the screen it was opened from`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const where: Array<[string, string]> = [
+        ['People', '/connections'], ['Messages', '/messages'], ['Events', '/sessions'], ['Circles', '/circles'], ['Pods', '/pods'],
+        ['For You', '/'], ['Your path', '/'], ['Connections', '/'],
+      ];
+      // A fresh tab each time: its history starts empty, as a link opened from an email, or a name opened from the live
+      // event in a new tab, does.
+      for (const [from, route] of where) {
+        const tab = await newTab(o);
+        await visit(tab, `/people/${giver.id}?from=${encodeURIComponent(from)}`);
+        await expectProfileOf(tab, giver, NAME.giver);
+        const entries = await tab.evaluate(() => window.history.length);
+        await tap(tab, backButton(tab), `Back (from ${from})`, { centre: false });
+        await expect(tab, `Back from a profile opened from ${from} goes to ${route}`).toHaveURL(`${APP}${route}`);
+        // `replace`: the profile does not stay behind it, so the browser's own Back would not return to the profile.
+        expect(await tab.evaluate(() => window.history.length), `${from}: the profile did not stay in the tab's history`).toBe(entries);
+        await settle(tab);
+        await tab.close();
+      }
+      await expectQuiet(o, 'Back with nothing behind it');
+      console.log('  ✓ A profile opened with nothing behind it goes back to the screen named in ?from=, and to For You when there is none.');
+    });
+  });
+
+  // Measured on the live app's twin of this change (26 Oct 2026), where "is anything behind this page" was the length of the
+  // browser's history: that counts other sites' pages and entries ahead as well. The router's own word for it is the key
+  // "default" on a tab's first entry. These are the two cases the length got wrong.
+  test(`${engineLabel()} phone: a profile address pasted into a tab with earlier history goes back into the app, never out of it`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const tab = await newTab(o);
+      // A page that is not the app's, as the tab's earlier history: a picture the site serves (a page from another site would
+      // say the same, but the signed-in tokens are put in every page by script, and another origin refuses that).
+      await tab.goto(`${APP}/favicon-64.png`);
+      await visit(tab, `/people/${giver.id}?from=Messages`);
+      await expectProfileOf(tab, giver, NAME.giver);
+      await tap(tab, backButton(tab), 'Back (pasted address)', { centre: false });
+      await expect(tab, 'Back goes to the screen the profile names, inside the app').toHaveURL(`${APP}/messages`);
+      await settle(tab);
+      await tab.close();
+      await expectQuiet(o, 'a pasted profile address');
+      console.log('  ✓ A profile address pasted into a tab with an earlier page goes back to the screen its ?from= names, in the app.');
+    });
+  });
+
+  test(`${engineLabel()} phone: a profile in a new tab, then its main button, then the browser's Back, then the page's Back, still goes somewhere`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      // The viewer has met this member, so the profile's main button is Continue: it opens the conversation, a new entry in this tab.
+      const tab = await newTab(o);
+      await visit(tab, `/people/${met.id}?from=Messages`);
+      await expectProfileOf(tab, met, NAME.met);
+      await tap(tab, primaryButton(tab), 'Continue', { centre: false });
+      await expect(tab, 'the conversation opens in this tab').toHaveURL(new RegExp(`/messages/new/${met.id}$`), { timeout: SLOW });
+      // The browser's Back returns to the profile, which is still the first page of this tab: nothing is behind it.
+      await tab.goBack();
+      await expectProfileOf(tab, met, NAME.met);
+      await tap(tab, backButton(tab), 'Back (after Continue)', { centre: false });
+      await expect(tab, 'the page\'s Back goes to the screen the profile names, not nowhere').toHaveURL(`${APP}/messages`, { timeout: SLOW });
+      await settle(tab);
+      await tab.close();
+      await expectQuiet(o, 'a profile in a new tab, then Continue');
+      console.log('  ✓ A profile in a new tab, then Continue, then the browser\'s Back, then the page\'s Back, goes to the screen its ?from= names.');
+    });
+  });
+
+  // The onboarding gate puts a member on a profile by REPLACING the first entry of the tab (ProtectedRoute sends them to
+  // /onboarding?redirect=..., and OnboardingFlow ends with navigate(redirect, { replace: true })). The router gives that entry
+  // a key of its own, so a rule that reads the key alone calls navigate(-1) with nothing behind it, and Back does nothing. The
+  // router's own count of this app's pages (idx) is 0 there, and says so.
+  test(`${engineLabel()} phone: a profile that is the first page of a tab by a replace, with a router key of its own, has a Back that goes to the screen it names`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const tab = await newTab(o);
+      await visit(tab, `/people/${giver.id}?from=Messages`);
+      await expectProfileOf(tab, giver, NAME.giver);
+      // What a replace leaves in the entry: the router's key and a count of 0, where an address typed in has no key at all.
+      await tab.evaluate(() => window.history.replaceState({ usr: null, key: 'replaced-first-entry', idx: 0 }, ''));
+      await reload(tab);
+      await expectProfileOf(tab, giver, NAME.giver);
+      expect(await tab.evaluate(() => window.history.state), 'the page starts with a key of its own, nothing behind it').toMatchObject({ key: 'replaced-first-entry', idx: 0 });
+      await tap(tab, backButton(tab), 'Back (first page by a replace)', { centre: false });
+      await expect(tab, 'Back goes to the screen the profile names').toHaveURL(`${APP}/messages`, { timeout: SLOW });
+      await settle(tab);
+      await tab.close();
+      await expectQuiet(o, 'a profile reached by a replace');
+      console.log('  ✓ A profile that is the first page of a tab by a replace goes back to the screen its ?from= names.');
+    });
+  });
+
+  // A restore waits 1.5 s for the page to grow, then gives up and goes as far as the page goes. That move is the code's own: it
+  // must not be recorded as where the member left, or the place they were after is lost for the next Back.
+  test(`${engineLabel()} phone: a restore that gives up on a slow page does not forget the place, so the next Back still lands on it`, async () => {
+    test.setTimeout(240_000);
+    await using(viewer, PHONE, async (o) => {
+      const { page } = o;
+      await visit(page, '/');
+      await expectPeople(page, [giver, longName, secretive], 'For You');
+      const last = page.locator('[data-person-id]').last();
+      ours((await last.getAttribute('data-person-id')) ?? '');
+      await last.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }));
+      await holdsStill(page, last);
+      const place = await pageAreaPlace(page, last);
+      expect(place.top, 'the page area is scrolled').toBeGreaterThan(100);
+      await last.locator('h3 a').first().click();
+      await expect(backButton(page), 'the profile is drawn').toBeVisible({ timeout: SLOW });
+
+      // A reload empties what the page remembers of For You (the place is in sessionStorage, which a reload keeps), so on the way
+      // back the list is fetched again, and the answer is held for 3 s: a restore waits 1.5 s and gives up.
+      await reload(page);
+      await expect(backButton(page), 'the profile is back after the reload').toBeVisible({ timeout: SLOW });
+      let slow = true;
+      const forYou = /\/api\/matches\/platform$/;
+      await page.route(forYou, async (route) => {
+        if (slow) await new Promise((resolve) => setTimeout(resolve, 3_000));
+        await route.continue();
+      });
+      await page.goBack();
+      await expect(page.locator('[data-person-id]').first(), 'the list arrives after the restore has given up').toBeVisible({ timeout: SLOW });
+      slow = false;
+      expect((await pageAreaPlace(page, last)).top, 'the restore gave up: the page area did not reach the place').toBeLessThan(place.top - 100);
+
+      // The browser's Forward and Back again, now with the list drawn: the place the first visit saved is what comes back.
+      await page.goForward();
+      await expect(backButton(page), 'the profile again').toBeVisible({ timeout: SLOW });
+      await page.goBack();
+      await expectPlace(page, last, place, 'after the Back that follows a restore that gave up');
+      await page.unroute(forYou);
+      await expectQuiet(o, 'a restore that gave up');
+      console.log(`  ✓ A restore that gave up on a slow page left the place at ${place.top}px, and the next Back lands on it.`);
     });
   });
 

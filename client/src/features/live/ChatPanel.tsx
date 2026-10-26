@@ -289,8 +289,10 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
         {!isOwn && (
           <div className="flex items-center gap-1.5 mb-0.5">
             {/* Phase 0 (a0070bd) fixed this surface ad-hoc; WS2/S3 moved the
-                new-tab guarantee into the shared ProfileLink. */}
-            <ProfileLink from="Events" userId={msg.userId} className={`text-xs font-semibold hover:underline ${msg.isHost ? 'text-amber-600' : 'text-gray-500'}`}>
+                new-tab guarantee into the shared ProfileLink (newTab). The padding, paid back by the negative
+                margin, makes the name a 44px target without moving the bubble; the message under it stays on top
+                of that padding, so a link in the first line still takes its own tap. */}
+            <ProfileLink newTab from="Events" userId={msg.userId} className={`-mx-2 -my-3.5 px-2 py-3.5 text-xs font-semibold hover:underline ${msg.isHost ? 'text-amber-600' : 'text-gray-500'}`}>
               {msg.displayName}
               {msg.isHost && <span className="ml-1 text-[10px] font-medium text-amber-600">HOST</span>}
             </ProfileLink>

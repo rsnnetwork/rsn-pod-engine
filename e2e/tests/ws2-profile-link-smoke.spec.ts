@@ -110,6 +110,9 @@ test('clicking a participant name opens the profile in a NEW tab; the event tab 
   // when it fires but not required).
   expect(await bobLink.getAttribute('target'), 'ProfileLink opens a new tab').toBe('_blank');
   expect(await bobLink.getAttribute('rel'), 'ProfileLink severs the opener').toContain('noopener');
+  // CON-01 (25 Oct 2026): a link that opens a new tab says so, with an arrow for the eye and the words for a screen reader.
+  await expect(bobLink.getByText('↗'), 'the link shows an arrow').toBeVisible();
+  await expect(bobLink, 'and says it opens a new tab').toContainText('(opens in a new tab)');
 
   const beforeUrl = alicePage.url();
   aliceSession.context.on('page', (p) => console.log(`  (popup opened: ${p.url()})`));

@@ -10,6 +10,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { Skeleton } from '@/components/ui/Spinner';
 import ReportUserModal from '@/components/ReportUserModal';
+import { hasEarlierAppPage } from '@/features/profile/profile-back';
 import { cn } from '@/lib/utils';
 import ReasonMark from '../brand/ReasonMark';
 import ReasonSheep from '../brand/ReasonSheep';
@@ -24,7 +25,7 @@ import MeetSheet from './MeetSheet';
 import OutcomeSheet from './OutcomeSheet';
 import { STATE_LABEL } from './labels';
 import {
-  MOVE_RESPONSE, isMemberId, knownSource, loadFailedText, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
+  MOVE_RESPONSE, backFallback, isMemberId, knownSource, loadFailedText, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
 } from './profile-text';
 import { blockMember, errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
 
@@ -166,11 +167,15 @@ export default function HumanProfilePage() {
     meta: { entities: me && userId ? [E.user(me), E.user(userId), E.userInvites(me), E.userDms(me), E.userBlocks(me), E.userEntities(userId), E.userEntities(me)] : [] },
   });
 
-  // The first screen of the app in this tab (a link opened from an email, say): going back would leave
-  // the app, so go to For You instead. `replace` keeps the browser's own Back button from returning here.
+  // The first page of this app in the tab (a link opened from an email, a name opened from the live event in a new tab, an
+  // address pasted in, a page reached by replacing the first one): going back would leave the app or do nothing, so go to
+  // the screen the link was on (CON-01), For You when it does not say. `replace` keeps the browser's own Back button from
+  // returning here. Everywhere else the profile is opened in the tab that was looking at the list, so Back is the browser's
+  // own step back, which returns to it. profile-back.ts says how "an earlier page of this app" is read; the old profile page
+  // uses the same rule, so the two cannot disagree.
   const back = () => {
-    if (location.key === 'default') navigate('/', { replace: true });
-    else navigate(-1);
+    if (hasEarlierAppPage(window.history.state, location.key)) navigate(-1);
+    else navigate(backFallback(source), { replace: true });
   };
 
   // More (21 Oct 2026): Block and Report this member, with the old public profile's confirmation, its block call

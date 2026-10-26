@@ -10,6 +10,7 @@ import { profileHref, profileLinkSelector, profilePage } from '../helpers/profil
 // profile card, and the recipient can reach the sender's profile by clicking the
 // name — from the request AND from the bell (which links /messages?poke=<id>,
 // now focused). So the recipient can check who they are before accepting.
+// CON-01 (25 Oct 2026): the profile opens in the same tab and Back returns to the request.
 // ─────────────────────────────────────────────────────────────────────────────
 
 let browser: Browser;
@@ -81,14 +82,22 @@ test('a meeting request shows the sender as a profile card, name links to their 
   // Name text is inside a profile link, not plain text.
   await expect(card.getByText('Dana Sender')).toHaveAttribute('href', profileHref(sender.id, 'Messages'));
 
-  // Clicking it opens the sender's public profile (new tab).
-  const [profileTab] = await Promise.all([
-    page.context().waitForEvent('page'),
-    card.getByText('Dana Sender').click(),
-  ]);
-  await profileTab.waitForLoadState('domcontentloaded');
-  await expect(profileTab).toHaveURL(profilePage(sender.id));
-  await profileTab.close();
+  // CON-01 (25 Oct 2026, Stefan and Claus): clicking it opens the sender's profile in THIS tab, so Back returns to the
+  // request. It used to open a new tab, where Back did nothing (a new tab has no history behind it).
+  const requestUrl = page.url();
+  await card.getByText('Dana Sender').click();
+  await expect(page, 'the profile opens in this tab').toHaveURL(profilePage(sender.id), { timeout: 30_000 });
+  expect(page.context().pages().length, 'no second tab was opened').toBe(1);
+  // The browser's own Back returns to the request, with its card showing.
+  await page.goBack();
+  await expect(page, 'Back returns to the request').toHaveURL(requestUrl, { timeout: 30_000 });
+  await expect(card, 'and the request is showing').toBeVisible({ timeout: 30_000 });
+  // The page's own Back button does the same.
+  await card.getByText('Dana Sender').click();
+  await expect(page).toHaveURL(profilePage(sender.id), { timeout: 30_000 });
+  await page.getByRole('button', { name: /Back/ }).first().click();
+  await expect(page, "the profile's own Back returns to the request").toHaveURL(requestUrl, { timeout: 30_000 });
+  await expect(card).toBeVisible({ timeout: 30_000 });
 
   // 7 Sep 2026 (Ali): the MAIN pane (not just the left band) shows the
   // requester's profile card with Accept/Decline, on desktop widths.

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -14,6 +14,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
+import { hasEarlierAppPage } from './profile-back';
 
 // 13 Aug 2026 (D1): Stefan — "the profile card needs a major visual upgrade,
 // the greatest thing on the platform", and "About was cut off / too narrow".
@@ -29,6 +30,7 @@ const EMPTY = <span className="text-sm italic text-gray-300">Not shared yet</spa
 export default function PublicProfilePage() {
   const { userId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const qc = useQueryClient();
   const { user: currentUser } = useAuthStore();
   const currentUserId = currentUser?.id;
@@ -121,12 +123,20 @@ export default function PublicProfilePage() {
     },
   });
 
+  // 25 Oct 2026 (CON-01): a profile can be the first page of this app in a tab (a new tab from the live event, an
+  // emailed link, an address pasted in), where Back used to do nothing or leave the site. It steps back only when an
+  // earlier page of this app is behind it, and goes to the dashboard otherwise (profile-back.ts says how that is read).
+  const goBack = () => {
+    if (hasEarlierAppPage(window.history.state, location.key)) navigate(-1);
+    else navigate('/', { replace: true });
+  };
+
   if (isLoading) return <PageLoader />;
   if (error || !user) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-12 text-center">
         <h2 className="text-xl font-semibold text-gray-700">User not found</h2>
-        <Button onClick={() => navigate(-1)} variant="secondary" className="mt-4">Go Back</Button>
+        <Button onClick={goBack} variant="secondary" className="mt-4">Go Back</Button>
       </div>
     );
   }
@@ -140,7 +150,7 @@ export default function PublicProfilePage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
       <button
-        onClick={() => navigate(-1)}
+        onClick={goBack}
         className="mb-4 inline-flex min-h-[44px] items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
       >
         <ArrowLeft className="h-4 w-4" /> Back

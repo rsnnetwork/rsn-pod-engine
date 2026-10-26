@@ -7,7 +7,7 @@ import * as path from 'path';
 import type { PersonBrief } from '@rsn/shared';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
 import {
-  KNOWN_SOURCES, MOVE_RESPONSE, SIGNAL, foundThrough, isClientError, isGone, isMemberId, knownSource, lastMetText,
+  BACK_FALLBACK, KNOWN_SOURCES, MOVE_RESPONSE, SIGNAL, backFallback, foundThrough, isClientError, isGone, isMemberId, knownSource, lastMetText,
   loadFailedText, memoryRows, metTitle, moveToast, personFacts, personHref, reasonText, shouldRetry, statusOf, viewFor, whyNowRows,
   type LoadState, type Move,
 } from '../../../../client/src/features/reason/human/profile-text';
@@ -46,6 +46,19 @@ describe('?from= and the member id', () => {
   });
   it('gives back a known source as it is', () => {
     for (const s of KNOWN_SOURCES) expect(knownSource(s)).toBe(s);
+  });
+  // CON-01 (25 Oct 2026): a profile opened with nothing behind it (a link from an email, a name opened from the live
+  // event in a new tab) used to send everyone to For You. It goes to the screen the link was on.
+  it('Back with nothing behind it goes to the screen the profile was opened from, and to For You when that is not known', () => {
+    expect(BACK_FALLBACK).toEqual({
+      'For You': '/', People: '/connections', Messages: '/messages', Connections: '/', 'Your path': '/', Circles: '/circles', Pods: '/pods', Events: '/sessions',
+    });
+    for (const s of KNOWN_SOURCES) expect(backFallback(s)).toBe(BACK_FALLBACK[s]);
+    expect(backFallback(null)).toBe('/');
+  });
+  it('every place Back can fall back to is a page the app has', () => {
+    const app = fs.readFileSync(path.join(__dirname, '../../../../client/src/App.tsx'), 'utf8');
+    for (const route of new Set(Object.values(BACK_FALLBACK))) expect(app).toContain(`<Route path="${route}" element=`);
   });
   it('treats anything else as no source: other case, spaces, markup, another name, nothing', () => {
     for (const s of ['Profile', 'for you', 'FOR YOU', 'For You ', ' For You', 'Your Path', 'your path', '', 'Attacker Corp', '<img src=x onerror=alert(1)>', 'For You<b>', null]) {
@@ -110,12 +123,18 @@ describe('every ?from= the app writes is one the profile accepts', () => {
     expect([...src.matchAll(/<Link to=\{(personHref\([^)]*\))\}/g)].map((m) => m[1])).toEqual(links);
     expect(src).toMatch(/import \{ personHref \} from '@\/features\/reason\/human\/profile-text';/);
   });
-  it('a meeting request in Messages and the live event\'s chat, participant list and end screen open it through ProfileLink, in a new tab', () => {
-    expect(clientFile('features/messages/MeetingRequests.tsx').match(/<ProfileLink\b[^>]*\bfrom="Messages"/g)).toHaveLength(5);
-    expect(clientFile('features/messages/MeetingRequests.tsx')).not.toMatch(/<ProfileLink\b(?![^>]*\bfrom=)/);
+  // CON-01 (25 Oct 2026): the request opens the profile in THIS tab, so Back returns to the request. Only the live
+  // event, where leaving the tab drops the call, opens a new one.
+  it('a meeting request in Messages opens the Human Profile through ProfileLink in the same tab, and the live event\'s chat, participant list and end screen in a new one', () => {
+    const requests = clientFile('features/messages/MeetingRequests.tsx');
+    expect(requests.match(/<ProfileLink\b[^>]*\bfrom="Messages"/g)).toHaveLength(5);
+    expect(requests).not.toMatch(/<ProfileLink\b(?![^>]*\bfrom=)/);
+    expect(requests).not.toMatch(/<ProfileLink\b[^>]*\bnewTab\b/);
     for (const file of ['features/live/ChatPanel.tsx', 'features/live/ParticipantList.tsx', 'features/live/SessionComplete.tsx']) {
       const src = clientFile(file);
       expect({ file, all: /<ProfileLink\b/.test(src) && !/<ProfileLink\b(?![^>]*\bfrom="Events")/.test(src) }).toEqual({ file, all: true });
+      // The bare attribute: `newTab={false}` is a same-tab link that merely mentions it.
+      expect({ file, all: !/<ProfileLink\b(?![^>]*\bnewTab(?=[\s/>]))/.test(src) }).toEqual({ file, all: true });
     }
     // Admin links keep the old page.
     expect(clientFile('features/admin/AdminAnalyticsPage.tsx')).toMatch(/navigate\(`\/profile\/\$\{r\.userId\}`\)/);

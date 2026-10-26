@@ -10,7 +10,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Sparkles, Calendar, UserPlus, Compass, ArrowLeft, Check, Bell, MessageSquare,
 } from 'lucide-react';
@@ -43,7 +43,12 @@ interface PlatformMatchesResult {
 }
 
 export default function MatchesPage() {
-  const [browse, setBrowse] = useState(false);
+  // The wider list is in the address (?view=all), not held in the page: a member who opened someone from it and pressed
+  // Back used to find the narrow list again (CON-01, 25 Oct 2026). Choosing a view replaces the entry, so the page stays
+  // one step in the history.
+  const [params, setParams] = useSearchParams();
+  const browse = params.get('view') === 'all';
+  const setBrowse = (all: boolean) => setParams(all ? { view: 'all' } : {}, { replace: true });
   const [requested, setRequested] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState<string | null>(null);
   const { addToast } = useToastStore();

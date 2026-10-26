@@ -61,22 +61,18 @@ interface PeopleMetData {
 // both the "existing conversation" and "compose new" cases via the
 // /messages/new/:userId route.
 function MessagePartnerButton({ userId, displayName }: { userId: string; displayName: string }) {
-  // UX3 (June-10 debrief) — open the conversation in a NEW TAB instead of
-  // navigating away from the recap, so the recap stays put.
-  const openConversation = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    window.open(`/messages/new/${userId}`, '_blank', 'noopener,noreferrer');
-  };
+  // CON-01 (25 Oct 2026) — the conversation opens in THIS tab, and Back returns to the recap. UX3 (June-10 debrief)
+  // opened a new tab to keep the recap, but a new tab has no history behind it (a Back that does nothing); this is a
+  // post-event page, not the call, so nothing is lost by leaving it. The live end screen keeps its new tab.
   return (
-    <button
-      onClick={openConversation}
+    <Link
+      to={`/messages/new/${userId}`}
       title={`Message ${displayName || 'this user'}`}
-      className="shrink-0 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
+      className="ml-auto shrink-0 inline-flex min-h-[44px] items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
       data-testid={`recap-dm-button-${userId}`}
     >
       <MessageSquare className="h-3.5 w-3.5" /> Message
-    </button>
+    </Link>
   );
 }
 
@@ -431,7 +427,7 @@ export default function RecapPage() {
         </div>
       )}
 
-      {/* Mutual connections */}
+      {/* Mutual connections. A name is a 44px target (py-1.5 paid back by -my-1.5), so the rows do not move. */}
       {data && data.mutualConnections.length > 0 && (
         <Card>
           <h3 className="text-sm font-semibold text-indigo-500 uppercase tracking-wider mb-4 flex items-center gap-2">
@@ -440,8 +436,8 @@ export default function RecapPage() {
           </h3>
           <div className="space-y-3">
             {data.mutualConnections.map(c => (
-              <div key={c.userId} className="flex items-center gap-3 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
-                <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 flex-1 min-w-0">
+              <div key={c.userId} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
+                <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 grow basis-full min-w-0 py-1.5 -my-1.5 sm:basis-0">
                   <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -488,8 +484,8 @@ export default function RecapPage() {
         const bonusAdded = data.bonusRoundsAdded ?? 0;
         const isBonus = (r: number) => bonusAdded > 0 && data.totalRounds > 0 && r > data.totalRounds - bonusAdded;
         const row = (c: typeof data.connections[number]) => (
-          <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
-            <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 flex-1 min-w-0">
+          <div key={`${c.userId}-${c.roundNumber}`} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
+            <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 grow basis-full min-w-0 py-1.5 -my-1.5 sm:basis-0">
               <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
