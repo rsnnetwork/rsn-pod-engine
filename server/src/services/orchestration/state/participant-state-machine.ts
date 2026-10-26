@@ -206,9 +206,14 @@ export async function transitionParticipant(
     ? (current.state as ParticipantState)
     : ParticipantState.REGISTERED;
 
+  // H1b (26 Oct 2026) — a removal is the database's, and the kick is the one write that makes it: a kick of someone
+  // memory already holds as removed is written all the same (memory can hold a removal the database has since lifted,
+  // and the reconciler no longer writes removals from memory). Every other self-transition only touches updatedAt.
+  const rewritesRemoval = persistToDb && fromState === ParticipantState.REMOVED && toState === ParticipantState.REMOVED;
+
   // Idempotent self-transition is fine (e.g. multiple "still in main room"
   // confirmations from heartbeat). Skip the validation but still touch updatedAt.
-  if (fromState === toState && allowIdempotent) {
+  if (fromState === toState && allowIdempotent && !rewritesRemoval) {
     activeSession.participantStates.set(userId, {
       state: toState,
       currentRoomId: toState === ParticipantState.IN_BREAKOUT
@@ -220,7 +225,7 @@ export async function transitionParticipant(
   }
 
   const legal = LEGAL_TRANSITIONS[fromState] || [];
-  if (!legal.includes(toState)) {
+  if (!rewritesRemoval && !legal.includes(toState)) {
     logger.warn(
       { sessionId, userId, fromState, toState },
       'transitionParticipant: illegal transition rejected',
@@ -238,6 +243,10 @@ export async function transitionParticipant(
   // DB projection — for cross-process visibility. Failure here is logged
   // but not fatal: in-memory state is still authoritative.
   if (persistToDb) {
+    // H1b — until this write has taken the removal, memory holds one the database may not have: the reconciler does
+    // not read the row as the truth about it, and finishes the removal if this write fails or finds no row to change.
+    const removing = toState === ParticipantState.REMOVED;
+    if (removing) (activeSession.unsavedRemovals ??= new Set()).add(userId);
     try {
       const dbStatus = projectToDbStatus(toState);
       const setClauses = ['status = $1'];
@@ -278,11 +287,12 @@ export async function transitionParticipant(
       // H1 fix round 1 — never over a removed row (a removal is terminal). With nothing held in memory for the
       // person (after a restart, or a kick on another instance) this transition starts from REGISTERED, so it
       // would otherwise write a kicked member back to LEFT or the main room.
-      await query(
+      const written = await query(
         `UPDATE session_participants SET ${setClauses.join(', ')}
          WHERE session_id = $${paramIdx} AND user_id = $${paramIdx + 1} AND status <> 'removed'`,
         values,
       );
+      if (removing && written.rowCount) activeSession.unsavedRemovals?.delete(userId);
     } catch (err) {
       logger.error({ err, sessionId, userId, toState }, 'transitionParticipant: DB persist failed');
       // Continue — in-memory state is still authoritative.
@@ -350,6 +360,38 @@ export async function transitionParticipant(
   }
 
   return { ok: true, fromState, toState };
+}
+
+/**
+ * H1b (26 Oct 2026) — the one way out of REMOVED, taken once the database has let the person back in. A removal is
+ * terminal (REMOVED has no exits in LEGAL_TRANSITIONS) except through a host's fresh personal invite, which
+ * registerParticipant writes; the reconciler also comes here when it reads a row that is no longer removed. Memory
+ * follows the database: the person is `toState` again in this event (REGISTERED after the invite, the row's own state
+ * from the reconciler), nothing of the kick is left for the reconciler to finish, and the canonical doc stops calling
+ * them removed. Before this, memory kept REMOVED after the database had let them back in, and the reconciler wrote the
+ * removal back within 30 seconds. With `removedBefore` (epoch ms), only a removal memory recorded before that moment
+ * is lifted: one recorded since then is newer than what the caller read. No database write (the caller's lifted the
+ * removal). Returns whether a removal was lifted.
+ */
+export function readmitParticipant(
+  sessionId: string,
+  userId: string,
+  toState: ParticipantState = ParticipantState.REGISTERED,
+  removedBefore: number = Number.POSITIVE_INFINITY,
+): boolean {
+  const activeSession = activeSessions.get(sessionId);
+  const states = activeSession?.participantStates;
+  const current = states?.get(userId);
+  if (!activeSession || !states || !current || current.state !== ParticipantState.REMOVED) return false;
+  if (new Date(current.updatedAt).getTime() >= removedBefore) return false;
+  states.set(userId, { state: toState, currentRoomId: null, updatedAt: new Date() });
+  activeSession.unsavedRemovals?.delete(userId);
+  // Best-effort, as every canonical write is: the person's own join marks them connected there in any case.
+  void import('./canonical-state')
+    .then((m) => m.liftCanonicalRemoval(sessionId, userId))
+    .catch((err) => logger.warn({ err, sessionId, userId }, 'readmitParticipant: the canonical doc was not updated'));
+  logger.info({ sessionId, userId, toState }, 'readmitParticipant: a removal the database lifted is lifted in memory');
+  return true;
 }
 
 /**
@@ -423,6 +465,10 @@ export async function reconcileSessionStates(sessionId: string, io?: SocketIOSer
   if (!activeSession) return { checked: 0, diverged: 0, staleEscalated: 0 };
   if (!activeSession.participantStates) return { checked: 0, diverged: 0, staleEscalated: 0 };
 
+  // H1b (26 Oct 2026) — what memory knew as the rows were read. A removal recorded from this moment on, or one whose
+  // write had not reached the database yet, may be missing from the rows: they are not the truth about it this tick.
+  const readAt = Date.now();
+  const unsavedAtRead = new Set(activeSession.unsavedRemovals);
   const dbRows = await query<{ user_id: string; status: ParticipantStatus; joined_at: Date | null }>(
     `SELECT user_id, status, joined_at FROM session_participants WHERE session_id = $1`,
     [sessionId],
@@ -433,9 +479,24 @@ export async function reconcileSessionStates(sessionId: string, io?: SocketIOSer
     const memState = activeSession.participantStates.get(row.user_id);
     if (!memState) continue; // not tracked in memory yet — bootstrap will pick it up
     const projected = projectToDbStatus(memState.state as ParticipantState);
-    if (projected !== row.status && row.status === ParticipantStatus.REMOVED) {
-      // H1 fix round 1 — a removal is terminal: memory follows a removed row, never the other way round.
-      activeSession.participantStates.set(row.user_id, { state: ParticipantState.REMOVED, currentRoomId: null, updatedAt: new Date() });
+    if (row.status === ParticipantStatus.REMOVED) {
+      // H1b — the database has the removal: there is no write of it left to finish.
+      activeSession.unsavedRemovals?.delete(row.user_id);
+      if (projected !== row.status) {
+        // H1 fix round 1 — a removal is terminal: memory follows a removed row, never the other way round.
+        activeSession.participantStates.set(row.user_id, { state: ParticipantState.REMOVED, currentRoomId: null, updatedAt: new Date() });
+      }
+      continue;
+    }
+    // H1b — and memory never writes a removal of its own: only the kick does. Memory saying REMOVED over a row that is
+    // not, with the kick's own write done, means the database has the person back (a host's fresh personal invite is
+    // the one way back, here one memory did not see: the invite's own insert after a kick that raced it, or a restart
+    // that brought the removal back from the canonical doc), and memory follows the row. A removal recorded after the
+    // read, or still being written when it was taken, is left to the next tick. The one removal written below is a
+    // kick's own write that did not reach the database (unsavedRemovals). This used to write `removed` back over a
+    // re-admitted member within 30 seconds of their return.
+    if (memState.state === ParticipantState.REMOVED && !activeSession.unsavedRemovals?.has(row.user_id)) {
+      if (!unsavedAtRead.has(row.user_id)) readmitParticipant(sessionId, row.user_id, liftFromDbStatus(row.status), readAt);
       continue;
     }
     if (projected !== row.status) {
@@ -450,6 +511,7 @@ export async function reconcileSessionStates(sessionId: string, io?: SocketIOSer
           `UPDATE session_participants SET status = $1 WHERE session_id = $2 AND user_id = $3 AND status <> 'removed'`,
           [projected, sessionId, row.user_id],
         );
+        if (projected === ParticipantStatus.REMOVED) activeSession.unsavedRemovals?.delete(row.user_id);
       } catch (err) {
         logger.error({ err, sessionId, userId: row.user_id, projected },
           'reconcileSessionStates: DB converge failed — will retry on next tick');

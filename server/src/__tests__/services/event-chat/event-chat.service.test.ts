@@ -348,6 +348,16 @@ describe('persistEventChatMessage', () => {
     mockQuery.mockRejectedValueOnce(new Error('connection terminated'));
     await expect(persistEventChatMessage(lobby)).rejects.toThrow('connection terminated');
   });
+
+  // H1b (26 Oct 2026): the end is checked on the event's row as it stands when the message is written. Without the
+  // lock, a send whose read of the row came before the completion's commit was still stored a few ms after the end.
+  // The ordering itself is proved against a real Postgres in event-chat-end-order.sql.test.ts.
+  it('reads the event\'s row with a share lock, so a message is stored before the event ends or not at all', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: MSG_A, created_at: new Date() }] });
+    await persistEventChatMessage(lobby);
+    const sql = sqlOf(mockQuery.mock.calls[0]);
+    expect(sql).toMatch(/FROM sessions s LEFT JOIN matches m ON m\.id = \$7::uuid AND m\.session_id = s\.id WHERE s\.id = \$1 AND s\.status NOT IN \('completed', 'cancelled'\) FOR SHARE OF s ON CONFLICT/);
+  });
 });
 
 // ── Reactions ────────────────────────────────────────────────────────────────
@@ -391,6 +401,13 @@ describe('toggleEventChatReaction', () => {
   it('ignores a reaction the chat does not offer without asking the database', async () => {
     expect(await toggleEventChatReaction({ ...input, emoji: 'fire' })).toBeNull();
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  // H1b — the same end guard as a message: the share lock on the event's row is held until the reaction is written.
+  it('reads the event\'s row with a share lock, so a reaction is changed before the event ends or not at all', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await toggleEventChatReaction(input);
+    expect(sqlOf(mockQuery.mock.calls[0])).toMatch(/FOR SHARE OF s\s*$/);
   });
 });
 

@@ -391,14 +391,27 @@ export async function registerParticipant(
       if (existingStatus === 'removed' && !options?.allowRemovedReadmit) {
         throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, 'You have been removed from this event by the host');
       }
-      // Re-register
+      // Re-register. H1b (26 Oct 2026) — guarded like every other status write. An invite accept and the REST register
+      // run outside the event's guard, so a kick could land between the read above and this write, which used to undo
+      // it. A removed row is written only for a host's fresh personal invite (allowRemovedReadmit, the one way back:
+      // the same rule as the invite accept's own insert); otherwise nothing is written and the person is told they
+      // were removed.
       const result = await client.query<SessionParticipant>(
         `UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE
-         WHERE session_id = $1 AND user_id = $2
+         WHERE session_id = $1 AND user_id = $2 AND (status <> 'removed' OR $3::boolean)
          RETURNING ${PARTICIPANT_COLUMNS}`,
+        [sessionId, userId, !!options?.allowRemovedReadmit]
+      );
+      if (result.rows[0]) return { ...result.rows[0], isNewRegistration: false };
+      const reread = await client.query<{ status: string }>(
+        `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
         [sessionId, userId]
       );
-      return { ...result.rows[0], isNewRegistration: false };
+      if (reread.rows[0]?.status === 'removed') {
+        throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, 'You have been removed from this event by the host');
+      }
+      // Otherwise the row went away meanwhile (an unregister), or a personal invite has just taken them back: the
+      // insert below registers them afresh, or reads the row as it now is.
     }
 
     // Phase R8 (20 May 2026 — live-test post-mortem). For admin / super_admin
@@ -460,7 +473,11 @@ export async function registerParticipant(
   try {
     const { activeSessions } = await import('../orchestration/state/session-state');
     if (activeSessions.has(sessionId)) {
-      const { transitionParticipant, ParticipantState } = await import('../orchestration/state/participant-state-machine');
+      const { transitionParticipant, readmitParticipant, ParticipantState } = await import('../orchestration/state/participant-state-machine');
+      // H1b — a host's fresh personal invite has registered them: a removal memory holds for them in this event is
+      // lifted, as the database's was (the state machine's one way out of REMOVED). Before, memory stayed REMOVED and
+      // the reconciler wrote the removal back within 30 seconds.
+      if (options?.allowRemovedReadmit) readmitParticipant(sessionId, userId);
       await transitionParticipant(sessionId, userId, ParticipantState.REGISTERED, { persistToDb: false });
     }
   } catch (err) {

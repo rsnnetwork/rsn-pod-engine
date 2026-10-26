@@ -58,6 +58,12 @@ export interface ActiveSession {
     updatedAt: Date;
   }>;
   /**
+   * H1b (26 Oct 2026) — people a host removed whose removal the database has not taken yet: the kick's write is on
+   * its way, failed, or found no row. Only a kick writes a removal; the reconciler finishes these and never writes
+   * any other removal from memory, nor reads a row as lifting one of these. In memory only, like manuallyLeftRound.
+   */
+  unsavedRemovals?: Set<string>;
+  /**
    * Bug 1 (18 May Stefan) — global pin set by an acting host. When non-null,
    * every participant's lobby view switches to pinned-mode with this user as
    * the big tile. Participant-side local pins (yesterday's per-viewer pin)

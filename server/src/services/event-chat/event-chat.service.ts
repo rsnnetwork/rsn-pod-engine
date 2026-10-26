@@ -263,6 +263,11 @@ export interface NewEventChatMessage {
  * Stores a message before anyone receives it and returns it in the socket's shape. `created` is false when its
  * clientId had been stored already (the earlier message is returned, and nothing should be sent again).
  * Throws AppError EVENT_ENDED when the event's chat is closed: nothing is stored.
+ *
+ * H1b (26 Oct 2026) — the event's row is read with a share lock (FOR SHARE OF s). A completion that has written the
+ * row holds it until it commits, so a send in that moment waits, then reads the row as completed and stores nothing;
+ * a completion that comes while a message is being stored waits for it. Nothing is stored after the end. Without the
+ * lock the read was a snapshot from before the completion's commit, and the message was stored after it.
  */
 export async function persistEventChatMessage(
   input: NewEventChatMessage,
@@ -282,6 +287,7 @@ export async function persistEventChatMessage(
        FROM sessions s
        LEFT JOIN matches m ON m.id = $7::uuid AND m.session_id = s.id
       WHERE s.id = $1 AND s.status NOT IN ('completed', 'cancelled')
+        FOR SHARE OF s
      ON CONFLICT (session_id, sender_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
      RETURNING id, created_at`,
     [input.sessionId, input.senderId, senderName, input.senderIsHost, input.scope, roomId, matchId, audience,
@@ -320,7 +326,8 @@ export async function persistEventChatMessage(
 /**
  * Gives or takes back a member's reaction on a message they can see, in an event whose chat is open. Returns
  * every reaction on the message (each with who gave it) and who the message reached, so the update goes to the
- * same people; null when the member cannot react to it.
+ * same people; null when the member cannot react to it. The event's row is read with a share lock held until the
+ * reaction is written, so, as with a message, nothing is changed after the end (H1b).
  */
 export async function toggleEventChatReaction(input: {
   sessionId: string;
@@ -341,7 +348,8 @@ export async function toggleEventChatReaction(input: {
           AND NOT EXISTS (
             SELECT 1 FROM user_blocks b
              WHERE (b.blocker_id = $3 AND b.blocked_id = m.sender_id)
-                OR (b.blocker_id = m.sender_id AND b.blocked_id = $3))`,
+                OR (b.blocker_id = m.sender_id AND b.blocked_id = $3))
+          FOR SHARE OF s`,
       [input.messageId, input.sessionId, input.userId],
     );
     const found = message.rows[0];

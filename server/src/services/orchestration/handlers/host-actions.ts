@@ -350,6 +350,8 @@ export async function handleHostStart(
       pendingRoundNumber: null,
       manuallyLeftRound: existing?.manuallyLeftRound ?? new Set(),
       participantStates: existing?.participantStates,
+      // H1b — a kick in the pre-event lobby that the database has not taken yet is still finished after Go Live.
+      unsavedRemovals: existing?.unsavedRemovals,
     };
 
     activeSessions.set(data.sessionId, activeSession);
