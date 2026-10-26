@@ -18,6 +18,7 @@ import { config } from '../../../config';
 import logger from '../../../config/logger';
 import { userRoom, activeSessions } from './session-state';
 import { readCanonical, CanonicalSessionState, ParticipantLocation } from './canonical-state';
+import { liveStateAccess } from '../event-room-entry';
 
 export interface StateSnapshotParticipant {
   userId: string;
@@ -187,20 +188,18 @@ export async function handleResync(_io: SocketServer, socket: Socket, data: { se
       // is RECOVERABLE: a returning/reconnecting participant is briefly 'left'
       // and the reconnect path resets them to the main room (FIX A). Evicting
       // 'left' here bounced legitimate returners to the recap — they never got
-      // back to the main room. A status-lookup failure degrades to the token
-      // gate (best-effort).
-      try {
-        const { query } = await import('../../../db');
-        const statusRow = await query<{ status: string }>(
-          `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
-          [data.sessionId, userId],
-        );
-        const st = statusRow.rows[0]?.status;
-        if (st === 'removed') {
-          socket.emit('session:evicted', { reason: 'removed_from_event' });
-          return;
-        }
-      } catch { /* status check best-effort — buildYou still gates the token */ }
+      // back to the main room.
+      //
+      // H1 fix round 1 — and only someone the event admits, or a socket its join already let into the room, is
+      // answered at all: the snapshot is the live roster, and it used to go to any signed-in socket that named
+      // the event. Everyone else gets nothing (one read, as the removal check was; a failed read answers a socket
+      // in the room and nobody outside it).
+      const st = await liveStateAccess(socket, data.sessionId, userId, (socket.data as { role?: string } | undefined)?.role);
+      if (st === 'removed') {
+        socket.emit('session:evicted', { reason: 'removed_from_event' });
+        return;
+      }
+      if (st === 'ignore') return;
       // June-13 (Stefan's event #2) — STALE BREAKOUT HEAL. A participant whose
       // tab was throttled/backgrounded during a round-end can be left with a
       // canonical 'breakout' location pointing at a match that has already
@@ -234,9 +233,8 @@ export async function handleResync(_io: SocketServer, socket: Socket, data: { se
       if (!sessLocs) { sessLocs = new Map(); lastEmittedLocation.set(data.sessionId, sessLocs); }
       sessLocs.set(userId, locationKey(p.location));
       socket.emit('state:snapshot', { ...base, you });
-    } else {
-      socket.emit('state:snapshot', base);
     }
+    // A socket with no signed-in person (none passes the handshake) is not answered.
   } catch (err) {
     logger.warn({ err, sessionId: data?.sessionId }, 'handleResync failed');
   }

@@ -1,20 +1,29 @@
 // ─── Session Access Control ──────────────────────────────────────────────────
 // Read-access gate for session detail endpoints. Prevents metadata leaks to
 // authenticated users who are neither participants nor pod members. Also who
-// an event lets into its live room (eventRoomAdmission), and what it tells
-// everyone else (eventRoomRefusal).
+// an event lets into its live room (eventRoomAdmission) and who may say they
+// are in one of its breakout rooms (mayClaimBreakoutRoom). What the live join
+// does with those facts lives in orchestration/event-room-entry.ts.
 
-import { ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { query } from '../../db';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isAdminRole(role: string | undefined): boolean {
+  return !!role && hasRoleAtLeast(role as UserRole, UserRole.ADMIN);
+}
 
 /**
  * Determines if a user is allowed to view a session's details.
  *
  * Rules (short-circuit in order):
  *   1. Admin / super_admin → allowed
- *   2. Session host → allowed
+ *   2. Session host or co-host → allowed
  *   3. Registered participant (status != 'removed') → allowed
- *   4. Pod member → allowed
+ *   4. ACTIVE pod member → allowed (H1 fix round 1: a left, pending, invited,
+ *      declined or removed membership no longer counts; such a person cannot
+ *      register for the pod's events either)
  *   5. Pod is public → allowed to any authenticated user (discovery)
  *   6. Else → denied
  *
@@ -32,17 +41,19 @@ export async function canViewSession(
     host_user_id: string;
     pod_id: string | null;
     pod_visibility: string | null;
+    is_cohost: boolean;
   }>(
-    `SELECT s.host_user_id, s.pod_id, p.visibility AS pod_visibility
+    `SELECT s.host_user_id, s.pod_id, p.visibility AS pod_visibility,
+            EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost
      FROM sessions s
      LEFT JOIN pods p ON p.id = s.pod_id
      WHERE s.id = $1`,
-    [sessionId],
+    [sessionId, userId],
   );
   if (sessRes.rows.length === 0) return false;
   const s = sessRes.rows[0];
 
-  if (s.host_user_id === userId) return true;
+  if (s.host_user_id === userId || s.is_cohost) return true;
 
   const partRes = await query<{ status: string }>(
     `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
@@ -52,7 +63,7 @@ export async function canViewSession(
 
   if (s.pod_id) {
     const memRes = await query<{ role: string }>(
-      `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 LIMIT 1`,
+      `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active' LIMIT 1`,
       [s.pod_id, userId],
     );
     if (memRes.rows.length > 0) return true;
@@ -93,25 +104,35 @@ export async function eventRoomAdmission(
   const facts = result.rows[0];
   if (!facts) return 'refused';
   if (facts.participant_status === 'removed') return 'removed';
-  const admin = !!userRole && hasRoleAtLeast(userRole as UserRole, UserRole.ADMIN);
-  if (facts.is_host || facts.is_cohost || admin || facts.participant_status !== null) return 'admitted';
+  if (facts.is_host || facts.is_cohost || isAdminRole(userRole) || facts.participant_status !== null) return 'admitted';
   return 'refused';
 }
 
 /**
- * The one refusal someone the event does not admit receives, as the socket `error` production's live page
- * shows (a toast and a banner with the sentence). Words that are true for them: the event is over, it is
- * only for its pod's members (the registration refused them as not one), or the join could not be
- * completed and a refresh tries again.
+ * Whether someone may say they are in a breakout room (presence:room_joined), which puts them among the
+ * people that room's chat and reactions reach: someone in that match, or the event's host, a co-host or an
+ * admin visiting it. The match must belong to the event and carry that room id; a removed person never
+ * may. One read.
  */
-export function eventRoomRefusal(
-  eventStatus: string,
-  registrationCode: string | undefined,
-): { code: string; message: string } {
-  if (eventStatus === 'completed') return { code: ErrorCodes.EVENT_ENDED, message: 'This event has ended.' };
-  if (eventStatus === 'cancelled') return { code: ErrorCodes.EVENT_ENDED, message: 'This event was cancelled.' };
-  if (registrationCode === ErrorCodes.AUTH_FORBIDDEN) {
-    return { code: ErrorCodes.AUTH_FORBIDDEN, message: 'This event is only open to its pod\'s members.' };
-  }
-  return { code: 'JOIN_FAILED', message: 'You could not join this event. Refresh the page to try again.' };
+export async function mayClaimBreakoutRoom(
+  sessionId: string,
+  matchId: string,
+  roomId: string,
+  userId: string,
+  userRole: string | undefined,
+): Promise<boolean> {
+  if (!UUID.test(sessionId) || !UUID.test(matchId)) return false;
+  const result = await query<{ in_match: boolean; is_host: boolean; is_cohost: boolean; participant_status: string | null }>(
+    `SELECT COALESCE(m.participant_a_id = $3 OR m.participant_b_id = $3 OR m.participant_c_id = $3, FALSE) AS in_match,
+            s.host_user_id = $3 AS is_host,
+            EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $3) AS is_cohost,
+            p.status::text AS participant_status
+       FROM matches m JOIN sessions s ON s.id = m.session_id
+       LEFT JOIN session_participants p ON p.session_id = s.id AND p.user_id = $3
+      WHERE m.id = $1 AND m.session_id = $2 AND m.room_id = $4`,
+    [matchId, sessionId, userId, roomId],
+  );
+  const facts = result.rows[0];
+  if (!facts || facts.participant_status === 'removed') return false;
+  return facts.in_match || facts.is_host || facts.is_cohost || isAdminRole(userRole);
 }

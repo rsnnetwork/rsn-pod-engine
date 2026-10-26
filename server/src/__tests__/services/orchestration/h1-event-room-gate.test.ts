@@ -27,6 +27,7 @@ const world = {
   cohosts: [] as Row[],
   users: new Map<string, Row>(),
   messages: [] as Row[],
+  matches: [] as Row[],
 };
 
 /** Holds one query until released, so a test can act while a join is still being decided. */
@@ -39,10 +40,14 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
 }
 const mockQuery = jest.fn(fakeQuery);
 
-/** The database fails the admission check (and answers everything else). */
-function failTheAdmissionCheck() {
+/** The database fails the admission check `times` times (and answers everything else). */
+function failTheAdmissionCheck(times = Infinity) {
+  let failures = 0;
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
-    if (/^SELECT s\.host_user_id = \$2 AS is_host/.test(sql.replace(/\s+/g, ' ').trim())) throw new Error('connection terminated unexpectedly');
+    if (/^SELECT s\.host_user_id = \$2 AS is_host/.test(sql.replace(/\s+/g, ' ').trim()) && failures < times) {
+      failures++;
+      throw new Error('connection terminated unexpectedly');
+    }
     return fakeQuery(sql, params);
   });
 }
@@ -67,12 +72,7 @@ jest.mock('../../../config/logger', () => ({
   __esModule: true,
 }));
 jest.mock('../../../services/redis/redis.client', () => ({ getRedisClient: () => null, __esModule: true }));
-// The real registration and event reads; only the status write (not what this suite is about) is a spy.
-jest.mock('../../../services/session/session.service', () => ({
-  ...jest.requireActual('../../../services/session/session.service'),
-  updateParticipantStatus: jest.fn(async () => {}),
-  __esModule: true,
-}));
+// session.service is the real one (registration, event reads, status writes, LiveKit tokens), over the fake database.
 jest.mock('../../../services/session/session-state-snapshot.service', () => ({
   buildSessionStateSnapshot: jest.fn(async (sessionId: string) => ({
     connectedParticipants: [], sessionStatus: world.sessions.get(sessionId)?.status, hostInLobby: true,
@@ -101,13 +101,18 @@ jest.mock('../../../services/rating/rating.service', () => ({
 
 import { randomUUID } from 'crypto';
 import type { Server as SocketServer, Socket } from 'socket.io';
+import { ParticipantStatus } from '@rsn/shared';
 import {
   activeSessions, disconnectTimeouts, sessionRoom, userRoom,
 } from '../../../services/orchestration/state/session-state';
-import { handleJoinSession, handleHeartbeat } from '../../../services/orchestration/handlers/participant-flow';
+import {
+  handleJoinSession, handleHeartbeat, handleLeaveSession, handleReady, handleRoomJoined,
+} from '../../../services/orchestration/handlers/participant-flow';
 import {
   handleChatSend, handleChatRequestHistory, handleReactionSend,
 } from '../../../services/orchestration/handlers/chat-handlers';
+import { reconcileSessionStates, setPresence } from '../../../services/orchestration/state/participant-state-machine';
+import * as sessionService from '../../../services/session/session.service';
 
 // ── The fake database ────────────────────────────────────────────────────────
 
@@ -156,6 +161,32 @@ function answer(sql: string, params: unknown[]): Answer {
       || sql === 'SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2') {
     const p = participant(a, b);
     return { rows: p ? [{ id: p.id, status: p.status }] : [] };
+  }
+  // A status write: the state machine's, the legacy fallback's and the reconciler's all start this way. One that
+  // carries the removal guard leaves a removed row as it is, as Postgres would.
+  if (sql.startsWith('UPDATE session_participants SET status = $1')) {
+    const p = participant(params[params.length - 2], params[params.length - 1]);
+    if (!p || (sql.includes("status <> 'removed'") && p.status === 'removed')) return { rows: [], rowCount: 0 };
+    p.status = params[0];
+    return { rows: [], rowCount: 1 };
+  }
+  // The reconciler reads every row of the event, to write memory into it.
+  if (sql === 'SELECT user_id, status, joined_at FROM session_participants WHERE session_id = $1') {
+    return { rows: world.participants.filter((p) => p.session_id === a).map((p) => ({ user_id: p.user_id, status: p.status, joined_at: p.joined_at })) };
+  }
+  // Who may say they are in a breakout room (presence:room_joined).
+  if (/FROM matches m JOIN sessions s ON s\.id = m\.session_id/.test(sql)) {
+    const [matchId, sessionId, who, roomId] = params;
+    const m = world.matches.find((r) => r.id === matchId && r.session_id === sessionId && r.room_id === roomId);
+    if (!m) return { rows: [] };
+    return {
+      rows: [{
+        in_match: [m.a, m.b, m.c].includes(who),
+        is_host: world.sessions.get(sessionId as string)?.host_user_id === who,
+        is_cohost: world.cohosts.some((c) => c.session_id === sessionId && c.user_id === who),
+        participant_status: participant(sessionId, who)?.status ?? null,
+      }],
+    };
   }
   if (sql.startsWith("UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE")) {
     const p = participant(a, b)!;
@@ -310,6 +341,23 @@ function expectRefused(s: FakeSocket, sessionId: string, refusal: { code: string
 }
 
 const POD_ONLY = { code: 'AUTH_FORBIDDEN', message: 'This event is only open to its pod\'s members.' };
+const RETRY = { code: 'JOIN_FAILED', message: 'You could not join this event. Refresh the page to try again.' };
+const statusOf = (sessionId: string, userId: string) => participant(sessionId, userId)?.status ?? null;
+
+/** A running private event: its host and a registered member are in; a stranger has a socket. */
+async function privateEventWithMemberChatting() {
+  const ev = event({ visibility: 'private' });
+  const member = person('Member');
+  podMember(ev.podId, member);
+  register(ev.sessionId, member);
+  const hostSock = connect(ev.host);
+  const memberSock = connect(member);
+  await join(hostSock, ev.sessionId);
+  await join(memberSock, ev.sessionId);
+  const stranger = person('Stranger');
+  const strangerSock = connect(stranger);
+  return { ...ev, member, hostSock, memberSock, stranger, strangerSock };
+}
 
 beforeAll(() => {
   jest.useFakeTimers({ doNotFake: ['Date', 'setImmediate', 'clearImmediate', 'nextTick', 'queueMicrotask', 'performance'] });
@@ -320,7 +368,7 @@ afterAll(() => {
 
 beforeEach(() => {
   world.sessions.clear(); world.pods.clear(); world.users.clear();
-  world.podMembers = []; world.participants = []; world.cohosts = []; world.messages = [];
+  world.podMembers = []; world.participants = []; world.cohosts = []; world.messages = []; world.matches = [];
   sockets.clear();
   activeSessions.clear();
   disconnectTimeouts.clear();
@@ -337,20 +385,6 @@ afterEach(() => {
 // ── Refused ──────────────────────────────────────────────────────────────────
 
 describe('a stranger to a private pod\'s running event', () => {
-  async function privateEventWithMemberChatting() {
-    const ev = event({ visibility: 'private' });
-    const member = person('Member');
-    podMember(ev.podId, member);
-    register(ev.sessionId, member);
-    const hostSock = connect(ev.host);
-    const memberSock = connect(member);
-    await join(hostSock, ev.sessionId);
-    await join(memberSock, ev.sessionId);
-    const stranger = person('Stranger');
-    const strangerSock = connect(stranger);
-    return { ...ev, member, hostSock, memberSock, stranger, strangerSock };
-  }
-
   it('is refused with one sentence: not in the room, not present, no state, no history, nobody told they came', async () => {
     const t = await privateEventWithMemberChatting();
     await handleChatSend(io, asSocket(t.memberSock), { sessionId: t.sessionId, message: 'Welcome all', scope: 'lobby' });
@@ -481,8 +515,8 @@ describe('a stranger to a private pod\'s running event', () => {
   });
 });
 
-describe('when the check itself cannot run', () => {
-  it('nobody is let in on a guess: the join is refused with a sentence that asks for a refresh', async () => {
+describe('when the admission read fails (fix round 1: one pool or Neon error must never drop a member)', () => {
+  it('a registered member opening the page is let in: the registration proved their row', async () => {
     const ev = event({ visibility: 'private' });
     const member = person('Member');
     podMember(ev.podId, member);
@@ -490,12 +524,215 @@ describe('when the check itself cannot run', () => {
     failTheAdmissionCheck();
     const s = connect(member);
     await join(s, ev.sessionId);
-    expectRefused(s, ev.sessionId, { code: 'JOIN_FAILED', message: 'You could not join this event. Refresh the page to try again.' });
-    // The refresh it asks for lets them in once the database answers again.
-    mockQuery.mockImplementation(fakeQuery);
-    const refreshed = connect(member);
-    await join(refreshed, ev.sessionId);
-    expectAdmitted(refreshed, ev.sessionId);
+    expectAdmitted(s, ev.sessionId);
+    expect(present(ev.sessionId, member)).toBe(true);
+  });
+
+  it('a member already in the room stays in it when their page asks again (a focus, visibility or network return)', async () => {
+    const t = await privateEventWithMemberChatting();
+    failTheAdmissionCheck();
+    t.memberSock.got = [];
+    await join(t.memberSock, t.sessionId);
+    expect(inRoom(t.memberSock, t.sessionId)).toBe(true);
+    expect(present(t.sessionId, t.member)).toBe(true);
+    expect(events(t.memberSock)).not.toContain('error');
+  });
+
+  it('a co-host with no participant row, already in the room, is not taken out of it either', async () => {
+    const ev = event({ visibility: 'private' });
+    const helper = person('Helper');
+    world.cohosts.push({ session_id: ev.sessionId, user_id: helper, role: 'co_host' });
+    const s = connect(helper);
+    await join(s, ev.sessionId);
+    expectAdmitted(s, ev.sessionId);
+    failTheAdmissionCheck();
+    s.got = [];
+    await join(s, ev.sessionId);
+    expect(inRoom(s, ev.sessionId)).toBe(true);
+    expect(events(s)).not.toContain('error');
+  });
+
+  it('within the reconnect grace: a member who dropped comes back on a new socket and is let in, the grace cancelled', async () => {
+    const ev = event({ visibility: 'private', status: 'round_active' });
+    const member = person('Member');
+    podMember(ev.podId, member);
+    register(ev.sessionId, member, 'disconnected');
+    const graceExpired = jest.fn();
+    disconnectTimeouts.set(`${ev.sessionId}:${member}`, setTimeout(graceExpired, 15_000));
+    failTheAdmissionCheck();
+    const s = connect(member);
+    await join(s, ev.sessionId);
+    expectAdmitted(s, ev.sessionId);
+    expect(disconnectTimeouts.has(`${ev.sessionId}:${member}`)).toBe(false);
+    jest.advanceTimersByTime(16_000);
+    expect(graceExpired).not.toHaveBeenCalled();
+    expect(present(ev.sessionId, member)).toBe(true);
+  });
+
+  it('a stranger is still refused: asked once more, then told to refresh', async () => {
+    const t = await privateEventWithMemberChatting();
+    failTheAdmissionCheck();
+    await join(t.strangerSock, t.sessionId);
+    expectRefused(t.strangerSock, t.sessionId, RETRY);
+  });
+
+  it('a stranger whose second read comes back is refused as not a member', async () => {
+    const t = await privateEventWithMemberChatting();
+    failTheAdmissionCheck(1);
+    await join(t.strangerSock, t.sessionId);
+    expectRefused(t.strangerSock, t.sessionId, POD_ONLY);
+  });
+});
+
+describe('a removal is terminal: nothing a removed person sends undoes it (fix round 1)', () => {
+  /** A member who was in the event, then kicked: the kick's own writes (the status, the room, the presence). */
+  async function kickedMember() {
+    const t = await privateEventWithMemberChatting();
+    await sessionService.updateParticipantStatus(t.sessionId, t.member, ParticipantStatus.REMOVED);
+    t.memberSock.leave(sessionRoom(t.sessionId));
+    setPresence(t.sessionId, t.member, null);
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    return t;
+  }
+  const EVICTED = [{ event: 'session:evicted', payload: { reason: 'removed_from_event' } }];
+
+  it('their page leaving (production\'s client sends session:leave when they click away from the recap) leaves them removed', async () => {
+    const t = await kickedMember();
+    await handleLeaveSession(io, asSocket(t.memberSock), { sessionId: t.sessionId });
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    const back = connect(t.member);
+    await join(back, t.sessionId);
+    expect(back.got).toEqual(EVICTED);
+    await expect(sessionService.generateLiveKitToken(t.sessionId, t.member)).rejects.toThrow('User is not a participant in this event');
+  });
+
+  it('presence:ready (crafted; production\'s client never sends it) changes nothing', async () => {
+    const t = await kickedMember();
+    await handleReady(io, asSocket(t.memberSock), { sessionId: t.sessionId });
+    await handleReady(io, asSocket(connect(t.member)), { sessionId: t.sessionId });
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    const back = connect(t.member);
+    await join(back, t.sessionId);
+    expect(back.got).toEqual(EVICTED);
+    await expect(sessionService.generateLiveKitToken(t.sessionId, t.member)).rejects.toThrow('User is not a participant in this event');
+  });
+
+  it('no status write moves a removed row: not the state machine\'s fallback, not its own write, not the reconciler', async () => {
+    const t = await kickedMember();
+    // The state machine refuses every move out of REMOVED and used to fall back to a plain write.
+    for (const st of [ParticipantStatus.LEFT, ParticipantStatus.IN_LOBBY, ParticipantStatus.DISCONNECTED, ParticipantStatus.CHECKED_IN]) {
+      await sessionService.updateParticipantStatus(t.sessionId, t.member, st);
+    }
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    // With nothing held in memory for them (after a restart, or a kick on another instance) the transition writes.
+    activeSessions.get(t.sessionId)!.participantStates?.delete(t.member);
+    await sessionService.updateParticipantStatus(t.sessionId, t.member, ParticipantStatus.LEFT);
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    // That left memory saying LEFT; the reconciler writes memory into the database.
+    expect(activeSessions.get(t.sessionId)!.participantStates?.get(t.member)?.state).toBe('left');
+    await reconcileSessionStates(t.sessionId);
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    expect(activeSessions.get(t.sessionId)!.participantStates?.get(t.member)?.state).toBe('removed');
+    // With no event held in memory at all, the legacy write runs.
+    activeSessions.delete(t.sessionId);
+    await sessionService.updateParticipantStatus(t.sessionId, t.member, ParticipantStatus.LEFT);
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+  });
+
+  it('a fresh personal invite still re-admits them (the registration\'s own write), and they come back in', async () => {
+    const t = await kickedMember();
+    await sessionService.registerParticipant(t.sessionId, t.member, undefined, { allowRemovedReadmit: true });
+    expect(statusOf(t.sessionId, t.member)).toBe('registered');
+    const back = connect(t.member);
+    await join(back, t.sessionId);
+    expectAdmitted(back, t.sessionId);
+    expect(statusOf(t.sessionId, t.member)).toBe('in_lobby');
+  });
+
+  it('a stranger\'s presence:ready leaves no trace of them in the event', async () => {
+    const t = await privateEventWithMemberChatting();
+    await handleReady(io, asSocket(t.strangerSock), { sessionId: t.sessionId });
+    expect(activeSessions.get(t.sessionId)!.participantStates?.has(t.stranger) ?? false).toBe(false);
+  });
+});
+
+describe('Leave Event from a page the event never let in (fix round 1)', () => {
+  it('does nothing beyond leaving: no status write, nobody told, nothing held for them', async () => {
+    const t = await privateEventWithMemberChatting();
+    await join(t.strangerSock, t.sessionId);
+    // The member's own join scheduled a list broadcast: let it go out before the stranger leaves.
+    jest.advanceTimersByTime(400);
+    await flush();
+    t.hostSock.got = []; t.memberSock.got = [];
+    const statusWrites = jest.spyOn(sessionService, 'updateParticipantStatus');
+    await handleLeaveSession(io, asSocket(t.strangerSock), { sessionId: t.sessionId });
+    jest.advanceTimersByTime(400);
+    await flush();
+    expect(statusWrites).not.toHaveBeenCalled();
+    expect(t.hostSock.got).toEqual([]);
+    expect(t.memberSock.got).toEqual([]);
+    expect(activeSessions.get(t.sessionId)!.participantStates?.has(t.stranger) ?? false).toBe(false);
+  });
+
+  it('a member\'s Leave Event still marks them left and tells the room', async () => {
+    const t = await privateEventWithMemberChatting();
+    t.hostSock.got = [];
+    await handleLeaveSession(io, asSocket(t.memberSock), { sessionId: t.sessionId });
+    expect(statusOf(t.sessionId, t.member)).toBe('left');
+    expect(t.hostSock.got).toContainEqual({ event: 'participant:left', payload: { userId: t.member, isHost: false } });
+  });
+});
+
+describe('presence:room_joined (fix round 1): only someone in that match, or a host visiting it, is put in its room', () => {
+  async function roundWithOneRoom() {
+    const t = await privateEventWithMemberChatting();
+    const partner = person('Partner');
+    podMember(t.podId, partner);
+    register(t.sessionId, partner);
+    const partnerSock = connect(partner);
+    await join(partnerSock, t.sessionId);
+    const matchId = randomUUID();
+    const roomId = `match-${t.sessionId}-r1-${matchId.slice(0, 8)}`;
+    world.matches.push({ id: matchId, session_id: t.sessionId, room_id: roomId, a: t.member, b: partner, c: null, status: 'active' });
+    return { ...t, partner, partnerSock, matchId, roomId };
+  }
+  const roomOf = (sessionId: string, userId: string) => activeSessions.get(sessionId)?.roomParticipants?.get(userId)?.roomId ?? null;
+
+  it('the two in the match are put in its room; a stranger naming it is not, and receives none of its chat', async () => {
+    const t = await roundWithOneRoom();
+    const claim = { sessionId: t.sessionId, matchId: t.matchId, roomId: t.roomId };
+    await handleRoomJoined(io, asSocket(t.memberSock), claim);
+    await handleRoomJoined(io, asSocket(t.partnerSock), claim);
+    await handleRoomJoined(io, asSocket(t.strangerSock), claim);
+    expect(roomOf(t.sessionId, t.member)).toBe(t.roomId);
+    expect(roomOf(t.sessionId, t.partner)).toBe(t.roomId);
+    expect(roomOf(t.sessionId, t.stranger)).toBeNull();
+    t.strangerSock.got = [];
+    await handleChatSend(io, asSocket(t.memberSock), { sessionId: t.sessionId, message: 'Just us two', scope: 'room' });
+    expect(chatTexts(t.partnerSock)).toContain('Just us two');
+    expect(t.strangerSock.got).toEqual([]);
+  });
+
+  it('someone else in the event, a wrong room id, and a removed person are not put in it', async () => {
+    const t = await roundWithOneRoom();
+    const other = person('Other');
+    podMember(t.podId, other);
+    register(t.sessionId, other);
+    const otherSock = connect(other);
+    await join(otherSock, t.sessionId);
+    await handleRoomJoined(io, asSocket(otherSock), { sessionId: t.sessionId, matchId: t.matchId, roomId: t.roomId });
+    await handleRoomJoined(io, asSocket(t.memberSock), { sessionId: t.sessionId, matchId: t.matchId, roomId: 'some-other-room' });
+    await sessionService.updateParticipantStatus(t.sessionId, t.partner, ParticipantStatus.REMOVED);
+    await handleRoomJoined(io, asSocket(t.partnerSock), { sessionId: t.sessionId, matchId: t.matchId, roomId: t.roomId });
+    expect(roomOf(t.sessionId, other)).toBeNull();
+    expect(roomOf(t.sessionId, t.member)).toBeNull();
+    expect(roomOf(t.sessionId, t.partner)).toBeNull();
+  });
+
+  it('the host visiting the room is put in it', async () => {
+    const t = await roundWithOneRoom();
+    await handleRoomJoined(io, asSocket(t.hostSock), { sessionId: t.sessionId, matchId: t.matchId, roomId: t.roomId });
+    expect(roomOf(t.sessionId, t.host)).toBe(t.roomId);
   });
 });
 
@@ -635,7 +872,7 @@ describe('the people an event admits', () => {
     expect(chatTexts(hostSock)).toEqual(['Welcome', 'Thanks']);
   });
 
-  it('a participant who left comes back in, and is registered again', async () => {
+  it('a participant who left comes back in, and is in the main room again', async () => {
     const ev = event({ visibility: 'private' });
     const leaver = person('Leaver');
     podMember(ev.podId, leaver);
@@ -644,7 +881,7 @@ describe('the people an event admits', () => {
     await join(s, ev.sessionId);
     expectAdmitted(s, ev.sessionId);
     expect(present(ev.sessionId, leaver)).toBe(true);
-    expect(world.participants.find((p) => p.user_id === leaver)?.status).toBe('registered');
+    expect(world.participants.find((p) => p.user_id === leaver)?.status).toBe('in_lobby');
   });
 
   it('a participant who left comes back in even when the event has filled up since', async () => {
@@ -694,7 +931,7 @@ describe('the people an event admits', () => {
     const s = connect(late);
     await join(s, ev.sessionId);
     expectAdmitted(s, ev.sessionId);
-    expect(world.participants.find((p) => p.user_id === late)?.status).toBe('registered');
+    expect(world.participants.find((p) => p.user_id === late)?.status).toBe('in_lobby');
     expect(mockRepairFutureRounds).toHaveBeenCalledWith(ev.sessionId, 2, 'late_joiner', expect.any(Set));
   });
 
@@ -705,7 +942,17 @@ describe('the people an event admits', () => {
     await join(s, ev.sessionId);
     expectAdmitted(s, ev.sessionId);
     expect(world.podMembers.find((m) => m.user_id === visitor)?.status).toBe('active');
-    expect(world.participants.find((p) => p.user_id === visitor)?.status).toBe('registered');
+    expect(world.participants.find((p) => p.user_id === visitor)?.status).toBe('in_lobby');
+  });
+
+  it('an active member of an INVITE-ONLY pod is registered and let in', async () => {
+    const ev = event({ visibility: 'invite_only' });
+    const member = person('Member');
+    podMember(ev.podId, member);
+    const s = connect(member);
+    await join(s, ev.sessionId);
+    expectAdmitted(s, ev.sessionId);
+    expect(present(ev.sessionId, member)).toBe(true);
   });
 
   it('their heartbeats keep them present; one that arrives before their own join is dropped, then the join marks them', async () => {

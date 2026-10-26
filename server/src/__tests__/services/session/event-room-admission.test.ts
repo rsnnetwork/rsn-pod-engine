@@ -1,10 +1,14 @@
-// ─── Who an event lets into its live room (H1, 26 Oct 2026) ──────────────────────────────────────────
+// ─── Who an event lets into its live room, and who may see it (H1, 26 Oct 2026) ──────────────────────
 //
 // One positive check decides whether a socket joins an event's live room: the event's host, a co-host or
 // moderator, a platform admin or super admin (they may act as host), or someone whose participant row is
-// not `removed`. Someone who left is coming back, which is recoverable; a removed row is terminal and wins
+// not removed. Someone who left is coming back, which is recoverable; a removed row is terminal and wins
 // over every role, as the registration's own REMOVED_FROM_EVENT check already does. Everyone else is
-// refused, and is told in words that are true for them.
+// refused (the words they read live with the join: orchestration/event-room-entry).
+//
+// Fix round 1: canViewSession (the live page's REST gate) counts only an ACTIVE pod membership, and lets a
+// co-host in; mayClaimBreakoutRoom lets only someone in a match (or a host, co-host or admin visiting it)
+// say they are in its room.
 
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({
@@ -12,7 +16,7 @@ jest.mock('../../../db', () => ({
   __esModule: true,
 }));
 
-import { eventRoomAdmission, eventRoomRefusal } from '../../../services/session/session-access';
+import { canViewSession, eventRoomAdmission, mayClaimBreakoutRoom } from '../../../services/session/session-access';
 
 const EVENT = '0c1d2e3f-4a5b-4c6d-8e7f-8a9b0c1d2e3f';
 const ME = '1d2e3f4a-5b6c-4d7e-9f80-9b0c1d2e3f4a';
@@ -82,42 +86,139 @@ describe('eventRoomAdmission', () => {
   });
 });
 
-describe('eventRoomRefusal: what the refused person reads', () => {
-  it('an event that is over', () => {
-    expect(eventRoomRefusal('completed', 'SESSION_NOT_SCHEDULED')).toEqual({ code: 'EVENT_ENDED', message: 'This event has ended.' });
-  });
+// ── canViewSession (fix round 1) ────────────────────────────────────────────
 
-  it('a cancelled event', () => {
-    expect(eventRoomRefusal('cancelled', 'SESSION_NOT_SCHEDULED')).toEqual({ code: 'EVENT_ENDED', message: 'This event was cancelled.' });
-  });
+const HOST = '2e3f4a5b-6c7d-4e8f-a091-0c1d2e3f4a5b';
+const POD = '3f4a5b6c-7d8e-4f90-b1a2-1d2e3f4a5b6c';
 
-  it('a private or invite-only pod\'s event, for someone who is not one of its members', () => {
-    for (const status of ['scheduled', 'lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby']) {
-      expect(eventRoomRefusal(status, 'AUTH_FORBIDDEN')).toEqual({
-        code: 'AUTH_FORBIDDEN',
-        message: 'This event is only open to its pod\'s members.',
-      });
+type World = {
+  visibility: string; cohosts: string[]; participants: Record<string, string>; members: Record<string, string>;
+};
+
+/** A database that reads its answers from a tiny world, by what each query asks. */
+function world(w: Partial<World>) {
+  const full: World = { visibility: 'private', cohosts: [], participants: {}, members: {}, ...w };
+  mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+    const flat = sql.replace(/\s+/g, ' ');
+    const who = params[1] as string;
+    if (/FROM sessions s LEFT JOIN pods p/.test(flat)) {
+      return { rows: [{ host_user_id: HOST, pod_id: POD, pod_visibility: full.visibility, is_cohost: full.cohosts.includes(who) }] };
     }
+    if (/FROM session_participants WHERE session_id = \$1 AND user_id = \$2/.test(flat)) {
+      const st = full.participants[who];
+      return { rows: st ? [{ status: st }] : [] };
+    }
+    if (/FROM pod_members WHERE pod_id = \$1 AND user_id = \$2/.test(flat)) {
+      const st = full.members[who];
+      const activeOnly = /status = 'active'/.test(flat);
+      return { rows: st && (!activeOnly || st === 'active') ? [{ role: 'member' }] : [] };
+    }
+    return { rows: [] };
+  });
+}
+
+describe('canViewSession: who may load an event and its state (the live page\'s REST gate)', () => {
+  it('keeps admins, the host, any participant who is not removed, active pod members and public pods', async () => {
+    world({});
+    expect(await canViewSession(ME, EVENT, 'admin')).toBe(true);
+    expect(await canViewSession(ME, EVENT, 'super_admin')).toBe(true);
+    expect(await canViewSession(HOST, EVENT, 'member')).toBe(true);
+    for (const status of ['registered', 'in_lobby', 'left', 'disconnected', 'no_show']) {
+      world({ participants: { [ME]: status } });
+      expect(await canViewSession(ME, EVENT, 'member')).toBe(true);
+    }
+    world({ members: { [ME]: 'active' } });
+    expect(await canViewSession(ME, EVENT, 'member')).toBe(true);
+    world({ visibility: 'public' });
+    expect(await canViewSession(ME, EVENT, 'member')).toBe(true);
   });
 
-  it('anything else (a registration that failed, a check that could not run) asks them to try again', () => {
-    for (const code of [undefined, 'NOT_FOUND', 'INTERNAL_ERROR']) {
-      expect(eventRoomRefusal('round_active', code)).toEqual({
-        code: 'JOIN_FAILED',
-        message: 'You could not join this event. Refresh the page to try again.',
-      });
-    }
+  it('now lets in a co-host with no participant row and no pod membership (they used to get a 403)', async () => {
+    world({ cohosts: [ME] });
+    expect(await canViewSession(ME, EVENT, 'member')).toBe(true);
   });
 
-  it('is always a plain sentence about an event: no code, no "session"', () => {
-    const all = [
-      eventRoomRefusal('completed', undefined), eventRoomRefusal('cancelled', undefined),
-      eventRoomRefusal('lobby_open', 'AUTH_FORBIDDEN'), eventRoomRefusal('lobby_open', undefined),
-    ];
-    for (const { message } of all) {
-      expect(message).toMatch(/^[A-Z].*\.$/);
-      expect(message).toMatch(/event/);
-      expect(message).not.toMatch(/session|_|[A-Z]{3,}/);
-    }
+  it.each(['left', 'pending_approval', 'invited', 'declined', 'removed', 'no_response'])(
+    'counts only an ACTIVE pod membership: a %s membership of a private or invite-only pod is not enough',
+    async (membership) => {
+      for (const visibility of ['private', 'invite_only']) {
+        world({ visibility, members: { [ME]: membership } });
+        expect(await canViewSession(ME, EVENT, 'member')).toBe(false);
+      }
+    },
+  );
+
+  it('a non-active member who is a participant of the event still loads it', async () => {
+    world({ members: { [ME]: 'left' }, participants: { [ME]: 'registered' } });
+    expect(await canViewSession(ME, EVENT, 'member')).toBe(true);
+  });
+
+  it('a removed participant loads it only through an active membership or a public pod', async () => {
+    world({ participants: { [ME]: 'removed' } });
+    expect(await canViewSession(ME, EVENT, 'member')).toBe(false);
+    world({ participants: { [ME]: 'removed' }, members: { [ME]: 'active' } });
+    expect(await canViewSession(ME, EVENT, 'member')).toBe(true);
+  });
+
+  it('a stranger, and an event that does not exist, are refused', async () => {
+    world({});
+    expect(await canViewSession(ME, EVENT, 'member')).toBe(false);
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [] });
+    expect(await canViewSession(ME, EVENT, 'member')).toBe(false);
+  });
+});
+
+// ── mayClaimBreakoutRoom (fix round 1) ──────────────────────────────────────
+
+const MATCH = '4a5b6c7d-8e9f-4a01-82b3-2e3f4a5b6c7d';
+const ROOM_ID = `match-${EVENT}-r1-4a5b6c7d`;
+
+type MatchFacts = { in_match: boolean; is_host: boolean; is_cohost: boolean; participant_status: string | null };
+function match(f: Partial<MatchFacts> | null) {
+  mockQuery.mockResolvedValueOnce({
+    rows: f === null ? [] : [{ in_match: false, is_host: false, is_cohost: false, participant_status: 'in_round', ...f }],
+  });
+}
+
+describe('mayClaimBreakoutRoom: who may say they are in a breakout room (presence:room_joined)', () => {
+  it('reads the match, its event and the caller in one parameterised query, room id included', async () => {
+    match({ in_match: true });
+    await mayClaimBreakoutRoom(EVENT, MATCH, ROOM_ID, ME, 'member');
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(params).toEqual([MATCH, EVENT, ME, ROOM_ID]);
+    expect(sql).toMatch(/FROM matches m/);
+    expect(sql).toMatch(/m\.room_id = \$4/);
+    expect(sql).not.toContain(MATCH);
+  });
+
+  it('allows someone in the match', async () => {
+    match({ in_match: true });
+    expect(await mayClaimBreakoutRoom(EVENT, MATCH, ROOM_ID, ME, 'member')).toBe(true);
+  });
+
+  it('allows the host, a co-host or an admin visiting the room', async () => {
+    match({ is_host: true, participant_status: null });
+    expect(await mayClaimBreakoutRoom(EVENT, MATCH, ROOM_ID, ME, 'member')).toBe(true);
+    match({ is_cohost: true });
+    expect(await mayClaimBreakoutRoom(EVENT, MATCH, ROOM_ID, ME, 'member')).toBe(true);
+    match({ participant_status: null });
+    expect(await mayClaimBreakoutRoom(EVENT, MATCH, ROOM_ID, ME, 'super_admin')).toBe(true);
+  });
+
+  it('refuses anyone else in the event, a removed person, and a match, event or room that do not line up', async () => {
+    match({});
+    expect(await mayClaimBreakoutRoom(EVENT, MATCH, ROOM_ID, ME, 'member')).toBe(false);
+    match({ in_match: true, participant_status: 'removed' });
+    expect(await mayClaimBreakoutRoom(EVENT, MATCH, ROOM_ID, ME, 'member')).toBe(false);
+    match(null);
+    expect(await mayClaimBreakoutRoom(EVENT, MATCH, 'some-other-room', ME, 'member')).toBe(false);
+  });
+
+  it('refuses ids that are not uuids without asking the database', async () => {
+    expect(await mayClaimBreakoutRoom(EVENT, 'not-a-match', ROOM_ID, ME, 'member')).toBe(false);
+    expect(await mayClaimBreakoutRoom('not-an-event', MATCH, ROOM_ID, ME, 'member')).toBe(false);
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });

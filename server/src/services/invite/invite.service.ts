@@ -481,12 +481,12 @@ async function applyInviteRegistration(
       out.podId = podId;
     }
 
+    // #4B (June-10 debrief) — a fresh PERSONAL invite (targeted email) is the
+    // host's way to re-admit a kicked user, so it lifts the removed-bar. A
+    // shareable/multi-use link (no inviteeEmail) must NOT silently re-admit a
+    // removed user — they stay bounced until personally re-invited.
+    const allowRemovedReadmit = !!invite.inviteeEmail;
     try {
-      // #4B (June-10 debrief) — a fresh PERSONAL invite (targeted email) is the
-      // host's way to re-admit a kicked user, so it lifts the removed-bar. A
-      // shareable/multi-use link (no inviteeEmail) must NOT silently re-admit a
-      // removed user — they stay bounced until personally re-invited.
-      const allowRemovedReadmit = !!invite.inviteeEmail;
       await sessionService.registerParticipant(invite.sessionId, userId, undefined, { allowRemovedReadmit });
     } catch (err) {
       if (err instanceof ConflictError) {
@@ -501,11 +501,17 @@ async function applyInviteRegistration(
     // Defensive idempotent INSERT to handle the rare case where
     // registerParticipant returned successfully but the row was wiped by
     // a parallel removal. ON CONFLICT preserves invariant.
+    // H1 fix round 1 — a row a kick has just made 'removed' is lifted only by a
+    // personal invite; a shared link leaves it removed (a removal is terminal).
     await query(
-      `INSERT INTO session_participants (session_id, user_id, status)
-       VALUES ($1, $2, 'registered')
-       ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
-       WHERE session_participants.status = 'removed'`,
+      allowRemovedReadmit
+        ? `INSERT INTO session_participants (session_id, user_id, status)
+           VALUES ($1, $2, 'registered')
+           ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
+           WHERE session_participants.status = 'removed'`
+        : `INSERT INTO session_participants (session_id, user_id, status)
+           VALUES ($1, $2, 'registered')
+           ON CONFLICT (session_id, user_id) DO NOTHING`,
       [invite.sessionId, userId],
     );
 

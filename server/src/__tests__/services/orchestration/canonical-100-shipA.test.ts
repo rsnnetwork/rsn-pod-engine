@@ -23,6 +23,10 @@ jest.mock('../../../services/session/session.service', () => ({
   getSessionById: jest.fn(async () => ({ lobbyRoomId: 'lobby-1' })),
   generateLiveKitToken: mintMock,
 }));
+// H1 (fix round 1) — a resync answers only someone the event admits; u1 is a participant.
+jest.mock('../../../services/session/session-access', () => ({
+  eventRoomAdmission: jest.fn(async () => 'admitted'),
+}));
 
 import { writeCanonical } from '../../../services/orchestration/state/canonical-state';
 import {
@@ -89,7 +93,7 @@ describe('Ship A — emitStateSnapshot v2 (per-recipient you, token on location 
       u1: { role: 'participant', connState: 'connected', location: { type: 'main' }, lastSeenAt: 1, userSeq: 8 },
     }) as any);
     const sent: any[] = [];
-    const socket = { data: { userId: 'u1' }, emit: (_e: string, p: any) => sent.push(p) } as any;
+    const socket = { data: { userId: 'u1' }, rooms: new Set(['session:s9']), emit: (_e: string, p: any) => sent.push(p) } as any;
     await handleResync(makeIo([]), socket, { sessionId: 's9', haveSeq: 3 });
 
     expect(sent).toHaveLength(1);
