@@ -27,7 +27,9 @@ jest.mock('../../../config/logger', () => ({
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
-  transaction: jest.fn(),
+  // The duplicate check and the insert of a personal invite run in a transaction (26 Oct 2026): its client asks the same database.
+  transaction: async (callback: (client: { query: (...args: unknown[]) => unknown }) => unknown) =>
+    callback({ query: (...args: unknown[]) => mockQuery(...args) }),
   __esModule: true,
 }));
 

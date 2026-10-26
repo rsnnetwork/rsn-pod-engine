@@ -50,3 +50,67 @@ export interface CreateInviteInput {
 export interface AcceptInviteInput {
   code: string;
 }
+
+// ─── Inviting from your connections (26 Oct 2026) ────────────────────────────
+// GET /invites/candidates and POST /invites/batch: the picker's two server calls. Types only, so a client built
+// from `main` compiles unchanged.
+
+/** Met (at an event, or in a 1:1 meeting both joined) and connected (an accepted request, or a conversation) are the People page's two readings; pod is a member of the event's pod. */
+export type InviteCandidateHow = 'met' | 'connected' | 'pod';
+
+/** Where one person stands against the pod or the event being invited to. `member` is for pods and `going` for events. */
+export type InviteCandidateState = 'available' | 'member' | 'going' | 'invited' | 'declined';
+
+/** `connections` lists the asker's own connections; `pod` lists the active members of an event's pod. */
+export type InviteCandidateSource = 'connections' | 'pod';
+
+export interface InviteCandidate {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  jobTitle: string | null;
+  company: string | null;
+  how: InviteCandidateHow;
+  /** The latest date of anything between the two (connections), or when they joined the pod (pod list), ISO. */
+  since: string;
+  state: InviteCandidateState;
+  /** The invite behind `invited` and `declined`, so an organiser can remind or withdraw it. */
+  inviteId?: string;
+}
+
+export interface InviteCandidatePage {
+  items: InviteCandidate[];
+  /** Ask again with ?before= this for the next people; null when there are no more. */
+  nextBefore: string | null;
+}
+
+export type InviteBatchOutcome =
+  | 'invited'
+  | 'already_member'
+  | 'already_going'
+  | 'already_invited'
+  | 'not_allowed'
+  | 'failed';
+
+export interface InviteBatchInput {
+  type: 'pod' | 'session';
+  podId?: string;
+  sessionId?: string;
+  /** 1 to 50 member ids; may be empty only with allPodMembers. */
+  inviteeUserIds: string[];
+  /** Events in a pod: also invite every pod member who is not going, invited or declined yet. */
+  allPodMembers?: boolean;
+}
+
+export interface InviteBatchResult {
+  userId: string;
+  outcome: InviteBatchOutcome;
+  inviteId?: string;
+}
+
+export interface InviteBatchResponse {
+  results: InviteBatchResult[];
+  counts: Record<InviteBatchOutcome, number>;
+  /** With allPodMembers: how many more pod members can still be invited after this batch's 50. */
+  remaining?: number;
+}

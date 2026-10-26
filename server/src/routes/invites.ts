@@ -3,14 +3,15 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate, optionalAuth } from '../middleware/auth';
-import { inviteLimiter } from '../middleware/rateLimit';
+import { inviteLimiter, inviteBatchLimiter, peopleReadLimiter } from '../middleware/rateLimit';
 import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
+import * as inviteCandidates from '../services/invite/invite-candidates.service';
 import { fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { query } from '../db';
-import { ApiResponse, InviteType, InviteStatus, eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
+import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse, eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
 
 const router = Router();
 
@@ -26,6 +27,55 @@ const createInviteSchema = z.object({
   maxUses: z.number().int().min(1).max(1_000_000).optional(),
   expiresInHours: z.number().positive().max(720).optional(), // max 30 days
 });
+
+// Postgres reads an upper-case uuid as the same id, but the services compare ids as plain strings, so ids are
+// lower-cased here (as in routes/people.ts).
+const lowerUuid = z.string().uuid().transform((s) => s.toLowerCase());
+
+// The connections picker's list, a page at a time: 30 people unless fewer are asked for, never more than 50.
+// `before` is the nextBefore of the page already shown, an ISO time.
+const CANDIDATES_PAGE = 30;
+const CANDIDATES_PAGE_MAX = 50;
+const candidatesQuery = z.object({
+  podId: lowerUuid.optional(),
+  sessionId: lowerUuid.optional(),
+  source: z.enum(['connections', 'pod']).default('connections'),
+  q: z.string().trim().max(100).optional(),
+  before: z.string().datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).optional()
+    .transform((n) => Math.min(n ?? CANDIDATES_PAGE, CANDIDATES_PAGE_MAX)),
+}).superRefine((value, ctx) => {
+  if (Boolean(value.podId) === Boolean(value.sessionId)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['podId'], message: 'Name either podId or sessionId' });
+  }
+  if (value.source === 'pod' && !value.sessionId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['source'], message: 'The pod list is for inviting to an event' });
+  }
+});
+type CandidatesQuery = z.infer<typeof candidatesQuery>;
+
+// Up to 50 people in one call. "Everyone in the pod" (events only) may stand in for naming them.
+const batchInviteSchema = z.object({
+  type: z.enum(['pod', 'session']),
+  podId: lowerUuid.optional(),
+  sessionId: lowerUuid.optional(),
+  inviteeUserIds: z.array(lowerUuid).max(inviteCandidates.BATCH_MAX).default([]),
+  allPodMembers: z.boolean().optional(),
+}).superRefine((value, ctx) => {
+  if (value.type === 'pod' && !value.podId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['podId'], message: 'Choose the pod to invite to' });
+  }
+  if (value.type === 'session' && !value.sessionId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sessionId'], message: 'Choose the event to invite to' });
+  }
+  if (value.allPodMembers && value.type !== 'session') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['allPodMembers'], message: 'Everyone in the pod is for inviting to an event' });
+  }
+  if (value.inviteeUserIds.length === 0 && !value.allPodMembers) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['inviteeUserIds'], message: 'Choose at least one person to invite' });
+  }
+});
+type BatchInviteBody = z.infer<typeof batchInviteSchema>;
 
 // ─── POST /invites ──────────────────────────────────────────────────────────
 
@@ -50,6 +100,38 @@ router.post(
       }
       const response: ApiResponse = { success: true, data: invite };
       res.status(201).json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /invites/batch ────────────────────────────────────────────────────
+// 26 Oct 2026: up to 50 people in one call, one outcome each, the same person never invited twice (the service
+// takes the lock). Registered with the fixed paths, ahead of every /:code route. The pod's or the event's screens
+// are told once for the whole batch, not once per invitee; each invitee's own bell is pushed by the service.
+
+router.post(
+  '/batch',
+  authenticate,
+  inviteBatchLimiter,
+  validate(batchInviteSchema),
+  auditMiddleware('create_invite_batch', 'invite'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const body: BatchInviteBody = req.body;
+      const batch = await inviteCandidates.createInvitesBatch({ userId: req.user!.userId, role: req.user!.role }, body);
+      if (batch.counts.invited > 0) {
+        const { podId, sessionId } = batch.target;
+        if (sessionId) {
+          fanoutSessionEntities(podId, sessionId, [E.sessionInvites(sessionId)]).catch(() => {});
+        } else {
+          fanoutPodEntities(podId).catch(() => {});
+        }
+      }
+      const data: InviteBatchResponse = { results: batch.results, counts: batch.counts };
+      if (batch.remaining !== undefined) data.remaining = batch.remaining;
+      res.json({ success: true, data } as ApiResponse);
     } catch (err) {
       next(err);
     }
@@ -122,6 +204,39 @@ router.get(
   }
 );
 
+// ─── GET /invites/candidates ────────────────────────────────────────────────
+// 26 Oct 2026: the people an organiser can invite to a pod or an event, with where each stands against it (member,
+// going, invited, declined, or available). `source=connections` is the asker's own connections, `source=pod` the
+// people in the event's pod. 403 unless the asker may send an invite there. Registered ahead of GET /:code, or
+// "candidates" would be read as an invite code. A read: it emits nothing.
+
+router.get(
+  '/candidates',
+  authenticate,
+  peopleReadLimiter,
+  validate(candidatesQuery, 'query'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // validate() has replaced req.query with the parsed value; Express still types it as raw strings.
+      const asked: CandidatesQuery = req.query as unknown as CandidatesQuery;
+      const data = await inviteCandidates.listInviteCandidates(
+        { userId: req.user!.userId, role: req.user!.role },
+        {
+          podId: asked.podId,
+          sessionId: asked.sessionId,
+          source: asked.source,
+          q: asked.q,
+          before: asked.before ?? null,
+          limit: asked.limit,
+        },
+      );
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── GET /invites/session/:sessionId ─────────────────────────────────────────
 
 router.get(
@@ -132,7 +247,8 @@ router.get(
       const { sessionId } = req.params;
       const status = req.query.status as string | undefined;
 
-      // Only host or admin can view session invites
+      // Only the host, a co-host or an admin can view session invites (26 Oct 2026: co-hosts send them now, so
+      // they see who has answered)
       const sessionResult = await query<{ host_user_id: string }>(
         `SELECT host_user_id FROM sessions WHERE id = $1`, [sessionId]
       );
@@ -141,8 +257,16 @@ router.get(
       }
       const isHost = sessionResult.rows[0].host_user_id === req.user!.userId;
       const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
+      let isCohost = false;
       if (!isHost && !isAdmin) {
-        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can view session invites' } });
+        const cohost = await query(
+          `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
+          [sessionId, req.user!.userId]
+        );
+        isCohost = cohost.rows.length > 0;
+      }
+      if (!isHost && !isAdmin && !isCohost) {
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host or a co-host can view session invites' } });
       }
 
       const invites = await inviteService.listSessionInvites(sessionId, status);
@@ -600,7 +724,8 @@ router.post(
         fanoutPodEntities(declined.podId).catch(() => {});
       }
       if (declined.sessionId) {
-        fanoutSessionEntities(declined.podId, declined.sessionId).catch(() => {});
+        // 26 Oct 2026: the event's invites tag too, so an organiser's list flips to "declined" without a refresh.
+        fanoutSessionEntities(declined.podId, declined.sessionId, [E.sessionInvites(declined.sessionId)]).catch(() => {});
       }
       emitEntities(
         getRealtimeIo(),
@@ -630,7 +755,7 @@ router.delete(
         fanoutPodEntities(revoked.podId).catch(() => {});
       }
       if (revoked.sessionId) {
-        fanoutSessionEntities(revoked.podId, revoked.sessionId).catch(() => {});
+        fanoutSessionEntities(revoked.podId, revoked.sessionId, [E.sessionInvites(revoked.sessionId)]).catch(() => {});
       }
       const response: ApiResponse = { success: true, data: { message: 'Invite revoked' } };
       res.json(response);
@@ -646,6 +771,11 @@ const bulkInviteSchema = z.object({
   sessionId: z.string().uuid(),
   emails: z.array(z.string().email()).min(1).max(500),
 });
+
+// Someone who already has a pending invite, is already going, or is already in the pod is skipped, not an error.
+// (The route used to look for 'INVITE_EXISTS' and 'CONFLICT', which nothing throws, so every duplicate was
+// counted as an error: audit 03, defect 7.)
+const BULK_SKIP_CODES: ReadonlySet<string> = new Set(['DUPLICATE_INVITE', 'SESSION_ALREADY_REGISTERED', 'POD_MEMBER_EXISTS']);
 
 router.post(
   '/bulk',
@@ -666,9 +796,9 @@ router.post(
             maxUses: 1,
           });
           results.sent++;
-        } catch (err: any) {
+        } catch (err) {
           // Skip already-invited, already-registered, etc
-          if (err?.code === 'INVITE_EXISTS' || err?.code === 'SESSION_ALREADY_REGISTERED' || err?.code === 'CONFLICT') {
+          if (BULK_SKIP_CODES.has((err as { code?: string }).code ?? '')) {
             results.skipped++;
           } else {
             results.errors++;
