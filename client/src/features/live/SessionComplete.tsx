@@ -107,6 +107,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
 
 export default function SessionComplete({ sessionId }: Props) {
   const navigate = useNavigate();
+  const leaveTo = (to: string) => navigate(to, { replace: true });
   // Button visibility only — server gate is authoritative. Admins see Message
   // on every person; members only see it on mutual matches.
   const currentUserRole = useAuthStore((s) => s.user?.role);
@@ -211,7 +212,7 @@ export default function SessionComplete({ sessionId }: Props) {
         ) : fetchError ? (
           <div className="text-center bg-gray-50 rounded-2xl p-8 border border-gray-200">
             <p className="text-gray-500 mb-3">Could not load your recap.</p>
-            <Button size="sm" variant="secondary" onClick={fetchRecap}>Retry</Button>
+            <Button variant="secondary" onClick={fetchRecap}>Retry</Button>
           </div>
         ) : (
           <>
@@ -347,18 +348,20 @@ export default function SessionComplete({ sessionId }: Props) {
         {/* Post-event feedback */}
         <FeedbackPrompt sessionId={sessionId} />
 
-        {/* Actions */}
-        <div className="flex gap-3">
-          <Button onClick={() => navigate(`/sessions/${sessionId}/recap`)} variant="secondary" className="flex-1">
-            Full Recap <ArrowRight className="h-4 w-4 ml-1" />
+        {/* Actions: the event's own page first (its recap, its chat, message everyone), then its pod, then the full
+            recap (COM-05). Each replaces this live page, so Back does not walk into the ended event again. Stacked
+            full width on a phone. */}
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Button onClick={() => leaveTo(`/sessions/${sessionId}`)} className="w-full sm:w-auto sm:flex-1">
+            Event details <ArrowRight className="h-4 w-4 ml-1" />
           </Button>
           {podId && (
-            <Button onClick={() => navigate(`/pods/${podId}`)} variant="secondary" className="flex-1">
-              Back to Pod
+            <Button onClick={() => leaveTo(`/pods/${podId}`)} variant="secondary" className="w-full sm:w-auto sm:flex-1">
+              Back to pod
             </Button>
           )}
-          <Button onClick={() => navigate('/sessions')} className="flex-1">
-            Back to Events
+          <Button onClick={() => leaveTo(`/sessions/${sessionId}/recap`)} variant="outline" className="w-full sm:w-auto sm:flex-1">
+            Full recap
           </Button>
         </div>
       </div>
@@ -409,7 +412,7 @@ function FeedbackPrompt({ sessionId }: { sessionId: string }) {
         className="w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 resize-none placeholder-gray-400"
       />
       <div className="flex justify-end mt-2">
-        <Button size="sm" onClick={handleSubmit} disabled={!text.trim() || submitting}>
+        <Button onClick={handleSubmit} disabled={!text.trim() || submitting}>
           {submitting ? 'Sending...' : 'Submit Feedback'}
         </Button>
       </div>

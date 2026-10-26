@@ -1,10 +1,13 @@
 import { useEffect, useRef } from 'react';
+import type { EventChatPage } from '@rsn/shared';
 import { connectSocket, getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { playTimerChime } from '@/lib/chime';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
+import { mergeChatHistory, withoutTakenDown } from './chat-history';
 
 // All socket event names we listen to — used for deterministic cleanup
 const SOCKET_EVENTS = [
@@ -1008,19 +1011,64 @@ export default function useSessionSocket(sessionId: string) {
     socket.on('chat:history', (data: any) => {
       if (!data.messages || !Array.isArray(data.messages)) return;
       // Bug 15 (13 May live test) — an empty server reply must not wipe the
-      // local array. Pre-fix, a race during round transitions could ship
-      // an empty history back and erase the messages the user had just
-      // exchanged. Only replace when the server's authoritative reply is
-      // non-empty; an empty reply means "I have no extra history for you
-      // right now", not "discard what you have".
+      // local array: it means "I have no extra history for you right now".
       if (data.messages.length === 0) return;
-      store.setChatMessages(data.messages);
+      // 26 Oct 2026 (C10) — the chat is stored as it is sent, so the history is a copy of what the panel should
+      // hold: merged by id, never put in its place, so a message that arrived while it was on its way stays.
+      store.setChatMessages(mergeChatHistory(useSessionStore.getState().chatMessages, data.messages));
     });
     socket.on('chat:reaction_update', (data: any) => {
       if (data.messageId && data.reactions) {
         store.updateMessageReaction(data.messageId, data.reactions);
       }
     });
+
+    // 26 Oct 2026 (C10) — a message taken down after it was sent is announced only by the event chat's tag, and a
+    // merge never removes anything, so the panel then reads the chat page and drops what the page no longer has
+    // (chat-history.ts says when a missing message counts as taken down). A page the reader may not read (403:
+    // nobody who has not taken part reads it) or a failed request leaves the panel as the socket filled it, since
+    // nothing is taken away that the page did not prove gone. Not while the event is over: the panel is gone.
+    const chatTag = E.sessionChat(sessionId);
+    // One read at a time; a tag that comes during it asks for one more read after it.
+    const chatRead = { running: false, again: false };
+    let disposed = false;
+    const dropTakenDown = async (): Promise<void> => {
+      const before = useSessionStore.getState();
+      if (before.phase === 'complete' || before.chatMessages.length === 0) return;
+      const heldBefore = new Set(before.chatMessages.map((m) => m.id));
+      const messages: EventChatPage['messages'] = [];
+      let cursor: string | undefined;
+      let complete = false;
+      try {
+        // Two pages of 100 reach back past the panel's 200 newest.
+        for (let read = 0; read < 2; read++) {
+          const page: EventChatPage = (await api.get(`/sessions/${sessionId}/chat`, { params: { limit: 100, cursor } })).data.data;
+          messages.push(...page.messages);
+          if (!page.nextCursor) { complete = true; break; }
+          cursor = page.nextCursor;
+        }
+      } catch {
+        return;
+      }
+      if (disposed) return;
+      const role = useAuthStore.getState().user?.role;
+      const held = useSessionStore.getState().chatMessages;
+      const kept = withoutTakenDown(held, { messages, complete }, heldBefore, role === 'admin' || role === 'super_admin');
+      if (kept.length !== held.length) store.setChatMessages(kept);
+    };
+    const onChatChanged = (data: { entities?: string[] }) => {
+      if (!Array.isArray(data?.entities) || !data.entities.includes(chatTag)) return;
+      if (chatRead.running) { chatRead.again = true; return; }
+      chatRead.running = true;
+      void (async () => {
+        do {
+          chatRead.again = false;
+          await dropTakenDown();
+        } while (!disposed && chatRead.again);
+        chatRead.running = false;
+      })();
+    };
+    socket.on('entity:changed', onChatChanged);
 
     // ── Sync & errors ──
     // WS3/B2 — round wrap-up warning (T-30/T-10 from the server's segment
@@ -1404,6 +1452,9 @@ export default function useSessionSocket(sessionId: string) {
 
       // Remove ALL socket event listeners we attached
       for (const ev of SOCKET_EVENTS) socket.off(ev);
+      // entity:changed is the app's own (useEntityChangedHandler): only this hook's listener comes off.
+      disposed = true;
+      socket.off('entity:changed', onChatChanged);
       socket.off('connect', joinSession);
       socket.io.off('reconnect', onReconnect);
       socket.io.off('reconnect_attempt', onReconnectAttempt);
