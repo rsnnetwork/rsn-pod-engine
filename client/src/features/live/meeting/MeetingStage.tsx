@@ -10,8 +10,8 @@
 // MeetingStageView only draws the tiles it is given.
 
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { useConnectionState, useLocalParticipant, useRoomContext, useTracks } from '@livekit/components-react';
-import type { TrackReferenceOrPlaceholder } from '@livekit/components-core';
+import { useConnectionState, useLocalParticipant, useRoomContext, useTracks, VideoTrack } from '@livekit/components-react';
+import { isTrackReference, type TrackReferenceOrPlaceholder } from '@livekit/components-core';
 import { ConnectionState, RoomEvent, Track } from 'livekit-client';
 import { Columns2, Loader2, Mic, MicOff, Pin, PinOff, PictureInPicture2, UserPlus, Users, VideoOff } from 'lucide-react';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -37,6 +37,12 @@ const PRODUCER_STRIP_H = 40;
 const HOLD_MS = 15_000;
 /** On a tile smaller than this a camera-off person's name goes under their initial, not in a corner label. */
 const SMALL_TILE = { w: 160, h: 110 };
+/**
+ * On a tile shorter than this there is no room for a name at all: the small picture of yourself beside the other
+ * person on a short stage (fix round 2). It shows the picture alone, or the initial; its label names it to a
+ * screen reader ("Show yourself large").
+ */
+const TINY_TILE_H = 64;
 
 /** A display name for a person on the stage; an email-like name shows only its local part. */
 function personName(name: string | undefined, identity: string | undefined): string {
@@ -83,8 +89,11 @@ function initialOf(name: string): string {
  * their name, under the initial on a small tile and in the corner label on a larger one (where a live tile has it).
  */
 function NoPicture({ name, box }: { name: string; box: Box }) {
+  const tiny = box.h < TINY_TILE_H;
   const small = box.w < SMALL_TILE.w || box.h < SMALL_TILE.h;
-  const size = Math.round(Math.max(32, Math.min(96, Math.min(box.w, box.h) * 0.36)));
+  const size = tiny
+    ? Math.max(24, Math.min(32, box.h - 12))
+    : Math.round(Math.max(32, Math.min(96, Math.min(box.w, box.h) * 0.36)));
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[#3c4043] px-1">
       <div
@@ -94,7 +103,7 @@ function NoPicture({ name, box }: { name: string; box: Box }) {
       >
         {initialOf(name)}
       </div>
-      {small ? (
+      {tiny ? null : small ? (
         <span className="max-w-full truncate text-[11px] text-gray-200">{name}</span>
       ) : (
         <span className="absolute bottom-2 left-2 inline-flex max-w-[70%] items-center gap-1 rounded bg-black/60 px-2 py-1 text-xs text-white">
@@ -117,10 +126,14 @@ type TileAction = { kind: 'tap'; run: () => void } | { kind: 'pin'; run: () => v
 
 function StageTileView({ tile, box, fill, inset, action }: { tile: StageTile; box: Box; fill: TileFill; inset: boolean; action: TileAction }) {
   // The breakout's own tile for a live picture (mirroring, name plate, object-fit); a camera that is off gets a
-  // picture sized to the tile, so the name never runs into the placeholder on a small tile.
-  const picture = tile.held || !hasLivePicture(tile.trackRef)
+  // picture sized to the tile, so the name never runs into the placeholder on a small tile. A tile too short for
+  // the breakout tile's name plate shows the picture alone (the plate would cover most of it).
+  const live = !tile.held && hasLivePicture(tile.trackRef);
+  const picture = !live
     ? <NoPicture name={tile.name} box={box} />
-    : <VideoTile trackRef={tile.trackRef} label={tile.name} userId={tile.userId} fillMode={fill} />;
+    : box.h < TINY_TILE_H && isTrackReference(tile.trackRef)
+      ? <VideoTrack trackRef={tile.trackRef} className={`h-full w-full ${fill === 'contain' ? 'object-contain' : 'object-cover'}`} />
+      : <VideoTile trackRef={tile.trackRef} label={tile.name} userId={tile.userId} fillMode={fill} />;
   const tap = action.kind === 'tap' ? action.run : null;
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (tap && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); tap(); }
@@ -190,10 +203,12 @@ export interface MeetingStageViewProps {
   onInvite?: () => void;
   /** Notices for the top of the stage (sound blocked by the browser). */
   notices?: ReactNode;
+  /** The room's connection state (LiveKit's ConnectionState), shown on the stage as data-room for tests. */
+  roomState?: string;
 }
 
 export function MeetingStageView({
-  tiles, producers, focusKey, pinnedKey, onPin, pairView, onPairView, connecting, holding, onInvite, notices,
+  tiles, producers, focusKey, pinnedKey, onPin, pairView, onPairView, connecting, holding, onInvite, notices, roomState,
 }: MeetingStageViewProps) {
   const [areaRef, size] = useBoxSize<HTMLDivElement>();
   // Two people sit side by side by default in a window at least 1024px wide and landscape (the window decides,
@@ -224,7 +239,7 @@ export function MeetingStageView({
   };
 
   return (
-    <div data-testid="meeting-stage" data-layout={plan.layout} className="relative flex-1 min-h-0 min-w-0 overflow-hidden bg-[#202124] p-2">
+    <div data-testid="meeting-stage" data-layout={plan.layout} data-room={roomState} className="relative flex-1 min-h-0 min-w-0 overflow-hidden bg-[#202124] p-2">
       <div ref={areaRef} className="relative h-full w-full">
         {tiles.map((tile, i) => {
           const box = plan.boxes[i];
@@ -410,6 +425,7 @@ export default function MeetingStage({ onInvite, notices }: { onInvite?: () => v
       holding={holding}
       onInvite={onInvite}
       notices={notices}
+      roomState={connectionState}
     />
   );
 }

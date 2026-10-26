@@ -1,5 +1,7 @@
 // ─── Real-Time Socket Event Types ────────────────────────────────────────────
 
+import type { ChatSendAck } from './event-chat';
+
 // Server -> Client events
 export interface ServerToClientEvents {
   // Session lifecycle
@@ -335,7 +337,12 @@ export interface ClientToServerEvents {
   'reaction:send': (data: { sessionId: string; type: string; matchId?: string }) => void;
 
   // Chat
-  'chat:send': (data: { sessionId: string; message: string; scope: 'lobby' | 'room' }) => void;
+  // 26 Oct 2026 — clientId stores a retried message once; with the callback, the outcome (or a refusal)
+  // arrives there instead of as an `error` event. Both optional: production's client sends neither.
+  'chat:send': (
+    data: { sessionId: string; message: string; scope: 'lobby' | 'room'; clientId?: string },
+    ack?: (res: ChatSendAck) => void,
+  ) => void;
   'chat:react': (data: { sessionId: string; messageId: string; emoji: string }) => void;
   // Phase 4B (5 May spec) — force-fetch chat history on demand.
   'chat:request_history': (data: { sessionId: string; matchId?: string }) => void;

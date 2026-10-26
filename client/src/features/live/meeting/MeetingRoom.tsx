@@ -251,6 +251,8 @@ export default function MeetingRoom({ sessionId, session, isDirector, canManage,
   // return, take a fresh token and connect the room again. Never for a tab that was replaced by another
   // (it would take the room back from it), nor once the meeting is over.
   const reconnectRoom = useCallback(() => {
+    // A retry still waiting is replaced by this connection, never run after it (a second token and remount).
+    if (retryTimer.current) clearTimeout(retryTimer.current);
     retryTimer.current = null;
     const st = useSessionStore.getState();
     if (st.phase === 'complete' || st.transitionStatus === 'evicted' || st.removedFromEvent
@@ -270,23 +272,26 @@ export default function MeetingRoom({ sessionId, session, isDirector, canManage,
     reconnectRoom();
   }, [reconnectRoom]);
 
+  // The three <LiveKitRoom> callbacks keep their identity across renders: <LiveKitRoom> connects again whenever
+  // its onError changes (it is in the connect effect's dependencies), and during the SDK's own resume that fresh
+  // join would replace the resume. They read only refs and the stable reconnectRoom.
   // A connection that holds for a minute earns its retries back. Not on every connect: a connection that
   // drops again at once would then retry for ever.
-  const onRoomConnected = () => {
+  const onRoomConnected = useCallback(() => {
     if (stableTimer.current) clearTimeout(stableTimer.current);
     stableTimer.current = setTimeout(() => { retries.current = 0; stableTimer.current = null; }, ROOM_STABLE_MS);
-  };
-  const onRoomDisconnected = () => {
+  }, []);
+  const onRoomDisconnected = useCallback(() => {
     if (stableTimer.current) clearTimeout(stableTimer.current);
     stableTimer.current = null;
-  };
+  }, []);
   // Only a connection failure is tried again, at most ROOM_RETRY_LIMIT times, with a fresh token. A camera or
   // microphone that cannot open is not a reason to reconnect: the person stays in, with that device off.
-  const onRoomError = (err: Error) => {
+  const onRoomError = useCallback((err: Error) => {
     if (!isRetryableRoomError(err) || retries.current >= ROOM_RETRY_LIMIT || retryTimer.current) return;
     retries.current += 1;
     retryTimer.current = setTimeout(reconnectRoom, ROOM_RETRY_DELAY_MS);
-  };
+  }, [reconnectRoom]);
 
   const toggleChat = () => { setPeopleOpen(false); setChatOpen(!chatOpen); };
   const togglePeople = () => { setChatOpen(false); setPeopleOpen((v) => !v); };

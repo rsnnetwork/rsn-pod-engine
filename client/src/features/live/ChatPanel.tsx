@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/authStore';
 import ProfileLink from '@/components/ui/ProfileLink';
 import { getSocket } from '@/lib/socket';
 import Linkify from '@/components/ui/Linkify';
+import { useChatSend } from './useChatSend';
 
 const CHAT_EMOJIS = [
   { type: 'heart', emoji: '❤️' },
@@ -91,17 +92,17 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
     inputRef.current?.focus();
   }, []);
 
+  // 26 Oct 2026 (fix round 2) — the words leave the box only once the server says the message went out; a
+  // refused message keeps them and says why, beside the box (useChatSend).
+  const { send, sending, notice, clearNotice } = useChatSend(sessionId, scope, input, setInput);
   const handleSend = useCallback(() => {
-    const trimmed = input.trim();
-    if (!trimmed) return;
-
-    const socket = getSocket();
-    if (!socket) return;
-
-    socket.emit('chat:send', { sessionId, message: trimmed, scope });
-    setInput('');
+    send();
     inputRef.current?.focus();
-  }, [input, sessionId, scope]);
+  }, [send]);
+  const typeMessage = useCallback((value: string) => {
+    setInput(value);
+    clearNotice();
+  }, [clearNotice]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -185,14 +186,20 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
           {chatDisabled ? (
             <p className="text-xs text-gray-400 text-center py-1">Chat available when host joins</p>
           ) : (
-            <ChatInputWithEmoji
-              inputRef={inputRef}
-              input={input}
-              setInput={setInput}
-              handleKeyDown={handleKeyDown}
-              handleSend={handleSend}
-              scope={scope}
-            />
+            <>
+              {notice && (
+                <p role="alert" data-testid="chat-send-notice" className="mb-2 px-1 text-xs text-red-600">{notice}</p>
+              )}
+              <ChatInputWithEmoji
+                inputRef={inputRef}
+                input={input}
+                setInput={typeMessage}
+                handleKeyDown={handleKeyDown}
+                handleSend={handleSend}
+                scope={scope}
+                sending={sending}
+              />
+            </>
           )}
         </div>
       )}
@@ -200,13 +207,15 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
   );
 }
 
-function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSend, scope }: {
+function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSend, scope, sending }: {
   inputRef: any;
   input: string;
   setInput: (v: string) => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
   handleSend: () => void;
   scope: string;
+  /** A message is on its way: the button waits (the box stays usable, so a phone's keyboard stays up). */
+  sending: boolean;
 }) {
   const [showEmoji, setShowEmoji] = useState(false);
   return (
@@ -239,7 +248,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
         />
         {/* WS3/S11 — 44px tap target (was p-2 ≈ 32px, below the mobile
             minimum; caught by the mobile event smoke). */}
-        <button onClick={handleSend} disabled={!input.trim()} aria-label="Send message"
+        <button onClick={handleSend} disabled={!input.trim() || sending} aria-busy={sending || undefined} aria-label="Send message"
           className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
           <Send className="h-4 w-4" />
         </button>

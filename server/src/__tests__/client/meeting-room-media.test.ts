@@ -14,6 +14,12 @@
 // Plus the rulings: chat in a running meeting needs no host in the room; one
 // invite-link hook; a 44px pin button; no ghost in the reconnect hold; the
 // reaction gate as the server has it.
+// Fix round 2: a pending retry is cleared when the room connects again another
+// way (ReconnectOnReturn), the three <LiveKitRoom> callbacks keep their identity
+// (LiveKitRoom connects again whenever onError changes, which during the SDK's
+// own resume replaced it with a fresh join), the stage shows the room's
+// connection state for the specs (data-room), and a picture too short for a name
+// plate shows the picture alone.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -108,7 +114,7 @@ describe('the room retries at most twice, and only a connection that holds earns
   const s = () => readClient(ROOM);
 
   it('onError retries only a retryable error, within the limit, one pending retry at a time', () => {
-    const fn = between(s(), 'const onRoomError', '};');
+    const fn = between(s(), 'const onRoomError = useCallback(', '}, [reconnectRoom]);');
     expect(fn).toMatch(/if \(!isRetryableRoomError\(err\) \|\| retries\.current >= ROOM_RETRY_LIMIT \|\| retryTimer\.current\) return;/);
     expect(fn).toMatch(/retries\.current \+= 1;/);
     expect(fn).toMatch(/retryTimer\.current = setTimeout\(reconnectRoom, ROOM_RETRY_DELAY_MS\);/);
@@ -136,6 +142,29 @@ describe('the room retries at most twice, and only a connection that holds earns
     const unmount = between(src, 'useEffect(() => () => {', '}, []);');
     expect(unmount).toMatch(/clearTimeout\(retryTimer\.current\)/);
     expect(unmount).toMatch(/clearTimeout\(stableTimer\.current\)/);
+  });
+
+  it('the three <LiveKitRoom> callbacks keep their identity across renders (fix round 2)', () => {
+    // <LiveKitRoom> lists onError in its connect effect's dependencies: a new function on every render called
+    // room.connect() on every render, which during the SDK's own resume replaced it with a fresh join.
+    const src = s();
+    expect(src).toMatch(/const onRoomConnected = useCallback\(\(\) => \{[\s\S]*?\n {2}\}, \[\]\);/);
+    expect(src).toMatch(/const onRoomDisconnected = useCallback\(\(\) => \{[\s\S]*?\n {2}\}, \[\]\);/);
+    expect(src).toMatch(/const onRoomError = useCallback\(\(err: Error\) => \{[\s\S]*?\n {2}\}, \[reconnectRoom\]\);/);
+    // reconnectRoom itself changes only with the event.
+    expect(src).toMatch(/const reconnectRoom = useCallback\(\(\) => \{[\s\S]*?\n {2}\}, \[sessionId\]\);/);
+    // No callback is written inline on the room (each would be a new function per render).
+    const room = between(src, '<LiveKitRoom', '</LiveKitRoom>');
+    expect(room).not.toMatch(/on(Connected|Disconnected|Error)=\{\(/);
+    expect(room).not.toMatch(/on(Connected|Disconnected|Error)=\{function/);
+  });
+
+  it('a retry still waiting is cleared when the room connects again another way (fix round 2)', () => {
+    // ReconnectOnReturn while a retry is pending: the pending timer used to fire as well (a second token, a
+    // second remount).
+    const fn = between(s(), 'const reconnectRoom = useCallback', '}, [sessionId]);');
+    expect(fn).toMatch(/if \(retryTimer\.current\) clearTimeout\(retryTimer\.current\);\n\s*retryTimer\.current = null;/);
+    expect(fn.indexOf('clearTimeout(retryTimer.current)')).toBeLessThan(fn.indexOf("api.post(`/sessions/${sessionId}/token`"));
   });
 
   it('never connects again once the meeting is over, for someone removed, or for a tab another one replaced', () => {
@@ -192,6 +221,24 @@ describe('the stage', () => {
     const pin = between(stage, "action.kind === 'pin' && (", '</button>');
     expect(pin).toMatch(/flex h-11 w-11 items-center justify-center/);
     expect(pin).not.toMatch(/after:-inset/);
+  });
+
+  it('shows the room\'s connection state for the specs, as data-room on the stage (fix round 2)', () => {
+    const src = readClient(STAGE);
+    expect(src).toMatch(/data-testid="meeting-stage" data-layout=\{plan\.layout\} data-room=\{roomState\}/);
+    expect(src).toMatch(/roomState=\{connectionState\}/);
+    expect(src).toMatch(/const connectionState = useConnectionState\(\);/);
+  });
+
+  it('a picture too short for a name plate shows the picture alone, or the initial (fix round 2)', () => {
+    const src = readClient(STAGE);
+    expect(src).toMatch(/const TINY_TILE_H = 64;/);
+    // A live picture: LiveKit's own video element, no breakout tile (whose name plate would cover most of it).
+    expect(src).toMatch(/box\.h < TINY_TILE_H && isTrackReference\(tile\.trackRef\)\n\s*\? <VideoTrack trackRef=\{tile\.trackRef\}/);
+    // A camera that is off: the initial, sized to fit, and no name under it.
+    const none = between(src, 'function NoPicture', '\n}\n');
+    expect(none).toMatch(/const tiny = box\.h < TINY_TILE_H;/);
+    expect(none).toMatch(/\{tiny \? null : small \?/);
   });
 
   it('the reconnect hold is refreshed on every connected render, so nobody who left is held as a ghost', () => {

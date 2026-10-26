@@ -116,27 +116,53 @@ export function insetSize(width: number, height: number): { w: number; h: number
 /** Of its full size, how much the other person's frame keeps when it moves clear of the inset; below that it stays. */
 export const CLEAR_OF_INSET_MIN = 0.7;
 
+/** The smallest the picture of yourself gets, either way: still a picture you can see, and a target you can tap. */
+export const INSET_MIN = 44;
+
 /**
- * The other person large, and the inset picture of yourself in the top-right corner of the stage. On a landscape
- * stage the other person's frame moves clear of the inset (below it, or to its left) whenever that keeps at least
- * CLEAR_OF_INSET_MIN of its size, so the corner picture never covers them (fix round 1). On an upright stage they
- * fill it and the inset sits over its corner, as on any phone call; their picture is shown whole, so a landscape
- * camera sits in the middle, clear of the corner.
+ * The other person's largest frame clear of the inset: where it is, when the inset is already clear of it. On an
+ * upright stage, the stage's whole width below the inset: a landscape camera's picture is as wide as the stage
+ * either way, so it loses nothing there. On a landscape stage, a 16:9 frame below the inset or to its left,
+ * whichever is larger.
+ */
+function clearOf(width: number, height: number, inset: Box): Box {
+  const full = mainBox(width, height);
+  if (!intersects(full, inset)) return full;
+  const top = inset.y + inset.h + STAGE_GAP;
+  if (width < height) return { x: 0, y: top, w: width, h: Math.max(0, height - top) };
+  const lower = fitCentered(width, Math.max(0, height - top), TILE_ASPECT);
+  const below = { ...lower, y: lower.y + top };
+  const left = fitCentered(Math.max(0, inset.x - STAGE_GAP), height, TILE_ASPECT);
+  return areaOf(below) >= areaOf(left) ? below : left;
+}
+
+/**
+ * The other person large, and the picture of yourself in the top-right corner of the stage, never over them (fix
+ * round 2: on every stage, upright or on its side, chat open or closed). Your picture keeps its size while the
+ * other person, moved clear of it, keeps at least CLEAR_OF_INSET_MIN of their frame; on a stage too short for that
+ * it shrinks first, in its own shape, never below INSET_MIN either way, and at that size the other person takes
+ * the largest room clear of it.
  */
 function pairBoxes(width: number, height: number): { main: Box; inset: Box } {
   const margin = height <= 500 ? 8 : 12;
   const size = insetSize(width, height);
-  const w = Math.min(size.w, Math.max(0, width - 2 * margin));
-  const h = Math.min(size.h, Math.max(0, height - 2 * margin));
-  const inset = { x: width - margin - w, y: margin, w, h };
-  const full = mainBox(width, height);
-  if (width <= height || !intersects(full, inset)) return { main: full, inset };
-  const top = inset.y + inset.h + STAGE_GAP;
-  const lower = fitCentered(width, height - top, TILE_ASPECT);
-  const below = { ...lower, y: lower.y + top };
-  const left = fitCentered(inset.x - STAGE_GAP, height, TILE_ASPECT);
-  const clear = areaOf(below) >= areaOf(left) ? below : left;
-  return { main: areaOf(clear) >= CLEAR_OF_INSET_MIN * areaOf(full) ? clear : full, inset };
+  const maxW = Math.max(0, width - 2 * margin);
+  const maxH = Math.max(0, height - 2 * margin);
+  const insetOfHeight = (h: number): Box => {
+    const w = Math.min(Math.round((h * size.w) / size.h), maxW);
+    const ch = Math.min(h, maxH);
+    return { x: width - margin - w, y: margin, w, h: ch };
+  };
+  const enough = CLEAR_OF_INSET_MIN * areaOf(mainBox(width, height));
+  // The height at which the narrower side reaches INSET_MIN (a portrait picture is narrower than it is tall).
+  const floorH = Math.min(size.h, Math.ceil(INSET_MIN * Math.max(1, size.h / size.w)));
+  for (let h = size.h; h > floorH; h--) {
+    const inset = insetOfHeight(h);
+    const main = clearOf(width, height, inset);
+    if (areaOf(main) >= enough) return { main, inset };
+  }
+  const inset = insetOfHeight(floorH);
+  return { main: clearOf(width, height, inset), inset };
 }
 
 /** Lays `cells` same-size tiles out as rows, each row centred and the block centred on the stage. */

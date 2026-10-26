@@ -20,6 +20,7 @@ describe('P2-1 — the meeting files subscribe to fields, never the whole store'
       'features/live/meeting/MeetingEnded.tsx',
       'features/live/meeting/useLocalMediaToggles.ts',
       'features/live/useEventInviteLink.ts',
+      'features/live/useChatSend.ts',
     ];
     for (const f of files) {
       const src = clientSrc(f);

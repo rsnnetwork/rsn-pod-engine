@@ -9,8 +9,9 @@
 //   - 2 people: side by side at equal size in a WINDOW at least 1024px wide and
 //     landscape (ruling, fix round 1: a landscape tablet or small laptop counts,
 //     though its stage is a few pixels narrower), otherwise the other person
-//     large with yourself small in the corner, never covering them on a
-//     landscape stage; the viewer can swap the two views;
+//     large with yourself small in the corner, never covering them on any
+//     stage (fix round 2: your picture shrinks first, never below 44px); the
+//     viewer can swap the two views;
 //   - 3 or more: an even grid that always fits the stage (it never scrolls),
 //     the viewer's own tile first;
 //   - a pin or a host's spotlight: that person large, the others in a strip.
@@ -22,6 +23,7 @@ import {
   sideBySideByDefault,
   SIDE_BY_SIDE_QUERY,
   CLEAR_OF_INSET_MIN,
+  INSET_MIN,
   STAGE_GAP,
   TILE_ASPECT,
   type Box,
@@ -178,9 +180,8 @@ describe('planStage: where every tile sits, for 1, 2, 3, 4, 9 and 25 people at t
       const shown = plan.boxes.filter((b): b is Box => b !== null);
       for (const b of shown) expect(inside(b, width, height)).toBe(true);
       if (plan.more) expect(inside(plan.more.box, width, height)).toBe(true);
-      // Nothing overlaps except the small inset picture of a two-person view.
+      // Nothing overlaps, the small picture of yourself in a two-person view included (fix round 2).
       const flat = plan.boxes
-        .map((b, i) => (i === plan.insetIndex ? null : b))
         .filter((b): b is Box => b !== null)
         .concat(plan.more ? [plan.more.box] : []);
       for (let i = 0; i < flat.length; i++) {
@@ -297,7 +298,7 @@ describe('planStage: where every tile sits, for 1, 2, 3, 4, 9 and 25 people at t
   });
 });
 
-describe('the corner picture of yourself never covers the other person on a landscape stage (fix round 1)', () => {
+describe('the corner picture of yourself never covers the other person, on any stage (fix rounds 1 and 2)', () => {
   // Landscape stages where the corner picture would sit over the other person's frame: the four landscape
   // windows with the view set to "Focus" (the other person large), the chat open on a computer (the stage
   // narrows) and the chat open on a 390 phone (its sheet leaves a short, wide stage, where it overlapped by ~16px).
@@ -328,12 +329,104 @@ describe('the corner picture of yourself never covers the other person on a land
     expect(overlap(plan.boxes[0] as Box, plan.boxes[1] as Box)).toBe(false);
   });
 
-  it('on an upright phone the other person fills the stage and you sit over its corner, as on any phone call', () => {
-    for (const win of [[390, 844], [360, 740]] as Array<[number, number]>) {
+  // Every stage shape a window can leave, upright and on its side, short and tall: with two people, in the
+  // corner view and in its swapped (pinned) form, the two pictures never overlap, both are wholly on the stage,
+  // the corner picture is a 44px target at least, and the large picture stays the large one.
+  it('never, on any stage from 260x160 to 1600x1100, in either view', () => {
+    let checked = 0;
+    for (let width = 260; width <= 1600; width += 23) {
+      for (let height = 160; height <= 1100; height += 19) {
+        for (const focusIndex of [null, 0] as Array<number | null>) {
+          const plan = planStage({ width, height, count: 2, focusIndex, pairView: 'pair', wide: false });
+          const large = plan.boxes[1 - (plan.insetIndex as number)] as Box;
+          const small = plan.boxes[plan.insetIndex as number] as Box;
+          expect(overlap(large, small)).toBe(false);
+          expect(inside(large, width, height)).toBe(true);
+          expect(inside(small, width, height)).toBe(true);
+          expect(Math.min(small.w, small.h)).toBeGreaterThanOrEqual(INSET_MIN);
+          expect(area(large)).toBeGreaterThan(area(small) * 3);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(2000);
+  });
+
+  // The phones' real in-browser heights (fix round 2): Safari's visible viewport on an iPhone 12 to 14 (390x664,
+  // Playwright's iPhone 12), a small Android (360x640), an iPhone Plus (414x715) and an iPhone SE-sized one
+  // (375x635). Chat open, the sheet leaves a short, wide stage; chat closed, the stage is upright. These are the
+  // stages the meeting page leaves there, measured in Chromium and WebKit alike (shots-c8-fix2), and the boxes
+  // both engines drew on them: your picture top-right, the other person clear of it.
+  const PHONES: Array<[string, number, number, Box, Box]> = [
+    ['390x664 chat open', 374, 240, { x: 303, y: 8, w: 63, h: 47 }, { x: 30, y: 63, w: 314, h: 176 }],
+    ['360x640 chat open', 344, 227, { x: 271, y: 8, w: 65, h: 49 }, { x: 28, y: 65, w: 288, h: 162 }],
+    ['414x715 chat open', 398, 268, { x: 305, y: 8, w: 85, h: 64 }, { x: 32, y: 80, w: 334, h: 187 }],
+    ['375x635 chat open', 359, 224, { x: 292, y: 8, w: 59, h: 44 }, { x: 34, y: 60, w: 291, h: 163 }],
+    ['390x664 chat closed', 374, 539, { x: 252, y: 12, w: 110, h: 141 }, { x: 0, y: 161, w: 374, h: 378 }],
+    ['360x640 chat closed', 344, 515, { x: 228, y: 12, w: 104, h: 134 }, { x: 0, y: 154, w: 344, h: 361 }],
+    ['414x715 chat closed', 398, 590, { x: 274, y: 12, w: 112, h: 144 }, { x: 0, y: 164, w: 398, h: 426 }],
+    ['375x635 chat closed', 359, 510, { x: 244, y: 12, w: 103, h: 133 }, { x: 0, y: 153, w: 359, h: 357 }],
+  ];
+
+  it.each(PHONES)('%s: exactly where the two pictures sit', (_label, width, height, selfBox, otherBox) => {
+    const plan = planStage({ width, height, count: 2, focusIndex: null, pairView: null, wide: false });
+    expect(plan.boxes).toEqual([selfBox, otherBox]);
+    expect(plan.insetIndex).toBe(0);
+  });
+
+  it.each(PHONES)('%s: you sit beside the other person, never over them; their frame stays most of its size', (_label, width, height) => {
+    const plan = planStage({ width, height, count: 2, focusIndex: null, pairView: null, wide: false });
+    expect(plan.layout).toBe('pair');
+    const self = plan.boxes[0] as Box;
+    const other = plan.boxes[1] as Box;
+    expect(overlap(self, other)).toBe(false);
+    expect(inside(self, width, height)).toBe(true);
+    expect(inside(other, width, height)).toBe(true);
+    // Your picture stays a picture you can see and tap: 44px at least either way, top-right.
+    expect(Math.min(self.w, self.h)).toBeGreaterThanOrEqual(INSET_MIN);
+    expect(self.x + self.w).toBeGreaterThan(width - 16);
+    expect(self.y).toBeLessThanOrEqual(12);
+    // Above the other person, where the view toggle (top-left, 44px tall from 8px) sits too: nothing is over them.
+    expect(other.y).toBeGreaterThanOrEqual(self.y + self.h + STAGE_GAP);
+    expect(other.y).toBeGreaterThanOrEqual(8 + 44);
+    // The other person keeps most of their size: at least 60% of the frame they would have alone (70% wherever a
+    // 44px picture of you allows it).
+    const alone = width < height ? width * height : fullFrameArea(width, height);
+    expect(area(other)).toBeGreaterThanOrEqual(0.6 * alone);
+  });
+
+  it('your picture shrinks only as far as it has to: where there is room it keeps its full size', () => {
+    // An upright 390x844 phone (stage 374x716) and a 1280x720 "Focus" view lose nothing.
+    const phone = stageOf([390, 844]);
+    const p = planStage({ ...phone, count: 2, focusIndex: null, pairView: null, wide: false });
+    expect([(p.boxes[0] as Box).w, (p.boxes[0] as Box).h]).toEqual([112, 144]);
+    const desk = stageOf([1280, 720]);
+    const d = planStage({ ...desk, count: 2, focusIndex: null, pairView: 'pair', wide: false });
+    expect([(d.boxes[0] as Box).w, (d.boxes[0] as Box).h]).toEqual([208, 117]);
+    // On the short stage a 390x664 phone leaves with the chat open, it shrinks to keep the other person at 70%.
+    const short = planStage({ width: 374, height: 240, count: 2, focusIndex: null, pairView: null, wide: false });
+    const self = short.boxes[0] as Box;
+    expect(self.h).toBeLessThan(72);
+    expect(area(short.boxes[1] as Box)).toBeGreaterThanOrEqual(CLEAR_OF_INSET_MIN * fullFrameArea(374, 240));
+    // One pixel more of picture would leave the other person under 70%: it shrank no further than it had to.
+    const bigger = { ...self, x: self.x - 1, w: self.w + 1, h: self.h + 1 };
+    const room = 240 - (bigger.y + bigger.h + STAGE_GAP);
+    const w = Math.floor(Math.min(374, room * TILE_ASPECT));
+    expect(w * Math.floor(w / TILE_ASPECT)).toBeLessThan(CLEAR_OF_INSET_MIN * fullFrameArea(374, 240));
+  });
+
+  it('on an upright phone or tablet the other person keeps the full width of the stage below your picture', () => {
+    // Below, never in a column beside you: a landscape camera's picture is as wide as an upright stage either way.
+    for (const win of [[390, 844], [360, 740], [768, 1024]] as Array<[number, number]>) {
       const { width, height } = stageOf(win);
       const plan = planStage({ width, height, count: 2, focusIndex: null, pairView: null, wide: false });
-      expect(plan.boxes[1]).toEqual({ x: 0, y: 0, w: width, h: height });
+      const self = plan.boxes[0] as Box;
+      const other = plan.boxes[1] as Box;
       expect(plan.insetIndex).toBe(0);
+      expect(other.x).toBe(0);
+      expect(other.w).toBe(width);
+      expect(other.y + other.h).toBe(height);
+      expect(other.y).toBe(self.y + self.h + STAGE_GAP);
     }
   });
 });
