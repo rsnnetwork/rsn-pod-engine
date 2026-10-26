@@ -21,7 +21,7 @@ import { sendPokeReceivedEmail } from '../../../services/email/email.service';
 async function send(introMessage: string | null): Promise<{ html: string; text: string }> {
   mockSend.mockReset();
   mockSend.mockResolvedValue({ error: null });
-  await sendPokeReceivedEmail('them@example.com', 'Iqbal', {
+  await sendPokeReceivedEmail('delivered+them@resend.dev', 'Iqbal', {
     senderName: 'Fatima',
     introMessage,
     messagesUrl: 'https://app.rsn.network/messages',

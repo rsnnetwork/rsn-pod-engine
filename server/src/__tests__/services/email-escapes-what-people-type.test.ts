@@ -76,58 +76,58 @@ const inviteData = {
 
 const cases: Case[] = [
   email('sendMagicLinkEmail', 'the sign-in link', ['to', 'magicLinkUrl'],
-    ['ana@example.com', `${APP}/auth/verify?token=abc&inviteCode=XYZ`]),
-  email('sendSessionRecapEmail', 'the event recap', ['to', 'displayName', 'data'], ['ana@example.com', 'Ana', {
+    ['delivered+ana@resend.dev', `${APP}/auth/verify?token=abc&inviteCode=XYZ`]),
+  email('sendSessionRecapEmail', 'the event recap', ['to', 'displayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
     sessionTitle: 'Founders Evening', peopleMet: 5, mutualConnections: 2, avgRating: 4.2, recapUrl: `${APP}/sessions/s-1/recap`,
   }]),
-  email('sendDmNotificationEmail', 'a new message', ['to', 'recipientDisplayName', 'data'], ['ana@example.com', 'Ana', {
+  email('sendDmNotificationEmail', 'a new message', ['to', 'recipientDisplayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
     senderName: 'Fatima', snippet: 'Are you free on Thursday?', threadUrl: `${APP}/messages/c1`,
   }]),
-  email('sendHostRecapEmail', 'the host recap', ['to', 'displayName', 'data'], ['host@example.com', 'Host', {
+  email('sendHostRecapEmail', 'the host recap', ['to', 'displayName', 'data'], ['delivered+host@resend.dev', 'Host', {
     sessionTitle: 'Founders Evening', totalParticipants: 12, totalRounds: 5, totalMatches: 20, matchesCreated: 24,
     avgEventRating: 4.1, mutualConnectionsCount: 8, recapUrl: `${APP}/sessions/s-1/recap`,
   }]),
   email('buildInviteEmail', 'an event invite, as built', ['data'], [inviteData]),
-  email('sendInviteEmail', 'an event invite', ['to', 'data'], ['guest@example.com', inviteData]),
-  email('sendInviteEmail', 'a platform invite', ['to', 'data'], ['guest@example.com', { ...inviteData, type: 'platform' }]),
-  email('sendSessionRegistrationConfirmationEmail', 'the event registration', ['to', 'data'], ['ana@example.com', {
+  email('sendInviteEmail', 'an event invite', ['to', 'data'], ['delivered+guest@resend.dev', inviteData]),
+  email('sendInviteEmail', 'a platform invite', ['to', 'data'], ['delivered+guest@resend.dev', { ...inviteData, type: 'platform' }]),
+  email('sendSessionRegistrationConfirmationEmail', 'the event registration', ['to', 'data'], ['delivered+ana@resend.dev', {
     recipientName: 'Ana', sessionTitle: 'Founders Evening', sessionUrl: `${APP}/sessions/s-1`, calendarEvent,
   }]),
-  email('sendJoinRequestConfirmationEmail', 'the request received', ['to', 'fullName'], ['sam@example.com', 'Sam Applicant']),
+  email('sendJoinRequestConfirmationEmail', 'the request received', ['to', 'fullName'], ['delivered+sam@resend.dev', 'Sam Applicant']),
   email('sendJoinRequestWelcomeEmail', 'the welcome after approval', ['to', 'fullName', 'loginUrl'],
-    ['sam@example.com', 'Sam Applicant', `${APP}/auth/verify?token=abc`]),
-  email('sendJoinRequestDeclineEmail', 'the decline', ['to', 'fullName'], ['sam@example.com', 'Sam Applicant']),
+    ['delivered+sam@resend.dev', 'Sam Applicant', `${APP}/auth/verify?token=abc`]),
+  email('sendJoinRequestDeclineEmail', 'the decline', ['to', 'fullName'], ['delivered+sam@resend.dev', 'Sam Applicant']),
   email('sendJoinRequestReminderEmail', 'the first reminder', ['to', 'fullName', 'loginUrl', 'reminderCount'],
-    ['sam@example.com', 'Sam Applicant', `${APP}/login`, 1]),
+    ['delivered+sam@resend.dev', 'Sam Applicant', `${APP}/login`, 1]),
   email('sendJoinRequestReminderEmail', 'the second reminder', ['to', 'fullName', 'loginUrl', 'reminderCount'],
-    ['sam@example.com', 'Sam Applicant', `${APP}/login`, 2]),
+    ['delivered+sam@resend.dev', 'Sam Applicant', `${APP}/login`, 2]),
   email('sendGenericEmail', 'a message from an admin', ['to', 'recipientName', 'data'],
-    ['sam@example.com', 'Sam', { subject: 'A note from the team', body: 'Thanks for your patience.' }]),
-  email('sendJoinRequestAdminReviewEmail', 'the admin review', ['to', 'data'], ['ada@example.com', {
+    ['delivered+sam@resend.dev', 'Sam', { subject: 'A note from the team', body: 'Thanks for your patience.' }]),
+  email('sendJoinRequestAdminReviewEmail', 'the admin review', ['to', 'data'], ['delivered+ada@resend.dev', {
     adminDisplayName: 'Ada', applicantName: 'Sam Applicant', applicantEmail: 'sam@example.com',
     applicantLinkedinUrl: 'https://www.linkedin.com/in/sam-applicant', applicantReason: 'I run a studio.',
     approveUrl: `${APP}/admin/jr/aaaa`, rejectUrl: `${APP}/admin/jr/bbbb`, dashboardUrl: `${APP}/admin/join-requests`,
     expiresInHours: 48,
   }]),
-  email('sendPokeReceivedEmail', 'a meeting request', ['to', 'recipientDisplayName', 'data'], ['ana@example.com', 'Ana', {
+  email('sendPokeReceivedEmail', 'a meeting request', ['to', 'recipientDisplayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
     senderName: 'Fatima', introMessage: 'I would value your view on our seed round.', messagesUrl: `${APP}/messages`,
   }]),
   email('sendPokeAcceptedEmail', 'a meeting request accepted', ['to', 'recipientDisplayName', 'data'],
-    ['ana@example.com', 'Ana', { accepterName: 'Bo', messagesUrl: `${APP}/messages` }]),
+    ['delivered+ana@resend.dev', 'Ana', { accepterName: 'Bo', messagesUrl: `${APP}/messages` }]),
   email('sendLlmBalanceAlertEmail', 'the balance alert', ['opts'],
-    [{ to: 'ops@example.com', where: 'onboarding chat', at: '2026-11-05T17:00:00Z' }]),
-  email('sendMeetingConfirmedEmail', 'a confirmed meeting', ['to', 'recipientDisplayName', 'data'], ['ana@example.com', 'Ana', {
+    [{ to: 'delivered+ops@resend.dev', where: 'onboarding chat', at: '2026-11-05T17:00:00Z' }]),
+  email('sendMeetingConfirmedEmail', 'a confirmed meeting', ['to', 'recipientDisplayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
     partnerName: 'Bo', startAt: STARTS, durationMin: 30, recipientTimezone: 'Europe/Berlin', threadUrl: `${APP}/messages/c1`,
     googleCalendarUrl: 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=REASON%20meeting',
     icsContent: 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n',
     joinUrl: `${APP}/meet/c1?scheduled=1&kind=video`, kind: 'video',
     eventsUrl: `${APP}/sessions`, moved: true,
   }]),
-  email('sendMeetingCancelledEmail', 'a cancelled meeting', ['to', 'recipientDisplayName', 'data'], ['ana@example.com', 'Ana', {
+  email('sendMeetingCancelledEmail', 'a cancelled meeting', ['to', 'recipientDisplayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
     partnerName: 'Bo', cancellerName: 'Bo', cancelledByMe: false, startAt: STARTS, durationMin: 30, kind: 'video',
     recipientTimezone: 'Europe/Berlin', threadUrl: `${APP}/messages/c1`, icsContent: 'BEGIN:VCALENDAR\r\nMETHOD:CANCEL\r\nEND:VCALENDAR\r\n',
   }]),
-  email('sendMeetingReminderEmail', 'a meeting reminder', ['to', 'recipientDisplayName', 'data'], ['ana@example.com', 'Ana', {
+  email('sendMeetingReminderEmail', 'a meeting reminder', ['to', 'recipientDisplayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
     partnerName: 'Bo', startAt: STARTS, durationMin: 30, kind: 'audio', recipientTimezone: 'Europe/Berlin', minutesToGo: 10,
     joinUrl: `${APP}/meet/c1?scheduled=1&kind=audio`, eventsUrl: `${APP}/sessions`,
   }]),
@@ -300,7 +300,7 @@ describe('what people typed reads as they typed it', () => {
   const NAME = '<a href="https://evil.example">x</a>';
 
   it('the request to join, which needs no account, greets the name it was given as text', async () => {
-    const sent = await render('sendJoinRequestConfirmationEmail', ['anyone@example.com', NAME]);
+    const sent = await render('sendJoinRequestConfirmationEmail', ['delivered+anyone@resend.dev', NAME]);
     expect(sent.html).toContain(`Hi ${escaped(NAME)},`);
     expect(sent.html).not.toContain(NAME);
     expect(sent.text).toContain(`Hi ${NAME},`);
@@ -308,20 +308,20 @@ describe('what people typed reads as they typed it', () => {
 
   it('a direct message is shown as the words that were sent', async () => {
     const snippet = 'Use <b>bold</b> & "quotes", it\'s fine';
-    const sent = await render('sendDmNotificationEmail', ['ana@example.com', 'Ana', { senderName: 'Fatima', snippet, threadUrl: `${APP}/messages/c1` }]);
+    const sent = await render('sendDmNotificationEmail', ['delivered+ana@resend.dev', 'Ana', { senderName: 'Fatima', snippet, threadUrl: `${APP}/messages/c1` }]);
     expect(sent.html).toContain('Use &lt;b&gt;bold&lt;/b&gt; &amp; &quot;quotes&quot;, it&#39;s fine');
     expect(sent.text).toContain(`"${snippet}"`);
   });
 
   it('an admin\'s message keeps its line breaks and shows a tag as text', async () => {
     const body = 'Thanks.\nSee <a href="https://evil.example">this</a>.';
-    const sent = await render('sendGenericEmail', ['sam@example.com', 'Sam', { subject: 'A note', body }]);
+    const sent = await render('sendGenericEmail', ['delivered+sam@resend.dev', 'Sam', { subject: 'A note', body }]);
     expect(sent.html).toContain(`white-space:pre-wrap;">${escaped(body)}</p>`);
     expect(sent.text).toContain(body);
   });
 
   it('a name with an apostrophe or an ampersand still reads the same', async () => {
-    const sent = await render('sendInviteEmail', ['guest@example.com', { ...inviteData, inviterName: "Seán O'Brien", targetName: 'Food & Drink' }]);
+    const sent = await render('sendInviteEmail', ['delivered+guest@resend.dev', { ...inviteData, inviterName: "Seán O'Brien", targetName: 'Food & Drink' }]);
     expect(sent.html).toContain('<strong>Seán O&#39;Brien</strong>');
     expect(sent.html).toContain('<strong>Food &amp; Drink</strong>');
     expect(sent.subject).toBe("Seán O'Brien invited you to Food & Drink");
@@ -330,10 +330,41 @@ describe('what people typed reads as they typed it', () => {
 
   it('a link the server builds still opens the same address: its & is written &amp;, which every mail client reads as &', async () => {
     const link = `${APP}/auth/verify?token=abc&inviteCode=XYZ`;
-    const sent = await render('sendMagicLinkEmail', ['ana@example.com', link]);
+    const sent = await render('sendMagicLinkEmail', ['delivered+ana@resend.dev', link]);
     const hrefs = tagsOf(sent.html).filter((t) => t.name === 'a').map((t) => t.attributes.find(([n]) => n === 'href')?.[1]);
     expect(hrefs).toContain(link);
     expect(sent.html).toContain(`href="${APP}/auth/verify?token=abc&amp;inviteCode=XYZ"`);
     expect(sent.text).toContain(link);
+  });
+});
+
+// ── An address reserved for testing (26 Oct 2026) ────────────────────────────────────────────────
+//
+// The list above is every email there is, each with the arguments it needs, so it also answers whether any of them
+// gets round sendEmail's refusal to offer the provider an email for a reserved address: the throwaway members of the
+// platform's own runs (…@rsn-e2e.invalid) must cost the provider's quota nothing, whichever email they are sent.
+// email-reserved-test-addresses.test.ts runs the rule itself.
+
+/** The arguments with the recipient put on `address`: the first argument, or the `to` of the options the balance alert takes. */
+function addressedTo(c: Case, address: string): unknown[] {
+  const [first, ...rest] = c.args;
+  return typeof first === 'string' ? [address, ...rest] : [{ ...(first as object), to: address }, ...rest];
+}
+
+describe('to an address reserved for testing, every email stops before the provider', () => {
+  const senders = cases.filter((c) => c.fn.startsWith('send'));
+
+  it.each(senders.map((c) => [c.label, c] as const))('%s', async (_label, c) => {
+    mockSend.mockReset();
+    mockSend.mockResolvedValue({ error: null });
+    await (emailService[c.fn] as unknown as (...a: unknown[]) => Promise<unknown>)(...addressedTo(c, 'e2etest-1@rsn-e2e.invalid'));
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('and the same emails to a real address do reach it, so the check above is not passing for want of a send', async () => {
+    for (const c of senders) {
+      const sent = await render(c.fn, addressedTo(c, 'delivered+ana@resend.dev'));
+      expect(sent.subject).toBeTruthy();
+    }
   });
 });

@@ -42,7 +42,7 @@ beforeEach(() => {
 describe('sendInviteEmail says whether the email went', () => {
   it('the provider takes it: sent', async () => {
     mockSend.mockResolvedValue({ data: { id: 'email-1' }, error: null });
-    await expect(sendInviteEmail('guest@example.com', anInvite)).resolves.toEqual({ sent: true });
+    await expect(sendInviteEmail('delivered+guest@resend.dev', anInvite)).resolves.toEqual({ sent: true });
     expect(mockSend).toHaveBeenCalledTimes(1);
   });
 
@@ -51,7 +51,7 @@ describe('sendInviteEmail says whether the email went', () => {
     ['cannot be reached: the library answers, it does not throw', { statusCode: null, name: 'application_error', message: 'Unable to fetch data. The request could not be resolved.' }],
   ])('the provider %s: not sent, and not tried again', async (_what, error) => {
     mockSend.mockResolvedValue({ data: null, error });
-    await expect(sendInviteEmail('guest@example.com', anInvite)).resolves.toEqual({ sent: false });
+    await expect(sendInviteEmail('delivered+guest@resend.dev', anInvite)).resolves.toEqual({ sent: false });
     expect(mockSend).toHaveBeenCalledTimes(1);
   });
 
@@ -59,7 +59,7 @@ describe('sendInviteEmail says whether the email went', () => {
     jest.useFakeTimers();
     try {
       mockSend.mockResolvedValue({ data: null, error: { statusCode, name: 'application_error', message: 'Try again later' } });
-      const answer = sendInviteEmail('guest@example.com', anInvite);
+      const answer = sendInviteEmail('delivered+guest@resend.dev', anInvite);
       // The waits between the tries: 1 s, 2 s, 4 s.
       await jest.advanceTimersByTimeAsync(1000 + 2000 + 4000);
       await expect(answer).resolves.toEqual({ sent: false });
@@ -71,7 +71,7 @@ describe('sendInviteEmail says whether the email went', () => {
 
   it('no email provider at all: not sent, and nothing is asked of the library', async () => {
     withProvider('');
-    await expect(sendInviteEmail('guest@example.com', anInvite)).resolves.toEqual({ sent: false });
+    await expect(sendInviteEmail('delivered+guest@resend.dev', anInvite)).resolves.toEqual({ sent: false });
     expect(mockSend).not.toHaveBeenCalled();
   });
 });

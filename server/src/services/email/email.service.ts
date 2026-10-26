@@ -8,6 +8,7 @@ import logger from '../../config/logger';
 import { generateIcsContent } from '../calendar/calendar.service';
 import { meetingTime } from '../meetings/meeting-time';
 import { query } from '../../db';
+import { isReservedTestAddress, maskAddress } from '../identity/reserved-address';
 
 let resend: Resend | null = null;
 
@@ -57,7 +58,26 @@ export function emailCardClose(): string {
   ].join("");
 }
 
-// Centralized email sender with deliverability best-practices headers
+/**
+ * What sendEmail answers. `sent` is true for an email the provider took, and also for one to an address reserved for
+ * testing, which is never offered to the provider and says so in `skipped`.
+ */
+export interface SendEmailResult {
+  sent: boolean;
+  skipped?: 'reserved-test-address';
+}
+
+// Centralized email sender with deliverability best-practices headers.
+//
+// It is also the one place that decides whether an email is offered to the provider at all (26 Oct 2026). That day the
+// production account's daily sending quota ran out at 06:51 UTC and every email after it, real members' sign-in links
+// and meeting confirmations included, was refused. The platform's own end-to-end runs and production smokes had used
+// it up: their throwaway members sit on addresses reserved for testing (…@rsn-e2e.invalid, …@example.com) and every
+// email to them went to the provider. Nobody has a mailbox on a domain that RFC 2606 and RFC 6761 reserve, so the
+// provider is not asked. The answer is the one a delivered email gets, marked `skipped`: a reminder keeps its hour, a
+// batch counts the email as sent and nothing is tried again. The provider's own test sink (delivered+label@resend.dev)
+// is an address like any other here and goes as before. A call to the provider from anywhere else would get round this;
+// email-provider-single-door.test.ts fails if one appears.
 async function sendEmail(opts: {
   to: string;
   subject: string;
@@ -68,10 +88,15 @@ async function sendEmail(opts: {
    *  is what makes Gmail/Outlook/Apple render an inline Accept/Decline invite
    *  instead of a bare .ics download (Stefan, 9 Sep 2026). */
   attachments?: { filename: string; content: string; contentType?: string }[];
-}): Promise<{ sent: boolean }> {
+}): Promise<SendEmailResult> {
   if (!config.resendApiKey) {
     logger.warn({ to: opts.to, subject: opts.subject }, 'No email provider — email skipped');
     return { sent: false };
+  }
+
+  if (isReservedTestAddress(opts.to)) {
+    logger.debug({ subject: opts.subject, to: maskAddress(opts.to) }, 'email to a reserved test address not sent');
+    return { sent: true, skipped: 'reserved-test-address' };
   }
 
   const senderName = 'REASON';
@@ -518,12 +543,13 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
 /**
  * Sends an invite email and says whether it went. The mail provider answers a refusal (a bad address, its rate limit
  * after the retries, an outage, the network) rather than throwing, so `sent` is false for those, and with no provider
- * configured nothing goes either (26 Oct 2026: a reminder keeps an invite's hour only for an email that went).
+ * configured nothing goes either (26 Oct 2026: a reminder keeps an invite's hour only for an email that went). An
+ * address reserved for testing is not offered to the provider and counts as sent (see sendEmail).
  */
 export async function sendInviteEmail(
   to: string,
   data: InviteEmailData
-): Promise<{ sent: boolean }> {
+): Promise<SendEmailResult> {
   const { subject, html, text } = buildInviteEmail(data);
 
   if (config.resendApiKey) {
@@ -1136,7 +1162,7 @@ export async function isEmailTypeEnabled(emailType: string): Promise<boolean> {
  * 7 Sep 2026: the prepaid Anthropic balance is empty. Sent by
  * llm-balance-alert.ts at most once an hour while Anthropic keeps refusing.
  */
-export async function sendLlmBalanceAlertEmail(opts: { to: string; where: string; at: string }): Promise<{ sent: boolean }> {
+export async function sendLlmBalanceAlertEmail(opts: { to: string; where: string; at: string }): Promise<SendEmailResult> {
   const subject = 'REASON: Anthropic balance is empty, onboarding chat and LinkedIn fill are down';
   const text = [
     `At ${opts.at} the Anthropic API refused a call (${opts.where}) with "Your credit balance is too low".`,

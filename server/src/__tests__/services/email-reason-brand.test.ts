@@ -101,12 +101,12 @@ const cases: EmailCase[] = [
   {
     fn: 'sendMagicLinkEmail', label: 'the sign-in link', subject: 'Sign in to REASON',
     underCard: "If you didn't request this email, you can safely ignore it.",
-    run: () => emailService.sendMagicLinkEmail('ana@example.com', 'https://app.rsn.network/auth/verify?token=abc'),
+    run: () => emailService.sendMagicLinkEmail('delivered+ana@resend.dev', 'https://app.rsn.network/auth/verify?token=abc'),
   },
   {
     fn: 'sendSessionRecapEmail', label: 'the event recap', subject: 'Your REASON Recap — Founders Evening',
     brandLine: MEET, brandLineInHtml: true,
-    run: () => emailService.sendSessionRecapEmail('ana@example.com', 'Ana', {
+    run: () => emailService.sendSessionRecapEmail('delivered+ana@resend.dev', 'Ana', {
       sessionTitle: 'Founders Evening', peopleMet: 5, mutualConnections: 2, avgRating: 4.2, recapUrl: 'https://app.rsn.network/sessions/1/recap',
     }),
   },
@@ -114,14 +114,14 @@ const cases: EmailCase[] = [
     fn: 'sendDmNotificationEmail', label: 'a new message', subject: 'Fatima sent you a message on REASON',
     brandLine: MEET, underCard: "You're receiving this because someone messaged you on REASON.",
     says: ['sent you a message on REASON'],
-    run: () => emailService.sendDmNotificationEmail('ana@example.com', 'Ana', {
+    run: () => emailService.sendDmNotificationEmail('delivered+ana@resend.dev', 'Ana', {
       senderName: 'Fatima', snippet: 'Are you free on Thursday?', threadUrl: 'https://app.rsn.network/messages/c1',
     }),
   },
   {
     fn: 'sendHostRecapEmail', label: 'the host recap', subject: 'Host Recap — Founders Evening',
     brandLine: MEET, brandLineInHtml: true,
-    run: () => emailService.sendHostRecapEmail('host@example.com', 'Host', {
+    run: () => emailService.sendHostRecapEmail('delivered+host@resend.dev', 'Host', {
       sessionTitle: 'Founders Evening', totalParticipants: 12, totalRounds: 5, totalMatches: 20, matchesCreated: 24,
       avgEventRating: 4.1, mutualConnectionsCount: 8, recapUrl: 'https://app.rsn.network/sessions/1/recap',
     }),
@@ -129,22 +129,22 @@ const cases: EmailCase[] = [
   {
     fn: 'sendInviteEmail', label: 'a platform invite', subject: 'Stefan invited you to REASON',
     brandLine: MEET, brandLineInHtml: true,
-    run: () => emailService.sendInviteEmail('guest@example.com', { inviterName: 'Stefan', type: 'platform', inviteUrl: 'https://app.rsn.network/invite/ABC123' }),
+    run: () => emailService.sendInviteEmail('delivered+guest@resend.dev', { inviterName: 'Stefan', type: 'platform', inviteUrl: 'https://app.rsn.network/invite/ABC123' }),
   },
   {
     fn: 'sendInviteEmail', label: 'a pod invite', subject: 'Stefan invited you to Founding Pod',
     brandLine: MEET, brandLineInHtml: true,
-    run: () => emailService.sendInviteEmail('guest@example.com', { inviterName: 'Stefan', type: 'pod', targetName: 'Founding Pod', inviteUrl: 'https://app.rsn.network/invite/ABC123' }),
+    run: () => emailService.sendInviteEmail('delivered+guest@resend.dev', { inviterName: 'Stefan', type: 'pod', targetName: 'Founding Pod', inviteUrl: 'https://app.rsn.network/invite/ABC123' }),
   },
   {
     fn: 'sendInviteEmail', label: 'a circle invite', subject: 'Claus invited you to Nordic Founders',
     brandLine: MEET, brandLineInHtml: true,
-    run: () => emailService.sendInviteEmail('guest@example.com', { inviterName: 'Claus', type: 'circle', targetName: 'Nordic Founders', inviteUrl: 'https://app.rsn.network/invite/ABC123' }),
+    run: () => emailService.sendInviteEmail('delivered+guest@resend.dev', { inviterName: 'Claus', type: 'circle', targetName: 'Nordic Founders', inviteUrl: 'https://app.rsn.network/invite/ABC123' }),
   },
   {
     fn: 'sendInviteEmail', label: 'an event invite with a calendar file', subject: 'Stefan invited you to Founders Evening',
     brandLine: MEET, brandLineInHtml: true,
-    run: () => emailService.sendInviteEmail('guest@example.com', {
+    run: () => emailService.sendInviteEmail('delivered+guest@resend.dev', {
       inviterName: 'Stefan', type: 'session', targetName: 'Founders Evening', inviteUrl: 'https://app.rsn.network/invite/ABC123',
       calendarEvent: { ...aCalendarEvent, sessionId: 's-1' },
     }),
@@ -152,7 +152,7 @@ const cases: EmailCase[] = [
   {
     fn: 'sendSessionRegistrationConfirmationEmail', label: 'the event registration', subject: "You're registered — Founders Evening",
     brandLine: MEET, brandLineInHtml: true,
-    run: () => emailService.sendSessionRegistrationConfirmationEmail('ana@example.com', {
+    run: () => emailService.sendSessionRegistrationConfirmationEmail('delivered+ana@resend.dev', {
       recipientName: 'Ana', sessionTitle: 'Founders Evening', sessionUrl: 'https://app.rsn.network/sessions/s-1',
       calendarEvent: { ...aCalendarEvent, sessionId: 's-1' },
     }),
@@ -165,7 +165,7 @@ const cases: EmailCase[] = [
       // 25 Oct review: REASON is for everyone, not only founders.
       'REASON is an invite-only community for professionals of every kind, from founders to employees, investors and advisors, who value honesty over hype.',
     ],
-    run: () => emailService.sendJoinRequestConfirmationEmail('sam@example.com', 'Sam'),
+    run: () => emailService.sendJoinRequestConfirmationEmail('delivered+sam@resend.dev', 'Sam'),
   },
   {
     fn: 'sendJoinRequestWelcomeEmail', label: 'the welcome after approval', subject: "Welcome to REASON — You're in!",
@@ -175,48 +175,48 @@ const cases: EmailCase[] = [
       'Sign In to REASON',
       "You're now part of a community of professionals of every kind, from founders to employees, investors and advisors, who connect with honesty and purpose.",
     ],
-    run: () => emailService.sendJoinRequestWelcomeEmail('sam@example.com', 'Sam', 'https://app.rsn.network/auth/verify?token=abc'),
+    run: () => emailService.sendJoinRequestWelcomeEmail('delivered+sam@resend.dev', 'Sam', 'https://app.rsn.network/auth/verify?token=abc'),
   },
   {
     fn: 'sendJoinRequestDeclineEmail', label: 'the decline', subject: 'REASON — Update on your request',
     brandLine: FAST, brandLineInHtml: true,
     says: ['Thank you for your interest in REASON.', 'REASON is a curated community'],
-    run: () => emailService.sendJoinRequestDeclineEmail('sam@example.com', 'Sam'),
+    run: () => emailService.sendJoinRequestDeclineEmail('delivered+sam@resend.dev', 'Sam'),
   },
   {
     fn: 'sendJoinRequestReminderEmail', label: 'the first reminder', subject: "REASON — Don't forget to complete your signup!",
     brandLine: FAST, brandLineInHtml: true,
     says: ['You were approved to join REASON!'],
-    run: () => emailService.sendJoinRequestReminderEmail('sam@example.com', 'Sam', 'https://app.rsn.network/login', 1),
+    run: () => emailService.sendJoinRequestReminderEmail('delivered+sam@resend.dev', 'Sam', 'https://app.rsn.network/login', 1),
   },
   {
     fn: 'sendJoinRequestReminderEmail', label: 'the second reminder', subject: 'REASON — Your spot is still waiting',
     brandLine: FAST, brandLineInHtml: true,
     says: ['Your approved spot at REASON is still reserved'],
-    run: () => emailService.sendJoinRequestReminderEmail('sam@example.com', 'Sam', 'https://app.rsn.network/login', 2),
+    run: () => emailService.sendJoinRequestReminderEmail('delivered+sam@resend.dev', 'Sam', 'https://app.rsn.network/login', 2),
   },
   {
     fn: 'sendGenericEmail', label: 'a message from an admin', subject: 'A note from the team',
     brandLine: FAST, brandLineInHtml: true,
-    run: () => emailService.sendGenericEmail('sam@example.com', 'Sam', { subject: 'A note from the team', body: 'Thanks for your patience.' }),
+    run: () => emailService.sendGenericEmail('delivered+sam@resend.dev', 'Sam', { subject: 'A note from the team', body: 'Thanks for your patience.' }),
   },
   {
     fn: 'sendJoinRequestAdminReviewEmail', label: 'the admin review (with a LinkedIn link)', subject: 'New REASON join request — Sam Applicant',
     brandLine: FAST, brandLineInHtml: true,
     says: ['A new request to join REASON just came in.', 'Why REASON'],
-    run: () => emailService.sendJoinRequestAdminReviewEmail('ada@example.com', adminReview('https://www.linkedin.com/in/sam-applicant')),
+    run: () => emailService.sendJoinRequestAdminReviewEmail('delivered+ada@resend.dev', adminReview('https://www.linkedin.com/in/sam-applicant')),
   },
   {
     fn: 'sendJoinRequestAdminReviewEmail', label: 'the admin review (no LinkedIn address)', subject: 'New REASON join request — Sam Applicant',
     brandLine: FAST, brandLineInHtml: true,
     says: ['A new request to join REASON just came in.', 'Why REASON'],
-    run: () => emailService.sendJoinRequestAdminReviewEmail('ada@example.com', adminReview(null)),
+    run: () => emailService.sendJoinRequestAdminReviewEmail('delivered+ada@resend.dev', adminReview(null)),
   },
   {
     fn: 'sendPokeReceivedEmail', label: 'a meeting request with a note', subject: 'Fatima wants to meet you on REASON',
     brandLine: MEET, underCard: "You're receiving this because someone wants to meet you on REASON.",
     says: ['wants to meet you on REASON.'],
-    run: () => emailService.sendPokeReceivedEmail('ana@example.com', 'Ana', {
+    run: () => emailService.sendPokeReceivedEmail('delivered+ana@resend.dev', 'Ana', {
       senderName: 'Fatima', introMessage: 'I would value your view on our seed round.', messagesUrl: 'https://app.rsn.network/messages',
     }),
   },
@@ -224,40 +224,40 @@ const cases: EmailCase[] = [
     fn: 'sendPokeReceivedEmail', label: 'a meeting request without a note', subject: 'Fatima wants to meet you on REASON',
     brandLine: MEET, underCard: "You're receiving this because someone wants to meet you on REASON.",
     says: ['wants to meet you on REASON.'],
-    run: () => emailService.sendPokeReceivedEmail('ana@example.com', 'Ana', { senderName: 'Fatima', introMessage: null, messagesUrl: 'https://app.rsn.network/messages' }),
+    run: () => emailService.sendPokeReceivedEmail('delivered+ana@resend.dev', 'Ana', { senderName: 'Fatima', introMessage: null, messagesUrl: 'https://app.rsn.network/messages' }),
   },
   {
     fn: 'sendPokeAcceptedEmail', label: 'a meeting request accepted', subject: 'Bo accepted your meeting request',
     brandLine: MEET, underCard: "You're receiving this because your meeting request was accepted on REASON.",
-    run: () => emailService.sendPokeAcceptedEmail('ana@example.com', 'Ana', { accepterName: 'Bo', messagesUrl: 'https://app.rsn.network/messages' }),
+    run: () => emailService.sendPokeAcceptedEmail('delivered+ana@resend.dev', 'Ana', { accepterName: 'Bo', messagesUrl: 'https://app.rsn.network/messages' }),
   },
   {
     fn: 'sendLlmBalanceAlertEmail', label: 'the balance alert', subject: 'REASON: Anthropic balance is empty, onboarding chat and LinkedIn fill are down',
     shell: false,
-    run: () => emailService.sendLlmBalanceAlertEmail({ to: 'ops@example.com', where: 'onboarding chat', at: '2026-11-05T17:00:00Z' }),
+    run: () => emailService.sendLlmBalanceAlertEmail({ to: 'delivered+ops@resend.dev', where: 'onboarding chat', at: '2026-11-05T17:00:00Z' }),
   },
   // 26 Oct 2026: the subject carries the time, in the recipient's zone (Berlin here), with the zone named.
   {
     fn: 'sendMeetingConfirmedEmail', label: 'a confirmed meeting with a join link', subject: 'Meeting confirmed: Bo on Thu 5 Nov, 18:00 (CET)',
     brandLine: MEET,
-    run: () => emailService.sendMeetingConfirmedEmail('ana@example.com', 'Ana', meetingConfirmed({
+    run: () => emailService.sendMeetingConfirmedEmail('delivered+ana@resend.dev', 'Ana', meetingConfirmed({
       joinUrl: 'https://app.rsn.network/meet/c1?scheduled=1&kind=video', kind: 'video', eventsUrl: 'https://app.rsn.network/sessions',
     })),
   },
   {
     fn: 'sendMeetingConfirmedEmail', label: 'a confirmed meeting without a join link', subject: 'Meeting confirmed: Bo on Thu 5 Nov, 18:00 (CET)',
     brandLine: MEET,
-    run: () => emailService.sendMeetingConfirmedEmail('ana@example.com', 'Ana', meetingConfirmed()),
+    run: () => emailService.sendMeetingConfirmedEmail('delivered+ana@resend.dev', 'Ana', meetingConfirmed()),
   },
   {
     fn: 'sendMeetingConfirmedEmail', label: 'a moved meeting', subject: 'Meeting moved: Bo on Thu 5 Nov, 18:00 (CET)',
     brandLine: MEET,
-    run: () => emailService.sendMeetingConfirmedEmail('ana@example.com', 'Ana', meetingConfirmed({ moved: true })),
+    run: () => emailService.sendMeetingConfirmedEmail('delivered+ana@resend.dev', 'Ana', meetingConfirmed({ moved: true })),
   },
   {
     fn: 'sendMeetingCancelledEmail', label: 'a cancelled meeting', subject: 'Meeting cancelled: Bo on Thu 5 Nov, 18:00 (CET)',
     brandLine: MEET,
-    run: () => emailService.sendMeetingCancelledEmail('ana@example.com', 'Ana', {
+    run: () => emailService.sendMeetingCancelledEmail('delivered+ana@resend.dev', 'Ana', {
       partnerName: 'Bo', cancellerName: 'Bo', cancelledByMe: false, startAt: STARTS, durationMin: 30, kind: 'video',
       recipientTimezone: 'Europe/Berlin', threadUrl: 'https://app.rsn.network/messages/c1', icsContent: aStubCalendarFile,
     }),
@@ -265,7 +265,7 @@ const cases: EmailCase[] = [
   {
     fn: 'sendMeetingReminderEmail', label: 'a meeting reminder', subject: 'Your meeting with Bo starts in 10 minutes',
     brandLine: MEET,
-    run: () => emailService.sendMeetingReminderEmail('ana@example.com', 'Ana', {
+    run: () => emailService.sendMeetingReminderEmail('delivered+ana@resend.dev', 'Ana', {
       partnerName: 'Bo', startAt: STARTS, durationMin: 30, kind: 'video', recipientTimezone: 'Europe/Berlin', minutesToGo: 10,
       joinUrl: 'https://app.rsn.network/meet/c1?scheduled=1&kind=video', eventsUrl: 'https://app.rsn.network/sessions',
     }),
@@ -432,7 +432,7 @@ describe('the join-request review email gives the LinkedIn row an answer when th
   const rowAfterTheLabel = (html: string) => html.match(/>LinkedIn<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>/)?.[1].trim();
 
   it('links the profile when there is one', async () => {
-    const sent = await sendAndCapture(() => emailService.sendJoinRequestAdminReviewEmail('ada@example.com', adminReview('https://www.linkedin.com/in/sam-applicant')));
+    const sent = await sendAndCapture(() => emailService.sendJoinRequestAdminReviewEmail('delivered+ada@resend.dev', adminReview('https://www.linkedin.com/in/sam-applicant')));
     expect(rowAfterTheLabel(sent.html)).toContain('<a href="https://www.linkedin.com/in/sam-applicant"');
     expect(sent.text).toContain('LinkedIn: https://www.linkedin.com/in/sam-applicant');
   });
@@ -440,13 +440,13 @@ describe('the join-request review email gives the LinkedIn row an answer when th
   // At 360 wide the value column is about 120px. A profile address has no space to break at, so
   // without this it pushed the table past the edge of the card (seen in the browser, 21 Oct 2026).
   it('lets a long LinkedIn address and a long email address wrap inside the card', async () => {
-    const sent = await sendAndCapture(() => emailService.sendJoinRequestAdminReviewEmail('ada@example.com', adminReview('https://www.linkedin.com/in/a-very-long-profile-name-0123456789abcdef')));
+    const sent = await sendAndCapture(() => emailService.sendJoinRequestAdminReviewEmail('delivered+ada@resend.dev', adminReview('https://www.linkedin.com/in/a-very-long-profile-name-0123456789abcdef')));
     expect(sent.html).toMatch(/word-break:break-all;"><a href="https:\/\/www\.linkedin\.com\/in\/a-very-long-profile-name/);
     expect(sent.html).toMatch(/word-break:break-all;">sam@example\.com<\/td>/);
   });
 
   it.each([null, '', '   '])('says "Not given", with no link, for %j', async (given) => {
-    const sent = await sendAndCapture(() => emailService.sendJoinRequestAdminReviewEmail('ada@example.com', adminReview(given)));
+    const sent = await sendAndCapture(() => emailService.sendJoinRequestAdminReviewEmail('delivered+ada@resend.dev', adminReview(given)));
     expect(rowAfterTheLabel(sent.html)).toBe('Not given');
     expect(sent.html).not.toContain('linkedin.com');
     expect(sent.text).toContain('LinkedIn: Not given');
