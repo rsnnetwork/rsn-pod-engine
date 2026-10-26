@@ -392,8 +392,14 @@ test('a long group opens at its newest message even when its details come after 
 
   const page = await open(stefan, 'stefan-long', '/messages', { width: 360, height: 740 });
   await expect(groupRow(page, LONG_GROUP)).toBeVisible({ timeout: 40_000 });
+  // The read marks the server has STORED (their 2xx answers, not the requests): the next step of the test may post a
+  // message, and a mark still on its way to the server would be stored after that message, which the server then counts
+  // as read, so no mark would be due for it. Counted as responses, the message that follows is always newer than the
+  // mark before it. (Seen on the preview, 26 Oct 2026: one of two marks missing when the request order flipped.)
   const reads: string[] = [];
-  page.on('request', (r) => { if (r.method() === 'POST' && r.url().endsWith(`/api/groups/${groupId}/read`)) reads.push(r.url()); });
+  page.on('response', (r) => {
+    if (r.request().method() === 'POST' && r.url().endsWith(`/api/groups/${groupId}/read`) && r.ok()) reads.push(r.url());
+  });
   // The group's details come a second and a half after its messages, as on a slow connection.
   await page.route(`**/api/groups/${groupId}`, async (route) => {
     await new Promise((r) => setTimeout(r, 1500));
