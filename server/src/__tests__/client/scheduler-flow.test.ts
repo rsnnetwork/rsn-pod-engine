@@ -12,8 +12,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   ASK_SEND, NOT_SHARED, SAVE_OVERLAP, SAVE_SENT,
-  addDays, cellAriaLabel, cellLabels, cellState, cellText, confirmable, confirmedMessage, dayKeyOf, dayLabel, dayParts,
-  daySlots, isMeetingOver, isSlotKey, isTimeNotShared, meetingStands, saveMessage, saveOutcome, schedulerError,
+  addDays, cardSeed, cellAriaLabel, cellLabels, cellState, cellText, confirmFailure, confirmable, confirmedMessage,
+  dayKeyOf, dayLabel, dayParts,
+  daySlots, isMeetingOver, isSlotKey, isTimeNotShared, meetingLength, meetingStands, saveMessage, saveOutcome, schedulerError,
   slotLabel, slotTime, typedSlot, upcomingDays, whenWithZone, zoneLine, zoneName,
   type SchedulingLike,
 } from '../../../../client/src/features/messages/scheduler-flow';
@@ -220,63 +221,122 @@ describe('a cell: what it shows, what it says to a screen reader, and what a tap
 
 describe('what a Save says it did, read from the answer the save itself got', () => {
   const now = at('2026-10-25T11:45:47Z');
+  const ME = 'u-claus';
+  const PARTNER = 'u-stefan';
   const sched = (overlap: string[], confirmed: SchedulingLike['confirmed'] = null): SchedulingLike => ({ overlap, confirmed });
-  const booked = { window: '2026-10-25T12:00:00Z', startAt: '2026-10-25T12:00:00.000Z', durationMin: 30 };
+  const booked = { window: '2026-10-25T12:00:00Z', startAt: '2026-10-25T12:00:00.000Z', durationMin: 30, byUserId: ME };
+  const ctx = (known: SchedulingLike['confirmed'] = null, added: string[] = []) => ({ me: ME, known, added });
 
   it('the save booked the one time both picked: "Meeting confirmed: Sun 25 Oct, 13:00", and the panel closes', () => {
-    const outcome = saveOutcome(sched([]), sched(['2026-10-25T12:00:00Z'], booked), now);
+    const outcome = saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), ctx(null, ['2026-10-25T12:00:00Z']), now);
     expect(outcome).toEqual({ kind: 'confirmed', startAt: booked.startAt });
     expect(saveMessage(outcome, CPH)).toBe('Meeting confirmed: Sun 25 Oct, 13:00');
   });
 
+  it('a meeting the PARTNER booked or moved meanwhile is never "Meeting confirmed" for this person: the server says who', () => {
+    // The panel still showed 13:00 when the partner moved it to 15:00; this save only added 17:00.
+    const moved = { window: '2026-10-25T14:00:00Z', startAt: '2026-10-25T14:00:00.000Z', durationMin: 30, byUserId: PARTNER };
+    expect(saveOutcome(sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], moved), ctx(booked, ['2026-10-25T16:00:00Z']), now))
+      .toEqual({ kind: 'sent' });
+  });
+
   it('two or more shared times and no meeting: "You can both meet. Confirm a time." and the panel stays open', () => {
-    const outcome = saveOutcome(sched([]), sched(['2026-10-25T12:00:00Z', '2026-10-25T13:00:00Z']), now);
+    const outcome = saveOutcome(sched(['2026-10-25T12:00:00Z', '2026-10-25T13:00:00Z']), ctx(), now);
     expect(outcome).toEqual({ kind: 'overlap' });
     expect(saveMessage(outcome, CPH)).toBe('You can both meet. Confirm a time.');
     expect(SAVE_OVERLAP).toBe('You can both meet. Confirm a time.');
   });
 
   it('nothing shared yet: "Sent. They can see when you are free."', () => {
-    const outcome = saveOutcome(undefined, sched([]), now);
+    const outcome = saveOutcome(sched([]), ctx(), now);
     expect(outcome).toEqual({ kind: 'sent' });
     expect(saveMessage(outcome, CPH)).toBe('Sent. They can see when you are free.');
     expect(SAVE_SENT).toBe('Sent. They can see when you are free.');
   });
 
   it('a meeting that already stood is not news: a save that shares nothing new just sends', () => {
-    expect(saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), sched(['2026-10-25T12:00:00Z'], booked), now))
+    expect(saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), ctx(booked), now)).toEqual({ kind: 'sent' });
+  });
+
+  it('a save never moves a meeting: ONE new shared time asks "Move the meeting there?" and the card opens on it', () => {
+    // Both picked 15:00 while 13:00 stood. The member's own added time is what became shared.
+    const outcome = saveOutcome(
+      sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], booked), ctx(booked, ['2026-10-25T14:00:00Z']), now,
+    );
+    expect(outcome).toEqual({ kind: 'move', to: '2026-10-25T14:00:00Z' });
+    expect(saveMessage(outcome, CPH)).toBe('You can both meet at Sun 25 Oct, 15:00. Move the meeting there?');
+    expect(saveMessage(outcome, CPH)).not.toMatch(/Meeting (confirmed|moved)/);
+  });
+
+  it('two or more new shared times say there is a choice of where to move it; shared times the member did not add are not new', () => {
+    const two = saveOutcome(
+      sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z', '2026-10-25T16:00:00Z'], booked),
+      ctx(booked, ['2026-10-25T14:00:00Z', '2026-10-25T16:00:00Z']), now,
+    );
+    expect(two).toEqual({ kind: 'move-choice' });
+    expect(saveMessage(two, CPH)).toBe('You can both meet at other times too. Pick one to move the meeting.');
+    expect(saveMessage(two, CPH)).not.toBe(SAVE_OVERLAP);
+    // 14:00 was shared already (the member added only 17:30, which the partner does not have): nothing to move to.
+    expect(saveOutcome(sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], booked), ctx(booked, ['2026-10-25T16:30:00Z']), now))
       .toEqual({ kind: 'sent' });
   });
 
-  it('Reschedule: with a meeting standing, the save that makes ONE more time shared moves the meeting there', () => {
-    // Both picked 15:00 while 13:00 stood: that is the new agreement, the way the first one was.
-    expect(saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], booked), now))
-      .toEqual({ kind: 'move', to: '2026-10-25T14:00:00Z' });
-    expect(saveMessage({ kind: 'move', to: '2026-10-25T14:00:00Z' }, CPH)).toBe('Meeting moved: Sun 25 Oct, 15:00');
-  });
-
-  it('Reschedule: two or more new shared times leave the choice to the person (the move step stays open); old ones are not new', () => {
-    expect(saveOutcome(
-      sched(['2026-10-25T12:00:00Z'], booked),
-      sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z', '2026-10-25T16:00:00Z'], booked), now,
-    )).toEqual({ kind: 'overlap' });
-    // 14:00 was already shared before this save: nothing moves.
-    expect(saveOutcome(
-      sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], booked),
-      sched(['2026-10-25T12:00:00Z', '2026-10-25T14:00:00Z'], booked), now,
-    )).toEqual({ kind: 'sent' });
-  });
-
   it('only shared times still ahead count; once a meeting has ended, a new one booked by the save is news again', () => {
-    expect(saveOutcome(sched([]), sched(['2026-10-25T11:30:00Z']), now)).toEqual({ kind: 'sent' });
-    const ended = { window: '2026-10-20T12:00:00Z', startAt: '2026-10-20T12:00:00.000Z', durationMin: 30 };
-    expect(saveOutcome(sched([], ended), sched(['2026-10-25T12:00:00Z'], booked), now)).toEqual({ kind: 'confirmed', startAt: booked.startAt });
-    expect(saveOutcome(sched([], ended), sched(['2026-10-25T12:00:00Z', '2026-10-25T13:00:00Z'], ended), now)).toEqual({ kind: 'overlap' });
+    expect(saveOutcome(sched(['2026-10-25T11:30:00Z']), ctx(), now)).toEqual({ kind: 'sent' });
+    const ended = { window: '2026-10-20T12:00:00Z', startAt: '2026-10-20T12:00:00.000Z', durationMin: 30, byUserId: ME };
+    expect(saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), ctx(ended, ['2026-10-25T12:00:00Z']), now))
+      .toEqual({ kind: 'confirmed', startAt: booked.startAt });
+    expect(saveOutcome(sched(['2026-10-25T12:00:00Z', '2026-10-25T13:00:00Z'], ended), ctx(ended), now)).toEqual({ kind: 'overlap' });
   });
 
   it('a confirm says what it did, and moving a meeting says so', () => {
     expect(confirmedMessage('2026-10-25T12:00:00Z', CPH, false)).toBe('Meeting confirmed: Sun 25 Oct, 13:00');
     expect(confirmedMessage('2026-10-27T15:00:00Z', CPH, true)).toBe('Meeting moved: Tue 27 Oct, 16:00');
+  });
+});
+
+describe('the confirm card for a meeting that stands keeps its length and kind', () => {
+  const now = at('2026-10-25T11:45:47Z');
+
+  it('a 45-minute audio meeting opens the Move card at 45 minutes, audio', () => {
+    const standing = { window: '2026-10-25T12:00:00Z', startAt: '2026-10-25T12:00:00.000Z', durationMin: 45, type: 'audio' as const };
+    expect(cardSeed(standing, now)).toEqual({ duration: '45', kind: 'audio' });
+    expect(cardSeed({ ...standing, durationMin: null, type: null }, now)).toEqual({ duration: '30', kind: 'video' });
+  });
+
+  it('with no meeting standing (none, or one that has ended) the card keeps what the member chose', () => {
+    expect(cardSeed(null, now)).toBeNull();
+    const ended = { window: '2026-10-20T12:00:00Z', startAt: '2026-10-20T12:00:00.000Z', durationMin: 45, type: 'audio' as const };
+    expect(cardSeed(ended, now)).toBeNull();
+  });
+
+  it('a typed length is whole minutes from 5 to 240, the bounds the server keeps', () => {
+    expect(meetingLength('45')).toBe(45);
+    expect(meetingLength('5')).toBe(5);
+    expect(meetingLength('240')).toBe(240);
+    for (const bad of ['', '4', '241', '30.5', 'abc', '-30']) expect(meetingLength(bad)).toBeNull();
+  });
+});
+
+describe('a Move or a Confirm that fails says where the meeting is, and that nothing moved', () => {
+  const answer = (status: number, code: string, message: string) => ({ response: { status, data: { error: { code, message } } } });
+  const notShared = answer(409, 'MEETING_TIME_NOT_SHARED', 'That time is no longer free for both of you.');
+  const dropped = { isAxiosError: true, request: {} };
+  const stays = '2026-10-29T09:00:00.000Z';
+
+  it('a Move refused because the time is no longer shared names where the meeting stays', () => {
+    expect(confirmFailure(notShared, { moving: true, stays, zone: CPH }))
+      .toBe('That time is no longer free for both of you. Your meeting stays on Thu 29 Oct, 10:00.');
+  });
+
+  it('a Move that never reached the server (the connection dropped) says the meeting stays, and to try again', () => {
+    expect(confirmFailure(dropped, { moving: true, stays, zone: CPH }))
+      .toBe('Could not move the meeting. It stays on Thu 29 Oct, 10:00. Try again.');
+  });
+
+  it('a Confirm with no meeting yet says the time is gone, or the connection', () => {
+    expect(confirmFailure(notShared, { moving: false, stays: null, zone: CPH })).toBe(NOT_SHARED);
+    expect(confirmFailure(dropped, { moving: false, stays: null, zone: CPH })).toBe('Connection lost. Check your internet and try again.');
   });
 });
 
@@ -301,11 +361,36 @@ describe('when a request fails', () => {
 // ---- the screens, read from source -------------------------------------------------------------------------------
 
 const read = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../client/src', rel), 'utf8').replace(/\r\n/g, '\n');
-const scheduler = () => read('features/messages/MeetingScheduler.tsx');
+// The scheduler is a container (state and what each action does) and focused parts; the pins read them together.
+const SCHEDULER_PARTS = [
+  'MeetingScheduler.tsx', 'SchedulerConfirmCard.tsx', 'SchedulerSaveBar.tsx', 'SchedulerSlotGrid.tsx', 'SchedulerDayStrip.tsx',
+  'SchedulerTypedTime.tsx', 'SchedulerOverlapList.tsx', 'SchedulerMeetingSummary.tsx', 'useSchedulerScroll.ts',
+];
+const container = () => read('features/messages/MeetingScheduler.tsx');
+const part = (file: string) => read(`features/messages/${file}`);
+const scheduler = () => SCHEDULER_PARTS.map(part).join('\n');
 const page = () => read('features/messages/MessagesPage.tsx');
 const card = () => read('features/messages/SystemMessageCard.tsx');
+/** The body of `const name = (...) => {` up to its closing brace at the same indent. */
+const handler = (src: string, name: string) => {
+  const start = src.indexOf(`  const ${name} = `);
+  expect(start).toBeGreaterThan(-1);
+  return src.slice(start, src.indexOf('\n  };', start));
+};
 
 describe('the scheduler on screen', () => {
+  it('is a container and focused parts: the confirm card, the Save bar, the timeline, the day strip and the rest', () => {
+    const src = container();
+    for (const file of SCHEDULER_PARTS.slice(1)) {
+      const name = file.replace(/\.tsx?$/, '');
+      expect(src).toMatch(new RegExp(`from '\\./${name}'`));
+    }
+    // The parts hold the markup: the container no longer draws a card, a cell or the prompt itself.
+    expect(src).not.toMatch(/data-testid="confirm-card"/);
+    expect(src).not.toMatch(/data-slot=\{key\}/);
+    expect(src).not.toMatch(/\{ASK_SEND\}/);
+  });
+
   it('builds its days and cells from the zone-safe rules above, not from wall-clock Dates', () => {
     const src = scheduler();
     expect(src).toMatch(/from '\.\/scheduler-flow'/);
@@ -314,61 +399,106 @@ describe('the scheduler on screen', () => {
   });
 
   it('a green cell opens the confirm card for its own time; it never toggles your pick away', () => {
-    const src = scheduler();
-    expect(src).toMatch(/state === 'agreed'\s*\?\s*openConfirm\(key\)\s*:\s*toggle\(key\)/);
-    expect(src).toMatch(/aria-label=\{cellAriaLabel\(state, /);
+    expect(container()).toMatch(/state === 'agreed'\s*\?\s*openConfirm\(key\)\s*:\s*toggle\(key\)/);
+    expect(part('SchedulerSlotGrid.tsx')).toMatch(/aria-label=\{cellAriaLabel\(state, /);
+    expect(part('SchedulerSlotGrid.tsx')).toMatch(/onClick=\{\(\) => onPress\(state, key\)\}/);
+    expect(container()).toMatch(/onPress=\{pressCell\}/);
   });
 
   it('hides the times that have started instead of greying them out with no reason', () => {
     expect(scheduler()).not.toMatch(/disabled=\{past\}/);
-    expect(scheduler()).toMatch(/\.filter\(k => !hasStarted\(k, now\)\)/);
+    expect(container()).toMatch(/\.filter\(k => !hasStarted\(k, now\)\)/);
   });
 
   it('names the time zone over the times', () => {
-    expect(scheduler()).toMatch(/data-testid="scheduler-zone"/);
-    expect(scheduler()).toMatch(/zoneLine\(zone, now\)/);
+    expect(container()).toMatch(/data-testid="scheduler-zone"/);
+    expect(container()).toMatch(/zoneLine\(zone, now\)/);
   });
 
   it('keeps the length and Video or Audio inside the confirm card, the only place they are used', () => {
-    const src = scheduler();
+    const src = part('SchedulerConfirmCard.tsx');
     const cardAt = src.indexOf('data-testid="confirm-card"');
     expect(cardAt).toBeGreaterThan(-1);
     expect(src.indexOf('id="meeting-minutes"')).toBeGreaterThan(cardAt);
     expect(src.indexOf("k === 'video' ? 'Video' : 'Audio'")).toBeGreaterThan(cardAt);
-    expect(src.match(/id="meeting-minutes"/g)).toHaveLength(1);
+    expect(scheduler().match(/id="meeting-minutes"/g)).toHaveLength(1);
   });
 
   it('sends the length and kind with Save, so a save that books the time books it with them', () => {
-    expect(scheduler()).toMatch(/scheduling\/availability`, \{\s*windows,\s*\.\.\.\(durationOk \? \{ durationMin \} : \{\}\),\s*type: meetingKind,\s*\}\)/);
+    expect(container()).toMatch(/scheduling\/availability`, \{\s*windows,\s*\.\.\.\(durationOk \? \{ durationMin \} : \{\}\),\s*type: meetingKind,\s*\}\)/);
   });
 
-  it('reads the Save\'s own answer to say what happened, and stays open when there is a time to confirm', () => {
-    const src = scheduler();
-    expect(src).toMatch(/const after = res\.data\.data as Scheduling;\s*const outcome = saveOutcome\(before, after, Date\.now\(\)\)/);
-    expect(src).toMatch(/addToast\(saveMessage\(outcome, zone\), 'success'\)/);
-    expect(src).toMatch(/if \(outcome\.kind === 'overlap'\)/);
+  it('reads the Save\'s own answer, against what the server said before, to say what happened', () => {
+    const save = handler(container(), 'save');
+    // The meeting as the server last said it, and the times this save adds, are taken before the request…
+    expect(save).toMatch(/const known = data\.confirmed;/);
+    expect(save).toMatch(/const added = windows\.filter\(w => !savedMine\.has\(w\)\);/);
+    // …and the outcome is read from the save's own answer, which says who booked or moved the meeting.
+    expect(save).toMatch(/const after = res\.data\.data as Scheduling;\s*const outcome = saveOutcome\(after, \{ me, known, added \}, Date\.now\(\)\);/);
+    expect(save).not.toMatch(/saveOutcome\(before/);
+    expect(save).toMatch(/addToast\(saveMessage\(outcome, zone\), asks \? 'info' : 'success'\);/);
+    // With a choice to make (times to confirm, or where to move the meeting) the panel stays open on it.
+    expect(save).toMatch(/if \(outcome\.kind === 'overlap' \|\| outcome\.kind === 'move-choice'\) \{/);
   });
 
   it('never drops a typed "Another time": it is added on blur and on Enter, counts as unsaved, and rides with Save', () => {
-    const src = scheduler();
-    expect(src).toMatch(/onBlur=\{addTypedTime\}/);
-    expect(src).toMatch(/if \(e\.key === 'Enter'\) \{ e\.preventDefault\(\); addTypedTime\(\); \}/);
+    const typed = part('SchedulerTypedTime.tsx');
+    expect(typed).toMatch(/onBlur=\{onAdd\}/);
+    expect(typed).toMatch(/if \(e\.key === 'Enter'\) \{ e\.preventDefault\(\); onAdd\(\); \}/);
+    const src = container();
+    expect(src).toMatch(/onAdd=\{addTypedTime\}/);
     expect(src).toMatch(/const unsaved = stagedChanged \|\| typed !== null;/);
     expect(src).toMatch(/const windows = typed && !mine\.has\(typed\) \? \[\.\.\.mine, typed\] : \[\.\.\.mine\];/);
   });
 
   it('asks "Send your times?" (Send / Discard) before closing with unsaved times, whichever way it is closed', () => {
-    const src = scheduler();
+    const bar = part('SchedulerSaveBar.tsx');
     expect(ASK_SEND).toBe('Send your times?');
-    expect(src).toMatch(/\{ASK_SEND\}/);
-    expect(src).toMatch(/>\s*Discard\s*</);
-    expect(src).toMatch(/\{saving \? 'Sending…' : 'Send'\}/);
+    expect(bar).toMatch(/\{ASK_SEND\}/);
+    expect(bar).toMatch(/>\s*Discard\s*</);
+    expect(bar).toMatch(/\{saving \? 'Sending…' : 'Send'\}/);
+    const src = container();
     expect(src).toMatch(/useImperativeHandle\(ref, \(\) => \(\{ requestClose \}\)\)/);
     expect(src).toMatch(/if \(unsaved\) \{ setAsking\(true\); return; \}/);
   });
 
-  it('a 409 for a time no longer shared redraws the panel instead of leaving a dead card', () => {
-    expect(scheduler()).toMatch(/if \(isTimeNotShared\(err\)\) \{\s*setFinalizing\(null\);/);
+  it('the question survives the typed time\'s blur, and Discard acts on the first press', () => {
+    // The blur that adds a typed time is not an answer to "Send your times?" (it used to take the question away)…
+    expect(handler(container(), 'addTypedTime')).not.toMatch(/setAsking/);
+    // …and pressing Send or Discard does not move the focus first, so the panel never changes under the pointer.
+    const bar = part('SchedulerSaveBar.tsx');
+    const prompt = bar.slice(bar.indexOf('{ASK_SEND}'), bar.indexOf(') : ('));
+    expect(prompt.match(/onMouseDown=\{keepFocus\}/g)).toHaveLength(2);
+    expect(bar).toMatch(/const keepFocus = \(e: \{ preventDefault: \(\) => void \}\) => e\.preventDefault\(\);/);
+  });
+
+  it('a save never moves a meeting: one new shared time opens the Move card on it, and only Move moves it', () => {
+    const save = handler(container(), 'save');
+    expect(save).toMatch(/if \(outcome\.kind === 'move'\) \{[^}]*showCard\(outcome\.to, after\.confirmed\);\s*return;/);
+    expect(scheduler()).not.toMatch(/moveAfterSave/);
+    // The one request that books or moves a meeting is the card's button.
+    expect(scheduler().match(/scheduling\/confirm`/g)).toHaveLength(1);
+    expect(handler(container(), 'confirm')).toMatch(/scheduling\/confirm`/);
+  });
+
+  it('the card keeps a standing meeting\'s length and kind (a 45-minute audio meeting moves as one)', () => {
+    const show = handler(container(), 'showCard');
+    expect(show).toMatch(/const seed = cardSeed\(meeting, Date\.now\(\)\);/);
+    expect(show).toMatch(/if \(seed\) \{ setDurationText\(seed\.duration\); setMeetingKind\(seed\.kind\); \}/);
+    // Every way into the card goes through it: a green cell, a chip, the thread card's time, and a save.
+    expect(handler(container(), 'openConfirm')).toMatch(/showCard\(slot, data\?\.confirmed\);/);
+  });
+
+  it('a failed Move or Confirm keeps the card open to retry, and says where the meeting is', () => {
+    const confirm = handler(container(), 'confirm');
+    // The card closes only once the request has succeeded.
+    expect(confirm).toMatch(/scheduling\/confirm`, \{ window: key, durationMin, type: meetingKind \}\);\s*setFinalizing\(null\);/);
+    expect(confirm).toMatch(/catch \(err\) \{\s*await queryClient\.invalidateQueries\(\{ queryKey: schedulingKey\(conversationId\) \}\);\s*addToast\(confirmFailure\(err, \{ moving, stays, zone \}\), 'error'\);\s*\} finally/);
+    // A time that stopped being shared stays on the card with the reason, and its button waits.
+    const cardSrc = part('SchedulerConfirmCard.tsx');
+    expect(cardSrc).toMatch(/disabled=\{busy \|\| minutes === null \|\| !stillShared\}/);
+    expect(cardSrc).toMatch(/\{!stillShared && \(\s*<p[^>]*data-testid="confirm-card-not-shared">\{NOT_SHARED\}<\/p>/);
+    expect(container()).toMatch(/stillShared=\{confirmables\.includes\(finalizing\)\}/);
   });
 });
 
@@ -402,10 +532,11 @@ describe('the thread: the card\'s time opens the confirm step for that time, and
     expect(src).toMatch(/next\.delete\('schedule'\);\s*setSearchParams\(next, \{ replace: true \}\);/);
     // It opens with a time in view and in focus, ready for the first pick.
     expect(src).toMatch(/focusFirstPick=\{rescheduling\}/);
-    expect(scheduler()).toMatch(/if \(focusFirstPick && !pickFocused\.current && pickEl && pick\) \{/);
-    expect(scheduler()).toMatch(/pickEl\.focus\(\{ preventScroll: true \}\);/);
+    const scroll = part('useSchedulerScroll.ts');
+    expect(scroll).toMatch(/if \(focusFirstPick && !pickFocused\.current && pickEl && pick\) \{/);
+    expect(scroll).toMatch(/pickEl\.focus\(\{ preventScroll: true \}\);/);
     // Not the booked time it opens on: the one after it.
-    expect(scheduler()).toMatch(/const pick = target === bookedKey \? shown\[shown\.indexOf\(target\) \+ 1\]/);
+    expect(scroll).toMatch(/const pick = target === bookedKey \? shown\[shown\.indexOf\(target\) \+ 1\]/);
   });
 
   it('a meeting card for a time that no longer stands (moved, or cancelled) says so and offers no Join', () => {
@@ -415,13 +546,8 @@ describe('the thread: the card\'s time opens the confirm step for that time, and
     expect(page()).toMatch(/currentMeeting=\{scheduling \? \(scheduling\.confirmed \? \{ startAt: scheduling\.confirmed\.startAt \?\? null \} : null\) : undefined\}/);
   });
 
-  it('a save that agrees one new time while a meeting stands moves it there, keeping its length and kind', () => {
-    const src = scheduler();
-    expect(src).toMatch(/if \(outcome\.kind === 'move'\) \{\s*await moveAfterSave\(outcome\.to, after\.confirmed\);/);
-    expect(src).toMatch(/durationMin: meeting\?\.durationMin \?\? 30, type: meeting\?\.type \?\? 'video'/);
-  });
-
   it('the pinned meeting links to its own page once it has one', () => {
-    expect(scheduler()).toMatch(/to=\{`\/meetings\/\$\{c\.meetingId\}`\}/);
+    expect(read('features/messages/ThreadMeetingBanner.tsx')).toMatch(/to=\{`\/meetings\/\$\{c\.meetingId\}`\}/);
+    expect(page()).toMatch(/import ThreadMeetingBanner from '\.\/ThreadMeetingBanner';/);
   });
 });

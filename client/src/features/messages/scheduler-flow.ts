@@ -243,8 +243,22 @@ export function typedSlot(dayKey: string, typed: string, zone: string): string |
 
 // ---- meetings ----------------------------------------------------------------------------------------------------
 
+export const MIN_DURATION = 5;
+export const MAX_DURATION = 240;
+
+/** A typed meeting length in whole minutes, 5 to 240 (the server's bounds), or null. */
+export function meetingLength(text: string): number | null {
+  const minutes = Number(text);
+  return Number.isInteger(minutes) && minutes >= MIN_DURATION && minutes <= MAX_DURATION ? minutes : null;
+}
+
 /** The part of the scheduling answer these rules read. */
-export interface ConfirmedLike { window: string; startAt: string | null; durationMin: number | null }
+export interface ConfirmedLike {
+  window: string; startAt: string | null; durationMin: number | null;
+  /** Who booked it (or last moved it), as the server says. */
+  byUserId?: string;
+  type?: 'audio' | 'video' | null;
+}
 export interface SchedulingLike { overlap: string[]; confirmed: ConfirmedLike | null }
 
 /** Times that can still be confirmed: shared, a real slot, starting after now (the server refuses any other). */
@@ -271,43 +285,66 @@ export function confirmedMessage(at: string, zone: string, moved: boolean): stri
 export type SaveOutcome =
   | { kind: 'confirmed'; startAt: string }
   | { kind: 'move'; to: string }
+  | { kind: 'move-choice' }
   | { kind: 'overlap' }
   | { kind: 'sent' };
 
+export const MOVE_CHOICE = 'You can both meet at other times too. Pick one to move the meeting.';
+
+/** What a save knows besides the server's answer: who is saving, the meeting the panel showed, and the times added. */
+export interface SaveContext {
+  me: string | null | undefined;
+  known: ConfirmedLike | null | undefined;
+  added: readonly string[];
+}
+
 /**
- * What a Save did, read from the scheduling the save itself answered with, against what the panel held before it.
- * Since 25 Oct 2026 a save that leaves exactly one shared time books it, so the answer can carry a meeting that was
- * not there before: that is "confirmed". With no meeting standing and times both can still confirm, it is "overlap"
- * and the confirm step stays in front of the person. Anything else only sent their times.
+ * What a Save did, read from the server's own answer to it. Since 25 Oct 2026 a save that leaves exactly one shared
+ * time books it: the answer then carries a standing meeting that THIS member booked (the server names who), and the
+ * panel did not show it yet: "confirmed". A meeting the partner booked or moved in the meantime is theirs, never
+ * "confirmed" for this person. With no meeting standing and times both can still confirm, it is "overlap", and the
+ * confirm step stays in front of the person. Anything else only sent their times.
  *
- * A meeting that already stood is not news. Moving it (Reschedule, 26 Oct 2026) is agreed the way it was booked:
- * the save that makes exactly ONE more time shared by both is "move", and the panel moves the meeting there; two or
- * more new shared times leave the choice to the person ("overlap", with the move step open).
+ * A save never moves a meeting (the server's rule, S1): moving one is a Confirm. With a meeting standing, the save
+ * that makes ONE time shared, of the times this member just added, is "move": the panel opens the Move card on that
+ * time and asks. Two or more such times are "move-choice", with the move step open to pick from.
  */
-export function saveOutcome(before: SchedulingLike | undefined, after: SchedulingLike, now: number): SaveOutcome {
+export function saveOutcome(after: SchedulingLike, ctx: SaveContext, now: number): SaveOutcome {
   const meeting = after.confirmed;
   if (meeting?.startAt && meetingStands(meeting, now)) {
-    const prior = before?.confirmed;
-    const already = !!prior && meetingStands(prior, now) && prior.window === meeting.window;
-    if (!already) return { kind: 'confirmed', startAt: meeting.startAt };
-    const others = (s: SchedulingLike | undefined) => confirmable(s?.overlap ?? [], now).filter((k) => k !== meeting.window);
-    const was = new Set(others(before));
-    const fresh = others(after).filter((k) => !was.has(k));
+    const known = ctx.known;
+    const already = !!known && meetingStands(known, now) && known.window === meeting.window;
+    if (!already && !!ctx.me && meeting.byUserId === ctx.me) return { kind: 'confirmed', startAt: meeting.startAt };
+    const added = new Set(ctx.added);
+    const fresh = confirmable(after.overlap, now).filter((k) => k !== meeting.window && added.has(k));
     if (fresh.length === 1) return { kind: 'move', to: fresh[0] };
-    return fresh.length > 1 ? { kind: 'overlap' } : { kind: 'sent' };
+    return fresh.length > 1 ? { kind: 'move-choice' } : { kind: 'sent' };
   }
   if (!meetingStands(meeting, now) && confirmable(after.overlap, now).length > 0) return { kind: 'overlap' };
   return { kind: 'sent' };
 }
 
-/** The toast after a Save (for "move", once the meeting has moved). */
+/** The toast after a Save. "move" and "move-choice" ask; nothing has moved. */
 export function saveMessage(outcome: SaveOutcome, zone: string): string {
   switch (outcome.kind) {
     case 'confirmed': return confirmedMessage(outcome.startAt, zone, false);
-    case 'move': return confirmedMessage(outcome.to, zone, true);
+    case 'move': return `You can both meet at ${slotLabel(outcome.to, zone)}. Move the meeting there?`;
+    case 'move-choice': return MOVE_CHOICE;
     case 'overlap': return SAVE_OVERLAP;
     default: return SAVE_SENT;
   }
+}
+
+/**
+ * The length and kind the confirm card opens with. Moving a meeting that stands keeps its own (a 45-minute audio
+ * meeting stays 45 minutes, audio) unless the member changes them; with none standing, the card keeps what the member
+ * chose last (null).
+ */
+export function cardSeed(
+  meeting: ConfirmedLike | null | undefined, now: number,
+): { duration: string; kind: 'audio' | 'video' } | null {
+  if (!meeting || !meetingStands(meeting, now)) return null;
+  return { duration: String(meeting.durationMin ?? 30), kind: meeting.type === 'audio' ? 'audio' : 'video' };
 }
 
 // ---- cells -------------------------------------------------------------------------------------------------------
@@ -375,4 +412,17 @@ export function schedulerError(err: unknown, fallback: string): string {
     return memberSentence(response.data?.error?.message) ?? fallback;
   }
   return fallback;
+}
+
+/**
+ * The sentence for a Confirm or a Move that failed. Nothing changed on the server, so a Move says where the meeting
+ * still is: "That time is no longer free for both of you. Your meeting stays on Thu 29 Oct, 10:00." when the partner
+ * took the time back, "Could not move the meeting. It stays on Thu 29 Oct, 10:00. Try again." for anything else.
+ */
+export function confirmFailure(err: unknown, c: { moving: boolean; stays: string | null; zone: string }): string {
+  if (!c.moving) return isTimeNotShared(err) ? NOT_SHARED : schedulerError(err, 'Could not confirm that time. Try again.');
+  const where = c.stays ? `on ${slotLabel(c.stays, c.zone)}` : 'where it was';
+  return isTimeNotShared(err)
+    ? `${NOT_SHARED} Your meeting stays ${where}.`
+    : `Could not move the meeting. It stays ${where}. Try again.`;
 }
