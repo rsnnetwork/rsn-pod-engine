@@ -137,9 +137,10 @@ function normalizePair(userA: string, userB: string): [string, string] {
  *   4. grandfather       → {allowed:true} if a thread with ≥1 message already exists
  *                          (forward-only: don't break in-progress conversations)
  *   5. mutual gate       → {allowed:true} if encounter_history.mutual_meet_again = TRUE
- *   6. shared meeting    → {allowed:true} if both took part in the same completed meeting-format event (a video
- *                          or voice meeting, a webinar: live kind 'meeting' in @rsn/shared) and neither one's
- *                          latest rating of the other says no to meeting again (X2, 26 Oct 2026)
+ *   6. shared meeting    → {allowed:true} if both took part in the same completed video or voice meeting (live
+ *                          kind 'meeting' in @rsn/shared, but not the webinar, whose audience does not see or
+ *                          hear each other) and neither one's latest real rating of the other says no to
+ *                          meeting again; a placeholder rating the system made does not count (X2, 26 Oct 2026)
  *   7. otherwise         → {allowed:false, reason:'not_mutual'} when they have an encounter row,
  *                          else {allowed:false, reason:'no_encounter'}
  */
@@ -200,11 +201,15 @@ export async function canMessage(
   // met. A meeting makes no match, so it writes no encounter row, and its people could never write to each
   // other afterwards. Took part = joined (not only registered) and not removed, the same rule as group chats
   // and "message everyone". Meeting = a format whose live kind is 'meeting' in the shared event definition,
-  // so this list and the definition cannot drift; a speed-networking event does not count.
-  // Only an explicit "no" stands in the way: either person's latest rating of the other saying they do not
-  // want to meet again. An encounter row alone does not (mutual_meet_again is NOT NULL DEFAULT FALSE), so a
-  // pair matched in speed networking but never rated is treated like strangers who shared the meeting.
-  const meetingFormats = EVENT_FORMAT_KEYS.filter((f) => liveKindOf(f) === 'meeting');
+  // so this list and the definition cannot drift, except the webinar: its audience does not see or hear
+  // each other, so sharing one is not meeting. A speed-networking event does not count either.
+  // Only an explicit "no" stands in the way: either person's latest real rating of the other saying they do
+  // not want to meet again. An encounter row alone does not (mutual_meet_again is NOT NULL DEFAULT FALSE), so
+  // a pair matched in speed networking but never rated is treated like strangers who shared the meeting.
+  // A rating the system made is not a decision: "This conversation didn't work" and a no-show or cancelled
+  // match store meet_again = false with excluded_from_quality_stats = true only so the match counts as
+  // handled (migration 067). Those rows are left out before each person's latest rating is picked.
+  const meetingFormats = EVENT_FORMAT_KEYS.filter((f) => liveKindOf(f) === 'meeting' && f !== 'webinar');
   const together = await query(
     `SELECT 1
        FROM session_participants a
@@ -223,8 +228,9 @@ export async function canMessage(
       `SELECT 1
          FROM (SELECT DISTINCT ON (r.from_user_id) r.meet_again
                  FROM ratings r
-                WHERE (r.from_user_id = $1 AND r.to_user_id = $2)
-                   OR (r.from_user_id = $2 AND r.to_user_id = $1)
+                WHERE ((r.from_user_id = $1 AND r.to_user_id = $2)
+                    OR (r.from_user_id = $2 AND r.to_user_id = $1))
+                  AND NOT r.excluded_from_quality_stats
                 ORDER BY r.from_user_id, r.created_at DESC, r.id DESC) latest
         WHERE latest.meet_again = FALSE
         LIMIT 1`,
