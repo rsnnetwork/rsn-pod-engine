@@ -134,6 +134,9 @@ function normalizePair(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+/** The first key of every pair lock (lockPair): 'POKE' in ASCII. */
+const PAIR_LOCK_CLASS = 0x504f4b45;
+
 /**
  * Hold this pair's lock until the transaction ends (26 Oct 2026). Two people who each had a
  * request waiting from the other, both pressing Accept at the same moment, deadlocked on the
@@ -142,11 +145,14 @@ function normalizePair(a: string, b: string): [string, string] {
  * pair's requests takes this lock before it reads or writes anything of the pair's, so they run
  * one after the other. One lock per pair: Postgres builds the key from the two ids as uuids, the
  * lower one first, so it is the same whichever of the two takes it, whatever case an id is in.
+ *
+ * The two-key form, with PAIR_LOCK_CLASS as the first key: two-key locks never share a key with
+ * one-key locks (the invite lock takes one key), and no other lock uses this class.
  */
 async function lockPair(client: PoolClient, a: string, b: string): Promise<void> {
   await client.query(
-    `SELECT pg_advisory_xact_lock(hashtext('poke-pair:' || least($1::uuid, $2::uuid) || ':' || greatest($1::uuid, $2::uuid)))`,
-    [a, b],
+    `SELECT pg_advisory_xact_lock($1::int, hashtext(least($2::uuid, $3::uuid) || ':' || greatest($2::uuid, $3::uuid)))`,
+    [PAIR_LOCK_CLASS, a, b],
   );
 }
 

@@ -1022,8 +1022,10 @@ function armWorld(world: World) {
         const sql = String(args[0]);
         record.sql.push(sql);
         if (/pg_advisory_xact_lock/.test(sql)) {
-          // Wait for whoever holds this pair's lock, then hold it until this transaction ends.
-          const key = (args[1] as string[]).map(id => id.toLowerCase()).sort().join(':');
+          // Wait for whoever holds this pair's lock, then hold it until this transaction ends. The
+          // parameters are the lock's class, then the pair (the key ignores the pair's order and case).
+          const [lockClass, ...pair] = args[1] as [number, string, string];
+          const key = `${lockClass}:${pair.map(id => id.toLowerCase()).sort().join(':')}`;
           const before = held.get(key) ?? Promise.resolve();
           let release!: () => void;
           const mineEnds = new Promise<void>((resolve) => { release = resolve; });
@@ -1379,10 +1381,11 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
 describe('a pair\'s requests are answered one transaction at a time', () => {
   const PAIR_LOCK = /pg_advisory_xact_lock/;
   const transactionOf = (pattern: RegExp) => mockTransactions.find(t => t.sql.some(s => pattern.test(s)))!;
+  /** The pair a transaction's lock was taken for (the parameters after the lock's class), in id order. */
   const lockParams = (tx: TxRecord) => {
     const at = tx.sql.findIndex(s => PAIR_LOCK.test(s));
     const call = mockQuery.mock.calls.find(c => c[0] === tx.sql[at])!;
-    return [...(call[1] as string[])].sort();
+    return [...(call[1] as unknown[]).slice(1) as string[]].sort();
   };
 
   it('accept takes the pair\'s lock before it claims the request, having read only whose request it is', async () => {
@@ -1427,7 +1430,16 @@ describe('a pair\'s requests are answered one transaction at a time', () => {
     const lock = mockQuery.mock.calls.find(c => PAIR_LOCK.test(String(c[0])))!;
     const flat = String(lock[0]).replace(/\s+/g, ' ');
     // The key is built by Postgres from the two ids as uuids, the lower one first.
-    expect(flat).toMatch(/pg_advisory_xact_lock\(hashtext\('poke-pair:' \|\| least\(\$1::uuid, \$2::uuid\) \|\| ':' \|\| greatest\(\$1::uuid, \$2::uuid\)\)\)/);
+    expect(flat).toMatch(/pg_advisory_xact_lock\(\$1::int, hashtext\(least\(\$2::uuid, \$3::uuid\) \|\| ':' \|\| greatest\(\$2::uuid, \$3::uuid\)\)\)/);
+  });
+
+  // The invite lock (S7) takes one key; a two-key lock never shares a key with a one-key lock.
+  it('is the two-key form, its first key the pair-lock class ("POKE" in ASCII), so it never shares a key with a one-key lock', async () => {
+    armWorld(newWorld([pendingRequest('poke-1', SENDER, RECIPIENT)]));
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+    const lock = mockQuery.mock.calls.find(c => PAIR_LOCK.test(String(c[0])))!;
+    expect((lock[1] as unknown[])[0]).toBe(0x504f4b45);
+    expect(Buffer.from((0x504f4b45).toString(16), 'hex').toString('ascii')).toBe('POKE');
   });
 
   it('a member the request was not sent to takes no lock: they are refused exactly as before', async () => {

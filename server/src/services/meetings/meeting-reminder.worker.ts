@@ -42,9 +42,18 @@ interface DueMeeting {
   kind: MeetingKind;
   /** When it was booked, or last moved. */
   updated_at: Date;
-  /** This claim's own stamp on reminder_sent_at, as text: a Date would drop its microseconds. */
+  /** The claimed start, as exact text (EXACT): what the re-read compares the meeting with. */
+  claimed_start: string;
+  /** This claim's own stamp on reminder_sent_at, as exact text (EXACT): a Date would drop its microseconds. */
   claimed_at: string;
 }
+
+/**
+ * A timestamp column as exact text, whatever the time zone and date style of the connection that reads it:
+ * UTC, to the microsecond. The claim is read on one pooled connection and compared on another, so what is
+ * carried between them must not depend on either connection's settings; Postgres does the comparing.
+ */
+const EXACT = (column: string) => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 interface Person {
   id: string;
@@ -62,34 +71,55 @@ interface BellRow {
   created_at: Date;
 }
 
+/** Where a claimed meeting stands when its reminder is about to go out. */
+type ClaimedMeetingNow =
+  /** Still scheduled, at the claimed time, under this claim, and the meeting its conversation names then. */
+  | 'stands'
+  /** At another time now: a move since the claim. */
+  | 'moved'
+  /** Cancelled or gone, claimed again by another run since, or no longer the meeting its conversation names. */
+  | 'skip';
+
 /**
- * Does the meeting still stand as it was claimed? Read under its row lock, on the transaction that
- * then writes the bells: still scheduled, still at the claimed time, still under this claim, and
- * still the meeting its conversation names at that time (current-meeting.ts: the server before
- * 26 Oct can leave a row behind that its conversation has moved away from). A meeting moved since
- * the claim gets the claim back, so it is reminded at its new time; only this claim is given back,
- * never one another run has taken since.
+ * Lock the claimed meeting's row until the transaction ends, in a statement of its own. The read comes in
+ * the next statement, which begins once the lock is free and so sees whatever the cancel or move it waited
+ * for wrote, to the meeting and to its conversation alike (current-meeting.ts, lockConversation).
  */
-async function standsAsClaimed(client: PoolClient, meeting: DueMeeting): Promise<boolean> {
-  const found = await client.query<{ status: string; start_at: Date; claimed_at: string | null; named: boolean }>(
-    `SELECT m.status, m.start_at, m.reminder_sent_at::text AS claimed_at,
+async function lockMeeting(client: PoolClient, meetingId: string): Promise<void> {
+  await client.query(`SELECT 1 FROM meetings WHERE id = $1 FOR UPDATE`, [meetingId]);
+}
+
+/**
+ * Where the claimed meeting stands now, read once its row is locked. Postgres compares it with the claim's
+ * own exact start and stamp. "Its conversation names it" is current-meeting.ts's rule: the server before
+ * 26 Oct can leave a row behind that its conversation has moved away from. Reads only.
+ */
+async function claimedMeetingNow(client: PoolClient, meeting: DueMeeting): Promise<ClaimedMeetingNow> {
+  const found = await client.query<{ scheduled: boolean; at_claimed_time: boolean; still_claimed: boolean; named: boolean }>(
+    `SELECT m.status = 'scheduled' AS scheduled,
+            m.start_at = $2::timestamptz AS at_claimed_time,
+            m.reminder_sent_at IS NOT DISTINCT FROM $3::timestamptz AS still_claimed,
             (c.current_meeting_id IS NOT DISTINCT FROM m.id AND c.meeting_start_at IS NOT DISTINCT FROM m.start_at) AS named
        FROM meetings m
        JOIN dm_conversations c ON c.id = m.conversation_id
-      WHERE m.id = $1
-        FOR UPDATE OF m`,
-    [meeting.id],
+      WHERE m.id = $1`,
+    [meeting.id, meeting.claimed_start, meeting.claimed_at],
   );
   const current = found.rows[0];
-  if (!current || current.status !== 'scheduled') return false;
-  if (current.start_at.getTime() !== meeting.start_at.getTime()) {
-    await client.query(
-      `UPDATE meetings SET reminder_sent_at = NULL WHERE id = $1 AND reminder_sent_at = $2::timestamptz`,
-      [meeting.id, meeting.claimed_at],
-    );
-    return false;
-  }
-  return current.claimed_at === meeting.claimed_at && current.named;
+  if (!current?.scheduled) return 'skip';
+  if (!current.at_claimed_time) return 'moved';
+  return current.still_claimed && current.named ? 'stands' : 'skip';
+}
+
+/**
+ * Give a moved meeting's claim back, so it is reminded at its new time. Only this run's own claim: one
+ * another run has taken since (at the meeting's new time, say) stays as it is.
+ */
+async function giveClaimBack(client: PoolClient, meeting: DueMeeting): Promise<void> {
+  await client.query(
+    `UPDATE meetings SET reminder_sent_at = NULL WHERE id = $1 AND reminder_sent_at = $2::timestamptz`,
+    [meeting.id, meeting.claimed_at],
+  );
 }
 
 /** Claim and remind every meeting that is due. Returns how many were claimed. */
@@ -104,7 +134,7 @@ export async function processMeetingReminders(now = new Date()): Promise<number>
          LIMIT 50
          FOR UPDATE SKIP LOCKED)
       RETURNING id, conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, updated_at,
-                reminder_sent_at::text AS claimed_at`,
+                ${EXACT('start_at')} AS claimed_start, ${EXACT('reminder_sent_at')} AS claimed_at`,
     [now],
   );
   for (const meeting of claimed.rows) {
@@ -151,7 +181,10 @@ async function remind(meeting: DueMeeting, now: Date): Promise<void> {
   let rang: BellRow[] = [];
   try {
     rang = await transaction(async (client) => {
-      if (!(await standsAsClaimed(client, meeting))) return [];
+      await lockMeeting(client, meeting.id);
+      const standing = await claimedMeetingNow(client, meeting);
+      if (standing === 'moved') await giveClaimBack(client, meeting);
+      if (standing !== 'stands') return [];
       stood = true;
       const inserted = await client.query<BellRow>(
         `INSERT INTO notifications (id, user_id, type, title, body, link)

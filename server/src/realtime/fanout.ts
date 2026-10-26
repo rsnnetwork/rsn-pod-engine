@@ -326,6 +326,11 @@ export async function fanoutOwnNotifications(userId: string): Promise<void> {
 //
 // Targets both the blocker and the blocked user with each side's userBlocks
 // entity. Used for block / unblock mutations.
+//
+// 26 Oct 2026: and each person's own bell. A meeting request reads as gone in
+// the bell while a block stands between the two people, whichever of them made
+// it (GET /notifications), so a block or an unblock changes both bells, and an
+// open bell must redraw without waiting for its next fetch.
 
 export async function fanoutUserBlocks(
   blockerId: string,
@@ -339,6 +344,8 @@ export async function fanoutUserBlocks(
       [blockerId, blockedId],
       [E.userBlocks(blockerId), E.userBlocks(blockedId)],
     );
+    await emitEntities(io, [blockerId], [E.userNotifications(blockerId)]);
+    await emitEntities(io, [blockedId], [E.userNotifications(blockedId)]);
   } catch (err) {
     logger.warn({ err, blockerId, blockedId }, 'fanoutUserBlocks: failed to fan out');
   }

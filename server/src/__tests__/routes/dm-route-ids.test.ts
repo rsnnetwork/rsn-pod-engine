@@ -146,4 +146,33 @@ describe('the paths with a second part keep it', () => {
     await request(app).delete(`/dm/messages/${ID}/reactions/heart`);
     expect(mockServices.removeReaction).toHaveBeenCalledWith(ID, 'aaaaaaaa-0000-4000-8000-000000000001', 'heart');
   });
+
+  // H2a review: an emoji too long to be a reaction was refused as "We couldn't find that message."
+  it('a reaction too long to be one has a sentence of its own; a bad message id is still said first', async () => {
+    const long = 'x'.repeat(17);
+
+    const res = await request(app).delete(`/dm/messages/${ID}/reactions/${long}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toBe("That reaction isn't available.");
+    expect(res.body.error.details).toEqual({ emoji: ["That reaction isn't available."] });
+    expect(mockServices.removeReaction).not.toHaveBeenCalled();
+
+    const both = await request(app).delete(`/dm/messages/undefined/reactions/${long}`);
+    expect(both.body.error.message).toBe(MESSAGE);
+  });
+});
+
+describe('one set of checks for the whole mount', () => {
+  // H2a review: the id check and its sentences were written twice, once in each router.
+  it('neither router writes its own id check or refusal: both take them from middleware/dm-path-ids.ts', () => {
+    const fs = jest.requireActual<typeof import('fs')>('fs');
+    const path = jest.requireActual<typeof import('path')>('path');
+    for (const file of ['dm.ts', 'meeting.ts']) {
+      const src = fs.readFileSync(path.join(__dirname, '../../routes', file), 'utf8');
+      expect(src).toMatch(/from '\.\.\/middleware\/dm-path-ids'/);
+      expect(src).not.toMatch(/We couldn't find that/);
+      // A path is checked only by the shared checks (a body's own fields are the router's business).
+      expect(src).not.toMatch(/'params'/);
+    }
+  });
 });

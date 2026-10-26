@@ -10,6 +10,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { callRequestIdInPath, conversationIdInPath } from '../middleware/dm-path-ids';
 import * as meetingService from '../services/dm/meeting-windows.service';
 import * as callService from '../services/dm/meeting-call.service';
 import { areActive } from '../services/presence/presence.service';
@@ -21,19 +22,8 @@ import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
 
-// 26 Oct 2026: every id in a path is checked before it reaches the database. "undefined" sent as a
-// conversation id went to Postgres, which cannot read it as a uuid, and came back a 500. Now it is a
-// 400 that says, in a member's words, what production's client shows as its toast or on the call
-// screen. A well-formed id in capitals names the same row, and is lower-cased so that the tags the
-// services send match the ones each screen listens for.
-const CONVERSATION_GONE = "We couldn't find that conversation.";
-const CALL_REQUEST_GONE = "We couldn't find that call request.";
-const conversationParams = validate(
-  z.object({ id: z.string().uuid(CONVERSATION_GONE).transform((s) => s.toLowerCase()) }), 'params', CONVERSATION_GONE,
-);
-const callRequestParams = validate(
-  z.object({ id: z.string().uuid(CALL_REQUEST_GONE).transform((s) => s.toLowerCase()) }), 'params', CALL_REQUEST_GONE,
-);
+// 26 Oct 2026: every id in a path is checked before it reaches the database (middleware/dm-path-ids.ts):
+// "undefined" sent as a conversation id came back a 500, and is now a 400 in a member's words.
 
 // GET /dm/conversations/:id/meeting.ics — the confirmed meeting as a universal
 // calendar file (Google, Outlook, Apple…) for the in-app "Add to calendar"
@@ -42,7 +32,7 @@ const callRequestParams = validate(
 router.get(
   '/conversations/:id/meeting.ics',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const me = req.user!.userId;
@@ -138,7 +128,7 @@ const confirmBodySchema = z.object({
 router.get(
   '/conversations/:id/scheduling',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await meetingService.getScheduling(req.params.id, req.user!.userId);
@@ -153,7 +143,7 @@ router.get(
 router.put(
   '/conversations/:id/scheduling/availability',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   validate(availabilityBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -172,7 +162,7 @@ router.put(
 router.post(
   '/conversations/:id/scheduling/confirm',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   validate(confirmBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -193,7 +183,7 @@ router.post(
 router.post(
   '/conversations/:id/scheduling/seen',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await meetingService.markSchedulerSeen(req.params.id, req.user!.userId);
@@ -208,7 +198,7 @@ router.post(
 router.post(
   '/conversations/:id/call-token',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   validate(callBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -224,7 +214,7 @@ router.post(
 router.post(
   '/conversations/:id/call/request',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   validate(callRequestBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -241,7 +231,7 @@ router.post(
 router.get(
   '/conversations/:id/call/pending',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await callService.getPendingCallRequest(req.params.id, req.user!.userId);
@@ -254,7 +244,7 @@ router.get(
 router.post(
   '/call/requests/:id/accept',
   authenticate,
-  callRequestParams,
+  callRequestIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await callService.acceptCallRequest(req.params.id, req.user!.userId);
@@ -265,7 +255,7 @@ router.post(
 router.post(
   '/call/requests/:id/decline',
   authenticate,
-  callRequestParams,
+  callRequestIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await callService.declineCallRequest(req.params.id, req.user!.userId);
@@ -276,7 +266,7 @@ router.post(
 router.post(
   '/call/requests/:id/cancel',
   authenticate,
-  callRequestParams,
+  callRequestIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await callService.cancelCallRequest(req.params.id, req.user!.userId);
@@ -289,7 +279,7 @@ router.post(
 router.get(
   '/conversations/:id/partner-presence',
   authenticate,
-  conversationParams,
+  conversationIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const online = await callService.isPartnerOnline(req.params.id, req.user!.userId);

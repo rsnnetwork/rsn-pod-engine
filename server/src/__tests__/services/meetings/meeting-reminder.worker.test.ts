@@ -43,23 +43,25 @@ const START = new Date('2026-11-05T17:00:00Z'); // 9.5 minutes away
 const A = 'aaaaaaaa-0000-4000-8000-000000000001';
 const B = 'bbbbbbbb-0000-4000-8000-000000000002';
 
-/** The claim's own stamp on reminder_sent_at, as text so it compares to the microsecond. */
-const CLAIMED_AT = '2026-11-05 16:50:30.123456+00';
+/** The claim's start and its own stamp on reminder_sent_at, as the claim returns them: exact UTC text. */
+const CLAIMED_START = '2026-11-05T17:00:00.000000Z';
+const CLAIMED_AT = '2026-11-05T16:50:30.123456Z';
 
 const due = (extra: Record<string, unknown> = {}) => ({
   id: 'mtg-1', conversation_id: 'conv-1', user_a_id: A, user_b_id: B,
   start_at: START, duration_min: 30, kind: 'video', updated_at: new Date('2026-11-04T09:00:00Z'),
-  claimed_at: CLAIMED_AT,
+  claimed_start: CLAIMED_START, claimed_at: CLAIMED_AT,
   ...extra,
 });
 
 /**
- * The meeting as the re-read just before sending finds it. By default it still stands exactly as
- * claimed: scheduled, at the claimed time, still under this run's claim, and named by its conversation.
+ * The meeting as the read just before sending finds it, compared by Postgres with the claim. By default it
+ * still stands exactly as claimed: scheduled, at the claimed time, still under this run's claim, and named
+ * by its conversation.
  */
 let reread: Record<string, unknown> | null = null;
 const standing = (extra: Record<string, unknown> = {}) => ({
-  status: 'scheduled', start_at: START, claimed_at: CLAIMED_AT, named: true, ...extra,
+  scheduled: true, at_claimed_time: true, still_claimed: true, named: true, ...extra,
 });
 
 const person = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -112,7 +114,9 @@ describe('processMeetingReminders', () => {
       + " AND start_at > $1 AND start_at <= $1::timestamptz + INTERVAL '10 minutes'"
       + ' ORDER BY start_at LIMIT 50 FOR UPDATE SKIP LOCKED)'
       + ' RETURNING id, conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, updated_at,'
-      + ' reminder_sent_at::text AS claimed_at',
+      // Exact text whatever the connection's settings: the claim is compared later, on another connection.
+      + ` to_char(start_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS claimed_start,`
+      + ` to_char(reminder_sent_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS claimed_at`,
     );
     expect(params).toEqual([NOW]);
   });
@@ -247,29 +251,31 @@ describe('processMeetingReminders', () => {
 describe('the reminder re-reads the meeting before it sends', () => {
   const unclaims = () => mockQuery.mock.calls.filter((c) => /UPDATE meetings SET reminder_sent_at = NULL/.test(c[0] as string));
 
-  it('reads it again under its row lock, with what its conversation says, and writes the bells in that same transaction', async () => {
+  it('locks the meeting\'s row in a statement of its own, reads it in the next, and writes the bells in that same transaction', async () => {
     arm([[due()]]);
 
     await processMeetingReminders(NOW);
 
-    const reads = mockQuery.mock.calls.filter((c) => /FROM meetings m\s+JOIN dm_conversations c/.test(c[0] as string));
-    expect(reads).toHaveLength(1);
-    expect(flat(reads[0][0])).toBe(
-      'SELECT m.status, m.start_at, m.reminder_sent_at::text AS claimed_at,'
+    const tx = mockTxSql.map((s) => flat(s));
+    expect(tx[0]).toBe('SELECT 1 FROM meetings WHERE id = $1 FOR UPDATE');
+    // The read comes after the lock, so it sees what a cancel or move it waited for wrote, to the meeting and
+    // its conversation alike; and Postgres compares the meeting with the claim, on the claim's exact text.
+    expect(tx[1]).toBe(
+      "SELECT m.status = 'scheduled' AS scheduled, m.start_at = $2::timestamptz AS at_claimed_time,"
+      + ' m.reminder_sent_at IS NOT DISTINCT FROM $3::timestamptz AS still_claimed,'
       + ' (c.current_meeting_id IS NOT DISTINCT FROM m.id AND c.meeting_start_at IS NOT DISTINCT FROM m.start_at) AS named'
-      + ' FROM meetings m JOIN dm_conversations c ON c.id = m.conversation_id WHERE m.id = $1 FOR UPDATE OF m',
+      + ' FROM meetings m JOIN dm_conversations c ON c.id = m.conversation_id WHERE m.id = $1',
     );
-    expect(reads[0][1]).toEqual(['mtg-1']);
-    const readAt = mockTxSql.findIndex((s) => /FROM meetings m\s+JOIN dm_conversations c/.test(s));
-    const bellsAt = mockTxSql.findIndex((s) => /INSERT INTO notifications/.test(s));
-    expect(readAt).toBeGreaterThanOrEqual(0);
-    expect(bellsAt).toBeGreaterThan(readAt);
+    const read = mockQuery.mock.calls.find((c) => /AS still_claimed/.test(c[0] as string))!;
+    expect(read[1]).toEqual(['mtg-1', CLAIMED_START, CLAIMED_AT]);
+    expect(/INSERT INTO notifications/.test(tx[2])).toBe(true);
+    expect(tx.filter((s) => /FOR UPDATE/.test(s) && /JOIN/.test(s))).toEqual([]);
     expect(bellRows()).toHaveLength(1);
   });
 
   it('a meeting cancelled just after the claim is not reminded: no bell, no email, nothing on anyone\'s screen', async () => {
     arm([[due()]]);
-    reread = standing({ status: 'cancelled' });
+    reread = standing({ scheduled: false });
 
     expect(await processMeetingReminders(NOW)).toBe(1);
 
@@ -282,7 +288,7 @@ describe('the reminder re-reads the meeting before it sends', () => {
 
   it('a meeting moved just after the claim is not reminded at the old time, and the claim is given back for its new time', async () => {
     arm([[due()]]);
-    reread = standing({ start_at: new Date('2026-11-05T19:00:00Z') });
+    reread = standing({ at_claimed_time: false, still_claimed: false });
 
     await processMeetingReminders(NOW);
 
@@ -309,7 +315,7 @@ describe('the reminder re-reads the meeting before it sends', () => {
 
   it('a meeting claimed again since (moved and moved back, then claimed by another run) is left to that run', async () => {
     arm([[due()]]);
-    reread = standing({ claimed_at: '2026-11-05 16:51:30.5+00' });
+    reread = standing({ still_claimed: false });
 
     await processMeetingReminders(NOW);
 

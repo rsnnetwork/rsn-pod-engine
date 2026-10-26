@@ -17,11 +17,30 @@
 // one has started (the deploy's overlap) or while no new server runs at all (a rollback), so a
 // startup repair would come too early or not at all; and the guard writes nothing to anyone's rows.
 
+import type { PoolClient } from 'pg';
+
 /**
- * The guarded pointer, as a column of a query whose FROM is dm_conversations (not aliased). The
- * sub-select only reads the meetings row: a FOR UPDATE on the query locks the conversation row alone.
+ * The guarded pointer, as a column of a query whose FROM is dm_conversations (not aliased).
+ *
+ * Never in a statement that locks the conversation row (lockConversation says why).
  */
 export const CURRENT_MEETING_ID = `(SELECT m.id FROM meetings m
        WHERE m.id = dm_conversations.current_meeting_id
          AND m.status = 'scheduled'
          AND m.start_at = dm_conversations.meeting_start_at) AS current_meeting_id`;
+
+/**
+ * Lock the conversation row until the transaction ends, in a statement of its own; then read it,
+ * with CURRENT_MEETING_ID, in the next statement.
+ *
+ * A statement that has to wait for the row lock re-reads that row at its newest version once the
+ * lock is free, but reads everything else as of the moment it began. With the guard inside it, a
+ * cancel or a Confirm that waited behind a booking or a move saw the conversation as that booking
+ * left it and the meetings as they were before it: the meeting the booking had just written or
+ * moved read as stale, so the waiting Confirm wrote a second meeting, and the waiting cancel left
+ * the conversation naming the meeting it had cancelled (26 Oct 2026 review). The statement after
+ * the lock begins after the booking it waited for has committed, and sees both as it left them.
+ */
+export async function lockConversation(client: Pick<PoolClient, 'query'>, conversationId: string): Promise<void> {
+  await client.query(`SELECT 1 FROM dm_conversations WHERE id = $1 FOR UPDATE`, [conversationId]);
+}

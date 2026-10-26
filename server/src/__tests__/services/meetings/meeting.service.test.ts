@@ -310,7 +310,8 @@ describe('cancelMeeting', () => {
     mockQuery.mockImplementation((sql: string) => {
       const s = flat(sql);
       if (/FROM meetings m JOIN users p/.test(s)) return Promise.resolve({ rows: [meeting] });
-      if (/FROM dm_conversations WHERE id = \$1 FOR UPDATE/.test(s)) {
+      // The lock (SELECT 1 … FOR UPDATE) and the read after it both find the conversation.
+      if (/FROM dm_conversations WHERE id = \$1/.test(s)) {
         return Promise.resolve({ rows: [{ meeting_confirmed_window: opts.window === undefined ? '2026-11-05T17:00:00Z' : opts.window, current_meeting_id: opts.current === undefined ? MEETING : opts.current }] });
       }
       if (/UPDATE meetings SET status = 'cancelled'/.test(s)) {
@@ -384,8 +385,24 @@ describe('cancelMeeting', () => {
 
     await cancelMeeting(A, MEETING, NOW);
 
-    const [read] = calls(/FROM dm_conversations WHERE id = \$1 FOR UPDATE/);
+    const [read] = calls(/AS current_meeting_id FROM dm_conversations WHERE id = \$1/);
     expect(flat(read[0])).toMatch(/\(SELECT m\.id FROM meetings m WHERE m\.id = dm_conversations\.current_meeting_id AND m\.status = 'scheduled' AND m\.start_at = dm_conversations\.meeting_start_at\) AS current_meeting_id/);
+  });
+
+  // 26 Oct 2026 (H2a review): with the guard inside the locking statement, a cancel that waited behind a move
+  // read the moved meeting as stale (the conversation at its newest version, the meetings as they were), so
+  // it cancelled the meeting and left the conversation naming it, production's banner and Join included.
+  it('locks the conversation in a statement of its own, then reads it with the guard: no statement does both', async () => {
+    armCancel();
+
+    await cancelMeeting(A, MEETING, NOW);
+
+    const tx = mockTxSql.map((s) => flat(s).trim());
+    const lockAt = tx.indexOf('SELECT 1 FROM dm_conversations WHERE id = $1 FOR UPDATE');
+    const readAt = tx.findIndex((s) => /AS current_meeting_id FROM dm_conversations WHERE id = \$1$/.test(s));
+    expect(lockAt).toBe(0);
+    expect(readAt).toBe(1);
+    expect(tx.filter((s) => /FOR UPDATE/.test(s) && /current_meeting_id/.test(s))).toEqual([]);
   });
 
   it('leaves a conversation that has moved on to another meeting as it is', async () => {

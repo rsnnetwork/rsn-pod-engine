@@ -24,7 +24,7 @@ import * as dmService from '../dm/dm.service';
 import { meetingJoinPath } from '../dm/meeting-windows.service';
 import { emitMeetingChanged } from './meeting-tags';
 import { meetingTime } from './meeting-time';
-import { CURRENT_MEETING_ID } from './current-meeting';
+import { CURRENT_MEETING_ID, lockConversation } from './current-meeting';
 
 /** A meeting row with the other person's columns, as every read here selects it. */
 interface MeetingRow {
@@ -216,10 +216,13 @@ export async function cancelMeeting(userId: string, meetingId: string, now = new
   const partnerId = found.user_a_id === userId ? found.user_b_id : found.user_a_id;
 
   const outcome = await transaction<CancelOutcome>(async (client) => {
-    // The pointer through its guard: a row the old server left it naming (current-meeting.ts) is not
-    // the conversation's meeting, so cancelling that row leaves the conversation's meeting standing.
+    // The lock first, in its own statement, then the pointer read through its guard in the next one
+    // (current-meeting.ts): a cancel that waited behind a move then sees the moved meeting as the
+    // conversation's and takes it off the conversation, and a row the old server left the pointer
+    // naming is not the conversation's meeting, so cancelling it leaves that meeting standing.
+    await lockConversation(client, found.conversation_id);
     const conv = await client.query<{ meeting_confirmed_window: string | null; current_meeting_id: string | null }>(
-      `SELECT meeting_confirmed_window, ${CURRENT_MEETING_ID} FROM dm_conversations WHERE id = $1 FOR UPDATE`,
+      `SELECT meeting_confirmed_window, ${CURRENT_MEETING_ID} FROM dm_conversations WHERE id = $1`,
       [found.conversation_id],
     );
     const claimed = await client.query<MeetingRow>(

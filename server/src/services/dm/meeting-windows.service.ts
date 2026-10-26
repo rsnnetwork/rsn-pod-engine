@@ -19,7 +19,7 @@ import { ErrorCodes } from '@rsn/shared';
 import * as dmService from './dm.service';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
 import { meetingTime } from '../meetings/meeting-time';
-import { CURRENT_MEETING_ID } from '../meetings/current-meeting';
+import { CURRENT_MEETING_ID, lockConversation } from '../meetings/current-meeting';
 
 export const DAYPARTS = ['morning', 'afternoon', 'evening'] as const;
 export type Daypart = typeof DAYPARTS[number];
@@ -599,6 +599,10 @@ function exactStart(windowKey: string, startAt: string | null | undefined): Date
  * lock: a partner who took it off a moment ago gets the confirmer a 409 with
  * where both people's times stand now, so the screen can redraw (26 Oct 2026;
  * before, a 400 checked outside any lock).
+ *
+ * The lock is its own statement and the row is read in the next one, so a
+ * Confirm that waited behind another booking reads the meeting that booking
+ * wrote and moves it, instead of writing a second one (lockConversation).
  */
 async function writeConfirmation(
   client: PoolClient,
@@ -606,12 +610,13 @@ async function writeConfirmation(
   actorId: string,
   meeting: { window: string; startAt: Date | null; durationMin: number | null; type: MeetingKind | null },
 ): Promise<ConfirmResult> {
-  const locked = await client.query<ConversationRow>(
+  await lockConversation(client, conversationId);
+  const read = await client.query<ConversationRow>(
     `SELECT ${CONVERSATION_COLUMNS}
-     FROM dm_conversations WHERE id = $1 FOR UPDATE`,
+     FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
-  const conv = locked.rows[0];
+  const conv = read.rows[0];
   if (!conv) throw new NotFoundError('Conversation', conversationId);
   const partnerId = conv.user_a_id === actorId ? conv.user_b_id : conv.user_a_id;
 
