@@ -58,6 +58,21 @@ export function emailCardClose(): string {
   ].join("");
 }
 
+/** A burst of emails refused for the day's quota is logged once: the first as an error, the rest within this at debug. */
+const DAILY_QUOTA_NOTICE_MS = 60_000;
+let dailyQuotaNoticedAt = 0;
+
+/** The provider's "daily sending quota used up" refusal (429 `daily_quota_exceeded`), which no retry can get past. */
+function isDailyQuotaRefusal(error: unknown): boolean {
+  const e = error as { statusCode?: unknown; name?: unknown; message?: unknown } | null;
+  return !!e && e.statusCode === 429 && /daily_quota/i.test(`${String(e.name ?? '')} ${String(e.message ?? '')}`);
+}
+
+/** Tests only: the next daily-quota refusal is logged as an error again. */
+export function __resetDailyQuotaNoticeForTests(): void {
+  dailyQuotaNoticedAt = 0;
+}
+
 /**
  * What sendEmail answers. `sent` is true for an email the provider took, and also for one to an address reserved for
  * testing, which is never offered to the provider and says so in `skipped`.
@@ -133,6 +148,20 @@ async function sendEmail(opts: {
       if (attempt > 0) logger.warn({ to: opts.to, attempt }, `Email sent after ${attempt} retries: ${opts.subject}`);
       else logger.info({ to: opts.to }, `Email sent: ${opts.subject}`);
       return { sent: true };
+    }
+
+    // The day's sending quota is used up (H2b item 8b, 26 Oct 2026): nothing goes until it resets, so this is not
+    // tried again (it used to be, three more times and seven seconds per email), and a burst of refused emails is
+    // logged as an error once, the rest at debug.
+    if (isDailyQuotaRefusal(error)) {
+      const now = Date.now();
+      if (now - dailyQuotaNoticedAt > DAILY_QUOTA_NOTICE_MS) {
+        dailyQuotaNoticedAt = now;
+        logger.error({ error, to: opts.to }, `The mail provider's daily quota is used up; emails are not sent until it resets: ${opts.subject}`);
+      } else {
+        logger.debug({ to: opts.to }, `Not sent: the mail provider's daily quota is used up: ${opts.subject}`);
+      }
+      return { sent: false };
     }
 
     const statusCode = (error as any).statusCode;
