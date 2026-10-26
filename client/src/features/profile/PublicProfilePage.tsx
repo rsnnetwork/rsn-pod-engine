@@ -14,6 +14,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
+import { hasEarlierAppPage } from './profile-back';
 
 // 13 Aug 2026 (D1): Stefan — "the profile card needs a major visual upgrade,
 // the greatest thing on the platform", and "About was cut off / too narrow".
@@ -122,13 +123,11 @@ export default function PublicProfilePage() {
     },
   });
 
-  // 25 Oct 2026 (CON-01): a tab with nothing behind it, a profile opened in a new tab from the live event or from an
-  // emailed link, used to get a Back that did nothing. It goes to the dashboard now. The router gives the first entry of a
-  // tab the key "default", and that is the one test of "nothing behind it in the app": the length of the browser's history
-  // cannot say, because it counts the entries ahead as well as behind, and another site's as well as this app's. So every
-  // link to a profile must be an in-app link (ProfileLink), or the page it came from is not behind this one.
+  // 25 Oct 2026 (CON-01): a profile can be the first page of this app in a tab (a new tab from the live event, an
+  // emailed link, an address pasted in), where Back used to do nothing or leave the site. It steps back only when an
+  // earlier page of this app is behind it, and goes to the dashboard otherwise (profile-back.ts says how that is read).
   const goBack = () => {
-    if (location.key !== 'default') navigate(-1);
+    if (hasEarlierAppPage(window.history.state, location.key)) navigate(-1);
     else navigate('/', { replace: true });
   };
 

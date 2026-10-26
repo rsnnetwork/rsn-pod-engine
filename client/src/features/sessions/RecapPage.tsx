@@ -427,7 +427,7 @@ export default function RecapPage() {
         </div>
       )}
 
-      {/* Mutual connections */}
+      {/* Mutual connections. A name is a 44px target (py-1.5 paid back by -my-1.5), so the rows do not move. */}
       {data && data.mutualConnections.length > 0 && (
         <Card>
           <h3 className="text-sm font-semibold text-indigo-500 uppercase tracking-wider mb-4 flex items-center gap-2">
@@ -437,7 +437,7 @@ export default function RecapPage() {
           <div className="space-y-3">
             {data.mutualConnections.map(c => (
               <div key={c.userId} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
-                <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 grow basis-full min-w-0 sm:basis-0">
+                <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 grow basis-full min-w-0 py-1.5 -my-1.5 sm:basis-0">
                   <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -485,7 +485,7 @@ export default function RecapPage() {
         const isBonus = (r: number) => bonusAdded > 0 && data.totalRounds > 0 && r > data.totalRounds - bonusAdded;
         const row = (c: typeof data.connections[number]) => (
           <div key={`${c.userId}-${c.roundNumber}`} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
-            <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 grow basis-full min-w-0 sm:basis-0">
+            <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 grow basis-full min-w-0 py-1.5 -my-1.5 sm:basis-0">
               <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">

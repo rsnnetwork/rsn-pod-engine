@@ -22,7 +22,8 @@ function MessagePartnerButton({ userId, displayName }: { userId: string; display
   // its scroll/context) intact while messaging a connection. This is still the
   // live event's page (/session/:id/live), which a same-tab move would leave, so
   // it stays a new tab; CON-01 (25 Oct 2026) makes it say so, as ProfileLink
-  // does. The recap page (RecapPage) opens the conversation in its own tab.
+  // does. The recap page (RecapPage) is not the call, so its Message opens the conversation in the same tab as the
+  // recap, and Back returns to the recap.
   const openConversation = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -262,7 +263,7 @@ export default function SessionComplete({ sessionId }: Props) {
                 <div className="space-y-3">
                   {mutualConnections.map(c => (
                     <div key={c.userId} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-2 rounded-lg bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 transition-colors">
-                      <ProfileLink newTab from="Events" userId={c.userId} className="flex items-center gap-3 grow basis-full min-w-0 sm:basis-0">
+                      <ProfileLink newTab from="Events" userId={c.userId} className="flex items-center gap-3 grow basis-full min-w-0 py-1.5 -my-1.5 sm:basis-0">
                         <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" className="shrink-0" />
                         <div className="min-w-0">
                           <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
@@ -281,7 +282,7 @@ export default function SessionComplete({ sessionId }: Props) {
               </div>
             )}
 
-            {/* All people met — grouped by round, with manual rooms separate (#5) */}
+            {/* All people met — grouped by round, with manual rooms separate (#5). A name is a 44px target (py-1.5 paid back by -my-1.5), so the rows do not move. */}
             {connections.length > 0 && (() => {
               const roundConns = connections.filter(c => !c.isManual);
               const manualConns = connections.filter(c => c.isManual);
@@ -292,7 +293,7 @@ export default function SessionComplete({ sessionId }: Props) {
               const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
               const row = (c: Connection) => (
                 <div key={`${c.userId}-${c.roundNumber}`} className="flex flex-wrap items-center gap-x-3 gap-y-2 p-2 rounded-lg hover:bg-gray-100">
-                  <ProfileLink newTab from="Events" userId={c.userId} className="flex items-center gap-3 grow basis-full min-w-0 sm:basis-0">
+                  <ProfileLink newTab from="Events" userId={c.userId} className="flex items-center gap-3 grow basis-full min-w-0 py-1.5 -my-1.5 sm:basis-0">
                     <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" className="shrink-0" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">

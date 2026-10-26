@@ -133,7 +133,8 @@ describe('every ?from= the app writes is one the profile accepts', () => {
     for (const file of ['features/live/ChatPanel.tsx', 'features/live/ParticipantList.tsx', 'features/live/SessionComplete.tsx']) {
       const src = clientFile(file);
       expect({ file, all: /<ProfileLink\b/.test(src) && !/<ProfileLink\b(?![^>]*\bfrom="Events")/.test(src) }).toEqual({ file, all: true });
-      expect({ file, all: !/<ProfileLink\b(?![^>]*\bnewTab\b)/.test(src) }).toEqual({ file, all: true });
+      // The bare attribute: `newTab={false}` is a same-tab link that merely mentions it.
+      expect({ file, all: !/<ProfileLink\b(?![^>]*\bnewTab(?=[\s/>]))/.test(src) }).toEqual({ file, all: true });
     }
     // Admin links keep the old page.
     expect(clientFile('features/admin/AdminAnalyticsPage.tsx')).toMatch(/navigate\(`\/profile\/\$\{r\.userId\}`\)/);

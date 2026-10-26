@@ -7,8 +7,9 @@
 // kept per history entry (React Router's location.key, which comes back unchanged on Back) in a module-level map that
 // outlives the shell, and mirrored to sessionStorage, which outlives a reload and a page the browser threw away.
 //
-// Pure on purpose (no React, router or DOM beyond the Storage handed in), so a test can run it:
-// server/src/__tests__/client/reason-m1-scroll-memory.test.ts. useMainScrollMemory.ts wires it to the page area.
+// Pure on purpose: no React, router, DOM or global (the store and the frames are handed in), and nothing happens when the file
+// is loaded, so a test can run it: server/src/__tests__/client/reason-m1-scroll-memory.test.ts. useMainScrollMemory.ts holds the
+// one memory of the page area, reads where it comes from, and wires all of this to <main>.
 
 export type Navigation = 'POP' | 'PUSH' | 'REPLACE';
 
@@ -106,43 +107,12 @@ export class ScrollMemory {
   }
 }
 
-/** sessionStorage, or null where there is none or asking for it throws (a sandboxed frame, a browser that blocks storage). */
-function browserSessionStore(): ScrollStore | null {
-  try {
-    // Through globalThis, not window: this file is run by the server's tests, which have no DOM types.
-    return (globalThis as { sessionStorage?: ScrollStore }).sessionStorage ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Whether a page loaded by `type` (the browser's own word for it, from the navigation timing) is the entry it was before:
  * a reload, or Back into this document from another one. Any other way (a URL typed in, a link, a bookmark) is a new
  * page, which starts at its top.
  */
 export const loadedAsSameEntry = (type: string | undefined): boolean => type === 'reload' || type === 'back_forward';
-
-/** How this document was loaded, or undefined where the browser does not say (and in the tests, which have no page). */
-function documentLoadType(): string | undefined {
-  try {
-    const timing = (globalThis as { performance?: { getEntriesByType?: (kind: string) => Array<{ type?: string }> } }).performance;
-    return timing?.getEntriesByType?.('navigation')[0]?.type;
-  } catch {
-    return undefined;
-  }
-}
-
-/** The one memory of the shell's page area. Module level, so it outlives the shell: the profile is outside it. */
-export const mainScroll = new ScrollMemory(browserSessionStore());
-
-// The first entry of a tab is keyed "default" whatever its address, and what is saved under it may belong to an earlier
-// page of the tab (the same address, typed in again). A page loaded as something new starts at its top, so it forgets that,
-// in the store too, or a reload of this page would find it again.
-if (!loadedAsSameEntry(documentLoadType())) {
-  mainScroll.forget('default');
-  mainScroll.save();
-}
 
 // ---- putting the page back ----------------------------------------------------------------------
 
@@ -161,20 +131,23 @@ export interface Frames {
   cancel(id: number): void;
 }
 
+/** How a placement ended: at the place, given up on a page that stayed too short (and moved as far as it goes), or stopped early. */
+export type Placed = 'placed' | 'gave-up' | 'stopped';
+
 /**
  * Puts the area at `top`. The page may not be tall enough yet (a list still on its way), so until it is, this tries again on
  * every frame, for at most RESTORE_WAIT_MS, and then goes as far as the page allows. The first try is now, so a page that is
- * already there is placed before anything is drawn. `done` is called once, when it ends for any reason. The function returned
- * stops it early (the member took over, or the shell moved on) and is safe to call again.
+ * already there is placed before anything is drawn. `done` is called once, when it ends for any reason, and says how. The
+ * function returned stops it early (the member took over, or the shell moved on) and is safe to call again.
  */
-export function placeScroll(area: ScrollArea, top: number, frames: Frames, done: () => void): () => void {
+export function placeScroll(area: ScrollArea, top: number, frames: Frames, done: (how: Placed) => void): () => void {
   const started = frames.now();
   let waiting: number | null = null;
   let over = false;
-  const finish = () => {
+  const finish = (how: Placed) => {
     if (over) return;
     over = true;
-    done();
+    done(how);
   };
   const attempt = () => {
     waiting = null;
@@ -185,12 +158,41 @@ export function placeScroll(area: ScrollArea, top: number, frames: Frames, done:
     }
     // Instant: the app scrolls smoothly (index.css), and a smooth restore would be seen travelling down the list.
     area.scrollTo({ top, left: 0, behavior: 'instant' });
-    finish();
+    finish(roomEnough ? 'placed' : 'gave-up');
   };
   attempt();
   return () => {
     if (waiting !== null) frames.cancel(waiting);
     waiting = null;
-    finish();
+    finish('stopped');
   };
+}
+
+/**
+ * Remembers that the page area was just moved by this code, so the scroll event that follows (it arrives a frame later) is
+ * not taken for the member scrolling and recorded as where they left it. A restore that gives up on a page that stayed
+ * short clamps the area to the end of what there is; recording that would replace the place it was trying to reach.
+ */
+export class OwnScrolls {
+  private pending = false;
+  private waiting: number | null = null;
+
+  constructor(private readonly frames: Frames) {}
+
+  /** Call right after moving the area. It is the member's again once two frames have been drawn. */
+  mark(): void {
+    this.pending = true;
+    if (this.waiting !== null) this.frames.cancel(this.waiting);
+    this.waiting = this.frames.request(() => {
+      this.waiting = this.frames.request(() => {
+        this.waiting = null;
+        this.pending = false;
+      });
+    });
+  }
+
+  /** True while a scroll event may still be on its way from a move this code made. */
+  get active(): boolean {
+    return this.pending;
+  }
 }

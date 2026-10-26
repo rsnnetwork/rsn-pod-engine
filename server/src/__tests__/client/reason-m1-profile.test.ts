@@ -84,7 +84,8 @@ describe('Human Profile: the network is down', () => {
 describe('Human Profile: the way back stays in the app', () => {
   it('goes by the router, not by the length of the browser history', () => {
     expect(page()).toMatch(/useLocation\(\)/);
-    expect(page()).toMatch(/location\.key === 'default'/);
+    // The router's own count of this app's pages (profile-back.ts, the rule the old profile page uses too), and the key as its fallback.
+    expect(page()).toMatch(/hasEarlierAppPage\(window\.history\.state, location\.key\)/);
     // With nothing behind it, Back goes to the screen the link was on (CON-01, 25 Oct 2026), For You when it does not say.
     expect(page()).toMatch(/navigate\(backFallback\(source\), \{ replace: true \}\)/);
     expect(page()).toMatch(/navigate\(-1\)/);

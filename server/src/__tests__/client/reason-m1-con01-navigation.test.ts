@@ -104,9 +104,31 @@ describe('the recap and the live end screen: a row wraps on a phone, so a name g
     it(`${file}: both kinds of row wrap, the person's link takes the whole first line below 640px, and the Message button sits at the right of the second`, () => {
       const src = clientFile(file);
       expect(src.match(/className="flex flex-wrap items-center gap-x-3 gap-y-2 p-[23] rounded-lg/g)).toHaveLength(2);
-      expect(src.match(/className="flex items-center gap-3 grow basis-full min-w-0 sm:basis-0"/g)).toHaveLength(2);
+      // (and 44px tall: see the next block)
+      expect(src.match(/className="flex items-center gap-3 grow basis-full min-w-0 py-1\.5 -my-1\.5 sm:basis-0"/g)).toHaveLength(2);
       expect(src).not.toMatch(/gap-3 flex-1 min-w-0/);
       expect(src).toMatch(/className="ml-auto shrink-0 inline-flex min-h-\[44px\]/);
     });
   }
+});
+
+describe('a name that opens a profile is a 44px target, grown into the padding around it so that nothing moves', () => {
+  // Measured: the recap's and the end screen's links were 32 to 40px tall, the participant list's 32px, the chat's 16px. The
+  // padding makes the box the height, and the negative margin of the same size pays it back, so the layout is the one it was.
+  it('the recap\'s and the end screen\'s two kinds of row: py-1.5 paid back by -my-1.5 (a 32px row of avatar and name becomes 44px)', () => {
+    for (const file of ['features/sessions/RecapPage.tsx', 'features/live/SessionComplete.tsx']) {
+      expect({ file, links: clientFile(file).match(/ py-1\.5 -my-1\.5 sm:basis-0"/g)?.length }).toEqual({ file, links: 2 });
+    }
+  });
+
+  it('the participant list\'s row: its 32px photo row becomes 44px inside the row\'s own padding', () => {
+    expect(clientFile('features/live/ParticipantList.tsx')).toContain('className="flex items-center gap-2.5 flex-1 min-w-0 py-1.5 -my-1.5"');
+  });
+
+  it('the chat\'s name: 14px above and below (16px becomes 44px) and 8px at each side, paid back; the message under it is later in the page, so it stays on top where they overlap', () => {
+    const chat = clientFile('features/live/ChatPanel.tsx');
+    expect(chat).toContain('className={`-mx-2 -my-3.5 px-2 py-3.5 text-xs font-semibold hover:underline ');
+    // The message paragraph comes after the name in the bubble: it is what a tap on the first line of the message reaches.
+    expect(chat.indexOf('<ProfileLink newTab')).toBeLessThan(chat.indexOf('<Linkify text={msg.message}'));
+  });
 });

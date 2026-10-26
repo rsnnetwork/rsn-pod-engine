@@ -143,7 +143,8 @@ describe('WS2/S3 + CON-01 — ProfileLink: the same tab by default, a marked new
     for (const rel of listFiles('features/live')) {
       for (const tag of readClient(rel).match(/<ProfileLink\b[^>]*>/g) ?? []) {
         seen += 1;
-        if (!/\bnewTab\b/.test(tag)) offenders.push(`${rel}: ${tag.replace(/\s+/g, ' ')}`);
+        // The bare attribute: `newTab={false}` is a same-tab link that merely mentions it.
+        if (!/\bnewTab(?=[\s/>])/.test(tag)) offenders.push(`${rel}: ${tag.replace(/\s+/g, ' ')}`);
         // ...and, on the preview, says it was opened from an event.
         if (!/\bfrom="Events"/.test(tag)) offenders.push(`${rel}: no from="Events": ${tag.replace(/\s+/g, ' ')}`);
       }
@@ -169,13 +170,17 @@ describe('WS2/S3 + CON-01 — ProfileLink: the same tab by default, a marked new
 describe('CON-01 — a profile\'s Back goes back, and goes somewhere when there is nothing behind it', () => {
   const page = readClient('features/profile/PublicProfilePage.tsx');
 
-  it('Back and "Go Back" are one function: navigate(-1) when the router has an entry behind this one, else the dashboard, replacing the entry', () => {
+  it('Back and "Go Back" are one function: it steps back when an earlier page of the app is behind, else goes to the dashboard, replacing the entry', () => {
     // One place decides. No button calls navigate(-1) itself.
     expect(page).not.toMatch(/onClick=\{\(\) => navigate\(-1\)\}/);
     expect(page.match(/onClick=\{goBack\}/g)).toHaveLength(2);
     const fn = page.slice(page.indexOf('const goBack'), page.indexOf('};', page.indexOf('const goBack')));
-    expect(fn).toMatch(/if \(location\.key !== 'default'\) navigate\(-1\);/);
+    expect(fn).toMatch(/hasEarlierAppPage\(window\.history\.state, location\.key\)/);
+    expect(fn).toMatch(/navigate\(-1\)/);
     expect(fn).toMatch(/navigate\('\/', \{ replace: true \}\)/);
+    // The key alone is not the question either: a first page reached by a replace has a key of its own.
+    expect(fn).not.toMatch(/location\.key [!=]==/);
+    expect(page).toMatch(/import \{ hasEarlierAppPage \} from '\.\/profile-back';/);
   });
 
   it('the router says whether anything is behind a profile, never the length of the browser history: that counts the entries ahead as well as behind, and another site\'s as well as this app\'s', () => {
@@ -194,9 +199,11 @@ describe('CON-01 — a profile\'s Back goes back, and goes somewhere when there 
   it('the Human Profile\'s Back is the browser\'s own step back, and with nothing behind it goes to the screen the link was on, replacing the entry', () => {
     const human = readClient('features/reason/human/HumanProfilePage.tsx');
     const fn = human.slice(human.indexOf('const back = () =>'), human.indexOf('};', human.indexOf('const back = () =>')));
-    expect(fn).toMatch(/location\.key === 'default'/);
+    // The one rule, the same file the old page reads, so the two pages cannot disagree about what is behind them.
+    expect(fn).toMatch(/if \(hasEarlierAppPage\(window\.history\.state, location\.key\)\) navigate\(-1\);/);
     expect(fn).toMatch(/navigate\(backFallback\(source\), \{ replace: true \}\)/);
-    expect(fn).toMatch(/navigate\(-1\)/);
+    expect(fn).not.toMatch(/location\.key [!=]==/);
+    expect(human).toMatch(/import \{ hasEarlierAppPage \} from '@\/features\/profile\/profile-back';/);
     // It does not send everyone to For You any more.
     expect(fn).not.toMatch(/navigate\('\/', \{ replace: true \}\)/);
   });
@@ -228,5 +235,71 @@ describe('CON-01 — every link to a profile is an in-app link, so what is behin
     }
     expect(files).toBeGreaterThan(150);
     expect(offenders).toEqual([]);
+  });
+
+  it('every ProfileLink in the client says where it opened the profile from (from=): without it the member lands on the old /profile/ page, whose Back and wording are not the Human Profile\'s', () => {
+    // `from` is optional in the type, because production's own link has none; on this client it is always given.
+    const offenders: string[] = [];
+    let seen = 0;
+    for (const file of walk(CLIENT_SRC)) {
+      for (const tag of code(file).match(/<ProfileLink\b[^>]*>/g) ?? []) {
+        seen += 1;
+        if (!/\bfrom=/.test(tag)) offenders.push(`${path.relative(CLIENT_SRC, file)}: ${tag.replace(/\s+/g, ' ')}`);
+      }
+    }
+    // The meeting requests (5) and the live event (4).
+    expect(seen).toBeGreaterThanOrEqual(9);
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('CON-01 — hasEarlierAppPage: where Back goes in each way a profile is reached', () => {
+  // window.history.state as React Router keeps it: { usr, key, idx }, idx being how many pages of the app were opened in this
+  // tab since the document loaded (0 for the first). The same file, byte for byte, as production's.
+  const rule = () => loadClientModule('features/profile/profile-back.ts', {}).hasEarlierAppPage as (state: unknown, key: string) => boolean;
+
+  it('from a page of the app (the pod page, a meeting request, People, a recap): back to it', () => {
+    expect(rule()({ usr: null, key: 'a1b2', idx: 1 }, 'a1b2')).toBe(true);
+    expect(rule()({ usr: null, key: 'c3d4', idx: 4 }, 'c3d4')).toBe(true);
+  });
+
+  it('after a reload inside the app: the entry\'s state is kept, so Back still goes to the page before', () => {
+    expect(rule()({ usr: null, key: 'a1b2', idx: 2 }, 'a1b2')).toBe(true);
+  });
+
+  it('a new tab, a link from an email, an address pasted into a tab that already showed another site: the fallback', () => {
+    // The first page of the document: idx 0 and the key "default", whatever else the browser's history holds.
+    expect(rule()({ idx: 0 }, 'default')).toBe(false);
+    expect(rule()(null, 'default')).toBe(false);
+  });
+
+  it('a new tab where the member went on (Message) and came back with the browser\'s Back: the first page again, so the fallback', () => {
+    expect(rule()({ idx: 0 }, 'default')).toBe(false);
+  });
+
+  it('the first page reached by a replace (the onboarding gate sends a member on with navigate(redirect, { replace: true })) has a key of its own but nothing behind it: the fallback', () => {
+    // The key alone would say yes here, and Back would step back to nothing.
+    expect(rule()({ usr: null, key: 'r9z8', idx: 0 }, 'r9z8')).toBe(false);
+  });
+
+  it('if the router stopped keeping idx, it falls back on the router key, never on the browser\'s count', () => {
+    expect(rule()(null, 'x7y6')).toBe(true);
+    expect(rule()({}, 'default')).toBe(false);
+    expect(rule()('not an object', 'default')).toBe(false);
+  });
+
+  it('a count that is not a whole number says nothing, so the key decides (an entry whose state was replaced behind the router\'s back)', () => {
+    // Replacing an entry's state with an empty object drops the router's idx, and every page opened after it counted on from
+    // nothing: idx NaN. NaN is a number and NaN > 0 is false, so a profile with a page of the app behind it sent Back to the
+    // dashboard. Only a whole number is the router's count. (The preview's ProfilePage.tsx still does that replace for the Google
+    // photo return, as production's did; the production fix for it arrives with the merge of main.)
+    expect(rule()({ usr: null, key: 'a1b2', idx: NaN }, 'a1b2')).toBe(true);
+    expect(rule()({ idx: NaN }, 'default')).toBe(false);
+    expect(rule()({ idx: Infinity }, 'k9')).toBe(true);
+    expect(rule()({ idx: 1.5 }, 'default')).toBe(false);
+    expect(rule()({ idx: '2' }, 'k9')).toBe(true);
+    // A whole number is still believed, whatever the key says.
+    expect(rule()({ idx: 0 }, 'k9')).toBe(false);
+    expect(rule()({ idx: 3 }, 'default')).toBe(true);
   });
 });

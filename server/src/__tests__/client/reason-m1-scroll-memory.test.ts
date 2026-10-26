@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  REMEMBER_LIMIT, RESTORE_WAIT_MS, STORAGE_KEY, ScrollMemory, loadedAsSameEntry, placeScroll, scrollActionFor,
+  OwnScrolls, REMEMBER_LIMIT, RESTORE_WAIT_MS, STORAGE_KEY, ScrollMemory, loadedAsSameEntry, placeScroll, scrollActionFor,
   type Frames, type ScrollArea, type ScrollStore,
 } from '../../../../client/src/features/reason/shell/scroll-memory';
 
@@ -142,9 +142,9 @@ describe('the places the page area was scrolled to, kept by history entry', () =
     expect(loadedAsSameEntry('back_forward')).toBe(true);
     // A URL typed in, a link, a bookmark, a pre-rendered page, and a browser that does not say.
     for (const type of ['navigate', 'prerender', '', undefined]) expect(loadedAsSameEntry(type)).toBe(false);
-    // And the module acts on it once, when the document loads, for the entry every tab starts with.
-    const src = clientFile('features/reason/shell/scroll-memory.ts');
-    expect(src).toMatch(/if \(!loadedAsSameEntry\(documentLoadType\(\)\)\) \{\s*mainScroll\.forget\('default'\);\s*mainScroll\.save\(\);\s*\}/);
+    // And the hook's file acts on it once, when the document loads, for the entry every tab starts with.
+    const src = clientFile('features/reason/shell/useMainScrollMemory.ts');
+    expect(src).toMatch(/if \(!loadedAsSameEntry\(loaded\?\.type\)\) \{\s*mainScroll\.forget\('default'\);\s*mainScroll\.save\(\);\s*\}/);
   });
 
   it('works with no storage at all (private mode, a blocked frame), and when storage refuses a write', () => {
@@ -184,63 +184,138 @@ function stage(content: number, view = 600) {
 describe('putting the page area back where it was, when the page may still be on its way', () => {
   it('a page already tall enough is placed at once, before the first frame is drawn, and nothing is left waiting', () => {
     const s = stage(2000);
-    let done = 0;
-    placeScroll(s.area, 640, s.frames, () => { done += 1; });
+    const ended: string[] = [];
+    placeScroll(s.area, 640, s.frames, (how) => { ended.push(how); });
     expect(s.area.placed).toEqual([640]);
-    expect(done).toBe(1);
+    expect(ended).toEqual(['placed']);
     expect(s.waiting.size).toBe(0);
   });
 
   it('a page still loading is tried again on every frame, and placed the frame it is tall enough', () => {
     const s = stage(700);
-    let done = 0;
-    placeScroll(s.area, 640, s.frames, () => { done += 1; });
+    const ended: string[] = [];
+    placeScroll(s.area, 640, s.frames, (how) => { ended.push(how); });
     expect(s.area.placed).toEqual([]);
-    expect(done).toBe(0);
+    expect(ended).toEqual([]);
     s.frame();
     s.frame();
     expect(s.area.placed).toEqual([]);
     s.area.scrollHeight = 1400;
     s.frame();
     expect(s.area.placed).toEqual([640]);
-    expect(done).toBe(1);
+    expect(ended).toEqual(['placed']);
     expect(s.waiting.size).toBe(0);
   });
 
   it('a page that never gets tall enough is placed as far as it goes once the wait is over, and never later', () => {
     const s = stage(700);
-    let done = 0;
-    placeScroll(s.area, 5000, s.frames, () => { done += 1; });
+    const ended: string[] = [];
+    placeScroll(s.area, 5000, s.frames, (how) => { ended.push(how); });
     for (let t = 0; t < RESTORE_WAIT_MS - 100; t += 100) s.frame(100);
     expect(s.area.placed).toEqual([]);
     s.frame(300);
     expect(s.area.placed).toEqual([5000]);
-    expect(done).toBe(1);
+    // Told that it gave up, so that the page area is left alone until the member touches it.
+    expect(ended).toEqual(['gave-up']);
     s.frame(100);
     expect(s.area.placed).toEqual([5000]);
   });
 
   it('the member scrolling first stops it: the page is not moved under their finger, and it is told it is over once', () => {
     const s = stage(700);
-    let done = 0;
-    const stop = placeScroll(s.area, 640, s.frames, () => { done += 1; });
+    const ended: string[] = [];
+    const stop = placeScroll(s.area, 640, s.frames, (how) => { ended.push(how); });
     s.frame();
     stop();
     stop();
     s.area.scrollHeight = 5000;
     s.frame();
     expect(s.area.placed).toEqual([]);
-    expect(done).toBe(1);
+    expect(ended).toEqual(['stopped']);
     expect(s.waiting.size).toBe(0);
   });
 
   it('stopping after it has finished changes nothing', () => {
     const s = stage(2000);
-    let done = 0;
-    const stop = placeScroll(s.area, 100, s.frames, () => { done += 1; });
+    const ended: string[] = [];
+    const stop = placeScroll(s.area, 100, s.frames, (how) => { ended.push(how); });
     stop();
     expect(s.area.placed).toEqual([100]);
-    expect(done).toBe(1);
+    expect(ended).toEqual(['placed']);
+  });
+});
+
+describe('a move made by this code is not the member scrolling', () => {
+  it('the scroll event that follows a move arrives within a frame or two; after two frames a scroll is the member\'s again', () => {
+    const s = stage(2000);
+    const own = new OwnScrolls(s.frames);
+    expect(own.active).toBe(false);
+    own.mark();
+    expect(own.active).toBe(true);
+    s.frame();
+    expect(own.active).toBe(true);
+    s.frame();
+    expect(own.active).toBe(false);
+    expect(s.waiting.size).toBe(0);
+  });
+
+  it('a second move before the first has run out starts the two frames again, and leaves nothing waiting twice', () => {
+    const s = stage(2000);
+    const own = new OwnScrolls(s.frames);
+    own.mark();
+    s.frame();
+    own.mark();
+    s.frame();
+    expect(own.active).toBe(true);
+    s.frame();
+    expect(own.active).toBe(false);
+    expect(s.waiting.size).toBe(0);
+  });
+
+  it('a restore that gives up on a page that stayed short leaves the place alone: its own move, and what the page does as it fills, are not the member scrolling; the member\'s next touch is', () => {
+    // What the hook does, with its parts: the listener records the area's place unless a restore is waiting, a restore gave up and
+    // the member has not touched the page since, or the move was ours.
+    const memory = new ScrollMemory(null);
+    memory.remember('k', '/', 1200);
+    const s = stage(700);
+    const own = new OwnScrolls(s.frames);
+    let settling = true;
+    let waitingForMember = false;
+    const onScroll = (top: number) => { if (!settling && !waitingForMember && !own.active) memory.remember('k', '/', top); };
+    const onMemberInput = () => { waitingForMember = false; };
+    const mover: ScrollArea = {
+      get scrollHeight() { return s.area.scrollHeight; },
+      get clientHeight() { return s.area.clientHeight; },
+      scrollTo: (options) => { own.mark(); s.area.scrollTo(options); },
+    };
+    placeScroll(mover, 1200, s.frames, (how) => { settling = false; waitingForMember = how === 'gave-up'; });
+    for (let t = 0; t < RESTORE_WAIT_MS - 100; t += 100) s.frame(100);
+    s.frame(300);
+    // It gave up: the area was told to go to 1200, and the browser clamped it to what the page has.
+    expect(s.area.placed).toEqual([1200]);
+    expect(settling).toBe(false);
+    onScroll(2);
+    expect(memory.recall('k', '/')).toBe(1200);
+    // The list arrives much later, long after the two frames a move of ours is allowed, and the browser sets the area to the top
+    // (WebKit did: it was the place the next Back landed on).
+    for (let i = 0; i < 20; i++) s.frame(200);
+    expect(own.active).toBe(false);
+    onScroll(0);
+    expect(memory.recall('k', '/')).toBe(1200);
+    // The member touches the page, and what they scroll to is recorded.
+    onMemberInput();
+    onScroll(80);
+    expect(memory.recall('k', '/')).toBe(80);
+  });
+
+  it('a restore that reached its place, or that the member ended, does not leave the page waiting for the member', () => {
+    for (const [content, stopFirst] of [[2000, false], [700, true]] as const) {
+      const s = stage(content);
+      let waitingForMember = true;
+      const stop = placeScroll(s.area, 640, s.frames, (how) => { waitingForMember = how === 'gave-up'; });
+      if (stopFirst) stop();
+      expect({ content, stopFirst, waitingForMember }).toEqual({ content, stopFirst, waitingForMember: false });
+    }
   });
 });
 
@@ -271,6 +346,30 @@ describe('the shell uses it', () => {
     expect(hook).toMatch(/settling\.current/);
     // Only the member stops it, and only by touching the page area.
     for (const input of ['wheel', 'touchstart', 'keydown', 'pointerdown']) expect(hook).toContain(`'${input}'`);
+  });
+
+  it('every move the hook makes marks itself as its own, and the scroll listener skips a scroll that is one', () => {
+    expect(hook).toMatch(/const ours = useRef\(new OwnScrolls\(FRAMES\)\);/);
+    expect(hook).toMatch(/scrollTo: \(options\) => \{\s*ours\.current\.mark\(\);\s*area\.scrollTo\(options\);\s*\}/);
+    expect(hook).toMatch(/if \(settling\.current \|\| waitingForMember\.current \|\| ours\.current\.active\) return;/);
+    // A restore that gave up waits for the member; the member's touch, anywhere in the page, ends the wait and any restore still going.
+    expect(hook).toMatch(/waitingForMember\.current = how === 'gave-up';/);
+    expect(hook).toMatch(/const onMemberInput = \(\) => \{\s*waitingForMember\.current = false;\s*stopRestore\.current\(\);\s*\};/);
+    expect(hook).toMatch(/document\.addEventListener\(event, onMemberInput, \{ capture: true, passive: true \}\)/);
+    // The restore and the jump to a new page's top both go through it: the one scrollTo of the area is inside it.
+    expect(hook).toMatch(/placeScroll\(mover, action\.top, FRAMES, release\)/);
+    expect(hook).toMatch(/mover\.scrollTo\(\{ top: 0, left: 0, behavior: 'instant' \}\)/);
+    expect(hook.match(/area\.scrollTo\(/g)).toHaveLength(1);
+  });
+
+  it('scroll-memory.ts is pure: no global or DOM word in its code, and nothing runs when it is loaded (the memory and the load check are in the hook\'s file)', () => {
+    const code = clientFile('features/reason/shell/scroll-memory.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(code).not.toMatch(/\b(window|document|globalThis|performance|sessionStorage|localStorage|requestAnimationFrame)\b/);
+    // No statement at the top level but declarations: no instance made, no if.
+    expect(code).not.toMatch(/^(?:export )?(?:const|let|var) \w+ = new /m);
+    expect(code).not.toMatch(/^if \(/m);
+    expect(code).not.toMatch(/mainScroll/);
+    expect(hook).toMatch(/const mainScroll = new ScrollMemory\(sessionStore\(\)\);/);
   });
 
   it('the places are saved when the page is hidden or left, not only on a timer', () => {
