@@ -20,9 +20,10 @@ import {
 } from '../state/session-state';
 import * as sessionService from '../../session/session.service';
 import {
-  CHAT_REACTION_EMOJIS, EVENT_CHAT_CLOSED, EVENT_CHAT_FORBIDDEN, EVENT_CHAT_MAX_LENGTH, EVENT_CHAT_SEND_FAILED,
+  CHAT_REACTION_EMOJIS, EVENT_CHAT_CLOSED, EVENT_CHAT_MAX_LENGTH, EVENT_CHAT_ROOM_ID_MAX, EVENT_CHAT_SEND_FAILED,
   EVENT_CHAT_TOO_FAST, NewEventChatMessage, canReadEventChat, chatBlockedUserIds, isChatClosed, isUuid,
-  listLiveChatHistory, persistEventChatMessage, takeChatSendSlot, toggleEventChatReaction,
+  listLiveChatHistory, persistEventChatMessage, takeChatHistorySlot, takeChatReactSlot, takeChatSendSlot,
+  toggleEventChatReaction,
 } from '../../event-chat/event-chat.service';
 // matchingService removed — using direct queries for room-scoped chat
 
@@ -69,9 +70,8 @@ export async function handleChatSend(
       return;
     }
     const { sessionId, scope, clientId } = parsed.data;
-    // Cut by characters, as the database counts them (one emoji is one character).
-    const trimmed = Array.from(parsed.data.message.trim()).slice(0, EVENT_CHAT_MAX_LENGTH).join('');
-    if (trimmed.length === 0) {
+    const text = parsed.data.message.trim();
+    if (text.length === 0) {
       ack?.({ ok: false, code: ErrorCodes.VALIDATION_ERROR, message: 'Write a message first.' });
       return;
     }
@@ -83,11 +83,15 @@ export async function handleChatSend(
       return;
     }
 
-    // At most 10 messages in any 10 seconds, counted before any database work.
+    // At most 10 messages in any 10 seconds, counted before any work on the text or the database.
     if (!takeChatSendSlot(userId)) {
       refuse(ErrorCodes.RATE_LIMIT_EXCEEDED, EVENT_CHAT_TOO_FAST);
       return;
     }
+
+    // Cut to 500 characters as the database counts them (one emoji is one). 500 characters fit in 1,000 code
+    // units, so only those are split into characters, however long the message that was sent.
+    const trimmed = Array.from(text.slice(0, EVENT_CHAT_MAX_LENGTH * 2)).slice(0, EVENT_CHAT_MAX_LENGTH).join('');
 
     // Determine if sender is host/co-host
     const session = await sessionService.getSessionById(sessionId).catch(() => null);
@@ -231,6 +235,14 @@ export async function handleChatSend(
         }
       }
 
+      // A client names its own room (presence:room_joined) and the id is stored with the message: one longer
+      // than any real room id is refused without a word (a client that asked for an answer gets one).
+      if (resolvedRoomId !== null && resolvedRoomId.length > EVENT_CHAT_ROOM_ID_MAX) {
+        logger.warn({ sessionId, userId, length: resolvedRoomId.length }, 'Chat message refused: its room id is too long');
+        ack?.({ ok: false, code: ErrorCodes.VALIDATION_ERROR, message: EVENT_CHAT_SEND_FAILED });
+        return;
+      }
+
       if (resolvedRoomId !== null && recipientIds.size > 0) {
         // Phase 8A.4 — guarantee non-undefined roomId for room-scope
         // messages: the client shows a room message only in its own room.
@@ -285,6 +297,8 @@ export async function handleChatReact(
     // A message from before chat was kept had a made-up id: nothing is stored to react to.
     if (!isUuid(messageId)) return;
     if (!socket.rooms.has(sessionRoom(sessionId))) return;
+    // 20 reactions per member in any 10 seconds; one over is dropped without a word.
+    if (!takeChatReactSlot(userId)) return;
 
     // Toggle in the database: add if not present, remove if already reacted.
     const result = await toggleEventChatReaction({ sessionId, messageId, userId, emoji });
@@ -429,8 +443,10 @@ export async function handleReactionSend(
 //
 // 26 Oct 2026 — read from the database: the event's lobby messages and the room messages this member was
 // sent (the last 200, oldest first). X3: it used to answer any signed-in socket that named an event. Now it
-// answers a socket in the event's room while its chat is open, or anyone canReadEventChat allows (who took
-// part, the hosts; an admin, lobby messages only); anyone else is refused.
+// answers anyone canReadEventChat allows (who took part, the hosts; someone registered whose socket is in the
+// room while the chat is open; an admin, lobby messages only). Anyone else gets no answer at all: production's
+// chat panel asks when it mounts, before its session:join reaches the server, and an `error` here was a red
+// toast on nearly every first entry. The join sends the history a moment later.
 export async function handleChatRequestHistory(
   _io: SocketServer,
   socket: Socket,
@@ -440,14 +456,13 @@ export async function handleChatRequestHistory(
     const userId = getUserIdFromSocket(socket);
     const parsed = historyRequestSchema.safeParse(data);
     if (!userId || !parsed.success) return;
+    // 20 requests per member in any 10 seconds; one over is dropped without a word.
+    if (!takeChatHistorySlot(userId)) return;
     const { sessionId } = parsed.data;
     const access = await canReadEventChat(userId, socket.data?.role, sessionId, {
       inSessionRoom: socket.rooms.has(sessionRoom(sessionId)),
     });
-    if (!access) {
-      socket.emit('error', { code: ErrorCodes.AUTH_FORBIDDEN, message: EVENT_CHAT_FORBIDDEN });
-      return;
-    }
+    if (!access) return;
     const messages = await listLiveChatHistory(sessionId, userId, access);
     socket.emit('chat:history', { messages });
   } catch (err) {

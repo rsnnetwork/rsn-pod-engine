@@ -8,7 +8,8 @@
 // Who reads it (canReadEventChat):
 //   - the event's host, its co-hosts and everyone who took part (joined, not removed; those who left early
 //     included): every lobby message and the room messages they were sent;
-//   - a socket in the room of an event whose chat is still open (the pre-event lobby and the live event);
+//   - someone registered for the event whose socket is in its room while the chat is open (the pre-event
+//     lobby, before joined_at is set, and the live event);
 //   - a platform admin: lobby messages only (room messages are private to their room; reports cover them);
 //   - nobody else: registered but never joined, other pod members, a removed participant.
 // A blocked author is left out both ways on every read, and skipped when a message is sent.
@@ -24,6 +25,10 @@ export const CHAT_REACTION_EMOJIS = ['heart', 'clap', 'thumbs_up'] as const;
 export const EVENT_CHAT_MAX_LENGTH = 500;
 /** At most this many messages from one member in any window. */
 export const CHAT_SEND_LIMIT = { max: 10, windowMs: 10_000 } as const;
+/** History requests and reactions each cost database work: at most this many of each per member in any window. */
+export const CHAT_READ_LIMIT = { max: 20, windowMs: 10_000 } as const;
+/** The longest room id stored with a room message. A client names its room (presence:room_joined); real ids are far shorter. */
+export const EVENT_CHAT_ROOM_ID_MAX = 200;
 
 export const EVENT_CHAT_FORBIDDEN = 'Only people who took part in this event can read its chat.';
 export const EVENT_CHAT_CLOSED = 'This event has ended, so its chat is closed.';
@@ -68,8 +73,8 @@ interface AccessFacts {
 
 /**
  * What the viewer may read of the event's chat, or null for nothing. `inSessionRoom`: the viewer's socket is
- * in the event's socket room, which admits them while the chat is open. Throws NotFoundError for an event
- * that does not exist.
+ * in the event's socket room, which admits someone registered for the event while the chat is open. Throws
+ * NotFoundError for an event that does not exist.
  */
 export async function canReadEventChat(
   viewerId: string,
@@ -95,7 +100,9 @@ export async function canReadEventChat(
   // A kick is final: a removed member reads nothing, even as a co-host or from a socket still in the room.
   if (facts.participant_status === 'removed') return admin ? 'lobby' : null;
   if (facts.is_cohost || facts.joined) return 'all';
-  if (opts.inSessionRoom && !isChatClosed(facts.status)) return 'all';
+  // The room counts only for someone registered for the event (the pre-event lobby has no joined_at yet):
+  // joining an event's socket room checks nothing, so a stranger can be in it.
+  if (opts.inSessionRoom && facts.participant_status !== null && !isChatClosed(facts.status)) return 'all';
   return admin ? 'lobby' : null;
 }
 
@@ -435,3 +442,7 @@ export function createSendLimiter(max: number, windowMs: number): (userId: strin
 
 /** The live chat's limit: 10 messages per member in any 10 seconds. */
 export const takeChatSendSlot = createSendLimiter(CHAT_SEND_LIMIT.max, CHAT_SEND_LIMIT.windowMs);
+/** chat:request_history: 20 per member in any 10 seconds; one over is dropped without a word. */
+export const takeChatHistorySlot = createSendLimiter(CHAT_READ_LIMIT.max, CHAT_READ_LIMIT.windowMs);
+/** chat:react: 20 per member in any 10 seconds; one over is dropped without a word. */
+export const takeChatReactSlot = createSendLimiter(CHAT_READ_LIMIT.max, CHAT_READ_LIMIT.windowMs);

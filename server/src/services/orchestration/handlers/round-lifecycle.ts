@@ -1130,10 +1130,6 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
       logger.warn({ err, sessionId }, '#11 per-user session:completed fan-out failed (non-fatal)');
     }
 
-    // 26 Oct 2026 — tell every open page of this event (those who already left included) that it has ended
-    // and its chat is complete. Never throws.
-    await fanoutSessionCompleted(sessionId);
-
     logger.info({ sessionId }, 'Session completed (clients signaled)');
 
     // M1 sweep (21 May Ali) — close out the participant roster when the
@@ -1149,8 +1145,9 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     // legitimately (explicit leave), and stamps NOW() on rows that
     // didn't have it. F4 (21 May) — moved post-emit so it doesn't gate
     // the host's UI transition; the recap doesn't depend on
-    // session_participants.status for anything time-critical.
-    query(
+    // session_participants.status for anything time-critical. Started
+    // without await; the completion fan-out below waits for it (26 Oct).
+    const swept = query(
       `UPDATE session_participants
          SET status = 'left',
              left_at = COALESCE(left_at, NOW())
@@ -1191,6 +1188,12 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     } else {
       logger.info({ sessionId, format: completedFormat }, 'No recap email: this event has no ratings');
     }
+
+    // 26 Oct 2026 — tell every open page of this event (those who already left included) that it has ended
+    // and its chat is complete, once the sweep has marked everyone left, so a refetch reads the final roster.
+    // session:completed went out above, so no screen waits on this. Never throws.
+    await swept;
+    await fanoutSessionCompleted(sessionId);
 
     // Phase A4 (10 May spec) — AWAIT LiveKit cleanup before tearing down
     // in-memory state. Pre-fix this was fire-and-forget, so when the in-memory

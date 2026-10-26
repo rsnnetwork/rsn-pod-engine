@@ -63,7 +63,6 @@ const MSG = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const KEY = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const HOST = 'u-host';
 const CLOSED = 'This event has ended, so its chat is closed.';
-const FORBIDDEN = 'Only people who took part in this event can read its chat.';
 
 type Sent = { to: string; event: string; payload: any };
 let sent: Sent[] = [];
@@ -303,6 +302,36 @@ describe('handleChatSend: stored first, then sent', () => {
     expect(errors()[0].payload.code).toBe('CHAT_DISABLED');
   });
 
+  // Fix round 1: a client names its own room (presence:room_joined), and the id is stored with the message.
+  it('a room id longer than 200 characters is refused silently: nothing stored, nothing sent, no error', async () => {
+    const me = freshUser();
+    const long = 'r'.repeat(201);
+    liveEvent({ roomParticipants: new Map([[me, { matchId: 'm-7', roomId: long, joinedAt: new Date() }]]) });
+    const ack = jest.fn();
+    await handleChatSend(ioWith(), socketFor(me), { sessionId: EVENT, message: 'Hi', scope: 'room' });
+    await handleChatSend(ioWith(), socketFor(me), { sessionId: EVENT, message: 'Hi', scope: 'room' }, ack);
+    expect(mockPersist).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ ok: false, code: ErrorCodes.VALIDATION_ERROR }));
+  });
+
+  it('a room id of exactly 200 characters is stored as it is', async () => {
+    const me = freshUser();
+    const room = 'r'.repeat(200);
+    liveEvent({ roomParticipants: new Map([[me, { matchId: 'm-7', roomId: room, joinedAt: new Date() }]]) });
+    await handleChatSend(ioWith(), socketFor(me), { sessionId: EVENT, message: 'Hi', scope: 'room' });
+    expect(mockPersist.mock.calls[0][0].roomId).toBe(room);
+  });
+
+  it('a message is cut to 500 characters as the database counts them: a megabyte of text, 600 emoji', async () => {
+    const me = freshUser();
+    liveEvent();
+    await handleChatSend(ioWith([me]), socketFor(me), { sessionId: EVENT, message: ` ${'a'.repeat(1_000_000)} `, scope: 'lobby' });
+    await handleChatSend(ioWith([me]), socketFor(me), { sessionId: EVENT, message: '😀'.repeat(600), scope: 'lobby' });
+    expect(mockPersist.mock.calls[0][0].content).toBe('a'.repeat(500));
+    expect(mockPersist.mock.calls[1][0].content).toBe('😀'.repeat(500));
+  });
+
   it('an empty message is ignored: nothing stored, no error for production\'s client to show', async () => {
     const me = freshUser();
     liveEvent();
@@ -366,13 +395,33 @@ describe('handleChatSend: clientId and the acknowledgement', () => {
 describe('handleChatRequestHistory (X3)', () => {
   const history = [{ id: MSG, userId: 'u-a', displayName: 'A', message: 'hi', timestamp: '2026-10-25T11:52:00.000Z', scope: 'lobby', isHost: false, reactions: {} }];
 
-  it('refuses a socket that is not in the event and may not read its chat, and reads nothing', async () => {
+  // Fix round 1: production's chat panel asks for the history on mount, BEFORE its session:join reaches the
+  // server, so a refusal here must be silent: an `error` event became a red toast and a banner on nearly
+  // every first entry. The join sends the history a moment later.
+  it('refuses a socket that is not in the event and may not read its chat: reads nothing, answers nothing', async () => {
     mockCanRead.mockResolvedValueOnce(null);
     const socket = socketFor('u-stranger', { inRoom: false });
     await handleChatRequestHistory(ioWith(), socket, { sessionId: EVENT });
     expect(mockCanRead).toHaveBeenCalledWith('u-stranger', 'member', EVENT, { inSessionRoom: false });
     expect(mockHistory).not.toHaveBeenCalled();
-    expect(sent).toEqual([{ to: 'socket:u-stranger', event: 'error', payload: { code: ErrorCodes.AUTH_FORBIDDEN, message: FORBIDDEN } }]);
+    expect(sent).toEqual([]);
+    expect(socket.emit).not.toHaveBeenCalledWith('error', expect.anything());
+  });
+
+  it('the 21st request in 10 seconds is dropped without reading anything', async () => {
+    const me = freshUser();
+    mockCanRead.mockResolvedValue('all');
+    mockHistory.mockResolvedValue([]);
+    const socket = socketFor(me);
+    for (let i = 0; i < 20; i++) await handleChatRequestHistory(ioWith(), socket, { sessionId: EVENT });
+    expect(mockCanRead).toHaveBeenCalledTimes(20);
+    sent = [];
+    await handleChatRequestHistory(ioWith(), socket, { sessionId: EVENT });
+    expect(mockCanRead).toHaveBeenCalledTimes(20);
+    expect(sent).toEqual([]);
+    // Another member is not slowed down by them.
+    await handleChatRequestHistory(ioWith(), socketFor(freshUser()), { sessionId: EVENT });
+    expect(mockCanRead).toHaveBeenCalledTimes(21);
   });
 
   it('a socket in the event reads the history from the database', async () => {
@@ -469,6 +518,18 @@ describe('handleChatReact', () => {
     mockToggle.mockResolvedValueOnce(null);
     await handleChatReact(ioWith(), socketFor('u-a'), { sessionId: EVENT, messageId: MSG, emoji: 'heart' });
     expect(sent).toHaveLength(0);
+  });
+
+  it('the 21st reaction in 10 seconds is dropped without touching the database', async () => {
+    const me = freshUser();
+    mockToggle.mockResolvedValue({ scope: 'lobby', audienceIds: null, reactions: {} });
+    const socket = socketFor(me);
+    for (let i = 0; i < 20; i++) await handleChatReact(ioWith(), socket, { sessionId: EVENT, messageId: MSG, emoji: 'heart' });
+    expect(mockToggle).toHaveBeenCalledTimes(20);
+    sent = [];
+    await handleChatReact(ioWith(), socket, { sessionId: EVENT, messageId: MSG, emoji: 'heart' });
+    expect(mockToggle).toHaveBeenCalledTimes(20);
+    expect(sent).toEqual([]);
   });
 
   it.each([

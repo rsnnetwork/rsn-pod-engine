@@ -123,9 +123,20 @@ describe('canReadEventChat', () => {
     expect(await read(facts({ is_cohost: true, participant_status: 'removed', joined: true }))).toBeNull();
   });
 
-  it('a socket in the room of an event still open reads it (the pre-event lobby, before anyone has joined_at)', async () => {
+  it('a registered member in the room of an event still open reads it (the pre-event lobby, before joined_at is set)', async () => {
     expect(await read(facts({ status: 'scheduled', participant_status: 'registered' }), 'member', { inSessionRoom: true })).toBe('all');
-    expect(await read(facts({ status: 'round_active' }), 'member', { inSessionRoom: true })).toBe('all');
+    expect(await read(facts({ status: 'round_active', participant_status: 'registered' }), 'member', { inSessionRoom: true })).toBe('all');
+  });
+
+  // Fix round 1: joining an event's socket room needs no access (a private pod's refusal is swallowed after the
+  // join), so the room alone admits nobody: only a participant row does.
+  it('a socket in the room with no participant row reads nothing (a stranger in a live event\'s room)', async () => {
+    expect(await read(facts({ status: 'lobby_open' }), 'member', { inSessionRoom: true })).toBeNull();
+    expect(await read(facts({ status: 'scheduled' }), 'member', { inSessionRoom: true })).toBeNull();
+  });
+
+  it('…an admin in that room keeps lobby moderation only', async () => {
+    expect(await read(facts({ status: 'lobby_open' }), 'admin', { inSessionRoom: true })).toBe('lobby');
   });
 
   it('once the event is over, being in its socket room admits nobody who did not take part', async () => {

@@ -74,8 +74,10 @@ describe('F4 (21 May Ali) — End Event host lag fix', () => {
 
     it('M1 sweep is fire-and-forget (NOT awaited)', () => {
       // The sweep must not be prefixed by `await` (or the host's UI
-      // pays for it). It still .catch()es non-fatally.
-      expect(body).toMatch(/\n\s*query\(\s*\n\s*`UPDATE session_participants/);
+      // pays for it). It still .catch()es non-fatally. 26 Oct 2026: its
+      // promise is kept (`const swept = query(…)`) so the completion
+      // fan-out, which runs after session:completed, can wait for it.
+      expect(body).toMatch(/\n\s*(?:const swept = )?query\(\s*\n\s*`UPDATE session_participants/);
       // Negative match: there is no `await` immediately before the sweep.
       const sweepCtx = body.match(/[\s\S]{0,40}UPDATE session_participants/);
       expect(sweepCtx).toBeTruthy();

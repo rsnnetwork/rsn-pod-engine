@@ -13,7 +13,10 @@ const store = {
   status: 'round_active',
   participants: new Map<string, { status: string; joined: boolean }>(),
   podMembers: [] as string[],
+  /** The order the end-of-event sweep and the completion fan-out reached the database in. */
+  timeline: [] as string[],
 };
+const mockRegister = jest.fn();
 
 const mockQuery = jest.fn(async (sql: string, params: unknown[] = []) => answer(sql.replace(/\s+/g, ' ').trim(), params));
 jest.mock('../../../db', () => ({
@@ -32,7 +35,7 @@ jest.mock('../../../services/session/session.service', () => ({
   updateSessionStatus: jest.fn(async () => ({})),
   updateParticipantStatus: jest.fn(async () => {}),
   getParticipantCount: jest.fn(async () => 2),
-  registerParticipant: jest.fn(async () => ({ isNewRegistration: false })),
+  registerParticipant: (...args: unknown[]) => mockRegister(...args),
   __esModule: true,
 }));
 jest.mock('../../../services/video/video.service', () => ({
@@ -65,9 +68,13 @@ const POD = '6f2b3c4d-5e6f-4a71-8b8c-0d1e2f3a4b5c';
 const HOST = '7a3c4d5e-6f70-4b82-9c9d-1e2f3a4b5c6d';
 const STEFAN = '8b4d5e6f-7081-4c93-8dae-2f3a4b5c6d7e';
 const CLAUS = '9c5e6f70-8192-4da4-9ebf-3a4b5c6d7e8f';
+const NEWCOMER = 'ad6f7081-92a3-4eb5-8fc0-4b5c6d7e8f90';
+const STRANGER = 'be708192-a3b4-4fc6-90d1-5c6d7e8f9001';
+
+type Answer = { rows: any[]; rowCount?: number };
 
 /** The fake database: what each query this flow makes would return, from what was written. */
-function answer(sql: string, params: unknown[]): { rows: any[]; rowCount?: number } {
+function answer(sql: string, params: unknown[]): Answer | Promise<Answer> {
   if (sql.startsWith('INSERT INTO event_chat_messages')) {
     if (store.status === 'completed' || store.status === 'cancelled') return { rows: [] };
     const row = {
@@ -96,7 +103,21 @@ function answer(sql: string, params: unknown[]): { rows: any[]; rowCount?: numbe
     store.status = 'completed';
     return { rows: [{ id: EVENT, event_format: 'speed_networking' }] };
   }
-  if (sql === 'SELECT pod_id FROM sessions WHERE id = $1') return { rows: [{ pod_id: POD }] };
+  // The end-of-event sweep takes a moment, as a real UPDATE does, and marks everyone still there left.
+  if (/^UPDATE session_participants SET status = 'left'/.test(sql)) {
+    store.timeline.push('sweep:start');
+    return (async () => {
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      for (const p of store.participants.values()) if (!['left', 'removed', 'no_show'].includes(p.status)) p.status = 'left';
+      store.timeline.push('sweep:done');
+      return { rows: [], rowCount: store.participants.size };
+    })();
+  }
+  if (sql === 'SELECT pod_id FROM sessions WHERE id = $1') {
+    store.timeline.push('fanout:start');
+    return { rows: [{ pod_id: POD }] };
+  }
   if (/FROM session_participants WHERE session_id = \$1 AND \(joined_at IS NOT NULL OR status <> 'removed'\)/.test(sql)) {
     const rows = [...store.participants]
       .filter(([, p]) => p.joined || p.status !== 'removed')
@@ -152,9 +173,12 @@ beforeEach(() => {
     [CLAUS, { status: 'in_lobby', joined: true }],
   ]);
   store.podMembers = [];
+  store.timeline = [];
   sent.length = 0;
   activeSessions.clear();
   mockGetSessionById.mockResolvedValue({ id: EVENT, podId: POD, hostUserId: HOST, status: 'lobby_open', config: {} });
+  mockRegister.mockReset();
+  mockRegister.mockResolvedValue({ isNewRegistration: false });
 });
 
 afterEach(() => {
@@ -196,7 +220,54 @@ describe('a restart in the middle of an event loses nothing', () => {
   });
 });
 
+// Fix round 1 (26 Oct 2026).
+describe('entering an event', () => {
+  async function clausSaysWelcome() {
+    liveEvent();
+    const claus = socketFor(CLAUS, 'Claus'); claus.join(sessionRoom(EVENT));
+    await handleChatSend(io, claus, { sessionId: EVENT, message: 'Welcome', scope: 'lobby' });
+    sent.length = 0;
+  }
+
+  // Production's chat panel asks for the history when it mounts, before the page's session:join reaches the
+  // server. That first ask must not turn into a red toast; the join sends the history a moment later.
+  it('a registered member\'s first visit: the early ask is answered with silence, then the join sends the history', async () => {
+    await clausSaysWelcome();
+    store.participants.set(NEWCOMER, { status: 'registered', joined: false });
+    const newcomer = socketFor(NEWCOMER, 'Newcomer');
+    await handleChatRequestHistory(io, newcomer, { sessionId: EVENT });
+    expect(sent).toEqual([]);
+    await handleJoinSession(io, newcomer, { sessionId: EVENT });
+    await flush(); await flush(); await flush();
+    const history = sent.find((s) => s.to === `socket:${NEWCOMER}` && s.event === 'chat:history');
+    expect(history?.payload.messages.map((m: any) => m.message)).toEqual(['Welcome']);
+    expect(sent.filter((s) => s.event === 'error')).toEqual([]);
+  });
+
+  // Joining an event's socket room checks nothing (a private pod's refusal is swallowed after the join; gating
+  // the join itself is a separate follow-up), so the room alone must not open the history.
+  it('a stranger whose registration is refused still gets into the room, but no history, by joining or asking', async () => {
+    await clausSaysWelcome();
+    mockRegister.mockRejectedValueOnce(Object.assign(new Error('You must be a pod member to register for sessions in a private pod'), { code: 'AUTH_FORBIDDEN' }));
+    const stranger = socketFor(STRANGER, 'Stranger');
+    await handleJoinSession(io, stranger, { sessionId: EVENT });
+    await flush(); await flush(); await flush();
+    expect(stranger.rooms.has(sessionRoom(EVENT))).toBe(true);
+    await handleChatRequestHistory(io, stranger, { sessionId: EVENT });
+    const toStranger = sent.filter((s) => s.to === `socket:${STRANGER}`).map((s) => s.event);
+    expect(toStranger).not.toContain('chat:history');
+    expect(toStranger).not.toContain('error');
+  });
+});
+
 describe('the end of an event', () => {
+  it('the completion fan-out runs once the sweep has marked everyone left, so a refetch reads the final roster', async () => {
+    liveEvent();
+    setRealtimeIo(io);
+    await completeSession(io, EVENT);
+    expect(store.timeline).toEqual(['sweep:start', 'sweep:done', 'fanout:start']);
+  });
+
   it('tells a participant who had already left, among everyone, with the event, its people and its chat', async () => {
     liveEvent();
     store.participants.set(STEFAN, { status: 'left', joined: true }); // left before the end, as on 25 Oct
