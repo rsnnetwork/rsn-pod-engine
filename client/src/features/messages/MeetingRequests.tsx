@@ -11,10 +11,10 @@
 // that entity makes a new request appear without a refresh.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { Check, X } from 'lucide-react';
+import { Check, Loader2, X } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import ProfileLink from '@/components/ui/ProfileLink';
 import { Spinner } from '@/components/ui/Spinner';
@@ -22,6 +22,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import api from '@/lib/api';
 import { MEETING_FORMATS } from '@rsn/shared';
+import { useRequestAnswer } from './useRequestAnswer';
 
 export interface PendingRequest {
   id: string;
@@ -37,32 +38,48 @@ export interface PendingRequest {
 
 const formatLabel = (f: PendingRequest['preferredFormat']) => MEETING_FORMATS.find(m => m.key === f)?.label ?? null;
 
-/** Shared accept/decline for a pending request. */
-function usePokeActions(myUserId: string) {
-  const qc = useQueryClient();
+/**
+ * Accept and Decline for one request (26 Oct 2026). The list card and the
+ * focused card both draw this, and the bell answers through the same hook: one
+ * mutation key per request, so while any of them is answering it, every one of
+ * them is busy and none offers a second answer. Accepting lands in the
+ * conversation (a repeated accept too: the server answers with the same one).
+ * An answer given the other way already is said, and the card redraws.
+ */
+function RequestAnswerButtons({ requestId, className, onDeclined }: {
+  requestId: string; className: string; onDeclined?: () => void;
+}) {
   const navigate = useNavigate();
   const addToast = useToastStore(s => s.addToast);
-  const settle = (err: unknown, fallback: string) => {
-    addToast((err as any)?.response?.data?.error?.message || fallback, 'info');
-    qc.invalidateQueries({ queryKey: ['pokes-received'] });
-  };
-  const accept = useMutation({
-    mutationFn: (id: string) => api.post(`/pokes/${id}/accept`).then(r => r.data.data as { conversationId: string }),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['pokes-received'] });
-      qc.invalidateQueries({ queryKey: ['dm-conversations'] });
+  const { answer, busy, answering } = useRequestAnswer(requestId, {
+    onAccepted: (result) => {
       addToast('Connected — say hello', 'success');
-      if (data?.conversationId) navigate(`/messages/${data.conversationId}`);
+      if (result.conversationId) navigate(`/messages/${result.conversationId}`);
     },
-    onError: (err) => settle(err, 'That request was already handled'),
+    onDeclined,
   });
-  const decline = useMutation({
-    mutationFn: (id: string) => api.post(`/pokes/${id}/decline`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pokes-received'] }); navigate('/messages'); },
-    onError: (err) => settle(err, 'That request was already handled'),
-  });
-  void myUserId;
-  return { accept, decline, pending: accept.isPending || decline.isPending };
+  const accept = () => answer('accept');
+  const decline = () => answer('decline');
+  return (
+    <div className={className}>
+      <button
+        type="button"
+        onClick={accept}
+        disabled={busy}
+        className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+      >
+        {answering === 'accept' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Accept
+      </button>
+      <button
+        type="button"
+        onClick={decline}
+        disabled={busy}
+        className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
+      >
+        {answering === 'decline' ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} Decline
+      </button>
+    </div>
+  );
 }
 
 /** Where one request stands, from GET /pokes/:id (either person in it may ask). */
@@ -119,7 +136,6 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
     refetchInterval: 20_000,
     meta: { entities: [E.userInvites(myUserId)] },
   });
-  const { accept, decline, pending } = usePokeActions(myUserId);
   const req = (requests || []).find(r => r.id === pokeId);
 
   // /pokes/received only carries PENDING requests, so one that has been
@@ -210,24 +226,11 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
         <ProfileLink from="Messages" userId={req.senderId} className="mt-3 inline-block text-xs font-medium text-rsn-red underline">
           View full profile
         </ProfileLink>
-        <div className="mt-5 flex gap-2">
-          <button
-            type="button"
-            onClick={() => accept.mutate(req.id)}
-            disabled={pending}
-            className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            <Check className="h-4 w-4" /> Accept
-          </button>
-          <button
-            type="button"
-            onClick={() => decline.mutate(req.id)}
-            disabled={pending}
-            className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
-            <X className="h-4 w-4" /> Decline
-          </button>
-        </div>
+        <RequestAnswerButtons
+          requestId={req.id}
+          className="mt-5 flex gap-2"
+          onDeclined={() => navigate('/messages')}
+        />
       </div>
     </div>
   );
@@ -309,9 +312,6 @@ function ClampedMessage({ text }: { text: string }) {
 }
 
 export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: string; focusPokeId?: string | null }) {
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const addToast = useToastStore(s => s.addToast);
   const focusRef = useRef<HTMLDivElement>(null);
 
   const { data: requests } = useQuery({
@@ -328,34 +328,6 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
     meta: { entities: [E.userInvites(myUserId)] },
   });
 
-  // A resolved-elsewhere request (other tab, stale page) must not strand the
-  // user on a broken card — drop it from the list and say why.
-  function settle(err: unknown, fallback: string) {
-    const message = (err as any)?.response?.data?.error?.message || fallback;
-    addToast(message, 'info');
-    qc.invalidateQueries({ queryKey: ['pokes-received'] });
-  }
-
-  const acceptMutation = useMutation({
-    mutationFn: (id: string) =>
-      api.post(`/pokes/${id}/accept`).then(r => r.data.data as { conversationId: string }),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['pokes-received'] });
-      qc.invalidateQueries({ queryKey: ['dm-conversations'] });
-      addToast('Connected — say hello', 'success');
-      if (data?.conversationId) navigate(`/messages/${data.conversationId}`);
-    },
-    onError: (err) => settle(err, 'That request was already handled'),
-  });
-
-  const declineMutation = useMutation({
-    mutationFn: (id: string) => api.post(`/pokes/${id}/decline`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pokes-received'] });
-    },
-    onError: (err) => settle(err, 'That request was already handled'),
-  });
-
   // Scroll the bell-linked request into view once it renders.
   useEffect(() => {
     if (focusPokeId && focusRef.current) {
@@ -363,7 +335,6 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
     }
   }, [focusPokeId, requests]);
 
-  const pending = acceptMutation.isPending || declineMutation.isPending;
   if (!requests || requests.length === 0) return null;
 
   return (
@@ -412,24 +383,7 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
                 )}
               </div>
             </div>
-            <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                onClick={() => acceptMutation.mutate(r.id)}
-                disabled={pending}
-                className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
-                <Check className="h-4 w-4" /> Accept
-              </button>
-              <button
-                type="button"
-                onClick={() => declineMutation.mutate(r.id)}
-                disabled={pending}
-                className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
-              >
-                <X className="h-4 w-4" /> Decline
-              </button>
-            </div>
+            <RequestAnswerButtons requestId={r.id} className="mt-3 flex gap-2" />
           </div>
         ))}
       </div>
