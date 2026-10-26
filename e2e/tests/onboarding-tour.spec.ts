@@ -1,9 +1,12 @@
-import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
+import { test, expect, Browser, BrowserContext, Locator, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable, tapReachable } from '../helpers/viewport-fit';
+// The made-up people the tour's pictures show. Read from the shared source itself, so swapping a name there
+// needs no change here.
+import { EXAMPLE_PEOPLE } from '../../shared/src/onboarding/example-people';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // "How RSN works" (Shradha's deck, task 2).
@@ -14,6 +17,10 @@ import { expectReachable, tapReachable } from '../helpers/viewport-fit';
 // It plays once, over their own suggestions, for someone who has just
 // finished. Nobody who onboarded before it existed is interrupted, and it
 // stays re-openable from Support afterwards.
+//
+// 26 Oct 2026 (Stefan and Claus tested production on 25 Oct, ONB-04/05): every card opens with its heading
+// and its words, then a line saying the examples are made up, then the picture, whose people are the made-up
+// English ones in EXAMPLE_PEOPLE, each tagged "Example", with the sheep where a photo would be.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PHONE = { width: 390, height: 844 };
@@ -62,6 +69,16 @@ async function openAs(u: TestUser, path: string, viewport = PHONE): Promise<Page
 
 const tour = (page: Page) => page.getByTestId('how-rsn-works');
 
+const CAPTION = 'Examples only. These are not real members.';
+const OLD_PEOPLE = /Amara Okafor|Tomas Lind|Priya Raman|Northwind|Baltic Seed/;
+
+/** Where a thing is on the page, top edge and bottom edge, or a clear failure. */
+async function band(label: string, target: Locator): Promise<{ top: number; bottom: number }> {
+  const box = await target.boundingBox();
+  expect(box, `${label}: not on the page`).not.toBeNull();
+  return { top: box!.y, bottom: box!.y + box!.height };
+}
+
 test.beforeAll(async () => {
   console.log(`[onboarding-tour] engine=${engineLabel()} app=${APP}`);
   browser = await launchBrowser();
@@ -107,6 +124,63 @@ test('it explains the product once, then never again', async () => {
     `SELECT tour_outcome FROM users WHERE id = $1`, [me.id],
   )).rows[0];
   expect(row.tour_outcome).toBe('completed');
+});
+
+test('every card puts its heading and words first, says its examples are made up, and labels its people', async () => {
+  test.setTimeout(240_000);
+  const me = await justOnboarded('tourorder');
+  const page = await openAs(me, '/agents');
+  const dialog = tour(page);
+  await expect(dialog).toBeVisible({ timeout: 30_000 });
+
+  const titles = ['Suggestions', 'Matches', 'Meetings', 'Circles & events'];
+  // The first card has two people, one tag on each. The others are lists, tagged once for the whole picture.
+  const tagsPerCard = [2, 1, 1, 1];
+  for (const [i, title] of titles.entries()) {
+    const heading = dialog.getByRole('heading', { name: title });
+    await expect(heading).toBeVisible();
+    await page.waitForTimeout(700); // the card has slid in and the sheep has settled
+    const words = heading.locator('xpath=following-sibling::p[1]');
+    const caption = dialog.getByTestId('tour-caption');
+    const picture = dialog.getByTestId('tour-picture');
+
+    // The heading, its words, the line about the examples, and then the picture: top to bottom, by where they are.
+    const h = await band(`${title} heading`, heading);
+    const w = await band(`${title} words`, words);
+    const c = await band(`${title} caption`, caption);
+    const p = await band(`${title} picture`, picture);
+    expect(h.bottom, `${title}: its words come under the heading`).toBeLessThanOrEqual(w.top + 1);
+    expect(w.bottom, `${title}: the caption comes under its words`).toBeLessThanOrEqual(c.top + 1);
+    expect(c.bottom, `${title}: the picture comes under the caption`).toBeLessThanOrEqual(p.top + 1);
+    // Nothing is drawn above the heading but the header bar: the sheep are in the picture, where a photo would be.
+    for (const sheep of await dialog.getByTestId('sheep-avatar').all()) {
+      expect((await band(`${title} sheep`, sheep)).top, `${title}: a sheep above the heading`).toBeGreaterThan(h.top);
+    }
+
+    // The caption says the examples are made up, in words, and a screen reader reads it: it sits outside the hidden picture.
+    await expect(caption).toHaveText(CAPTION);
+    expect(await caption.evaluate((el) => !el.closest('[aria-hidden="true"]')), `${title}: the caption is inside a hidden frame`).toBe(true);
+    expect(await picture.getAttribute('aria-hidden'), `${title}: the picture is hidden from a screen reader`).toBe('true');
+
+    // Each person, or each list, is tagged "Example" in words, not by colour alone.
+    await expect(picture.getByText('Example', { exact: true }), `${title}: Example tags`).toHaveCount(tagsPerCard[i]);
+
+    // The people are the shared list's, and nobody from before is in the picture or anywhere else on the card.
+    if (i === 0) {
+      await expect(picture).toContainText('I want to meet');
+      for (const person of EXAMPLE_PEOPLE.slice(0, 2)) {
+        await expect(picture).toContainText(person.name);
+        await expect(picture).toContainText(person.role);
+      }
+    }
+    if (i === 1) {
+      for (const person of EXAMPLE_PEOPLE.slice(0, 3)) await expect(picture).toContainText(person.name);
+    }
+    expect(await dialog.innerText(), `${title}: a person from before`).not.toMatch(OLD_PEOPLE);
+
+    if (i < titles.length - 1) await tapReachable(page, page.getByRole('button', { name: /^Next$/ }), `Next from ${title}`);
+  }
+  console.log('  ✓ heading, words, caption, picture on every card; people tagged Example');
 });
 
 test('skipping it counts as seen, and it does not come back', async () => {
