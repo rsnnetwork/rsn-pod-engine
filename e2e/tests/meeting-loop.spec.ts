@@ -1,4 +1,4 @@
-import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
+import { test, expect, Browser, BrowserContext, Page, Locator } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
@@ -18,8 +18,11 @@ import { expectReachable, tapReachable } from '../helpers/viewport-fit';
 // 25 Oct 2026 (Stefan and Claus on production): both saved the same time, the
 // server said "pick a time to confirm", nobody found the control that books,
 // and no meeting existed. The same time picked by both is now the agreement:
-// the save that leaves exactly one shared time books it. Two or more shared
-// times still get the proposal card and the Confirm step (the second test).
+// the save that leaves exactly one shared time books it, and says so ("Meeting
+// confirmed: Sun 25 Oct, 13:00"). Two or more shared times still get the
+// proposal card, whose time opens the confirm card for that very time (the
+// second test); "the green" in the timeline does the same, and nothing picked
+// or typed is dropped without a word (the third).
 // ─────────────────────────────────────────────────────────────────────────────
 
 let browser: Browser;
@@ -69,6 +72,20 @@ async function openScheduler(page: Page): Promise<void> {
 }
 
 const cards = (page: Page) => page.getByTestId('system-message-card');
+/** Toasts that are not errors (a success or a note) live in the page's status region. */
+const toast = (page: Page, text: string) => page.getByRole('status').getByText(text, { exact: true });
+
+/** A time on a reader's own clock, 24-hour, as the scheduler and the cards write it: "13:00". */
+function timeIn(slot: string, tz: string): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(slot));
+}
+/** Its day and time, "Sun 25 Oct, 13:00" (the toasts and the confirm card). */
+function labelIn(slot: string, tz: string): string {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', month: 'numeric', day: 'numeric' })
+    .formatToParts(new Date(slot)).map(x => [x.type, x.value]));
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${p.weekday} ${Number(p.day)} ${months[Number(p.month) - 1]}, ${timeIn(slot, tz)}`;
+}
 
 /**
  * The timeline shows ONE day at a time, and opens on the first day that has
@@ -90,18 +107,35 @@ async function selectDayFor(page: Page, slot: string): Promise<void> {
   throw new Error(`no day in the strip holds ${slot}`);
 }
 
+/**
+ * Wait until a target has stopped moving. A wheel scroll is animated, and a tap
+ * measured while the panel is still gliding lands on the time next to it.
+ */
+async function stillAt(target: Locator): Promise<void> {
+  let last = '';
+  for (let i = 0; i < 20; i++) {
+    const box = await target.boundingBox();
+    const at = box ? `${Math.round(box.x)},${Math.round(box.y)}` : 'none';
+    if (at === last) return;
+    last = at;
+    await target.page().waitForTimeout(100);
+  }
+}
+
 /** Bring a time into reach, scrolling the panel the way a person would. */
 async function reachSlot(page: Page, slot: string, label: string): Promise<void> {
   await selectDayFor(page, slot);
   const target = page.locator(`[data-slot="${slot}"]`);
   for (let i = 0; i < 8; i++) {
+    await stillAt(target);
     if (await expectReachable(page, target, 'probe').then(() => true, () => false)) break;
-    const anchor = await page.locator('label[for="meeting-minutes"]').boundingBox();
+    const anchor = await page.getByTestId('scheduler-zone').boundingBox();
     if (!anchor) break;
     await page.mouse.move(anchor.x + 4, Math.max(1, anchor.y + 4));
     await page.mouse.wheel(0, 120);
     await page.waitForTimeout(250);
   }
+  await stillAt(target);
   await tapReachable(page, target, label);
 }
 
@@ -146,9 +180,13 @@ test('two people go from silence to a booked meeting, each step arriving on both
 
   // ── 1. Ana shares her times. The thread says so, on BOTH screens.
   await openScheduler(anaPage);
+  // The zone is named over the times, and nothing that has started is offered.
+  await expect(anaPage.getByTestId('scheduler-zone')).toHaveText(/^Times in your time zone: Central European (Standard |Summer )?Time \(CES?T\)$/);
+  const offered = await anaPage.locator('[data-slot]').evaluateAll(els => els.map(e => e.getAttribute('data-slot') ?? ''));
+  expect(offered.every(k => Date.parse(k) > Date.now()), 'only times still ahead are offered').toBe(true);
   await reachSlot(anaPage, SLOT, 'Ana: the time she can meet');
   await tapReachable(anaPage, anaPage.getByRole('button', { name: /Save and send availability/i }), 'Ana: "Save and send availability"');
-  await expect(anaPage.getByText(/Sent — they can see when you are free/i)).toBeVisible({ timeout: 20_000 });
+  await expect(toast(anaPage, 'Sent. They can see when you are free.')).toBeVisible({ timeout: 20_000 });
 
   await expect(cards(boPage).filter({ hasText: /shared times they can meet/i }))
     .toBeVisible({ timeout: 30_000 });
@@ -161,8 +199,15 @@ test('two people go from silence to a booked meeting, each step arriving on both
   // ── 2. Bo picks the same time and saves. That is the agreement: the meeting
   //       is booked by the save itself, and both are told, with nothing more to press.
   await openScheduler(boPage);
+  const boCell = boPage.locator(`[data-slot="${SLOT}"]`);
+  await selectDayFor(boPage, SLOT);
+  await expect(boCell).toHaveAttribute('aria-label', `${timeIn(SLOT, 'Asia/Karachi')}, they can`);
   await reachSlot(boPage, SLOT, 'Bo: the same time, from a different timezone');
+  // Picked but not sent: it is still his own pick, not yet the agreement.
+  await expect(boCell).toHaveAttribute('aria-label', `${timeIn(SLOT, 'Asia/Karachi')}, you both can, not sent yet`);
   await tapReachable(boPage, boPage.getByRole('button', { name: /Save and send availability/i }), 'Bo: "Save and send availability"');
+  // The save says what it did, in Bo's own time.
+  await expect(toast(boPage, `Meeting confirmed: ${labelIn(SLOT, 'Asia/Karachi')}`)).toBeVisible({ timeout: 20_000 });
 
   // Sending ended the job: the panel is gone and the chat is back, with the
   // card the save wrote in it. Nothing traps them any more.
@@ -182,14 +227,16 @@ test('two people go from silence to a booked meeting, each step arriving on both
   await expect(boCard.getByRole('button', { name: /Join meeting/i })).toBeVisible();
   await expect(boCard.getByRole('button', { name: /Add to calendar/i })).toBeVisible();
 
-  const localIn = (tz: string) => new Date(SLOT).toLocaleString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
-  await expect(boCard).toContainText(localIn('Asia/Karachi').replace(/^0/, ''));
-  await expect(cards(anaPage).filter({ hasText: confirmed })).toContainText(localIn('Europe/Oslo').replace(/^0/, ''));
-  console.log(`  ✓ same meeting, Oslo ${localIn('Europe/Oslo')} and Karachi ${localIn('Asia/Karachi')}`);
+  await expect(boCard).toContainText(labelIn(SLOT, 'Asia/Karachi'));
+  await expect(cards(anaPage).filter({ hasText: confirmed })).toContainText(labelIn(SLOT, 'Europe/Oslo'));
+  console.log(`  ✓ same meeting, Oslo ${labelIn(SLOT, 'Europe/Oslo')} and Karachi ${labelIn(SLOT, 'Asia/Karachi')}`);
   // Nobody sees a raw timestamp.
   await expect(boCard).not.toContainText(/\d{4}-\d{2}-\d{2}T/);
-  // Production's scheduler shows the meeting with Join as soon as the scheduling says it is confirmed.
-  await expect(anaPage.getByTestId('thread-meeting-banner').getByRole('button', { name: /^Join$/ })).toBeVisible({ timeout: 30_000 });
+  // The pinned banner shows the meeting with Join as soon as the scheduling says it is confirmed,
+  // and opens the meeting's own page.
+  const anaBanner = anaPage.getByTestId('thread-meeting-banner');
+  await expect(anaBanner.getByRole('button', { name: /^Join$/ })).toBeVisible({ timeout: 30_000 });
+  await expect(anaBanner.locator('a[href^="/meetings/"]')).toBeVisible();
 
   // ── 4. The database holds ONE meeting, booked by Bo's save, 30 minutes of
   //       video (production's scheduler sends no length), ONE confirmation card,
@@ -216,7 +263,7 @@ test('two people go from silence to a booked meeting, each step arriving on both
   expect(anaBell.rows.map(r => r.title)).toEqual(['Meeting time confirmed']);
 });
 
-test('when two times are shared, the card leads to Confirm, and Confirm books the time picked', async () => {
+test('when two times are shared, the card\'s time opens the confirm card on that time, and Confirm books it', async () => {
   test.setTimeout(240_000);
   // Its own pair: two shared times are not an agreement on one, so nothing is booked by the saves.
   const cy = await createTestUser('mlcy');
@@ -243,11 +290,16 @@ test('when two times are shared, the card leads to Confirm, and Confirm books th
     const proposal = /You are both free/i;
     await expect(cards(diPage).filter({ hasText: proposal })).toBeVisible({ timeout: 30_000 });
 
-    // Di confirms from the card in the chat, on a phone: the card's time, the green chip, Confirm meeting.
-    await tapReachable(diPage, cards(diPage).filter({ hasText: proposal }).getByRole('button').first(), 'Di: the proposed time');
+    // Di confirms from the card in the chat, on a phone: the card's time opens the
+    // confirm card for THAT time (on 25 Oct it threw the time away and only opened
+    // the panel), then Confirm meeting.
+    const cardTime = cards(diPage).filter({ hasText: proposal }).getByRole('button', { name: labelIn(early, 'Asia/Karachi') });
+    await tapReachable(diPage, cardTime, 'Di: the proposed time');
     await expect(diPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
-    await tapReachable(diPage, diPage.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first(), 'Di: green time chip');
-    await tapReachable(diPage, diPage.getByRole('button', { name: /^Confirm meeting$/ }), 'Di: "Confirm meeting"');
+    const confirmCard = diPage.getByTestId('confirm-card');
+    await expect(confirmCard).toContainText(labelIn(early, 'Asia/Karachi'));
+    await tapReachable(diPage, confirmCard.getByRole('button', { name: /^Confirm meeting$/ }), 'Di: "Confirm meeting"');
+    await expect(toast(diPage, `Meeting confirmed: ${labelIn(early, 'Asia/Karachi')}`)).toBeVisible({ timeout: 20_000 });
 
     const confirmed = /Meeting confirmed/i;
     await expect(cards(diPage).filter({ hasText: confirmed })).toBeVisible({ timeout: 30_000 });
@@ -267,6 +319,72 @@ test('when two times are shared, the card leads to Confirm, and Confirm books th
     console.log('  ✓ two shared times: one proposal card, then Confirm booked the time picked');
   } finally {
     await cleanup(pool, { ids: [cy.id, di.id] });
+  }
+});
+
+test('"the green" in the timeline opens the confirm card, and nothing picked or typed is dropped without a word', async () => {
+  test.setTimeout(240_000);
+  // 25 Oct: in the reopened panel "the green" 13:00 cell was a toggle, and tapping
+  // it took back the pick that had made it green. A time typed into "Another time"
+  // and left vanished, and a tap outside the panel threw unsent picks away silently.
+  const ev = await createTestUser('mlev');
+  const fi = await createTestUser('mlfi');
+  try {
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Ev', ev.id]);
+    await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Loop Fi', fi.id]);
+    const sent = await apiAs(ev, 'POST', '/pokes', { recipientId: fi.id, message: 'Coffee?' });
+    expect((await apiAs(fi, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [ev.id, fi.id],
+    )).rows[0].id;
+    const green = futureSlot(2, 11);
+    const other = futureSlot(2, 15);
+    const free = futureSlot(2, 17, 30);
+    await apiAs(ev, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [green, other] });
+    await apiAs(fi, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [green, other] });
+
+    const TZ = 'Asia/Karachi';
+    const page = await openAs(fi, `/messages/${conv}`, { width: 390, height: 844 }, TZ);
+    await openScheduler(page);
+
+    // The green cell is the confirm control: it opens the card for its own time and removes nothing.
+    await selectDayFor(page, green);
+    const cell = page.locator(`[data-slot="${green}"]`);
+    await expect(cell).toHaveAttribute('aria-label', `Confirm ${timeIn(green, TZ)}, you both can`);
+    await reachSlot(page, green, 'Fi: the green time');
+    const confirmCard = page.getByTestId('confirm-card');
+    await expect(confirmCard).toContainText(labelIn(green, TZ));
+    await expect(cell).toHaveAttribute('aria-label', `Confirm ${timeIn(green, TZ)}, you both can`);
+    // Its length and kind live on the card.
+    await expect(confirmCard.locator('#meeting-minutes')).toHaveValue('30');
+    await expect(confirmCard.getByRole('button', { name: 'Video' })).toHaveAttribute('aria-pressed', 'true');
+    await tapReachable(page, confirmCard.getByRole('button', { name: 'Cancel' }), 'Fi: Cancel');
+
+    // An unsent pick, then a tap outside the panel: it asks, and Discard means discard.
+    await reachSlot(page, free, 'Fi: a free time');
+    await page.getByPlaceholder(/^(Type a message\.\.\.|Message…)$/).click();
+    await expect(page.getByText('Send your times?', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('meeting-scheduler')).toBeVisible();
+    await tapReachable(page, page.getByRole('button', { name: 'Discard', exact: true }), 'Fi: Discard');
+    await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0);
+    await openScheduler(page);
+    await selectDayFor(page, free);
+    await expect(page.locator(`[data-slot="${free}"]`)).toHaveAttribute('aria-pressed', 'false');
+
+    // A typed time with neither Add time nor Enter: it counts as unsent, and Save sends it.
+    await page.locator('#custom-time').fill(timeIn(free, TZ));
+    await tapReachable(page, page.getByRole('button', { name: /Save and send availability/i }), 'Fi: Save');
+    // Two times are shared and nothing is booked, so the panel stays on the confirm step.
+    await expect(toast(page, 'You can both meet. Confirm a time.')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('overlap-list')).toBeVisible();
+    const saved = await apiAs(fi, 'GET', `/dm/conversations/${conv}/scheduling`);
+    expect(saved.json.data.mine).toEqual(expect.arrayContaining([green, other, free]));
+    const row = (await pool.query<{ meeting_start_at: Date | null }>(`SELECT meeting_start_at FROM dm_conversations WHERE id=$1`, [conv])).rows[0];
+    expect(row.meeting_start_at, 'nothing was booked by any of this').toBeNull();
+    console.log('  ✓ the green cell opened the confirm card; an unsent pick was asked about; a typed time was sent');
+  } finally {
+    await cleanup(pool, { ids: [ev.id, fi.id] });
   }
 });
 
