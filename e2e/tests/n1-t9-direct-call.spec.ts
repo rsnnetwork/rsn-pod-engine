@@ -177,8 +177,12 @@ test.describe.serial('a direct video call with a connection', () => {
 
   test('Leave ends it for both (needs a real LiveKit room: the preview or production)', async () => {
     test.skip(LOCAL, 'The local API mocks LiveKit: the room never connects, so Leave is checked against the preview.');
-    await expect(pageA.locator('[data-lk-theme]')).toBeVisible({ timeout: 30_000 });
-    await expect(pageB.locator('[data-lk-theme]')).toBeVisible({ timeout: 30_000 });
+    test.skip(pickEngine() !== chromium, "Playwright's WebKit on Windows has no WebRTC, so it cannot join a LiveKit room");
+    // Leave fix (1 Nov 2026): both rooms must list each other first. The room's frame draws as soon as the token is
+    // here, before LiveKit has connected, and a Leave pressed then is a leave the other room never saw arrive.
+    const tiles = (p: Page) => p.locator('.lk-participant-tile');
+    await expect(tiles(pageA)).toHaveCount(2, { timeout: 45_000 });
+    await expect(tiles(pageB)).toHaveCount(2, { timeout: 45_000 });
     await pageA.getByRole('button', { name: 'Leave call and go back to chat' }).click();
     await pageA.waitForURL(new RegExp(`/messages/${conv}`));
     await expect(pageB.getByTestId('partner-left')).toBeVisible({ timeout: 30_000 });
