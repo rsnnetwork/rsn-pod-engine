@@ -30,7 +30,9 @@ describe('client public profile renders Block / Unblock button', () => {
   });
 
   it('block button shows confirm dialog with user-friendly explanation', () => {
-    expect(src).toMatch(/confirm\(/);
+    // T2 (1 Nov 2026): the question is a ConfirmDialog in the page (useConfirm), never window.confirm.
+    expect(src).toMatch(/await ask\(\{ title: `Block /);
+    expect(src).not.toMatch(/(^|[^\w.])confirm\(/m);
     expect(src).toMatch(/won't be matched together/);
   });
 });
