@@ -29,6 +29,8 @@ import { expectReachable } from '../helpers/viewport-fit';
 const TITLE = 'Founders and Investors Evening: Autumn Speed Networking Night';
 const WIDTHS = [360, 390];
 const THANKS = 'Thanks, we will use this for your matches.';
+/** A portal dialog's backdrop (client/src/components/ui/Modal.tsx), never anything inside the app's own #root. */
+const CHECK_IN_BACKDROP = 'body > div.fixed.inset-0.z-50 > div[class~="bg-black/60"]';
 
 let browser: Browser;
 let host: TestUser;
@@ -112,7 +114,10 @@ async function expectToastBelowBar(page: Page): Promise<void> {
     `${label}: the toast's own timer is held while it is checked`).toBeGreaterThanOrEqual(1);
   // The check-in closes as the toast opens: judge the bar once the check-in and its backdrop have finished leaving.
   await expect(page.getByRole('heading', { name: /What brings you here/i }), `${label}: the check-in has closed`).toHaveCount(0, { timeout: 15_000 });
-  await expect(page.locator('[class~="bg-black/60"]'), `${label}: the check-in's backdrop has gone`).toHaveCount(0, { timeout: 15_000 });
+  // The check-in is a Modal: it renders through a portal as a direct child of <body> (`fixed inset-0 z-50`), its
+  // backdrop the `bg-black/60` layer inside. Only that one is waited for: the room's video tiles inside #root carry
+  // `bg-black/60` name and mute badges too (on production, where the tiles are real, a page-wide match never cleared).
+  await expect(page.locator(CHECK_IN_BACKDROP), `${label}: the check-in's backdrop has gone`).toHaveCount(0, { timeout: 15_000 });
   // The card slides in from the right: wait until it has come to rest.
   let previous = '';
   await expect.poll(async () => {
@@ -216,6 +221,7 @@ test(`[${engineLabel()}] a phone shows the live event's title next to the round 
   await expect(memberPage.getByRole('button', { name: 'Leave Event', exact: true })).toBeAttached({ timeout: 45_000 });
   // Every member is asked the check-in once on entering; Set saves the answer and thanks them with a toast.
   await expect(memberPage.getByRole('heading', { name: /What brings you here/i })).toBeVisible({ timeout: 30_000 });
+  await expect(memberPage.locator(CHECK_IN_BACKDROP), 'the check-in\'s backdrop is found while it is open').toHaveCount(1);
   const answered = memberPage.waitForResponse((r) => r.request().method() === 'POST' && /\/sessions\/[^/]+\/intention$/.test(new URL(r.url()).pathname), { timeout: 30_000 });
   await memberPage.getByRole('button', { name: 'Set', exact: true }).click();
   expect((await answered).ok(), 'the check-in answer is saved').toBe(true);
