@@ -246,6 +246,12 @@ export async function insertPendingInvite(row: NewInvite): Promise<InsertedInvit
   });
 }
 
+/** An invite `i` that is pending, for an event, and older than its person's (`u`) removal from it (`sp`). */
+const PENDING_FROM_BEFORE_REMOVAL = `i.status = 'pending' AND i.session_id IS NOT NULL
+        AND lower(u.email) = i.invitee_email
+        AND sp.session_id = i.session_id AND sp.user_id = u.id
+        AND sp.status = 'removed' AND sp.left_at > i.created_at`;
+
 /**
  * Withdraws a pending event invite made before its person was removed from the event (H2b item 24, 26 Oct 2026).
  * The kick withdraws such invites best-effort; one it missed refused every fresh invite for the person as a
@@ -255,14 +261,22 @@ export async function withdrawInviteFromBeforeRemoval(inviteId: string): Promise
   const r = await query<{ id: string }>(
     `UPDATE invites i SET status = 'revoked'
        FROM users u, session_participants sp
-      WHERE i.id = $1 AND i.status = 'pending' AND i.session_id IS NOT NULL
-        AND lower(u.email) = i.invitee_email
-        AND sp.session_id = i.session_id AND sp.user_id = u.id
-        AND sp.status = 'removed' AND sp.left_at > i.created_at
+      WHERE i.id = $1 AND ${PENDING_FROM_BEFORE_REMOVAL}
       RETURNING i.id`,
     [inviteId],
   );
   return (r.rowCount ?? 0) > 0;
+}
+
+/** Which of these invites are pending event invites made before their person was removed (read only; for a batch). */
+export async function invitesFromBeforeRemoval(inviteIds: string[]): Promise<Set<string>> {
+  if (inviteIds.length === 0) return new Set();
+  const r = await query<{ id: string }>(
+    `SELECT i.id FROM invites i, users u, session_participants sp
+      WHERE i.id = ANY($1::uuid[]) AND ${PENDING_FROM_BEFORE_REMOVAL}`,
+    [inviteIds],
+  );
+  return new Set(r.rows.map((row) => row.id));
 }
 
 type InviteCalendarEvent = NonNullable<Parameters<typeof emailService.sendInviteEmail>[1]['calendarEvent']>;

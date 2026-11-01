@@ -246,9 +246,9 @@ export async function createPost(
         content.slice(0, 120) || (sharedFromPostId ? 'Shared a post' : 'Shared an attachment'),
         `/circles/${circleId}`],
     );
+    // One emit per member with their own tag (every member's tag to every member was N squared for a big circle).
     const io = getRealtimeIo();
-    const rungIds = rung.rows.map((r) => r.user_id);
-    if (io && rungIds.length > 0) await emitEntities(io, rungIds, rungIds.map((id) => E.userNotifications(id)));
+    if (io) await Promise.all(rung.rows.map((r) => emitEntities(io, [r.user_id], [E.userNotifications(r.user_id)])));
   } catch (err) {
     logger.warn({ err, circleId }, 'circle_post notifications failed (non-fatal)');
   }

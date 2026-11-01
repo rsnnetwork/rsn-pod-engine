@@ -49,11 +49,11 @@ describe('Session Service', () => {
       expect(session).toEqual(mockSession);
     });
 
-    it('should throw NotFoundError when session not found', async () => {
+    it('a missing event is a 404 that says "event" in words, with the code production\'s client knows and no id (H2b review M8)', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
       await expect(sessionService.getSessionById('missing'))
-        .rejects.toThrow('not found');
+        .rejects.toMatchObject({ statusCode: 404, code: 'SESSION_NOT_FOUND', message: "We couldn't find that event." });
     });
   });
 
@@ -117,14 +117,19 @@ describe('Session Service', () => {
 
     it('no sentence a member reads from this service says "session"', () => {
       const src = require('fs').readFileSync(require('path').join(__dirname, '../../services/session/session.service.ts'), 'utf8') as string;
-      // Every thrown sentence: the quoted first or second argument of a new *Error(...).
-      // (A code such as SESSION_FULL is not a sentence; a member never reads it.)
-      const sentences = [...src.matchAll(/new (?:Forbidden|NotFound|Conflict|Validation|App)Error\(([^)]*)\)/g)]
-        .flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((q) => q[1]))
+      // Every thrown sentence: the quoted arguments of a new *Error(...), in either quotes.
+      // (A code such as SESSION_FULL is not a sentence; a member never reads it. Nor is the entity of a
+      // NotFoundError(entity, id, message) given its own message: it only names the code, SESSION_NOT_FOUND.)
+      const sentences = [...src.matchAll(/new (Forbidden|NotFound|Conflict|Validation|App)Error\(([^)]*)\)/g)]
+        .flatMap((m) => {
+          const quoted = [...m[2].matchAll(/'([^']+)'|"([^"]+)"/g)].map((q) => q[1] ?? q[2]);
+          return m[1] === 'NotFound' && quoted.length > 1 ? quoted.slice(1) : quoted;
+        })
         .filter((s) => !/^[A-Z_]+$/.test(s));
       expect(sentences.length).toBeGreaterThan(0);
       expect(sentences.filter((s) => /session/i.test(s))).toEqual([]);
       expect(sentences).toEqual(expect.arrayContaining([
+        "We couldn't find that event.",
         'Only pod directors and hosts can create events',
         'Only the host of the event can change it',
         'Only the host of the event can delete it',

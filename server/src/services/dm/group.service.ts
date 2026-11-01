@@ -246,13 +246,27 @@ function listNames(names: string[]): string {
  * before; `details.people` carries them for the screen.
  */
 async function refuseNaming(db: Db, userIds: string[], why: (names: string) => string): Promise<AppError> {
-  const r = await db.query<{ id: string; display_name: string | null }>(
-    `SELECT id, display_name FROM users WHERE id = ANY($1::uuid[])`,
+  const r = await db.query<{ id: string; display_name: string | null; status: string | null }>(
+    `SELECT id, display_name, status FROM users WHERE id = ANY($1::uuid[])`,
     [userIds],
   );
-  const named = new Map(r.rows.map((row) => [row.id, (row.display_name ?? '').trim() || 'Someone']));
-  const people = userIds.map((id) => ({ id, name: named.get(id) ?? 'Someone' }));
-  return new AppError(403, ErrorCodes.AUTH_FORBIDDEN, why(listNames(people.map((p) => p.name))), { people });
+  const rows = new Map(r.rows.map((row) => [row.id, row]));
+  // A closed account is named as every other screen names it ("Former member"), and is said to be gone rather than
+  // not to have taken part: a picker opened before the account closed could still name them.
+  const people = userIds.map((id) => {
+    const row = rows.get(id);
+    return { id, name: row ? nameOf(row.display_name, row.status) : 'Someone' };
+  });
+  const isClosed = (id: string) => (rows.get(id)?.status ?? 'active') !== 'active';
+  const open = people.filter((p) => !isClosed(p.id));
+  const closedCount = people.length - open.length;
+  const sentences = [
+    ...(open.length > 0 ? [why(listNames(open.map((p) => p.name)))] : []),
+    ...(closedCount === 0 ? [] : [closedCount === 1
+      ? 'Someone you chose is no longer on REASON.'
+      : `${closedCount} of the people you chose are no longer on REASON.`]),
+  ];
+  return new AppError(403, ErrorCodes.AUTH_FORBIDDEN, sentences.join(' '), { people });
 }
 
 const didNotTakePart = (names: string) => `${names} did not take part in this event.`;

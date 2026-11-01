@@ -13,8 +13,21 @@ export interface EventRowForDuration {
   config: unknown;
 }
 
+/** The row's config as an object: parsed when stored as text, the format's defaults when it is not an object. */
+function configOf(stored: unknown): SessionConfig {
+  let value = stored;
+  if (typeof stored === 'string') {
+    try {
+      value = JSON.parse(stored);
+    } catch {
+      value = null;
+    }
+  }
+  return (value && typeof value === 'object' ? value : {}) as SessionConfig;
+}
+
 /** Minutes the event lasts, from its row. */
 export function eventDurationOf(row: EventRowForDuration): number {
-  const config = (typeof row.config === 'string' ? JSON.parse(row.config) : row.config ?? {}) as SessionConfig;
+  const config = configOf(row.config);
   return eventDurationMinutes(resolveEventFormat({ format: row.event_format, config }), config);
 }

@@ -176,14 +176,16 @@ describe('computeEligibilityV2', () => {
         .toBe('2026-10-26T14:20:00.000Z');
     });
 
+    // These two are asked on the day the next send falls (the clock is the test's, not the machine's: on the real
+    // clock they began to say "tomorrow" once the day they were written had passed; H2b fix round 1).
     it('falls back to UTC when the stored zone is not one the platform knows', () => {
-      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'Not/AZone' })).explanation)
+      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'Not/AZone', now: new Date('2026-10-26T09:00:00Z') })).explanation)
         .toBe('You can send another message at 14:20.');
     });
 
     it('writes midnight as 00:05, never 24:05', () => {
       const a = new Date('2026-10-25T00:05:00Z');
-      expect(computeEligibilityV2(inputs({ recentSends: [a, t2, t3] })).explanation)
+      expect(computeEligibilityV2(inputs({ recentSends: [a, t2, t3], now: new Date('2026-10-26T00:01:00Z') })).explanation)
         .toBe('You can send another message at 00:05.');
     });
 
@@ -335,9 +337,15 @@ describe('getEligibilityV2ForEvent', () => {
         new Date('2026-10-25T14:20:00Z'), new Date('2026-10-25T18:00:00Z'), new Date('2026-10-25T19:00:00Z'),
       ],
     });
-    expect(await getEligibilityV2ForEvent('host', UserRole.MEMBER, SESSION)).toMatchObject({
-      reason: 'limit', explanation: 'You can send another message at 15:20.',
-    });
+    // Asked at 10:00 Berlin on the 26th, the day the oldest send ages out (the route asks at the real now).
+    jest.useFakeTimers({ now: new Date('2026-10-26T09:00:00Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      expect(await getEligibilityV2ForEvent('host', UserRole.MEMBER, SESSION)).toMatchObject({
+        reason: 'limit', explanation: 'You can send another message at 15:20.',
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('counts only THIS person\'s sends for THIS event, inside the window, and never a job that failed before sending anyone', async () => {

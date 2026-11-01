@@ -85,6 +85,29 @@ describe('a retry', () => {
   });
 });
 
+describe('the real clock (H2b review M7)', () => {
+  it('a wall clock set back an hour between two emails does not hold the second one back: the gate keeps time on a clock that only goes forward', async () => {
+    // The gate's own pause runs on fake timers (so a stalled gate is a timer that never fires, not a hung run); the
+    // wall clock and the monotonic clock are the real ones.
+    jest.useFakeTimers({ doNotFake: ['Date', 'performance', 'hrtime', 'nextTick', 'setImmediate', 'queueMicrotask'] });
+    emailService.__setSendPaceForTests(null);
+    const realNow = Date.now.bind(Date);
+    const wallClock = jest.spyOn(Date, 'now');
+    try {
+      await send('before@getjacksapp.com');
+      wallClock.mockImplementation(() => realNow() - 60 * 60 * 1000);
+      void send('after@getjacksapp.com');
+      await jest.advanceTimersByTimeAsync(emailService.SEND_GAP_MS);
+      expect(reached.map((r) => r.to)).toEqual(['before@getjacksapp.com', 'after@getjacksapp.com']);
+    } finally {
+      wallClock.mockRestore();
+      jest.clearAllTimers();
+      jest.useRealTimers();
+      emailService.__setSendPaceForTests(clock);
+    }
+  });
+});
+
 describe('a single email and a burst', () => {
   it('the single email is released ahead of the burst waiting in the bulk lane', async () => {
     const burst = ['bulk-1', 'bulk-2', 'bulk-3'].map((n) =>
@@ -97,12 +120,33 @@ describe('a single email and a burst', () => {
     expect(reached.map((r) => r.at)).toEqual([0, 500, 1000, 1500]);
   });
 
-  it('inside the bulk lane every email the callback sends is a bulk one, and the callback\'s answer comes back', async () => {
-    const answer = await emailService.asBulkEmail(async () => {
+  it('a burst whose sends are queued after an await and never awaited (the worker\'s offline-DM emails) is still in the lane: a single email asked for later goes ahead of all that still waits', async () => {
+    let carryOn: () => void = () => {};
+    const later = new Promise<void>((r) => { carryOn = r; });
+    const voided: Array<Promise<unknown>> = [];
+    const burst = emailService.asBulkEmail(async () => {
+      await later;
+      for (const n of ['bulk-1', 'bulk-2', 'bulk-3']) voided.push(send(`${n}@getjacksapp.com`));
+    });
+    carryOn();
+    await burst;
+    // The callback has returned; its three emails are queued and nobody awaits them inside the lane.
+    const single = send('single@getjacksapp.com');
+    await Promise.all([...voided, single]);
+    expect(reached.map((r) => r.to)).toEqual([
+      'bulk-1@getjacksapp.com', 'single@getjacksapp.com', 'bulk-2@getjacksapp.com', 'bulk-3@getjacksapp.com',
+    ]);
+  });
+
+  it('an email sent inside the bulk lane is a bulk one: a single email asked for after it goes first; the callback\'s answer comes back', async () => {
+    const first = send('first@getjacksapp.com');
+    const answer = emailService.asBulkEmail(async () => {
       await send('inside@getjacksapp.com');
       return 'done';
     });
-    expect(answer).toBe('done');
-    expect(reached.map((r) => r.to)).toEqual(['inside@getjacksapp.com']);
+    const single = send('single@getjacksapp.com');
+    await Promise.all([first, single]);
+    expect(await answer).toBe('done');
+    expect(reached.map((r) => r.to)).toEqual(['first@getjacksapp.com', 'single@getjacksapp.com', 'inside@getjacksapp.com']);
   });
 });

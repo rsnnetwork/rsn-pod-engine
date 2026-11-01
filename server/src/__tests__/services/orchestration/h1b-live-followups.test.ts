@@ -601,12 +601,26 @@ describe('0. the kick itself', () => {
     expect(presentSet(t.sessionId).has(t.host)).toBe(true);
   });
 
-  it('a kick aimed at someone the event never had bars nobody: no removed row is written for them (item 25)', async () => {
+  it('a kick aimed at someone the event never had changes nothing, and they are let in when they come (item 25)', async () => {
+    // Decided before anything changes: no row, no memory, no unfinished-kick marker (the reconciler used to finish the
+    // kick half a minute after they arrived), and the person who pressed it is told.
     const t = await liveEvent();
-    const stranger = randomUUID();
+    const stranger = person('Stranger');
     await kick(t, stranger);
+    expect(t.hostSock.got).toContainEqual({ event: 'error', payload: { code: 'NOT_IN_EVENT', message: 'That person is not in this event.' } });
     expect(participant(t.sessionId, stranger) ?? null).toBeNull();
+    expect(memoryOf(t.sessionId, stranger)).toBeNull();
+    expect(activeSessions.get(t.sessionId)?.unsavedRemovals?.has(stranger) ?? false).toBe(false);
     expect(statusOf(t.sessionId, t.member)).not.toBe('removed');
+
+    register(t.sessionId, stranger);
+    const sock = connect(stranger);
+    await join(sock, t.sessionId);
+    expectAdmitted(sock, t.sessionId);
+    await reconcileSessionStates(t.sessionId, io);
+    expect(statusOf(t.sessionId, stranger)).not.toBe('removed');
+    expect(memoryOf(t.sessionId, stranger)).not.toBe('removed');
+    expect(inRoom(sock, t.sessionId)).toBe(true);
   });
 
   it('a second kick of someone already removed stamps the removal with the second kick\'s time (item 26)', async () => {

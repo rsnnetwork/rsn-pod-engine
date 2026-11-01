@@ -53,6 +53,38 @@ beforeEach(() => {
   (fanout.fanoutUserEntity as jest.Mock).mockResolvedValue(undefined);
 });
 
+describe('an edit while a rescoring is running (review I4 of H2b item 14)', () => {
+  it('is scored once more, with the new words, when the running one ends', async () => {
+    const id = 'a3a3a3a3-0000-4000-8000-0000000000a3';
+    const agent = unscored(id);
+    const edited = { ...agent, wantText: 'designers in Oslo' };
+    (agentRepo.listAgents as jest.Mock).mockResolvedValue([agent]);
+    (agentRepo.updateAgent as jest.Mock).mockResolvedValue(edited);
+    const finishes: Array<() => void> = [];
+    (agentMatching.recomputeAgent as jest.Mock).mockImplementation(() => new Promise<number>((resolve) => { finishes.push(() => resolve(1)); }));
+
+    await request(app).get('/agents').expect(200);
+    await settle();
+    expect(agentMatching.recomputeAgent).toHaveBeenCalledTimes(1);
+
+    // The edit lands while the first rescoring runs: it is not dropped, and not run beside the first either.
+    await request(app).patch(`/agents/${id}`).send({ wantText: 'designers in Oslo' }).expect(200);
+    await settle();
+    expect(agentMatching.recomputeAgent).toHaveBeenCalledTimes(1);
+
+    finishes[0]();
+    await settle();
+    await settle();
+    expect(agentMatching.recomputeAgent).toHaveBeenCalledTimes(2);
+    expect((agentMatching.recomputeAgent as jest.Mock).mock.calls[1][0]).toMatchObject({ id, wantText: 'designers in Oslo' });
+
+    // A read during the second run starts nothing more.
+    await request(app).get('/agents').expect(200);
+    await settle();
+    expect(agentMatching.recomputeAgent).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('GET /agents scores an unscored agent in the background, once at a time', () => {
   it('two reads while the first rescoring is still running start it once; a read after it has finished may start it again', async () => {
     const agent = unscored('agent-1');

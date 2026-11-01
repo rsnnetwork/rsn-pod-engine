@@ -40,3 +40,12 @@ describe('the three callers use it, and the two-call expression is written nowhe
     expect(src).not.toMatch(/eventDurationMinutes\(resolveEventFormat\(/);
   });
 });
+
+describe('a config the row holds as text that is not an object (review M9)', () => {
+  it('falls back to the format\'s defaults instead of throwing after the invite row exists', () => {
+    const defaults = eventDurationOf({ event_format: 'speed_networking', config: {} });
+    expect(eventDurationOf({ event_format: 'speed_networking', config: '{not json' })).toBe(defaults);
+    expect(eventDurationOf({ event_format: 'speed_networking', config: 'null' })).toBe(defaults);
+    expect(eventDurationOf({ event_format: 'speed_networking', config: null })).toBe(defaults);
+  });
+});

@@ -52,11 +52,9 @@ jest.mock('../../services/dm/group.service', () => ({
 }));
 const mockCandidates = jest.fn();
 const mockFanoutGroup = jest.fn();
-const mockFanoutGroupForUser = jest.fn();
 const mockFanoutGroupReadMark = jest.fn();
 jest.mock('../../realtime/fanout', () => ({
   fanoutGroupEntities: (...a: unknown[]) => mockFanoutGroup(...a),
-  fanoutGroupForUser: (...a: unknown[]) => mockFanoutGroupForUser(...a),
   fanoutGroupReadMark: (...a: unknown[]) => mockFanoutGroupReadMark(...a),
   __esModule: true,
 }));
@@ -88,7 +86,7 @@ const services = [mockCreateFromEvent, mockCreateCustom, mockList, mockGet, mock
 const nothingCalled = () => {
   for (const m of services) expect(m).not.toHaveBeenCalled();
   expect(mockFanoutGroup).not.toHaveBeenCalled();
-  expect(mockFanoutGroupForUser).not.toHaveBeenCalled();
+  expect(mockFanoutGroupReadMark).not.toHaveBeenCalled();
   expect(mockPush).not.toHaveBeenCalled();
 };
 const full = () => new ConflictError(ErrorCodes.GROUP_FULL, 'This group is full (50 people).');
@@ -112,7 +110,7 @@ beforeEach(() => {
   mockAdd.mockResolvedValue({ added: [B], memberCount: 4 });
   mockRemove.mockResolvedValue({ removedUserId: B });
   mockFanoutGroup.mockResolvedValue(undefined);
-  mockFanoutGroupForUser.mockResolvedValue(undefined);
+  mockFanoutGroupReadMark.mockResolvedValue(undefined);
 });
 
 describe('POST /groups/from-event/:sessionId', () => {
@@ -276,7 +274,6 @@ describe('POST /groups/:id/read', () => {
     expect(mockRead).toHaveBeenCalledWith(GROUP, 'u-read');
     // Only the reader's Messages list (H2b item 22): the group's tag sent back to the reader cost a read per mark.
     expect(mockFanoutGroupReadMark).toHaveBeenCalledWith('u-read');
-    expect(mockFanoutGroupForUser).not.toHaveBeenCalled();
     expect(mockFanoutGroup).not.toHaveBeenCalled();
   });
 });

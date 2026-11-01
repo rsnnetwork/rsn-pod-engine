@@ -41,20 +41,36 @@ const statusSchema = z.object({
   status: z.enum(['active', 'paused', 'archived']),
 });
 
-/** Rescore without making the caller wait. Never rejects into the request. */
-/** The agents being rescored right now: a second read of the dashboard while one runs starts no second rescoring. */
-const rescoring = new Set<string>();
+type RescoredAgent = { id: string; userId: string; wantText: string; label: string };
 
-function rescoreInBackground(agent: { id: string; userId: string; wantText: string; label: string }): void {
-  // One at a time per agent (H2b item 14, 26 Oct 2026): the dashboard polls and a second tab reads too, and each read
-  // used to start another search over the whole member base for the same unscored agent.
-  if (rescoring.has(agent.id)) return;
+/** The agents being rescored right now, and for each the newest words to score once the running one ends. */
+const rescoring = new Set<string>();
+const rescoreAgain = new Map<string, RescoredAgent>();
+
+/**
+ * Rescore without making the caller wait. Never rejects into the request. One rescoring at a time per agent (H2b
+ * item 14, 26 Oct 2026): the dashboard polls and a second tab reads too, and each read used to start another search
+ * over the whole member base for the same unscored agent. A read (`onlyIfIdle`) starts nothing while one runs; an
+ * edit, a creation or a resume is never dropped: it is scored once more, with its words, when the running one ends.
+ */
+function rescoreInBackground(agent: RescoredAgent, opts: { onlyIfIdle?: boolean } = {}): void {
+  if (rescoring.has(agent.id)) {
+    if (!opts.onlyIfIdle) rescoreAgain.set(agent.id, agent);
+    return;
+  }
   rescoring.add(agent.id);
   agentMatching
     .recomputeAgent(agent)
     .then((n) => fanoutUserEntity(agent.userId).catch(() => { void n; }))
     .catch((err) => logger.warn({ err, agentId: agent.id }, 'background agent rescore failed'))
-    .finally(() => rescoring.delete(agent.id));
+    .finally(() => {
+      rescoring.delete(agent.id);
+      const again = rescoreAgain.get(agent.id);
+      if (again) {
+        rescoreAgain.delete(agent.id);
+        rescoreInBackground(again);
+      }
+    });
 }
 
 // GET /agents — the dashboard: every agent with its live count.
@@ -70,7 +86,7 @@ router.get('/', authenticate, async (req: Request, res: Response, next: NextFunc
     const agents = await agentRepo.listAgents(req.user!.userId, { includeArchived });
     res.json({ success: true, data: agents } as ApiResponse);
     for (const a of agents) {
-      if (a.status === 'active' && a.lastMatchedAt === null) rescoreInBackground(a);
+      if (a.status === 'active' && a.lastMatchedAt === null) rescoreInBackground(a, { onlyIfIdle: true });
     }
   } catch (err) { next(err); }
 });

@@ -33,6 +33,7 @@ import { query } from '../../db';
 import logger from '../../config/logger';
 import { getRedisClient } from '../redis/redis.client';
 import { buildMessage } from './templates';
+import { asBulkEmail } from '../email/email.service';
 import { reportProgress, resolveProgressAudience } from './send-progress';
 import { skipReasonFor, type RecipientSkipReason } from './skip-rule';
 import { CLAIM_SQL, PICK_SQL, PROBE_SQL, STALE_AFTER_MINUTES } from './job-queue-sql';
@@ -240,7 +241,9 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
             content,
           );
 
-          await broadcastDmMessage(io, createdBy, row.user_id, conversationId, message, dmOptions);
+          // In the bulk lane (H2b item 7): the email a DM to someone offline sends must not go ahead of a member's single
+          // email at the provider's gate (a sign-in link asked for during a sixty-person broadcast waited half a minute).
+          await asBulkEmail(() => broadcastDmMessage(io, createdBy, row.user_id, conversationId, message, dmOptions));
 
           await markSent(jobId, row.id, message.id);
         } catch (err: unknown) {

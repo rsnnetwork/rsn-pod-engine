@@ -151,7 +151,7 @@ export async function getSessionById(sessionId: string): Promise<Session> {
   );
 
   if (result.rows.length === 0) {
-    throw new NotFoundError('Event', sessionId);
+    throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
   }
   return result.rows[0];
 }
@@ -343,7 +343,7 @@ export async function registerParticipant(
       [sessionId]
     );
     if (sessionResult.rows.length === 0) {
-      throw new NotFoundError('Event', sessionId);
+      throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
     }
     const session = sessionResult.rows[0];
 

@@ -37,6 +37,8 @@ jest.mock('../../../db', () => ({
 const mockSendInviteEmail = jest.fn(async () => ({ sent: true }));
 jest.mock('../../../services/email/email.service', () => ({
   sendInviteEmail: (...args: unknown[]) => (mockSendInviteEmail as jest.Mock)(...args),
+  // The bulk lane only orders sends at the provider's gate; here it runs the callback as it is.
+  asBulkEmail: (run: () => Promise<unknown>) => run(),
   __esModule: true,
 }));
 

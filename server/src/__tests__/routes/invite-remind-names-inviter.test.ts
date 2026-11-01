@@ -43,6 +43,7 @@ jest.mock('../../services/pod/pod.service');
 
 import * as inviteService from '../../services/invite/invite.service';
 import * as inviteReminders from '../../services/invite/invite-reminders.service';
+import * as emailService from '../../services/email/email.service';
 import inviteRoutes from '../../routes/invites';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 
@@ -71,6 +72,50 @@ beforeEach(() => {
   (inviteReminders.claimReminders as jest.Mock).mockResolvedValue({ claimed: [INVITE], recent: [] });
   (inviteReminders.releaseReminders as jest.Mock).mockResolvedValue(undefined);
   (inviteReminders.countRemindersSent as jest.Mock).mockResolvedValue(undefined);
+});
+
+describe('POST /invites/remind-all/:sessionId by a co-host (review I2: the event\'s Remind all names each invite\'s own inviter)', () => {
+  const INVITE_2 = 'cccccccc-0000-4000-8000-0000000000bb';
+
+  it('each reminder names the person who made its invite, and the presser\'s allowance is the one spent', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (/FROM sessions WHERE id = \$1/.test(sql)) {
+        return { rows: [{ id: EVENT, title: 'Founders dinner', scheduled_at: null, host_user_id: HOST, pod_id: null, config: {}, event_format: null }], rowCount: 1 };
+      }
+      if (/SELECT id, invitee_email, code, inviter_id FROM invites/.test(sql)) {
+        return {
+          rows: [
+            { id: INVITE, invitee_email: 'guest@getjacksapp.com', code: 'CODE123', inviter_id: HOST },
+            { id: INVITE_2, invitee_email: 'other@getjacksapp.com', code: 'CODE456', inviter_id: COHOST },
+          ],
+          rowCount: 2,
+        };
+      }
+      if (/SELECT id, display_name FROM users WHERE id = ANY/.test(sql)) {
+        return { rows: [{ id: HOST, display_name: 'Claus' }, { id: COHOST, display_name: 'Co Host' }], rowCount: 2 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    (inviteService.isAdminRole as jest.Mock).mockReturnValue(false);
+    (inviteService.eventInviteRole as jest.Mock).mockResolvedValue('cohost');
+    (inviteService.unreachableAddresses as jest.Mock).mockResolvedValue(new Set());
+    (inviteReminders.reminderAllowance as jest.Mock).mockResolvedValue(10);
+    (inviteReminders.claimReminders as jest.Mock).mockResolvedValue({ claimed: [INVITE, INVITE_2], recent: new Map() });
+    (inviteReminders.releaseReminders as jest.Mock).mockResolvedValue(undefined);
+    (inviteReminders.countRemindersSent as jest.Mock).mockResolvedValue(undefined);
+    (emailService.sendInviteEmail as jest.Mock).mockResolvedValue({ sent: true });
+    (emailService.asBulkEmail as jest.Mock).mockImplementation((run: () => Promise<unknown>) => run());
+
+    const res = await request(app).post(`/invites/remind-all/${EVENT}`).send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ reminded: 2, total: 2 });
+    const sent = (emailService.sendInviteEmail as jest.Mock).mock.calls.map((c) => [c[0], c[1].inviterName]);
+    expect(sent).toEqual(expect.arrayContaining([['guest@getjacksapp.com', 'Claus'], ['other@getjacksapp.com', 'Co Host']]));
+    expect(sent).toHaveLength(2);
+    expect(inviteReminders.reminderAllowance).toHaveBeenCalledWith(COHOST);
+    expect(inviteReminders.countRemindersSent).toHaveBeenCalledWith(COHOST, 2);
+  });
 });
 
 describe('POST /invites/:id/remind by a co-host for the host\'s invite', () => {

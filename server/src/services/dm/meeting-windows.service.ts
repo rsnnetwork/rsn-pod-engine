@@ -639,18 +639,16 @@ async function writeConfirmation(
     [conversationId],
   );
 
-  // The client said which meeting it saw (H2b item 9, 26 Oct 2026): a standing meeting that no longer matches is
-  // answered with where things stand, under the lock, so a Move pressed before the partner's own move arrived
-  // cannot quietly replace it. A request without the field is checked as before.
-  if (expected !== undefined) {
-    const standing = conv.meeting_confirmed_window && !over ? conv.meeting_confirmed_window : null;
-    if (standing !== (expected.window ?? null)) {
-      throw new ConflictError(
-        ErrorCodes.MEETING_CHANGED_SINCE_SEEN,
-        'The meeting time changed a moment ago. Here is where it stands now.',
-        { scheduling: buildScheduling(conv, actorId, avail.rows) },
-      );
-    }
+  // The client said which meeting it saw (H2b item 9, 26 Oct 2026): the confirmed window as the conversation records
+  // it, which is what the client is shown (over or not: buildScheduling shows it until a new booking replaces it). One
+  // that no longer matches is answered with where things stand, under the lock, so a Move pressed before the partner's
+  // own move arrived cannot quietly replace it. A request without the field is checked as before.
+  if (expected !== undefined && (conv.meeting_confirmed_window ?? null) !== (expected.window ?? null)) {
+    throw new ConflictError(
+      ErrorCodes.MEETING_CHANGED_SINCE_SEEN,
+      'The meeting time changed a moment ago. Here is where it stands now.',
+      { scheduling: buildScheduling(conv, actorId, avail.rows) },
+    );
   }
 
   const shared = avail.rows.some(r => r.user_id === actorId && r.window_key === meeting.window)

@@ -707,6 +707,62 @@ describe('createInvitesBatch', () => {
       expect(world.invites).toHaveLength(0);
     });
 
+    // H2b review M5 (item 24 on the batch path): a pending event invite made before its person was removed from the
+    // event can no longer let them in, yet the sheet answered already_invited for it, so they could not be invited
+    // back from the sheet. It is withdrawn and a fresh invite made, as POST /invites does.
+    describe('a pending event invite from before the person was removed', () => {
+      const STALE = 'e0000000-0000-4000-8000-0000000000aa';
+      /** A world where person 1's pending invite STALE was made before they were removed from the event. */
+      const removedAfterInvite = () => {
+        const stale: WorldInvite = {
+          id: STALE, code: 'OLD', type: 'session', inviterId: VIEWER, email: 'person1@example.com', podId: EVENT_POD,
+          sessionId: EVENT, circleId: null, status: 'pending', maxUses: 1, expiresAt: null, declinedAt: null, createdAt: new Date(0),
+        };
+        world = inviteWorld({ answers: (text, params) => {
+          const beforeRemoval = /sp\.status = 'removed' AND sp\.left_at > i\.created_at/.test(text);
+          if (beforeRemoval && /^SELECT i\.id FROM invites i/.test(text)) {
+            return { rows: (params[0] as string[]).filter((id) => id === STALE && stale.status === 'pending').map((id) => ({ id })) };
+          }
+          if (beforeRemoval && /^UPDATE invites i SET status = 'revoked'/.test(text)) {
+            if (params[0] !== STALE || stale.status !== 'pending') return { rows: [], rowCount: 0 };
+            stale.status = 'revoked';
+            return { rows: [{ id: STALE }], rowCount: 1 };
+          }
+          return batchAnswers(text, params);
+        } });
+        world.invites.push(stale);
+        mockQuery.mockImplementation(world.query);
+        mockTransaction.mockImplementation(world.transaction);
+      };
+
+      it('is withdrawn and a fresh one made: invited, with the new invite, its bell and its email', async () => {
+        const id = person(1, { state: 'invited', latestInviteId: STALE });
+        removedAfterInvite();
+        const result = await eventBatch([id]);
+        expect(outcomes(result)).toEqual([[id, 'invited']]);
+        expect(result.results[0].inviteId).not.toBe(STALE);
+        expect(world.invites.find((i) => i.id === STALE)?.status).toBe('revoked');
+        expect(world.invites.filter((i) => i.status === 'pending')).toHaveLength(1);
+        await result.delivery;
+        expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
+      });
+
+      it('a live invite made after any removal stays as it is: already_invited, nothing withdrawn', async () => {
+        const id = person(1, { state: 'invited', latestInviteId: 'inv-live' });
+        removedAfterInvite();
+        const result = await eventBatch([id]);
+        expect(result.results).toEqual([{ userId: id, outcome: 'already_invited', inviteId: 'inv-live' }]);
+        expect(statementsMatching(/^UPDATE invites i SET status = 'revoked'/)).toHaveLength(0);
+      });
+
+      it('a pod batch never asks', async () => {
+        const id = person(1, { state: 'invited', latestInviteId: STALE });
+        removedAfterInvite();
+        expect(outcomes(await podBatch([id]))).toEqual([[id, 'already_invited']]);
+        expect(statementsMatching(/sp\.left_at > i\.created_at/)).toHaveLength(0);
+      });
+    });
+
     it('a declined person among others is counted, and the others are still invited', async () => {
       const ids = [person(1), person(2, { state: 'declined', latestInviteId: 'inv-old' }), person(3)];
       const result = await podBatch(ids);

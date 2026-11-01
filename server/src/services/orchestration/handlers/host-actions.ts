@@ -935,9 +935,19 @@ export async function handleHostRemoveParticipant(
       socket.emit('error', { code: 'DIRECTOR_TARGET', message: "The event's director cannot be removed from their own event." });
       return;
     }
-    // Whether the engine has this person, read before the removal below changes it (H2b item 25): only someone the
-    // event let in is given a removed row; a crafted id bars nobody.
+    // Decided before anything changes (H2b item 25): someone the engine does not have and who holds no row is not in
+    // this event. A kick aimed at them used to leave a removal in memory (and an unfinished-kick marker) that the
+    // reconciler wrote into their row once they registered and came; now nothing changes and the presser is told.
     const inEngine = activeSessions.get(data.sessionId)?.participantStates?.has(data.userId) ?? false;
+    if (!inEngine) {
+      const held = await query<{ status: string }>(
+        `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`, [data.sessionId, data.userId],
+      );
+      if (held.rows.length === 0) {
+        socket.emit('error', { code: 'NOT_IN_EVENT', message: 'That person is not in this event.' });
+        return;
+      }
+    }
 
     // WS2 (27 May remaining work) — a kick must END the kicked user's active
     // match, not orphan it. Immediate (kick is decisive — no grace): the

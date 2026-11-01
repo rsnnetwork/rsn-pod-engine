@@ -414,6 +414,26 @@ function decide(userId: string, row: RecipientRow | undefined, asker: { id: stri
   return { userId, outcome: 'create', email: row.email };
 }
 
+/**
+ * For an event: someone whose pending invite was made before they were removed from it is invited afresh, as POST
+ * /invites does (H2b item 24, review M5). That invite can no longer let them in, so already_invited would leave the
+ * sheet saying Invited with no way back but Withdraw. Read only here; the stale invite is withdrawn at the insert.
+ */
+async function renewInvitesFromBeforeRemoval(
+  target: Target, decisions: Decision[], recipients: Map<string, RecipientRow>,
+): Promise<Decision[]> {
+  if (target.kind !== 'session') return decisions;
+  const held = decisions.flatMap((d) => (d.outcome === 'already_invited' && d.inviteId ? [d.inviteId] : []));
+  const stale = await invites.invitesFromBeforeRemoval(held);
+  if (stale.size === 0) return decisions;
+  return decisions.map((d) => {
+    const email = recipients.get(d.userId)?.email;
+    return d.outcome === 'already_invited' && d.inviteId && stale.has(d.inviteId) && email
+      ? { userId: d.userId, outcome: 'create', email }
+      : d;
+  });
+}
+
 /** The bells of the invites just made, ten at a time. A failure is logged: the invite exists, and its email is still to go. */
 async function ringBells(context: invites.InviteContext, made: MadeInvite[]): Promise<void> {
   for (let from = 0; from < made.length; from += BELLS_AT_ONCE) {
@@ -525,7 +545,9 @@ export async function createInvitesBatch(
   }
 
   const recipients = ids.length > 0 ? await readRecipients(asker.userId, target, ids) : new Map<string, RecipientRow>();
-  const decisions = ids.map((id) => decide(id, recipients.get(id), { id: asker.userId, isAdmin, target }));
+  const decisions = await renewInvitesFromBeforeRemoval(
+    target, ids.map((id) => decide(id, recipients.get(id), { id: asker.userId, isAdmin, target })), recipients,
+  );
 
   const results = new Map<string, InviteBatchResult>();
   for (const decision of decisions) {
@@ -563,7 +585,7 @@ export async function createInvitesBatch(
       }
       const code = invites.generateCode();
       try {
-        const inserted = await invites.insertPendingInvite({
+        const pending: invites.NewInvite = {
           code,
           type: target.kind === 'pod' ? InviteType.POD : InviteType.SESSION,
           inviterId: asker.userId,
@@ -573,7 +595,12 @@ export async function createInvitesBatch(
           circleId: null,
           maxUses: 1,
           expiresAt: target.kind === 'pod' ? new Date(Date.now() + POD_INVITE_HOURS * 60 * 60 * 1000) : null,
-        });
+        };
+        let inserted = await invites.insertPendingInvite(pending);
+        // A pending invite made before the person was removed is withdrawn and the fresh one made (H2b item 24).
+        if (inserted.duplicate && await invites.withdrawInviteFromBeforeRemoval(inserted.existingId)) {
+          inserted = await invites.insertPendingInvite(pending);
+        }
         if (inserted.duplicate) {
           // Someone else's batch (or a second tab) got there first: one invite exists, and this caller is told so.
           results.set(decision.userId, { userId: decision.userId, outcome: 'already_invited', inviteId: inserted.existingId });

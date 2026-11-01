@@ -114,7 +114,7 @@ const SUMMARY = /FROM dm_group_members me JOIN dm_groups g ON g\.id = me\.group_
 const MEMBERS = /FROM dm_group_members m JOIN users u ON u\.id = m\.user_id WHERE m\.group_id = \$1 ORDER BY/;
 const READ_MARK = /UPDATE dm_group_members SET last_read_at = NOW\(\)/;
 const GROUP_EXISTS = /SELECT id FROM dm_groups WHERE id = \$1$/;
-const NAMES = /SELECT id, display_name FROM users WHERE id = ANY\(\$1::uuid\[\]\)/;
+const NAMES = /SELECT id, display_name, status FROM users WHERE id = ANY\(\$1::uuid\[\]\)/;
 const CANDIDATES = /FROM session_participants sp JOIN users u ON u\.id = sp\.user_id WHERE sp\.session_id = \$1 AND sp\.joined_at IS NOT NULL AND sp\.status <> 'removed' AND u\.status = 'active' AND u\.id <> \$2/;
 
 const NOW = new Date('2026-10-26T10:00:00.000Z');
@@ -200,7 +200,7 @@ describe('createGroupFromEvent', () => {
 
   it('refuses someone who registered and never came, naming them, and writes nothing (H2b item 23)', async () => {
     // NEVER_CAME is registered but has no joined_at, so the read does not return them.
-    startsWith([A, B], [[NAMES, [{ id: NEVER_CAME, display_name: 'Nev Er' }]]]);
+    startsWith([A, B], [[NAMES, [{ id: NEVER_CAME, display_name: 'Nev Er', status: 'active' }]]]);
     const e = await caught(createGroupFromEvent(host, SESSION, { memberIds: [A, NEVER_CAME] }));
     expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'Nev Er did not take part in this event.' });
     expect(e?.details).toEqual({ people: [{ id: NEVER_CAME, name: 'Nev Er' }] });
@@ -296,7 +296,7 @@ describe('createGroupFromEvent', () => {
   });
 
   it('refuses to add, by name, someone blocked with the creator, and writes nothing (H2b item 23: the refusal names them)', async () => {
-    startsWith([A, B, C], [[BLOCKED_WITH, [{ user_id: B }]], [NAMES, [{ id: B, display_name: 'Ben Blocked' }]]]);
+    startsWith([A, B, C], [[BLOCKED_WITH, [{ user_id: B }]], [NAMES, [{ id: B, display_name: 'Ben Blocked', status: 'active' }]]]);
     const e = await caught(createGroupFromEvent(host, SESSION, { memberIds: [A, B] }));
     expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: "You can't add Ben Blocked: you can no longer message each other." });
     expect(e?.details).toEqual({ people: [{ id: B, name: 'Ben Blocked' }] });
@@ -304,7 +304,7 @@ describe('createGroupFromEvent', () => {
   });
 
   it('names everyone who did not take part, in one sentence (H2b item 23)', async () => {
-    startsWith([A], [[NAMES, [{ id: B, display_name: 'Ben' }, { id: C, display_name: 'Cy' }]]]);
+    startsWith([A], [[NAMES, [{ id: B, display_name: 'Ben', status: 'active' }, { id: C, display_name: 'Cy', status: 'active' }]]]);
     const e = await caught(createGroupFromEvent(host, SESSION, { memberIds: [A, B, C] }));
     expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'Ben and Cy did not take part in this event.' });
     expect(e?.details).toEqual({ people: [{ id: B, name: 'Ben' }, { id: C, name: 'Cy' }] });
@@ -421,7 +421,7 @@ describe('addGroupMembers', () => {
   });
 
   it('only people who took part in the event: someone who registered and never came is refused, by name (H2b item 23)', async () => {
-    adds([ADMIN, A, B], [A, B], [[NAMES, [{ id: NEVER_CAME, display_name: 'Nev Er' }]]]);
+    adds([ADMIN, A, B], [A, B], [[NAMES, [{ id: NEVER_CAME, display_name: 'Nev Er', status: 'active' }]]]);
     const e = await caught(addGroupMembers(GROUP, ADMIN, [NEVER_CAME]));
     expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'Nev Er did not take part in this event.' });
     expect(e?.details).toEqual({ people: [{ id: NEVER_CAME, name: 'Nev Er' }] });
@@ -435,7 +435,7 @@ describe('addGroupMembers', () => {
   });
 
   it('nobody can add someone blocked with them, in either direction; the refusal names them (H2b item 23)', async () => {
-    adds([ADMIN, A, B], [A, B, C], [[BLOCKED_WITH, [{ user_id: C }]], [NAMES, [{ id: C, display_name: 'Cy Blocked' }]]]);
+    adds([ADMIN, A, B], [A, B, C], [[BLOCKED_WITH, [{ user_id: C }]], [NAMES, [{ id: C, display_name: 'Cy Blocked', status: 'active' }]]]);
     const e = await caught(addGroupMembers(GROUP, ADMIN, [C]));
     expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: "You can't add Cy Blocked: you can no longer message each other." });
     expect(e?.details).toEqual({ people: [{ id: C, name: 'Cy Blocked' }] });
@@ -940,5 +940,33 @@ describe('eventGroupCandidates', () => {
     pool([]);
     const e = await caught(eventGroupCandidates(asker, SESSION));
     expect(refusal(e)).toEqual({ status: 404, code: 'SESSION_NOT_FOUND', message: GROUP_COPY.eventNotFound });
+  });
+});
+
+describe('a closed account named in a request (review M4)', () => {
+  it('is said as no longer on REASON, under the name every other screen gives a closed account', async () => {
+    // NEVER_CAME's account is closed: whoTookPart leaves them out, and the refusal must not say they did not take part.
+    tx([
+      [EVENT, [{ status: 'completed', title: 'Founders dinner', host_user_id: CREATOR, is_cohost: false, is_pod_organiser: false }]],
+      [TOOK_PART, [{ user_id: A }, { user_id: B }]],
+      [NAMES, [{ id: NEVER_CAME, display_name: 'Nev Er', status: 'deactivated' }]],
+    ]);
+    const e = await caught(createGroupFromEvent({ userId: CREATOR, role: UserRole.MEMBER }, SESSION, { memberIds: [A, NEVER_CAME] }));
+    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'Someone you chose is no longer on REASON.' });
+    expect(e?.details).toEqual({ people: [{ id: NEVER_CAME, name: 'Former member' }] });
+    expect(ran(mockTx, INSERT_GROUP)).toBe(false);
+  });
+
+  it('beside someone open who did not take part, each is said in their own words, in one answer', async () => {
+    tx([
+      [EVENT, [{ status: 'completed', title: 'Founders dinner', host_user_id: CREATOR, is_cohost: false, is_pod_organiser: false }]],
+      [TOOK_PART, [{ user_id: A }]],
+      [NAMES, [{ id: B, display_name: 'Ben', status: 'active' }, { id: NEVER_CAME, display_name: 'Nev Er', status: 'deactivated' }]],
+    ]);
+    const e = await caught(createGroupFromEvent({ userId: CREATOR, role: UserRole.MEMBER }, SESSION, { memberIds: [A, B, NEVER_CAME] }));
+    expect(refusal(e)).toEqual({
+      status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'Ben did not take part in this event. Someone you chose is no longer on REASON.',
+    });
+    expect(e?.details).toEqual({ people: [{ id: B, name: 'Ben' }, { id: NEVER_CAME, name: 'Former member' }] });
   });
 });

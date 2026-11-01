@@ -416,6 +416,10 @@ router.post(
 // Bulk remind: resend invite emails to the pending invites of a session. Fix round 3: an invite reminded within the last
 // hour is skipped and not counted, and at most as many are reminded as the member has reminder emails left for the hour.
 // Fix round 4: nothing is claimed until everything the emails need is in hand, and `reminded` counts only emails that went.
+// H2b (review I1): every email waits its turn at the provider's gate, two a second, and the answer comes once they have
+// gone, so a press reminds at most REMIND_ALL_PER_PRESS invites (about 25 seconds), inside the 60 seconds production's
+// page waits for an answer; the oldest go first and the next press reminds the next ones.
+const REMIND_ALL_PER_PRESS = 50;
 
 router.post(
   '/remind-all/:sessionId',
@@ -439,8 +443,8 @@ router.post(
       // Get all pending invites for this session (only those with an email to send to). An invite whose expiry has
       // passed keeps the status 'pending' but its link is dead, so nobody is reminded with it.
       // Oldest first, so a member short of allowance reminds the invites that have waited longest (fix round 3).
-      const allPending = await query<{ id: string; invitee_email: string; code: string }>(
-        `SELECT id, invitee_email, code FROM invites
+      const allPending = await query<{ id: string; invitee_email: string; code: string; inviter_id: string }>(
+        `SELECT id, invitee_email, code, inviter_id FROM invites
          WHERE session_id = $1 AND status = 'pending' AND invitee_email IS NOT NULL AND invitee_email != ''
            AND (expires_at IS NULL OR expires_at > NOW())
          ORDER BY created_at`,
@@ -466,10 +470,13 @@ router.post(
 
       // Everything the emails need is in hand BEFORE any invite is claimed (fix round 4): a question that fails here (the
       // sender's name, the host for the calendar entry) fails the call with nothing claimed, so pressing again reminds them.
-      const inviterResult = await query<{ displayName: string }>(
-        `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [req.user!.userId]
+      // Each reminder names the person who made its invite (H2b item 8, review I2): a co-host's Remind all used to
+      // read "{co-host} invited you" for every invite the host made. The presser still spends their own allowance.
+      const inviterIds = [...new Set(eligible.map((inv) => inv.inviter_id))];
+      const inviterRows = await query<{ id: string; display_name: string | null }>(
+        `SELECT id, display_name FROM users WHERE id = ANY($1::uuid[])`, [inviterIds]
       );
-      const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
+      const inviterNames = new Map(inviterRows.rows.map((r) => [r.id, r.display_name || 'Someone']));
 
       let calendarEvent: any = undefined;
       if (session.scheduled_at) {
@@ -493,7 +500,9 @@ router.post(
       const { default: appConfig } = await import('../config');
       const emailService = await import('../services/email/email.service');
 
-      const { claimed, recent } = await inviteReminders.claimReminders(eligible.map((inv) => inv.id), allowance);
+      const { claimed, recent } = await inviteReminders.claimReminders(
+        eligible.map((inv) => inv.id), Math.min(allowance, REMIND_ALL_PER_PRESS),
+      );
       const claimedIds = new Set(claimed);
       const pendingInvites = { rows: eligible.filter((inv) => claimedIds.has(inv.id)) };
       const total = eligible.length - recent.size;
@@ -507,24 +516,27 @@ router.post(
       // went count against the member's allowance (fix round 3) and in `reminded`.
       const emailed = new Set<string>();
       try {
-        const BATCH = 10;
-        for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
-          const batch = pendingInvites.rows.slice(i, i + BATCH);
-          const results = await Promise.allSettled(
-            batch.map(inv =>
-              emailService.sendInviteEmail(inv.invitee_email, {
-                inviterName,
-                type: 'session',
-                targetName: session.title,
-                inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
-                calendarEvent,
-              })
-            )
-          );
-          results.forEach((result, at) => {
-            if (result.status === 'fulfilled' && result.value.sent) emailed.add(batch[at].id);
-          });
-        }
+        // In the bulk lane (H2b item 7): a member's single email elsewhere goes ahead of these at the provider's gate.
+        await emailService.asBulkEmail(async () => {
+          const BATCH = 10;
+          for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
+            const batch = pendingInvites.rows.slice(i, i + BATCH);
+            const results = await Promise.allSettled(
+              batch.map(inv =>
+                emailService.sendInviteEmail(inv.invitee_email, {
+                  inviterName: inviterNames.get(inv.inviter_id) ?? 'Someone',
+                  type: 'session',
+                  targetName: session.title,
+                  inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
+                  calendarEvent,
+                })
+              )
+            );
+            results.forEach((result, at) => {
+              if (result.status === 'fulfilled' && result.value.sent) emailed.add(batch[at].id);
+            });
+          }
+        });
       } finally {
         const notSent = claimed.filter((id) => !emailed.has(id));
         if (notSent.length > 0) await inviteReminders.releaseReminders(notSent);

@@ -85,7 +85,10 @@ describe('when someone asks to join', () => {
     await createJoinRequest({ fullName: 'Sam Applicant', email: 'sam@getjacksapp.com', linkedinUrl: 'https://www.linkedin.com/in/sam', reason: 'I run a studio' });
     await flush();
 
-    expect(mockEmit).toHaveBeenCalledWith(io, [ADMIN_1, ADMIN_2], [E.userNotifications(ADMIN_1), E.userNotifications(ADMIN_2)]);
+    // One emit per admin with their own tag (review M6): every admin's tag to every admin was N squared.
+    expect(mockEmit).toHaveBeenCalledTimes(2);
+    expect(mockEmit).toHaveBeenCalledWith(io, [ADMIN_1], [E.userNotifications(ADMIN_1)]);
+    expect(mockEmit).toHaveBeenCalledWith(io, [ADMIN_2], [E.userNotifications(ADMIN_2)]);
   });
 
   it('tells nobody when no admin was rung (every admin already has this bell)', async () => {

@@ -737,6 +737,29 @@ describe('confirmWindow', () => {
       expect(confirmations()).toHaveLength(1);
     });
 
+    it('a meeting that is over is still what the client saw: naming its window books afresh, no 409 (review M3)', async () => {
+      // The client is shown the confirmed window even once the meeting is over, so that is what it names.
+      const slot = wanted();
+      armConv(both(slot), {
+        ...CONV, meeting_confirmed_window: 'over-and-done', meeting_start_at: new Date(Date.now() - 2 * 86_400_000), meeting_duration_min: 30,
+      });
+      await confirmWindow('conv-1', 'u-a', slot, { expectedWindow: 'over-and-done' });
+      expect(confirmations()).toHaveLength(1);
+    });
+
+    it('a legacy day part the conversation holds (no time of its own) is matched by its key: naming it goes through, naming another is refused (review M3)', async () => {
+      const dayPart = futureKey(2, 'evening');
+      const dayPartHeld = { ...CONV, meeting_confirmed_window: dayPart, meeting_start_at: null, meeting_duration_min: null };
+      const slot = wanted();
+      armConv(both(slot), dayPartHeld);
+      await confirmWindow('conv-1', 'u-a', slot, { expectedWindow: dayPart });
+      expect(confirmations()).toHaveLength(1);
+
+      armConv(both(slot), dayPartHeld);
+      await expect(confirmWindow('conv-1', 'u-a', slot, { expectedWindow: futureKey(3, 'morning') }))
+        .rejects.toMatchObject({ statusCode: 409, code: 'MEETING_CHANGED_SINCE_SEEN' });
+    });
+
     it('without the field (production\'s client) nothing is checked', async () => {
       const slot = wanted();
       armConv(both(slot), standing('the-partner-moved-it'));

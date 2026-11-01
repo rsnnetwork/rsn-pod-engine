@@ -37,10 +37,10 @@ jest.mock('../../db', () => ({ query: jest.fn(), transaction: jest.fn() }));
 import config from '../../config';
 import logger from '../../config/logger';
 import * as emailService from '../../services/email/email.service';
+import { isReservedTestAddress, maskAddress } from '../../services/identity/reserved-address';
 
 // These tests are about the addresses, not the pace: the provider's gate (two sends a second) is run on an instant clock.
 beforeAll(() => emailService.__setSendPaceForTests({ now: () => Date.now(), pause: async () => {} }));
-import { isReservedTestAddress, maskAddress } from '../../services/identity/reserved-address';
 
 const anInvite = {
   inviterName: 'Stefan', type: 'platform' as const, inviteUrl: 'https://app.rsn.network/invite/ABC123',

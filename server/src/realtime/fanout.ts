@@ -516,17 +516,6 @@ export async function fanoutGroupEntities(
   }
 }
 
-// One member marked a group read: only their own tabs and devices redraw its unread count.
-export async function fanoutGroupForUser(groupId: string, userId: string): Promise<void> {
-  const io = getRealtimeIo();
-  if (!io) return;
-  try {
-    await emitEntities(io, [userId], [E.dmGroup(groupId), E.userDms(userId)]);
-  } catch (err) {
-    logger.warn({ err, groupId, userId }, 'fanoutGroupForUser: failed to fan out');
-  }
-}
-
 /**
  * A member's own read mark moves only their Messages list (the unread counts: user:<id>:dms), on every tab they
  * have open. It no longer sends the group's own tag back to the reader (H2b item 22, 26 Oct 2026): the reader

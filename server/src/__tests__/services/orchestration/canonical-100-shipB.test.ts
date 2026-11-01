@@ -308,10 +308,10 @@ describe('Ship B — flip-site + wiring invariants', () => {
   it('host kick deliberately stays on presenceMap (socketId lookup, not a presence gate)', () => {
     const src = readSrc('services/orchestration/handlers/host-actions.ts');
     const i = src.indexOf('export async function handleHostRemoveParticipant');
-    // WS2 widened this window: the kick handler gained the match-end flow
-    // (demote + survivor rating) ahead of the presence cleanup. H2b (26 Oct 2026) widened it again: the
-    // director guard and the engine check come before the flow.
-    const block = src.slice(i, i + 8500);
+    // The whole handler, to the next export: a fixed window (8500 characters after WS2 and H2b added the match-end
+    // flow, the director guard and the engine check ahead of the presence cleanup) passed on an LF checkout and
+    // failed on a CRLF one, where every line is a character longer (H2b fix round 1).
+    const block = src.slice(i, src.indexOf('\nexport ', i + 1));
     expect(block).toMatch(/presenceMap\.get\(data\.userId\)/);
     expect(block).toMatch(/deliberately|socketId/i); // documented decision
   });

@@ -14,7 +14,7 @@ describe('isRoomGone: the one reader of "this room is no more"', () => {
     ['a not_found code', { code: 'not_found', message: 'room not found' }],
     ['an HTTP 404', { status: 404, message: 'no such room' }],
     ['"room has already closed" (409, right after an event ends)', { status: 409, code: 'failed_precondition', message: 'room has already closed' }],
-    ['"already closed" however it is coded', { code: 9, message: 'twirp error failed_precondition: room has already closed' }],
+    ['"room has already closed" however it is coded', { code: 9, message: 'twirp error failed_precondition: room has already closed' }],
   ])('reads %s as gone', (_what, err) => {
     expect(isRoomGone(err)).toBe(true);
   });
@@ -24,6 +24,9 @@ describe('isRoomGone: the one reader of "this room is no more"', () => {
     ['an authentication failure', { status: 401, message: 'invalid API key' }],
     ['a server error', { status: 500, message: 'internal error' }],
     ['a 409 about something else', { status: 409, message: 'participant already exists' }],
+    // Review M11: only the room's own closing reads as gone, not anything else that has already closed.
+    ['a stream that has already closed', { status: 409, message: 'stream already closed' }],
+    ['an egress that has already closed', { code: 9, message: 'egress has already closed' }],
     ['nothing', null],
   ])('does not read %s as gone', (_what, err) => {
     expect(isRoomGone(err)).toBe(false);

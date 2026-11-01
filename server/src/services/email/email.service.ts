@@ -93,6 +93,8 @@ export interface SendEmailResult {
 // provider is not asked. The answer is the one a delivered email gets, marked `skipped`: a reminder keeps its hour, a
 // batch counts the email as sent and nothing is tried again. The provider's own test sink (delivered+label@resend.dev)
 // is an address like any other here and goes as before. A call to the provider from anywhere else would get round this;
+// email-provider-single-door.test.ts fails if one appears.
+
 // ─── One pace for every email (H2b item 7, 26 Oct 2026) ──────────────────────────────────────────────────────
 // The provider takes two sends a second. Every email — a bulk invite, Remind all's one-at-a-time sends, a job's
 // burst, a member's single email — reaches it through one process-wide gate that releases a provider call every
@@ -101,7 +103,8 @@ export interface SendEmailResult {
 // burst. A waiter is released in its turn whatever became of the one before, so nothing is lost.
 export const SEND_GAP_MS = 500;
 export interface SendPace { now(): number; pause(ms: number): Promise<void> }
-const REAL_SEND_PACE: SendPace = { now: () => Date.now(), pause: (ms) => new Promise((r) => setTimeout(r, ms)) };
+// A clock that only goes forward: the wall clock set back (an NTP step) would hold every email for the size of the step.
+const REAL_SEND_PACE: SendPace = { now: () => performance.now(), pause: (ms) => new Promise((r) => setTimeout(r, ms)) };
 let sendPace: SendPace = REAL_SEND_PACE;
 let lastReleaseAt = Number.NEGATIVE_INFINITY;
 const waitingToSend: Array<{ release: () => void; bulk: boolean }> = [];
@@ -147,7 +150,6 @@ export function __setSendPaceForTests(pace: SendPace | null): void {
   releasing = false;
 }
 
-// email-provider-single-door.test.ts fails if one appears.
 async function sendEmail(opts: {
   to: string;
   subject: string;

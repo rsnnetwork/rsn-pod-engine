@@ -71,7 +71,9 @@ describe('Rating Service', () => {
       expect(rating.matchId).toBe('match-1');
     });
 
-    it('should throw when match not found', async () => {
+    // H2b fix round 1 (the M8 pattern): NotFoundError('Match not found') read "Match not found not found" in the
+    // rating's error toast, with the code MATCH NOT FOUND_NOT_FOUND.
+    it('a missing match is a 404 in words a member reads, with the MATCH_NOT_FOUND code', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
       await expect(
@@ -80,7 +82,7 @@ describe('Rating Service', () => {
           qualityScore: 4,
           meetAgain: true,
         })
-      ).rejects.toThrow('not found');
+      ).rejects.toMatchObject({ statusCode: 404, code: 'MATCH_NOT_FOUND', message: "We couldn't find that conversation." });
     });
 
     it('should throw when user is not a participant', async () => {
@@ -294,11 +296,11 @@ describe('Rating Service', () => {
       expect(result.sessionId).toBe('session-1');
     });
 
-    it('should throw NotFoundError when session not found', async () => {
+    it('a missing event is a 404 that says "event", with the SESSION_NOT_FOUND code (H2b fix round 1, the M8 pattern)', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
       await expect(ratingService.getPeopleMet('user-a', 'missing-session'))
-        .rejects.toThrow('not found');
+        .rejects.toMatchObject({ statusCode: 404, code: 'SESSION_NOT_FOUND', message: "We couldn't find that event." });
     });
   });
 
@@ -397,6 +399,15 @@ describe('Rating Service', () => {
       const stats = await ratingService.getSessionRatingStats('session-1');
       expect(stats.totalRatings).toBe(0);
       expect(stats.meetAgainRate).toBe(0);
+    });
+  });
+
+  describe('exportSessionData', () => {
+    it('a missing event is a 404 that says "event", with the SESSION_NOT_FOUND code (H2b fix round 1, the M8 pattern)', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      await expect(ratingService.exportSessionData('missing-session'))
+        .rejects.toMatchObject({ statusCode: 404, code: 'SESSION_NOT_FOUND', message: "We couldn't find that event." });
     });
   });
 

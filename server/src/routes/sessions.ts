@@ -194,7 +194,7 @@ router.get(
       const io = req.app.get('io') as SocketServer | null;
       const snapshot = await buildSessionStateSnapshot(req.params.id, io);
       if (!snapshot) {
-        throw new NotFoundError('Session not found');
+        throw new NotFoundError('Session', req.params.id, "We couldn't find that event.");
       }
 
       // H1 fix round 1 — hccParticipants is the Host Control Center's list: every registered person's email,
@@ -947,7 +947,7 @@ router.get(
         [sessionId],
       );
       if (sessionResult.rows.length === 0) {
-        throw new NotFoundError('Session', sessionId);
+        throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
       }
       const session = sessionResult.rows[0];
 

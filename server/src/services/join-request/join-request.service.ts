@@ -109,9 +109,9 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
        RETURNING user_id`,
       [input.fullName || email]
     );
+    // One emit per admin with their own tag (every admin's tag to every admin was N squared).
     const io = getRealtimeIo();
-    const adminIds = rung.rows.map((r) => r.user_id);
-    if (io && adminIds.length > 0) await emitEntities(io, adminIds, adminIds.map((id) => E.userNotifications(id)));
+    if (io) await Promise.all(rung.rows.map((r) => emitEntities(io, [r.user_id], [E.userNotifications(r.user_id)])));
   } catch (notifErr) {
     logger.warn({ err: notifErr }, 'Failed to create admin notifications for join request — non-fatal');
   }
