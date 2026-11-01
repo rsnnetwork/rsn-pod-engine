@@ -62,7 +62,11 @@ jest.mock('../../services/dm/meeting-call.service', () => ({
 }));
 jest.mock('../../services/presence/presence.service', () => ({ __esModule: true, areActive: jest.fn().mockResolvedValue({}) }));
 jest.mock('../../services/orchestration/handlers/dm-handlers', () => ({ __esModule: true, broadcastDmMessage: jest.fn() }));
-jest.mock('../../realtime/fanout', () => ({ __esModule: true, fanoutDmConversation: jest.fn().mockResolvedValue(undefined) }));
+jest.mock('../../realtime/fanout', () => ({
+  __esModule: true,
+  fanoutDmConversation: jest.fn().mockResolvedValue(undefined),
+  fanoutDmRead: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('../../db', () => ({ query: jest.fn().mockResolvedValue({ rows: [] }), transaction: jest.fn(), __esModule: true }));
 
 import dmRoutes from '../../routes/dm';

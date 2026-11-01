@@ -12,7 +12,7 @@ import { authenticate } from '../middleware/auth';
 import { conversationIdInPath, memberIdInPath, messageIdInPath, reactionInPath } from '../middleware/dm-path-ids';
 import * as dmService from '../services/dm/dm.service';
 import { broadcastDmMessage } from '../services/orchestration/handlers/dm-handlers';
-import { fanoutDmConversation } from '../realtime/fanout';
+import { fanoutDmConversation, fanoutDmRead } from '../realtime/fanout';
 import { query } from '../db';
 import { ApiResponse } from '@rsn/shared';
 
@@ -177,7 +177,8 @@ router.post(
             const otherUserId = conv.user_a_id === req.user!.userId
               ? conv.user_b_id
               : conv.user_a_id;
-            fanoutDmConversation(req.params.id, [req.user!.userId, otherUserId]).catch(() => {});
+            // The same tags as dm:read: the conversation, and both people's Messages counts (1 Nov 2026).
+            fanoutDmRead(req.params.id, req.user!.userId, otherUserId).catch(() => {});
           }
         } catch { /* non-fatal */ }
       }

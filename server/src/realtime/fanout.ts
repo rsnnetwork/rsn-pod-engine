@@ -564,6 +564,22 @@ export async function fanoutDmConversation(
   }
 }
 
+/**
+ * A conversation was read over REST (POST /dm/conversations/:id/read): the same tags as the socket's dm:read
+ * (handleDmRead), so the reader's other tabs and the writer's thread move too: the conversation (its read marks) and
+ * each one's Messages (the inbox and the unread counts, which the Messages badge and the tab's "(N) REASON" read). Until
+ * 1 Nov 2026 this path sent only the conversation's tag, and another tab of the reader kept its count.
+ */
+export async function fanoutDmRead(conversationId: string, readerId: string, otherId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    await emitEntities(io, [readerId, otherId], [E.dmConversation(conversationId), E.userDms(readerId), E.userDms(otherId)]);
+  } catch (err) {
+    logger.warn({ err, conversationId }, 'fanoutDmRead: failed to fan out');
+  }
+}
+
 // ─── Group chat fanout (26 Oct 2026) ────────────────────────────────────────
 //
 // A group chat changed: it was started, a message was sent, people were added, someone left or was
