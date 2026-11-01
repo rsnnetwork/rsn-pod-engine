@@ -214,9 +214,6 @@ export default function PodDetailPage() {
 
   const openEdit = () => setEditOpen(true);
 
-  // The wall found the pod closed before this page's own copy said so (the archive route tells the pod's screens a
-  // moment before it saves the new status): read the pod again, so the badge, the buttons and the wall agree.
-  const refreshPod = () => { void qc.invalidateQueries({ queryKey: ['pod', podId], exact: true }); };
 
   // A chip scrolls its section into view. A plain address with #section would add a history entry and leave <main>,
   // the page's scroll area, where it is.
@@ -604,7 +601,6 @@ export default function PodDetailPage() {
               isMember={isMember}
               isActiveMember={isActiveMember}
               highlightPostId={highlightPostId}
-              onPodStatusStale={refreshPod}
             />
           )}
         </section>

@@ -40,14 +40,12 @@ export function WallNotMember({ config }: { config: WallConfig }) {
   );
 }
 
-export default function Wall({ config, fallbackViewer, highlightPostId, onViewerChange }: {
+export default function Wall({ config, fallbackViewer, highlightPostId }: {
   config: WallConfig;
   /** What the viewer may do, for a wall whose feed does not say (the circle wall's page knows). */
   fallbackViewer?: WallViewer;
   /** The post a ?post= link names: scrolled into view and outlined. */
   highlightPostId?: string;
-  /** Told what the server's feed says the viewer may do, each time that changes (never before the feed has answered). */
-  onViewerChange?: (viewer: WallViewer) => void;
 }) {
   const userId = useAuthStore((s) => s.user?.id);
   const addToast = useToastStore((s) => s.addToast);
@@ -77,9 +75,6 @@ export default function Wall({ config, fallbackViewer, highlightPostId, onViewer
 
   const { pinned, rest, viewer: fromFeed } = arrangeFeed(feed.data?.pages);
   const viewer = viewerFor(fromFeed, fallbackViewer);
-  useEffect(() => {
-    if (fromFeed) onViewerChange?.(fromFeed);
-  }, [fromFeed, onViewerChange]);
   const loadedIds = new Set([...pinned, ...rest].map((p) => p.id));
 
   // The ?post= link: a post on the pages loaded so far is scrolled to where it stands. One that is not (older

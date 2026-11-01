@@ -32,16 +32,6 @@ export function podCannotPostNote(podStatus: string | undefined, isActiveMember:
   return 'This pod is not open for new activity right now.';
 }
 
-/**
- * Two reads of the same pod that disagree: the wall says an active member cannot post, and the pod page still
- * reads the pod as open. The archive route (DELETE /api/pods/:id) tells the pod's screens a moment before it
- * saves the new status, so a page that refetches the pod at once reads the old one while the wall, a slower
- * read, already knows. The pod is read again to settle it.
- */
-export function podStatusLooksStale(canPost: boolean | undefined, isActiveMember: boolean, podStatus: string | undefined): boolean {
-  return canPost === false && isActiveMember && podStatus === 'active';
-}
-
 export function podWallConfig({ podId, me, podStatus, isActiveMember }: PodWallInput): WallConfig {
   const blocks = me ? [E.userBlocks(me)] : [];
   // The feed answers more than the posts. Its viewer flags depend on the pod's status (pod:<id>) and on the
