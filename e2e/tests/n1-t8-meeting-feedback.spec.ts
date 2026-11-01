@@ -6,6 +6,7 @@ import { cleanup, gotoRetry, idsOf, teardown, APP, SERVER } from '../helpers/liv
 import { primePreview } from '../helpers/preview-bypass';
 import { contextOptions, engineLabel, launchBrowser } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
+import { untilSized } from '../helpers/window-size';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Feedback after meetings (30 Oct 2026, item 5c): "After a meeting ends, show a short prompt asking how it went and
@@ -65,7 +66,15 @@ async function openAs(u: TestUser, p: string, viewport = { width: 1280, height: 
 }
 
 const sheetOf = (page: Page, name: string) => page.getByRole('dialog', { name: `How did your meeting with ${name} go?` });
-const noSideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+// No sideways scroll, measured once the window has a size: Windows WebKit now and then gives a window that reads 0 wide
+// for a moment (helpers/window-size.ts), which would read as a page wider than its window.
+async function noSideways(page: Page): Promise<boolean> {
+  const read = await untilSized(page, () => page.evaluate(() => ({
+    sized: document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0,
+    fits: document.documentElement.scrollWidth <= window.innerWidth,
+  })));
+  return !!read?.sized && read.fits;
+}
 
 async function answer(page: Page, partner: string, worth: 'Yes' | 'Maybe' | 'No', problems: string[] = [], text = '') {
   const sheet = sheetOf(page, partner);
@@ -119,7 +128,6 @@ test.afterAll(async () => {
 test('1) leaving the 1:1 room after the other person was in it asks how it went', async () => {
   test.setTimeout(240_000);
   test.skip(process.env.E2E_ENGINE === 'webkit' || MOBILE, "Playwright's WebKit on Windows has no WebRTC, so it cannot join a LiveKit room");
-  test.skip(LOCAL, 'needs a real LiveKit server; the local API only mocks one (tests 2 to 6 open the question where the room sends people)');
   // A meeting the room knows as the conversation's own: booked through the scheduler two minutes ahead (the earliest
   // the server takes), then moved back to have started, so the question can be answered on the way out.
   const now = new Date((await pool.query<{ n: Date }>('SELECT NOW() AS n')).rows[0].n).getTime();
@@ -131,8 +139,20 @@ test('1) leaving the 1:1 room after the other person was in it asks how it went'
   });
   expect(booked.status).toBe(200);
   const roomMeeting = (await apiAs(ana, 'GET', `/dm/conversations/${convId}/scheduling`)).json.data.confirmed.meetingId as string;
-  await pool.query(`UPDATE meetings SET start_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, [roomMeeting]);
-  await pool.query(`UPDATE dm_conversations SET meeting_start_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, [convId]);
+  // One statement, so the meeting and its conversation get the very same instant. The server names a conversation's
+  // meeting only while the two starts are equal (services/meetings/current-meeting.ts); two UPDATEs run as two
+  // transactions, each with its own NOW(), so the room read no meeting id and leaving went to the chat (fix round 1).
+  await pool.query(
+    `WITH moved AS (UPDATE meetings SET start_at = NOW() - INTERVAL '1 minute' WHERE id = $1 RETURNING start_at)
+     UPDATE dm_conversations SET meeting_start_at = (SELECT start_at FROM moved) WHERE id = $2`,
+    [roomMeeting, convId],
+  );
+  // The room learns the meeting from this read: it must still name the meeting after the move.
+  const moved = await apiAs(ana, 'GET', `/dm/conversations/${convId}/scheduling`);
+  expect(moved.json.data.confirmed?.meetingId, 'the room can still see the meeting it is in').toBe(roomMeeting);
+  // Only the room itself needs a real LiveKit server: the local API only mocks one (tests 2 to 6 open the question
+  // where the room sends people).
+  test.skip(LOCAL, 'needs a real LiveKit server; the local API only mocks one');
 
   const media = await chromium.launch({
     headless: process.env.E2E_HEADED === '0',
@@ -149,11 +169,13 @@ test('1) leaving the 1:1 room after the other person was in it asks how it went'
     await anaRoom.getByRole('button', { name: 'Leave call and go back to chat' }).click();
     await expect(anaRoom).toHaveURL(new RegExp(`/meetings/${roomMeeting}\\?feedback=1`), { timeout: 15_000 });
     await expect(sheetOf(anaRoom, BO)).toBeVisible({ timeout: 20_000 });
-    // Bo is told Ana left, and is not asked anything while he waits.
-    const notice = boRoom.getByTestId('partner-left');
-    await expect(notice).toContainText(`${ANA} left the call`, { timeout: 30_000 });
+    // Bo stays in the room after Ana has gone, past the notice's 5 s grace, and is never asked anything while he
+    // does. (The "{name} left the call" notice itself is meeting-call.spec.ts test 9's; its Leave calls the same
+    // leave as the button below, pinned in server/src/__tests__/client/meeting-feedback-ui.test.ts.)
+    await boRoom.waitForTimeout(8_000);
+    await expect(boRoom).toHaveURL(new RegExp(`/meet/${convId}`));
     await expect(sheetOf(boRoom, ANA)).toHaveCount(0);
-    await notice.getByRole('button', { name: 'Leave', exact: true }).click();
+    await boRoom.getByRole('button', { name: 'Leave call and go back to chat' }).click();
     await expect(boRoom).toHaveURL(new RegExp(`/meetings/${roomMeeting}\\?feedback=1`), { timeout: 15_000 });
     await expect(sheetOf(boRoom, ANA)).toBeVisible({ timeout: 20_000 });
     meetingId = roomMeeting;
@@ -267,7 +289,11 @@ test('6) the sheet and the card fit at every width; the admin page at 1280 and 3
     const card = page.getByRole('heading', { name: 'How did it go?' });
     await expect(card).toBeVisible({ timeout: 30_000 });
     expect(await noSideways(page), `card ${tag}: sideways scroll`).toBe(true);
-    await expectReachable(page, page.getByRole('button', { name: 'Answer', exact: true }), `card ${tag}: Answer`);
+    // The first check after a page opens waits for its layout to settle (Windows WebKit once drew the page at a
+    // passing size before the window had its own; the check passed again on its own run).
+    await expect(async () => {
+      await expectReachable(page, page.getByRole('button', { name: 'Answer', exact: true }), `card ${tag}: Answer`);
+    }).toPass({ timeout: 10_000 });
     await page.screenshot({ path: path.join(SHOTS, `card-${tag}-${label}.png`) });
 
     await page.getByRole('button', { name: 'Answer', exact: true }).click();
@@ -297,7 +323,9 @@ test('6) the sheet and the card fit at every width; the admin page at 1280 and 3
     const page = await openAs(adm, '/admin/feedback', { width: w || 390, height: 900 });
     await expect(page.getByTestId('feedback-row').first()).toBeVisible({ timeout: 30_000 });
     expect(await noSideways(page), `admin ${w}: sideways scroll`).toBe(true);
-    await expectReachable(page, page.getByRole('button', { name: 'Only with problems' }), `admin ${w}: filter`);
+    await expect(async () => {
+      await expectReachable(page, page.getByRole('button', { name: 'Only with problems' }), `admin ${w}: filter`);
+    }).toPass({ timeout: 10_000 });
     await page.screenshot({ path: path.join(SHOTS, `admin-${MOBILE ? 'device' : w}-${label}.png`), fullPage: true });
     await page.context().close();
   }

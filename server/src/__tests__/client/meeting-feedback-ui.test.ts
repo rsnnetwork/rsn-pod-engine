@@ -166,6 +166,25 @@ describe('whether the other person has been in the room', () => {
   });
 });
 
+// Fix round 1 (1 Nov 2026). On the preview the spec's leave went to the chat: it moved the meeting's start and the
+// conversation's start in two statements, two transactions with two NOW()s, and the server names a conversation's
+// meeting only while the two starts are equal, so the room read no meeting id. Any spec that moves a booked meeting's
+// time must move both in one statement.
+describe('the feedback spec moves a booked meeting the way the server can still read it', () => {
+  const spec = fs.readFileSync(path.join(__dirname, '../../../../e2e/tests/n1-t8-meeting-feedback.spec.ts'), 'utf8').replace(/\r\n/g, '\n');
+  const guard = fs.readFileSync(path.join(__dirname, '../../services/meetings/current-meeting.ts'), 'utf8');
+
+  it("the server names the meeting only while its start equals the conversation's", () => {
+    expect(guard.replace(/\s+/g, ' ')).toContain('AND m.start_at = dm_conversations.meeting_start_at');
+  });
+
+  it('so the spec moves both starts in one statement, and checks the room can still see the meeting', () => {
+    expect(spec).toMatch(/WITH moved AS \(UPDATE meetings SET start_at = [^\n]*? RETURNING start_at\)\s*UPDATE dm_conversations SET meeting_start_at = \(SELECT start_at FROM moved\)/);
+    expect(spec).not.toMatch(/UPDATE dm_conversations SET meeting_start_at = NOW\(\)/);
+    expect(spec).toMatch(/confirmed\?\.meetingId, 'the room can still see the meeting it is in'\)\.toBe\(roomMeeting\)/);
+  });
+});
+
 describe('the meeting room', () => {
   const room = read('features/messages/MeetPage.tsx');
 
