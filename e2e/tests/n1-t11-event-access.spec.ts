@@ -77,6 +77,7 @@ async function fits(page: Page, scope: string, label: string): Promise<void> {
 let host: Person;
 let stranger: Person;
 let podId = '';
+const extraPods: string[] = [];
 
 test.beforeAll(async () => {
   expect(SECRET, 'E2E_JWT_SECRET (or JWT_SECRET) is needed to sign the throwaway accounts').toBeTruthy();
@@ -91,6 +92,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   const ids = idsOf(host, stranger);
   // The spec's own event requests go with its events (CASCADE) when the pod goes.
+  for (const extra of extraPods) await cleanup(pool, { ids: [], podId: extra });
   await cleanup(pool, { ids, podId });
   if (ids.length) await pool.query(`DELETE FROM users WHERE id = ANY($1)`, [ids]).catch(() => {});
 });
@@ -158,7 +160,9 @@ test('a stranger requests, the host approves live, private is hidden, public reg
     await expect(s.page.getByText('Approval event', { exact: false }).first()).toBeVisible({ timeout: 30_000 });
     await expect(s.page.getByText(priv.json.data.title)).toHaveCount(0);
     await s.page.goto(`${APP}/sessions/${priv.json.data.id}`);
-    await expect(s.page.getByText('Access restricted')).toBeVisible({ timeout: 30_000 });
+    await expect(s.page.getByTestId('event-private-title')).toHaveText('This event is private', { timeout: 30_000 });
+    await expect(s.page.getByTestId('event-private-notice')).toContainText("It is for its pod's members and the people the host invites.");
+    await shot(s.page, 'private-notice');
 
     // A public event: opening it registers nobody; Register does.
     const pub = await api(host, 'POST', '/sessions', {
@@ -172,6 +176,26 @@ test('a stranger requests, the host approves live, private is hidden, public reg
     const before = await pool.query(`SELECT 1 FROM session_participants WHERE session_id = $1 AND user_id = $2`, [pub.json.data.id, stranger.id]);
     expect(before.rows.length).toBe(0);
     await register.click();
+    await expect(s.page.getByText('Registered', { exact: true })).toBeVisible({ timeout: 20_000 });
+
+    // A NULL event (production's form) in a public pod: opening it registers nobody outside the pod; Register does.
+    const publicPod = uuid();
+    await pool.query(`INSERT INTO pods (id, name, created_by, visibility, status, pod_type) VALUES ($1, $2, $3, 'public', 'active', 'speed_networking')`,
+      [publicPod, `T11 public pod ${Date.now()}`, host.id]);
+    await pool.query(`INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'director', 'active')`, [publicPod, host.id]);
+    extraPods.push(publicPod);
+    const legacy = await api(host, 'POST', '/sessions', {
+      podId: publicPod, title: `Old form event ${Date.now()}`, scheduledAt: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+      format: 'speed_networking', config: { numberOfRounds: 3, roundDurationSeconds: 300, maxParticipants: 20 },
+    });
+    expect(legacy.status).toBe(201);
+    expect(legacy.json.data.visibility).toBeNull();
+    await s.page.goto(`${APP}/sessions/${legacy.json.data.id}`);
+    await expect(s.page.getByTestId('event-register')).toBeVisible({ timeout: 30_000 });
+    await s.page.waitForTimeout(1500);
+    const notYet = await pool.query(`SELECT 1 FROM session_participants WHERE session_id = $1 AND user_id = $2`, [legacy.json.data.id, stranger.id]);
+    expect(notYet.rows.length).toBe(0);
+    await s.page.getByTestId('event-register').click();
     await expect(s.page.getByText('Registered', { exact: true })).toBeVisible({ timeout: 20_000 });
 
     // Seven widths: the form field, the request sheet and the Requests card.
