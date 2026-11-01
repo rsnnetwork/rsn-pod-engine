@@ -23,14 +23,27 @@ export class AppError extends Error {
   }
 }
 
+/** What a member calls the thing behind each entity name; any other name is read as words ("Call request" is "call request"). */
+const NOT_FOUND_LABELS: Record<string, string> = {
+  User: 'member',
+  PodMember: 'member',
+  PendingMember: 'member',
+  Session: 'event',
+  Poke: 'meeting request',
+};
+
+function notFoundLabel(entity: string): string {
+  return NOT_FOUND_LABELS[entity] ?? entity.toLowerCase();
+}
+
 export class NotFoundError extends AppError {
   /**
-   * `message` replaces the generated "<entity> with id <id> not found" where a member
-   * reads it and the id or the entity's internal name would mean nothing to them.
-   * The 404 and the `<ENTITY>_NOT_FOUND` code stay as they are.
+   * `message` replaces the generated one where a member reads it. Without it, a call that
+   * names an id says "We couldn't find that <thing>." and never prints the id, which would
+   * mean nothing to a member. The 404 and the `<ENTITY>_NOT_FOUND` code stay as they are.
    */
   constructor(entity: string, id?: string, message?: string) {
-    const generated = id ? `${entity} with id ${id} not found` : `${entity} not found`;
+    const generated = id ? `We couldn't find that ${notFoundLabel(entity)}.` : `${entity} not found`;
     super(404, `${entity.toUpperCase()}_NOT_FOUND` as ErrorCode, message ?? generated);
   }
 }

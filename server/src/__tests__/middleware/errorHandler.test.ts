@@ -41,7 +41,7 @@ describe('errorHandler', () => {
       success: false,
       error: {
         code: 'USER_NOT_FOUND',
-        message: 'User with id 123 not found',
+        message: "We couldn't find that member.",
         details: undefined,
       },
     });

@@ -37,10 +37,31 @@ describe('NotFoundError', () => {
     expect(err.message).toBe('User not found');
   });
 
-  it('should include ID in message when provided', () => {
+  it('should say what could not be found without printing the id', () => {
     const err = new NotFoundError('Pod', '123');
-    expect(err.message).toBe('Pod with id 123 not found');
+    expect(err.message).toBe("We couldn't find that pod.");
+    expect(err.message).not.toContain('123');
     expect(err.code).toBe('POD_NOT_FOUND');
+  });
+
+  it.each([
+    ['User', 'member', 'USER_NOT_FOUND'],
+    ['Session', 'event', 'SESSION_NOT_FOUND'],
+    ['PodMember', 'member', 'PODMEMBER_NOT_FOUND'],
+    ['Circle', 'circle', 'CIRCLE_NOT_FOUND'],
+    ['Agent', 'agent', 'AGENT_NOT_FOUND'],
+    ['Entity', 'entity', 'ENTITY_NOT_FOUND'],
+    ['Conversation', 'conversation', 'CONVERSATION_NOT_FOUND'],
+    ['Invite', 'invite', 'INVITE_NOT_FOUND'],
+    ['Call request', 'call request', 'CALL REQUEST_NOT_FOUND'],
+    ['LinkedIn photo', 'linkedin photo', 'LINKEDIN PHOTO_NOT_FOUND'],
+  ])('names %s as "%s" and keeps the code %s', (entity, thing, code) => {
+    const uuid = '8f14e45f-ceea-467a-9575-0a1c5e8b2d11';
+    const err = new NotFoundError(entity, uuid);
+    expect(err.message).toBe(`We couldn't find that ${thing}.`);
+    expect(err.message).not.toContain(uuid);
+    expect(err.statusCode).toBe(404);
+    expect(err.code).toBe(code);
   });
 
   it('should use a given message in place of the generated one, keeping the 404 and the code', () => {
