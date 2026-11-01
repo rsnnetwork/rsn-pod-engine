@@ -23,7 +23,8 @@ describe('REASON look (milestone 1)', () => {
       expect(size).toBeLessThanOrEqual(200 * 1024);
     }
   });
-  it('the logo is the official sheep mark with its outline grown so the face reads when small (reason-mark-small.png), not the thin-outlined original or a prototype crop', () => {
+  // 1 Nov 2026: the mark is the official sheep unaltered, with a margin, no longer a grown outline (logo-files.test.ts).
+  it('the logo is the official sheep mark (reason-mark-small.png), not the full-size original file or a prototype crop', () => {
     const mark = read('src/features/reason/brand/ReasonMark.tsx');
     expect(mark).toMatch(/\/reason-mark-small\.png/);
     expect(mark).not.toMatch(/\/rsn-sheep\.png/);

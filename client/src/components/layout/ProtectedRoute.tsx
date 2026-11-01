@@ -2,6 +2,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { PageLoader } from '@/components/ui/Spinner';
 import { type ReactNode } from 'react';
+import { signInPathFor } from '@/features/auth/return-path';
 
 /**
  * D2 — always-on re-onboarding gate, keyed on `user.onboardingStatus`
@@ -23,7 +24,9 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   const location = useLocation();
 
   if (isLoading) return <div className="h-screen w-screen bg-white flex items-center justify-center"><PageLoader /></div>;
-  if (!user) return <Navigate to="/welcome" state={{ from: location }} replace />;
+  // 1 Nov 2026: straight to sign-in, carrying the page (a meeting link followed signed out lands back on it).
+  // /welcome only redirects to /login, and that redirect dropped the page.
+  if (!user) return <Navigate to={signInPathFor(location.pathname, location.search)} replace />;
 
   const status = user.onboardingStatus;
   const needsOnboarding = status !== undefined && status !== 'completed';

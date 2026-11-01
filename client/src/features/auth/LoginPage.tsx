@@ -5,11 +5,17 @@ import { useAuthStore } from '@/stores/authStore';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { ArrowRight, AlertCircle, KeyRound, Mail } from 'lucide-react';
+import CheckEmailPanel from './CheckEmailPanel';
+import { safeReturnPath } from './return-path';
+import { rememberReturnPath, takeReturnPath } from './kept-return-path';
 // Note: inviteCode is never entered manually — it arrives via URL param from /invite/:code flow
 // and is passed silently to Google OAuth and magic link endpoints.
 import { API_BASE_URL } from '@/lib/runtimeEndpoints';
 
 const API_URL = API_BASE_URL;
+
+// 1 Nov 2026 (30 Oct review: Stefan expected a password). Said where the sign-in starts.
+const NO_PASSWORD = "No password needed — we'll email you a link and a code.";
 
 const ERROR_MESSAGES: Record<string, string> = {
   google_auth_failed: 'Google sign-in failed. Please try again.',
@@ -28,21 +34,23 @@ export default function LoginPage() {
   const signOutReason = useAuthStore((s) => s.signOutReason);
   const [params] = useSearchParams();
   const [sent, setSent] = useState(false);
+  const [sentTo, setSentTo] = useState('');
   const [devLink, setDevLink] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const handlingCrossTabAuth = useRef(false);
   const inviteCodeFromUrl = params.get('inviteCode');
   const hasInvite = !!inviteCodeFromUrl;
-  const { register, handleSubmit, formState: { errors, isSubmitting }, getValues } = useForm<{ email: string }>();
+  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<{ email: string }>();
 
   // Invite code comes silently from URL params (via /invite/:code flow) — no manual input needed
   const inviteCodeValue = inviteCodeFromUrl || '';
 
-  // Store redirect path so VerifyPage can use it after login
-  const redirectPath = params.get('redirect');
-  if (redirectPath) {
-    sessionStorage.setItem('rsn_redirect', redirectPath);
-  }
+  // The page to come back to after sign-in (a signed-out visit to a protected page sends it here; 1 Nov 2026). This
+  // tab keeps it for Google and the code; the emailed link carries it for another tab or device. Same-site paths only.
+  const returnPath = safeReturnPath(params.get('redirect'));
+  useEffect(() => {
+    if (returnPath) rememberReturnPath(returnPath);
+  }, [returnPath]);
 
   // Show error from OAuth redirect (e.g. ?error=INVITE_REQUIRED)
   const urlError = params.get('error');
@@ -61,9 +69,7 @@ export default function LoginPage() {
       handlingCrossTabAuth.current = true;
       try {
         await checkSession();
-        const redirect = sessionStorage.getItem('rsn_redirect');
-        sessionStorage.removeItem('rsn_redirect');
-        navigate(redirect || '/', { replace: true });
+        navigate(takeReturnPath() ?? '/', { replace: true });
       } finally {
         handlingCrossTabAuth.current = false;
       }
@@ -83,7 +89,8 @@ export default function LoginPage() {
     setAuthError(null);
     setDevLink(null);
     try {
-      const response = await login(data.email, window.location.origin, inviteCodeValue || undefined);
+      const response = await login(data.email, window.location.origin, inviteCodeValue || undefined, returnPath ?? undefined);
+      setSentTo(data.email.trim());
       setSent(true);
       // Signal that this login tab is waiting for magic link verification
       localStorage.setItem('rsn_magic_link_sent', '1');
@@ -93,9 +100,21 @@ export default function LoginPage() {
         setDevLink(response.data.devLink);
       }
     } catch (err: any) {
-      const msg = err?.response?.data?.error?.message || err?.response?.data?.data?.message || 'Failed to send magic link';
+      const msg = err?.response?.data?.error?.message || err?.response?.data?.data?.message || 'We could not send the email. Please try again.';
       setAuthError(msg);
     }
+  };
+
+  // A new email from the waiting screen: a new link and a new code (the older ones stop working). Errors go back to it.
+  const resend = async () => {
+    const response = await login(sentTo, window.location.origin, inviteCodeValue || undefined, returnPath ?? undefined);
+    setDevLink(response?.data?.devLink ?? null);
+  };
+
+  // Signed in with the code, in this tab: on to the page the member was going to.
+  const onCodeSignedIn = () => {
+    localStorage.removeItem('rsn_magic_link_sent');
+    navigate(takeReturnPath() ?? '/', { replace: true });
   };
 
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -152,7 +171,7 @@ export default function LoginPage() {
                 <KeyRound className="h-5 w-5 text-[#1a1a2e]" />
                 <h2 className="text-base font-semibold text-[#1a1a2e]">Already a member? Sign in</h2>
               </div>
-              <p className="text-sm text-gray-500 -mt-2 mb-4">Use Google or magic link to access your account</p>
+              <p className="text-sm text-gray-500 -mt-2 mb-4">{NO_PASSWORD}</p>
 
               {/* Google Login */}
               <button
@@ -190,7 +209,7 @@ export default function LoginPage() {
                 />
                 <Button type="submit" className="w-full group" isLoading={isSubmitting}>
                   <Mail className="h-4 w-4 mr-2" />
-                  Send magic link
+                  Email me a link and a code
                   <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
                 </Button>
               </form>
@@ -210,40 +229,18 @@ export default function LoginPage() {
               </div>
             )}
 
-            {redirectPath && (
+            {returnPath && (
               <p className="text-xs text-gray-400 text-center">You&apos;ll be redirected after signing in</p>
             )}
           </div>
         ) : (
-          <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-8 text-center space-y-4 animate-fade-in">
-            <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-emerald-50 text-emerald-600 mb-2">
-              <Mail className="h-8 w-8" />
-            </div>
-            <h2 className="text-xl font-semibold text-[#1a1a2e]">Check your email</h2>
-            <p className="text-gray-500 text-sm">
-              We sent a magic link to <span className="font-medium text-gray-800">{getValues('email')}</span>
-            </p>
-            <p className="text-gray-400 text-xs mt-1">Click the link in your email to sign in. It expires in 60 minutes.</p>
-            <p className="text-gray-400 text-xs">This page will continue automatically after you verify the link.</p>
-
-            {/* Dev mode: show direct link */}
-            {devLink && (
-              <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 mt-4 animate-fade-in">
-                <p className="text-xs text-amber-600 mb-2 font-semibold">DEV MODE — Direct Link</p>
-                <a
-                  href={devLink}
-                  className="inline-flex items-center gap-2 text-sm text-amber-600 hover:text-amber-700 underline"
-                >
-                  Click here to verify
-                  <ArrowRight className="h-4 w-4" />
-                </a>
-              </div>
-            )}
-
-            <button onClick={() => setSent(false)} className="min-h-[44px] px-3 text-sm text-gray-400 hover:text-gray-600 transition-colors">
-              Try a different email
-            </button>
-          </div>
+          <CheckEmailPanel
+            email={sentTo}
+            devLink={devLink}
+            onResend={resend}
+            onDifferentEmail={() => setSent(false)}
+            onSignedIn={onCodeSignedIn}
+          />
         )}
 
       </div>

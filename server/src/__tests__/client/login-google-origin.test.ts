@@ -52,6 +52,7 @@ describe('the Google button on the sign-in page', () => {
   });
 
   it('the email-link sign-in on the same page still names the site too (the existing behaviour this matches)', () => {
-    expect(LOGIN).toMatch(/login\(data\.email, window\.location\.origin, inviteCodeValue \|\| undefined\)/);
+    // 1 Nov 2026: it also sends the page to come back to after sign-in (sign-in-code-entry.test.ts).
+    expect(LOGIN).toMatch(/login\(data\.email, window\.location\.origin, inviteCodeValue \|\| undefined, returnPath \?\? undefined\)/);
   });
 });

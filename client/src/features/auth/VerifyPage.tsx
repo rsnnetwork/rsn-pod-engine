@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { PageLoader } from '@/components/ui/Spinner';
+import { safeReturnPath } from './return-path';
+import { takeReturnPath } from './kept-return-path';
 
 interface VerifyFailure {
   message: string;
@@ -58,14 +60,13 @@ export default function VerifyPage() {
       // Signal original login tab that auth is complete
       localStorage.setItem('rsn_auth_completed_at', String(Date.now()));
 
-      // Priority: inviteCode from URL (Google OAuth) > sessionStorage (magic link) > home
+      // Priority: inviteCode from the URL > the page the link carries (1 Nov 2026: the email may open in another tab
+      // or on another device, where this tab kept nothing) > the page this tab kept (Google) > home. Paths on this
+      // site only (return-path.ts). New / not-yet-onboarded users are INVITED into the host chat by a welcome popup
+      // on the dashboard, never auto-redirected here.
       const inviteCode = params.get('inviteCode');
-      const redirect = sessionStorage.getItem('rsn_redirect');
-      sessionStorage.removeItem('rsn_redirect');
-      // Land on the destination (or the dashboard). New / not-yet-onboarded users
-      // are INVITED into the host chat by a welcome popup on the dashboard, never
-      // auto-redirected here.
-      const destination = inviteCode ? `/invite/${inviteCode}` : (redirect || '/');
+      const kept = takeReturnPath();
+      const destination = inviteCode ? `/invite/${inviteCode}` : (safeReturnPath(params.get('redirect')) ?? kept ?? '/');
 
       // Clear magic link flag so original tab knows auth is done
       localStorage.removeItem('rsn_magic_link_sent');
