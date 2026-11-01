@@ -5,25 +5,16 @@
 // in one call. POST /invites stays for one typed address and for a shareable link. Every query follows the tags the
 // server sends when its answer changes; every write also refetches, on the sender's own screen, what the server's
 // fan-out names, because the sender may be in no list the fan-out reaches (an admin who is not in the pod).
-import { useInfiniteQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { InviteBatchResponse, InviteCandidatePage, InviteCandidateSource } from '@rsn/shared';
 import api from '@/lib/api';
+import { invalidateEntities } from '@/realtime/invalidate-entities';
 import { useAuthStore } from '@/stores/authStore';
 import { batchBody, candidateEntities, candidateParams, emailInviteBody, linkBody, targetId, targetTags, type InviteTarget } from './invite-picker';
 
 /** Everything the sheet has read for one pod, event or circle, whatever the list and the search. */
 export const targetKey = (target: InviteTarget) => ['invite-candidates', target.type, targetId(target)] as const;
 
-/** Every query that declares one of these tags is read again, as the app does when the server sends them. */
-export function invalidateTags(qc: QueryClient, tags: readonly string[]): void {
-  const wanted = new Set(tags);
-  void qc.invalidateQueries({
-    predicate: (query) => {
-      const declared = (query.meta as { entities?: unknown } | undefined)?.entities;
-      return Array.isArray(declared) && declared.some((tag) => typeof tag === 'string' && wanted.has(tag));
-    },
-  });
-}
 
 /** How long a list read stays fresh: the server allows 60 candidate reads a minute per member, shared with People. */
 const CANDIDATES_FRESH_MS = 60_000;
@@ -70,7 +61,7 @@ export function useSendInvites(target: InviteTarget, handlers: Handlers<InviteBa
     mutationFn: ({ ids, allPodMembers }) =>
       api.post('/invites/batch', batchBody(target, ids, allPodMembers)).then((r) => r.data.data as InviteBatchResponse),
     onSuccess: (data, variables) => {
-      invalidateTags(qc, targetTags(target));
+      void invalidateEntities(qc, targetTags(target));
       handlers.onSuccess(data, variables);
     },
     onError: (error, variables) => handlers.onError(error, variables),
@@ -85,7 +76,7 @@ export function useInviteByEmail(target: InviteTarget, handlers: Handlers<string
     networkMode: 'always',
     mutationFn: (email) => api.post('/invites', emailInviteBody(target, email)),
     onSuccess: (_answer, email) => {
-      invalidateTags(qc, targetTags(target));
+      void invalidateEntities(qc, targetTags(target));
       handlers.onSuccess(email.trim(), email);
     },
     onError: (error, email) => handlers.onError(error, email),
@@ -99,7 +90,7 @@ export function useShareLink(target: InviteTarget, cap: number, handlers: Handle
     networkMode: 'always',
     mutationFn: () => api.post('/invites', linkBody(target, cap)).then((r) => (r.data.data as { code: string }).code),
     onSuccess: (code) => {
-      invalidateTags(qc, targetTags(target));
+      void invalidateEntities(qc, targetTags(target));
       handlers.onSuccess(code);
     },
     onError: (error) => handlers.onError(error),

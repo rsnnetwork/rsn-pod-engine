@@ -10,7 +10,7 @@ import { GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS } from '@rsn/shared';
 import type {
   DmGroupLastMessage, DmGroupMember, DmGroupSummary, GroupCandidate, GroupChatMessage, GroupChatMessagePage,
 } from '@rsn/shared';
-import { CONNECTION_LOST, memberSentence } from '../reason/errors';
+import { CONNECTION_LOST, firstDetail, memberSentence } from '../reason/errors';
 import { shouldRetry, statusOf } from '../reason/human/profile-text';
 import { PANEL_TITLE } from '../sessions/post-event-panel';
 import { clusterMessages, type Cluster } from './bubble-look';
@@ -289,15 +289,6 @@ export function groupLoadProblem(err: unknown): 'gone' | 'not-member' | 'failed'
   if (status === 404) return 'gone';
   if (status === 403) return 'not-member';
   return 'failed';
-}
-
-/** The first message of a validation failure's details ({ field: [messages] }). */
-function firstDetail(details: unknown): unknown {
-  if (!details || typeof details !== 'object') return undefined;
-  for (const messages of Object.values(details)) {
-    if (Array.isArray(messages) && messages.length > 0) return messages[0];
-  }
-  return undefined;
 }
 
 /**

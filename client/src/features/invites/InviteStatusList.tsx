@@ -21,7 +21,7 @@ import {
   statusSummary, tallyReminders, type InTurnOptions, type InviteListRow,
 } from './invite-status';
 import { DeclinedSection, InvitedSection, LinksSection, ROW_BUTTON, type RemindProgress } from './InviteStatusRows';
-import { invalidateTags } from './useInviteCandidates';
+import { invalidateEntities } from '@/realtime/invalidate-entities';
 
 interface Props {
   /** A pod's or an event's invitations (a circle has no such card). */
@@ -127,7 +127,7 @@ function InviteStatusCard({ target, kind, pending, history, remindAll, present, 
     networkMode: 'always',
     mutationFn: (inviteId: string) => api.delete(`/invites/${inviteId}`),
     onSuccess: () => {
-      invalidateTags(qc, targetTags(target));
+      void invalidateEntities(qc, targetTags(target));
       addToast(WITHDRAWN, 'success');
     },
     onError: (err) => addToast(inviteErrorSentence(err, NOT_WITHDRAWN), 'error'),

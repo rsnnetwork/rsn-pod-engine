@@ -516,8 +516,25 @@ describe('the data layer: candidates as a useInfiniteQuery that declares its tag
     expect(hooks).toMatch(/api\.post\('\/invites\/batch', batchBody\(/);
     expect(hooks).toMatch(/api\.post\('\/invites', emailInviteBody\(/);
     expect(hooks).toMatch(/api\.post\('\/invites', linkBody\(/);
-    expect(hooks).toMatch(/invalidateTags\(qc, targetTags\(target\)\)/);
+    // Through the app's one rule for tags (realtime/invalidate-entities.ts), not a copy of it (P1 item 28).
+    expect(hooks).toMatch(/void invalidateEntities\(qc, targetTags\(target\)\)/);
+    expect(hooks).not.toMatch(/function invalidateTags|predicate:/);
     expect(hooks).not.toMatch(/setQueryData/);
+  });
+
+  it('one firstDetail for every screen that reads validation details (P1 item 28)', () => {
+    const copies: string[] = [];
+    const walk = (dir: string) => {
+      for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, f.name);
+        if (f.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(f.name) && /function firstDetail\(details: unknown\): (string \| undefined|unknown)/.test(fs.readFileSync(p, 'utf8'))) {
+          copies.push(path.relative(SRC, p).split(path.sep).join('/'));
+        }
+      }
+    };
+    walk(SRC);
+    expect(copies).toEqual(['features/reason/errors.ts']);
   });
 });
 

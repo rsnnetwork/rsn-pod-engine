@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import { POST_EVENT_MESSAGE_LIMITS } from '@rsn/shared';
 import type { BroadcastAudience, BroadcastEligibilityV2, PostEventMessageJob } from '@rsn/shared';
-import { CONNECTION_LOST, memberSentence } from '../reason/errors';
+import { CONNECTION_LOST, firstDetail, memberSentence } from '../reason/errors';
 
 export const PANEL_TITLE = 'Message everyone who took part';
 export const PANEL_INTRO = 'Each person gets your message privately, from you, in Messages. Their replies come to you alone.';
@@ -125,15 +125,6 @@ interface FailedSend {
   isAxiosError?: unknown;
   request?: unknown;
   response?: { status?: number; data?: { error?: { message?: unknown; details?: unknown } } };
-}
-
-/** The first message of a validation failure's details ({ field: [messages] }). */
-function firstDetail(details: unknown): unknown {
-  if (!details || typeof details !== 'object') return undefined;
-  for (const messages of Object.values(details)) {
-    if (Array.isArray(messages) && messages.length > 0) return messages[0];
-  }
-  return undefined;
 }
 
 /**

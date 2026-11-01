@@ -44,8 +44,11 @@ export function memberSentence(text: unknown): string | null {
   return ID_LIKE.test(sentence) || CODE_WORD.test(sentence) ? null : sentence;
 }
 
-/** Validation details are { field: [messages] }. The first message of the first field that has one. */
-function firstDetail(details: unknown): string | undefined {
+/**
+ * Validation details are { field: [messages] }. The first message of the first field that has one. The one copy
+ * (P1 item 28): the invite picker, the group chats and the message-everyone panel read it too.
+ */
+export function firstDetail(details: unknown): string | undefined {
   if (!details || typeof details !== 'object') return undefined;
   for (const messages of Object.values(details)) {
     if (!Array.isArray(messages)) continue;

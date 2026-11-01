@@ -12,7 +12,7 @@ import type {
   InviteBatchInput, InviteBatchOutcome, InviteBatchResponse, InviteCandidate, InviteCandidateSource, InviteCandidateState,
 } from '@rsn/shared';
 import { E } from '../../realtime/entities';
-import { CONNECTION_LOST, memberSentence } from '../reason/errors';
+import { CONNECTION_LOST, firstDetail, memberSentence } from '../reason/errors';
 
 /**
  * What the sheet invites to: a pod, an event (which lives in a pod; podId is null only while that is unknown), or a
@@ -260,17 +260,6 @@ interface FailedCall {
   isAxiosError?: unknown;
   request?: unknown;
   response?: { status?: number; data?: { error?: { message?: unknown; details?: unknown } } };
-}
-
-/** Validation details are { field: [messages] }: the first message of the first field that has one. */
-function firstDetail(details: unknown): string | undefined {
-  if (!details || typeof details !== 'object') return undefined;
-  for (const messages of Object.values(details)) {
-    if (!Array.isArray(messages)) continue;
-    const first = messages.find((m): m is string => typeof m === 'string' && m.trim() !== '');
-    if (first !== undefined) return first;
-  }
-  return undefined;
 }
 
 // The refusals the invite routes word for members: a closed pod or event, not allowed here, nobody there, a person who
