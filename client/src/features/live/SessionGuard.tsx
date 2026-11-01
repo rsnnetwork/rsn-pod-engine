@@ -27,13 +27,13 @@ import { Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
-import { RETRY_DELAYS_MS, REFUSED_SENTENCE, UNREACHABLE_SENTENCE, classifyGuardFailure } from './session-guard-state';
+import { RETRY_DELAYS_MS, REFUSED_SENTENCE, UNREACHABLE_SENTENCE, classifyGuardFailure, refusalOf } from './session-guard-state';
 
 type GuardState =
   | { kind: 'checking' }
   | { kind: 'ready' }
   | { kind: 'retrying'; attempt: number }
-  | { kind: 'refused' }
+  | { kind: 'refused'; detail: string; requestOnEventPage: boolean }
   | { kind: 'gone' }
   | { kind: 'error'; message: string };
 
@@ -66,7 +66,7 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
       // but a sustained 404 ends in "gone"; sustained other errors end in a generic error.
       const outcome = classifyGuardFailure(err?.response?.status, attempt);
       if (outcome === 'refused') {
-        safeSetState({ kind: 'refused' });
+        safeSetState({ kind: 'refused', ...refusalOf(err) });
         return;
       }
       if (outcome === 'gone') {
@@ -96,7 +96,7 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
         // Cheap re-validate: if it 404s now, we transition to gone.
         api.get(`/sessions/${sessionId}`).catch((err) => {
           if (err?.response?.status === 404) safeSetState({ kind: 'gone' });
-          if (err?.response?.status === 403) safeSetState({ kind: 'refused' });
+          if (err?.response?.status === 403) safeSetState({ kind: 'refused', ...refusalOf(err) });
         });
       }
     };
@@ -132,10 +132,13 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
         <div className="text-center max-w-md">
           <AlertCircle className="h-10 w-10 text-amber-500 mx-auto mb-4" />
           <h2 className="text-lg font-semibold text-gray-900 mb-2">{REFUSED_SENTENCE}</h2>
-          <p className="text-sm text-gray-500 mb-6">
-            If you think this is a mistake, ask the person who runs the event.
-          </p>
-          <Button onClick={() => navigate('/sessions')}>Back to events</Button>
+          <p className="text-sm text-gray-500 mb-6">{state.detail}</p>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {state.requestOnEventPage && (
+              <Button onClick={() => navigate(`/sessions/${sessionId}`)}>Open the event page</Button>
+            )}
+            <Button variant={state.requestOnEventPage ? 'secondary' : 'primary'} onClick={() => navigate('/sessions')}>Back to events</Button>
+          </div>
         </div>
       </div>
     );

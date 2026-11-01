@@ -4,6 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { REFUSED_DETAIL, refusalOf } from '../../../../client/src/features/live/session-guard-state';
 import { chimeFromCall, quietHere } from '../../../../client/src/lib/message-chime-policy';
 
 const CLIENT = path.join(__dirname, '../../../../client/src');
@@ -81,5 +82,29 @@ describe('X3: one "Former member" on the client', () => {
     expect(defined).toEqual(['lib/former-member.ts']);
     const server = fs.readFileSync(path.join(__dirname, '../../services/users/active-member.ts'), 'utf8');
     expect(server).toMatch(/FORMER_MEMBER_NAME = 'Former member'/);
+  });
+});
+
+describe('P1 item 9: a refused person\'s live page is final, and says T11\'s refusals in the server\'s words', () => {
+  const refused = (code: string, message: string) => ({ response: { status: 403, data: { error: { code, message } } } });
+
+  it('a private event or one that needs the host\'s approval says why; approval also points to the event page', () => {
+    expect(refusalOf(refused('EVENT_PRIVATE', 'This event is private. It is for its pod\'s members and the people the host invites.')))
+      .toEqual({ detail: 'This event is private. It is for its pod\'s members and the people the host invites.', requestOnEventPage: false });
+    expect(refusalOf(refused('EVENT_NEEDS_APPROVAL', 'This event asks the host to approve each place. Request to join from the event page.')))
+      .toEqual({ detail: 'This event asks the host to approve each place. Request to join from the event page.', requestOnEventPage: true });
+  });
+
+  it('any other refusal keeps the plain line, never a code or a raw server text', () => {
+    expect(refusalOf(refused('AUTH_FORBIDDEN', 'Forbidden'))).toEqual({ detail: REFUSED_DETAIL, requestOnEventPage: false });
+    expect(refusalOf(refused('EVENT_PRIVATE', ''))).toEqual({ detail: REFUSED_DETAIL, requestOnEventPage: false });
+    expect(refusalOf(undefined)).toEqual({ detail: REFUSED_DETAIL, requestOnEventPage: false });
+  });
+
+  it('the guard keeps the refusal it read, on the first read and on the re-check when the tab comes back', () => {
+    const guard = read('features/live/SessionGuard.tsx');
+    expect(guard.match(/safeSetState\(\{ kind: 'refused', \.\.\.refusalOf\(err\) \}\)/g)).toHaveLength(2);
+    expect(guard).toMatch(/\{state\.detail\}/);
+    expect(guard).toMatch(/state\.requestOnEventPage && \(/);
   });
 });
