@@ -16,7 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ConnectionState, RoomEvent } from 'livekit-client';
 import {
-  DEPART_MS, GOODBYE_MS, GOODBYE_TOPIC, LEAVE_GRACE_MS, leaveCall, leftCallText, watchPartner, type DepartingRoom, type PresenceRoom,
+  CONNECT_MS, DEPART_MS, GOODBYE_MS, GOODBYE_TOPIC, LEAVE_GRACE_MS, leaveCall, leftCallText, watchPartner, type DepartingRoom, type PresenceRoom,
 } from '../../../../client/src/features/messages/call-presence';
 
 interface Person { identity: string; name?: string }
@@ -204,13 +204,32 @@ describe('someone who leaves on purpose is announced at once', () => {
     expect(seen).toEqual([null, LEFT, null, LEFT]);
   });
 
-  it('a data message on any other topic, or one with no sender, is not a goodbye', () => {
+  it('a data message on any other topic is not a goodbye', () => {
     const { room, seen } = watched();
     room.join(stefan);
     sayGoodbye(room, stefan, 'lk-chat-topic');
-    room.emit(RoomEvent.DataReceived, goodbye, undefined, undefined, GOODBYE_TOPIC);
     jest.advanceTimersByTime(LEAVE_GRACE_MS * 2);
     expect(seen).toEqual([null]);
+  });
+
+  // Fix round 2 (preview): livekit-client names a data message's sender from the identity the server stamps on the
+  // packet; when that is missing the sender arrives undefined. In a 1:1 room the goodbye can only be the other
+  // person's, so it is said for the one person the room lists, and ignored only when the room lists nobody.
+  it('a goodbye the room cannot name a sender for is the other person\'s in a 1:1 room', () => {
+    const { room, seen } = watched();
+    room.join(stefan);
+    room.emit(RoomEvent.DataReceived, goodbye, undefined, undefined, GOODBYE_TOPIC);
+    expect(seen).toEqual([null, LEFT]);
+    room.leave(stefan);
+    jest.advanceTimersByTime(LEAVE_GRACE_MS * 2);
+    expect(seen).toEqual([null, LEFT]);
+  });
+
+  it('a goodbye with no sender, in a room that lists nobody else, is not a goodbye', () => {
+    const { room, seen } = watched();
+    room.emit(RoomEvent.DataReceived, goodbye, undefined, undefined, GOODBYE_TOPIC);
+    jest.advanceTimersByTime(LEAVE_GRACE_MS * 2);
+    expect(seen).toEqual([]);
   });
 
   // Fix round 1 (review Minor 2): my own reconnect after their goodbye unwinds them and comes back without them;
@@ -235,11 +254,18 @@ describe('someone who leaves on purpose is announced at once', () => {
 });
 
 /** The part of the room leaveCall uses, with a disconnect that can be held open. */
-function leavingRoom(state: ConnectionState = ConnectionState.Connected) {
+function leavingRoom(state: ConnectionState = ConnectionState.Connected, others: Person[] = [stefan]) {
   const order: string[] = [];
   let finishDisconnect: () => void = () => {};
+  const events = new EventEmitter();
   const room = {
     state,
+    remoteParticipants: new Map(others.map((p) => [p.identity, p])),
+    on: (e: string, fn: (...args: unknown[]) => void) => { events.on(e, fn); return room; },
+    off: (e: string, fn: (...args: unknown[]) => void) => { events.off(e, fn); return room; },
+    /** My own connection finishes: the room reads Connected and says so. */
+    connects: () => { room.state = ConnectionState.Connected; events.emit(RoomEvent.ConnectionStateChanged, ConnectionState.Connected); },
+    listeners: () => events.listenerCount(RoomEvent.ConnectionStateChanged),
     localParticipant: {
       publishData: jest.fn(async (_data: Uint8Array, opts: { reliable?: boolean; topic?: string }) => {
         order.push(`goodbye:${opts.topic}:${opts.reliable ? 'reliable' : 'lossy'}`);
@@ -267,12 +293,53 @@ describe('leaveCall: the goodbye, then the room\'s own disconnect, before the pa
   });
 
   it('a room that never connected says no goodbye (nobody heard them come in) and still disconnects', async () => {
-    const { room, order, finish } = leavingRoom(ConnectionState.Connecting);
+    const { room, order, finish } = leavingRoom(ConnectionState.Connecting, []);
     const left = leaveCall(room as unknown as DepartingRoom);
     await jest.advanceTimersByTimeAsync(0);
     finish();
     await left;
     expect(room.localParticipant.publishData).not.toHaveBeenCalled();
+    expect(order).toEqual(['disconnect', 'disconnected']);
+  });
+
+  // Fix round 2 (preview, 2 Nov 2026): on LiveKit Cloud the other room lists me as soon as my join is announced, a
+  // second or more before my own room reads Connected (its peer connection is still being set up). A leave pressed in
+  // that window used to send no goodbye, so the other person waited on the server's leave, which on Cloud did not
+  // arrive within 30 s (n1-t9 test 2). Now the leave waits, up to CONNECT_MS, for my room to finish connecting.
+  it('a room still connecting that already lists the other person waits for the connection, then says goodbye', async () => {
+    const { room, order, finish } = leavingRoom(ConnectionState.Connecting);
+    const left = leaveCall(room as unknown as DepartingRoom);
+    await jest.advanceTimersByTimeAsync(CONNECT_MS - 1);
+    expect(order).toEqual([]);
+    room.connects();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(order).toEqual([`goodbye:${GOODBYE_TOPIC}:reliable`, 'disconnect']);
+    finish();
+    await left;
+    expect(room.listeners()).toBe(0);
+  });
+
+  it('a room that does not connect within CONNECT_MS is left without a goodbye, and stops waiting for it', async () => {
+    const { room, order, finish } = leavingRoom(ConnectionState.Connecting);
+    const left = leaveCall(room as unknown as DepartingRoom);
+    expect(CONNECT_MS + GOODBYE_MS).toBeLessThan(DEPART_MS);
+    await jest.advanceTimersByTimeAsync(CONNECT_MS - 1);
+    expect(order).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(order).toEqual(['disconnect']);
+    expect(room.listeners()).toBe(0);
+    room.connects();
+    finish();
+    await left;
+    expect(room.localParticipant.publishData).not.toHaveBeenCalled();
+  });
+
+  it('a connected room with nobody else in it has no one to say goodbye to', async () => {
+    const { room, order, finish } = leavingRoom(ConnectionState.Connected, []);
+    const left = leaveCall(room as unknown as DepartingRoom);
+    await jest.advanceTimersByTimeAsync(0);
+    finish();
+    await left;
     expect(order).toEqual(['disconnect', 'disconnected']);
   });
 
@@ -308,6 +375,7 @@ describe('leaveCall: the goodbye, then the room\'s own disconnect, before the pa
     const { room } = leavingRoom();
     let done = false;
     void leaveCall(room as unknown as DepartingRoom).then(() => { done = true; });
+    // No longer than the meeting's read on the way out (LEAVE_READ_MS, 3 s), which runs beside it.
     expect(DEPART_MS).toBeLessThanOrEqual(3_000);
     await jest.advanceTimersByTimeAsync(DEPART_MS - 1);
     expect(done).toBe(false);

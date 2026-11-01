@@ -29,18 +29,28 @@ import { ConnectionState, RoomEvent, type LocalParticipant, type RemoteParticipa
 export type PresenceRoom = Pick<Room, 'on' | 'off' | 'remoteParticipants' | 'state'>;
 
 /** The part of a LiveKit room leaveCall uses. */
-export type DepartingRoom = Pick<Room, 'state' | 'disconnect'> & { localParticipant: Pick<LocalParticipant, 'publishData'> };
+export type DepartingRoom = Pick<Room, 'state' | 'disconnect' | 'remoteParticipants' | 'on' | 'off'> & {
+  localParticipant: Pick<LocalParticipant, 'publishData'>;
+};
 
 /** The data topic a goodbye is sent on. */
 export const GOODBYE_TOPIC = 'reason:left-call';
-/** The longest a leave waits on the goodbye and the disconnect before the page moves on anyway. */
-export const DEPART_MS = 2_000;
+/** The longest a leave waits on its own connection, the goodbye and the disconnect before the page moves on anyway. */
+export const DEPART_MS = 3_000;
+/**
+ * The longest a leave waits for my own room to finish connecting before it can say goodbye (fix round 2, 2 Nov 2026).
+ * The other room lists me as soon as the server announces my join, which on LiveKit Cloud is a second or more before
+ * my own room reads Connected; a leave pressed in between said no goodbye, and the other person waited on the
+ * server's leave instead, past 30 s on Cloud.
+ */
+export const CONNECT_MS = 1_500;
 /**
  * The longest the goodbye itself is waited on, inside DEPART_MS, so the disconnect always runs and is waited for: a
  * goodbye can stall (livekit-client waits for the publisher to connect, which a person with camera and mic denied
- * may never have done).
+ * may never have done). A second, not half of one (fix round 2): livekit-client opens the data channel only when it
+ * is first used, and on LiveKit Cloud that renegotiation is a round trip or two away.
  */
-export const GOODBYE_MS = 500;
+export const GOODBYE_MS = 1_000;
 const GOODBYE = new TextEncoder().encode('left');
 
 /** `work`, or nothing once `ms` have passed, whichever is first; never rejects. */
@@ -54,16 +64,35 @@ async function within(work: Promise<unknown>, ms: number): Promise<void> {
   }
 }
 
+/** Resolves once the room reads Connected (at once if it already does), or after `ms`; stops listening either way. */
+async function connectedWithin(room: DepartingRoom, ms: number): Promise<void> {
+  if (room.state === ConnectionState.Connected) return;
+  let onState: ((state: ConnectionState) => void) | undefined;
+  const connected = new Promise<void>((resolve) => {
+    onState = (state) => { if (state === ConnectionState.Connected) resolve(); };
+    room.on(RoomEvent.ConnectionStateChanged, onState);
+  });
+  try {
+    await within(connected, ms);
+  } finally {
+    if (onState) room.off(RoomEvent.ConnectionStateChanged, onState);
+  }
+}
+
 /**
- * Leave the room on purpose: say goodbye (only from a connected room: a room that never connected was never seen),
- * waiting at most GOODBYE_MS on it, then disconnect. Resolves once the disconnect has finished, or after `timeoutMs`
- * altogether, whichever is first; never rejects.
+ * Leave the room on purpose. When someone else is in it (so they may have seen me come in), say goodbye: first let my
+ * own room finish connecting, for at most CONNECT_MS, then wait at most GOODBYE_MS on the goodbye itself. Then
+ * disconnect. A room with nobody else in it has no one to tell. Resolves once the disconnect has finished, or after
+ * `timeoutMs` altogether, whichever is first; never rejects.
  */
 export async function leaveCall(room: DepartingRoom, timeoutMs: number = DEPART_MS): Promise<void> {
   const depart = async () => {
-    if (room.state === ConnectionState.Connected) {
+    if (room.remoteParticipants.size > 0) {
+      await connectedWithin(room, CONNECT_MS);
       // A goodbye that cannot be sent is the drop case: the server's own leave, or its timeout, still tells them.
-      await within(room.localParticipant.publishData(GOODBYE, { reliable: true, topic: GOODBYE_TOPIC }), GOODBYE_MS);
+      if (room.state === ConnectionState.Connected) {
+        await within(room.localParticipant.publishData(GOODBYE, { reliable: true, topic: GOODBYE_TOPIC }), GOODBYE_MS);
+      }
     }
     await room.disconnect();
   };
@@ -130,9 +159,15 @@ export function watchPartner(
   const reconnected = () => {
     if (partner && partner.identity !== announced && !inRoom(partner.identity)) waitThenSay();
   };
-  // They pressed leave: said at once, with no grace, even while the room still lists them.
-  const saidGoodbye = (_payload: Uint8Array, p?: RemoteParticipant, _kind?: unknown, topic?: string) => {
-    if (topic !== GOODBYE_TOPIC || !p) return;
+  // The one other person the room lists, if it lists exactly one.
+  const onlyOther = (): RemoteParticipant | undefined =>
+    room.remoteParticipants.size === 1 ? room.remoteParticipants.values().next().value : undefined;
+  // They pressed leave: said at once, with no grace, even while the room still lists them. livekit-client names the
+  // sender from the identity the server stamps on the packet; without it, in a 1:1 room it can only be the other one.
+  const saidGoodbye = (_payload: Uint8Array, sender?: RemoteParticipant, _kind?: unknown, topic?: string) => {
+    if (topic !== GOODBYE_TOPIC) return;
+    const p = sender ?? onlyOther();
+    if (!p) return;
     partner = { identity: p.identity, name: p.name ?? '' };
     announced = p.identity;
     stopWaiting();
