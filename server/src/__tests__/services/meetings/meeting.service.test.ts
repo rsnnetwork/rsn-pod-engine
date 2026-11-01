@@ -323,7 +323,7 @@ describe('getMeeting', () => {
       partner: { userId: B, displayName: 'Bo Meyer', avatarUrl: 'https://cdn.example/bo.png' },
       startAt: '2026-11-05T11:30:00.000Z', durationMin: 30, kind: 'video', status: 'scheduled', phase: 'live',
       context: 'Coffee about your seed round?', joinPath: '/meet/conv-1?scheduled=1&kind=video',
-      attended: { me: true, them: false },
+      attended: { me: true, them: false }, source: 'scheduled',
       myFeedback: null,
     });
     const [feedbackSql, feedbackParams] = mockQuery.mock.calls[1];

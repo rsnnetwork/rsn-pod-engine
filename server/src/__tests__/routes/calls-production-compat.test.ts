@@ -53,6 +53,7 @@ jest.mock('../../services/orchestration/handlers/dm-handlers', () => ({ __esModu
 jest.mock('../../services/dm/dm.service', () => ({
   __esModule: true,
   sendBroadcastMessage: () => Promise.resolve({ conversationId: CONV, message: { id: 'm1' } }),
+  canMessage: () => Promise.resolve({ allowed: true }),
 }));
 
 import meetingRoutes from '../../routes/meeting';
@@ -68,14 +69,16 @@ const NOW = Date.now();
 let conv: Record<string, unknown>;
 let rq: Record<string, unknown> | null;
 let meetingWritten = false;
+// Whether the pair has a real mutual connection (call-eligibility.ts MUTUAL_CONNECTION_SQL), as the database answers.
+let mutual = true;
 
 function arm() {
   mockQuery.mockImplementation((sql: string, params?: unknown[]) => {
     const s = String(sql).replace(/\s+/g, ' ');
     if (/FROM dm_conversations WHERE id/.test(s)) return Promise.resolve({ rows: [conv] });
     if (/FROM meeting_availability/.test(s)) return Promise.resolve({ rows: [] });
-    if (/WITH signals AS/.test(s)) {
-      return Promise.resolve({ rows: [{ my_status: 'active', their_status: 'active', their_name: 'Meet Bo', blocked: false, connected: true }] });
+    if (/AS connected FROM users t/.test(s)) {
+      return Promise.resolve({ rows: [{ my_active: true, they_active: true, their_name: 'Meet Bo', blocked: false, connected: mutual }] });
     }
     if (/SELECT display_name FROM users/.test(s)) return Promise.resolve({ rows: [{ display_name: 'Meet Ana' }] });
     if (/AND \(source = 'instant' OR id = \$2\)/.test(s)) return Promise.resolve({ rows: meetingWritten ? [{ id: 'mtg-1', source: 'instant' }] : [] });
@@ -109,6 +112,7 @@ beforeEach(() => {
   conv = unlockedPair();
   rq = null;
   meetingWritten = false;
+  mutual = true;
   mockQuery.mockReset();
   arm();
 });
@@ -144,7 +148,34 @@ describe('production\'s call screens, for a pair whose calls are unlocked', () =
     expect((await request(app).post(`/dm/call/requests/${RQ}/decline`).set('x-as', B)).body).toEqual({ success: true, data: { ok: true } });
     rq = null;
     await request(app).post(`/dm/conversations/${CONV}/call/request`).set('x-as', A).send({ kind: 'video', durationMin: 15 });
-    expect((await request(app).post(`/dm/call/requests/${RQ}/cancel`).set('x-as', A)).body).toEqual({ success: true, data: { ok: true } });
+    // The cancel adds what it ended as beside ok (fix round 1); production's client reads only ok.
+    const cancelled = await request(app).post(`/dm/call/requests/${RQ}/cancel`).set('x-as', A);
+    expect(cancelled.body).toEqual({ success: true, data: { ok: true, status: 'cancelled', conversationId: CONV, kind: 'video' } });
+  });
+
+  // Fix round 1 (L12): audio keeps production's rule exactly, calls unlocked; it never asks for the video call's
+  // mutual connection, so a pair production lets call today can still call.
+  it('an unlocked pair still rings for AUDIO on the old route, whatever the video connection says', async () => {
+    mutual = false;
+    const res = await request(app).post(`/dm/conversations/${CONV}/call/request`).set('x-as', A).send({ kind: 'audio', durationMin: 20 });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ kind: 'audio' });
+  });
+
+  it('a locked pair is refused AUDIO in the same words as before', async () => {
+    conv = { ...unlockedPair(), calls_unlocked_at: null };
+    const res = await request(app).post(`/dm/conversations/${CONV}/call/request`).set('x-as', A).send({ kind: 'audio', durationMin: 20 });
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toBe('Calls unlock after your first scheduled meeting together.');
+  });
+
+  it('a pair with only a conversation (an admin\'s or a broadcast\'s thread) is refused VIDEO on the old route too', async () => {
+    conv = { ...unlockedPair(), calls_unlocked_at: null };
+    mutual = false;
+    const res = await request(app).post(`/dm/conversations/${CONV}/call/request`).set('x-as', A).send({ kind: 'video', durationMin: 20 });
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toBe('You can call the people you are connected with. Send a meeting request first.');
+    expect((await request(app).get(`/dm/conversations/${CONV}/scheduling`).set('x-as', A)).body.data.canCall).toBe(false);
   });
 });
 

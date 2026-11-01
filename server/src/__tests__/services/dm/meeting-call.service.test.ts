@@ -16,6 +16,9 @@ const mockSendBroadcast = jest.fn((..._a: any[]) => Promise.resolve({ conversati
 const mockBroadcastDm = jest.fn((..._a: any[]) => Promise.resolve(undefined));
 const mockEmitEntities = jest.fn((..._a: any[]) => Promise.resolve(undefined));
 const mockRequireConnection = jest.fn((..._a: any[]) => Promise.resolve({ name: 'Bo Brandt' }));
+const mockRequireMembers = jest.fn((..._a: any[]) => Promise.resolve({ name: 'Bo Brandt' }));
+// Fix round 1: may the two message each other already? (dm.service canMessage, asked both ways)
+const mockCanMessage = jest.fn((..._a: any[]) => Promise.resolve({ allowed: true } as { allowed: boolean; reason?: string }));
 const mockFindOrCreate = jest.fn((..._a: any[]) => Promise.resolve('conv-1'));
 const mockOrder: string[] = [];
 // Which user room each socket event went to, in the order they were sent.
@@ -54,6 +57,7 @@ jest.mock('../../../index', () => ({
 }));
 jest.mock('../../../services/dm/dm.service', () => ({
   __esModule: true, sendBroadcastMessage: (...a: unknown[]) => mockSendBroadcast(...a),
+  canMessage: (...a: unknown[]) => mockCanMessage(...a),
   findOrCreateConversation: (...a: unknown[]) => { mockOrder.push('conversation'); return mockFindOrCreate(...a); },
 }));
 jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
@@ -61,6 +65,7 @@ jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
 }));
 jest.mock('../../../services/dm/call-eligibility', () => ({
   __esModule: true, requireConnection: (...a: unknown[]) => { mockOrder.push('connection'); return mockRequireConnection(...a); },
+  requireMembers: (...a: unknown[]) => mockRequireMembers(...a),
 }));
 jest.mock('../../../realtime/emit', () => ({ __esModule: true, emitEntities: (...a: unknown[]) => mockEmitEntities(...a) }));
 jest.mock('../../../realtime/entities', () => ({
@@ -132,6 +137,13 @@ function arm() {
       return Promise.resolve({ rows: [{ id: request.id }] });
     }
     if (/FROM call_requests r/.test(sql)) return Promise.resolve({ rows: liveRows });
+    for (const answer of ['declined', 'cancelled'] as const) {
+      if (new RegExp(`SET status = '${answer}'`).test(sql)) {
+        if (!request || request.status !== 'pending') return Promise.resolve({ rows: [] });
+        request.status = answer;
+        return Promise.resolve({ rows: [{ id: request.id }] });
+      }
+    }
     if (/UPDATE meetings SET joined_[ab]_at/.test(sql)) {
       const side = /joined_a_at/.test(sql) ? 'a' : 'b';
       if (meetingStamps[side]) return Promise.resolve({ rows: [] });
@@ -166,6 +178,8 @@ beforeEach(() => {
   mockIsActive.mockReset(); mockIsActive.mockResolvedValue(true);
   mockFetchSockets.mockReset(); mockFetchSockets.mockResolvedValue([]);
   mockRequireConnection.mockReset(); mockRequireConnection.mockResolvedValue({ name: 'Bo Brandt' });
+  mockRequireMembers.mockReset(); mockRequireMembers.mockResolvedValue({ name: 'Bo Brandt' });
+  mockCanMessage.mockReset(); mockCanMessage.mockResolvedValue({ allowed: true });
   mockFindOrCreate.mockReset(); mockFindOrCreate.mockResolvedValue('conv-1'); mockOrder.length = 0;
   arm();
 });
@@ -396,9 +410,46 @@ describe('requestCall', () => {
   it('an unlocked pair ringing for audio is also checked: a removed partner is never rung', async () => {
     conv.calls_unlocked_at = new Date();
     const { ForbiddenError } = jest.requireActual('../../../middleware/errors');
-    mockRequireConnection.mockRejectedValue(new ForbiddenError('This person is no longer a member of REASON, so they cannot be called.'));
+    mockRequireMembers.mockRejectedValue(new ForbiddenError('This person is no longer a member of REASON, so they cannot be called.'));
     await expect(requestCall('conv-1', 'u-a', 'audio', 15)).rejects.toMatchObject({ statusCode: 403 });
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  // Fix round 1: audio keeps production's rule exactly: calls unlocked, and only the block and the two accounts
+  // besides; it never asks for the video call's mutual connection.
+  it('AUDIO for an unlocked pair asks only that both are members, never the video connection', async () => {
+    conv.calls_unlocked_at = new Date();
+    const { ForbiddenError } = jest.requireActual('../../../middleware/errors');
+    mockRequireConnection.mockRejectedValue(new ForbiddenError('You can call the people you are connected with. Send a meeting request first.'));
+    await expect(requestCall('conv-1', 'u-a', 'audio', 15)).resolves.toMatchObject({ kind: 'audio', status: 'pending' });
+    expect(mockRequireMembers).toHaveBeenCalledWith('u-a', 'u-b');
+    expect(mockRequireConnection).not.toHaveBeenCalled();
+  });
+
+  it('VIDEO asks the mutual connection, never the audio check', async () => {
+    await requestCall('conv-1', 'u-a', 'video', 15);
+    expect(mockRequireConnection).toHaveBeenCalledWith('u-a', 'u-b');
+    expect(mockRequireMembers).not.toHaveBeenCalled();
+  });
+
+  // Fix round 1: a ring must not open messaging. Its line in the thread is a message, and one message is enough for
+  // dm.service canMessage to let both people write freely (the grandfather rule). So the line is written only where
+  // both may already message each other; otherwise the ring still rings, with its bell, and leaves no line.
+  it('writes the "Requested a call" line only when both may already message each other', async () => {
+    await requestCall('conv-1', 'u-a', 'video', 15);
+    expect(mockCanMessage.mock.calls).toEqual(expect.arrayContaining([['u-a', 'u-b'], ['u-b', 'u-a']]));
+    expect(mockSendBroadcast).toHaveBeenCalledWith('u-a', 'u-b', expect.stringMatching(/15-min video call/));
+  });
+
+  it.each([
+    ['the caller may not message the callee', [{ allowed: false, reason: 'not_mutual' }, { allowed: true }]],
+    ['the callee may not message the caller (an admin rings: only the admin may write)', [{ allowed: true }, { allowed: false, reason: 'not_mutual' }]],
+  ])('writes no line in the thread when %s, and still rings with the bell', async (_label, answers) => {
+    mockCanMessage.mockImplementation((from: unknown) => Promise.resolve(from === 'u-a' ? answers[0] : answers[1]));
+    await requestCall('conv-1', 'u-a', 'video', 15);
+    expect(mockSendBroadcast).not.toHaveBeenCalled();
+    expect(mockBroadcastDm).not.toHaveBeenCalled();
+    expect(mockEmit.mock.calls.map(c => c[0])).toEqual(expect.arrayContaining(['call:request', 'notification:new']));
   });
 
   it('a blocked pair is refused before anything else, and no banner is ever sent to the blocked callee', async () => {
@@ -574,6 +625,54 @@ describe('declineCallRequest / cancelCallRequest', () => {
   });
   it('only the caller can cancel', async () => {
     await expect(cancelCallRequest('rq-1', 'u-b')).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  // Fix round 1: decline and cancel are claims, like the accept. Each changes the request only while it still waits
+  // (AND status = 'pending' RETURNING id) and tells people only when it did.
+  it('both are claims on a request still waiting', async () => {
+    await cancelCallRequest('rq-1', 'u-a');
+    expect(flat(calls(/SET status = 'cancelled'/)[0][0])).toMatch(/WHERE id = \$1 AND status = 'pending' RETURNING id/);
+    request.status = 'pending';
+    await declineCallRequest('rq-1', 'u-b');
+    expect(flat(calls(/SET status = 'declined'/)[0][0])).toMatch(/WHERE id = \$1 AND status = 'pending' RETURNING id/);
+  });
+
+  it('a cancel answers what happened: cancelled, with the conversation and kind', async () => {
+    await expect(cancelCallRequest('rq-1', 'u-a')).resolves.toEqual({ status: 'cancelled', conversationId: 'conv-1', kind: 'video' });
+  });
+
+  /** The answer lands between the read and the claim: the read saw it waiting, the claim finds it taken. */
+  function acceptLandsDuringClaim(answer: 'cancelled' | 'declined') {
+    const base = mockQuery.getMockImplementation()!;
+    mockQuery.mockImplementation((sql: string, params?: unknown[]) => {
+      if (new RegExp(`SET status = '${answer}'`).test(sql)) {
+        request.status = 'accepted'; // the accept committed first
+        return Promise.resolve({ rows: [] });
+      }
+      return base(sql, params);
+    });
+  }
+
+  it('a cancel that lost to an accept changes nothing, tells nobody, and answers accepted so the caller goes into the room', async () => {
+    acceptLandsDuringClaim('cancelled');
+    await expect(cancelCallRequest('rq-1', 'u-a')).resolves.toEqual({ status: 'accepted', conversationId: 'conv-1', kind: 'video' });
+    expect(request.status).toBe('accepted');
+    expect(mockRooms).toEqual([]);
+    expect(mockEmitEntities).not.toHaveBeenCalled();
+  });
+
+  it('a decline from the callee\'s other tab that lost to an accept changes nothing and tells nobody', async () => {
+    acceptLandsDuringClaim('declined');
+    await declineCallRequest('rq-1', 'u-b');
+    expect(request.status).toBe('accepted');
+    expect(mockRooms.some(r => r.event === 'call:declined' || r.event === 'call:cancelled')).toBe(false);
+    expect(mockEmitEntities).not.toHaveBeenCalled();
+  });
+
+  it('a cancel of a request already answered answers its status and repeats nothing', async () => {
+    request.status = 'declined';
+    await expect(cancelCallRequest('rq-1', 'u-a')).resolves.toMatchObject({ status: 'declined' });
+    expect(mockRooms).toEqual([]);
   });
 });
 

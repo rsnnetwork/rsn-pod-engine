@@ -52,6 +52,18 @@ describe('submitMeetingFeedback', () => {
     expect(saved).toEqual({ id: 'o-1', meetingId: M, worthContinuing: 'maybe', problems: ['audio', 'other'], problemText: 'Echo', createdAt: '2026-11-05T12:00:00.000Z' });
   });
 
+  // T9 (migration 124): an answered call is a meetings row with source 'instant'; its feedback says so.
+  it('an answer about an answered call is stored with source instant; a booked meeting\'s with source meeting', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [target({ source: 'instant' })] }).mockResolvedValueOnce({ rows: [savedRow] });
+    await submitMeetingFeedback(B, M, { worthContinuing: 'yes' }, NOW);
+    expect(flat(mockQuery.mock.calls[0][0])).toMatch(/SELECT m\.id, m\.user_a_id, m\.user_b_id, m\.start_at, m\.status, m\.source,/);
+    expect(mockQuery.mock.calls[1][1][4]).toBe('instant');
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValueOnce({ rows: [target({ source: 'scheduled' })] }).mockResolvedValueOnce({ rows: [savedRow] });
+    await submitMeetingFeedback(B, M, { worthContinuing: 'yes' }, NOW);
+    expect(mockQuery.mock.calls[1][1][4]).toBe('meeting');
+  });
+
   it('blank text is stored as no text, and no problems as an empty list', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [target()] }).mockResolvedValueOnce({ rows: [{ ...savedRow, problems: [], problem_text: null }] });
     await submitMeetingFeedback(A, M, { worthContinuing: 'yes', problemText: '   ' }, NOW);

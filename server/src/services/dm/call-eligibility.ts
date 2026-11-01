@@ -1,19 +1,23 @@
-// ─── Who may ring whom for a video call (1 Nov 2026, 30 Oct review item 4, L12) ─────────────────────
+// ─── Who may ring whom for a call (1 Nov 2026, 30 Oct review item 4, L12) ───────────────────────────
 //
 // Stefan: "Users should be able to start a video call right away with a connection, without scheduling a
-// meeting." So a video call needs a connection, not a held meeting:
-//   - the two are connected by the one definition of a connection (connections.service.ts: an accepted meeting
-//     request either way, a conversation, a 1:1 meeting both joined, or having met at an event);
+// meeting." So a video call needs a real mutual connection, not a held meeting (L12: connections only, no admin
+// override):
+//   - the two are mutually connected (MUTUAL_CONNECTION_SQL): a meeting request one of them accepted, both saying
+//     "meet again", or a 1:1 meeting the two held. A conversation on its own does not count (fix round 1): an
+//     admin may message anyone and a host's broadcast opens a thread with every participant, so a thread proves
+//     nothing either person chose;
 //   - neither has blocked the other;
 //   - both are still members (an account that is removed, suspended or banned is not rung, and cannot ring).
-// No admin override: unlike messages (dm.service.ts canMessage), ringing strangers is not wanted.
+// Audio keeps the 9 Sep rule (calls unlocked, meeting-call.service.ts), so for it only the block and the two
+// accounts are asked (requireMembers).
 // Online or not is asked when the call is rung (meeting-call.service.ts), not here: the button stays put.
-// One question to the database, so the profile and the thread can ask it on every read.
+// One question to the database, about this pair only, so the profile and the thread can ask it on every read.
 
 import { query } from '../../db';
 import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
-import { CONNECTION_SIGNALS_SQL } from '../people/connections.service';
+import { activeMemberSql } from '../users/active-member';
 
 export type CallRefusal = 'self' | 'not_found' | 'caller_inactive' | 'former_member' | 'blocked' | 'not_connected';
 
@@ -29,22 +33,36 @@ export const CALL_REFUSALS: Record<CallRefusal, string> = {
 
 export type CallEligibility = { allowed: true; name: string } | { allowed: false; reason: CallRefusal; name: string };
 
-// $1 the caller, $2 the person rung. `connected` is the People page's own reading of the caller's connections.
-// Both status checks are inline: switch to activeMemberSql after T2.
+/**
+ * $1 and $2 are a real mutual connection: a meeting request one accepted, both saying "meet again", or a 1:1 meeting
+ * they held (both joined, or calls unlocked by it). Never a conversation on its own, and never only having been at
+ * the same event. The one reading of "connected" for calls: every call route and both canCall fields use it.
+ */
+export const MUTUAL_CONNECTION_SQL = `
+  EXISTS (SELECT 1 FROM user_pokes p
+           WHERE p.status = 'accepted'
+             AND ((p.sender_id = $1 AND p.recipient_id = $2) OR (p.sender_id = $2 AND p.recipient_id = $1)))
+  OR EXISTS (SELECT 1 FROM encounter_history e
+              WHERE e.user_a_id = LEAST($1::uuid, $2::uuid) AND e.user_b_id = GREATEST($1::uuid, $2::uuid)
+                AND e.mutual_meet_again)
+  OR EXISTS (SELECT 1 FROM dm_conversations c
+              WHERE c.user_a_id = LEAST($1::uuid, $2::uuid) AND c.user_b_id = GREATEST($1::uuid, $2::uuid)
+                AND (c.calls_unlocked_at IS NOT NULL OR (c.meeting_joined_a_at IS NOT NULL AND c.meeting_joined_b_at IS NOT NULL)))`;
+
+// $1 the caller, $2 the person rung.
 const ELIGIBILITY_SQL = `
-  WITH ${CONNECTION_SIGNALS_SQL}
-  SELECT (SELECT me.status FROM users me WHERE me.id = $1) AS my_status,
-         t.status AS their_status,
+  SELECT (SELECT ${activeMemberSql('me')} AS me_active FROM users me WHERE me.id = $1) AS my_active,
+         ${activeMemberSql('t')} AS they_active,
          t.display_name AS their_name,
          EXISTS (SELECT 1 FROM user_blocks b
                   WHERE (b.blocker_id = $1 AND b.blocked_id = $2) OR (b.blocker_id = $2 AND b.blocked_id = $1)) AS blocked,
-         EXISTS (SELECT 1 FROM people WHERE person_id = $2) AS connected
+         (${MUTUAL_CONNECTION_SQL}) AS connected
     FROM users t
    WHERE t.id = $2`;
 
 interface Row {
-  my_status: string | null;
-  their_status: string;
+  my_active: boolean | null;
+  they_active: boolean;
   their_name: string | null;
   blocked: boolean;
   connected: boolean;
@@ -60,23 +78,34 @@ export async function callEligibility(callerId: string, calleeId: string): Promi
   const name = nameOf(r);
   // A block answers first, so a blocked person learns nothing else about the other.
   if (r.blocked) return { allowed: false, reason: 'blocked', name };
-  if (r.my_status !== 'active') return { allowed: false, reason: 'caller_inactive', name };
-  if (r.their_status !== 'active') return { allowed: false, reason: 'former_member', name };
+  if (!r.my_active) return { allowed: false, reason: 'caller_inactive', name };
+  if (!r.they_active) return { allowed: false, reason: 'former_member', name };
   if (!r.connected) return { allowed: false, reason: 'not_connected', name };
   return { allowed: true, name };
 }
 
-/** The profile's and the thread's `canCall`. */
+/** The profile's and the thread's `canCall`: exactly what the call routes allow for video. */
 export async function canVideoCall(callerId: string, calleeId: string): Promise<boolean> {
   return (await callEligibility(callerId, calleeId)).allowed;
 }
 
-/** The caller may ring this person, or the refusal in a sentence: 400 yourself, 404 no such member, 403 the rest. */
-export async function requireConnection(callerId: string, calleeId: string): Promise<{ name: string }> {
-  const answer = await callEligibility(callerId, calleeId);
-  if (answer.allowed) return { name: answer.name };
+function refuse(answer: Extract<CallEligibility, { allowed: false }>, calleeId: string): never {
   const message = CALL_REFUSALS[answer.reason];
   if (answer.reason === 'self') throw new AppError(400, ErrorCodes.VALIDATION_ERROR, message);
   if (answer.reason === 'not_found') throw new NotFoundError('User', calleeId, message);
   throw new ForbiddenError(message);
+}
+
+/** Video: the caller may ring this person, or the refusal in a sentence (400 yourself, 404 no such member, 403 the rest). */
+export async function requireConnection(callerId: string, calleeId: string): Promise<{ name: string }> {
+  const answer = await callEligibility(callerId, calleeId);
+  if (answer.allowed) return { name: answer.name };
+  return refuse(answer, calleeId);
+}
+
+/** Audio, whose own rule is calls unlocked: only no block and both still members are asked here. */
+export async function requireMembers(callerId: string, calleeId: string): Promise<{ name: string }> {
+  const answer = await callEligibility(callerId, calleeId);
+  if (answer.allowed || answer.reason === 'not_connected') return { name: answer.name };
+  return refuse(answer, calleeId);
 }

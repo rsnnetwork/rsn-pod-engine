@@ -286,8 +286,10 @@ router.post(
   callRequestIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await callService.cancelCallRequest(req.params.id, req.user!.userId);
-      res.json({ success: true, data: { ok: true } } as ApiResponse);
+      // ok as before (production's client reads only that), and what the withdraw ended as: "accepted" when the
+      // answer came first, so the caller's screen goes into the room instead (fix round 1).
+      const outcome = await callService.cancelCallRequest(req.params.id, req.user!.userId);
+      res.json({ success: true, data: { ok: true, ...outcome } } as ApiResponse);
     } catch (err) { next(err); }
   },
 );

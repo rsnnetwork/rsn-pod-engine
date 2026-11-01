@@ -32,7 +32,7 @@ import { isActive } from '../presence/presence.service';
 import { stampAttendance } from '../meetings/meeting.service';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
 import { CURRENT_MEETING_ID } from '../meetings/current-meeting';
-import { requireConnection } from './call-eligibility';
+import { requireConnection, requireMembers } from './call-eligibility';
 
 const CALL_TOKEN_TTL_SECONDS = 4 * 60 * 60; // a call can run a while
 // The scheduled-meeting window: you may enter from 5 min before, and it stays
@@ -323,15 +323,23 @@ async function closeCalleeBanners(rq: RequestRow): Promise<void> {
   }
 }
 
+/** Video asks a real mutual connection; audio keeps its own rule (calls unlocked) and asks only the two accounts. */
+function requireCallable(kind: 'audio' | 'video', callerId: string, calleeId: string): Promise<{ name: string }> {
+  return kind === 'audio' ? requireMembers(callerId, calleeId) : requireConnection(callerId, calleeId);
+}
+
+/** A ring that leaves no line in the thread (the two may not message each other yet). */
+class SkipLine extends Error {}
+
 /** What the offline refusal says: exactly the plan's sentence (L12). */
 export function offlineSentence(name: string): string {
   return `${name} isn't online right now. Send a message instead.`;
 }
 
 /**
- * Ask the partner for a call of a chosen length. A video call needs the two to be connected, not blocked,
- * and both members (requireConnection); an audio call also needs calls unlocked (the first meeting
- * happened). The partner must be online right now. Rings them with a bell notification + a live
+ * Ask the partner for a call of a chosen length. A video call needs a real mutual connection, no block and
+ * both members (requireConnection); an audio call keeps the 9 Sep rule, calls unlocked (the first meeting
+ * happened), with no block and both members (requireMembers). The partner must be online right now. Rings them with a bell notification + a live
  * `call:request`, and leaves a line in the thread. The caller then waits for accept/decline.
  */
 export async function requestCall(
@@ -343,9 +351,7 @@ export async function requestCall(
   const conv = await requireCallParticipant(conversationId, userId);
   const callKind: 'audio' | 'video' = kind === 'audio' ? 'audio' : 'video';
   if (callKind === 'audio') requireUnlocked(conv);
-  // Either kind: still connected, not blocked, both members. The conversation itself makes the two a
-  // connection, so for an unlocked pair this asks only whether both are still members.
-  const { name: partnerName } = await requireConnection(userId, conv.partnerId);
+  const { name: partnerName } = await requireCallable(callKind, userId, conv.partnerId);
   const minutes = clampDuration(durationMin);
 
   if (!(await partnerIsOnline(conv.partnerId, conversationId))) {
@@ -379,15 +385,21 @@ export async function requestCall(
   )).rows[0];
   const callerName = me?.display_name || 'Someone';
 
-  // A line in the thread so the request shows in history for both sides.
+  // A line in the thread so the request shows in history for both sides, only where the two may already
+  // message each other: one message in a thread lets both write freely (dm.service canMessage, its grandfather
+  // rule), so a ring must not be what opens it (fix round 1). Without the line the ring still rings, bell and all.
   try {
     const dmService = await import('./dm.service');
+    const [mine, theirs] = await Promise.all([
+      dmService.canMessage(userId, conv.partnerId), dmService.canMessage(conv.partnerId, userId),
+    ]);
+    if (!mine.allowed || !theirs.allowed) throw new SkipLine();
     const sent = await dmService.sendBroadcastMessage(userId, conv.partnerId, `📞 Requested a ${minutes}-min ${callKind} call`);
     const { io } = await import('../../index');
     const { broadcastDmMessage } = await import('../orchestration/handlers/dm-handlers');
     await broadcastDmMessage(io, userId, conv.partnerId, sent.conversationId, sent.message, { notify: false });
   } catch (err) {
-    logger.warn({ err, conversationId }, 'call request system message failed (non-fatal)');
+    if (!(err instanceof SkipLine)) logger.warn({ err, conversationId }, 'call request system message failed (non-fatal)');
   }
 
   // Ring the partner: bell notification + a live event they can accept/decline.
@@ -513,7 +525,7 @@ export async function acceptCallRequest(requestId: string, userId: string): Prom
   }
   // Blocked, closed or no longer connected since it rang: nothing is answered.
   const conv = await requireCallParticipant(rq.conversation_id, userId);
-  await requireConnection(userId, rq.from_user_id);
+  await requireCallable(rq.kind, userId, rq.from_user_id);
 
   const meetingId = await transaction(async (client) => {
     const claimed = await client.query<{ id: string }>(
@@ -549,12 +561,24 @@ export async function acceptCallRequest(requestId: string, userId: string): Prom
   return { ...token, conversationId: rq.conversation_id };
 }
 
-/** The callee declines → the caller is told. */
+/**
+ * Claim a request that still waits for an answer, as the accept does: one statement, so of an accept, a decline and
+ * a cancel landing at once exactly one changes it, and the others find it taken (fix round 1).
+ */
+async function claimAnswer(requestId: string, status: 'declined' | 'cancelled'): Promise<boolean> {
+  const claimed = await query<{ id: string }>(
+    `UPDATE call_requests SET status = '${status}', responded_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING id`,
+    [requestId],
+  );
+  return claimed.rows.length > 0;
+}
+
+/** The callee declines → the caller is told. Already answered (here or on another device): nothing is said. */
 export async function declineCallRequest(requestId: string, userId: string): Promise<void> {
   const rq = await loadRequest(requestId);
   if (rq.to_user_id !== userId) throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Not your call request');
   if (rq.status !== 'pending') return; // already answered — idempotent
-  await query(`UPDATE call_requests SET status = 'declined', responded_at = NOW() WHERE id = $1`, [requestId]);
+  if (!(await claimAnswer(requestId, 'declined'))) return; // answered on another device a moment ago
   const me = (await query<{ display_name: string | null }>(`SELECT display_name FROM users WHERE id = $1`, [userId])).rows[0];
   try {
     const { io } = await import('../../index');
@@ -568,12 +592,24 @@ export async function declineCallRequest(requestId: string, userId: string): Pro
   await emitCallChanged(rq.conversation_id, [rq.from_user_id, rq.to_user_id]);
 }
 
-/** The caller withdraws a request they're still waiting on → the callee is told. */
-export async function cancelCallRequest(requestId: string, userId: string): Promise<void> {
+/** What a withdraw ends as: cancelled, or whatever answered first (accepted: the caller goes into the room). */
+export interface CancelOutcome {
+  status: CallRequestStatus;
+  conversationId: string;
+  kind: 'audio' | 'video';
+}
+
+/**
+ * The caller withdraws a request they're still waiting on → the callee is told. When the answer came first (the
+ * callee accepted as the caller pressed Cancel), nothing changes and the answer says so, so the caller's screen can
+ * still go into the room the callee is in.
+ */
+export async function cancelCallRequest(requestId: string, userId: string): Promise<CancelOutcome> {
   const rq = await loadRequest(requestId);
   if (rq.from_user_id !== userId) throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Not your call request');
-  if (rq.status !== 'pending') return; // idempotent
-  await query(`UPDATE call_requests SET status = 'cancelled', responded_at = NOW() WHERE id = $1`, [requestId]);
+  const outcome = (status: CallRequestStatus): CancelOutcome => ({ status, conversationId: rq.conversation_id, kind: rq.kind });
+  if (rq.status !== 'pending') return outcome(rq.status); // idempotent
+  if (!(await claimAnswer(requestId, 'cancelled'))) return outcome((await loadRequest(requestId)).status);
   try {
     const { io } = await import('../../index');
     io.to(`user:${rq.to_user_id}`).emit('call:cancelled', { requestId, conversationId: rq.conversation_id });
@@ -581,4 +617,5 @@ export async function cancelCallRequest(requestId: string, userId: string): Prom
     logger.warn({ err, requestId }, 'call cancelled signal failed (non-fatal)');
   }
   await emitCallChanged(rq.conversation_id, [rq.from_user_id, rq.to_user_id]);
+  return outcome('cancelled');
 }
