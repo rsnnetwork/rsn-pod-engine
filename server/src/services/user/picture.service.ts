@@ -100,16 +100,18 @@ interface StoredPicture {
   crop: unknown;
   shown: Buffer | null;
   shown_mime: string | null;
+  /** The photo's address (avatar_url); always null for a banner, whose address is built from its time. */
+  shown_url: string | null;
 }
 
 // Each kind's columns, written out: the photo also carries its address (avatar_url, which every list reads) and the
 // row's updated_at, as a captured photo does (avatar.service.ts); the banner's address is built from its time.
 const READ: Record<PictureKind, string> = {
   avatar: `SELECT avatar_source_blob AS source, avatar_source_mime AS source_mime, avatar_crop AS crop,
-                  avatar_blob AS shown, avatar_blob_type AS shown_mime
+                  avatar_blob AS shown, avatar_blob_type AS shown_mime, avatar_url AS shown_url
              FROM users WHERE id = $1`,
   banner: `SELECT banner_source_blob AS source, banner_source_mime AS source_mime, banner_crop AS crop,
-                  banner_blob AS shown, banner_mime AS shown_mime
+                  banner_blob AS shown, banner_mime AS shown_mime, NULL AS shown_url
              FROM users WHERE id = $1`,
 };
 
@@ -167,8 +169,9 @@ async function writePicture(
 /**
  * Keep a member's photo or banner. With a new picture: it is kept as it came, with its crop (the middle when none is
  * given), and the picture everyone sees is cut from it. With only a crop: the kept picture is cut again. A member
- * whose picture came from elsewhere (a captured LinkedIn, Google or Gravatar photo, or a banner from before) and was
- * never placed is placed from that picture, which is then kept. Answers with the picture's new address.
+ * whose picture came from elsewhere (a captured LinkedIn, Google or Gravatar photo, a banner from before, or a photo
+ * that lives only as a data URL in its address) and was never placed is placed from that picture, which is then kept.
+ * Answers with the picture's new address.
  */
 export async function savePicture(kind: PictureKind, userId: string, input: PictureInput): Promise<{ url: string }> {
   if (input.image !== undefined) {
@@ -186,7 +189,27 @@ export async function savePicture(kind: PictureKind, userId: string, input: Pict
     const out = await renderPicture(stored.shown, kind, crop);
     return { url: await writePicture(kind, userId, out, new Date(), { bytes: stored.shown, mime: bareType(stored.shown_mime) }) };
   }
+  const inAddress = pictureInAddress(stored.shown_url);
+  if (inAddress) {
+    const out = await renderPicture(inAddress.bytes, kind, crop);
+    return { url: await writePicture(kind, userId, out, new Date(), inAddress) };
+  }
   throw new ValidationError(CHOOSE_FIRST);
+}
+
+/**
+ * A photo saved before pictures were kept (final fix wave X2, 2 Nov 2026) can live only in its address, as a data URL.
+ * It is the picture everyone sees, so the editor opens on it, and placing it keeps it, as a captured photo is kept,
+ * once it passes the same checks as a picture sent now (a JPEG, PNG or WebP of at most 3 MB and 4096 pixels a side).
+ * A web address (a Google hotlink) is not read here. Null when there is no such picture.
+ */
+function pictureInAddress(address: string | null): { bytes: Buffer; mime: string } | null {
+  if (!address || !address.startsWith('data:')) return null;
+  try {
+    return parsePicture(address, 'avatar');
+  } catch {
+    return null; // not a picture the editor can open: it opens empty, as before
+  }
 }
 
 /** What the member's editor opens on: the kept picture and its crop, else the picture everyone sees, else none. */
@@ -196,5 +219,6 @@ export async function getPictureSource(kind: PictureKind, userId: string): Promi
     return { image: asDataUrl(stored.source_mime, stored.source), crop: storedCrop(stored.crop) };
   }
   if (stored.shown && stored.shown_mime) return { image: asDataUrl(stored.shown_mime, stored.shown), crop: null };
-  return { image: null, crop: null };
+  const inAddress = pictureInAddress(stored.shown_url);
+  return { image: inAddress ? asDataUrl(inAddress.mime, inAddress.bytes) : null, crop: null };
 }

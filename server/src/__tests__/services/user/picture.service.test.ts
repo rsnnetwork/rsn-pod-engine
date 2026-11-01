@@ -154,6 +154,18 @@ describe('savePicture (placed again, with no new picture)', () => {
     expect(await sizeOf(db.row.avatar_blob as Buffer)).toEqual({ width: 100, height: 100, format: 'jpeg' });
   });
 
+  // Final fix wave X2: the editor opened on a photo that lives only as a data URL in avatar_url; Save with only a crop
+  // places that photo, which is then kept, instead of "Choose a picture first."
+  it('a photo kept only as a data URL in avatar_url is placed from that photo, which is then kept', async () => {
+    const legacy = await solid(200, 200, RED);
+    db.row.avatar_url = dataUrl('image/jpeg', legacy);
+    const { url } = await savePicture('avatar', ME, { crop: { x: 0.5, y: 0.5, zoom: 2 } });
+    expect(Buffer.compare(db.row.avatar_source_blob as Buffer, legacy)).toBe(0);
+    expect(db.row.avatar_source_mime).toBe('image/jpeg');
+    expect(await sizeOf(db.row.avatar_blob as Buffer)).toEqual({ width: 100, height: 100, format: 'jpeg' });
+    expect(url.startsWith('data:')).toBe(false);
+  });
+
   it('with no picture at all, asks for one in a sentence and writes nothing', async () => {
     await expect(savePicture('avatar', ME, { crop: { x: 0.5, y: 0.5, zoom: 1 } })).rejects.toThrow('Choose a picture first.');
     await expect(savePicture('banner', ME, {})).rejects.toThrow('Choose a picture first.');
@@ -179,6 +191,31 @@ describe('getPictureSource', () => {
 
   it('with no picture at all, gives none', async () => {
     expect(await getPictureSource('avatar', ME)).toEqual({ image: null, crop: null });
+  });
+
+  // Final fix wave X2 (2 Nov 2026), a shape production holds: a photo saved long ago lives only in avatar_url, as a data
+  // URL, with no picture kept beside it. The editor opens on that photo instead of "No photo yet".
+  it('a photo kept only as a data URL in avatar_url opens the editor on that photo, never placed', async () => {
+    const legacy = await solid(300, 300, BLUE);
+    db.row.avatar_url = dataUrl('image/jpeg', legacy);
+    expect(await getPictureSource('avatar', ME)).toEqual({ image: dataUrl('image/jpeg', legacy), crop: null });
+  });
+
+  it('a photo at a web address (a Google hotlink), or a data URL that is not a usable picture, still gives none', async () => {
+    db.row.avatar_url = 'https://lh3.googleusercontent.com/a/abc=s96-c';
+    expect(await getPictureSource('avatar', ME)).toEqual({ image: null, crop: null });
+    db.row.avatar_url = `data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}`;
+    expect(await getPictureSource('avatar', ME)).toEqual({ image: null, crop: null });
+    db.row.avatar_url = 'data:image/jpeg;base64,bm90IGEgcGljdHVyZQ==';
+    expect(await getPictureSource('avatar', ME)).toEqual({ image: null, crop: null });
+  });
+
+  it('the kept picture still comes first when avatar_url also holds a data URL', async () => {
+    const chosen = await solid(800, 600, BLUE, 'png');
+    db.row.avatar_source_blob = chosen;
+    db.row.avatar_source_mime = 'image/png';
+    db.row.avatar_url = dataUrl('image/jpeg', await solid(100, 100));
+    expect((await getPictureSource('avatar', ME)).image).toBe(dataUrl('image/png', chosen));
   });
 });
 
