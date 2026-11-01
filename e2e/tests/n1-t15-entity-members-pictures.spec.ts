@@ -13,8 +13,9 @@
 //                 zoomed (+ and a two-finger pinch) and dragged, and saved. It shows on the hero, on the member's open
 //                 page (no reload), and on the owner's card in the list. The banner the same at 3:1.
 //   Removal       the owner removes a second member after the confirm; they leave People at once.
-//   Circles       a circle's manager links the entity to their circle; the entity's Circles section shows it without
-//                 a reload.
+//   Circles       a circle's manager links the entity from the circle's page (Link an entity, a search sheet): it shows
+//                 on the circle's Organisations, with its logo, on a member's open circle page and on the entity's
+//                 Circles section, each without a reload; Unlink asks first and takes it off both pages the same way.
 //   Every size    at the width given (7 widths, or the device's own): no sideways scroll; the pencils, Approve, Decline
 //                 and Remove are at least 44px and inside the window; at 360 a request is two lines with its buttons
 //                 on their own row.
@@ -278,17 +279,61 @@ for (const width of WIDTHS) {
     expect((await pool.query(`SELECT status FROM entity_members WHERE entity_id = $1 AND user_id = $2`, [entityId, second.id])).rows[0].status).toBe('removed');
 
     // ── Circles ────────────────────────────────────────────────────────────────────────────────────────────
+    // The circle's manager links the entity from the circle's page. The entity's page (the owner's) and the circle's
+    // page (the claimant's, a member of the circle) both show it without a reload.
     const circles = own.page.getByTestId('entity-circles');
     await expect(circles.getByText('Not linked to a circle yet.', { exact: false })).toBeVisible();
+    const circleName = `T15 Circle ${run} ${width}`;
     const circle = await pool.query(
-      `INSERT INTO circles (name, created_by, member_count) VALUES ($1, $2, 1) RETURNING id`, [`T15 Circle ${run} ${width}`, manager.id]);
+      `INSERT INTO circles (name, created_by, member_count) VALUES ($1, $2, 2) RETURNING id`, [circleName, manager.id]);
     const circleId = circle.rows[0].id as string;
     circleIds.push(circleId);
-    await pool.query(`INSERT INTO circle_members (circle_id, user_id, role) VALUES ($1, $2, 'owner')`, [circleId, manager.id]);
-    expect((await api(manager, 'POST', `/circles/${circleId}/entities`, { entityId })).status).toBe(201);
+    await pool.query(`INSERT INTO circle_members (circle_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'member')`, [circleId, manager.id, claimant.id]);
+    const man = await signedIn(manager, width);
+    await gotoRetry(man.page, `${APP}/circles/${circleId}`);
+    await expect(man.page.getByRole('heading', { name: circleName, level: 1 })).toBeVisible({ timeout: SLOW });
+    await gotoRetry(cla.page, `${APP}/circles/${circleId}`);
+    await expect(cla.page.getByRole('heading', { name: circleName, level: 1 })).toBeVisible({ timeout: SLOW });
+    await expect(cla.page.getByTestId('circle-organisations'), 'nothing linked, and no Link for a member').toHaveCount(0);
+    const orgs = man.page.getByTestId('circle-organisations');
+    await expect(orgs.getByText('No organisations are linked to this circle yet.')).toBeVisible();
+    const linkButton = orgs.getByRole('button', { name: 'Link an entity' });
+    await linkButton.scrollIntoViewIfNeeded();
+    await expectReachable(man.page, linkButton, `${at}: Link an entity`);
+    await tall(linkButton, `${at}: Link an entity`);
+    await linkButton.click();
+    const linkSheet = man.page.getByRole('dialog', { name: 'Link an entity' });
+    await linkSheet.getByTestId('link-entity-search').fill(name);
+    const pick = linkSheet.locator(`[data-link-entity="${entityId}"]`);
+    await expect(pick, 'the entity is found by name, with its logo').toBeVisible({ timeout: LIVE });
+    await expect(pick.locator(logoImg)).toBeVisible();
+    await noSidewaysScroll(man.page, `${at}: the link sheet`);
+    await pick.getByRole('button', { name: 'Link' }).click();
+    await expect(man.page.getByText(`${name} is linked to ${circleName}.`)).toBeVisible({ timeout: LIVE });
+    const orgRow = (page: Page) => page.getByTestId('circle-organisations').locator(`[data-entity-row="${entityId}"]`);
+    await expect(orgRow(man.page), 'on the circle\'s Organisations, with its logo').toContainText(name, { timeout: LIVE });
+    await expect(orgRow(man.page).locator(logoImg)).toBeVisible();
+    await expect(orgRow(cla.page), 'a member\'s open circle page shows it without a reload').toContainText(name, { timeout: LIVE });
+    await expect(cla.page.getByRole('button', { name: `Unlink ${name} from this circle` }), 'no Unlink for a member').toHaveCount(0);
     const linked = circles.locator(`[data-circle-id="${circleId}"]`);
-    await expect(linked, 'the circle shows on the entity\'s page without a reload').toContainText(`T15 Circle ${run} ${width}`, { timeout: LIVE });
-    await expect(linked).toContainText('1 member');
+    await expect(linked, 'the circle shows on the entity\'s page without a reload').toContainText(circleName, { timeout: LIVE });
+    await expect(linked).toContainText('2 members');
+    await noSidewaysScroll(man.page, `${at}: the circle with an organisation`);
+    expect((await pool.query(`SELECT count(*)::int AS n FROM circle_entities WHERE circle_id = $1`, [circleId])).rows[0].n).toBe(1);
+
+    // Unlink asks first; both pages drop it without a reload.
+    const unlink = man.page.getByRole('button', { name: `Unlink ${name} from this circle` });
+    await tall(unlink, `${at}: Unlink`);
+    await unlink.click();
+    const sure = man.page.getByRole('dialog', { name: `Unlink ${name}?` });
+    await sure.getByTestId('confirm-dialog-confirm').click();
+    await expect(man.page.getByText(`${name} is no longer linked to ${circleName}.`)).toBeVisible({ timeout: LIVE });
+    await expect(orgRow(cla.page), 'gone from the member\'s circle page').toHaveCount(0, { timeout: LIVE });
+    await expect(linked, 'gone from the entity\'s page').toHaveCount(0, { timeout: LIVE });
+    // Linked again, so the list below still shows a circle-linked entity.
+    expect((await api(manager, 'POST', `/circles/${circleId}/entities`, { entityId })).status).toBe(201);
+    await expect(linked).toBeVisible({ timeout: LIVE });
+    expect(unexpected(man.errors)).toEqual([]);
 
     // ── The card in the list ───────────────────────────────────────────────────────────────────────────────
     await gotoRetry(own.page, `${APP}/entities`);
