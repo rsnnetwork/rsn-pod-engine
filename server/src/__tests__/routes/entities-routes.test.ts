@@ -30,7 +30,24 @@ const mockUpdate = jest.fn();
 const mockSetMembership = jest.fn();
 const mockLeave = jest.fn();
 const mockArchive = jest.fn();
+const mockApprove = jest.fn();
+const mockDecline = jest.fn();
+const mockRemove = jest.fn();
+const mockSavePicture = jest.fn();
+const mockRemovePicture = jest.fn();
+const mockPictureSource = jest.fn();
+const mockPictureBlob = jest.fn();
+jest.mock('../../services/entity/entity-pictures.service', () => ({
+  saveEntityPicture: (...a: unknown[]) => mockSavePicture(...a),
+  removeEntityPicture: (...a: unknown[]) => mockRemovePicture(...a),
+  getEntityPictureSource: (...a: unknown[]) => mockPictureSource(...a),
+  getEntityPictureBlob: (...a: unknown[]) => mockPictureBlob(...a),
+  __esModule: true,
+}));
 jest.mock('../../services/entity/entity.service', () => ({
+  approveMember: (...a: unknown[]) => mockApprove(...a),
+  declineMember: (...a: unknown[]) => mockDecline(...a),
+  removeMember: (...a: unknown[]) => mockRemove(...a),
   listEntities: (...a: unknown[]) => mockList(...a),
   createEntity: (...a: unknown[]) => mockCreate(...a),
   getEntity: (...a: unknown[]) => mockGet(...a),
@@ -51,12 +68,14 @@ jest.mock('../../realtime/fanout', () => ({
 import entityRoutes from '../../routes/entities';
 import { authenticate } from '../../middleware/auth';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
-import { entityCreateLimiter, entityReadLimiter, entityWriteLimiter } from '../../middleware/rateLimit';
+import {
+  bannerReadLimiter, entityCreateLimiter, entityReadLimiter, entityWriteLimiter, pictureSourceLimiter,
+} from '../../middleware/rateLimit';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { ENTITY_KINDS, ENTITY_ROLES, ErrorCodes } from '@rsn/shared';
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // as the server's own app (index.ts), so a picture reaches the route
 app.use('/entities', entityRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -69,7 +88,10 @@ const ID = '5f0c3a3e-8d7b-4a57-9d0e-1f2a3b4c5d6e';
 const OLD = '7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
 
 const notFound = () => new NotFoundError('Entity', ID, 'This entity could not be found.');
-const services = [mockList, mockCreate, mockGet, mockUpdate, mockSetMembership, mockLeave, mockArchive];
+const services = [
+  mockList, mockCreate, mockGet, mockUpdate, mockSetMembership, mockLeave, mockArchive, mockApprove, mockDecline, mockRemove,
+  mockSavePicture, mockRemovePicture, mockPictureSource, mockPictureBlob,
+];
 const nothingCalled = () => {
   for (const m of services) expect(m).not.toHaveBeenCalled();
   expect(mockFanoutEntity).not.toHaveBeenCalled();
@@ -85,6 +107,13 @@ beforeEach(() => {
   mockSetMembership.mockResolvedValue({ joined: true, role: 'employee', title: null, isAdmin: false, companyUpdated: false });
   mockLeave.mockResolvedValue({ left: true, archived: false });
   mockArchive.mockResolvedValue(undefined);
+  mockApprove.mockResolvedValue({ companyUpdated: false });
+  mockDecline.mockResolvedValue(undefined);
+  mockRemove.mockResolvedValue(undefined);
+  mockSavePicture.mockResolvedValue({ url: `https://api.example/api/entities/${ID}/logo?v=1` });
+  mockRemovePicture.mockResolvedValue(undefined);
+  mockPictureSource.mockResolvedValue({ image: null, crop: null });
+  mockPictureBlob.mockResolvedValue(null);
 });
 
 describe('GET /entities', () => {
@@ -339,16 +368,26 @@ describe('POST /entities/:id/members (join, or change your own role)', () => {
     const res = await request(app).post(`/entities/${ID}/members`).set(me).send({ role: 'employee', title: ' Engineer ' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, data: link });
-    expect(mockSetMembership).toHaveBeenCalledWith('u-join', ID, { role: 'employee', title: 'Engineer' });
+    expect(mockSetMembership).toHaveBeenCalledWith('u-join', ID, { role: 'employee', title: 'Engineer' }, false);
     expect(mockFanoutEntity).toHaveBeenCalledWith(ID, 'u-join', ['u-join']);
     expect(mockFanoutProfile).not.toHaveBeenCalled();
   });
 
   it('leaves the title out when none is sent (it stays as it was), and sends null for a blank one', async () => {
     await request(app).post(`/entities/${ID}/members`).set(me).send({ role: 'investor' });
-    expect(mockSetMembership).toHaveBeenLastCalledWith('u-join', ID, { role: 'investor' });
+    expect(mockSetMembership).toHaveBeenLastCalledWith('u-join', ID, { role: 'investor' }, false);
     await request(app).post(`/entities/${ID}/members`).set(me).send({ role: 'investor', title: '' });
-    expect(mockSetMembership).toHaveBeenLastCalledWith('u-join', ID, { role: 'investor', title: null });
+    expect(mockSetMembership).toHaveBeenLastCalledWith('u-join', ID, { role: 'investor', title: null }, false);
+  });
+
+  it('answers a claim that waits (status pending), and tells the service when a platform admin claims (applied at once)', async () => {
+    const waiting = { joined: true, role: 'employee', title: null, isAdmin: false, companyUpdated: false, status: 'pending', pendingChange: null };
+    mockSetMembership.mockResolvedValueOnce(waiting);
+    const res = await request(app).post(`/entities/${ID}/members`).set(me).send({ role: 'employee' });
+    expect(res.body).toEqual({ success: true, data: waiting });
+    expect(mockFanoutEntity).toHaveBeenCalledWith(ID, 'u-join', ['u-join']);
+    await request(app).post(`/entities/${ID}/members`).set(as('u-join-admin', 'admin')).send({ role: 'investor' });
+    expect(mockSetMembership).toHaveBeenLastCalledWith('u-join-admin', ID, { role: 'investor' }, true);
   });
 
   it('also tells the screens that show the member\'s card when their empty company was filled in', async () => {
@@ -448,6 +487,15 @@ describe('the routes are rate limited', () => {
     ['delete', '/:id', entityWriteLimiter],
     ['post', '/:id/members', entityWriteLimiter],
     ['delete', '/:id/members/me', entityWriteLimiter],
+    ['post', '/:id/members/:userId/approve', entityWriteLimiter],
+    ['post', '/:id/members/:userId/decline', entityWriteLimiter],
+    ['delete', '/:id/members/:userId', entityWriteLimiter],
+    ['put', '/:id/logo', entityWriteLimiter],
+    ['delete', '/:id/logo', entityWriteLimiter],
+    ['put', '/:id/banner', entityWriteLimiter],
+    ['delete', '/:id/banner', entityWriteLimiter],
+    ['get', '/:id/logo/source', pictureSourceLimiter],
+    ['get', '/:id/banner/source', pictureSourceLimiter],
   ])('%s %s carries its limiter, after authenticate and ahead of its handler', (method, path, limiter) => {
     const handlers = handlersOf(method, path);
     expect(handlers.length).toBeGreaterThan(2); // the route exists
@@ -492,5 +540,171 @@ describe('the routes are rate limited', () => {
     const refused = await request(app).post('/entities').set(tester).send({ name: 'Tested 10', kind: 'company', role: 'founder' });
     expect(refused.status).toBe(429);
     expect(refused.body.error.message).toBe('You have added a lot of entities this hour. Try again later.');
+  });
+});
+
+// ── 30 Oct review (T15): the admins' answers, the pictures, and production's shapes ─────────────────────────
+
+const OTHER = '9c8b7a6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d';
+
+describe('POST /entities/:id/members/:userId/approve | decline, DELETE /entities/:id/members/:userId', () => {
+  const me = as('u-answer');
+
+  it('approves, answers ok, then tells the entity\'s screens and the member\'s', async () => {
+    const res = await request(app).post(`/entities/${ID}/members/${OTHER}/approve`).set(me);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { ok: true } });
+    expect(mockApprove).toHaveBeenCalledWith('u-answer', ID, OTHER, false);
+    expect(mockFanoutEntity).toHaveBeenCalledWith(ID, 'u-answer', [OTHER]);
+    expect(mockFanoutProfile).not.toHaveBeenCalled();
+  });
+
+  it('also tells the screens that show the member\'s card when approval filled their empty company', async () => {
+    mockApprove.mockResolvedValueOnce({ companyUpdated: true });
+    await request(app).post(`/entities/${ID}/members/${OTHER}/approve`).set(me);
+    expect(mockFanoutProfile).toHaveBeenCalledWith(OTHER);
+  });
+
+  it('declines and removes, telling the same screens, and lower-cases an id sent in capitals', async () => {
+    await request(app).post(`/entities/${ID}/members/${OTHER.toUpperCase()}/decline`).set(me);
+    expect(mockDecline).toHaveBeenCalledWith('u-answer', ID, OTHER, false);
+    expect(mockFanoutEntity).toHaveBeenLastCalledWith(ID, 'u-answer', [OTHER]);
+    await request(app).delete(`/entities/${ID}/members/${OTHER}`).set(as('u-answer-admin', 'admin'));
+    expect(mockRemove).toHaveBeenCalledWith('u-answer-admin', ID, OTHER, true);
+    expect(mockFanoutEntity).toHaveBeenLastCalledWith(ID, 'u-answer-admin', [OTHER]);
+  });
+
+  it('still leaves through /members/me: "me" never reaches the remove route', async () => {
+    await request(app).delete(`/entities/${ID}/members/me`).set(me);
+    expect(mockLeave).toHaveBeenCalledWith('u-answer', ID);
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  it('answers the service\'s 403, 404 and 409 in words, and tells no screens', async () => {
+    mockApprove.mockRejectedValueOnce(new ForbiddenError("Only this entity's admins can change or archive it."));
+    expect((await request(app).post(`/entities/${ID}/members/${OTHER}/approve`).set(me)).status).toBe(403);
+    mockDecline.mockRejectedValueOnce(new NotFoundError('EntityRequest', undefined, 'This request has already been answered.'));
+    const gone = await request(app).post(`/entities/${ID}/members/${OTHER}/decline`).set(me);
+    expect(gone.status).toBe(404);
+    expect(gone.body.error.message).toBe('This request has already been answered.');
+    mockRemove.mockRejectedValueOnce(new ConflictError(ErrorCodes.ENTITY_LAST_ADMIN, "This is the entity's last admin, so they can't be removed."));
+    const last = await request(app).delete(`/entities/${ID}/members/${OTHER}`).set(me);
+    expect(last.status).toBe(409);
+    expect(last.body.error.code).toBe('ENTITY_LAST_ADMIN');
+    expect(mockFanoutEntity).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bad member id or no token without calling the service', async () => {
+    expect((await request(app).post(`/entities/${ID}/members/not-an-id/approve`).set(me)).status).toBe(400);
+    expect((await request(app).delete(`/entities/${ID}/members/12345`).set(me)).status).toBe(400);
+    expect((await request(app).post(`/entities/${ID}/members/${OTHER}/approve`)).status).toBe(401);
+    nothingCalled();
+  });
+});
+
+describe('PUT / DELETE /entities/:id/logo and /banner, GET …/source', () => {
+  const me = as('u-pictures');
+  const image = 'data:image/png;base64,iVBORw0KGgo=';
+
+  it.each([['logo', 'logoUrl'], ['banner', 'bannerUrl']] as const)('saves the %s, answers its address, then tells the entity\'s screens', async (kind, field) => {
+    mockSavePicture.mockResolvedValueOnce({ url: `https://api.example/api/entities/${ID}/${kind}?v=5` });
+    const res = await request(app).put(`/entities/${ID}/${kind}`).set(me).send({ image, crop: { x: 0.5, y: 0.4, zoom: 2 } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { [field]: `https://api.example/api/entities/${ID}/${kind}?v=5` } });
+    expect(mockSavePicture).toHaveBeenCalledWith('u-pictures', ID, kind, { image, crop: { x: 0.5, y: 0.4, zoom: 2 } }, false);
+    expect(mockFanoutEntity).toHaveBeenCalledWith(ID, 'u-pictures');
+  });
+
+  it('places the kept picture again with only a crop, and removes a picture', async () => {
+    await request(app).put(`/entities/${ID}/logo`).set(me).send({ crop: { x: 0.2, y: 0.5, zoom: 1 } });
+    expect(mockSavePicture).toHaveBeenCalledWith('u-pictures', ID, 'logo', { image: undefined, crop: { x: 0.2, y: 0.5, zoom: 1 } }, false);
+    const res = await request(app).delete(`/entities/${ID}/banner`).set(as('u-pictures-admin', 'admin'));
+    expect(res.body).toEqual({ success: true, data: { bannerUrl: null } });
+    expect(mockRemovePicture).toHaveBeenCalledWith('u-pictures-admin', ID, 'banner', true);
+  });
+
+  it.each([
+    ['nothing', {}],
+    ['a crop out of range', { crop: { x: 2, y: 0.5, zoom: 1 } }],
+    ['a zoom of 9', { crop: { x: 0.5, y: 0.5, zoom: 9 } }],
+    ['a crop with more in it', { crop: { x: 0.5, y: 0.5, zoom: 1, rotate: 90 } }],
+    ['a picture far past 3 MB', { image: `data:image/png;base64,${'A'.repeat(4_300_000)}` }],
+  ])('refuses %s without calling the service', async (_what, sent) => {
+    const res = await request(app).put(`/entities/${ID}/logo`).set(as('u-pictures-refused')).send(sent);
+    expect(res.status).toBe(400);
+    nothingCalled();
+  });
+
+  it('names the logo in its refusals', async () => {
+    const none = await request(app).put(`/entities/${ID}/logo`).set(as('u-pictures-words')).send({});
+    expect(JSON.stringify(none.body)).toContain('Choose a picture for the logo.');
+    const big = await request(app).put(`/entities/${ID}/banner`).set(as('u-pictures-words'))
+      .send({ image: `data:image/png;base64,${'A'.repeat(4_300_000)}` });
+    expect(JSON.stringify(big.body)).toContain('The banner must be 3 MB or smaller.');
+  });
+
+  it('answers the service\'s 403 for someone who is not an admin, and tells no screens', async () => {
+    mockSavePicture.mockRejectedValueOnce(new ForbiddenError("Only this entity's admins can change or archive it."));
+    expect((await request(app).put(`/entities/${ID}/logo`).set(me).send({ image })).status).toBe(403);
+    expect(mockFanoutEntity).not.toHaveBeenCalled();
+  });
+
+  it('hands the editor the kept picture, for the people who may change it', async () => {
+    mockPictureSource.mockResolvedValueOnce({ image, crop: { x: 0.5, y: 0.5, zoom: 1 } });
+    const res = await request(app).get(`/entities/${ID}/logo/source`).set(me);
+    expect(res.body).toEqual({ success: true, data: { image, crop: { x: 0.5, y: 0.5, zoom: 1 } } });
+    expect(mockPictureSource).toHaveBeenCalledWith('u-pictures', ID, 'logo', false);
+    expect((await request(app).get(`/entities/${ID}/logo/source`)).status).toBe(401);
+  });
+});
+
+describe('GET /entities/:id/logo and /banner (public)', () => {
+  it('serves the picture with no token, as a picture only, cached for a day', async () => {
+    mockPictureBlob.mockResolvedValueOnce({ blob: Buffer.from([0xff, 0xd8, 0xff, 0x00]), contentType: 'image/jpeg' });
+    const res = await request(app).get(`/entities/${ID}/logo?v=123`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/jpeg');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['cache-control']).toBe('public, max-age=86400');
+    expect(mockPictureBlob).toHaveBeenCalledWith(ID, 'logo');
+  });
+
+  it('answers an empty 404 for no picture or an archived entity, and 400 for a bad id', async () => {
+    const res = await request(app).get(`/entities/${ID}/banner`);
+    expect(res.status).toBe(404);
+    expect(res.text).toBe('');
+    expect((await request(app).get('/entities/acme/logo')).status).toBe(400);
+  });
+
+  it.each([['get', '/:id/logo'], ['get', '/:id/banner']])('%s %s is limited per address, with no sign-in', (method, routePath) => {
+    type Layer = { route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: unknown }> } };
+    const handlers = (entityRoutes as unknown as { stack: Layer[] }).stack
+      .filter((layer) => layer.route?.path === routePath && layer.route.methods[method])
+      .flatMap((layer) => layer.route!.stack.map((s) => s.handle));
+    expect(handlers[0]).toBe(bannerReadLimiter);
+    expect(handlers).not.toContain(authenticate);
+  });
+});
+
+// Production's client (origin/main's client/) never calls /entities (audit 05 §0.1); the preview's does. Every field
+// the routes answered before T15 is still answered, with the same name and meaning; the new ones are added beside them.
+describe("production's shapes are unchanged (additive only)", () => {
+  it('the join body the screens sent before is still accepted, and its answer keeps every old field', async () => {
+    const old = { joined: true, role: 'employee', title: 'Engineer', isAdmin: false, companyUpdated: false };
+    mockSetMembership.mockResolvedValueOnce({ ...old, status: 'pending', pendingChange: null });
+    const res = await request(app).post(`/entities/${ID}/members`).set(as('u-compat')).send({ role: 'employee', title: 'Engineer' });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject(old);
+  });
+
+  it('the page keeps every old field beside the new ones', async () => {
+    const entity = { id: ID, name: 'Acme', kind: 'company', about: null, location: null, size: null, website: null, peopleCount: 1, createdAt: 'x', updatedAt: 'y' };
+    mockGet.mockResolvedValueOnce({
+      entity: { ...entity, logoUrl: null, bannerUrl: null }, people: [], myRole: null, canEdit: false,
+      myStatus: null, myPendingChange: null, circles: [],
+    });
+    const page = await request(app).get(`/entities/${ID}`).set(as('u-compat'));
+    expect(page.body.data).toMatchObject({ entity, people: [], myRole: null, canEdit: false });
+    expect(Object.keys(page.body.data).sort()).toEqual(['canEdit', 'circles', 'entity', 'myPendingChange', 'myRole', 'myStatus', 'people']);
   });
 });

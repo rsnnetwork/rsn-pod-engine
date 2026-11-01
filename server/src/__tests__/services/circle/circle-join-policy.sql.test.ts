@@ -42,6 +42,8 @@ const TABLES = [
   'circles', 'circle_members', 'circle_pods', 'circle_posts', 'circle_post_reactions', 'circle_post_comments', 'circle_comment_likes',
   'dm_conversations', 'direct_messages', 'user_blocks', 'user_pokes', 'encounter_history', 'user_entitlements',
   'event_join_requests', 'matching_templates',
+  // T15: a circle's page names the entities linked to it (migration 130).
+  'entities', 'circle_entities',
 ];
 
 const MIGRATION_128 = fs.readFileSync(path.join(__dirname, '../../../db/migrations/128_circle_join_policy.sql'), 'utf8');

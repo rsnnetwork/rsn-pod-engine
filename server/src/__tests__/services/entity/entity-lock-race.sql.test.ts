@@ -78,10 +78,26 @@ suite('an admin action queued behind the actor\'s own demotion', () => {
     await queued.query('ROLLBACK');
   });
 
-  it('goes through while the actor is still an admin', async () => {
+  it('goes through while the actor is still an admin (it answers the entity, T15)', async () => {
     await holder.query('UPDATE entity_members SET is_admin = true WHERE entity_id = $1 AND user_id = $2', [entity, user]);
     await queued.query('BEGIN');
-    await expect(lockForAdmin(queued as unknown as PoolClient, entity, user, false)).resolves.toBeUndefined();
+    await expect(lockForAdmin(queued as unknown as PoolClient, entity, user, false)).resolves.toEqual({ name: 'Lock Race Ltd' });
     await queued.query('ROLLBACK');
+  });
+
+  // T15 (30 Oct review, L23): a removed admin keeps the flag's old value nowhere, since rights count only on an
+  // active link. Queued behind their own removal, the action reads the removal and is refused.
+  it('is refused (403) when queued behind a removal of the actor', async () => {
+    await holder.query('BEGIN');
+    await holder.query('SELECT id FROM entities WHERE id = $1 FOR UPDATE', [entity]);
+    await queued.query('BEGIN');
+    const answer = lockForAdmin(queued as unknown as PoolClient, entity, user, false)
+      .then(() => 'allowed', (err: { statusCode?: number }) => err.statusCode ?? 'threw');
+    await new Promise((r) => setTimeout(r, 300));
+    await holder.query("UPDATE entity_members SET status = 'removed' WHERE entity_id = $1 AND user_id = $2", [entity, user]);
+    await holder.query('COMMIT');
+    expect(await answer).toBe(403);
+    await queued.query('ROLLBACK');
+    await holder.query("UPDATE entity_members SET status = 'active' WHERE entity_id = $1 AND user_id = $2", [entity, user]);
   });
 });

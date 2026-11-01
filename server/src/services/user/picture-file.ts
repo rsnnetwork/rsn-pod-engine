@@ -20,10 +20,21 @@ export const PICTURE_MAX_SIDE = 4096;
 
 const NAME: Record<PictureKind, string> = { avatar: 'photo', banner: 'banner' };
 export const NOT_A_PICTURE = 'That file is not a picture we can use. Choose a JPG, PNG or WebP picture.';
-export const pictureWords = (kind: PictureKind) => ({
+
+/** The sentences a refusal reads, naming the picture it is about. */
+export interface PictureWords { wrongType: string; tooBig: string; tooManyPixels: string }
+
+export const pictureWords = (kind: PictureKind): PictureWords => ({
   wrongType: `Choose a JPG, PNG or WebP picture for your ${NAME[kind]}.`,
   tooBig: `Your ${NAME[kind]} must be 3 MB or smaller.`,
   tooManyPixels: `Your ${NAME[kind]} can be at most 4096 by 4096 pixels.`,
+});
+
+/** The same sentences for a picture that is not the reader's own (an entity's logo or banner, 30 Oct review T15). */
+export const namedPictureWords = (name: string): PictureWords => ({
+  wrongType: `Choose a JPG, PNG or WebP picture for the ${name}.`,
+  tooBig: `The ${name} must be 3 MB or smaller.`,
+  tooManyPixels: `The ${name} can be at most 4096 by 4096 pixels.`,
 });
 
 // A data URL holds up to 4 MB of base64, and Node 20's pattern engine has run out of stack reading one that long
@@ -123,8 +134,8 @@ export function pictureSize(bytes: Buffer, mime: PictureType): Size | null {
 }
 
 /** The picture in a data URL, or a 400 that says in a sentence what is wrong with it. */
-export function parsePicture(image: string, kind: PictureKind): { bytes: Buffer; mime: PictureType } {
-  const words = pictureWords(kind);
+export function parsePicture(image: string, kind: PictureKind | PictureWords): { bytes: Buffer; mime: PictureType } {
+  const words = typeof kind === 'string' ? pictureWords(kind) : kind;
   const parts = splitDataUrl(image);
   if (!parts) throw new ValidationError(NOT_A_PICTURE);
   const { mime, base64 } = parts;

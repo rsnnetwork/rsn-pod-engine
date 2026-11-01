@@ -70,7 +70,8 @@ beforeEach(() => {
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
     if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] }; // authenticate
-    if (/SELECT user_id FROM entity_members WHERE entity_id = \$1/.test(text)) {
+    // T15: the live links only (active and pending); a declined or removed person is told only as a changed user.
+    if (/SELECT m\.user_id FROM entity_members m WHERE m\.entity_id = \$1 AND m\.status IN \('active', 'pending'\)/.test(text)) {
       return { rows: (people[String(params[0])] ?? []).map(user_id => ({ user_id })) };
     }
     if (/SELECT pod_id FROM pod_members WHERE user_id = \$1 AND status = 'active'/.test(text)) {
@@ -84,7 +85,12 @@ beforeEach(() => {
   jest.mocked(entityService.createEntity).mockResolvedValue({ id: ENTITY, companyUpdated: false });
   jest.mocked(entityService.updateEntity).mockResolvedValue(undefined);
   jest.mocked(entityService.archiveEntity).mockResolvedValue(undefined);
-  jest.mocked(entityService.setMyMembership).mockResolvedValue({ joined: true, role: 'employee', title: null, isAdmin: false, companyUpdated: false });
+  jest.mocked(entityService.setMyMembership).mockResolvedValue({
+    joined: true, role: 'employee', title: null, isAdmin: false, companyUpdated: false, status: 'pending', pendingChange: null,
+  });
+  jest.mocked(entityService.approveMember).mockResolvedValue({ companyUpdated: false });
+  jest.mocked(entityService.declineMember).mockResolvedValue(undefined);
+  jest.mocked(entityService.removeMember).mockResolvedValue(undefined);
   jest.mocked(entityService.leaveEntity).mockResolvedValue({ left: true, archived: false });
 });
 
@@ -186,7 +192,9 @@ describe('who hears an entity change', () => {
 
   it('a member\'s company filled in from the entity also reaches their own card and their pods\' member lists', async () => {
     people[ENTITY] = [ADMIN, COLLEAGUE, JOINER];
-    jest.mocked(entityService.setMyMembership).mockResolvedValueOnce({ joined: true, role: 'founder', title: null, isAdmin: false, companyUpdated: true });
+    jest.mocked(entityService.setMyMembership).mockResolvedValueOnce({
+      joined: true, role: 'founder', title: null, isAdmin: false, companyUpdated: true, status: 'active', pendingChange: null,
+    });
     await request(app).post(`/entities/${ENTITY}/members`).set(as(JOINER)).send({ role: 'founder' });
     await settle();
     const all = heard();
@@ -194,6 +202,47 @@ describe('who hears an entity change', () => {
     expect(all[PODMATE]).toEqual(expect.arrayContaining([E.pod(POD), E.podMembers(POD)]));
     expect(all[PODMATE]).not.toContain(E.entity(ENTITY));
     expect(all[ADMIN]).not.toContain(E.user(JOINER));
+  });
+});
+
+// T15 (30 Oct review, 7.2): a claim waits, and the admins answer it. Each answer reaches the entity's live people, the
+// admin who answered and the member it was about, whatever their link now is, so the Requests panel, the People list
+// and the member's own "Waiting for approval" all flip without a reload.
+describe('who hears a claim and its answer (T15)', () => {
+  it('a claim that waits: the people and the claimant (now a pending link) hear it, with the claimant\'s list tag', async () => {
+    people[ENTITY] = [ADMIN, COLLEAGUE, JOINER]; // JOINER's pending link is among the live links
+    await request(app).post(`/entities/${ENTITY}/members`).set(as(JOINER)).send({ role: 'employee' });
+    await settle();
+    expect(heard()).toEqual({
+      [ADMIN]: sorted([E.entity(ENTITY), E.userEntities(ADMIN), E.userEntities(JOINER)]),
+      [COLLEAGUE]: sorted([E.entity(ENTITY), E.userEntities(COLLEAGUE), E.userEntities(JOINER)]),
+      [JOINER]: sorted([E.entity(ENTITY), E.userEntities(JOINER)]),
+    });
+  });
+
+  it.each([
+    ['approve', 'post', 'approve'],
+    ['decline', 'post', 'decline'],
+  ] as const)('%s: the people, the admin and the member hear the entity and the member\'s list', async (_what, _method, verb) => {
+    people[ENTITY] = verb === 'approve' ? [ADMIN, COLLEAGUE, JOINER] : [ADMIN, COLLEAGUE];
+    expect((await request(app).post(`/entities/${ENTITY}/members/8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d/${verb}`).set(as(ADMIN))).status).toBe(200);
+    await settle();
+    const all = heard();
+    const member = '8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+    expect(all[ADMIN]).toEqual(expect.arrayContaining([E.entity(ENTITY), E.userEntities(member)]));
+    expect(all[COLLEAGUE]).toEqual(expect.arrayContaining([E.entity(ENTITY), E.userEntities(member)]));
+    expect(all[member]).toEqual(sorted([E.entity(ENTITY), E.userEntities(member)]));
+  });
+
+  it('a removal: the removed member, no longer among its people, is still told', async () => {
+    const member = '8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+    people[ENTITY] = [ADMIN];
+    expect((await request(app).delete(`/entities/${ENTITY}/members/${member}`).set(as(ADMIN))).status).toBe(200);
+    await settle();
+    expect(heard()).toEqual({
+      [ADMIN]: sorted([E.entity(ENTITY), E.userEntities(ADMIN), E.userEntities(member)]),
+      [member]: sorted([E.entity(ENTITY), E.userEntities(member)]),
+    });
   });
 });
 

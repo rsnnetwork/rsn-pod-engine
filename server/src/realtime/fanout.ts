@@ -468,8 +468,11 @@ export async function fanoutUserEntity(
 //
 // An entity (an organisation members create, such as a company or a fund; not the realtime "entities"
 // these tags are) was created, edited or archived, or a member joined it, changed their role in it or
-// left it. Audience: its people as they are after the write (an archive keeps them), the member who
-// acted, and each member whose link changed (one who has just left is no longer among its people).
+// left it. T15 (30 Oct review): also someone claims to be part of it or asks to change their role, an
+// admin approves, declines or removes, its logo or banner changes, or it is linked to or unlinked from a
+// circle. Audience: its people as they are after the write (an archive keeps them; active and pending
+// links), the member who acted, and each member whose link changed (one who has just left, or was
+// declined or removed, is no longer among its people).
 // Each recipient is sent, in an emit of their own:
 //   entity:<id>                its page;
 //   user:<recipient>:entities  their own list, whose names and people counts may have moved;
@@ -487,8 +490,11 @@ export async function fanoutEntityChange(
   if (!io) return;
   try {
     const { query } = await import('../db');
+    const { openLinkSql } = await import('../services/entity/entity-links');
+    // T15: its listed people and the people whose claims wait (their own screens show where the claim stands); a
+    // declined or removed person is told only as a changed user.
     const people = await query<{ user_id: string }>(
-      `SELECT user_id FROM entity_members WHERE entity_id = $1`,
+      `SELECT m.user_id FROM entity_members m WHERE m.entity_id = $1 AND ${openLinkSql('m')}`,
       [entityId],
     );
     const recipients = new Set([...people.rows.map(r => r.user_id), actorId, ...changedUserIds].filter(Boolean));

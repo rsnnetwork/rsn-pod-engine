@@ -26,10 +26,10 @@ import {
 } from '../realtime/fanout';
 import { NotFoundError } from '../middleware/errors';
 import { query } from '../db';
-import { ApiResponse, PICTURE_MAX_ZOOM, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { ApiResponse, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import * as bannerService from '../services/user/banner.service';
 import { getPictureSource, savePicture } from '../services/user/picture.service';
-import { PICTURE_MAX_DATA_URL_CHARS } from '../services/user/picture-file';
+import { pictureBodySchema, type PictureBody } from './picture-body';
 import { avatarWriteLimiter, bannerReadLimiter, bannerWriteLimiter, pictureSourceLimiter } from '../middleware/rateLimit';
 
 const router = Router();
@@ -71,26 +71,12 @@ const updateUserSchema = z.object({
   inviteOptOutPublicEvents: z.boolean().optional(),
 });
 
-// Where a member placed their picture (30 Oct review, T3a): the middle of the kept part as shares of the picture's
-// width and height, and the zoom. The server holds the part inside the picture whatever it is sent; these bounds only
-// refuse what no editor sends.
-const pictureCropSchema = z.object({
-  x: z.number().min(0).max(1),
-  y: z.number().min(0).max(1),
-  zoom: z.number().min(1).max(PICTURE_MAX_ZOOM),
-}).strict();
-
-// The member banner (21 Oct 2026) and photo (30 Oct review, T3a). A new picture is a data URL; the service checks the
-// type, the bytes and the decoded size. This cap is only the longest text that can hold the largest picture allowed,
-// with the same words. A crop alone places the kept picture again. The banner's old body, { image }, is still this.
-const pictureBodySchema = (name: 'banner' | 'photo') => z.object({
-  image: z.string().min(1, `Choose a picture for your ${name}.`)
-    .max(PICTURE_MAX_DATA_URL_CHARS, `Your ${name} must be 3 MB or smaller.`).optional(),
-  crop: pictureCropSchema.optional(),
-}).refine((b) => b.image !== undefined || b.crop !== undefined, { message: `Choose a picture for your ${name}.`, path: ['image'] });
-const bannerBodySchema = pictureBodySchema('banner');
-const avatarBodySchema = pictureBodySchema('photo');
-type PictureBody = z.infer<typeof bannerBodySchema>;
+// The member banner (21 Oct 2026) and photo (30 Oct review, T3a): `{ image?, crop? }` (picture-body.ts, shared with an
+// entity's logo and banner since T15). The banner's old body, { image }, is still this.
+const memberPictureBody = (name: 'banner' | 'photo') =>
+  pictureBodySchema({ choose: `Choose a picture for your ${name}.`, tooBig: `Your ${name} must be 3 MB or smaller.` });
+const bannerBodySchema = memberPictureBody('banner');
+const avatarBodySchema = memberPictureBody('photo');
 const memberIdParams = z.object({ id: z.string().uuid('Not a member id') });
 // The member a route names (26 Oct 2026): a malformed id is a 400 in a member's words, not a Postgres 500, and an id
 // in capitals is lower-cased, so the services' string compares and the tags they send match.

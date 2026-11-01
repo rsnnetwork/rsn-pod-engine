@@ -31,6 +31,7 @@ jest.mock('../../db', () => ({
 jest.mock('../../services/circle/circle.service');
 jest.mock('../../services/circle/circle-join.service');
 jest.mock('../../services/circle/circle-wall.service');
+jest.mock('../../services/circle/circle-entities.service');
 
 const mockIo = { name: 'the socket server' };
 const mockEmitEntities = jest.fn();
@@ -44,6 +45,7 @@ jest.mock('../../realtime/emit', () => ({
 import * as circleService from '../../services/circle/circle.service';
 import * as joinService from '../../services/circle/circle-join.service';
 import * as wallService from '../../services/circle/circle-wall.service';
+import * as linkService from '../../services/circle/circle-entities.service';
 import circleRoutes from '../../routes/circles';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { authenticate } from '../../middleware/auth';
@@ -59,6 +61,8 @@ const MEMBER = 'user-member';     // in it
 const JOINER = 'user-joiner';     // joins it in the test
 const PLATFORM = 'user-platform'; // a platform admin who is not in it
 const ASKER = '7c2e9a41-3d5b-4e6f-8a1c-9b0d2e4f6a33'; // asks to join (an id: it sits in the path)
+const LINKED_ENTITY = '2b6d8f1a-4c3e-4a5b-9d7f-1e3c5a7b9d22'; // T15: an entity linked to the circle
+const ENTITY_ADMIN = 'user-entity-admin';                       // its admin, not in the circle
 
 /** Who is in the circle, as the fake database holds it; a test changes it to mirror its write. */
 let members: string[];
@@ -78,6 +82,10 @@ beforeEach(() => {
     }
     if (/SELECT 1 FROM circles c WHERE c.id = \$1 AND \(c.created_by = \$2/.test(text)) {
       return { rows: params[1] === creator ? [{ '?column?': 1 }] : [] };
+    }
+    // T15: an entity's live links, for the entity's own fan-out when it is linked or unlinked.
+    if (/SELECT m\.user_id FROM entity_members m WHERE m\.entity_id = \$1 AND m\.status IN \('active', 'pending'\)/.test(text)) {
+      return { rows: params[0] === LINKED_ENTITY ? [{ user_id: ENTITY_ADMIN }] : [] };
     }
     if (/SELECT user_id FROM circle_members WHERE circle_id = \$1 UNION SELECT created_by FROM circles WHERE id = \$1/.test(text)) {
       return { rows: [...new Set([...members, creator])].map(user_id => ({ user_id })) };
@@ -101,6 +109,8 @@ beforeEach(() => {
   jest.mocked(joinService.ringApproved).mockResolvedValue(undefined);
   jest.mocked(joinService.listJoinRequests).mockResolvedValue([]);
   jest.mocked(joinService.listAttachablePods).mockResolvedValue({ items: [], nextPage: null });
+  jest.mocked(linkService.linkEntity).mockResolvedValue(undefined);
+  jest.mocked(linkService.unlinkEntity).mockResolvedValue(undefined);
 });
 
 const app = express();
@@ -233,6 +243,7 @@ describe('the routes are rate limited', () => {
     ['post', '/:id/join'], ['post', '/:id/leave'],
     ['post', '/:id/request'], ['delete', '/:id/request'], ['post', '/:id/requests/:userId/approve'],
     ['post', '/:id/requests/:userId/decline'], ['delete', '/:id/members/:userId'],
+    ['post', '/:id/entities'], ['delete', '/:id/entities/:entityId'],
   ])('%s %s carries the write limiter', (method, path) => {
     order(circleWriteLimiter, method, path);
   });
@@ -432,5 +443,46 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ success: false, error: { code: 'CIRCLE_CLOSED', message: 'This circle is closed. Ask to join and its owner will let you in.' } });
     expect(circleService.joinCircle).toHaveBeenCalledWith(CIRCLE, ASKER, { role: 'member' });
+  });
+});
+
+// ─── T15 (30 Oct review 7.3; L23): an entity linked to a circle ────────────────────────────────────────────────
+
+describe('linking an entity to a circle: who may, and who hears it', () => {
+  it('a link: the circle\'s people hear the circle, the entity\'s people hear the entity, the actor both', async () => {
+    const res = await request(app).post(`/circles/${CIRCLE}/entities`).set(as(ADMIN)).send({ entityId: LINKED_ENTITY.toUpperCase() });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ success: true, data: { ok: true } });
+    expect(linkService.linkEntity).toHaveBeenCalledWith(CIRCLE, LINKED_ENTITY, { userId: ADMIN, role: 'member' });
+    await settle();
+    const all = heard();
+    expect(all[MEMBER]).toEqual(page(MEMBER));
+    expect(all[ENTITY_ADMIN]).toEqual(sorted([E.entity(LINKED_ENTITY), E.userEntities(ENTITY_ADMIN)]));
+    expect(all[ADMIN]).toEqual(expect.arrayContaining([E.circle(CIRCLE), E.entity(LINKED_ENTITY)]));
+  });
+
+  it('an unlink tells the same people', async () => {
+    const res = await request(app).delete(`/circles/${CIRCLE}/entities/${LINKED_ENTITY}`).set(as(ENTITY_ADMIN));
+    expect(res.body).toEqual({ success: true, data: { ok: true } });
+    expect(linkService.unlinkEntity).toHaveBeenCalledWith(CIRCLE, LINKED_ENTITY, { userId: ENTITY_ADMIN, role: 'member' });
+    await settle();
+    const all = heard();
+    expect(all[MEMBER]).toEqual(page(MEMBER));
+    expect(all[ENTITY_ADMIN]).toEqual(expect.arrayContaining([E.entity(LINKED_ENTITY), E.circle(CIRCLE)]));
+  });
+
+  it('a refused link tells nobody; a bad id or no entity is a 400 before the service', async () => {
+    const { AppError } = await import('../../middleware/errors');
+    jest.mocked(linkService.linkEntity).mockRejectedValueOnce(
+      new AppError(403, 'AUTH_FORBIDDEN', 'Only the people who run this circle can link an entity to it.'));
+    const refused = await request(app).post(`/circles/${CIRCLE}/entities`).set(as(MEMBER)).send({ entityId: LINKED_ENTITY });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.message).toBe('Only the people who run this circle can link an entity to it.');
+    expect((await request(app).post(`/circles/${CIRCLE}/entities`).set(as(ADMIN)).send({})).status).toBe(400);
+    expect((await request(app).post(`/circles/${CIRCLE}/entities`).set(as(ADMIN)).send({ entityId: 'acme' })).status).toBe(400);
+    expect((await request(app).delete(`/circles/${CIRCLE}/entities/acme`).set(as(ADMIN))).status).toBe(400);
+    await settle();
+    expect(mockEmitEntities).not.toHaveBeenCalled();
+    expect(linkService.unlinkEntity).not.toHaveBeenCalled();
   });
 });

@@ -393,15 +393,18 @@ describe('getPersonBrief: what the page is given', () => {
   });
 
   // 21 Oct 2026: the entities (companies, funds…) the person is linked to, with their role and title in each.
-  it('lists the person\'s own entities, not the viewer\'s, archived ones left out', async () => {
+  // 30 Oct review (T15): only approved links (a claim still waiting is on nobody's view of the person), each with the
+  // entity's logo address (null for the letter tile). The old fields keep their names and values.
+  it('lists the person\'s own entities, not the viewer\'s, archived ones and claims still waiting left out', async () => {
     arm();
     const theirs = [{ id: 'e1', name: 'Harbor Collective', kind: 'company', role: 'founder', title: 'CEO' }];
-    mockQuery.mockImplementation((sql: string) => Promise.resolve({ rows: /FROM entity_members m/.test(sql) ? theirs : [] }));
+    const rows = theirs.map((e) => ({ ...e, status: 'active', has_logo: false, has_banner: false, pictures_updated_at: null }));
+    mockQuery.mockImplementation((sql: string) => Promise.resolve({ rows: /FROM entity_members m/.test(sql) ? rows : [] }));
     const brief = await getPersonBrief(VIEWER, TARGET);
-    expect(brief.entities).toEqual(theirs);
+    expect(brief.entities).toEqual(theirs.map((e) => ({ ...e, logoUrl: null })));
     const call = mockQuery.mock.calls.find(c => /FROM entity_members m/.test(String(c[0])))!;
     expect(call[1]).toEqual([TARGET]);
-    expect(String(call[0]).replace(/\s+/g, ' ')).toMatch(/e\.archived_at IS NULL/);
+    expect(String(call[0]).replace(/\s+/g, ' ')).toMatch(/e\.archived_at IS NULL AND m\.status = 'active'/);
   });
 
   it('gives an empty list when the person is linked to no entity', async () => {
