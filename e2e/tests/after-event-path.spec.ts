@@ -50,6 +50,15 @@ let podId = '';
 let sessionId = '';
 let meetingId = '';
 let hostSocket: Socket | null = null;
+// The host "stays in the room" as the live page does: a heartbeat every 15 s (useSessionSocket). Without it the server
+// clears the host's presence after 90 s, and lobby chat answers "Chat is available once the host joins" (CHAT_DISABLED):
+// on the preview, where the two pages take long to open, the second message was refused that way (2 Nov 2026).
+const heartbeats: ReturnType<typeof setInterval>[] = [];
+function joinAsHost(socket: Socket, id: string): void {
+  socket.emit('session:join', { sessionId: id });
+  socket.emit('presence:heartbeat', { sessionId: id });
+  heartbeats.push(setInterval(() => socket.emit('presence:heartbeat', { sessionId: id }), 15_000));
+}
 const ctxs: BrowserContext[] = [];
 const pageErrors: string[] = [];
 let staysPage: Page;
@@ -146,6 +155,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  heartbeats.forEach(clearInterval);
   hostSocket?.disconnect();
   for (const c of ctxs) await c.close().catch(() => {});
   await browser?.close().catch(() => {});
@@ -168,7 +178,7 @@ test('two people chat; one leaves to the event page, which turns to Ended withou
   hostSocket = await connect(host);
   hostSocket.emit('host:start_session', { sessionId });
   await expect.poll(statusOf, { timeout: 30_000, message: 'the event is live' }).toBe('lobby_open');
-  hostSocket.emit('session:join', { sessionId });
+  joinAsHost(hostSocket, sessionId);
 
   staysPage = await open(stays, 'stays', `/session/${sessionId}/live`, { width: 360, height: 740 });
   leavesPage = await open(leaves, 'leaves', `/session/${sessionId}/live`, { width: 390, height: 844 });
@@ -292,7 +302,7 @@ test('a guest who leaves a video meeting is listed as a member who left, not "Re
   hostSocket!.emit('host:start_session', { sessionId: meetingId });
   await expect.poll(async () => (await pool.query<{ status: string }>('SELECT status FROM sessions WHERE id = $1', [meetingId])).rows[0]?.status,
     { timeout: 30_000, message: 'the meeting is live' }).toBe('lobby_open');
-  hostSocket!.emit('session:join', { sessionId: meetingId });
+  joinAsHost(hostSocket!, meetingId);
 
   const guest = await open(stays, 'meeting guest', `/session/${meetingId}/live`, { width: 390, height: 844 });
   await expect.poll(async () => (await pool.query<{ status: string }>(
