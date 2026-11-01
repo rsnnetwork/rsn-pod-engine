@@ -11,7 +11,7 @@ import {
   NUDGE, ZOOM_STEP, keyedCrop, panPicture, pictureView, pinchZoom, zoomPicture,
 } from '../../../../client/src/components/picture/picture-geometry';
 import {
-  PICTURE_INPUT_MAX_BYTES, PICTURE_SEND_MAX_BYTES, PICTURE_SEND_MAX_SIDE, pictureFileProblem, sendsAsItIs,
+  PICTURE_INPUT_MAX_BYTES, PICTURE_SEND_MAX_BYTES, PICTURE_SEND_MAX_SIDE, pictureFileProblem, sendsAsItIs, serverCouldNotOpen,
 } from '../../../../client/src/components/picture/picture-file';
 import { isSmallPhoto } from '../../../../client/src/features/reason/human/profile-text';
 
@@ -168,5 +168,29 @@ describe('the editor and the pencil, as built', () => {
     expect(hook).toMatch(/meta: \{ entities: me \? \[E\.user\(me\)\] : \[\] \}/);
     expect(hook).toMatch(/checkSession\(\)/);
     expect(hook).toMatch(/invalidateQueries\(\{ queryKey: reasonKeys\.mine \}\)/);
+  });
+});
+
+// Fix round 2 (preview): a picture the browser draws can still be one the server's decoder refuses (photo-on-card's
+// 2x2 PNG has a bad checksum: libspng stops, Chrome and Safari draw it). Before T3a the form always redrew a photo, so
+// the server never saw the raw file. Now, when the server says it cannot open the original, one copy drawn by the
+// browser (which already shows it in the frame) is sent instead.
+describe('a picture the server cannot open is sent again as the browser draws it', () => {
+  const refused = { response: { status: 400, data: { error: { code: 'VALIDATION_ERROR', message: 'That file is not a picture we can use. Choose a JPG, PNG or WebP picture.' } } } };
+
+  it('only the server\'s "cannot open it" answer counts', () => {
+    expect(serverCouldNotOpen(refused)).toBe(true);
+    expect(serverCouldNotOpen({ response: { status: 400, data: { error: { message: 'Your photo must be 3 MB or smaller.' } } } })).toBe(false);
+    expect(serverCouldNotOpen({ response: { status: 429, data: { error: { message: 'Slow down a moment, then try again.' } } } })).toBe(false);
+    expect(serverCouldNotOpen({ request: {}, code: 'ERR_NETWORK' })).toBe(false);
+    expect(serverCouldNotOpen(new Error('x'))).toBe(false);
+  });
+
+  it('the save tries the original, then once a drawn copy, and never a copy of a copy', () => {
+    const hook = read('components/picture/useMemberPicture.ts');
+    expect(hook).toMatch(/const first = await pictureToSend\(picture\);/);
+    expect(hook).toMatch(/if \(first\.copied \|\| !serverCouldNotOpen\(err\)\) throw err;/);
+    expect(hook).toMatch(/const copy = await pictureToSend\(picture, true\);/);
+    expect(read('components/picture/prepare-picture.ts')).toMatch(/export async function pictureToSend\(file: Blob, drawCopy = false\): Promise<\{ image: string; copied: boolean \}>/);
   });
 });

@@ -26,3 +26,16 @@ export function sendsAsItIs(file: { type: string; size: number }, natural: Natur
     && natural.width <= PICTURE_SEND_MAX_SIDE
     && natural.height <= PICTURE_SEND_MAX_SIDE;
 }
+
+/** What the server says when it cannot open a picture's bytes (server/src/services/user/picture-file.ts). */
+const COULD_NOT_OPEN = 'That file is not a picture we can use. Choose a JPG, PNG or WebP picture.';
+
+/**
+ * True when the server refused a picture because it could not open it. A browser forgives files a decoder does not
+ * (a PNG with a bad checksum draws in Chrome and Safari but stops libspng), so the caller then sends a copy drawn by
+ * the browser, which already shows the picture in the editor's frame.
+ */
+export function serverCouldNotOpen(err: unknown): boolean {
+  const failed = (err ?? {}) as { response?: { status?: number; data?: { error?: { message?: unknown } } } };
+  return failed.response?.status === 400 && failed.response.data?.error?.message === COULD_NOT_OPEN;
+}

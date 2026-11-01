@@ -524,8 +524,11 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
       .toBeVisible({ timeout: SLOW });
     await noSidewaysScroll(own.page, `your profile at ${at}`);
     expect(await brokenWords(own.page.getByRole('heading', { level: 1 })), `your name at ${at}`).toEqual([]);
+    // Scrolled to first, as the links below are: the photo's pencil sits at the bottom right of a tile at least 430px
+    // tall under the banner, so on a short window (1024x768) it is under the fold at the page's top (fix round 2).
     for (const pencil of ['Edit banner', 'Edit photo']) {
       const button = own.page.getByRole('button', { name: pencil });
+      await button.scrollIntoViewIfNeeded();
       expect((await button.boundingBox())!.height, `${pencil} at ${at}`).toBeGreaterThanOrEqual(44);
       await expectReachable(own.page, button, `${pencil} at ${at}`);
     }

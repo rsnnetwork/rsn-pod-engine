@@ -12,6 +12,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { fetchPictureSource, reasonKeys, savePictureRequest } from '@/features/reason/api';
 import type { PictureEditorProps } from './PictureEditor';
+import { serverCouldNotOpen } from './picture-file';
 import { pictureToSend } from './prepare-picture';
 
 const WORDS: Record<PictureKind, { name: string; title: string; aspect: 1 | 3 }> = {
@@ -42,8 +43,16 @@ export function useMemberPicture(kind: PictureKind, onSaved?: () => Promise<unkn
   const save = useMutation({
     networkMode: 'always',
     mutationFn: async ({ picture, crop }: { picture: Blob | null; crop: PictureCrop }) => {
-      const image = picture ? await pictureToSend(picture) : undefined;
-      return savePictureRequest(kind, image ? { image, crop } : { crop });
+      if (!picture) return savePictureRequest(kind, { crop });
+      const first = await pictureToSend(picture);
+      try {
+        return await savePictureRequest(kind, { image: first.image, crop });
+      } catch (err) {
+        // The browser could draw it (it is in the frame), but the server could not open the original: send the drawing.
+        if (first.copied || !serverCouldNotOpen(err)) throw err;
+        const copy = await pictureToSend(picture, true);
+        return savePictureRequest(kind, { image: copy.image, crop });
+      }
     },
     onSuccess: async () => {
       await Promise.all([
