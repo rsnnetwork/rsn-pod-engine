@@ -31,9 +31,9 @@ describe('profile photo: where it is changed on the form', () => {
 
 describe('profile photo: what is sent', () => {
   it('the picture as it is when the server keeps it as it is, else a smaller copy that fits 3 MB and 4096 pixels', () => {
-    expect(prepare()).toMatch(/if \(sendsAsItIs\(file, \{ width: img\.naturalWidth, height: img\.naturalHeight \}\)\) return readAsDataUrl\(file\);/);
+    expect(prepare()).toMatch(/if \(!drawCopy && sendsAsItIs\(file, \{ width: img\.naturalWidth, height: img\.naturalHeight \}\)\) \{\s*return \{ image: await readAsDataUrl\(file\), copied: false \};/);
     expect(prepare()).toMatch(/for \(const side of \[PICTURE_SEND_MAX_SIDE, 3072, 2048\]\)/);
-    expect(prepare()).toMatch(/if \(bytesIn\(copy\) <= PICTURE_SEND_MAX_BYTES\) return copy;/);
+    expect(prepare()).toMatch(/if \(bytesIn\(copy\) <= PICTURE_SEND_MAX_BYTES\) return \{ image: copy, copied: true \};/);
   });
 
   it('a smaller copy is shrunk in halving steps with the best smoothing, never in one low-quality step', () => {
@@ -52,8 +52,8 @@ describe('profile photo: what is sent', () => {
   });
 
   it('a picture is sent with where it was placed, and a crop alone places the kept picture again', () => {
-    expect(hook()).toMatch(/const image = picture \? await pictureToSend\(picture\) : undefined;/);
-    expect(hook()).toMatch(/return savePictureRequest\(kind, image \? \{ image, crop \} : \{ crop \}\);/);
+    expect(hook()).toMatch(/if \(!picture\) return savePictureRequest\(kind, \{ crop \}\);/);
+    expect(hook()).toMatch(/return await savePictureRequest\(kind, \{ image: first\.image, crop \}\);/);
   });
 });
 

@@ -63,14 +63,19 @@ function drawSmaller(img: HTMLImageElement, maxSide: number, quality: number): s
 
 const bytesIn = (dataUrl: string) => Math.floor(((dataUrl.length - dataUrl.indexOf(',') - 1) * 3) / 4);
 
-/** The chosen file as the data URL to send: itself when it can be, else a smaller copy. Throws a sentence. */
-export async function pictureToSend(file: Blob): Promise<string> {
+/**
+ * The chosen file as the data URL to send: itself when it can be, else (or when `drawCopy` asks, because the server
+ * could not open the original) a copy drawn by the browser, smaller when it has to be. Throws a sentence.
+ */
+export async function pictureToSend(file: Blob, drawCopy = false): Promise<{ image: string; copied: boolean }> {
   const img = await openPicture(file);
-  if (sendsAsItIs(file, { width: img.naturalWidth, height: img.naturalHeight })) return readAsDataUrl(file);
+  if (!drawCopy && sendsAsItIs(file, { width: img.naturalWidth, height: img.naturalHeight })) {
+    return { image: await readAsDataUrl(file), copied: false };
+  }
   for (const side of [PICTURE_SEND_MAX_SIDE, 3072, 2048]) {
     for (const quality of [0.92, 0.85]) {
       const copy = drawSmaller(img, side, quality);
-      if (bytesIn(copy) <= PICTURE_SEND_MAX_BYTES) return copy;
+      if (bytesIn(copy) <= PICTURE_SEND_MAX_BYTES) return { image: copy, copied: true };
     }
   }
   throw new Error(PICTURE_TOO_LARGE);
