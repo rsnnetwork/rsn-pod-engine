@@ -186,3 +186,40 @@ describe('the live event page leaves the app-wide connect listeners in place', (
     expect(live).toMatch(/socket\.off\('connect', joinSession\);/);
   });
 });
+
+describe('no screen removes another screen\'s socket listeners (review T16, fix round 1)', () => {
+  it('no .off(...) in client/src is called with only an event name, and removeAllListeners only signs out', () => {
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, f.name);
+        if (f.isDirectory()) { walk(p); continue; }
+        if (!/\.tsx?$/.test(f.name)) continue;
+        const src = fs.readFileSync(p, 'utf8');
+        const rel = path.relative(CLIENT, p).split(path.sep).join('/');
+        for (const m of src.matchAll(/\.off\(\s*(?:'[^']*'|"[^"]*"|[A-Za-z_$][\w$]*)\s*\)/g)) offenders.push(`${rel}: ${m[0]}`);
+        if (/removeAllListeners\(/.test(src) && rel !== 'lib/socket.ts') offenders.push(`${rel}: removeAllListeners`);
+      }
+    };
+    walk(CLIENT);
+    expect(offenders).toEqual([]);
+    expect(read('lib/socket.ts')).toMatch(/export function resetSocket\(\): void \{\s*if \(socket\) \{\s*socket\.removeAllListeners\(\);/);
+  });
+
+  it('the live hook takes off exactly the listeners its run added, each by its handler', () => {
+    const live = read('hooks/useSessionSocket.ts');
+    expect(live).toMatch(/const heldBefore = new Map\(SOCKET_EVENTS\.map\(\(ev\) => \[ev, new Set\(socket\.listeners\(ev\)\)\] as const\)\);/);
+    expect(live).toMatch(/socket\.listeners\(ev\)\.filter\(\(fn\) => !heldBefore\.get\(ev\)\?\.has\(fn\)\)/);
+    expect(live).toMatch(/for \(const \{ ev, fn \} of ownListeners\) socket\.off\(ev, fn\);/);
+    // Its socket.io reconnect listeners come off by handler only.
+    expect(live).toMatch(/socket\.io\.off\('reconnect', onReconnect\);/);
+    expect(live).not.toMatch(/socket\.io\.off\('reconnect(?:_attempt|_failed)?'\);/);
+    // Every registration sits at the effect's top level (or in its one synchronous `if`), so all of them are made
+    // between heldBefore and ownListeners: none is registered later, inside a callback, where the clean-up would miss it.
+    const body = live.slice(live.indexOf('const heldBefore'), live.indexOf('const ownListeners'));
+    const registrations = [...body.matchAll(/^( *)socket\.(?:on|once)\(/gm)].map((m) => m[1].length);
+    expect(registrations.length).toBeGreaterThan(40);
+    expect(registrations.every((indent) => indent === 4 || indent === 6)).toBe(true);
+    expect([...body.matchAll(/^( {6})socket\.(?:on|once)\(/gm)].length).toBe(1);
+  });
+});

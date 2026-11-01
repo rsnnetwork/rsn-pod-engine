@@ -159,14 +159,11 @@ export default function useSessionSocket(sessionId: string) {
     connectSocket(token);
     const socket = getSocket();
 
-    // FIX 4B: Remove ALL previous listeners before registering new ones
-    // Prevents accumulation on mount/unmount cycles (React strict mode, fast nav)
-    SOCKET_EVENTS.forEach(ev => socket.off(ev));
-    // Never every 'connect' listener: the socket is the app's, and the app-wide resync (every tagged read again on
-    // connect, P1 item 17) and the connection banner listen there too. This hook's own (joinSession) goes in cleanup.
-    socket.io.off('reconnect');
-    socket.io.off('reconnect_attempt');
-    socket.io.off('reconnect_failed');
+    // FIX 4B: no listener of this hook outlives it (StrictMode's mount, unmount and mount again; fast navigation): the
+    // clean-up removes exactly what this run registered. Never a whole event name: the socket is the app's, and other
+    // screens listen on some of these names too (HostControls and EventPlanStrip on 'error' and 'roster:changed', the
+    // app on 'connect'). What each name holds before this run registers anything, so its own can be told apart below.
+    const heldBefore = new Map(SOCKET_EVENTS.map((ev) => [ev, new Set(socket.listeners(ev))] as const));
 
     // Track connection status
     store.setConnectionStatus('connecting');
@@ -1450,6 +1447,10 @@ export default function useSessionSocket(sessionId: string) {
     window.addEventListener('focus', resyncPresenceOnReturn);
     window.addEventListener('online', resyncPresenceOnReturn);
 
+    // This run's own listeners: every one registered above under these names (all of them synchronously, in this body).
+    const ownListeners = SOCKET_EVENTS.flatMap((ev) =>
+      socket.listeners(ev).filter((fn) => !heldBefore.get(ev)?.has(fn)).map((fn) => ({ ev, fn })));
+
     return () => {
       if (resyncDebounce) clearTimeout(resyncDebounce);
       document.removeEventListener('visibilitychange', resyncPresenceOnReturn);
@@ -1465,8 +1466,8 @@ export default function useSessionSocket(sessionId: string) {
       clearInterval(waitingHealInterval);
       if (recoveryBurstTimer) clearInterval(recoveryBurstTimer);
 
-      // Remove ALL socket event listeners we attached
-      for (const ev of SOCKET_EVENTS) socket.off(ev);
+      // Exactly the listeners this run attached, each by its own handler.
+      for (const { ev, fn } of ownListeners) socket.off(ev, fn);
       // entity:changed is the app's own (useEntityChangedHandler): only this hook's listener comes off.
       disposed = true;
       socket.off('entity:changed', onChatChanged);
