@@ -112,3 +112,78 @@ describe('the live top bar keeps the title readable', () => {
     expect(src).toMatch(/import \{ eventStateChipText \} from '\.\/event-state-chip';/);
   });
 });
+
+// ─── Production fix (2 Nov 2026): a toast never covers the live top bar ───────────────────────────────────
+//
+// On production the phone spec found Leave Event under "Thanks, we will use this for your matches.", the success
+// toast a member gets on pressing Set on the event check-in. The toasts were `fixed top-4 right-4`: on a phone that
+// box (y 16 to 90, almost the full width) lay over the whole top bar (the title, the chip, Participants and Leave
+// Event) for 2.5s, and 6s for an error. It did so before the title fix as well. In the live room the toasts now open
+// just below the top bar, so they never cover its controls; every other page keeps its toast position.
+
+interface ToastModule { default: (props: { hostQuiet?: boolean; placement?: 'viewport' | 'below-bar' }) => unknown }
+
+function drawToasts(props: { hostQuiet?: boolean; placement?: 'viewport' | 'below-bar' }): string {
+  // Loaded inside a test so a missing piece fails that test with a message.
+  /* eslint-disable @typescript-eslint/no-var-requires -- react and react-dom/server are only needed by this block */
+  const { createElement, Fragment } = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { iconStandIns } = require('./load-client-module');
+  /* eslint-enable @typescript-eslint/no-var-requires */
+  const toasts = [{ id: 't1', type: 'success', message: 'Thanks, we will use this for your matches.' }];
+  const mod = loadClientModule('components/ui/Toast.tsx', {
+    'framer-motion': { motion: { div: 'div' }, AnimatePresence: Fragment },
+    'lucide-react': iconStandIns,
+    '@/stores/toastStore': { useToastStore: () => ({ toasts, removeToast: () => undefined }) },
+  }) as unknown as ToastModule;
+  return renderToStaticMarkup(createElement(mod.default, props));
+}
+
+/** The class list of the toast stack's own element. */
+const stackClasses = (html: string): string[] => (html.match(/^<div[^>]*class="([^"]*)"/)?.[1] ?? '').split(/\s+/);
+
+describe('a toast in the live room opens below the top bar, never over it', () => {
+  it('keeps every other page as it was: fixed to the top right of the window', () => {
+    const html = drawToasts({});
+    expect(html).toContain('Thanks, we will use this for your matches.');
+    const classes = stackClasses(html);
+    expect(classes).toEqual(expect.arrayContaining(['fixed', 'top-4', 'right-4', 'z-[100]', 'max-w-sm']));
+  });
+
+  it('opens just below its bar, inside the screen with the notch kept clear, when placed below the bar', () => {
+    const html = drawToasts({ placement: 'below-bar' });
+    expect(html).toContain('Thanks, we will use this for your matches.');
+    const classes = stackClasses(html);
+    expect(classes).toEqual(expect.arrayContaining(['absolute', 'top-full', 'mt-2', 'z-[100]', 'sm:left-auto', 'sm:max-w-sm']));
+    expect(classes).not.toContain('fixed');
+    expect(classes).not.toContain('top-4');
+    expect(classes.some((c) => /^left-\[max\(1rem,env\(safe-area-inset-left\)\)\]$/.test(c))).toBe(true);
+    expect(classes.some((c) => /^right-\[max\(1rem,env\(safe-area-inset-right\)\)\]$/.test(c))).toBe(true);
+  });
+
+  it('draws an opaque card below the bar, so the room under it never shows through its words', () => {
+    const card = (html: string) => html.match(/<div[^>]*\sclass="([^"]*rounded-xl[^"]*)"/)?.[1].split(/\s+/) ?? [];
+    const below = card(drawToasts({ placement: 'below-bar' }));
+    expect(below).toEqual(expect.arrayContaining(['bg-emerald-50', 'text-emerald-800', 'border-emerald-200', 'shadow-lg']));
+    // No see-through background (a Tailwind opacity suffix such as bg-emerald-500/10).
+    expect(below.filter((c) => c.startsWith('bg-') && c.includes('/'))).toEqual([]);
+    // Every other page keeps its card as it was.
+    expect(card(drawToasts({}))).toEqual(expect.arrayContaining(['bg-emerald-500/10', 'text-emerald-400', 'border-emerald-500/30']));
+  });
+
+  it('still shows the host only actionable errors', () => {
+    expect(drawToasts({ placement: 'below-bar', hostQuiet: true })).not.toContain('Thanks, we will use this');
+  });
+
+  it('is drawn inside the live top bar, which is its positioned parent, and only there', () => {
+    const src = readClientSource('features/live/LiveSessionPage.tsx');
+    expect(src.match(/<ToastContainer\b/g)).toHaveLength(1);
+    const barAt = src.indexOf('data-testid="live-top-bar"');
+    const barOpen = src.slice(src.lastIndexOf('<div', barAt), src.indexOf('>', barAt));
+    expect(barOpen.split(/className="/)[1]).toMatch(/^relative\b|\srelative\s/);
+    const toastAt = src.indexOf('<ToastContainer');
+    expect(toastAt).toBeGreaterThan(barAt);
+    expect(toastAt).toBeLessThan(src.indexOf('data-testid="live-top-bar-title"'));
+    expect(src.slice(toastAt, src.indexOf('/>', toastAt))).toMatch(/hostQuiet=\{isHost\}\s+placement="below-bar"/);
+  });
+});

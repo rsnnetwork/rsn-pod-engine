@@ -29,7 +29,8 @@ describe('Host-quiet toasts', () => {
 
   it('ToastContainer drops internal toasts for everyone, then host sees only non-silent errors', () => {
     expect(toast).toMatch(/hostQuiet\?: boolean/);
-    expect(toast).toMatch(/export default function ToastContainer\(\{ hostQuiet = false \}: Props\)/);
+    // hostQuiet still defaults to off (2 Nov 2026: a placement prop sits beside it, for the live room).
+    expect(toast).toMatch(/export default function ToastContainer\(\{ hostQuiet = false, placement = 'viewport' \}: Props\)/);
     // #2 (9 Jun) — internal/admin/system messages never banner ANYONE
     expect(toast).toMatch(/const userFacing = toasts\.filter\(t => !t\.internal\)/);
     // host: info/success dropped; errors survive unless hostSilent
@@ -44,7 +45,7 @@ describe('Host-quiet toasts', () => {
   });
 
   it('the live event page runs the host in hostQuiet mode', () => {
-    expect(live).toMatch(/<ToastContainer hostQuiet=\{isHost\} \/>/);
+    expect(live).toMatch(/<ToastContainer hostQuiet=\{isHost\} placement="below-bar" \/>/);
   });
 
   it('the non-actionable "no match data" notice is hostSilent', () => {
