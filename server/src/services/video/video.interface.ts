@@ -45,4 +45,11 @@ export interface IVideoProvider {
    * participant has already left by the time eviction fires.
    */
   removeParticipant(roomId: string, userId: string): Promise<void>;
+
+  /**
+   * Leave fix (2 Nov 2026): take the member out of the room only while the connection in it is still the one with
+   * participant sid `sid` (the one that left). True when it removed them; false when they are no longer in the room,
+   * the room has gone, or a newer connection of theirs is in it (they came back). Other failures are thrown.
+   */
+  removeParticipantIfSession(roomId: string, userId: string, sid: string): Promise<boolean>;
 }

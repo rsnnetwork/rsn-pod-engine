@@ -500,6 +500,17 @@ export const callRequestLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have rung a lot of calls in the last few minutes. Try again in a little while.' } },
 });
 
+// Leaving a 1:1 call (2 Nov 2026, leave fix): one request per leave, so 30 a minute is far more than anyone leaves.
+export const callLeaveLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-leave'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // The call ringing me, or the one I rang (1 Nov 2026): read when the app opens, after a refresh and when the
 // connection comes back, and again when a call changes. A minute's worth is far more than a member's screens ask.
 export const callReadLimiter = rateLimit({

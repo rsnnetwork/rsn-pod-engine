@@ -50,4 +50,7 @@ export class MockVideoProvider implements IVideoProvider {
 
   // Phase 4 (G1) — no-op mock; real eviction handled by LiveKitProvider.
   async removeParticipant(_roomId: string, _userId: string): Promise<void> { /* no-op */ }
+
+  // Leave fix (2 Nov 2026): the mock has no room to take anyone out of.
+  async removeParticipantIfSession(_roomId: string, _userId: string, _sid: string): Promise<boolean> { return false; }
 }
