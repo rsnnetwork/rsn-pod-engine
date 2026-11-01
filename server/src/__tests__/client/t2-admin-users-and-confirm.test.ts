@@ -149,7 +149,10 @@ describe('a former member in an old conversation', () => {
     const page = read('features/messages/MessagesPage.tsx');
     expect(page).toMatch(/otherIsFormerMember\?: boolean;/);
     expect(page).toMatch(/const otherIsFormer = !!activeConv\?\.otherIsFormerMember;/);
-    expect(page).toMatch(/<PersonHeaderLink to=\{`\/people\/\$\{headerContext\.otherUserId\}\?from=Messages`\} former=\{otherIsFormer\}>/);
+    // With T6's PersonLink (1 Nov 2026): the header's picture and name are one PersonLink, plain text for a former member,
+    // who reads No longer a member of REASON there.
+    expect(page).toMatch(/<PersonLink\s+userId=\{headerContext\.otherUserId\}\s+from="Messages"\s+former=\{otherIsFormer\}/);
+    expect(page).toMatch(/\{otherIsFormer && <p className="text-xs text-gray-500" data-testid="former-member-header">No longer a member of REASON<\/p>\}/);
     expect(page).toMatch(/This person is no longer a member of REASON, so they cannot get messages\./);
     expect(page).toMatch(/\{activeConv && !otherIsFormer && callsUnlocked && \(/);
   });
