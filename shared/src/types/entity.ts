@@ -74,6 +74,21 @@ export const ENTITY_LIMITS = {
 } as const;
 
 // ─── What the API answers (GET /api/entities and the routes under it) ────────
+// The 30 Oct review's fields (T15) are optional in these types so code built against the types before them still
+// compiles; the server always sends every one of them.
+
+/**
+ * Where a person's link to an entity stands (30 Oct review, 7.2; L23). A claim waits as `pending` until one of the
+ * entity's admins approves it (`active`) or declines it; an admin can remove an active member. Links made before the
+ * review are all `active`. Only `active` links are listed anywhere, counted, or carry admin rights.
+ */
+export type EntityMemberStatus = 'pending' | 'active' | 'declined' | 'removed';
+
+/** A change of role or title an active member asked for, waiting for an admin. */
+export interface EntityPendingChange {
+  role: EntityRole;
+  title: string | null;
+}
 
 /** One entity in a list. `peopleCount` counts the people the viewer can see on its page. */
 export interface EntitySummary {
@@ -84,6 +99,10 @@ export interface EntitySummary {
   peopleCount: number;
   /** The viewer's own role, or null when they are not linked to it. */
   myRole: EntityRole | null;
+  /** 30 Oct review: the entity's logo (an absolute, versioned address), or null when it has none (the letter tile). */
+  logoUrl?: string | null;
+  /** 30 Oct review: 'pending' when the viewer's claim waits for approval (in `mine` only), 'active' when listed, else null. */
+  myStatus?: 'active' | 'pending' | null;
 }
 
 /** GET /api/entities: the viewer's own entities, and others (a name search, or the most recently active). */
@@ -104,6 +123,9 @@ export interface EntityInfo {
   peopleCount: number;
   createdAt: string;
   updatedAt: string;
+  /** 30 Oct review: the logo and the banner (absolute, versioned addresses), or null when there is none. */
+  logoUrl?: string | null;
+  bannerUrl?: string | null;
 }
 
 /** The thinnest public card: who someone is, and nothing of why they are here. */
@@ -121,13 +143,51 @@ export interface EntityPerson extends PublicCardBasics {
   isAdmin: boolean;
 }
 
+/** Someone waiting for an entity's admins: a claim to be part of it, or an active member's change of role or title. */
+export interface EntityRequest extends PublicCardBasics {
+  kind: 'join' | 'change';
+  /** What they say they are. */
+  role: EntityRole;
+  title: string | null;
+  /** For a change: their role and title as listed now. Null for a claim. */
+  currentRole: EntityRole | null;
+  currentTitle: string | null;
+  requestedAt: string;
+}
+
+/** A circle an entity is linked to. `memberCount` is null for a closed circle the viewer is outside (named only, L22). */
+export interface EntityCircle {
+  id: string;
+  name: string;
+  memberCount: number | null;
+  joinPolicy: 'open' | 'closed';
+}
+
+/** An entity on a circle's page (GET /api/circles/:id, `entities`). */
+export interface CircleEntityLink {
+  id: string;
+  name: string;
+  kind: EntityKind;
+  logoUrl: string | null;
+}
+
 /** GET /api/entities/:id */
 export interface EntityPage {
   entity: EntityInfo;
   people: EntityPerson[];
+  /** The viewer's role when their link is active, else null. */
   myRole: EntityRole | null;
   /** The viewer may edit and archive it: one of its admins, or a platform admin. */
   canEdit: boolean;
+  /** 30 Oct review: where the viewer's own link stands, or null when they have none. */
+  myStatus?: EntityMemberStatus | null;
+  /** 30 Oct review: a change of role or title the viewer asked for, waiting for an admin. */
+  myPendingChange?: EntityPendingChange | null;
+  /** 30 Oct review: the circles it is linked to (at most 50). */
+  circles?: EntityCircle[];
+  /** 30 Oct review, only when `canEdit`: the people waiting for an answer (at most 200), and how many wait. */
+  requests?: EntityRequest[];
+  requestCount?: number;
 }
 
 /** One of a person's entities: GET /api/users/:id/entities, and the person brief's `entities`. */
@@ -137,6 +197,10 @@ export interface PersonEntity {
   kind: EntityKind;
   role: EntityRole;
   title: string | null;
+  /** 30 Oct review: the entity's logo (an absolute, versioned address), or null. */
+  logoUrl?: string | null;
+  /** 30 Oct review, on a member's own list only: 'pending' for a claim that waits for approval. */
+  status?: 'active' | 'pending';
 }
 
 /** POST /api/entities */
@@ -155,6 +219,10 @@ export interface EntityMembershipResult {
   isAdmin: boolean;
   /** The member's empty profile company was set to the entity's name. */
   companyUpdated: boolean;
+  /** 30 Oct review: 'pending' when the claim waits for the entity's admins, 'active' when it was applied at once. */
+  status?: EntityMemberStatus;
+  /** 30 Oct review: a change of role or title that waits for the entity's admins, or null. */
+  pendingChange?: EntityPendingChange | null;
 }
 
 /** DELETE /api/entities/:id/members/me */
