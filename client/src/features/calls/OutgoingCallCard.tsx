@@ -5,13 +5,15 @@
 // 360px. Portalled to <body>: a page's animated wrapper keeps a transform that would carry a fixed card with it.
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { Phone, Video, X } from 'lucide-react';
 import { useCallStore } from '@/stores/callStore';
 import { withdrawCall } from './call-api';
-import { countdown } from './call-ring';
+import { callRoomPath, countdown } from './call-ring';
 
 export default function OutgoingCallCard() {
   const call = useCallStore((s) => s.outgoing);
+  const navigate = useNavigate();
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!call) return;
@@ -21,10 +23,17 @@ export default function OutgoingCallCard() {
   }, [call]);
   if (!call) return null;
 
-  const cancel = () => {
+  // The card goes at once. The server says what the withdraw ended as: when the callee accepted a moment before,
+  // the call is on and the caller goes into the room after all (fix round 1). A withdraw that never reached the
+  // server puts the card back while the call still rings, so the caller can try again or be answered.
+  const cancel = async () => {
     useCallStore.getState().end(call.requestId);
-    // Best-effort: the card goes at once, and a call nobody withdraws still lapses on the server in two minutes.
-    withdrawCall(call.requestId).catch(() => undefined);
+    try {
+      const outcome = await withdrawCall(call.requestId);
+      if (outcome.status === 'accepted') navigate(callRoomPath(outcome.conversationId, outcome.kind));
+    } catch {
+      if (call.expiresAt > Date.now()) useCallStore.getState().setOutgoing(call);
+    }
   };
   const Icon = call.kind === 'audio' ? Phone : Video;
   return createPortal(
@@ -46,7 +55,7 @@ export default function OutgoingCallCard() {
         </div>
         <button
           type="button"
-          onClick={cancel}
+          onClick={() => void cancel()}
           className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 hover:bg-gray-50"
         >
           <X className="h-4 w-4" aria-hidden="true" /> Cancel

@@ -135,6 +135,25 @@ describe('the banner and the Calling card', () => {
   });
 });
 
+describe('fix round 1: a withdraw that lost to an answer, and signing out', () => {
+  it('Cancel that the server answers "accepted" (the answer came first) takes the caller into the room', () => {
+    const card = src('features/calls/OutgoingCallCard.tsx');
+    expect(card).toMatch(/const outcome = await withdrawCall\(call\.requestId\);/);
+    expect(card).toMatch(/if \(outcome\.status === 'accepted'\) navigate\(callRoomPath\(outcome\.conversationId, outcome\.kind\)\);/);
+    expect(src('features/calls/call-api.ts')).toMatch(/withdrawCall = \(requestId: string\) =>[\s\S]*?r\.data\.data as WithdrawOutcome/);
+  });
+
+  it('a withdraw that never reached the server puts the card back while the call still rings', () => {
+    const card = src('features/calls/OutgoingCallCard.tsx');
+    expect(card).toMatch(/catch \{\s*if \(call\.expiresAt > Date\.now\(\)\) useCallStore\.getState\(\)\.setOutgoing\(call\);/);
+  });
+
+  it('signing out takes every call off this device: the layer clears the store as it goes', () => {
+    const layer = src('features/calls/CallLayer.tsx');
+    expect(layer).toMatch(/useEffect\(\(\) => \(\) => \{\s*useCallStore\.getState\(\)\.setIncoming\(null\);\s*useCallStore\.getState\(\)\.setOutgoing\(null\);\s*\}, \[\]\);/);
+  });
+});
+
 describe('a ringing call (call-ring.ts)', () => {
   const live: LiveCallRequest = {
     id: 'rq-1', conversationId: 'conv-1', fromUserId: 'u-a', toUserId: 'u-b', partnerName: 'Ana', kind: 'video',

@@ -103,13 +103,6 @@ export function useCallSignals(): void {
     if (next !== undefined) useCallStore.getState().setOutgoing(next);
   }, [outgoing.data]);
 
-  // Signed out: nothing of the last member's calls stays on screen.
-  useEffect(() => {
-    if (me) return;
-    useCallStore.getState().setIncoming(null);
-    useCallStore.getState().setOutgoing(null);
-  }, [me]);
-
   // A call nobody answers lapses on its own, on both sides.
   const ringingIn = useCallStore((s) => s.incoming);
   const ringingOut = useCallStore((s) => s.outgoing);

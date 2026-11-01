@@ -20,7 +20,10 @@ export async function ringCall(target: CallTarget, kind: CallKind, durationMin: 
 
 export const answerCall = (requestId: string) => api.post(`/dm/call/requests/${encodeURIComponent(requestId)}/accept`);
 export const declineCall = (requestId: string) => api.post(`/dm/call/requests/${encodeURIComponent(requestId)}/decline`);
-export const withdrawCall = (requestId: string) => api.post(`/dm/call/requests/${encodeURIComponent(requestId)}/cancel`);
+/** What a withdraw ended as: cancelled, or whatever answered first ("accepted": the callee is in the room). */
+export interface WithdrawOutcome { status: string; conversationId: string; kind: CallKind }
+export const withdrawCall = (requestId: string) =>
+  api.post(`/dm/call/requests/${encodeURIComponent(requestId)}/cancel`).then((r) => r.data.data as WithdrawOutcome);
 
 export const fetchIncomingCall = () =>
   api.get('/dm/call/requests/incoming').then((r) => r.data.data as LiveCallRequest | null);

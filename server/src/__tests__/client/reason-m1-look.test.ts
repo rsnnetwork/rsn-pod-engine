@@ -595,7 +595,6 @@ describe('Weights the page loads, and the waiting-call card above the phone bar 
     expect(card).not.toBeNull();
     const lifted = card![1].match(/(?<![\w-])bottom-\[calc\((\d+)px\+env\(safe-area-inset-bottom\)\)\]/);
     expect(lifted).not.toBeNull();
-    const liftedByInset = true;
     const offset = Number(lifted![1]);
     expect(offset).toBe(92);
     const move = read('src/features/reason/human/MoveBar.tsx');
@@ -613,7 +612,7 @@ describe('Weights the page loads, and the waiting-call card above the phone bar 
 
     for (const inset of [0, 34, 47]) {
       const barHeight = 1 + above + tab + below + inset;
-      const cardBottom = offset + (liftedByInset ? inset : 0);
+      const cardBottom = offset + inset;
       expect({ inset, barHeight, cardBottom, clear: cardBottom - barHeight >= 8 }).toEqual({ inset, barHeight, cardBottom, clear: true });
     }
   });
