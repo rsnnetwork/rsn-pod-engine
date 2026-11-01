@@ -19,8 +19,10 @@ interface AuthState {
    *  (ACCOUNT_CLOSED, USER_SUSPENDED). The login page says it in words. */
   signOutReason: string | null;
 
-  login: (email: string, clientUrl?: string, inviteCode?: string) => Promise<any>;
+  login: (email: string, clientUrl?: string, inviteCode?: string, redirect?: string) => Promise<any>;
   verify: (token: string) => Promise<void>;
+  /** Sign in with the 6-digit code from the sign-in email (1 Nov 2026): the same session the link gives. */
+  verifyCode: (email: string, code: string) => Promise<void>;
   setTokensAndLoad: (accessToken: string, refreshToken: string) => Promise<void>;
   checkSession: () => Promise<void>;
   refreshAccessToken: () => Promise<void>;
@@ -216,13 +218,20 @@ export const useAuthStore = create<AuthState>((set, get) => {
     isSessionChecked: false,
     signOutReason: null,
 
-    login: async (email: string, clientUrl?: string, inviteCode?: string) => {
-      const { data } = await api.post('/auth/magic-link', { email, clientUrl, inviteCode });
+    login: async (email: string, clientUrl?: string, inviteCode?: string, redirect?: string) => {
+      const { data } = await api.post('/auth/magic-link', { email, clientUrl, inviteCode, redirect });
       return data;
     },
 
     verify: async (token: string) => {
       const { data } = await api.post('/auth/verify', { token });
+      const { accessToken, refreshToken } = data.data;
+      installTokens(accessToken, refreshToken);
+      await get().checkSession();
+    },
+
+    verifyCode: async (email: string, code: string) => {
+      const { data } = await api.post('/auth/magic-link/code', { email, code });
       const { accessToken, refreshToken } = data.data;
       installTokens(accessToken, refreshToken);
       await get().checkSession();

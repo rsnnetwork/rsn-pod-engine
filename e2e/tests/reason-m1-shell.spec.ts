@@ -255,7 +255,7 @@ async function expectTapSize(targets: Array<{ name: string; loc: Locator }>, whe
   expect(bad, `${where}: targets under 44px\n${bad.join('\n')}`).toEqual([]);
 }
 
-// The official sheep mark with its outline grown so the face reads when small, loaded, from /reason-mark-small.png; and the
+// The official sheep mark (unaltered, with a margin so no edge is cut; 1 Nov 2026), loaded, from /reason-mark-small.png; and the
 // mark is the sheep and the word REASON on one line, centred on each other, with nothing beside them (19 Oct: no small "RSN").
 async function expectOfficialLogo(page: Page, where: string): Promise<void> {
   const logo = page.locator('img[src="/reason-mark-small.png"]:visible').first();

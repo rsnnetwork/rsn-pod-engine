@@ -19,10 +19,12 @@ describe('The sign-in page: every control is a 44px touch target (19 Oct feedbac
     expect(login()).toMatch(/onClick=\{handleGoogleLogin\}[^>]*className="[^"]*\bmin-h-\[44px\]/);
     expect(login()).toMatch(/<Input\s[^>]*type="email"[^>]*className="min-h-\[44px\]"/);
     expect(login()).toMatch(/onClick=\{\(\) => navigate\('\/request-to-join'\)\}\s*className="[^"]*\bmin-h-\[44px\]/);
-    expect(login()).toMatch(/onClick=\{\(\) => setSent\(false\)\} className="[^"]*\bmin-h-\[44px\]/);
+    // 1 Nov 2026: the waiting screen is its own component now, with the code field and Send a new email beside it.
+    expect(login()).toMatch(/onDifferentEmail=\{\(\) => setSent\(false\)\}/);
+    expect(read('src/features/auth/CheckEmailPanel.tsx')).toMatch(/onClick=\{onDifferentEmail\} className="[^"]*\bmin-h-\[44px\]/);
   });
 
-  it('Send magic link is a medium Button, whose own minimum height is 44px', () => {
+  it('Email me a link and a code is a medium Button, whose own minimum height is 44px', () => {
     expect(login()).toMatch(/<Button type="submit" className="w-full group" isLoading=\{isSubmitting\}>/);
     expect(read('src/components/ui/Button.tsx')).toMatch(/md: '[^']*\bmin-h-\[44px\]'/);
   });
