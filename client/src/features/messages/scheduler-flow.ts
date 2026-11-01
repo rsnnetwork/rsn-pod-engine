@@ -437,9 +437,17 @@ interface FailedRequest {
 }
 
 /** The 409 a confirm gets when the time stopped being free for both while the card was open. */
+export const CHANGED_SINCE_SEEN = 'The meeting time changed a moment ago.';
+
 export function isTimeNotShared(err: unknown): boolean {
   const failed = (err ?? {}) as FailedRequest;
   return failed.response?.status === 409 && failed.response.data?.error?.code === 'MEETING_TIME_NOT_SHARED';
+}
+
+/** 409 MEETING_CHANGED_SINCE_SEEN: the meeting the Move or Confirm was pressed on is no longer the one that stands. */
+export function isChangedSinceSeen(err: unknown): boolean {
+  const failed = (err ?? {}) as FailedRequest;
+  return failed.response?.status === 409 && failed.response.data?.error?.code === 'MEETING_CHANGED_SINCE_SEEN';
 }
 
 const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
@@ -452,7 +460,7 @@ const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 export function lastingRefusal(err: unknown): string | null {
   const response = ((err ?? {}) as FailedRequest).response;
   const status = response?.status ?? 0;
-  if (!response || status < 400 || status >= 500 || status === 429 || isTimeNotShared(err)) return null;
+  if (!response || status < 400 || status >= 500 || status === 429 || isTimeNotShared(err) || isChangedSinceSeen(err)) return null;
   return sentence(errorMessage(err, 'That time cannot be booked.'));
 }
 
@@ -478,6 +486,15 @@ export function confirmFailure(
   err: unknown, c: { moving: boolean; stays: string | null; zone: string; now: number },
 ): string {
   const response = ((err ?? {}) as FailedRequest).response;
+  // The other person moved or cancelled it a moment before (H2b item 9; P1 item 36): where it stands now, from the
+  // refusal itself, never "stays".
+  if (isChangedSinceSeen(err)) {
+    const now = (response?.data?.error?.details as { scheduling?: SchedulingLike } | undefined)?.scheduling?.confirmed;
+    const meeting = now && meetingStands(now, c.now) ? now : null;
+    return meeting
+      ? `${CHANGED_SINCE_SEEN} Your meeting is now on ${slotLabel(meeting.startAt ?? meeting.window, c.zone)}.`
+      : `${CHANGED_SINCE_SEEN} No meeting is booked now.`;
+  }
   if (isTimeNotShared(err)) {
     const told = (response?.data?.error?.details as { scheduling?: SchedulingLike } | undefined)?.scheduling?.confirmed;
     const meeting = told && meetingStands(told, c.now) ? told : null;
