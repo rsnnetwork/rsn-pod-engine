@@ -14,7 +14,7 @@ import { callRequestIdInPath, conversationIdInPath } from '../middleware/dm-path
 import * as meetingService from '../services/dm/meeting-windows.service';
 import * as callService from '../services/dm/meeting-call.service';
 import { areActive } from '../services/presence/presence.service';
-import { callReadLimiter, callRequestLimiter } from '../middleware/rateLimit';
+import { callLeaveLimiter, callReadLimiter, callRequestLimiter } from '../middleware/rateLimit';
 import { buildMeetingFile, MEETING_FILE_HEADERS } from '../services/meetings/meeting-calendar';
 import { NotFoundError } from '../middleware/errors';
 import { query } from '../db';
@@ -192,6 +192,27 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await callService.getCallToken(req.params.id, req.user!.userId, req.body.kind || 'video');
+      res.json({ success: true, data: result } as ApiResponse);
+    } catch (err) { next(err); }
+  },
+);
+
+// POST /dm/conversations/:id/call/leave { sid } — I have left this conversation's call on purpose: take that
+// connection of mine (its LiveKit participant sid) out of the room, so the other person is told at once even when the
+// leave my browser sent never reached LiveKit (leave fix, 2 Nov 2026). It changes no data any screen reads: the room's
+// membership reaches both people through LiveKit itself, so there is no entity to emit.
+const callLeaveBodySchema = z.object({
+  sid: z.string().regex(/^PA_[A-Za-z0-9]+$/).max(64),
+});
+router.post(
+  '/conversations/:id/call/leave',
+  authenticate,
+  conversationIdInPath,
+  callLeaveLimiter,
+  validate(callLeaveBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await callService.leaveCallRoom(req.params.id, req.user!.userId, req.body.sid);
       res.json({ success: true, data: result } as ApiResponse);
     } catch (err) { next(err); }
   },

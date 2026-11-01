@@ -229,6 +229,32 @@ async function recordJoin(conv: ConvParticipants, userId: string, standing: Stan
   }
 }
 
+/**
+ * The member has left the conversation's call on purpose (leave fix, 2 Nov 2026). Their app has already said so in
+ * the room and sent LiveKit its own leave, but on LiveKit Cloud neither always reached the room, and LiveKit then kept
+ * them listed until their connection timed out (over 30 s), so the other person was not told. Our server asks LiveKit
+ * itself to take that very connection (participant sid) out, which tells the other person at once. A newer connection
+ * of theirs (they came back in) stays. Being in the conversation is enough: a block does not keep anyone in a room.
+ * A LiveKit failure never fails the leave.
+ */
+export async function leaveCallRoom(conversationId: string, userId: string, sid: string): Promise<{ removed: boolean }> {
+  const r = await query<{ user_a_id: string; user_b_id: string }>(
+    `SELECT user_a_id, user_b_id FROM dm_conversations WHERE id = $1`,
+    [conversationId],
+  );
+  const conv = r.rows[0];
+  if (!conv) throw new NotFoundError('Conversation', conversationId);
+  if (conv.user_a_id !== userId && conv.user_b_id !== userId) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Not your conversation');
+  }
+  try {
+    return { removed: await getVideoProvider().removeParticipantIfSession(callRoomId(conversationId), userId, sid) };
+  } catch (err) {
+    logger.warn({ err, conversationId, userId }, 'taking a member who left out of the call room failed (non-fatal)');
+    return { removed: false };
+  }
+}
+
 /** Mint a LiveKit token so this participant can join the conversation's room. */
 export async function getCallToken(
   conversationId: string,

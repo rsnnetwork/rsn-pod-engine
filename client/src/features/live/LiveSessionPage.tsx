@@ -28,6 +28,7 @@ import { connectSocket, getSocket } from '@/lib/socket';
 import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
 import { useConfirm } from '@/hooks/useConfirm';
+import { eventStateChipText } from './event-state-chip';
 
 /** The final screen for a person the host removed: one sentence and the way out. */
 function RemovedFromEvent({ onBack }: { onBack: () => void }) {
@@ -275,9 +276,14 @@ function LiveEventRoom() {
           and the participant/leave controls. Collapsing the two stacked header
           rows into one reclaims a full row of vertical space so the main-room
           video grid (flex-1 below) fits more participant tiles without scrolling
-          — for hosts, co-hosts and participants alike. */}
-      <div className="flex items-center gap-2 px-4 py-1.5 bg-white border-b border-gray-200">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+
+          — for hosts, co-hosts and participants alike.
+          2 Nov 2026: on a 390px phone the chip and the leave button took the whole line and squeezed the title to 0px.
+          The title now asks for 10rem before it shares the line; when the controls leave it less, the bar wraps and
+          the title gets its own line above them (it truncates, never vanishes). The controls are one group that
+          never shrinks, so the leave button keeps its 44px. The insets keep the bar clear of a notch (viewport-fit=cover). */}
+      <div data-testid="live-top-bar" className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.375rem,env(safe-area-inset-top))] pb-1.5 bg-white border-b border-gray-200">
+        <div className="flex items-center gap-1.5 min-w-0 flex-[1_1_10rem]">
           {/* The pod is named, not linked: a link here left the event without its leave (a full reload of the page).
               The way out is the leave button, which lands on the event page, and that page goes back to the pod. */}
           {session?.podId && session?.podName && (
@@ -286,46 +292,48 @@ function LiveEventRoom() {
               <span className="mx-1">/</span>
             </span>
           )}
-          <h2 className="text-sm font-medium text-[#1a1a2e] truncate">{session?.title || 'Live Event'}</h2>
+          <h2 data-testid="live-top-bar-title" className="text-sm font-medium text-[#1a1a2e] truncate">{session?.title || 'Live Event'}</h2>
         </div>
-        {/* Inline room-state chip (was a separate full-width banner row). */}
-        {connectionStatus === 'connected' && phase !== 'matched' && phase !== 'rating' && (
-          <EventStateBanner sessionStatus={sessionStatus} currentRound={currentRound} totalRounds={totalRounds} bonusRoundsAdded={bonusRoundsAdded} phase={phase} />
-        )}
-        {/* UX (June-10) — the participant count moved OFF the area above the
-            video tiles (where it ate vertical space) and INTO the top bar, next
-            to the room-state chip. Only shown in the main room (lobby phase). */}
-        {connectionStatus === 'connected' && phase === 'lobby' && (
-          <TopBarParticipantCount />
-        )}
-        {/* Bug 10 (13 May live test) — once the event ends, the top-bar
-            participant + leave controls must vanish along with chat /
-            reactions / host controls. The recap page below has its own
-            navigation; keeping the event controls visible after the
-            event ended confuses users into thinking the event is still
-            running. */}
-        {phase !== 'complete' && (
-          <div className="flex items-center gap-1">
-            {/* WS3/S11 — 44px tap target (was p-2 ≈ 32px, below the mobile
-                minimum); thumb-sized like the chat FAB. */}
-            <button
-              onClick={() => setParticipantListOpen(!participantListOpen)}
-              aria-label="Participants"
-              className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${participantListOpen ? 'bg-gray-200 text-[#1a1a2e]' : 'text-gray-500 hover:text-[#1a1a2e] hover:bg-gray-100'}`}
-            >
-              <Users className="h-4 w-4" />
-            </button>
-            {/* WS3/G3 — THE event exit. Destructive styling + explicit label
-                so it can't be confused with "Back to Main Room" (which only
-                ends the breakout). The in-room duplicate was removed (G4). */}
-            <button
-              onClick={handleLeave}
-              className="flex items-center gap-1.5 text-sm font-medium text-red-500 hover:text-red-600 transition-colors px-3 py-1.5 rounded-full hover:bg-red-50 min-h-[44px]"
-            >
-              <LogOut className="h-4 w-4" /> Leave Event
-            </button>
-          </div>
-        )}
+        <div data-testid="live-top-bar-controls" className="flex items-center gap-2 shrink-0 ml-auto">
+          {/* Inline room-state chip (was a separate full-width banner row). */}
+          {connectionStatus === 'connected' && phase !== 'matched' && phase !== 'rating' && (
+            <EventStateBanner sessionStatus={sessionStatus} currentRound={currentRound} totalRounds={totalRounds} bonusRoundsAdded={bonusRoundsAdded} phase={phase} />
+          )}
+          {/* UX (June-10) — the participant count moved OFF the area above the
+              video tiles (where it ate vertical space) and INTO the top bar, next
+              to the room-state chip. Only shown in the main room (lobby phase). */}
+          {connectionStatus === 'connected' && phase === 'lobby' && (
+            <TopBarParticipantCount />
+          )}
+          {/* Bug 10 (13 May live test) — once the event ends, the top-bar
+              participant + leave controls must vanish along with chat /
+              reactions / host controls. The recap page below has its own
+              navigation; keeping the event controls visible after the
+              event ended confuses users into thinking the event is still
+              running. */}
+          {phase !== 'complete' && (
+            <div className="flex items-center gap-1">
+              {/* WS3/S11 — 44px tap target (was p-2 ≈ 32px, below the mobile
+                  minimum); thumb-sized like the chat FAB. */}
+              <button
+                onClick={() => setParticipantListOpen(!participantListOpen)}
+                aria-label="Participants"
+                className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${participantListOpen ? 'bg-gray-200 text-[#1a1a2e]' : 'text-gray-500 hover:text-[#1a1a2e] hover:bg-gray-100'}`}
+              >
+                <Users className="h-4 w-4" />
+              </button>
+              {/* WS3/G3 — THE event exit. Destructive styling + explicit label
+                  so it can't be confused with "Back to Main Room" (which only
+                  ends the breakout). The in-room duplicate was removed (G4). */}
+              <button
+                onClick={handleLeave}
+                className="flex items-center gap-1.5 text-sm font-medium text-red-500 hover:text-red-600 transition-colors px-3 py-1.5 rounded-full hover:bg-red-50 min-h-[44px]"
+              >
+                <LogOut className="h-4 w-4" /> Leave Event
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* (UX1) Event-state row removed — it now renders inline in the top bar above. */}
@@ -689,15 +697,15 @@ function LiveEventRoom() {
 
 /* ─── Persistent Event State Banner ─────────────────────────────────────── */
 
-const STATE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
-  scheduled:        { label: 'Waiting to start', icon: <Users className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-400' },
-  lobby_open:       { label: 'Main Room', icon: <Mic className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
-  round_active:     { label: 'Breakout Rooms · Round {round}', icon: <Radio className="h-3.5 w-3.5 animate-pulse" />, color: 'bg-red-500/10 text-red-400' },
-  round_rating:     { label: 'Rating', icon: <ArrowLeftRight className="h-3.5 w-3.5" />, color: 'bg-amber-500/10 text-amber-400' },
-  round_transition: { label: 'Main Room', icon: <Shuffle className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
-  // closing_lobby: empty label — the separate "Round X of Y" suffix carries the context on its own.
-  closing_lobby:    { label: '', icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />, color: 'bg-white/5 text-gray-400' },
-  completed:        { label: 'Event ended', icon: <CheckCircle2 className="h-3.5 w-3.5" />, color: 'bg-emerald-500/10 text-emerald-400' },
+// The chip's words live in event-state-chip.ts (a full text and a short one for phones).
+const STATE_CONFIG: Record<string, { icon: React.ReactNode; color: string }> = {
+  scheduled:        { icon: <Users className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-400' },
+  lobby_open:       { icon: <Mic className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
+  round_active:     { icon: <Radio className="h-3.5 w-3.5 animate-pulse" />, color: 'bg-red-500/10 text-red-400' },
+  round_rating:     { icon: <ArrowLeftRight className="h-3.5 w-3.5" />, color: 'bg-amber-500/10 text-amber-400' },
+  round_transition: { icon: <Shuffle className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
+  closing_lobby:    { icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />, color: 'bg-white/5 text-gray-400' },
+  completed:        { icon: <CheckCircle2 className="h-3.5 w-3.5" />, color: 'bg-emerald-500/10 text-emerald-400' },
 };
 
 // Phase 5B (5 May spec) — test-mode banner. Renders only when
@@ -737,17 +745,7 @@ function AutoDismissErrorBanner({ message, onClose }: { message: string; onClose
 
 function EventStateBanner({ sessionStatus, currentRound, totalRounds, bonusRoundsAdded }: { sessionStatus: string; currentRound: number; totalRounds: number; bonusRoundsAdded?: number; phase?: string }) {
   const config = STATE_CONFIG[sessionStatus] || STATE_CONFIG.scheduled;
-  const label = config.label.replace('{round}', String(currentRound || 1));
-  const roundInfo = totalRounds > 0 && sessionStatus !== 'completed' && sessionStatus !== 'scheduled'
-    ? `Round ${currentRound || 1} of ${totalRounds}`
-    : '';
-
-  // Don't duplicate round info if already in label
-  const showRoundInfo = roundInfo && !label.includes(`Round ${currentRound || 1}`);
-  // Handle empty labels (e.g. closing_lobby) — show round info alone, no separator
-  const display = label && showRoundInfo
-    ? `${label} · ${roundInfo}`
-    : label || (showRoundInfo ? roundInfo : '');
+  const { full, short } = eventStateChipText(sessionStatus, currentRound, totalRounds);
 
   // Bug 28 (19 May Ali + Stefan) — flag the current round as bonus when
   // it falls past the originally-configured numberOfRounds. Example:
@@ -763,13 +761,14 @@ function EventStateBanner({ sessionStatus, currentRound, totalRounds, bonusRound
 
   // UX1 (June-10 debrief) — rendered INLINE inside the single top bar (not as a
   // separate full-width row) so the main-room video grid reclaims that vertical
-  // space and more participant tiles fit on screen without scrolling. The
-  // rounded chip keeps it readable against the white bar; it shrinks/hides its
-  // text gracefully on narrow phones via truncate on the bar's title sibling.
+  // space and more participant tiles fit on screen without scrolling. Under
+  // 640px it draws its short text ("Round 1/5") so the event's title keeps room
+  // in the bar; a screen reader hears the full text at every width.
   return (
-    <div className={`inline-flex items-center gap-1.5 shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${config.color}`}>
+    <div title={full} className={`inline-flex items-center gap-1.5 shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${config.color}`}>
       {config.icon}
-      <span className="whitespace-nowrap">{display}</span>
+      <span className="whitespace-nowrap sm:hidden" aria-hidden="true">{short}</span>
+      <span className="sr-only sm:not-sr-only whitespace-nowrap">{full}</span>
       {isBonusRound && (
         <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-full px-1.5 py-px">
           Bonus

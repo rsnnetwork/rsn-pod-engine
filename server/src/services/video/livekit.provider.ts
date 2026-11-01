@@ -202,6 +202,21 @@ export class LiveKitProvider implements IVideoProvider {
     await this.roomService.removeParticipant(roomId, userId);
   }
 
+  // ─── Leave fix (2 Nov 2026) — remove one connection that left ───────────
+
+  async removeParticipantIfSession(roomId: string, userId: string, sid: string): Promise<boolean> {
+    try {
+      const p = await this.roomService.getParticipant(roomId, userId);
+      if (p.sid !== sid) return false;
+      await this.roomService.removeParticipant(roomId, userId);
+      return true;
+    } catch (err: unknown) {
+      // Not in the room (any more), or no room: there is nobody to take out.
+      if (isRoomGone(err)) return false;
+      throw err;
+    }
+  }
+
   // ─── Phase U — Set participant publish permission (mute enforcement) ────
 
   async setParticipantCanPublishAudio(
