@@ -83,7 +83,9 @@ test('circles core: admin creates, members join idempotently, detail aggregates 
   expect(detail1.json.data.memberCount, 'double-join must count ONCE').toBe(2);
   expect(detail1.json.data.members.map((m: any) => m.userId).sort()).toEqual([admin.id, m1.id].sort());
   expect(detail1.json.data.isMember).toBe(true);
-  expect(detail1.json.data.pods.map((p: any) => p.podId)).toContain(podId);
+  // T14: the pod is private and m1 is not in it, so the circle page does not name it to them; the admin sees it.
+  expect(detail1.json.data.pods.map((p: any) => p.podId), 'a private pod is named only to its members').not.toContain(podId);
+  expect((await apiAs(admin, 'GET', `/circles/${circleId}`)).json.data.pods.map((p: any) => p.podId)).toContain(podId);
   // D3: the pod is private and m1 is not in it, so its event is not named to them; the admin may open it.
   expect(detail1.json.data.upcomingEvents.map((e: any) => e.id), "a private pod's event is not named to a non-member").not.toContain(sessionId);
   const adminDetail = await apiAs(admin, 'GET', `/circles/${circleId}`);
@@ -92,6 +94,7 @@ test('circles core: admin creates, members join idempotently, detail aggregates 
   expect((await apiAs(admin, 'PUT', `/pods/${podId}`, { visibility: 'public' })).status).toBe(200);
   const detailPublic = await apiAs(m1, 'GET', `/circles/${circleId}`);
   expect(detailPublic.json.data.upcomingEvents.map((e: any) => e.id)).toContain(sessionId);
+  expect(detailPublic.json.data.pods.map((p: any) => p.podId), 'a public pod is named to everyone').toContain(podId);
   console.log('  ✓ idempotent join (creator + m1 = 2) + detail aggregates the pod; its event is named only to people who may open it.');
 
   // (5) Leave decrements exactly once: the owner stays.

@@ -19,6 +19,7 @@ let admin: TestUser;
 let member: TestUser;     // in the circle; may invite
 let outsider: TestUser;   // not in the circle; may not invite
 let joiner: TestUser;     // accepts the invite
+let bellee: TestUser;     // already on REASON, invited by address from the sheet, accepts from the bell (T14)
 let circleId: string;
 const ctxs: BrowserContext[] = [];
 
@@ -52,6 +53,7 @@ test.beforeAll(async () => {
   member = await createTestUser('circleinvmember');
   outsider = await createTestUser('circleinvoutsider');
   joiner = await createTestUser('circleinvjoiner');
+  bellee = await createTestUser('circleinvbellee');
 
   const c = await apiAs(admin, 'POST', '/circles', { name: `E2E Circle ${Date.now()}`, description: 'throwaway' });
   expect(c.status, `create circle: ${JSON.stringify(c.json)}`).toBe(201);
@@ -64,7 +66,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   try { await browser?.close(); } catch {}
-  const ids = [admin?.id, member?.id, outsider?.id, joiner?.id].filter(Boolean);
+  const ids = [admin?.id, member?.id, outsider?.id, joiner?.id, bellee?.id].filter(Boolean);
   await pool.query(`DELETE FROM invites WHERE circle_id = $1 OR inviter_id = ANY($2)`, [circleId, ids]).catch(() => {});
   if (circleId) {
     await pool.query(`DELETE FROM circle_members WHERE circle_id = $1`, [circleId]).catch(() => {});
@@ -133,7 +135,9 @@ test('a circle member cannot email-invite someone already in the circle', async 
   expect(r.json.error.code).toBe('CIRCLE_MEMBER_EXISTS');
 });
 
-test('the circle page offers Invite to a member, and the invites page creates a circle link at 360px', async () => {
+// T14 (1 Nov 2026): the circle page's Invite opens the shared invite sheet (connections, Invite by email, Share a link),
+// not the old /invites form, whose search found only people met at an event. That form's deep link still works.
+test('the circle page\'s Invite opens the invite sheet, whose Share a link makes a circle link at 360px', async () => {
   test.setTimeout(180_000);
   const circlePage = await openAs(member, `/circles/${circleId}`, { width: 360, height: 780 });
   // Scoped by test id: the phone bottom bar also carries an "Invite" nav link.
@@ -142,31 +146,58 @@ test('the circle page offers Invite to a member, and the invites page creates a 
   const ib = await inviteBtn.boundingBox();
   expect(ib!.height, 'Invite tap target').toBeGreaterThanOrEqual(44);
   await inviteBtn.click();
-  await expect(circlePage).toHaveURL(/\/invites\?type=circle&circleId=/);
+  const sheet = circlePage.getByRole('dialog', { name: 'Invite people' });
+  await expect(sheet).toBeVisible({ timeout: 20_000 });
+  expect(new URL(circlePage.url()).pathname, 'the sheet opens on the circle page').toBe(`/circles/${circleId}`);
+  await expect(sheet.getByRole('group', { name: 'Who to list' }), 'a circle has no pod list').toHaveCount(0);
 
-  // Preselected from the URL: the type is Circle and the circle is chosen.
-  await expect(circlePage.locator('select').first()).toHaveValue('circle', { timeout: 20_000 });
   const before = (await pool.query(`SELECT COUNT(*)::int n FROM invites WHERE inviter_id = $1 AND type = 'circle'`, [member.id])).rows[0].n;
-  const createLink = circlePage.getByRole('button', { name: /Create & Copy Link/i });
-  await expect(createLink).toBeEnabled();
-  const box = await createLink.boundingBox();
+  await sheet.getByRole('button', { name: 'Share a link' }).click();
+  await expect(sheet.getByText(/Anyone with this link can join the circle, up to 500 people, for 7 days\./)).toBeVisible();
+  const make = sheet.getByRole('button', { name: 'Make a link' });
+  const box = await make.boundingBox();
   expect(box!.height, 'tap target').toBeGreaterThanOrEqual(44);
-  await createLink.click();
-
-  let n = before;
-  for (let i = 0; i < 20 && n === before; i++) {
-    await new Promise(res => setTimeout(res, 1000));
-    n = (await pool.query(`SELECT COUNT(*)::int n FROM invites WHERE inviter_id = $1 AND type = 'circle'`, [member.id])).rows[0].n;
-  }
-  expect(n, 'a new circle invite row from the page').toBe(before + 1);
+  await make.click();
+  await expect(sheet.getByLabel('Invite link')).toHaveValue(/\/invite\/[A-Za-z0-9]+$/, { timeout: 20_000 });
+  const n = (await pool.query(`SELECT COUNT(*)::int n FROM invites WHERE inviter_id = $1 AND type = 'circle' AND circle_id = $2`, [member.id, circleId])).rows[0].n;
+  expect(n, 'a new circle invite row from the sheet').toBeGreaterThan(before - 1);
   const overflow = await circlePage.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, 'no sideways scroll at 360px').toBeLessThanOrEqual(0);
-  console.log('  ✓ circle page → invites page preselected → circle link created, 360px clean.');
+  console.log('  ✓ circle page → invite sheet → circle link made, 360px clean.');
+});
+
+test('the old /invites?type=circle deep link still preselects the circle (production\'s form)', async () => {
+  const page = await openAs(member, `/invites?type=circle&circleId=${circleId}`, { width: 390, height: 844 });
+  await expect(page.locator('select').first()).toHaveValue('circle', { timeout: 20_000 });
+});
+
+test('someone already on REASON, invited by address from the sheet, is rung and accepts from the bell onto the circle', async () => {
+  test.setTimeout(180_000);
+  const circlePage = await openAs(member, `/circles/${circleId}`, { width: 1280, height: 900 });
+  const belleePage = await openAs(bellee, '/circles', { width: 1280, height: 900 });
+  await circlePage.getByTestId('circle-invite').click();
+  const sheet = circlePage.getByRole('dialog', { name: 'Invite people' });
+  await sheet.getByRole('button', { name: 'Invite by email' }).click();
+  await sheet.getByLabel('Their email address').fill(bellee.email);
+  await sheet.getByRole('button', { name: 'Send invite', exact: true }).click();
+  await expect(circlePage.getByText(`Invitation sent to ${bellee.email}.`)).toBeVisible({ timeout: 20_000 });
+
+  // The bell rings without a reload (migration 118 allowed the circle_invite type; T1), and Accept is in the row (T14).
+  const bell = belleePage.getByRole('button', { name: 'Notifications' });
+  await expect(bell.locator('span').filter({ hasText: /^\d+$/ })).toBeVisible({ timeout: 30_000 });
+  await bell.click();
+  const row = belleePage.getByTestId('notification-row').filter({ hasText: 'invited you to' }).first();
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await row.getByRole('button', { name: 'Accept' }).click();
+  await belleePage.waitForURL(new RegExp(`/circles/${circleId}$`), { timeout: 30_000 });
+  expect(await membersOf()).toContain(bellee.id);
+  console.log('  ✓ existing member invited by address: bell rang, Accept in the bell, landed on the circle.');
 });
 
 test('an outsider sees no Invite on the circle page', async () => {
   const page = await openAs(outsider, `/circles/${circleId}`, { width: 390, height: 844 });
-  await expect(page.getByRole('button', { name: /Join circle/i })).toBeVisible({ timeout: 30_000 });
+  // T14: the button reads Join (an open circle).
+  await expect(page.getByTestId(`circle-join-${circleId}`)).toHaveText('Join', { timeout: 30_000 });
   await expect(page.getByTestId('circle-invite')).toHaveCount(0);
 });

@@ -57,7 +57,9 @@ test('the wall: members-only, idempotent, block-filtered, rate-limited, pinned �
   expect(ofPod.json.data.map((c: any) => c.id)).toContain(circleId);
   console.log('  ✓ of-pod lookup shows the attachment (P3b).');
 
-  // (2) POSTING IS MEMBERS-ONLY — even the admin must join first.
+  // (2) POSTING IS MEMBERS-ONLY — even the admin must be in it. Since R10a the admin who made the circle is its owner
+  // and a member, so the admin leaves it first to be the platform admin outside it.
+  expect((await apiAs(admin, 'POST', `/circles/${circleId}/leave`)).status).toBe(200);
   const adminPost = await apiAs(admin, 'POST', `/circles/${circleId}/posts`, { clientId: uuid(), content: 'hi' });
   expect(adminPost.status).toBe(403);
   console.log('  ✓ non-member posting rejected — even for an admin (403).');
