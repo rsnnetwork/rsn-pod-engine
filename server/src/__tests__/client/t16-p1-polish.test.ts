@@ -20,3 +20,19 @@ describe('X4: the event form does not move under a person while the matching cho
     expect(src).not.toMatch(/h-11 animate-pulse rounded-xl bg-gray-100/);
   });
 });
+
+describe('X2: tap targets measured under 44px are 44px at every width', () => {
+  it('the pod row link in "Pods in this circle" (42px from 390)', () => {
+    expect(read('features/circles/CirclePodsSection.tsx')).toMatch(/<Link to=\{`\/pods\/\$\{p\.podId\}`\} className="flex min-h-\[44px\][^"]*"/);
+  });
+
+  it('the host\'s and each participant\'s picture-and-name link on the event page (under 44px from 768)', () => {
+    const page = read('features/sessions/SessionDetailPage.tsx');
+    expect(page).toMatch(/<Link to=\{personHref\(hostRow\.userId, 'Events'\)\} className="flex min-h-\[44px\] /);
+    expect(page).toMatch(/<Link to=\{personHref\(p\.userId \|\| p\.id, 'Events'\)\} className="flex min-h-\[44px\] /);
+  });
+
+  it('the profile\'s Video call holds a fixed 44px and never shrinks in its row (36.5px seen in headless WebKit)', () => {
+    expect(read('features/calls/CallButton.tsx')).toMatch(/hero: 'inline-flex h-11 min-h-\[44px\] shrink-0 /);
+  });
+});

@@ -70,7 +70,7 @@ describe('one Video call button, where canCall says', () => {
     const button = src('features/calls/CallButton.tsx');
     expect(button).toContain("export const VIDEO_CALL = 'Video call';");
     expect(button).toMatch(/<Video /);
-    expect(button).toMatch(/hero: 'inline-flex min-h-\[44px\]/);
+    expect(button).toMatch(/hero: 'inline-flex h-11 min-h-\[44px\] shrink-0/);
     expect(button).toMatch(/icon: 'flex h-11 w-11/);
     expect(button).toMatch(/menu: 'flex min-h-\[44px\]/);
   });
