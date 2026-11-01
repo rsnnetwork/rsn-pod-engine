@@ -133,7 +133,8 @@ test("Shradha's path: deleted, told why, asks again, approved from the admin pag
   // 4. The login page says it too, when she asks for a link there.
   await page.goto(`${APP}/login`, { waitUntil: 'domcontentloaded' });
   await page.getByPlaceholder('you@example.com').fill(email);
-  await page.getByRole('button', { name: /Send magic link/ }).click();
+  // The preview's button reads "Email me a link and a code" since 1 Nov 2026; production's still "Send magic link".
+  await page.getByRole('button', { name: /Send magic link|Email me a link and a code/ }).click();
   await expect(page.getByText(CLOSED_TEXT)).toBeVisible({ timeout: 30_000 });
   await page.screenshot({ path: 'test-results/closed-2-login-says-why.png' });
 
