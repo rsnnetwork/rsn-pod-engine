@@ -16,10 +16,9 @@ import { cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 // sign in, and stay in. Plus: a member deleted mid-session is told why, and a
 // suspended account is never let in by an approval.
 //
-// The profile link is deliberately not a LinkedIn /in/ URL, so no approval
+// The request carries no LinkedIn address (optional since 21 Oct), so no approval
 // here spends a paid ScrapingDog lookup.
 
-const NOT_LINKEDIN = 'https://example.com/not-a-linkedin-profile';
 const CLOSED_TEXT = /This account was closed\. Ask to join again, and you can sign in as soon as you are approved\./;
 let admin: TestUser;
 const emails: string[] = [];
@@ -35,7 +34,7 @@ async function api(method: string, path: string, body?: unknown, token?: string)
 }
 
 async function apply(email: string): Promise<string> {
-  const jr = await api('POST', '/join-requests', { fullName: 'Closed Account Test', email, linkedinUrl: NOT_LINKEDIN, reason: 'testing re-joining after a delete' });
+  const jr = await api('POST', '/join-requests', { fullName: 'Closed Account Test', email, reason: 'testing re-joining after a delete' });
   expect(jr.status, JSON.stringify(jr.json)).toBe(201);
   return jr.json.data.id;
 }
