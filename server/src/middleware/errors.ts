@@ -28,6 +28,7 @@ const NOT_FOUND_LABELS: Record<string, string> = {
   User: 'member',
   PodMember: 'member',
   PendingMember: 'member',
+  'LinkedIn photo': 'LinkedIn photo',
   Session: 'event',
   Poke: 'meeting request',
 };
