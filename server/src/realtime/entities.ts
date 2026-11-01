@@ -45,6 +45,8 @@ export const E = {
   session: (sessionId: string) => `session:${sessionId}`,
   sessionParticipants: (sessionId: string) => `session:${sessionId}:participants`,
   sessionInvites: (sessionId: string) => `session:${sessionId}:invites`,
+  /** T11 (1 Nov 2026): requests to join an event that asks the host to approve each place. */
+  sessionJoinRequests: (sessionId: string) => `session:${sessionId}:join-requests`,
   sessionMatches: (sessionId: string) => `session:${sessionId}:matches`,
   sessionPlan: (sessionId: string) => `session:${sessionId}:plan`,
   sessionChat: (sessionId: string) => `session:${sessionId}:chat`,

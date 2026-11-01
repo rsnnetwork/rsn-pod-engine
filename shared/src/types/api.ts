@@ -91,6 +91,11 @@ export const ErrorCodes = {
   NOT_A_ROUNDS_EVENT: 'NOT_A_ROUNDS_EVENT',              // a round, matching or breakout action on an event that has none (a video meeting)
   NOT_A_VIDEO_EVENT: 'NOT_A_VIDEO_EVENT',                // 409; Go Live, a video token or the live room asked of an in-person event
   TEMPLATE_IS_PRESET: 'TEMPLATE_IS_PRESET',              // 409; a speed-networking preset cannot be deleted (its weights can be edited)
+  EVENT_NEEDS_APPROVAL: 'EVENT_NEEDS_APPROVAL',          // T11: the event asks the host to approve each place
+  EVENT_PRIVATE: 'EVENT_PRIVATE',                        // T11: a private event, for its pod's members and invitees
+  EVENT_REQUEST_NOT_NEEDED: 'EVENT_REQUEST_NOT_NEEDED',  // T11: the person can register directly
+  EVENT_REQUEST_DECLINED: 'EVENT_REQUEST_DECLINED',      // T11: the host declined; the requester cannot reopen it
+  EVENT_REQUEST_ANSWERED: 'EVENT_REQUEST_ANSWERED',      // T11: the request was already approved, declined or withdrawn
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

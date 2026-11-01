@@ -593,6 +593,26 @@ describe('Session Routes', () => {
       expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
     });
 
+    // T11 (1 Nov 2026) — production's form sends no visibility: the event is created NULL (it follows its pod).
+    it('passes no visibility when the production form sends none, and the preview visibility when it does', async () => {
+      (sessionService.createSession as jest.Mock).mockClear().mockResolvedValue(mockSession);
+      const token = makeToken();
+      const base = {
+        podId: '00000000-0000-0000-0000-000000000001', title: 'Test Session', scheduledAt: '2025-01-15T18:00:00Z',
+        format: 'speed_networking', config: { numberOfRounds: 5, roundDurationSeconds: 480, maxParticipants: 25 },
+      };
+      const old = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`).send(base);
+      expect(old.status).toBe(201);
+      expect((sessionService.createSession as jest.Mock).mock.calls[0][1]).not.toHaveProperty('visibility');
+      const preview = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`)
+        .send({ ...base, visibility: 'public_with_approval' });
+      expect(preview.status).toBe(201);
+      expect((sessionService.createSession as jest.Mock).mock.calls[1][1]).toMatchObject({ visibility: 'public_with_approval' });
+      const wrong = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`)
+        .send({ ...base, visibility: 'invite_only' });
+      expect(wrong.status).toBe(400);
+    });
+
     it('should reject session without title', async () => {
       const token = makeToken();
       const res = await request(app)
@@ -607,6 +627,9 @@ describe('Session Routes', () => {
   describe('GET /sessions/:id', () => {
     it('should return session by id', async () => {
       (sessionService.getSessionById as jest.Mock).mockResolvedValue(mockSession);
+      // T11: the additive access block reads one row; none here, so the answer is today's shape.
+      (dbQuery as jest.Mock).mockImplementation(async (sql: string) =>
+        (sql.includes('event_join_requests') ? { rows: [], rowCount: 0 } : undefined));
 
       // Admin role bypasses canViewSession DB lookups (short-circuits on role check).
       const token = makeToken({ role: 'admin' });
@@ -616,6 +639,7 @@ describe('Session Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
+      (dbQuery as jest.Mock).mockReset();
     });
   });
 });

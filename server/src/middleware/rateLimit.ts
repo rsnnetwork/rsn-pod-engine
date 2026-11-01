@@ -679,3 +679,23 @@ export const notificationPageLimiter = rateLimit({
   store: buildStore('notification-page'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
+
+// T11 (1 Nov 2026): requests to join an event that asks the host to approve each place, and the host's answers.
+export const eventRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 60,                   // 60 request writes per hour per person (asking, withdrawing, approving, declining)
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-request'),
+  handler: (_req, res) => {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'You have done that a lot this hour. Please try again later.',
+      },
+    };
+    res.status(429).json(response);
+  },
+});

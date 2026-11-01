@@ -14,9 +14,10 @@ import {
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import { activeMemberSql } from '../users/active-member';
-import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql, visibleEventSql } from './session-access';
+import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-access';
 import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
 import { assertVideoRoom } from './video-room';
+import { canRegister, publicEventsSql, readEventAccessFacts, visibleEventsSql } from './event-access';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ const SESSION_COLUMNS = `
   lobby_room_id AS "lobbyRoomId",
   host_visibility_mode AS "hostVisibilityMode",
   event_format AS "format",
+  visibility,
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
@@ -138,8 +140,8 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   const sessionId = uuid();
 
   const result = await query<Session>(
-    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING ${SESSION_COLUMNS}`,
     [
       sessionId,
@@ -150,6 +152,8 @@ export async function createSession(userId: string, input: CreateSessionInput, u
       JSON.stringify(sessionConfig),
       userId,
       format,
+      // T11 (1 Nov 2026): who can join. Production's form sends none: NULL, the event follows its pod as before.
+      input.visibility ?? null,
     ]
   );
 
@@ -253,6 +257,13 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     paramIdx++;
   }
 
+  // T11 (1 Nov 2026): who can join, while the event is scheduled. Going private removes nobody already in.
+  if (input.visibility !== undefined && input.visibility !== session.visibility) {
+    setClauses.push(`visibility = $${paramIdx}`);
+    values.push(input.visibility);
+    paramIdx++;
+  }
+
   if (setClauses.length === 0) {
     return session;
   }
@@ -289,14 +300,15 @@ export async function listSessions(params: {
   } else if (params.isAdmin) {
     // Admins see all sessions across all pods
   } else if (params.userId) {
-    // T2 (1 Nov 2026), D1: the events this member may open, and only those (visibleEventSql is canViewSession's
-    // rule). An invite-only pod's events were listed to everyone, who were then refused on open.
-    whereClause += ` AND ${visibleEventSql('s', `$${paramIdx}`)}`;
+    // T2 (1 Nov 2026), D1: the events this member may open, and only those (canViewSession's rule). An
+    // invite-only pod's events were listed to everyone, who were then refused on open. T11: an event with its own
+    // visibility follows it (a private one is listed only to its audience, invitees and participants); NULL as T2.
+    whereClause += ` AND ${visibleEventsSql('s', `$${paramIdx}`)}`;
     values.push(params.userId);
     paramIdx++;
   } else {
     // Nobody asking: only public pods' events (D1: an invite-only pod's events open to nobody outside it)
-    whereClause += ` AND s.pod_id IN (SELECT id FROM pods WHERE visibility = 'public')`;
+    whereClause += ` AND ${publicEventsSql('s')}`;
   }
 
   if (params.status) {
@@ -318,6 +330,7 @@ export async function listSessions(params: {
             s.current_round AS "currentRound", s.config, s.host_user_id AS "hostUserId",
             s.lobby_room_id AS "lobbyRoomId", s.created_at AS "createdAt", s.updated_at AS "updatedAt",
             s.event_format AS "format",
+            s.visibility,
             p.name AS "podName",
             u.display_name AS "hostDisplayName"
      FROM sessions s
@@ -365,7 +378,9 @@ export async function registerParticipant(
   // join, socket reconnect, shared link) passes nothing → still bounced.
   // T2 (1 Nov 2026), D2: `viaInvite` says the invite-accept path is registering someone the host invited, so a pod
   // that asks for approval takes them (a shared link records who used it only after the registration).
-  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean },
+  // T11 (1 Nov 2026): `approvedRequest` says the host has approved this person's request to join an event that asks
+  // for approval (the approve route), so that event takes them; capacity and their own row still decide.
+  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean },
 ): Promise<SessionParticipant & { isNewRegistration: boolean }> {
   const invitedAt = options?.personalInviteCreatedAt ?? null;
   const viaInvite = !!options?.viaInvite || !!invitedAt;
@@ -387,13 +402,23 @@ export async function registerParticipant(
       throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'This event is no longer accepting participants');
     }
 
-    // Enforce pod visibility rules for session access (admin/super_admin bypass)
     const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+
+    // T11 (1 Nov 2026): an event with its own visibility follows the one rule (event-access.ts) and never adds
+    // anyone to its pod. A NULL event follows its pod's rules below, exactly as before.
+    if (session.visibility) {
+      const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
+      if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+      const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
+      if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
+    }
+
+    // Enforce pod visibility rules for session access (admin/super_admin bypass)
     const podResult = await client.query(
       `SELECT visibility FROM pods WHERE id = $1`,
       [session.podId]
     );
-    if (podResult.rows.length > 0 && !isAdmin) {
+    if (podResult.rows.length > 0 && !isAdmin && !session.visibility) {
       const podVisibility = podResult.rows[0].visibility;
       const memberResult = await client.query(
         `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,

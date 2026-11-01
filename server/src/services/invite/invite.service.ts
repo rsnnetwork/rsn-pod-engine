@@ -830,7 +830,16 @@ async function applyInviteRegistration(
       [invite.sessionId],
     );
     const podId = sessionRow.rows[0]?.podId;
-    if (podId) {
+    // T11 (1 Nov 2026), D4: an event with its own visibility takes its invitee without making them a member of its
+    // pod (an invite to one event is not an invite to the pod). A NULL event adds them to the pod first, as before.
+    const visibilityRow = await query<{ visibility: string | null }>(
+      `SELECT visibility FROM sessions WHERE id = $1`,
+      [invite.sessionId],
+    );
+    const ownVisibility = !!visibilityRow?.rows?.[0]?.visibility;
+    if (podId && ownVisibility) {
+      out.podId = podId;
+    } else if (podId) {
       try {
         await podService.addMember(podId, userId);
       } catch (err) {

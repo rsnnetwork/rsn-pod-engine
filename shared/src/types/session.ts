@@ -1,6 +1,6 @@
 // ─── Session Domain Types ────────────────────────────────────────────────────
 
-import type { EventFormat } from '../events/definitions';
+import type { EventFormat, EventVisibility } from '../events/definitions';
 
 export enum SessionStatus {
   SCHEDULED = 'scheduled',
@@ -168,6 +168,8 @@ export interface Session {
   hostVisibilityMode?: HostVisibilityMode;
   /** 26 Oct 2026 — what the event is (speed networking, a video meeting…); sessions.event_format. */
   format?: EventFormat;
+  /** T11 (1 Nov 2026) — who can join (sessions.visibility). NULL: the event follows its pod, as before. */
+  visibility?: EventVisibility | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -203,6 +205,8 @@ export interface CreateSessionInput {
    * offered `config.eventType` (option O1), else speed networking.
    */
   format?: EventFormat;
+  /** T11 (1 Nov 2026) — who can join. Production's form omits it: the event then follows its pod (NULL). */
+  visibility?: EventVisibility;
   config?: SessionConfigInput;
 }
 
@@ -212,6 +216,8 @@ export interface UpdateSessionInput {
   scheduledAt?: string;
   /** 26 Oct 2026 — a scheduled event may switch to another format its pod holds. */
   format?: EventFormat;
+  /** T11 (1 Nov 2026) — who can join; a scheduled event may change it. Going private removes nobody. */
+  visibility?: EventVisibility;
   config?: SessionConfigInput;
 }
 

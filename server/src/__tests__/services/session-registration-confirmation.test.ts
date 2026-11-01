@@ -77,8 +77,13 @@ describe('Self-registration confirmation + calendar (26 May, Stefan)', () => {
       const i = src.indexOf("'/:id/register'");
       expect(i).toBeGreaterThan(-1);
       const block = src.slice(i, i + 2800);
-      expect(block).toMatch(/sendSessionRegistrationConfirmationEmail/);
-      expect(block).toMatch(/buildSessionCalendarEvent/);
+      // T11 (1 Nov 2026): the email is one helper, shared with the approval of a request to join.
+      expect(block).toMatch(/void sendRegistrationEmail\(req\.params\.id, req\.user!\.userId\)/);
+      const h = src.indexOf('async function sendRegistrationEmail');
+      expect(h).toBeGreaterThan(-1);
+      const helper = src.slice(h, src.indexOf('\n}\n', h));
+      expect(helper).toMatch(/sendSessionRegistrationConfirmationEmail/);
+      expect(helper).toMatch(/buildSessionCalendarEvent/);
     });
 
     // S15 (live-test 2026-06-06) — the live page auto-registers on every
@@ -89,7 +94,7 @@ describe('Self-registration confirmation + calendar (26 May, Stefan)', () => {
       const src = readServer('routes/sessions.ts');
       const i = src.indexOf("'/:id/register'");
       const block = src.slice(i, i + 2800);
-      expect(block).toMatch(/if \(participant\.isNewRegistration\) void \(async \(\) =>/);
+      expect(block).toMatch(/if \(participant\.isNewRegistration\) void sendRegistrationEmail\(/);
     });
 
     it('registerParticipant marks re-activations and race-losses as NOT new', () => {

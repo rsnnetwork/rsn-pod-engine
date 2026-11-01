@@ -14,14 +14,18 @@ import {
 } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
+import { readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
+import * as eventRequests from '../services/session/event-requests.service';
+import { eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
 // 27 May — live main-room presence (heartbeat) to gate the event-plan "not matched" counts.
 import { activeSessions } from '../services/orchestration/state/session-state';
 import { getCanonicalConnectedSet } from '../services/orchestration/state/canonical-state';
 import {
   ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
+  EventVisibility, EVENT_VISIBILITY_KEYS,
 } from '@rsn/shared';
-import { ForbiddenError, NotFoundError } from '../middleware/errors';
+import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
 import config from '../config';
 import logger from '../config/logger';
@@ -33,11 +37,33 @@ import { listMatchingPresets } from '../services/matching/matching-template-choi
 
 const router = Router();
 
+/** The "you're registered" email with its calendar invite. Best-effort: a failure is logged, never thrown. */
+async function sendRegistrationEmail(sessionId: string, userId: string): Promise<void> {
+  try {
+    const u = (await query<{ email: string; display_name: string | null }>(
+      `SELECT email, display_name FROM users WHERE id = $1`,
+      [userId],
+    )).rows[0];
+    if (!u?.email) return;
+    const calendarEvent = await buildSessionCalendarEvent(sessionId);
+    await emailService.sendSessionRegistrationConfirmationEmail(u.email, {
+      recipientName: u.display_name || undefined,
+      sessionTitle: calendarEvent?.title ?? 'your REASON event',
+      sessionUrl: `${config.clientUrl}/sessions/${sessionId}`,
+      calendarEvent,
+    });
+  } catch (err) {
+    logger.warn({ err, sessionId, userId }, 'registration confirmation email failed (non-fatal)');
+  }
+}
+
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
 // 26 Oct 2026 — the event's format, from the shared definition. Optional: production's old form sends
 // config.eventType instead, which the service reads (option O1).
 const eventFormatSchema = z.enum(EVENT_FORMAT_KEYS as [EventFormat, ...EventFormat[]]);
+// T11 (1 Nov 2026) — who can join. Optional: production's form sends none, and the event follows its pod (NULL).
+const eventVisibilitySchema = z.enum(EVENT_VISIBILITY_KEYS as [EventVisibility, ...EventVisibility[]]);
 
 export const createSessionSchema = z.object({
   podId: z.string().uuid(),
@@ -45,6 +71,7 @@ export const createSessionSchema = z.object({
   description: z.string().max(2000).optional(),
   scheduledAt: z.string().datetime().nullable(),
   format: eventFormatSchema.optional(),
+  visibility: eventVisibilitySchema.optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -84,6 +111,7 @@ export const updateSessionSchema = z.object({
   description: z.string().max(2000).optional(),
   scheduledAt: z.string().datetime().optional(),
   format: eventFormatSchema.optional(),
+  visibility: eventVisibilitySchema.optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -184,10 +212,14 @@ router.get(
 
       const session = await sessionService.getSessionById(req.params.id);
       const participantCount = await sessionService.getParticipantCount(req.params.id);
+      // T11 (1 Nov 2026) — additive: what this viewer can do (Register, Request to join, or the private notice),
+      // so the event page stops guessing from the pod.
+      const facts = await readEventAccessFacts(req.params.id, req.user!.userId);
+      const access = facts ? summariseEventAccess(facts, req.user!.role) : undefined;
 
       const response: ApiResponse = {
         success: true,
-        data: { ...session, participantCount },
+        data: { ...session, participantCount, ...(access ? { access } : {}) },
       };
       res.json(response);
     } catch (err) {
@@ -348,6 +380,112 @@ router.get(
   }
 );
 
+// ─── Requests to join (T11, 1 Nov 2026) ─────────────────────────────────────
+// An event that asks the host to approve each place: the person asks, may withdraw, and the event's organisers
+// approve or decline. Every write tells the organisers and the requester (session:<id>:join-requests).
+
+const joinRequestSchema = z.object({ message: z.string().trim().max(500).optional() });
+const joinRequestListSchema = z.object({ status: z.enum(['pending', 'approved', 'declined', 'withdrawn']).optional() });
+const requesterPath = z.object({ userId: z.string().uuid() });
+
+function requesterId(req: Request): string {
+  const parsed = requesterPath.safeParse({ userId: req.params.userId });
+  if (!parsed.success) throw new ValidationError('That is not a person on REASON.');
+  return parsed.data.userId;
+}
+
+router.post(
+  '/:id/requests',
+  authenticate,
+  uuidInPath('id', PATH_REFUSALS.event),
+  eventRequestLimiter,
+  validate(joinRequestSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const message = (req.body.message as string | undefined)?.trim() || null;
+      const request = await eventRequests.requestToJoin(req.params.id, req.user!.userId, req.user!.role, message);
+      const response: ApiResponse = { success: true, data: request };
+      res.status(201).json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.delete(
+  '/:id/requests/mine',
+  authenticate,
+  uuidInPath('id', PATH_REFUSALS.event),
+  eventRequestLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await eventRequests.withdrawRequest(req.params.id, req.user!.userId);
+      const response: ApiResponse = { success: true, data: result };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.get(
+  '/:id/requests',
+  authenticate,
+  uuidInPath('id', PATH_REFUSALS.event),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = joinRequestListSchema.safeParse(req.query);
+      if (!parsed.success) throw new ValidationError('That is not a request status.');
+      const requests = await eventRequests.listRequests(
+        req.params.id, req.user!.userId, req.user!.role, parsed.data.status ?? 'pending',
+      );
+      const response: ApiResponse = { success: true, data: requests };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/:id/requests/:userId/approve',
+  authenticate,
+  uuidInPath('id', PATH_REFUSALS.event),
+  eventRequestLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = requesterId(req);
+      const outcome = await eventRequests.approveRequest(req.params.id, userId, req.user!.userId, req.user!.role);
+      const sessRow = await query<{ pod_id: string | null }>(`SELECT pod_id FROM sessions WHERE id = $1`, [req.params.id]);
+      const podId = sessRow.rows[0]?.pod_id ?? null;
+      fanoutSessionEntities(podId, req.params.id, [E.userSessions(userId), E.sessionParticipants(req.params.id)]).catch(() => {});
+      eventRequests.fanoutJoinRequests(req.params.id, userId, [E.sessionParticipants(req.params.id), E.userSessions(userId)]).catch(() => {});
+      if (outcome.isNewRegistration) void sendRegistrationEmail(req.params.id, userId);
+      const response: ApiResponse = { success: true, data: outcome.request };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/:id/requests/:userId/decline',
+  authenticate,
+  uuidInPath('id', PATH_REFUSALS.event),
+  eventRequestLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = requesterId(req);
+      const request = await eventRequests.declineRequest(req.params.id, userId, req.user!.userId, req.user!.role);
+      const response: ApiResponse = { success: true, data: request };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // ─── POST /sessions/:id/register ────────────────────────────────────────────
 
 router.post(
@@ -386,25 +524,7 @@ router.post(
       // S15 (live-test 2026-06-06) — FRESH registrations only. The live page
       // auto-registers on every mount, so "Join Live Event" / rejoin-after-
       // leaving hit the re-register path and re-sent this email every time.
-      if (participant.isNewRegistration) void (async () => {
-        try {
-          const u = (await query<{ email: string; display_name: string | null }>(
-            `SELECT email, display_name FROM users WHERE id = $1`,
-            [req.user!.userId],
-          )).rows[0];
-          if (!u?.email) return;
-          const calendarEvent = await buildSessionCalendarEvent(req.params.id);
-          await emailService.sendSessionRegistrationConfirmationEmail(u.email, {
-            recipientName: u.display_name || undefined,
-            sessionTitle: calendarEvent?.title ?? 'your REASON event',
-            sessionUrl: `${config.clientUrl}/sessions/${req.params.id}`,
-            calendarEvent,
-          });
-        } catch (err) {
-          logger.warn({ err, sessionId: req.params.id, userId: req.user!.userId },
-            'registration confirmation email failed (non-fatal)');
-        }
-      })();
+      if (participant.isNewRegistration) void sendRegistrationEmail(req.params.id, req.user!.userId);
 
       const response: ApiResponse = { success: true, data: participant };
       res.status(201).json(response);

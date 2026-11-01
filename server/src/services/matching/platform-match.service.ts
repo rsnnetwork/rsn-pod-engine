@@ -38,7 +38,7 @@ import { clip } from '../people/text';
 import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
 import { fitToUnits } from '../poke/request-text';
 import { isReservedTestAddress } from '../identity/reserved-address';
-import { visibleEventSql } from '../session/session-access';
+import { visibleEventsSql } from '../session/event-access';
 import { canBring, type MatchStrength, type MeetingFormat } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -593,12 +593,12 @@ export async function getPlatformMatches(
   // 5 Oct 2026: the same visibility rule as the events list (listSessions). This used to
   // take the next event of ANY pod, so a private pod's event was named to people outside
   // it. T2 (1 Nov 2026), D1: the rule is the events the member may open (visibleEventSql),
-  // so an invite-only pod's event is no longer named to people it would then refuse.
+  // so an invite-only pod's event is no longer named to people it would then refuse. T11: visibleEventsSql (an event's own visibility; NULL as T2).
   const nextEventRes = await query<{ id: string; title: string; scheduledAt: Date }>(
     `SELECT s.id, s.title, s.scheduled_at AS "scheduledAt"
        FROM sessions s
       WHERE s.status = 'scheduled' AND s.scheduled_at > NOW()
-        AND ${visibleEventSql('s', '$1')}
+        AND ${visibleEventsSql('s', '$1')}
       ORDER BY s.scheduled_at ASC LIMIT 1`,
     [userId],
   );

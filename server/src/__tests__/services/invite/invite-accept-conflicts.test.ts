@@ -19,6 +19,8 @@ const POD = '6f2b3c4d-5e6f-4a71-8b8c-0d1e2f3a4b5c';
 const MEMBER = '7a3c4d5e-6f70-4b82-9c9d-1e2f3a4b5c6d';
 
 let invite: Record<string, unknown>;
+/** T11: the event's own visibility (NULL = the event follows its pod, as every event made before). */
+let eventVisibility: string | null = null;
 const baseInvite = {
   id: 'invite-1', code: 'CODE123', inviterId: 'host-1', inviteeEmail: null, circleId: null, status: 'pending',
   maxUses: 50, useCount: 0, expiresAt: new Date(Date.now() + 86_400_000), acceptedByUserId: null, acceptedAt: null,
@@ -35,6 +37,7 @@ const mockQuery = jest.fn(async (sql: string) => {
   if (/FROM invites WHERE code = \$1 FOR UPDATE/.test(s)) return { rows: [invite], rowCount: 1 };
   if (s === 'SELECT status FROM sessions WHERE id = $1') return { rows: [{ status: 'scheduled' }], rowCount: 1 };
   if (s === 'SELECT pod_id AS "podId" FROM sessions WHERE id = $1') return { rows: [{ podId: POD }], rowCount: 1 };
+  if (s === 'SELECT visibility FROM sessions WHERE id = $1') return { rows: [{ visibility: eventVisibility }], rowCount: 1 };
   if (s.startsWith('UPDATE invites')) return { rows: [{ ...invite, useCount: 1, status: 'accepted' }], rowCount: 1 };
   if (s === 'SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2') {
     return { rows: [{ status: 'registered' }], rowCount: 1 };
@@ -129,6 +132,27 @@ describe('an event invite', () => {
       // A shared link (no address) passes no invite time: a removed member stays removed (H1b).
       expect(mockRegister).toHaveBeenLastCalledWith(EVENT, MEMBER, undefined, { personalInviteCreatedAt: undefined, viaInvite: true });
     }
+  });
+
+  // T11 (1 Nov 2026), D4: an event with its own visibility takes its invitee without making them a pod member.
+  it('for an event with its own visibility registers the invitee without adding them to the pod', async () => {
+    invite = sessionInvite();
+    eventVisibility = 'private';
+    mockAddMember.mockClear();
+    try {
+      await expect(acceptInvite('CODE123', MEMBER)).resolves.toMatchObject({ redirectTo: `/sessions/${EVENT}` });
+      expect(mockAddMember).not.toHaveBeenCalled();
+      expect(mockRegister).toHaveBeenLastCalledWith(EVENT, MEMBER, undefined, { personalInviteCreatedAt: undefined, viaInvite: true });
+    } finally {
+      eventVisibility = null;
+    }
+  });
+
+  it('for a NULL event still adds the invitee to the pod first, as before', async () => {
+    invite = sessionInvite();
+    mockAddMember.mockClear();
+    await acceptInvite('CODE123', MEMBER);
+    expect(mockAddMember).toHaveBeenCalledWith(POD, MEMBER);
   });
 
   it('still fails on anything else the registration throws', async () => {
