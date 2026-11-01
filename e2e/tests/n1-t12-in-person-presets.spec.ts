@@ -240,8 +240,13 @@ test(`D: the form at seven widths: no sideways scroll, every Matching and place 
     const label = process.env.E2E_DEVICE ?? `${width}px`;
     await page.getByRole('radio', { name: /^In person/ }).click();
     const where = page.getByLabel('Where', { exact: true });
-    await where.scrollIntoViewIfNeeded();
-    await expectReachable(page, where, `${label} Where`);
+    // The pod and its event types arrive after the form is drawn and move the field down, so a scroll made too early
+    // leaves it under the sticky Schedule bar (WebKit has no scroll anchoring). A person scrolls on; so does the test,
+    // until the field sits where a finger can reach it, and a field that stays covered still fails after the wait.
+    await expect(async () => {
+      await where.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+      await expectReachable(page, where, `${label} Where`);
+    }).toPass({ timeout: 15_000 });
     await tall(page, where, `${label} Where`);
     await noSidewaysScroll(page, `${label} in person`);
 
