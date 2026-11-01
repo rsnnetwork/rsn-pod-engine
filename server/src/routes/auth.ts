@@ -189,6 +189,9 @@ router.get(
             profileComplete: user.profileComplete,
             onboardingCompleted: (user as any).onboardingCompleted,
             onboardingStatus: user.onboardingStatus,
+            // 30 Oct review (2.1): 2 once they finished the new onboarding, else null. The preview gates on it;
+            // production's client ignores it.
+            onboardingVersion: user.onboardingVersion ?? null,
             // pg returns Date; the shared contract is ISO string or null
             lastOnboardedAt: (user.lastOnboardedAt as any) instanceof Date ? ((user.lastOnboardedAt as any) as Date).toISOString() : (user.lastOnboardedAt ?? null),
             // Matching-profile free-text fields the profile page reads. getUserById

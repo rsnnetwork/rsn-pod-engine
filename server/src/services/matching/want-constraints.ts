@@ -38,9 +38,8 @@
 // beside a town the table knows, to say which state the person is in and to
 // settle a namesake town.
 
-import {
-  COUNTRY_NAMES, ENDONYMS, REGIONS, regionByKey, regionCovers,
-} from './want-regions';
+import { COUNTRY_ALIASES, COUNTRY_NAMES, ENDONYMS, fold } from '@rsn/shared';
+import { REGIONS, regionByKey, regionCovers } from './want-regions';
 import {
   CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_CANON, PLACE_BY_NAME, REGION_CODES, STATE_OF_CITY,
   SUBREGIONS, WRITTEN_FOR,
@@ -57,58 +56,10 @@ export interface WantConstraints {
   minYears: number | null;
 }
 
-export const COUNTRY_ALIASES: Record<string, string[]> = {
-  'united states': ['usa', 'u.s.a.', 'u.s.', 'united states', 'united states of america', 'america', 'american'],
-  'united kingdom': ['uk', 'u.k.', 'united kingdom', 'britain', 'great britain', 'england', 'british', 'scotland', 'wales'],
-  'germany': ['germany', 'deutschland', 'german'],
-  'india': ['india', 'indian'],
-  'canada': ['canada', 'canadian'],
-  'australia': ['australia', 'australian'],
-  'france': ['france', 'french'],
-  'netherlands': ['netherlands', 'holland', 'dutch'],
-  'switzerland': ['switzerland', 'swiss'],
-  'united arab emirates': ['uae', 'united arab emirates', 'dubai', 'abu dhabi', 'emirates'],
-  'pakistan': ['pakistan', 'pakistani'],
-  'singapore': ['singapore'],
-  'spain': ['spain', 'spanish'],
-  'italy': ['italy', 'italian'],
-  'sweden': ['sweden', 'swedish'],
-  'denmark': ['denmark', 'danish'],
-  'norway': ['norway', 'norwegian'],
-  'finland': ['finland', 'finnish'],
-  'ireland': ['ireland', 'irish'],
-  'israel': ['israel', 'israeli'],
-  'brazil': ['brazil', 'brazilian'],
-  'mexico': ['mexico', 'mexican'],
-  'japan': ['japan', 'japanese'],
-  'china': ['china', 'chinese'],
-  'south africa': ['south africa', 'south african'],
-  'nigeria': ['nigeria', 'nigerian'],
-  'kenya': ['kenya', 'kenyan'],
-  'poland': ['poland', 'polish'],
-  'portugal': ['portugal', 'portuguese'],
-  'austria': ['austria', 'austrian'],
-  'belgium': ['belgium', 'belgian'],
-  'turkey': ['turkey', 'türkiye', 'turkish'],
-  'saudi arabia': ['saudi arabia', 'saudi', 'ksa'],
-  'new zealand': ['new zealand'],
-};
-
-/** The letters Unicode does not take apart, and what they are read as ("Malmö" is "malmo", "Øre" is "ore"). */
-const TRANSLITERATED: Readonly<Record<string, string>> = {
-  'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'ł': 'l', 'đ': 'd', 'ð': 'd', 'þ': 'th', 'ı': 'i', 'ħ': 'h',
-};
-
-/**
- * A name or a person's location as the matcher reads it: lowercase, without accents, "&" as
- * "and", punctuation as spaces. "Côte d’Ivoire" and "Bosnia & Herzegovina", the way Intl writes
- * them into a profile, become "cote d'ivoire" and "bosnia and herzegovina"; "Düsseldorf" and
- * "Zürich" become "dusseldorf" and "zurich".
- */
-export const fold = (s: string): string => s
-  .normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
-  .replace(/[ßæœøłđðþıħ]/g, (c) => TRANSLITERATED[c])
-  .replace(/[’‘`´]/g, "'").replace(/&/g, ' and ').replace(/[^a-z0-9']+/g, ' ').trim();
+// The country alias table and how a name is folded live in @rsn/shared (1 Nov 2026), so the onboarding
+// screens and the profile form read "only a country?" from the same names (30 Oct review, 1.2). The
+// matcher reads them, and exports them, exactly as before.
+export { COUNTRY_ALIASES, fold };
 
 // Dot-free lookup for phrases captured after a preposition ("U.K." → "uk", "Türkiye" → "turkiye").
 const ALIAS_NODOT = new Map<string, string>();

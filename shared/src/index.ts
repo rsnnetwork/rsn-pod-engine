@@ -53,7 +53,7 @@ export * from './onboarding/options-v2';
 import {
   ONBOARDING_V2_MEET as _V2_MEET, ONBOARDING_V2_FIND as _V2_FIND, ONBOARDING_V2_OFFER as _V2_OFFER,
   ONBOARDING_V2_SELF as _V2_SELF, ONBOARDING_V2_COPY as _V2_COPY, ONBOARDING_V2_OTHER_KEYS as _V2_OTHER_KEYS,
-  ONBOARDING_V2_LIMITS as _V2_LIMITS, ONBOARDING_V2_STEPS as _V2_STEPS,
+  ONBOARDING_V2_LIMITS as _V2_LIMITS, ONBOARDING_V2_STEPS as _V2_STEPS, onboardingDone as _onboardingDone,
 } from './onboarding/options-v2';
 export const ONBOARDING_V2_MEET = _V2_MEET;
 export const ONBOARDING_V2_FIND = _V2_FIND;
@@ -63,6 +63,7 @@ export const ONBOARDING_V2_COPY = _V2_COPY;
 export const ONBOARDING_V2_OTHER_KEYS = _V2_OTHER_KEYS;
 export const ONBOARDING_V2_LIMITS = _V2_LIMITS;
 export const ONBOARDING_V2_STEPS = _V2_STEPS;
+export const onboardingDone = _onboardingDone;
 // The made-up people the tour's pictures show (25 Oct 2026): a real VALUE both tours render, so it has its
 // own named export for the same Rollup reason as OPENINGS above.
 export * from './onboarding/example-people';
@@ -195,3 +196,18 @@ export const PICTURE_CENTRED = _PICTURE_CENTRED;
 export const clampPictureCrop = _clampPictureCrop;
 export const pictureCropRect = _pictureCropRect;
 export const pictureOutputSize = _pictureOutputSize;
+export * from './location/countries';
+// "Where are you based?" (30 Oct review, 1.2): VALUES the onboarding screens, the profile form and the server judge
+// a location with, and the matcher reads places with, so each needs its own statically analysable named export, same
+// as the meeting values above.
+import {
+  COUNTRY_ALIASES as _COUNTRY_ALIASES, COUNTRY_NAMES as _COUNTRY_NAMES, COUNTRIES_IN_NO_REGION as _COUNTRIES_IN_NO_REGION,
+  ENDONYMS as _ENDONYMS, fold as _fold, isCountryOnly as _isCountryOnly, isLocationComplete as _isLocationComplete,
+} from './location/countries';
+export const COUNTRY_ALIASES = _COUNTRY_ALIASES;
+export const COUNTRY_NAMES = _COUNTRY_NAMES;
+export const COUNTRIES_IN_NO_REGION = _COUNTRIES_IN_NO_REGION;
+export const ENDONYMS = _ENDONYMS;
+export const fold = _fold;
+export const isCountryOnly = _isCountryOnly;
+export const isLocationComplete = _isLocationComplete;

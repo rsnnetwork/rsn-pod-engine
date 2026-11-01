@@ -11,8 +11,8 @@
 
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
-import { NotFoundError } from '../../middleware/errors';
-import { ONBOARDING_V2_MEET, ONBOARDING_V2_STEPS, shortLabelFor } from '@rsn/shared';
+import { NotFoundError, ValidationError } from '../../middleware/errors';
+import { ONBOARDING_V2_MEET, ONBOARDING_V2_STEPS, isLocationComplete, shortLabelFor } from '@rsn/shared';
 import type {
   OnboardingStatus, OnboardingV2Answers, OnboardingV2State, OnboardingV2Step, TourOutcome,
 } from '@rsn/shared';
@@ -38,6 +38,7 @@ interface StateRow extends LinkedinRow {
   company: string | null;
   industry: string | null;
   timezone: string | null;
+  location: string | null;
   tour_due_at: Date | null;
   tour_seen_at: Date | null;
   tour_outcome: TourOutcome | null;
@@ -143,7 +144,7 @@ const isStep = (s: unknown): s is OnboardingV2Step =>
 export async function getState(userId: string): Promise<OnboardingV2State> {
   const r = await query<StateRow>(
     `SELECT u.onboarding_status, u.onboarding_version, u.display_name, u.avatar_url,
-            u.job_title, u.company, u.industry, u.timezone, u.linkedin_url,
+            u.job_title, u.company, u.industry, u.timezone, u.location, u.linkedin_url,
             u.tour_due_at, u.tour_seen_at, u.tour_outcome, u.last_onboarded_at,
             u.onboarding_intent, u.looking_to_meet, u.can_offer, u.self_kinds, u.hoping_to_find,
             u.meet_other, u.find_other, u.find_specific, u.offer_other, u.self_other,
@@ -190,6 +191,7 @@ export async function getState(userId: string): Promise<OnboardingV2State> {
       industry: row.industry,
       timezone: row.timezone,
       linkedinUrl: row.linkedin_url,
+      location: row.location,
     },
     linkedin: { ...linkedinBlock(sourcesFromRow(row)), chosen: chosenFrom(row.signup_stage) },
     tour: {
@@ -243,6 +245,7 @@ interface BeforeRow {
   self_other: string | null;
   job_title: string | null;
   industry: string | null;
+  location: string | null;
 }
 
 const sameSet = (a: readonly string[], b: readonly string[]) =>
@@ -268,6 +271,9 @@ function splitName(displayName: string): [string, string] {
   return [parts[0] ?? displayName, parts.slice(1).join(' ')];
 }
 
+/** The plan's sentence (30 Oct review, 1.2), shown under the location field on screen 7. */
+export const LOCATION_REFUSAL = 'Please add your city and country.';
+
 export interface ConfirmResultV2 {
   /** False when they confirmed the same answers again. */
   changed: boolean;
@@ -287,6 +293,8 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
     canOffer: input.canOffer, offerOther: input.offerOther,
     selfKinds: input.selfKinds, selfOther: input.selfOther,
   };
+  // An answer saved in edit mode sends no profile; screen 7 always sends one.
+  const profileSent = input.profile !== undefined;
   const profile = input.profile ?? {};
   const given = <T>(v: T | null | undefined): T | null => v ?? null;
   /** What a field holds once this confirm is written: emptied ('') is nothing, not given keeps the stored value. */
@@ -303,12 +311,19 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
   return transaction(async (client) => {
     const cur = await client.query<BeforeRow>(
       `SELECT onboarding_status, onboarding_version, looking_to_meet, meet_other, hoping_to_find,
-              find_other, find_specific, can_offer, offer_other, self_kinds, self_other, job_title, industry
+              find_other, find_specific, can_offer, offer_other, self_kinds, self_other, job_title, industry, location
          FROM users WHERE id = $1 FOR UPDATE`,
       [userId],
     );
     const before = cur.rows[0];
     if (!before) throw new NotFoundError('User', userId);
+
+    // "Where are you based?" (30 Oct review, 1.2, L2): screen 7 cannot be confirmed while the location it leaves
+    // (the one given, else the stored one: it is never cleared) is empty or only a country ("USA"). Production's
+    // client never calls v2, and PUT /users/me has no such rule, so production's profile saves are untouched.
+    if (profileSent && !isLocationComplete(profile.location ?? before.location)) {
+      throw new ValidationError(LOCATION_REFUSAL, { 'profile.location': [LOCATION_REFUSAL] });
+    }
 
     const changed = !sameAnswers(before, answers);
     // Invite and Google sign-ups start with onboarding_completed already true,
@@ -347,6 +362,7 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
          company = CASE WHEN $19::text IS NULL THEN company ELSE NULLIF($19, '') END,
          industry = CASE WHEN $20::text IS NULL THEN industry ELSE NULLIF($20, '') END,
          timezone = COALESCE($21, timezone),
+         location = COALESCE($24, location),
          -- "can this person be matched": for a v2 member, exactly their answers
          profile_complete = true,
          onboarding_completed = true,
@@ -365,7 +381,7 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
         roleTitles, wantText, intentText, offerText, reasonsV2(answers.hopingToFind),
         displayName, given(profile.jobTitle), titleSource, given(profile.company),
         given(profile.industry), given(profile.timezone),
-        firstName, lastName,
+        firstName, lastName, given(profile.location),
       ],
     );
 

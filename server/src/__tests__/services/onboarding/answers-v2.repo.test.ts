@@ -40,7 +40,7 @@ const NOW = Date.now();
 /** A users row joined with its intent profile and approval-time lookup, as getState selects it. */
 const stateRow = (over: Record<string, unknown> = {}) => ({
   onboarding_status: 'not_started', onboarding_version: null,
-  display_name: 'Jane Doe', avatar_url: null, job_title: null, company: null, industry: null, timezone: null,
+  display_name: 'Jane Doe', avatar_url: null, job_title: null, company: null, industry: null, timezone: null, location: null,
   linkedin_url: null, tour_due_at: null, tour_seen_at: null, tour_outcome: null,
   onboarding_intent: null, looking_to_meet: [], can_offer: [], self_kinds: [], hoping_to_find: [],
   meet_other: null, find_other: null, find_specific: null, offer_other: null, self_other: null,
@@ -64,7 +64,10 @@ describe('getState', () => {
         canOffer: [], offerOther: null, selfKinds: [], selfOther: null,
       },
       prefilledFromV1: false,
-      profile: { displayName: 'Jane Doe', avatarUrl: null, jobTitle: null, company: null, industry: null, timezone: null, linkedinUrl: null },
+      profile: {
+        displayName: 'Jane Doe', avatarUrl: null, jobTitle: null, company: null, industry: null, timezone: null, linkedinUrl: null,
+        location: null,
+      },
       linkedin: { status: 'none', chosen: null },
       tour: { pending: false, seenAt: null, outcome: null },
     });
@@ -80,6 +83,12 @@ describe('getState', () => {
       canOffer: ['offer_advice_mentoring'], selfKinds: ['self_founder_owner'],
     });
     expect(s.prefilledFromV1).toBe(true);
+  });
+
+  it('screen 7 shows where they are based, as they wrote it', async () => {
+    const s = await answer({ location: 'Omaha, NE ' });
+    expect(s.profile.location).toBe('Omaha, NE ');
+    expect(mockQuery.mock.calls[0][0]).toMatch(/u\.location/);
   });
 
   it('a v2 member sees their own answers and words, not a mapping', async () => {
@@ -288,6 +297,8 @@ describe('confirm', () => {
       onboarding_status: 'in_progress', onboarding_version: null, looking_to_meet: [], meet_other: null,
       hoping_to_find: [], find_other: null, find_specific: null, can_offer: [], offer_other: null,
       self_kinds: [], self_other: null, job_title: null, industry: 'Software',
+      // Where they are based is on file, so a confirm that does not mention it goes through (see "where they are based").
+      location: 'Copenhagen, Denmark',
     };
     mockShownPrefill.mockReset();
     mockShownPrefill.mockResolvedValue(null);
@@ -543,5 +554,63 @@ describe('confirm', () => {
   it('a member that does not exist is a 404', async () => {
     mockTx.mockImplementation(() => Promise.resolve({ rows: [] }));
     await expect(confirm('nope', FULL)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  // 30 Oct review (1.2, L2): screen 7 asks "Where are you based?". A confirm that sends the profile is refused while
+  // the location it leaves is empty or only a country; one that sends no profile (an edit-mode answer save) is not.
+  describe('where they are based', () => {
+    const REFUSAL = 'Please add your city and country.';
+    const confirmWith = (profile?: Record<string, unknown>) =>
+      confirm('u-1', confirmSchemaV2.parse({ ...FULL_ANSWERS, ...(profile ? { profile } : {}) }));
+    const refused = async (profile?: Record<string, unknown>) => {
+      const err = await confirmWith(profile).then(() => null, (e: unknown) => e);
+      expect(err).toMatchObject({ statusCode: 400, message: REFUSAL, details: { 'profile.location': [REFUSAL] } });
+      // Nothing is written: the member's row was only read.
+      expect(mockTx.mock.calls.some(c => /^\s*(UPDATE|INSERT)/.test(c[0] as string))).toBe(false);
+    };
+
+    it('writes the location they gave, tidied, and keeps the stored one when none is given', async () => {
+      before.location = null;
+      await confirmWith({ location: '  Copenhagen,\n Denmark ' });
+      const { sql, value } = update();
+      expect(sql).toMatch(/location = COALESCE\(\$\d+, location\)/);
+      expect(value('location')).toBe('Copenhagen, Denmark');
+
+      mockTx.mockClear();
+      before.location = 'Manchester, UK';
+      await confirmWith({ company: 'Vokt' });
+      expect(update().value('location')).toBeNull();
+    });
+
+    it('a member with no location on file who gives none is refused, on the location field', async () => {
+      before.location = null;
+      await refused({ company: 'Vokt' });
+      await refused({ location: '' });
+      await refused({ location: '   ' });
+      await refused({});
+    });
+
+    it('only a country is refused, whether stored ("USA") or given ("United Kingdom")', async () => {
+      before.location = 'USA';
+      await refused({ jobTitle: 'Founder' });
+      before.location = null;
+      await refused({ location: 'United Kingdom' });
+      before.location = 'Copenhagen, Denmark';
+      await refused({ location: 'Nepal' });
+    });
+
+    it('a city with its country over a stored country goes through', async () => {
+      before.location = 'USA';
+      await confirmWith({ location: 'Omaha, NE' });
+      expect(update().value('location')).toBe('Omaha, NE');
+    });
+
+    it('an answer saved in edit mode sends no profile, and is never refused for the location', async () => {
+      before.location = null;
+      before.onboarding_status = 'completed';
+      before.onboarding_version = 2;
+      await confirmWith(undefined);
+      expect(update().value('location')).toBeNull();
+    });
   });
 });

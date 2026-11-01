@@ -304,6 +304,40 @@ describe('Auth Routes', () => {
       expect(res.body.data.user.lastOnboardedAt).toBeNull();
     });
 
+    // 30 Oct review (2.1): the preview takes everyone who has not done the new onboarding through it, so the
+    // session says which version they finished: 2, or null for an earlier one or none.
+    it('carries which onboarding the member finished: 2, and null when they have not done the new one', async () => {
+      (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, onboardingStatus: 'completed', onboardingVersion: 2 });
+      const v2 = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
+      expect(v2.status).toBe(200);
+      expect(v2.body.data.user.onboardingVersion).toBe(2);
+
+      for (const onboardingVersion of [null, undefined]) {
+        (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, onboardingStatus: 'completed', onboardingVersion });
+        const v1 = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
+        expect(v1.body.data.user).toHaveProperty('onboardingVersion', null);
+      }
+    });
+
+    // Production's client (origin/main: authStore.checkSession, ProtectedRoute, the profile and Settings pages)
+    // reads the session as it was; the new field is only added beside every one of them.
+    it('production\'s client still gets every field it read before onboardingVersion was added', async () => {
+      const before = [
+        'id', 'email', 'displayName', 'firstName', 'lastName', 'avatarUrl', 'bannerUrl', 'bio', 'company', 'jobTitle',
+        'industry', 'location', 'linkedinUrl', 'interests', 'reasonsToConnect', 'languages', 'timezone', 'phone', 'role',
+        'profileComplete', 'onboardingCompleted', 'onboardingStatus', 'lastOnboardedAt', 'expertiseText', 'whatICareAbout',
+        'whatICanHelpWith', 'whoIWantToMeet', 'whyIWantToMeet', 'myIntent', 'notifyEmail', 'notifyEventReminders',
+        'notifyMatches', 'profileVisible', 'inviteOptOutPublicEvents',
+      ];
+      // Every field held (null where the member has nothing), so a field the route stopped sending cannot hide as undefined.
+      const stored = { ...Object.fromEntries(before.map(k => [k, null])), ...mockUser, onboardingStatus: 'completed', onboardingVersion: 2 };
+      (identityService.getUserById as jest.Mock).mockResolvedValue(stored);
+      const res = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body.data.user).sort()).toEqual([...before, 'onboardingVersion'].sort());
+      expect(res.body.data.user).toMatchObject({ id: mockUser.id, email: mockUser.email, onboardingStatus: 'completed', location: null });
+    });
+
     // 21 Oct 2026: the member's banner rides the session like their photo does, as its address or null.
     it('carries the banner\'s address, and null when the member has none', async () => {
       const bannerUrl = 'http://localhost:3001/api/users/05e70000-0000-4000-8000-000000000123/banner?v=1761040000000';
@@ -403,6 +437,26 @@ describe('User Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.displayName).toBe('Updated Name');
+    });
+
+    // 30 Oct review (1.2): location is required on the preview's screens, never here. Production's profile form
+    // (origin/main ProfilePage.tsx) posts location: '' for every member who has none (44 of 81 on 1 Nov), and the
+    // old onboarding and Settings saves post no location at all; each still saves.
+    it.each([
+      ['an empty location, as production\'s form sends it', { location: '' }],
+      ['no location at all', {}],
+      ['only a country', { location: 'USA' }],
+    ])('production\'s profile save with %s still saves', async (_label, location) => {
+      (identityService.updateUser as jest.Mock).mockResolvedValue({ ...mockUser, displayName: 'Jane Doe' });
+      const productionForm = {
+        displayName: 'Jane Doe', firstName: 'Jane', lastName: 'Doe', bio: '', company: '', jobTitle: '', industry: '',
+        linkedinUrl: '', timezone: 'Europe/Copenhagen', phone: '', interests: [], reasonsToConnect: [], languages: ['english'],
+        expertiseText: null, whatICareAbout: null, whatICanHelpWith: null, whoIWantToMeet: null, whyIWantToMeet: null, myIntent: null,
+        ...location,
+      };
+      const res = await request(app).put('/users/me').set('Authorization', `Bearer ${makeToken()}`).send(productionForm);
+      expect(res.status).toBe(200);
+      expect(identityService.updateUser).toHaveBeenCalledWith(mockUser.id, expect.objectContaining(location));
     });
 
     it('should reject invalid update data', async () => {

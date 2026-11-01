@@ -78,6 +78,8 @@ export interface User {
   profileVisible: boolean;
   inviteOptOutPublicEvents: boolean;
   onboardingStatus?: OnboardingStatus;
+  /** 2 once the member has finished the new onboarding; null before (an earlier one, or none). The preview gates on it. */
+  onboardingVersion?: number | null;
   lastOnboardedAt?: string | null;
   lastActiveAt: Date | null;
   createdAt: Date;

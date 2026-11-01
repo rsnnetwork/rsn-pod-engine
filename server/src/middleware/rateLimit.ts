@@ -546,6 +546,18 @@ export const adminFeedbackExportLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have downloaded the feedback a lot just now. Try again in a few minutes.' } },
 });
 
+// The admin onboarding answers CSV (30 Oct review, 2.3): every active member at once, and each download is written to
+// the audit log, so 10 in 10 minutes per admin.
+export const adminOnboardingExportLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('admin-onboarding-export'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have downloaded the onboarding answers a lot just now. Try again in a few minutes.' } },
+});
+
 // A meeting's calendar file (1 Nov 2026, T7): one press of "Add to calendar" is one read, so 20 a minute per member
 // is far more than a person needs, and keeps a script from reading every meeting's file in a loop.
 export const meetingCalendarLimiter = rateLimit({

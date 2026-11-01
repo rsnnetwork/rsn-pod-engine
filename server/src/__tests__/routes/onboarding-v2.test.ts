@@ -293,6 +293,25 @@ describe('POST /onboarding/v2/confirm', () => {
     expect(order).toEqual(['saved', 'told']);
   });
 
+  // 30 Oct review (1.2): the refusal of a missing location reaches screen 7 on the field it is about, in words.
+  it('a confirm refused for its location answers 400 on profile.location, says why, and tells nobody', async () => {
+    mockConfirm.mockRejectedValue(new ValidationError('Please add your city and country.', { 'profile.location': ['Please add your city and country.'] }));
+    const res = await authAs('u-no-location')(request(app).post('/onboarding/v2/confirm').send({ ...ANSWERS, profile: { location: 'USA' } }));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatchObject({
+      message: 'Please add your city and country.', details: { 'profile.location': ['Please add your city and country.'] },
+    });
+    expect(mockConfirm).toHaveBeenCalledWith('u-no-location', expect.objectContaining({ profile: { location: 'USA' } }));
+    expect(mockProfileFanout).not.toHaveBeenCalled();
+    expect(mockSync).not.toHaveBeenCalled();
+  });
+
+  it('an answer saved in edit mode, with no profile, reaches the confirm with no profile at all', async () => {
+    const res = await authAs('u-edit-mode')(request(app).post('/onboarding/v2/confirm').send(ANSWERS));
+    expect(res.status).toBe(200);
+    expect(mockConfirm.mock.calls[0][1]).not.toHaveProperty('profile');
+  });
+
   it('tells nobody when the confirm is refused', async () => {
     const res = await authAs('u-refused-fanout')(request(app).post('/onboarding/v2/confirm').send({ ...ANSWERS, selfKinds: [] }));
     expect(res.status).toBe(400);

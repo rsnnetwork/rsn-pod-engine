@@ -292,6 +292,79 @@ describe('GET /users/:id/onboarding', () => {
     expect(res.body.data.stageEvents).toEqual([]);
   });
 
+  // 30 Oct review (2.3, L4): the inspector's "Onboarding answers" card reads the answers as the member gave them.
+  describe('answers', () => {
+    const row = (over: Record<string, unknown>) => ({
+      linkedin_url: null, onboarding_status: 'completed', last_onboarded_at: null,
+      enrichment_status: null, enrichment_source: null, enrichment_error: null, enrichment_started_at: null,
+      enrichment_completed_at: null, enrichment_result: null, onboarding_conversation: null, matching_intent: null,
+      matching_tags: null, avoid_preferences: null, profile_strength: null, confidence: null,
+      onboarding_version: null, location: null, timezone: null, onboarding_intent: null,
+      looking_to_meet: null, meet_other: null, hoping_to_find: null, find_other: null, find_specific: null,
+      can_offer: null, offer_other: null, self_kinds: null, self_other: null,
+      ...over,
+    });
+    const read = async (over: Record<string, unknown>) => {
+      mockQuery([
+        (sql) => (/LEFT JOIN user_intent_profiles/i.test(sql) ? { rows: [row(over)], rowCount: 1 } : undefined),
+      ]);
+      const res = await request(app).get(`/admin/users/${USER_ID}/onboarding`).set('Authorization', `Bearer ${makeToken('admin', ADMIN_ID)}`);
+      expect(res.status).toBe(200);
+      return res.body.data;
+    };
+
+    it('a v2 member: their keys, their own words, the specific wish, where they are based and their time zone', async () => {
+      const data = await read({
+        onboarding_version: 2, location: 'Copenhagen, Denmark', timezone: 'Europe/Copenhagen',
+        // the same columns still hold the earlier onboarding's keys beside the new ones
+        looking_to_meet: ['investors', 'meet_investors', 'meet_other'], meet_other: 'bakers in Vienna',
+        hoping_to_find: ['find_funding'], find_specific: 'a seed lead',
+        can_offer: ['mentoring_advice', 'offer_advice_mentoring'], self_kinds: ['self_founder_owner'],
+        onboarding_intent: 'find_investors',
+      });
+      expect(data.answers).toEqual({
+        version: 2,
+        lookingToMeet: ['meet_investors', 'meet_other'], meetOther: 'bakers in Vienna',
+        hopingToFind: ['find_funding'], findOther: null, findSpecific: 'a seed lead',
+        canOffer: ['offer_advice_mentoring'], offerOther: null,
+        selfKinds: ['self_founder_owner'], selfOther: null,
+        v1Keys: ['find_investors', 'investors', 'mentoring_advice'],
+        location: 'Copenhagen, Denmark', timezone: 'Europe/Copenhagen',
+      });
+      const sql = (dbQuery as jest.Mock).mock.calls.map(c => c[0] as string).find(s => /LEFT JOIN user_intent_profiles/i.test(s))!;
+      expect(sql).toMatch(/u\.onboarding_version/);
+      expect(sql).toMatch(/u\.find_specific/);
+    });
+
+    it('a member who did only the earlier onboarding: no new answers, their earlier keys raw', async () => {
+      const data = await read({ looking_to_meet: ['investors'], can_offer: ['mentoring_advice'], self_kinds: ['founders'], location: 'Nepal' });
+      expect(data.answers).toMatchObject({
+        version: null, lookingToMeet: [], hopingToFind: [], canOffer: [], selfKinds: [],
+        v1Keys: ['investors', 'mentoring_advice', 'founders'], location: 'Nepal', timezone: null,
+      });
+    });
+
+    // Production's client (origin/main AdminUserInspectorPage.tsx) reads every field below; each stays as it was,
+    // and answers is only added beside them.
+    it('production\'s inspector still gets every field it read, unchanged', async () => {
+      const data = await read({
+        linkedin_url: 'https://www.linkedin.com/in/jane', onboarding_status: 'completed',
+        last_onboarded_at: new Date('2026-07-01T00:00:00.000Z'), onboarding_conversation: [{ role: 'user', content: 'hi' }],
+        matching_intent: { desiredOutcome: 'x' }, matching_tags: ['a'],
+      });
+      expect(Object.keys(data).sort()).toEqual(
+        ['answers', 'conversation', 'enrichment', 'intent', 'lastOnboardedAt', 'linkedinUrl', 'onboardingStatus', 'stageEvents'],
+      );
+      expect(data).toMatchObject({
+        linkedinUrl: 'https://www.linkedin.com/in/jane', onboardingStatus: 'completed', lastOnboardedAt: '2026-07-01T00:00:00.000Z',
+        enrichment: { status: 'none', source: null, error: null, startedAt: null, completedAt: null, result: null },
+        conversation: [{ role: 'user', content: 'hi' }],
+        intent: { matchingIntent: { desiredOutcome: 'x' }, tags: ['a'], avoidPreferences: [], profileStrength: null, confidence: {} },
+        stageEvents: [],
+      });
+    });
+  });
+
   it('propagates an unexpected DB failure as a 500 with no data payload', async () => {
     (dbQuery as jest.Mock).mockImplementation((sql: string, params: any[] = []) => {
       if (/SELECT\s+status\s+FROM\s+users/i.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });

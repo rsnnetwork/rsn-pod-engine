@@ -127,6 +127,8 @@ export const ONBOARDING_V2_LIMITS = {
   companyMaxLen: 120,
   industryMaxLen: 100,
   timezoneMaxLen: 50,
+  /** "Where are you based?": the users.location column holds 200. */
+  locationMaxLen: 200,
   linkedinUrlMaxLen: 500,
 } as const;
 
@@ -163,6 +165,8 @@ export interface OnboardingV2Profile {
   /** IANA zone, for example "Asia/Kathmandu". Only the member sees it. */
   timezone: string | null;
   linkedinUrl: string | null;
+  /** "Where are you based?", as the member wrote it ("Copenhagen, Denmark"); null when they never said. */
+  location: string | null;
 }
 
 export type OnboardingV2LinkedinStatus = 'none' | 'searching' | 'found' | 'partial' | 'not_found' | 'failed';
@@ -225,6 +229,11 @@ export interface OnboardingV2ProfileInput {
   company?: string | null;
   industry?: string | null;
   timezone?: string | null;
+  /**
+   * "Where are you based?": a city and a country. It can never be cleared, like the name: a blank one keeps the
+   * stored one. A confirm that sends a profile is refused while the location it leaves is empty or only a country.
+   */
+  location?: string | null;
   /** "Keep this photo": make the photo from their LinkedIn page their own. */
   useLinkedinPhoto?: boolean;
 }
@@ -250,4 +259,35 @@ export interface OnboardingV2ConfirmResponse {
 /** POST /api/onboarding/v2/linkedin: the linkedin block, plus the address as it was saved. */
 export interface OnboardingV2LinkedinResponse extends OnboardingV2Linkedin {
   linkedinUrl: string;
+}
+
+/**
+ * The admin inspector's "Onboarding answers" (30 Oct review, 2.3): the member's answers as they gave them, beside
+ * GET /api/admin/users/:id/onboarding's other fields. The four lists hold only v2 keys; whatever v1 keys the same
+ * columns still hold are in v1Keys, shown raw under "Earlier answers", never mapped.
+ */
+export interface AdminOnboardingAnswers {
+  /** 2 once the new onboarding was confirmed; null before. */
+  version: number | null;
+  lookingToMeet: MeetV2Key[];
+  meetOther: string | null;
+  hopingToFind: FindV2Key[];
+  findOther: string | null;
+  findSpecific: string | null;
+  canOffer: OfferV2Key[];
+  offerOther: string | null;
+  selfKinds: SelfV2Key[];
+  selfOther: string | null;
+  /** The earlier onboarding's keys (its reason, the people, the offers, the kinds), as stored. */
+  v1Keys: string[];
+  location: string | null;
+  timezone: string | null;
+}
+
+export type OnboardingDone = 'New onboarding' | 'Earlier onboarding' | 'Not done';
+
+/** Which onboarding a member has done, in the words the admin card and the CSV both use. */
+export function onboardingDone(status: OnboardingStatus | string | null | undefined, version: number | null | undefined): OnboardingDone {
+  if (version === 2) return 'New onboarding';
+  return status === 'completed' ? 'Earlier onboarding' : 'Not done';
 }

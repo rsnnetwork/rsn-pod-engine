@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate, invalidateUserStatusCache } from '../middleware/auth';
 import { recordAudit } from '../middleware/audit';
+import { adminOnboardingExportLimiter, clientIp } from '../middleware/rateLimit';
+import { ONBOARDING_CSV_COLUMNS, onboardingReportRows } from '../services/onboarding/onboarding-report';
 import { requireRole } from '../middleware/rbac';
 import { query } from '../db';
 import { ApiResponse, ErrorCodes, UserRole } from '@rsn/shared';
@@ -1258,6 +1260,43 @@ router.get(
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="reason-analytics-${type}.csv"`);
       res.send(csv);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─── /onboarding/export.csv ───────────────────────────────────────────────
+//
+// The admin onboarding report (30 Oct review, 2.3; L4): one row per active member with every answer as its label,
+// for a sheet. Members' own words leave REASON in this file, so who took it, when and how many rows is written to
+// audit_log (D13). A read, so no entity tags.
+
+/** A cell a spreadsheet would run as a formula (member-written text can start with =, +, -, @) is written as text. */
+const asText = (v: string | null): string | null => (v && /^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
+
+router.get(
+  '/onboarding/export.csv',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  adminOnboardingExportLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const rows = await onboardingReportRows();
+      await recordAudit({
+        actorId: req.user!.userId,
+        action: 'admin.onboarding_csv_download',
+        entityType: 'user',
+        entityId: null,
+        details: { rows: rows.length },
+        ipAddress: clientIp(req),
+      });
+      const cells = rows.map(r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, asText(v)])));
+      const day = new Date().toISOString().slice(0, 10);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="reason-onboarding-answers-${day}.csv"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(toCsv(cells, [...ONBOARDING_CSV_COLUMNS]));
     } catch (err) {
       next(err);
     }

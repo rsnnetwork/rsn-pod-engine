@@ -30,6 +30,8 @@
 // European market (8 Oct 2026), so they are read as Europe, the wider list, and the card still
 // says the one the member wrote.
 
+import { COUNTRY_NAMES, COUNTRIES_IN_NO_REGION, ENDONYMS } from '@rsn/shared';
+
 export interface Region {
   /** What the region is called inside a constraint: lowercase, one per region. */
   key: string;
@@ -216,117 +218,10 @@ export function regionCovers(outer: string, inner: string): boolean {
   return !!big && !!small && small.countries.every((c) => big.has(c));
 }
 
-// ── Countries the older alias table (want-constraints.ts) does not know ────────
+// ── Countries the older alias table does not know, and their home names ──────
 //
-// canonical name -> the other ways it is written. The canonical name itself is always
-// understood. These are matched in a PERSON'S location only, never scanned for in a want's
-// text: "Jordan", "Chad" and "Georgia" are first names as often as countries, and a want that
-// says "meet Jordan" must not become a place. In a want a country is read after "in", "from",
-// "based in"... as before.
-//
-// The spellings are the ones the app itself writes (the onboarding card stored a member's
-// country as Intl.DisplayNames gives it: "Türkiye", "Czechia", "Bosnia & Herzegovina",
-// "Congo - Kinshasa", "Hong Kong SAR China") plus the old and common names. Georgia is left
-// out on purpose: it is the US state as often as the country.
-const COUNTRY_NAMES_IN_REGIONS: Readonly<Record<string, readonly string[]>> = {
-  // Europe
-  luxembourg: [], greece: [], czechia: ['czech republic'], hungary: [], romania: [], bulgaria: [],
-  croatia: [], slovenia: [], slovakia: ['slovak republic'], estonia: [], latvia: [], lithuania: [],
-  cyprus: [], malta: [], iceland: [], albania: [], andorra: [], belarus: [],
-  'bosnia and herzegovina': ['bosnia', 'bosnia herzegovina'], kosovo: [], liechtenstein: [],
-  moldova: [], monaco: [], montenegro: [], 'north macedonia': ['macedonia'],
-  russia: ['russian federation'], 'san marino': [], serbia: [], ukraine: [],
-  'vatican city': ['holy see', 'vatican'],
-  // The Middle East and North Africa
-  bahrain: [], egypt: [], iran: [], iraq: [], jordan: [], kuwait: [], lebanon: [], oman: [],
-  palestine: ['state of palestine', 'palestinian territories', 'west bank', 'gaza'],
-  qatar: [], syria: [], yemen: [], algeria: [], libya: [], morocco: [], tunisia: [],
-  // Africa
-  angola: [], benin: [], botswana: [], 'burkina faso': [], burundi: [], 'cabo verde': ['cape verde'],
-  cameroon: [], 'central african republic': [], chad: [], comoros: [],
-  'dr congo': ['democratic republic of the congo', 'democratic republic of congo', 'congo kinshasa', 'drc'],
-  'republic of the congo': ['congo brazzaville', 'congo'], "cote d'ivoire": ['ivory coast'],
-  djibouti: [], 'equatorial guinea': [], eritrea: [], eswatini: ['swaziland'], ethiopia: [], gabon: [],
-  gambia: ['the gambia'], ghana: [], guinea: [], 'guinea-bissau': [], lesotho: [], liberia: [],
-  madagascar: [], malawi: [], mali: [], mauritania: [], mauritius: [], mozambique: [], namibia: [],
-  niger: [], rwanda: [], 'sao tome and principe': ['sao tome'], senegal: [], seychelles: [],
-  'sierra leone': [], somalia: [], 'south sudan': [], sudan: [], tanzania: [], togo: [], uganda: [],
-  zambia: [], zimbabwe: [],
-  // Asia and Oceania
-  kazakhstan: [], kyrgyzstan: [], tajikistan: [], turkmenistan: [], uzbekistan: [], 'hong kong': [],
-  macao: ['macau'], mongolia: [], 'north korea': [], 'south korea': ['korea', 'republic of korea'],
-  taiwan: [], brunei: ['brunei darussalam'], cambodia: [], indonesia: [], laos: ['lao pdr'],
-  malaysia: [], myanmar: ['burma'], philippines: [], thailand: [], 'timor-leste': ['east timor'],
-  vietnam: ['viet nam'], afghanistan: [], bangladesh: [], bhutan: [], maldives: [], nepal: [],
-  'sri lanka': [], fiji: [], kiribati: [], 'marshall islands': [], micronesia: ['federated states of micronesia'],
-  nauru: [], palau: [], 'papua new guinea': [], samoa: [], 'solomon islands': [], tonga: [], tuvalu: [],
-  vanuatu: [],
-  // Latin America
-  belize: [], 'costa rica': [], 'el salvador': [], guatemala: [], honduras: [], nicaragua: [], panama: [],
-  argentina: [], bolivia: [], chile: [], colombia: [], ecuador: [], guyana: [], paraguay: [], peru: [],
-  suriname: [], uruguay: [], venezuela: [], cuba: [], 'dominican republic': [], haiti: [], 'puerto rico': [],
-};
-
-// Countries no region lists, written the same way. Every sovereign state is one of the alias table,
-// COUNTRY_NAMES_IN_REGIONS above or these, which the Intl test in want-regions.test.ts checks (Georgia
-// aside). The short forms ("trinidad", "st kitts") are what a want captures before "and".
-const COUNTRY_NAMES_IN_NO_REGION: Readonly<Record<string, readonly string[]>> = {
-  armenia: [], azerbaijan: [],
-  'antigua and barbuda': ['antigua'], bahamas: ['the bahamas'], barbados: [], dominica: [], grenada: [], jamaica: [],
-  'saint kitts and nevis': ['st kitts and nevis', 'st kitts', 'saint kitts', 'st christopher and nevis'],
-  'saint lucia': ['st lucia'],
-  'saint vincent and the grenadines': [
-    'st vincent and the grenadines', 'st vincent and grenadines', 'saint vincent and grenadines', 'st vincent', 'saint vincent',
-  ],
-  'trinidad and tobago': ['trinidad', 'tobago'],
-};
-
-export const COUNTRY_NAMES: Readonly<Record<string, readonly string[]>> = {
-  ...COUNTRY_NAMES_IN_REGIONS, ...COUNTRY_NAMES_IN_NO_REGION,
-};
-
-/** The countries of COUNTRY_NAMES that no region lists. */
-export const COUNTRIES_IN_NO_REGION: readonly string[] = Object.keys(COUNTRY_NAMES_IN_NO_REGION);
-
-// ── Countries by the names they are written with at home ──────────────────────
-//
-// canonical name -> the names a person at home writes, and the names a German speaker writes the
-// neighbours with. The launch audience is Düsseldorf and the DACH countries, so its locations say
-// "Deutschland", "Österreich" and "Schweiz" ("Wien, Österreich", "Zürich, Schweiz"). Like the rows
-// above, these are matched in a person's location, and in a want after a preposition ("Gründer in
-// Österreich"), never scanned for anywhere in a want's text. Accents are folded when they are read.
-export const ENDONYMS: Readonly<Record<string, readonly string[]>> = {
-  austria: ['österreich'],
-  switzerland: ['schweiz', 'suisse', 'svizzera', 'svizra'],
-  france: ['frankreich'],
-  italy: ['italia', 'italien'],
-  spain: ['españa', 'spanien'],
-  netherlands: ['nederland', 'niederlande'],
-  belgium: ['belgië', 'belgique', 'belgien'],
-  luxembourg: ['luxemburg', 'lëtzebuerg'],
-  poland: ['polska', 'polen'],
-  czechia: ['česko', 'tschechien'],
-  slovakia: ['slovensko', 'slowakei'],
-  hungary: ['magyarország', 'ungarn'],
-  romania: ['românia', 'rumänien'],
-  bulgaria: ['bulgarien'],
-  croatia: ['hrvatska', 'kroatien'],
-  slovenia: ['slovenija', 'slowenien'],
-  serbia: ['srbija', 'serbien'],
-  greece: ['hellas', 'griechenland'],
-  cyprus: ['zypern'],
-  turkey: ['türkei'],
-  russia: ['russland'],
-  sweden: ['sverige', 'schweden'],
-  norway: ['norge', 'norwegen'],
-  denmark: ['danmark', 'dänemark'],
-  finland: ['suomi', 'finnland'],
-  estonia: ['eesti', 'estland'],
-  latvia: ['latvija', 'lettland'],
-  lithuania: ['lietuva', 'litauen'],
-  ireland: ['éire', 'irland'],
-  'united kingdom': ['großbritannien', 'vereinigtes königreich'],
-  'united states': ['vereinigte staaten'],
-  brazil: ['brasil'],
-  egypt: ['ägypten'],
-};
+// COUNTRY_NAMES (canonical name -> the other ways it is written), COUNTRIES_IN_NO_REGION and
+// ENDONYMS (the names a person at home writes) live in @rsn/shared (1 Nov 2026), with the notes on
+// where each spelling comes from, so the onboarding screens and the profile form read "only a
+// country?" from the same names. The matcher reads them, and exports them, exactly as before.
+export { COUNTRY_NAMES, COUNTRIES_IN_NO_REGION, ENDONYMS };
