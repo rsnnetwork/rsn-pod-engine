@@ -91,6 +91,7 @@ export default function PodsPage() {
             key={key}
             variant={filter === key ? 'primary' : 'ghost'}
             size="sm"
+            className="min-h-[44px]"
             onClick={() => setFilter(key)}
           >
             {Icon ? <><Icon className="h-3.5 w-3.5 mr-1" /> {label}</> : label}

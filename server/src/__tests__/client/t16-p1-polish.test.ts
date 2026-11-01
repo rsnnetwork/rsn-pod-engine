@@ -166,3 +166,15 @@ describe('P1 item 7: a message taken down during a socket gap leaves the open li
     expect(read('features/sessions/MessageParticipantsPanel.tsx')).not.toMatch(/\n[ \t]+\n/);
   });
 });
+
+describe('the sweep of the screens T16 touched: every tap target 44px', () => {
+  it('the pod page\'s circle chips are app links with a 44px tap, the pods filters and the admin pods controls are 44px', () => {
+    const pod = read('features/pods/PodDetailPage.tsx');
+    expect(pod).toMatch(/<Link key=\{c\.id\} to=\{`\/circles\/\$\{c\.id\}`\} className="inline-flex min-h-\[44px\]/);
+    expect(pod).not.toMatch(/href=\{`\/circles\//);
+    expect(read('features/pods/PodsPage.tsx')).toMatch(/size="sm"\s*className="min-h-\[44px\]"\s*onClick=\{\(\) => setFilter\(key\)\}/);
+    const admin = read('features/admin/AdminPodsPage.tsx');
+    expect(admin).toMatch(/className=\{`min-h-\[44px\] px-3 py-1\.5 rounded-lg/);
+    expect(admin.match(/size="sm"\s*className="min-h-\[44px\]"/g)?.length).toBe(2);
+  });
+});

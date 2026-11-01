@@ -57,7 +57,7 @@ export default function AdminPodsPage() {
           <button
             key={f}
             onClick={() => setFilter(f)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${filter === f ? 'bg-rsn-red text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            className={`min-h-[44px] px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${filter === f ? 'bg-rsn-red text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
             {f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
@@ -72,8 +72,9 @@ export default function AdminPodsPage() {
         ) : data.map((pod: any) => (
           // A grid item keeps its min-content width (a long unbroken name) unless it may shrink (P1 item 2).
           <Card key={pod.id} className="min-w-0">
-            <div className="flex items-center justify-between">
-              <div className="flex-1 min-w-0">
+            {/* On a phone the actions wrap under the pod's name rather than squeezing it. */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 flex-[1_1_14rem]">
                 <div className="flex flex-wrap items-center gap-2 mb-1">
                   <h3 className="min-w-0 break-words font-semibold text-gray-800 hover:text-rsn-red cursor-pointer" onClick={() => navigate(`/pods/${pod.id}`)}>{pod.name}</h3>
                   {/* The same human words the pod's own page uses (P1 item 3): Active, Archived, Suspended, Draft. */}
@@ -85,10 +86,11 @@ export default function AdminPodsPage() {
                   Members: {pod.memberCount || '—'} · Events: {pod.sessionCount || '—'} · Type: {pod.type}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2">
                 {pod.status === 'active' && (
                   <Button
                     size="sm"
+                    className="min-h-[44px]"
                     variant="secondary"
                     onClick={async () => { if (await ask({ title: `Archive ${pod.name}?`, body: 'Its events are kept, and it can be reactivated later.', confirmLabel: 'Archive', tone: 'danger' })) archiveMutation.mutate(pod.id); }}
                   >
@@ -98,6 +100,7 @@ export default function AdminPodsPage() {
                 {isSuperAdmin && (
                   <Button
                     size="sm"
+                    className="min-h-[44px]"
                     variant="danger"
                     onClick={async () => { if (await ask({ title: `Delete ${pod.name} for good?`, body: 'This deletes the pod and all its events, matches and data. It cannot be undone.', confirmLabel: 'Delete forever', tone: 'danger' })) hardDeleteMutation.mutate(pod.id); }}
                   >

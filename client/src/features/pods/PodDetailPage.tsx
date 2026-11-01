@@ -731,10 +731,10 @@ function PodCircleChips({ podId }: { podId?: string }) {
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs font-semibold text-gray-500">In circles:</span>
         {circles.map(c => (
-          <a
-            key={c.id} href={`/circles/${c.id}`}
-            className="text-xs font-medium text-rsn-red bg-rsn-red-light px-2.5 py-1 rounded-full hover:opacity-80 transition-opacity min-h-[28px] inline-flex items-center"
-          >{c.name}</a>
+          // A 44px tap around the 28px chip, inside the app (a bare link reloaded the whole page).
+          <Link key={c.id} to={`/circles/${c.id}`} className="inline-flex min-h-[44px] items-center hover:opacity-80 transition-opacity">
+            <span className="inline-flex min-h-[28px] items-center rounded-full bg-rsn-red-light px-2.5 py-1 text-xs font-medium text-rsn-red">{c.name}</span>
+          </Link>
         ))}
       </div>
     </div>
