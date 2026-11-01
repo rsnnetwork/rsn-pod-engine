@@ -16,7 +16,7 @@ import {
   GROUP_FULL, GROUP_LIMIT, GROUP_TOO_SMALL, addLabel, clusterGroupMessages, groupErrorSentence, groupLoadProblem, groupPreview,
   groupUnreadTotal, memberCountLabel, mergeInbox, newestFromOthers, ofMax, roomLeft, sendSchema, startBody,
   startChosen, startProblem, threadInOrder, choosable, addSchema, startSchema, byName, membersInOrder,
-  START_MANY, MARK_READ_DEBOUNCE_MS, readMarkKey, isRateLimited, rateLimitWaitMs, groupReadRetry, groupReadRetryDelay,
+  START_MANY, MARK_READ_DEBOUNCE_MS, MARK_READ_MAX_WAIT_MS, markReadDelay, TRYING_AGAIN, readMarkKey, isRateLimited, rateLimitWaitMs, groupReadRetry, groupReadRetryDelay,
   EARLIER_PAGE_TRIES, untilEarlierPage,
 } from '../../../../client/src/features/messages/group-chat-text';
 import { PANEL_TITLE } from '../../../../client/src/features/sessions/post-event-panel';
@@ -287,6 +287,18 @@ describe('the read mark: once per burst, and never for a group already read', ()
   it('one mark per burst: it waits a second, and each newer message starts the second again', () => {
     expect(MARK_READ_DEBOUNCE_MS).toBe(1000);
   });
+
+  it('however fast messages keep coming, a mark lands within five seconds of the first one waiting (P1 item 21)', () => {
+    expect(MARK_READ_MAX_WAIT_MS).toBe(5000);
+    // Nothing waiting yet: the usual second.
+    expect(markReadDelay(null, 10_000)).toBe(1000);
+    // Waiting since 10 s: a newer message at 12 s still waits the second; at 14.5 s only the half second left.
+    expect(markReadDelay(10_000, 12_000)).toBe(1000);
+    expect(markReadDelay(10_000, 14_500)).toBe(500);
+    expect(markReadDelay(10_000, 16_000)).toBe(0);
+    const thread = read('features/messages/GroupThread.tsx');
+    expect(thread).toMatch(/markReadDelay\(waitingSince\.current, Date\.now\(\)\)/);
+  });
 });
 
 describe('a read refused for going too fast keeps what is shown, and is tried again after the limit\'s window', () => {
@@ -308,9 +320,9 @@ describe('a read refused for going too fast keeps what is shown, and is tried ag
     expect(rateLimitWaitMs(limited({ 'retry-after': 'soon' }))).toBe(60_000);
   });
 
-  it('a 429 is tried twice more, each after the wait; any other 4xx is an answer; a lost connection or a 5xx gets one more try', () => {
+  it('a 429 is tried once more, after the wait (so Show earlier gives up within the window, P1 item 20); any other 4xx is an answer; a lost connection or a 5xx gets one more try', () => {
     expect(groupReadRetry(0, limited())).toBe(true);
-    expect(groupReadRetry(1, limited())).toBe(true);
+    expect(groupReadRetry(1, limited())).toBe(false);
     expect(groupReadRetry(2, limited())).toBe(false);
     expect(groupReadRetry(0, { response: { status: 404 } })).toBe(false);
     expect(groupReadRetry(0, { response: { status: 403 } })).toBe(false);
@@ -528,9 +540,10 @@ describe('the group thread', () => {
     expect(thread).toMatch(/const unread = detail\.data\?\.unreadCount \?\? 0;/);
     const effect = blockFrom(thread, 'useEffect(() => {\n    const mark = readMarkKey(');
     expect(effect).toMatch(/readMarkKey\(\{ loaded: readable, seen: pageSeen, unread, groupId, newestOther, marked: marked\.current \}\)/);
-    expect(effect).toMatch(/if \(!mark\) return;/);
-    // The debounce: the mark waits a second, and the effect's clean-up cancels it when a newer message comes first.
-    expect(effect).toMatch(/const timer = window\.setTimeout\(\(\) => \{[\s\S]*?markRead\(undefined, \{ onError: \(\) => \{ marked\.current = null; \} \}\);[\s\S]*?\}, MARK_READ_DEBOUNCE_MS\);/);
+    expect(effect).toMatch(/if \(!mark\) \{ waitingSince\.current = null; return; \}/);
+    // The debounce: the mark waits a second (at most five in all, P1 item 21), and the effect's clean-up cancels it
+    // when a newer message comes first.
+    expect(effect).toMatch(/const timer = window\.setTimeout\(\(\) => \{[\s\S]*?markRead\(undefined, \{ onError: \(\) => \{ marked\.current = null; \} \}\);[\s\S]*?\}, delay\);/);
     expect(effect).toMatch(/return \(\) => window\.clearTimeout\(timer\);/);
     // Every value it reads is a dependency (the mutation's mutate is stable), so no lint rule is switched off for it.
     expect(thread).toMatch(/\}, \[readable, pageSeen, unread, groupId, newestOther, markRead\]\);/);
@@ -737,5 +750,17 @@ describe('"Start a group chat" on a completed event, for the people who ran it',
     // At 360px a long name in "Your group chats from this event" pushed both after-event cards past the screen's edge.
     expect(card).toMatch(/const CARD = 'min-w-0 [^']*';/);
     expect(card).toMatch(/<span className="min-w-0 truncate font-medium">\{g\.name\}<\/span>/);
+  });
+});
+
+describe('Try again on a group that could not load (P1 items 18 and 19)', () => {
+  it('stops a waiting retry and reads again at once, and says so while it does', () => {
+    const thread = read('features/messages/GroupThread.tsx');
+    expect(TRYING_AGAIN).toBe('Trying again…');
+    expect(thread).toMatch(/qc\.cancelQueries\(\{ queryKey: groupKeys\.detail\(groupId\) \}\)/);
+    expect(thread).toMatch(/qc\.cancelQueries\(\{ queryKey: groupKeys\.messages\(groupId\) \}\)/);
+    expect(thread).toMatch(/<ThreadProblem text=\{GROUP_FAILED\} onRetry=\{tryAgain\} busy=\{retrying\} \/>/);
+    expect(thread).toMatch(/disabled=\{busy\}/);
+    expect(thread).toMatch(/\{busy \? TRYING_AGAIN : TRY_AGAIN\}/);
   });
 });

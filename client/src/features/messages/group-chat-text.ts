@@ -45,6 +45,7 @@ export const EARLIER_FAILED = "We couldn't load the earlier messages.";
 export const SEND_FAILED = 'Your message could not be sent. Try again.';
 export const SHOW_EARLIER = 'Show earlier messages';
 export const TRY_AGAIN = 'Try again';
+export const TRYING_AGAIN = 'Trying again…';
 export const BACK_TO_MESSAGES = 'Back to Messages';
 export const MESSAGE_PLACEHOLDER = 'Write to the group…';
 export const MESSAGE_PLACEHOLDER_SHORT = 'Message…';
@@ -178,6 +179,14 @@ export function newestFromOthers(messages: GroupChatMessage[], myUserId: string 
 
 /** How long the read mark waits for the burst to end: each newer message starts the wait again. */
 export const MARK_READ_DEBOUNCE_MS = 1000;
+/** The longest a mark waits however fast messages keep coming (P1 item 21): a burst that never pauses is still marked. */
+export const MARK_READ_MAX_WAIT_MS = 5000;
+
+/** How long to wait before marking, given since when a mark has been waiting (null: none was). */
+export function markReadDelay(waitingSince: number | null, now: number): number {
+  if (waitingSince === null) return MARK_READ_DEBOUNCE_MS;
+  return Math.max(0, Math.min(MARK_READ_DEBOUNCE_MS, waitingSince + MARK_READ_MAX_WAIT_MS - now));
+}
 
 /**
  * What the open thread should mark read now, as "{group}:{newest message from someone else}", or null: before the group
@@ -214,9 +223,12 @@ export function rateLimitWaitMs(err: unknown): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : RATE_WINDOW_MS;
 }
 
-/** Group reads: a 429 is tried twice more; any other 4xx is an answer; a lost connection or a 5xx gets one more try. */
+/**
+ * Group reads: a 429 is tried once more, after the limit's wait, then said with Try again (P1 item 20: twice more kept
+ * Show earlier spinning for about two minutes); any other 4xx is an answer; a lost connection or a 5xx gets one more try.
+ */
 export function groupReadRetry(failures: number, err: unknown): boolean {
-  return isRateLimited(err) ? failures < 2 : shouldRetry(failures, err);
+  return isRateLimited(err) ? failures < 1 : shouldRetry(failures, err);
 }
 
 /** A 429 waits the limit out; anything else waits as React Query does by default (1 s, then 2 s…). */
