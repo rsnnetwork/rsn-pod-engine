@@ -32,8 +32,8 @@ jest.mock('../../../services/block/block.service', () => ({
 }));
 
 import {
-  archiveEntity, createEntity, entitiesOf, getEntity, leaveEntity, listEntities, listUserEntities,
-  setMyMembership, updateEntity,
+  approveMember, archiveEntity, createEntity, declineMember, entitiesOf, getEntity, leaveEntity, listEntities, listUserEntities,
+  removeMember, setMyMembership, updateEntity,
 } from '../../../services/entity/entity.service';
 import { ENTITY_ROLES, COMPANY_ROLES } from '@rsn/shared';
 
@@ -78,11 +78,15 @@ beforeEach(() => {
 // The lock is its own statement and the viewer's link is read in the next one (H2b item 10, 26 Oct 2026): an admin
 // action queued behind the actor's own demotion reads the demotion, not the flag from before the queue.
 const LOCKED = /^SELECT name FROM entities WHERE id = \$1 AND archived_at IS NULL FOR UPDATE$/;
-const ADMIN_LINK = /^SELECT is_admin FROM entity_members WHERE entity_id = \$1 AND user_id = \$2$/;
+// T15 (30 Oct review, L23): the link is read whatever its status, and its admin flag counts only on an active link.
+const ADMIN_LINK = /^SELECT m\.status, m\.role, m\.title, m\.requested_role, m\.requested_title, \(m\.is_admin AND m\.status = 'active'\) AS is_admin FROM entity_members m WHERE m\.entity_id = \$1 AND m\.user_id = \$2$/;
+/** The viewer's active link as the lock reads it. */
+const activeLink = (isAdmin: boolean, more: Record<string, unknown> = {}) =>
+  ({ status: 'active', role: 'employee', title: null, requested_role: null, requested_title: null, is_admin: isAdmin, ...more });
 /** The locked entity, and whether the viewer is one of its admins (null: not linked to it at all). */
 const locked = (isAdmin: boolean | null): Rule[] => [
   [LOCKED, [{ name: 'Acme Ltd' }]],
-  [ADMIN_LINK, isAdmin === null ? [] : [{ is_admin: isAdmin }]],
+  [ADMIN_LINK, isAdmin === null ? [] : [activeLink(isAdmin)]],
 ];
 const SAME_NAME = /lower\(btrim\(name\)\) = lower\(btrim\(\$1\)\)/;
 
@@ -96,7 +100,7 @@ describe('createEntity', () => {
     expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(callTo(mockTx, /INSERT INTO entities/)![1]).toEqual(['Acme Ltd', 'company', 'We fund boats.', 'Oslo', '11-50', 'https://acme.com', ME]);
     const link = callTo(mockTx, /INSERT INTO entity_members/)!;
-    expect(String(link[0]).replace(/\s+/g, ' ')).toMatch(/VALUES \(\$1, \$2, \$3, \$4, true\)/);
+    expect(String(link[0]).replace(/\s+/g, ' ')).toMatch(/VALUES \(\$1, \$2, \$3, \$4, true, 'active'\)/);
     expect(link[1]).toEqual([ENTITY, ME, 'investor', 'Partner']);
     expect(mockPool).not.toHaveBeenCalled(); // every write went through the one transaction
   });
@@ -213,21 +217,24 @@ describe('createEntity', () => {
 describe('listEntities', () => {
   const MINE = /FROM entity_members m JOIN entities e/;
   const OTHERS = /FROM entities e WHERE/;
-  const row = (id: string, name: string, myRole: string | null) => ({ id, name, kind: 'company', location: 'Oslo', my_role: myRole, people_count: 3 });
+  const row = (id: string, name: string, myRole: string | null) => ({
+    id, name, kind: 'company', location: 'Oslo', my_role: myRole, my_status: myRole ? 'active' : null, people_count: 3,
+    has_logo: false, has_banner: false, pictures_updated_at: null,
+  });
 
   it('gives the viewer\'s own entities with their role, and others they are not linked to', async () => {
     pool([[MINE, [row(ENTITY, 'Acme Ltd', 'founder')]], [OTHERS, [row(OLD, 'Beta Fund', null)]]]);
     expect(await listEntities(ME)).toEqual({
-      mine: [{ id: ENTITY, name: 'Acme Ltd', kind: 'company', location: 'Oslo', peopleCount: 3, myRole: 'founder' }],
-      others: [{ id: OLD, name: 'Beta Fund', kind: 'company', location: 'Oslo', peopleCount: 3, myRole: null }],
+      mine: [{ id: ENTITY, name: 'Acme Ltd', kind: 'company', location: 'Oslo', peopleCount: 3, myRole: 'founder', logoUrl: null, myStatus: 'active' }],
+      others: [{ id: OLD, name: 'Beta Fund', kind: 'company', location: 'Oslo', peopleCount: 3, myRole: null, logoUrl: null, myStatus: null }],
     });
     expect(callTo(mockPool, MINE)![1]).toEqual([ME]);
   });
 
-  it('lists the viewer\'s own active entities by name', async () => {
+  it('lists the viewer\'s own active entities by name, with their claims still waiting', async () => {
     await listEntities(ME);
     const mine = sqlOf(mockPool).find(s => MINE.test(s))!;
-    expect(mine).toMatch(/m\.user_id = \$1 AND e\.archived_at IS NULL/);
+    expect(mine).toMatch(/m\.user_id = \$1 AND m\.status IN \('active', 'pending'\) AND e\.archived_at IS NULL/);
     expect(mine).toMatch(/ORDER BY lower\(e\.name\)/);
     expect(mine).toMatch(/LIMIT 100/);
   });
@@ -236,7 +243,7 @@ describe('listEntities', () => {
     await listEntities(ME);
     const others = sqlOf(mockPool).find(s => OTHERS.test(s))!;
     expect(others).toMatch(/e\.archived_at IS NULL/);
-    expect(others).toMatch(/NOT EXISTS \(SELECT 1 FROM entity_members m WHERE m\.entity_id = e\.id AND m\.user_id = \$1\)/);
+    expect(others).toMatch(/NOT EXISTS \(SELECT 1 FROM entity_members m WHERE m\.entity_id = e\.id AND m\.user_id = \$1 AND m\.status IN \('active', 'pending'\)\)/);
     expect(others).toMatch(/ORDER BY e\.updated_at DESC/);
     expect(others).not.toMatch(/ILIKE/);
     expect(callTo(mockPool, OTHERS)![1]).toEqual([ME, 30]);
@@ -251,7 +258,7 @@ describe('listEntities', () => {
     await listEntities(ME, { q: '  ac  ', limit: 10 });
     const others = sqlOf(mockPool).find(s => OTHERS.test(s))!;
     expect(others).toMatch(/e\.name ILIKE \$2/);
-    expect(others).toMatch(/NOT EXISTS \(SELECT 1 FROM entity_members m WHERE m\.entity_id = e\.id AND m\.user_id = \$1\)/);
+    expect(others).toMatch(/NOT EXISTS \(SELECT 1 FROM entity_members m WHERE m\.entity_id = e\.id AND m\.user_id = \$1 AND m\.status IN \('active', 'pending'\)\)/);
     expect(others).toMatch(/ORDER BY \(lower\(btrim\(e\.name\)\) = lower\(\$3\)\) DESC, \(e\.name ILIKE \$4\) DESC/);
     expect(callTo(mockPool, OTHERS)![1]).toEqual([ME, '%ac%', 'ac', 'ac%', 10]);
   });
@@ -269,7 +276,7 @@ describe('listEntities', () => {
   it('counts, on every card, only the people the viewer can see: active, and not blocked either way', async () => {
     await listEntities(ME, { q: 'acme' });
     for (const sql of [sqlOf(mockPool).find(s => MINE.test(s))!, sqlOf(mockPool).find(s => OTHERS.test(s))!]) {
-      expect(sql).toMatch(/pu\.status = 'active'/);
+      expect(sql).toMatch(/pm\.status = 'active' AND pu\.status = 'active'/);
       expect(sql).toMatch(/b\.blocker_id = \$1 AND b\.blocked_id = pm\.user_id\) OR \(b\.blocker_id = pm\.user_id AND b\.blocked_id = \$1/);
     }
   });
@@ -283,6 +290,8 @@ describe('getEntity', () => {
   const entityRow = (my: { role: string | null; admin: boolean | null }) => ({
     id: ENTITY, name: 'Acme Ltd', kind: 'company', about: 'We build boats.', location: 'Oslo', size: '11-50',
     website: 'https://acme.com', created_at: created, updated_at: updated, my_role: my.role, my_admin: my.admin, people_count: 2,
+    my_status: my.role ? 'active' : null, my_requested_role: null, my_requested_title: null,
+    has_logo: false, has_banner: false, pictures_updated_at: null,
   });
   const person = {
     id: OTHER, displayName: 'Sarah Chen', firstName: 'Sarah', lastName: 'Chen', avatarUrl: null, jobTitle: 'CEO',
@@ -304,6 +313,7 @@ describe('getEntity', () => {
       entity: {
         id: ENTITY, name: 'Acme Ltd', kind: 'company', about: 'We build boats.', location: 'Oslo', size: '11-50',
         website: 'https://acme.com', peopleCount: 2, createdAt: '2026-10-21T09:00:00.000Z', updatedAt: '2026-10-21T10:30:00.000Z',
+        logoUrl: null, bannerUrl: null,
       },
       people: [{
         id: OTHER, displayName: 'Sarah Chen', firstName: 'Sarah', lastName: 'Chen', avatarUrl: null, jobTitle: 'CEO',
@@ -311,6 +321,9 @@ describe('getEntity', () => {
       }],
       myRole: 'employee',
       canEdit: false,
+      myStatus: 'active',
+      myPendingChange: null,
+      circles: [],
     });
     expect(callTo(mockPool, ENTITY_ROW)![1]).toEqual([ENTITY, ME]);
     expect(callTo(mockPool, PEOPLE)![1]).toEqual([ENTITY, ME]);
@@ -320,7 +333,7 @@ describe('getEntity', () => {
     pool([[ENTITY_ROW, [entityRow({ role: null, admin: null })]]]);
     await getEntity(ME, ENTITY, false);
     const people = sqlOf(mockPool).find(s => PEOPLE.test(s))!;
-    expect(people).toMatch(/u\.status = 'active'/);
+    expect(people).toMatch(/m\.status = 'active' AND u\.status = 'active'/);
     expect(people).toMatch(/\(b\.blocker_id = \$2 AND b\.blocked_id = m\.user_id\) OR \(b\.blocker_id = m\.user_id AND b\.blocked_id = \$2\)/);
     expect(people).toMatch(/ORDER BY m\.is_admin DESC, m\.created_at ASC/);
     expect(people).toMatch(/LIMIT 200/);
@@ -413,9 +426,9 @@ describe('updateEntity', () => {
   });
 });
 
-describe('setMyMembership (join, or change your own role)', () => {
-  const LINK = /SELECT title, is_admin FROM entity_members/;
+describe('setMyMembership (a claim, or a change of your own role)', () => {
   const open = locked(null);
+  const CLAIM = /INSERT INTO entity_members \(entity_id, user_id, role, title, status, requested_at\)/;
 
   it('answers 404 for a missing or archived entity, and writes nothing', async () => {
     const err = await caught(setMyMembership(ME, ENTITY, { role: 'employee' }));
@@ -423,49 +436,72 @@ describe('setMyMembership (join, or change your own role)', () => {
     expect(ran(mockTx, /INSERT INTO|UPDATE \w+ SET/)).toBe(false); // the lock's FOR UPDATE writes nothing
   });
 
-  it('takes the entity\'s lock before it reads the link', async () => {
+  it('takes the entity\'s lock before it reads the link, and reads the link once', async () => {
     tx(open);
     await setMyMembership(ME, ENTITY, { role: 'employee' });
     expect(sqlOf(mockTx)[0]).toMatch(LOCKED);
     expect(sqlOf(mockTx)[1]).toMatch(ADMIN_LINK);
-    expect(sqlOf(mockTx)[2]).toMatch(LINK);
+    expect(sqlOf(mockTx).filter((sql) => ADMIN_LINK.test(sql))).toHaveLength(1);
   });
 
-  it('joins as the role given, not as an admin, and marks the entity active', async () => {
-    tx(open);
-    const out = await setMyMembership(ME, ENTITY, { role: 'advisor', title: 'Board advisor' });
-    expect(out).toEqual({ joined: true, role: 'advisor', title: 'Board advisor', isAdmin: false, companyUpdated: false });
-    const join = callTo(mockTx, /INSERT INTO entity_members/)!;
-    expect(String(join[0])).not.toMatch(/is_admin/);
-    expect(join[1]).toEqual([ENTITY, ME, 'advisor', 'Board advisor']);
-    expect(ran(mockTx, /UPDATE entities SET updated_at = NOW\(\) WHERE id = \$1/)).toBe(true);
+  it('a claim waits: pending, not an admin, no company filled, and the entity is not marked active', async () => {
+    tx([...open, [/UPDATE users/, { rows: [], rowCount: 1 }]]);
+    const out = await setMyMembership(ME, ENTITY, { role: 'founder', title: 'CEO' });
+    expect(out).toEqual({ joined: true, role: 'founder', title: 'CEO', isAdmin: false, companyUpdated: false, status: 'pending', pendingChange: null });
+    const claim = callTo(mockTx, CLAIM)!;
+    expect(String(claim[0])).not.toMatch(/is_admin/);
+    expect(claim[1]).toEqual([ENTITY, ME, 'founder', 'CEO', 'pending']);
+    expect(ran(mockTx, /UPDATE users/)).toBe(false);
+    expect(ran(mockTx, /UPDATE entities SET updated_at/)).toBe(false);
   });
 
-  it('changes the role of an existing link, keeps its title when none is given, and keeps its admin', async () => {
-    tx([...open, [LINK, [{ title: 'CEO', is_admin: true }]]]);
+  it('a declined or removed link asks again: the same row goes back to pending, with no admin flag', async () => {
+    tx([[LOCKED, [{ name: 'Acme Ltd' }]], [ADMIN_LINK, [activeLink(false, { status: 'declined', title: 'Old' })]]]);
+    const out = await setMyMembership(ME, ENTITY, { role: 'advisor' });
+    expect(out).toMatchObject({ joined: true, status: 'pending', role: 'advisor', title: 'Old' });
+    const again = callTo(mockTx, /UPDATE entity_members SET status = \$5::text/)!;
+    expect(String(again[0]).replace(/\s+/g, ' ')).toMatch(/is_admin = false/);
+    expect(again[1]).toEqual([ENTITY, ME, 'advisor', 'Old', 'pending']);
+    expect(ran(mockTx, CLAIM)).toBe(false);
+  });
+
+  it('an admin changes their own role at once, keeps its title when none is given, and keeps their admin', async () => {
+    tx([[LOCKED, [{ name: 'Acme Ltd' }]], [ADMIN_LINK, [activeLink(true, { title: 'CEO' })]]]);
     const out = await setMyMembership(ME, ENTITY, { role: 'former_employee' });
-    expect(out).toEqual({ joined: false, role: 'former_employee', title: 'CEO', isAdmin: true, companyUpdated: false });
+    expect(out).toEqual({ joined: false, role: 'former_employee', title: 'CEO', isAdmin: true, companyUpdated: false, status: 'active', pendingChange: null });
     expect(callTo(mockTx, /UPDATE entity_members SET role/)![1]).toEqual([ENTITY, ME, 'former_employee', 'CEO']);
     expect(ran(mockTx, /INSERT INTO entity_members/)).toBe(false);
   });
 
-  it('clears the title when it is given as null', async () => {
-    tx([...open, [LINK, [{ title: 'CEO', is_admin: false }]]]);
+  it('an admin clears their title when it is given as null', async () => {
+    tx([[LOCKED, [{ name: 'Acme Ltd' }]], [ADMIN_LINK, [activeLink(true, { title: 'CEO' })]]]);
     const out = await setMyMembership(ME, ENTITY, { role: 'employee', title: null });
     expect(out.title).toBeNull();
     expect(callTo(mockTx, /UPDATE entity_members SET role/)![1]).toEqual([ENTITY, ME, 'employee', null]);
   });
 
-  it.each([...COMPANY_ROLES])('fills an empty profile company with the entity\'s name on joining as its %s', async (role) => {
+  it('an active member who is not an admin asks for a change, which waits beside their link', async () => {
+    tx([[LOCKED, [{ name: 'Acme Ltd' }]], [ADMIN_LINK, [activeLink(false, { role: 'follower' })]]]);
+    const out = await setMyMembership(ME, ENTITY, { role: 'founder', title: 'CEO' });
+    expect(out).toEqual({
+      joined: false, role: 'follower', title: null, isAdmin: false, companyUpdated: false, status: 'active',
+      pendingChange: { role: 'founder', title: 'CEO' },
+    });
+    expect(callTo(mockTx, /SET requested_role = \$3, requested_title = \$4, requested_at = NOW\(\)/)![1]).toEqual([ENTITY, ME, 'founder', 'CEO']);
+    expect(ran(mockTx, /UPDATE entity_members SET role/)).toBe(false);
+  });
+
+  it.each([...COMPANY_ROLES])('a platform admin\'s own claim as its %s applies at once and fills an empty company', async (role) => {
     tx([...open, [/UPDATE users/, { rows: [], rowCount: 1 }]]);
-    const out = await setMyMembership(ME, ENTITY, { role });
-    expect(out.companyUpdated).toBe(true);
+    const out = await setMyMembership(ME, ENTITY, { role }, true);
+    expect(out).toMatchObject({ status: 'active', companyUpdated: true });
+    expect(callTo(mockTx, CLAIM)![1]).toEqual([ENTITY, ME, role, null, 'active']);
     expect(callTo(mockTx, /UPDATE users/)![1]).toEqual([ME, 'Acme Ltd']);
   });
 
-  it('leaves the profile company alone when joining as an investor', async () => {
+  it('leaves the profile company alone when a platform admin joins as an investor', async () => {
     tx([...open, [/UPDATE users/, { rows: [], rowCount: 1 }]]);
-    expect((await setMyMembership(ME, ENTITY, { role: 'investor' })).companyUpdated).toBe(false);
+    expect((await setMyMembership(ME, ENTITY, { role: 'investor' }, true)).companyUpdated).toBe(false);
     expect(ran(mockTx, /UPDATE users/)).toBe(false);
   });
 });
@@ -513,7 +549,8 @@ describe('leaveEntity', () => {
     expect(promote).toMatch(/u\.status = 'active'/);
     expect(promote).toMatch(/ORDER BY m\.created_at ASC, m\.user_id ASC LIMIT 1/);
     expect(callTo(mockTx, PROMOTE)![1]).toEqual([ENTITY]);
-    expect(sqlOf(mockTx).find(s => REST.test(s))).toMatch(/m\.is_admin AND u\.status = 'active'/);
+    expect(sqlOf(mockTx).find(s => REST.test(s))).toMatch(/m\.is_admin AND m\.status = 'active' AND u\.status = 'active'/);
+    expect(promote).toMatch(/m\.status = 'active' AND u\.status = 'active'/);
   });
 
   it('an admin leaving while another active admin stays promotes nobody', async () => {
@@ -560,12 +597,14 @@ describe('a person\'s entities', () => {
   const STATUS = /SELECT status FROM users WHERE id = \$1/;
   const THEIRS = /FROM entity_members m JOIN entities e ON e\.id = m\.entity_id/;
   const theirs = [{ id: ENTITY, name: 'Acme Ltd', kind: 'company', role: 'founder', title: 'CEO' }];
+  const rows = theirs.map((e) => ({ ...e, status: 'active', has_logo: false, has_banner: false, pictures_updated_at: null }));
+  const shown = theirs.map((e) => ({ ...e, logoUrl: null }));
 
   it('lists id, name, kind, role and title, active entities only, by name', async () => {
-    pool([[STATUS, [{ status: 'active' }]], [THEIRS, theirs]]);
-    expect(await listUserEntities(ME, OTHER)).toEqual(theirs);
+    pool([[STATUS, [{ status: 'active' }]], [THEIRS, rows]]);
+    expect(await listUserEntities(ME, OTHER)).toEqual(shown);
     const sql = sqlOf(mockPool).find(s => THEIRS.test(s))!;
-    expect(sql).toMatch(/m\.user_id = \$1 AND e\.archived_at IS NULL/);
+    expect(sql).toMatch(/m\.user_id = \$1 AND e\.archived_at IS NULL AND m\.status = 'active'/);
     expect(sql).toMatch(/ORDER BY lower\(e\.name\)/);
     expect(callTo(mockPool, THEIRS)![1]).toEqual([OTHER]);
     expect(mockBlocked).toHaveBeenCalledWith(ME, OTHER);
@@ -585,17 +624,174 @@ describe('a person\'s entities', () => {
     expect(ran(mockPool, THEIRS)).toBe(false);
   });
 
-  it('gives a member their own list without asking about blocks or status', async () => {
-    pool([[THEIRS, theirs]]);
-    expect(await listUserEntities(ME, ME)).toEqual(theirs);
+  it('gives a member their own list, claims still waiting included, without asking about blocks or status', async () => {
+    pool([[THEIRS, [...rows, { ...rows[0], id: OLD, name: 'Beta', status: 'pending' }]]]);
+    expect(await listUserEntities(ME, ME)).toEqual([
+      { ...shown[0], status: 'active' },
+      { ...shown[0], id: OLD, name: 'Beta', status: 'pending' },
+    ]);
+    expect(sqlOf(mockPool).find(s => THEIRS.test(s))).toMatch(/m\.status IN \('active', 'pending'\)/);
     expect(mockBlocked).not.toHaveBeenCalled();
     expect(ran(mockPool, STATUS)).toBe(false);
   });
 
   it('entitiesOf reads the one person\'s links only', async () => {
-    pool([[THEIRS, theirs]]);
-    expect(await entitiesOf(OTHER)).toEqual(theirs);
+    pool([[THEIRS, rows]]);
+    expect(await entitiesOf(OTHER)).toEqual(shown);
     expect(mockPool).toHaveBeenCalledTimes(1);
     expect(callTo(mockPool, THEIRS)![1]).toEqual([OTHER]);
+  });
+});
+
+// ── 30 Oct review (T15, L23): the admins' answers, in CI (review I1) ─────────────────────────────────────────────
+// The same rules the opt-in real-Postgres suite (entity-members.sql.test.ts) runs on real tables, pinned here on the
+// SQL the service sends, so a regression cannot ship with CI green.
+
+const WAITING = /FROM entity_members m JOIN users u ON u\.id = m\.user_id WHERE m\.entity_id = \$1 AND m\.user_id = \$2 AND u\.status = 'active' AND \(m\.status = 'pending' OR \(m\.status = 'active' AND m\.requested_role IS NOT NULL\)\)/;
+const APPROVED = /^UPDATE entity_members SET status = 'active', role = \$3, title = \$4, requested_role = NULL, requested_title = NULL, requested_at = NULL WHERE entity_id = \$1 AND user_id = \$2$/;
+const TARGET = /^SELECT m\.is_admin, u\.status = 'active' AS account_active FROM entity_members m JOIN users u ON u\.id = m\.user_id WHERE m\.entity_id = \$1 AND m\.user_id = \$2 AND m\.status = 'active'$/;
+const OTHER_ADMINS = /^SELECT count\(\*\)::int AS n FROM entity_members m JOIN users u ON u\.id = m\.user_id WHERE m\.entity_id = \$1 AND m\.user_id <> \$2 AND m\.is_admin AND m\.status = 'active' AND u\.status = 'active'$/;
+const REMOVED = /^UPDATE entity_members SET status = 'removed', is_admin = false, requested_role = NULL, requested_title = NULL, requested_at = NULL WHERE entity_id = \$1 AND user_id = \$2$/;
+const claim = (more: Record<string, unknown> = {}) => activeLink(false, { status: 'pending', role: 'founder', title: 'CEO', ...more });
+
+describe('approveMember', () => {
+  it('lists a claim: active with the role and title claimed, under the entity lock, read from an active account', async () => {
+    tx([...locked(true), [WAITING, [claim()]], [/UPDATE users/, { rows: [], rowCount: 1 }]]);
+    expect(await approveMember(ME, ENTITY, OTHER, false)).toEqual({ companyUpdated: true });
+    expect(sqlOf(mockTx)[0]).toMatch(LOCKED);
+    expect(callTo(mockTx, APPROVED)![1]).toEqual([ENTITY, OTHER, 'founder', 'CEO']);
+    expect(callTo(mockTx, /UPDATE users/)![1]).toEqual([OTHER, 'Acme Ltd']);
+    // The approval bell: "You're listed at {entity}", to the member.
+    const bell = callTo(mockPool, /INSERT INTO notifications/)!;
+    expect(bell[1]).toEqual([OTHER, "You're listed at Acme Ltd", 'Your request was approved.', `/entities/${ENTITY}`]);
+    expect(String(bell[0])).toMatch(/'approval'/);
+  });
+
+  it('applies a change an active member asked for: the requested role and title, and clears the request', async () => {
+    tx([...locked(true), [WAITING, [activeLink(false, { role: 'follower', requested_role: 'advisor', requested_title: 'Chair' })]]]);
+    expect(await approveMember(ME, ENTITY, OTHER, false)).toEqual({ companyUpdated: false });
+    expect(callTo(mockTx, APPROVED)![1]).toEqual([ENTITY, OTHER, 'advisor', 'Chair']);
+    expect(ran(mockTx, /UPDATE users/)).toBe(false); // an advisor fills no company
+  });
+
+  it('answers 404 in words when nothing waits (answered already, withdrawn, never made), and writes nothing', async () => {
+    tx(locked(true));
+    expect(await caught(approveMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 404, message: 'This request has already been answered.' });
+    expect(ran(mockTx, APPROVED)).toBe(false);
+    expect(ran(mockPool, /INSERT INTO notifications/)).toBe(false);
+  });
+
+  it.each([[false], [null]])('refuses someone who is not one of its active admins (link is_admin %p), before it reads the request', async (isAdmin) => {
+    tx([...locked(isAdmin), [WAITING, [claim()]]]);
+    expect(await caught(approveMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 403 });
+    expect(ran(mockTx, WAITING)).toBe(false);
+  });
+
+  it('lets a platform admin answer for an entity with no active admin', async () => {
+    tx([...locked(null), [WAITING, [claim({ role: 'investor', title: null })]]]);
+    await approveMember(ME, ENTITY, OTHER, true);
+    expect(callTo(mockTx, APPROVED)![1]).toEqual([ENTITY, OTHER, 'investor', null]);
+  });
+});
+
+describe('declineMember', () => {
+  it('declines a claim: status declined, the request cleared, and no bell', async () => {
+    tx([...locked(true), [WAITING, [claim()]]]);
+    await declineMember(ME, ENTITY, OTHER, false);
+    const write = callTo(mockTx, /^UPDATE entity_members SET/)!;
+    expect(flat(write[0])).toMatch(/^UPDATE entity_members SET status = 'declined', requested_role = NULL, requested_title = NULL, requested_at = NULL WHERE entity_id = \$1 AND user_id = \$2$/);
+    expect(write[1]).toEqual([ENTITY, OTHER]);
+    expect(ran(mockPool, /INSERT INTO notifications/)).toBe(false);
+  });
+
+  it('declines a change: the request is cleared and the member stays as listed (status untouched)', async () => {
+    tx([...locked(true), [WAITING, [activeLink(false, { requested_role: 'founder' })]]]);
+    await declineMember(ME, ENTITY, OTHER, false);
+    const write = flat(callTo(mockTx, /^UPDATE entity_members SET/)![0]);
+    expect(write).toMatch(/^UPDATE entity_members SET requested_role = NULL, requested_title = NULL, requested_at = NULL WHERE/);
+    expect(write).not.toMatch(/status/);
+  });
+
+  it('answers 404 when nothing waits, and 403 for someone who is not an admin', async () => {
+    tx(locked(true));
+    expect(await caught(declineMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 404 });
+    tx([...locked(false), [WAITING, [claim()]]]);
+    expect(await caught(declineMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe('removeMember', () => {
+  it('refuses removing yourself with a 400 before it asks the database anything (you leave instead)', async () => {
+    expect(await caught(removeMember(ME, ENTITY, ME, true))).toMatchObject({ statusCode: 400, message: 'To leave this entity, use Leave.' });
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('removes an active member who is not an admin: status removed, admin flag off, any request cleared', async () => {
+    tx([...locked(true), [TARGET, [{ is_admin: false, account_active: true }]]]);
+    await removeMember(ME, ENTITY, OTHER, false);
+    expect(callTo(mockTx, REMOVED)![1]).toEqual([ENTITY, OTHER]);
+    expect(ran(mockTx, OTHER_ADMINS)).toBe(false);
+    expect(ran(mockPool, /INSERT INTO notifications/)).toBe(false); // no bell, as for pods
+  });
+
+  it('answers 404 for someone not listed (a pending, declined or removed link is not "listed")', async () => {
+    tx(locked(true));
+    expect(await caught(removeMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 404, message: 'They are not listed at this entity.' });
+    expect(ran(mockTx, REMOVED)).toBe(false);
+  });
+
+  it('only a platform admin removes another admin: an entity admin gets 403', async () => {
+    tx([...locked(true), [TARGET, [{ is_admin: true, account_active: true }]], [OTHER_ADMINS, [{ n: 1 }]]]);
+    expect(await caught(removeMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 403, message: 'Only a platform admin can remove one of its admins.' });
+    expect(ran(mockTx, REMOVED)).toBe(false);
+    tx([...locked(null), [TARGET, [{ is_admin: true, account_active: true }]], [OTHER_ADMINS, [{ n: 1 }]]]);
+    await removeMember(ME, ENTITY, OTHER, true);
+    expect(callTo(mockTx, REMOVED)![1]).toEqual([ENTITY, OTHER]);
+  });
+
+  it('nobody removes the last active admin: 409 ENTITY_LAST_ADMIN, even a platform admin', async () => {
+    tx([...locked(null), [TARGET, [{ is_admin: true, account_active: true }]], [OTHER_ADMINS, [{ n: 0 }]]]);
+    expect(await caught(removeMember(ME, ENTITY, OTHER, true))).toMatchObject({ statusCode: 409, code: 'ENTITY_LAST_ADMIN' });
+    expect(ran(mockTx, REMOVED)).toBe(false);
+  });
+
+  it('a closed admin account is no active admin: a platform admin may remove it though no other admin is left', async () => {
+    tx([...locked(null), [TARGET, [{ is_admin: true, account_active: false }]], [OTHER_ADMINS, [{ n: 0 }]]]);
+    await removeMember(ME, ENTITY, OTHER, true);
+    expect(callTo(mockTx, REMOVED)![1]).toEqual([ENTITY, OTHER]);
+  });
+});
+
+// Review Focus 2 and 3, always on (the real-Postgres suite runs them on real rows; these pin the SQL that does it).
+describe('legacy links, and people who are pending, removed, closed or blocked', () => {
+  it('a legacy link (status defaulted to active) keeps its admin rights: the admin flag counts on an active link', async () => {
+    expect(String(ADMIN_LINK)).toContain("m\\.is_admin AND m\\.status = 'active'");
+    tx(locked(true));
+    await updateEntity(ME, ENTITY, { about: 'x' }, false);
+    expect(ran(mockTx, /^UPDATE entities SET about/)).toBe(true);
+  });
+
+  it('a pending or removed link carries no admin rights: the lock reads is_admin false and refuses', async () => {
+    tx([[LOCKED, [{ name: 'Acme Ltd' }]], [ADMIN_LINK, [activeLink(false, { status: 'removed' })]]]);
+    expect(await caught(updateEntity(ME, ENTITY, { about: 'x' }, false))).toMatchObject({ statusCode: 403 });
+  });
+
+  it('the people list and the requests leave out closed accounts and anyone blocked either way; the people are approved links only', async () => {
+    pool([[/FROM entities e LEFT JOIN entity_members my/, [{
+      id: ENTITY, name: 'Acme Ltd', kind: 'company', about: null, location: null, size: null, website: null,
+      created_at: new Date(), updated_at: new Date(), my_role: 'founder', my_status: 'active', my_admin: true,
+      my_requested_role: null, my_requested_title: null, people_count: 1, has_logo: false, has_banner: false, pictures_updated_at: null,
+    }]]]);
+    const page = await getEntity(ME, ENTITY, false);
+    expect(page.requests).toEqual([]);
+    const people = sqlOf(mockPool).find((s) => /ORDER BY m\.is_admin DESC/.test(s))!;
+    expect(people).toMatch(/m\.status = 'active' AND u\.status = 'active' AND NOT EXISTS \(SELECT 1 FROM user_blocks b WHERE \(b\.blocker_id = \$2 AND b\.blocked_id = m\.user_id\) OR \(b\.blocker_id = m\.user_id AND b\.blocked_id = \$2\)\)/);
+    const requests = sqlOf(mockPool).find((s) => /AS total/.test(s))!;
+    expect(requests).toMatch(/\(m\.status = 'pending' OR \(m\.status = 'active' AND m\.requested_role IS NOT NULL\)\) AND u\.status = 'active' AND NOT EXISTS \(SELECT 1 FROM user_blocks b/);
+  });
+
+  it('a pending claim is on nobody else\'s view of the person: entitiesOf reads approved links only', async () => {
+    await entitiesOf(OTHER);
+    expect(sqlOf(mockPool)[0]).toMatch(/AND m\.status = 'active'/);
   });
 });

@@ -33,6 +33,7 @@ jest.mock('../../db', () => ({
   __esModule: true,
 }));
 jest.mock('../../services/entity/entity.service');
+jest.mock('../../services/entity/entity-pictures.service');
 
 const mockIo = { name: 'the socket server' };
 const mockEmitEntities = jest.fn();
@@ -44,6 +45,7 @@ jest.mock('../../realtime/emit', () => ({
 }));
 
 import * as entityService from '../../services/entity/entity.service';
+import * as entityPictures from '../../services/entity/entity-pictures.service';
 import entityRoutes from '../../routes/entities';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { ForbiddenError } from '../../middleware/errors';
@@ -59,19 +61,36 @@ const JOINER = 'user-joiner';       // links themselves to it in the test
 const PLATFORM = 'user-platform';   // a platform admin, not linked to it
 const PODMATE = 'user-podmate';     // shares a pod with the joiner, nothing to do with the entity
 const OUTSIDER = 'user-outsider';   // linked to another entity only
+// T15 review M2: two circles the entity is linked to, and people who have their pages open.
+const CIRCLE_A = '6c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f';
+const CIRCLE_B = '0f9e8d7c-6b5a-4f3e-9d2c-1b0a9f8e7d6c';
+const CIRCLE_MEMBER = 'user-circle-member';       // in both circles, nothing to do with the entity
+const OTHER_CIRCLE_PERSON = 'user-circle-b-only'; // in circle B only
 
 /** Who is linked to which entity, as the fake database holds it; a test changes it to mirror its write. */
 let people: Record<string, string[]>;
+/** T15 review M2: whether the entity is linked to the two circles (only that block's tests link it). */
+let linkedToCircles = false;
 
 beforeEach(() => {
   jest.clearAllMocks();
   people = { [ENTITY]: [ADMIN, COLLEAGUE], [OTHER_ENTITY]: [OUTSIDER] };
+  linkedToCircles = false;
   mockEmitEntities.mockResolvedValue(undefined);
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
     if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] }; // authenticate
-    if (/SELECT user_id FROM entity_members WHERE entity_id = \$1/.test(text)) {
+    // T15: the live links only (active and pending); a declined or removed person is told only as a changed user.
+    if (/SELECT m\.user_id FROM entity_members m WHERE m\.entity_id = \$1 AND m\.status IN \('active', 'pending'\)/.test(text)) {
       return { rows: (people[String(params[0])] ?? []).map(user_id => ({ user_id })) };
+    }
+    // T15 review M2: the people of each circle the entity is linked to (members and creator, active accounts).
+    if (/FROM circle_entities ce/.test(text)) {
+      if (params[0] !== ENTITY || !linkedToCircles) return { rows: [] };
+      return { rows: [
+        { circle_id: CIRCLE_A, user_id: CIRCLE_MEMBER }, { circle_id: CIRCLE_A, user_id: ADMIN },
+        { circle_id: CIRCLE_B, user_id: CIRCLE_MEMBER }, { circle_id: CIRCLE_B, user_id: OTHER_CIRCLE_PERSON },
+      ] };
     }
     if (/SELECT pod_id FROM pod_members WHERE user_id = \$1 AND status = 'active'/.test(text)) {
       return { rows: params[0] === JOINER ? [{ pod_id: POD }] : [] };
@@ -84,7 +103,14 @@ beforeEach(() => {
   jest.mocked(entityService.createEntity).mockResolvedValue({ id: ENTITY, companyUpdated: false });
   jest.mocked(entityService.updateEntity).mockResolvedValue(undefined);
   jest.mocked(entityService.archiveEntity).mockResolvedValue(undefined);
-  jest.mocked(entityService.setMyMembership).mockResolvedValue({ joined: true, role: 'employee', title: null, isAdmin: false, companyUpdated: false });
+  jest.mocked(entityService.setMyMembership).mockResolvedValue({
+    joined: true, role: 'employee', title: null, isAdmin: false, companyUpdated: false, status: 'pending', pendingChange: null,
+  });
+  jest.mocked(entityService.approveMember).mockResolvedValue({ companyUpdated: false });
+  jest.mocked(entityService.declineMember).mockResolvedValue(undefined);
+  jest.mocked(entityService.removeMember).mockResolvedValue(undefined);
+  jest.mocked(entityPictures.saveEntityPicture).mockResolvedValue({ url: `https://api.example/api/entities/${ENTITY}/logo?v=1` });
+  jest.mocked(entityPictures.removeEntityPicture).mockResolvedValue(undefined);
   jest.mocked(entityService.leaveEntity).mockResolvedValue({ left: true, archived: false });
 });
 
@@ -186,7 +212,9 @@ describe('who hears an entity change', () => {
 
   it('a member\'s company filled in from the entity also reaches their own card and their pods\' member lists', async () => {
     people[ENTITY] = [ADMIN, COLLEAGUE, JOINER];
-    jest.mocked(entityService.setMyMembership).mockResolvedValueOnce({ joined: true, role: 'founder', title: null, isAdmin: false, companyUpdated: true });
+    jest.mocked(entityService.setMyMembership).mockResolvedValueOnce({
+      joined: true, role: 'founder', title: null, isAdmin: false, companyUpdated: true, status: 'active', pendingChange: null,
+    });
     await request(app).post(`/entities/${ENTITY}/members`).set(as(JOINER)).send({ role: 'founder' });
     await settle();
     const all = heard();
@@ -194,6 +222,80 @@ describe('who hears an entity change', () => {
     expect(all[PODMATE]).toEqual(expect.arrayContaining([E.pod(POD), E.podMembers(POD)]));
     expect(all[PODMATE]).not.toContain(E.entity(ENTITY));
     expect(all[ADMIN]).not.toContain(E.user(JOINER));
+  });
+});
+
+// T15 (30 Oct review, 7.2): a claim waits, and the admins answer it. Each answer reaches the entity's live people, the
+// admin who answered and the member it was about, whatever their link now is, so the Requests panel, the People list
+// and the member's own "Waiting for approval" all flip without a reload.
+describe('who hears a claim and its answer (T15)', () => {
+  it('a claim that waits: the people and the claimant (now a pending link) hear it, with the claimant\'s list tag', async () => {
+    people[ENTITY] = [ADMIN, COLLEAGUE, JOINER]; // JOINER's pending link is among the live links
+    await request(app).post(`/entities/${ENTITY}/members`).set(as(JOINER)).send({ role: 'employee' });
+    await settle();
+    expect(heard()).toEqual({
+      [ADMIN]: sorted([E.entity(ENTITY), E.userEntities(ADMIN), E.userEntities(JOINER)]),
+      [COLLEAGUE]: sorted([E.entity(ENTITY), E.userEntities(COLLEAGUE), E.userEntities(JOINER)]),
+      [JOINER]: sorted([E.entity(ENTITY), E.userEntities(JOINER)]),
+    });
+  });
+
+  it.each([
+    ['approve', 'post', 'approve'],
+    ['decline', 'post', 'decline'],
+  ] as const)('%s: the people, the admin and the member hear the entity and the member\'s list', async (_what, _method, verb) => {
+    people[ENTITY] = verb === 'approve' ? [ADMIN, COLLEAGUE, JOINER] : [ADMIN, COLLEAGUE];
+    expect((await request(app).post(`/entities/${ENTITY}/members/8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d/${verb}`).set(as(ADMIN))).status).toBe(200);
+    await settle();
+    const all = heard();
+    const member = '8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+    expect(all[ADMIN]).toEqual(expect.arrayContaining([E.entity(ENTITY), E.userEntities(member)]));
+    expect(all[COLLEAGUE]).toEqual(expect.arrayContaining([E.entity(ENTITY), E.userEntities(member)]));
+    expect(all[member]).toEqual(sorted([E.entity(ENTITY), E.userEntities(member)]));
+  });
+
+  it('a removal: the removed member, no longer among its people, is still told', async () => {
+    const member = '8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+    people[ENTITY] = [ADMIN];
+    expect((await request(app).delete(`/entities/${ENTITY}/members/${member}`).set(as(ADMIN))).status).toBe(200);
+    await settle();
+    expect(heard()).toEqual({
+      [ADMIN]: sorted([E.entity(ENTITY), E.userEntities(ADMIN), E.userEntities(member)]),
+      [member]: sorted([E.entity(ENTITY), E.userEntities(member)]),
+    });
+  });
+});
+
+// T15 review M2 (CLAUDE.md §1): a circle's page lists the entities linked to it with their name, kind and logo, so a
+// rename, an archive or a new logo must reach the people of every linked circle too, each with only their circles.
+describe('the circles an entity is linked to hear what their pages show of it (T15, review M2)', () => {
+  beforeEach(() => { linkedToCircles = true; });
+  const circlesHeard = () => {
+    const all = heard();
+    return Object.fromEntries(Object.entries(all).map(([who, tags]) => [who, tags.filter((t) => t.startsWith('circle:')).sort()]));
+  };
+
+  it.each([
+    ['a rename', () => request(app).patch(`/entities/${ENTITY}`).set(as(ADMIN)).send({ name: 'Acme Boats' })],
+    ['an archive', () => request(app).delete(`/entities/${ENTITY}`).set(as(ADMIN))],
+    ['a new logo', () => request(app).put(`/entities/${ENTITY}/logo`).set(as(ADMIN)).send({ crop: { x: 0.5, y: 0.5, zoom: 1 } })],
+    ['a removed banner', () => request(app).delete(`/entities/${ENTITY}/banner`).set(as(ADMIN))],
+  ])('%s: each circle\'s people hear that circle, and nobody hears a circle they are not in', async (_what, send) => {
+    expect((await send()).status).toBe(200);
+    await settle();
+    const tags = circlesHeard();
+    expect(tags[CIRCLE_MEMBER]).toEqual([`circle:${CIRCLE_A}`, `circle:${CIRCLE_B}`].sort());
+    expect(tags[OTHER_CIRCLE_PERSON]).toEqual([`circle:${CIRCLE_B}`]);
+    expect(tags[ADMIN]).toEqual(expect.arrayContaining([`circle:${CIRCLE_A}`]));
+    expect(tags[ADMIN]).not.toContain(`circle:${CIRCLE_B}`);
+    expect(tags[COLLEAGUE] ?? []).toEqual([]);
+  });
+
+  it('a claim, an answer or a removal changes nothing a circle page shows, so no circle hears it', async () => {
+    await request(app).post(`/entities/${ENTITY}/members`).set(as(JOINER)).send({ role: 'fan' });
+    await request(app).post(`/entities/${ENTITY}/members/8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d/approve`).set(as(ADMIN));
+    await settle();
+    expect(Object.values(circlesHeard()).flat()).toEqual([]);
   });
 });
 

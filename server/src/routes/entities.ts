@@ -6,21 +6,36 @@
 // GET    /entities/:id              { entity, people, myRole, canEdit }
 // PATCH  /entities/:id              { name?, kind?, about?, location?, size?, website? }  { ok: true }   its admins, platform admins
 // DELETE /entities/:id              archive  { ok: true }                                               its admins, platform admins
-// POST   /entities/:id/members      { role, title? }  join, or change your own role
-// DELETE /entities/:id/members/me   leave  { left, archived }
+// POST   /entities/:id/members      { role, title? }  claim to be part of it (pending until an admin approves), or
+//                                   ask to change your own role (applied at once for its admins and platform admins)
+// DELETE /entities/:id/members/me   leave, or withdraw your claim  { left, archived }
 //
-// A person's entities (GET /users/:id/entities) are in routes/users.ts. The service decides who may
-// do what; the routes check the shape of what was sent and tell the screens once a write is done.
+// 30 Oct review (T15), its admins and platform admins:
+// POST   /entities/:id/members/:userId/approve   a claim or a change   { ok: true }
+// POST   /entities/:id/members/:userId/decline   a claim or a change   { ok: true }
+// DELETE /entities/:id/members/:userId           remove a member       { ok: true }
+// PUT    /entities/:id/logo | /banner            { image?, crop? }  { logoUrl } | { bannerUrl }
+// DELETE /entities/:id/logo | /banner            { logoUrl: null } | { bannerUrl: null }
+// GET    /entities/:id/logo/source | /banner/source   the picture the editor opens on
+// Public (an <img> sends no token): GET /entities/:id/logo?v= and /banner?v=
+//
+// A person's entities (GET /users/:id/entities) are in routes/users.ts; an entity's links to circles are made from
+// the circle (routes/circles.ts). The service decides who may do what; the routes check the shape of what was sent
+// and tell the screens once a write is done.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { ApiResponse, ENTITY_KINDS, ENTITY_LIMITS, ENTITY_ROLES, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
-import { entityCreateLimiter, entityReadLimiter, entityWriteLimiter } from '../middleware/rateLimit';
-import { fanoutEntityChange, fanoutProfileChange } from '../realtime/fanout';
+import {
+  bannerReadLimiter, entityCreateLimiter, entityReadLimiter, entityWriteLimiter, pictureSourceLimiter,
+} from '../middleware/rateLimit';
+import { fanoutEntityChange, fanoutEntityCircles, fanoutProfileChange } from '../realtime/fanout';
 import * as entities from '../services/entity/entity.service';
+import * as entityPictures from '../services/entity/entity-pictures.service';
 import { blankToNull, characterCount, normaliseName, normaliseWebsite } from '../services/entity/entity-fields';
+import { pictureBodySchema, type PictureBody } from './picture-body';
 
 const router = Router();
 
@@ -31,6 +46,9 @@ const isPlatformAdmin = (req: Request) => hasRoleAtLeast(req.user!.role, UserRol
 
 // Postgres reads an upper-case uuid as the same row, but the services compare ids as plain strings.
 const entityParams = z.object({ id: z.string().uuid('Not an entity id').transform((s) => s.toLowerCase()) });
+const memberParams = entityParams.extend({
+  userId: z.string().uuid('Not a member id').transform((s) => s.toLowerCase()),
+});
 
 const listQuery = z.object({
   q: z.string().max(ENTITY_LIMITS.searchMax).optional(),
@@ -132,6 +150,7 @@ router.patch('/:id', authenticate, entityWriteLimiter, validate(entityParams, 'p
       const me = req.user!.userId;
       await entities.updateEntity(me, req.params.id, req.body as UpdateBody, isPlatformAdmin(req));
       void fanoutEntityChange(req.params.id, me);
+      void fanoutEntityCircles(req.params.id); // its name or kind on the circle pages that list it
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) {
       next(err);
@@ -144,6 +163,7 @@ router.delete('/:id', authenticate, entityWriteLimiter, validate(entityParams, '
       const me = req.user!.userId;
       await entities.archiveEntity(me, req.params.id, isPlatformAdmin(req));
       void fanoutEntityChange(req.params.id, me);
+      void fanoutEntityCircles(req.params.id); // it leaves the circle pages that list it
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) {
       next(err);
@@ -154,7 +174,7 @@ router.post('/:id/members', authenticate, entityWriteLimiter, validate(entityPar
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const me = req.user!.userId;
-      const data = await entities.setMyMembership(me, req.params.id, req.body as MembershipBody);
+      const data = await entities.setMyMembership(me, req.params.id, req.body as MembershipBody, isPlatformAdmin(req));
       void fanoutEntityChange(req.params.id, me, [me]);
       if (data.companyUpdated) void fanoutProfileChange(me);
       res.json({ success: true, data } satisfies ApiResponse);
@@ -170,10 +190,126 @@ router.delete('/:id/members/me', authenticate, entityWriteLimiter, validate(enti
       const data = await entities.leaveEntity(me, req.params.id);
       // Someone who was not linked to it changed nothing, so no screen needs telling.
       if (data.left) void fanoutEntityChange(req.params.id, me, [me]);
+      // The last person out archives it, and it leaves the circle pages that list it.
+      if (data.archived) void fanoutEntityCircles(req.params.id);
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);
     }
   });
+
+// ── The admins' answers (30 Oct review, 7.2; L23). Declared after /members/me, which they never match ─────────
+
+type MemberParams = z.infer<typeof memberParams>;
+
+router.post('/:id/members/:userId/approve', authenticate, entityWriteLimiter, validate(memberParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const me = req.user!.userId;
+      const { id, userId } = req.params as unknown as MemberParams;
+      const { companyUpdated } = await entities.approveMember(me, id, userId, isPlatformAdmin(req));
+      void fanoutEntityChange(id, me, [userId]);
+      if (companyUpdated) void fanoutProfileChange(userId);
+      res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+router.post('/:id/members/:userId/decline', authenticate, entityWriteLimiter, validate(memberParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const me = req.user!.userId;
+      const { id, userId } = req.params as unknown as MemberParams;
+      await entities.declineMember(me, id, userId, isPlatformAdmin(req));
+      void fanoutEntityChange(id, me, [userId]);
+      res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+router.delete('/:id/members/:userId', authenticate, entityWriteLimiter, validate(memberParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const me = req.user!.userId;
+      const { id, userId } = req.params as unknown as MemberParams;
+      await entities.removeMember(me, id, userId, isPlatformAdmin(req));
+      void fanoutEntityChange(id, me, [userId]);
+      res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+// ── The logo and the banner (30 Oct review, 7.1; L1) ──────────────────────────────────────────────────────────
+
+const PICTURES = [
+  { kind: 'logo', field: 'logoUrl' },
+  { kind: 'banner', field: 'bannerUrl' },
+] as const;
+
+for (const { kind, field } of PICTURES) {
+  const body = pictureBodySchema({ choose: `Choose a picture for the ${kind}.`, tooBig: `The ${kind} must be 3 MB or smaller.` });
+
+  // Its admins and platform admins: a new picture with where it was placed, or a new place for the kept one.
+  router.put(`/:id/${kind}`, authenticate, entityWriteLimiter, validate(entityParams, 'params'), validate(body),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const me = req.user!.userId;
+        const { image, crop } = req.body as PictureBody;
+        const { url } = await entityPictures.saveEntityPicture(me, req.params.id, kind, { image, crop }, isPlatformAdmin(req));
+        void fanoutEntityChange(req.params.id, me);
+        void fanoutEntityCircles(req.params.id); // the logo on the circle pages that list it
+        res.json({ success: true, data: { [field]: url } } satisfies ApiResponse);
+      } catch (err) {
+        next(err);
+      }
+    });
+
+  router.delete(`/:id/${kind}`, authenticate, entityWriteLimiter, validate(entityParams, 'params'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const me = req.user!.userId;
+        await entityPictures.removeEntityPicture(me, req.params.id, kind, isPlatformAdmin(req));
+        void fanoutEntityChange(req.params.id, me);
+        void fanoutEntityCircles(req.params.id);
+        res.json({ success: true, data: { [field]: null } } satisfies ApiResponse);
+      } catch (err) {
+        next(err);
+      }
+    });
+
+  // What the editor opens on, for the people who may change it.
+  router.get(`/:id/${kind}/source`, authenticate, pictureSourceLimiter, validate(entityParams, 'params'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const data = await entityPictures.getEntityPictureSource(req.user!.userId, req.params.id, kind, isPlatformAdmin(req));
+        res.json({ success: true, data } satisfies ApiResponse);
+      } catch (err) {
+        next(err);
+      }
+    });
+
+  // Public, as a member's banner is: an <img> sends no token. The address carries ?v=<when it changed>, so a day-long
+  // cache never shows an old picture after a new one. 404 with nothing in it for no picture or an archived entity.
+  router.get(`/:id/${kind}`, bannerReadLimiter, validate(entityParams, 'params'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const picture = await entityPictures.getEntityPictureBlob(req.params.id, kind);
+        if (!picture) {
+          res.status(404).end();
+          return;
+        }
+        res.setHeader('Content-Type', picture.contentType);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        // These bytes come from a member, so a browser must never read them as anything but the picture type they were cut as.
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.send(picture.blob);
+      } catch (err) {
+        next(err);
+      }
+    });
+}
 
 export default router;

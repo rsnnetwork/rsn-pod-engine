@@ -8,6 +8,8 @@
 // T14 (1 Nov 2026, L22): the people who run a circle (its creator, owners and moderators, and platform admins;
 // circle-managers.ts) edit it, choose Open or Closed, answer asks to join, remove members and attach pods. Creating
 // and archiving a circle stay a platform admin's. Every change to the asks also tells circle:<id>:requests.
+// T15 (30 Oct review 7.3): the people who run a circle link entities to it and unlink them (an entity's own admins may
+// also unlink it); each link tells circle:<id> and entity:<id>.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -16,11 +18,12 @@ import { authenticate } from '../middleware/auth';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { requireRole } from '../middleware/rbac';
 import { circleReadLimiter, circleWriteLimiter, wallWriteLimiter } from '../middleware/rateLimit';
-import { fanoutCircleChange } from '../realtime/fanout';
+import { fanoutCircleChange, fanoutEntityChange } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as circleService from '../services/circle/circle.service';
 import * as joinService from '../services/circle/circle-join.service';
+import * as linkService from '../services/circle/circle-entities.service';
 import * as wallService from '../services/circle/circle-wall.service';
 import { assertCircleManager } from '../services/circle/circle-managers';
 
@@ -215,6 +218,40 @@ router.delete('/:id/members/:userId', authenticate, circleWriteLimiter,
     try {
       await joinService.removeCircleMember(req.params.id, req.params.userId, { userId: req.user!.userId, role: req.user!.role });
       void fanoutCircleChange(req.params.id, req.user!.userId, [req.params.userId]);
+      res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// ── Entities linked to the circle (T15, 30 Oct review 7.3; L23) ───────────────────────────────────────────
+
+const linkEntityBody = z.object({
+  entityId: z.string({ required_error: 'Choose an entity to link.' }).uuid("We couldn't find that entity.")
+    .transform((s) => s.toLowerCase()),
+});
+
+// POST /circles/:id/entities { entityId } — link an entity (the people who run it); linking twice adds nothing
+router.post('/:id/entities', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle), validate(linkEntityBody),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { entityId } = req.body as z.infer<typeof linkEntityBody>;
+      await linkService.linkEntity(req.params.id, entityId, { userId: req.user!.userId, role: req.user!.role });
+      void fanoutCircleChange(req.params.id, req.user!.userId);
+      void fanoutEntityChange(entityId, req.user!.userId);
+      res.status(201).json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// DELETE /circles/:id/entities/:entityId — unlink (the people who run it, or the entity's own admins)
+router.delete('/:id/entities/:entityId', authenticate, circleWriteLimiter,
+  uuidInPath('id', PATH_REFUSALS.circle), uuidInPath('entityId', "We couldn't find that entity."),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { unlinked } = await linkService.unlinkEntity(req.params.id, req.params.entityId, { userId: req.user!.userId, role: req.user!.role });
+      // A link that was not there changed nothing, so no screen needs telling.
+      if (unlinked) {
+        void fanoutCircleChange(req.params.id, req.user!.userId);
+        void fanoutEntityChange(req.params.entityId, req.user!.userId);
+      }
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });

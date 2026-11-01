@@ -55,6 +55,7 @@ import * as sessionService from '../../services/session/session.service';
 import * as inviteService from '../../services/invite/invite.service';
 import * as ratingService from '../../services/rating/rating.service';
 import { query as dbQuery } from '../../db';
+import * as eventAccess from '../../services/session/event-access';
 
 import authRoutes from '../../routes/auth';
 import userRoutes from '../../routes/users';
@@ -986,6 +987,98 @@ describe('Session Routes - Extended', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(1);
+    });
+
+    // T13 fix (1 Nov 2026): the people the event page registers on opening it read the list as its pod's members do,
+    // because that page registers them only once the list has loaded: the event's audience (for an event for a whole
+    // circle, the circle's active members, who are not in the pod) and its invitees (fix round 1), each only while they
+    // may see the event. Everyone else: as before, word for word. The rule is read through readEventAccessFacts, mocked
+    // here, so these tests do not depend on its SQL.
+    describe('who reads it', () => {
+      const SESSION = '5e550000-0000-4000-8000-000000000123';
+      const facts = (over: Partial<eventAccess.EventAccessFacts>): eventAccess.EventAccessFacts => ({
+        visibility: 'private', podId: 'p1', podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
+        inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
+        outsideClosedCircle: false, ...over,
+      });
+      let readFacts: jest.SpyInstance;
+      const arm = (world: { podMember?: boolean; facts?: Partial<eventAccess.EventAccessFacts> }) => {
+        (sessionService.getSessionById as jest.Mock).mockResolvedValue({ ...mockSession, hostUserId: 'someone-else', podId: 'p1' });
+        (sessionService.isSessionParticipant as jest.Mock).mockResolvedValue(false);
+        (podService.getMemberRole as jest.Mock).mockResolvedValue(world.podMember ? 'member' : null);
+        (sessionService.getSessionParticipants as jest.Mock).mockResolvedValue([
+          { id: 'sp-1', userId: 'someone-else', status: 'registered', email: 'host@example.com' },
+        ]);
+        (dbQuery as jest.Mock).mockImplementation(async (sql: string) =>
+          (sql.includes('SELECT status FROM users') ? { rows: [{ status: 'active' }], rowCount: 1 } : { rows: [], rowCount: 0 }));
+        readFacts = jest.spyOn(eventAccess, 'readEventAccessFacts').mockResolvedValue(facts(world.facts ?? {}));
+      };
+      const read = () => request(app).get(`/sessions/${SESSION}/participants`).set('Authorization', `Bearer ${makeToken()}`);
+      // Put back what the tests after this block read: the event hosted by the token's member, and the pod role.
+      afterEach(() => {
+        (dbQuery as jest.Mock).mockReset();
+        (podService.getMemberRole as jest.Mock).mockResolvedValue('director');
+        (sessionService.getSessionById as jest.Mock).mockResolvedValue(mockSession);
+        (sessionService.isSessionParticipant as jest.Mock).mockReset();
+        readFacts?.mockRestore();
+      });
+
+      it('a circle member who is not in the pod reads it (the public card, no email)', async () => {
+        arm({ facts: { inAudience: true } });
+        const res = await read();
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).not.toHaveProperty('email');
+      });
+
+      it('an invitee who is not in the pod and holds no place yet reads it (fix round 1), without email', async () => {
+        arm({ facts: { isInvited: true } });
+        const res = await read();
+        expect(res.status).toBe(200);
+        expect(res.body.data[0]).not.toHaveProperty('email');
+      });
+
+      it('an invitee or a circle member whose account is closed is refused', async () => {
+        arm({ facts: { isInvited: true, accountActive: false } });
+        expect((await read()).status).toBe(403);
+        readFacts.mockRestore();
+        arm({ facts: { inAudience: true, accountActive: false } });
+        expect((await read()).status).toBe(403);
+      });
+
+      // Fix round 2: a kick is terminal. Someone the host removed from the event is not let back to its list through
+      // being invited or being in its circle, with the same words as before.
+      it('an invitee or a circle member the host removed from the event is refused', async () => {
+        arm({ facts: { isInvited: true, participantStatus: 'removed' } });
+        const invitee = await read();
+        expect(invitee.status).toBe(403);
+        expect(invitee.body.error.message).toBe('You must be a participant or pod member to view this list');
+        readFacts.mockRestore();
+        arm({ facts: { inAudience: true, participantStatus: 'removed' } });
+        expect((await read()).status).toBe(403);
+      });
+
+      it('an invitee or a circle member who left the event (not removed) still reads it', async () => {
+        arm({ facts: { isInvited: true, participantStatus: 'left' } });
+        expect((await read()).status).toBe(200);
+        readFacts.mockRestore();
+        arm({ facts: { inAudience: true, participantStatus: 'left' } });
+        expect((await read()).status).toBe(200);
+      });
+
+      it('someone outside the event\'s audience is refused with the same words as before', async () => {
+        arm({ facts: {} });
+        const res = await read();
+        expect(res.status).toBe(403);
+        expect(res.body.error.message).toBe('You must be a participant or pod member to view this list');
+      });
+
+      it('a pod member reads it as before, without the event access read', async () => {
+        arm({ podMember: true });
+        const res = await read();
+        expect(res.status).toBe(200);
+        expect(readFacts).not.toHaveBeenCalled();
+      });
     });
   });
 });

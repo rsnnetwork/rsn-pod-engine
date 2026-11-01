@@ -14,7 +14,7 @@ import {
 } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
-import { readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
+import { canSeeEvent, readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
 import { readEventCircle } from '../services/circle/circle-events.service';
 import * as eventRequests from '../services/session/event-requests.service';
 import { eventRequestLimiter } from '../middleware/rateLimit';
@@ -49,6 +49,15 @@ async function refuseView(sessionId: string): Promise<never> {
   const row = await query<{ visibility: string | null }>(`SELECT visibility FROM sessions WHERE id = $1`, [sessionId]);
   if (row?.rows?.[0]?.visibility === 'private') throw new AppError(403, ErrorCodes.EVENT_PRIVATE, VIEW_REFUSAL);
   throw new ForbiddenError(VIEW_REFUSAL);
+}
+
+/** Whether the event page registers this person on opening it: its audience or an invitee, who may see the event. */
+async function registersOnOpening(sessionId: string, userId: string, role: string | undefined): Promise<boolean> {
+  const f = await readEventAccessFacts(sessionId, userId);
+  // Fix round 2: a kick is terminal. Someone the host removed from the event is never let back to its list through an
+  // invite or the event's circle, as nothing else about the event lets them back.
+  if (!f || f.participantStatus === 'removed') return false;
+  return canSeeEvent(f, role) && (f.inAudience || f.isInvited);
 }
 
 /** The "you're registered" email with its calendar invite. Best-effort: a failure is logged, never thrown. */
@@ -635,7 +644,13 @@ router.get(
         const isPodMember = session.podId
           ? !!(await podService.getMemberRole(session.podId, req.user!.userId))
           : false;
-        if (!isHost && !isParticipant && !isPodMember) {
+        // T13 fix (1 Nov 2026): the people the event page registers on opening it read it as its pod's members do, because
+        // that page registers them only once this list has loaded: the event's audience (for an event for a whole circle,
+        // the circle's active members, who are not in the pod) and its invitees (fix round 1), each only while they may
+        // see the event. For an event with no circle the audience is exactly the pod's active members. Read only when
+        // nothing above allowed.
+        const allowedBefore = isHost || isParticipant || isPodMember;
+        if (!allowedBefore && !(await registersOnOpening(req.params.id, req.user!.userId, req.user!.role))) {
           throw new ForbiddenError('You must be a participant or pod member to view this list');
         }
         const cohost = isHost ? null : await query(

@@ -32,6 +32,8 @@ const TABLES = [
   'sessions', 'session_participants', 'session_cohosts', 'invites',
   'circles', 'circle_members', 'circle_join_requests', 'circle_pods', 'circle_posts', 'circle_post_reactions', 'circle_post_comments', 'circle_comment_likes',
   'dm_conversations', 'direct_messages', 'dm_message_reactions', 'user_blocks', 'encounter_history', 'ratings',
+  // T15: a circle's page names the entities linked to it (migration 130).
+  'entities', 'circle_entities',
 ];
 
 suite('removed members vanish, and who sees and joins a pod\'s events (real Postgres)', () => {

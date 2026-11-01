@@ -36,6 +36,8 @@ const TABLES = [
   'circles', 'circle_members', 'circle_pods', 'notifications', 'matching_templates',
   // T14: a circle read asks the viewer's latest ask to join (migration 128).
   'circle_join_requests',
+  // T15: a circle's page names the entities linked to it (migration 130).
+  'entities', 'circle_entities',
 ];
 
 suite('an event for a whole circle (real Postgres)', () => {

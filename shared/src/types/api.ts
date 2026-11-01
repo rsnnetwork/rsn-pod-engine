@@ -120,6 +120,7 @@ export const ErrorCodes = {
   // Entity errors (an organisation members create: a company, a fund…)
   ENTITY_NOT_FOUND: 'ENTITY_NOT_FOUND',    // missing or archived; the two read the same
   ENTITY_NAME_TAKEN: 'ENTITY_NAME_TAKEN',  // 409; details.existingId[0] is the active entity with that name
+  ENTITY_LAST_ADMIN: 'ENTITY_LAST_ADMIN',  // 409; removing them would leave the entity with no active admin
 
   // Meeting request and meeting errors
   MEETING_REQUEST_ALREADY_ANSWERED: 'MEETING_REQUEST_ALREADY_ANSWERED',  // 409; details.status is the answer it already has

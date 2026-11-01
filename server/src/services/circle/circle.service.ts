@@ -14,12 +14,13 @@ import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
-import { CircleAccess, CircleJoinPolicy, ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { CircleAccess, CircleEntityLink, CircleJoinPolicy, ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 import { visibleEventsSql } from '../session/event-access';
 import {
   CircleAccessRow, circleAccessColumns, isCircleManager, isPlatformAdmin, toCircleAccess,
 } from './circle-managers';
+import { entitiesOfCircle } from './circle-entities.service';
 
 /** What joinCircle answers someone outside a closed circle (30 Oct review, 7.5). */
 export const CIRCLE_CLOSED_JOIN = 'This circle is closed. Ask to join and its owner will let you in.';
@@ -73,6 +74,8 @@ export interface CircleDetail extends CircleSummary {
   /** T13: `forCircle` (additive) is true for an event made for this circle, false for an attached pod's event. */
   upcomingEvents: Array<{ id: string; title: string; scheduledAt: Date; podId: string; forCircle: boolean }>;
   children: Array<{ id: string; name: string; memberCount: number }>;
+  /** T15 (additive): the entities linked to it (at most 50, none archived); empty on a locked circle. */
+  entities: CircleEntityLink[];
 }
 
 // ── Nesting integrity ────────────────────────────────────────────────────────
@@ -383,7 +386,7 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
   // attached pod is named only when it is not archived and, if private, to its members.
   const seesEveryEvent = !!userRole && hasRoleAtLeast(userRole as UserRole, UserRole.ADMIN);
   const none = Promise.resolve({ rows: [] as never[] });
-  const [members, pods, events, children] = await Promise.all([
+  const [members, pods, events, children, entities] = await Promise.all([
     access.locked ? none : query<{ user_id: string; display_name: string | null; avatar_url: string | null; role: string; joined_at: Date }>(
       `SELECT m.user_id, u.display_name, u.avatar_url, m.role, m.joined_at
        FROM circle_members m JOIN users u ON u.id = m.user_id
@@ -411,6 +414,8 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
        ORDER BY member_count DESC`,
       [circleId],
     ),
+    // T15: the entities linked to it. A locked circle names none, as it names no members (L22).
+    access.locked ? Promise.resolve([] as CircleEntityLink[]) : entitiesOfCircle(circleId),
   ]);
 
   return {
@@ -428,5 +433,6 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
       id: e.id, title: e.title, scheduledAt: e.scheduled_at, podId: e.pod_id, forCircle: !!e.for_circle,
     })),
     children: children.rows.map(ch => ({ id: ch.id, name: ch.name, memberCount: ch.member_count })),
+    entities,
   };
 }

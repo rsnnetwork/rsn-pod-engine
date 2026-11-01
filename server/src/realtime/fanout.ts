@@ -468,8 +468,11 @@ export async function fanoutUserEntity(
 //
 // An entity (an organisation members create, such as a company or a fund; not the realtime "entities"
 // these tags are) was created, edited or archived, or a member joined it, changed their role in it or
-// left it. Audience: its people as they are after the write (an archive keeps them), the member who
-// acted, and each member whose link changed (one who has just left is no longer among its people).
+// left it. T15 (30 Oct review): also someone claims to be part of it or asks to change their role, an
+// admin approves, declines or removes, its logo or banner changes, or it is linked to or unlinked from a
+// circle. Audience: its people as they are after the write (an archive keeps them; active and pending
+// links), the member who acted, and each member whose link changed (one who has just left, or was
+// declined or removed, is no longer among its people).
 // Each recipient is sent, in an emit of their own:
 //   entity:<id>                its page;
 //   user:<recipient>:entities  their own list, whose names and people counts may have moved;
@@ -487,8 +490,11 @@ export async function fanoutEntityChange(
   if (!io) return;
   try {
     const { query } = await import('../db');
+    const { openLinkSql } = await import('../services/entity/entity-links');
+    // T15: its listed people and the people whose claims wait (their own screens show where the claim stands); a
+    // declined or removed person is told only as a changed user.
     const people = await query<{ user_id: string }>(
-      `SELECT user_id FROM entity_members WHERE entity_id = $1`,
+      `SELECT m.user_id FROM entity_members m WHERE m.entity_id = $1 AND ${openLinkSql('m')}`,
       [entityId],
     );
     const recipients = new Set([...people.rows.map(r => r.user_id), actorId, ...changedUserIds].filter(Boolean));
@@ -578,6 +584,51 @@ export async function fanoutCircleEvent(circleId: string, sessionId: string, act
     }
   } catch (err) {
     logger.warn({ err, circleId, sessionId }, 'fanoutCircleEvent: failed to fan out');
+  }
+}
+
+// ─── The circles an entity is linked to (T15 review M2, 1 Nov 2026) ─────────
+//
+// A circle's page lists the entities linked to it with their name, kind and logo (circle_entities, migration 130). So
+// when one of those changes (an edit, an archive, a new or removed logo or banner), the people of every circle the
+// entity is linked to are told that circle's page changed, as its members are for any other change to it: each hears
+// circle:<id> for the circles they are in (or made) only, in one emit of their own. One query reads every audience
+// (at most 50 circles per entity, the same cap as the reads), and the emits go in batches of CIRCLE_EVENT_FANOUT_BATCH.
+// A claim, an answer or a removal changes nothing a circle page shows, so those do not call this.
+
+export const ENTITY_CIRCLES_MAX = 50;
+
+export async function fanoutEntityCircles(entityId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const rows = await query<{ circle_id: string; user_id: string }>(
+      `WITH linked AS (
+         SELECT c.id, c.created_by FROM circle_entities ce JOIN circles c ON c.id = ce.circle_id
+          WHERE ce.entity_id = $1 AND c.archived_at IS NULL
+          ORDER BY c.id LIMIT ${ENTITY_CIRCLES_MAX})
+       SELECT l.id AS circle_id, cm.user_id FROM linked l
+         JOIN circle_members cm ON cm.circle_id = l.id JOIN users u ON u.id = cm.user_id
+        WHERE ${activeMemberSql('u')}
+       UNION
+       SELECT l.id, l.created_by FROM linked l WHERE l.created_by IS NOT NULL`,
+      [entityId],
+    );
+    const circlesOf = new Map<string, Set<string>>();
+    for (const r of rows.rows) {
+      const mine = circlesOf.get(r.user_id) ?? new Set<string>();
+      mine.add(E.circle(r.circle_id));
+      circlesOf.set(r.user_id, mine);
+    }
+    const recipients = [...circlesOf.entries()];
+    for (let i = 0; i < recipients.length; i += CIRCLE_EVENT_FANOUT_BATCH) {
+      await Promise.all(recipients.slice(i, i + CIRCLE_EVENT_FANOUT_BATCH).map(([userId, tags]) =>
+        emitEntities(io, [userId], [...tags]),
+      ));
+    }
+  } catch (err) {
+    logger.warn({ err, entityId }, 'fanoutEntityCircles: failed to fan out');
   }
 }
 
