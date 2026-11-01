@@ -15,7 +15,7 @@ import * as words from '../../../../client/src/features/messages/group-chat-text
 import {
   GROUP_FULL, GROUP_LIMIT, GROUP_TOO_SMALL, addLabel, clusterGroupMessages, groupErrorSentence, groupLoadProblem, groupPreview,
   groupUnreadTotal, memberCountLabel, mergeInbox, newestFromOthers, ofMax, roomLeft, sendSchema, startBody,
-  startChosen, startProblem, threadInOrder, tookPart, addSchema, startSchema, byName, membersInOrder,
+  startChosen, startProblem, threadInOrder, choosable, addSchema, startSchema, byName, membersInOrder,
   START_MANY, MARK_READ_DEBOUNCE_MS, readMarkKey, isRateLimited, rateLimitWaitMs, groupReadRetry, groupReadRetryDelay,
   EARLIER_PAGE_TRIES, untilEarlierPage,
 } from '../../../../client/src/features/messages/group-chat-text';
@@ -381,17 +381,24 @@ describe('an earlier page asked for while a change to the group lands is asked f
 
 // ── Choosing people: starting a group from an event, and adding to one ────────
 
-const person = (userId: string, over: Partial<{ status: string; joinedAt: string | null; displayName: string }> = {}) => ({
-  userId, displayName: userId, avatarUrl: null, status: 'left', joinedAt: at(0), ...over,
+const person = (userId: string, over: Partial<{ displayName: string }> = {}) => ({
+  userId, displayName: userId, avatarUrl: null, ...over,
 });
+const candidate = (id: string) => ({ id, displayName: id, avatarUrl: null, jobTitle: null, company: null });
 
-describe('who can be chosen: the people who took part in the event', () => {
-  it('took part = came in and was not removed; never yourself, nor anyone already in the group', () => {
-    const list = [
-      person('ana'), person('ben', { joinedAt: null, status: 'registered' }), person('cara', { status: 'removed' }),
-      person(ME), person('dan'), person('dan'), person('eve', { status: 'no_show', joinedAt: null }), person('fay'),
-    ];
-    expect(tookPart(list, [ME, 'fay']).map((p) => p.userId)).toEqual(['ana', 'dan']);
+describe('who can be chosen: the server\'s candidates for the event (P1 item 37)', () => {
+  it('the server decides who took part, is open and not blocked; the screen leaves out you and the group\'s members, once each', () => {
+    const list = [candidate('ana'), candidate(ME), candidate('dan'), candidate('dan'), candidate('fay')];
+    expect(choosable(list, [ME, 'fay'])).toEqual([
+      { userId: 'ana', displayName: 'ana', avatarUrl: null }, { userId: 'dan', displayName: 'dan', avatarUrl: null },
+    ]);
+  });
+
+  it('both pickers read GET /groups/event/:sessionId/candidates, never the participants list, and follow who took part and blocks', () => {
+    const hooks = read('features/messages/useGroups.ts');
+    expect(hooks).toMatch(/api\.get\(`\/groups\/event\/\$\{encodeURIComponent\(sessionId \?\? ''\)\}\/candidates`\)/);
+    expect(hooks).toMatch(/meta: \{ entities: sessionId && me \? \[E\.session\(sessionId\), E\.sessionParticipants\(sessionId\), E\.userBlocks\(me\)\] : \[\] \}/);
+    expect(hooks).not.toMatch(/\/participants`/);
   });
 
   it('the people to choose from are listed by name, numbers in their order, without changing the list given', () => {
@@ -618,7 +625,7 @@ describe('the members sheet', () => {
   it('nobody can be added past 50: the full group says so in the server\'s words', () => {
     expect(sheet).toMatch(/roomLeft\(/);
     expect(sheet).toMatch(/GROUP_FULL/);
-    expect(sheet).toMatch(/byName\(tookPart\(/);
+    expect(sheet).toMatch(/byName\(choosable\(people\.data, /);
   });
 
   it('lists the members admin first, then as they joined, people who joined together by name', () => {
@@ -707,7 +714,7 @@ describe('"Start a group chat" on a completed event, for the people who ran it',
   });
 
   it('chooses from the people who took part (by name), states the cap, and stops at 3 to 50', () => {
-    expect(card).toMatch(/byName\(tookPart\(/);
+    expect(card).toMatch(/byName\(choosable\(people\.data, /);
     expect(card).toMatch(/startChosen\(/);
     expect(card).toMatch(/startProblem\(/);
     expect(card).toMatch(/roomLeft\(/);

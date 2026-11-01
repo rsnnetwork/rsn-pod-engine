@@ -9,12 +9,12 @@
 // messages between people who block each other, so they redraw on it too. Nothing here writes the cache by hand: a write
 // has the writer's own reads asked again at once, and the socket does the same for everyone else.
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DmGroupDetail, DmGroupSummary, GroupChatMessage, GroupChatMessagePage } from '@rsn/shared';
+import type { DmGroupDetail, DmGroupSummary, GroupCandidate, GroupChatMessage, GroupChatMessagePage } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { invalidateEntities } from '@/realtime/invalidate-entities';
 import { useAuthStore } from '@/stores/authStore';
-import { groupReadRetry, groupReadRetryDelay, groupUnreadTotal, type EventPerson } from './group-chat-text';
+import { groupReadRetry, groupReadRetryDelay, groupUnreadTotal } from './group-chat-text';
 
 export const groupKeys = {
   list: ['dm-groups'] as const,
@@ -103,13 +103,19 @@ export function useGroupMessages(groupId: string | undefined) {
   });
 }
 
-/** Who signed up for an event and who came. The event's page reads the same list under the same key. */
-export function useEventPeople(sessionId: string | null | undefined) {
+/**
+ * Who may be added to a group from this event (P1 item 37): the server's candidates, so the start and add pickers never
+ * offer a closed account or someone blocked either way. It changes with who took part and with the reader's blocks.
+ */
+export function useGroupCandidates(sessionId: string | null | undefined) {
+  const me = useMe();
   return useQuery({
-    queryKey: ['session-participants', sessionId],
-    queryFn: () => api.get(`/sessions/${sessionId}/participants`).then((r) => (r.data.data ?? []) as EventPerson[]),
-    enabled: !!sessionId,
-    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
+    queryKey: ['group-candidates', sessionId],
+    queryFn: () => api.get(`/groups/event/${encodeURIComponent(sessionId ?? '')}/candidates`).then((r) => (r.data.data ?? []) as GroupCandidate[]),
+    enabled: !!sessionId && !!me,
+    retry: groupReadRetry,
+    retryDelay: groupReadRetryDelay,
+    meta: { entities: sessionId && me ? [E.session(sessionId), E.sessionParticipants(sessionId), E.userBlocks(me)] : [] },
   });
 }
 

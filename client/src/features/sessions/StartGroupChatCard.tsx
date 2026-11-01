@@ -8,11 +8,11 @@ import { formResolver } from '@/lib/form-resolver';
 import { useAuthStore } from '@/stores/authStore';
 import { TEXT_BUTTON } from '@/features/messages/buttons';
 import PeopleChoices from '@/features/messages/PeopleChoices';
-import { useEventPeople, useMyGroups, useStartGroupChat } from '@/features/messages/useGroups';
+import { useGroupCandidates, useMyGroups, useStartGroupChat } from '@/features/messages/useGroups';
 import {
   CANCEL, EVENT_GROUPS, GROUP_FULL, GROUP_LIMIT, GROUP_TOO_SMALL, PEOPLE_FAILED, PEOPLE_LEGEND, START_FAILED,
   START_INTRO, START_MANY, START_SUBMIT, START_TITLE, TRY_AGAIN,
-  byName, groupErrorSentence, ofMax, roomLeft, startBody, startChosen, startProblem, startSchema, tookPart,
+  byName, groupErrorSentence, ofMax, roomLeft, startBody, startChosen, startProblem, startSchema, choosable,
   type EventPerson, type StartValues,
 } from '@/features/messages/group-chat-text';
 
@@ -29,7 +29,7 @@ const CARD = 'min-w-0 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm'
 
 export default function StartGroupChatCard({ sessionId }: { sessionId: string }) {
   const myUserId = useAuthStore((s) => s.user?.id as string | undefined);
-  const people = useEventPeople(sessionId);
+  const people = useGroupCandidates(sessionId);
   const groups = useMyGroups();
   const [open, setOpen] = useState(false);
 
@@ -57,7 +57,7 @@ export default function StartGroupChatCard({ sessionId }: { sessionId: string })
     );
   }
 
-  const candidates = byName(tookPart(people.data, myUserId ? [myUserId] : []));
+  const candidates = byName(choosable(people.data, myUserId ? [myUserId] : []));
   const tooFew = candidates.length + 1 < GROUP_CHAT_MIN_MEMBERS;
   const fromThisEvent = (groups.data ?? []).filter((g) => g.sessionId === sessionId);
 

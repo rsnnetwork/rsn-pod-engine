@@ -7,7 +7,9 @@
 // Pure (no React, axios or store), so the server's jest runs it: server/src/__tests__/client/c12-group-chats.test.ts.
 import { z } from 'zod';
 import { GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS } from '@rsn/shared';
-import type { DmGroupLastMessage, DmGroupMember, DmGroupSummary, GroupChatMessage, GroupChatMessagePage } from '@rsn/shared';
+import type {
+  DmGroupLastMessage, DmGroupMember, DmGroupSummary, GroupCandidate, GroupChatMessage, GroupChatMessagePage,
+} from '@rsn/shared';
 import { CONNECTION_LOST, memberSentence } from '../reason/errors';
 import { shouldRetry, statusOf } from '../reason/human/profile-text';
 import { PANEL_TITLE } from '../sessions/post-event-panel';
@@ -313,27 +315,25 @@ export function groupErrorSentence(err: unknown, fallback: string): string {
 
 // ── Choosing people: starting a group from an event, and adding to one ────────
 
-/** One row of GET /api/sessions/:id/participants, as far as choosing people needs it. */
+/** Someone who can be chosen for a group: a row of the server's candidates, as the pickers draw it. */
 export interface EventPerson {
   userId: string;
   displayName?: string | null;
   avatarUrl?: string | null;
-  status: string;
-  joinedAt: string | null;
 }
 
 /**
- * The people who took part in an event, as the server counts them: they came in (joinedAt is set) and the organisers
- * did not remove them. Never anyone in `exclude` (the reader, the group's members), and each person once. The server
- * also leaves out closed accounts and anyone blocked, and says so if one is chosen.
+ * The people who can be chosen, from GET /groups/event/:sessionId/candidates (P1 item 37): the server already keeps to
+ * those who took part, whose account is open and who are not blocked either way with the reader, so nobody offered is
+ * refused. Never anyone in `exclude` (the reader, the group's members), and each person once.
  */
-export function tookPart<P extends EventPerson>(participants: P[], exclude: Iterable<string>): P[] {
+export function choosable(candidates: GroupCandidate[], exclude: Iterable<string>): EventPerson[] {
   const skip = new Set(exclude);
-  const out: P[] = [];
-  for (const p of participants) {
-    if (!p.joinedAt || p.status === 'removed' || skip.has(p.userId)) continue;
-    skip.add(p.userId);
-    out.push(p);
+  const out: EventPerson[] = [];
+  for (const c of candidates) {
+    if (skip.has(c.id)) continue;
+    skip.add(c.id);
+    out.push({ userId: c.id, displayName: c.displayName, avatarUrl: c.avatarUrl });
   }
   return out;
 }
