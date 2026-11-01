@@ -72,7 +72,7 @@ async function reopenBellOn(page: Page) {
   await bellButton(page).click();
   await fetched;
   await page.waitForTimeout(500);
-  await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
 }
 
 test.beforeAll(async () => {
@@ -80,7 +80,7 @@ test.beforeAll(async () => {
   recipient = await createTestUser('mrbellrecipient');
   decliner = await createTestUser('mrbelldecliner');
   carder = await createTestUser('mrbellcarder');
-  await pool.query(`UPDATE users SET display_name = 'Bell Sender' WHERE id = $1`, [sender.id]);
+  await pool.query(`UPDATE users SET display_name = 'Bell Sender', first_name = 'Bell' WHERE id = $1`, [sender.id]);
   browser = await launchBrowser();
 });
 
@@ -100,12 +100,12 @@ test('a meeting request can be accepted from the bell and lands in the conversat
 
   // The row itself carries the id in its link, and the product's wording.
   const n = await pool.query(`SELECT title, link FROM notifications WHERE user_id = $1 AND type = 'poke' ORDER BY created_at DESC LIMIT 1`, [recipient.id]);
-  expect(n.rows[0].title).toBe('Bell Sender asked to meet you');
+  expect(n.rows[0].title).toBe('Bell wants to meet you');
   expect(n.rows[0].link).toBe(`/messages?poke=${pokeId}`);
 
   const page = await openAs(recipient, '/');
   await bellButton(page).click();
-  await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
   const accept = page.getByRole('button', { name: /^Accept$/ }).first();
   const box = await accept.boundingBox();
   expect(box!.height, 'Accept tap target').toBeGreaterThanOrEqual(44);
@@ -158,7 +158,7 @@ test('a meeting request can be declined from the bell', async () => {
 
   const page = await openAs(decliner, '/');
   await bellButton(page).click();
-  await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
   await page.getByRole('button', { name: /^Decline$/ }).first().click();
   await expect(page.getByText(/^Declined$/)).toBeVisible({ timeout: 15_000 });
 
