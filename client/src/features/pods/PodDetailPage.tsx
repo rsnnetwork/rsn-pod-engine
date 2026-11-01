@@ -28,6 +28,7 @@ import { podEventsInOrder } from './pod-event-order';
 import { isForbidden, retryUnlessAnswered } from '@/components/wall/wall-logic';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
+import { useConfirm } from '@/hooks/useConfirm';
 
 // ─── Label / icon maps ──────────────────────────────────────────────────────
 
@@ -78,6 +79,7 @@ export default function PodDetailPage() {
 
   // Edit Pod is its own sheet (EditPodModal, 26 Oct 2026): a react-hook-form form that follows the pod type.
   const [editOpen, setEditOpen] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
 
   // "Invite members": the invite sheet (features/invites, 26 Oct 2026), the people chosen from your connections.
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -442,8 +444,8 @@ export default function PodDetailPage() {
           {isDirector && (
             <Button
               variant="danger"
-              onClick={() => {
-                if (confirm('Archive this pod? Events will be preserved and you can reactivate later.')) {
+              onClick={async () => {
+                if (await ask({ title: 'Archive this pod?', body: 'Its events are kept, and you can reactivate it later.', confirmLabel: 'Archive', tone: 'danger' })) {
                   deleteMutation.mutate();
                 }
               }}
@@ -776,6 +778,7 @@ export default function PodDetailPage() {
           )}
         </div>
       </div>
+      {confirmDialog}
     </div>
   );
 }

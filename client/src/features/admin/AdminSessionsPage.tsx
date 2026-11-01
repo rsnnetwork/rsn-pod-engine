@@ -12,6 +12,7 @@ import { isAdmin, formatDateTime } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor } from '@/features/sessions/statusConfig';
+import { useConfirm } from '@/hooks/useConfirm';
 
 export default function AdminSessionsPage() {
   const { user } = useAuthStore();
@@ -19,6 +20,7 @@ export default function AdminSessionsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<string>('all');
+  const { ask, confirmDialog } = useConfirm();
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-sessions', filter],
@@ -85,7 +87,7 @@ export default function AdminSessionsPage() {
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={() => { if (confirm('Cancel this event?')) cancelMutation.mutate(session.id); }}
+                    onClick={async () => { if (await ask({ title: `Cancel ${session.title || 'this event'}?`, body: 'It is called off for everyone registered.', confirmLabel: 'Cancel event', cancelLabel: 'Keep it', tone: 'danger' })) cancelMutation.mutate(session.id); }}
                   >
                     <XCircle className="h-3.5 w-3.5 mr-1" /> Cancel
                   </Button>
@@ -94,7 +96,7 @@ export default function AdminSessionsPage() {
                   <Button
                     size="sm"
                     variant="danger"
-                    onClick={() => { if (confirm('PERMANENTLY delete this event and ALL its matches, ratings, and data? This cannot be undone.')) hardDeleteMutation.mutate(session.id); }}
+                    onClick={async () => { if (await ask({ title: `Delete ${session.title || 'this event'} for good?`, body: 'This deletes the event and all its matches, ratings and data. It cannot be undone.', confirmLabel: 'Delete forever', tone: 'danger' })) hardDeleteMutation.mutate(session.id); }}
                   >
                     <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete Forever
                   </Button>
@@ -104,6 +106,7 @@ export default function AdminSessionsPage() {
           </Card>
         ))}
       </div>
+      {confirmDialog}
     </div>
   );
 }

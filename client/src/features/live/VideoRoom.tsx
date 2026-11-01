@@ -21,6 +21,7 @@ import '@livekit/components-styles';
 import { Track, ConnectionState, RoomEvent, VideoPresets } from 'livekit-client';
 import api from '@/lib/api';
 import { planRoomRecovery } from './room-retry';
+import { useConfirm } from '@/hooks/useConfirm';
 
 // Prefer displayName → name → email local-part → "Partner".
 // Avoids raw email addresses (and their trailing @domain) rendering full-width
@@ -568,6 +569,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
   const timerWarning = useSessionStore(s => s.timerWarning);
   const { setLiveKitToken } = useSessionStore.getState();
   const [retrying, setRetrying] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
   const retryCountRef = useRef(0);
   const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { sessionId } = useParams();
@@ -808,12 +810,13 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
                   also wrong post-WS2 (it claimed rejoining was impossible —
                   leavers CAN rejoin; only kicks ban re-entry). */}
               <button
-                onClick={() => {
-                  if (confirm('Return to the main room? Your conversation will end.')) {
+                onClick={async () => {
+                  // T2 (1 Nov 2026): asked in the page (useConfirm), never window.confirm.
+                  if (await ask({ title: 'Back to the main room?', body: 'Your conversation ends.', confirmLabel: 'Back to main room' })) {
                     if (sessionId) getSocket()?.emit('participant:leave_conversation', { sessionId });
                   }
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-[11px] sm:text-xs font-medium text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] text-[11px] sm:text-xs font-medium text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition-colors"
                 title="End this conversation and return to the main room"
               >
                 <ArrowLeft className="h-3.5 w-3.5" /> Back to Main Room
@@ -860,6 +863,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
         <VideoStage />
       </div>
       <RoomAudioRenderer />
+      {confirmDialog}
     </LiveKitRoom>
   );
 }

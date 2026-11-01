@@ -15,6 +15,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { hasEarlierAppPage } from './profile-back';
+import { useConfirm } from '@/hooks/useConfirm';
 
 // 13 Aug 2026 (D1): Stefan — "the profile card needs a major visual upgrade,
 // the greatest thing on the platform", and "About was cut off / too narrow".
@@ -37,6 +38,7 @@ export default function PublicProfilePage() {
   const { addToast } = useToastStore();
   const isOwnProfile = currentUser?.id === userId;
   const [reportOpen, setReportOpen] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
 
   const { data: user, isLoading, error } = useQuery({
     queryKey: ['user', userId],
@@ -135,7 +137,12 @@ export default function PublicProfilePage() {
   if (error || !user) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-12 text-center">
-        <h2 className="text-xl font-semibold text-gray-700">User not found</h2>
+        {/* T2 (1 Nov 2026): a removed, suspended or banned person's card is refused with the server's own sentence. */}
+        <h2 className="text-xl font-semibold text-gray-700">
+          {(error as { response?: { status?: number; data?: { error?: { message?: string } } } } | null)?.response?.status === 404
+            ? (error as { response?: { data?: { error?: { message?: string } } } }).response?.data?.error?.message || 'User not found'
+            : 'User not found'}
+        </h2>
         <Button onClick={goBack} variant="secondary" className="mt-4">Go Back</Button>
       </div>
     );
@@ -309,8 +316,8 @@ export default function PublicProfilePage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => {
-                      if (confirm(`Block ${user.displayName || 'this user'}? They won't be able to message you and you won't be matched together in future events.`)) {
+                    onClick={async () => {
+                      if (await ask({ title: `Block ${user.displayName || 'this person'}?`, body: "They won't be able to message you, and you won't be matched together in future events.", confirmLabel: 'Block', tone: 'danger' })) {
                         blockMutation.mutate();
                       }
                     }}
@@ -416,6 +423,7 @@ export default function PublicProfilePage() {
           reportedDisplayName={user.displayName}
         />
       )}
+      {confirmDialog}
     </div>
   );
 }

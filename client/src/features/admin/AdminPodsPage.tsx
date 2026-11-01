@@ -11,6 +11,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { isAdmin } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import { useConfirm } from '@/hooks/useConfirm';
 
 export default function AdminPodsPage() {
   const { user } = useAuthStore();
@@ -18,6 +19,7 @@ export default function AdminPodsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<'all' | 'active' | 'archived'>('all');
+  const { ask, confirmDialog } = useConfirm();
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-pods', filter],
@@ -85,7 +87,7 @@ export default function AdminPodsPage() {
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={() => { if (confirm('Archive this pod?')) archiveMutation.mutate(pod.id); }}
+                    onClick={async () => { if (await ask({ title: `Archive ${pod.name}?`, body: 'Its events are kept, and it can be reactivated later.', confirmLabel: 'Archive', tone: 'danger' })) archiveMutation.mutate(pod.id); }}
                   >
                     <Archive className="h-3.5 w-3.5 mr-1" /> Archive
                   </Button>
@@ -94,7 +96,7 @@ export default function AdminPodsPage() {
                   <Button
                     size="sm"
                     variant="danger"
-                    onClick={() => { if (confirm('PERMANENTLY delete this pod and ALL its events, matches, and data? This cannot be undone.')) hardDeleteMutation.mutate(pod.id); }}
+                    onClick={async () => { if (await ask({ title: `Delete ${pod.name} for good?`, body: 'This deletes the pod and all its events, matches and data. It cannot be undone.', confirmLabel: 'Delete forever', tone: 'danger' })) hardDeleteMutation.mutate(pod.id); }}
                   >
                     <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete Forever
                   </Button>
@@ -104,6 +106,7 @@ export default function AdminPodsPage() {
           </Card>
         ))}
       </div>
+      {confirmDialog}
     </div>
   );
 }

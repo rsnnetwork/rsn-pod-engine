@@ -15,6 +15,7 @@ import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
 import { E } from '@/realtime/entities';
+import { useConfirm } from '@/hooks/useConfirm';
 
 // ─── Task E3: admin per-user inspector ───────────────────────────────────────
 //
@@ -146,6 +147,7 @@ export default function AdminUserInspectorPage() {
     enabled: admin && !!selectedConvId,
   });
 
+  const { ask, confirmDialog } = useConfirm();
   const refreshMutation = useMutation({
     mutationFn: (targetId: string) => api.post('/onboarding/admin/refresh-enrichment', { userId: targetId }),
     onSuccess: (_data, targetId) => {
@@ -213,14 +215,19 @@ export default function AdminUserInspectorPage() {
           data={onboardingQuery.data}
           isLoading={onboardingQuery.isLoading}
           isError={onboardingQuery.isError}
-          onRefresh={() => {
-            if (confirm('Force a re-enrichment for this member? This clears their cached LinkedIn lookup and re-runs it in the background.')) {
+          onRefresh={async () => {
+            if (await ask({
+              title: "Refresh this member's enrichment?",
+              body: 'This clears their saved LinkedIn lookup and runs it again in the background.',
+              confirmLabel: 'Refresh',
+            })) {
               refreshMutation.mutate(id!);
             }
           }}
           refreshing={refreshMutation.isPending}
         />
       )}
+      {confirmDialog}
 
       {tab === 'profile' && (
         <ProfileTab

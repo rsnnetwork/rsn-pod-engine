@@ -13,6 +13,7 @@ import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import { linkedinHref } from './linkedin-href';
+import { useConfirm } from '@/hooks/useConfirm';
 
 interface JoinRequest {
   id: string;
@@ -44,11 +45,28 @@ function getActivationTier(days: number | undefined): { label: string; color: st
   return { label: 'Gone Cold', color: 'text-gray-400', variant: 'default' };
 }
 
+const POKE_COOLDOWN_HOURS = 24;
+
+function hoursSinceReminder(r: JoinRequest): number | null {
+  return r.lastRemindedAt ? (Date.now() - new Date(r.lastRemindedAt).getTime()) / (1000 * 60 * 60) : null;
+}
+
 function canPoke(r: JoinRequest): boolean {
   if (r.status !== 'approved' || r.hasActivated) return false;
-  if (!r.lastRemindedAt) return true;
-  const hoursSince = (Date.now() - new Date(r.lastRemindedAt).getTime()) / (1000 * 60 * 60);
-  return hoursSince >= 24;
+  const since = hoursSinceReminder(r);
+  return since === null || since >= POKE_COOLDOWN_HOURS;
+}
+
+/**
+ * T2 (1 Nov 2026): why Poke is greyed out, said under it. A tooltip never shows on a phone, so the button looked dead
+ * for a day after each reminder.
+ */
+function pokeCooldownText(r: JoinRequest): string | null {
+  const since = hoursSinceReminder(r);
+  if (since === null || since >= POKE_COOLDOWN_HOURS) return null;
+  const ago = Math.max(0, Math.floor(since));
+  const wait = Math.max(1, Math.ceil(POKE_COOLDOWN_HOURS - since));
+  return `Reminded ${ago === 0 ? 'less than an hour' : `${ago}h`} ago. You can remind them again in ${wait}h.`;
 }
 
 /** What approving does to an account that already exists and is not active. */
@@ -85,6 +103,7 @@ export default function AdminJoinRequestsPage() {
   const [messageText, setMessageText] = useState('');
   const [noteEdit, setNoteEdit] = useState<string | null>(null);
   const [noteText, setNoteText] = useState('');
+  const { ask, confirmDialog } = useConfirm();
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-join-requests', page, statusFilter],
@@ -253,10 +272,10 @@ export default function AdminJoinRequestsPage() {
           <div className="flex-1" />
           {statusFilter === 'pending' && (
             <>
-              <Button size="sm" variant="ghost" className="!text-emerald-300 !text-xs" isLoading={bulkMutation.isPending && bulkMutation.variables?.action === 'approve'} disabled={bulkMutation.isPending} onClick={() => { if (confirm(`Approve ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'approve' }); }}>
+              <Button size="sm" variant="ghost" className="!text-emerald-300 !text-xs" isLoading={bulkMutation.isPending && bulkMutation.variables?.action === 'approve'} disabled={bulkMutation.isPending} onClick={async () => { if (await ask({ title: `Approve ${selected.size} request${selected.size === 1 ? '' : 's'}?`, body: 'Each person gets their welcome email and can sign in.', confirmLabel: 'Approve' })) bulkMutation.mutate({ action: 'approve' }); }}>
                 Bulk Approve
               </Button>
-              <Button size="sm" variant="ghost" className="!text-red-300 !text-xs" isLoading={bulkMutation.isPending && bulkMutation.variables?.action === 'decline'} disabled={bulkMutation.isPending} onClick={() => { if (confirm(`Decline ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'decline' }); }}>
+              <Button size="sm" variant="ghost" className="!text-red-300 !text-xs" isLoading={bulkMutation.isPending && bulkMutation.variables?.action === 'decline'} disabled={bulkMutation.isPending} onClick={async () => { if (await ask({ title: `Decline ${selected.size} request${selected.size === 1 ? '' : 's'}?`, body: 'Each person is told their request was not accepted.', confirmLabel: 'Decline', tone: 'danger' })) bulkMutation.mutate({ action: 'decline' }); }}>
                 Bulk Decline
               </Button>
             </>
@@ -267,7 +286,7 @@ export default function AdminJoinRequestsPage() {
               variant="ghost"
               className="!text-amber-300 !text-xs"
               isLoading={bulkPokeMutation.isPending}
-              onClick={() => { if (confirm(`Send reminder to ${pokeableSelected.length} people?`)) bulkPokeMutation.mutate(pokeableSelected); }}
+              onClick={async () => { if (await ask({ title: `Remind ${pokeableSelected.length} ${pokeableSelected.length === 1 ? 'person' : 'people'}?`, body: 'Each gets an email reminding them to finish signing up.', confirmLabel: 'Send reminders' })) bulkPokeMutation.mutate(pokeableSelected); }}
             >
               <BellRing className="h-3.5 w-3.5 mr-1" /> Bulk Poke ({pokeableSelected.length})
             </Button>
@@ -419,17 +438,21 @@ export default function AdminJoinRequestsPage() {
                     )}
                     {/* Poke button for approved-but-not-activated */}
                     {r.status === 'approved' && !r.hasActivated && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!canPoke(r)}
-                        isLoading={pokeMutation.isPending}
-                        onClick={() => pokeMutation.mutate(r.id)}
-                        className={canPoke(r) ? '!border-amber-400 !text-amber-600 hover:!bg-amber-50' : ''}
-                        title={canPoke(r) ? 'Send signup reminder email' : 'Cooldown: wait 24h between pokes'}
-                      >
-                        <BellRing className="h-3.5 w-3.5 mr-1" /> Poke
-                      </Button>
+                      <div className="flex flex-col items-start sm:items-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!canPoke(r) || pokeMutation.isPending}
+                          isLoading={pokeMutation.isPending && pokeMutation.variables === r.id}
+                          onClick={() => pokeMutation.mutate(r.id)}
+                          className={`!min-h-[44px] ${canPoke(r) ? '!border-amber-400 !text-amber-600 hover:!bg-amber-50' : ''}`}
+                        >
+                          <BellRing className="h-3.5 w-3.5 mr-1" /> Poke
+                        </Button>
+                        {pokeCooldownText(r) && (
+                          <p className="max-w-[16rem] text-xs text-gray-500 sm:text-right" data-testid={`poke-cooldown-${r.id}`}>{pokeCooldownText(r)}</p>
+                        )}
+                      </div>
                     )}
                     <div className="flex items-center gap-2">
                       <Button
@@ -542,6 +565,7 @@ export default function AdminJoinRequestsPage() {
           </div>
         </Modal>
       )}
+      {confirmDialog}
     </div>
   );
 }

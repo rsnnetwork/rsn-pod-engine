@@ -1,403 +1,210 @@
+// client/src/features/admin/AdminUsersPage.tsx
+// The admin Users page (T2, 1 Nov 2026): Active, Suspended, Removed and Banned tabs, each asking the server for its
+// own status and saying how many it holds. Every action asks first in a ConfirmDialog, shows that it is working, then
+// says how it went in a toast, and the row leaves its tab on the refetch (admin:users reaches every admin's open
+// list). All hooks run before the admin check, so a role change while the page is open cannot break the page.
 import { useState } from 'react';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Shield, Search, ChevronLeft, ChevronRight, Ban, Trash2, UserX, RotateCcw, Settings } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronLeft, ChevronRight, Search, Shield } from 'lucide-react';
+import type { PaginationMeta } from '@rsn/shared';
 import Card from '@/components/ui/Card';
-import Badge from '@/components/ui/Badge';
-import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
-import Modal from '@/components/ui/Modal';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useAuthStore } from '@/stores/authStore';
-import { useNavigate } from 'react-router-dom';
+import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
-import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
+import AdminUserRow from './users/AdminUserRow';
+import UserStatusTabs from './users/UserStatusTabs';
+import UsersBulkBar from './users/UsersBulkBar';
+import EntitlementsModal from './users/EntitlementsModal';
+import { ROLE_LABEL, STATUS_TABS, actionCopy, failureText, type AccountStatus } from './users/user-status';
+import { nameOf, useStatusAction, type AdminUserRowData } from './users/useStatusAction';
 
-type StatusTab = 'active' | 'removed' | 'banned';
-
-const TAB_CONFIG: { key: StatusTab; label: string; apiStatus?: string }[] = [
-  { key: 'active', label: 'Active' },
-  { key: 'removed', label: 'Removed', apiStatus: 'deactivated' },
-  { key: 'banned', label: 'Banned', apiStatus: 'banned' },
-];
+const ROLE_FILTERS = ['super_admin', 'admin', 'host', 'founding_member', 'pro', 'member', 'free'];
 
 export default function AdminUsersPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const addToast = useToastStore(s => s.addToast);
+  const addToast = useToastStore((s) => s.addToast);
+  const admin = isAdmin(user?.role);
+  const isSuperAdmin = user?.role === 'super_admin';
+
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
   const [roleFilter, setRoleFilter] = useState('');
-  const [statusTab, setStatusTab] = useState<StatusTab>('active');
+  const [tab, setTab] = useState<AccountStatus>('active');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [entitlementUser, setEntitlementUser] = useState<any | null>(null);
-  const [entitlements, setEntitlements] = useState<any>(null);
+  const [limitsFor, setLimitsFor] = useState<AdminUserRowData | null>(null);
+  const status = useStatusAction();
 
-  const activeTabConfig = TAB_CONFIG.find(t => t.key === statusTab)!;
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['admin-users', page, debouncedSearch, roleFilter, statusTab],
+  const list = useQuery({
+    queryKey: ['admin-users', page, debouncedSearch, roleFilter, tab],
     queryFn: () => {
-      const params = new URLSearchParams();
-      params.set('page', String(page));
-      params.set('pageSize', '20');
+      const params = new URLSearchParams({ page: String(page), pageSize: '20', status: tab });
       if (debouncedSearch) params.set('search', debouncedSearch);
       if (roleFilter) params.set('role', roleFilter);
-      if (activeTabConfig.apiStatus) params.set('status', activeTabConfig.apiStatus);
-      return api.get(`/users?${params.toString()}`).then(r => r.data);
+      return api.get(`/users?${params.toString()}`).then((r) => r.data as { data: AdminUserRowData[]; meta: PaginationMeta });
     },
-    enabled: isAdmin(user?.role),
+    enabled: admin,
+    placeholderData: (previous) => previous,
     meta: { entities: [E.adminUsers] },
   });
 
-  if (!isAdmin(user?.role)) {
+  const roleMutation = useMutation({
+    mutationFn: ({ target, role }: { target: AdminUserRowData; role: string }) => api.put(`/users/${target.id}/role`, { role }),
+    onSuccess: (_res, { target, role }) => addToast(`${nameOf(target)} is now ${ROLE_LABEL[role] ?? role}.`, 'success'),
+    onError: (err) => addToast(failureText(err), 'error'),
+    onSettled: () => { void queryClient.invalidateQueries({ queryKey: ['admin-users'] }); },
+  });
+
+  if (!admin) {
     return (
-      <div className="max-w-md mx-auto text-center py-20">
-        <Shield className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-        <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">Admin Only</h2>
-        <p className="text-gray-500 mb-4">This page is restricted to administrators.</p>
+      <div className="mx-auto max-w-md py-20 text-center">
+        <Shield className="mx-auto mb-4 h-16 w-16 text-gray-300" />
+        <h2 className="mb-2 text-xl font-bold text-[#1a1a2e]">Admin Only</h2>
+        <p className="mb-4 text-gray-500">This page is restricted to administrators.</p>
         <Button variant="secondary" onClick={() => navigate('/')}>Go Home</Button>
       </div>
     );
   }
 
-  const users = data?.data ?? [];
-  const meta = data?.meta;
-  const isSuperAdmin = user?.role === 'super_admin';
-
-  const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: ['admin-users'] });
-
-  const banMutation = useMutation({
-    mutationFn: (userId: string) => api.put(`/users/${userId}/status`, { status: 'banned' }),
-    onSuccess: () => { invalidateUsers(); addToast('User banned', 'success'); },
-  });
-  const suspendMutation = useMutation({
-    mutationFn: (userId: string) => api.put(`/users/${userId}/status`, { status: 'suspended' }),
-    onSuccess: () => { invalidateUsers(); addToast('User suspended', 'success'); },
-  });
-  const activateMutation = useMutation({
-    mutationFn: (userId: string) => api.put(`/users/${userId}/status`, { status: 'active' }),
-    onSuccess: () => { invalidateUsers(); addToast('User reactivated', 'success'); },
-  });
-  const removeMutation = useMutation({
-    mutationFn: (userId: string) => api.put(`/users/${userId}/status`, { status: 'deactivated' }),
-    onSuccess: () => { invalidateUsers(); addToast('User removed', 'success'); },
-  });
-  const deleteMutation = useMutation({
-    mutationFn: (userId: string) => api.delete(`/users/${userId}`),
-    onSuccess: () => { invalidateUsers(); addToast('User permanently deleted', 'success'); },
-  });
-  const roleMutation = useMutation({
-    mutationFn: ({ userId, role }: { userId: string; role: string }) => api.put(`/users/${userId}/role`, { role }),
-    onSuccess: () => { invalidateUsers(); addToast('Role updated', 'success'); },
-  });
-  const bulkMutation = useMutation({
-    mutationFn: ({ action, value }: { action: string; value?: string }) =>
-      api.post('/admin/users/bulk-action', { userIds: Array.from(selected), action, value }),
-    onSuccess: (_, { action }) => {
-      invalidateUsers();
-      const label = action === 'activate' ? 'reactivated' : action === 'change_role' ? 'role updated' : action + 'ned';
-      addToast(`${selected.size} user(s) ${label}`, 'success');
-      setSelected(new Set());
-    },
-    onError: () => addToast('Bulk action failed', 'error'),
-  });
-
-  const toggleSelect = (id: string) => setSelected(prev => {
+  const users = list.data?.data ?? [];
+  const meta = list.data?.meta;
+  const counts = meta?.statusCounts ?? null;
+  const tabInfo = STATUS_TABS.find((t) => t.status === tab)!;
+  const others = users.filter((u) => u.id !== user?.id);
+  const chooseTab = (next: AccountStatus) => { setTab(next); setPage(1); setSelected(new Set()); };
+  const toggle = (id: string) => setSelected((prev) => {
     const next = new Set(prev);
-    next.has(id) ? next.delete(id) : next.add(id);
+    if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-  const toggleAll = () => {
-    const nonSelfUsers = users.filter((u: any) => u.id !== user?.id);
-    if (selected.size === nonSelfUsers.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(nonSelfUsers.map((u: any) => u.id)));
-    }
-  };
-
-  const openEntitlements = async (u: any) => {
-    setEntitlementUser(u);
-    try {
-      const res = await api.get(`/admin/users/${u.id}/entitlements`);
-      setEntitlements(res.data.data);
-    } catch {
-      setEntitlements({ maxPodsOwned: 1, maxSessionsPerMonth: 5, maxInvitesPerDay: 10, canHostSessions: false, canCreatePods: false });
-    }
-  };
-  const saveEntitlementsMutation = useMutation({
-    mutationFn: () => api.put(`/admin/users/${entitlementUser?.id}/entitlements`, entitlements),
-    onSuccess: () => { addToast('Entitlements updated', 'success'); setEntitlementUser(null); },
-    onError: () => addToast('Failed to save entitlements', 'error'),
-  });
+  const asked = status.asking ? actionCopy(status.asking.action, nameOf(status.asking.user)) : null;
+  const shown = counts ? counts[tab] : meta?.totalCount ?? 0;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between animate-fade-in">
-        <div>
+    <div className="mx-auto max-w-4xl space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-[#1a1a2e]">User Management</h1>
-          <p className="text-gray-500 text-sm mt-1">{meta?.totalCount || 0} users</p>
+          <p className="mt-1 text-sm text-gray-500" data-testid="admin-users-heading-count">
+            {shown} {tabInfo.label.toLowerCase()} {shown === 1 ? 'account' : 'accounts'}
+          </p>
         </div>
-        <Shield className="h-8 w-8 text-rsn-red" />
+        <Shield className="h-8 w-8 shrink-0 text-rsn-red" />
       </div>
 
-      {/* Status Tabs */}
-      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 animate-fade-in">
-        {TAB_CONFIG.map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => { setStatusTab(tab.key); setPage(1); }}
-            className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-              statusTab === tab.key
-                ? 'bg-white text-[#1a1a2e] shadow-sm'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
+      <UserStatusTabs current={tab} counts={counts} onChange={chooseTab} />
+
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Search by name or email</span>
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); setSelected(new Set()); }}
+            placeholder="Search by name or email..."
+            className="min-h-[44px] w-full rounded-xl border border-gray-200 bg-gray-50 py-2.5 pl-10 pr-4 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
+          />
+        </label>
+        <label className="sm:w-48">
+          <span className="sr-only">Filter by role</span>
+          <select
+            value={roleFilter}
+            onChange={(e) => { setRoleFilter(e.target.value); setPage(1); setSelected(new Set()); }}
+            className="min-h-[44px] w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
           >
-            {tab.label}
-          </button>
-        ))}
+            <option value="">All roles</option>
+            {ROLE_FILTERS.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+          </select>
+        </label>
       </div>
 
-      {/* Filters */}
-      <div className="flex gap-3 animate-fade-in-up">
-        <div className="flex-1">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1); }}
-              placeholder="Search by name or email..."
-              className="w-full rounded-xl border border-gray-200 bg-gray-50 pl-10 pr-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200"
-            />
-          </div>
-        </div>
-        <select
-          value={roleFilter}
-          onChange={e => { setRoleFilter(e.target.value); setPage(1); }}
-          className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200"
-        >
-          <option value="">All Roles</option>
-          <option value="super_admin">Super Admin</option>
-          <option value="admin">Admin</option>
-          <option value="host">Host</option>
-          <option value="founding_member">Founding Member</option>
-          <option value="pro">Pro</option>
-          <option value="member">Member</option>
-          <option value="free">Free</option>
-        </select>
-      </div>
-
-      {/* Bulk Action Bar */}
       {selected.size > 0 && (
-        <div className="sticky top-0 z-10 flex items-center gap-3 bg-[#1a1a2e] text-white rounded-xl px-4 py-3 shadow-lg animate-fade-in">
-          <span className="text-sm font-medium">{selected.size} selected</span>
-          <div className="flex-1" />
-          {statusTab === 'active' && (
-            <>
-              <select
-                className="bg-transparent border border-gray-500 rounded text-xs text-blue-300 px-2 py-1"
-                defaultValue=""
-                onChange={(e) => {
-                  const role = e.target.value;
-                  if (role && confirm(`Change ${selected.size} user(s) to ${role}?`)) {
-                    bulkMutation.mutate({ action: 'change_role', value: role });
-                  }
-                  e.target.value = '';
-                }}
-              >
-                <option value="" disabled>Bulk Change Role</option>
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-                <option value="super_admin">Super Admin</option>
-              </select>
-              <Button size="sm" variant="ghost" className="!text-amber-300 !text-xs" onClick={() => { if (confirm(`Suspend ${selected.size} user(s)?`)) bulkMutation.mutate({ action: 'suspend' }); }}>
-                Bulk Suspend
-              </Button>
-              <Button size="sm" variant="ghost" className="!text-red-300 !text-xs" onClick={() => { if (confirm(`Ban ${selected.size} user(s)?`)) bulkMutation.mutate({ action: 'ban' }); }}>
-                Bulk Ban
-              </Button>
-            </>
-          )}
-          {(statusTab === 'removed' || statusTab === 'banned') && (
-            <Button size="sm" variant="ghost" className="!text-emerald-300 !text-xs" onClick={() => { if (confirm(`Reactivate ${selected.size} user(s)?`)) bulkMutation.mutate({ action: 'activate' }); }}>
-              Bulk Reactivate
-            </Button>
-          )}
-          <Button size="sm" variant="ghost" className="!text-gray-300 !text-xs" onClick={() => setSelected(new Set())}>
-            Clear
-          </Button>
-        </div>
+        <UsersBulkBar
+          selected={Array.from(selected)}
+          tab={tab}
+          isSuperAdmin={isSuperAdmin}
+          onDone={() => setSelected(new Set())}
+          onClear={() => setSelected(new Set())}
+        />
       )}
 
-      {/* User List */}
-      {isLoading ? <PageLoader /> : (
-        <div className="space-y-2 animate-fade-in-up stagger-1">
-          {/* Select all checkbox */}
-          {users.length > 0 && (
-            <label className="flex items-center gap-2 px-4 py-1 text-xs text-gray-500 cursor-pointer">
+      {list.isPending ? <PageLoader /> : list.isError ? (
+        <Card>
+          <div className="py-4 text-center">
+            <p className="text-sm text-gray-600">The accounts could not be loaded.</p>
+            <Button variant="secondary" className="mt-3" onClick={() => void list.refetch()}>Try again</Button>
+          </div>
+        </Card>
+      ) : (
+        <div className="space-y-2" data-testid={`admin-users-list-${tab}`}>
+          {others.length > 0 && (
+            <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-sm text-gray-500">
               <input
                 type="checkbox"
-                checked={selected.size > 0 && selected.size === users.filter((u: any) => u.id !== user?.id).length}
-                onChange={toggleAll}
-                className="h-3.5 w-3.5 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
+                checked={selected.size > 0 && selected.size === others.length}
+                onChange={() => setSelected(selected.size === others.length ? new Set() : new Set(others.map((u) => u.id)))}
+                className="h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
               />
-              Select all
+              Select all on this page
             </label>
           )}
-          {users.map((u: any) => (
-            <Card key={u.id} className={`!p-4 card-hover ${selected.has(u.id) ? 'ring-2 ring-rsn-red/30' : ''}`}>
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  {u.id !== user?.id && (
-                    <input
-                      type="checkbox"
-                      checked={selected.has(u.id)}
-                      onChange={() => toggleSelect(u.id)}
-                      className="h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red shrink-0"
-                    />
-                  )}
-                  <a href={`/admin/users/${u.id}`} className="flex min-w-0 items-center gap-3 hover:opacity-80 transition-opacity">
-                    <Avatar src={u.avatarUrl} name={u.displayName || u.email} size="sm" className="shrink-0" />
-                    <div className="min-w-0 break-words">
-                      <p className="text-sm font-medium text-gray-800">{u.displayName || 'No name'}</p>
-                      <p className="text-xs text-gray-400">{u.email}</p>
-                    </div>
-                  </a>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={u.role === 'admin' || u.role === 'super_admin' ? 'brand' : u.role === 'host' ? 'info' : u.role === 'founding_member' ? 'success' : u.role === 'pro' ? 'warning' : 'default'}>
-                    {u.role}
-                  </Badge>
-                  <Badge variant={u.status === 'active' ? 'success' : u.status === 'banned' ? 'warning' : 'default'}>
-                    {u.status}
-                  </Badge>
-                </div>
-              </div>
-              {/* Admin actions (don't show for self) */}
-              {u.id !== user?.id && (
-                <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-gray-100">
-                  {statusTab === 'active' && (
-                    <>
-                      {/* Role selector */}
-                      <select
-                        value={u.role}
-                        onChange={e => roleMutation.mutate({ userId: u.id, role: e.target.value })}
-                        className="text-xs rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-rsn-red/30"
-                      >
-                        <option value="free">Free</option>
-                        <option value="member">Member</option>
-                        <option value="pro">Pro</option>
-                        <option value="founding_member">Founding Member</option>
-                        <option value="host">Host</option>
-                        {isSuperAdmin && <option value="admin">Admin</option>}
-                        {isSuperAdmin && <option value="super_admin">Super Admin</option>}
-                      </select>
-                      <Button size="sm" variant="ghost" onClick={() => openEntitlements(u)} className="!text-blue-600 !text-xs">
-                        <Settings className="h-3 w-3 mr-1" /> Limits
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => suspendMutation.mutate(u.id)} className="!text-amber-600 !text-xs">
-                        <UserX className="h-3 w-3 mr-1" /> Suspend
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => { if (confirm('Ban this user? They will be moved to the Banned tab.')) banMutation.mutate(u.id); }} className="!text-red-600 !text-xs">
-                        <Ban className="h-3 w-3 mr-1" /> Ban
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => { if (confirm('Remove this user? They will be moved to the Removed tab and can be reactivated later.')) removeMutation.mutate(u.id); }} className="!text-orange-600 !text-xs">
-                        <UserX className="h-3 w-3 mr-1" /> Remove
-                      </Button>
-                    </>
-                  )}
-                  {(statusTab === 'removed' || statusTab === 'banned') && (
-                    <>
-                      <Button size="sm" variant="ghost" onClick={() => { if (confirm('Reactivate this user? They will be moved back to the Active tab.')) activateMutation.mutate(u.id); }} className="!text-emerald-600 !text-xs">
-                        <RotateCcw className="h-3 w-3 mr-1" /> Reactivate
-                      </Button>
-                      {isSuperAdmin && (
-                        <Button size="sm" variant="ghost" onClick={() => { if (confirm('Permanently delete this user and all their data? This cannot be undone.')) deleteMutation.mutate(u.id); }} className="!text-red-600 !text-xs">
-                          <Trash2 className="h-3 w-3 mr-1" /> Delete Forever
-                        </Button>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-            </Card>
+          {users.map((u) => (
+            <AdminUserRow
+              key={u.id}
+              user={u}
+              tab={tab}
+              isSelf={u.id === user?.id}
+              isSuperAdmin={isSuperAdmin}
+              selected={selected.has(u.id)}
+              busy={status.busyUserId === u.id}
+              roleBusy={roleMutation.isPending && roleMutation.variables?.target.id === u.id}
+              onToggleSelect={() => toggle(u.id)}
+              onAction={(action) => status.ask(u, action)}
+              onRole={(role) => roleMutation.mutate({ target: u, role })}
+              onLimits={() => setLimitsFor(u)}
+            />
           ))}
           {users.length === 0 && (
-            <Card>
-              <p className="text-gray-400 text-sm text-center py-4">
-                {statusTab === 'active' ? 'No active users found' : statusTab === 'removed' ? 'No removed users' : 'No banned users'}
-              </p>
-            </Card>
+            <Card><p className="py-4 text-center text-sm text-gray-500">{debouncedSearch ? 'Nobody here matches that search.' : tabInfo.empty}</p></Card>
           )}
         </div>
       )}
 
-      {/* Pagination */}
       {meta && meta.totalPages > 1 && (
-        <div className="flex items-center justify-between animate-fade-in-up stagger-2">
-          <p className="text-sm text-gray-400">Page {meta.page} of {meta.totalPages}</p>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-gray-500">Page {meta.page} of {meta.totalPages}</p>
           <div className="flex gap-2">
-            <Button variant="ghost" size="sm" disabled={!meta.hasPrev} onClick={() => setPage(p => p - 1)}>
+            <Button variant="ghost" disabled={!meta.hasPrev} onClick={() => setPage((p) => p - 1)}>
               <ChevronLeft className="h-4 w-4" /> Prev
             </Button>
-            <Button variant="ghost" size="sm" disabled={!meta.hasNext} onClick={() => setPage(p => p + 1)}>
+            <Button variant="ghost" disabled={!meta.hasNext} onClick={() => setPage((p) => p + 1)}>
               Next <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
       )}
-      {/* Entitlements Modal */}
-      {entitlementUser && entitlements && (
-        <Modal open={!!entitlementUser} onClose={() => setEntitlementUser(null)} title={`Limits — ${entitlementUser.displayName || entitlementUser.email}`}>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Max Pods Owned</label>
-                <input type="number" min={0} max={100} value={entitlements.maxPodsOwned}
-                  onChange={e => setEntitlements((p: any) => ({ ...p, maxPodsOwned: parseInt(e.target.value) || 0 }))}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Max Sessions / Month</label>
-                <input type="number" min={0} max={500} value={entitlements.maxSessionsPerMonth}
-                  onChange={e => setEntitlements((p: any) => ({ ...p, maxSessionsPerMonth: parseInt(e.target.value) || 0 }))}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Max Invites / Day</label>
-                <input type="number" min={0} max={1000} value={entitlements.maxInvitesPerDay}
-                  onChange={e => setEntitlements((p: any) => ({ ...p, maxInvitesPerDay: parseInt(e.target.value) || 0 }))}
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]" />
-              </div>
-            </div>
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                <input type="checkbox" checked={entitlements.canHostSessions}
-                  onChange={e => setEntitlements((p: any) => ({ ...p, canHostSessions: e.target.checked }))}
-                  className="h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red" />
-                Can host events
-              </label>
-              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                <input type="checkbox" checked={entitlements.canCreatePods}
-                  onChange={e => setEntitlements((p: any) => ({ ...p, canCreatePods: e.target.checked }))}
-                  className="h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red" />
-                Can create pods
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="secondary" onClick={() => setEntitlementUser(null)}>Cancel</Button>
-              <Button onClick={() => saveEntitlementsMutation.mutate()} isLoading={saveEntitlementsMutation.isPending}>
-                Save Limits
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
+
+      <ConfirmDialog
+        open={!!asked}
+        title={asked?.title ?? ''}
+        body={asked?.body ?? ''}
+        confirmLabel={asked?.confirmLabel ?? ''}
+        busyLabel={asked?.busyLabel}
+        tone={asked?.tone ?? 'default'}
+        busy={status.busy}
+        onConfirm={status.confirm}
+        onCancel={status.cancel}
+      />
+      {limitsFor && <EntitlementsModal user={limitsFor} onClose={() => setLimitsFor(null)} />}
     </div>
   );
 }

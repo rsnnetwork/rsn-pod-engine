@@ -264,7 +264,8 @@ describe('Leave keeps the app\'s live connection and lands on the event page', (
 
   it('speed networking: Leave Event tells the server, keeps the socket, and replaces the live page with the event page', () => {
     const leave = blockFrom(page, 'const handleLeave');
-    expect(leave).toMatch(/confirm\(/);
+    // T2 (1 Nov 2026): it asks first in the page (useConfirm), never window.confirm.
+    expect(leave).toMatch(/if \(!\(await ask\(\{ title: 'Leave this event\?'/);
     expect(leave).toMatch(/emit\('session:leave', \{ sessionId: sessionId! \}\)/);
     expect(leave).not.toMatch(/disconnectSocket/);
     expect(leave).toMatch(/navigate\(`\/sessions\/\$\{sessionId\}`, \{ replace: true \}\)/);

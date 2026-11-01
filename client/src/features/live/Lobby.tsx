@@ -24,6 +24,7 @@ import {
 import { isTrackReference } from '@livekit/components-core';
 import '@livekit/components-styles';
 import { Track, ConnectionState, RoomEvent, VideoPresets } from 'livekit-client';
+import { useConfirm } from '@/hooks/useConfirm';
 
 // Bug 10 (April 19) — Meet/Zoom-style reaction badge anchored above
 // the lobby tile name plate. Subscribes only to this user's entry so
@@ -40,6 +41,7 @@ const LobbyTileReaction = memo(function LobbyTileReaction({ userId }: { userId?:
 });
 
 function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
+  const { ask, confirmDialog } = useConfirm();
   const tracks = useTracks(
     [{ source: Track.Source.Camera, withPlaceholder: true }],
     { onlySubscribed: false },
@@ -205,12 +207,13 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     socket?.emit('host:mute_participant', { sessionId, targetUserId: targetIdentity, muted: mute });
   }, [sessionId]);
 
-  const handleKick = useCallback((targetIdentity: string, targetName: string) => {
+  // T2 (1 Nov 2026): asked in the page (useConfirm), never window.confirm.
+  const handleKick = useCallback(async (targetIdentity: string, targetName: string) => {
     if (!sessionId) return;
-    if (!window.confirm(`Remove ${targetName} from this event?`)) return;
+    if (!(await ask({ title: `Remove ${targetName} from this event?`, body: 'They are disconnected at once and cannot come back unless you invite them again.', confirmLabel: 'Remove', tone: 'danger' }))) return;
     const socket = getSocket();
     socket?.emit('host:remove_participant', { sessionId, userId: targetIdentity, reason: 'Removed by host' });
-  }, [sessionId]);
+  }, [sessionId, ask]);
 
   // F2 (20 May 2026 — user spec): host can shrink a cohost's tile back to
   // participant size without opening HCC. Visual only; cohost privileges
@@ -626,6 +629,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   });
   return (
     <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto`}>
+      {confirmDialog}
       {bigSpeakerTracks.length > 0 && (
         <div
           data-testid="lobby-big-speaker-stage"
@@ -1256,6 +1260,7 @@ export function formatParticipantHeader(
 }
 
 function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
+  const { ask, confirmDialog } = useConfirm();
   // F3 (21 May Ali) — same realtime-presence story as LobbyStatusOverlay.
   const hostUserId = useSessionStore(s => s.hostUserId);
   const cohosts = useSessionStore(s => s.cohosts);
@@ -1279,15 +1284,16 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
   })();
   const [expanded, setExpanded] = useState(true);
 
-  const handleKick = useCallback((userId: string, displayName: string) => {
+  const handleKick = useCallback(async (userId: string, displayName: string) => {
     if (!sessionId) return;
-    if (!window.confirm(`Remove ${displayName} from this event?`)) return;
+    if (!(await ask({ title: `Remove ${displayName} from this event?`, body: 'They are disconnected at once and cannot come back unless you invite them again.', confirmLabel: 'Remove', tone: 'danger' }))) return;
     const socket = getSocket();
     socket?.emit('host:remove_participant', { sessionId, userId, reason: 'Removed by host' });
-  }, [sessionId]);
+  }, [sessionId, ask]);
 
   return (
     <div className="w-full max-w-4xl mx-auto bg-gray-50 rounded-xl overflow-hidden">
+      {confirmDialog}
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-gray-300 hover:bg-white/5 transition-colors"

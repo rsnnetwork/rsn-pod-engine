@@ -24,6 +24,7 @@ import EditEventModal from './EditEventModal';
 import { eventFacts, eventFactsLine } from './event-format-form';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
+import { useConfirm } from '@/hooks/useConfirm';
 
 /** The icon over each figure under an event's title. */
 const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
@@ -39,6 +40,7 @@ export default function SessionDetailPage() {
   const qc = useQueryClient();
   // Edit Event is its own react-hook-form sheet that follows the event type (EditEventModal, 26 Oct 2026).
   const [editOpen, setEditOpen] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
   // The invite sheet (features/invites, 26 Oct 2026). A new event lands here with ?invite=1 (Schedule an Event), and
   // the sheet is open on arrival for whoever may invite.
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -402,8 +404,8 @@ export default function SessionDetailPage() {
               <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
                 <CheckCircle className="h-4 w-4" /> Registered
               </div>
-              <Button variant="ghost" onClick={() => {
-                if (!confirm('Are you sure you want to unregister? You will need to register again or get a new invite to rejoin.')) return;
+              <Button variant="ghost" onClick={async () => {
+                if (!(await ask({ title: 'Unregister from this event?', body: 'To come back you register again, or ask for a new invite.', confirmLabel: 'Unregister', tone: 'danger' }))) return;
                 unregisterMutation.mutate();
               }} isLoading={unregisterMutation.isPending}>
                 <UserMinus className="h-4 w-4 mr-2" /> Unregister
@@ -500,8 +502,8 @@ export default function SessionDetailPage() {
                   {sessionStatusPhase(session.status) !== 'live' && (
                     <button
                       type="button"
-                      onClick={() => {
-                        if (confirm('Delete this event? This cannot be undone.')) deleteMutation.mutate();
+                      onClick={async () => {
+                        if (await ask({ title: 'Delete this event?', body: 'This cannot be undone.', confirmLabel: 'Delete event', tone: 'danger' })) deleteMutation.mutate();
                       }}
                       disabled={deleteMutation.isPending}
                       className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-red-200 bg-white hover:bg-red-50 flex items-center justify-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-60"
@@ -676,6 +678,7 @@ export default function SessionDetailPage() {
 
       {/* Edit Event: the same type picker and settings as Schedule an Event */}
       <EditEventModal open={editOpen} onClose={() => setEditOpen(false)} session={session} podType={pod?.podType} isAdmin={isAdmin} />
+      {confirmDialog}
     </div>
   );
 }

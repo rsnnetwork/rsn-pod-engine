@@ -468,7 +468,9 @@ describe('the organisers\' list keeps the pages\' query keys and their tags', ()
   it('reminds (one, or all on an event), withdraws after asking, and is always on screen for the people who run it', () => {
     expect(list).toMatch(/api\.post\(`\/invites\/\$\{inviteId\}\/remind`\)/);
     expect(list).toMatch(/api\.post\(`\/invites\/remind-all\/\$\{sessionId\}`\)/);
-    expect(list).toMatch(/window\.confirm\(WITHDRAW_CONFIRM\)/);
+    // T2 (1 Nov 2026): asked in the page, never window.confirm (a blocked dialog answers false and nothing happens).
+    expect(list).not.toMatch(/window\.confirm/);
+    expect(list).toMatch(/<ConfirmDialog[\s\S]{0,200}title=\{WITHDRAW_TITLE\}[\s\S]{0,60}body=\{WITHDRAW_BODY\}/);
     expect(list).toContain('{STATUS_TITLE}');
     expect(list).not.toMatch(/setQueryData/);
   });

@@ -6,7 +6,7 @@
 // host, co-hosts and admins while the event can still take people (the same people the server lets read the lists).
 // Each invite can be reminded or withdrawn; Remind all goes to everyone still waiting. What it reads follows the
 // pod's or event's invites tag, so an invite sent, accepted, declined or withdrawn changes it without a reload.
-import { useId } from 'react';
+import { useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { Link2, Send, Trash2 } from 'lucide-react';
 import api from '@/lib/api';
@@ -14,9 +14,10 @@ import { E } from '@/realtime/entities';
 import { useToastStore } from '@/stores/toastStore';
 import { Skeleton } from '@/components/ui/Spinner';
 import { cn } from '@/lib/utils';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { inviteErrorSentence, targetTags, type InviteTarget, type Notice } from './invite-picker';
 import {
-  CHOOSE_PEOPLE, LOAD_FAILED, NOBODY_INVITED, NOT_REMINDED, NOT_WITHDRAWN, REMIND_GAP_MS, SHAREABLE_LINK, STATUS_TITLE, WITHDRAWN, WITHDRAW_CONFIRM,
+  CHOOSE_PEOPLE, LOAD_FAILED, NOBODY_INVITED, NOT_REMINDED, NOT_WITHDRAWN, REMIND_GAP_MS, SHAREABLE_LINK, STATUS_TITLE, WITHDRAWN, WITHDRAW_BODY, WITHDRAW_TITLE,
   dayOf, inviteStatusGroups, personLine, remindAllSentence, remindSentence, settleInTurn, statusSummary, tallyReminders,
   type InviteListRow,
 } from './invite-status';
@@ -120,9 +121,15 @@ function InviteStatusCard({ target, kind, pending, history, remindAll, present, 
     },
     onError: (err) => addToast(inviteErrorSentence(err, NOT_WITHDRAWN), 'error'),
   });
+  // Withdraw asks first; the question stays open and busy until the server answers.
+  const [askingWithdraw, setAskingWithdraw] = useState<string | null>(null);
   const withdraw = (inviteId: string) => {
     if (revokeInviteMutation.isPending) return;
-    if (window.confirm(WITHDRAW_CONFIRM)) revokeInviteMutation.mutate(inviteId);
+    setAskingWithdraw(inviteId);
+  };
+  const confirmWithdraw = () => {
+    if (!askingWithdraw || revokeInviteMutation.isPending) return;
+    revokeInviteMutation.mutate(askingWithdraw, { onSettled: () => setAskingWithdraw(null) });
   };
 
   if (pending.isPending || history.isPending) {
@@ -274,6 +281,17 @@ function InviteStatusCard({ target, kind, pending, history, remindAll, present, 
           )}
         </>
       )}
+      <ConfirmDialog
+        open={!!askingWithdraw}
+        title={WITHDRAW_TITLE}
+        body={WITHDRAW_BODY}
+        confirmLabel="Withdraw"
+        busyLabel="Withdrawing…"
+        tone="danger"
+        busy={revokeInviteMutation.isPending}
+        onConfirm={confirmWithdraw}
+        onCancel={() => setAskingWithdraw(null)}
+      />
     </section>
   );
 }

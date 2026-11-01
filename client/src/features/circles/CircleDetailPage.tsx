@@ -18,6 +18,7 @@ import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
+import { useConfirm } from '@/hooks/useConfirm';
 import CircleWall from './CircleWall';
 
 interface CircleDetail {
@@ -43,6 +44,7 @@ export default function CircleDetailPage() {
   const admin = isAdmin(user?.role);
   const [attaching, setAttaching] = useState(false);
   const [podChoice, setPodChoice] = useState('');
+  const { ask, confirmDialog } = useConfirm();
 
   // realtime: skip — admin attach picker only; fetched when the picker opens
   const { data: allPods } = useQuery<Array<{ id: string; name: string }>>({
@@ -209,14 +211,15 @@ export default function CircleDetailPage() {
                   {admin && (
                     <button
                       onClick={async () => {
-                        if (!confirm(`Detach ${p.name} from this circle? The pod itself is untouched.`)) return;
+                        if (!(await ask({ title: `Detach ${p.name}?`, body: 'It leaves this circle. The pod itself is untouched.', confirmLabel: 'Detach', tone: 'danger' }))) return;
                         try {
                           await api.delete(`/circles/${circle.id}/pods/${p.podId}`);
                           await queryClient.invalidateQueries({ queryKey: ['circle', circleId] });
                         } catch { addToast('Could not detach.', 'error'); }
                       }}
-                      className="text-gray-300 hover:text-red-500 min-h-[36px] min-w-[36px]"
+                      className="flex min-h-[44px] min-w-[44px] items-center justify-center text-gray-400 hover:text-red-500"
                       title="Detach from circle"
+                      aria-label={`Detach ${p.name} from this circle`}
                     ><X className="h-4 w-4" /></button>
                   )}
                 </div>
@@ -255,6 +258,7 @@ export default function CircleDetailPage() {
           </div>
         )}
       </div>
+      {confirmDialog}
     </div>
   );
 }

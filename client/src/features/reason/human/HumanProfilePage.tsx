@@ -28,6 +28,7 @@ import {
   MOVE_RESPONSE, backFallback, isMemberId, knownSource, loadFailedText, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
 } from './profile-text';
 import { blockMember, errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
+import { useConfirm } from '@/hooks/useConfirm';
 
 // The line under "could not load" when the failure itself has nothing more specific to say.
 const LOAD_HINT = 'Try again in a moment.';
@@ -157,6 +158,7 @@ export default function HumanProfilePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const me = useAuthStore((s) => s.user?.id as string | undefined);
+  const { ask, confirmDialog } = useConfirm();
 
   const { data: brief, error, fetchStatus, isError, isPending, refetch } = useQuery({
     queryKey: reasonKeys.brief(userId),
@@ -202,9 +204,10 @@ export default function HumanProfilePage() {
     },
     onError: (err) => addToast(errorMessage(err, 'Could not block right now. Try again in a moment.'), 'error'),
   });
-  const onBlock = () => {
+  // T2 (1 Nov 2026): asked in the page (useConfirm), never window.confirm.
+  const onBlock = async () => {
     if (block.isPending) return;
-    if (confirm(`Block ${name}? They won't be able to message you and you won't be matched together in future events.`)) block.mutate();
+    if (await ask({ title: `Block ${name}?`, body: "They won't be able to message you, and you won't be matched together in future events.", confirmLabel: 'Block', tone: 'danger' })) block.mutate();
   };
   // The page stays mounted when one profile opens another, so the dialog's "also blocked" is read once and cleared.
   const closeReport = () => {
@@ -272,6 +275,8 @@ export default function HumanProfilePage() {
           onBlocked={() => setBlockedInReport(true)}
         />
       )}
+      {confirmDialog}
+      {blocked.confirmDialog}
     </div>
   );
 }

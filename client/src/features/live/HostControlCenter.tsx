@@ -63,6 +63,7 @@ import {
 } from 'lucide-react';
 import { useActionLock } from '@/hooks/useActionLock';
 import { useEscapeKey } from '@/hooks/useEscapeKey';
+import { useConfirm } from '@/hooks/useConfirm';
 
 // 9 May iter (revised) — windowed Control Center on desktop with drag,
 // resize, minimize, maximize. Default size is intentionally LARGE so
@@ -201,6 +202,7 @@ export default function HostControlCenter({
   });
   const [isMaximized, setIsMaximized] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
   const preMaxBoundsRef = useRef<PersistedBounds | null>(null);
 
   useEffect(() => {
@@ -324,17 +326,18 @@ export default function HostControlCenter({
     runLocked(`set_tile_size:${userId}:${size}`, () => {
       socket?.emit('host:set_tile_size', { sessionId, targetUserId: userId, size });
     });
-  // Phase 7-audit fix — confirm() lives outside runLocked so a Cancel
+  // Phase 7-audit fix — the question lives outside runLocked so a Cancel
   // doesn't burn the lock on a no-op. Lock acquisition only happens
-  // when the user actually committed to the action.
-  const reassign = (userId: string) => {
-    if (!confirm('Pull this person out of their current spot and re-match them?')) return;
+  // when the user actually committed to the action. T2 (1 Nov 2026): asked
+  // in the page (useConfirm), never window.confirm.
+  const reassign = async (userId: string) => {
+    if (!(await ask({ title: 'Re-match this person?', body: 'They are pulled out of their current spot and matched again.', confirmLabel: 'Re-match' }))) return;
     runLocked(`reassign:${userId}`, () => {
       socket?.emit('host:reassign', { sessionId, participantId: userId });
     });
   };
-  const kick = (userId: string, displayName: string) => {
-    if (!confirm(`Remove ${displayName} from the event? They'll be disconnected immediately.`)) return;
+  const kick = async (userId: string, displayName: string) => {
+    if (!(await ask({ title: `Remove ${displayName} from the event?`, body: 'They are disconnected at once and cannot come back unless you invite them again.', confirmLabel: 'Remove', tone: 'danger' }))) return;
     runLocked(`kick:${userId}`, () => {
       socket?.emit('host:remove_participant', { sessionId, userId, reason: 'host_removed' });
     });
@@ -854,6 +857,7 @@ export default function HostControlCenter({
           {bodyContent}
         </div>
         {subModal}
+        {confirmDialog}
       </div>
     );
   }
@@ -906,6 +910,7 @@ export default function HostControlCenter({
         {bodyContent}
       </Rnd>
       {subModal}
+      {confirmDialog}
     </>,
     document.body,
   );

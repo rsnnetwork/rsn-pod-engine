@@ -27,6 +27,7 @@ import { E } from '@/realtime/entities';
 import { connectSocket, getSocket } from '@/lib/socket';
 import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
+import { useConfirm } from '@/hooks/useConfirm';
 
 /** The final screen for a person the host removed: one sentence and the way out. */
 function RemovedFromEvent({ onBack }: { onBack: () => void }) {
@@ -73,6 +74,7 @@ export default function LiveSessionPage() {
   const [participantListOpen, setParticipantListOpen] = useState(false);
 
   const [mediaError, setMediaError] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
 
   // Request media permissions once per event entry (not per room transition)
   useEffect(() => {
@@ -183,12 +185,13 @@ export default function LiveSessionPage() {
   // it again. The app's one live connection stays up: the server takes this socket out of the event's room on
   // session:leave, and cutting the connection here stopped every bell, the "Ended" flip and the post-event messages
   // until the token rotated (and left the event page showing the live room's stale list).
-  const handleLeave = () => {
+  // T2 (1 Nov 2026): asked in the page (useConfirm), never window.confirm.
+  const handleLeave = async () => {
     const inActivePhase = phase === 'matched' || phase === 'rating';
-    const message = inActivePhase
-      ? 'You\'re in a breakout room. Leaving will end your conversation. Leave event?'
-      : 'Leave this event?';
-    if (!confirm(message)) return;
+    const body = inActivePhase
+      ? 'You are in a breakout room. Leaving ends your conversation.'
+      : 'You can come back while it is running.';
+    if (!(await ask({ title: 'Leave this event?', body, confirmLabel: 'Leave', tone: 'danger' }))) return;
     getSocket()?.emit('session:leave', { sessionId: sessionId! });
     reset();
     navigate(`/sessions/${sessionId}`, { replace: true });
@@ -661,6 +664,7 @@ export default function LiveSessionPage() {
           <HostControls sessionId={sessionId} canEndEvent={canEndEvent} onLeave={handleLeave} />
         </SectionErrorBoundary>
       )}
+      {confirmDialog}
     </div>
   );
 }

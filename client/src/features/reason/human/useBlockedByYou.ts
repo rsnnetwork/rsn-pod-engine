@@ -8,14 +8,19 @@ import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { errorMessage, fetchBlockStatus, reasonKeys, unblockMember } from '../api';
 import { shouldRetry } from './profile-text';
+import { useConfirm } from '@/hooks/useConfirm';
 
-// The old profile unblocked at once. A confirmation now asks first, in the same dialog Block uses.
+// The old profile unblocked at once. A confirmation now asks first, in the same dialog Block uses (T2, 1 Nov 2026: a
+// ConfirmDialog in the page; the page renders `confirmDialog`).
 export const UNBLOCK_QUESTION = 'Unblock this member? They will be able to message you again, and you may be matched together in future events.';
+const UNBLOCK_TITLE = 'Unblock this member?';
+const UNBLOCK_BODY = 'They will be able to message you again, and you may be matched together in future events.';
 
 /** Asked only while the page shows "not available" for a member id: whether you blocked them, and Unblock. */
 export function useBlockedByYou(userId: string, me: string | undefined, asking: boolean) {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  const { ask, confirmDialog } = useConfirm();
   const status = useQuery({
     queryKey: reasonKeys.blockStatus(userId),
     queryFn: () => fetchBlockStatus(userId),
@@ -35,9 +40,9 @@ export function useBlockedByYou(userId: string, me: string | undefined, asking: 
     },
     onError: (err) => addToast(errorMessage(err, 'Could not unblock right now. Try again in a moment.'), 'error'),
   });
-  const askToUnblock = () => {
+  const askToUnblock = async () => {
     if (unblock.isPending) return;
-    if (confirm(UNBLOCK_QUESTION)) unblock.mutate();
+    if (await ask({ title: UNBLOCK_TITLE, body: UNBLOCK_BODY, confirmLabel: 'Unblock' })) unblock.mutate();
   };
   return {
     /** The answer is on its way: the page waits for it rather than flash the plain notice first. */
@@ -45,5 +50,6 @@ export function useBlockedByYou(userId: string, me: string | undefined, asking: 
     blockedByYou: status.data?.hasBlocked === true,
     askToUnblock,
     unblocking: unblock.isPending,
+    confirmDialog,
   };
 }
