@@ -40,7 +40,7 @@ export default function YourEntities({ mine, failure, onCreate }: Props) {
             <ReasonSheep pose="curious" className="h-[52px] w-[52px] shrink-0" />
             <div className="min-w-0">
               <h3 className="text-[15px] font-bold">You are not linked to an entity yet.</h3>
-              <p className="mt-1 text-[13px] text-reason-muted">Create your company, or find it below and join it with your role.</p>
+              <p className="mt-1 text-[13px] text-reason-muted">Create your company, or find it below and ask to join it with your role.</p>
             </div>
           </div>
         ) : (

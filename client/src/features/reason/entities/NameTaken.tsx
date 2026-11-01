@@ -1,6 +1,7 @@
 // client/src/features/reason/entities/NameTaken.tsx
-// The create form's answer to a 409: another active entity already has this name. The member can open it, or join it
-// with the role (and title) they chose in the form; "Join it" is the same intent as creating it ("this is my company").
+// The create form's answer to a 409: another active entity already has this name. The member can open it, or ask to
+// join it with the role (and title) they chose in the form; "Ask to join" is the same intent as creating it ("this is
+// my company"). 30 Oct review (T15, L23): the claim waits for the entity's admins, and a claim already waiting says so.
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -46,6 +47,7 @@ export default function NameTaken({ taken, role, title, onLeave }: Props) {
   });
   const name = existing.data?.entity.name ?? taken.name;
   const linkedAs = existing.data?.myRole ?? null;
+  const waiting = existing.data?.myStatus === 'pending';
   // Archived since the 409 came back: the name is free again, and Create can be pressed again.
   const gone = existing.isError && statusOf(existing.error) === 404;
 
@@ -60,7 +62,7 @@ export default function NameTaken({ taken, role, title, onLeave }: Props) {
       return qc.invalidateQueries({ queryKey: entityKeys.all });
     },
     onError: (err) => {
-      const message = entityError(err, 'Could not join it just now. Try again in a moment.');
+      const message = entityError(err, 'Could not send your request just now. Try again in a moment.');
       if (shown.current) setError(message);
       else addToast(message, 'error');
       if (statusOf(err) === 404) return qc.invalidateQueries({ queryKey: entityKeys.page(taken.id) });
@@ -86,7 +88,9 @@ export default function NameTaken({ taken, role, title, onLeave }: Props) {
   // Until the lookup has answered, nobody knows whether the member is linked already, so Join it waits: pressed for a
   // member who is linked, it would change their role instead of joining.
   const line = existing.isSuccess
-    ? (linkedAs ? `You are already linked to it, as ${roleLabel(linkedAs)}.` : `You can join it instead, as ${roleLabel(role)}.`)
+    ? (linkedAs ? `You are already linked to it, as ${roleLabel(linkedAs)}.`
+      : waiting ? 'You asked to join it already. Its admins have your request.'
+        : `You can ask to join it instead, as ${roleLabel(role)}. Its admins approve who is listed.`)
     : existing.isError ? 'Open it to see it, and join it there.' : 'Checking it…';
 
   return (
@@ -95,9 +99,9 @@ export default function NameTaken({ taken, role, title, onLeave }: Props) {
       <p className="mt-1 text-[12px] text-[#5e4a48]">{line}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <Link to={`/entities/${taken.id}`} onClick={onLeave} className={QUIET_BUTTON}>Open it</Link>
-        {existing.isSuccess && !linkedAs && (
+        {existing.isSuccess && !linkedAs && !waiting && (
           <button type="button" onClick={pressJoin} disabled={join.isPending} className={PRIMARY_BUTTON}>
-            {join.isPending ? 'Joining…' : 'Join it'}
+            {join.isPending ? 'Sending…' : 'Ask to join'}
           </button>
         )}
       </div>

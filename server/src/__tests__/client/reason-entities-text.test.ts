@@ -12,7 +12,7 @@ import { ENTITY_KINDS, ENTITY_KIND_LABELS, ENTITY_LIMITS, ENTITY_ROLES, ENTITY_R
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
 import {
   ENTITY_GONE, SIZE_OPTIONS, createdToast, entitiesOf, entityError, entityLetter, entityMeta, fieldErrors, isEntityId,
-  joinedToast, kindLabel, leftToast, loadFailedLine, membershipToast, nameTakenId, peopleCount, roleLabel, roleLine, searchTerm, sizeChoices,
+  joinedToast, kindLabel, leftToast, pendingChangeLine, pictureWords, requestLine, circleCountLine, waitingLine, loadFailedLine, membershipToast, nameTakenId, peopleCount, roleLabel, roleLine, searchTerm, sizeChoices,
   sizeText, tidyName, websiteLink,
 } from '../../../../client/src/features/reason/entities/entity-text';
 import {
@@ -113,7 +113,7 @@ describe('ids, names and the search box', () => {
 
 describe('a person\'s entities, read from the brief', () => {
   it('is the brief\'s list, or none when the API answering has no such field yet (the live API before Task 10 ships)', () => {
-    const list = [{ id: ID, name: 'Acme', kind: 'company' as const, role: 'founder' as const, title: null }];
+    const list = [{ id: ID, name: 'Acme', kind: 'company' as const, role: 'founder' as const, title: null, logoUrl: null }];
     expect(entitiesOf({ entities: list })).toBe(list);
     expect(entitiesOf({})).toEqual([]);
     expect(entitiesOf({ entities: null })).toEqual([]);
@@ -271,6 +271,12 @@ interface EntityApi {
   setMyEntityRole: (id: string, role: string, title?: string | null) => Promise<unknown>;
   leaveEntity: (id: string) => Promise<unknown>;
   fetchPersonEntities: (userId: string) => Promise<unknown>;
+  approveEntityMember: (id: string, userId: string) => Promise<unknown>;
+  declineEntityMember: (id: string, userId: string) => Promise<unknown>;
+  removeEntityMember: (id: string, userId: string) => Promise<unknown>;
+  saveEntityPicture: (id: string, kind: 'logo' | 'banner', body: unknown) => Promise<unknown>;
+  removeEntityPicture: (id: string, kind: 'logo' | 'banner') => Promise<unknown>;
+  fetchEntityPictureSource: (id: string, kind: 'logo' | 'banner') => Promise<unknown>;
   entityKeys: {
     all: readonly string[]; list: (t: string) => readonly string[]; page: (id: string) => readonly string[];
     person: (userId: string) => readonly string[];
@@ -284,7 +290,9 @@ function loadEntityApi(): { api: EntityApi; exported: string[]; calls: RecordedC
     calls.push(hasBody ? { method, url, body: a, config: b } : { method, url, config: a });
     return Promise.resolve({ data: { data: null } });
   };
-  const fakeClient = { get: answer('GET', false), post: answer('POST', true), patch: answer('PATCH', true), delete: answer('DELETE', false) };
+  const fakeClient = {
+    get: answer('GET', false), post: answer('POST', true), patch: answer('PATCH', true), put: answer('PUT', true), delete: answer('DELETE', false),
+  };
   const { outputText } = ts.transpileModule(fs.readFileSync(path.join(dir, 'entity-api.ts'), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019, esModuleInterop: true },
   });
@@ -294,6 +302,8 @@ function loadEntityApi(): { api: EntityApi; exported: string[]; calls: RecordedC
   run(mod, mod.exports, load);
   return { api: mod.exports as unknown as EntityApi, exported: Object.keys(mod.exports).sort(), calls };
 }
+
+const OTHER_ID = '9c8b7a6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d';
 
 describe('the entities api: the contract\'s addresses, an id is data and never part of the path', () => {
   const crafted = '../users/me?';
@@ -326,6 +336,29 @@ describe('the entities api: the contract\'s addresses, an id is data and never p
       { method: 'GET', url: `/users/${ID}/entities`, config: undefined },
     ]);
   });
+  // 30 Oct review (T15): the admins' answers and the pictures, at the server's addresses.
+  it('asks the T15 addresses: approve, decline, remove, and the logo and banner', async () => {
+    const { api, calls } = loadEntityApi();
+    const crop = { x: 0.5, y: 0.5, zoom: 1 };
+    await api.approveEntityMember(ID, OTHER_ID);
+    await api.declineEntityMember(ID, OTHER_ID);
+    await api.removeEntityMember(ID, OTHER_ID);
+    await api.saveEntityPicture(ID, 'logo', { image: 'data:image/png;base64,AA==', crop });
+    await api.saveEntityPicture(ID, 'banner', { crop });
+    await api.removeEntityPicture(ID, 'banner');
+    await api.fetchEntityPictureSource(ID, 'logo');
+    await api.approveEntityMember(crafted, crafted);
+    expect(calls).toEqual([
+      { method: 'POST', url: `/entities/${ID}/members/${OTHER_ID}/approve`, body: undefined, config: undefined },
+      { method: 'POST', url: `/entities/${ID}/members/${OTHER_ID}/decline`, body: undefined, config: undefined },
+      { method: 'DELETE', url: `/entities/${ID}/members/${OTHER_ID}`, config: undefined },
+      { method: 'PUT', url: `/entities/${ID}/logo`, body: { image: 'data:image/png;base64,AA==', crop }, config: undefined },
+      { method: 'PUT', url: `/entities/${ID}/banner`, body: { crop }, config: undefined },
+      { method: 'DELETE', url: `/entities/${ID}/banner`, config: undefined },
+      { method: 'GET', url: `/entities/${ID}/logo/source`, config: undefined },
+      { method: 'POST', url: `/entities/${encoded}/members/${encoded}/approve`, body: undefined, config: undefined },
+    ]);
+  });
   it('puts an id into every address as one encoded segment', async () => {
     const { api, calls } = loadEntityApi();
     await api.fetchEntity(crafted);
@@ -348,8 +381,39 @@ describe('the entities api: the contract\'s addresses, an id is data and never p
   });
   it('exports exactly what the pages import', () => {
     expect(loadEntityApi().exported).toEqual([
-      'archiveEntity', 'createEntity', 'entityKeys', 'fetchEntities', 'fetchEntity', 'fetchPersonEntities', 'leaveEntity',
-      'setMyEntityRole', 'updateEntity',
+      'approveEntityMember', 'archiveEntity', 'createEntity', 'declineEntityMember', 'entityKeys', 'fetchEntities', 'fetchEntity',
+      'fetchEntityPictureSource', 'fetchPersonEntities', 'leaveEntity', 'removeEntityMember', 'removeEntityPicture',
+      'saveEntityPicture', 'setMyEntityRole', 'updateEntity',
     ]);
+  });
+});
+
+// ─── 30 Oct review (T15): claims wait for the entity's admins; logos, banners and circles ─────────────────────
+
+describe('what a claim, an answer and a picture say (T15)', () => {
+  it('a claim that waits, and a change that waits, say so instead of "joined"', () => {
+    expect(membershipToast('Acme', { joined: true, companyUpdated: false, status: 'pending', pendingChange: null }))
+      .toBe("Your request is sent to Acme's admins. We'll let you know when they approve it.");
+    expect(membershipToast('Acme', { joined: false, companyUpdated: false, status: 'active', pendingChange: { role: 'founder' } }))
+      .toBe("Your change is sent to Acme's admins. Your role stays as it is until they approve it.");
+    // A platform admin's claim is applied at once, and reads as a join.
+    expect(membershipToast('Acme', { joined: true, companyUpdated: false, status: 'active', pendingChange: null })).toBe('You joined Acme.');
+  });
+  it('the panel\'s and the requests\' lines', () => {
+    expect(waitingLine('Acme')).toBe("Waiting for Acme's admins to approve you.");
+    expect(pendingChangeLine('founder', 'CEO')).toBe('Asked to change to Founder · CEO. Waiting for approval.');
+    expect(requestLine({ kind: 'join', role: 'employee', title: 'Engineer', currentRole: null, currentTitle: null })).toBe('Says they are Employee · Engineer');
+    expect(requestLine({ kind: 'change', role: 'founder', title: null, currentRole: 'follower', currentTitle: null }))
+      .toBe('Asks to change from Follower to Founder');
+  });
+  it('the pencils say Add before there is a picture and Change after; Remove names it', () => {
+    expect(pictureWords('logo', false)).toEqual({ edit: 'Add logo', remove: 'Remove logo' });
+    expect(pictureWords('logo', true)).toEqual({ edit: 'Change logo', remove: 'Remove logo' });
+    expect(pictureWords('banner', true)).toEqual({ edit: 'Change banner', remove: 'Remove banner' });
+  });
+  it('a closed circle the viewer is outside is named only (L22)', () => {
+    expect(circleCountLine({ memberCount: null, joinPolicy: 'closed' })).toBe('Closed circle');
+    expect(circleCountLine({ memberCount: 1, joinPolicy: 'open' })).toBe('1 member');
+    expect(circleCountLine({ memberCount: 9, joinPolicy: 'closed' })).toBe('Closed circle · 9 members');
   });
 });

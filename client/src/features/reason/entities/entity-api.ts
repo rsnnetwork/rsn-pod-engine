@@ -3,6 +3,7 @@
 import api from '@/lib/api';
 import type {
   CreateEntityResult, EntityList, EntityMembershipResult, EntityPage, EntityRole, LeaveEntityResult, PersonEntity,
+  PictureCrop, PictureSource,
 } from '@rsn/shared';
 import type { EntityChanges, NewEntityBody } from './entity-form';
 
@@ -35,10 +36,34 @@ export const updateEntity = (id: string, changes: EntityChanges) => api.patch(`/
 /** Archive: its admins and platform admins only. Every link is kept; the page closes and the name is free again. */
 export const archiveEntity = (id: string) => api.delete(`/entities/${entitySegment(id)}`);
 
-/** Join with a role, or change your own role. A title left out keeps the one on record; null clears it. */
+/**
+ * Ask to join with a role, or ask to change your own role (30 Oct review: both wait for the entity's admins, unless
+ * you are one of them or a platform admin). A title left out keeps the one on record; null clears it.
+ */
 export const setMyEntityRole = (id: string, role: EntityRole, title?: string | null) =>
   api.post(`/entities/${entitySegment(id)}/members`, title === undefined ? { role } : { role, title })
     .then((r) => r.data.data as EntityMembershipResult);
 
+/** Leave, or withdraw a claim that still waits for the admins. */
 export const leaveEntity = (id: string) =>
   api.delete(`/entities/${entitySegment(id)}/members/me`).then((r) => r.data.data as LeaveEntityResult);
+
+// 30 Oct review (T15): the admins' answers. Its admins and platform admins only; the server says who may.
+
+export const approveEntityMember = (id: string, userId: string) =>
+  api.post(`/entities/${entitySegment(id)}/members/${entitySegment(userId)}/approve`);
+export const declineEntityMember = (id: string, userId: string) =>
+  api.post(`/entities/${entitySegment(id)}/members/${entitySegment(userId)}/decline`);
+export const removeEntityMember = (id: string, userId: string) =>
+  api.delete(`/entities/${entitySegment(id)}/members/${entitySegment(userId)}`);
+
+// The logo and the banner (L1): a new picture with where it was placed, or a new place for the kept one.
+export type EntityPictureKind = 'logo' | 'banner';
+export interface EntityPictureBody { image?: string; crop: PictureCrop }
+
+export const saveEntityPicture = (id: string, kind: EntityPictureKind, body: EntityPictureBody) =>
+  api.put(`/entities/${entitySegment(id)}/${kind}`, body);
+export const removeEntityPicture = (id: string, kind: EntityPictureKind) => api.delete(`/entities/${entitySegment(id)}/${kind}`);
+/** The picture the editor opens on: the one the admin chose, with where they placed it. */
+export const fetchEntityPictureSource = (id: string, kind: EntityPictureKind) =>
+  api.get(`/entities/${entitySegment(id)}/${kind}/source`).then((r) => r.data.data as PictureSource);

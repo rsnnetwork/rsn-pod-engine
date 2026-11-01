@@ -1,7 +1,10 @@
 // client/src/features/reason/entities/RelationshipPanel.tsx
 // "Your relationship" (the v4 prototype's pink panel beside the entity): your role and title with [Change] and
-// [Leave], or [Join] with a role. Leaving asks first, and says so when you are the only person here (the entity is
-// archived with you).
+// [Leave], or [Ask to join] with a role. Leaving asks first, and says so when you are the only person here (the entity
+// is archived with you).
+// 30 Oct review (T15, L23): a claim waits for the entity's admins. While it waits the panel says so, with Cancel
+// request; a declined one says it was not approved, with Ask again; a change of role you asked for waits beside your
+// role. Each flips without a reload when an admin answers (entity:<id> and user:<you>:entities).
 import { useId, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -12,7 +15,9 @@ import { statusOf } from '../human/profile-text';
 import ConfirmSheet from './ConfirmSheet';
 import RoleSheet from './RoleSheet';
 import { entityKeys, leaveEntity, setMyEntityRole } from './entity-api';
-import { entityError, leftToast, membershipToast, roleLabel } from './entity-text';
+import {
+  DECLINED_LINE, cancelledToast, entityError, leftToast, membershipToast, pendingChangeLine, roleLabel, waitingLine,
+} from './entity-text';
 import { PRIMARY_BUTTON, QUIET_BUTTON } from './look';
 
 const KICKER = 'text-[10px] font-extrabold uppercase tracking-[0.14em] text-reason-red-hover md:text-[11px]';
@@ -37,6 +42,9 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
   const [changing, setChanging] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState<string | null>(null);
+  // A declined claim shows its answer first; Ask again opens the form.
+  const [askingAgain, setAskingAgain] = useState(false);
+  const status = page.myStatus;
   // Refs, not isPending: a double tap lands before React draws the button as disabled.
   const busy = useRef(false);
   const mine = page.people.find((p) => p.id === me);
@@ -52,7 +60,7 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
       return qc.invalidateQueries({ queryKey: entityKeys.all });
     },
     onError: (err) => {
-      addToast(entityError(err, 'Could not join it just now. Try again in a moment.'), 'error');
+      addToast(entityError(err, 'Could not send your request just now. Try again in a moment.'), 'error');
       return statusOf(err) === 404 ? qc.invalidateQueries({ queryKey: entityKeys.page(entity.id) }) : undefined;
     },
     onSettled: () => { busy.current = false; },
@@ -65,7 +73,7 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
     mutationFn: () => leaveEntity(entity.id),
     onMutate: () => onClosing(true),
     onSuccess: (result) => {
-      addToast(leftToast(entity.name, result.archived), 'success');
+      addToast(status === 'pending' ? cancelledToast(entity.name) : leftToast(entity.name, result.archived), 'success');
       setLeaving(false);
       // Archived with you: its page is closed now, so the page you are on is the list.
       if (result.archived) navigate('/entities', { replace: true });
@@ -74,7 +82,9 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
     },
     onError: (err) => {
       onClosing(false);
-      setLeaveError(entityError(err, 'Could not leave it just now. Try again in a moment.'));
+      const message = entityError(err, 'Could not do that just now. Try again in a moment.');
+      if (status === 'pending') addToast(message, 'error');
+      else setLeaveError(message);
       return statusOf(err) === 404 ? qc.invalidateQueries({ queryKey: entityKeys.page(entity.id) }) : undefined;
     },
     onSettled: () => { busy.current = false; },
@@ -84,6 +94,11 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
     if (!joinAs || busy.current) return;
     busy.current = true;
     join.mutate(joinAs);
+  };
+  const pressCancel = () => {
+    if (busy.current) return;
+    busy.current = true;
+    leave.mutate();
   };
   const pressLeave = () => {
     if (busy.current) return;
@@ -102,15 +117,38 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
             {mine?.title ? `Your title here: ${mine.title}.` : 'You have not added a title here.'}
             {mine?.isAdmin ? ' You look after this page.' : ''}
           </p>
+          {page.myPendingChange && (
+            <p className={cn('mt-2 rounded-[11px] bg-white/70 px-3 py-2 text-[13px] font-bold [overflow-wrap:anywhere]', ON_PINK)} data-testid="pending-change">
+              {pendingChangeLine(page.myPendingChange.role, page.myPendingChange.title)}
+            </p>
+          )}
           <div className="mt-[18px] grid grid-cols-2 gap-2 md:mt-auto md:pt-[22px]">
             <button type="button" onClick={() => setChanging(true)} className={QUIET_BUTTON}>Change</button>
             <button type="button" onClick={() => { setLeaveError(null); setLeaving(true); }} className={QUIET_BUTTON}>Leave</button>
           </div>
         </>
+      ) : status === 'pending' ? (
+        <>
+          <h2 id={`${roleId}-title`} className="mt-3 text-[24px] font-bold leading-[1.08] tracking-[-0.04em] [overflow-wrap:anywhere] md:text-[27px]">{waitingLine(entity.name)}</h2>
+          <p className={cn('mt-2 text-[14px] leading-relaxed', ON_PINK)}>You are listed among its people once one of them approves. We will let you know.</p>
+          <div className="mt-[18px] grid md:mt-auto md:pt-[22px]">
+            <button type="button" onClick={pressCancel} disabled={leave.isPending} className={QUIET_BUTTON}>
+              {leave.isPending ? 'Cancelling…' : 'Cancel request'}
+            </button>
+          </div>
+        </>
+      ) : status === 'declined' && !askingAgain ? (
+        <>
+          <h2 id={`${roleId}-title`} className="mt-3 text-[24px] font-bold leading-[1.08] tracking-[-0.04em] [overflow-wrap:anywhere] md:text-[27px]">{DECLINED_LINE}</h2>
+          <p className={cn('mt-2 text-[14px] leading-relaxed', ON_PINK)}>{entity.name}&apos;s admins did not approve your request. You can ask again with your role.</p>
+          <div className="mt-[18px] grid md:mt-auto md:pt-[22px]">
+            <button type="button" onClick={() => setAskingAgain(true)} className={QUIET_BUTTON}>Ask again</button>
+          </div>
+        </>
       ) : (
         <>
           <h2 id={`${roleId}-title`} className="mt-3 text-[24px] font-bold leading-[1.08] tracking-[-0.04em] [overflow-wrap:anywhere] md:text-[27px]">Are you part of {entity.name}?</h2>
-          <p className={cn('mt-2 text-[14px] leading-relaxed', ON_PINK)}>Join it with your role, and you are listed among its people.</p>
+          <p className={cn('mt-2 text-[14px] leading-relaxed', ON_PINK)}>Tell its admins your role. Once one of them approves, you are listed among its people.</p>
           <div className="mt-[18px] grid gap-1.5 md:mt-auto md:pt-[22px]">
             <label htmlFor={roleId} className="text-[12px] font-bold">Your role</label>
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -124,7 +162,7 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
                 {ENTITY_ROLES.map((r) => <option key={r} value={r}>{ENTITY_ROLE_LABELS[r]}</option>)}
               </select>
               <button type="button" onClick={pressJoin} disabled={!joinAs || join.isPending} aria-describedby={joinAs ? undefined : hintId} className={PRIMARY_BUTTON}>
-                {join.isPending ? 'Joining…' : 'Join'}
+                {join.isPending ? 'Sending…' : 'Ask to join'}
               </button>
             </div>
             {!joinAs && <p id={hintId} className={cn('text-[12px]', ON_PINK)}>Choose your role first.</p>}
@@ -140,7 +178,7 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
         title={`Leave ${entity.name}?`}
         text={lastOne
           ? `You are the only person here. If you leave, ${entity.name} is archived: it leaves every list, its page closes, and its name is free again.`
-          : 'You are no longer listed among its people. You can join again at any time.'}
+          : 'You are no longer listed among its people. You can ask to join again at any time.'}
         confirmLabel="Leave"
         busyLabel="Leaving…"
         busy={leave.isPending}

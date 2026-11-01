@@ -30,8 +30,9 @@ describe('Entities: every query is told by the contract\'s realtime tags', () =>
     expect(page('ProfileEntities.tsx')).toMatch(/queryKey: entityKeys\.person\(me \?\? ''\),/);
     expect(page('ProfileEntities.tsx')).toMatch(/meta: \{ entities: me \? \[E\.userEntities\(me\)\] : \[\] \},/);
   });
-  it('there are exactly those six queries', () => {
-    expect(files().reduce((n, { s }) => n + count(s, /\buseQuery\(/g), 0)).toBe(6);
+  it('there are exactly those seven queries (T15: the picture editor\'s source, which listens for the entity)', () => {
+    expect(files().reduce((n, { s }) => n + count(s, /\buseQuery\(/g), 0)).toBe(7);
+    expect(page('useEntityPicture.ts')).toMatch(/meta: \{ entities: \[E\.entity\(entity\.id\)\] \},/);
   });
   it('a write never edits the cache by hand: it refreshes every entity screen (and the tags tell the other tabs and people)', () => {
     for (const { f, s } of files()) {
@@ -49,8 +50,9 @@ describe('Entities: every query is told by the contract\'s realtime tags', () =>
       expect({ f, always: count(s, /useMutation\(\{\s*networkMode: 'always',/g) }).toEqual({ f, always: n });
       if (n > 0) expect({ f, lock: /if \((?:!joinAs \|\| )?(?:sending|joining|busy)\.current\) return;/.test(s) }).toEqual({ f, lock: true });
     }
-    // Create, edit, role, join (from a 409), join (on the page), leave, archive.
-    expect(mutations).toBe(7);
+    // Create, edit, role, join (from a 409), join (on the page), leave, archive; T15: approve or decline, remove a
+    // member, save a picture, remove a picture.
+    expect(mutations).toBe(11);
   });
 });
 
@@ -124,19 +126,20 @@ describe('Entities: the create sheet', () => {
     expect(sheet).toMatch(/<SelectField label="Your role"/);
     expect(sheet).toMatch(/<TextField label="Your title" optional/);
   });
-  it('a 409 shows the name taken, with Open it and Join it', () => {
+  it('a 409 shows the name taken, with Open it and Ask to join (T15: the claim waits for its admins)', () => {
     const box = page('NameTaken.tsx');
     expect(box).toMatch(/There is already an entity called \{name\}\./);
     expect(box).toMatch(/>Open it<\/Link>/);
-    expect(box).toMatch(/'Join it'/);
+    expect(box).toMatch(/'Ask to join'/);
+    expect(box).not.toMatch(/'Join it'/);
     expect(page('CreateEntitySheet.tsx')).toMatch(/const existingId = nameTakenId\(err\);/);
   });
   // Review, fix round 1: pressed before the lookup answered (or after it failed), Join it was a role change for a member
   // already linked: it replaced their role with the form's, cleared their title, and said "You joined".
-  it('Join it is offered only once the lookup says you are not linked; a blank title is left out; the toast follows the answer', () => {
+  it('Ask to join is offered only once the lookup says you are not linked and have no claim waiting; a blank title is left out; the toast follows the answer', () => {
     const box = page('NameTaken.tsx');
-    expect(box).toMatch(/\{existing\.isSuccess && !linkedAs && \(/);
-    expect(count(box, /'Join it'/g)).toBe(1);
+    expect(box).toMatch(/\{existing\.isSuccess && !linkedAs && !waiting && \(/);
+    expect(count(box, /'Ask to join'/g)).toBe(1);
     expect(box).toMatch(/setMyEntityRole\(taken\.id, role, title\.trim\(\) \|\| undefined\)/);
     expect(box).not.toMatch(/title\.trim\(\) \|\| null/);
     for (const f of ['NameTaken.tsx', 'RelationshipPanel.tsx', 'RoleSheet.tsx']) expect(page(f)).toMatch(/membershipToast\(/);
@@ -175,12 +178,13 @@ describe('Entities: the entity profile', () => {
     expect(people).toMatch(/to=\{you \? '\/profile' : `\/people\/\$\{p\.id\}`\}/);
     expect(people).toMatch(/roleLine\(p\.role, p\.title\)/);
   });
-  it('"Your relationship" offers Change and Leave, or Join with a role', () => {
+  it('"Your relationship" offers Change and Leave, or Ask to join with a role (T15)', () => {
     const rel = page('RelationshipPanel.tsx');
     expect(rel).toMatch(/Your relationship/);
     expect(rel).toMatch(/>Change<\/button>/);
     expect(rel).toMatch(/>Leave<\/button>/);
-    expect(rel).toMatch(/'Join'/);
+    expect(rel).toMatch(/'Ask to join'/);
+    expect(rel).not.toMatch(/'Join'/);
     expect(rel).toMatch(/<option value="">Choose your role<\/option>/);
   });
   // Review, fix round 1: Cancel, X, Escape and the backdrop closed a sheet while "Archiving…" or "Leaving…", and a
@@ -287,5 +291,93 @@ describe('Entities: words, sizes and colours', () => {
     for (const name of ['PRIMARY_BUTTON', 'QUIET_BUTTON']) {
       expect(look).toMatch(new RegExp(`export const ${name} = '[^']*\\bmin-h-\\[44px\\]`));
     }
+  });
+});
+
+// ─── 30 Oct review (T15): approval, removal, the logo and banner, and circles ─────────────────────────────────
+
+describe('Entities: claims wait for the admins (T15, L23)', () => {
+  it('"Your relationship" says a claim waits, with Cancel request, and a declined one, with Ask again; a change waits beside the role', () => {
+    const rel = page('RelationshipPanel.tsx');
+    expect(rel).toMatch(/status === 'pending' \? \(/);
+    expect(rel).toMatch(/\{waitingLine\(entity\.name\)\}/);
+    expect(rel).toMatch(/'Cancel request'/);
+    expect(rel).toMatch(/status === 'declined' && !askingAgain \? \(/);
+    expect(rel).toMatch(/\{DECLINED_LINE\}/);
+    expect(rel).toMatch(/>Ask again<\/button>/);
+    expect(rel).toMatch(/pendingChangeLine\(page\.myPendingChange\.role, page\.myPendingChange\.title\)/);
+  });
+  it('your lists and profile say "Waiting for approval" for a claim that waits; the create form says Ask to join', () => {
+    expect(page('EntityCard.tsx')).toMatch(/entity\.myStatus === 'pending' \? \(/);
+    expect(page('EntityCard.tsx')).toMatch(/\{WAITING_FOR_APPROVAL\}/);
+    expect(page('EntityRows.tsx')).toMatch(/\{e\.status === 'pending' && <span[^>]*> · \{WAITING_FOR_APPROVAL\}<\/span>\}/);
+    expect(page('AlreadyOnReason.tsx')).toMatch(/'Ask to join'/);
+    expect(page('AlreadyOnReason.tsx')).toMatch(/return WAITING_FOR_APPROVAL;/);
+  });
+  it('the Requests panel is for the people who may edit, opened by ?requests=1, with 44px Approve and Decline', () => {
+    const panel = page('EntityRequests.tsx');
+    expect(panel).toMatch(/if \(!page\.canEdit\) return null;/);
+    expect(panel).toMatch(/>Requests<\/h2>/);
+    expect(panel).toMatch(/No one is waiting for an answer\./);
+    expect(panel).toMatch(/'Approve'/);
+    expect(panel).toMatch(/'Decline'/);
+    expect(panel).toMatch(/className=\{PRIMARY_BUTTON\}/);
+    expect(panel).toMatch(/className=\{QUIET_BUTTON\}/);
+    const p = page('EntityProfilePage.tsx');
+    expect(p).toMatch(/const toRequests = params\.get\('requests'\) === '1';/);
+    expect(p).toMatch(/<EntityRequests page=\{page\} focus=\{toRequests\} \/>\n\s*<EntityPeople page=\{page\} me=\{me\} \/>/);
+  });
+  it('Remove on a member card asks first, and is never on yourself, on an admin (unless a platform admin), or on the last admin', () => {
+    const people = page('EntityPeople.tsx');
+    expect(people).toMatch(/const removable = \(p: EntityPerson\) => page\.canEdit && p\.id !== me && \(!p\.isAdmin \|\| \(platformAdmin && admins > 1\)\);/);
+    expect(people).toMatch(/<ConfirmDialog/);
+    expect(people).toMatch(/onConfirm=\{pressRemove\}/);
+    // A button never sits inside the card's link.
+    expect(people).not.toMatch(/<Link[^>]*>[\s\S]*?<button[\s\S]*?<\/Link>/);
+  });
+});
+
+describe('Entities: the logo and the banner (T15, 7.1; L1)', () => {
+  it('the mark draws the logo on a white tile with the line border, and the letter when it fails or there is none', () => {
+    const mark = page('EntityMark.tsx');
+    expect(mark).toMatch(/if \(logoUrl && logoUrl !== failed\) \{/);
+    expect(mark).toMatch(/border border-reason-line bg-white/);
+    expect(mark).toMatch(/onError=\{\(\) => setFailed\(logoUrl\)\}/);
+    expect(mark).toMatch(/\{entityLetter\(name\)\}/);
+    for (const f of ['EntityHero.tsx', 'EntityCard.tsx', 'EntityRows.tsx', 'AlreadyOnReason.tsx']) {
+      expect({ f, logo: /<EntityMark [^>]*logoUrl=\{/.test(page(f)) }).toEqual({ f, logo: true });
+    }
+  });
+  it('T3a\'s pencil and editor, only for the people who may edit: aspect 1 for the logo, 3 for the banner; Remove asks first', () => {
+    const hero = page('EntityHero.tsx');
+    expect(hero).toMatch(/\{page\.canEdit && \(\n\s*<PencilButton label=\{logo\.words\.edit\}/);
+    expect(hero).toMatch(/<PictureEditor \{\.\.\.logo\.editor\} \/>/);
+    expect(hero).toMatch(/title="Remove the logo\?"/);
+    const banner = page('EntityBanner.tsx');
+    expect(banner).toMatch(/if \(!entity\.bannerUrl && !canEdit\) return null;/);
+    expect(banner).toMatch(/<PencilButton label=\{banner\.words\.edit\}/);
+    expect(banner).toMatch(/title="Remove the banner\?"/);
+    expect(banner).toMatch(/<ProfileBanner src=\{entity\.bannerUrl \?\? null\}>/);
+    // A bell's ?requests=1 lands on the heading clear of the sticky header.
+    expect(page('EntityRequests.tsx')).toMatch(/id="entity-requests-title" className="scroll-mt-\[calc\(84px\+env\(safe-area-inset-top\)\)\]/);
+    const hook = page('useEntityPicture.ts');
+    expect(hook).toMatch(/aspect: kind === 'logo' \? 1 : 3,/);
+    expect(hook).toMatch(/import \{ pictureToSend \} from '@\/components\/picture\/prepare-picture';/);
+    // One cropper: the entity reuses T3a's editor and never draws its own.
+    for (const { f, s } of files()) expect({ f, canvas: /getContext\(|<canvas/.test(s) }).toEqual({ f, canvas: false });
+  });
+  it('the logo pencil sits at the tile\'s corner, so it keeps 44px on the 74px phone tile', () => {
+    expect(page('EntityHero.tsx')).toMatch(/className="absolute -bottom-2\.5 -right-2\.5"/);
+  });
+});
+
+describe('Entities: the circles an entity is linked to (T15, 7.3)', () => {
+  it('a Circles section with an empty state, each circle opening its page, a closed one named only', () => {
+    const c = page('EntityCircles.tsx');
+    expect(c).toMatch(/>Circles<\/h2>/);
+    expect(c).toMatch(/Not linked to a circle yet\./);
+    expect(c).toMatch(/to=\{`\/circles\/\$\{c\.id\}`\}/);
+    expect(c).toMatch(/\{circleCountLine\(c\)\}/);
+    expect(page('EntityProfilePage.tsx')).toMatch(/<EntityCircles page=\{page\} \/>/);
   });
 });
