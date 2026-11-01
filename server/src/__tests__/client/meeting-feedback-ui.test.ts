@@ -12,7 +12,7 @@ import type { Meeting } from '@rsn/shared';
 import { partnerInRoom, watchPartnerSeen, type SeenRoom } from '../../../../client/src/features/messages/partner-seen';
 import {
   afterRoomLeave, afterRoomPath, canGiveFeedback, cardLine, feedbackBody, feedbackCardDue, feedbackTitle, reportLine, toggleProblem,
-  CARD_TITLE, FEEDBACK_PRIVACY, PROBLEMS_QUESTION, PROBLEM_OPTIONS, WORTH_OPTIONS, WORTH_QUESTION,
+  CARD_TITLE, FEEDBACK_PRIVACY, LEAVE_READ_MS, PROBLEMS_QUESTION, PROBLEM_OPTIONS, WORTH_OPTIONS, WORTH_QUESTION,
 } from '../../../../client/src/features/meetings/meeting-feedback';
 import { E as clientE } from '../../../../client/src/realtime/entities';
 
@@ -220,6 +220,34 @@ describe('where leaving the room goes (worked out as the person leaves)', () => 
     // A room with nothing to read (an instant call, no ?scheduled=1) goes to the chat, as before.
     expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: undefined, hadPartner: true, partnerHere: true })).toBe(chat);
   });
+
+  // Fix round 3: that read is the only wait between pressing leave and leaving, so it is bounded. A read that never
+  // answers (axios gives up only after 60 s) must not hold the person in a call they asked to leave.
+  it('goes to the chat once the fresh read has taken LEAVE_READ_MS, even if the read never answers', async () => {
+    expect(LEAVE_READ_MS).toBe(3_000);
+    jest.useFakeTimers();
+    try {
+      const never = jest.fn(() => new Promise<string>(() => {}));
+      let to: string | null = null;
+      void afterRoomLeave({ conversationId: 'c-1', meetingId: null, hadPartner: true, partnerHere: true, readMeetingId: never })
+        .then((p) => { to = p; });
+      await jest.advanceTimersByTimeAsync(LEAVE_READ_MS - 1);
+      expect(to).toBeNull();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(to).toBe(chat);
+      expect(never).toHaveBeenCalledTimes(1);
+      // A read that answers inside the bound still takes them to the question.
+      let quick: string | null = null;
+      void afterRoomLeave({
+        conversationId: 'c-1', meetingId: null, hadPartner: true, partnerHere: true,
+        readMeetingId: () => new Promise<string>((ok) => setTimeout(() => ok('m-1'), LEAVE_READ_MS - 500)),
+      }).then((p) => { quick = p; });
+      await jest.advanceTimersByTimeAsync(LEAVE_READ_MS - 500);
+      expect(quick).toBe(asked);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
 
 // Fix round 1 (1 Nov 2026). On the preview the spec's leave went to the chat: it moved the meeting's start and the
@@ -258,8 +286,16 @@ describe('the meeting room', () => {
     expect(seen).toMatch(/probe\.current = \(\) => partnerInRoom\(room\)/);
   });
 
+  // Fix round 3: a press visibly does something at once, while the leave may wait (up to LEAVE_READ_MS) on that read.
+  it('shows the leave buttons as busy from the moment they are pressed', () => {
+    expect(room).toMatch(/leftRoom\.current = true;\s*setLeaving\(true\);/);
+    expect(room).toMatch(/onClick=\{leaveRoom\}\s*disabled=\{leaving\}\s*aria-busy=\{leaving\}/);
+    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} leaving=\{leaving\} \/>/);
+    expect(room).toMatch(/\{leaving \? 'Leaving…' : 'Leave'\}/);
+  });
+
   it('the Wait / Leave notice never asks itself; its Leave is the person leaving, like the room\'s own buttons', () => {
-    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} \/>/);
+    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} /);
     // The pages outside the room (error, ended, countdown) go back to the chat, as before.
     expect(room.match(/onClick=\{leave\}/g)?.length).toBe(3);
   });

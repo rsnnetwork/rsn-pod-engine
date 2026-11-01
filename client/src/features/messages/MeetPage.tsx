@@ -16,7 +16,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LiveKitRoom, RoomAudioRenderer, ParticipantTile, ControlBar, useTracks, useRoomContext, type TrackReference } from '@livekit/components-react';
 import '@livekit/components-styles';
 import { Track } from 'livekit-client';
-import { ArrowLeft, CalendarClock, Maximize2, MessageSquare, Minimize2, PhoneOff } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Loader2, Maximize2, MessageSquare, Minimize2, PhoneOff } from 'lucide-react';
 import { MEETING_JOIN_EARLY_MIN } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
@@ -141,7 +141,7 @@ function CallStage() {
 // and rejoin without ending the other person's meeting" could not be done.
 // Now the one still here is told who left, and chooses: Wait (stay in the
 // room; the notice clears by itself when they come back in) or Leave.
-function CallEndWatcher({ onLeave }: { onLeave: () => void }) {
+function CallEndWatcher({ onLeave, leaving }: { onLeave: () => void; leaving: boolean }) {
   const room = useRoomContext();
   // Who left ('' when the room has no name for them); null while nobody has, or once they are back.
   const [leftName, setLeftName] = useState<string | null>(null);
@@ -169,9 +169,11 @@ function CallEndWatcher({ onLeave }: { onLeave: () => void }) {
           <button
             type="button"
             onClick={onLeave}
-            className="inline-flex min-h-[44px] min-w-[88px] items-center justify-center rounded-lg bg-rsn-red px-4 text-sm font-medium text-white hover:opacity-90"
+            disabled={leaving}
+            aria-busy={leaving}
+            className="inline-flex min-h-[44px] min-w-[88px] items-center justify-center rounded-lg bg-rsn-red px-4 text-sm font-medium text-white hover:opacity-90 disabled:opacity-70"
           >
-            Leave
+            {leaving ? 'Leaving…' : 'Leave'}
           </button>
         </div>
       </div>
@@ -202,6 +204,8 @@ export default function MeetPage() {
   const partnerSeen = useCallback(() => { hadPartner.current = true; }, []);
   // Whether anyone else is in the room right now, asked as the person leaves (PartnerSeen sets it inside the room).
   const partnerProbe = useRef<() => boolean>(() => false);
+  // Pressed: the leave buttons show it at once, while the leave may wait (up to LEAVE_READ_MS) on the meeting's read.
+  const [leaving, setLeaving] = useState(false);
   const queryClient = useQueryClient();
 
   // A scheduled meeting's start and length: the scheduler's own query, kept live
@@ -235,6 +239,7 @@ export default function MeetPage() {
   const leaveRoom = useCallback(() => {
     if (leftRoom.current) return;
     leftRoom.current = true;
+    setLeaving(true);
     void afterRoomLeave({
       conversationId: conversationId ?? '',
       meetingId: meeting?.meetingId,
@@ -356,7 +361,7 @@ export default function MeetPage() {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
   }
 
-  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} />;
+  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} leaving={leaving} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} />;
 }
 
 /**
@@ -366,12 +371,14 @@ export default function MeetPage() {
  * phone, with the stage shrinking above it; it lives inside the LiveKit room, so the call runs on while they type.
  * The page is 100dvh and keeps the iPhone's home-indicator inset clear under whatever is lowest.
  */
-function CallRoom({ conversationId, kind, live, leaveRoom, onPartnerSeen, partnerProbe }: {
+function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSeen, partnerProbe }: {
   conversationId: string;
   kind: 'audio' | 'video';
   live: { token: string; url: string };
   /** Leaving the room: to the feedback question after a meeting the other person was in, else to the chat (T8). */
   leaveRoom: () => void;
+  /** The person has pressed leave and is on their way out. */
+  leaving: boolean;
   onPartnerSeen: () => void;
   /** Set inside the room: whether anyone else is in it now, read by the leave (outside the room). */
   partnerProbe: MutableRefObject<() => boolean>;
@@ -404,10 +411,12 @@ function CallRoom({ conversationId, kind, live, leaveRoom, onPartnerSeen, partne
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
         <button
           onClick={leaveRoom}
-          className="flex h-11 w-11 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
+          disabled={leaving}
+          aria-busy={leaving}
+          className="flex h-11 w-11 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-70"
           aria-label="Leave call and go back to chat"
         >
-          <ArrowLeft className="h-5 w-5" />
+          {leaving ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : <ArrowLeft className="h-5 w-5" />}
         </button>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">{kind === 'audio' ? 'Audio call' : 'Video call'}</p>
@@ -446,7 +455,7 @@ function CallRoom({ conversationId, kind, live, leaveRoom, onPartnerSeen, partne
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             <CallStage />
-            <CallEndWatcher onLeave={leaveRoom} />
+            <CallEndWatcher onLeave={leaveRoom} leaving={leaving} />
             <PartnerSeen onSeen={onPartnerSeen} probe={partnerProbe} />
             <div className={`shrink-0 pb-[env(safe-area-inset-bottom)] ${chatOpen ? 'max-sm:pb-0' : ''}`}>
               <ControlBar variation="minimal" />

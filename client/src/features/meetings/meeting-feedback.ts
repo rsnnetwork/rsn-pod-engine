@@ -67,7 +67,7 @@ export function afterRoomPath(opts: { conversationId: string; meetingId?: string
  * room when the room said so earlier (`hadPartner`) or when they are in it as I leave (`partnerHere`: their tile is on
  * my screen). The meeting is the one the scheduler's read named; when that read gave none (it failed, or had not
  * answered yet), a scheduled room reads it once more (`readMeetingId`), and a read that fails or finds none goes to
- * the chat. Nothing is read for a room nobody else came into.
+ * the chat. Nothing is read for a room nobody else came into. The read is given LEAVE_READ_MS.
  */
 export async function afterRoomLeave(opts: {
   conversationId: string;
@@ -78,6 +78,20 @@ export async function afterRoomLeave(opts: {
 }): Promise<string> {
   const hadPartner = opts.hadPartner || opts.partnerHere;
   if (!hadPartner) return afterRoomPath({ conversationId: opts.conversationId, hadPartner });
-  const meetingId = opts.meetingId || (opts.readMeetingId ? await opts.readMeetingId().catch(() => null) : null);
+  const meetingId = opts.meetingId || (opts.readMeetingId ? await boundedRead(opts.readMeetingId) : null);
   return afterRoomPath({ conversationId: opts.conversationId, meetingId, hadPartner });
+}
+
+/**
+ * How long the leave waits on that read (fix round 3). It is the only wait between pressing leave and leaving, with
+ * the call still running; a read still unanswered by then goes to the chat, as a failed one does (axios alone would
+ * wait 60 s).
+ */
+export const LEAVE_READ_MS = 3_000;
+
+/** The read's answer, or null once it fails or has taken LEAVE_READ_MS. */
+function boundedRead(read: () => Promise<string | null | undefined>): Promise<string | null | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const gaveUp = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), LEAVE_READ_MS); });
+  return Promise.race([read().catch(() => null), gaveUp]).finally(() => clearTimeout(timer));
 }

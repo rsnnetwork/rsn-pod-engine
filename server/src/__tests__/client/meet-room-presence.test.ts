@@ -218,6 +218,7 @@ describe('MeetPage, read from source', () => {
     expect(src).toMatch(/watchPartner\(room, setLeftName\)/);
     expect(src).toMatch(/\{leftCallText\(leftName\)\}/);
     expect(src).toMatch(/onClick=\{\(\) => setLeftName\(null\)\}[\s\S]{0,300}>\s*Wait\s*</);
-    expect(src).toMatch(/onClick=\{onLeave\}[\s\S]{0,300}>\s*Leave\s*</);
+    // Fix round 3 (T8): pressed, it reads "Leaving…" while the leave is on its way.
+    expect(src).toMatch(/onClick=\{onLeave\}[\s\S]{0,300}\{leaving \? 'Leaving…' : 'Leave'\}/);
   });
 });
