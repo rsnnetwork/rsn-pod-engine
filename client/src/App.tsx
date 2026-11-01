@@ -65,7 +65,7 @@ import NotFoundPage from '@/features/misc/NotFoundPage';
 import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
 import OnboardingFlow from '@/features/onboarding/OnboardingFlow';
 import ToastContainer from '@/components/ui/Toast';
-import IncomingCallBanner from '@/components/ui/IncomingCallBanner';
+import CallLayer from '@/features/calls/CallLayer';
 
 export default function App() {
   const { checkSession } = useAuthStore();
@@ -198,7 +198,8 @@ export default function App() {
 
   return (
     <>
-      {isAuthenticated && <IncomingCallBanner />}
+      {/* A call rings, and enters the room when answered, from every screen (1 Nov 2026). */}
+      {isAuthenticated && <CallLayer />}
       <Routes>
       {/* Public pages */}
       <Route path="/welcome" element={<Navigate to="/login" replace />} />

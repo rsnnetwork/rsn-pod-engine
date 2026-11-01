@@ -124,7 +124,7 @@ function Profile({ brief, userId, source, hideBar }: { brief: PersonBrief; userI
         <div className="mb-[11px] md:mb-[18px]">
           <ProfileBanner src={brief.person.bannerUrl} />
         </div>
-        <ProfileHero brief={brief} who={who} source={source} />
+        <ProfileHero brief={brief} who={who} source={source} userId={userId} />
         <ProfileDetails brief={brief} who={who} source={source} onRecordOutcome={() => setOutcomeOpen(true)} />
       </main>
       {!hideBar && (

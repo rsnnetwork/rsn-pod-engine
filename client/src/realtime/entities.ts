@@ -56,6 +56,10 @@ export const E = {
   userMeetings: (userId: string) => `user:${userId}:meetings`,
   meeting: (meetingId: string) => `meeting:${meetingId}`,
 
+  // Calls (1 Nov 2026): a call ringing the member, or one they rang, changed (rung, answered, declined,
+  // cancelled, lapsed)
+  userCalls: (userId: string) => `user:${userId}:calls`,
+
   // Support
   supportTicket: (ticketId: string) => `support-ticket:${ticketId}`,
 

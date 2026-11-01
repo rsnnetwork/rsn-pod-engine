@@ -15,7 +15,9 @@ import MeetingScheduler, { type SchedulerHandle } from './MeetingScheduler';
 import ThreadMeetingBanner from './ThreadMeetingBanner';
 import { confirmable, isMeetingOver, localizeMeetingText } from './scheduler-flow';
 import SystemMessageCard, { type DmMessageKind, type DmSystemMeta } from './SystemMessageCard';
-import { CallRequestModal, CallWaitingCard, IncomingCallCard } from './CallRequest';
+import { CallRequestModal } from './CallRequest';
+import CallButton from '@/features/calls/CallButton';
+import { useCallRequest } from '@/features/calls/useCallRequest';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
 import GroupThread from './GroupThread';
@@ -172,9 +174,6 @@ export default function MessagesPage() {
   // Task E4 — report entry point for the thread's conversation partner.
   const [reportOpen, setReportOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  // W-meet — "Meet now" needs the other person online. Poll presence; a call is
-  // pointless if they cannot answer, so the buttons gate on it.
-  const [calling, setCalling] = useState(false);
   // 360px phones: image + mic + send leave ~150px for the box, where "Type a
   // message..." wraps under its own first word. A shorter prompt fits.
   const narrowPhone = typeof window !== 'undefined' && window.matchMedia('(max-width: 379px)').matches;
@@ -368,124 +367,18 @@ export default function MessagesPage() {
   const partnerOnline = !!presence?.online;
 
   // 9 Sep 2026 (Ali/Stefan): calls go REQUEST → ACCEPT, with a duration the
-  // caller types. "startCall" now opens the request dialog; the request itself
-  // is sent from there. `calling` stays true while we wait for an answer.
-  const [requestKind, setRequestKind] = useState<'audio' | 'video' | null>(null);
-  const [sendingRequest, setSendingRequest] = useState(false);
-  const [pendingCall, setPendingCall] = useState<{
-    requestId: string; kind: 'audio' | 'video'; durationMin: number; fromMe: boolean; fromName: string | null; expiresAt: number;
-  } | null>(null);
-  const [answering, setAnswering] = useState(false);
-  const CALL_REQUEST_TTL_MS = 2 * 60 * 1000;
+  // caller types. "startCall" opens the request dialog; the request itself is
+  // sent from there. 1 Nov 2026: the call then lives app-wide (stores/callStore,
+  // features/calls/useCallSignals), so its "Calling…" card, the other person's
+  // banner and the way into the room no longer depend on this thread staying
+  // open. `calling` is true while a call I rang waits for an answer.
+  const callRequest = useCallRequest(activeId ? { conversationId: activeId } : null, activeConv?.otherDisplayName ?? null);
+  const calling = callRequest.ringing;
 
   const startCall = (kind: 'audio' | 'video') => {
     if (!activeId || calling) return;
-    setRequestKind(kind);
+    callRequest.open(kind);
   };
-
-  const sendCallRequest = async (kind: 'audio' | 'video', durationMin: number) => {
-    if (!activeId) return;
-    setSendingRequest(true);
-    try {
-      const { data } = await api.post(`/dm/conversations/${activeId}/call/request`, { kind, durationMin });
-      const rq = data.data as { id: string; kind: 'audio' | 'video'; durationMin: number; createdAt: string };
-      setPendingCall({
-        requestId: rq.id, kind: rq.kind, durationMin: rq.durationMin, fromMe: true, fromName: null,
-        expiresAt: new Date(rq.createdAt).getTime() + CALL_REQUEST_TTL_MS,
-      });
-      setCalling(true);
-      setRequestKind(null);
-    } catch (e: any) {
-      addToast(e?.response?.data?.error?.message || 'Could not send the call request.', 'info');
-    } finally {
-      setSendingRequest(false);
-    }
-  };
-
-  const cancelCallRequest = async () => {
-    const rq = pendingCall;
-    setPendingCall(null);
-    setCalling(false);
-    if (rq?.fromMe) { try { await api.post(`/dm/call/requests/${rq.requestId}/cancel`); } catch { /* best-effort */ } }
-  };
-
-  const answerCallRequest = async (accept: boolean) => {
-    const rq = pendingCall;
-    if (!rq || rq.fromMe || answering) return;
-    setAnswering(true);
-    try {
-      if (accept) {
-        await api.post(`/dm/call/requests/${rq.requestId}/accept`);
-        setPendingCall(null);
-        navigate(`/meet/${activeId}?kind=${rq.kind}`);
-      } else {
-        await api.post(`/dm/call/requests/${rq.requestId}/decline`);
-        setPendingCall(null);
-      }
-    } catch (e: any) {
-      addToast(e?.response?.data?.error?.message || 'Could not answer the call request.', 'error');
-      setPendingCall(null);
-    } finally {
-      setAnswering(false);
-    }
-  };
-
-  // The caller learns the answer live; a withdrawn request disappears for the callee.
-  useEffect(() => {
-    const socket = getSocket();
-    if (!socket || !activeId) return;
-    const onAccepted = (d: { requestId: string; conversationId: string; kind: 'audio' | 'video' }) => {
-      if (d.conversationId !== activeId) return;
-      setPendingCall(null); setCalling(false);
-      navigate(`/meet/${d.conversationId}?kind=${d.kind}`);
-    };
-    const onDeclined = (d: { requestId: string; conversationId: string; byName: string }) => {
-      if (d.conversationId !== activeId) return;
-      setPendingCall(null); setCalling(false);
-      addToast(`${d.byName} can't take the call right now.`, 'info');
-    };
-    const onCancelled = (d: { requestId: string; conversationId: string }) => {
-      if (d.conversationId !== activeId) return;
-      setPendingCall((cur) => (cur && cur.requestId === d.requestId ? null : cur));
-    };
-    socket.on('call:accepted', onAccepted);
-    socket.on('call:declined', onDeclined);
-    socket.on('call:cancelled', onCancelled);
-    return () => {
-      socket.off('call:accepted', onAccepted);
-      socket.off('call:declined', onDeclined);
-      socket.off('call:cancelled', onCancelled);
-    };
-  }, [activeId, navigate, addToast]);
-
-  // A live request survives a refresh: restore "waiting…" (mine) or the
-  // in-thread Accept/Decline (theirs) from the server, not from memory.
-  // realtime: skip — a one-shot restore on thread open; the socket events above carry the live changes.
-  const { data: pendingFromServer } = useQuery({
-    queryKey: ['call-pending', activeId],
-    queryFn: () => api.get(`/dm/conversations/${activeId}/call/pending`).then(r => r.data.data as
-      { id: string; fromUserId: string; kind: 'audio' | 'video'; durationMin: number; createdAt: string } | null),
-    enabled: !!activeId,
-    staleTime: 0,
-  });
-  useEffect(() => {
-    if (!pendingFromServer || pendingCall) return;
-    const fromMe = pendingFromServer.fromUserId === myUserId;
-    setPendingCall({
-      requestId: pendingFromServer.id, kind: pendingFromServer.kind, durationMin: pendingFromServer.durationMin,
-      fromMe, fromName: fromMe ? null : (activeConv?.otherDisplayName ?? null),
-      expiresAt: new Date(pendingFromServer.createdAt).getTime() + CALL_REQUEST_TTL_MS,
-    });
-    if (fromMe) setCalling(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingFromServer]);
-
-  // A request the other side never answers lapses on its own.
-  useEffect(() => {
-    if (!pendingCall) return;
-    const t = setTimeout(() => { setPendingCall(null); setCalling(false); }, Math.max(0, pendingCall.expiresAt - Date.now()));
-    return () => clearTimeout(t);
-  }, [pendingCall]);
 
   // Block the conversation partner (8 Sep 2026, Ali). Blocking stops future
   // messages and matches (enforced server-side); we leave the thread afterwards.
@@ -509,6 +402,7 @@ export default function MessagesPage() {
     queryFn: () => api.get(`/dm/conversations/${activeId}/scheduling`).then(r => r.data.data as {
       schedulingUpdated?: boolean;
       callsUnlocked?: boolean;
+      canCall?: boolean;
       overlap?: string[];
       confirmed?: { type?: 'audio' | 'video' | null; startAt?: string | null; durationMin?: number | null } | null;
     }),
@@ -519,6 +413,9 @@ export default function MessagesPage() {
   // the chat offers the scheduler and NOT calls; once it has, calls appear and
   // the scheduler steps aside.
   const callsUnlocked = !!scheduling?.callsUnlocked;
+  // 1 Nov 2026 (30 Oct review item 4): a connection can ring for VIDEO with no meeting held first. Audio keeps
+  // the 9 Sep rule (callsUnlocked), and so does the scheduler's place in the chat.
+  const canCall = !!scheduling?.canCall;
   const availabilityDot = !!scheduling?.schedulingUpdated && !schedulerOpen && !callsUnlocked;
   const confirmedCallKind: 'audio' | 'video' = scheduling?.confirmed?.type === 'audio' ? 'audio' : 'video';
   // A scheduled meeting whose window has ended behaves like an instant call
@@ -1168,18 +1065,16 @@ export default function MessagesPage() {
                 )}
               </Link>
               <div className="hidden sm:flex items-center gap-1">
-              {/* Calls appear only once the pair's first meeting has happened
-                  (Ali, 9 Sep); enabled only while the other person is online. */}
-              {activeConv && callsUnlocked && (
-                <button
+              {/* Video: any connection (canCall, 1 Nov 2026). Audio: once the pair's
+                  first meeting has happened (Ali, 9 Sep). Both only while the other
+                  person is online. */}
+              {activeConv && canCall && (
+                <CallButton
+                  variant="icon"
                   onClick={() => startCall('video')}
                   disabled={!partnerOnline || calling}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-rsn-red disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
-                  title={partnerOnline ? 'Start a video call now' : 'They are offline — schedule a meeting instead'}
-                  aria-label="Start a video call now"
-                >
-                  <Video className="h-4.5 w-4.5" />
-                </button>
+                  title={partnerOnline ? 'Video call' : 'They are offline — send a message instead'}
+                />
               )}
               {activeConv && callsUnlocked && (
                 <button
@@ -1269,12 +1164,13 @@ export default function MessagesPage() {
                 </button>
                 {moreOpen && (
                   <div className="absolute right-0 top-12 z-30 w-60 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
-                    {activeConv && callsUnlocked && (
-                      <button type="button" disabled={!partnerOnline || calling}
+                    {activeConv && canCall && (
+                      <CallButton
+                        variant="menu"
+                        disabled={!partnerOnline || calling}
                         onClick={() => { setMoreOpen(false); startCall('video'); }}
-                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">
-                        <Video className="h-4 w-4 text-gray-400" /> {partnerOnline ? 'Video call now' : 'Video call (they are offline)'}
-                      </button>
+                        title={partnerOnline ? 'Video call' : 'They are offline — send a message instead'}
+                      />
                     )}
                     {activeConv && callsUnlocked && (
                       <button type="button" disabled={!partnerOnline || calling}
@@ -1330,39 +1226,13 @@ export default function MessagesPage() {
             />
 
             {/* Request a call: pick video/audio + type a duration (Ali, 9 Sep). */}
-            <CallRequestModal
-              open={requestKind !== null}
-              kind={requestKind ?? 'video'}
-              partnerName={headerContext.otherDisplayName}
-              onClose={() => setRequestKind(null)}
-              onSend={sendCallRequest}
-              sending={sendingRequest}
-            />
-            {pendingCall?.fromMe && (
-              <CallWaitingCard
-                partnerName={headerContext.otherDisplayName}
-                kind={pendingCall.kind}
-                durationMin={pendingCall.durationMin}
-                expiresAt={pendingCall.expiresAt}
-                onCancel={cancelCallRequest}
-              />
-            )}
+            {/* Audio is offered only once calls are unlocked; before that a call is video. */}
+            <CallRequestModal {...callRequest.modal} videoOnly={!callsUnlocked} />
 
             {/* Confirmed meeting — always pinned so both people see it in the
                 chat, with Join, not buried in the scheduler (Ali, 8 Sep 2026). */}
             {activeConv && <ThreadMeetingBanner conversationId={activeConv.conversationId} onCallNow={startCall} />}
 
-            {/* A live call request from the other side, restored after a refresh. */}
-            {activeConv && pendingCall && !pendingCall.fromMe && (
-              <IncomingCallCard
-                fromName={pendingCall.fromName ?? activeConv.otherDisplayName}
-                kind={pendingCall.kind}
-                durationMin={pendingCall.durationMin}
-                busy={answering}
-                onAccept={() => answerCallRequest(true)}
-                onDecline={() => answerCallRequest(false)}
-              />
-            )}
 
             {/* Availability grid — collapsible so the thread stays primary. Gone
                 once calls are unlocked (the first meeting has happened), except
@@ -1531,9 +1401,10 @@ export default function MessagesPage() {
                                     const Icon = act.kind === 'audio' ? Phone : Video;
                                     // A scheduled meeting still in play → Join; once its window has
                                     // ended → Call now; an instant-call line → Call again/back.
-                                    // Any CALL action needs calls unlocked (first meeting happened).
+                                    // A CALL action needs what ringing needs: a video call canCall, an
+                                    // audio one calls unlocked (first meeting happened).
                                     const scheduledLive = act.scheduled && !confirmedMeetingOver;
-                                    if (!scheduledLive && !callsUnlocked) return null;
+                                    if (!scheduledLive && !(act.kind === 'video' ? canCall : callsUnlocked)) return null;
                                     const label = scheduledLive
                                       ? 'Join meeting'
                                       : act.scheduled

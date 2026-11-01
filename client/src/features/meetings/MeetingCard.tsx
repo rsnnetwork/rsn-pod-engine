@@ -8,7 +8,7 @@ import type { Meeting } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import { ACTION, CARD_FRAME, JoinOrCountdown, PhaseChip } from './MeetingParts';
-import { firstLine, meetingChip, meetingLine } from './meeting-words';
+import { firstLine, meetingChip, meetingLine, meetingTitle } from './meeting-words';
 
 export default function MeetingCard({ meeting, now }: { meeting: Meeting; now: number }) {
   const headingId = useId();
@@ -34,7 +34,7 @@ export default function MeetingCard({ meeting, now }: { meeting: Meeting; now: n
             <h3 id={headingId} className="min-w-0 text-[16px] font-bold leading-tight [overflow-wrap:anywhere]">
               {/* Stretched over the card, so a tap anywhere on it opens the meeting's page. */}
               <Link to={`/meetings/${encodeURIComponent(meeting.id)}`} className="after:absolute after:inset-0 after:rounded-[15px] after:content-[''] hover:underline">
-                Meeting with {name}
+                {meetingTitle(meeting)}
               </Link>
             </h3>
             {chip && <PhaseChip chip={chip} />}

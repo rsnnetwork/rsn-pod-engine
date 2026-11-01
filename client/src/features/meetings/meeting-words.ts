@@ -70,6 +70,15 @@ export function meetingDay(startAt: string, timeZone?: string): string {
 
 export const kindLabel = (kind: MeetingKind): string => (kind === 'audio' ? 'Audio' : 'Video');
 
+/**
+ * A meeting's heading: "Meeting with Bo" for a time the two agreed, "Video call with Bo" for a call one of them
+ * rang and the other answered (source instant, 1 Nov 2026). A list from a server before the field reads as a meeting.
+ */
+export function meetingTitle(meeting: Pick<Meeting, 'kind' | 'partner'> & { source?: Meeting['source'] }): string {
+  const name = meeting.partner.displayName;
+  return meeting.source === 'instant' ? `${kindLabel(meeting.kind)} call with ${name}` : `Meeting with ${name}`;
+}
+
 /** A card's time line: "Sun 25 Oct · 13:00–13:30 CET · Video" */
 export function meetingLine(meeting: Pick<Meeting, 'startAt' | 'durationMin' | 'kind'>, timeZone?: string): string {
   return `${meetingWhen(meeting.startAt, meeting.durationMin, timeZone)} · ${kindLabel(meeting.kind)}`;
