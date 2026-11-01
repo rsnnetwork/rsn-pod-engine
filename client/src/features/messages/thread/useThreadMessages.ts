@@ -5,17 +5,33 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { queryClient } from '@/lib/queryClient';
 import { getSocket } from '@/lib/socket';
 import { E } from '@/realtime/entities';
+import { invalidateEntities } from '@/realtime/invalidate-entities';
+import { useAuthStore } from '@/stores/authStore';
 import type { DmMessage } from './dm-message';
 
-/** Mark everything the other person wrote in this conversation as read: over the socket, or by REST when it is down. */
+/** The tags the server sends for a read: the conversation, and the reader's Messages counts. */
+function readTags(conversationId: string): string[] {
+  const me = useAuthStore.getState().user?.id as string | undefined;
+  return me ? [E.dmConversation(conversationId), E.userDms(me)] : [E.dmConversation(conversationId)];
+}
+
+/**
+ * Mark everything the other person wrote in this conversation as read: over the socket, or by REST when it is down.
+ * Over the socket the server's tags come back on this very socket. By REST (a tab that has just opened, whose socket is
+ * not up yet) they can go out before this tab joins its room, after its first count was read, so this tab refreshes
+ * those reads itself when the read answers; otherwise it kept "(1) REASON" and the badge (1 Nov 2026).
+ */
 export function markThreadRead(conversationId: string): void {
   const socket = getSocket();
   if (socket?.connected) {
     socket.emit('dm:read', { conversationId });
   } else {
-    api.post(`/dm/conversations/${conversationId}/read`).catch(err => console.warn('mark-read failed', err));
+    api.post(`/dm/conversations/${conversationId}/read`)
+      .then(() => invalidateEntities(queryClient, readTags(conversationId)))
+      .catch(err => console.warn('mark-read failed', err));
   }
 }
 

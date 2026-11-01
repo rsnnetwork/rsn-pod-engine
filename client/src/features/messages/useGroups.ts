@@ -12,6 +12,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import type { DmGroupDetail, DmGroupSummary, GroupChatMessage, GroupChatMessagePage } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import { invalidateEntities } from '@/realtime/invalidate-entities';
 import { useAuthStore } from '@/stores/authStore';
 import { groupReadRetry, groupReadRetryDelay, groupUnreadTotal, type EventPerson } from './group-chat-text';
 
@@ -126,10 +127,18 @@ export function useSendGroupMessage(groupId: string) {
   });
 }
 
-/** The member has read the group up to now. The server tells the reader's own tabs, whose counts redraw. */
+/**
+ * The member has read the group up to now. The server tells the reader's other tabs, whose counts redraw; this tab
+ * refreshes the same reads itself when the read answers, since its socket may not be up yet to hear that (1 Nov 2026).
+ */
 export function useMarkGroupRead(groupId: string) {
+  const qc = useQueryClient();
+  const me = useMe();
   return useMutation({
     mutationFn: () => api.post(`/groups/${encodeURIComponent(groupId)}/read`).then((r) => r.data.data as { lastReadAt: string }),
+    onSuccess: () => {
+      if (me) void invalidateEntities(qc, [E.userDms(me)]);
+    },
   });
 }
 

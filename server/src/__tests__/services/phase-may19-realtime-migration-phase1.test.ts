@@ -85,10 +85,14 @@ describe('Realtime migration Phase 1 — scaffolding', () => {
     });
 
     it('invalidates queries via predicate matching on meta.entities', () => {
-      expect(handlerSrc).toMatch(/invalidateQueries\(\{\s*predicate:/);
-      expect(handlerSrc).toMatch(/query\.meta[\s\S]{0,80}entities/);
+      // The predicate lives in realtime/invalidate-entities.ts since 1 Nov 2026, so a tab's own REST read can apply the
+      // same rule (t6-read-own-tab.test.ts); the handler hands it every incoming tag.
+      const ruleSrc = readClient('realtime/invalidate-entities.ts');
+      expect(handlerSrc).toMatch(/invalidateEntities\(queryClient, incoming\)/);
+      expect(ruleSrc).toMatch(/invalidateQueries\(\{\s*predicate:/);
+      expect(ruleSrc).toMatch(/query\.meta[\s\S]{0,80}entities/);
       // Predicate uses Set membership for O(1) lookup against incoming entities.
-      expect(handlerSrc).toMatch(/new\s+Set\(incoming\)/);
+      expect(ruleSrc).toMatch(/new\s+Set\(entities\)/);
     });
 
     it('is mounted at the App root', () => {

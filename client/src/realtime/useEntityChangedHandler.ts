@@ -14,6 +14,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { getSocket } from '@/lib/socket';
+import { invalidateEntities } from './invalidate-entities';
 
 export function useEntityChangedHandler(): void {
   const queryClient = useQueryClient();
@@ -24,19 +25,7 @@ export function useEntityChangedHandler(): void {
 
     const handler = (data: { entities?: string[] }) => {
       const incoming = Array.isArray(data?.entities) ? data.entities : [];
-      if (incoming.length === 0) return;
-      const incomingSet = new Set(incoming);
-
-      queryClient.invalidateQueries({
-        predicate: (query) => {
-          const tags = (query.meta as { entities?: string[] } | undefined)?.entities;
-          if (!tags || !Array.isArray(tags) || tags.length === 0) return false;
-          for (const tag of tags) {
-            if (incomingSet.has(tag)) return true;
-          }
-          return false;
-        },
-      });
+      void invalidateEntities(queryClient, incoming);
     };
 
     socket.on('entity:changed', handler);
