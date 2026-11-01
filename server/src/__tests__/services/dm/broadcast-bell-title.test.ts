@@ -18,6 +18,8 @@ jest.mock('../../../services/dm/dm.service', () => ({ __esModule: true }));
 jest.mock('../../../services/email/email.service', () => ({ sendDmNotificationEmail: jest.fn(), __esModule: true }));
 jest.mock('../../../services/notification-prefs/notification-prefs.service', () => ({
   shouldSendEmail: jest.fn(async () => false),
+  // The message bell is on (dm-bell-switch.test.ts covers it off).
+  shouldSendBell: jest.fn(async () => true),
   __esModule: true,
 }));
 jest.mock('../../../services/redis/redis.client', () => ({ getRedisClient: () => null, __esModule: true }));

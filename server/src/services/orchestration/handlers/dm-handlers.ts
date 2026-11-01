@@ -39,6 +39,7 @@ import * as emailService from '../../email/email.service';
 import * as prefsService from '../../notification-prefs/notification-prefs.service';
 import { getRedisClient } from '../../redis/redis.client';
 import config from '../../../config';
+import type { MessageReplyQuote } from '@rsn/shared';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. DM message /
 // reaction / read-receipt / notification:new fanouts get sibling
 // emitEntities() calls so the client's predicate invalidator refreshes
@@ -128,6 +129,67 @@ async function maybeSendDmEmail(
   }
 }
 
+/**
+ * The recipient's bell entry for a message: "<name> sent you a message" (or the caller's own title), pushed live with
+ * notification:new and their notifications tag. Best-effort: a failure is logged, never thrown.
+ *
+ * 1 Nov 2026 (audit 02, side finding S1): only while the recipient's "Direct messages" bell switch is on. Settings
+ * offered it and the server stored it, but nothing read it, so the switch did nothing. The email has its own switch.
+ */
+async function ringDmBell(
+  io: SocketServer,
+  fromUserId: string,
+  toUserId: string,
+  conversationId: string,
+  message: BroadcastableDmMessage,
+  bellTitle: string | undefined,
+): Promise<void> {
+  try {
+    if (!(await prefsService.shouldSendBell(toUserId, 'dm'))) return;
+    let notifTitle = bellTitle;
+    if (!notifTitle) {
+      const senderResult = await query<{ display_name: string | null }>(
+        `SELECT display_name FROM users WHERE id = $1`, [fromUserId],
+      );
+      const senderName = senderResult.rows[0]?.display_name || 'Someone';
+      notifTitle = `${senderName} sent you a message`;
+    }
+    // For attachment-only messages, the bell body falls back to a short
+    // descriptor so the bell shows useful text instead of an empty bubble.
+    const notifBody = message.content && message.content.trim().length > 0
+      ? message.content.slice(0, 140)
+      : message.attachmentType === 'image'
+        ? '📷 Photo'
+        : message.attachmentType === 'audio'
+          ? '🎤 Voice message'
+          : 'New message';
+    const notifLink = `/messages/${conversationId}`;
+    const notifResult = await query<{ id: string; created_at: Date }>(
+      `INSERT INTO notifications (id, user_id, type, title, body, link)
+       VALUES ($1, $2, 'direct_message', $3, $4, $5)
+       RETURNING id, created_at`,
+      [uuid(), toUserId, notifTitle, notifBody, notifLink],
+    );
+    io.to(userRoom(toUserId)).emit('notification:new', {
+      id: notifResult.rows[0].id,
+      type: 'direct_message',
+      title: notifTitle,
+      body: notifBody,
+      link: notifLink,
+      isRead: false,
+      createdAt: notifResult.rows[0].created_at,
+    });
+    // Phase 2 dual-emit — notifications + invites entities so the bell
+    // counter + invites list refresh for the recipient.
+    emitEntities(
+      io, [toUserId],
+      [E.userNotifications(toUserId), E.userInvites(toUserId)],
+    ).catch(() => {});
+  } catch (err) {
+    logger.warn({ err, fromUserId, toUserId }, 'DM notification insert failed (non-fatal)');
+  }
+}
+
 // ─── Real-time broadcast helper ────────────────────────────────────────────
 //
 // Shared between handleDmSend (socket path) and the POST /dm/messages REST
@@ -153,6 +215,8 @@ export interface BroadcastableDmMessage {
   /** 'system' → the client draws a neutral card, not this person's bubble. */
   kind?: string;
   systemMeta?: Record<string, any> | null;
+  /** The message it answers (30 Oct 2026), so a reply arrives quoted without a refetch. */
+  replyTo?: MessageReplyQuote | null;
 }
 
 /**
@@ -195,6 +259,7 @@ export async function broadcastDmMessage(
     // triggering member's own bubble until the next refetch (21 Sep 2026).
     kind: message.kind ?? 'user',
     systemMeta: message.systemMeta ?? null,
+    replyTo: message.replyTo ?? null,
   };
   io.to(userRoom(fromUserId)).emit('dm:message', payload);
   io.to(userRoom(toUserId)).emit('dm:message', payload);
@@ -220,51 +285,7 @@ export async function broadcastDmMessage(
   ).catch(() => {});
 
   if (shouldNotify) {
-  // Bell notification — same pattern as invites so the bell icon counts
-  // DMs alongside invite events consistently.
-  try {
-    let notifTitle = options.bellTitle;
-    if (!notifTitle) {
-      const senderResult = await query<{ display_name: string | null }>(
-        `SELECT display_name FROM users WHERE id = $1`, [fromUserId],
-      );
-      const senderName = senderResult.rows[0]?.display_name || 'Someone';
-      notifTitle = `${senderName} sent you a message`;
-    }
-    // For attachment-only messages, the bell body falls back to a short
-    // descriptor so the bell shows useful text instead of an empty bubble.
-    const notifBody = message.content && message.content.trim().length > 0
-      ? message.content.slice(0, 140)
-      : message.attachmentType === 'image'
-        ? '📷 Photo'
-        : message.attachmentType === 'audio'
-          ? '🎤 Voice message'
-          : 'New message';
-    const notifLink = `/messages/${conversationId}`;
-    const notifResult = await query<{ id: string; created_at: Date }>(
-      `INSERT INTO notifications (id, user_id, type, title, body, link)
-       VALUES ($1, $2, 'direct_message', $3, $4, $5)
-       RETURNING id, created_at`,
-      [uuid(), toUserId, notifTitle, notifBody, notifLink],
-    );
-    io.to(userRoom(toUserId)).emit('notification:new', {
-      id: notifResult.rows[0].id,
-      type: 'direct_message',
-      title: notifTitle,
-      body: notifBody,
-      link: notifLink,
-      isRead: false,
-      createdAt: notifResult.rows[0].created_at,
-    });
-    // Phase 2 dual-emit — notifications + invites entities so the bell
-    // counter + invites list refresh for the recipient.
-    emitEntities(
-      io, [toUserId],
-      [E.userNotifications(toUserId), E.userInvites(toUserId)],
-    ).catch(() => {});
-  } catch (err) {
-    logger.warn({ err, fromUserId, toUserId }, 'DM notification insert failed (non-fatal)');
-  }
+  await ringDmBell(io, fromUserId, toUserId, conversationId, message, options.bellTitle);
 
   // Offline fallback: email the recipient (debounced) if they're not
   // connected. Snippet uses the content if present; attachment-only sends
