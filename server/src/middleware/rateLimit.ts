@@ -389,9 +389,12 @@ export const wallWriteLimiter = rateLimit({
 // entity that was made uses it: a refusal (a name already taken, a name too short) claims no name, and
 // counting it told a member trying the name-clash flow they had added a lot of entities when they had
 // added none. The API limiter in front of every route still counts every request.
+// Reads are 120 a minute per member since 2 Nov 2026 (T15): since claims wait for approval, every answer an admin
+// gives makes each of their entity screens read again (measured: 4 reads per approval with the page, the list and
+// their profile open), and at 60 the 15th approval in a row met a 429 and froze the Requests panel.
 export const entityReadLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 60,
+  max: 120,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
