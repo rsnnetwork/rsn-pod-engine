@@ -351,6 +351,31 @@ describe('offers reach the people who are looking for them', () => {
 describe('a leader\'s assistant, secretary or coordinator is not suggested as a leader (H2b item 13)', () => {
   it.each(['Executive Assistant of the CEO', 'Executive Assistant to the Chief Executive Officer', 'Secretary to the Managing Director', 'Coordinator, Office of the VP'])('%s', (role) => {
     expect(selfGuessesFromText(role, null)).not.toContain('self_manager_leader');
+    expect(selfGuessesFromText(role, null)).not.toContain('self_founder_owner');
+  });
+
+  // Review M10: the veto is read per title, not over the whole role. A role that names a leader's title beside an
+  // assisting one keeps the leader's; the assisting title, and what follows it up to the next title, gives none.
+  it.each([
+    ['Founder & CEO | Board Secretary', 'self_founder_owner'],
+    ['Executive Assistant at Acme | Founder at Side Project', 'self_founder_owner'],
+    ['Managing Director · Secretary of the Rotary Club', 'self_manager_leader'],
+    ['Founder and Board Secretary', 'self_founder_owner'],
+  ] as const)('%s keeps %s', (role, kept) => {
+    expect(selfGuessesFromText(role, null)).toContain(kept);
+  });
+
+  // "Assistant" in front of a rank names a junior holder of that rank, who runs people (an assistant manager runs a
+  // shift; an assistant director a department), not someone who assists a leader.
+  it.each(['Assistant Manager', 'Assistant Director of Operations', 'Assistant General Manager', 'Assistant Head of Sales'])('%s is still a manager', (role) => {
+    expect(selfGuessesFromText(role, null)).toContain('self_manager_leader');
+  });
+
+  it.each([
+    ['Executive Assistant, CEO Office | Founder, Acme', ['self_employee', 'self_founder_owner']],
+    ['Coordinator, Office of the VP', ['self_employee']],
+  ] as const)('%s', (role, keys) => {
+    expect(selfGuessesFromText(role, null)).toEqual(keys);
   });
 });
 
