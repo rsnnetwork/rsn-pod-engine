@@ -11,8 +11,8 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import type { PictureEditorProps } from '@/components/picture/PictureEditor';
-import { serverCouldNotOpen } from '@/components/picture/picture-file';
 import { pictureToSend } from '@/components/picture/prepare-picture';
+import { sendPicture } from '@/components/picture/send-picture';
 import {
   entityKeys, fetchEntityPictureSource, removeEntityPicture, saveEntityPicture, type EntityPictureKind,
 } from './entity-api';
@@ -40,18 +40,8 @@ export function useEntityPicture(entity: { id: string; name: string }, kind: Ent
 
   const save = useMutation({
     networkMode: 'always',
-    mutationFn: async ({ picture, crop }: { picture: Blob | null; crop: PictureCrop }) => {
-      if (!picture) return saveEntityPicture(entity.id, kind, { crop });
-      const first = await pictureToSend(picture);
-      try {
-        return await saveEntityPicture(entity.id, kind, { image: first.image, crop });
-      } catch (err) {
-        // The browser could draw it (it is in the frame), but the server could not open the original: send the drawing.
-        if (first.copied || !serverCouldNotOpen(err)) throw err;
-        const copy = await pictureToSend(picture, true);
-        return saveEntityPicture(entity.id, kind, { image: copy.image, crop });
-      }
-    },
+    mutationFn: ({ picture, crop }: { picture: Blob | null; crop: PictureCrop }) =>
+      sendPicture(picture, crop, (body) => saveEntityPicture(entity.id, kind, body), pictureToSend),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: entityKeys.all });
       setOpen(false);
@@ -74,6 +64,8 @@ export function useEntityPicture(entity: { id: string; name: string }, kind: Ent
     open,
     title: words.edit,
     name: kind,
+    // A company's picture, not the admin's own: "Could not save the logo", "Choose a picture for the logo".
+    subject: `the ${kind}`,
     aspect: kind === 'logo' ? 1 : 3,
     src: source.data?.image ?? null,
     loading: source.isLoading,

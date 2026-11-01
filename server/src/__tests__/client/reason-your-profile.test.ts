@@ -251,7 +251,8 @@ describe('Your profile: the banner', () => {
     expect(editor()).toMatch(/mutationFn: removeBannerRequest/);
     // The file is checked before it is read, and the same file can be chosen again after a failure (in the editor).
     const pictureEditor = read('components/picture/PictureEditor.tsx');
-    expect(pictureEditor).toMatch(/pictureFileProblem\(file, name\)/);
+    // T15 review M6: with how the picture is named (still "your {name}" for a member's).
+    expect(pictureEditor).toMatch(/pictureFileProblem\(file, name, named\)/);
     expect(pictureEditor).toMatch(/e\.target\.value = '';/);
     expect(pictureEditor).toMatch(/accept=\{PICTURE_TYPES\.join\(','\)\}/);
   });
