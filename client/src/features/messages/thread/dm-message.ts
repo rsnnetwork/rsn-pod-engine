@@ -1,6 +1,7 @@
 // One message in a 1:1 conversation, as GET /dm/conversations/:id/messages answers it (newest first).
 // Shared by the Messages thread and the chat panel in the call room (1 Nov 2026, T7).
 
+import type { MessageReplyQuote } from '@rsn/shared';
 import type { DmMessageKind, DmSystemMeta } from '../SystemMessageCard';
 
 export interface DmMessage {
@@ -24,4 +25,6 @@ export interface DmMessage {
     width?: number; height?: number; bytes?: number; format?: string;
     durationSec?: number;
   } | null;
+  /** The message this one answers (30 Oct 2026); null or absent when it answers none (every row before then). */
+  replyTo?: MessageReplyQuote | null;
 }

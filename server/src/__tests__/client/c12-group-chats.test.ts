@@ -496,7 +496,8 @@ describe('every group query declares the tags the server sends (the realtime che
   });
 
   it('each write calls its route; none writes the cache by hand', () => {
-    expect(hooks).toMatch(/api\.post\(`\/groups\/\$\{encodeURIComponent\(groupId\)\}\/messages`, \{ content \}\)/);
+    // 30 Oct 2026: a message may answer one of the group's (quoted replies); only then does the body carry replyToId.
+    expect(hooks).toMatch(/api\.post\(`\/groups\/\$\{encodeURIComponent\(groupId\)\}\/messages`, \{ content, \.\.\.\(replyToId \? \{ replyToId \} : \{\}\) \}\)/);
     expect(hooks).toMatch(/api\.post\(`\/groups\/\$\{encodeURIComponent\(groupId\)\}\/read`\)/);
     expect(hooks).toMatch(/api\.post\(`\/groups\/\$\{encodeURIComponent\(groupId\)\}\/leave`\)/);
     expect(hooks).toMatch(/api\.post\(`\/groups\/\$\{encodeURIComponent\(groupId\)\}\/members`, \{ userIds \}\)/);
@@ -558,7 +559,8 @@ describe('the group thread', () => {
 
   it('the message box is 44px tall on every width, and Enter does not send while a word is still being composed', () => {
     expect(classAfter(thread, '<textarea').split(/\s+/)).toContain('min-h-[44px]');
-    expect(thread).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !e\.nativeEvent\.isComposing\)/);
+    // Safari's confirming Enter (keyCode 229) is part of the composition too (P22, isComposingEnter).
+    expect(thread).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !isComposingEnter\(e\.nativeEvent\)\)/);
   });
 
   it('has a loading, an empty and three error states, each with a way back to Messages', () => {
@@ -674,7 +676,7 @@ describe('Messages: groups in the inbox, a group open at /messages/g/:groupId', 
 
   it('the one-to-one message box is 44px tall too, and Enter does not send mid-composition', () => {
     expect(classAfter(page, '<textarea').split(/\s+/)).toContain('min-h-[44px]');
-    expect(page).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !e\.nativeEvent\.isComposing\)/);
+    expect(page).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !isComposingEnter\(e\.nativeEvent\)\)/);
   });
 });
 
@@ -682,8 +684,11 @@ describe('the Messages badge counts the groups\' unread too', () => {
   const shell = read('features/reason/shell/ReasonShell.tsx');
 
   it('the one-to-one count plus every group\'s, for the sidebar and the phone bar alike', () => {
-    expect(shell).toMatch(/const groupUnread = useGroupUnreadTotal\(\);/);
-    expect(shell).toMatch(/const unreadCount = \(unread \?\? 0\) \+ groupUnread;/);
+    // 30 Oct 2026: the sum moved into useMessagesUnread, which the browser tab's "(N) REASON" reads too.
+    const unread = read('features/messages/useMessagesUnread.ts');
+    expect(unread).toMatch(/const groupUnread = useGroupUnreadTotal\(\);/);
+    expect(unread).toMatch(/return userId \? \(unread \?\? 0\) \+ groupUnread : 0;/);
+    expect(shell).toMatch(/const unreadCount = useMessagesUnread\(\);/);
     expect(shell).toMatch(/<ShellSidebar unreadCount=\{unreadCount\} \/>/);
     expect(shell).toMatch(/<MobileNav unreadCount=\{unreadCount\} \/>/);
   });

@@ -157,7 +157,8 @@ describe('the people pages: one profile page, two to a row from 1024px', () => {
 
   it('the conversation header opens the person\'s Human Profile, saying it was found through Messages', () => {
     const src = read('features/messages/MessagesPage.tsx');
-    expect(src).toContain('<Link to={`/people/${headerContext.otherUserId}?from=Messages`} className="min-w-0 flex-1 hover:opacity-80">');
+    // 30 Oct 2026 (L7): the picture and the name are one PersonLink (ProfileLink with from="Messages": /people/:id?from=Messages).
+    expect(src).toMatch(/<PersonLink\s+userId=\{headerContext\.otherUserId\}\s+from="Messages"/);
     expect(src).not.toContain('to={`/profile/${headerContext.otherUserId}`}');
   });
 

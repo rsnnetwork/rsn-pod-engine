@@ -102,9 +102,16 @@ describe('every ?from= the app writes is one the profile accepts', () => {
   it('every literal in the client is in KNOWN_SOURCES, so a plain link cannot write a source the profile rejects', () => {
     const files = walk(path.join(__dirname, '../../../../client/src'));
     expect(files.length).toBeGreaterThan(200);
-    const written = files.flatMap((file) => fromLiterals(fs.readFileSync(file, 'utf8')).map((source) => ({ file: path.basename(file), source })));
+    // 30 Oct 2026: a link drawn by ProfileLink or PersonLink names its source as a prop (from="Messages"), and that is
+    // read too: the conversation header is one now.
+    const fromProps = (src: string) => [...src.matchAll(/\bfrom="([^"]+)"/g)].map((m) => m[1]);
+    const written = files.flatMap((file) => {
+      const src = fs.readFileSync(file, 'utf8');
+      return [...fromLiterals(src), ...fromProps(src)].map((source) => ({ file: path.basename(file), source }));
+    });
     // The scan is not blind: the People pages' links, the conversation header's and the profile's "Your path" link are there.
     expect(written.map((w) => w.source)).toEqual(expect.arrayContaining(['People', 'Messages', 'Your path']));
+    expect(written).toEqual(expect.arrayContaining([{ file: 'MessagesPage.tsx', source: 'Messages' }]));
     for (const w of written) expect({ ...w, known: knownSource(w.source) !== null }).toEqual({ ...w, known: true });
   });
 

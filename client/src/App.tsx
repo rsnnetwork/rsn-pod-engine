@@ -3,6 +3,8 @@ import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { connectSocket, disconnectSocket, getSocket, reconnectSocket } from '@/lib/socket';
 import { useEntityChangedHandler } from '@/realtime/useEntityChangedHandler';
 import { useToastStore } from '@/stores/toastStore';
+import { useTabTitleCount } from '@/hooks/useTabTitleCount';
+import { useMessageChime } from '@/hooks/useMessageChime';
 
 // Backward-compat: old invite emails (pre-cbcef30) pointed users at
 // `/sessions/:id/live` (plural). The actual route is `/session/:id/live`
@@ -60,6 +62,7 @@ import AdminEmailPage from '@/features/admin/AdminEmailPage';
 import AdminSupportPage from '@/features/admin/AdminSupportPage';
 import AdminFeedbackPage from '@/features/admin/AdminFeedbackPage';
 import SettingsPage from '@/features/settings/SettingsPage';
+import NotificationsPage from '@/features/notifications/NotificationsPage';
 import BillingPage from '@/features/billing/BillingPage';
 import SupportPage from '@/features/support/SupportPage';
 import NotFoundPage from '@/features/misc/NotFoundPage';
@@ -197,6 +200,13 @@ export default function App() {
   // meta.entities and the server emits entity:changed for every mutation.
   useEntityChangedHandler();
 
+  // 30 Oct 2026 (L8): "(N) REASON" in the browser tab while messages are unread, and a chime when one comes in. Here,
+  // not in the shell: the profile and the meeting room are outside it. Signed out, the tab reads "REASON" and nothing
+  // sounds.
+  const signedInId = useAuthStore((s) => (s.isAuthenticated ? s.user?.id : undefined));
+  useTabTitleCount();
+  useMessageChime(signedInId);
+
   return (
     <>
       {isAuthenticated && <IncomingCallBanner />}
@@ -250,6 +260,8 @@ export default function App() {
         <Route path="/messages/:conversationId" element={<MessagesPage />} />
         <Route path="/invites" element={<InvitesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        {/* Every notification in one list (30 Oct 2026); the bell's foot links here. */}
+        <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/support" element={<SupportPage />} />
         <Route path="/admin" element={<AdminDashboardPage />} />

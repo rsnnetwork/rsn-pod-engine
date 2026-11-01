@@ -1,9 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { ArrowLeft, Loader2, Send, Users } from 'lucide-react';
+import { ArrowLeft, Loader2, Send, Smile, Users } from 'lucide-react';
 import type { DmGroupDetail, GroupChatMessage } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
+import PersonLink, { isFormerMemberName } from '@/components/people/PersonLink';
+import EmojiPicker, { pickInto } from '@/components/chat/EmojiPicker';
+import { isComposingEnter } from '@/components/chat/emoji';
 import Linkify from '@/components/ui/Linkify';
 import { Spinner } from '@/components/ui/Spinner';
 import { formResolver } from '@/lib/form-resolver';
@@ -11,6 +14,10 @@ import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { TEXT_BUTTON } from './buttons';
+import { bubbleLook } from './bubble-look';
+import ReplyQuote from './ReplyQuote';
+import ReplyStrip, { ReplyButton } from './ReplyStrip';
+import type { ReplyTarget } from './reply-text';
 import GroupMembersSheet from './GroupMembersSheet';
 import { dayHeaderLabel, sameLocalDay, timeOnly } from './message-time';
 import { isGroupId, useGroup, useGroupMessages, useMarkGroupRead, useSendGroupMessage } from './useGroups';
@@ -51,6 +58,13 @@ export default function GroupThread({ groupId }: { groupId: string }) {
   const { mutate: markRead } = useMarkGroupRead(groupId);
   const pageSeen = usePageSeen();
   const [membersOpen, setMembersOpen] = useState(false);
+  // The message being replied to (30 Oct 2026, L7): "Replying to …" above the box until it is sent or cancelled.
+  const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
+  const composerBox = useRef<HTMLTextAreaElement | null>(null);
+  const replyTo = useCallback((m: GroupChatMessage, mine: boolean) => {
+    setReplyTarget({ id: m.id, senderName: m.senderName, content: m.content, mine });
+    composerBox.current?.focus();
+  }, []);
 
   const messages = useMemo(() => threadInOrder(thread.data?.pages ?? []), [thread.data]);
   const newestOther = newestFromOthers(messages, myUserId);
@@ -153,9 +167,9 @@ export default function GroupThread({ groupId }: { groupId: string }) {
         {thread.isFetchNextPageError && <p role="alert" className="mb-2 text-center text-sm text-red-600">{EARLIER_FAILED}</p>}
         {messages.length === 0
           ? <p data-testid="group-thread-empty" className="py-8 text-center text-sm text-gray-500">{GROUP_EMPTY}</p>
-          : <MessageList messages={messages} myUserId={myUserId} />}
+          : <MessageList messages={messages} myUserId={myUserId} onReply={replyTo} />}
       </div>
-      <GroupComposer groupId={groupId} />
+      <GroupComposer groupId={groupId} replyTarget={replyTarget} onReplyDone={() => setReplyTarget(null)} boxRef={composerBox} />
       <GroupMembersSheet open={membersOpen} onClose={() => setMembersOpen(false)} group={group} myUserId={myUserId ?? ''} />
     </div>
   );
@@ -188,8 +202,17 @@ function ThreadHeader({ group, onMembers }: { group: DmGroupDetail; onMembers: (
   );
 }
 
-/** The messages oldest first, one person's within a minute under one name, a line between days. */
-function MessageList({ messages, myUserId }: { messages: GroupChatMessage[]; myUserId: string | undefined }) {
+/**
+ * The messages oldest first, one person's within a minute under one name, a line between days. A sender's name and
+ * picture open their profile (30 Oct 2026, L7); a former member's do not. Each message offers Reply, and a reply shows
+ * the message it answers.
+ */
+function MessageList({ messages, myUserId, onReply }: {
+  messages: GroupChatMessage[];
+  myUserId: string | undefined;
+  onReply: (m: GroupChatMessage, mine: boolean) => void;
+}) {
+  const loadedIds = new Set(messages.map((m) => m.id));
   const rows: ReactNode[] = [];
   let previousDay: Date | null = null;
   clusterGroupMessages(messages).forEach((cluster, ci) => {
@@ -207,21 +230,48 @@ function MessageList({ messages, myUserId }: { messages: GroupChatMessage[]; myU
     const mine = cluster.senderId === myUserId;
     rows.push(
       <li key={first.id} className={cn('flex items-end gap-2', mine ? 'justify-end' : 'justify-start', ci > 0 && 'mt-3')}>
-        {!mine && <Avatar src={first.senderAvatarUrl} name={first.senderName} size="sm" className="shrink-0" />}
+        {!mine && (
+          <PersonLink
+            userId={first.fromUserId}
+            from="Messages"
+            former={isFormerMemberName(first.senderName)}
+            className="-m-1.5 shrink-0 rounded-full p-1.5"
+            title={`View ${first.senderName}'s profile`}
+          >
+            <Avatar src={first.senderAvatarUrl} name={first.senderName} size="sm" />
+          </PersonLink>
+        )}
         <div className={cn('flex min-w-0 max-w-[75%] flex-col sm:max-w-[60%]', mine ? 'items-end' : 'items-start')}>
-          {!mine && <p className="mb-0.5 max-w-full truncate px-1 text-[11px] font-semibold text-gray-500">{first.senderName}</p>}
+          {!mine && (
+            // The padding, taken back by the margin, makes the name a 44px target without moving the bubble.
+            <PersonLink
+              userId={first.fromUserId}
+              from="Messages"
+              former={isFormerMemberName(first.senderName)}
+              className="-mt-3.5 -mb-3 block max-w-full truncate px-1 py-3.5 text-[11px] font-semibold text-gray-500 hover:underline"
+              title={`View ${first.senderName}'s profile`}
+            >
+              {first.senderName}
+            </PersonLink>
+          )}
           {cluster.messages.map((m, i) => (
             <div
               key={m.id}
-              data-message-id={m.id}
-              className={cn(
-                'whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm [overflow-wrap:anywhere]',
-                i > 0 && 'mt-0.5',
-                mine ? 'bg-rsn-red text-white' : 'bg-gray-100 text-[#1a1a2e]',
-                i === cluster.messages.length - 1 && (mine ? 'rounded-br-sm' : 'rounded-bl-sm'),
-              )}
+              className={cn('group/bubble flex max-w-full items-center gap-1', mine ? 'flex-row-reverse' : 'flex-row', i > 0 && 'mt-0.5')}
             >
-              <Linkify text={m.content} className={mine ? 'break-all text-white underline hover:opacity-80' : undefined} />
+              <div
+                data-message-id={m.id}
+                data-testid={mine ? 'bubble-own' : 'bubble-theirs'}
+                className={cn(
+                  'min-w-0 whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm [overflow-wrap:anywhere]',
+                  bubbleLook(mine),
+                  i === cluster.messages.length - 1 && (mine ? 'rounded-br-sm' : 'rounded-bl-sm'),
+                )}
+              >
+                {m.replyTo && <ReplyQuote quote={m.replyTo} loaded={loadedIds.has(m.replyTo.id)} mine={mine} />}
+                <Linkify text={m.content} />
+              </div>
+              <ReplyButton onReply={() => onReply(m, mine)} />
             </div>
           ))}
           <p className="mt-1 px-1 text-[11px] text-gray-400">{timeOnly(new Date(last.createdAt))}</p>
@@ -232,22 +282,36 @@ function MessageList({ messages, myUserId }: { messages: GroupChatMessage[]; myU
   return <ol data-testid="group-messages">{rows}</ol>;
 }
 
-/** The message box: the server's 1 to 4000 characters; a refusal keeps the words and says why. */
-function GroupComposer({ groupId }: { groupId: string }) {
+/**
+ * The message box: the server's 1 to 4000 characters; a refusal keeps the words and says why. A reply being written
+ * shows "Replying to …" above it (30 Oct 2026, L7), and the emoji picker beside it stays open for several picks (L9).
+ */
+function GroupComposer({ groupId, replyTarget, onReplyDone, boxRef }: {
+  groupId: string;
+  replyTarget: ReplyTarget | null;
+  onReplyDone: () => void;
+  boxRef: MutableRefObject<HTMLTextAreaElement | null>;
+}) {
   const send = useSendGroupMessage(groupId);
   const addToast = useToastStore((s) => s.addToast);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const closeEmoji = useCallback(() => setEmojiOpen(false), []);
+  const emojiToggle = useRef<HTMLButtonElement>(null);
   // 360px phones: the long prompt wraps under its own first word beside the send button.
   const narrowPhone = typeof window !== 'undefined' && window.matchMedia('(max-width: 379px)').matches;
-  const { register, handleSubmit, reset, watch } = useForm<SendValues>({
+  const { register, handleSubmit, reset, watch, setValue } = useForm<SendValues>({
     defaultValues: { content: '' },
     resolver: formResolver(sendSchema),
   });
-  const typed = (watch('content') ?? '').trim().length > 0;
+  const content = watch('content') ?? '';
+  const typed = content.trim().length > 0;
+  const field = register('content');
 
   const submit = handleSubmit((values) => {
     if (send.isPending) return;
-    send.mutate(values, {
-      onSuccess: () => reset({ content: '' }),
+    setEmojiOpen(false);
+    send.mutate({ ...values, replyToId: replyTarget?.id ?? null }, {
+      onSuccess: () => { reset({ content: '' }); onReplyDone(); },
       onError: (err) => addToast(groupErrorSentence(err, SEND_FAILED), 'error'),
     });
   });
@@ -259,17 +323,43 @@ function GroupComposer({ groupId }: { groupId: string }) {
       className="border-t border-gray-200 px-3 pt-2"
       style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
     >
+      <div className="relative">
+        <EmojiPicker
+          open={emojiOpen}
+          onClose={closeEmoji}
+          toggleRef={emojiToggle}
+          onPick={(e) => pickInto(boxRef.current, content, e, (next) => setValue('content', next, { shouldDirty: true }))}
+          className="absolute bottom-full left-0 right-0 mb-2"
+        />
+      </div>
+      {replyTarget && <ReplyStrip target={replyTarget} onCancel={onReplyDone} />}
       <div className="flex items-end gap-2">
+        {/* The smile stays hidden on a phone, whose keyboard has its own emoji panel. */}
+        <button
+          ref={emojiToggle}
+          type="button"
+          onClick={() => setEmojiOpen((o) => !o)}
+          aria-label="Add emoji"
+          aria-expanded={emojiOpen}
+          title="Add emoji"
+          className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 sm:flex"
+        >
+          <Smile className="h-5 w-5" />
+        </button>
         <label htmlFor={`group-message-${groupId}`} className="sr-only">Message</label>
         <textarea
           id={`group-message-${groupId}`}
           rows={1}
           maxLength={GROUP_MESSAGE_MAX}
           placeholder={narrowPhone ? MESSAGE_PLACEHOLDER_SHORT : MESSAGE_PLACEHOLDER}
-          {...register('content')}
+          {...field}
+          ref={(el) => { field.ref(el); boxRef.current = el; }}
+          // A phone keyboard coming up puts the picker out of the way.
+          onFocus={() => setEmojiOpen(false)}
           onKeyDown={(e) => {
             // Not while a word is still being composed (Japanese, Chinese, Korean input): there Enter picks the word.
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            // Safari sends the Enter that confirms the word after composition has ended, as keyCode 229 (P22).
+            if (e.key === 'Enter' && !e.shiftKey && !isComposingEnter(e.nativeEvent)) {
               e.preventDefault();
               void submit();
             }

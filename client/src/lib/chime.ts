@@ -46,3 +46,61 @@ export function playTimerChime(): void {
     /* fail-open: a missed chime must never break the room UI */
   }
 }
+
+// ─── Messages (30 Oct 2026 review, item 4.4, L8) ─────────────────────────────
+//
+// Stefan: "When a new message comes in, there is no sound." A short rising pair, unlike the timer's falling one, so the
+// two are never mistaken for each other. Who plays it, and when not, is useMessageChime's business (one tab, not in the
+// open conversation, not in a live event or a meeting); the setting is per device.
+
+/** Two quick rising tones: "a message came in". Silent on failure. Tells the page it played (for its tests). */
+export function playMessageChime(messageId?: string): void {
+  try {
+    const audio = getCtx();
+    if (audio) {
+      const now = audio.currentTime;
+      tone(audio, 988, now, 0.09);
+      tone(audio, 1319, now + 0.1, 0.16);
+    }
+  } catch {
+    /* fail-open: a missed chime must never break the page */
+  }
+  window.dispatchEvent(new CustomEvent('reason:message-chime', { detail: { id: messageId ?? null } }));
+}
+
+/**
+ * Browsers keep audio locked until the page is pressed or typed in; the first press of either readies it, so the first
+ * message after that can sound. A message before any press stays silent: no page can change that. Returns the undo.
+ */
+export function readyAudioOnFirstPress(): () => void {
+  const ready = () => {
+    getCtx();
+    stop();
+  };
+  const stop = () => {
+    document.removeEventListener('pointerdown', ready, true);
+    document.removeEventListener('keydown', ready, true);
+  };
+  document.addEventListener('pointerdown', ready, true);
+  document.addEventListener('keydown', ready, true);
+  return stop;
+}
+
+/** The setting "Sound for new messages", kept on this device (as volume is), on until it is switched off. */
+const MESSAGE_SOUND_KEY = 'reason:message-sound';
+
+export function messageSoundOn(): boolean {
+  try {
+    return localStorage.getItem(MESSAGE_SOUND_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+export function setMessageSoundOn(on: boolean): void {
+  try {
+    localStorage.setItem(MESSAGE_SOUND_KEY, on ? 'on' : 'off');
+  } catch {
+    /* a device that keeps nothing keeps the default: on */
+  }
+}

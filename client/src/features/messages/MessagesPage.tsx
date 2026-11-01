@@ -23,7 +23,15 @@ import GroupInboxRow from './GroupInboxRow';
 import { useMyGroups } from './useGroups';
 import { GROUPS_FAILED, TRY_AGAIN, isRateLimited, mergeInbox } from './group-chat-text';
 import { dayHeaderLabel, formatRelative, sameLocalDay, timeOnly } from './message-time';
+import { bubbleLook, clusterMessages } from './bubble-look';
+import ReplyQuote from './ReplyQuote';
+import ReplyStrip, { ReplyButton } from './ReplyStrip';
+import { replyContentOf, type ReplyTarget } from './reply-text';
+import type { MessageReplyQuote } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
+import PersonLink, { isFormerMemberName } from '@/components/people/PersonLink';
+import EmojiPicker, { pickInto } from '@/components/chat/EmojiPicker';
+import { isComposingEnter } from '@/components/chat/emoji';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
 import ReportUserModal from '@/components/ReportUserModal';
@@ -76,42 +84,6 @@ function emojiForType(type: string): string {
   return DM_REACTIONS.find(r => r.type === type)?.emoji || type;
 }
 
-// Phase A polish — group consecutive messages from the same sender within 60s
-// so we only show name/avatar/timestamp once per cluster (iMessage / WhatsApp pattern).
-const CLUSTER_GAP_MS = 60_000;
-
-// Phase B polish — curated emoji set for the composer picker.
-// Same 20 the in-event ChatPanel uses, kept duplicated rather than abstracted
-// because each chat surface might tune its own list later (no premature DRY).
-const EMOJI_PICKER_LIST = [
-  '😀','😂','😍','🥳','🤔','👍','👏','❤️','🔥','🎉',
-  '💯','🙌','😮','🤩','😎','👋','✅','💪','🙏','⭐',
-];
-
-interface MessageCluster {
-  senderId: string;
-  messages: DmMessage[];
-}
-
-function clusterMessages(messages: DmMessage[]): MessageCluster[] {
-  const clusters: MessageCluster[] = [];
-  for (const msg of messages) {
-    const last = clusters[clusters.length - 1];
-    const lastMsg = last?.messages[last.messages.length - 1];
-    const gap = lastMsg ? new Date(msg.createdAt).getTime() - new Date(lastMsg.createdAt).getTime() : Infinity;
-    // A system card is never folded into someone's run of messages: it belongs
-    // to the conversation, not to whoever's action triggered it.
-    const joins = last && last.senderId === msg.fromUserId && gap < CLUSTER_GAP_MS
-      && msg.kind !== 'system' && lastMsg?.kind !== 'system';
-    if (joins) {
-      last!.messages.push(msg);
-    } else {
-      clusters.push({ senderId: msg.fromUserId, messages: [msg] });
-    }
-  }
-  return clusters;
-}
-
 export default function MessagesPage() {
   // Feature 18 (13 May spec) — single page renders four modes:
   //   • /messages                     → inbox only (right pane is empty state)
@@ -138,6 +110,10 @@ export default function MessagesPage() {
   const myUserId = user?.id;
   const [draft, setDraft] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
+  const closeEmoji = useCallback(() => setShowEmoji(false), []);
+  const emojiToggleRef = useRef<HTMLButtonElement>(null);
+  // The message being replied to (30 Oct 2026, L7): "Replying to …" above the box until it is sent or cancelled.
+  const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
   // REASON Phase 2 — "Find a time" panel (availability windows) per thread.
   const [schedulerOpen, setSchedulerOpen] = useState(false);
   // A time on a proposal card asks the panel for that time's confirm card (26 Oct 2026).
@@ -266,6 +242,9 @@ export default function MessagesPage() {
       navigate(`/messages/${existing.conversationId}`, { replace: true });
     }
   }, [composeToUserId, inboxData, navigate]);
+
+  // A reply belongs to its conversation: opening another one drops it.
+  useEffect(() => { setReplyTarget(null); }, [activeId, composeToUserId]);
 
   // Real-time subscriptions: refresh inbox + active thread on incoming events.
   useEffect(() => {
@@ -619,6 +598,7 @@ export default function MessagesPage() {
     content: string;
     image: { file: File } | null;
     audio: { blob: Blob; durationMs: number } | null;
+    replyToId: string | null;
   }>(activeId, activeConv?.otherUserId ?? composeToUserId, {
     // Feature 19/20 (13 May spec) — at most one attachment per message.
     // Image takes precedence if both are queued, but the UI disallows
@@ -640,6 +620,7 @@ export default function MessagesPage() {
     },
     onSent: (data) => {
       setDraft('');
+      setReplyTarget(null);
       if (pendingImage) {
         URL.revokeObjectURL(pendingImage.previewUrl);
         setPendingImage(null);
@@ -686,11 +667,25 @@ export default function MessagesPage() {
     const text = draft.trim();
     if (!text && !pendingImage && !pendingAudio) return;
     if (sendMutation.isPending) return;
+    // Sending closes the emoji picker (it stays open for several picks until then).
+    setShowEmoji(false);
     sendMutation.mutate({
       content: text,
       image: pendingImage,
       audio: pendingAudio ? { blob: pendingAudio.blob, durationMs: pendingAudio.durationMs } : null,
+      replyToId: replyTarget?.id ?? null,
     });
+  };
+
+  // Reply (30 Oct 2026, L7): the strip above the box names the message, and the box takes the focus for the answer.
+  const replyTo = (m: DmMessage, fromMe: boolean) => {
+    setReplyTarget({
+      id: m.id,
+      senderName: fromMe ? (user?.displayName ?? '') : (headerContext?.otherDisplayName ?? ''),
+      content: replyContentOf(m),
+      mine: fromMe,
+    });
+    textareaRef.current?.focus();
   };
 
   // Feature 20 + Pass A fix (15 May follow-up) — recording lifecycle.
@@ -1064,16 +1059,30 @@ export default function MessagesPage() {
               >
                 <ArrowLeft className="h-4 w-4 text-gray-500" />
               </button>
-              <Avatar src={headerContext.otherAvatarUrl || undefined} name={headerContext.otherDisplayName || 'User'} size="sm" />
               {/* 13 Aug 2026 overhaul (task A5) — "unclear who's messaging you".
                   The name-only link is now bold + prominent, and job title /
                   company / bio give the recipient a sense of who this is
                   before they even open the thread. truncate + line-clamp-2
-                  keep this from overflowing at 360px. */}
-              <Link to={`/people/${headerContext.otherUserId}?from=Messages`} className="min-w-0 flex-1 hover:opacity-80">
-                <p className="truncate text-sm font-bold text-[#1a1a2e] hover:underline">
-                  {headerContext.otherDisplayName || 'User'}
-                </p>
+                  keep this from overflowing at 360px.
+                  30 Oct 2026 (L7, "names should be clickable"): the picture and the
+                  name are one link to the profile, and say so on every width. */}
+              <PersonLink
+                userId={headerContext.otherUserId}
+                from="Messages"
+                former={isFormerMemberName(headerContext.otherDisplayName)}
+                className="group/person flex min-w-0 flex-1 items-center gap-3 rounded-lg hover:opacity-80"
+                title={`View ${headerContext.otherDisplayName || 'their'} profile`}
+              >
+                <Avatar src={headerContext.otherAvatarUrl || undefined} name={headerContext.otherDisplayName || 'User'} size="sm" />
+                <span className="min-w-0 flex-1">
+                <span className="flex min-w-0 items-baseline gap-2">
+                  <span data-testid="thread-partner-name" className="truncate text-sm font-bold text-[#1a1a2e] group-hover/person:underline">
+                    {headerContext.otherDisplayName || 'User'}
+                  </span>
+                  {!isFormerMemberName(headerContext.otherDisplayName) && (
+                    <span className="shrink-0 text-[11px] font-medium text-gray-500">View profile ›</span>
+                  )}
+                </span>
                 {/* Online status (8 Sep 2026) — green when the partner is actually
                     on the platform now (drives the Meet-now buttons too). */}
                 {activeConv && (
@@ -1094,7 +1103,8 @@ export default function MessagesPage() {
                 {headerContext.otherBio && (
                   <p className="mt-0.5 line-clamp-1 sm:line-clamp-2 text-xs text-gray-400">{headerContext.otherBio}</p>
                 )}
-              </Link>
+                </span>
+              </PersonLink>
               <div className="hidden sm:flex items-center gap-1">
               {/* Calls appear only once the pair's first meeting has happened
                   (Ali, 9 Sep); enabled only while the other person is online. */}
@@ -1327,6 +1337,8 @@ export default function MessagesPage() {
                 (() => {
                   // Server returns newest-first; we render oldest-first.
                   const oldest = [...messagesData].reverse();
+                  // A quote can bring its original into view only when that message is on the page.
+                  const loadedIds = new Set(oldest.map((x) => x.id));
                   const clusters = clusterMessages(oldest);
                   const elements: ReactNode[] = [];
                   let prevClusterDate: Date | null = null;
@@ -1380,13 +1392,19 @@ export default function MessagesPage() {
                         className={`flex items-end gap-2 ${fromMe ? 'justify-end' : 'justify-start'} ${ci > 0 ? 'mt-3' : ''}`}
                       >
                         {!fromMe && (
-                          <div className="flex-shrink-0">
+                          <PersonLink
+                            userId={headerContext.otherUserId}
+                            from="Messages"
+                            former={isFormerMemberName(headerContext.otherDisplayName)}
+                            className="-m-1.5 flex-shrink-0 rounded-full p-1.5"
+                            title={`View ${headerContext.otherDisplayName || 'their'} profile`}
+                          >
                             <Avatar
                               src={headerContext.otherAvatarUrl || undefined}
                               name={headerContext.otherDisplayName || 'User'}
                               size="sm"
                             />
-                          </div>
+                          </PersonLink>
                         )}
                         <div className={`flex flex-col max-w-[75%] sm:max-w-[60%] ${fromMe ? 'items-end' : 'items-start'}`}>
                           {cluster.messages.map((m, idx) => {
@@ -1402,12 +1420,17 @@ export default function MessagesPage() {
                                 className={`group/bubble relative flex ${fromMe ? 'flex-row-reverse' : 'flex-row'} items-center gap-1 ${idx > 0 ? 'mt-0.5' : ''} ${hasReactions ? 'mb-3' : ''}`}
                               >
                                 <div
-                                  className={`text-sm break-words whitespace-pre-wrap ${
-                                    fromMe
-                                      ? `bg-rsn-red text-white rounded-2xl ${isLast ? 'rounded-br-sm' : ''}`
-                                      : `bg-gray-100 text-[#1a1a2e] rounded-2xl ${isLast ? 'rounded-bl-sm' : ''}`
+                                  data-testid={fromMe ? 'bubble-own' : 'bubble-theirs'}
+                                  className={`text-sm break-words whitespace-pre-wrap rounded-2xl ${bubbleLook(fromMe)} ${
+                                    isLast ? (fromMe ? 'rounded-br-sm' : 'rounded-bl-sm') : ''
                                   } ${m.attachmentUrl ? 'overflow-hidden' : 'px-3.5 py-2'}`}
                                 >
+                                  {/* The message it answers (30 Oct 2026, L7). */}
+                                  {m.replyTo && (
+                                    <div className={m.attachmentUrl ? 'px-2 pt-2' : ''}>
+                                      <ReplyQuote quote={m.replyTo} loaded={loadedIds.has(m.replyTo.id)} mine={fromMe} />
+                                    </div>
+                                  )}
                                   {/* Feature 19 (13 May spec) — render the
                                       image inside the bubble. The bubble's
                                       padding is dropped when an image is
@@ -1444,11 +1467,11 @@ export default function MessagesPage() {
                                   )}
                                   {m.content && (
                                     // 4 Sep 2026: a pasted www. or https:// address is a real link
-                                    // here too, the same Linkify the wall and live chat use.
-                                    // 4 Sep 2026 (walkthrough screenshot): the default link colour is
-                                    // the brand red, which vanishes on the sender's own red bubble.
+                                    // here too, the same Linkify the wall and live chat use. 30 Oct 2026
+                                    // (L9): the bubbles are gray and white, so a link in either is drawn
+                                    // as links are everywhere (the forced white was for the red bubble).
                                     <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}>
-                                      <Linkify text={localizeMeetingText(m.content)} className={fromMe ? 'break-all text-white underline hover:opacity-80' : undefined} />
+                                      <Linkify text={localizeMeetingText(m.content)} />
                                     </div>
                                   )}
                                   {/* Scheduled meeting → Join the room; an instant call that's
@@ -1495,6 +1518,8 @@ export default function MessagesPage() {
                                 >
                                   <SmilePlus className="h-3.5 w-3.5" />
                                 </button>
+                                {/* Reply (30 Oct 2026, L7), beside the reaction trigger and shown the same way. */}
+                                <ReplyButton onReply={() => replyTo(m, fromMe)} />
                                 {/* Reaction pills — under the bubble, slightly indented onto it */}
                                 {hasReactions && (
                                   <div className={`absolute -bottom-3 ${fromMe ? 'right-2' : 'left-2'} flex gap-1`}>
@@ -1575,28 +1600,18 @@ export default function MessagesPage() {
               className="relative px-3 py-2 border-t border-gray-200"
               style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
             >
-              {showEmoji && (
-                <div
-                  className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-xl shadow-lg p-2 grid grid-cols-6 sm:grid-cols-10 gap-1 z-10"
-                  role="dialog"
-                  aria-label="Emoji picker"
-                >
-                  {EMOJI_PICKER_LIST.map(e => (
-                    <button
-                      key={e}
-                      type="button"
-                      onClick={() => {
-                        setDraft(prev => prev + e);
-                        setShowEmoji(false);
-                        textareaRef.current?.focus();
-                      }}
-                      className="text-xl sm:text-lg hover:bg-gray-100 active:scale-95 rounded p-1.5 transition-transform"
-                    >
-                      {e}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {/* One picker for every message box (30 Oct 2026, L9): it stays open for several
+                  emojis, each put where the caret is, until Escape, a tap outside, the smile
+                  button, Done or Send. */}
+              <EmojiPicker
+                open={showEmoji}
+                onClose={closeEmoji}
+                toggleRef={emojiToggleRef}
+                onPick={(e) => pickInto(textareaRef.current, draft, e, setDraft)}
+                className="absolute bottom-full left-3 right-3 mb-2"
+              />
+              {/* The message being answered (30 Oct 2026, L7), above the box. */}
+              {replyTarget && <ReplyStrip target={replyTarget} onCancel={() => setReplyTarget(null)} />}
               {pendingImage && (
                 <div className="mb-2 inline-block relative">
                   <img
@@ -1678,7 +1693,7 @@ export default function MessagesPage() {
                     onClick={cancelRecording}
                     aria-label="Cancel recording"
                     title="Cancel"
-                    className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
+                    className="w-11 h-11 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
                   >
                     <X className="h-5 w-5 sm:h-4 sm:w-4" />
                   </button>
@@ -1687,7 +1702,7 @@ export default function MessagesPage() {
                     onClick={stopRecording}
                     aria-label="Stop and preview"
                     title="Stop"
-                    className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full bg-rsn-red text-white hover:bg-rsn-red/90 transition-colors flex-shrink-0"
+                    className="w-11 h-11 flex items-center justify-center rounded-full bg-rsn-red text-white hover:bg-rsn-red/90 transition-colors flex-shrink-0"
                     data-testid="dm-recording-stop"
                   >
                     <StopSquare className="h-5 w-5 sm:h-4 sm:w-4" />
@@ -1699,10 +1714,16 @@ export default function MessagesPage() {
                   a send mid-record. */}
               {recordingState !== 'recording' && (
               <div className="flex items-end gap-2">
+                {/* Every button beside the box is 44px on every width, the box's own height, so
+                    they line up with it (P23, 26 Oct 2026: from 640px they were 36px, 4px off
+                    centre and under the 44px target). The smile stays hidden on a phone, whose
+                    keyboard has its own emoji panel. */}
                 <button
+                  ref={emojiToggleRef}
                   type="button"
                   onClick={() => setShowEmoji(s => !s)}
-                  className="hidden sm:flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
+                  aria-expanded={showEmoji}
+                  className="hidden sm:flex w-11 h-11 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
                   aria-label="Add emoji"
                   title="Add emoji"
                 >
@@ -1722,7 +1743,7 @@ export default function MessagesPage() {
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={sendMutation.isPending || !!pendingAudio}
-                      className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-11 h-11 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                       aria-label="Attach image"
                       title={pendingAudio ? 'Discard the voice message first' : 'Attach image'}
                       data-testid="dm-image-button"
@@ -1736,7 +1757,7 @@ export default function MessagesPage() {
                       type="button"
                       onClick={startRecording}
                       disabled={sendMutation.isPending || !!pendingImage || !!pendingAudio}
-                      className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-11 h-11 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                       aria-label="Record voice message"
                       title={pendingImage ? 'Discard the image first' : 'Record voice message'}
                       data-testid="dm-mic-button"
@@ -1757,7 +1778,8 @@ export default function MessagesPage() {
                   }}
                   onKeyDown={(e) => {
                     // Not while a word is still being composed (Japanese, Chinese, Korean input): there Enter picks the word.
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    // Safari sends the Enter that confirms the word after composition has ended, as keyCode 229 (P22).
+                    if (e.key === 'Enter' && !e.shiftKey && !isComposingEnter(e.nativeEvent)) {
                       e.preventDefault();
                       submitMessage();
                     }
@@ -1773,7 +1795,7 @@ export default function MessagesPage() {
                   onClick={submitMessage}
                   disabled={(!draft.trim() && !pendingImage && !pendingAudio) || sendMutation.isPending}
                   isLoading={sendMutation.isPending}
-                  className="!w-11 !h-11 sm:!w-9 sm:!h-9 !p-0 flex-shrink-0"
+                  className="!w-11 !h-11 !p-0 flex-shrink-0"
                   aria-label="Send message"
                 >
                   <Send className="h-4 w-4" />

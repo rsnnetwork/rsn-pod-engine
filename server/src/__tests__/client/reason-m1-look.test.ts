@@ -405,7 +405,13 @@ describe('A sheep that cannot load keeps its place, empty (integration pass, pol
 });
 
 describe('The bell panel\'s text reads at 4.5:1 on white and on the unread tint (integration pass)', () => {
-  const bell = () => read('src/components/ui/NotificationBell.tsx');
+  // 30 Oct 2026: the bell was split. Its rows are NotificationItem, shared with the notifications page, and the invite
+  // labels live in notification-logic.ts; the panel is read with them.
+  const bell = () => [
+    read('src/components/ui/NotificationBell.tsx'),
+    read('src/features/notifications/NotificationItem.tsx'),
+    read('src/features/notifications/notification-logic.ts'),
+  ].join('\n');
   const classesOf = (re: RegExp) => {
     const m = bell().match(re);
     if (!m) throw new Error(`not found in NotificationBell.tsx: ${re}`);
@@ -418,7 +424,7 @@ describe('The bell panel\'s text reads at 4.5:1 on white and on the unread tint 
   };
   // An unread row is painted bg-blue-50/40 over the white panel.
   const unreadTint = () => {
-    const m = bell().match(/!n\.isRead \? '(bg-[a-z]+-\d+)\/(\d+)'/);
+    const m = bell().match(/!(?:n\.isRead|read) \? '(bg-[a-z]+-\d+)\/(\d+)'/);
     if (!m) throw new Error('the unread tint is not where this test looks');
     const alpha = Number(m[2]) / 100;
     const fg = [1, 3, 5].map((i) => parseInt(hexOf(m[1]).slice(i, i + 2), 16));
@@ -428,7 +434,7 @@ describe('The bell panel\'s text reads at 4.5:1 on white and on the unread tint 
 
   it('the message and its time are 4.5:1 or better on both grounds, and the message stays the darker of the two', () => {
     const body = textColour(classesOf(/<p className="([^"]*)">\{n\.body\}<\/p>/));
-    const time = textColour(classesOf(/<p className="([^"]*)">\{formatTime\(n\.createdAt\)\}<\/p>/));
+    const time = textColour(classesOf(/<p className="([^"]*)">\{(?:formatTime|timeAgo)\(n\.createdAt\)\}<\/p>/));
     for (const ground of grounds()) {
       expect(contrast(body, ground)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(time, ground)).toBeGreaterThanOrEqual(4.5);
@@ -458,7 +464,11 @@ describe('The bell panel\'s text reads at 4.5:1 on white and on the unread tint 
 });
 
 describe('The bell\'s Accept buttons read at 4.5:1, resting and hovered (polish pass)', () => {
-  const bell = () => read('src/components/ui/NotificationBell.tsx');
+  const bell = () => [
+    read('src/components/ui/NotificationBell.tsx'),
+    read('src/features/notifications/NotificationItem.tsx'),
+    read('src/features/notifications/notification-logic.ts'),
+  ].join('\n');
   // The colours the app is built with: `bg-reason-red` is the red the browser paints, not a name this test makes up.
   const reasonToken = (name: string): string => {
     const block = read('tailwind.config.js').match(/reason:\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -473,11 +483,12 @@ describe('The bell\'s Accept buttons read at 4.5:1, resting and hovered (polish 
   };
   // Both Accept buttons in the panel: the one on a pod or event invite, and the one on a meeting request (its own
   // component since 26 Oct 2026, which knows its request, so its handler takes no row).
-  const accepts = () => [...bell().matchAll(/onClick=\{\(\) => (handleAccept\w+)\((?:n)?\)\}\s*disabled=\{isActing\}\s*className="([^"]*)"/g)]
+  // 30 Oct 2026: both now live in NotificationItem (the invite's calls onAcceptInvite, the request's answer('accept')).
+  const accepts = () => [...bell().matchAll(/onClick=\{(onAcceptInvite|\(\) => answer\('accept'\))\}\s*disabled=\{(?:acting|isActing)\}\s*className="([^"]*)"/g)]
     .map((m) => ({ handler: m[1], classes: m[2].split(/\s+/) }));
 
   it('there are two Accept buttons, and both are checked below', () => {
-    expect(accepts().map((a) => a.handler)).toEqual(['handleAcceptInvite', 'handleAcceptPoke']);
+    expect(accepts().map((a) => a.handler)).toEqual(['onAcceptInvite', "() => answer('accept')"]);
   });
 
   // Red reads as the opposite of accepting, so Accept stays in the green family: the palette's green, darkened until a
@@ -529,9 +540,11 @@ describe('The bell\'s Accept buttons read at 4.5:1, resting and hovered (polish 
 
 describe('Every button in the bell panel is a 44px touch target (pre-review adjustment)', () => {
   // The panel is everything from the portal on; the bell button that opens it comes before and is h-11 w-11.
+  // 30 Oct 2026: the rows are NotificationItem now, so its buttons are read with the panel's.
   const panelButtons = () => {
     const src = read('src/components/ui/NotificationBell.tsx');
-    return [...src.slice(src.indexOf('createPortal(')).matchAll(/<button\b[\s\S]*?className=(?:"([^"]*)"|\{`([^`]*)`\})/g)]
+    const panel = src.slice(src.indexOf('createPortal(')) + read('src/features/notifications/NotificationItem.tsx');
+    return [...panel.matchAll(/<button\b[\s\S]*?className=(?:"([^"]*)"|\{`([^`]*)`\})/g)]
       .map((m) => ({ label: (m[1] ?? m[2]).replace(/\s+/g, ' ').slice(0, 60), classes: (m[1] ?? m[2]).split(/\s+/) }));
   };
 
