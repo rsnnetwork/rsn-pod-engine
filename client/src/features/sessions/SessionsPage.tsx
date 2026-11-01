@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { cn, formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import { EVENT_ACCESS, type EventVisibility } from '@rsn/shared';
 import MeetingsSection from '@/features/meetings/MeetingsSection';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
 
@@ -35,6 +36,8 @@ interface EventRow {
   hostUserId: string;
   podName?: string | null;
   hostDisplayName?: string | null;
+  /** T11: who can join; NULL follows the pod (no chip). */
+  visibility?: EventVisibility | null;
 }
 
 /** What the page reads of each of the member's pods: whether they may run events in it. */
@@ -172,6 +175,11 @@ export default function SessionsPage() {
                         {isHost && (
                           <Badge variant="brand" className="text-xs">
                             <Mic className="h-3 w-3 mr-1" /> Hosting
+                          </Badge>
+                        )}
+                        {s.visibility && (
+                          <Badge variant="default" className="text-xs">
+                            {EVENT_ACCESS[s.visibility].chip}
                           </Badge>
                         )}
                       </div>
