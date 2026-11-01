@@ -1060,7 +1060,7 @@ test('the time zone: detected, searchable by the name people use, and saved', as
   expect((await pool.query(`SELECT timezone FROM users WHERE id = $1`, [me.id])).rows[0].timezone).toBe('Asia/Kolkata');
 });
 
-test('Upload a new one: a photo from the phone is made small, becomes their photo, and is theirs to keep', async () => {
+test('Upload a new one: a photo from the phone is placed in the editor, becomes their photo, and is theirs to keep', async () => {
   test.setTimeout(180_000);
   const me = await freshMember('ob2photo');
   const page = await openAs(me);
@@ -1068,18 +1068,23 @@ test('Upload a new one: a photo from the phone is made small, becomes their phot
   await press(page, 'Continue with email');
   await throughQuestions(page);
 
-  // A real picture, larger than the 800px the upload keeps.
+  // A real picture. Since the 30 Oct review (T3a) choosing it opens the picture editor; saved, the server keeps it with
+  // where it was placed and cuts the photo everyone sees, at its own address.
   const picture = await page.screenshot({ type: 'png', fullPage: false, scale: 'device' });
-  await page.locator('input[type="file"]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: picture });
-  await expect(page.getByText('Photo updated.')).toBeVisible({ timeout: 30_000 });
+  const photoInput = page.locator('input[type="file"]').first();
+  await photoInput.setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: picture });
+  const editor = page.getByRole('dialog', { name: 'Edit your photo' });
+  await expect(editor.getByRole('slider', { name: 'Zoom' })).toBeVisible({ timeout: 30_000 });
+  await editor.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText('Your photo is updated.')).toBeVisible({ timeout: 30_000 });
+  await expect(editor).toHaveCount(0);
   await expect(button(page, 'Keep this photo')).toHaveAttribute('aria-pressed', 'true');
   await expect(button(page, 'Upload a new one')).toBeVisible();
   const avatar = (await pool.query<{ avatar_url: string }>(`SELECT avatar_url FROM users WHERE id = $1`, [me.id])).rows[0].avatar_url;
-  expect(avatar.startsWith('data:image/jpeg;base64,')).toBe(true);
-  expect(avatar.length).toBeLessThan(2_000_000);
+  expect(avatar).toMatch(new RegExp(`/api/users/${me.id}/avatar\\?v=\\d+$`));
 
   // Something that is not a photo is refused before anything is sent.
-  await page.locator('input[type="file"]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+  await photoInput.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
   await expect(page.getByText('Choose a JPG, PNG or WebP photo.')).toBeVisible();
 });
 

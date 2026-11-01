@@ -4,8 +4,8 @@
 // at my profile, I should see my profile, how other people see it - and then edit, where applicable"; the 19 Oct
 // feedback: "Users should be able to change their banner from their profile".
 //
-//   The banner        a member changes it on /profile (the picture is cut to its middle 3:1 band at 1500x500 in the
-//                     browser), sees it there, and another member sees the same banner on their Human Profile;
+//   The banner        a member changes it on /profile with the pencil (the picture editor, 30 Oct review T3a: placed
+//                     in the middle and cut on the server at its own size, never enlarged), sees it there, and another member sees the same banner on their Human Profile;
 //                     removed (it asks first), both go back to the default gradient. A second tab of the member's
 //                     own profile follows the change with no refresh.
 //   Your profile      the hero is the card other members get (GET /people/me/card), what only you see is apart,
@@ -118,7 +118,14 @@ async function stripedPicture(page: Page, width: number, height: number): Promis
 }
 
 const bannerOf = (page: Page) => page.getByTestId('profile-banner');
-const pictureInput = (page: Page) => page.locator('input[type="file"][aria-label="Choose a banner picture"]');
+/** The banner's pencil, the editor it opens, and the picture chosen in it; saved, the editor closes. */
+async function chooseBanner(page: Page, picture: Buffer) {
+  await bannerOf(page).getByRole('button', { name: 'Edit banner' }).click();
+  const editor = page.getByRole('dialog', { name: 'Edit your banner' });
+  await editor.locator('input[type="file"]').setInputFiles({ name: 'banner.jpg', mimeType: 'image/jpeg', buffer: picture });
+  await expect(editor.getByRole('slider', { name: 'Zoom' })).toBeVisible({ timeout: 30_000 });
+  await editor.getByRole('button', { name: 'Save', exact: true }).click();
+}
 const loadedWidth = (img: Locator) => img.evaluate((i: HTMLImageElement) => (i.complete ? i.naturalWidth : 0));
 
 /** The words of a heading that the browser broke across two lines: a name cut mid-word. */
@@ -188,12 +195,12 @@ test(`the banner: changed on your profile, seen there and on your Human Profile 
   await expect(bannerOf(me.page)).toBeVisible();
   await expect(bannerOf(me.page).locator('img')).toHaveCount(0);
 
-  // Change banner: a tall picture is cut to its middle 3:1 band, at 1500x500.
-  await pictureInput(me.page).setInputFiles({ name: 'tall.jpg', mimeType: 'image/jpeg', buffer: await stripedPicture(me.page, 1200, 1600) });
+  // The pencil: a tall picture, placed as it opens (its middle), is cut to its middle 3:1 band at its own 1200x400.
+  await chooseBanner(me.page, await stripedPicture(me.page, 1200, 1600));
   await expect(me.page.getByText('Your banner is updated.')).toBeVisible({ timeout: 30_000 });
   const mine = bannerOf(me.page).locator('img');
-  await expect.poll(() => loadedWidth(mine), { timeout: 20_000 }).toBe(1500);
-  expect(await mine.evaluate((i: HTMLImageElement) => i.naturalHeight)).toBe(500);
+  await expect.poll(() => loadedWidth(mine), { timeout: 20_000 }).toBe(1200);
+  expect(await mine.evaluate((i: HTMLImageElement) => i.naturalHeight)).toBe(400);
   const src = await mine.getAttribute('src');
   expect(src).toMatch(new RegExp(`/api/users/${owner.id}/banner\\?v=\\d{13}$`));
   // Read the stored picture back (fetched, so the canvas can be read) and check it is all the green middle band.
@@ -203,7 +210,7 @@ test(`the banner: changed on your profile, seen there and on your Human Profile 
     c.width = bitmap.width; c.height = bitmap.height;
     const x = c.getContext('2d')!;
     x.drawImage(bitmap, 0, 0);
-    return [[30, 30], [750, 250], [1470, 470]].map(([px, py]) => Array.from(x.getImageData(px, py, 1, 1).data.slice(0, 3)));
+    return [[30, 30], [600, 200], [1170, 370]].map(([px, py]) => Array.from(x.getImageData(px, py, 1, 1).data.slice(0, 3)));
   }, src!);
   for (const [r, g, b] of corners) expect({ r, g, b, middleBand: g > 100 && r < 70 && b < 90 }).toMatchObject({ middleBand: true });
 
@@ -214,7 +221,7 @@ test(`the banner: changed on your profile, seen there and on your Human Profile 
   await expect(name).toBeVisible({ timeout: SLOW });
   const theirs = bannerOf(them.page).locator('img');
   await expect(theirs).toHaveAttribute('src', src!);
-  await expect.poll(() => loadedWidth(theirs), { timeout: 20_000 }).toBe(1500);
+  await expect.poll(() => loadedWidth(theirs), { timeout: 20_000 }).toBe(1200);
   const banner = (await bannerOf(them.page).boundingBox())!;
   expect(banner.y + banner.height).toBeLessThanOrEqual((await name.boundingBox())!.y);
   expect(await them.page.content()).not.toContain(`private-`);
@@ -244,12 +251,13 @@ test(`a second tab of your profile follows a new banner with no refresh (${ENGIN
   for (const p of [one.page, two]) await expect(p.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: SLOW });
   // Let the second tab's live connection come up first.
   await two.waitForTimeout(3000);
-  await pictureInput(one.page).setInputFiles({ name: 'wide.jpg', mimeType: 'image/jpeg', buffer: await stripedPicture(one.page, 1500, 500) });
+  await chooseBanner(one.page, await stripedPicture(one.page, 1500, 500));
   await expect(one.page.getByText('Your banner is updated.')).toBeVisible({ timeout: 30_000 });
   await expect(bannerOf(two).locator('img')).toHaveCount(1, { timeout: 20_000 });
   await expect(bannerOf(two).getByRole('button', { name: 'Remove' })).toBeVisible();
   await one.ctx.close();
-  await pool.query('UPDATE users SET banner_blob = NULL, banner_mime = NULL, banner_updated_at = NULL WHERE id = $1', [owner.id]);
+  await pool.query(`UPDATE users SET banner_blob = NULL, banner_mime = NULL, banner_updated_at = NULL,
+    banner_source_blob = NULL, banner_source_mime = NULL, banner_crop = NULL WHERE id = $1`, [owner.id]);
 });
 
 test(`your profile is the way others see it, with what only you see apart, and every link goes where it should (${ENGINE})`, async () => {
@@ -516,7 +524,11 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
       .toBeVisible({ timeout: SLOW });
     await noSidewaysScroll(own.page, `your profile at ${at}`);
     expect(await brokenWords(own.page.getByRole('heading', { level: 1 })), `your name at ${at}`).toEqual([]);
-    await expectReachable(own.page, own.page.getByRole('button', { name: 'Change banner' }), `Change banner at ${at}`);
+    for (const pencil of ['Edit banner', 'Edit photo']) {
+      const button = own.page.getByRole('button', { name: pencil });
+      expect((await button.boundingBox())!.height, `${pencil} at ${at}`).toBeGreaterThanOrEqual(44);
+      await expectReachable(own.page, button, `${pencil} at ${at}`);
+    }
     for (const label of ['Edit profile', 'Edit answers', 'Add your company', 'Add LinkedIn']) {
       const link = own.page.getByRole('link', { name: label });
       await link.scrollIntoViewIfNeeded();
