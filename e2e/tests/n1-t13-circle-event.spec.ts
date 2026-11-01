@@ -28,6 +28,7 @@ let podId: string | undefined;
 let plainPodId: string | undefined;
 let sessionId: string | undefined;
 const contexts: BrowserContext[] = [];
+const traced: Array<{ ctx: BrowserContext; label: string }> = [];
 const sockets: Socket[] = [];
 
 // `any`: each Socket.IO event carries its own payload shape, read by name in the assertions.
@@ -47,10 +48,16 @@ async function throwaway(label: string): Promise<TestUser> {
   };
 }
 
-/** A signed-in page whose Socket.IO frames are recorded. */
-async function signedIn(user: TestUser): Promise<{ page: Page; frames: Frame[] }> {
+/**
+ * A signed-in page whose Socket.IO frames are recorded (the app's socket is websocket-only, client/src/lib/socket.ts,
+ * so every frame passes the page's websocket listener). Each page is traced; a failing run keeps the traces
+ * (E2E_TRACE_DIR, else the test's output folder), so a failure can be read afterwards.
+ */
+async function signedIn(user: TestUser, label: string): Promise<{ page: Page; frames: Frame[] }> {
   const ctx = await browser.newContext(contextOptions({ width: 1280, height: 900 }));
   contexts.push(ctx);
+  traced.push({ ctx, label });
+  await ctx.tracing.start({ screenshots: true, snapshots: true, sources: false });
   await ctx.addInitScript((t) => {
     localStorage.setItem('rsn_access', t.a);
     localStorage.setItem('rsn_refresh', t.r);
@@ -110,6 +117,17 @@ test.beforeAll(async () => {
   plainPodId = (await createPod(plain, `${RUN} Plain pod`)).id;
 });
 
+// A failing run keeps every page's trace (npx playwright show-trace <file>); a passing run keeps none.
+test.afterEach(async ({}, testInfo) => {
+  const failed = testInfo.status !== testInfo.expectedStatus;
+  const dir = process.env.E2E_TRACE_DIR || testInfo.outputPath('traces');
+  const stamp = `${Date.now()}-${engineLabel().replace(/\W+/g, '-')}`;
+  for (const { ctx, label } of traced) {
+    await ctx.tracing.stop(failed ? { path: `${dir}/${stamp}-${label}.zip` } : undefined).catch(() => undefined);
+  }
+  if (failed) console.log(`Traces kept in ${dir} (${stamp}-*.zip)`);
+});
+
 test.afterAll(async () => {
   await teardown(
     () => (sessionId && manager ? endSession(manager, sessionId).catch(() => undefined) : Promise.resolve()),
@@ -126,13 +144,17 @@ test.afterAll(async () => {
 
 test(`a manager schedules for the whole circle; a member outside the pod sees it live, registers and enters (${engineLabel()})`, async () => {
   test.setTimeout(300_000);
-  const m = await signedIn(manager!);
-  const mem = await signedIn(member!);
+  const m = await signedIn(manager!, 'manager');
+  const mem = await signedIn(member!, 'member');
 
   // ── 1. The member watches the circle page; the manager schedules from it ────────────────────────────────────
   await gotoRetry(mem.page, `${APP}/circles/${circleId}`);
   await expect(mem.page.getByTestId('circle-events-empty')).toHaveText('No upcoming events yet.', { timeout: 30_000 });
   await expect(mem.page.getByTestId('circle-schedule-event')).toHaveCount(0);
+  // The member's bell holds nothing yet, so a count later proves the bell reached this page without a reload.
+  const memberBellCount = mem.page.getByRole('button', { name: 'Notifications' }).locator('span').filter({ hasText: /^\d+$/ });
+  await expect(mem.page.getByRole('button', { name: 'Notifications' })).toBeVisible({ timeout: 30_000 });
+  await expect(memberBellCount).toHaveCount(0);
 
   await gotoRetry(m.page, `${APP}/circles/${circleId}`);
   await m.page.getByTestId('circle-schedule-event').click();
@@ -143,7 +165,7 @@ test(`a manager schedules for the whole circle; a member outside the pod sees it
   await podSelect.selectOption(podId!);
   const access = m.page.getByTestId('event-access-field');
   await expect(access.getByRole('radio', { name: /Private/ })).toBeChecked();
-  await expect(access.getByTestId('event-access-private')).toContainText(`Only ${circleName}' members and people you invite.`);
+  await expect(access.getByTestId('event-access-private-circle')).toHaveText(`Private: only ${circleName}'s members and people you invite`);
   const title = `${RUN} Circle evening`;
   await m.page.getByLabel('Title').fill(title);
   const created = m.page.waitForResponse((r) => r.url().endsWith('/api/sessions') && r.request().method() === 'POST');
@@ -161,9 +183,9 @@ test(`a manager schedules for the whole circle; a member outside the pod sees it
   const row = mem.page.getByTestId('circle-event').filter({ hasText: title });
   await expect(row).toBeVisible({ timeout: 30_000 });
   await expect(row.getByTestId('circle-event-for-circle')).toHaveText('For this circle');
-  // The bell, as the member sees it (its count), not a socket frame: Socket.IO may still be on HTTP polling, which a
-  // page's websocket listener never sees.
-  await expect(mem.page.getByRole('button', { name: 'Notifications' }).locator('span').filter({ hasText: /^\d+$/ })).toBeVisible({ timeout: 30_000 });
+  // The bell reached the member's own client: the push on their socket, and the count on their screen (empty before).
+  await until(() => got(mem.frames, 'notification:new').some((f) => f.payload?.title === `New event in ${circleName}`), 30_000, 'the member\'s bell push');
+  await expect(memberBellCount).toBeVisible({ timeout: 30_000 });
   const bells = await pool.query(`SELECT user_id, type FROM notifications WHERE link = $1`, [`/sessions/${sessionId}`]);
   expect(bells.rows.map((b) => b.user_id).sort()).toEqual([member!.id, plain!.id].sort());
   expect(bells.rows.every((b) => b.type === 'event_invite')).toBe(true);
@@ -179,7 +201,7 @@ test(`a manager schedules for the whole circle; a member outside the pod sees it
   expect(inPod.rows).toHaveLength(0);
 
   // ── 3. Someone outside the circle: not listed, and the address answers the private notice ────────────────────
-  const s = await signedIn(stranger!);
+  const s = await signedIn(stranger!, 'stranger');
   const listed = await call(stranger!, 'GET', '/sessions');
   expect((listed.json.data?.sessions ?? listed.json.data ?? []).map((x: { id: string }) => x.id)).not.toContain(sessionId);
   await gotoRetry(s.page, `${APP}/sessions/${sessionId}`);
@@ -187,7 +209,7 @@ test(`a manager schedules for the whole circle; a member outside the pod sees it
   expect((await call(stranger!, 'POST', `/sessions/${sessionId}/register`)).status).toBe(403);
 
   // ── 4. A plain member of the circle: no button, and the route refuses them in a sentence ─────────────────────
-  const p = await signedIn(plain!);
+  const p = await signedIn(plain!, 'plain');
   await gotoRetry(p.page, `${APP}/circles/${circleId}`);
   await expect(p.page.getByTestId('circle-event').filter({ hasText: title })).toBeVisible({ timeout: 30_000 });
   await expect(p.page.getByTestId('circle-schedule-event')).toHaveCount(0);
@@ -214,9 +236,15 @@ test(`a manager schedules for the whole circle; a member outside the pod sees it
   host.emit('host:start_session', { sessionId });
   await until(() => hostGot.includes('session:status_changed:lobby_open'), 30_000, 'the event live');
 
+  const enteredAt = Date.now();
   await gotoRetry(mem.page, `${APP}/session/${sessionId}/live`);
-  // The server tells the room only once it has admitted them (the host's own socket is pure WebSocket, so nothing is missed).
+  // The member's own page is let in: its socket asks to join and receives the room's state, which the server sends
+  // only after it admits them, and no refusal. The room tells the host the member joined (also only after admission).
+  await until(() => mem.frames.some((f) => f.dir === 'out' && f.event === 'session:join' && f.at >= enteredAt), 30_000, 'the member\'s page asking to join');
+  await until(() => mem.frames.some((f) => f.dir === 'in' && f.event === 'session:state' && f.at >= enteredAt), 45_000, 'the room\'s state on the member\'s page');
   await until(() => hostGot.includes(`participant:joined:${member!.id}`), 45_000, 'the member admitted to the room');
+  await expect(mem.page.getByText(title, { exact: true }).first()).toBeVisible({ timeout: 30_000 });
+  await expect(mem.page.getByText('You have been removed from this event.')).toHaveCount(0);
   const memberRefusals = got(mem.frames, 'error').map((f) => f.payload?.message ?? f.payload);
   expect(memberRefusals, 'the member is never refused').toEqual([]);
   const inRoom = await call(member!, 'GET', `/sessions/${sessionId}/state`);
