@@ -118,7 +118,8 @@ describe('every ?from= the app writes is one the profile accepts', () => {
   // Final review (C3): these opened the old /profile/:id page (a hard-coded gradient banner, none of the new one). The
   // old page stays for the admin links only.
   const SURFACES = {
-    'features/circles/CircleDetailPage.tsx': ["personHref(m.userId, 'Circles')"],
+    // T14: the circle's member rows moved into their own section.
+    'features/circles/CircleMembersSection.tsx': ["personHref(m.userId, 'Circles')"],
     'features/pods/PodDetailPage.tsx': ["personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')"],
     'features/sessions/RecapPage.tsx': ["personHref(c.userId, 'Events')", "personHref(c.userId, 'Events')"],
     'features/sessions/SessionDetailPage.tsx': ["personHref(hostRow.userId, 'Events')", "personHref(p.userId || p.id, 'Events')"],

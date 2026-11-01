@@ -317,7 +317,9 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
     // Circle detail: events (a truncated title beside a date that never wraps) and members. +53px at a 360px window for a 33-character title.
     const circle = read('features/circles/CircleDetailPage.tsx');
     expect(circle).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.upcomingEvents\.map/);
-    expect(circle).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.members\.map/);
+    // T14: the member rows (and the pod rows) moved into their own sections.
+    expect(read('features/circles/CircleMembersSection.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.members\.map/);
+    expect(read('features/circles/CirclePodsSection.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.pods\.map/);
     // Pod detail: the member list, whose ProfileCard truncates the job title (+360px at a 360px window for a long one).
     expect(read('features/pods/PodDetailPage.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{\(memberStatusFilter === null \? activeMembers/);
     // Event page: the participant list (8px at 360 in WebKit).

@@ -24,7 +24,8 @@ import {
 import { invalidateTags } from './useInviteCandidates';
 
 interface Props {
-  target: InviteTarget;
+  /** A pod's or an event's invitations (a circle has no such card). */
+  target: Exclude<InviteTarget, { type: 'circle' }>;
   /** The ids of the people already in: the pod's active members, or the event's guests (neither Invited nor Declined). */
   present: readonly string[];
   /** How many are in, as the page counts them: Members of a pod, Going to an event. */

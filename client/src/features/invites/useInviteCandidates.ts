@@ -9,10 +9,10 @@ import { useInfiniteQuery, useMutation, useQueryClient, type QueryClient } from 
 import type { InviteBatchResponse, InviteCandidatePage, InviteCandidateSource } from '@rsn/shared';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
-import { batchBody, candidateEntities, candidateParams, emailInviteBody, linkBody, targetTags, type InviteTarget } from './invite-picker';
+import { batchBody, candidateEntities, candidateParams, emailInviteBody, linkBody, targetId, targetTags, type InviteTarget } from './invite-picker';
 
-/** Everything the sheet has read for one pod or event, whatever the list and the search. */
-export const targetKey = (target: InviteTarget) => ['invite-candidates', target.type, target.type === 'pod' ? target.podId : target.sessionId] as const;
+/** Everything the sheet has read for one pod, event or circle, whatever the list and the search. */
+export const targetKey = (target: InviteTarget) => ['invite-candidates', target.type, targetId(target)] as const;
 
 /** Every query that declares one of these tags is read again, as the app does when the server sends them. */
 export function invalidateTags(qc: QueryClient, tags: readonly string[]): void {
@@ -39,8 +39,9 @@ export function useInviteCandidates(target: InviteTarget, source: InviteCandidat
   const me = useAuthStore((s) => s.user?.id as string | undefined);
   return useInfiniteQuery({
     queryKey: [...targetKey(target), source, q.trim()],
-    queryFn: ({ pageParam }) =>
-      api.get('/invites/candidates', { params: candidateParams(target, source, q, pageParam) }).then((r) => r.data.data as InviteCandidatePage),
+    // P35: a cancelled refetch (the sheet closed, a newer search) stops reading instead of finishing every page.
+    queryFn: ({ pageParam, signal }) =>
+      api.get('/invites/candidates', { params: candidateParams(target, source, q, pageParam), signal }).then((r) => r.data.data as InviteCandidatePage),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextBefore ?? undefined,
     enabled,

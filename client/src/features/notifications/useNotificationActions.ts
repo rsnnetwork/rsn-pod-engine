@@ -12,7 +12,7 @@ import { useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/r
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import {
-  NOTIFICATIONS_KEY, NOTIFICATIONS_PAGE_KEY, destinationOf, extractInviteCode,
+  NOTIFICATIONS_KEY, NOTIFICATIONS_PAGE_KEY, acceptedDestination, destinationOf, extractInviteCode,
   type Notification, type NotificationList,
 } from './notification-logic';
 
@@ -77,9 +77,8 @@ export function useNotificationActions(onLeave: () => void = () => undefined) {
       try {
         const res = await api.post(`/invites/${code}/accept`);
         const data = res.data?.data;
-        const sessionId = data?.sessionId || n.sessionId;
-        const podId = data?.podId || n.podId;
-        return { dest: sessionId ? `/sessions/${sessionId}` : podId ? `/pods/${podId}` : null, success: true };
+        // A circle invite lands on the circle (T14).
+        return { dest: acceptedDestination({ sessionId: data?.sessionId || n.sessionId, podId: data?.podId || n.podId, circleId: data?.circleId }), success: true };
       } catch (err: any) {
         const errCode = err?.response?.data?.error?.code;
         const status = err?.response?.status;

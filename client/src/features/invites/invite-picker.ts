@@ -14,10 +14,14 @@ import type {
 import { E } from '../../realtime/entities';
 import { CONNECTION_LOST, memberSentence } from '../reason/errors';
 
-/** What the sheet invites to: a pod, or an event (which lives in a pod; podId is null only while that is unknown). */
+/**
+ * What the sheet invites to: a pod, an event (which lives in a pod; podId is null only while that is unknown), or a
+ * circle (T14, 1 Nov 2026: the circle page's Invite opens this sheet; it has no pod list and no "Invite everyone").
+ */
 export type InviteTarget =
   | { type: 'pod'; podId: string }
-  | { type: 'session'; sessionId: string; podId: string | null };
+  | { type: 'session'; sessionId: string; podId: string | null }
+  | { type: 'circle'; circleId: string };
 
 /** Your connections come 30 at a time, with "Show more" (the server's own page size). */
 export const CONNECTIONS_PAGE = 30;
@@ -55,8 +59,23 @@ export function pickerTitle(target: InviteTarget): string {
   return target.type === 'pod' ? 'Invite members' : 'Invite people';
 }
 
-const typed = (target: InviteTarget) =>
-  target.type === 'pod' ? { type: 'pod' as const, podId: target.podId } : { type: 'session' as const, sessionId: target.sessionId };
+/** The id the server takes for this target. */
+export function targetId(target: InviteTarget): string {
+  if (target.type === 'pod') return target.podId;
+  if (target.type === 'circle') return target.circleId;
+  return target.sessionId;
+}
+
+/** What a target is called in a sentence: "the pod", "the event", "the circle". */
+export function targetNoun(target: InviteTarget): 'pod' | 'event' | 'circle' {
+  return target.type === 'session' ? 'event' : target.type;
+}
+
+const typed = (target: InviteTarget) => {
+  if (target.type === 'pod') return { type: 'pod' as const, podId: target.podId };
+  if (target.type === 'circle') return { type: 'circle' as const, circleId: target.circleId };
+  return { type: 'session' as const, sessionId: target.sessionId };
+};
 
 // ─── What is asked of the server ──────────────────────────────────────────────────────────────────
 
@@ -69,6 +88,7 @@ export function candidateParams(
 ): Record<string, string | number> {
   const params: Record<string, string | number> = { source, limit: source === 'pod' ? POD_PAGE : CONNECTIONS_PAGE };
   if (target.type === 'pod') params.podId = target.podId;
+  else if (target.type === 'circle') params.circleId = target.circleId;
   else params.sessionId = target.sessionId;
   const words = q.trim();
   if (words) params.q = words;
@@ -76,11 +96,11 @@ export function candidateParams(
   return params;
 }
 
-/** The tags the server's fan-out sends when an invite to this pod or event is made, answered or withdrawn. */
+/** The tags the server's fan-out sends when an invite to this pod, event or circle is made, answered or withdrawn. */
 export function targetTags(target: InviteTarget): string[] {
-  return target.type === 'pod'
-    ? [E.pod(target.podId), E.podMembers(target.podId), E.podInvites(target.podId)]
-    : [E.session(target.sessionId), E.sessionParticipants(target.sessionId), E.sessionInvites(target.sessionId)];
+  if (target.type === 'pod') return [E.pod(target.podId), E.podMembers(target.podId), E.podInvites(target.podId)];
+  if (target.type === 'circle') return [E.circle(target.circleId), E.circleMembers(target.circleId), E.circleInvites(target.circleId)];
+  return [E.session(target.sessionId), E.sessionParticipants(target.sessionId), E.sessionInvites(target.sessionId)];
 }
 
 /**
@@ -92,9 +112,9 @@ export function targetTags(target: InviteTarget): string[] {
  * comes with every participant change too: an invitee who accepts sends only that tag, so it is what tells the list.
  */
 export function candidateEntities(target: InviteTarget, source: InviteCandidateSource, me: string | undefined): string[] {
-  const tags = target.type === 'pod'
-    ? [E.pod(target.podId), E.podMembers(target.podId), E.podInvites(target.podId)]
-    : [E.session(target.sessionId), E.sessionInvites(target.sessionId)];
+  const tags = target.type === 'session'
+    ? [E.session(target.sessionId), E.sessionInvites(target.sessionId)]
+    : targetTags(target);
   if (source === 'pod' && target.type === 'session' && target.podId) tags.push(E.podMembers(target.podId));
   if (me) tags.push(...(source === 'connections' ? [E.userInvites(me), E.userBlocks(me)] : [E.userBlocks(me)]));
   return tags;
@@ -123,7 +143,7 @@ export function linkBody(target: InviteTarget, cap: number) {
 
 /** What the link allows, said before it is made and beside it after. */
 export function shareLinkNote(target: InviteTarget, cap: number): string {
-  return `Anyone with this link can join the ${target.type === 'pod' ? 'pod' : 'event'}, up to ${people(cap)}, for 7 days.`;
+  return `Anyone with this link can join the ${targetNoun(target)}, up to ${people(cap)}, for 7 days.`;
 }
 
 /** The email form: each problem at the field, in words (lib/form-resolver.ts). */
@@ -219,12 +239,12 @@ const was = (n: number) => (n === 1 ? 'was' : 'were');
  * A batch's answer as one toast. "Invitations sent" is what the server promises when it answers (each invite exists
  * and its bell has gone; the emails follow, two a second), so it never says the emails were sent.
  */
-export function batchSentence(res: InviteBatchResponse): Notice {
+export function batchSentence(res: InviteBatchResponse, noun: 'pod' | 'event' | 'circle' = 'pod'): Notice {
   const c = res.counts;
   const parts: string[] = [];
   if (c.invited > 0) parts.push(c.invited === 1 ? '1 invitation sent.' : `${c.invited} invitations sent.`);
   if (c.already_invited > 0) parts.push(`${people(c.already_invited)} ${was(c.already_invited)} already invited.`);
-  if (c.already_member > 0) parts.push(`${people(c.already_member)} ${is(c.already_member)} already in the pod.`);
+  if (c.already_member > 0) parts.push(`${people(c.already_member)} ${is(c.already_member)} already in the ${noun === 'circle' ? 'circle' : 'pod'}.`);
   if (c.already_going > 0) parts.push(`${people(c.already_going)} ${is(c.already_going)} already going.`);
   if (c.declined > 0) parts.push(`${people(c.declined)} declined an earlier invitation.`);
   if (c.not_allowed > 0) parts.push(`${people(c.not_allowed)} can't be invited.`);

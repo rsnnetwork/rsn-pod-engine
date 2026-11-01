@@ -2,6 +2,9 @@
 // Create a Pod, and Duplicate Pod (26 Oct 2026): a sheet (a bottom sheet on phones, a dialog from 768px) whose submit
 // stays in its sticky footer, with the summary of anything to fix beside it. The type decides the orchestration
 // (a Reason pod is Freeform without the member touching it) and the communication, from the shared table.
+// T14 (1 Nov 2026): opened from a circle's page with `circle`, it reads "New pod in {circle}", sends the circle so the
+// server makes and attaches the pod in one transaction, and stays on the circle with "{pod} is created and added to
+// {circle}." instead of going to the new pod.
 import { useId, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -13,6 +16,7 @@ import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { formResolver } from '@/lib/form-resolver';
 import PodFormFields from './PodFormFields';
+import { podMadeToast } from '../circles/circle-logic';
 import { newPodValues, podBody, podProblemSummary, podProblems, podFormSchema, type PodField, type PodFormValues, type PodSource } from './pod-type-form';
 
 interface Props {
@@ -20,17 +24,19 @@ interface Props {
   onClose: () => void;
   /** Pre-fill the form (used by "Duplicate Pod"). */
   initialValues?: PodSource;
+  /** Made from this circle's page: attached to it, and the page stays where it is. */
+  circle?: { id: string; name: string };
 }
 
 const COPY = { fallback: 'Could not create the pod just now. Try again in a moment.', forbidden: 'You cannot create a pod with this account.' };
 
-export default function CreatePodModal({ open, onClose, initialValues }: Props) {
+export default function CreatePodModal({ open, onClose, initialValues, circle }: Props) {
   // Mounted only while open, so every opening starts from the type's defaults (or the pod being duplicated).
   if (!open) return null;
-  return <CreatePodSheet onClose={onClose} initialValues={initialValues} />;
+  return <CreatePodSheet onClose={onClose} initialValues={initialValues} circle={circle} />;
 }
 
-function CreatePodSheet({ onClose, initialValues }: { onClose: () => void; initialValues?: PodSource }) {
+function CreatePodSheet({ onClose, initialValues, circle }: Omit<Props, 'open'>) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
@@ -47,10 +53,18 @@ function CreatePodSheet({ onClose, initialValues }: { onClose: () => void; initi
 
   const create = useMutation({
     networkMode: 'always',
-    mutationFn: (values: PodFormValues) => api.post('/pods', podBody(values)),
+    mutationFn: (values: PodFormValues) => api.post('/pods', circle ? { ...podBody(values), circleId: circle.id } : podBody(values)),
     onSuccess: (res) => {
       const newPodId = res.data?.data?.id;
       qc.invalidateQueries({ queryKey: ['my-pods'] });
+      if (circle) {
+        // The circle's page and lists also hear circle:<id> from the server; this one reads them again at once.
+        qc.invalidateQueries({ queryKey: ['circle', circle.id] });
+        qc.invalidateQueries({ queryKey: ['circles'] });
+        addToast(podMadeToast(res.data?.data?.name ?? 'The pod', circle.name), 'success');
+        onClose();
+        return;
+      }
       addToast(duplicating ? 'Pod duplicated!' : 'Pod created!', 'success');
       onClose();
       if (newPodId && !duplicating) navigate(`/pods/${newPodId}`);
@@ -79,7 +93,7 @@ function CreatePodSheet({ onClose, initialValues }: { onClose: () => void; initi
     <Sheet
       open
       onClose={close}
-      title={duplicating ? 'Duplicate Pod' : 'Create a Pod'}
+      title={circle ? `New pod in ${circle.name}` : duplicating ? 'Duplicate Pod' : 'Create a Pod'}
       footer={(
         <div className="flex w-full flex-wrap items-center justify-end gap-x-2 gap-y-1">
           <FormSummary className="basis-full sm:basis-auto sm:flex-1" summary={summary} message={formError} onGoTo={(key) => setFocus(key as PodField)} />
