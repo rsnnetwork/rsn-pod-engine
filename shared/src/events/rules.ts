@@ -7,8 +7,8 @@
 import { PodType, OrchestrationMode, CommunicationMode } from '../types/pod';
 import { DEFAULT_SESSION_CONFIG } from '../types/session';
 import {
-  EventFormat, LiveKind, EventFormatRule, EventFieldRule, PodTypeRule,
-  EVENT_FORMATS, EVENT_FORMAT_KEYS, POD_TYPES, ORCHESTRATION_MODES,
+  EventFormat, LiveKind, EventFormatRule, EventFieldRule, PodTypeRule, FormatOffer,
+  EVENT_FORMATS, EVENT_FORMAT_KEYS, POD_TYPES, ORCHESTRATION_MODES, IN_PERSON_ENABLED_CLIENTS,
 } from './definitions';
 
 /** One thing wrong with an event's settings, said at the field. */
@@ -57,9 +57,23 @@ export function effectiveOrchestration(pod: { podType: PodType; orchestrationMod
   return stored && orchestration.allowed.includes(stored) ? stored : orchestration.default;
 }
 
-/** The formats an organiser may choose for an event in a pod of this type: allowed and offered, default first. */
-export function eventFormatsForPod(t: PodType): EventFormat[] {
-  return podTypeRule(t).events.allowed.filter((f) => formatRule(f).available);
+/**
+ * Whether a format is offered to this caller: every form's formats, plus one kept for callers that ask for it
+ * (In person, for IN_PERSON_ENABLED_CLIENTS). Called without an offer it answers as production's form reads it.
+ */
+export function formatOffered(f: EventFormat, offer?: FormatOffer): boolean {
+  const rule = formatRule(f);
+  if (rule.available) return true;
+  return rule.offeredTo !== undefined && offer?.[rule.offeredTo] === true;
+}
+
+/**
+ * The formats an organiser may choose for an event in a pod of this type: allowed and offered, default first.
+ * Production's form calls it without an offer and gets what it can draw; the forms that draw a place pass
+ * IN_PERSON_ENABLED_CLIENTS and also get In person.
+ */
+export function eventFormatsForPod(t: PodType, offer?: FormatOffer): EventFormat[] {
+  return podTypeRule(t).events.allowed.filter((f) => formatOffered(f, offer));
 }
 
 /** "Video meeting", "Video meeting or Speed networking", "A, B or C". */
@@ -71,19 +85,19 @@ function orList(labels: string[]): string {
  * Why an event in a pod of this type cannot be of this format, as a sentence, or null when it can:
  * "Webinar isn't offered yet." / "Speed networking isn't available in Chat pods. Choose Video meeting."
  */
-export function formatRefusal(t: PodType, f: EventFormat): string | null {
-  const offered = eventFormatsForPod(t);
+export function formatRefusal(t: PodType, f: EventFormat, offer?: FormatOffer): string | null {
+  const offered = eventFormatsForPod(t, offer);
   if (offered.includes(f)) return null;
   const label = formatRule(f).label;
-  if (!formatRule(f).available) return `${label} isn't offered yet.`;
+  if (!formatOffered(f, offer)) return `${label} isn't offered yet.`;
   const choose = offered.length > 0 ? ` Choose ${orList(offered.map((o) => formatRule(o).label))}.` : '';
   return `${label} isn't available in ${podTypeNoun(podTypeRule(t))}.${choose}`;
 }
 
-export function defaultEventFormat(t: PodType): EventFormat {
+export function defaultEventFormat(t: PodType, offer?: FormatOffer): EventFormat {
   const { events } = podTypeRule(t);
-  if (formatRule(events.default).available) return events.default;
-  return eventFormatsForPod(t)[0] ?? 'speed_networking';
+  if (formatOffered(events.default, offer)) return events.default;
+  return eventFormatsForPod(t, offer)[0] ?? 'speed_networking';
 }
 
 export function fieldsFor(f: EventFormat): string[] {
@@ -107,11 +121,18 @@ export function defaultTitle(f: EventFormat, podName: string): string {
 }
 
 function isBlank(value: unknown): boolean {
-  return value === undefined || value === null || value === '';
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
 }
 
 /** What is wrong with one field's value, as a sentence, or null when it is fine. */
 function fieldIssue(field: EventFieldRule, value: unknown): string | null {
+  if (field.kind === 'text') {
+    if (typeof value !== 'string') return `${field.label} must be text.`;
+    if (field.maxLength !== undefined && value.trim().length > field.maxLength) {
+      return `${field.label} must be ${field.maxLength} characters or fewer.`;
+    }
+    return null;
+  }
   if (field.options) {
     return field.options.includes(value as string) ? null : `Choose one of the ${field.label.toLowerCase()} options.`;
   }
@@ -136,11 +157,24 @@ export function checkEventInput(f: EventFormat, input: object | null | undefined
   return issues;
 }
 
-/** A field's value as it is stored: the form's value (scaled), else the stored one, else the default. */
+/**
+ * The settings an event of this format cannot be stored without that are empty here (an in-person event's place),
+ * one per field, in the format's own sentence. checkEventInput leaves an empty field to its default; a required
+ * field has none.
+ */
+export function missingRequired(f: EventFormat, input: object | null | undefined): EventInputIssue[] {
+  const values = (input ?? {}) as Settings;
+  return Object.entries(formatRule(f).fields)
+    .filter(([key, field]) => field.required && isBlank(values[key]))
+    .map(([key, field]) => ({ field: key, message: field.missing ?? `${field.label} is required.` }));
+}
+
+/** A field's value as it is stored: the form's value (scaled, or trimmed), else the stored one, else the default. */
 function storedValue(field: EventFieldRule, key: string, source: Settings): unknown {
   const scale = field.stored?.scale ?? 1;
   const fromForm = source[key];
   if (!isBlank(fromForm)) {
+    if (field.kind === 'text' && typeof fromForm === 'string') return fromForm.trim();
     return field.stored && typeof fromForm === 'number' ? Math.round(fromForm * scale) : fromForm;
   }
   if (field.stored && !isBlank(source[field.stored.key])) return source[field.stored.key];
@@ -175,6 +209,9 @@ export function normaliseConfig(f: EventFormat, config: object | null | undefine
   const out: Settings = rule.live === 'rounds' ? { ...DEFAULT_SESSION_CONFIG, ...source } : {};
   if (rule.live === 'rounds') for (const key of otherFormatsSettings(f)) delete out[key];
   for (const [key, field] of Object.entries(rule.fields)) {
+    // A setting that applies only under another one's value (the months of the cooldown rule) gets no default
+    // otherwise, so an event on another rule is stored exactly as before.
+    if (field.when && out[field.when.key] !== field.when.equals && isBlank(source[key])) continue;
     const value = storedValue(field, key, source);
     if (field.stored) delete out[key];
     if (value !== undefined) out[field.stored?.key ?? key] = value;
@@ -321,15 +358,23 @@ export function applyFormatChange<T extends object>(
 
 /**
  * The format an event runs as. The stored column when it names a format; else (a request or a row from before
- * the column) an offered format named by the legacy `config.eventType` that production's old form sends;
- * else speed networking. Anything unknown is speed networking.
+ * the column) an offered format named by the legacy `config.eventType` that production's old form sends, when
+ * the config also carries what that format cannot do without; else speed networking. Anything unknown is speed
+ * networking.
+ *
+ * So production's duplicate button (config only) copies an in-person event, place and all, as in person, while a
+ * row from before 26 Oct tagged "physical_event" with no place still copies as the speed networking it ran as.
  */
 export function resolveEventFormat(
-  s: { format?: unknown; config?: { eventType?: unknown } | null } | null | undefined,
+  s: { format?: unknown; config?: object | null } | null | undefined,
 ): EventFormat {
   const column = s?.format;
   if (isEventFormat(column)) return column;
-  const legacy = s?.config?.eventType;
-  if (isEventFormat(legacy) && EVENT_FORMATS[legacy].available) return legacy;
+  const legacy = (s?.config as { eventType?: unknown } | null | undefined)?.eventType;
+  if (
+    isEventFormat(legacy)
+    && formatOffered(legacy, IN_PERSON_ENABLED_CLIENTS)
+    && missingRequired(legacy, valuesFromConfig(legacy, s?.config)).length === 0
+  ) return legacy;
   return 'speed_networking';
 }

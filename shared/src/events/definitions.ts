@@ -11,7 +11,9 @@
 // a field without a default or limits).
 //
 // A format marked `available: false` is defined but not offered: no form shows it and the server refuses
-// it, until its live behaviour exists and its row is switched on.
+// it, until its live behaviour exists and its row is switched on. A format with `offeredTo` is offered only to
+// a caller that asks for it (IN_PERSON_ENABLED_CLIENTS): production's form reads `available` alone, so it keeps
+// offering what it can draw, while the forms that have the format's fields, and the server, offer it too.
 
 import { PodType, OrchestrationMode, CommunicationMode } from '../types/pod';
 
@@ -25,10 +27,33 @@ export const EVENT_FORMAT_KEYS: readonly EventFormat[] = [
   'speed_networking', 'video_meeting', 'voice_meeting', 'webinar', 'physical_event',
 ];
 
+/**
+ * The formats a caller can draw beyond those every form offers. Production's event form passes nothing, so it
+ * never offers In person (it has no place field and its Go Live opens a video room).
+ */
+export interface FormatOffer {
+  inPerson?: boolean;
+}
+
+/** What the event forms that draw a place field ask for, and what the server accepts (30 Oct 2026). */
+export const IN_PERSON_ENABLED_CLIENTS: FormatOffer = { inPerson: true };
+
 /** One setting an organiser makes for an event of a format. */
 export interface EventFieldRule {
   /** The field's name on a form, and the start of its error message ("Capacity must be…"). */
   label: string;
+  /** A free-text field (a place); otherwise a choice (options) or a number (min and max). */
+  kind?: 'text';
+  /** The event cannot be stored without it; `missing` is the sentence when it is empty. */
+  required?: boolean;
+  missing?: string;
+  /** A text field's longest value, after trimming. */
+  maxLength?: number;
+  /**
+   * The setting applies only while another one has this value (the months of the `cooldown` rule): its default is
+   * stored only then, so an event on another rule is stored exactly as before.
+   */
+  when?: { key: string; equals: string };
   default?: unknown;
   min?: number;
   max?: number;
@@ -50,8 +75,10 @@ export interface EventFormatRule {
   /** One line under the label on a format picker. */
   summary: string;
   live: LiveKind;
-  /** Offered on the forms and accepted by the server. */
+  /** Offered on every form (production's included) and accepted by the server. */
   available: boolean;
+  /** Offered and accepted for a caller that asks for this (a FormatOffer key) while `available` stays false. */
+  offeredTo?: keyof FormatOffer;
   /** What the recap shows: ratings and connections, or who attended. */
   recap: 'ratings' | 'attendance';
   /** Whether a host may open breakout rooms during the event. */
@@ -96,6 +123,12 @@ export const EVENT_FORMATS: Record<EventFormat, EventFormatRule> = {
       },
       timerVisibility: { label: 'Timer', default: 'last_10s', options: TIMER_OPTIONS },
       matchingPolicy: { label: 'Matching rule', default: 'within_event', options: MATCHING_POLICY_OPTIONS },
+      cooldownMonths: {
+        label: 'Months apart', default: 12, min: 1, max: 60, unit: 'months',
+        when: { key: 'matchingPolicy', equals: 'cooldown' },
+      },
+      // Who should meet whom. Organisers choose one of REASON's presets (MATCHING_PRESET_IDS, 30 Oct 2026); any other
+      // template stays a platform admin's pick (26 Oct 2026), so the field keeps its admin-only mark for that list.
       matchingTemplateId: { label: 'Matching template', adminOnly: true },
       maxParticipants: { label: 'Capacity', default: 500, min: 2, max: 10000, unit: 'people' },
     },
@@ -142,17 +175,23 @@ export const EVENT_FORMATS: Record<EventFormat, EventFormatRule> = {
       maxParticipants: { label: 'Capacity', default: 500, min: 2, max: 10000, unit: 'people' },
     },
   },
-  // Not offered yet: a meetup at a place, with no video room. Its location field arrives with it.
+  // A meetup at a place, with no video room (30 Oct 2026, L18). It ends itself at its start plus its length. Offered
+  // only to the forms that draw its place (offeredTo), so production's form, which has no place field, never shows it.
   physical_event: {
     label: 'In person',
     summary: 'A meetup at a place; no video room',
     live: 'none',
     available: false,
+    offeredTo: 'inPerson',
     recap: 'attendance',
     breakouts: false,
     matchingEngineId: null,
     fields: {
-      durationMinutes: { label: 'Length', default: 60, min: 15, max: 240, unit: 'minutes' },
+      location: {
+        label: 'Where', kind: 'text', required: true, maxLength: 300,
+        missing: 'Say where the event happens: an address or a venue.',
+      },
+      durationMinutes: { label: 'Length', default: 60, min: 15, max: 480, unit: 'minutes' },
       maxParticipants: { label: 'Capacity', default: 25, min: 2, max: 10000, unit: 'people' },
     },
   },
@@ -176,7 +215,7 @@ export const POD_TYPES: Record<PodType, PodTypeRule> = {
     label: 'Reason Pod',
     summary: 'A small group (5 to 12) that meets for depth around a shared purpose',
     orchestration: { default: OrchestrationMode.FREE_FORM, allowed: [OrchestrationMode.FREE_FORM, OrchestrationMode.MODERATED] },
-    events: { default: 'video_meeting', allowed: ['video_meeting', 'speed_networking'] },
+    events: { default: 'video_meeting', allowed: ['video_meeting', 'speed_networking', 'physical_event'] },
     communication: CommunicationMode.VIDEO,
     sizeHint: 12,
   },
@@ -184,7 +223,7 @@ export const POD_TYPES: Record<PodType, PodTypeRule> = {
     label: 'Speed Networking',
     summary: 'Timed one-to-one rounds',
     orchestration: { default: OrchestrationMode.TIMED_ROUNDS, allowed: [OrchestrationMode.TIMED_ROUNDS] },
-    events: { default: 'speed_networking', allowed: ['speed_networking', 'video_meeting'] },
+    events: { default: 'speed_networking', allowed: ['speed_networking', 'video_meeting', 'physical_event'] },
     communication: CommunicationMode.VIDEO,
     sizeHint: null,
   },
@@ -192,7 +231,7 @@ export const POD_TYPES: Record<PodType, PodTypeRule> = {
     label: 'Conversational',
     summary: 'Small group open conversations',
     orchestration: { default: OrchestrationMode.FREE_FORM, allowed: [OrchestrationMode.FREE_FORM, OrchestrationMode.MODERATED] },
-    events: { default: 'video_meeting', allowed: ['video_meeting', 'speed_networking'] },
+    events: { default: 'video_meeting', allowed: ['video_meeting', 'speed_networking', 'physical_event'] },
     communication: CommunicationMode.VIDEO,
     sizeHint: null,
   },
@@ -205,12 +244,12 @@ export const POD_TYPES: Record<PodType, PodTypeRule> = {
     communication: CommunicationMode.VIDEO,
     sizeHint: null,
   },
-  // In-person events come first here once they are offered.
+  // In-person events come first here. A form that does not offer them (production's) starts on a video meeting.
   [PodType.PHYSICAL_EVENT]: {
     label: 'Physical Event',
     summary: 'In person, supported digitally',
     orchestration: { default: OrchestrationMode.FREE_FORM, allowed: [OrchestrationMode.FREE_FORM] },
-    events: { default: 'video_meeting', allowed: ['video_meeting', 'physical_event'] },
+    events: { default: 'physical_event', allowed: ['physical_event', 'video_meeting'] },
     communication: CommunicationMode.HYBRID,
     sizeHint: null,
   },
@@ -226,7 +265,7 @@ export const POD_TYPES: Record<PodType, PodTypeRule> = {
     label: 'Two-Sided Networking',
     summary: 'Two groups meeting each other',
     orchestration: { default: OrchestrationMode.TIMED_ROUNDS, allowed: [OrchestrationMode.TIMED_ROUNDS, OrchestrationMode.FREE_FORM] },
-    events: { default: 'speed_networking', allowed: ['speed_networking', 'video_meeting'] },
+    events: { default: 'speed_networking', allowed: ['speed_networking', 'video_meeting', 'physical_event'] },
     communication: CommunicationMode.VIDEO,
     sizeHint: null,
   },
@@ -234,7 +273,7 @@ export const POD_TYPES: Record<PodType, PodTypeRule> = {
     label: 'One-Sided Networking',
     summary: 'One group meeting among themselves',
     orchestration: { default: OrchestrationMode.TIMED_ROUNDS, allowed: [OrchestrationMode.TIMED_ROUNDS, OrchestrationMode.FREE_FORM] },
-    events: { default: 'speed_networking', allowed: ['speed_networking', 'video_meeting'] },
+    events: { default: 'speed_networking', allowed: ['speed_networking', 'video_meeting', 'physical_event'] },
     communication: CommunicationMode.VIDEO,
     sizeHint: null,
   },

@@ -84,6 +84,8 @@ export const ErrorCodes = {
   EVENT_ENDED: 'EVENT_ENDED',
   EVENT_FORMAT_NOT_ALLOWED: 'EVENT_FORMAT_NOT_ALLOWED',  // the format is not offered, or the pod's type does not hold it
   NOT_A_ROUNDS_EVENT: 'NOT_A_ROUNDS_EVENT',              // a round, matching or breakout action on an event that has none (a video meeting)
+  NOT_A_VIDEO_EVENT: 'NOT_A_VIDEO_EVENT',                // 409; Go Live, a video token or the live room asked of an in-person event
+  TEMPLATE_IS_PRESET: 'TEMPLATE_IS_PRESET',              // 409; a speed-networking preset cannot be deleted (its weights can be edited)
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

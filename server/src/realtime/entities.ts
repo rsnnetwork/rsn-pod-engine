@@ -75,6 +75,8 @@ export const E = {
   adminViolations: 'admin:violations',
   adminSupportTickets: 'admin:support-tickets',
   adminAnalytics: 'admin:analytics',
+  // 30 Oct 2026 — matching templates and the speed-networking presets (fanoutAdminEntities('templates')).
+  adminTemplates: 'admin:templates',
   /** Feedback after meetings (30 Oct 2026): the admin feedback list. */
   adminMeetingFeedback: 'admin:meeting-feedback',
 } as const;

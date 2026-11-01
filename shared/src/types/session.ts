@@ -101,6 +101,11 @@ export interface SessionConfig {
    */
   durationMinutes?: number;
   /**
+   * 30 Oct 2026 — where an in-person event happens: an address or a venue, trimmed, at most 300 characters
+   * (the format's "Where" field). Shown and mailed as typed; never filtered, so it lives here, not in a column.
+   */
+  location?: string;
+  /**
    * The event's format as production's old form sends it. Since 26 Oct 2026 the server keeps it equal to
    * the stored format (sessions.event_format), so a copy the old form makes keeps the format.
    */

@@ -119,10 +119,12 @@ export const ENTITY_ROLE_LABELS = _ENTITY_ROLE_LABELS;
 // as OPENINGS above.
 export * from './events/definitions';
 export * from './events/rules';
+export * from './events/presets';
 import {
   EVENT_FORMATS as _EVENT_FORMATS, EVENT_FORMAT_KEYS as _EVENT_FORMAT_KEYS, POD_TYPES as _POD_TYPES,
-  ORCHESTRATION_MODES as _ORCHESTRATION_MODES,
+  ORCHESTRATION_MODES as _ORCHESTRATION_MODES, IN_PERSON_ENABLED_CLIENTS as _IN_PERSON_ENABLED_CLIENTS,
 } from './events/definitions';
+import { MATCHING_PRESET_IDS as _MATCHING_PRESET_IDS } from './events/presets';
 import {
   formatRule as _formatRule, podTypeRule as _podTypeRule, isEventFormat as _isEventFormat, liveKindOf as _liveKindOf,
   effectiveOrchestration as _effectiveOrchestration, eventFormatsForPod as _eventFormatsForPod,
@@ -131,7 +133,12 @@ import {
   valuesFromConfig as _valuesFromConfig, eventDurationMinutes as _eventDurationMinutes,
   applyTypeChange as _applyTypeChange, applyFormatChange as _applyFormatChange,
   resolveEventFormat as _resolveEventFormat, formatRefusal as _formatRefusal,
+  formatOffered as _formatOffered, missingRequired as _missingRequired,
 } from './events/rules';
+export const IN_PERSON_ENABLED_CLIENTS = _IN_PERSON_ENABLED_CLIENTS;
+export const MATCHING_PRESET_IDS = _MATCHING_PRESET_IDS;
+export const formatOffered = _formatOffered;
+export const missingRequired = _missingRequired;
 export const EVENT_FORMATS = _EVENT_FORMATS;
 export const EVENT_FORMAT_KEYS = _EVENT_FORMAT_KEYS;
 export const POD_TYPES = _POD_TYPES;
