@@ -30,8 +30,19 @@ export type PresenceRoom = Pick<Room, 'on' | 'off' | 'remoteParticipants' | 'sta
 
 /** The part of a LiveKit room leaveCall uses. */
 export type DepartingRoom = Pick<Room, 'state' | 'disconnect' | 'remoteParticipants' | 'on' | 'off'> & {
-  localParticipant: Pick<LocalParticipant, 'publishData'>;
+  localParticipant: Pick<LocalParticipant, 'publishData' | 'sid'>;
 };
+
+/** How leaveCall is asked to leave. */
+export interface LeaveCallOptions {
+  /** The longest it waits altogether (DEPART_MS). */
+  timeoutMs?: number;
+  /**
+   * Told this connection's participant sid once the goodbye has been said and before the disconnect, when the room
+   * ever joined (fix round 3): MeetPage asks our server to take exactly that connection out of the room.
+   */
+  onLeaving?: (sid: string) => void;
+}
 
 /** The data topic a goodbye is sent on. */
 export const GOODBYE_TOPIC = 'reason:left-call';
@@ -81,17 +92,27 @@ async function connectedWithin(room: DepartingRoom, ms: number): Promise<void> {
 
 /**
  * Leave the room on purpose. When someone else is in it (so they may have seen me come in), say goodbye: first let my
- * own room finish connecting, for at most CONNECT_MS, then wait at most GOODBYE_MS on the goodbye itself. Then
- * disconnect. A room with nobody else in it has no one to tell. Resolves once the disconnect has finished, or after
- * `timeoutMs` altogether, whichever is first; never rejects.
+ * own room finish connecting, for at most CONNECT_MS, then wait at most GOODBYE_MS on the goodbye itself. Then name
+ * this connection to `onLeaving` and disconnect. A room with nobody else in it has no one to tell. Resolves once the
+ * disconnect has finished, or after `timeoutMs` altogether, whichever is first; never rejects.
  */
-export async function leaveCall(room: DepartingRoom, timeoutMs: number = DEPART_MS): Promise<void> {
+export async function leaveCall(room: DepartingRoom, { timeoutMs = DEPART_MS, onLeaving }: LeaveCallOptions = {}): Promise<void> {
   const depart = async () => {
     if (room.remoteParticipants.size > 0) {
       await connectedWithin(room, CONNECT_MS);
       // A goodbye that cannot be sent is the drop case: the server's own leave, or its timeout, still tells them.
       if (room.state === ConnectionState.Connected) {
         await within(room.localParticipant.publishData(GOODBYE, { reliable: true, topic: GOODBYE_TOPIC }), GOODBYE_MS);
+      }
+    }
+    // Fix round 3 (preview rr4, 2 Nov 2026): on LiveKit Cloud neither the goodbye nor LiveKit's own leave always
+    // reached the room, and the other person waited past 30 s. Our server can take this connection out as well.
+    const sid = room.localParticipant.sid;
+    if (sid && onLeaving) {
+      try {
+        onLeaving(sid);
+      } catch {
+        // Only a second way to the same end: LiveKit's own leave below still goes.
       }
     }
     await room.disconnect();

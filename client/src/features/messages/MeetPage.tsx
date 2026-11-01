@@ -24,6 +24,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { errorMessage } from '@/features/reason/errors';
 import { leaveCall, leftCallText, watchPartner } from './call-presence';
 import { afterRoomLeave } from '@/features/meetings/meeting-feedback';
+import { leftCallRoom } from '@/features/calls/call-api';
 import PartnerSeen from './PartnerSeen';
 import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
 import { schedulingKey, type Scheduling } from './scheduling-types';
@@ -142,8 +143,11 @@ function CallStage() {
 // Now the one still here is told who left, and chooses: Wait (stay in the
 // room; the notice clears by itself when they come back in) or Leave.
 // 1 Nov 2026 (leave fix): it also hands the leave, which sits outside the room, this side's departure: the goodbye
-// the other side's watcher hears at once, then the disconnect (call-presence.ts, leaveCall).
-function CallEndWatcher({ onLeave, leaving, depart }: {
+// the other side's watcher hears at once, then the disconnect (call-presence.ts, leaveCall). Fix round 3 (2 Nov 2026):
+// between the two it also asks our server to take this connection out of the room, so the other person is told even
+// when neither the goodbye nor LiveKit's own leave reaches the room.
+function CallEndWatcher({ conversationId, onLeave, leaving, depart }: {
+  conversationId: string;
   onLeave: () => void;
   leaving: boolean;
   depart: MutableRefObject<() => Promise<void>>;
@@ -153,9 +157,9 @@ function CallEndWatcher({ onLeave, leaving, depart }: {
   const [leftName, setLeftName] = useState<string | null>(null);
   useEffect(() => watchPartner(room, setLeftName), [room]);
   useEffect(() => {
-    depart.current = () => leaveCall(room);
+    depart.current = () => leaveCall(room, { onLeaving: (sid) => leftCallRoom(conversationId, sid) });
     return () => { depart.current = noDeparture; };
-  }, [room, depart]);
+  }, [room, depart, conversationId]);
   if (leftName === null) return null;
   return (
     <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-3">
@@ -477,7 +481,7 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             <CallStage />
-            <CallEndWatcher onLeave={leaveRoom} leaving={leaving} depart={departRef} />
+            <CallEndWatcher conversationId={conversationId} onLeave={leaveRoom} leaving={leaving} depart={departRef} />
             <PartnerSeen onSeen={onPartnerSeen} probe={partnerProbe} />
             <div className={`shrink-0 pb-[env(safe-area-inset-bottom)] ${chatOpen ? 'max-sm:pb-0' : ''}`}>
               {/* LiveKit's own Leave disconnects the room itself, before any goodbye can be said (fix round 1), so the

@@ -290,12 +290,12 @@ describe('the meeting room', () => {
   it('shows the leave buttons as busy from the moment they are pressed', () => {
     expect(room).toMatch(/leftRoom\.current = true;\s*setLeaving\(true\);/);
     expect(room).toMatch(/onClick=\{leaveRoom\}\s*disabled=\{leaving\}\s*aria-busy=\{leaving\}/);
-    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} leaving=\{leaving\} depart=\{departRef\} \/>/);
+    expect(room).toMatch(/<CallEndWatcher conversationId=\{conversationId\} onLeave=\{leaveRoom\} leaving=\{leaving\} depart=\{departRef\} \/>/);
     expect(room).toMatch(/\{leaving \? 'Leaving…' : 'Leave'\}/);
   });
 
   it('the Wait / Leave notice never asks itself; its Leave is the person leaving, like the room\'s own buttons', () => {
-    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} /);
+    expect(room).toMatch(/<CallEndWatcher conversationId=\{conversationId\} onLeave=\{leaveRoom\} /);
     // The pages outside the room (error, ended, countdown) go back to the chat, as before.
     expect(room.match(/onClick=\{leave\}/g)?.length).toBe(3);
   });
