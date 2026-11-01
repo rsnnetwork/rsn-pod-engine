@@ -22,6 +22,7 @@ import {
 } from './invite-status';
 import { DeclinedSection, InvitedSection, LinksSection, ROW_BUTTON, type RemindProgress } from './InviteStatusRows';
 import { invalidateEntities } from '@/realtime/invalidate-entities';
+import { usePendingInvites } from './useInviteCandidates';
 
 interface Props {
   /** A pod's or an event's invitations (a circle has no such card). */
@@ -45,11 +46,7 @@ export default function InviteStatusList(props: Props) {
 }
 
 function PodInviteStatus({ podId, ...props }: Props & { podId: string }) {
-  const pending = useQuery({
-    queryKey: ['pod-pending-invites', podId],
-    queryFn: () => api.get(`/invites/pod/${podId}?status=pending`).then((r) => (r.data.data ?? []) as InviteListRow[]),
-    meta: { entities: [E.pod(podId), E.podInvites(podId)] },
-  });
+  const pending = usePendingInvites(props.target);
   const history = useQuery({
     queryKey: ['pod-invite-history', podId],
     queryFn: () => api.get(`/invites/pod/${podId}`).then((r) => (r.data.data ?? []) as InviteListRow[]),
@@ -73,11 +70,7 @@ function PodInviteStatus({ podId, ...props }: Props & { podId: string }) {
 }
 
 function EventInviteStatus({ sessionId, ...props }: Props & { sessionId: string }) {
-  const pending = useQuery({
-    queryKey: ['session-pending-invites', sessionId],
-    queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then((r) => (r.data.data ?? []) as InviteListRow[]),
-    meta: { entities: [E.session(sessionId), E.sessionInvites(sessionId)] },
-  });
+  const pending = usePendingInvites(props.target);
   const history = useQuery({
     queryKey: ['session-invite-history', sessionId],
     queryFn: () => api.get(`/invites/session/${sessionId}`).then((r) => (r.data.data ?? []) as InviteListRow[]),

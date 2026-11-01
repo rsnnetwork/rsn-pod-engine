@@ -27,7 +27,7 @@ import {
 } from '../../../../client/src/features/invites/invite-picker';
 import {
   REMIND_GAP_MS, STATUS_TITLE, WITHDRAW_BODY, WITHDRAW_TITLE,
-  inviteStatusGroups, personName, remindAllSentence, remindAllStopped, remindingProgress, remindSentence, settleInTurn, statusSummary, tallyReminders,
+  inviteStatusGroups, openLink, personName, remindAllSentence, remindAllStopped, remindingProgress, remindSentence, settleInTurn, statusSummary, tallyReminders,
   type InviteListRow,
 } from '../../../../client/src/features/invites/invite-status';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
@@ -542,15 +542,18 @@ describe('the organisers\' list keeps the pages\' query keys and their tags', ()
   const list = read('features/invites/InviteStatusList.tsx');
 
   it('the pod\'s pending invites and history follow the pod\'s invites tag', () => {
-    const pending = list.slice(list.indexOf("queryKey: ['pod-pending-invites', podId]"));
-    expect(pending).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podInvites\(podId\)/);
+    // The pending list is the shared usePendingInvites read (P1 item 30), under the same key and tags.
+    const pending = read('features/invites/useInviteCandidates.ts');
+    expect(pending).toMatch(/queryKey: pod \? \['pod-pending-invites', pod\]/);
+    expect(pending).toMatch(/meta: \{ entities: pod \? \[E\.pod\(pod\), E\.podInvites\(pod\)\]/);
     const history = list.slice(list.indexOf("queryKey: ['pod-invite-history', podId]"));
     expect(history).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podInvites\(podId\)/);
   });
 
   it('the event\'s pending invites and history follow the event\'s invites tag', () => {
-    const pending = list.slice(list.indexOf("queryKey: ['session-pending-invites', sessionId]"));
-    expect(pending).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.sessionInvites\(sessionId\)/);
+    const pending = read('features/invites/useInviteCandidates.ts');
+    expect(pending).toMatch(/: \['session-pending-invites', session\]/);
+    expect(pending).toMatch(/session \? \[E\.session\(session\), E\.sessionInvites\(session\)\]/);
     const history = list.slice(list.indexOf("queryKey: ['session-invite-history', sessionId]"));
     expect(history).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.sessionInvites\(sessionId\)/);
   });
@@ -601,5 +604,27 @@ describe('the pod page and the event page open the sheet and show the list', () 
   it('the dead CreateInviteModal is gone and nothing imports it', () => {
     expect(exists('features/invites/CreateInviteModal.tsx')).toBe(false);
     expect(pod + event + read('App.tsx') + read('features/invites/InvitesPage.tsx')).not.toMatch(/CreateInviteModal/);
+  });
+});
+
+describe('Share a link reuses the open link instead of making another each time (P1 item 30)', () => {
+  const link = (id: string, over: Partial<InviteListRow> = {}) => row({ id, inviteeEmail: null, inviteeName: null, inviteeUserId: null, code: `c-${id}`, ...over });
+
+  it('picks an open link that still has uses (the newest first, as the server lists them); none is null', () => {
+    expect(openLink([row({ id: 'p' }), link('l1'), link('l2')])).toBe('c-l1');
+    expect(openLink([link('used', { maxUses: 5, useCount: 5 }), link('l2', { maxUses: 5, useCount: 2 })])).toBe('c-l2');
+    // A co-host's list blanks the codes of others' invites: a blank code is no link to give.
+    expect(openLink([link('hidden', { code: '' })])).toBeNull();
+    expect(openLink([row({ id: 'p' })])).toBeNull();
+    expect(openLink(undefined)).toBeNull();
+  });
+
+  it('the sheet reads the same pending list as the card (one query, one key) and shows that link before offering to make one', () => {
+    const extras = read('features/invites/InviteExtras.tsx');
+    expect(extras).toMatch(/const pending = usePendingInvites\(target\);/);
+    expect(extras).toMatch(/const open = openLink\(pending\.data\);/);
+    const list = read('features/invites/InviteStatusList.tsx');
+    expect(list.match(/usePendingInvites\(/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(list).not.toMatch(/queryKey: \['pod-pending-invites'/);
   });
 });

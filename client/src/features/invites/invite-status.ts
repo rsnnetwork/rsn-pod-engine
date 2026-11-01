@@ -51,6 +51,17 @@ export const NOT_REMINDED = 'The reminder could not be sent. Please try again.';
 export const NOT_REMINDED_ALL = 'No reminders were sent.';
 export const SHAREABLE_LINK = 'Shareable link';
 
+/**
+ * The open shareable link to hand out again (P1 item 30: "Share a link" made a new one every time): the first link in
+ * the pending list (the server lists the newest first, and leaves out expired ones) that still has uses. A co-host's
+ * list blanks the codes of other people's invites, so a blank code is no link.
+ */
+export function openLink(pending: readonly InviteListRow[] | undefined): string | null {
+  const open = (pending ?? []).find((row) => !row.inviteeEmail && !!row.code
+    && (row.maxUses === undefined || row.useCount === undefined || row.useCount < row.maxUses));
+  return open?.code ?? null;
+}
+
 /** How the server hides an address from a co-host (maskEmail): "a•••@example.com". The mask is no person. */
 const HIDDEN_ADDRESS = '•••';
 
