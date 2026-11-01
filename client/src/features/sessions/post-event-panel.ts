@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import { POST_EVENT_MESSAGE_LIMITS } from '@rsn/shared';
 import type { BroadcastAudience, BroadcastEligibilityV2, PostEventMessageJob } from '@rsn/shared';
-import { CONNECTION_LOST, firstDetail, memberSentence } from '../reason/errors';
+import { CONNECTION_LOST, firstDetail, gotNoAnswer, memberSentence } from '../reason/errors';
 
 export const PANEL_TITLE = 'Message everyone who took part';
 export const PANEL_INTRO = 'Each person gets your message privately, from you, in Messages. Their replies come to you alone.';
@@ -134,7 +134,7 @@ interface FailedSend {
 export function sendErrorSentence(err: unknown): string {
   const failed = (typeof err === 'object' && err !== null ? err : {}) as FailedSend;
   const response = failed.response;
-  if (!response) return failed.isAxiosError === true || failed.request != null ? CONNECTION_LOST : NOT_SENT;
+  if (!response) return gotNoAnswer(err) ? CONNECTION_LOST : NOT_SENT;
   const error = response.data?.error;
   switch (response.status) {
     case 400:

@@ -16,7 +16,7 @@ import {
   type OnboardingOption, type OnboardingV2Answers, type OnboardingV2ConfirmRequest,
   type OnboardingV2LinkedinStatus, type OnboardingV2ProfileInput, type OnboardingV2State, type OnboardingV2Step,
 } from '@rsn/shared';
-import { CONNECTION_LOST } from '../reason/errors';
+import { CONNECTION_LOST, gotNoAnswer } from '../reason/errors';
 
 // ── The brief's words ────────────────────────────────────────────────────────
 
@@ -600,11 +600,7 @@ function refusalOf(err: unknown): { status?: number; error?: { message?: unknown
 export function onboardingError(err: unknown, fallback: string): string {
   const failed = (typeof err === 'object' && err !== null ? err : {}) as FailedRequest;
   const response = failed.response;
-  if (!response) {
-    const noAnswer = failed.isAxiosError === true || failed.request != null
-      || (typeof failed.code === 'string' && ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(failed.code));
-    return noAnswer ? CONNECTION_LOST : fallback;
-  }
+  if (!response) return gotNoAnswer(err) ? CONNECTION_LOST : fallback;
   const error = response.data?.error;
   if (response.status === 429) return sentence(error?.message) ?? SLOW_DOWN;
   if (response.status === 400) {

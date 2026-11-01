@@ -4,6 +4,11 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { CONNECTION_LOST, gotNoAnswer } from '../../../../client/src/features/reason/errors';
+import { groupErrorSentence } from '../../../../client/src/features/messages/group-chat-text';
+import { inviteErrorSentence } from '../../../../client/src/features/invites/invite-picker';
+import { sendErrorSentence } from '../../../../client/src/features/sessions/post-event-panel';
+import { onboardingError } from '../../../../client/src/features/onboarding/flow';
 import { leaveEvent, leaveOnUnmount } from '../../../../client/src/features/live/leave-event';
 import { REFUSED_DETAIL, refusalOf } from '../../../../client/src/features/live/session-guard-state';
 import { chimeFromCall, quietHere } from '../../../../client/src/lib/message-chime-policy';
@@ -176,5 +181,37 @@ describe('the sweep of the screens T16 touched: every tap target 44px', () => {
     const admin = read('features/admin/AdminPodsPage.tsx');
     expect(admin).toMatch(/className=\{`min-h-\[44px\] px-3 py-1\.5 rounded-lg/);
     expect(admin.match(/size="sm"\s*className="min-h-\[44px\]"/g)?.length).toBe(2);
+  });
+});
+
+describe('one "no answer" rule for every failed-request sentence (review T16, Important 2; item 18)', () => {
+  // A timeout carries a code and may carry no request; it is still a lost connection, never the caller's own words.
+  const timedOut = { code: 'ECONNABORTED' };
+  const fault = new TypeError('x is undefined');
+
+  it('gotNoAnswer is the one check: the axios mark, a request that went out, or a no-answer code', () => {
+    expect(gotNoAnswer(timedOut)).toBe(true);
+    expect(gotNoAnswer({ code: 'ERR_NETWORK' })).toBe(true);
+    expect(gotNoAnswer({ isAxiosError: true })).toBe(true);
+    expect(gotNoAnswer({ request: {} })).toBe(true);
+    expect(gotNoAnswer(fault)).toBe(false);
+    expect(gotNoAnswer(null)).toBe(false);
+  });
+
+  it('the group chat, invites, message-everyone and onboarding sentences all say Connection lost for a timeout', () => {
+    expect(groupErrorSentence(timedOut, 'fallback')).toBe(CONNECTION_LOST);
+    expect(inviteErrorSentence(timedOut, 'fallback')).toBe(CONNECTION_LOST);
+    expect(sendErrorSentence(timedOut)).toBe(CONNECTION_LOST);
+    expect(onboardingError(timedOut, 'fallback')).toBe(CONNECTION_LOST);
+    expect(groupErrorSentence(fault, 'fallback')).toBe('fallback');
+    expect(inviteErrorSentence(fault, 'fallback')).toBe('fallback');
+    expect(onboardingError(fault, 'fallback')).toBe('fallback');
+  });
+
+  it('no screen keeps its own copy of the check', () => {
+    for (const f of ['features/messages/group-chat-text.ts', 'features/invites/invite-picker.ts', 'features/sessions/post-event-panel.ts', 'features/onboarding/flow.ts']) {
+      expect(read(f)).not.toMatch(/isAxiosError === true/);
+      expect(read(f)).toMatch(/gotNoAnswer\(/);
+    }
   });
 });
