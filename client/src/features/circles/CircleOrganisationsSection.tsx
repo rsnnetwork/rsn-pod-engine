@@ -4,8 +4,8 @@
 // beside each, which asks first. A locked circle shows none (the page leaves this section out). The page's own query
 // follows circle:<id>, which a link and an unlink send, so the list changes without a reload on every screen.
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { Building2, Link2, X } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Building2, Link2, Loader2, X } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import api from '@/lib/api';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -25,15 +25,24 @@ export default function CircleOrganisationsSection({ circle }: { circle: CircleD
   const [linking, setLinking] = useState(false);
   const manager = !!circle.canManage;
   const entities = circle.entities ?? [];
+  // As the members' Remove does it (CircleMembersSection): one mutation, a second press refused while one is on its
+  // way (before the confirm opens), and the row's button busy until the circle is read again.
+  const unlinking = useMutation({
+    networkMode: 'always',
+    mutationFn: ({ entityId }: { entityId: string; name: string }) => api.delete(`/circles/${circle.id}/entities/${entityId}`),
+    onSuccess: async (_res, { name }) => {
+      await Promise.all([refreshCircle(qc, circle.id), qc.invalidateQueries({ queryKey: entityKeys.all })]);
+      addToast(unlinkedToast(name, circle.name), 'success');
+    },
+    onError: (err) => addToast(circleErrorSentence(err, 'That organisation could not be unlinked. Try again.'), 'error'),
+  });
+  // Every hook above runs on every render; only then does a member with nothing to see get nothing.
   if (entities.length === 0 && !manager) return null;
 
   const unlink = async (entityId: string, name: string) => {
+    if (unlinking.isPending) return;
     if (!(await ask({ title: `Unlink ${name}?`, body: `It leaves ${circle.name}'s organisations. The entity itself is untouched.`, confirmLabel: 'Unlink', tone: 'danger' }))) return;
-    try {
-      await api.delete(`/circles/${circle.id}/entities/${entityId}`);
-      await Promise.all([refreshCircle(qc, circle.id), qc.invalidateQueries({ queryKey: entityKeys.all })]);
-      addToast(unlinkedToast(name, circle.name), 'success');
-    } catch (err) { addToast(circleErrorSentence(err, 'That organisation could not be unlinked. Try again.'), 'error'); }
+    unlinking.mutate({ entityId, name });
   };
 
   return (
@@ -58,10 +67,16 @@ export default function CircleOrganisationsSection({ circle }: { circle: CircleD
               <button
                 type="button"
                 onClick={() => void unlink(e.id, e.name)}
-                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-red-500"
+                disabled={unlinking.isPending}
+                aria-busy={unlinking.isPending && unlinking.variables?.entityId === e.id}
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-red-500 disabled:opacity-50"
                 title="Unlink from circle"
                 aria-label={`Unlink ${e.name} from this circle`}
-              ><X className="h-4 w-4" aria-hidden="true" /></button>
+              >
+                {unlinking.isPending && unlinking.variables?.entityId === e.id
+                  ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  : <X className="h-4 w-4" aria-hidden="true" />}
+              </button>
             ) : undefined}
           />
         </Card>

@@ -381,3 +381,11 @@ describe('Entities: the circles an entity is linked to (T15, 7.3)', () => {
     expect(page('EntityProfilePage.tsx')).toMatch(/<EntityCircles page=\{page\} \/>/);
   });
 });
+
+// ─── T15 client review, fix round 1 ──────────────────────────────────────────────────────────────────────────────
+describe('Entities: a second decline shows "not approved" again (review M4)', () => {
+  it('Ask again is reset when the new request is sent, so a later decline shows its answer, not the form', () => {
+    const rel = page('RelationshipPanel.tsx');
+    expect(rel).toMatch(/onSuccess: \(result\) => \{\n\s*addToast\(membershipToast\(entity\.name, result\), 'success'\);\n\s*setJoinAs\(''\);\n(\s*\/\/[^\n]*\n)?\s*setAskingAgain\(false\);/);
+  });
+});

@@ -57,6 +57,8 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
     onSuccess: (result) => {
       addToast(membershipToast(entity.name, result), 'success');
       setJoinAs('');
+      // A new request: if it is declined too, the panel shows that answer again, not the form.
+      setAskingAgain(false);
       return qc.invalidateQueries({ queryKey: entityKeys.all });
     },
     onError: (err) => {

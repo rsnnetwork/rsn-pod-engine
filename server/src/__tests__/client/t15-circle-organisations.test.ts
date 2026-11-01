@@ -46,3 +46,27 @@ describe('the circle page: Organisations (T15)', () => {
     }
   });
 });
+
+// T15 client review M1: Unlink as CircleMembersSection's Remove does it: a mutation, guarded before the confirm, busy.
+describe('the circle page: Unlink is guarded and shows it is working (review M1)', () => {
+  it('goes through one useMutation (networkMode always), refuses a second press while one is on its way, and is busy', () => {
+    expect(section()).toMatch(/const unlinking = useMutation\(\{\n\s*networkMode: 'always',/);
+    expect(section()).toMatch(/if \(unlinking\.isPending\) return;\n\s*if \(!\(await ask\(/);
+    expect(section()).toMatch(/disabled=\{unlinking\.isPending\}/);
+    expect(section()).toMatch(/aria-busy=\{unlinking\.isPending && unlinking\.variables\?\.entityId === e\.id\}/);
+    expect(section()).not.toMatch(/await api\.delete/);
+  });
+});
+
+// Fix round 1 (found by the spec): the Unlink mutation sat below the early return, so a member whose circle had no
+// organisations, then got one, rendered one more hook than before and the section never drew.
+describe('the circle page: every hook runs before the section decides to draw nothing', () => {
+  it('useMutation and useConfirm come before `return null`', () => {
+    const s = section();
+    const early = s.indexOf('if (entities.length === 0 && !manager) return null;');
+    expect(early).toBeGreaterThan(0);
+    for (const hook of ['useMutation(', 'useConfirm(', 'useState(', 'useQueryClient(', 'useToastStore(']) {
+      expect({ hook, before: s.indexOf(hook) > 0 && s.indexOf(hook) < early }).toEqual({ hook, before: true });
+    }
+  });
+});
