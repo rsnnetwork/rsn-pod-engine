@@ -54,7 +54,10 @@ async function refuseView(sessionId: string): Promise<never> {
 /** Whether the event page registers this person on opening it: its audience or an invitee, who may see the event. */
 async function registersOnOpening(sessionId: string, userId: string, role: string | undefined): Promise<boolean> {
   const f = await readEventAccessFacts(sessionId, userId);
-  return !!f && canSeeEvent(f, role) && (f.inAudience || f.isInvited);
+  // Fix round 2: a kick is terminal. Someone the host removed from the event is never let back to its list through an
+  // invite or the event's circle, as nothing else about the event lets them back.
+  if (!f || f.participantStatus === 'removed') return false;
+  return canSeeEvent(f, role) && (f.inAudience || f.isInvited);
 }
 
 /** The "you're registered" email with its calendar invite. Best-effort: a failure is logged, never thrown. */

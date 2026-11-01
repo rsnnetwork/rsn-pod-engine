@@ -1046,6 +1046,26 @@ describe('Session Routes - Extended', () => {
         expect((await read()).status).toBe(403);
       });
 
+      // Fix round 2: a kick is terminal. Someone the host removed from the event is not let back to its list through
+      // being invited or being in its circle, with the same words as before.
+      it('an invitee or a circle member the host removed from the event is refused', async () => {
+        arm({ facts: { isInvited: true, participantStatus: 'removed' } });
+        const invitee = await read();
+        expect(invitee.status).toBe(403);
+        expect(invitee.body.error.message).toBe('You must be a participant or pod member to view this list');
+        readFacts.mockRestore();
+        arm({ facts: { inAudience: true, participantStatus: 'removed' } });
+        expect((await read()).status).toBe(403);
+      });
+
+      it('an invitee or a circle member who left the event (not removed) still reads it', async () => {
+        arm({ facts: { isInvited: true, participantStatus: 'left' } });
+        expect((await read()).status).toBe(200);
+        readFacts.mockRestore();
+        arm({ facts: { inAudience: true, participantStatus: 'left' } });
+        expect((await read()).status).toBe(200);
+      });
+
       it('someone outside the event\'s audience is refused with the same words as before', async () => {
         arm({ facts: {} });
         const res = await read();
