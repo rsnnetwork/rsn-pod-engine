@@ -10,7 +10,7 @@
 // is read from the same query the scheduler and the thread read, so a move
 // made while this page waits on its countdown moves the countdown too.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { LiveKitRoom, RoomAudioRenderer, ParticipantTile, ControlBar, useTracks, useRoomContext, type TrackReference } from '@livekit/components-react';
@@ -23,6 +23,8 @@ import { E } from '@/realtime/entities';
 import { PageLoader } from '@/components/ui/Spinner';
 import { errorMessage } from '@/features/reason/errors';
 import { leftCallText, watchPartner } from './call-presence';
+import { afterRoomPath } from '@/features/meetings/meeting-feedback';
+import PartnerSeen from './PartnerSeen';
 import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
 import { schedulingKey, type Scheduling } from './scheduling-types';
 
@@ -187,6 +189,12 @@ export default function MeetPage() {
   const [forceJoin, setForceJoin] = useState(false);
 
   const leave = useCallback(() => navigate(`/messages/${conversationId}`), [navigate, conversationId]);
+  // Feedback after meetings (30 Oct 2026): whether the other person has been in the room with me. Leaving the room
+  // after that asks how a scheduled meeting went; the room's own leave can fire twice (its button, then the
+  // disconnect), so it goes once.
+  const hadPartner = useRef(false);
+  const leftRoom = useRef(false);
+  const partnerSeen = useCallback(() => { hadPartner.current = true; }, []);
 
   // A scheduled meeting's start and length: the scheduler's own query, kept live
   // by the dm-conversation entity, so a move (or a cancel) reaches a page that is
@@ -204,6 +212,11 @@ export default function MeetPage() {
   const startMs = meeting?.startAt ? Date.parse(meeting.startAt) : null;
   const scheduleChecked = !isScheduled || schedule.isFetchedAfterMount;
   const roomKey = `${conversationId}:${kind}`;
+  const leaveRoom = useCallback(() => {
+    if (leftRoom.current) return;
+    leftRoom.current = true;
+    navigate(afterRoomPath({ conversationId: conversationId ?? '', meetingId: meeting?.meetingId, hadPartner: hadPartner.current }));
+  }, [navigate, conversationId, meeting?.meetingId]);
   const live = conn && conn.room === roomKey ? conn : null;
 
   // A scheduled meeting opened early waits on a countdown; one long over says
@@ -326,7 +339,7 @@ export default function MeetPage() {
       {/* Slim top bar — leave affordance + what kind of call this is. */}
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
         <button
-          onClick={leave}
+          onClick={leaveRoom}
           className="flex h-11 w-11 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
           aria-label="Leave call and go back to chat"
         >
@@ -344,12 +357,13 @@ export default function MeetPage() {
         connect
         video={kind === 'video'}
         audio
-        onDisconnected={leave}
+        onDisconnected={leaveRoom}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'transparent' }}
       >
         <CallStage />
         <RoomAudioRenderer />
-        <CallEndWatcher onLeave={leave} />
+        <CallEndWatcher onLeave={leaveRoom} />
+        <PartnerSeen onSeen={partnerSeen} />
         <div className="shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
           <ControlBar variation="minimal" />
         </div>

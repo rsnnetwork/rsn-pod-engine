@@ -17,6 +17,7 @@ export const ADMIN_TABS = [
   { to: '/admin/templates', label: 'Templates', end: false },
   { to: '/admin/email', label: 'Email', end: false },
   { to: '/admin/support', label: 'Support', end: false },
+  { to: '/admin/feedback', label: 'Feedback', end: false },
 ] as const;
 
 export default function AdminTabs() {
