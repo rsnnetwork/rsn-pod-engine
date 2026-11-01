@@ -29,6 +29,7 @@ const WIDTHS = [360, 390, 414, 768, 1024, 1280, 1440];
 const NO_PASSWORD = "No password needed — we'll email you a link and a code.";
 
 const made: string[] = [];
+const madeEmails: string[] = [];
 let browser: Browser;
 
 async function member(label: string): Promise<{ id: string; email: string }> {
@@ -40,6 +41,7 @@ async function member(label: string): Promise<{ id: string; email: string }> {
     [id, email, `Tee Four ${label}`],
   );
   made.push(id);
+  madeEmails.push(email);
   return { id, email };
 }
 
@@ -81,7 +83,8 @@ test.describe(`sign-in by code, the target page kept, the logo (${engineLabel()}
   });
 
   test.afterAll(async () => {
-    await pool.query(`DELETE FROM magic_links WHERE email LIKE $1`, [`e2etest-t4-%-${RUN}@rsn-e2e.invalid`]).catch(() => undefined);
+    // Exactly the addresses this run made, never a pattern.
+    await pool.query(`DELETE FROM magic_links WHERE email = ANY($1)`, [madeEmails]);
     await cleanup(pool, { ids: made });
     await browser?.close();
   });
@@ -170,7 +173,7 @@ test.describe(`sign-in by code, the target page kept, the logo (${engineLabel()}
   });
 
   test('the top-left logo is the whole official sheep at seven widths, and the manifest is served', async () => {
-    const { id, email } = await member('logo');
+    const { email } = await member('logo');
     const manifest = await fetch(`${APP}/manifest.webmanifest`);
     expect(manifest.status).toBe(200);
     const json = await manifest.json();
@@ -184,7 +187,6 @@ test.describe(`sign-in by code, the target page kept, the logo (${engineLabel()}
     const { code } = await askForEmail(page, email);
     await codeField(page).fill(code);
     await expect(page).toHaveURL(`${APP}/`, { timeout: 30_000 });
-    expect(id).toBeTruthy();
 
     for (const width of WIDTHS) {
       await page.setViewportSize({ width, height: 900 });
