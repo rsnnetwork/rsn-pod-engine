@@ -12,6 +12,9 @@ import { CalendarCheck, CalendarClock, Clock, Video, Phone } from 'lucide-react'
 import { useNavigate } from 'react-router-dom';
 import { isMeetingOver, slotLabel, viewerZone } from './scheduler-flow';
 import SheepAvatar from '@/components/brand/SheepAvatar';
+import AddToCalendar from '@/components/calendar/AddToCalendar';
+import { meetingEntry } from '@/components/calendar/calendar-links';
+import { conversationMeetingFile, meetingFile } from '@/components/calendar/calendar-files';
 
 export type DmMessageKind = 'user' | 'system';
 
@@ -23,6 +26,8 @@ export type DmSystemMeta =
       meetingType: 'audio' | 'video'; joinPath: string;
       /** Set when this replaced a time that was already agreed. */
       movedFrom?: string;
+      /** The meeting's own record (26 Oct 2026). Absent on cards written before meetings had one. */
+      meetingId?: string;
     };
 
 /** One instant, in the reader's own time zone, in the form the scheduler and the emails use: "Sun 25 Oct, 13:00". */
@@ -44,7 +49,8 @@ interface Props {
   onOpenScheduler?: () => void;
   /** Hidden once a meeting is set: the proposal has been answered. */
   meetingConfirmed?: boolean;
-  onAddToCalendar?: () => void;
+  /** Add to calendar on a "Meeting confirmed" card (1 Nov 2026, T7): the conversation and the other person's name. */
+  calendar?: { conversationId: string; partnerName: string };
   /** Ring them instead, once the meeting's own time has passed. Only offered
    *  when calls are unlocked — the first meeting is what unlocks them. */
   onCallNow?: (kind: 'audio' | 'video') => void;
@@ -60,7 +66,7 @@ interface Props {
 const sameInstant = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && Date.parse(a) === Date.parse(b);
 
 export default function SystemMessageCard({
-  content, meta, liveSlots, onPickSlot, onOpenScheduler, meetingConfirmed, onAddToCalendar,
+  content, meta, liveSlots, onPickSlot, onOpenScheduler, meetingConfirmed, calendar,
   onCallNow, callsUnlocked, meetingOver, currentMeeting,
 }: Props) {
   const navigate = useNavigate();
@@ -126,14 +132,21 @@ export default function SystemMessageCard({
               {meta.meetingType === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
             </button>
           )}
-          {onAddToCalendar && !settled && (
-            <button
-              type="button"
-              onClick={onAddToCalendar}
+          {/* Google Calendar, Outlook.com or the file (1 Nov 2026, T7). The file is this card's own meeting, so an
+              older card never adds the meeting booked after it; a card older than meeting ids reads the conversation's. */}
+          {calendar && !settled && (
+            <AddToCalendar
+              entry={meetingEntry({
+                partnerName: calendar.partnerName,
+                kind: meta.meetingType,
+                startAt: meta.startAt,
+                durationMin: meta.durationMin,
+                joinUrl: window.location.origin + meta.joinPath,
+              })}
+              file={meta.meetingId ? meetingFile(meta.meetingId) : conversationMeetingFile(calendar.conversationId)}
+              icon={<CalendarCheck className="h-4 w-4" />}
               className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
-            >
-              <CalendarCheck className="h-4 w-4" /> Add to calendar
-            </button>
+            />
           )}
         </div>
       </Shell>

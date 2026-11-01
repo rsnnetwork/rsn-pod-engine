@@ -4,6 +4,10 @@
 
 import { useNavigate } from 'react-router-dom';
 import { CalendarCheck, Phone, Video } from 'lucide-react';
+import AddToCalendar from '@/components/calendar/AddToCalendar';
+import { meetingEntry } from '@/components/calendar/calendar-links';
+import { conversationMeetingFile, meetingFile } from '@/components/calendar/calendar-files';
+import { useConversationPartner } from './thread/useConversationPartner';
 import { isSlotKey, dayLabel, slotLabel, whenWithZone } from './scheduler-flow';
 import type { Scheduling } from './scheduling-types';
 
@@ -19,11 +23,12 @@ interface Props {
   meeting: NonNullable<Scheduling['confirmed']>;
   over: boolean;
   zone: string;
-  onAddToCalendar: () => void;
 }
 
-export default function SchedulerMeetingSummary({ conversationId, meeting, over, zone, onAddToCalendar }: Props) {
+export default function SchedulerMeetingSummary({ conversationId, meeting, over, zone }: Props) {
   const navigate = useNavigate();
+  const partner = useConversationPartner(conversationId);
+  const kind = meeting.type ?? 'video';
   const callWord = meeting.type === 'audio' ? 'Audio call' : 'Video call';
   return (
     <div className={`rounded-lg border px-3 py-2.5 ${over ? 'bg-gray-50 border-gray-200' : 'bg-emerald-50 border-emerald-200'}`}>
@@ -49,13 +54,19 @@ export default function SchedulerMeetingSummary({ conversationId, meeting, over,
             >
               {meeting.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
             </button>
-            <button
-              type="button"
-              onClick={onAddToCalendar}
+            {/* Google Calendar, Outlook.com or the meeting's file (1 Nov 2026, T7). */}
+            <AddToCalendar
+              entry={meetingEntry({
+                partnerName: partner?.name ?? 'your match',
+                kind,
+                startAt: meeting.startAt,
+                durationMin: meeting.durationMin ?? 30,
+                joinUrl: `${window.location.origin}/meet/${conversationId}?scheduled=1&kind=${kind}`,
+              })}
+              file={meeting.meetingId ? meetingFile(meeting.meetingId) : conversationMeetingFile(conversationId)}
+              icon={<CalendarCheck className="h-4 w-4" />}
               className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
-            >
-              <CalendarCheck className="h-4 w-4" /> Add to calendar
-            </button>
+            />
           </div>
           <p className="text-[11px] text-emerald-700">A calendar invite was emailed to you both.</p>
         </div>

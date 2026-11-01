@@ -238,26 +238,8 @@ export function useSchedulerActions(o: ActionOptions) {
     failureToasts.current = [];
   };
 
-  // "Add to calendar" — a universal .ics download (Google, Outlook, Apple…),
-  // not a Google-only link (Stefan, 9 Sep 2026).
-  const downloadIcs = async () => {
-    try {
-      const res = await api.get(`/dm/conversations/${conversationId}/meeting.ics`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/calendar' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'reason-meeting.ics';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch {
-      addToast('Could not build the calendar file. Try again.', 'error');
-    }
-  };
-
   return {
     saving, confirming, finalizing, setFinalizing, cardReason, openConfirm, requestClose, pressCell, removeTime, save,
-    discard, confirm, downloadIcs,
+    discard, confirm,
   };
 }

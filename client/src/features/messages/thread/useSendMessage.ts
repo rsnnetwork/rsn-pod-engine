@@ -17,6 +17,8 @@ export interface SendMessageOptions<V> {
   prepareAttachment?: (vars: V) => Promise<DmAttachment | null>;
   onSent?: (data: { conversationId: string }, vars: V) => void;
   onFailed?: (err: unknown, vars: V) => void;
+  /** Say a failure in a toast (the default). The call room has no toasts: its panel says it in place. */
+  toastOnError?: boolean;
 }
 
 export function useSendMessage<V extends { content: string }>(
@@ -45,6 +47,7 @@ export function useSendMessage<V extends { content: string }>(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- axios errors and thrown Errors both land here; the message is read from either
     onError: (err: any, vars) => {
       options.onFailed?.(err, vars);
+      if (options.toastOnError === false) return;
       addToast(err?.response?.data?.error?.message || err?.message || 'Failed to send message', 'error');
     },
   });

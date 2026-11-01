@@ -487,25 +487,6 @@ export default function MessagesPage() {
   // ("Call now") rather than "Join" (Ali, 8 Sep 2026).
   const confirmedMeetingOver = isMeetingOver(scheduling?.confirmed?.startAt, scheduling?.confirmed?.durationMin);
 
-  // The confirmed card in the thread offers the same universal .ics the
-  // scheduler's banner does (Stefan, 9 Sep: not a Google-only link).
-  const downloadMeetingIcs = async () => {
-    if (!activeId) return;
-    try {
-      const res = await api.get(`/dm/conversations/${activeId}/meeting.ics`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/calendar' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'reason-meeting.ics';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch {
-      addToast('Could not build the calendar file — try again.', 'error');
-    }
-  };
-
   // A system line in the thread gets its own action button (Ali, 8 Sep 2026):
   //  - a SCHEDULED meeting ("Meeting confirmed …") → "Join meeting" (enter the room)
   //  - an INSTANT "Meet now" ("Started a … call") that's already over → "Call
@@ -1379,7 +1360,7 @@ export default function MessagesPage() {
                             meetingConfirmed={!!scheduling?.confirmed}
                             onOpenScheduler={() => openSchedulerOn(null)}
                             onPickSlot={(slot) => openSchedulerOn(slot)}
-                            onAddToCalendar={m.systemMeta?.type === 'meeting_confirmed' ? downloadMeetingIcs : undefined}
+                            calendar={m.systemMeta?.type === 'meeting_confirmed' && activeId ? { conversationId: activeId, partnerName: headerContext.otherDisplayName || 'your match' } : undefined}
                             onCallNow={startCall}
                             callsUnlocked={callsUnlocked}
                             meetingOver={confirmedMeetingOver}

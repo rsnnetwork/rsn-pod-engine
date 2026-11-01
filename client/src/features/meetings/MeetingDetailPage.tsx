@@ -5,15 +5,17 @@
 // sits in a bar on top of the bottom bar.
 import { useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { CalendarClock, CalendarPlus, MessageCircle, Phone, Video } from 'lucide-react';
+import { CalendarClock, MessageCircle, Phone, Video } from 'lucide-react';
 import { MEETING_JOIN_EARLY_MIN, type Meeting } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import { Skeleton } from '@/components/ui/Spinner';
-import api from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import Sheet from '@/features/reason/ui/Sheet';
+import AddToCalendar from '@/components/calendar/AddToCalendar';
+import { meetingEntry } from '@/components/calendar/calendar-links';
+import { meetingFile } from '@/components/calendar/calendar-files';
 import { CONNECTION_LOST } from '@/features/reason/errors';
 import { isGone, personHref } from '@/features/reason/human/profile-text';
 import { ACTION, JoinOrCountdown, PhaseChip } from './MeetingParts';
@@ -135,33 +137,25 @@ function MeetingFacts({ meeting }: { meeting: Meeting }) {
 interface ActionsProps { meeting: Meeting; now: number; standing: boolean; onCancel: () => void }
 
 function MeetingActions({ meeting, now, standing, onCancel }: ActionsProps) {
-  const addToast = useToastStore((s) => s.addToast);
-  // The meeting as a calendar file any calendar opens, with the identity the emailed invite has, so adding it again
-  // updates that entry instead of adding a second one.
-  const addToCalendar = async () => {
-    try {
-      const res = await api.get(`/dm/conversations/${encodeURIComponent(meeting.conversationId)}/meeting.ics`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/calendar' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'reason-meeting.ics';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      addToast(meetingError(err, 'We could not make the calendar file. Try again in a moment.'), 'error');
-    }
-  };
-
   return (
     <div className="mt-4 grid gap-2 min-[721px]:flex min-[721px]:flex-wrap min-[721px]:items-center">
       {/* On a phone Join is in the bar at the foot of the screen instead. */}
       {standing && <JoinOrCountdown meeting={meeting} now={now} className="hidden min-[721px]:inline-flex" />}
+      {/* Google Calendar, Outlook.com or the meeting's own file (1 Nov 2026, T7). The file has the identity the emailed
+          invite has, so adding it again updates that entry instead of adding a second one. The links join on this
+          site, so an entry made on the preview joins on the preview. */}
       {standing && (
-        <button type="button" onClick={() => void addToCalendar()} className={cn(ACTION, SECONDARY)}>
-          <CalendarPlus aria-hidden="true" className="h-4 w-4" /> Add to calendar
-        </button>
+        <AddToCalendar
+          entry={meetingEntry({
+            partnerName: meeting.partner.displayName,
+            kind: meeting.kind,
+            startAt: meeting.startAt,
+            durationMin: meeting.durationMin,
+            joinUrl: window.location.origin + meeting.joinPath,
+          })}
+          file={meetingFile(meeting.id)}
+          className={cn(ACTION, SECONDARY)}
+        />
       )}
       {standing && (
         <Link to={`/messages/${encodeURIComponent(meeting.conversationId)}?schedule=1`} className={cn(ACTION, SECONDARY)}>

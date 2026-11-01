@@ -99,7 +99,6 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
           meeting={data.confirmed}
           over={isMeetingOver(data.confirmed.startAt, data.confirmed.durationMin, now)}
           zone={zone}
-          onAddToCalendar={act.downloadIcs}
         />
       )}
 

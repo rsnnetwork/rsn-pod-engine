@@ -400,12 +400,13 @@ describe('the meeting\'s page', () => {
 
   it('its actions: Join, Add to calendar, Reschedule (to the chat\'s scheduler), Cancel meeting, Open conversation', () => {
     const src = detail();
-    expect(src).toMatch(/>\s*Add to calendar\s*</);
+    expect(src).toMatch(/<AddToCalendar\b/);
     expect(src).toMatch(/`\/messages\/\$\{encodeURIComponent\(meeting\.conversationId\)\}\?schedule=1`/);
     expect(src).toMatch(/>\s*Reschedule\s*</);
     expect(src).toMatch(/>\s*Cancel meeting\s*</);
     expect(src).toMatch(/>\s*Open conversation\s*</);
-    expect(src).toMatch(/api\.get\(`\/dm\/conversations\/\$\{encodeURIComponent\(meeting\.conversationId\)\}\/meeting\.ics`, \{ responseType: 'blob' \}\)/);
+    // 1 Nov 2026 (T7): Add to calendar is the shared menu, with the meeting's own file (t7-add-to-calendar.test.ts).
+    expect(src).toContain('file={meetingFile(meeting.id)}');
   });
 
   it('Cancel asks first, in a sheet portalled to the page: "Cancel this meeting? {name} will be told."', () => {
