@@ -114,10 +114,15 @@ describe('Schedule an Event follows the event type', () => {
     expect(page).toMatch(/navigate\(`\/sessions\/\$\{[^}]+\}\?invite=1`\)/);
   });
 
-  it('one templates endpoint, asked only for admins (the template is an admin pick)', () => {
+  it('one templates endpoint, asked only for admins; the presets for everyone (30 Oct 2026: through useMatchingChoices)', () => {
+    const hook = read('features/sessions/useMatchingChoices.ts');
     expect(page).not.toMatch(/['"]\/matching-templates['"]/);
-    expect(page).toMatch(/queryKey: \['admin-templates'\]/);
-    expect(page).toMatch(/enabled: isAdmin/);
+    expect(page).toMatch(/useMatchingChoices\(isAdmin\)/);
+    expect(hook).toMatch(/queryKey: \['admin-templates'\]/);
+    expect(hook).toMatch(/enabled: isAdmin/);
+    expect(hook).toMatch(/api\.get\('\/sessions\/matching-presets'\)/);
+    // Both declare the tag an admin's template edit sends (D8).
+    expect(hook.match(/meta: \{ entities: \[E\.adminTemplates\] \}/g)).toHaveLength(2);
   });
 });
 
@@ -136,8 +141,7 @@ describe('the event page', () => {
   it('no call to the /matching-templates route that does not exist; the edit form asks /admin/templates, for admins', () => {
     expect(page).not.toMatch(/\/matching-templates/);
     expect(edit).not.toMatch(/\/matching-templates/);
-    expect(edit).toMatch(/queryKey: \['admin-templates'\]/);
-    expect(edit).toMatch(/enabled: isAdmin/);
+    expect(edit).toMatch(/useMatchingChoices\(isAdmin\)/);
   });
 
   it('the facts under the title follow the type (no "rounds" on a video meeting)', () => {
@@ -219,7 +223,9 @@ describe('every C7 form is react-hook-form with a Zod schema through formResolve
   });
 
   it('the matching rules say "event", never "session"', () => {
-    const policies = files.eventFields.slice(files.eventFields.indexOf('export const MATCHING_POLICIES'), files.eventFields.indexOf('const TIMER_LABELS'));
+    // 30 Oct 2026 — the rules moved into the Matching section, the words unchanged (plus the cooldown).
+    const matching = read('features/sessions/MatchingSection.tsx');
+    const policies = matching.slice(matching.indexOf('export const MATCHING_POLICIES'), matching.indexOf('export const NO_PAIRING_LINE'));
     expect(policies).not.toMatch(/session/i);
     expect(policies).toMatch(/curated events/);
   });

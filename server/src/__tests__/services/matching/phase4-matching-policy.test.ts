@@ -123,18 +123,28 @@ describe('Phase 4 — matching policy 3-option chooser', () => {
   // 26 Oct 2026 (C7) — the event forms follow the shared event definition. The matching rule is one of the
   // speed-networking settings EventFormatFields draws (the create and the edit form alike), its default is the
   // definition's, and the request is built by event-format-form's eventBody, which is run here.
+  // 30 Oct 2026 (T12, D7) — the rule is its own Matching section (MatchingSection.tsx, drawn by EventFormatFields for
+  // every type), and it offers the fourth rule the server always accepted: cooldown, with its months.
   describe('client event forms expose matchingPolicy as a radio selector', () => {
-    const src = readClient('features/sessions/EventFormatFields.tsx');
+    const src = readClient('features/sessions/MatchingSection.tsx');
 
-    it('declares the three choices the form offers', () => {
-      expect(src).toMatch(/MatchingPolicyChoice\s*=\s*['"]platform_wide['"]\s*\|\s*['"]within_event['"]\s*\|\s*['"]none['"]/);
+    it('declares the four choices the form offers', () => {
+      expect(src).toMatch(/MatchingPolicyChoice\s*=\s*['"]platform_wide['"]\s*\|\s*['"]within_event['"]\s*\|\s*['"]none['"]\s*\|\s*['"]cooldown['"]/);
     });
 
-    it('exports MATCHING_POLICIES array with three options', () => {
+    it('exports MATCHING_POLICIES array with four options', () => {
       expect(src).toMatch(/export const MATCHING_POLICIES/);
       expect(src).toMatch(/value:\s*['"]platform_wide['"]/);
       expect(src).toMatch(/value:\s*['"]within_event['"]/);
       expect(src).toMatch(/value:\s*['"]none['"]/);
+      expect(src).toMatch(/value:\s*['"]cooldown['"]/);
+      expect(src).toMatch(/register\('cooldownMonths', \{ valueAsNumber: true/);
+    });
+
+    it('EventFormatFields draws the Matching section for every type, and re-exports the rules', () => {
+      const fields = readClient('features/sessions/EventFormatFields.tsx');
+      expect(fields).toMatch(/<MatchingSection format=\{format\}/);
+      expect(fields).toMatch(/export \{ MATCHING_POLICIES, type MatchingPolicyChoice, type TemplateOption \} from '\.\/MatchingSection'/);
     });
 
     it('a new speed-networking event starts on within_event (the shared definition\'s default)', () => {

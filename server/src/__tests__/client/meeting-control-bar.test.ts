@@ -138,11 +138,14 @@ describe('MeetingControlBar: Leave for everyone, End for everyone only for the d
 });
 
 describe('MeetingRoom and the live page: one branch on the format, speed networking untouched', () => {
-  it('LiveSessionPage branches once on the format read from the event itself', () => {
+  it('LiveSessionPage branches on the format read from the event itself: in person goes back to the event page, a meeting to its room', () => {
     const s = readClient(PAGE);
     expect(s).toMatch(/import \{ liveKindOf, resolveEventFormat \} from '@rsn\/shared'/);
+    // 30 Oct 2026 (D10) — first, before the room asks for the camera or joins: no video room, back to the event page.
+    expect(s).toMatch(/if \(session && liveKindOf\(resolveEventFormat\(session\)\) === 'none'\) return <Navigate to=\{`\/sessions\/\$\{sessionId\}`\} replace \/>;/);
+    expect(s.indexOf("=== 'none'")).toBeLessThan(s.indexOf('function LiveEventRoom()'));
     expect(s).toMatch(/liveKindOf\(resolveEventFormat\(session\)\) !== 'rounds'/);
-    expect(s.match(/resolveEventFormat\(/g)).toHaveLength(1);
+    expect(s.match(/resolveEventFormat\(/g)).toHaveLength(2);
     expect(s).toMatch(/<MeetingRoom/);
   });
 

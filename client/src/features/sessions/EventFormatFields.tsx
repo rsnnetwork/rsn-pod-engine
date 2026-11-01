@@ -2,37 +2,18 @@
 // The event forms' type picker and each type's settings, shared by Schedule an Event and Edit Event (26 Oct 2026),
 // drawn from the shared definition: round settings only for a rounds event (speed networking), a length for a
 // meeting, a capacity with the type's own limits, every problem said at its field. 25 Oct walkthrough: a "Video
-// meeting" showed five 8-minute rounds and ran as speed networking.
+// meeting" showed five 8-minute rounds and ran as speed networking. 30 Oct 2026: an in-person event has a "Where"
+// field and a length up to eight hours, and every type has its own Matching section (MatchingSection.tsx).
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import type { FieldErrors, UseFormRegister, UseFormRegisterReturn } from 'react-hook-form';
-import { Clock, Users } from 'lucide-react';
+import { Clock, MapPin, Users } from 'lucide-react';
 import { formatRule, liveKindOf } from '@rsn/shared';
 import type { EventFieldRule, EventFormat } from '@rsn/shared';
 import { cn } from '@/lib/utils';
 import { lengthOptions, type EventFormValues, type EventSettingKey } from './event-format-form';
+import MatchingSection, { type MatchingSectionProps } from './MatchingSection';
 
-export type MatchingPolicyChoice = 'platform_wide' | 'within_event' | 'none';
-
-export const MATCHING_POLICIES: { value: MatchingPolicyChoice; label: string; description: string; hint: string }[] = [
-  {
-    value: 'platform_wide',
-    label: 'Platform-wide no rematch',
-    description: 'Strictest. If two people have ever met before anywhere on REASON, they will never be matched again.',
-    hint: 'Best for large-scale discovery events.',
-  },
-  {
-    value: 'within_event',
-    label: 'Within this event only',
-    description: "If two people already met in THIS event, they won't be re-paired in this event. They can meet again in future events.",
-    hint: 'Recommended default — balanced.',
-  },
-  {
-    value: 'none',
-    label: 'No restriction',
-    description: 'People can be matched again, even if they met before. Useful for smaller groups, curated events, or when repeated conversations are valuable.',
-    hint: 'Best for small groups or repeat-attendance pods.',
-  },
-];
+export { MATCHING_POLICIES, type MatchingPolicyChoice, type TemplateOption } from './MatchingSection';
 
 const TIMER_LABELS: Record<string, string> = {
   always_visible: 'Always visible',
@@ -177,7 +158,8 @@ const described = (id: string, hasHint: boolean, error?: string) => ({
   'aria-describedby': [hasHint && `${id}-hint`, error && `${id}-error`].filter(Boolean).join(' ') || undefined,
 });
 
-export interface TemplateOption { id: string; name: string; isDefault?: boolean }
+/** What the form gives the Matching section beyond the fields' own props. */
+type MatchingProps = Omit<MatchingSectionProps, 'format' | 'register' | 'errors' | 'onTouched' | 'isAdmin'>;
 
 interface FieldsProps {
   format: EventFormat;
@@ -186,24 +168,16 @@ interface FieldsProps {
   /** The meeting length now in the form, so a length that is no preset stays a choice. */
   durationMinutes: number;
   isAdmin: boolean;
-  templates?: TemplateOption[];
-  templatesLoading?: boolean;
-  /**
-   * Edit: the event already has a template. The API cannot clear one (an empty id is never sent), so "Default" is
-   * not offered then: choosing it would be a save that is silently discarded.
-   */
-  hasTemplate?: boolean;
-  /** The template the form holds, so a saved one no longer listed still shows as itself. */
-  templateId?: string;
+  matching: MatchingProps;
   /** The organiser set this setting: a later switch of type keeps it, or asks before dropping it. */
   onTouched: (key: EventSettingKey) => void;
 }
 
 export default function EventFormatFields({
-  format, register, errors, durationMinutes, isAdmin, templates, templatesLoading, hasTemplate, templateId, onTouched,
+  format, register, errors, durationMinutes, isAdmin, matching, onTouched,
 }: FieldsProps) {
   const ids = {
-    timing: useId(), rounds: useId(), roundMinutes: useId(), timer: useId(), template: useId(),
+    timing: useId(), rounds: useId(), roundMinutes: useId(), timer: useId(), place: useId(),
     length: useId(), capacity: useId(),
   };
   const rule = formatRule(format);
@@ -218,6 +192,20 @@ export default function EventFormatFields({
 
   return (
     <div className="grid gap-6">
+      {fields.location && (
+        <section className="grid gap-4">
+          <h2 className={SECTION_HEAD}><MapPin className="h-5 w-5 text-rsn-red" /> Place</h2>
+          <Field id={ids.place} label={fields.location.label} hint="An address or a venue. People see it on the event page and in their invitation." error={err('location')}>
+            <input
+              id={ids.place} type="text" autoComplete="street-address" maxLength={fields.location.maxLength}
+              placeholder="e.g. The Ivy, 1-5 West St, London"
+              className={cn(EVENT_FIELD, fieldBorder(err('location')), 'placeholder:text-gray-400')}
+              {...described(ids.place, true, err('location'))}
+              {...setting('location')}
+            />
+          </Field>
+        </section>
+      )}
       {liveKindOf(format) === 'rounds' ? (
         <section aria-labelledby={ids.timing} className="grid gap-4">
           <h2 id={ids.timing} className={SECTION_HEAD}><Clock className="h-5 w-5 text-rsn-red" /> Timing</h2>
@@ -249,60 +237,19 @@ export default function EventFormatFields({
                 </select>
               </Field>
             )}
-            {fields.matchingTemplateId && isAdmin && (
-              <Field id={ids.template} label={fields.matchingTemplateId.label} hint="How participants are matched (admins only)" error={err('matchingTemplateId')}>
-                {/* Registered only once the templates are here: a select drawn without the saved template's option
-                    would show another one while the form still holds the saved id. */}
-                {templatesLoading ? (
-                  <select id={ids.template} disabled className={cn(EVENT_FIELD, fieldBorder())}>
-                    <option>Loading templates…</option>
-                  </select>
-                ) : (
-                  <select
-                    id={ids.template}
-                    className={cn(EVENT_FIELD, fieldBorder(err('matchingTemplateId')))}
-                    {...described(ids.template, true, err('matchingTemplateId'))}
-                    {...setting('matchingTemplateId')}
-                  >
-                    {!hasTemplate && <option value="">Default (balanced)</option>}
-                    {hasTemplate && templateId && !(templates ?? []).some((t) => t.id === templateId) && (
-                      <option value={templateId}>Current template</option>
-                    )}
-                    {(templates ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}{t.isDefault ? ' (default)' : ''}</option>)}
-                  </select>
-                )}
-              </Field>
-            )}
           </div>
-          {fields.matchingPolicy && (
-            <fieldset data-field className="min-w-0">
-              <legend className="mb-1 block text-sm font-medium text-gray-600">{fields.matchingPolicy.label}</legend>
-              <p className="mb-3 text-xs text-gray-500">Control whether people who&apos;ve met before can be paired again.</p>
-              <div className="space-y-2">
-                {MATCHING_POLICIES.map((p) => (
-                  <label key={p.value} className="flex min-h-[44px] cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3 transition-colors hover:border-gray-300">
-                    <input
-                      type="radio"
-                      value={p.value}
-                      className="mt-0.5 h-4 w-4 shrink-0 accent-[#1a1a2e] scroll-mt-24 scroll-mb-44"
-                      {...register('matchingPolicy', { onChange: () => onTouched('matchingPolicy') })}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-medium text-[#1a1a2e]">{p.label}</span>
-                      <span className="mt-0.5 block text-xs text-gray-600">{p.description}</span>
-                      <span className="mt-1 block text-xs italic text-gray-400">{p.hint}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              {err('matchingPolicy') && <p className={ERROR_LINE}>{err('matchingPolicy')}</p>}
-            </fieldset>
-          )}
         </section>
       ) : fields.durationMinutes ? (
         <section className="grid gap-4">
           <h2 className={SECTION_HEAD}><Clock className="h-5 w-5 text-rsn-red" /> Timing</h2>
-          <Field id={ids.length} label={fields.durationMinutes.label} hint="For the invitations and calendars. The host ends the meeting." error={err('durationMinutes')}>
+          <Field
+            id={ids.length}
+            label={fields.durationMinutes.label}
+            hint={liveKindOf(format) === 'none'
+              ? 'For the invitations and calendars. The event ends itself when this time is up.'
+              : 'For the invitations and calendars. The host ends the meeting.'}
+            error={err('durationMinutes')}
+          >
             <select
               id={ids.length}
               className={cn(EVENT_FIELD, fieldBorder(err('durationMinutes')))}
@@ -328,6 +275,8 @@ export default function EventFormatFields({
           </Field>
         </section>
       )}
+
+      <MatchingSection format={format} register={register} errors={errors} isAdmin={isAdmin} onTouched={onTouched} {...matching} />
     </div>
   );
 }

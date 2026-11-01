@@ -183,7 +183,10 @@ export function useEventFormatForm({ defaultValues, schema, touched: chosenAtSta
     formError,
     summary: problemSummary(Object.keys(errors).filter((key) => shown.includes(key)), format),
     picker,
+    /** Switches the type as the picker does: asking first when settings the organiser set would be dropped. */
+    chooseFormat,
     touch: (key: EventSettingKey) => { touched.current.add(key); },
+    touched: (key: EventSettingKey) => touched.current.has(key),
     followFormat,
     goTo,
     onSubmit,

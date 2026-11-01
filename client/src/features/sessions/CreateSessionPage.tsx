@@ -21,10 +21,11 @@ import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 import { cn, isAdmin as isAdminRole, localTimezoneLabel } from '@/lib/utils';
 import { E } from '@/realtime/entities';
-import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder, type TemplateOption } from './EventFormatFields';
+import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder } from './EventFormatFields';
+import { useMatchingChoices } from './useMatchingChoices';
 import {
   DESCRIPTION_MAX, TITLE_MAX, autoTitle, eventBody, newEventSchema, newEventValues, nextQuarterHour, offeredFormats,
-  podChangeFormat, shownEventKeys, type EventPod, type NewEventBody,
+  podChangeFormat, shownEventKeys, startingPreset, type EventPod, type NewEventBody,
 } from './event-format-form';
 import { useEventFormatForm } from './useEventFormatForm';
 
@@ -70,17 +71,10 @@ export default function CreateSessionPage() {
     enabled: !fromPodId,
     meta: { entities: [...(userId ? [E.userPods(userId)] : []), ...(isAdmin ? [E.adminPods] : [])] },
   });
-  // The matching template is an admin pick, and /admin/templates is the one endpoint that lists templates.
-  const templatesQuery = useQuery({
-    queryKey: ['admin-templates'],
-    queryFn: () => api.get('/admin/templates').then((r) => (r.data.data ?? []) as TemplateOption[]),
-    enabled: isAdmin,
-  });
-
   const pod = podQuery.data;
   const back = fromPodId ? `/pods/${fromPodId}` : '/sessions';
   const backLabel = fromPodId ? (pod ? `Back to ${pod.name}` : 'Back to Pod') : 'Back to Events';
-  const formProps = { isAdmin, templates: templatesQuery.data, templatesLoading: isAdmin && templatesQuery.isLoading, back };
+  const formProps = { isAdmin, back };
 
   let body: ReactNode;
   if (fromPodId) {
@@ -173,12 +167,10 @@ interface FormProps {
   /** The pods to choose from when there is no fixed pod. */
   pods: PodRow[];
   isAdmin: boolean;
-  templates?: TemplateOption[];
-  templatesLoading: boolean;
   back: string;
 }
 
-function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, back }: FormProps) {
+function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
   const podFieldId = useId();
@@ -195,6 +187,8 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
   const { register, watch, setValue, getValues, clearErrors, formState: { errors } } = ev.form;
   const podOf = (id: string) => fixedPod ?? pods.find((p) => p.id === id) ?? null;
   const pod = podOf(watch('podId'));
+  const matchingChoices = useMatchingChoices(isAdmin);
+  const offered = offeredFormats(pod?.podType ?? null);
 
   /** The filled-in title follows the type and the pod until the member writes their own. */
   function refreshTitle(nextFormat: EventFormat) {
@@ -218,6 +212,9 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
   const podType = pod?.podType;
   useEffect(() => {
     if (podType && !offeredFormats(podType).includes(getValues('format'))) followPod(pod, true);
+    // A Two-Sided Networking pod's events start on Founders and investors; another pod's on General. Only a choice the
+    // organiser has not made follows the pod.
+    if (podType && !ev.touched('matchingTemplateId')) setValue('matchingTemplateId', startingPreset(podType));
     // Only a change of the pod's type matters here; the form's own state is read when it runs.
   }, [podType]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -270,7 +267,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
             </div>
           )}
 
-          <EventTypePicker {...ev.picker(offeredFormats(pod?.podType ?? null), pod ? undefined : 'Choose a pod to see the event types it holds.')} />
+          <EventTypePicker {...ev.picker(offered, pod ? undefined : 'Choose a pod to see the event types it holds.')} />
 
           <Input
             label="Title"
@@ -311,8 +308,14 @@ function NewEventForm({ fixedPod, pods, isAdmin, templates, templatesLoading, ba
           errors={errors}
           durationMinutes={watch('durationMinutes')}
           isAdmin={isAdmin}
-          templates={templates}
-          templatesLoading={templatesLoading}
+          matching={{
+            ...matchingChoices,
+            templateId: watch('matchingTemplateId'),
+            policy: watch('matchingPolicy'),
+            onTemplate: (id) => setValue('matchingTemplateId', id),
+            offered,
+            onChooseFormat: ev.chooseFormat,
+          }}
           onTouched={ev.touch}
         />
       </Card>

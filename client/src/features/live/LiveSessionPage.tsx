@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Navigate, useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { liveKindOf, resolveEventFormat } from '@rsn/shared';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -28,7 +28,25 @@ import { connectSocket, getSocket } from '@/lib/socket';
 import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
 
+/**
+ * The live page reads the event first (30 Oct 2026, D10). An in-person event has no video room: its live address goes
+ * back to the event page, before anything asks for the camera or joins the room. Any other event opens its room as
+ * before (the room's own query below is this one, already loaded); a failed read is the room's to say.
+ */
 export default function LiveSessionPage() {
+  const { sessionId } = useParams();
+  const { data: session, isLoading } = useQuery({
+    queryKey: ['session', sessionId],
+    queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
+    enabled: !!sessionId,
+    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
+  });
+  if (!sessionId || isLoading) return <PageLoader />;
+  if (session && liveKindOf(resolveEventFormat(session)) === 'none') return <Navigate to={`/sessions/${sessionId}`} replace />;
+  return <LiveEventRoom />;
+}
+
+function LiveEventRoom() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const phase = useSessionStore(s => s.phase);
