@@ -362,6 +362,29 @@ export const entityCreateLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have added a lot of entities this hour. Try again later.' } },
 });
 
+// Circles (1 Nov 2026). Reading a circle's list or page is limited like entities, because any circle can be
+// asked for by id. Making, editing, archiving, attaching a pod, joining and leaving share a write allowance,
+// as entities do. The wall's own writes keep wallWriteLimiter.
+export const circleReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('circle-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const circleWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('circle-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // REASON milestone 1 (7 Oct 2026): opening a person's brief and listing recent connections. The brief can
 // be aimed at any member by id, so without a limit one member could read it for the whole member list as
 // fast as the server answers. Reads have their own bucket: reading never uses up a member's Saves.

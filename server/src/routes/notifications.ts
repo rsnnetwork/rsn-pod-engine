@@ -91,7 +91,7 @@ router.get(
                 END AS "requestStatus",
                 rc.id AS "requestConversationId"
          FROM notifications n
-         LEFT JOIN invites i ON n.type IN ('pod_invite', 'event_invite')
+         LEFT JOIN invites i ON n.type IN ('pod_invite', 'event_invite', 'circle_invite')
            AND n.link LIKE '/invite/%'
            AND i.code = SUBSTRING(n.link FROM '/invite/(.+)$')
          -- substring() is NULL when the link does not match, and the pattern only

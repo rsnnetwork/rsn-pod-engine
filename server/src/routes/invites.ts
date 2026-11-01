@@ -8,7 +8,7 @@ import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
 import * as inviteCandidates from '../services/invite/invite-candidates.service';
 import * as inviteReminders from '../services/invite/invite-reminders.service';
-import { fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
+import { fanoutCircleChange, fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { AppError } from '../middleware/errors';
@@ -99,6 +99,10 @@ router.post(
       }
       if (invite.sessionId) {
         fanoutSessionEntities(invite.podId ?? null, invite.sessionId, [E.sessionInvites(invite.sessionId)]).catch(() => {});
+      }
+      if (invite.circleId) {
+        // 1 Nov 2026: the circle's people see the new pending invite without a refresh.
+        fanoutCircleChange(invite.circleId, req.user!.userId, [], [E.circleInvites(invite.circleId)]).catch(() => {});
       }
       const response: ApiResponse = { success: true, data: invite };
       res.status(201).json(response);
@@ -673,6 +677,11 @@ router.post(
           ],
         ).catch(() => {});
       }
+      if (result.registeredFor?.circleId) {
+        // 1 Nov 2026: accepting a circle invite joins the circle, so its page, members, count and invites change for
+        // everyone in it, and the accepter's own circles list changes.
+        fanoutCircleChange(result.registeredFor.circleId, req.user!.userId, [req.user!.userId], [E.circleInvites(result.registeredFor.circleId)]).catch(() => {});
+      }
       // Cover the accepter even if they're not yet in the active-member
       // SELECT on a slow replica — invite list shrinks and they pick up
       // the pod/session entity.
@@ -767,6 +776,9 @@ router.post(
         // 26 Oct 2026: the event's invites tag too, so an organiser's list flips to "declined" without a refresh.
         fanoutSessionEntities(declined.podId, declined.sessionId, [E.sessionInvites(declined.sessionId)]).catch(() => {});
       }
+      if (declined.circleId) {
+        fanoutCircleChange(declined.circleId, req.user!.userId, [], [E.circleInvites(declined.circleId)]).catch(() => {});
+      }
       emitEntities(
         getRealtimeIo(),
         [req.user!.userId],
@@ -796,6 +808,9 @@ router.delete(
       }
       if (revoked.sessionId) {
         fanoutSessionEntities(revoked.podId, revoked.sessionId, [E.sessionInvites(revoked.sessionId)]).catch(() => {});
+      }
+      if (revoked.circleId) {
+        fanoutCircleChange(revoked.circleId, req.user!.userId, [], [E.circleInvites(revoked.circleId)]).catch(() => {});
       }
       // Fix round 3 (every mutation emits): the sender's sent list and, when the address is a member's, that member's
       // received list change whoever withdrew the invite. A platform or circle invite has no pod or event whose screens

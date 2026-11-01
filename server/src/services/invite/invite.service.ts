@@ -11,6 +11,7 @@ import { NotFoundError, ConflictError, AppError } from '../../middleware/errors'
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
 import * as circleService from '../circle/circle.service';
+import { mayInviteToCircle } from '../circle/circle-managers';
 import * as emailService from '../email/email.service';
 import config from '../../config';
 
@@ -251,6 +252,8 @@ export interface InviteContext {
   type: InviteType | undefined;
   podId: string | null;
   sessionId: string | null;
+  /** The circle, for a circle invite; the bell tells that circle's invites list. */
+  circleId?: string | null;
   inviterName: string;
   targetName?: string;
   calendarEvent?: InviteCalendarEvent;
@@ -314,7 +317,9 @@ export async function buildInviteContext(
     }
   }
   return {
-    type, podId: target.podId ?? null, sessionId: target.sessionId ?? null, inviterName, targetName, calendarEvent, scheduledAt,
+    type, podId: target.podId ?? null, sessionId: target.sessionId ?? null,
+    circleId: type === InviteType.CIRCLE ? target.circleId ?? null : null,
+    inviterName, targetName, calendarEvent, scheduledAt,
   };
 }
 
@@ -409,6 +414,8 @@ export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery):
     }
   } else if (type === InviteType.POD) {
     notifBody = `Join ${targetName || 'this pod'} — invited by ${inviterName}`;
+  } else if (type === InviteType.CIRCLE) {
+    notifBody = `Join ${targetName || 'this circle'}, invited by ${inviterName}`;
   }
   const notifResult = await query<{ id: string; created_at: string }>(
     `INSERT INTO notifications (user_id, type, title, body, link) VALUES ($1, $2, $3, $4, $5)
@@ -431,6 +438,7 @@ export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery):
         inviteStatus: 'pending',
         podId: ctx.podId,
         sessionId: ctx.sessionId,
+        ...(type === InviteType.CIRCLE ? { circleId: ctx.circleId ?? null } : {}),
       });
       // Phase 2 dual-emit — invitee's bell + received-invites surfaces
       // refresh in the same tick as the bespoke event.
@@ -438,7 +446,10 @@ export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery):
       const { E } = await import('../../realtime/entities');
       emitEntities(
         io, [inviteeId],
-        [E.userNotifications(inviteeId), E.userInvites(inviteeId)],
+        [
+          E.userNotifications(inviteeId), E.userInvites(inviteeId),
+          ...(type === InviteType.CIRCLE && ctx.circleId ? [E.circleInvites(ctx.circleId)] : []),
+        ],
       ).catch(() => {});
     } catch { /* socket push is non-fatal */ }
   }
@@ -512,7 +523,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     if (circle.rows.length === 0) {
       throw new NotFoundError('Circle', input.circleId);
     }
-    if (!isAdmin && !(await circleService.isCircleMember(input.circleId, userId))) {
+    if (!(await mayInviteToCircle(input.circleId, userId, userRole))) {
       throw new AppError(403, 'AUTH_FORBIDDEN', 'Only circle members can invite to a circle');
     }
     if (input.inviteeEmail) {
@@ -722,7 +733,7 @@ export interface AcceptInviteResult {
   invite: Invite;
   /** Where the client should navigate next (lobby for session invites, pod page for pod invites). */
   redirectTo: string;
-  registeredFor: { sessionId?: string; podId?: string };
+  registeredFor: { sessionId?: string; podId?: string; circleId?: string };
   /**
    * Phase 4 (1 May spec) — server-confirmed participant status. Client uses
    * this to know the registration is fully committed before navigating, so
@@ -1350,11 +1361,11 @@ export async function listPodInvites(
 export async function declineInvite(
   code: string,
   userEmail: string,
-): Promise<{ podId: string | null; sessionId: string | null }> {
-  const result = await query<{ pod_id: string | null; session_id: string | null }>(
+): Promise<{ podId: string | null; sessionId: string | null; circleId: string | null }> {
+  const result = await query<{ pod_id: string | null; session_id: string | null; circle_id: string | null }>(
     `UPDATE invites SET status = 'revoked', declined_at = NOW()
      WHERE code = $1 AND invitee_email = $2 AND status = 'pending'
-     RETURNING pod_id, session_id`,
+     RETURNING pod_id, session_id, circle_id`,
     [code, userEmail.toLowerCase()]
   );
 
@@ -1377,6 +1388,7 @@ export async function declineInvite(
   return {
     podId: result.rows[0]?.pod_id ?? null,
     sessionId: result.rows[0]?.session_id ?? null,
+    circleId: result.rows[0]?.circle_id ?? null,
   };
 }
 
@@ -1400,6 +1412,7 @@ export async function declineInvite(
 export interface RevokedInvite {
   podId: string | null;
   sessionId: string | null;
+  circleId: string | null;
   inviterId: string;
   /** The member the invite's address belongs to; null when it belongs to no member or the invite is an open link. */
   inviteeUserId: string | null;
@@ -1424,9 +1437,9 @@ export async function revokeInvite(
   if (!mayWithdraw) throw new NotFoundError('Invite', inviteId);
 
   // Only a pending invite is withdrawn: one answered since the check above is simply not found.
-  const result = await query<{ pod_id: string | null; session_id: string | null }>(
+  const result = await query<{ pod_id: string | null; session_id: string | null; circle_id: string | null }>(
     `UPDATE invites SET status = 'revoked' WHERE id = $1 AND status = 'pending'
-     RETURNING pod_id, session_id`,
+     RETURNING pod_id, session_id, circle_id`,
     [inviteId]
   );
 
@@ -1437,6 +1450,7 @@ export async function revokeInvite(
   return {
     podId: result.rows[0]?.pod_id ?? null,
     sessionId: result.rows[0]?.session_id ?? null,
+    circleId: result.rows[0]?.circle_id ?? null,
     inviterId: invite.inviter_id,
     inviteeUserId: invite.invitee_user_id,
   };

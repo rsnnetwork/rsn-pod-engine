@@ -407,6 +407,44 @@ export async function fanoutEntityChange(
   }
 }
 
+// ─── Circle-change fanout ───────────────────────────────────────────────────
+//
+// 1 Nov 2026. Everyone a change to a circle can touch hears it, as the circle is after the write:
+//   circle:<id>, circle:<id>:members  its page, with who is in it and the counts;
+//   user:<recipient>:circles          their own Circles list, whose names and counts may have moved;
+//   user:<changed>:circles            for each member whose link changed, so a list that shows that member's
+//                                     circles redraws for the people who share the circle.
+// The audience is the circle's members, the person who made it (its creator manages it even with no member row),
+// the actor and the changed people. A circle's invites change through `extra` (circle:<id>:invites). Someone
+// outside the circle with its page open is not told, and catches up on focus, as with an entity.
+// The circle's wall keeps its own refresh and is not told.
+
+export async function fanoutCircleChange(
+  circleId: string,
+  actorId: string,
+  changedUserIds: string[] = [],
+  extra: string[] = [],
+): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const people = await query<{ user_id: string }>(
+      `SELECT user_id FROM circle_members WHERE circle_id = $1
+       UNION
+       SELECT created_by FROM circles WHERE id = $1`,
+      [circleId],
+    );
+    const recipients = new Set([...people.rows.map(r => r.user_id), actorId, ...changedUserIds].filter(Boolean));
+    const told = [E.circle(circleId), E.circleMembers(circleId), ...changedUserIds.map(E.userCircles), ...extra];
+    await Promise.all([...recipients].map(userId =>
+      emitEntities(io, [userId], [...new Set([...told, E.userCircles(userId)])]),
+    ));
+  } catch (err) {
+    logger.warn({ err, circleId }, 'fanoutCircleChange: failed to fan out');
+  }
+}
+
 // ─── Profile-change fanout ──────────────────────────────────────────────────
 //
 // A member's public card changed without the profile form: creating or joining their company as its

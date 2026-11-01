@@ -308,6 +308,31 @@ describe('Invite Service', () => {
       expect(insert![1]).toContain('circle-1');
     });
 
+    it('a platform admin who is not in the circle may invite to it: no membership is asked of them', async () => {
+      const circleInvite = { ...mockInvite, type: InviteType.CIRCLE, inviterId: 'user-admin', podId: null, circleId: 'circle-1' };
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'circle-1' }], rowCount: 1 }); // circle exists, not archived
+      mockQuery.mockResolvedValueOnce({ rows: [circleInvite], rowCount: 1 });       // INSERT
+
+      const invite = await inviteService.createInvite('user-admin', { type: InviteType.CIRCLE, circleId: 'circle-1', maxUses: 5 }, 'admin');
+
+      expect(invite).toEqual(circleInvite);
+      expect(mockQuery.mock.calls.some(c => String(c[0]).includes('circle_members'))).toBe(false);
+    });
+
+    it('the creator or a moderator of a circle who has no member row may invite: one lookup answers both', async () => {
+      const circleInvite = { ...mockInvite, type: InviteType.CIRCLE, inviterId: 'user-creator', podId: null, circleId: 'circle-1' };
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'circle-1' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ '?column?': 1 }], rowCount: 1 }); // created_by or member
+      mockQuery.mockResolvedValueOnce({ rows: [circleInvite], rowCount: 1 });
+
+      await inviteService.createInvite('user-creator', { type: InviteType.CIRCLE, circleId: 'circle-1' }, 'member');
+
+      const lookup = mockQuery.mock.calls.find(c => /created_by = \$2/.test(String(c[0])));
+      expect(lookup![1]).toEqual(['circle-1', 'user-creator']);
+    });
+
     it('someone who is not in the circle cannot invite to it', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
@@ -815,7 +840,7 @@ describe('Invite Service', () => {
 
       const declined = await inviteService.declineInvite('CODE123', 'Guest@Example.com');
 
-      expect(declined).toEqual({ podId: 'pod-1', sessionId: null });
+      expect(declined).toEqual({ podId: 'pod-1', sessionId: null, circleId: null });
       const [sql, params] = mockQuery.mock.calls[0];
       expect(flatSql(sql)).toMatch(/^UPDATE invites SET status = 'revoked', declined_at = NOW\(\) WHERE code = \$1 AND invitee_email = \$2 AND status = 'pending'/);
       expect(params).toEqual(['CODE123', 'guest@example.com']);
@@ -831,7 +856,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ pod_id: null, session_id: 'session-1' }], rowCount: 1 });
       await inviteService.revokeInvite('invite-1', 'user-host');
       const sql = flatSql(mockQuery.mock.calls[1][0]);
-      expect(sql).toMatch(/^UPDATE invites SET status = 'revoked' WHERE id = \$1 AND status = 'pending' RETURNING pod_id, session_id$/);
+      expect(sql).toMatch(/^UPDATE invites SET status = 'revoked' WHERE id = \$1 AND status = 'pending' RETURNING pod_id, session_id, circle_id$/);
       expect(sql).not.toMatch(/declined_at/);
     });
   });
@@ -861,7 +886,7 @@ describe('Invite Service', () => {
       queue(eventInvite({ inviter_id: 'user-ann' }));
       lands({ pod_id: null, session_id: 'session-1' });
       await expect(inviteService.revokeInvite('invite-1', 'user-ann', 'member'))
-        .resolves.toEqual({ podId: null, sessionId: 'session-1', inviterId: 'user-ann', inviteeUserId: null });
+        .resolves.toEqual({ podId: null, sessionId: 'session-1', circleId: null, inviterId: 'user-ann', inviteeUserId: null });
       expect(mockQuery).toHaveBeenCalledTimes(2);
       expect(mockQuery.mock.calls[0][1]).toEqual(['invite-1']);
     });
@@ -878,7 +903,7 @@ describe('Invite Service', () => {
       queue(eventInvite({ inviter_id: 'user-cohost', invitee_user_id: 'user-guest' }), { is_host: true, is_cohost: false });
       lands({ pod_id: null, session_id: 'session-1' });
       await expect(inviteService.revokeInvite('invite-1', 'user-host', 'member'))
-        .resolves.toEqual({ podId: null, sessionId: 'session-1', inviterId: 'user-cohost', inviteeUserId: 'user-guest' });
+        .resolves.toEqual({ podId: null, sessionId: 'session-1', circleId: null, inviterId: 'user-cohost', inviteeUserId: 'user-guest' });
     });
 
     it('the host withdraws the shareable link a co-host made (the case production\'s event page hit as a 404)', async () => {
@@ -925,7 +950,7 @@ describe('Invite Service', () => {
       queue(podInvite({ inviter_id: 'user-member' }), { role });
       lands({ pod_id: 'pod-1', session_id: null });
       await expect(inviteService.revokeInvite('invite-1', 'user-director', 'member'))
-        .resolves.toEqual({ podId: 'pod-1', sessionId: null, inviterId: 'user-member', inviteeUserId: null });
+        .resolves.toEqual({ podId: 'pod-1', sessionId: null, circleId: null, inviterId: 'user-member', inviteeUserId: null });
       expect(flatSql(mockQuery.mock.calls[1][0])).toBe("SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'");
       expect(mockQuery.mock.calls[1][1]).toEqual(['pod-1', 'user-director']);
     });
@@ -950,7 +975,7 @@ describe('Invite Service', () => {
       queue(invite({ inviter_id: 'user-ann' }));
       lands({ pod_id: null, session_id: null });
       await expect(inviteService.revokeInvite('invite-1', 'user-admin', 'admin'))
-        .resolves.toEqual({ podId: null, sessionId: null, inviterId: 'user-ann', inviteeUserId: null });
+        .resolves.toEqual({ podId: null, sessionId: null, circleId: null, inviterId: 'user-ann', inviteeUserId: null });
       expect(updates()).toHaveLength(1);
       expect(mockQuery).toHaveBeenCalledTimes(2);
       mockQuery.mockClear();
@@ -1428,6 +1453,16 @@ describe('Invite Service', () => {
       expect(mockQuery.mock.calls[0][1]).toEqual(['user-guest', 'pod_invite', 'Host User invited you to Test Pod', 'Join Test Pod — invited by Host User', '/invite/ABC123XYZ456']);
       expect(mockIoEmit).toHaveBeenCalledWith('user:user-guest', 'notification:new', expect.objectContaining({ type: 'pod_invite', podId: 'pod-123', inviteStatus: 'pending' }));
       expect(mockIoEmit).toHaveBeenCalledWith('user:user-guest', 'entity:changed', { entities: ['user:user-guest:notifications', 'user:user-guest:invites'] });
+    });
+
+    // 1 Nov 2026: circle_invite was never an allowed notification type (migration 118 adds it), so this bell never rang.
+    it('notifyInvitee rings a circle invite: a circle_invite row, the live push, the lists of the invitee and the invites of the circle told', async () => {
+      const circleContext = { type: InviteType.CIRCLE, podId: null, sessionId: null, circleId: 'circle-1', inviterName: 'Ali Hamza', targetName: 'Doctors', scheduledAt: null };
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'notification-2', created_at: '2026-11-01T09:00:00.000Z' }], rowCount: 1 });
+      await inviteService.notifyInvitee(circleContext, invite);
+      expect(mockQuery.mock.calls[0][1]).toEqual(['user-guest', 'circle_invite', 'Ali Hamza invited you to Doctors', 'Join Doctors, invited by Ali Hamza', '/invite/ABC123XYZ456']);
+      expect(mockIoEmit).toHaveBeenCalledWith('user:user-guest', 'notification:new', expect.objectContaining({ type: 'circle_invite', circleId: 'circle-1', inviteStatus: 'pending' }));
+      expect(mockIoEmit).toHaveBeenCalledWith('user:user-guest', 'entity:changed', { entities: ['user:user-guest:notifications', 'user:user-guest:invites', 'circle:circle-1:invites'] });
     });
 
     it('notifyInvitee finds a member by address when the id is not known, and does nothing for an address that is no member', async () => {
