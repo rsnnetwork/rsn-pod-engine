@@ -69,11 +69,18 @@ test('circles core: admin creates, members join idempotently, detail aggregates 
   const attach = await apiAs(admin, 'POST', `/circles/${circleId}/pods`, { podId });
   expect(attach.status).toBe(201);
 
-  // (4) Open join, IDEMPOTENT: joining twice counts once.
+  // (4) Open join, IDEMPOTENT: joining twice counts once. Since R10a the creator is the circle's owner and a member, so
+  // the circle starts at 1 and m1 makes it 2, after the first join and after the second.
+  const fresh = await apiAs(admin, 'GET', `/circles/${circleId}`);
+  expect(fresh.json.data.memberCount, 'the creator is the owner, and a member').toBe(1);
+  expect(fresh.json.data.members.map((m: any) => m.userId)).toEqual([admin.id]);
   expect((await apiAs(m1, 'POST', `/circles/${circleId}/join`)).status).toBe(200);
+  const afterFirst = await apiAs(m1, 'GET', `/circles/${circleId}`);
+  expect(afterFirst.json.data.memberCount).toBe(2);
   expect((await apiAs(m1, 'POST', `/circles/${circleId}/join`)).status).toBe(200);
   const detail1 = await apiAs(m1, 'GET', `/circles/${circleId}`);
-  expect(detail1.json.data.memberCount, 'double-join must count ONCE').toBe(1);
+  expect(detail1.json.data.memberCount, 'double-join must count ONCE').toBe(2);
+  expect(detail1.json.data.members.map((m: any) => m.userId).sort()).toEqual([admin.id, m1.id].sort());
   expect(detail1.json.data.isMember).toBe(true);
   expect(detail1.json.data.pods.map((p: any) => p.podId)).toContain(podId);
   // D3: the pod is private and m1 is not in it, so its event is not named to them; the admin may open it.
@@ -84,13 +91,14 @@ test('circles core: admin creates, members join idempotently, detail aggregates 
   expect((await apiAs(admin, 'PUT', `/pods/${podId}`, { visibility: 'public' })).status).toBe(200);
   const detailPublic = await apiAs(m1, 'GET', `/circles/${circleId}`);
   expect(detailPublic.json.data.upcomingEvents.map((e: any) => e.id)).toContain(sessionId);
-  console.log('  ✓ idempotent join (count=1) + detail aggregates the pod; its event is named only to people who may open it.');
+  console.log('  ✓ idempotent join (creator + m1 = 2) + detail aggregates the pod; its event is named only to people who may open it.');
 
-  // (5) Leave decrements exactly once.
+  // (5) Leave decrements exactly once: the owner stays.
   await apiAs(m1, 'POST', `/circles/${circleId}/leave`);
   const detail2 = await apiAs(m1, 'GET', `/circles/${circleId}`);
-  expect(detail2.json.data.memberCount).toBe(0);
-  console.log('  ✓ leave decrements to 0.');
+  expect(detail2.json.data.memberCount).toBe(1);
+  expect(detail2.json.data.members.map((m: any) => m.userId)).toEqual([admin.id]);
+  console.log('  ✓ leave decrements to 1 (the owner stays).');
 
   // (6) HEADED — m2 on a phone width joins from the real UI.
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
