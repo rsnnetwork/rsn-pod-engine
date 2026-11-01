@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // ALI'S 8-STEP TEST SCRIPT, RUN BY THE MACHINE FIRST (4 Sep 2026).
 //
@@ -325,9 +326,11 @@ test("Ali's script, steps 1 to 8, on production", async () => {
   console.log('  step 8: 360px, picker open, no sideways scroll.');
 
   ali.once('dialog', d => d.accept());
+  await acceptConfirmDialogs(ali);
   await ali.getByTestId(`comment-delete-${aliComment}`).click();
   await expect(ali.getByText('Thanks for reading, feedback welcome.')).toHaveCount(0, { timeout: 15_000 });
   ali.once('dialog', d => d.accept());
+  await acceptConfirmDialogs(ali);
   await ali.getByTestId(`delete-post-${postId}`).click();
   await expect(ali.getByTestId(`wall-post-${postId}`)).toHaveCount(0, { timeout: 15_000 });
   const gone = await pool.query(`SELECT deleted_at FROM circle_posts WHERE id = $1`, [postId]);

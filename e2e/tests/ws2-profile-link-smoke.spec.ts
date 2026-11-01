@@ -5,6 +5,7 @@ import { cleanup, cleanupByPrefix, idsOf, submitIntent, teardown } from '../help
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import { profileLinkSelector } from '../helpers/profile-link';
 import { skipEventCheckIn } from '../helpers/event-check-in';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for WS2/S3 (name-click safety) against PRODUCTION:
 //   Alice + Bob in a live event lobby. Alice opens the participant list and
@@ -48,6 +49,7 @@ async function openUserPage(user: TestUser): Promise<{ context: BrowserContext; 
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page);
   return { context, page };
 }

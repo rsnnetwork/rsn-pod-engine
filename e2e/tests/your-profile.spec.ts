@@ -31,6 +31,7 @@ import { gotoRetry, cleanup, APP } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 const ENGINE = engineLabel();
 // A preview's API can take up to a minute to wake.
@@ -439,12 +440,14 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   // Block asks first, with the old profile's words. Dismissed, nothing happens.
   const question = `Block ${OWNER.name}? They won't be able to message you and you won't be matched together in future events.`;
   page.once('dialog', (d) => { expect(d.message()).toBe(question); void d.dismiss(); });
+  await acceptConfirmDialogs(page);
   await more.click();
   await page.getByRole('button', { name: 'Block', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible();
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(0);
   // Accepted: blocked, said, and the page leaves the profile (opened directly, so back is For You).
   page.once('dialog', (d) => void d.accept());
+  await acceptConfirmDialogs(page);
   await more.click();
   await page.getByRole('button', { name: 'Block', exact: true }).click();
   await expect(page.getByText(`${OWNER.name} is blocked. They can no longer message you, and you won't be matched together.`)).toBeVisible({ timeout: 30_000 });
@@ -462,11 +465,13 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   // Unblock asks first. Dismissed, nothing changes.
   const unblockQuestion = 'Unblock this member? They will be able to message you again, and you may be matched together in future events.';
   page.once('dialog', (d) => { expect(d.message()).toBe(unblockQuestion); void d.dismiss(); });
+  await acceptConfirmDialogs(page);
   await unblock.click();
   await expect(page.getByRole('heading', { level: 1, name: 'You blocked this member.' })).toBeVisible();
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(1);
   // Accepted: unblocked, said, and the profile is back on the same page, with no refresh.
   page.once('dialog', (d) => void d.accept());
+  await acceptConfirmDialogs(page);
   await unblock.click();
   await expect(page.getByText('Unblocked.', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible({ timeout: 30_000 });

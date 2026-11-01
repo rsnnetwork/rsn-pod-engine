@@ -7,6 +7,7 @@ import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/liv
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE POD'S DISCUSSION (COM-01, 26 Oct 2026). Stefan, back in the pod after an event: "We can't write in the
@@ -98,8 +99,9 @@ const postButton = (page: Page) => wallOf(page).getByRole('button', { name: 'Pos
 const bellOf = (page: Page) => page.getByRole('button', { name: 'Notifications' }).first();
 
 /** The next confirm() on this page is accepted. Register it BEFORE the click that opens it. */
-function acceptNextDialog(page: Page) {
+async function acceptNextDialog(page: Page) {
   page.once('dialog', (d) => { void d.accept(); });
+  await acceptConfirmDialogs(page);
 }
 
 async function postIdOf(content: string): Promise<string> {
@@ -310,14 +312,14 @@ test('the director pins and deletes; a member can do neither to someone else\'s 
   // The director deletes B's comment: A's count goes back to nothing, live.
   await expect(cardOf(alicePage, postId)).toContainText('1 comment', { timeout: 15_000 });
   await cardOf(dirPage, postId).getByTestId(`comment-button-${postId}`).click();
-  acceptNextDialog(dirPage);
+  await acceptNextDialog(dirPage);
   await dirPage.getByTestId(`comment-delete-${commentId}`).click();
   await expect(cardOf(alicePage, postId)).not.toContainText('1 comment', { timeout: 15_000 });
   const gone = await pool.query(`SELECT deleted_at FROM pod_post_comments WHERE id = $1`, [commentId]);
   expect(gone.rows[0].deleted_at).not.toBeNull();
 
   // ...and the post itself: it leaves every open page, and the row stays, with who removed it.
-  acceptNextDialog(dirPage);
+  await acceptNextDialog(dirPage);
   await cardOf(dirPage, postId).getByTestId(`delete-post-${postId}`).click();
   await expect(cardOf(bobPage, postId)).toHaveCount(0, { timeout: 15_000 });
   await expect(cardOf(alicePage, postId)).toHaveCount(0, { timeout: 15_000 });
@@ -444,13 +446,13 @@ test('an archived pod takes nothing new, but its director still deletes and its 
   await expect(cardOf(alicePage, aliceId).getByTestId(`delete-post-${aliceId}`)).toBeVisible();
   await expect(cardOf(alicePage, bobId).getByTestId(`delete-post-${bobId}`)).toHaveCount(0);
   await expect(cardOf(alicePage, aliceId).getByTestId(`pin-post-${aliceId}`)).toHaveCount(0);
-  acceptNextDialog(alicePage);
+  await acceptNextDialog(alicePage);
   await cardOf(alicePage, aliceId).getByTestId(`delete-post-${aliceId}`).click();
   await expect(cardOf(alicePage, aliceId)).toHaveCount(0, { timeout: 15_000 });
   await expect(cardOf(dirPage, aliceId)).toHaveCount(0, { timeout: 15_000 });
   await cardOf(dirPage, bobId).getByTestId(`pin-post-${bobId}`).click();
   await expect(cardOf(dirPage, bobId).getByTestId(`pinned-badge-${bobId}`)).toBeVisible({ timeout: 15_000 });
-  acceptNextDialog(dirPage);
+  await acceptNextDialog(dirPage);
   await cardOf(dirPage, bobId).getByTestId(`delete-post-${bobId}`).click();
   await expect(cardOf(dirPage, bobId)).toHaveCount(0, { timeout: 15_000 });
 

@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import axios from 'axios';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for WS2 slice 2 (kick semantics) against PRODUCTION:
 //   Round with 4 participants → 2 pairs. Host kicks P1a mid-round:
@@ -71,6 +72,7 @@ async function openUserPage(user: TestUser): Promise<{ context: BrowserContext; 
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page);
   return { context, page };
 }

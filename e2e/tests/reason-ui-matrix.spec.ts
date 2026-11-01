@@ -4,6 +4,7 @@ import { createPod } from '../helpers/api';
 import { gotoRetry, cleanup, wait, APP, SERVER } from '../helpers/live-ui';
 import * as fs from 'fs';
 import * as path from 'path';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED PROD — the UI MATRIX for everything REASON v1 shipped (20 Jul 2026).
 // The earlier specs proved the RULES (mostly via REST) and the happy paths.
@@ -40,6 +41,7 @@ async function openAs(u: TestUser, url: string): Promise<Page> {
   page.on('pageerror', () => {});
   // Own-post deletes use confirm() — auto-accept.
   page.on('dialog', d => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoRetry(page, `${APP}${url}`);
   return page;
 }

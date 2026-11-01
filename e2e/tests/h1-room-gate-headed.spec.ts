@@ -3,6 +3,7 @@ import { Socket } from 'socket.io-client';
 import { createTestUser, TestUser, closePool, pool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, apiRequest } from '../helpers/api';
 import { APP, SERVER, connectSocket, cleanup, gotoRetry, tilesSeen, wait } from '../helpers/live-ui';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for H1 against PRODUCTION: only the people an event admits join its live room.
 // Before H1 the server put any signed-in socket that named an event into its room before registering it, and
@@ -58,6 +59,7 @@ async function openPage(user: TestUser): Promise<{ page: Page; frames: Frame[] }
   contexts.push(context);
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   const frames: Frame[] = [];
   page.on('websocket', (ws) => {
     if (!ws.url().includes('/socket.io/')) return;

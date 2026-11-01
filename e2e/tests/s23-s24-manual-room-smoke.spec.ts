@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import { Pool } from 'pg';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for S23 + S24 against PRODUCTION — Ali's bb sequence:
 //   S23: a trio member presses Back to Main Room → survivors get the ~8s
@@ -58,6 +59,7 @@ async function openUserPage(user: TestUser, sessionId: string): Promise<{ contex
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page, sessionId);
   return { context, page };
 }
