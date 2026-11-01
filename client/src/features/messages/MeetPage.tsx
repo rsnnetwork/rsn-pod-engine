@@ -480,7 +480,23 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
             <CallEndWatcher onLeave={leaveRoom} leaving={leaving} depart={departRef} />
             <PartnerSeen onSeen={onPartnerSeen} probe={partnerProbe} />
             <div className={`shrink-0 pb-[env(safe-area-inset-bottom)] ${chatOpen ? 'max-sm:pb-0' : ''}`}>
-              <ControlBar variation="minimal" />
+              {/* LiveKit's own Leave disconnects the room itself, before any goodbye can be said (fix round 1), so the
+                  bar's red hang-up is ours: the person leaving, like the top bar's button and the notice's Leave. */}
+              <div className="lk-control-bar">
+                <ControlBar variation="minimal" controls={{ leave: false }} className="!border-t-0 !p-0" />
+                <button
+                  type="button"
+                  onClick={leaveRoom}
+                  disabled={leaving}
+                  aria-busy={leaving}
+                  aria-label="Leave call"
+                  title="Leave call"
+                  data-testid="call-hang-up"
+                  className="lk-disconnect-button min-h-[44px] min-w-[44px]"
+                >
+                  {leaving ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : <PhoneOff className="h-5 w-5" aria-hidden="true" />}
+                </button>
+              </div>
             </div>
           </div>
           <aside className={`h-[45dvh] shrink-0 sm:h-auto sm:w-80 ${chatOpen ? 'flex flex-col' : 'hidden'}`} aria-label="Chat panel">

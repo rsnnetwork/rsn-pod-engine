@@ -16,7 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ConnectionState, RoomEvent } from 'livekit-client';
 import {
-  DEPART_MS, GOODBYE_TOPIC, LEAVE_GRACE_MS, leaveCall, leftCallText, watchPartner, type DepartingRoom, type PresenceRoom,
+  DEPART_MS, GOODBYE_MS, GOODBYE_TOPIC, LEAVE_GRACE_MS, leaveCall, leftCallText, watchPartner, type DepartingRoom, type PresenceRoom,
 } from '../../../../client/src/features/messages/call-presence';
 
 interface Person { identity: string; name?: string }
@@ -213,6 +213,19 @@ describe('someone who leaves on purpose is announced at once', () => {
     expect(seen).toEqual([null]);
   });
 
+  // Fix round 1 (review Minor 2): my own reconnect after their goodbye unwinds them and comes back without them;
+  // that is the leave already said, so it is not said a second time (a Wait stays a Wait).
+  it('my own reconnect after their goodbye does not say it again once I am back and they are not', () => {
+    const { room, seen } = watched();
+    room.join(stefan);
+    sayGoodbye(room, stefan);
+    room.restart();
+    jest.advanceTimersByTime(LEAVE_GRACE_MS * 2);
+    room.reconnected([]);
+    jest.advanceTimersByTime(LEAVE_GRACE_MS * 3);
+    expect(seen).toEqual([null, LEFT]);
+  });
+
   it('stops listening for goodbyes when the room is left', () => {
     const { room, stop } = watched();
     expect(room.listenerCount(RoomEvent.DataReceived)).toBe(1);
@@ -268,6 +281,24 @@ describe('leaveCall: the goodbye, then the room\'s own disconnect, before the pa
     room.localParticipant.publishData.mockRejectedValueOnce(new Error('engine closed'));
     const left = leaveCall(room as unknown as DepartingRoom);
     await jest.advanceTimersByTimeAsync(0);
+    finish();
+    await left;
+    expect(order).toEqual(['disconnect', 'disconnected']);
+  });
+
+  // Fix round 1 (review Minor 1): a goodbye that stalls (the publisher never connects, e.g. camera and mic denied)
+  // must not use up the whole bound: the disconnect still runs, and is waited for.
+  it('a goodbye that never finishes is given up after GOODBYE_MS, and the disconnect still runs and is waited for', async () => {
+    const { room, order, finish } = leavingRoom();
+    room.localParticipant.publishData.mockImplementationOnce(() => new Promise<void>(() => {}));
+    let done = false;
+    const left = leaveCall(room as unknown as DepartingRoom).then(() => { done = true; });
+    expect(GOODBYE_MS).toBeLessThan(DEPART_MS);
+    await jest.advanceTimersByTimeAsync(GOODBYE_MS - 1);
+    expect(order).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(order).toEqual(['disconnect']);
+    expect(done).toBe(false);
     finish();
     await left;
     expect(order).toEqual(['disconnect', 'disconnected']);
@@ -359,5 +390,20 @@ describe('MeetPage, read from source', () => {
     const leave = src.slice(src.indexOf('const leaveRoom = useCallback'));
     expect(leave).toMatch(/^const leaveRoom = useCallback\(\(\) => \{\s*if \(leftRoom\.current\) return;\s*leftRoom\.current = true;\s*setLeaving\(true\);\s*void Promise\.all\(\[\s*afterRoomLeave\(\{[\s\S]*?\}\),\s*departRef\.current\(\),\s*\]\)\.then\(\(\[to\]\) => navigate\(to\)\);/);
     expect(src.match(/navigate\(to\)/g)).toHaveLength(1);
+  });
+
+  // Fix round 1 (review Important): LiveKit's ControlBar draws its own red Leave, which disconnects the room itself, so
+  // its goodbye was never said (the room was already disconnected when onDisconnected reached the leave). The bar's
+  // own Leave is off; the red hang-up in the bar is ours, and it is the person leaving like every other leave.
+  it('the bottom bar\'s hang-up is ours: LiveKit\'s own Leave is off, and ours leaves the room the same way', () => {
+    const src = meetPage();
+    expect(src.match(/<ControlBar\b/g)).toHaveLength(1);
+    expect(src).toMatch(/<ControlBar variation="minimal" controls=\{\{ leave: false \}\}/);
+    expect(src).not.toMatch(/DisconnectButton|useDisconnectButton|\.disconnect\(/);
+    const hangUp = src.slice(src.indexOf('data-testid="call-hang-up"') - 400, src.indexOf('data-testid="call-hang-up"') + 400);
+    expect(hangUp).toMatch(/onClick=\{leaveRoom\}\s*disabled=\{leaving\}\s*aria-busy=\{leaving\}/);
+    expect(hangUp).toMatch(/aria-label="Leave call"/);
+    expect(hangUp).toMatch(/lk-disconnect-button/);
+    expect(hangUp).toMatch(/min-h-\[44px\] min-w-\[44px\]/);
   });
 });

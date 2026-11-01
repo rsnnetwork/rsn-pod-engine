@@ -19,6 +19,9 @@
 // in the room was not told within 30 s. So leaveCall first says goodbye in the room itself, on the call's reliable
 // data channel, then disconnects and waits for that before the page moves on; the other side says who left the moment
 // the goodbye arrives. A drop (a crash, a lost network) still shows once the server takes them off, after the grace.
+// So do the leaves that never pass through leaveCall: closing or refreshing the tab (a goodbye there would flash
+// "left the call" on every refresh), the browser's Back, a link out of the room, or answering another call from it.
+// Those still send LiveKit's own leave as the room unmounts, so the other person is told after the grace.
 
 import { ConnectionState, RoomEvent, type LocalParticipant, type RemoteParticipant, type Room } from 'livekit-client';
 
@@ -32,28 +35,40 @@ export type DepartingRoom = Pick<Room, 'state' | 'disconnect'> & { localParticip
 export const GOODBYE_TOPIC = 'reason:left-call';
 /** The longest a leave waits on the goodbye and the disconnect before the page moves on anyway. */
 export const DEPART_MS = 2_000;
+/**
+ * The longest the goodbye itself is waited on, inside DEPART_MS, so the disconnect always runs and is waited for: a
+ * goodbye can stall (livekit-client waits for the publisher to connect, which a person with camera and mic denied
+ * may never have done).
+ */
+export const GOODBYE_MS = 500;
 const GOODBYE = new TextEncoder().encode('left');
+
+/** `work`, or nothing once `ms` have passed, whichever is first; never rejects. */
+async function within(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+  try {
+    await Promise.race([work.catch(() => undefined), bound]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Leave the room on purpose: say goodbye (only from a connected room: a room that never connected was never seen),
- * then disconnect. Resolves once the disconnect has finished, or after `timeoutMs`, whichever is first; never rejects.
+ * waiting at most GOODBYE_MS on it, then disconnect. Resolves once the disconnect has finished, or after `timeoutMs`
+ * altogether, whichever is first; never rejects.
  */
 export async function leaveCall(room: DepartingRoom, timeoutMs: number = DEPART_MS): Promise<void> {
   const depart = async () => {
     if (room.state === ConnectionState.Connected) {
       // A goodbye that cannot be sent is the drop case: the server's own leave, or its timeout, still tells them.
-      await room.localParticipant.publishData(GOODBYE, { reliable: true, topic: GOODBYE_TOPIC }).catch(() => undefined);
+      await within(room.localParticipant.publishData(GOODBYE, { reliable: true, topic: GOODBYE_TOPIC }), GOODBYE_MS);
     }
     await room.disconnect();
   };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const bound = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
-  try {
-    // A disconnect that throws has still ended this side of the call; the page moves on either way.
-    await Promise.race([depart().catch(() => undefined), bound]);
-  } finally {
-    clearTimeout(timer);
-  }
+  // A disconnect that throws has still ended this side of the call; the page moves on either way.
+  await within(depart(), timeoutMs);
 }
 
 /** How long the other person has to be gone before "left the call" shows: long enough for a reconnect to land. */
