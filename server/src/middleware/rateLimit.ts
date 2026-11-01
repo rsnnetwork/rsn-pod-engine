@@ -1,7 +1,8 @@
 // ─── Rate Limiting Middleware ─────────────────────────────────────────────────
 import rateLimit, { Options as RateLimitOptions } from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
-import { Request } from 'express';
+import { Request, Response } from 'express';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import config from '../config';
 import logger from '../config/logger';
@@ -142,33 +143,58 @@ export const authLimiter = rateLimit({
 });
 
 /**
- * Invite endpoint rate limiter
- */
-/**
  * Typing the 6-digit sign-in code (1 Nov 2026). Ten tries per address per 15 minutes, on top of the five wrong
  * tries a single code allows before it dies with its link: a million codes cannot be walked through from one
  * place. Development keeps a wider bucket, as authLimiter does, so local runs of the sign-in spec do not lock
  * each other out.
  */
+const SIGN_IN_CODE_WINDOW_MS = 15 * 60 * 1000;
+const SIGN_IN_CODE_MAX = config.env === 'development' ? 100 : 10;
+const signInCodeLimited = (_req: Request, res: Response) => {
+  const response: ApiResponse = {
+    success: false,
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many codes tried. Please wait 15 minutes, then try again.',
+    },
+  };
+  res.status(429).json(response);
+};
+
 export const signInCodeLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: config.env === 'development' ? 100 : 10,
+  windowMs: SIGN_IN_CODE_WINDOW_MS,
+  max: SIGN_IN_CODE_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req: Request) => `ip:${clientIp(req)}`,
   store: buildStore('signin-code'),
-  handler: (_req, res) => {
-    const response: ApiResponse = {
-      success: false,
-      error: {
-        code: 'RATE_LIMIT_EXCEEDED',
-        message: 'Too many codes tried. Please wait 15 minutes, then try again.',
-      },
-    };
-    res.status(429).json(response);
-  },
+  handler: signInCodeLimited,
 });
 
+/**
+ * The per-email bucket for the sign-in code (1 Nov 2026, T4 review). clientIp() trusts cf-connecting-ip as sent,
+ * so a request that reaches the server without Cloudflare in front can name a new address on every try and never
+ * fill the bucket above. Ten tries per email per 15 minutes caps guessing at any one member whatever the address.
+ * The key is a hash of the normalised address (no email in the store), and the refusal is the same sentence for
+ * every address, with or without an account. It runs after validation, so req.body.email is a trimmed string.
+ */
+export function signInCodeEmailKey(email: string): string {
+  return `email:${crypto.createHash('sha256').update(email.trim().toLowerCase()).digest('hex')}`;
+}
+
+export const signInCodeEmailLimiter = rateLimit({
+  windowMs: SIGN_IN_CODE_WINDOW_MS,
+  max: SIGN_IN_CODE_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => signInCodeEmailKey(typeof req.body?.email === 'string' ? req.body.email : ''),
+  store: buildStore('signin-code-email'),
+  handler: signInCodeLimited,
+});
+
+/**
+ * Invite endpoint rate limiter
+ */
 export const inviteLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 50,                   // 50 invites per hour

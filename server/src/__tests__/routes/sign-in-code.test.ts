@@ -117,6 +117,7 @@ function answer(sqlRaw: string, params: unknown[] = []) {
 }
 
 import authRoutes from '../../routes/auth';
+import { signInCodeEmailKey, signInCodeEmailLimiter } from '../../middleware/rateLimit';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { sendMagicLinkEmail } from '../../services/email/email.service';
 
@@ -141,6 +142,10 @@ beforeEach(() => {
   myIp = `10.0.0.${ip}`;
   mockQuery.mockReset().mockImplementation((sql: string, params?: unknown[]) => Promise.resolve(answer(sql, params)));
   (sendMagicLinkEmail as jest.Mock).mockClear();
+  // The per-email bucket outlives a test (it is keyed on the address, which most tests share): each starts empty.
+  for (const address of [MEMBER.email, 'claus@example.com', 'nobody@example.com']) {
+    void signInCodeEmailLimiter.resetKey(signInCodeEmailKey(address));
+  }
 });
 
 /** Ask for a sign-in email the way the sign-in page does, and return what the email carries. */
@@ -320,6 +325,55 @@ describe('the sign-in email carries a 6-digit code', () => {
     expect(eleventh.status).toBe(429);
     expect(eleventh.body.error.code).toBe('RATE_LIMIT_EXCEEDED');
     expect(eleventh.body.error.message).toBe('Too many codes tried. Please wait 15 minutes, then try again.');
+  });
+});
+
+describe('tries per email, whatever address they come from (fix round 1)', () => {
+  // The per-address bucket trusts cf-connecting-ip as sent (clientIp), so a request that reaches the server without
+  // Cloudflare in front can name a new address every time. Ten tries per email per 15 minutes holds anyway.
+  const fromNewAddress = (body: object, n: number) =>
+    request(app).post('/auth/magic-link/code').set('cf-connecting-ip', `10.9.${n >> 8}.${n & 255}`).send(body);
+
+  it('ten tries for one email from ten addresses, then 429 for that email even from an eleventh address', async () => {
+    const { code } = await emailed();
+    links[0].code_attempts = -100; // keep the link alive, so only the email limit is measured
+    for (let i = 0; i < 10; i++) {
+      const r = await fromNewAddress({ email: MEMBER.email, code: wrongCode(code) }, ip * 100 + i);
+      expect(r.status).toBe(400);
+    }
+    const eleventh = await fromNewAddress({ email: MEMBER.email, code }, ip * 100 + 50);
+    expect(eleventh.status).toBe(429);
+    expect(eleventh.body.error).toEqual({ code: 'RATE_LIMIT_EXCEEDED', message: 'Too many codes tried. Please wait 15 minutes, then try again.' });
+    expect(sessionsWritten()).toBe(0);
+  });
+
+  it('the email is the same bucket in any case or spacing', async () => {
+    await emailed();
+    for (let i = 0; i < 10; i++) await fromNewAddress({ email: i % 2 ? ' STEFAN@example.com ' : MEMBER.email, code: '000000' }, ip * 100 + i);
+    expect((await fromNewAddress({ email: 'Stefan@Example.COM', code: '000000' }, ip * 100 + 60)).status).toBe(429);
+  });
+
+  it('says the same thing for an email with no account, so the limit hints at nothing', async () => {
+    for (let i = 0; i < 10; i++) {
+      expect((await fromNewAddress({ email: 'nobody@example.com', code: '000000' }, ip * 100 + i)).status).toBe(400);
+    }
+    const limited = await fromNewAddress({ email: 'nobody@example.com', code: '000000' }, ip * 100 + 70);
+    expect(limited.status).toBe(429);
+    expect(limited.body.error).toEqual({ code: 'RATE_LIMIT_EXCEEDED', message: 'Too many codes tried. Please wait 15 minutes, then try again.' });
+  });
+
+  it('another email is not held back by the limit on the first', async () => {
+    users.push({ ...MEMBER, id: '33333333-3333-3333-3333-333333333333', email: 'claus@example.com' });
+    for (let i = 0; i < 11; i++) await fromNewAddress({ email: MEMBER.email, code: '000000' }, ip * 100 + i);
+    const claus = await fromNewAddress({ email: 'claus@example.com', code: '000000' }, ip * 100 + 80);
+    expect(claus.status).toBe(400);
+  });
+
+  it('keys the bucket on a hash of the address, so no email is written into the limiter store', () => {
+    const key = signInCodeEmailKey(' Stefan@Example.com ');
+    expect(key).toBe(signInCodeEmailKey('stefan@example.com'));
+    expect(key).toMatch(/^email:[0-9a-f]{64}$/);
+    expect(key).not.toContain('stefan');
   });
 });
 

@@ -8,7 +8,8 @@
 //   - the code is crypto-random and is never stored: magic_links.code_hash keeps a keyed hash of it, bound to that
 //     row's token hash, so a copy of the table alone cannot be turned back into a code;
 //   - it works for 15 minutes (the link keeps its own 60);
-//   - it is spent with the link: using either one spends both;
+//   - it is spent with the link: using the link refuses the code, and using the code marks the link used (the link
+//     then keeps only its 2-minute scanner grace, which already lets the same link sign in twice);
 //   - every try is counted, and the fifth wrong one kills the link and the code together.
 
 import crypto from 'crypto';

@@ -3,7 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
-import { authLimiter, signInCodeLimiter } from '../middleware/rateLimit';
+import { authLimiter, signInCodeEmailLimiter, signInCodeLimiter } from '../middleware/rateLimit';
 import * as identityService from '../services/identity/identity.service';
 import { ApiResponse, ErrorCodes } from '@rsn/shared';
 import config from '../config';
@@ -96,6 +96,7 @@ router.post(
   '/magic-link/code',
   signInCodeLimiter,
   validate(signInCodeSchema, 'body', SIGN_IN_CODE_MESSAGE),
+  signInCodeEmailLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { email, code } = req.body;
