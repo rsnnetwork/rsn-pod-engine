@@ -151,7 +151,9 @@ test('the circle page\'s Invite opens the invite sheet, whose Share a link makes
   expect(new URL(circlePage.url()).pathname, 'the sheet opens on the circle page').toBe(`/circles/${circleId}`);
   await expect(sheet.getByRole('group', { name: 'Who to list' }), 'a circle has no pod list').toHaveCount(0);
 
-  const before = (await pool.query(`SELECT COUNT(*)::int n FROM invites WHERE inviter_id = $1 AND type = 'circle'`, [member.id])).rows[0].n;
+  const countLinks = async () => (await pool.query(
+    `SELECT COUNT(*)::int n FROM invites WHERE inviter_id = $1 AND type = 'circle' AND circle_id = $2`, [member.id, circleId])).rows[0].n as number;
+  const before = await countLinks();
   await sheet.getByRole('button', { name: 'Share a link' }).click();
   await expect(sheet.getByText(/Anyone with this link can join the circle, up to 500 people, for 7 days\./)).toBeVisible();
   const make = sheet.getByRole('button', { name: 'Make a link' });
@@ -159,8 +161,13 @@ test('the circle page\'s Invite opens the invite sheet, whose Share a link makes
   expect(box!.height, 'tap target').toBeGreaterThanOrEqual(44);
   await make.click();
   await expect(sheet.getByLabel('Invite link')).toHaveValue(/\/invite\/[A-Za-z0-9]+$/, { timeout: 20_000 });
-  const n = (await pool.query(`SELECT COUNT(*)::int n FROM invites WHERE inviter_id = $1 AND type = 'circle' AND circle_id = $2`, [member.id, circleId])).rows[0].n;
-  expect(n, 'a new circle invite row from the sheet').toBeGreaterThan(before - 1);
+  // The link the sheet shows is a circle invite of this member's for this circle, with no address, and it is new.
+  const code = (await sheet.getByLabel('Invite link').inputValue()).split('/invite/')[1];
+  const row = await pool.query(
+    `SELECT type, circle_id, inviter_id, invitee_email, max_uses FROM invites WHERE code = $1`, [code]);
+  expect(row.rows, 'the link\'s invite row exists').toHaveLength(1);
+  expect(row.rows[0]).toMatchObject({ type: 'circle', circle_id: circleId, inviter_id: member.id, invitee_email: null, max_uses: 500 });
+  expect(await countLinks(), 'exactly one new circle invite row from the sheet').toBe(before + 1);
   const overflow = await circlePage.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, 'no sideways scroll at 360px').toBeLessThanOrEqual(0);

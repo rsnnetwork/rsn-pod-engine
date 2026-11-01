@@ -23,6 +23,8 @@ const RUN = `zq${Date.now().toString(36)}`;
 let browser: Browser;
 let owner: TestUser | undefined, invitee: TestUser | undefined, requester: TestUser | undefined;
 let circleId = '';
+/** The pod the owner makes in step 3, read from POST /pods's answer, so it is deleted by its id. */
+let podId: string | undefined;
 const contexts: BrowserContext[] = [];
 
 const SECRET = process.env.E2E_JWT_SECRET || process.env.JWT_SECRET;
@@ -79,10 +81,10 @@ test.afterAll(async () => {
   await teardown(
     ...contexts.map((c) => () => c.close()),
     () => browser?.close(),
-    () => pool.query(`DELETE FROM pods WHERE created_by = $1 AND name LIKE $2`, [owner?.id ?? null, `${RUN}%`]),
     () => (circleId ? pool.query(`DELETE FROM invites WHERE circle_id = $1`, [circleId]) : Promise.resolve()),
     () => (circleId ? pool.query(`DELETE FROM circles WHERE id = $1`, [circleId]) : Promise.resolve()),
-    () => cleanup(pool, { ids: idsOf(owner, invitee, requester) }),
+    // The pod by its id (its members and the pod), then the people by theirs: never by a name.
+    () => cleanup(pool, { ids: idsOf(owner, invitee, requester), podId }),
   );
 });
 
@@ -147,7 +149,13 @@ test(`an owner invites from the sheet, closes the circle, approves an ask and ma
   const form = o.getByRole('dialog', { name: `New pod in ${RUN} Founders circle` });
   await expect(form).toBeVisible();
   await form.getByLabel('Pod name').fill(`${RUN} Breakfast pod`);
+  const made = o.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/pods');
   await o.getByRole('button', { name: 'Create Pod' }).click();
+  const answer = await made;
+  expect(answer.status()).toBe(201);
+  const pod = (await answer.json()).data as { id: string; circleId?: string };
+  podId = pod.id;
+  expect(pod.circleId, 'the pod is made in the circle').toBe(circleId);
   await expect(o.getByText(`${RUN} Breakfast pod is created and added to ${RUN} Founders circle.`)).toBeVisible({ timeout: 20_000 });
   await expect(o.getByTestId('circle-pods').getByText(`${RUN} Breakfast pod`)).toBeVisible({ timeout: 20_000 });
   expect(new URL(o.url()).pathname).toBe(`/circles/${circleId}`);
