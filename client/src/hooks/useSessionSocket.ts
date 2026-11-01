@@ -161,7 +161,8 @@ export default function useSessionSocket(sessionId: string) {
     // FIX 4B: Remove ALL previous listeners before registering new ones
     // Prevents accumulation on mount/unmount cycles (React strict mode, fast nav)
     SOCKET_EVENTS.forEach(ev => socket.off(ev));
-    socket.off('connect');
+    // Never every 'connect' listener: the socket is the app's, and the app-wide resync (every tagged read again on
+    // connect, P1 item 17) and the connection banner listen there too. This hook's own (joinSession) goes in cleanup.
     socket.io.off('reconnect');
     socket.io.off('reconnect_attempt');
     socket.io.off('reconnect_failed');

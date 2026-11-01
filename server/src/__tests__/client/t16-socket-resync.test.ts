@@ -104,3 +104,12 @@ describe('the app wires it once, and the screens no longer refetch on connect th
     expect(read('features/calls/useCallSignals.ts')).not.toMatch(/socket\.on\('connect'/);
   });
 });
+
+describe('the live event page leaves the app-wide connect listeners in place', () => {
+  it('useSessionSocket removes only its own connect listener, never every one (it used to strip the resync)', () => {
+    const live = read('hooks/useSessionSocket.ts');
+    expect(live).not.toMatch(/socket\.off\('connect'\);/);
+    expect(live).toMatch(/socket\.once\('connect', joinSession\);/);
+    expect(live).toMatch(/socket\.off\('connect', joinSession\);/);
+  });
+});
