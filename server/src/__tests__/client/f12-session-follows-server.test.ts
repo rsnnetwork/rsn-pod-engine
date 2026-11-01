@@ -19,7 +19,9 @@ import * as path from 'path';
 import * as vm from 'vm';
 import * as ts from 'typescript';
 import { QueryClient, QueryObserver } from '@tanstack/query-core';
-import { sessionReadOptions } from '../../../../client/src/realtime/session-read';
+import {
+  SESSION_READ_COALESCE_MS, SESSION_READ_MAX_WAIT_MS, sessionReadOptions, type SessionReadTiming,
+} from '../../../../client/src/realtime/session-read';
 import { invalidateEntities, subscribeEntitySync, type EntitySignals } from '../../../../client/src/realtime/invalidate-entities';
 import { onboardingDue } from '../../../../client/src/components/layout/onboarding-gate';
 
@@ -31,25 +33,42 @@ interface State {
   user: SessionUser | null;
   isAuthenticated: boolean;
   checkSession: () => Promise<void>;
-  rereadSession: () => Promise<unknown>;
+  rereadSession: (signal?: AbortSignal) => Promise<unknown>;
   logout: () => Promise<void>;
 }
 
 const b64url = (text: string) => Buffer.from(text, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const token = (sub: string) => [b64url('{"alg":"HS256","typ":"JWT"}'), b64url(JSON.stringify({ sub, exp: 4102444800 })), 'sig'].join('.');
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+async function until(check: () => boolean, label: string): Promise<void> {
+  for (let waited = 0; !check(); waited += 5) {
+    if (waited > 3000) throw new Error(`timed out waiting: ${label}`);
+    await sleep(5);
+  }
+}
+/** The app's window is a second or more; the tests use a short one so they run in milliseconds. */
+const QUICK: SessionReadTiming = { coalesceMs: 20, maxWaitMs: 200 };
 
 /** One device: the real store, signed in as `memberId`, whose session answers are whatever `server.session` holds then. */
-async function device(memberId: string, server: { session: SessionUser }) {
+async function device(memberId: string, server: { session: SessionUser }, timing: SessionReadTiming = QUICK) {
   const storage = new Map<string, string>([['rsn_tokens', JSON.stringify({ access: token(memberId), refresh: `r-${memberId}` })]]);
   const requests: string[] = [];
   let pending: Array<() => void> = [];
   let holdAnswers = false;
+  let holdNextOnly = false;
+  let held: Array<() => void> = [];
   const api = {
+    // The answer is what the server held when the request reached it; a held request answers that, late. The signal is
+    // not honoured: an answer already on its way still arrives, as on a slow phone link.
     get: async (url: string) => {
       requests.push(`GET ${url}`);
-      if (holdAnswers) await new Promise<void>((resolve) => pending.push(resolve));
-      return { data: { data: { user: { ...server.session } } } };
+      const answer = { ...server.session };
+      if (holdNextOnly) {
+        holdNextOnly = false;
+        await new Promise<void>((resolve) => held.push(resolve));
+      } else if (holdAnswers) await new Promise<void>((resolve) => pending.push(resolve));
+      return { data: { data: { user: answer } } };
     },
     post: async (url: string) => { requests.push(`POST ${url}`); return { data: { data: {} } }; },
   };
@@ -81,7 +100,7 @@ async function device(memberId: string, server: { session: SessionUser }) {
   // What the app mounts (useSessionFollowsServer): the session as a read tagged with the member's own user:<id>.
   const qc = new QueryClient();
   const observer = new QueryObserver(qc, {
-    ...sessionReadOptions(memberId, () => store.getState().rereadSession(), store.getState().user),
+    ...sessionReadOptions(memberId, (signal) => store.getState().rereadSession(signal), store.getState().user, timing),
     meta: { entities: [`user:${memberId}`] },
   });
   const unsubscribe = observer.subscribe(() => undefined);
@@ -90,6 +109,9 @@ async function device(memberId: string, server: { session: SessionUser }) {
     sessionReads: () => requests.filter((r) => r === 'GET /auth/session').length,
     hold: () => { holdAnswers = true; },
     release: () => { holdAnswers = false; pending.forEach((go) => go()); pending = []; },
+    /** Hold only the next session request: it answers what the server held then, when releaseHeld() is called. */
+    holdNext: () => { holdNextOnly = true; },
+    releaseHeld: () => { held.forEach((go) => go()); held = []; },
     close: () => { unsubscribe(); qc.clear(); },
   };
 }
@@ -183,11 +205,85 @@ describe('F1: the session follows the server on every device of the member', () 
     const socket = new EventEmitter() as EventEmitter & EntitySignals;
     const stop = subscribeEntitySync(socket, two.qc, { now: () => Date.now() + 10_000 });
     socket.emit('connect');
-    await settle();
-    await settle();
+    // The read waits the (short, in tests) quiet window first, as any burst of tags does.
+    await until(() => onboardingDue(two.store.getState().user) === null, 'the gate lets go after the connect');
     expect(onboardingDue(two.store.getState().user)).toBeNull();
     stop();
     two.close();
+  });
+});
+
+describe('F12 fix round 1: answers out of order, and bursts', () => {
+  it('an older read that answers last never puts back the session a newer one put in place (held first, released last)', async () => {
+    const server = { session: { ...OLD } };
+    const two = await device('una', server);
+    two.holdNext();
+    const first = invalidateEntities(two.qc, ['user:una']); // a draft save's tag: R1 asks while the session is still OLD
+    await until(() => two.sessionReads() === 2, 'R1 on its way');
+    server.session = { ...DONE };
+    await invalidateEntities(two.qc, ['user:una']); // the confirm's tag: R2 answers the finished session
+    expect(onboardingDue(two.store.getState().user)).toBeNull();
+    two.releaseHeld(); // R1's answer (OLD) lands last
+    await first;
+    await sleep(QUICK.coalesceMs * 3);
+    expect(two.store.getState().user).toMatchObject({ onboardingVersion: 2, location: 'Copenhagen, Denmark' });
+    expect(onboardingDue(two.store.getState().user)).toBeNull();
+    two.close();
+  });
+
+  it('on the confirming tab, a read on its way when the confirm\'s own session check lands is dropped, so there is no loop', async () => {
+    const server = { session: { ...OLD } };
+    const one = await device('una', server);
+    one.holdNext();
+    const first = invalidateEntities(one.qc, ['user:una']);
+    await until(() => one.sessionReads() === 2, 'R1 on its way');
+    server.session = { ...DONE };
+    await one.store.getState().checkSession(); // what the confirm does before it navigates
+    expect(onboardingDue(one.store.getState().user)).toBeNull();
+    one.releaseHeld();
+    await first;
+    await sleep(QUICK.coalesceMs * 3);
+    expect(onboardingDue(one.store.getState().user)).toBeNull();
+    one.close();
+  });
+
+  it('a burst of user:<id> (a For You swipe session) is one session read, sent once the burst is quiet', async () => {
+    const two = await device('una', { session: { ...DONE } }, { coalesceMs: 60, maxWaitMs: 2000 });
+    const before = two.sessionReads();
+    const tags: Array<Promise<void>> = [];
+    for (let i = 0; i < 5; i += 1) {
+      tags.push(invalidateEntities(two.qc, ['user:una']));
+      await sleep(10);
+    }
+    await Promise.all(tags);
+    await sleep(120);
+    expect(two.sessionReads()).toBe(before + 1);
+    two.close();
+  });
+
+  it('a burst that never pauses is still read once the longest wait is up', async () => {
+    const server = { session: { ...OLD } };
+    const two = await device('una', server, { coalesceMs: 50, maxWaitMs: 150 });
+    const before = two.sessionReads();
+    server.session = { ...DONE };
+    const tags: Array<Promise<void>> = [];
+    for (let elapsed = 0; elapsed < 500; elapsed += 15) {
+      tags.push(invalidateEntities(two.qc, ['user:una']));
+      await sleep(15);
+    }
+    const duringBurst = two.sessionReads() - before;
+    expect(duringBurst).toBeGreaterThanOrEqual(2);
+    expect(duringBurst).toBeLessThanOrEqual(8);
+    expect(onboardingDue(two.store.getState().user)).toBeNull();
+    await Promise.all(tags);
+    two.close();
+  });
+
+  it('the app waits a second for a burst to end and never more than five; a failed read is not retried in a loop', () => {
+    expect(SESSION_READ_COALESCE_MS).toBe(1000);
+    expect(SESSION_READ_MAX_WAIT_MS).toBe(5000);
+    const options = sessionReadOptions('m-1', async () => null, { id: 'm-1' });
+    expect(options.retry).toBe(false);
   });
 });
 

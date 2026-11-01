@@ -27,7 +27,7 @@ interface AuthState {
   checkSession: () => Promise<void>;
   /** Read the session again for the member this tab already shows, when the server says it changed (user:<id>).
    *  Resolves to the session's member; puts it in place only when something in it changed. */
-  rereadSession: () => Promise<unknown>;
+  rereadSession: (signal?: AbortSignal) => Promise<unknown>;
   refreshAccessToken: () => Promise<void>;
   logout: () => Promise<void>;
   setTokens: (access: string, refresh: string) => void;
@@ -106,6 +106,26 @@ function clearStoredTokens(): void {
 // the failure must NOT clear auth. This closes the boot-checkSession-vs-verify
 // race that bounced Stefan to /login on the first click.
 let authEpoch = 0;
+
+// Every read of GET /auth/session takes the next number as it is sent (F12 fix round 1, 2 Nov 2026). Its answer is put
+// in place only when no read sent after it has already been put in place, so answers that arrive out of order (a slow
+// phone link, a read superseded by a newer tag) can never bring back an older session: a draft save's read landing after
+// the confirm's would close the onboarding gate again, and on the confirming tab send the member back into onboarding.
+let sessionReadsSent = 0;
+let newestSessionInPlace = 0;
+
+/** The number of a session read about to be sent. */
+function nextSessionRead(): number {
+  sessionReadsSent += 1;
+  return sessionReadsSent;
+}
+
+/** True, and recorded, when read `n`'s answer is no older than the session in place. */
+function mayPutInPlace(n: number): boolean {
+  if (n < newestSessionInPlace) return false;
+  newestSessionInPlace = n;
+  return true;
+}
 
 // Distinguishes a DEFINITIVE rejection (refresh token truly dead → log out)
 // from a TRANSIENT failure (endpoint unreachable / 5xx → keep the session).
@@ -271,10 +291,15 @@ export const useAuthStore = create<AuthState>((set, get) => {
       const TRANSIENT_DELAYS = [2000, 5000, 10000];
       for (let attempt = 0; ; attempt++) {
         try {
+          const read = nextSessionRead();
           const { data } = await api.get('/auth/session', { timeout: 15000 });
-          // Whose session this is, BEFORE a page can read it: a different member empties the query cache.
-          setCacheOwner(data.data.user.id);
-          set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
+          if (mayPutInPlace(read)) {
+            // Whose session this is, BEFORE a page can read it: a different member empties the query cache.
+            setCacheOwner(data.data.user.id);
+            set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
+          } else {
+            set({ isAuthenticated: true, isLoading: false, isSessionChecked: true });
+          }
           scheduleProactiveRefresh(get().accessToken!);
           return;
         } catch (err: any) {
@@ -289,9 +314,14 @@ export const useAuthStore = create<AuthState>((set, get) => {
             // Token might be expired but refreshable — try refreshing before giving up.
             try {
               await get().refreshAccessToken();
+              const read = nextSessionRead();
               const { data } = await api.get('/auth/session', { timeout: 15000 });
-              setCacheOwner(data.data.user.id);
-              set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
+              if (mayPutInPlace(read)) {
+                setCacheOwner(data.data.user.id);
+                set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
+              } else {
+                set({ isAuthenticated: true, isLoading: false, isSessionChecked: true });
+              }
               scheduleProactiveRefresh(get().accessToken!);
             } catch (refreshErr: any) {
               const blockedNow = accountBlockedReason(refreshErr);
@@ -334,14 +364,18 @@ export const useAuthStore = create<AuthState>((set, get) => {
       }
     },
 
-    rereadSession: async () => {
-      const { data } = await api.get('/auth/session', { timeout: 15000 });
+    rereadSession: async (signal?: AbortSignal) => {
+      const read = nextSessionRead();
+      // The signal cancels a read a newer tag has superseded; an answer already on its way is held back below.
+      const { data } = await api.get('/auth/session', { timeout: 15000, signal });
       const fresh = data?.data?.user ?? null;
       const now = get();
       // Only the member this tab shows, and only while signed in: a tab signed out while the read was on its way stays
       // signed out, and a session that is another member's (a sign-in in another tab) is followed by the storage
       // listener, which also empties the cache.
       if (!fresh || !now.isAuthenticated || !now.user || now.user.id !== fresh.id) return fresh;
+      // Never an answer older than the session in place, whatever order they arrive in.
+      if (!mayPutInPlace(read)) return fresh;
       // The same session again (most user:<id> tags change other things) leaves the store as it was: nothing redraws,
       // and a profile form being typed in is not reset.
       if (JSON.stringify(now.user) !== JSON.stringify(fresh)) set({ user: fresh });
