@@ -14,7 +14,7 @@
 
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { getSocket } from '@/lib/socket';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
@@ -30,7 +30,6 @@ const callKeys = {
 
 export function useCallSignals(): void {
   const navigate = useNavigate();
-  const qc = useQueryClient();
   const me = useAuthStore((s) => s.user?.id as string | undefined);
   const addToast = useToastStore((s) => s.addToast);
 
@@ -56,21 +55,17 @@ export function useCallSignals(): void {
       addToast(`${d.byName} can't take the call right now.`, 'info');
     };
     const onCancelled = (d: { requestId: string }) => store().end(d.requestId);
-    // Events missed while the connection was down: read what rings now.
-    const onConnect = () => { void qc.invalidateQueries({ queryKey: ['calls'] }); };
     socket.on('call:request', onRequest);
     socket.on('call:accepted', onAccepted);
     socket.on('call:declined', onDeclined);
     socket.on('call:cancelled', onCancelled);
-    socket.on('connect', onConnect);
     return () => {
       socket.off('call:request', onRequest);
       socket.off('call:accepted', onAccepted);
       socket.off('call:declined', onDeclined);
       socket.off('call:cancelled', onCancelled);
-      socket.off('connect', onConnect);
     };
-  }, [navigate, addToast, qc]);
+  }, [navigate, addToast]);
 
   // What rings now, read when the app opens and again whenever a call of mine changes.
   const incoming = useQuery({

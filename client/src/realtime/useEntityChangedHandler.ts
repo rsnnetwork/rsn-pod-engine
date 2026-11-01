@@ -7,6 +7,9 @@
 // Contract: when a server emits `entity:changed` with `{ entities: [...] }`,
 // every query whose `meta.entities` shares at least one string with the
 // payload gets invalidated. Queries without meta.entities are untouched.
+// On every connect of the socket (the first, and each reconnect after a gap)
+// every query that declares meta.entities is invalidated once, so nothing sent
+// while this tab was not listening stays unseen (P1 item 17, 1 Nov 2026).
 //
 // See: docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
 // for the full migration plan.
@@ -14,23 +17,12 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { getSocket } from '@/lib/socket';
-import { invalidateEntities } from './invalidate-entities';
+import { subscribeEntitySync } from './invalidate-entities';
 
 export function useEntityChangedHandler(): void {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    const socket = getSocket();
-    if (!socket) return;
-
-    const handler = (data: { entities?: string[] }) => {
-      const incoming = Array.isArray(data?.entities) ? data.entities : [];
-      void invalidateEntities(queryClient, incoming);
-    };
-
-    socket.on('entity:changed', handler);
-    return () => {
-      socket.off('entity:changed', handler);
-    };
+    return subscribeEntitySync(getSocket(), queryClient);
   }, [queryClient]);
 }

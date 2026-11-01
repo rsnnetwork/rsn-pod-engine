@@ -56,7 +56,8 @@ describe('the ring is heard app-wide, not only in the open thread', () => {
     expect(signals).toMatch(/fetchIncomingCall\(\)/);
     expect(signals).toMatch(/fetchOutgoingCall\(\)/);
     expect(signals.match(/meta: \{ entities: me \? \[E\.userCalls\(me\)\] : \[\] \}/g)).toHaveLength(2);
-    expect(signals).toMatch(/socket\.on\('connect', onConnect\)/);
+    // After a lost connection the app-wide handler reads every tagged query again (P1 item 17), these two included.
+    expect(signals).not.toMatch(/socket\.on\('connect'/);
     expect(clientE.userCalls('u-1')).toBe('user:u-1:calls');
     const api = src('features/calls/call-api.ts');
     expect(api).toContain("api.get('/dm/call/requests/incoming')");

@@ -4,13 +4,11 @@
 // user:<id> tag, which refetches it here and wherever else the member is
 // signed in. The endpoints are Task 8's (server/src/routes/onboarding-v2.ts).
 
-import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   OnboardingV2ConfirmRequest, OnboardingV2ConfirmResponse, OnboardingV2LinkedinResponse, OnboardingV2State,
 } from '@rsn/shared';
 import api from '@/lib/api';
-import { getSocket } from '@/lib/socket';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import type { DraftPatch } from './flow';
@@ -24,19 +22,12 @@ function useMemberId(): string | undefined {
 /**
  * The onboarding state. It changes under the member's user tag: every write
  * here, and the end of a LinkedIn lookup, which the server sends when it ends.
- * A socket that dropped and came back has missed whatever was sent meanwhile,
- * so while this state is on screen it is read again each time the socket
- * connects. Only this query: nothing else on the page is re-read for it.
+ * A socket that dropped and came back has missed whatever was sent meanwhile:
+ * the app-wide handler reads every tagged query again when the socket connects
+ * (P1 item 17), this one included.
  */
 export function useOnboardingV2State() {
   const userId = useMemberId();
-  const qc = useQueryClient();
-  useEffect(() => {
-    const socket = getSocket();
-    const resync = () => { void qc.invalidateQueries({ queryKey: ['onboarding-v2-state'] }); };
-    socket.on('connect', resync);
-    return () => { socket.off('connect', resync); };
-  }, [qc]);
   return useQuery({
     queryKey: onboardingV2Key(userId),
     queryFn: () => api.get('/onboarding/v2/state').then(r => r.data.data as OnboardingV2State),
