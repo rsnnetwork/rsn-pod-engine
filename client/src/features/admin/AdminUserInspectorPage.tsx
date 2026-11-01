@@ -15,6 +15,7 @@ import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
 import { E } from '@/realtime/entities';
+import OnboardingAnswersCard from './OnboardingAnswersCard';
 
 // ─── Task E3: admin per-user inspector ───────────────────────────────────────
 //
@@ -273,6 +274,9 @@ function OnboardingTab({ data, isLoading, isError, onRefresh, refreshing }: {
 
   return (
     <div className="space-y-4 animate-fade-in-up">
+      {/* The member's answers as they gave them, and the CSV of everyone's (30 Oct review, 2.3). */}
+      <OnboardingAnswersCard answers={data.answers} status={data.onboardingStatus} />
+
       {/* Status + refresh */}
       <Card className="!p-5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

@@ -8,7 +8,7 @@
 
 import { useRef, useState } from 'react';
 import type { OnboardingV2ProfileInput, OnboardingV2State } from '@rsn/shared';
-import { browserTimeZone, currentZoneName, isRealZone, profileInput, profileValue, type ProfileFields } from './flow';
+import { browserTimeZone, currentZoneName, isRealZone, locationProblem, profileInput, profileValue, type ProfileFields } from './flow';
 
 const NAME_MISSING = 'Enter your name, as people should see it.';
 
@@ -20,11 +20,14 @@ export function useProfileForm(state: OnboardingV2State, linkedinOn: boolean) {
   const [zoneEdit, setZoneEdit] = useState<string | null>(null);
   const [keptPhoto, setKeptPhoto] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
+  // "Where are you based?" left empty, or only a country, when they pressed the last button (30 Oct review, 1.2).
+  const [locationError, setLocationError] = useState<string | null>(null);
   // A refusal from confirm: under the field it is about, or over the whole screen. Changing anything clears it.
   const [refusal, setRefusal] = useState<{ field: FieldKey | null; message: string } | null>(null);
   // "Later" on the LinkedIn card holds while they go to [Edit] a question and come back.
   const [linkedinLater, setLinkedinLater] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
+  const locationRef = useRef<HTMLInputElement>(null);
 
   const { profile } = state;
   const prefill = linkedinOn ? state.linkedin.prefill : undefined;
@@ -33,6 +36,7 @@ export function useProfileForm(state: OnboardingV2State, linkedinOn: boolean) {
     jobTitle: profileValue(edits.jobTitle, profile.jobTitle, prefill?.jobTitle),
     company: profileValue(edits.company, profile.company, prefill?.company),
     industry: profileValue(edits.industry, profile.industry, prefill?.industry),
+    location: profileValue(edits.location, profile.location, prefill?.location),
   };
   const zone = zoneEdit ?? (isRealZone(profile.timezone) ? currentZoneName(profile.timezone) : browserTimeZone());
   // Exactly the photo they were shown and kept, and only while they have no photo of their own.
@@ -43,26 +47,38 @@ export function useProfileForm(state: OnboardingV2State, linkedinOn: boolean) {
     zone,
     keptPhoto,
     nameRef,
+    locationRef,
     linkedinLater,
     setLinkedinLater,
     /** What to say under a field, if anything. */
     fieldError: (field: FieldKey): string | null =>
-      (field === 'displayName' && nameError) || (refusal?.field === field ? refusal.message : null),
+      (field === 'displayName' && nameError) || (field === 'location' && locationError)
+      || (refusal?.field === field ? refusal.message : null),
     /** What to say over the whole screen, if anything. */
     formError: refusal && !refusal.field ? refusal.message : null,
     refuse: (field: FieldKey | null, message: string) => setRefusal({ field, message }),
     setField: (field: keyof ProfileFields, value: string) => {
       if (field === 'displayName') setNameError(null);
+      if (field === 'location') setLocationError(null);
       setRefusal(null);
       setEdits(e => ({ ...e, [field]: value }));
     },
     setZone: (z: string) => { setRefusal(null); setZoneEdit(z); },
     setKeptPhoto,
-    /** The profile half of confirm; null when the name is blank, which it then says, with the cursor there. */
+    /**
+     * The profile half of confirm; null when the name is blank, or where they are based is empty or only a country,
+     * which it then says under the field, with the cursor there.
+     */
     input: (): OnboardingV2ProfileInput | null => {
       if (!shown.displayName.value.trim()) {
         setNameError(NAME_MISSING);
         nameRef.current?.focus();
+        return null;
+      }
+      const whereProblem = locationProblem(shown.location.value);
+      if (whereProblem) {
+        setLocationError(whereProblem);
+        locationRef.current?.focus();
         return null;
       }
       const fields: ProfileFields = {
@@ -70,6 +86,7 @@ export function useProfileForm(state: OnboardingV2State, linkedinOn: boolean) {
         jobTitle: shown.jobTitle.value,
         company: shown.company.value,
         industry: shown.industry.value,
+        location: shown.location.value,
       };
       return profileInput(fields, profile, isRealZone(zone) ? zone : null, keepsLinkedinPhoto);
     },

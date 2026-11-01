@@ -35,27 +35,31 @@ describe('T1-2 — onboarding gate decoupled from ProtectedRoute', () => {
       expect(src).not.toMatch(/VITE_LEGACY_ONBOARDING_GATE/);
     });
 
-    it('gates on user.onboardingStatus, redirecting to /onboarding unless completed', () => {
-      expect(src).toMatch(/user\.onboardingStatus/);
-      expect(src).toMatch(/status\s*!==\s*undefined\s*&&\s*status\s*!==\s*['"]completed['"]/);
+    // 30 Oct review (L3): the rule, its fail-open cases and the exempt pages moved into one pure helper,
+    // components/layout/onboarding-gate.ts, which server/src/__tests__/client/onboarding-gate.test.ts runs.
+    it('gates through the onboarding-gate helper, on the session member', () => {
+      expect(src).toContain('onboardingDue(user)');
+      expect(src).toContain('isGateExempt(location.pathname)');
     });
 
+    const gate = readClient('components/layout/onboarding-gate.ts');
+
     it('undefined onboardingStatus fails open (no redirect for a stale cached session)', () => {
-      // needsOnboarding must require status !== undefined — an old cached
-      // payload without the field must never trigger the redirect.
-      expect(src).toMatch(/status\s*!==\s*undefined/);
+      expect(gate).toContain('if (status === undefined) return null;');
     });
 
     it('exempts /onboarding itself, /invite/:code, and live-session paths', () => {
-      expect(src).toMatch(/location\.pathname === ['"]\/onboarding['"]/);
-      expect(src).toMatch(/location\.pathname\.startsWith\(['"]\/invite\/['"]\)/);
-      expect(src).toMatch(/location\.pathname\.startsWith\(['"]\/session\/['"]\)/);
-      expect(src).toMatch(/location\.pathname\.includes\(['"]\/live['"]\)/);
+      expect(gate).toContain('/^\\/onboarding$/');
+      expect(gate).toContain('/^\\/invite\\//');
+      expect(gate).toContain('/^\\/session\\/[^/]+\\/live(?:\\/|$)/');
     });
 
     it('has no role exemption — no role/admin check gates the redirect', () => {
-      expect(src).not.toMatch(/role\s*===\s*['"]admin['"]/);
-      expect(src).not.toMatch(/UserRole\.(ADMIN|SUPER_ADMIN)/);
+      for (const code of [src, gate]) {
+        expect(code).not.toMatch(/role\s*===\s*['"]admin['"]/);
+        expect(code).not.toMatch(/UserRole\.(ADMIN|SUPER_ADMIN)/);
+        expect(code).not.toMatch(/\.role\b/);
+      }
     });
   });
 

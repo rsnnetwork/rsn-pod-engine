@@ -177,18 +177,26 @@ export default function PublicProfilePage() {
                 {headline || <span className="italic text-gray-300">No title</span>}
               </p>
 
-              {/* Inline meta — always show all 3 */}
-              <div className="mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-gray-500 sm:justify-start">
-                <span className="flex items-center gap-1">
-                  <MapPin className="h-3 w-3" /> {user.location || <span className="italic text-gray-300">No location</span>}
-                </span>
-                <span className="flex items-center gap-1">
-                  <Globe className="h-3 w-3" /> {user.industry || <span className="italic text-gray-300">No industry</span>}
-                </span>
-                <span className="flex items-center gap-1">
-                  <Languages className="h-3 w-3" /> {user.languages?.length > 0 ? user.languages.join(', ') : <span className="italic text-gray-300">Not set</span>}
-                </span>
-              </div>
+              {/* Inline meta: each line only when it has something to say (30 Oct review, 1.2: never "No location"). */}
+              {(user.location || user.industry || user.languages?.length > 0) && (
+                <div className="mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-gray-500 sm:justify-start">
+                  {user.location && (
+                    <span className="flex min-w-0 items-center gap-1 [overflow-wrap:anywhere]">
+                      <MapPin className="h-3 w-3 shrink-0" /> {user.location}
+                    </span>
+                  )}
+                  {user.industry && (
+                    <span className="flex min-w-0 items-center gap-1 [overflow-wrap:anywhere]">
+                      <Globe className="h-3 w-3 shrink-0" /> {user.industry}
+                    </span>
+                  )}
+                  {user.languages?.length > 0 && (
+                    <span className="flex min-w-0 items-center gap-1 [overflow-wrap:anywhere]">
+                      <Languages className="h-3 w-3 shrink-0" /> {user.languages.join(', ')}
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* LinkedIn — always show */}
               <div className="mt-2">

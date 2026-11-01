@@ -59,7 +59,7 @@ describe('screen 1, Welcome', () => {
       "Welcome to REASON. We're glad you're here.",
       'Every good connection starts with a reason.',
       'On REASON, you connect with people you want to meet, who also want to meet you, for a specific reason.',
-      'Answer quick questions and we will suggest the potential mutuals for you.',
+      "Answer a few quick questions and we'll suggest potential mutuals for you.",
       "Let's go",
     ]);
     expect(html().match(/<button/g)).toHaveLength(1);
@@ -335,7 +335,8 @@ describe('the data contract', () => {
   // Fix round 1 (M-7): when the save opens the tour, its success toast sat over the tour's Skip on a phone. The tour, and
   // the changed page under it, say it was saved; every other edit-mode save still says so.
   it('edit mode says "Your changes are saved." only when the save does not open the tour', () => {
-    expect(flowSource).toMatch(/if \(!tourOpensAfterConfirm\(state\.tour\)\) addToast\('Your changes are saved\.', 'success'\);\s*leave\(edit\);/);
+    // 30 Oct review (1.2): sent here by the gate only for where they are based, Save goes on to the page they were going to.
+    expect(flowSource).toMatch(/if \(!tourOpensAfterConfirm\(state\.tour\)\) addToast\('Your changes are saved\.', 'success'\);\s*if \(locationDue\) navigate\(steps\.redirect, \{ replace: true, state: LANDED \}\);\s*else leave\(edit\);/);
     expect(flowSource.match(/Your changes are saved\./g)).toHaveLength(1);
   });
 
@@ -345,7 +346,9 @@ describe('the data contract', () => {
     expect(leave).toMatch(/markReturned\(memberId\);\s*navigate\(-keys\.current\.length\);/);
     expect(leave).toMatch(/navigate\(editFallback\(target\), \{ replace: true, state: LANDED \}\);/);
     // Every navigate in the flow and in edit mode's way out is one of those.
-    expect(flowSource.match(/\bnavigate\(/g)).toHaveLength(1);
+    // (the first confirm, and the gate's location-only save: both to ?redirect=, both LANDED)
+    expect(flowSource.match(/\bnavigate\(/g)).toHaveLength(2);
+    expect(flowSource.match(/\bnavigate\(steps\.redirect, \{ replace: true, state: LANDED \}\)/g)).toHaveLength(2);
     expect(leave.match(/\bnavigate\(/g)).toHaveLength(2);
   });
 
