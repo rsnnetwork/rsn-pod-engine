@@ -519,6 +519,18 @@ export const adminFeedbackExportLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have downloaded the feedback a lot just now. Try again in a few minutes.' } },
 });
 
+// A meeting's calendar file (1 Nov 2026, T7): one press of "Add to calendar" is one read, so 20 a minute per member
+// is far more than a person needs, and keeps a script from reading every meeting's file in a loop.
+export const meetingCalendarLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('meeting-calendar'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // The banner picture itself. It is public (an <img> sends no token), so it is counted per network address.
 // Each banner's URL is versioned and cached for a day, so one person opening profiles asks for each only once,
 // and a refused picture only means the page draws the default banner in its place.

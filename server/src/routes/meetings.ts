@@ -7,10 +7,11 @@
 // POST /meetings/:id/cancel                                               Meeting; already cancelled → 200, started or ended → 409
 // POST /meetings/:id/feedback  { worthContinuing, problems?, problemText? } SavedMeetingFeedback (30 Oct 2026); a second
 //                                                                         press edits the same answer
+// GET  /meetings/:id/calendar.ics                                         the meeting's .ics; cancelled → 404 (1 Nov 2026)
 //
 // `before` is a page's `nextBefore`. Booking and moving stay in the scheduler (routes/meeting.ts).
-// The reads are held by the API limiter in front of every /api route; cancel has an allowance of its
-// own, and so does feedback. The service decides who sees what and tells the screens once a cancel is done; the
+// The reads are held by the API limiter in front of every /api route; cancel, feedback and the calendar file have
+// allowances of their own. The service decides who sees what and tells the screens once a cancel is done; the
 // feedback service tells the author's screens and every admin's feedback list once an answer is saved.
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -18,9 +19,10 @@ import { z } from 'zod';
 import { ApiResponse, MEETING_PROBLEMS, MEETING_PROBLEM_TEXT_MAX, WORTH_CONTINUING } from '@rsn/shared';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
-import { meetingCancelLimiter, meetingFeedbackLimiter } from '../middleware/rateLimit';
+import { meetingCalendarLimiter, meetingCancelLimiter, meetingFeedbackLimiter } from '../middleware/rateLimit';
 import * as meetings from '../services/meetings/meeting.service';
 import * as feedback from '../services/meetings/meeting-feedback.service';
+import { MEETING_FILE_HEADERS } from '../services/meetings/meeting-calendar';
 
 const router = Router();
 
@@ -71,6 +73,19 @@ router.get('/:id', authenticate, validate(meetingParams, 'params'),
     try {
       const data = await meetings.getMeeting(req.user!.userId, req.params.id);
       res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+// The meeting's own calendar file (1 Nov 2026, T7): its two people only, with the content and headers of the
+// conversation's file (routes/meeting.ts), which production's client still downloads.
+router.get('/:id/calendar.ics', authenticate, meetingCalendarLimiter, validate(meetingParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const ics = await meetings.getMeetingCalendarFile(req.user!.userId, req.params.id);
+      res.set(MEETING_FILE_HEADERS);
+      res.send(ics);
     } catch (err) {
       next(err);
     }

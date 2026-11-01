@@ -847,22 +847,25 @@ async function announceConfirmation(conversationId: string, actorId: string, don
     // Whoever booked the meeting first organises every copy of its file, moves included: a
     // calendar trusts an update to an entry from the organizer it already has.
     const organizer = meeting?.confirmedBy ? byId.get(meeting.confirmedBy) : undefined;
-    const joinPath = meetingJoinPath(conversationId, type);
-    const { generateIcsContent, buildGoogleCalendarUrl, meetingCalendarUid } = await import('../calendar/calendar.service');
+    const joinUrl = `${config.clientUrl}${meetingJoinPath(conversationId, type)}`;
+    const { generateIcsContent, meetingCalendarLinks, meetingCalendarUid } = await import('../calendar/calendar.service');
     const { sendMeetingConfirmedEmail } = await import('../email/email.service');
     const title = 'REASON meeting';
     const threadUrl = `${config.clientUrl}/messages/${conversationId}`;
-    const googleUrl = buildGoogleCalendarUrl({ title, startTime: startAt, durationMinutes: durationMin, description: 'A 1:1 meeting arranged on REASON.' });
     for (const uid of [actorId, partnerId]) {
       const me = byId.get(uid);
       const other = byId.get(uid === actorId ? partnerId : actorId);
       if (!me?.email) continue;
+      const partnerName = other?.display_name || 'your match';
+      // 1 Nov 2026 (T7): each person's Google and Outlook.com links are a meeting with the other, and carry the join
+      // link; the Google link used to be a bare "REASON meeting" with no way into the call.
+      const links = meetingCalendarLinks({ partnerName, kind: type ?? 'video', startAt, durationMin, joinUrl });
       const ics = generateIcsContent({
         title,
-        description: `A 1:1 meeting arranged on REASON with ${other?.display_name || 'your match'}.`,
+        description: `A 1:1 meeting arranged on REASON with ${partnerName}. Join: ${joinUrl}`,
         startTime: startAt,
         durationMinutes: durationMin,
-        location: `${config.clientUrl}${joinPath}`,
+        location: joinUrl,
         // Same meeting, same identity, every copy: both emails, every move and
         // the in-app download. A move carries the next SEQUENCE, so calendars
         // move the entry they already have instead of keeping the old time.
@@ -872,15 +875,16 @@ async function announceConfirmation(conversationId: string, actorId: string, don
         attendees: people.filter(p => p.email).map(p => ({ name: p.display_name || undefined, email: p.email! })),
       });
       void sendMeetingConfirmedEmail(me.email, me.display_name || 'there', {
-        partnerName: other?.display_name || 'your match',
+        partnerName,
         startAt,
         durationMin,
         recipientTimezone: me.timezone,
         threadUrl,
         eventsUrl: `${config.clientUrl}/sessions`,
-        googleCalendarUrl: googleUrl,
+        googleCalendarUrl: links.google,
+        outlookCalendarUrl: links.outlook,
         icsContent: ics,
-        joinUrl: `${config.clientUrl}${joinPath}`,
+        joinUrl,
         kind: type ?? 'video',
         moved: !!movedFrom,
       }).catch(err => logger.warn({ err, uid }, 'meeting-confirmed email failed (non-fatal)'));

@@ -1293,6 +1293,8 @@ export interface MeetingConfirmedEmailData {
   recipientTimezone?: string | null;
   threadUrl: string;
   googleCalendarUrl: string;
+  /** 1 Nov 2026 (T7, L10): "Add to Outlook.com", beside the Google link. */
+  outlookCalendarUrl?: string;
   icsContent: string;
   /** W-meet: the REASON call link + kind, so they can join from the email. */
   joinUrl?: string;
@@ -1335,6 +1337,9 @@ export async function sendMeetingConfirmedEmail(
           <div style="text-align:center;margin:12px 0;">
             <a href="${escapeAttr(data.googleCalendarUrl)}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Google Calendar</a>
           </div>
+          ${data.outlookCalendarUrl ? `<div style="text-align:center;margin:12px 0;">
+            <a href="${escapeAttr(data.outlookCalendarUrl)}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Outlook.com</a>
+          </div>` : ''}
           <p style="color:#9ca3af;font-size:13px;text-align:center;margin:0 0 16px 0;">The calendar invite is attached (.ics) — open it to add the meeting to any calendar.</p>
           ${data.eventsUrl ? `<div style="text-align:center;margin:8px 0;">
             <a href="${escapeAttr(data.eventsUrl)}" style="color:#DE322E;font-size:14px;font-weight:600;">See it in Events</a>
@@ -1346,7 +1351,8 @@ export async function sendMeetingConfirmedEmail(
       </div>
     </body></html>`;
   const eventsLine = data.eventsUrl ? `See it in Events: ${data.eventsUrl}\n` : '';
-  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} ${firstLine}\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\n${eventsLine}Open the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nREASON — Meet people you have a reason to know.`;
+  const outlookLine = data.outlookCalendarUrl ? `Add to Outlook.com: ${data.outlookCalendarUrl}\n` : '';
+  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} ${firstLine}\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\n${outlookLine}${eventsLine}Open the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nREASON — Meet people you have a reason to know.`;
 
   if (config.resendApiKey) {
     await sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent, contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });

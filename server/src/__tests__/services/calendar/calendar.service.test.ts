@@ -6,7 +6,9 @@
 
 jest.mock('../../../db', () => ({ query: jest.fn(), __esModule: true }));
 
-import { generateIcsContent, meetingCalendarUid } from '../../../services/calendar/calendar.service';
+import {
+  buildCalendarLinks, buildGoogleCalendarUrl, generateIcsContent, meetingCalendarLinks, meetingCalendarUid,
+} from '../../../services/calendar/calendar.service';
 
 const base = {
   title: 'RSN meeting',
@@ -97,5 +99,73 @@ describe('a meeting\'s calendar identity', () => {
     expect(flat).not.toMatch(/RSVP=TRUE/);
     expect(ics).toContain('DTSTART:20260910T133000Z');
     expect(ics.endsWith('END:VCALENDAR\r\n')).toBe(true);
+  });
+});
+
+// ── Add to calendar by link (1 Nov 2026, 30 Oct review 5b; L10) ──────────────────
+// Google's template link and Outlook.com's compose link, from one builder: a title, the UTC start and end,
+// details that carry the join link, and where (the join link for a call, the place for an in-person event).
+// A template link cannot carry a UID, so these make an entry of their own; the file and the emailed invite
+// are the ones a move or a cancel updates.
+describe('the calendar template links', () => {
+  const entry = {
+    title: 'Meeting with Bo on REASON',
+    start: new Date('2026-11-05T17:00:00.000Z'),
+    end: new Date('2026-11-05T17:30:00.000Z'),
+    details: 'Video call on REASON. Join: https://app.rsn.network/meet/c1?scheduled=1&kind=video',
+    location: 'https://app.rsn.network/meet/c1?scheduled=1&kind=video',
+  };
+
+  it('Google: the title, the UTC dates in the compact form, details with the join link, and where', () => {
+    const url = new URL(buildCalendarLinks(entry).google);
+    expect(`${url.origin}${url.pathname}`).toBe('https://calendar.google.com/calendar/render');
+    expect(url.searchParams.get('action')).toBe('TEMPLATE');
+    expect(url.searchParams.get('text')).toBe('Meeting with Bo on REASON');
+    expect(url.searchParams.get('dates')).toBe('20261105T170000Z/20261105T173000Z');
+    expect(url.searchParams.get('details')).toBe(entry.details);
+    expect(url.searchParams.get('location')).toBe(entry.location);
+  });
+
+  it('Outlook.com: the same entry on its compose page, the times in UTC ISO form', () => {
+    const url = new URL(buildCalendarLinks(entry).outlook);
+    expect(`${url.origin}${url.pathname}`).toBe('https://outlook.live.com/calendar/0/deeplink/compose');
+    expect(url.searchParams.get('path')).toBe('/calendar/action/compose');
+    expect(url.searchParams.get('rru')).toBe('addevent');
+    expect(url.searchParams.get('subject')).toBe('Meeting with Bo on REASON');
+    expect(url.searchParams.get('startdt')).toBe('2026-11-05T17:00:00Z');
+    expect(url.searchParams.get('enddt')).toBe('2026-11-05T17:30:00Z');
+    expect(url.searchParams.get('body')).toBe(entry.details);
+    expect(url.searchParams.get('location')).toBe(entry.location);
+  });
+
+  it('an in-person place goes in as it is written, & and spaces included', () => {
+    const links = buildCalendarLinks({ ...entry, location: 'Café Nord, Østergade 1 & 2, Copenhagen' });
+    expect(new URL(links.google).searchParams.get('location')).toBe('Café Nord, Østergade 1 & 2, Copenhagen');
+    expect(new URL(links.outlook).searchParams.get('location')).toBe('Café Nord, Østergade 1 & 2, Copenhagen');
+  });
+
+  it('with no place, neither link has a location', () => {
+    const { location: _unused, ...noPlace } = entry;
+    const links = buildCalendarLinks(noPlace);
+    expect(new URL(links.google).searchParams.has('location')).toBe(false);
+    expect(new URL(links.outlook).searchParams.has('location')).toBe(false);
+  });
+
+  it('a meeting\'s links: "Meeting with {name} on REASON", "{Video|Audio} call on REASON. Join: {url}", the join link as where', () => {
+    const video = meetingCalendarLinks({
+      partnerName: 'Bo', kind: 'video', startAt: entry.start, durationMin: 30, joinUrl: entry.location,
+    });
+    expect(video).toEqual(buildCalendarLinks(entry));
+    const audio = new URL(meetingCalendarLinks({
+      partnerName: 'Ana', kind: 'audio', startAt: entry.start, durationMin: 45, joinUrl: 'https://app.rsn.network/meet/c2?scheduled=1&kind=audio',
+    }).google);
+    expect(audio.searchParams.get('text')).toBe('Meeting with Ana on REASON');
+    expect(audio.searchParams.get('details')).toBe('Audio call on REASON. Join: https://app.rsn.network/meet/c2?scheduled=1&kind=audio');
+    expect(audio.searchParams.get('dates')).toBe('20261105T170000Z/20261105T174500Z');
+  });
+
+  it('the older Google builder (title, start, length, description) still answers the same link', () => {
+    expect(buildGoogleCalendarUrl({ title: 'REASON meeting', startTime: entry.start, durationMinutes: 30, description: 'x' }))
+      .toBe('https://calendar.google.com/calendar/render?action=TEMPLATE&text=REASON+meeting&dates=20261105T170000Z%2F20261105T173000Z&details=x');
   });
 });
