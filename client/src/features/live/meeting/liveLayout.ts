@@ -114,9 +114,9 @@ export function insetSize(width: number, height: number): { w: number; h: number
 }
 
 /**
- * The share of its full frame the other person keeps when their frame moves clear of the inset (the picture of you).
- * When moving clear would leave them less than this, their frame stays full and the inset sits over its corner, made
- * smaller (down to INSET_MIN) where that lets them keep more. Either way they keep at least 60% (meeting-layout.test.ts).
+ * The share of their full frame the other person should keep once moved clear of the inset (the picture of you). When
+ * the inset at its own size would leave them less, the inset shrinks first, never below INSET_MIN; at that floor they
+ * take the largest room clear of it, which meeting-layout.test.ts holds at no less than 60%. The inset is never over them.
  */
 export const CLEAR_OF_INSET_MIN = 0.7;
 
