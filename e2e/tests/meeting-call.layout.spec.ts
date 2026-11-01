@@ -218,6 +218,19 @@ for (const vp of WIDTHS) {
       expect(lb!.y + lb!.height).toBeLessThanOrEqual(vp.height + 1);
     }
     await page.screenshot({ path: path.join(OUT, `room-${vp.name}.png`) });
+    // 1 Nov 2026 (T7): the chat panel open fits too, its box and Send inside the window, nothing sideways.
+    await page.getByTestId('call-chat-toggle').click();
+    const chat = page.getByTestId('call-chat-panel');
+    await expect(chat).toBeVisible();
+    for (const control of [chat.getByLabel('Message'), chat.getByRole('button', { name: 'Send' }), page.getByTestId('call-chat-toggle')]) {
+      const box = await control.boundingBox();
+      expect(box, `${vp.name}: a chat control has a box`).toBeTruthy();
+      expect(box!.height, `${vp.name}: chat control 44px`).toBeGreaterThanOrEqual(44);
+      expect(box!.y + box!.height, `${vp.name}: chat control inside the viewport`).toBeLessThanOrEqual(vp.height + 1);
+      expect(box!.x + box!.width, `${vp.name}: chat control inside the viewport`).toBeLessThanOrEqual(vp.width + 1);
+    }
+    await expectNoHorizontalOverflow(page, `call room with chat ${vp.name}`);
+    await page.screenshot({ path: path.join(OUT, `room-chat-${vp.name}.png`) });
     await page.close();
   });
 }
