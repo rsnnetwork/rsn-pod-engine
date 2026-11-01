@@ -83,9 +83,10 @@ export async function afterRoomLeave(opts: {
 }
 
 /**
- * How long the leave waits on that read (fix round 3). It is the only wait between pressing leave and leaving, with
- * the call still running; a read still unanswered by then goes to the chat, as a failed one does (axios alone would
- * wait 60 s).
+ * How long the leave waits on that read (fix round 3), with the call still running; a read still unanswered by then
+ * goes to the chat, as a failed one does (axios alone would wait 60 s). Since the leave fix (1 Nov 2026) the room's
+ * own departure (call-presence.ts leaveCall, at most DEPART_MS) runs beside it, so pressing leave waits for whichever
+ * of the two takes longer.
  */
 export const LEAVE_READ_MS = 3_000;
 

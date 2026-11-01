@@ -477,8 +477,9 @@ test('9) one person leaves the room and comes back in; the other stays in it and
       await expect(tiles(boPage)).toHaveCount(2, { timeout: 45_000 });
       await expect(tiles(anaPage)).toHaveCount(2, { timeout: 45_000 });
 
-      // She leaves once more; this time Bo leaves too, from the notice.
-      await anaPage.getByRole('button', { name: 'Leave call and go back to chat' }).click();
+      // She leaves once more, with the bottom bar's red hang-up this time; Bo leaves too, from the notice.
+      await anaPage.getByRole('button', { name: 'Leave call', exact: true }).click();
+      await expect(anaPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });
       await expect(notice).toBeVisible({ timeout: 30_000 });
       await notice.getByRole('button', { name: 'Leave', exact: true }).click();
       await expect(boPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });

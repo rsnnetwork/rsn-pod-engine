@@ -22,7 +22,7 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { PageLoader } from '@/components/ui/Spinner';
 import { errorMessage } from '@/features/reason/errors';
-import { leftCallText, watchPartner } from './call-presence';
+import { leaveCall, leftCallText, watchPartner } from './call-presence';
 import { afterRoomLeave } from '@/features/meetings/meeting-feedback';
 import PartnerSeen from './PartnerSeen';
 import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
@@ -141,11 +141,21 @@ function CallStage() {
 // and rejoin without ending the other person's meeting" could not be done.
 // Now the one still here is told who left, and chooses: Wait (stay in the
 // room; the notice clears by itself when they come back in) or Leave.
-function CallEndWatcher({ onLeave, leaving }: { onLeave: () => void; leaving: boolean }) {
+// 1 Nov 2026 (leave fix): it also hands the leave, which sits outside the room, this side's departure: the goodbye
+// the other side's watcher hears at once, then the disconnect (call-presence.ts, leaveCall).
+function CallEndWatcher({ onLeave, leaving, depart }: {
+  onLeave: () => void;
+  leaving: boolean;
+  depart: MutableRefObject<() => Promise<void>>;
+}) {
   const room = useRoomContext();
   // Who left ('' when the room has no name for them); null while nobody has, or once they are back.
   const [leftName, setLeftName] = useState<string | null>(null);
   useEffect(() => watchPartner(room, setLeftName), [room]);
+  useEffect(() => {
+    depart.current = () => leaveCall(room);
+    return () => { depart.current = noDeparture; };
+  }, [room, depart]);
   if (leftName === null) return null;
   return (
     <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-3">
@@ -181,6 +191,9 @@ function CallEndWatcher({ onLeave, leaving }: { onLeave: () => void; leaving: bo
   );
 }
 
+/** The leave before the room is there (or after it has gone): nothing to say goodbye to. */
+const noDeparture = (): Promise<void> => Promise.resolve();
+
 export default function MeetPage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const [params] = useSearchParams();
@@ -204,6 +217,8 @@ export default function MeetPage() {
   const partnerSeen = useCallback(() => { hadPartner.current = true; }, []);
   // Whether anyone else is in the room right now, asked as the person leaves (PartnerSeen sets it inside the room).
   const partnerProbe = useRef<() => boolean>(() => false);
+  // This side's departure from the room (goodbye, then disconnect), set inside the room by CallEndWatcher.
+  const departRef = useRef<() => Promise<void>>(noDeparture);
   // Pressed: the leave buttons show it at once, while the leave may wait (up to LEAVE_READ_MS) on the meeting's read.
   const [leaving, setLeaving] = useState(false);
   const queryClient = useQueryClient();
@@ -236,17 +251,22 @@ export default function MeetPage() {
     [queryClient, conversationId, readScheduling],
   );
   // Decided as the person leaves, from what the room holds then: who is in it now, as well as who it said came in.
+  // The page moves on once this side has left the room too (leave fix, 1 Nov 2026): the goodbye is said and the
+  // disconnect done while the page is still here, not left to the room's unmount after the address has changed.
   const leaveRoom = useCallback(() => {
     if (leftRoom.current) return;
     leftRoom.current = true;
     setLeaving(true);
-    void afterRoomLeave({
-      conversationId: conversationId ?? '',
-      meetingId: meeting?.meetingId,
-      hadPartner: hadPartner.current,
-      partnerHere: partnerProbe.current(),
-      readMeetingId: isScheduled ? readMeetingId : undefined,
-    }).then((to) => navigate(to));
+    void Promise.all([
+      afterRoomLeave({
+        conversationId: conversationId ?? '',
+        meetingId: meeting?.meetingId,
+        hadPartner: hadPartner.current,
+        partnerHere: partnerProbe.current(),
+        readMeetingId: isScheduled ? readMeetingId : undefined,
+      }),
+      departRef.current(),
+    ]).then(([to]) => navigate(to));
   }, [navigate, conversationId, meeting?.meetingId, isScheduled, readMeetingId]);
   const live = conn && conn.room === roomKey ? conn : null;
 
@@ -361,7 +381,7 @@ export default function MeetPage() {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
   }
 
-  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} leaving={leaving} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} />;
+  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} leaving={leaving} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} departRef={departRef} />;
 }
 
 /**
@@ -371,7 +391,7 @@ export default function MeetPage() {
  * phone, with the stage shrinking above it; it lives inside the LiveKit room, so the call runs on while they type.
  * The page is 100dvh and keeps the iPhone's home-indicator inset clear under whatever is lowest.
  */
-function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSeen, partnerProbe }: {
+function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSeen, partnerProbe, departRef }: {
   conversationId: string;
   kind: 'audio' | 'video';
   live: { token: string; url: string };
@@ -382,6 +402,8 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
   onPartnerSeen: () => void;
   /** Set inside the room: whether anyone else is in it now, read by the leave (outside the room). */
   partnerProbe: MutableRefObject<() => boolean>;
+  /** Set inside the room: this side's departure (goodbye, then disconnect), awaited by the leave. */
+  departRef: MutableRefObject<() => Promise<void>>;
 }) {
   const myUserId = useAuthStore((s) => s.user?.id);
   // Kept once known: a block made during the call takes the conversation off the inbox, and the panel must still
@@ -455,10 +477,26 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             <CallStage />
-            <CallEndWatcher onLeave={leaveRoom} leaving={leaving} />
+            <CallEndWatcher onLeave={leaveRoom} leaving={leaving} depart={departRef} />
             <PartnerSeen onSeen={onPartnerSeen} probe={partnerProbe} />
             <div className={`shrink-0 pb-[env(safe-area-inset-bottom)] ${chatOpen ? 'max-sm:pb-0' : ''}`}>
-              <ControlBar variation="minimal" />
+              {/* LiveKit's own Leave disconnects the room itself, before any goodbye can be said (fix round 1), so the
+                  bar's red hang-up is ours: the person leaving, like the top bar's button and the notice's Leave. */}
+              <div className="lk-control-bar">
+                <ControlBar variation="minimal" controls={{ leave: false }} className="!border-t-0 !p-0" />
+                <button
+                  type="button"
+                  onClick={leaveRoom}
+                  disabled={leaving}
+                  aria-busy={leaving}
+                  aria-label="Leave call"
+                  title="Leave call"
+                  data-testid="call-hang-up"
+                  className="lk-disconnect-button min-h-[44px] min-w-[44px]"
+                >
+                  {leaving ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : <PhoneOff className="h-5 w-5" aria-hidden="true" />}
+                </button>
+              </div>
             </div>
           </div>
           <aside className={`h-[45dvh] shrink-0 sm:h-auto sm:w-80 ${chatOpen ? 'flex flex-col' : 'hidden'}`} aria-label="Chat panel">

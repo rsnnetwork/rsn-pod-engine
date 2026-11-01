@@ -290,7 +290,7 @@ describe('the meeting room', () => {
   it('shows the leave buttons as busy from the moment they are pressed', () => {
     expect(room).toMatch(/leftRoom\.current = true;\s*setLeaving\(true\);/);
     expect(room).toMatch(/onClick=\{leaveRoom\}\s*disabled=\{leaving\}\s*aria-busy=\{leaving\}/);
-    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} leaving=\{leaving\} \/>/);
+    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} leaving=\{leaving\} depart=\{departRef\} \/>/);
     expect(room).toMatch(/\{leaving \? 'Leaving…' : 'Leave'\}/);
   });
 
