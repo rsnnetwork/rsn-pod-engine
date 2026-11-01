@@ -218,6 +218,9 @@ describe('the message-everyone panel says where it stands, in words, never a hov
     const now = new Date(2026, 9, 26, 22, 30).getTime();
     expect(limitSentence(new Date(2026, 9, 26, 23, 5).toISOString(), 'x', now)).toBe('You can send another message at 23:05.');
     expect(limitSentence(new Date(2026, 9, 27, 9, 15).toISOString(), 'x', now)).toBe('You can send another message tomorrow at 09:15.');
+    // Neither today nor tomorrow (a clock that is off, a moment already past): the server's own sentence.
+    expect(limitSentence(new Date(2026, 9, 25, 9, 15).toISOString(), 'the server says', now)).toBe('the server says');
+    expect(limitSentence(new Date(2026, 9, 28, 9, 15).toISOString(), 'the server says', now)).toBe('the server says');
   });
 
   it('before the end: the server\'s sentence and no button', () => {

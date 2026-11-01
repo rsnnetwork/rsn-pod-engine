@@ -271,7 +271,6 @@ describe('moderation and posting are separate in the components too', () => {
     expect(comments.match(/disabled=\{full \|\| sending \|\| /g)?.length).toBe(2);
   });
 
-
   it('a wall that answers 403 draws the not-a-member sentence instead of any stale posts', () => {
     expect(wall).toMatch(/isForbidden\(feed\.error\)/);
     expect(wall).toMatch(/config\.copy\.notMember/);

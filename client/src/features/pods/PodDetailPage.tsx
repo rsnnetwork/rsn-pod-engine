@@ -48,7 +48,6 @@ const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; color
   public_with_approval:{ label: 'Public with Approval', icon: UserCheck, color: 'text-indigo-400', desc: 'Anyone can find and request to join; director approves' },
 };
 
-/** What the page lists of each of the pod's events. */
 // The sections a phone's chip row jumps to; the ids are on the sections below.
 const SECTIONS = [
   { id: 'pod-discussion', label: 'Discussion' },
@@ -213,7 +212,6 @@ export default function PodDetailPage() {
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   const openEdit = () => setEditOpen(true);
-
 
   // A chip scrolls its section into view. A plain address with #section would add a history entry and leave <main>,
   // the page's scroll area, where it is.

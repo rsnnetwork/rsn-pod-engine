@@ -10,13 +10,13 @@ import type { InviteBatchResponse, InviteCandidatePage, InviteCandidateSource } 
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { invalidateEntities } from '@/realtime/invalidate-entities';
+import { retryUnlessAnswered } from '@/components/wall/wall-logic';
 import { useAuthStore } from '@/stores/authStore';
 import type { InviteListRow } from './invite-status';
 import { batchBody, candidateEntities, candidateParams, emailInviteBody, linkBody, targetId, targetTags, type InviteTarget } from './invite-picker';
 
 /** Everything the sheet has read for one pod, event or circle, whatever the list and the search. */
 export const targetKey = (target: InviteTarget) => ['invite-candidates', target.type, targetId(target)] as const;
-
 
 /** How long a list read stays fresh: the server allows 60 candidate reads a minute per member, shared with People. */
 const CANDIDATES_FRESH_MS = 60_000;
@@ -112,6 +112,8 @@ export function usePendingInvites(target: InviteTarget) {
     queryFn: () => api.get(pod ? `/invites/pod/${pod}?status=pending` : `/invites/session/${session}?status=pending`)
       .then((r) => (r.data.data ?? []) as InviteListRow[]),
     enabled: !!pod || !!session,
+    // A refusal (someone who may invite but not read the list: the sheet then makes a link) is an answer, not a blip.
+    retry: (failures: number, err: Error) => retryUnlessAnswered(failures, err),
     meta: { entities: pod ? [E.pod(pod), E.podInvites(pod)] : session ? [E.session(session), E.sessionInvites(session)] : [] },
   });
 }

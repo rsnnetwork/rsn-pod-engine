@@ -628,3 +628,9 @@ describe('Share a link reuses the open link instead of making another each time 
     expect(list).not.toMatch(/queryKey: \['pod-pending-invites'/);
   });
 });
+
+describe('the shared pending-invites read takes a refusal as an answer (review T16, minor 5)', () => {
+  it('a 403 (someone who may invite but not read the list) is not sent again on every opening', () => {
+    expect(read('features/invites/useInviteCandidates.ts')).toContain('retry: (failures: number, err: Error) => retryUnlessAnswered(failures, err),');
+  });
+});

@@ -51,10 +51,11 @@ export function limitSentence(nextSendAt: string | undefined, fallback: string, 
   const at = nextSendAt ? new Date(nextSendAt) : null;
   if (!at || Number.isNaN(at.getTime())) return fallback;
   const clock = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-  const today = new Date(now).toDateString();
-  return at.toDateString() === today
-    ? `You can send another message at ${clock}.`
-    : `You can send another message tomorrow at ${clock}.`;
+  const day = new Date(now);
+  if (at.toDateString() === day.toDateString()) return `You can send another message at ${clock}.`;
+  day.setDate(day.getDate() + 1);
+  // Only the reader's next day is "tomorrow"; any other date (a clock that is off) keeps the server's sentence.
+  return at.toDateString() === day.toDateString() ? `You can send another message tomorrow at ${clock}.` : fallback;
 }
 
 export interface PanelView {
