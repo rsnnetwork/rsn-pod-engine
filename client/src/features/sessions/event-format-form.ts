@@ -276,6 +276,8 @@ function settingsFor(values: EventFormValues, isAdmin: boolean): Record<string, 
   const config: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(formatRule(values.format).fields)) {
     if (field.adminOnly && !isAdmin) continue;
+    // A setting that applies only under another one's value (the cooldown rule's months) is sent only then.
+    if (field.when && all[field.when.key] !== field.when.equals) continue;
     const value = all[key];
     if (value === undefined || value === null || value === '') continue;
     config[key] = value;

@@ -47,6 +47,8 @@ export const E = {
   session: (sessionId: string) => `session:${sessionId}`,
   sessionParticipants: (sessionId: string) => `session:${sessionId}:participants`,
   sessionInvites: (sessionId: string) => `session:${sessionId}:invites`,
+  /** T11 (1 Nov 2026): requests to join an event that asks the host to approve each place. */
+  sessionJoinRequests: (sessionId: string) => `session:${sessionId}:join-requests`,
   sessionMatches: (sessionId: string) => `session:${sessionId}:matches`,
   sessionPlan: (sessionId: string) => `session:${sessionId}:plan`,
   sessionChat: (sessionId: string) => `session:${sessionId}:chat`,
@@ -63,6 +65,10 @@ export const E = {
   userMeetings: (userId: string) => `user:${userId}:meetings`,
   meeting: (meetingId: string) => `meeting:${meetingId}`,
 
+  // Calls (1 Nov 2026): a call ringing the member, or one they rang, changed (rung, answered, declined,
+  // cancelled, lapsed)
+  userCalls: (userId: string) => `user:${userId}:calls`,
+
   // Support
   supportTicket: (ticketId: string) => `support-ticket:${ticketId}`,
 
@@ -77,6 +83,8 @@ export const E = {
   adminViolations: 'admin:violations',
   adminSupportTickets: 'admin:support-tickets',
   adminAnalytics: 'admin:analytics',
+  // 30 Oct 2026 — matching templates and the speed-networking presets (fanoutAdminEntities('templates')).
+  adminTemplates: 'admin:templates',
   /** Feedback after meetings (30 Oct 2026): the admin feedback list. */
   adminMeetingFeedback: 'admin:meeting-feedback',
 } as const;
