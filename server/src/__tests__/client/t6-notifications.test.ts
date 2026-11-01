@@ -115,6 +115,16 @@ describe('the page (source)', () => {
     expect(page).toMatch(/Load more/);
   });
 
+  it('a re-read that fails (its own sixty-a-minute limit, or the network) keeps the list and says so, with Try again (fix round 1)', () => {
+    expect(page).toContain('{list.isRefetchError && (');
+    expect(page).toContain('This list could not be brought up to date.');
+    const stale = page.slice(page.indexOf('data-testid="notifications-stale"'));
+    const block = stale.slice(0, stale.indexOf('</div>'));
+    expect(block).toContain('onClick={() => { void list.refetch(); }}');
+    expect(block).toContain('min-h-[44px]');
+    expect(block).toContain('Try again');
+  });
+
   it('lives inside the shell at /notifications', () => {
     const app = read('App.tsx');
     const shellRoutes = app.slice(app.indexOf('<ReasonShell />'), app.indexOf('{/* Protected without layout'));

@@ -5,14 +5,20 @@
 //
 // Stefan: "the red color is too strong; change it to gray so new messages still stand out." Your own bubble is gray,
 // theirs is white with a border, and the two are told apart by side, fill and border. Red is kept for what is new
-// (unread badges and dots) and for primary buttons. A link in either bubble is drawn as links are everywhere else
-// (Linkify's own colour): the forced white was only there because the bubble was red.
+// (unread badges and dots) and for primary buttons. A link in either bubble is the bubble's own text colour,
+// underlined (BUBBLE_LINK): neither the old forced white nor Linkify's red.
 
 /** Your own message. */
 export const OWN_BUBBLE = 'bg-gray-100 text-gray-900';
 
 /** Someone else's message. */
 export const THEIR_BUBBLE = 'bg-white border border-gray-200 text-gray-900';
+
+/**
+ * A link inside a bubble, own or theirs, in the live chat too: the bubble's own text colour, underlined. Not Linkify's
+ * default brand red: L9 keeps red for unread badges and primary buttons only (T6 fix round 1).
+ */
+export const BUBBLE_LINK = 'break-all underline underline-offset-2 hover:opacity-80';
 
 /** The fill of a bubble, by who wrote it. */
 export const bubbleLook = (mine: boolean): string => (mine ? OWN_BUBBLE : THEIR_BUBBLE);

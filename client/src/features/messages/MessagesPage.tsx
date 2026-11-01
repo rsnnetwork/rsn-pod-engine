@@ -23,11 +23,10 @@ import GroupInboxRow from './GroupInboxRow';
 import { useMyGroups } from './useGroups';
 import { GROUPS_FAILED, TRY_AGAIN, isRateLimited, mergeInbox } from './group-chat-text';
 import { dayHeaderLabel, formatRelative, sameLocalDay, timeOnly } from './message-time';
-import { bubbleLook, clusterMessages } from './bubble-look';
+import { BUBBLE_LINK, bubbleLook, clusterMessages } from './bubble-look';
 import ReplyQuote from './ReplyQuote';
 import ReplyStrip, { ReplyButton } from './ReplyStrip';
 import { replyContentOf, type ReplyTarget } from './reply-text';
-import type { MessageReplyQuote } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import PersonLink, { isFormerMemberName } from '@/components/people/PersonLink';
 import EmojiPicker, { pickInto } from '@/components/chat/EmojiPicker';
@@ -1468,10 +1467,10 @@ export default function MessagesPage() {
                                   {m.content && (
                                     // 4 Sep 2026: a pasted www. or https:// address is a real link
                                     // here too, the same Linkify the wall and live chat use. 30 Oct 2026
-                                    // (L9): the bubbles are gray and white, so a link in either is drawn
-                                    // as links are everywhere (the forced white was for the red bubble).
+                                    // (L9): a link in either bubble is the bubble's own colour, underlined
+                                    // (BUBBLE_LINK), never the brand red.
                                     <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}>
-                                      <Linkify text={localizeMeetingText(m.content)} />
+                                      <Linkify text={localizeMeetingText(m.content)} className={BUBBLE_LINK} />
                                     </div>
                                   )}
                                   {/* Scheduled meeting → Join the room; an instant call that's

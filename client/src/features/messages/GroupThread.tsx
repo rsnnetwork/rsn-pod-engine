@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { TEXT_BUTTON } from './buttons';
-import { bubbleLook } from './bubble-look';
+import { BUBBLE_LINK, bubbleLook } from './bubble-look';
 import ReplyQuote from './ReplyQuote';
 import ReplyStrip, { ReplyButton } from './ReplyStrip';
 import type { ReplyTarget } from './reply-text';
@@ -269,7 +269,7 @@ function MessageList({ messages, myUserId, onReply }: {
                 )}
               >
                 {m.replyTo && <ReplyQuote quote={m.replyTo} loaded={loadedIds.has(m.replyTo.id)} mine={mine} />}
-                <Linkify text={m.content} />
+                <Linkify text={m.content} className={BUBBLE_LINK} />
               </div>
               <ReplyButton onReply={() => onReply(m, mine)} />
             </div>

@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { CLUSTER_GAP_MS, OWN_BUBBLE, THEIR_BUBBLE, bubbleLook, clusterMessages } from '../../../../client/src/features/messages/bubble-look';
+import { BUBBLE_LINK, CLUSTER_GAP_MS, OWN_BUBBLE, THEIR_BUBBLE, bubbleLook, clusterMessages } from '../../../../client/src/features/messages/bubble-look';
 import {
   EARLIER_MESSAGE, ORIGINAL_DELETED, quoteView, replyContentOf, replyingTo, shorten,
 } from '../../../../client/src/features/messages/reply-text';
@@ -45,6 +45,14 @@ describe('the bubble look (L9)', () => {
     const src = read('features/live/ChatPanel.tsx');
     expect(src).toMatch(/isOwn\s*\? OWN_BUBBLE\s*: msg\.isHost\s*\? 'bg-amber-50[^']*'\s*: THEIR_BUBBLE/);
     expect(src).not.toMatch(/'bg-blue-50 text-gray-800'/);
+  });
+
+  it('a link in any bubble is the bubble\'s own colour, underlined, never red (fix round 1): 1:1, group and live chat', () => {
+    expect(BUBBLE_LINK).toBe('break-all underline underline-offset-2 hover:opacity-80');
+    expect(BUBBLE_LINK).not.toMatch(/text-|red/);
+    expect(read('features/messages/MessagesPage.tsx')).toContain('<Linkify text={localizeMeetingText(m.content)} className={BUBBLE_LINK} />');
+    expect(read('features/messages/GroupThread.tsx')).toContain('<Linkify text={m.content} className={BUBBLE_LINK} />');
+    expect(read('features/live/ChatPanel.tsx')).toContain('<Linkify text={msg.message} className={BUBBLE_LINK} />');
   });
 
   it('one rule runs messages together in both threads (P18): one person, within a minute, the same day, never a card', () => {
@@ -205,7 +213,9 @@ describe('quoted replies (L7)', () => {
   });
 
   it('the reply goes to the server with the message, and only when there is one (production\'s body is unchanged otherwise)', () => {
-    expect(read('features/messages/MessagesPage.tsx')).toMatch(/\.\.\.\(args\.replyToId \? \{ replyToId: args\.replyToId \} : \{\}\)/);
+    // The 1:1 send is T7's shared hook (thread/useSendMessage.ts); the composer hands it the reply.
+    expect(read('features/messages/thread/useSendMessage.ts')).toContain('...(vars.replyToId ? { replyToId: vars.replyToId } : {}),');
+    expect(read('features/messages/MessagesPage.tsx')).toContain('replyToId: replyTarget?.id ?? null,');
     expect(read('features/messages/useGroups.ts')).toMatch(/\{ content, \.\.\.\(replyToId \? \{ replyToId \} : \{\}\) \}/);
   });
 

@@ -54,6 +54,21 @@ export default function NotificationsPage() {
         )}
       </div>
 
+      {/* A change re-reads every loaded page, and pages have their own limit on the server (sixty reads a minute); a
+          re-read that fails (that limit, or the network) keeps the list shown and says so, with Try again, rather than
+          leaving it quietly out of date (T6 fix round 1). */}
+      {list.isRefetchError && (
+        <div role="alert" data-testid="notifications-stale" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2">
+          <p className="text-sm text-gray-800">This list could not be brought up to date.</p>
+          <button
+            type="button"
+            onClick={() => { void list.refetch(); }}
+            className="min-h-[44px] rounded-lg px-3 text-sm font-semibold text-gray-800 hover:bg-amber-100"
+          >
+            Try again
+          </button>
+        </div>
+      )}
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
         {list.isPending && !list.isError && <PageSkeleton />}
         {list.isError && !list.data && (
