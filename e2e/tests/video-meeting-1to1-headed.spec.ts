@@ -60,6 +60,9 @@ let podId = '';
 let sessionId = '';
 const ctxs: BrowserContext[] = [];
 const pageErrors: string[] = [];
+// The step the run is on, so a page error names where it happened (P1 item 6: the 26 Oct preview run recorded one bare
+// "Event" per page, a promise rejected with a DOM Event, and nothing said which step or which code).
+let stepNow = 'setting up';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const statusOf = async () => (await pool.query<{ status: string }>('SELECT status FROM sessions WHERE id = $1', [sessionId])).rows[0]?.status;
@@ -76,7 +79,9 @@ async function openLive(u: TestUser, who: string, viewport: { width: number; hei
   ctxs.push(ctx);
   await primePreview(ctx);
   const page = await ctx.newPage();
-  page.on('pageerror', (e) => pageErrors.push(`${who}: ${e.message}`));
+  page.on('pageerror', (e) => {
+    pageErrors.push(`${who} during "${stepNow}" at ${page.url()}: ${e.name}: ${e.message} | ${e.stack ?? '(no stack)'}`);
+  });
   await gotoRetry(page, `${APP}/session/${sessionId}/live`);
   return page;
 }
@@ -182,6 +187,7 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   test.setTimeout(960_000);
 
   // 1. Before the start.
+  stepNow = '1. Before the start';
   const dirPage = await openLive(director, 'director', { width: 1280, height: 720 });
   const guestPage = await openLive(guest, 'guest', { width: 1280, height: 720 });
   await expect(guestPage.getByText('Waiting for Claus Meeting to start the meeting'), 'the guest waits for the director by name')
@@ -195,6 +201,7 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   await expect.poll(statusOf, { timeout: 30_000, message: 'the meeting is live' }).toBe('lobby_open');
 
   // 2. Both see each other: two tiles with real video on both screens.
+  stepNow = '2. Both see each other: two tiles with real video on both screens';
   for (const [page, who] of [[dirPage, 'director'], [guestPage, 'guest']] as const) {
     await expectLayout(page, 'side', who);
     await expect.poll(() => playingTiles(page), { timeout: 90_000, message: `${who}: both cameras play` }).toBe(2);
@@ -238,6 +245,7 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   expect(await guestPage.getByTestId('meeting-end').count(), 'the guest has no End').toBe(0);
 
   // 3. A guest's own socket asking to end the event is refused, and the event stays live.
+  stepNow = '3. A guest\'s own socket asking to end the event is refused, and the event stays live';
   const sock = io(SERVER, { auth: { token: guest.accessToken }, transports: ['websocket'], reconnection: false });
   const refusal = await new Promise<string>((resolve) => {
     sock.on('error', (e: { code?: string }) => resolve(e?.code ?? 'error without a code'));
@@ -252,6 +260,7 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   expect(await statusOf(), 'the meeting is still live').toBe('lobby_open');
 
   // 4. A muted guest who connects again comes back muted, and the director sees it.
+  stepNow = '4. A muted guest who connects again comes back muted, and the director sees it';
   await expect(micButton(guestPage), 'the guest joined with the mic on').toHaveAttribute('aria-label', 'Mic on', { timeout: 30_000 });
   await micButton(guestPage).click();
   await expect(micButton(guestPage)).toHaveAttribute('aria-label', 'Mic off', { timeout: 15_000 });
@@ -299,6 +308,7 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   await expect(guestMuted, 'unmuted, the director sees it').toHaveCount(0, { timeout: 20_000 });
 
   // 5. The guest leaves: the event page, the meeting carries on for the director; then the guest comes back.
+  stepNow = '5. The guest leaves: the event page, the meeting carries on for the director; then the guest comes back';
   await guestPage.getByTestId('meeting-leave').click();
   const dialog = guestPage.getByRole('alertdialog', { name: 'Leave the meeting?' });
   await expect(dialog).toContainText('The others can carry on. You can rejoin from the event page.');
@@ -313,6 +323,7 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   await expect.poll(() => playingTiles(dirPage), { timeout: 90_000, message: 'director: both cameras again' }).toBe(2);
 
   // 6. Four people, the fourth in a browser that may use only the camera.
+  stepNow = '6. Four people, the fourth in a browser that may use only the camera';
   const thirdPage = await openLive(third, 'third', { width: 1024, height: 768 });
   const tokenPosts: string[] = [];
   const fourthPage = await openLive(fourth, 'fourth (camera only)', { width: 1024, height: 768 }, { cameraOnly: true });
@@ -351,6 +362,7 @@ test('VID-01..04: a two-person video meeting fits every screen, has one way out,
   await fourthPage.screenshot({ path: 'test-results/vm1to1-fourth-camera-only.png' });
 
   // 7. The director ends it for everyone.
+  stepNow = '7. The director ends it for everyone';
   await dirPage.getByTestId('meeting-end').click();
   const endDialog = dirPage.getByRole('alertdialog', { name: 'End the meeting for everyone?' });
   await expect(endDialog).toContainText('Everyone will be disconnected.');
