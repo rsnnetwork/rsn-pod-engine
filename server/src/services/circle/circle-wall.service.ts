@@ -3,7 +3,8 @@
 // REASON v1 Phase 4 (20 Jul 2026). The feed inside a circle: text + images +
 // external link shares (Stefan's wall answer), comments, pinning, moderation.
 // First UGC system in the platform — the rules that matter:
-//   * POSTING is circle-members-only; READING is any authenticated member.
+//   * POSTING is circle-members-only; READING is any authenticated member, except a CLOSED circle's wall,
+//     which only its members and the people who run it read (T14, assertMayReadWall).
 //   * Blocks respected at read time (either direction) — the wall must not be
 //     a harassment bypass around the DM/poke block system.
 //   * Media = Cloudinary URLs only, validated here (host allowlist).
@@ -26,6 +27,12 @@ import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { FORMER_MEMBER_NAME, activeMemberSql } from '../users/active-member';
+import { isPlatformAdmin } from './circle-managers';
+
+/** What a reader outside a closed circle is told by every read of its wall (30 Oct review 7.5). */
+export const CIRCLE_CLOSED_READ = 'This circle is closed. Ask to join to see its wall, members and events.';
+/** A closed circle's posts are not carried into another circle, by anyone. */
+export const CLOSED_POST_STAYS = 'Posts in a closed circle stay in it.';
 
 export const POST_RATE_PER_MIN = 6;
 export const COMMENT_RATE_PER_MIN = 20;
@@ -72,6 +79,25 @@ export interface ReactionSummary {
 }
 
 // ── Guards ───────────────────────────────────────────────────────────────────
+
+/**
+ * T14 (1 Nov 2026): a closed circle's wall is read only by the people in it and those who run it (its creator, and
+ * platform admins; owners and moderators are in it). Every read of the wall asks this: the feed, one post, its
+ * comments, and a share out of it, so no path leaks it (audit 05, riskiest point 2). A circle that does not exist
+ * reads as before (an empty feed).
+ */
+export async function assertMayReadWall(circleId: string, viewerId: string, viewerRole?: string): Promise<void> {
+  if (isPlatformAdmin(viewerRole)) return;
+  const r = await query<{ join_policy: string | null; inside: boolean }>(
+    `SELECT c.join_policy,
+            (c.created_by = $2 OR EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $2)) AS inside
+       FROM circles c WHERE c.id = $1`,
+    [circleId, viewerId],
+  );
+  const circle = r.rows[0];
+  if (!circle || circle.join_policy !== 'closed' || circle.inside) return;
+  throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_READ);
+}
 
 async function requireCircleMember(circleId: string, userId: string, what = 'post'): Promise<void> {
   const r = await query(
@@ -186,7 +212,9 @@ const POST_SELECT = `
             FROM circle_posts o
             JOIN circles oc ON oc.id = o.circle_id
             JOIN users ou ON ou.id = o.author_id
-           WHERE o.id = p.shared_from_post_id AND o.deleted_at IS NULL) AS shared_from
+           WHERE o.id = p.shared_from_post_id AND o.deleted_at IS NULL
+             AND (oc.join_policy <> 'closed'
+                  OR EXISTS (SELECT 1 FROM circle_members om WHERE om.circle_id = o.circle_id AND om.user_id = $2))) AS shared_from
   FROM circle_posts p JOIN users u ON u.id = p.author_id`;
 
 export async function createPost(
@@ -257,12 +285,11 @@ export async function createPost(
     logger.warn({ err, circleId }, 'circle_post notifications failed (non-fatal)');
   }
 
-  const post = await getPost(inserted.id, userId);
+  const post = await readPost(inserted.id, userId);
   return post!;
 }
 
-/** One post as its viewer sees it; null when it is gone or blocked either way. */
-export async function getPost(postId: string, viewerId: string): Promise<WallPost | null> {
+async function readPost(postId: string, viewerId: string): Promise<WallPost | null> {
   const r = await query<any>(
     `${POST_SELECT}
      WHERE p.id = $1 AND p.deleted_at IS NULL
@@ -271,6 +298,13 @@ export async function getPost(postId: string, viewerId: string): Promise<WallPos
   );
   const row = r.rows[0];
   return row ? mapPost(row) : null;
+}
+
+/** One post as its viewer sees it; null when it is gone or blocked either way; 403 in a closed circle they are outside. */
+export async function getPost(postId: string, viewerId: string, viewerRole?: string): Promise<WallPost | null> {
+  const post = await readPost(postId, viewerId);
+  if (post) await assertMayReadWall(post.circleId, viewerId, viewerRole);
+  return post;
 }
 
 /** An author whose account is not active keeps their words, as "Former member" with no picture (T2). */
@@ -304,6 +338,7 @@ export async function listPosts(
   circleId: string,
   viewerId: string,
   opts: { cursor?: string; limit?: number } = {},
+  viewerRole?: string,
 ): Promise<{ pinned: WallPost[]; posts: WallPost[]; nextCursor: string | null }> {
   const limit = Math.min(opts.limit ?? 20, 50);
   const params: unknown[] = [circleId, viewerId];
@@ -314,6 +349,7 @@ export async function listPosts(
     params.push(new Date(Number(m[1])), m[2]);
     keyset = `AND (p.created_at, p.id) < ($3, $4::uuid)`;
   }
+  await assertMayReadWall(circleId, viewerId, viewerRole);
 
   const [pinned, page] = await Promise.all([
     opts.cursor
@@ -394,6 +430,7 @@ export async function sharePost(
     [postId, userId],
   );
   if (src.rows.length === 0) throw new NotFoundError('Post', postId);
+  await assertNotClosed(src.rows[0].circle_id);
 
   let root = { id: src.rows[0].id, circleId: src.rows[0].circle_id };
   if (src.rows[0].shared_from_post_id) {
@@ -402,6 +439,7 @@ export async function sharePost(
       [src.rows[0].shared_from_post_id],
     );
     if (orig.rows.length > 0) root = { id: orig.rows[0].id, circleId: orig.rows[0].circle_id };
+    if (root.circleId !== src.rows[0].circle_id) await assertNotClosed(root.circleId);
   }
   if (root.circleId === input.circleId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'That post is already in this circle. Copy its link instead.');
@@ -409,6 +447,12 @@ export async function sharePost(
   return createPost(input.circleId, userId, {
     clientId: input.clientId, content: input.content ?? '', media: [], sharedFromPostId: root.id,
   });
+}
+
+/** T14: nothing posted in a closed circle is carried out of it, by anyone (into a closed circle, createPost asks membership). */
+async function assertNotClosed(circleId: string): Promise<void> {
+  const r = await query<{ join_policy: string | null }>(`SELECT join_policy FROM circles WHERE id = $1`, [circleId]);
+  if (r.rows[0]?.join_policy === 'closed') throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CLOSED_POST_STAYS);
 }
 
 // ── Reactions ────────────────────────────────────────────────────────────────
@@ -531,7 +575,9 @@ export interface WallComment {
   likeCount: number; likedByMe: boolean;
 }
 
-export async function listComments(postId: string, viewerId: string): Promise<WallComment[]> {
+export async function listComments(postId: string, viewerId: string, viewerRole?: string): Promise<WallComment[]> {
+  const of = await query<{ circle_id: string }>(`SELECT circle_id FROM circle_posts WHERE id = $1`, [postId]);
+  if (of.rows[0]) await assertMayReadWall(of.rows[0].circle_id, viewerId, viewerRole);
   const r = await query<any>(
     `SELECT c.id, c.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_former,
             c.content, c.created_at, c.parent_comment_id,

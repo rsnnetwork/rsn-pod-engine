@@ -39,6 +39,8 @@ export const E = {
   circle: (circleId: string) => `circle:${circleId}`,
   circleMembers: (circleId: string) => `circle:${circleId}:members`,
   circleInvites: (circleId: string) => `circle:${circleId}:invites`,
+  // T14: the asks waiting to join a closed circle, for the people who run it
+  circleRequests: (circleId: string) => `circle:${circleId}:requests`,
   userCircles: (userId: string) => `user:${userId}:circles`,
 
   // Session

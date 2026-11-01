@@ -34,6 +34,8 @@ const suite = url ? describe : describe.skip;
 const TABLES = [
   'users', 'pods', 'pod_members', 'sessions', 'session_participants', 'session_cohosts', 'invites',
   'circles', 'circle_members', 'circle_pods', 'notifications', 'matching_templates',
+  // T14: a circle read asks the viewer's latest ask to join (migration 128).
+  'circle_join_requests',
 ];
 
 suite('an event for a whole circle (real Postgres)', () => {

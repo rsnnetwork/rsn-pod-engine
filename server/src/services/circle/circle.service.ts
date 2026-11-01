@@ -10,13 +10,27 @@
 // (Postgres can't CHECK graph properties; writes are admin-only so this is
 // contention-free).
 
+import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
-import { ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { CircleAccess, CircleJoinPolicy, ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 import { visibleEventsSql } from '../session/event-access';
-import { isCircleManager } from './circle-managers';
+import {
+  CircleAccessRow, circleAccessColumns, isCircleManager, isPlatformAdmin, toCircleAccess,
+} from './circle-managers';
+
+/** What joinCircle answers someone outside a closed circle (30 Oct review, 7.5). */
+export const CIRCLE_CLOSED_JOIN = 'This circle is closed. Ask to join and its owner will let you in.';
+
+/**
+ * T14 (1 Nov 2026): an attached pod is named on a circle's page only when it is not archived and, if private, only to
+ * its active members (and platform admins, `$admin`). `pod` is the pods alias, `viewer` and `admin` parameters.
+ */
+const visiblePodSql = (pod: string, viewer: string, admin: string) => `${pod}.status <> 'archived'
+  AND (${admin}::boolean OR ${pod}.visibility <> 'private'
+       OR EXISTS (SELECT 1 FROM pod_members vp_m WHERE vp_m.pod_id = ${pod}.id AND vp_m.user_id = ${viewer} AND vp_m.status = 'active'))`;
 
 export const MAX_NESTING_DEPTH = 3;
 
@@ -34,7 +48,8 @@ const activeCircleMemberCount = (circleAlias: string) => {
    WHERE cm_n.circle_id = ${circleAlias}.id AND ${activeMemberSql('cm_u')})`;
 };
 
-export interface CircleSummary {
+/** T14: every read adds the viewer's CircleAccess (joinPolicy, myStatus, canManage, canInvite, requestCount, locked). */
+export interface CircleSummary extends CircleAccess {
   id: string;
   name: string;
   description: string | null;
@@ -45,7 +60,11 @@ export interface CircleSummary {
   createdAt: Date;
 }
 
-export interface CircleDetail extends Omit<CircleSummary, 'podCount'> {
+/**
+ * A locked circle (closed, and the viewer is neither in it nor runs it) sends no members, pods or events: the arrays
+ * are empty. Its name, description, counts and child circles still read.
+ */
+export interface CircleDetail extends CircleSummary {
   members: Array<{
     userId: string; displayName: string | null; avatarUrl: string | null;
     role: string; joinedAt: Date;
@@ -54,8 +73,6 @@ export interface CircleDetail extends Omit<CircleSummary, 'podCount'> {
   /** T13: `forCircle` (additive) is true for an event made for this circle, false for an attached pod's event. */
   upcomingEvents: Array<{ id: string; title: string; scheduledAt: Date; podId: string; forCircle: boolean }>;
   children: Array<{ id: string; name: string; memberCount: number }>;
-  /** T13 (additive): whether the viewer runs the circle (isCircleManager), so the page offers Schedule an event. */
-  canManage: boolean;
 }
 
 // ── Nesting integrity ────────────────────────────────────────────────────────
@@ -121,13 +138,28 @@ export async function createCircle(
   }
 }
 
+/** Who is editing a circle, as the route knows them. Absent: a platform admin (production's admin-only route). */
+export interface CircleActor {
+  userId: string;
+  role?: string;
+}
+
+/**
+ * Edit a circle. Its managers (T14) may change its name, description and who can join; moving it under another
+ * circle stays a platform admin's (it reaches into a circle they may not run). Opening a closed circle lets everyone
+ * still waiting in, in the same transaction, and answers with who that was (the route rings and tells them).
+ */
 export async function updateCircle(
   circleId: string,
-  input: { name?: string; description?: string | null; parentCircleId?: string | null },
-): Promise<void> {
+  input: { name?: string; description?: string | null; parentCircleId?: string | null; joinPolicy?: CircleJoinPolicy },
+  actor?: CircleActor,
+): Promise<{ approvedUserIds: string[] }> {
   const existing = await query<{ id: string }>(
     `SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (existing.rows.length === 0) throw new NotFoundError('Circle', circleId);
+  if (actor && input.parentCircleId !== undefined && !isPlatformAdmin(actor.role)) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Only a platform admin can move a circle inside another one.');
+  }
 
   if (input.parentCircleId) await assertValidParent(input.parentCircleId, circleId);
 
@@ -136,15 +168,45 @@ export async function updateCircle(
   if (input.name !== undefined) { params.push(input.name.trim()); sets.push(`name = $${params.length}`); }
   if (input.description !== undefined) { params.push(input.description?.trim() || null); sets.push(`description = $${params.length}`); }
   if (input.parentCircleId !== undefined) { params.push(input.parentCircleId); sets.push(`parent_circle_id = $${params.length}`); }
-  if (!sets.length) return;
+  if (input.joinPolicy !== undefined) { params.push(input.joinPolicy); sets.push(`join_policy = $${params.length}`); }
+  if (!sets.length) return { approvedUserIds: [] };
   try {
-    await query(`UPDATE circles SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, params);
+    return await transaction(async (client) => {
+      await client.query(`UPDATE circles SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, params);
+      if (input.joinPolicy !== 'open') return { approvedUserIds: [] };
+      return { approvedUserIds: await admitEveryoneWaiting(client, circleId, actor?.userId ?? null) };
+    });
   } catch (err: any) {
     if (err?.code === '23505') {
       throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'A circle with that name already exists here');
     }
     throw err;
   }
+}
+
+/**
+ * Reopening a circle (30 Oct review 7.5, the audit's default): every pending ask from an active account is approved
+ * and its person joins, the stored count moving by the rows actually added. Asks from accounts that are not active
+ * stay pending and unseen. Runs inside the caller's transaction; answers who was let in.
+ */
+async function admitEveryoneWaiting(client: PoolClient, circleId: string, deciderId: string | null): Promise<string[]> {
+  const waiting = await client.query<{ user_id: string }>(
+    `UPDATE circle_join_requests r SET status = 'approved', decided_by = $2, decided_at = NOW()
+       FROM users u
+      WHERE r.circle_id = $1 AND r.status = 'pending' AND u.id = r.user_id AND ${activeMemberSql('u')}
+      RETURNING r.user_id`,
+    [circleId, deciderId],
+  );
+  const ids = waiting.rows.map((r) => r.user_id);
+  if (ids.length === 0) return [];
+  const added = await client.query(
+    `INSERT INTO circle_members (circle_id, user_id) SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING`,
+    [circleId, ids],
+  );
+  if (added.rowCount && added.rowCount > 0) {
+    await client.query(`UPDATE circles SET member_count = member_count + $2 WHERE id = $1`, [circleId, added.rowCount]);
+  }
+  return ids;
 }
 
 /** Archive, never delete — every member/post row survives (spec §6). */
@@ -157,15 +219,28 @@ export async function archiveCircle(circleId: string): Promise<void> {
 
 // ── Pod attachment (admin) ───────────────────────────────────────────────────
 
-export async function attachPod(circleId: string, podId: string, adminUserId: string): Promise<void> {
+/**
+ * Attach a pod to a circle. The route has already checked the caller runs the circle. T14 (30 Oct review 7.6): a
+ * platform admin attaches any pod; anyone else only a pod they run (its active director or host), so a pod is never
+ * shown on a circle by someone with no say over it.
+ */
+export async function attachPod(circleId: string, podId: string, userId: string, isAdmin = true): Promise<void> {
   const circle = await query(`SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
-  const pod = await query(`SELECT id FROM pods WHERE id = $1`, [podId]);
+  const pod = await query<{ id: string; runs: boolean }>(
+    `SELECT p.id, EXISTS (SELECT 1 FROM pod_members pm WHERE pm.pod_id = p.id AND pm.user_id = $2
+                            AND pm.status = 'active' AND pm.role IN ('director', 'host')) AS runs
+       FROM pods p WHERE p.id = $1`,
+    [podId, userId],
+  );
   if (pod.rows.length === 0) throw new NotFoundError('Pod', podId);
+  if (!isAdmin && !pod.rows[0].runs) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You can attach a pod you direct or host.');
+  }
   await query(
     `INSERT INTO circle_pods (circle_id, pod_id, added_by)
      VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-    [circleId, podId, adminUserId],
+    [circleId, podId, userId],
   );
 }
 
@@ -175,23 +250,50 @@ export async function detachPod(circleId: string, podId: string): Promise<void> 
 
 // ── Membership (open join — flagged default, spec §10) ───────────────────────
 
-export async function joinCircle(circleId: string, userId: string): Promise<void> {
-  const circle = await query(`SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
+/**
+ * Add someone to a circle inside the caller's transaction, and answer any ask of theirs that is still waiting as
+ * approved (an invite or a join is the answer to it). The counter moves in the SAME transaction as the membership row,
+ * and only when a row was actually inserted, so a double-join can't double-count. True when they were added.
+ */
+export async function admitToCircle(client: PoolClient, circleId: string, userId: string, deciderId: string | null = null): Promise<boolean> {
+  const ins = await client.query(
+    `INSERT INTO circle_members (circle_id, user_id)
+     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [circleId, userId],
+  );
+  const added = !!ins.rowCount && ins.rowCount > 0;
+  if (added) {
+    await client.query(
+      `UPDATE circles SET member_count = member_count + 1 WHERE id = $1`, [circleId]);
+  }
+  await client.query(
+    `UPDATE circle_join_requests SET status = 'approved', decided_by = $3, decided_at = NOW()
+      WHERE circle_id = $1 AND user_id = $2 AND status = 'pending'`,
+    [circleId, userId, deciderId],
+  );
+  return added;
+}
+
+/**
+ * Join a circle. An open circle takes anyone at once (as always). A closed one (T14) takes only the people who run it
+ * and anyone arriving with an invite (`byInvite`: the invite is the doorway, and it answers a pending ask); anyone
+ * else is told to ask, 403 CIRCLE_CLOSED. Someone already in it is left as they are.
+ */
+export async function joinCircle(
+  circleId: string,
+  userId: string,
+  opts: { role?: string; byInvite?: boolean } = {},
+): Promise<void> {
+  const circle = await query<{ id: string; join_policy: CircleJoinPolicy | null }>(
+    `SELECT id, join_policy FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
 
-  await transaction(async (client) => {
-    const ins = await client.query(
-      `INSERT INTO circle_members (circle_id, user_id)
-       VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [circleId, userId],
-    );
-    // Counter moves in the SAME transaction as the membership row, and only
-    // when a row was actually inserted — a double-join can't double-count.
-    if (ins.rowCount && ins.rowCount > 0) {
-      await client.query(
-        `UPDATE circles SET member_count = member_count + 1 WHERE id = $1`, [circleId]);
-    }
-  });
+  if (circle.rows[0].join_policy === 'closed' && !opts.byInvite
+      && !(await isCircleMember(circleId, userId)) && !(await isCircleManager(circleId, userId, opts.role))) {
+    throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_JOIN);
+  }
+
+  await transaction((client) => admitToCircle(client, circleId, userId));
 }
 
 /** Is this member in the circle? The gate for circle-level invites (C3). */
@@ -218,24 +320,27 @@ export async function leaveCircle(circleId: string, userId: string): Promise<voi
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
-export async function listCircles(userId: string): Promise<CircleSummary[]> {
-  const r = await query<{
+export async function listCircles(userId: string, userRole?: string): Promise<CircleSummary[]> {
+  const isAdmin = isPlatformAdmin(userRole);
+  const r = await query<CircleAccessRow & {
     id: string; name: string; description: string | null;
     parent_circle_id: string | null; member_count: number;
-    pod_count: string; is_member: boolean; created_at: Date;
+    pod_count: string; created_at: Date;
   }>(
     `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c')} AS member_count, c.created_at,
-            (SELECT count(*) FROM circle_pods cp WHERE cp.circle_id = c.id)::text AS pod_count,
-            EXISTS(SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $1) AS is_member
+            (SELECT count(*) FROM circle_pods cp JOIN pods p ON p.id = cp.pod_id
+              WHERE cp.circle_id = c.id AND ${visiblePodSql('p', '$1', '$2')})::text AS pod_count,
+            ${circleAccessColumns('c', '$1', '$2')}
      FROM circles c
      WHERE c.archived_at IS NULL
      ORDER BY member_count DESC, c.created_at ASC`,
-    [userId],
+    [userId, isAdmin],
   );
   return r.rows.map(c => ({
     id: c.id, name: c.name, description: c.description,
     parentCircleId: c.parent_circle_id, memberCount: c.member_count,
     podCount: parseInt(c.pod_count, 10), isMember: c.is_member, createdAt: c.created_at,
+    ...toCircleAccess(c),
   }));
 }
 
@@ -252,39 +357,46 @@ export async function listCirclesOfPod(podId: string): Promise<Array<{ id: strin
 }
 
 export async function getCircleDetail(circleId: string, userId: string, userRole?: string): Promise<CircleDetail> {
-  const c = await query<{
+  const isAdmin = isPlatformAdmin(userRole);
+  const c = await query<CircleAccessRow & {
     id: string; name: string; description: string | null;
     parent_circle_id: string | null; member_count: number; created_at: Date;
-    is_member: boolean;
+    public_pod_count: number;
   }>(
     `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c')} AS member_count, c.created_at,
-            EXISTS(SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $2) AS is_member
+            (SELECT count(*)::int FROM circle_pods cp JOIN pods p ON p.id = cp.pod_id
+              WHERE cp.circle_id = c.id AND p.status <> 'archived' AND p.visibility <> 'private') AS public_pod_count,
+            ${circleAccessColumns('c', '$2', '$3')}
      FROM circles c WHERE c.id = $1 AND c.archived_at IS NULL`,
-    [circleId, userId],
+    [circleId, userId, isAdmin],
   );
   const circle = c.rows[0];
   if (!circle) throw new NotFoundError('Circle', circleId);
+  const access = toCircleAccess(circle);
 
   // Three indexed queries, no N+1: members (joined users), pods, events of
   // those pods. Members capped at 100 for the page; full list can paginate later.
   // T2 (1 Nov 2026): members are the active accounts only, and an attached pod's event is named only to someone who
   // may open it (D3: a private pod's event titles were shown to any signed-in member). Admins see every event.
   // T13 (1 Nov 2026): the events are the circle's own (sessions.circle_id) and its pods', each under the same rule.
+  // T14: a locked circle (closed, the viewer outside it) is not asked for its members, pods or events at all; an
+  // attached pod is named only when it is not archived and, if private, to its members.
   const seesEveryEvent = !!userRole && hasRoleAtLeast(userRole as UserRole, UserRole.ADMIN);
-  const [members, pods, events, children, canManage] = await Promise.all([
-    query<{ user_id: string; display_name: string | null; avatar_url: string | null; role: string; joined_at: Date }>(
+  const none = Promise.resolve({ rows: [] as never[] });
+  const [members, pods, events, children] = await Promise.all([
+    access.locked ? none : query<{ user_id: string; display_name: string | null; avatar_url: string | null; role: string; joined_at: Date }>(
       `SELECT m.user_id, u.display_name, u.avatar_url, m.role, m.joined_at
        FROM circle_members m JOIN users u ON u.id = m.user_id
        WHERE m.circle_id = $1 AND ${activeMemberSql('u')} ORDER BY m.joined_at ASC LIMIT 100`,
       [circleId],
     ),
-    query<{ pod_id: string; name: string; description: string | null }>(
+    access.locked ? none : query<{ pod_id: string; name: string; description: string | null }>(
       `SELECT cp.pod_id, p.name, p.description
        FROM circle_pods cp JOIN pods p ON p.id = cp.pod_id
-       WHERE cp.circle_id = $1 ORDER BY cp.created_at ASC`,
-      [circleId],
+       WHERE cp.circle_id = $1 AND ${visiblePodSql('p', '$2', '$3')} ORDER BY cp.created_at ASC`,
+      [circleId, userId, seesEveryEvent],
     ),
-    query<{ id: string; title: string; scheduled_at: Date; pod_id: string; for_circle: boolean }>(
+    access.locked ? none : query<{ id: string; title: string; scheduled_at: Date; pod_id: string; for_circle: boolean }>(
       `SELECT s.id, s.title, s.scheduled_at, s.pod_id, (s.circle_id IS NOT DISTINCT FROM $1::uuid) AS for_circle
        FROM sessions s
        WHERE (s.circle_id = $1 OR s.pod_id IN (SELECT pod_id FROM circle_pods WHERE circle_id = $1))
@@ -299,13 +411,14 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
        ORDER BY member_count DESC`,
       [circleId],
     ),
-    isCircleManager(circleId, userId, userRole),
   ]);
 
   return {
     id: circle.id, name: circle.name, description: circle.description,
     parentCircleId: circle.parent_circle_id, memberCount: circle.member_count,
     isMember: circle.is_member, createdAt: circle.created_at,
+    podCount: access.locked ? circle.public_pod_count : pods.rows.length,
+    ...access,
     members: members.rows.map(m => ({
       userId: m.user_id, displayName: m.display_name, avatarUrl: m.avatar_url,
       role: m.role, joinedAt: m.joined_at,
@@ -315,6 +428,5 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
       id: e.id, title: e.title, scheduledAt: e.scheduled_at, podId: e.pod_id, forCircle: !!e.for_circle,
     })),
     children: children.rows.map(ch => ({ id: ch.id, name: ch.name, memberCount: ch.member_count })),
-    canManage,
   };
 }

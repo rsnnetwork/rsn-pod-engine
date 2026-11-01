@@ -108,6 +108,41 @@ describe('Pod Service', () => {
       expect(params[5]).toBe(CommunicationMode.VIDEO);
     });
 
+    // T14 (1 Nov 2026): the pod and its director were two separate queries; now they, and the circle link for a pod
+    // made from a circle's page, are one transaction, so a failure part way leaves nothing behind.
+    it('writes the pod and its director inside one transaction', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [mockPod], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      await podService.createPod('user-123', { name: 'Test Pod' });
+      expect(mockTransaction).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(mockQuery.mock.calls.some((c) => /circle_pods/.test(String(c[0])))).toBe(false);
+    });
+
+    it('a pod made from a circle is linked to it in the same transaction, only while the circle is not archived', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [mockPod], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      await podService.createPod('user-123', { name: 'In a circle', circleId: 'circle-1' });
+      expect(mockTransaction).toHaveBeenCalledTimes(1);
+      const link = mockQuery.mock.calls[2];
+      expect(String(link[0]).replace(/\s+/g, ' ')).toContain('INSERT INTO circle_pods (circle_id, pod_id, added_by) SELECT c.id, $2, $3 FROM circles c WHERE c.id = $1 AND c.archived_at IS NULL');
+      expect((link[1] as unknown[])[0]).toBe('circle-1');
+      expect((link[1] as unknown[])[2]).toBe('user-123');
+    });
+
+    it('an archived circle fails the transaction with a 404, so the pod and its director roll back', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [mockPod], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      let thrownInside: unknown = null;
+      mockTransaction.mockImplementationOnce(async (cb: Function) => {
+        try { return await cb({ query: mockQuery }); } catch (err) { thrownInside = err; throw err; }
+      });
+      await expect(podService.createPod('user-123', { name: 'Orphan', circleId: 'circle-gone' })).rejects.toMatchObject({ statusCode: 404 });
+      expect(thrownInside).toMatchObject({ statusCode: 404 });
+    });
+
     it('still defaults a pod sent with nothing but a name to a speed-networking pod with timed rounds and video', async () => {
       mockQuery.mockResolvedValue({ rows: [mockPod], rowCount: 1 });
       await podService.createPod('user-123', { name: 'Plain' });

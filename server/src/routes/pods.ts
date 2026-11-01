@@ -8,7 +8,8 @@ import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
 import { withoutEmail } from '../services/user/public-card';
-import { fanoutAdminEntities, fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
+import { fanoutAdminEntities, fanoutCircleChange, fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
+import { assertCircleManager } from '../services/circle/circle-managers';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { canViewPod } from '../services/pods/pod-access';
@@ -30,6 +31,8 @@ const createPodSchema = z.object({
   maxMembers:        z.number().int().positive().max(10000).optional(),
   rules:             z.string().max(5000).optional(),
   allowMemberInvites: z.boolean().optional(),
+  // T14 (1 Nov 2026): made from a circle's page and attached to it in the same transaction. Production's form never sends it.
+  circleId:          z.string().uuid().transform((id) => id.toLowerCase()).optional(),
 });
 
 const updatePodSchema = z.object({
@@ -68,12 +71,19 @@ router.post(
   auditMiddleware('create_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const circleId: string | undefined = req.body.circleId;
+      // T14: a pod is added to a circle only by the people who run it, checked before anything is made (404 for an
+      // archived circle, 403 for anyone else), so a refusal never leaves a pod behind.
+      if (circleId) {
+        await assertCircleManager(circleId, req.user!.userId, req.user!.role, 'Only the people who run this circle can add a pod to it.');
+      }
       const pod = await podService.createPod(req.user!.userId, req.body);
       // 26 Oct 2026 — a new pod used to tell nobody (the client refetched its own list by hand). Its only
       // member, the creator, gets the pod and their pods list; every admin's pod list refreshes.
       fanoutPodEntities(pod.id, [E.userPods(req.user!.userId)]).catch(() => {});
       fanoutAdminEntities('pods').catch(() => {});
-      const response: ApiResponse = { success: true, data: pod };
+      if (circleId) fanoutCircleChange(circleId, req.user!.userId).catch(() => {});
+      const response: ApiResponse = { success: true, data: circleId ? { ...pod, circleId } : pod };
       res.status(201).json(response);
     } catch (err) {
       next(err);

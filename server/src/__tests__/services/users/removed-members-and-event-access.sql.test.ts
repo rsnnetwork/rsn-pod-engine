@@ -30,7 +30,7 @@ const suite = url ? describe : describe.skip;
 const TABLES = [
   'users', 'pods', 'pod_members', 'pod_posts', 'pod_post_reactions', 'pod_post_comments', 'pod_comment_likes',
   'sessions', 'session_participants', 'session_cohosts', 'invites',
-  'circles', 'circle_members', 'circle_pods', 'circle_posts', 'circle_post_reactions', 'circle_post_comments', 'circle_comment_likes',
+  'circles', 'circle_members', 'circle_join_requests', 'circle_pods', 'circle_posts', 'circle_post_reactions', 'circle_post_comments', 'circle_comment_likes',
   'dm_conversations', 'direct_messages', 'dm_message_reactions', 'user_blocks', 'encounter_history', 'ratings',
 ];
 

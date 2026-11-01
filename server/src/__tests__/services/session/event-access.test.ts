@@ -4,7 +4,7 @@
 import { UserRole, defaultEventVisibility } from '@rsn/shared';
 import {
   canRegister, canSeeEvent, needsApproval, summariseEventAccess, visibleEventsSql, publicEventsSql,
-  eventAudienceSql, type EventAccessFacts,
+  eventAudienceSql, closedCircleOutsiderSql, CLOSED_CIRCLE_EVENT_SENTENCE, type EventAccessFacts,
 } from '../../../services/session/event-access';
 import { visibleEventSql } from '../../../services/session/session-access';
 
@@ -13,6 +13,7 @@ jest.mock('../../../db', () => ({ query: jest.fn(), transaction: jest.fn(), __es
 const base: EventAccessFacts = {
   visibility: null, podId: 'p', podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
+  outsideClosedCircle: false,
 };
 const f = (over: Partial<EventAccessFacts>): EventAccessFacts => ({ ...base, ...over });
 const M = UserRole.MEMBER;
@@ -143,5 +144,51 @@ describe('the list predicate', () => {
   it('refuses anything that is not an alias and a placeholder', () => {
     expect(() => visibleEventsSql('s; DROP', '$1')).toThrow();
     expect(() => visibleEventsSql('s', "'x'")).toThrow();
+  });
+});
+
+// ─── T14 (1 Nov 2026, L22): a closed circle hides its events from people outside it ──────────────────────────
+// An event for a whole circle (sessions.circle_id) whose circle is closed is for the people in the circle, whatever the
+// event's own visibility, public included. Its host, co-hosts, invitees, participants and its pod's own members keep
+// what they had (the event lives in the pod); admins see everything. `outsideClosedCircle` is true for a person with no
+// circle_members row (and not its creator) when the event names a closed circle.
+describe('an event of a closed circle', () => {
+  const outsider = (over: Partial<EventAccessFacts> = {}) => f({ visibility: 'public', outsideClosedCircle: true, ...over });
+
+  it.each(['public', 'public_with_approval', 'private'] as const)('%s: someone outside the circle neither sees, requests nor registers', (visibility) => {
+    const s = outsider({ visibility });
+    expect(canSeeEvent(s, M)).toBe(false);
+    expect(needsApproval(s, M)).toBe(false);
+    expect(canRegister(s, M)).toEqual({ ok: false, status: 403, code: 'EVENT_PRIVATE', message: CLOSED_CIRCLE_EVENT_SENTENCE });
+    expect(summariseEventAccess(s, M)).toMatchObject({ mode: 'private', autoRegister: false });
+  });
+
+  it('a member of the circle (its audience, outsideClosedCircle false) sees and registers a public one', () => {
+    const member = f({ visibility: 'public', inAudience: true, outsideClosedCircle: false });
+    expect(canSeeEvent(member, M)).toBe(true);
+    expect(canRegister(member, M)).toEqual({ ok: true, addToPod: false });
+  });
+
+  it('the host, a co-host, an invitee, someone holding a place, the pod\'s own members and admins keep what they had', () => {
+    for (const keeps of [{ isHost: true }, { isCohost: true }, { isInvited: true }, { participantStatus: 'registered' }, { inAudience: true }]) {
+      expect(canSeeEvent(outsider(keeps), M)).toBe(true);
+      expect(canRegister(outsider(keeps), M).ok).toBe(true);
+    }
+    expect(canSeeEvent(outsider(), UserRole.ADMIN)).toBe(true);
+    expect(canRegister(outsider(), UserRole.ADMIN).ok).toBe(true);
+    expect(canRegister(outsider(), M, { viaInvite: true }).ok).toBe(true);
+  });
+
+  it('the list predicate leaves the event out for someone outside the closed circle, and the logged-out list never names it', () => {
+    const list = visibleEventsSql('s', '$2').replace(/\s+/g, ' ');
+    expect(list).toContain(`AND NOT ${closedCircleOutsiderSql('s', '$2').replace(/\s+/g, ' ')}`);
+    const hidden = closedCircleOutsiderSql('s', '$2').replace(/\s+/g, ' ');
+    expect(hidden).toContain("s.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = s.circle_id AND cc_c.join_policy = 'closed'");
+    expect(hidden).toContain('cc_c.created_by <> $2');
+    expect(hidden).toContain('NOT EXISTS (SELECT 1 FROM circle_members cc_m WHERE cc_m.circle_id = s.circle_id AND cc_m.user_id = $2)');
+    expect(publicEventsSql('s').replace(/\s+/g, ' ')).toContain(
+      "AND NOT (s.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = s.circle_id AND pc_c.join_policy = 'closed'))",
+    );
+    expect(() => closedCircleOutsiderSql('s; DROP', '$2')).toThrow();
   });
 });

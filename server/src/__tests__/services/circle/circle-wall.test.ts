@@ -22,8 +22,8 @@ jest.mock('../../../index', () => ({ io: { to: () => ({ emit: (...a: unknown[]) 
 
 import {
   validateMedia, extractLinkUrl, createPost, listPosts, deletePost, addComment,
-  reactToPost, likeComment, deleteComment, sharePost, getPost,
-  MEDIA_HOST_PREFIX, POST_RATE_PER_MIN,
+  reactToPost, likeComment, deleteComment, sharePost, getPost, listComments,
+  MEDIA_HOST_PREFIX, POST_RATE_PER_MIN, CIRCLE_CLOSED_READ,
 } from '../../../services/circle/circle-wall.service';
 
 beforeEach(() => mockQuery.mockReset());
@@ -355,10 +355,79 @@ describe('sharePost — attribution to the root, never into the same circle', ()
 describe('getPost — one post for the deep link, blocks respected', () => {
   it('returns the mapped post with reaction fields, or null', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ id: 'p1', circle_id: 'c1', author_id: 'a', display_name: 'A', avatar_url: null, content: 'x', media: [], link_url: null, comment_count: 2, pinned_at: null, created_at: new Date(), reaction_count: 3, reactions: { love: 3 }, my_reaction: 'love', shared_from: null }] });
+    // T14: then whether the viewer may read that circle's wall (an open circle: anyone).
+    mockQuery.mockResolvedValueOnce({ rows: [{ join_policy: 'open', inside: false }] });
     const p = await getPost('p1', 'viewer');
     expect(p).toMatchObject({ id: 'p1', reactionCount: 3, reactions: { love: 3 }, myReaction: 'love', sharedFrom: null });
     expect(sqlsCalled()[0]).toMatch(/b\.blocker_id = p\.author_id AND b\.blocked_id = \$2/);
     mockQuery.mockResolvedValueOnce({ rows: [] });
     expect(await getPost('gone', 'viewer')).toBeNull();
+  });
+});
+
+// ─── T14 (1 Nov 2026): a closed circle's wall is for the people in it, on every read path ─────────────────────
+describe('a closed circle\'s wall, read from outside it', () => {
+  const POST_ROW = { id: 'p1', circle_id: 'c1', author_id: 'a', display_name: 'A', avatar_url: null, content: 'inside', media: [], link_url: null, comment_count: 0, pinned_at: null, created_at: new Date(), reaction_count: 0, reactions: {}, my_reaction: null, shared_from: null };
+  function armWall(policy: 'open' | 'closed', inside: boolean) {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/SELECT c\.join_policy,/.test(sql)) return Promise.resolve({ rows: [{ join_policy: policy, inside }] });
+      if (/SELECT join_policy FROM circles WHERE id = \$1/.test(sql)) return Promise.resolve({ rows: [{ join_policy: policy }] });
+      if (/SELECT circle_id FROM circle_posts WHERE id = \$1/.test(sql)) return Promise.resolve({ rows: [{ circle_id: 'c1' }] });
+      if (/SELECT p\.id, p\.circle_id, p\.shared_from_post_id/.test(sql)) return Promise.resolve({ rows: [{ id: 'p1', circle_id: 'c1', shared_from_post_id: null }] });
+      if (/FROM circle_posts p JOIN users u/.test(sql)) return Promise.resolve({ rows: [POST_ROW] });
+      if (/FROM circle_post_comments c JOIN users u/.test(sql)) return Promise.resolve({ rows: [] });
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+  }
+  const closedRefusal = { statusCode: 403, code: 'CIRCLE_CLOSED', message: CIRCLE_CLOSED_READ };
+
+  it('the feed refuses, before any post is read', async () => {
+    armWall('closed', false);
+    await expect(listPosts('c1', 'stranger', {}, 'member')).rejects.toMatchObject(closedRefusal);
+    expect(sqlsCalled().some(s => /FROM circle_posts p JOIN users u/.test(s))).toBe(false);
+  });
+
+  it('one post (the ?post= deep link) refuses', async () => {
+    armWall('closed', false);
+    await expect(getPost('p1', 'stranger', 'member')).rejects.toMatchObject(closedRefusal);
+  });
+
+  it('a post\'s comments refuse, before any comment is read', async () => {
+    armWall('closed', false);
+    await expect(listComments('p1', 'stranger', 'member')).rejects.toMatchObject(closedRefusal);
+    expect(sqlsCalled().some(s => /FROM circle_post_comments c JOIN users u/.test(s))).toBe(false);
+  });
+
+  it('a share out of it refuses, even for a member', async () => {
+    armWall('closed', true);
+    await expect(sharePost('p1', 'member', { circleId: 'c2', clientId: '5b3f7d1e-0000-4000-8000-00000000000d' }))
+      .rejects.toMatchObject({ statusCode: 403, message: 'Posts in a closed circle stay in it.' });
+    expect(sqlsCalled().some(s => /INSERT INTO circle_posts/.test(s))).toBe(false);
+  });
+
+  it('the people in it, and platform admins without a lookup, read every path', async () => {
+    armWall('closed', true);
+    await expect(listPosts('c1', 'member', {}, 'member')).resolves.toMatchObject({ posts: [{ id: 'p1' }] });
+    await expect(getPost('p1', 'member', 'member')).resolves.toMatchObject({ id: 'p1' });
+    await expect(listComments('p1', 'member', 'member')).resolves.toEqual([]);
+    mockQuery.mockClear();
+    armWall('closed', false);
+    await expect(listPosts('c1', 'platform', {}, 'admin')).resolves.toMatchObject({ posts: [{ id: 'p1' }] });
+    expect(sqlsCalled().some(s => /SELECT c\.join_policy,/.test(s))).toBe(false);
+  });
+
+  it('an open circle\'s wall reads for anyone signed in, as before (production\'s wall)', async () => {
+    armWall('open', false);
+    await expect(listPosts('c1', 'stranger')).resolves.toMatchObject({ posts: [{ id: 'p1' }] });
+    await expect(getPost('p1', 'stranger')).resolves.toMatchObject({ id: 'p1' });
+    await expect(listComments('p1', 'stranger')).resolves.toEqual([]);
+  });
+
+  it('a share\'s embedded original is carried only from an open circle or to someone in it', () => {
+    armWall('open', false);
+    return listPosts('c1', 'stranger').then(() => {
+      const feed = sqlsCalled().find(s => /ORDER BY p\.created_at DESC/.test(s))!.replace(/\s+/g, ' ');
+      expect(feed).toContain("AND (oc.join_policy <> 'closed' OR EXISTS (SELECT 1 FROM circle_members om WHERE om.circle_id = o.circle_id AND om.user_id = $2))");
+    });
   });
 });

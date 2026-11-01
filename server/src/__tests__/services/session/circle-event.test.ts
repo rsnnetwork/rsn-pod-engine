@@ -206,7 +206,7 @@ describe('the audience fragment', () => {
   it('a circle member in the audience of a private event sees and registers without joining the pod', () => {
     const facts: EventAccessFacts = {
       visibility: 'private', podId: POD_ID, podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
-      inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
+      inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
     };
     expect(canSeeEvent(facts, UserRole.MEMBER)).toBe(true);
     expect(canRegister(facts, UserRole.MEMBER)).toEqual({ ok: true, addToPod: false });

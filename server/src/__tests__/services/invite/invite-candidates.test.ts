@@ -1292,9 +1292,9 @@ describe('createInvitesBatch', () => {
   describe('what comes back', () => {
     it('names the pod or event it fanned out for, so the route can tell the right screens once', async () => {
       const pod = await podBatch([person(1)]);
-      expect(pod.target).toEqual({ podId: POD, sessionId: null });
+      expect(pod.target).toEqual({ podId: POD, sessionId: null, circleId: null });
       const event = await eventBatch([person(2)]);
-      expect(event.target).toEqual({ podId: EVENT_POD, sessionId: EVENT });
+      expect(event.target).toEqual({ podId: EVENT_POD, sessionId: EVENT, circleId: null });
     });
 
     it('never carries an email, an invite code or a link', async () => {
