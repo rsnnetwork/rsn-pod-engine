@@ -234,8 +234,34 @@ describe('the routes are rate limited', () => {
     expect(at).toBeLessThan(handlers.length - 1);
   };
 
-  it.each([['get', '/'], ['get', '/of-pod/:podId'], ['get', '/:id'], ['get', '/:id/requests'], ['get', '/:id/attachable-pods']])('%s %s carries the read limiter', (method, path) => {
+  it.each([['get', '/'], ['get', '/of-pod/:podId'], ['get', '/:id'], ['get', '/:id/requests'], ['get', '/:id/attachable-pods'],
+    // Final fix wave SM4 (2 Nov 2026): the wall's three reads too.
+    ['get', '/:id/posts'], ['get', '/posts/:postId'], ['get', '/posts/:postId/comments']])('%s %s carries the read limiter', (method, path) => {
     order(circleReadLimiter, method, path);
+  });
+
+  it('every read route has the read limiter: nothing is left unlimited', () => {
+    const stack = (circleRoutes as unknown as { stack: Layer[] }).stack;
+    const unlimited = stack
+      .filter((layer) => layer.route?.methods.get)
+      .filter((layer) => !layer.route!.stack.map((s) => s.handle).includes(circleReadLimiter))
+      .map((layer) => `get ${layer.route!.path}`);
+    expect(unlimited).toEqual([]);
+  });
+
+  // The wall polls every 30 s (all its loaded pages), and a phone that comes back to the tab reads the page, the
+  // feed and every open comment thread again. One allowance covers the circle's page and its wall: 120 a minute.
+  it('a member reading a circle and its wall has 120 reads a minute, then is told to slow down, in words', async () => {
+    const reader = as('user-busy-reader');
+    jest.mocked(wallService.listPosts).mockResolvedValue({ pinned: [], posts: [], nextCursor: null });
+    jest.mocked(wallService.listComments).mockResolvedValue([]);
+    const paths = [`/circles/${CIRCLE}`, `/circles/${CIRCLE}/posts`, `/circles/posts/${POST}/comments`];
+    for (let i = 0; i < 120; i += 1) {
+      expect((await request(app).get(paths[i % paths.length]).set(reader)).status).toBe(200);
+    }
+    const refused = await request(app).get(`/circles/${CIRCLE}/posts`).set(reader);
+    expect(refused.status).toBe(429);
+    expect(refused.body).toEqual({ success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } });
   });
 
   it.each([

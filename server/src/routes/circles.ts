@@ -4,7 +4,8 @@
 // create/update/archive/attach = admin+; join/leave/read = any authenticated
 // member. Every gate is server-side — nothing trusted from the client.
 // 1 Nov 2026: every route is rate limited (circleReadLimiter, circleWriteLimiter, and wallWriteLimiter on the wall's
-// writes) and every change to a circle tells the people it touches through fanoutCircleChange.
+// writes; the wall's reads joined circleReadLimiter on 2 Nov) and every change to a circle tells the people it touches
+// through fanoutCircleChange.
 // T14 (1 Nov 2026, L22): the people who run a circle (its creator, owners and moderators, and platform admins;
 // circle-managers.ts) edit it, choose Open or Closed, answer asks to join, remove members and attach pods. Creating
 // and archiving a circle stay a platform admin's. Every change to the asks also tells circle:<id>:requests.
@@ -286,7 +287,7 @@ const postInPath = uuidInPath('postId', PATH_REFUSALS.post);
 const commentInPath = uuidInPath('commentId', PATH_REFUSALS.comment);
 
 // GET /circles/:id/posts — the wall feed (any member; a closed circle's only to the people in it; keyset cursor)
-router.get('/:id/posts', authenticate, uuidInPath('id', PATH_REFUSALS.circle), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/:id/posts', authenticate, circleReadLimiter, uuidInPath('id', PATH_REFUSALS.circle), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await wallService.listPosts(req.params.id, req.user!.userId, {
       cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
@@ -305,7 +306,7 @@ router.post('/:id/posts', authenticate, wallWriteLimiter, uuidInPath('id', PATH_
   });
 
 // GET /circles/posts/:postId — one post (any member; blocks respected → 404). Backs ?post= deep links.
-router.get('/posts/:postId', authenticate, postInPath, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/posts/:postId', authenticate, circleReadLimiter, postInPath, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await wallService.getPost(req.params.postId, req.user!.userId, req.user!.role);
     if (!data) {
@@ -359,7 +360,7 @@ router.post('/posts/:postId/unpin', authenticate, wallWriteLimiter, requireRole(
   });
 
 // GET /circles/posts/:postId/comments — any member (blocks filtered)
-router.get('/posts/:postId/comments', authenticate, postInPath, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/posts/:postId/comments', authenticate, circleReadLimiter, postInPath, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await wallService.listComments(req.params.postId, req.user!.userId, req.user!.role);
     res.json({ success: true, data } satisfies ApiResponse);

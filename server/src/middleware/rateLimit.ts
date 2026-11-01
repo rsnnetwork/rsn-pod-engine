@@ -426,9 +426,12 @@ export const entityCreateLimiter = rateLimit({
 // Circles (1 Nov 2026). Reading a circle's list or page is limited like entities, because any circle can be
 // asked for by id. Making, editing, archiving, attaching a pod, joining and leaving share a write allowance,
 // as entities do. The wall's own writes keep wallWriteLimiter.
+// Since 2 Nov 2026 (final fix wave SM4) the wall's reads (its feed, one post, a post's comments) count here too, so the
+// allowance is 120 a minute, as the entity reads are: the wall reads every loaded page again every 30 s, and a phone
+// that comes back to the tab reads the page, the feed and each open comment thread again.
 export const circleReadLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 60,
+  max: 120,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
@@ -660,6 +663,8 @@ export const postEventMessageLimiter = rateLimit({
 // Event chat (26 Oct 2026). Any event's chat can be asked for by id, so reads are limited like the entity
 // reads; a page is 50 messages, so 60 a minute is far more than a person scrolling back reads. Taking a
 // message down has a smaller allowance of its own. Keyed per member: the routes sign in first.
+// Since 2 Nov 2026 (final fix wave SM4) the event's Requests list (GET /sessions/:id/requests) shares the read
+// allowance: it too can be asked for by id, and the organisers' card reads it once per change.
 export const eventChatReadLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
