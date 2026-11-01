@@ -30,18 +30,20 @@ const mockList = jest.fn();
 const mockSummary = jest.fn();
 const mockGet = jest.fn();
 const mockCancel = jest.fn();
+const mockCalendarFile = jest.fn();
 jest.mock('../../services/meetings/meeting.service', () => ({
   listMeetings: (...a: unknown[]) => mockList(...a),
   getMeetingSummary: (...a: unknown[]) => mockSummary(...a),
   getMeeting: (...a: unknown[]) => mockGet(...a),
   cancelMeeting: (...a: unknown[]) => mockCancel(...a),
+  getMeetingCalendarFile: (...a: unknown[]) => mockCalendarFile(...a),
   __esModule: true,
 }));
 
 import meetingsRoutes from '../../routes/meetings';
 import { authenticate } from '../../middleware/auth';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
-import { apiLimiter, meetingCancelLimiter } from '../../middleware/rateLimit';
+import { apiLimiter, meetingCalendarLimiter, meetingCancelLimiter } from '../../middleware/rateLimit';
 import { ConflictError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 
@@ -55,6 +57,7 @@ app.use(errorHandler);
 const token = (sub: string) => jwt.sign({ sub, email: `${sub}@example.com`, role: 'member', sessionId: 's-1' }, JWT_SECRET, { expiresIn: '1h' });
 const as = (sub: string) => ({ Authorization: `Bearer ${token(sub)}` });
 const ID = '5f0c3a3e-8d7b-4a57-9d0e-1f2a3b4c5d6e';
+const FILE = 'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n';
 
 const meeting = (extra: Record<string, unknown> = {}) => ({
   id: ID, conversationId: 'conv-1', partner: { userId: 'u-b', displayName: 'Bo', avatarUrl: null },
@@ -68,6 +71,7 @@ beforeEach(() => {
   mockSummary.mockResolvedValue({ upcomingCount: 1, liveNow: false, next: { id: ID, startAt: '2026-11-05T17:00:00.000Z', partnerName: 'Bo' } });
   mockGet.mockResolvedValue(meeting());
   mockCancel.mockResolvedValue(meeting({ status: 'cancelled', phase: 'cancelled' }));
+  mockCalendarFile.mockResolvedValue(FILE);
 });
 
 describe('GET /meetings', () => {
@@ -178,16 +182,41 @@ describe('POST /meetings/:id/cancel', () => {
   });
 });
 
+// 1 Nov 2026 (T7): the meeting's own calendar file, so a card for an earlier meeting adds that meeting.
+describe('GET /meetings/:id/calendar.ics', () => {
+  const me = as('u-file');
+
+  it('answers the meeting\'s file for this member, as a calendar invite saved as reason-meeting.ics', async () => {
+    const res = await request(app).get(`/meetings/${ID.toUpperCase()}/calendar.ics`).set(me);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('text/calendar; charset=utf-8; method=REQUEST');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="reason-meeting.ics"');
+    expect(res.text).toBe(FILE);
+    expect(mockCalendarFile).toHaveBeenCalledWith('u-file', ID);
+  });
+
+  it('is a 404 for anyone who is not one of the two, and refuses an id that is not one with a 400', async () => {
+    mockCalendarFile.mockRejectedValueOnce(new NotFoundError('Meeting', undefined, "We couldn't find that meeting."));
+    const gone = await request(app).get(`/meetings/${ID}/calendar.ics`).set(me);
+    expect(gone.status).toBe(404);
+    expect(gone.body.error.message).toBe("We couldn't find that meeting.");
+    mockCalendarFile.mockClear();
+    expect((await request(app).get('/meetings/undefined/calendar.ics').set(me)).status).toBe(400);
+    expect(mockCalendarFile).not.toHaveBeenCalled();
+  });
+});
+
 describe('every meetings route needs a signed-in member', () => {
   it.each([
     ['get', '/meetings'],
     ['get', '/meetings/summary'],
     ['get', `/meetings/${ID}`],
     ['post', `/meetings/${ID}/cancel`],
+    ['get', `/meetings/${ID}/calendar.ics`],
   ])('%s %s answers 401 without one, and reads or writes nothing', async (method, url) => {
     const res = await (method === 'get' ? request(app).get(url) : request(app).post(url));
     expect(res.status).toBe(401);
-    for (const m of [mockList, mockSummary, mockGet, mockCancel]) expect(m).not.toHaveBeenCalled();
+    for (const m of [mockList, mockSummary, mockGet, mockCancel, mockCalendarFile]) expect(m).not.toHaveBeenCalled();
   });
 });
 
@@ -218,6 +247,28 @@ describe('the routes are rate limited', () => {
     const mounted = index.indexOf("app.use('/api/meetings', meetingsRoutes);");
     expect(limiter).toBeGreaterThan(0);
     expect(mounted).toBeGreaterThan(limiter);
+  });
+
+  it('the calendar file carries its own allowance, after authenticate and ahead of its handler', () => {
+    const handlers = handlersOf('get', '/:id/calendar.ics');
+    const signedIn = handlers.indexOf(authenticate);
+    const at = handlers.indexOf(meetingCalendarLimiter);
+    expect(signedIn).toBeGreaterThanOrEqual(0);
+    expect(at).toBeGreaterThan(signedIn);
+    expect(at).toBeLessThan(handlers.length - 1);
+  });
+
+  it('refuses the 21st calendar file in a minute with a friendly 429, for that member only', async () => {
+    const busy = as('u-files');
+    for (let i = 0; i < 20; i += 1) {
+      expect((await request(app).get(`/meetings/${ID}/calendar.ics`).set(busy)).status).toBe(200);
+    }
+    mockCalendarFile.mockClear();
+    const refused = await request(app).get(`/meetings/${ID}/calendar.ics`).set(busy);
+    expect(refused.status).toBe(429);
+    expect(refused.body).toEqual({ success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } });
+    expect(mockCalendarFile).not.toHaveBeenCalled();
+    expect((await request(app).get(`/meetings/${ID}/calendar.ics`).set(as('u-files-2'))).status).toBe(200);
   });
 
   it('refuses the 11th cancel in an hour with a friendly 429, for that member only', async () => {

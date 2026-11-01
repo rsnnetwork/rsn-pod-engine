@@ -105,6 +105,32 @@ describe('the confirmation email', () => {
   });
 });
 
+// 1 Nov 2026 (T7, L10): Add to calendar is Google, Outlook.com or the file. The email offers all three.
+describe('the confirmation email\'s calendar links', () => {
+  const google = 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=Meeting+with+Stefan+on+REASON';
+  const outlook = 'https://outlook.live.com/calendar/0/deeplink/compose?subject=Meeting+with+Stefan+on+REASON';
+
+  it('links Add to Google Calendar and Add to Outlook.com, and keeps the file attached', async () => {
+    const mail = await sent(() => sendMeetingConfirmedEmail('delivered+claus@resend.dev', 'Claus', confirmed({
+      googleCalendarUrl: google, outlookCalendarUrl: outlook,
+    })));
+    expect(mail.html).toContain(`href="${google.replace(/&/g, '&amp;')}"`);
+    expect(mail.html).toContain('>Add to Google Calendar</a>');
+    expect(mail.html).toContain(`href="${outlook}"`);
+    expect(mail.html).toContain('>Add to Outlook.com</a>');
+    expect(mail.text).toContain(`Add to Google Calendar: ${google}\n`);
+    expect(mail.text).toContain(`Add to Outlook.com: ${outlook}\n`);
+    expect(mail.attachments?.[0]).toMatchObject({ filename: 'meeting.ics', contentType: 'text/calendar; charset=utf-8; method=REQUEST' });
+  });
+
+  it('a caller with only the Google link (the server before this release) sends the email as before, with no Outlook line', async () => {
+    const mail = await sent(() => sendMeetingConfirmedEmail('delivered+claus@resend.dev', 'Claus', confirmed()));
+    expect(mail.html).toContain('>Add to Google Calendar</a>');
+    expect(mail.html).not.toContain('Outlook');
+    expect(mail.text).not.toContain('Outlook');
+  });
+});
+
 describe('the cancellation email', () => {
   const cancelled = (extra: Record<string, unknown> = {}) => ({
     partnerName: 'Bo',

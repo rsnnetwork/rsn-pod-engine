@@ -27,6 +27,7 @@ jest.mock('../../middleware/auth', () => ({
 const mockScheduling = jest.fn();
 jest.mock('../../services/dm/meeting-windows.service', () => ({
   getScheduling: (...a: unknown[]) => mockScheduling(...a),
+  meetingJoinPath: (conversationId: string, type: string | null) => `/meet/${conversationId}?scheduled=1&kind=${type ?? 'video'}`,
   __esModule: true,
 }));
 jest.mock('../../services/dm/meeting-call.service', () => ({ __esModule: true }));

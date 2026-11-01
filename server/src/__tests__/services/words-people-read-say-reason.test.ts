@@ -19,6 +19,7 @@ const FILES = [
   'services/dm/meeting-windows.service.ts',
   'services/dm/meeting-call.service.ts',
   'services/meetings/meeting.service.ts',
+  'services/meetings/meeting-calendar.ts',
   'services/meetings/meeting-reminder.worker.ts',
   'services/join-request/join-request.service.ts',
   'services/join-request/admin-action-tokens.service.ts',
@@ -56,7 +57,7 @@ describe('the files that hold words a person reads', () => {
   });
 
   it('the downloads are named for REASON', () => {
-    expect(codeLines('routes/meeting.ts').join('\n')).toContain('filename="reason-meeting.ics"');
+    expect(codeLines('services/meetings/meeting-calendar.ts').join('\n')).toContain('filename="reason-meeting.ics"');
     expect(codeLines('routes/admin.ts').join('\n')).toContain('filename="reason-analytics-${type}.csv"');
   });
 

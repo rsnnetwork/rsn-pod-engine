@@ -26,6 +26,7 @@ import { emitMeetingChanged } from './meeting-tags';
 import { meetingTime } from './meeting-time';
 import { CURRENT_MEETING_ID, lockConversation } from './current-meeting';
 import { readMyFeedback } from './meeting-feedback.service';
+import { buildMeetingFile } from './meeting-calendar';
 
 /** A meeting row with the other person's columns, as every read here selects it. */
 interface MeetingRow {
@@ -183,6 +184,28 @@ async function loadVisible(userId: string, meetingId: string): Promise<MeetingRo
 export async function getMeeting(userId: string, meetingId: string, now = new Date()): Promise<Meeting> {
   const row = await loadVisible(userId, meetingId);
   return { ...toMeeting(row, userId, now), myFeedback: await readMyFeedback(userId, meetingId) };
+}
+
+/**
+ * One meeting's calendar file, for its two people (1 Nov 2026, T7): the meeting's own time, kind and SEQUENCE, so a
+ * thread card for an earlier meeting adds that meeting and not the conversation's current one. A cancelled meeting
+ * has nothing to add.
+ */
+export async function getMeetingCalendarFile(userId: string, meetingId: string): Promise<string> {
+  const row = await loadVisible(userId, meetingId);
+  if (row.status === 'cancelled') {
+    throw new NotFoundError('Meeting', undefined, 'This meeting was cancelled, so there is nothing to add to a calendar.');
+  }
+  return buildMeetingFile({
+    conversationId: row.conversation_id,
+    viewerId: userId,
+    partnerId: row.partner_id,
+    kind: row.kind,
+    startAt: row.start_at,
+    durationMin: row.duration_min,
+    meetingId: row.id,
+    booked: { calendarSequence: row.calendar_sequence, confirmedBy: row.confirmed_by },
+  });
 }
 
 type CancelOutcome =

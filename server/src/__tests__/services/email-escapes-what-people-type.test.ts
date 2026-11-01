@@ -122,6 +122,7 @@ const cases: Case[] = [
   email('sendMeetingConfirmedEmail', 'a confirmed meeting', ['to', 'recipientDisplayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
     partnerName: 'Bo', startAt: STARTS, durationMin: 30, recipientTimezone: 'Europe/Berlin', threadUrl: `${APP}/messages/c1`,
     googleCalendarUrl: 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=REASON%20meeting',
+    outlookCalendarUrl: 'https://outlook.live.com/calendar/0/deeplink/compose?subject=Meeting%20with%20Bo%20on%20REASON',
     icsContent: 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n',
     joinUrl: `${APP}/meet/c1?scheduled=1&kind=video`, kind: 'video',
     eventsUrl: `${APP}/sessions`, moved: true,

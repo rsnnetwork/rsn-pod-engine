@@ -188,16 +188,90 @@ export function buildGoogleCalendarUrl(data: {
   description?: string;
   location?: string;
 }): string {
-  const start = formatIcsDate(data.startTime);
-  const end = formatIcsDate(new Date(data.startTime.getTime() + data.durationMinutes * 60 * 1000));
+  return googleTemplateUrl({
+    title: data.title,
+    start: data.startTime,
+    end: new Date(data.startTime.getTime() + data.durationMinutes * 60 * 1000),
+    details: data.description,
+    location: data.location,
+  });
+}
+
+/**
+ * What an "Add to calendar" link carries (1 Nov 2026, L10): the entry's title, its start and end (written in UTC),
+ * the details (with the join link), and where: the join link for a call, the place for an in-person event.
+ */
+export interface CalendarLinkInput {
+  title: string;
+  start: Date;
+  end: Date;
+  details?: string;
+  location?: string;
+}
+
+/** The two template links REASON offers beside the .ics file. */
+export interface CalendarLinks {
+  google: string;
+  outlook: string;
+}
+
+/**
+ * Google Calendar's and Outlook.com's "new entry" pages, filled in. No sign-in or API key: the person saves the entry
+ * in their own calendar. A template link carries no UID, so a move or a cancel does not reach the entry it makes;
+ * the emailed invite and the file do.
+ */
+export function buildCalendarLinks(input: CalendarLinkInput): CalendarLinks {
+  return { google: googleTemplateUrl(input), outlook: outlookComposeUrl(input) };
+}
+
+/**
+ * A 1:1 meeting's links: "Meeting with {name} on REASON", "{Video|Audio} call on REASON. Join: {url}", and the join
+ * link as where, so the entry has a way into the call.
+ */
+export function meetingCalendarLinks(meeting: {
+  partnerName: string;
+  kind: 'audio' | 'video';
+  startAt: Date;
+  durationMin: number;
+  joinUrl: string;
+}): CalendarLinks {
+  return buildCalendarLinks({
+    title: `Meeting with ${meeting.partnerName} on REASON`,
+    start: meeting.startAt,
+    end: new Date(meeting.startAt.getTime() + meeting.durationMin * 60 * 1000),
+    details: `${meeting.kind === 'audio' ? 'Audio' : 'Video'} call on REASON. Join: ${meeting.joinUrl}`,
+    location: meeting.joinUrl,
+  });
+}
+
+/** Times in the compact UTC form Google expects; Google shows them in the viewer's own zone. */
+function googleTemplateUrl(input: CalendarLinkInput): string {
   const params = new URLSearchParams({
     action: 'TEMPLATE',
-    text: data.title,
-    dates: `${start}/${end}`,
+    text: input.title,
+    dates: `${formatIcsDate(input.start)}/${formatIcsDate(input.end)}`,
   });
-  if (data.description) params.set('details', data.description);
-  if (data.location) params.set('location', data.location);
+  if (input.details) params.set('details', input.details);
+  if (input.location) params.set('location', input.location);
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+/** Outlook.com (personal accounts). Times as UTC ISO instants, which Outlook shows in the viewer's own zone. */
+function outlookComposeUrl(input: CalendarLinkInput): string {
+  const params = new URLSearchParams({
+    path: '/calendar/action/compose',
+    rru: 'addevent',
+    subject: input.title,
+    startdt: formatIsoInstant(input.start),
+    enddt: formatIsoInstant(input.end),
+  });
+  if (input.details) params.set('body', input.details);
+  if (input.location) params.set('location', input.location);
+  return `https://outlook.live.com/calendar/0/deeplink/compose?${params.toString()}`;
+}
+
+function formatIsoInstant(date: Date): string {
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function formatIcsDate(date: Date): string {

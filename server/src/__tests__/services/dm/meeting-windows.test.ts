@@ -62,6 +62,11 @@ const mockGoogleInputs: Array<Record<string, unknown>> = [];
 jest.mock('../../../services/calendar/calendar.service', () => ({
   generateIcsContent: (input: Record<string, unknown>) => { mockIcsInputs.push(input); return 'ICSCONTENT'; },
   buildGoogleCalendarUrl: (input: Record<string, unknown>) => { mockGoogleInputs.push(input); return 'https://calendar.google.com/x'; },
+  // 1 Nov 2026 (T7): the Google and Outlook.com links come from one builder, per recipient.
+  meetingCalendarLinks: (input: Record<string, unknown>) => {
+    mockGoogleInputs.push(input);
+    return { google: `https://calendar.google.com/x?for=${String(input.partnerName)}`, outlook: `https://outlook.live.com/x?for=${String(input.partnerName)}` };
+  },
   meetingCalendarUid: (meetingId: string) => `meeting-${meetingId}`,
   __esModule: true,
 }));
@@ -70,6 +75,7 @@ jest.mock('../../../services/email/email.service', () => ({
   __esModule: true,
 }));
 
+import config from '../../../config';
 import {
   isValidWindowKey, windowLabel, getScheduling, setAvailability, confirmWindow,
   markSchedulerSeen, HORIZON_DAYS, isMeetingOver, isPastKey,
@@ -887,16 +893,42 @@ describe('confirmWindow', () => {
       await confirmWindow('conv-1', 'u-a', windowKey, { startAt, durationMin: 45 });
     }
 
-    it('is titled "REASON meeting" and says it was arranged on REASON, in the file and in the Google link', async () => {
+    // 1 Nov 2026 (T7, 30 Oct review 5b): the file's DESCRIPTION gains the join link (its SUMMARY and LOCATION are
+    // unchanged), and each person's Google and Outlook.com links are "Meeting with {the other} on REASON", with the
+    // join link in the details and as where, so the entry they make has a way into the call.
+    it('the file is a "REASON meeting" arranged on REASON whose description carries the join link', async () => {
       await confirmWithEmails('Ana');
 
+      const joinUrl = `${config.clientUrl}/meet/conv-1?scheduled=1&kind=video`;
       expect(mockIcsInputs.map(i => i.title)).toEqual(['REASON meeting', 'REASON meeting']);
       expect(mockIcsInputs.map(i => i.description)).toEqual([
-        'A 1:1 meeting arranged on REASON with Bo.',
-        'A 1:1 meeting arranged on REASON with Ana.',
+        `A 1:1 meeting arranged on REASON with Bo. Join: ${config.clientUrl}/meet/conv-1?scheduled=1&kind=video`,
+        `A 1:1 meeting arranged on REASON with Ana. Join: ${config.clientUrl}/meet/conv-1?scheduled=1&kind=video`,
       ]);
-      expect(mockGoogleInputs).toHaveLength(1);
-      expect(mockGoogleInputs[0]).toMatchObject({ title: 'REASON meeting', description: 'A 1:1 meeting arranged on REASON.' });
+      expect(mockIcsInputs.map(i => i.location)).toEqual([joinUrl, joinUrl]);
+    });
+
+    it('each person gets Google and Outlook.com links for a meeting with the other, the join link in them', async () => {
+      await confirmWithEmails('Ana');
+
+      expect(mockGoogleInputs).toHaveLength(2);
+      const startAt = mockIcsInputs[0].startTime;
+      expect(mockGoogleInputs).toEqual([
+        { partnerName: 'Bo', kind: 'video', startAt, durationMin: 45, joinUrl: `${config.clientUrl}/meet/conv-1?scheduled=1&kind=video` },
+        { partnerName: 'Ana', kind: 'video', startAt, durationMin: 45, joinUrl: `${config.clientUrl}/meet/conv-1?scheduled=1&kind=video` },
+      ]);
+      const byRecipient = Object.fromEntries(mockSendMtgEmail.mock.calls.map(c => [c[0], c[2] as Record<string, unknown>]));
+      expect(byRecipient['ana@example.com']).toMatchObject({
+        googleCalendarUrl: 'https://calendar.google.com/x?for=Bo', outlookCalendarUrl: 'https://outlook.live.com/x?for=Bo',
+      });
+      expect(byRecipient['bo@example.com']).toMatchObject({
+        googleCalendarUrl: 'https://calendar.google.com/x?for=Ana', outlookCalendarUrl: 'https://outlook.live.com/x?for=Ana',
+      });
+    });
+
+    it('a person with no name on file is "your match" in the other\'s links, as in the email', async () => {
+      await confirmWithEmails(null);
+      expect(mockGoogleInputs.map(i => i.partnerName)).toEqual(['Bo', 'your match']);
     });
 
     it('is organised by the person who confirmed it', async () => {
