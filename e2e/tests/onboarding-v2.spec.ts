@@ -55,7 +55,9 @@ async function freshMember(suffix: string, linkedinUrl: string | null = null): P
   await pool.query(
     `UPDATE users SET onboarding_completed = false, display_name = $2, first_name = 'Ana', last_name = $3,
        company = NULL, job_title = NULL, industry = NULL, bio = NULL, avatar_url = NULL, timezone = NULL,
-       linkedin_url = $4
+       linkedin_url = $4,
+       -- where they are based is on file (30 Oct review, 1.2: screen 7 requires it), so screen 7 shows it filled in
+       location = 'Copenhagen, Denmark'
      WHERE id = $1`,
     [u.id, `Ana ${suffix}`, suffix, linkedinUrl],
   );
@@ -68,7 +70,7 @@ async function finishedMember(suffix: string): Promise<TestUser> {
   const done = await apiAs(u, 'POST', '/onboarding/v2/confirm', {
     lookingToMeet: ['meet_investors'], hopingToFind: ['find_funding'],
     canOffer: ['offer_advice_mentoring'], selfKinds: ['self_founder_owner'],
-    profile: { company: 'Crumb', timezone: ZONE },
+    profile: { company: 'Crumb', timezone: ZONE, location: 'Copenhagen, Denmark' },
   });
   expect(done.status).toBe(200);
   expect((await apiAs(u, 'POST', '/onboarding/tour', { outcome: 'skipped' })).status).toBe(200);
@@ -240,7 +242,7 @@ test('continue with email: the brief\'s words, own words for Q1, a specific wish
   for (const line of [
     'Every good connection starts with a reason.',
     'On REASON, you connect with people you want to meet, who also want to meet you, for a specific reason.',
-    'Answer quick questions and we will suggest the potential mutuals for you.',
+    "Answer a few quick questions and we'll suggest potential mutuals for you.",
   ]) await expect(page.getByText(line, { exact: true })).toBeVisible();
   await expect(page.getByRole('button')).toHaveCount(1);
   await expect(page.locator('body')).not.toContainText(/\bRSN\b/);
@@ -329,6 +331,7 @@ test('continue with email: the brief\'s words, own words for Q1, a specific wish
   const sent = confirms[0] as { profile?: Record<string, unknown> };
   expect(sent.profile).toEqual({
     displayName: 'Ana ob2email', jobTitle: 'Head baker', company: 'Crumb', industry: 'Food and drink', timezone: ZONE,
+    location: 'Copenhagen, Denmark',
   });
   const row = (await pool.query(
     `SELECT onboarding_status, onboarding_version, looking_to_meet, meet_other, hoping_to_find, find_specific,
@@ -1288,7 +1291,7 @@ test('screen 7: emptying a stored company sends "" so it is cleared, and a field
   await press(page, 'Save');
   await expect.poll(() => confirms.length, { timeout: 20_000 }).toBe(1);
   // The server's contract (the other half of this fix): missing or null keeps a value, "" clears it.
-  expect(confirms[0].profile).toEqual({ displayName: 'Ana ob2clear', company: '', timezone: ZONE });
+  expect(confirms[0].profile).toEqual({ displayName: 'Ana ob2clear', company: '', timezone: ZONE, location: 'Copenhagen, Denmark' });
   // This member has seen the tour, so the save says so; and "saved" is true: the company is gone (fix round 1, T-2).
   await expect(page.getByText('Your changes are saved.')).toBeVisible({ timeout: 20_000 });
   await expect.poll(async () => (await pool.query<{ company: string | null; job_title: string | null; display_name: string }>(

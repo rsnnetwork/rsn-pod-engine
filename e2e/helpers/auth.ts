@@ -49,6 +49,12 @@ export function readSignedToken(token: string): jwt.JwtPayload {
  * `onboardingStatus` explicitly to seed a specific state for specs that
  * TEST the gate itself (e.g. reonboarding-gate.spec.ts, which flips it via
  * direct pool.query post-creation instead — both styles are fine).
+ *
+ * 30 Oct review (2.1, 1.2): the preview gates everyone who has not done the NEW
+ * onboarding (onboarding_version 2) and everyone with no location or only a
+ * country, so a completed test user is a v2 finisher based in a city:
+ * onboarding_version 2 and location 'Copenhagen, Denmark'. Any other status
+ * seeds neither, like a member who has not finished.
  */
 export async function createTestUser(
   suffix: string,
@@ -62,13 +68,15 @@ export async function createTestUser(
   const lastName = `Test ${suffix}`;
 
   await pool.query(
-    `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed, onboarding_status, email_verified, company, job_title, industry, reasons_to_connect)
-     VALUES ($1, $2, $3, $4, $5, 'active', $6, true, true, $7, true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[])`,
+    `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed, onboarding_status, email_verified, company, job_title, industry, reasons_to_connect,
+                        onboarding_version, location)
+     VALUES ($1, $2, $3, $4, $5, 'active', $6, true, true, $7, true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[],
+             CASE WHEN $8 THEN 2 END, CASE WHEN $8 THEN 'Copenhagen, Denmark' END)`,
     // job_title is deliberately NOT a real role. It used to be "Test Engineer",
     // which the matcher correctly reads as an engineer — so every test account
     // in the network silently qualified as a developer, and a Pastry Chef
     // fixture matched a React search. Any test that needs a role sets one.
-    [id, email, displayName, firstName, lastName, role, onboardingStatus]
+    [id, email, displayName, firstName, lastName, role, onboardingStatus, onboardingStatus === 'completed']
   );
 
   const sessionId = uuid();
