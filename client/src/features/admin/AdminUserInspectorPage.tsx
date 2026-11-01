@@ -100,14 +100,14 @@ export default function AdminUserInspectorPage() {
     refreshMutation.reset();
   }, [id]);
 
-  // Admin-only E2 diagnostic endpoint — no realtime entity is emitted for it
-  // server-side. Kept fresh via refetchInterval while a refresh is actually
-  // running; otherwise a manual tab revisit/reload is the intended refresh.
-  // realtime: skip — admin-only diagnostic read, no server-side entity emitted
+  // The "Onboarding answers" card and the onboarding tab. Every admin is sent admin:users when a member confirms an
+  // onboarding or saves their profile (final sweep F2, 2 Nov 2026), so the answers change here while it is open. The
+  // enrichment's own progress is still followed by refetchInterval while a refresh is running.
   const onboardingQuery = useQuery({
     queryKey: ['admin-inspect-onboarding', id],
     queryFn: () => api.get(`/admin/users/${id}/onboarding`).then((r) => r.data.data),
     enabled: admin && !!id,
+    meta: { entities: id ? [E.adminUsers, E.user(id)] : [E.adminUsers] },
     // Keep polling while a refresh is actually running so the UI reflects the
     // eventual terminal state without the admin having to manually refetch.
     refetchInterval: (q: any) => (q.state.data?.enrichment?.status === 'searching' ? 3000 : false),
