@@ -422,7 +422,7 @@ export default function ProfilePage() {
                 aria-required="true"
                 aria-invalid={errors.location ? true : undefined}
                 aria-describedby={errors.location ? 'location-error' : undefined}
-                className={`w-full rounded-xl border bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 ${errors.location ? 'border-rsn-red' : 'border-gray-200'}`}
+                className={`w-full scroll-mt-32 rounded-xl border bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 ${errors.location ? 'border-rsn-red' : 'border-gray-200'}`}
               />
               {errors.location?.message && (
                 <p id="location-error" role="alert" className="mt-1 text-xs text-red-700">{errors.location.message}</p>

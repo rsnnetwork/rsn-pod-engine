@@ -95,7 +95,7 @@ export default function OnboardingAnswersCard({ answers, status }: { answers: Ad
           size="sm"
           onClick={() => void download()}
           isLoading={downloading}
-          className="min-h-[44px] w-full shrink-0 sm:w-auto"
+          className="min-h-[44px] w-full shrink-0 gap-2 sm:w-auto"
         >
           <Download className="h-4 w-4" aria-hidden /> Download onboarding answers (CSV)
         </Button>
