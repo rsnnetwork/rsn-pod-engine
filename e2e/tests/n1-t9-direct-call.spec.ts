@@ -29,6 +29,10 @@ let browser: Browser;
 let a: TestUser | undefined, b: TestUser | undefined, c: TestUser | undefined;
 let conv = '';
 const contexts: BrowserContext[] = [];
+// What each page's LiveKit room logged (fix round 2, 2 Nov 2026): when B is never told that A left, the failure says
+// what each room heard, sent and was doing around the press. LiveKit logs at debug in this spec only.
+const roomLog: string[] = [];
+const ROOM_LINE = /dataReceived|participantDisconnected|participantConnected|disconnect|reconnect|resum|negotiat|abort|leave|connectionStateChanged|signal/i;
 
 async function apiAs(u: TestUser, method: string, path: string, body?: unknown) {
   const res = await fetch(`${SERVER}/api${path}`, {
@@ -51,9 +55,16 @@ async function openAs(u: TestUser, path: string): Promise<Page> {
     localStorage.setItem('rsn_tokens', JSON.stringify({ access: t.a, refresh: t.r }));
   }, { a: u.accessToken, r: u.refreshToken });
   contexts.push(ctx);
+  await ctx.addInitScript(() => {
+    for (const name of ['livekit', 'livekit-room', 'livekit-engine', 'livekit-signal', 'livekit-participant']) localStorage.setItem(`loglevel:${name}`, 'DEBUG');
+  });
   await primePreview(ctx);
   const page = await ctx.newPage();
   page.on('pageerror', () => {});
+  const who = u.email.split('@')[0];
+  page.on('console', (m) => {
+    if (ROOM_LINE.test(m.text())) roomLog.push(`${new Date().toISOString().slice(11, 23)} ${who}: ${m.text().slice(0, 200)}`);
+  });
   await gotoRetry(page, `${APP}${path}`);
   return page;
 }
@@ -183,9 +194,14 @@ test.describe.serial('a direct video call with a connection', () => {
     const tiles = (p: Page) => p.locator('.lk-participant-tile');
     await expect(tiles(pageA)).toHaveCount(2, { timeout: 45_000 });
     await expect(tiles(pageB)).toHaveCount(2, { timeout: 45_000 });
+    const pressedAt = new Date().toISOString().slice(11, 23);
     await pageA.getByRole('button', { name: 'Leave call and go back to chat' }).click();
     await pageA.waitForURL(new RegExp(`/messages/${conv}`));
-    await expect(pageB.getByTestId('partner-left')).toBeVisible({ timeout: 30_000 });
+    await expect(pageB.getByTestId('partner-left')).toBeVisible({ timeout: 30_000 }).catch(async (e: Error) => {
+      const fromPress = roomLog.filter((l) => l.slice(0, 12) >= pressedAt).slice(0, 120);
+      throw new Error(`${e.message}\nB was never told. Pressed at ${pressedAt}; B is on ${pageB.url()} with ${await tiles(pageB).count()} tiles.\n`
+        + `What the rooms logged from the press on:\n${fromPress.join('\n') || '(nothing)'}`);
+    });
     await pageB.getByTestId('partner-left').getByRole('button', { name: 'Leave' }).click();
     await pageB.waitForURL(new RegExp(`/messages/${conv}`));
   });
@@ -214,7 +230,16 @@ test.describe.serial('a direct video call with a connection', () => {
   });
 
   test('ringing B once B has gone offline says the offline sentence', async () => {
+    test.setTimeout(150_000);
+    // B closes the app: the page unloads (which closes its socket in every engine) and the window goes. Fix round 2
+    // (2 Nov 2026): Playwright's WebKit closed the context without B's socket going, so the server still read B as
+    // online when A rang; the ring is now made once the server itself reads B as offline (at most about a minute, the
+    // presence key's life), so the step tests the offline sentence and not how fast a browser hangs up.
+    await pageB.goto('about:blank');
     await pageB.context().close();
+    await expect.poll(async () => (await apiAs(a!, 'GET', `/dm/conversations/${conv}/partner-presence`)).json?.data?.online, {
+      message: 'the server reads B as offline once B has closed the app', timeout: 90_000, intervals: [500, 1_000, 2_000],
+    }).toBe(false);
     await gotoRetry(pageA, `${APP}/people/${b!.id}`);
     await pageA.getByTestId('video-call-button').click();
     await pageA.getByRole('button', { name: 'Send request' }).click();
