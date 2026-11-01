@@ -77,19 +77,24 @@ describe('one Video call button, where canCall says', () => {
   it('the thread offers Video call on canCall, on the desktop row and in the phone\'s More menu; audio stays on callsUnlocked', () => {
     const page = src('features/messages/MessagesPage.tsx');
     expect(page).toContain('const canCall = !!scheduling?.canCall;');
-    expect(page).toMatch(/\{activeConv && canCall && \(\s*<CallButton\s+variant="icon"/);
-    expect(page).toMatch(/\{activeConv && canCall && \(\s*<CallButton\s+variant="menu"/);
-    expect(page.match(/\{activeConv && callsUnlocked && \(/g)).toHaveLength(2); // the two audio buttons
+    // With T2 (1 Nov 2026): a former member's thread offers no call, so every call button also asks !otherIsFormer.
+    expect(page).toMatch(/\{activeConv && !otherIsFormer && canCall && \(\s*<CallButton\s+variant="icon"/);
+    expect(page).toMatch(/\{activeConv && !otherIsFormer && canCall && \(\s*<CallButton\s+variant="menu"/);
+    expect(page.match(/\{activeConv && !otherIsFormer && callsUnlocked && \(/g)).toHaveLength(2); // the two audio buttons
     expect(page).toMatch(/onClick=\{\(\) => startCall\('audio'\)\}/);
     // The scheduler keeps its place: it still steps aside only once calls are unlocked.
-    expect(page.match(/\{activeConv && !callsUnlocked && \(/g)).toHaveLength(2);
+    expect(page.match(/\{activeConv && !otherIsFormer && !callsUnlocked && \(/g)).toHaveLength(2);
     // Before calls unlock, the dialog offers video only (audio would be refused).
     expect(page).toContain('<CallRequestModal {...callRequest.modal} videoOnly={!callsUnlocked} />');
   });
 
   it('the profile shows it beside the hero\'s other actions only when the brief says canCall, ringing the person by id, video only', () => {
     const hero = src('features/reason/human/ProfileHero.tsx');
-    expect(hero).toMatch(/actions=\{brief\.canCall && <div className="mt-3 flex flex-wrap gap-2" data-testid="profile-call-actions"><ProfileCallButton brief=\{brief\} userId=\{userId\} name=\{who\.name\} \/><\/div>\}/);
+    // With T5 (1 Nov 2026): inside the hero's actions row, after Message, and also where Message is not offered.
+    expect(hero).toMatch(/actions=\{<ProfileHeroActions brief=\{brief\} userId=\{userId\} call=\{brief\.canCall && <ProfileCallButton brief=\{brief\} userId=\{userId\} name=\{who\.name\} \/>\} \/>\}/);
+    const row = src('features/reason/human/ProfileHeroActions.tsx');
+    expect(row).toMatch(/if \(!message && !call\) return closed;/);
+    expect(row).toMatch(/data-testid="profile-hero-actions">[\s\S]*Message[\s\S]*\{call\}\s*<\/div>/);
     const button = src('features/calls/ProfileCallButton.tsx');
     expect(button).toMatch(/useCallRequest\(brief\.canCall \? \{ userId \} : null, name\)/);
     expect(button).toMatch(/if \(!brief\.canCall\) return null;/);
