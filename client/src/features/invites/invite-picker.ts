@@ -12,7 +12,7 @@ import type {
   InviteBatchInput, InviteBatchOutcome, InviteBatchResponse, InviteCandidate, InviteCandidateSource, InviteCandidateState,
 } from '@rsn/shared';
 import { E } from '../../realtime/entities';
-import { CONNECTION_LOST, memberSentence } from '../reason/errors';
+import { CONNECTION_LOST, firstDetail, gotNoAnswer, memberSentence } from '../reason/errors';
 
 /**
  * What the sheet invites to: a pod, an event (which lives in a pod; podId is null only while that is unknown), or a
@@ -262,17 +262,6 @@ interface FailedCall {
   response?: { status?: number; data?: { error?: { message?: unknown; details?: unknown } } };
 }
 
-/** Validation details are { field: [messages] }: the first message of the first field that has one. */
-function firstDetail(details: unknown): string | undefined {
-  if (!details || typeof details !== 'object') return undefined;
-  for (const messages of Object.values(details)) {
-    if (!Array.isArray(messages)) continue;
-    const first = messages.find((m): m is string => typeof m === 'string' && m.trim() !== '');
-    if (first !== undefined) return first;
-  }
-  return undefined;
-}
-
 // The refusals the invite routes word for members: a closed pod or event, not allowed here, nobody there, a person who
 // cannot be invited, an allowance used up, a reminder the mail provider did not take.
 const SAID_TO_MEMBERS = new Set([400, 403, 404, 409, 429, 503]);
@@ -281,7 +270,7 @@ const SAID_TO_MEMBERS = new Set([400, 403, 404, 409, 429, 503]);
 export function inviteErrorSentence(err: unknown, fallback: string): string {
   const failed = (typeof err === 'object' && err !== null ? err : {}) as FailedCall;
   const response = failed.response;
-  if (!response) return failed.isAxiosError === true || failed.request != null ? CONNECTION_LOST : fallback;
+  if (!response) return gotNoAnswer(err) ? CONNECTION_LOST : fallback;
   const error = response.data?.error;
   if (response.status === 400 && error?.details != null) return memberSentence(firstDetail(error.details)) ?? fallback;
   return response.status !== undefined && SAID_TO_MEMBERS.has(response.status) ? memberSentence(error?.message) ?? fallback : fallback;

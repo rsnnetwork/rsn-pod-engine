@@ -56,7 +56,8 @@ describe('the ring is heard app-wide, not only in the open thread', () => {
     expect(signals).toMatch(/fetchIncomingCall\(\)/);
     expect(signals).toMatch(/fetchOutgoingCall\(\)/);
     expect(signals.match(/meta: \{ entities: me \? \[E\.userCalls\(me\)\] : \[\] \}/g)).toHaveLength(2);
-    expect(signals).toMatch(/socket\.on\('connect', onConnect\)/);
+    // After a lost connection the app-wide handler reads every tagged query again (P1 item 17), these two included.
+    expect(signals).not.toMatch(/socket\.on\('connect'/);
     expect(clientE.userCalls('u-1')).toBe('user:u-1:calls');
     const api = src('features/calls/call-api.ts');
     expect(api).toContain("api.get('/dm/call/requests/incoming')");
@@ -69,7 +70,7 @@ describe('one Video call button, where canCall says', () => {
     const button = src('features/calls/CallButton.tsx');
     expect(button).toContain("export const VIDEO_CALL = 'Video call';");
     expect(button).toMatch(/<Video /);
-    expect(button).toMatch(/hero: 'inline-flex min-h-\[44px\]/);
+    expect(button).toMatch(/hero: 'inline-flex h-11 min-h-\[44px\] shrink-0/);
     expect(button).toMatch(/icon: 'flex h-11 w-11/);
     expect(button).toMatch(/menu: 'flex min-h-\[44px\]/);
   });

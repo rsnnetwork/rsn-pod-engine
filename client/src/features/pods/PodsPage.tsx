@@ -11,6 +11,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import CreatePodModal from './CreatePodModal';
+import { podStatusLabel } from './pod-header-text';
 
 type PodFilter = 'browse' | 'active' | 'archived';
 
@@ -90,6 +91,7 @@ export default function PodsPage() {
             key={key}
             variant={filter === key ? 'primary' : 'ghost'}
             size="sm"
+            className="min-h-[44px]"
             onClick={() => setFilter(key)}
           >
             {Icon ? <><Icon className="h-3.5 w-3.5 mr-1" /> {label}</> : label}
@@ -162,8 +164,9 @@ export default function PodsPage() {
                     <Badge variant={vis.variant} className="text-xs flex items-center gap-1">
                       <VisIcon className="h-3 w-3" /> {vis.label}
                     </Badge>
+                    {/* The same human words the pod's own page uses (P1 item 3): Active, Archived, Suspended, Draft. */}
                     <Badge variant={pod.status === 'active' ? 'success' : pod.status === 'archived' ? 'default' : 'warning'}>
-                      {pod.status}
+                      {podStatusLabel(pod.status)}
                     </Badge>
                   </div>
                 </div>

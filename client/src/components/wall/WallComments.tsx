@@ -47,6 +47,9 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
   const reload = () => queryClient.invalidateQueries({ queryKey: config.keys.comments(postId), exact: true });
 
   const all = thread.data?.comments ?? [];
+  // Past the cap the server shows only the first comments, so a new one would never be seen: the boxes close and say
+  // why (P1 item 16).
+  const full = !!thread.data?.truncated;
   const { tops, repliesOf } = threadOf(all);
   // Someone who cannot post still sees how many likes a comment has; they just have no button.
   const canLike = viewer.canPost || config.copy.likeNeedsMembership !== undefined;
@@ -161,10 +164,11 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(replyDraft, c.id); } }}
                 placeholder={`Reply to ${c.authorName || 'this comment'}…`}
                 maxLength={4000}
+                disabled={full}
                 aria-label="Your reply"
                 className={inputClass}
               />
-              <Button size="sm" onClick={() => void send(replyDraft, c.id)} disabled={sending || !replyDraft.trim()} className="min-h-[44px] min-w-[44px]" aria-label="Send reply">
+              <Button size="sm" onClick={() => void send(replyDraft, c.id)} disabled={full || sending || !replyDraft.trim()} className="min-h-[44px] min-w-[44px]" aria-label="Send reply">
                 <Send className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -184,7 +188,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
       ) : tops.map((c) => renderComment(c, false))}
       {thread.data?.truncated && (
         <p className="text-xs text-gray-400" data-testid={`comments-truncated-${postId}`}>
-          {`Showing the first ${all.length} comments.`}
+          {`Showing the first ${all.length} comments. New comments are closed on this post.`}
         </p>
       )}
       {viewer.canPost && (
@@ -194,10 +198,11 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(draft); } }}
             placeholder="Write a comment…"
             maxLength={4000}
+            disabled={full}
             aria-label="Your comment"
             className={inputClass}
           />
-          <Button size="sm" onClick={() => void send(draft)} disabled={sending || !draft.trim()} className="min-h-[44px] min-w-[44px]" aria-label="Send comment">
+          <Button size="sm" onClick={() => void send(draft)} disabled={full || sending || !draft.trim()} className="min-h-[44px] min-w-[44px]" aria-label="Send comment">
             <Send className="h-3.5 w-3.5" />
           </Button>
         </div>

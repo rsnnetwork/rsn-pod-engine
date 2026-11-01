@@ -8,6 +8,9 @@
 // quiet: the conversation is open in a tab in front of the member, or a tab is in a live event or a meeting (where the
 // event's own sounds matter), or the member has switched the sound off on this device. Nor within 2 seconds of the last
 // chime in any tab, nor twice for the same message.
+//
+// An incoming call rings through the same path (X3, 2 Nov 2026): one tab, the same setting, quiet in a live event or a
+// meeting. Unlike a message it rings in its own open conversation too, and a recent chime does not hold it back.
 
 /** No chime within this long of the last one, in any tab. */
 export const CHIME_COOLDOWN_MS = 2000;
@@ -19,6 +22,8 @@ export interface ChimeEvent {
   id: string;
   /** /messages/<conversationId> or /messages/g/<groupId>. */
   path: string;
+  /** An incoming call: it rings (another sound), also in its open conversation. */
+  ring?: true;
 }
 
 /** One tab's word on one message. */
@@ -49,12 +54,37 @@ export function chimeFromNotification(n: NotificationLike): ChimeEvent | null {
   return { id: `bell:${n.id}`, path: n.link };
 }
 
+/** An incoming call (call:request) rings once per request. */
+export function chimeFromCall(d: { requestId: string; conversationId: string }): ChimeEvent | null {
+  if (!d?.requestId || !d.conversationId) return null;
+  return { id: `call:${d.requestId}`, path: `/messages/${d.conversationId}`, ring: true };
+}
+
+/** How often the tab that rings plays the ring again while the call still rings (T16 fix round 1). */
+export const RING_REPEAT_MS = 4000;
+
+/**
+ * Whether the tab that rang should ring again now: the call layer still holds this same call (an answer, a decline, a
+ * withdrawal or an answer on another device takes it away), it has not lapsed, and this device may still sound here
+ * (the setting, a meeting or a live event, by quietHere).
+ */
+export function keepsRinging(
+  ev: ChimeEvent,
+  ringing: { requestId: string; expiresAt: number } | null | undefined,
+  requestId: string,
+  now: number,
+  tab: { pathname: string; visible: boolean; soundOn: boolean },
+): boolean {
+  if (!ringing || ringing.requestId !== requestId || now >= ringing.expiresAt) return false;
+  return !quietHere(ev, tab);
+}
+
 /** Whether this tab says quiet for this message. */
 export function quietHere(ev: ChimeEvent, tab: { pathname: string; visible: boolean; soundOn: boolean }): boolean {
   if (!tab.soundOn) return true;
   if (tab.pathname.startsWith('/meet/')) return true;
   if (/^\/session\/[^/]+\/live(\/|$)/.test(tab.pathname)) return true;
-  return tab.visible && tab.pathname === ev.path;
+  return !ev.ring && tab.visible && tab.pathname === ev.path;
 }
 
 /**

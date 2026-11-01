@@ -6,7 +6,8 @@ import { formResolver } from '@/lib/form-resolver';
 import { cn } from '@/lib/utils';
 import { useToastStore } from '@/stores/toastStore';
 import { LINK_NOT_MADE, emailSchema, inviteErrorSentence, shareLinkNote, type EmailValues, type InviteTarget } from './invite-picker';
-import { useInviteByEmail, useShareLink } from './useInviteCandidates';
+import { useInviteByEmail, usePendingInvites, useShareLink } from './useInviteCandidates';
+import { openLink } from './invite-status';
 import { BUTTON, QUIET } from './invite-sheet-style';
 
 /** One address, checked at the field; the server's refusal (already invited, can't be invited) is said there too. */
@@ -53,7 +54,12 @@ export function EmailInvite({ target }: { target: InviteTarget }) {
 
 /** A link anyone can use, up to the real cap, for a week: what it allows is said before it is made. */
 export function ShareLink({ target, cap }: { target: InviteTarget; cap: number }) {
-  const [link, setLink] = useState<string | null>(null);
+  // The open link with uses left is handed out again rather than a new one made each time (P1 item 30). A circle has no
+  // list to look in, and a refused read (someone who may invite but not read the list) only means one is made.
+  const pending = usePendingInvites(target);
+  const open = openLink(pending.data);
+  const [made, setLink] = useState<string | null>(null);
+  const link = made ?? (open ? `${window.location.origin}/invite/${open}` : null);
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [error, setError] = useState<string | null>(null);
   const make = useShareLink(target, cap, {

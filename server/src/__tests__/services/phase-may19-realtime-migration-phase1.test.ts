@@ -79,16 +79,20 @@ describe('Realtime migration Phase 1 — scaffolding', () => {
     const appSrc = readClient('App.tsx');
 
     it('exports the hook and subscribes to entity:changed', () => {
+      // The listeners live in realtime/invalidate-entities.ts (subscribeEntitySync) since P1 item 17, 1 Nov 2026,
+      // which also refreshes every tagged read on connect (t16-socket-resync.test.ts); the hook mounts it.
+      const ruleSrc = readClient('realtime/invalidate-entities.ts');
       expect(handlerSrc).toMatch(/export\s+function\s+useEntityChangedHandler/);
-      expect(handlerSrc).toMatch(/socket\.on\(\s*['"]entity:changed['"]/);
-      expect(handlerSrc).toMatch(/socket\.off\(\s*['"]entity:changed['"]/);
+      expect(handlerSrc).toMatch(/subscribeEntitySync\(getSocket\(\), queryClient\)/);
+      expect(ruleSrc).toMatch(/socket\.on\(\s*['"]entity:changed['"]/);
+      expect(ruleSrc).toMatch(/socket\.off\(\s*['"]entity:changed['"]/);
     });
 
     it('invalidates queries via predicate matching on meta.entities', () => {
       // The predicate lives in realtime/invalidate-entities.ts since 1 Nov 2026, so a tab's own REST read can apply the
       // same rule (t6-read-own-tab.test.ts); the handler hands it every incoming tag.
       const ruleSrc = readClient('realtime/invalidate-entities.ts');
-      expect(handlerSrc).toMatch(/invalidateEntities\(queryClient, incoming\)/);
+      expect(ruleSrc).toMatch(/invalidateEntities\(client, Array\.isArray\(data\?\.entities\) \? data\.entities : \[\]\)/);
       expect(ruleSrc).toMatch(/invalidateQueries\(\{\s*predicate:/);
       expect(ruleSrc).toMatch(/query\.meta[\s\S]{0,80}entities/);
       // Predicate uses Set membership for O(1) lookup against incoming entities.

@@ -322,7 +322,7 @@ describe('the chime (L8)', () => {
     const chime = read('lib/chime.ts');
     expect(chime).toMatch(/return localStorage\.getItem\(MESSAGE_SOUND_KEY\) !== 'off';/);
     const settings = read('features/settings/SettingsPage.tsx');
-    expect(settings).toMatch(/label="Sound for new messages"/);
+    expect(settings).toMatch(/label="Sound for new messages and calls"/);
     expect(settings).toMatch(/<MessageSoundToggle \/>\s*<\/Card>/);
   });
 });

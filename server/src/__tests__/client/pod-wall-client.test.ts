@@ -12,7 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { OrchestrationMode, PodType } from '@rsn/shared';
-import { podCannotPostNote, podStatusLooksStale, podWallConfig } from '../../../../client/src/features/pods/pod-wall-config';
+import { podCannotPostNote, podWallConfig } from '../../../../client/src/features/pods/pod-wall-config';
 import { orchestrationLabel, podStatusLabel } from '../../../../client/src/features/pods/pod-header-text';
 import { podEventsInOrder } from '../../../../client/src/features/pods/pod-event-order';
 
@@ -127,21 +127,22 @@ describe('what the pod wall says where the composer would be, when the viewer ca
   });
 });
 
-describe('a pod page that has not yet heard the pod was archived', () => {
-  // DELETE /api/pods/:id tells the pod's screens a moment BEFORE it saves the new status, so a page that
-  // refetches the pod at once reads the old one, while the wall (a slower read) already knows the pod is closed.
-  it('is told by two reads that disagree: the wall says nobody can post, the pod says it is open', () => {
-    expect(podStatusLooksStale(false, true, 'active')).toBe(true);
+describe('a pod page hears an archive from the archive itself (P1 item 16)', () => {
+  // DELETE /api/pods/:id used to tell the pod's screens a moment BEFORE it saved the new status, so the wall had to
+  // notice the pod was closed before the page did. Since H2b item 20 the archive is saved first, then told: the page's
+  // own pod query is refreshed with the archive already in it, and the wall's re-read guard is gone.
+  it('the archive route saves first, then fans out', () => {
+    const route = fs.readFileSync(path.join(__dirname, '../../routes/pods.ts'), 'utf8').replace(/\r\n/g, '\n');
+    const del = route.slice(route.indexOf("router.delete(\n  '/:id',"), route.indexOf("res.json(response);", route.indexOf("router.delete(\n  '/:id',")));
+    expect(del.indexOf('await podService.deletePod(')).toBeGreaterThan(-1);
+    expect(del.indexOf('fanoutPodEntities(')).toBeGreaterThan(del.indexOf('await podService.deletePod('));
   });
 
-  it.each([
-    ['the viewer can post', true, true, 'active'],
-    ['the feed has not answered yet', undefined, true, 'active'],
-    ['the pod already says archived', false, true, 'archived'],
-    ['the pod already says it is not open', false, true, 'suspended'],
-    ['an admin who is not a member could never post, whatever the pod', false, false, 'active'],
-  ] as const)('is not told by anything else: %s', (_case, canPost, isActiveMember, podStatus) => {
-    expect(podStatusLooksStale(canPost, isActiveMember, podStatus)).toBe(false);
+  it('nothing on the client second-guesses it any more', () => {
+    expect(read('features/pods/pod-wall-config.ts')).not.toMatch(/podStatusLooksStale/);
+    expect(read('features/pods/PodWall.tsx')).not.toMatch(/onPodStatusStale|onViewerChange/);
+    expect(read('components/wall/Wall.tsx')).not.toMatch(/onViewerChange/);
+    expect(read('features/pods/PodDetailPage.tsx')).not.toMatch(/onPodStatusStale|refreshPod/);
   });
 });
 
@@ -263,14 +264,11 @@ describe('moderation and posting are separate in the components too', () => {
     expect(comments).toMatch(/Showing the first \$\{[^}]+\} comments\./);
   });
 
-  it('the wall tells its page what the viewer may do, so the page can notice a pod status it has not heard yet', () => {
-    expect(wall).toMatch(/onViewerChange\?\.\(fromFeed\)/);
-    const pod = read('features/pods/PodWall.tsx');
-    expect(pod).toMatch(/onViewerChange=\{onViewerChange\}/);
-    expect(pod).toMatch(/podStatusLooksStale\(canPost, isActiveMember, podStatus\)\) stale\.current\(\)/);
-    // Once per change: the callback is read from a ref, so a new function each render cannot run the effect again.
-    expect(pod).toMatch(/\}, \[canPost, isActiveMember, podStatus\]\);/);
-    expect(read('features/pods/PodDetailPage.tsx')).toMatch(/onPodStatusStale=\{refreshPod\}/);
+  it('at the cap the boxes close and say why: a new comment would not be shown (P1 item 16)', () => {
+    expect(comments).toMatch(/const full = !!thread\.data\?\.truncated;/);
+    expect(comments).toContain('New comments are closed on this post.');
+    expect(comments.match(/disabled=\{full\}/g)?.length).toBe(2);
+    expect(comments.match(/disabled=\{full \|\| sending \|\| /g)?.length).toBe(2);
   });
 
   it('a wall that answers 403 draws the not-a-member sentence instead of any stale posts', () => {
@@ -363,7 +361,9 @@ describe('the order of the pod\'s events: what is live, then what is coming soon
 });
 
 describe('the pod page', () => {
+  // The events list is its own section since P1 item 16 (PodEventsSection.tsx); the page draws it.
   const page = read('features/pods/PodDetailPage.tsx');
+  const events = read('features/pods/PodEventsSection.tsx');
 
   it('shows that label in the header, and no raw orchestration value and no communication badge', () => {
     expect(page).toMatch(/<Badge variant="brand">\{orchestrationLabel\(pod\)\}<\/Badge>/);
@@ -377,22 +377,24 @@ describe('the pod page', () => {
   });
 
   it('lists the pod\'s events in that order', () => {
-    expect(page).toMatch(/podEventsInOrder\(podSessions\)\.map\(/);
+    expect(events).toMatch(/podEventsInOrder\(podSessions\)\.map\(/);
+    expect(page).toMatch(/<PodEventsSection podId=\{podId\} mayReadEvents=\{mayReadEvents\} \/>/);
   });
 
   it('asks for the events only when the server will list them (an active member or an admin), and tells everyone else in words', () => {
     // GET /sessions?podId= answers 403 to anyone else: the section sat on a skeleton through the retries, then said
     // "No events yet." about a pod that has events.
-    expect(page).toMatch(/const mayReadEvents = !!pod\?\.memberRole \|\| user\?\.role === 'admin' \|\| user\?\.role === 'super_admin';/);
-    expect(page).toMatch(/enabled: !!podId && mayReadEvents,/);
-    expect(page).toMatch(/\{!mayReadEvents \|\| eventsRefused \? \(/);
-    expect(page).toContain("Members see the pod's events here.");
+    // Whether the viewer is an admin is asked through the one helper every screen uses (P1 item 16).
+    expect(page).toMatch(/const mayReadEvents = !!pod\?\.memberRole \|\| isAdmin\(user\?\.role\);/);
+    expect(events).toMatch(/enabled: !!podId && mayReadEvents,/);
+    expect(events).toMatch(/\{!mayReadEvents \|\| eventsRefused \? \(/);
+    expect(events).toContain("Members see the pod's events here.");
   });
 
   it('a list of events that could not be loaded says so and offers to try again, instead of "No events yet."', () => {
-    expect(page).toContain('We could not load the events just now.');
-    expect(page).toMatch(/onClick=\{\(\) => void refetchSessions\(\)\}[^>]*min-h-\[44px\]/);
-    expect(page).toMatch(/retry: retryUnlessAnswered,/);
+    expect(events).toContain('We could not load the events just now.');
+    expect(events).toMatch(/onClick=\{\(\) => void refetchSessions\(\)\}[^>]*min-h-\[44px\]/);
+    expect(events).toMatch(/retry: retryUnlessAnswered,/);
   });
 
   it('reads ?post= and hands it to the wall, so a bell or a link lands on the post', () => {
@@ -409,7 +411,8 @@ describe('the pod page', () => {
     expect(page).toMatch(/aria-label="Jump to a section"[^>]*className="[^"]*\blg:hidden\b/);
     for (const [label, id] of [['Discussion', 'pod-discussion'], ['Events', 'pod-events'], ['Members', 'pod-members']]) {
       expect(page).toContain(`id: '${id}', label: '${label}'`);
-      expect(page).toMatch(new RegExp(`id="${id}"`));
+      // The events section draws its own id (PodEventsSection.tsx, P1 item 16).
+      expect(`${page}\n${events}`).toMatch(new RegExp(`id="${id}"`));
     }
     expect(page).toMatch(/min-h-\[44px\][^"]*\brounded-full\b|\brounded-full\b[^"]*min-h-\[44px\]/);
   });

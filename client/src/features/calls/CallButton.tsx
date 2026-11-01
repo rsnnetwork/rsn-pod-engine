@@ -18,7 +18,7 @@ interface Props {
 }
 
 const LOOK: Record<Props['variant'], string> = {
-  hero: 'inline-flex min-h-[44px] items-center gap-2 rounded-[11px] border border-reason-line bg-white px-4 text-[14px] font-bold text-reason-ink hover:bg-[#f5f6f7] focus:outline-none focus-visible:ring-2 focus-visible:ring-reason-red focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-50',
+  hero: 'inline-flex h-11 min-h-[44px] shrink-0 items-center gap-2 rounded-[11px] border border-reason-line bg-white px-4 text-[14px] font-bold text-reason-ink hover:bg-[#f5f6f7] focus:outline-none focus-visible:ring-2 focus-visible:ring-reason-red focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-50',
   icon: 'flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-rsn-red disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400',
   menu: 'flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40',
 };

@@ -313,10 +313,9 @@ describe('the data contract', () => {
     expect(hooks).toMatch(/meta: \{ entities: userId \? \[E\.user\(userId\)\] : \[\] \}/);
     // No polling anywhere in the flow (CLAUDE.md section 14): the lookup's end arrives as the member's tag.
     expect(all).not.toMatch(/refetchInterval|setInterval|setTimeout/);
-    // A dropped socket missed what was sent meanwhile: on connect, this one query is read again, nothing else.
-    expect(hooks).toMatch(/socket\.on\('connect', resync\);/);
-    expect(hooks).toMatch(/socket\.off\('connect', resync\);/);
-    expect(hooks).toMatch(/const resync = \(\) => \{ void qc\.invalidateQueries\(\{ queryKey: \['onboarding-v2-state'\] \}\); \};/);
+    // A dropped socket missed what was sent meanwhile: the app-wide handler reads every tagged query again on connect
+    // (P1 item 17, t16-socket-resync.test.ts), this one included, so the hook keeps no listener of its own.
+    expect(hooks).not.toMatch(/socket\.on\('connect'/);
     expect(hooks).not.toMatch(/invalidateQueries\(\)/);
     expect(hooks).not.toMatch(/setQueryData/);
   });

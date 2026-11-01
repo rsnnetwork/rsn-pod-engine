@@ -192,7 +192,7 @@ test('two people chat; one leaves to the event page, which turns to Ended withou
   // 3. The host ends the event. The leaver's page turns to Ended on its own, and shows the chat.
   hostSocket.emit('host:end_session', { sessionId, endEvent: true });
   await expect.poll(statusOf, { timeout: 60_000, message: 'the event is completed' }).toBe('completed');
-  await expect(badgeOf(leavesPage), 'the leaver sees Ended without reloading').toHaveText('Ended', { timeout: 20_000 });
+  await expect(badgeOf(leavesPage), 'the leaver sees Ended without reloading').toHaveText('Ended', { timeout: 10_000 });
   expect(await leavesPage.evaluate(() => (window as unknown as { __notReloaded?: boolean }).__notReloaded), 'no reload happened').toBe(true);
   await expect(chatCard(leavesPage).getByText(HELLO), 'the chat kept with the event').toBeVisible({ timeout: 20_000 });
   await expect(chatCard(leavesPage).getByText(REPLY)).toBeVisible();
@@ -251,7 +251,7 @@ test('the host messages everyone who took part; the leaver, never reloaded, gets
   await send.click();
   await expect(dialog, 'the composer closes once the send is accepted').toHaveCount(0, { timeout: 15_000 });
   await expect(panel.getByTestId('message-everyone-sent'), 'the panel says it went out, from the event tag (no poll)')
-    .toContainText(/^Sent to 2 people on \d{1,2} [A-Z][a-z]{2} \d{4}$/, { timeout: 90_000 });
+    .toContainText(/^Sent to 2 people on \d{1,2} [A-Z][a-z]{2,3} \d{4}$/, { timeout: 90_000 });
   await expect(panel.getByRole('button', { name: 'Send another message' })).toBeVisible();
   await hostPage.screenshot({ path: 'test-results/aep-5-host-panel-sent.png', fullPage: true });
 
@@ -309,7 +309,10 @@ test('a guest who leaves a video meeting is listed as a member who left, not "Re
   await expect(ownRow).not.toContainText(/Reconnecting|In Main Room/);
 
   hostSocket!.emit('host:end_session', { sessionId: meetingId, endEvent: true });
-  await expect(badgeOf(guest), 'the guest sees the meeting end without reloading').toHaveText('Ended', { timeout: 30_000 });
+  // The server ends it first; then the page has 10 s, which the 30 s background refetch can never satisfy (P1 item 7).
+  await expect.poll(async () => (await pool.query<{ status: string }>('SELECT status FROM sessions WHERE id = $1', [meetingId])).rows[0]?.status,
+    { timeout: 60_000, message: 'the meeting is completed' }).toBe('completed');
+  await expect(badgeOf(guest), 'the guest sees the meeting end without reloading').toHaveText('Ended', { timeout: 10_000 });
   expect(await guest.evaluate(() => (window as unknown as { __notReloaded?: boolean }).__notReloaded), 'no reload happened').toBe(true);
   await noSidewaysScroll(guest, 'meeting guest, event page @390');
   await guest.screenshot({ path: 'test-results/aep-7-meeting-guest-ended.png', fullPage: true });

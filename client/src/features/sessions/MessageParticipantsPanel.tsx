@@ -139,7 +139,7 @@ function Composer({ sessionId, audience, open, onClose }: {
               <X className="h-5 w-5" aria-hidden="true" />
             </button>
           </div>
-  
+
           <label htmlFor="compose-everyone-body" className="mt-3 block text-sm font-medium text-gray-700">{MESSAGE_LABEL}</label>
           <textarea
             id="compose-everyone-body"
@@ -156,7 +156,7 @@ function Composer({ sessionId, audience, open, onClose }: {
             <p id="compose-everyone-error" role={errors.body ? 'alert' : undefined} className="text-red-600">{errors.body?.message}</p>
             <p id="compose-everyone-count" className="shrink-0 tabular-nums text-gray-500">{body.length} / {POST_EVENT_MESSAGE_LIMITS.bodyMax}</p>
           </div>
-  
+
           <fieldset className="mt-3">
             <legend className="text-sm font-medium text-gray-700">Who gets it</legend>
             <p className="mt-1 flex min-h-[44px] items-center gap-3 text-sm text-gray-800">
@@ -169,9 +169,9 @@ function Composer({ sessionId, audience, open, onClose }: {
               </label>
             )}
           </fieldset>
-  
+
           {refusal && <p role="alert" data-testid="message-everyone-refusal" className="mt-3 text-sm text-red-600">{refusal}</p>}
-  
+
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <button type="button" onClick={close} className={`${BUTTON} border border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}>
               Cancel

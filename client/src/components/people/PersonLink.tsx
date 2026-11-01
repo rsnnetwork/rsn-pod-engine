@@ -8,11 +8,8 @@ import type { KnownSource } from '@/features/reason/human/profile-text';
 // which ws2-profile-link-safety.test.ts holds). Someone whose account is closed is a former member: shown, never linked,
 // as they cannot be reached.
 
-/** The name the server gives a closed account wherever their messages are shown (group.service.ts, reply-quote.ts). */
-export const FORMER_MEMBER = 'Former member';
-
-/** Whether a name is a closed account's, as the server writes it. (Switch to T2's own flag once it is on this branch.) */
-export const isFormerMemberName = (name: string | null | undefined): boolean => (name ?? '').trim() === FORMER_MEMBER;
+// The one client constant for a closed account's name, re-exported here for the screens that link people.
+export { FORMER_MEMBER, isFormerMemberName } from '@/lib/former-member';
 
 export default function PersonLink({ userId, from, former = false, newTab = false, className, title, children }: {
   userId: string;

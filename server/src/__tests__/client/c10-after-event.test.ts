@@ -206,11 +206,21 @@ describe('the message-everyone panel says where it stands, in words, never a hov
     const clock = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     const v = panelView(elig({
       enabled: false, reason: 'limit', explanation: 'You can send another message at 19:20.', nextSendAt: at, lastSent: { at: NOON, recipients: 2 },
-    }), job({}));
+    }), job({}), Date.parse(at) - 60 * 60_000);
     expect(v.status).toBe(`You can send another message at ${clock}.`);
     expect(v.sent).toBe('Sent to 2 people on 26 Oct 2026');
     expect(v.action).toBeNull();
     expect(limitSentence(undefined, 'You can send another message at 19:20.')).toBe('You can send another message at 19:20.');
+  });
+
+  it('the next send on the reader\'s next day says "tomorrow at HH:MM", as the server does (P1 items 14 and 37)', () => {
+    // Local times, so the reader's clock is the test machine's whatever its zone.
+    const now = new Date(2026, 9, 26, 22, 30).getTime();
+    expect(limitSentence(new Date(2026, 9, 26, 23, 5).toISOString(), 'x', now)).toBe('You can send another message at 23:05.');
+    expect(limitSentence(new Date(2026, 9, 27, 9, 15).toISOString(), 'x', now)).toBe('You can send another message tomorrow at 09:15.');
+    // Neither today nor tomorrow (a clock that is off, a moment already past): the server's own sentence.
+    expect(limitSentence(new Date(2026, 9, 25, 9, 15).toISOString(), 'the server says', now)).toBe('the server says');
+    expect(limitSentence(new Date(2026, 9, 28, 9, 15).toISOString(), 'the server says', now)).toBe('the server says');
   });
 
   it('before the end: the server\'s sentence and no button', () => {
@@ -266,7 +276,8 @@ describe('Leave keeps the app\'s live connection and lands on the event page', (
     const leave = blockFrom(page, 'const handleLeave');
     // T2 (1 Nov 2026): it asks first in the page (useConfirm), never window.confirm.
     expect(leave).toMatch(/if \(!\(await ask\(\{ title: 'Leave this event\?'/);
-    expect(leave).toMatch(/emit\('session:leave', \{ sessionId: sessionId! \}\)/);
+    // Through leaveEvent, so the live hook's clean-up does not say it again (P1 item 7).
+    expect(leave).toMatch(/leaveEvent\(getSocket\(\), sessionId!\)/);
     expect(leave).not.toMatch(/disconnectSocket/);
     expect(leave).toMatch(/navigate\(`\/sessions\/\$\{sessionId\}`, \{ replace: true \}\)/);
     expect(page).not.toMatch(/disconnectSocket/);
@@ -274,7 +285,7 @@ describe('Leave keeps the app\'s live connection and lands on the event page', (
 
   it('a video meeting: Leave does the same (it cut the connection too, and the guest read "Reconnecting…")', () => {
     const leave = blockFrom(bar, 'const leaveMeeting');
-    expect(leave).toMatch(/emit\('session:leave', \{ sessionId \}\)/);
+    expect(leave).toMatch(/leaveEvent\(getSocket\(\), sessionId\)/);
     expect(leave).not.toMatch(/disconnectSocket/);
     expect(bar).not.toMatch(/disconnectSocket/);
   });

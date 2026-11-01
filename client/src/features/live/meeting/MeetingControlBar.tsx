@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import { CircleStop, Loader2, MessageCircle, Mic, MicOff, PhoneOff, Play, Users, Video, VideoOff } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
 import { getSocket } from '@/lib/socket';
+import { leaveEvent } from '../leave-event';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useActionLock } from '@/hooks/useActionLock';
 import { useLocalMediaToggles } from './useLocalMediaToggles';
@@ -120,7 +121,7 @@ export default function MeetingControlBar({
   // without bells, the "Ended" flip or the organiser's message until the token rotated.
   const leaveMeeting = () => {
     setConfirm(null);
-    getSocket()?.emit('session:leave', { sessionId });
+    leaveEvent(getSocket(), sessionId);
     useSessionStore.getState().reset();
     navigate(`/sessions/${sessionId}`, { replace: true });
   };

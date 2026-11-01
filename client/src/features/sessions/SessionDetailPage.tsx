@@ -656,7 +656,7 @@ export default function SessionDetailPage() {
               return (
                 <Card key={`host-${hostRow.userId}`} className="!p-4 border-rsn-red/30 bg-rsn-red/5">
                   <div className="flex items-center justify-between">
-                    <Link to={personHref(hostRow.userId, 'Events')} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                    <Link to={personHref(hostRow.userId, 'Events')} className="flex min-h-[44px] items-center gap-3 hover:opacity-80 transition-opacity">
                       <Avatar src={hostRow.avatarUrl} name={hostRow.displayName || hostRow.email || 'Host'} size="sm" />
                       <div>
                         <p className="text-sm font-medium text-gray-800">{hostRow.displayName || hostRow.email || 'Host'}</p>
@@ -682,7 +682,7 @@ export default function SessionDetailPage() {
               return (
                 <Card key={p.userId || p.id} className="!p-4">
                   <div className="flex items-center justify-between">
-                    <Link to={personHref(p.userId || p.id, 'Events')} className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
+                    <Link to={personHref(p.userId || p.id, 'Events')} className="flex min-h-[44px] items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
                       <Avatar src={p.avatarUrl} name={p.displayName || p.email || 'User'} size="sm" />
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-gray-800 truncate">{p.displayName || p.email || 'Participant'}</p>

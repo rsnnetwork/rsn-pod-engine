@@ -25,6 +25,7 @@ import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Rad
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { connectSocket, getSocket } from '@/lib/socket';
+import { leaveEvent } from './leave-event';
 import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -211,12 +212,18 @@ function LiveEventRoom() {
       ? 'You are in a breakout room. Leaving ends your conversation.'
       : 'You can come back while it is running.';
     if (!(await ask({ title: 'Leave this event?', body, confirmLabel: 'Leave', tone: 'danger' }))) return;
-    getSocket()?.emit('session:leave', { sessionId: sessionId! });
+    leaveEvent(getSocket(), sessionId!);
     reset();
     navigate(`/sessions/${sessionId}`, { replace: true });
   };
 
   if (!sessionId) return <PageLoader />;
+
+  // P2 items 9 and 10 (1 Nov 2026): nothing of the live page (top bar, controls, room) is drawn until the register
+  // call has answered, and a removed person gets a final screen instead: on a reload the top bar used to flash for
+  // the moment before the refusal landed. Before the format is read (P1 item 10), so a video meeting waits too.
+  if (removedFromEvent) return <RemovedFromEvent onBack={() => navigate('/sessions')} />;
+  if (!registrationKnown) return <PageLoader />;
 
   // 26 Oct 2026 (VID-04) — the event's format decides the room, read once from the event itself. Until it is
   // known nothing renders, so a video meeting never flashes the speed-networking grid.
@@ -237,11 +244,6 @@ function LiveEventRoom() {
     );
   }
 
-  // P2 items 9 and 10 (1 Nov 2026): nothing of the live shell (top bar, controls, room) is drawn until the register
-  // call has answered, and a removed person gets a final screen instead of the shell: on a reload the top bar used
-  // to flash for the moment before the refusal landed.
-  if (removedFromEvent) return <RemovedFromEvent onBack={() => navigate('/sessions')} />;
-  if (!registrationKnown) return <PageLoader />;
 
   return (
     // Phase 7-audit fix — overflow-x-hidden on the root prevents any

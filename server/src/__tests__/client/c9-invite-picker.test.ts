@@ -27,7 +27,7 @@ import {
 } from '../../../../client/src/features/invites/invite-picker';
 import {
   REMIND_GAP_MS, STATUS_TITLE, WITHDRAW_BODY, WITHDRAW_TITLE,
-  inviteStatusGroups, personLine, remindAllSentence, remindSentence, settleInTurn, statusSummary, tallyReminders,
+  inviteStatusGroups, openLink, personName, remindAllSentence, remindAllStopped, remindingProgress, remindSentence, settleInTurn, statusSummary, tallyReminders,
   type InviteListRow,
 } from '../../../../client/src/features/invites/invite-status';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
@@ -289,11 +289,29 @@ describe('the organisers\' list: Invited, Declined and the open links', () => {
     expect(STATUS_TITLE).toBe('Invitations');
   });
 
-  it('a row reads the name, and the address under it only when it is a different line', () => {
-    expect(personLine(row({ id: 'a' }))).toEqual({ name: 'Name a', detail: 'a@example.com' });
-    // A co-host's list puts the member's name where the address was: said once, not twice.
-    expect(personLine(row({ id: 'a', inviteeEmail: 'Name a' }))).toEqual({ name: 'Name a', detail: null });
-    expect(personLine(row({ id: 'a', inviteeName: null }))).toEqual({ name: 'a@example.com', detail: null });
+  it('a member is shown by name, never by address; an address with no account is shown as the address (P1 item 27)', () => {
+    // Default until Stefan decides: the card prints no member's address (the platform's member lists carry none).
+    expect(personName(row({ id: 'a' }))).toBe('Name a');
+    // A co-host's list puts the member's name where the address was: said once.
+    expect(personName(row({ id: 'a', inviteeEmail: 'Name a' }))).toBe('Name a');
+    expect(personName(row({ id: 'a', inviteeName: null, inviteeUserId: null }))).toBe('a@example.com');
+    const card = fs.readFileSync(path.join(__dirname, '../../../../client/src/features/invites/InviteStatusList.tsx'), 'utf8');
+    expect(card).not.toMatch(/inviteeEmail/);
+  });
+
+  it('two people whose hidden addresses look alike on a co-host\'s list stay two rows (P1 item 26)', () => {
+    // A co-host reads "a•••@example.com" for each address someone else sent that has no account: the same mask for
+    // ann@ and al@, so the mask is no person. Each such invite is its own row.
+    const ann = row({ id: 'ann', inviteeUserId: null, inviteeName: null, inviteeEmail: 'a•••@example.com' });
+    const al = row({ id: 'al', inviteeUserId: null, inviteeName: null, inviteeEmail: 'a•••@example.com' });
+    expect(inviteStatusGroups([ann, al], [], new Set()).invited.map((r) => r.id)).toEqual(['ann', 'al']);
+    const annNo = { ...ann, status: 'revoked', declinedAt: '2026-10-21T10:00:00.000Z' };
+    const alNo = { ...al, status: 'revoked', declinedAt: '2026-10-22T10:00:00.000Z' };
+    expect(inviteStatusGroups([], [annNo, alNo], new Set()).declined.map((r) => r.id)).toEqual(['al', 'ann']);
+    // A whole address is still one person across its invites.
+    const one = row({ id: 'o1', inviteeUserId: null, inviteeName: null, inviteeEmail: 'out@side.com' });
+    const two = row({ id: 'o2', inviteeUserId: null, inviteeName: null, inviteeEmail: 'Out@Side.com' });
+    expect(inviteStatusGroups([one, two], [], new Set()).invited.map((r) => r.id)).toEqual(['o1']);
   });
 });
 
@@ -307,7 +325,8 @@ describe('the organisers\' list: reminders and withdrawing, in words', () => {
     expect(remindAllSentence({ reminded: 3, total: 3, recentlyReminded: 0 })).toEqual({ message: 'Reminders sent to 3 people.', tone: 'success' });
     expect(remindAllSentence({ reminded: 2, total: 2, recentlyReminded: 1 })).toEqual({ message: 'Reminders sent to 2 people. 1 person was reminded less than an hour ago.', tone: 'success' });
     expect(remindAllSentence({ reminded: 1, total: 3, recentlyReminded: 0 })).toEqual({ message: 'Reminders sent to 1 of 3 people. Try the rest again in a moment.', tone: 'info' });
-    expect(remindAllSentence({ reminded: 0, total: 2, recentlyReminded: 0 })).toEqual({ message: 'The reminders could not be sent just now. Please try again.', tone: 'error' });
+    // Nothing sent is a warning sentence, never the success colour (P1 item 13, 26 Oct 2026).
+    expect(remindAllSentence({ reminded: 0, total: 2, recentlyReminded: 0 })).toEqual({ message: 'No reminders were sent. Please try again in a moment.', tone: 'error' });
     expect(remindAllSentence({ reminded: 0, total: 0, recentlyReminded: 4 })).toEqual({ message: 'Everyone was reminded less than an hour ago.', tone: 'info' });
     expect(remindAllSentence({ reminded: 0, total: 0, recentlyReminded: 0 })).toEqual({ message: 'Nobody is waiting for a reminder.', tone: 'info' });
   });
@@ -356,11 +375,42 @@ describe('the pod page reminds one invite at a time, half a second apart', () =>
     expect(wait).not.toHaveBeenCalled();
   });
 
+  it('says which reminder is on its way, and a Stop sends no further one (P1 item 34)', async () => {
+    const seen: number[] = [];
+    const stop = new AbortController();
+    const run = jest.fn(async (id: string) => {
+      if (id === 'b') stop.abort();
+      return { reminded: true };
+    });
+    const wait = jest.fn(async () => {});
+    const results = await settleInTurn(['a', 'b', 'c', 'd'], run, 500, wait, { onProgress: (n) => seen.push(n), signal: stop.signal });
+    // a and b were sent (b's own send was under way when Stop was pressed); c and d never started, and no pause after b.
+    expect(run.mock.calls.map((c) => c[0])).toEqual(['a', 'b']);
+    expect(seen).toEqual([1, 2]);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(2);
+    expect(remindingProgress(2, 4)).toBe('Sending 2 of 4…');
+  });
+
+  it('a stopped Remind all says how many went of how many, never "all sent"', () => {
+    expect(remindAllStopped({ reminded: 2 }, 5)).toEqual({ message: 'Remind all stopped. Reminders sent to 2 of 5 people.', tone: 'info' });
+    expect(remindAllStopped({ reminded: 0 }, 5)).toEqual({ message: 'Remind all stopped. No reminders were sent.', tone: 'info' });
+  });
+
+  it('while Remind all runs, it shows its progress and a Stop for a pod, and every row\'s Remind waits (P1 item 34)', () => {
+    const rows = read('features/invites/InviteStatusRows.tsx');
+    expect(rows).toMatch(/remindingProgress\(progress\.done, progress\.total\)/);
+    expect(rows).toMatch(/disabled=\{reminding \|\| remindAllBusy\}/);
+    expect(rows).toMatch(/onStop && \(/);
+    const list = read('features/invites/InviteStatusList.tsx');
+    expect(list).toMatch(/onProgress: \(done\) => setProgress\(\{ done, total: rows\.length \}\)/);
+  });
+
   it('the pod page uses it, half a second apart, and no longer fires them all at once', () => {
     const list = read('features/invites/InviteStatusList.tsx');
     expect(REMIND_GAP_MS).toBe(500);
     expect(list).toMatch(/settleInTurn\(\s*rows,\s*\(row\) => api\.post\(`\/invites\/\$\{row\.id\}\/remind`\)/);
-    expect(list).toMatch(/REMIND_GAP_MS,?\s*\)/);
+    expect(list).toMatch(/REMIND_GAP_MS,\s*undefined,\s*options,?\s*\)/);
     expect(list).not.toMatch(/Promise\.allSettled/);
   });
 });
@@ -466,8 +516,25 @@ describe('the data layer: candidates as a useInfiniteQuery that declares its tag
     expect(hooks).toMatch(/api\.post\('\/invites\/batch', batchBody\(/);
     expect(hooks).toMatch(/api\.post\('\/invites', emailInviteBody\(/);
     expect(hooks).toMatch(/api\.post\('\/invites', linkBody\(/);
-    expect(hooks).toMatch(/invalidateTags\(qc, targetTags\(target\)\)/);
+    // Through the app's one rule for tags (realtime/invalidate-entities.ts), not a copy of it (P1 item 28).
+    expect(hooks).toMatch(/void invalidateEntities\(qc, targetTags\(target\)\)/);
+    expect(hooks).not.toMatch(/function invalidateTags|predicate:/);
     expect(hooks).not.toMatch(/setQueryData/);
+  });
+
+  it('one firstDetail for every screen that reads validation details (P1 item 28)', () => {
+    const copies: string[] = [];
+    const walk = (dir: string) => {
+      for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, f.name);
+        if (f.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(f.name) && /function firstDetail\(details: unknown\): (string \| undefined|unknown)/.test(fs.readFileSync(p, 'utf8'))) {
+          copies.push(path.relative(SRC, p).split(path.sep).join('/'));
+        }
+      }
+    };
+    walk(SRC);
+    expect(copies).toEqual(['features/reason/errors.ts']);
   });
 });
 
@@ -475,15 +542,18 @@ describe('the organisers\' list keeps the pages\' query keys and their tags', ()
   const list = read('features/invites/InviteStatusList.tsx');
 
   it('the pod\'s pending invites and history follow the pod\'s invites tag', () => {
-    const pending = list.slice(list.indexOf("queryKey: ['pod-pending-invites', podId]"));
-    expect(pending).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podInvites\(podId\)/);
+    // The pending list is the shared usePendingInvites read (P1 item 30), under the same key and tags.
+    const pending = read('features/invites/useInviteCandidates.ts');
+    expect(pending).toMatch(/queryKey: pod \? \['pod-pending-invites', pod\]/);
+    expect(pending).toMatch(/meta: \{ entities: pod \? \[E\.pod\(pod\), E\.podInvites\(pod\)\]/);
     const history = list.slice(list.indexOf("queryKey: ['pod-invite-history', podId]"));
     expect(history).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podInvites\(podId\)/);
   });
 
   it('the event\'s pending invites and history follow the event\'s invites tag', () => {
-    const pending = list.slice(list.indexOf("queryKey: ['session-pending-invites', sessionId]"));
-    expect(pending).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.sessionInvites\(sessionId\)/);
+    const pending = read('features/invites/useInviteCandidates.ts');
+    expect(pending).toMatch(/: \['session-pending-invites', session\]/);
+    expect(pending).toMatch(/session \? \[E\.session\(session\), E\.sessionInvites\(session\)\]/);
     const history = list.slice(list.indexOf("queryKey: ['session-invite-history', sessionId]"));
     expect(history).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.sessionInvites\(sessionId\)/);
   });
@@ -534,5 +604,33 @@ describe('the pod page and the event page open the sheet and show the list', () 
   it('the dead CreateInviteModal is gone and nothing imports it', () => {
     expect(exists('features/invites/CreateInviteModal.tsx')).toBe(false);
     expect(pod + event + read('App.tsx') + read('features/invites/InvitesPage.tsx')).not.toMatch(/CreateInviteModal/);
+  });
+});
+
+describe('Share a link reuses the open link instead of making another each time (P1 item 30)', () => {
+  const link = (id: string, over: Partial<InviteListRow> = {}) => row({ id, inviteeEmail: null, inviteeName: null, inviteeUserId: null, code: `c-${id}`, ...over });
+
+  it('picks an open link that still has uses (the newest first, as the server lists them); none is null', () => {
+    expect(openLink([row({ id: 'p' }), link('l1'), link('l2')])).toBe('c-l1');
+    expect(openLink([link('used', { maxUses: 5, useCount: 5 }), link('l2', { maxUses: 5, useCount: 2 })])).toBe('c-l2');
+    // A co-host's list blanks the codes of others' invites: a blank code is no link to give.
+    expect(openLink([link('hidden', { code: '' })])).toBeNull();
+    expect(openLink([row({ id: 'p' })])).toBeNull();
+    expect(openLink(undefined)).toBeNull();
+  });
+
+  it('the sheet reads the same pending list as the card (one query, one key) and shows that link before offering to make one', () => {
+    const extras = read('features/invites/InviteExtras.tsx');
+    expect(extras).toMatch(/const pending = usePendingInvites\(target\);/);
+    expect(extras).toMatch(/const open = openLink\(pending\.data\);/);
+    const list = read('features/invites/InviteStatusList.tsx');
+    expect(list.match(/usePendingInvites\(/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(list).not.toMatch(/queryKey: \['pod-pending-invites'/);
+  });
+});
+
+describe('the shared pending-invites read takes a refusal as an answer (review T16, minor 5)', () => {
+  it('a 403 (someone who may invite but not read the list) is not sent again on every opening', () => {
+    expect(read('features/invites/useInviteCandidates.ts')).toContain('retry: (failures: number, err: Error) => retryUnlessAnswered(failures, err),');
   });
 });

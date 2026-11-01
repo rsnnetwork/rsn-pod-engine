@@ -125,11 +125,19 @@ export function meetingChip(meeting: Timed, now: number, timeZone?: string): Mee
   return day.year === today.year && day.month === today.month && day.day === today.day ? 'Today' : null;
 }
 
-/** The moments a meeting changes phase: Join opens (start − 5 min) and Join closes (the first instant after end + 30 min). */
+/** Its start is still ahead: until then it may be cancelled; once it is under way only Leave or End apply. */
+export function hasNotStarted(meeting: Pick<Timed, 'startAt'>, now: number): boolean {
+  return now < Date.parse(meeting.startAt);
+}
+
+/**
+ * The moments a meeting's screens change: Join opens (start − 5 min), it starts (Cancel goes) and Join closes (the
+ * first instant after end + 30 min).
+ */
 function phaseChanges(meeting: Timed): number[] {
   if (meeting.status === 'cancelled') return [];
   const start = Date.parse(meeting.startAt);
-  return [start - MEETING_JOIN_EARLY_MIN * MINUTE, endOf(meeting.startAt, meeting.durationMin) + MEETING_GRACE_MIN * MINUTE + 1];
+  return [start - MEETING_JOIN_EARLY_MIN * MINUTE, start, endOf(meeting.startAt, meeting.durationMin) + MEETING_GRACE_MIN * MINUTE + 1];
 }
 
 /** The soonest moment after `now` at which any of these meetings changes phase, or null when none will. */

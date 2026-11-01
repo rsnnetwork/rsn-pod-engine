@@ -397,6 +397,23 @@ describe('a Move or a Confirm that fails says why, and where the meeting is', ()
     expect(confirmFailure(answer(409, 'MEETING_TIME_NOT_SHARED', NOT_SHARED, { scheduling: none }), book)).toBe(NOT_SHARED);
   });
 
+  it('a meeting that changed since the panel read it says so and names where it stands now, never "stays" (P1 item 36)', () => {
+    const CHANGED = 'The meeting time changed a moment ago. Here is where it stands now.';
+    const moved = { overlap: [], confirmed: { window: '2026-10-30T11:00:00Z', startAt: '2026-10-30T11:00:00.000Z', durationMin: 30, type: 'video' } };
+    expect(confirmFailure(answer(409, 'MEETING_CHANGED_SINCE_SEEN', CHANGED, { scheduling: moved }), move))
+      .toBe('The meeting time changed a moment ago. Your meeting is now on Fri 30 Oct, 12:00.');
+    expect(confirmFailure(answer(409, 'MEETING_CHANGED_SINCE_SEEN', CHANGED, { scheduling: { overlap: [], confirmed: null } }), move))
+      .toBe('The meeting time changed a moment ago. No meeting is booked now.');
+    // Not a lasting refusal: the panel reads the new state at once, and the next press is judged on it.
+    expect(lastingRefusal(answer(409, 'MEETING_CHANGED_SINCE_SEEN', CHANGED, { scheduling: moved }))).toBeNull();
+  });
+
+  it('Move and Confirm say which meeting they saw (expectedWindow: its window, or null for none)', () => {
+    const confirm = handler(container(), 'confirm');
+    expect(confirm).toMatch(/const expectedWindow = data\.confirmed\?\.window \?\? null;/);
+    expect(confirm).toMatch(/scheduling\/confirm`, \{ window: key, durationMin, type: meetingKind, expectedWindow \}\);/);
+  });
+
   it('no answer, or the server\'s own fault: nothing moved, try again', () => {
     expect(confirmFailure(dropped, move)).toBe('Could not move the meeting. It stays on Thu 29 Oct, 10:00. Try again.');
     expect(confirmFailure(answer(503, 'UNAVAILABLE', 'upstream down at /srv'), move))
@@ -627,7 +644,7 @@ describe('the scheduler on screen', () => {
   it('a failed Move or Confirm keeps the card open to retry, says why at once, and frees the button at once', () => {
     const confirm = handler(container(), 'confirm');
     // The card closes only once the request has succeeded; the success is said before the thread refreshes.
-    expect(confirm).toMatch(/scheduling\/confirm`, \{ window: key, durationMin, type: meetingKind \}\);\s*setFinalizing\(null\);/);
+    expect(confirm).toMatch(/scheduling\/confirm`, \{ window: key, durationMin, type: meetingKind, expectedWindow \}\);\s*setFinalizing\(null\);/);
     expect(confirm).toMatch(/addToast\(confirmedMessage\(key, zone, moving\), 'success'\);\s*void refreshThread\(\);/);
     // The failure is said first, from the refusal itself, and the refresh is not waited on (no await anywhere in the catch).
     const failure = confirm.slice(confirm.indexOf('} catch (err) {'), confirm.indexOf('} finally {'));

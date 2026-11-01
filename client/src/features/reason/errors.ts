@@ -30,10 +30,13 @@ interface FailedRequest {
 // A request that went out and got no answer: axios marks that error (isAxiosError, a request, or one of
 // these codes) and leaves `response` off. Anything else without a response, such as a TypeError thrown
 // inside a mutation function, is a fault in our own code and says nothing about the member's connection.
+// The one copy of this check: every screen's failed-request sentence asks it (T16 fix round 1, P1 item 18).
 const NO_ANSWER_CODES = ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'];
-function gotNoAnswer(err: FailedRequest): boolean {
-  return err.isAxiosError === true || err.request != null
-    || (typeof err.code === 'string' && NO_ANSWER_CODES.includes(err.code));
+export function gotNoAnswer(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const failed = err as FailedRequest;
+  return failed.isAxiosError === true || failed.request != null
+    || (typeof failed.code === 'string' && NO_ANSWER_CODES.includes(failed.code));
 }
 
 /** The server's sentence, trimmed, if it is short, free of ids and in words a member would use. */
@@ -44,8 +47,11 @@ export function memberSentence(text: unknown): string | null {
   return ID_LIKE.test(sentence) || CODE_WORD.test(sentence) ? null : sentence;
 }
 
-/** Validation details are { field: [messages] }. The first message of the first field that has one. */
-function firstDetail(details: unknown): string | undefined {
+/**
+ * Validation details are { field: [messages] }. The first message of the first field that has one. The one copy
+ * (P1 item 28): the invite picker, the group chats and the message-everyone panel read it too.
+ */
+export function firstDetail(details: unknown): string | undefined {
   if (!details || typeof details !== 'object') return undefined;
   for (const messages of Object.values(details)) {
     if (!Array.isArray(messages)) continue;

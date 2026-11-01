@@ -53,9 +53,11 @@ describe('invalidateEntities: the one rule for which reads a tag refreshes', () 
   });
 
   it('entity:changed from the server goes through the same rule', () => {
+    // The app's listener lives beside the rule (subscribeEntitySync, P1 item 17) and hands it every incoming tag.
     const src = read('realtime/useEntityChangedHandler.ts');
-    expect(src).toMatch(/import \{ invalidateEntities \} from '\.\/invalidate-entities';/);
-    expect(src).toMatch(/invalidateEntities\(queryClient, incoming\)/);
+    const rule = read('realtime/invalidate-entities.ts');
+    expect(src).toMatch(/import \{ subscribeEntitySync \} from '\.\/invalidate-entities';/);
+    expect(rule).toMatch(/void invalidateEntities\(client, Array\.isArray\(data\?\.entities\) \? data\.entities : \[\]\);/);
     expect(src).not.toMatch(/predicate:/);
   });
 });

@@ -7,8 +7,10 @@
 // Pure (no React, axios or store), so the server's jest runs it: server/src/__tests__/client/c12-group-chats.test.ts.
 import { z } from 'zod';
 import { GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS } from '@rsn/shared';
-import type { DmGroupLastMessage, DmGroupMember, DmGroupSummary, GroupChatMessage, GroupChatMessagePage } from '@rsn/shared';
-import { CONNECTION_LOST, memberSentence } from '../reason/errors';
+import type {
+  DmGroupLastMessage, DmGroupMember, DmGroupSummary, GroupCandidate, GroupChatMessage, GroupChatMessagePage,
+} from '@rsn/shared';
+import { CONNECTION_LOST, firstDetail, gotNoAnswer, memberSentence } from '../reason/errors';
 import { shouldRetry, statusOf } from '../reason/human/profile-text';
 import { PANEL_TITLE } from '../sessions/post-event-panel';
 import { clusterMessages, type Cluster } from './bubble-look';
@@ -43,6 +45,7 @@ export const EARLIER_FAILED = "We couldn't load the earlier messages.";
 export const SEND_FAILED = 'Your message could not be sent. Try again.';
 export const SHOW_EARLIER = 'Show earlier messages';
 export const TRY_AGAIN = 'Try again';
+export const TRYING_AGAIN = 'Trying again…';
 export const BACK_TO_MESSAGES = 'Back to Messages';
 export const MESSAGE_PLACEHOLDER = 'Write to the group…';
 export const MESSAGE_PLACEHOLDER_SHORT = 'Message…';
@@ -61,8 +64,9 @@ export const ADD_TITLE = 'Add people who took part';
 export const ADD_PEOPLE = 'Add people';
 export const ADD_FAILED = 'They could not be added. Try again.';
 export const EVERYONE_IN = 'Everyone who took part is already in the group.';
-// The server's words (routes/groups.ts): the name a closed account goes by, and an add with nobody chosen.
-export const FORMER_MEMBER = 'Former member';
+// The server's words (routes/groups.ts): the name a closed account goes by (the client's one constant), and an add with
+// nobody chosen.
+export { FORMER_MEMBER } from '../../lib/former-member';
 export const CHOOSE_SOMEONE = 'Choose someone to add.';
 
 // ── The message box: the server's limits and its words for them (routes/groups.ts) ──
@@ -175,6 +179,14 @@ export function newestFromOthers(messages: GroupChatMessage[], myUserId: string 
 
 /** How long the read mark waits for the burst to end: each newer message starts the wait again. */
 export const MARK_READ_DEBOUNCE_MS = 1000;
+/** The longest a mark waits however fast messages keep coming (P1 item 21): a burst that never pauses is still marked. */
+export const MARK_READ_MAX_WAIT_MS = 5000;
+
+/** How long to wait before marking, given since when a mark has been waiting (null: none was). */
+export function markReadDelay(waitingSince: number | null, now: number): number {
+  if (waitingSince === null) return MARK_READ_DEBOUNCE_MS;
+  return Math.max(0, Math.min(MARK_READ_DEBOUNCE_MS, waitingSince + MARK_READ_MAX_WAIT_MS - now));
+}
 
 /**
  * What the open thread should mark read now, as "{group}:{newest message from someone else}", or null: before the group
@@ -211,9 +223,12 @@ export function rateLimitWaitMs(err: unknown): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : RATE_WINDOW_MS;
 }
 
-/** Group reads: a 429 is tried twice more; any other 4xx is an answer; a lost connection or a 5xx gets one more try. */
+/**
+ * Group reads: a 429 is tried once more, after the limit's wait, then said with Try again (P1 item 20: twice more kept
+ * Show earlier spinning for about two minutes); any other 4xx is an answer; a lost connection or a 5xx gets one more try.
+ */
 export function groupReadRetry(failures: number, err: unknown): boolean {
-  return isRateLimited(err) ? failures < 2 : shouldRetry(failures, err);
+  return isRateLimited(err) ? failures < 1 : shouldRetry(failures, err);
 }
 
 /** A 429 waits the limit out; anything else waits as React Query does by default (1 s, then 2 s…). */
@@ -276,15 +291,6 @@ export function groupLoadProblem(err: unknown): 'gone' | 'not-member' | 'failed'
   return 'failed';
 }
 
-/** The first message of a validation failure's details ({ field: [messages] }). */
-function firstDetail(details: unknown): unknown {
-  if (!details || typeof details !== 'object') return undefined;
-  for (const messages of Object.values(details)) {
-    if (Array.isArray(messages) && messages.length > 0) return messages[0];
-  }
-  return undefined;
-}
-
 /**
  * One sentence for a group request that failed: the server's own words when they are ones a member can read (every
  * refusal of the group routes is a sentence: full, too small, not the admin, not in the group, slow down), the
@@ -293,7 +299,7 @@ function firstDetail(details: unknown): unknown {
 export function groupErrorSentence(err: unknown, fallback: string): string {
   const failed = asFailed(err);
   const response = failed.response;
-  if (!response) return failed.isAxiosError === true || failed.request != null ? CONNECTION_LOST : fallback;
+  if (!response) return gotNoAnswer(err) ? CONNECTION_LOST : fallback;
   const error = response.data?.error;
   switch (response.status) {
     case 400:
@@ -312,27 +318,25 @@ export function groupErrorSentence(err: unknown, fallback: string): string {
 
 // ── Choosing people: starting a group from an event, and adding to one ────────
 
-/** One row of GET /api/sessions/:id/participants, as far as choosing people needs it. */
+/** Someone who can be chosen for a group: a row of the server's candidates, as the pickers draw it. */
 export interface EventPerson {
   userId: string;
   displayName?: string | null;
   avatarUrl?: string | null;
-  status: string;
-  joinedAt: string | null;
 }
 
 /**
- * The people who took part in an event, as the server counts them: they came in (joinedAt is set) and the organisers
- * did not remove them. Never anyone in `exclude` (the reader, the group's members), and each person once. The server
- * also leaves out closed accounts and anyone blocked, and says so if one is chosen.
+ * The people who can be chosen, from GET /groups/event/:sessionId/candidates (P1 item 37): the server already keeps to
+ * those who took part, whose account is open and who are not blocked either way with the reader, so nobody offered is
+ * refused. Never anyone in `exclude` (the reader, the group's members), and each person once.
  */
-export function tookPart<P extends EventPerson>(participants: P[], exclude: Iterable<string>): P[] {
+export function choosable(candidates: GroupCandidate[], exclude: Iterable<string>): EventPerson[] {
   const skip = new Set(exclude);
-  const out: P[] = [];
-  for (const p of participants) {
-    if (!p.joinedAt || p.status === 'removed' || skip.has(p.userId)) continue;
-    skip.add(p.userId);
-    out.push(p);
+  const out: EventPerson[] = [];
+  for (const c of candidates) {
+    if (skip.has(c.id)) continue;
+    skip.add(c.id);
+    out.push({ userId: c.id, displayName: c.displayName, avatarUrl: c.avatarUrl });
   }
   return out;
 }

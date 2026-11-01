@@ -102,7 +102,8 @@ describe('MeetingControlBar: Leave for everyone, End for everyone only for the d
 
   it('Leave keeps the meeting running for the others and lands on the event page, replacing the live page', () => {
     const s = bar();
-    expect(s).toMatch(/emit\('session:leave', \{ sessionId \}\)/);
+    // Through leaveEvent: the server hears it once (P1 item 7).
+    expect(s).toMatch(/leaveEvent\(getSocket\(\), sessionId\)/);
     // The app's one live connection stays up (C10, COM-05): cutting it left the guest "Reconnecting…" on the
     // event page and without bells or the "Ended" flip until the token rotated.
     expect(s).not.toMatch(/disconnectSocket/);

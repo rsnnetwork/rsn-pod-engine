@@ -5,25 +5,18 @@
 // in one call. POST /invites stays for one typed address and for a shareable link. Every query follows the tags the
 // server sends when its answer changes; every write also refetches, on the sender's own screen, what the server's
 // fan-out names, because the sender may be in no list the fan-out reaches (an admin who is not in the pod).
-import { useInfiniteQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { InviteBatchResponse, InviteCandidatePage, InviteCandidateSource } from '@rsn/shared';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
+import { invalidateEntities } from '@/realtime/invalidate-entities';
+import { retryUnlessAnswered } from '@/components/wall/wall-logic';
 import { useAuthStore } from '@/stores/authStore';
+import type { InviteListRow } from './invite-status';
 import { batchBody, candidateEntities, candidateParams, emailInviteBody, linkBody, targetId, targetTags, type InviteTarget } from './invite-picker';
 
 /** Everything the sheet has read for one pod, event or circle, whatever the list and the search. */
 export const targetKey = (target: InviteTarget) => ['invite-candidates', target.type, targetId(target)] as const;
-
-/** Every query that declares one of these tags is read again, as the app does when the server sends them. */
-export function invalidateTags(qc: QueryClient, tags: readonly string[]): void {
-  const wanted = new Set(tags);
-  void qc.invalidateQueries({
-    predicate: (query) => {
-      const declared = (query.meta as { entities?: unknown } | undefined)?.entities;
-      return Array.isArray(declared) && declared.some((tag) => typeof tag === 'string' && wanted.has(tag));
-    },
-  });
-}
 
 /** How long a list read stays fresh: the server allows 60 candidate reads a minute per member, shared with People. */
 const CANDIDATES_FRESH_MS = 60_000;
@@ -70,7 +63,7 @@ export function useSendInvites(target: InviteTarget, handlers: Handlers<InviteBa
     mutationFn: ({ ids, allPodMembers }) =>
       api.post('/invites/batch', batchBody(target, ids, allPodMembers)).then((r) => r.data.data as InviteBatchResponse),
     onSuccess: (data, variables) => {
-      invalidateTags(qc, targetTags(target));
+      void invalidateEntities(qc, targetTags(target));
       handlers.onSuccess(data, variables);
     },
     onError: (error, variables) => handlers.onError(error, variables),
@@ -85,7 +78,7 @@ export function useInviteByEmail(target: InviteTarget, handlers: Handlers<string
     networkMode: 'always',
     mutationFn: (email) => api.post('/invites', emailInviteBody(target, email)),
     onSuccess: (_answer, email) => {
-      invalidateTags(qc, targetTags(target));
+      void invalidateEntities(qc, targetTags(target));
       handlers.onSuccess(email.trim(), email);
     },
     onError: (error, email) => handlers.onError(error, email),
@@ -99,9 +92,28 @@ export function useShareLink(target: InviteTarget, cap: number, handlers: Handle
     networkMode: 'always',
     mutationFn: () => api.post('/invites', linkBody(target, cap)).then((r) => (r.data.data as { code: string }).code),
     onSuccess: (code) => {
-      invalidateTags(qc, targetTags(target));
+      void invalidateEntities(qc, targetTags(target));
       handlers.onSuccess(code);
     },
     onError: (error) => handlers.onError(error),
+  });
+}
+
+/**
+ * A pod's or an event's invites still waiting (?status=pending; expired ones are left out by the server): the
+ * Invitations card's list, and the sheet's way to find the open shareable link (P1 item 30). One definition, so the
+ * two share one read under one key. A circle has none.
+ */
+export function usePendingInvites(target: InviteTarget) {
+  const pod = target.type === 'pod' ? target.podId : null;
+  const session = target.type === 'session' ? target.sessionId : null;
+  return useQuery({
+    queryKey: pod ? ['pod-pending-invites', pod] : ['session-pending-invites', session],
+    queryFn: () => api.get(pod ? `/invites/pod/${pod}?status=pending` : `/invites/session/${session}?status=pending`)
+      .then((r) => (r.data.data ?? []) as InviteListRow[]),
+    enabled: !!pod || !!session,
+    // A refusal (someone who may invite but not read the list: the sheet then makes a link) is an answer, not a blip.
+    retry: (failures: number, err: Error) => retryUnlessAnswered(failures, err),
+    meta: { entities: pod ? [E.pod(pod), E.podInvites(pod)] : session ? [E.session(session), E.sessionInvites(session)] : [] },
   });
 }

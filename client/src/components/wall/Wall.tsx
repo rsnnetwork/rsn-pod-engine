@@ -9,7 +9,8 @@
 // Live updates. A wall whose routes send entity tags (the pod wall) declares them in each query's
 // meta.entities and never polls: the app-wide handler refetches a query when a tag it declares arrives.
 // A wall whose routes send none (the circle wall) is given pollMs instead. A phone that dropped its
-// connection missed whatever was sent meanwhile, so a tagged wall also refetches when the socket comes back.
+// connection missed whatever was sent meanwhile: the app-wide handler refetches every tagged query when the socket
+// connects again (P1 item 17), so the wall keeps no listener of its own.
 
 import { useEffect, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -17,7 +18,6 @@ import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Spinner';
 import api from '@/lib/api';
-import { getSocket } from '@/lib/socket';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import WallComposer from './WallComposer';
@@ -40,14 +40,12 @@ export function WallNotMember({ config }: { config: WallConfig }) {
   );
 }
 
-export default function Wall({ config, fallbackViewer, highlightPostId, onViewerChange }: {
+export default function Wall({ config, fallbackViewer, highlightPostId }: {
   config: WallConfig;
   /** What the viewer may do, for a wall whose feed does not say (the circle wall's page knows). */
   fallbackViewer?: WallViewer;
   /** The post a ?post= link names: scrolled into view and outlined. */
   highlightPostId?: string;
-  /** Told what the server's feed says the viewer may do, each time that changes (never before the feed has answered). */
-  onViewerChange?: (viewer: WallViewer) => void;
 }) {
   const userId = useAuthStore((s) => s.user?.id);
   const addToast = useToastStore((s) => s.addToast);
@@ -77,9 +75,6 @@ export default function Wall({ config, fallbackViewer, highlightPostId, onViewer
 
   const { pinned, rest, viewer: fromFeed } = arrangeFeed(feed.data?.pages);
   const viewer = viewerFor(fromFeed, fallbackViewer);
-  useEffect(() => {
-    if (fromFeed) onViewerChange?.(fromFeed);
-  }, [fromFeed, onViewerChange]);
   const loadedIds = new Set([...pinned, ...rest].map((p) => p.id));
 
   // The ?post= link: a post on the pages loaded so far is scrolled to where it stands. One that is not (older
@@ -97,15 +92,6 @@ export default function Wall({ config, fallbackViewer, highlightPostId, onViewer
   useEffect(() => {
     if (linked.isError && wanted) addToast('That post is no longer available.', 'info');
   }, [linked.isError, wanted, addToast]);
-
-  // Back online: whatever was sent while the socket was down was never heard.
-  useEffect(() => {
-    if (!tagged) return;
-    const socket = getSocket();
-    const onConnect = () => { void queryClient.invalidateQueries({ queryKey: config.keys.feed }); };
-    socket.on('connect', onConnect);
-    return () => { socket.off('connect', onConnect); };
-  }, [tagged, queryClient, config.keys.feed]);
 
   // The acting screen refreshes itself when its own change settles: a change that changed nothing (the same
   // reaction again) is answered 200 and sent to no one, so it gets no echo, and a moderator who is not a

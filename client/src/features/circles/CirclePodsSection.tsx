@@ -57,7 +57,7 @@ export default function CirclePodsSection({ circle }: { circle: CircleDetail }) 
           {circle.pods.map((p) => (
             <Card key={p.podId} className="card-hover !p-4">
               <div className="flex items-center justify-between gap-2">
-                <Link to={`/pods/${p.podId}`} className="block min-h-[36px] min-w-0 flex-1">
+                <Link to={`/pods/${p.podId}`} className="flex min-h-[44px] min-w-0 flex-1 flex-col justify-center">
                   <p className="font-medium text-gray-900 break-words">{p.name}</p>
                   {p.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{p.description}</p>}
                 </Link>

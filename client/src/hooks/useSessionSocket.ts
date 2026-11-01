@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { EventChatPage } from '@rsn/shared';
 import { connectSocket, getSocket } from '@/lib/socket';
+import { leaveOnUnmount } from '@/features/live/leave-event';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
@@ -158,13 +159,11 @@ export default function useSessionSocket(sessionId: string) {
     connectSocket(token);
     const socket = getSocket();
 
-    // FIX 4B: Remove ALL previous listeners before registering new ones
-    // Prevents accumulation on mount/unmount cycles (React strict mode, fast nav)
-    SOCKET_EVENTS.forEach(ev => socket.off(ev));
-    socket.off('connect');
-    socket.io.off('reconnect');
-    socket.io.off('reconnect_attempt');
-    socket.io.off('reconnect_failed');
+    // FIX 4B: no listener of this hook outlives it (StrictMode's mount, unmount and mount again; fast navigation): the
+    // clean-up removes exactly what this run registered. Never a whole event name: the socket is the app's, and other
+    // screens listen on some of these names too (HostControls and EventPlanStrip on 'error' and 'roster:changed', the
+    // app on 'connect'). What each name holds before this run registers anything, so its own can be told apart below.
+    const heldBefore = new Map(SOCKET_EVENTS.map((ev) => [ev, new Set(socket.listeners(ev))] as const));
 
     // Track connection status
     store.setConnectionStatus('connecting');
@@ -1064,8 +1063,7 @@ export default function useSessionSocket(sessionId: string) {
       const kept = withoutTakenDown(held, { messages, complete }, heldBefore, role === 'admin' || role === 'super_admin');
       if (kept.length !== held.length) store.setChatMessages(kept);
     };
-    const onChatChanged = (data: { entities?: string[] }) => {
-      if (!Array.isArray(data?.entities) || !data.entities.includes(chatTag)) return;
+    const reconcileChat = () => {
       if (chatRead.running) { chatRead.again = true; return; }
       chatRead.running = true;
       void (async () => {
@@ -1075,6 +1073,9 @@ export default function useSessionSocket(sessionId: string) {
         } while (!disposed && chatRead.again);
         chatRead.running = false;
       })();
+    };
+    const onChatChanged = (data: { entities?: string[] }) => {
+      if (Array.isArray(data?.entities) && data.entities.includes(chatTag)) reconcileChat();
     };
     socket.on('entity:changed', onChatChanged);
 
@@ -1373,6 +1374,9 @@ export default function useSessionSocket(sessionId: string) {
       // 14 Jul — count reconnects so the UI can warn "your connection looks
       // unstable" once this client has flapped a couple of times.
       store.bumpReconnectCount();
+      // A message taken down while the socket was away was announced only by a tag this socket never heard: the
+      // panel reads the chat page once and drops what it no longer has (P1 item 7).
+      reconcileChat();
       // Don't clear LiveKit token here — old token may still be valid and clearing
       // causes a race condition with VideoRoom's backup fetch + 30s timeout.
       // Server will send fresh match:assigned on session:join if needed.
@@ -1443,6 +1447,10 @@ export default function useSessionSocket(sessionId: string) {
     window.addEventListener('focus', resyncPresenceOnReturn);
     window.addEventListener('online', resyncPresenceOnReturn);
 
+    // This run's own listeners: every one registered above under these names (all of them synchronously, in this body).
+    const ownListeners = SOCKET_EVENTS.flatMap((ev) =>
+      socket.listeners(ev).filter((fn) => !heldBefore.get(ev)?.has(fn)).map((fn) => ({ ev, fn })));
+
     return () => {
       if (resyncDebounce) clearTimeout(resyncDebounce);
       document.removeEventListener('visibilitychange', resyncPresenceOnReturn);
@@ -1458,8 +1466,8 @@ export default function useSessionSocket(sessionId: string) {
       clearInterval(waitingHealInterval);
       if (recoveryBurstTimer) clearInterval(recoveryBurstTimer);
 
-      // Remove ALL socket event listeners we attached
-      for (const ev of SOCKET_EVENTS) socket.off(ev);
+      // Exactly the listeners this run attached, each by its own handler.
+      for (const { ev, fn } of ownListeners) socket.off(ev, fn);
       // entity:changed is the app's own (useEntityChangedHandler): only this hook's listener comes off.
       disposed = true;
       socket.off('entity:changed', onChatChanged);
@@ -1474,7 +1482,8 @@ export default function useSessionSocket(sessionId: string) {
       // not just the live event. Disconnecting here would kill
       // notifications + pod / session list updates on every page the
       // user navigates to after leaving an event.
-      socket.emit('session:leave', { sessionId });
+      // Once: a Leave press has already told the server (P1 item 7).
+      leaveOnUnmount(socket, sessionId);
 
       // Allow re-initialization if this effect re-runs
       initializedRef.current = null;

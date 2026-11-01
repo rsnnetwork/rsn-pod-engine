@@ -48,7 +48,8 @@ describe('the event page (D11, L17)', () => {
   it('shows the Requests card to the people who answer requests, opened by ?requests=1', () => {
     expect(detail).toMatch(/access\?\.canManageRequests && access\.visibility === 'public_with_approval'/);
     expect(detail).toMatch(/focus=\{searchParams\.get\('requests'\) === '1'\}/);
-    expect(card).toMatch(/meta: \{ entities: \[E\.session\(sessionId\)\] \}/);
+    // The card follows the requests' own tag beside the event's (X3, T16).
+    expect(card).toMatch(/meta: \{ entities: \[E\.session\(sessionId\), E\.sessionJoinRequests\(sessionId\)\] \}/);
     expect(card).toMatch(/\/requests\/\$\{row\.userId\}\/\$\{verb\}/);
     expect(card).toMatch(/min-h-\[44px\]/);
   });

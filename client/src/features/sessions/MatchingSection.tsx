@@ -120,8 +120,20 @@ function WhoMeetsWhom({ templateId, onTemplate, onTouched, presets, isAdmin, tem
       <legend className="mb-1 block text-sm font-medium text-gray-600">Who should meet whom</legend>
       <p className="mb-3 text-xs text-gray-500">REASON pairs these people first when it can. Everyone still meets someone.</p>
       {presets.isLoading ? (
-        <div aria-busy="true" aria-label="Loading the matching choices" className="grid gap-2">
-          {[0, 1, 2, 3].map((i) => <div key={i} className="h-11 animate-pulse rounded-xl bg-gray-100" />)}
+        // Shaped like the loaded choices (four presets, each a name over a line, and an admin's "Other templates"), so
+        // nothing below moves when they land: Safari keeps no scroll anchor, and a field scrolled to would slide (X4).
+        <div aria-busy="true" aria-label="Loading the matching choices" className="grid gap-2" data-testid="matching-presets-loading">
+          {Array.from({ length: isAdmin ? 5 : 4 }, (_, i) => (
+            <div key={i} className={card(false)}>
+              <span className={cn(RADIO, 'rounded-full bg-gray-200')} />
+              <span className="min-w-0 flex-1">
+                <span className="block h-5 w-40 max-w-full animate-pulse rounded bg-gray-200" />
+                <span className="mt-0.5 block h-4 w-64 max-w-full animate-pulse rounded bg-gray-100" />
+                {/* Below 400px most presets' lines wrap once. */}
+                {i < 3 && <span className="block h-4 w-40 max-w-full animate-pulse rounded bg-gray-100 min-[400px]:hidden" />}
+              </span>
+            </div>
+          ))}
         </div>
       ) : presets.isError ? (
         <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">

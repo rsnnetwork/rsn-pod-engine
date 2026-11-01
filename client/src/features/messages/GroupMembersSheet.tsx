@@ -10,12 +10,12 @@ import { formResolver } from '@/lib/form-resolver';
 import { useToastStore } from '@/stores/toastStore';
 import { TEXT_BUTTON } from './buttons';
 import PeopleChoices from './PeopleChoices';
-import { useAddGroupMembers, useEventPeople, useLeaveGroup, useRemoveGroupMember } from './useGroups';
+import { useAddGroupMembers, useGroupCandidates, useLeaveGroup, useRemoveGroupMember } from './useGroups';
 import {
   ADD_FAILED, ADD_PEOPLE, ADD_TITLE, ADMIN, CANCEL, EVERYONE_IN, FORMER_MEMBER, GROUP_FULL, GROUP_LIMIT, LEAVE,
   LEAVE_FAILED, LEAVE_WARNING, MEMBERS_TITLE, PEOPLE_FAILED, PEOPLE_LEGEND, REMOVE, REMOVE_FAILED, TRY_AGAIN, YOU,
   addLabel, addSchema, addedSentence, byName, groupErrorSentence, leftSentence, membersInOrder, ofMax, removeAsk,
-  removedSentence, roomLeft, tookPart, type AddValues,
+  removedSentence, roomLeft, choosable, type AddValues, type EventPerson,
 } from './group-chat-text';
 
 // ─── A group chat's members (26 Oct 2026, C12, COM-04) ───
@@ -188,7 +188,7 @@ function AddPeople({ group, sessionId, myUserId }: { group: DmGroupDetail; sessi
 }
 
 function AddPeopleList({ group, sessionId, myUserId, onDone }: { group: DmGroupDetail; sessionId: string; myUserId: string; onDone: () => void }) {
-  const people = useEventPeople(sessionId);
+  const people = useGroupCandidates(sessionId);
   if (people.isPending) {
     return (
       <div data-testid="add-people-loading" aria-busy="true" className="mt-2 space-y-2">
@@ -204,12 +204,12 @@ function AddPeopleList({ group, sessionId, myUserId, onDone }: { group: DmGroupD
       </div>
     );
   }
-  const candidates = byName(tookPart(people.data, [myUserId, ...group.members.map((m) => m.userId)]));
+  const candidates = byName(choosable(people.data, [myUserId, ...group.members.map((m) => m.userId)]));
   if (candidates.length === 0) return <p className="mt-1 text-sm text-gray-600">{EVERYONE_IN}</p>;
   return <AddPeopleForm group={group} candidates={candidates} onDone={onDone} />;
 }
 
-function AddPeopleForm({ group, candidates, onDone }: { group: DmGroupDetail; candidates: ReturnType<typeof tookPart>; onDone: () => void }) {
+function AddPeopleForm({ group, candidates, onDone }: { group: DmGroupDetail; candidates: EventPerson[]; onDone: () => void }) {
   const add = useAddGroupMembers(group.id);
   const addToast = useToastStore((s) => s.addToast);
   const [refusal, setRefusal] = useState<string | null>(null);

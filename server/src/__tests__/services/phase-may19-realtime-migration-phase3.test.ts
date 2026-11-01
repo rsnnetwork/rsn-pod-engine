@@ -34,15 +34,21 @@ describe('Realtime migration Phase 3 — client meta.entities', () => {
       expect(podBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.pod\(podId\)/);
       const membersBlock = src.slice(src.indexOf("queryKey: ['pod-members', podId]"));
       expect(membersBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podMembers\(podId\)/);
-      const sessionsBlock = src.slice(src.indexOf("queryKey: ['pod-sessions', podId]"));
+      // The events list is its own section since P1 item 16, 1 Nov 2026.
+      const events = readClient('features/pods/PodEventsSection.tsx');
+      expect(events).toMatch(/import\s*\{\s*E\s*\}\s*from\s*['"]@\/realtime\/entities['"]/);
+      const sessionsBlock = events.slice(events.indexOf("queryKey: ['pod-sessions', podId]"));
       expect(sessionsBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podSessions\(podId\)/);
       // 26 Oct 2026 (C9): the pod's pending invites are read by the organisers' list the page draws
       // (InviteStatusList), with the same key and tag.
       expect(src).toMatch(/<InviteStatusList\b/);
       const list = readClient('features/invites/InviteStatusList.tsx');
       expect(list).toMatch(/import\s*\{\s*E\s*\}\s*from\s*['"]@\/realtime\/entities['"]/);
-      const invitesBlock = list.slice(list.indexOf("queryKey: ['pod-pending-invites', podId]"));
-      expect(invitesBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podInvites\(podId\)/);
+      // P1 item 30: one pending-invites read (usePendingInvites), shared by the card and the invite sheet.
+      expect(list).toMatch(/usePendingInvites\(props\.target\)/);
+      const invitesBlock = readClient('features/invites/useInviteCandidates.ts');
+      expect(invitesBlock).toMatch(/queryKey: pod \? \['pod-pending-invites', pod\] : \['session-pending-invites', session\]/);
+      expect(invitesBlock).toMatch(/meta: \{ entities: pod \? \[E\.pod\(pod\), E\.podInvites\(pod\)\]/);
     });
 
     it('PodsPage.tsx imports E and tags my-pods with userPods', () => {
@@ -86,8 +92,10 @@ describe('Realtime migration Phase 3 — client meta.entities', () => {
       // (InviteStatusList), with the same key and tag.
       expect(src).toMatch(/<InviteStatusList\b/);
       const list = readClient('features/invites/InviteStatusList.tsx');
-      const invitesBlock = list.slice(list.indexOf("queryKey: ['session-pending-invites', sessionId]"));
-      expect(invitesBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.sessionInvites\(sessionId\)/);
+      // P1 item 30: one pending-invites read (usePendingInvites), shared by the card and the invite sheet.
+      expect(list).toMatch(/usePendingInvites\(props\.target\)/);
+      const invitesBlock = readClient('features/invites/useInviteCandidates.ts');
+      expect(invitesBlock).toMatch(/session \? \[E\.session\(session\), E\.sessionInvites\(session\)\]/);
     });
 
     it('RecapPage.tsx imports E and tags session/session-cohost/unrated-partners', () => {

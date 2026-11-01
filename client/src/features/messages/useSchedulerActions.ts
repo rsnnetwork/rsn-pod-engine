@@ -208,10 +208,13 @@ export function useSchedulerActions(o: ActionOptions) {
     setConfirming(key);
     const moving = standing;
     const stays = data.confirmed?.startAt ?? null;
+    // The meeting this panel shows (its window, or null for none): the server refuses the press with where things
+    // stand now if the other person moved or cancelled it meanwhile (H2b item 9; P1 item 36).
+    const expectedWindow = data.confirmed?.window ?? null;
     try {
       // The slot IS the instant — the server stores it and every client
       // renders it in its own timezone.
-      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: key, durationMin, type: meetingKind });
+      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: key, durationMin, type: meetingKind, expectedWindow });
       setFinalizing(null);
       ownConfirm.current = { window: key, durationMin, type: meetingKind };
       dismissFailures();

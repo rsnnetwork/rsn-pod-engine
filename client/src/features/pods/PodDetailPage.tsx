@@ -8,24 +8,22 @@ import {
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
-import { sessionStatusLabel, sessionStatusColor } from '@/features/sessions/statusConfig';
 import Avatar from '@/components/ui/Avatar';
 import ProfileCard from '@/components/ui/ProfileCard';
 import { Button } from '@/components/ui/Button';
 import Modal from '@/components/ui/Modal';
-import { PageLoader, Skeleton } from '@/components/ui/Spinner';
+import { PageLoader } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
-import { formatDateTime } from '@/lib/utils';
+import { isAdmin } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import CreatePodModal from './CreatePodModal';
 import EditPodModal from './EditPodModal';
 import PodWall from './PodWall';
 import { orchestrationLabel, podStatusLabel } from './pod-header-text';
-import { podEventsInOrder } from './pod-event-order';
-import { isForbidden, retryUnlessAnswered } from '@/components/wall/wall-logic';
+import PodEventsSection from './PodEventsSection';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -49,14 +47,6 @@ const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; color
   private:             { label: 'Private',              icon: Lock,   color: 'text-red-400',     desc: 'Hidden, invite only' },
   public_with_approval:{ label: 'Public with Approval', icon: UserCheck, color: 'text-indigo-400', desc: 'Anyone can find and request to join; director approves' },
 };
-
-/** What the page lists of each of the pod's events. */
-interface PodEventRow {
-  id: string;
-  title: string | null;
-  scheduledAt: string | null;
-  status: string;
-}
 
 // The sections a phone's chip row jumps to; the ids are on the sections below.
 const SECTIONS = [
@@ -118,18 +108,7 @@ export default function PodDetailPage() {
 
   // The server lists a pod's events to its active members (the only ones it names a role for) and to admins, and
   // answers 403 to anyone else, so nobody else asks.
-  const mayReadEvents = !!pod?.memberRole || user?.role === 'admin' || user?.role === 'super_admin';
-  const {
-    data: podSessions, isError: sessionsFailed, error: sessionsError, refetch: refetchSessions,
-  } = useQuery({
-    queryKey: ['pod-sessions', podId],
-    queryFn: () => api.get(`/sessions?podId=${podId}`).then(r => (r.data.data ?? []) as PodEventRow[]),
-    enabled: !!podId && mayReadEvents,
-    retry: retryUnlessAnswered,
-    meta: { entities: podId ? [E.pod(podId), E.podSessions(podId)] : [] },
-  });
-  // Refused all the same: this page's copy of the pod still named a role the member has just lost.
-  const eventsRefused = isForbidden(sessionsError);
+  const mayReadEvents = !!pod?.memberRole || isAdmin(user?.role);
 
   const { data: podMemberCounts } = useQuery({
     queryKey: ['pod-member-counts', podId],
@@ -234,10 +213,6 @@ export default function PodDetailPage() {
 
   const openEdit = () => setEditOpen(true);
 
-  // The wall found the pod closed before this page's own copy said so (the archive route tells the pod's screens a
-  // moment before it saves the new status): read the pod again, so the badge, the buttons and the wall agree.
-  const refreshPod = () => { void qc.invalidateQueries({ queryKey: ['pod', podId], exact: true }); };
-
   // A chip scrolls its section into view. A plain address with #section would add a history entry and leave <main>,
   // the page's scroll area, where it is.
   const jumpTo = (e: MouseEvent<HTMLAnchorElement>, id: string) => {
@@ -293,7 +268,7 @@ export default function PodDetailPage() {
     : pod.memberCount ?? activeMembers.length;
 
   const myMembership     = membersList.find((m: any) => m.userId === user?.id);
-  const isAdminUser      = user?.role === 'admin' || user?.role === 'super_admin';
+  const isAdminUser      = isAdmin(user?.role);
   const isMember         = myMembership?.status === 'active' || !!pod.memberRole || isAdminUser;
   // An active member of the pod. The server names a member role only for an active member.
   const isActiveMember   = myMembership?.status === 'active' || !!pod.memberRole;
@@ -325,12 +300,14 @@ export default function PodDetailPage() {
 
       {/* Pod Header */}
       <Card className="animate-fade-in-up">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#1a1a2e]">{pod.name}</h1>
-            <p className="text-gray-500 mt-1">{pod.description || 'No description'}</p>
+        {/* The name and description may shrink and break inside the row (P1 item 16): a long unbroken name used to
+            widen the page at 360. */}
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold text-[#1a1a2e] break-words">{pod.name}</h1>
+            <p className="text-gray-500 mt-1 break-words">{pod.description || 'No description'}</p>
           </div>
-          <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{podStatusLabel(pod.status)}</Badge>
+          <Badge variant={pod.status === 'active' ? 'success' : 'default'} className="shrink-0">{podStatusLabel(pod.status)}</Badge>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-4 pt-4 border-t border-gray-200">
@@ -622,60 +599,26 @@ export default function PodDetailPage() {
               isMember={isMember}
               isActiveMember={isActiveMember}
               highlightPostId={highlightPostId}
-              onPodStatusStale={refreshPod}
             />
           )}
         </section>
 
         <div className="min-w-0 space-y-6">
           {/* ── Events ──────────────────────────────────────────────────── */}
-          <section id="pod-events" className="scroll-mt-4 animate-fade-in-up stagger-2">
-            <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-              <Calendar className="h-5 w-5 text-rsn-red" /> Events{podSessions ? ` (${podSessions.length})` : ''}
-            </h2>
-            {!mayReadEvents || eventsRefused ? (
-              <Card className="!p-4">
-                <p className="text-center text-sm text-gray-500">Members see the pod's events here.</p>
-              </Card>
-            ) : sessionsFailed && !podSessions ? (
-              <Card className="!p-4 text-center">
-                <p className="text-sm text-gray-600">We could not load the events just now.</p>
-                <Button variant="ghost" onClick={() => void refetchSessions()} className="mx-auto mt-2 min-h-[44px]">Try again</Button>
-              </Card>
-            ) : !podSessions ? (
-              <Skeleton className="h-16" />
-            ) : podSessions.length > 0 ? (
-              <div className="grid grid-cols-1 gap-2">
-                {podEventsInOrder(podSessions).map((s) => (
-                  <Card
-                    key={s.id}
-                    className="!p-4 cursor-pointer hover:border-gray-300 transition-colors"
-                    onClick={() => navigate(`/sessions/${s.id}`)}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="break-words text-sm font-medium text-[#1a1a2e]">{s.title || 'Untitled Event'}</p>
-                        <p className="text-xs text-gray-400">
-                          {s.scheduledAt ? formatDateTime(s.scheduledAt) : 'No date set'}
-                        </p>
-                      </div>
-                      {/* This showed the raw column value, so a member read
-                          "round_transition" here (21 Sep 2026). One helper names
-                          every state in plain words now. 'active' was never a
-                          real status, so the old colour test never matched. */}
-                      <Badge variant={sessionStatusColor(s.status)} className="shrink-0">
-                        {sessionStatusLabel(s.status)}
-                      </Badge>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            ) : (
-              <Card className="!p-4">
-                <p className="text-center text-sm text-gray-400">No events yet.</p>
-              </Card>
-            )}
-          </section>
+          {podId && <PodEventsSection podId={podId} mayReadEvents={mayReadEvents} />}
+
+          {/* ── Invitations: who is invited, who declined (the pod's director, host and admins), for any pod that is not
+               archived: a draft or suspended pod can be invited to (the button above shows; the server refuses only an
+               archived pod), so its organisers see the card too. Above the members, so a director sees it without
+               scrolling past the whole list (P1 item 33). ─────── */}
+          {isDirectorOrHost && pod.status !== 'archived' && podId && (
+            <InviteStatusList
+              target={{ type: 'pod', podId }}
+              present={activeMembers.map((m: { userId: string }) => m.userId)}
+              presentCount={activeMembers.length}
+              onInvite={() => setInviteOpen(true)}
+            />
+          )}
 
           {/* ── Members ──────────────────────────────────────────────────── */}
           <section id="pod-members" className="scroll-mt-4 animate-fade-in-up stagger-2">
@@ -765,17 +708,6 @@ export default function PodDetailPage() {
             </div>
           </section>
 
-          {/* ── Invitations: who is invited, who declined (the pod's director, host and admins), for any pod that is not
-               archived: a draft or suspended pod can be invited to (the button above shows; the server refuses only an
-               archived pod), so its organisers see the card too. ─────── */}
-          {isDirectorOrHost && pod.status !== 'archived' && podId && (
-            <InviteStatusList
-              target={{ type: 'pod', podId }}
-              present={activeMembers.map((m: { userId: string }) => m.userId)}
-              presentCount={activeMembers.length}
-              onInvite={() => setInviteOpen(true)}
-            />
-          )}
         </div>
       </div>
       {confirmDialog}
@@ -797,10 +729,10 @@ function PodCircleChips({ podId }: { podId?: string }) {
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs font-semibold text-gray-500">In circles:</span>
         {circles.map(c => (
-          <a
-            key={c.id} href={`/circles/${c.id}`}
-            className="text-xs font-medium text-rsn-red bg-rsn-red-light px-2.5 py-1 rounded-full hover:opacity-80 transition-opacity min-h-[28px] inline-flex items-center"
-          >{c.name}</a>
+          // A 44px tap around the 28px chip, inside the app (a bare link reloaded the whole page).
+          <Link key={c.id} to={`/circles/${c.id}`} className="inline-flex min-h-[44px] items-center hover:opacity-80 transition-opacity">
+            <span className="inline-flex min-h-[28px] items-center rounded-full bg-rsn-red-light px-2.5 py-1 text-xs font-medium text-rsn-red">{c.name}</span>
+          </Link>
         ))}
       </div>
     </div>

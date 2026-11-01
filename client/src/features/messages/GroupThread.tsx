@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Loader2, Send, Smile, Users } from 'lucide-react';
 import type { DmGroupDetail, GroupChatMessage } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
@@ -20,12 +21,12 @@ import ReplyStrip, { ReplyButton } from './ReplyStrip';
 import type { ReplyTarget } from './reply-text';
 import GroupMembersSheet from './GroupMembersSheet';
 import { dayHeaderLabel, sameLocalDay, timeOnly } from './message-time';
-import { isGroupId, useGroup, useGroupMessages, useMarkGroupRead, useSendGroupMessage } from './useGroups';
+import { groupKeys, isGroupId, useGroup, useGroupMessages, useMarkGroupRead, useSendGroupMessage } from './useGroups';
 import {
   BACK_TO_MESSAGES, EARLIER_FAILED, GROUP_EMPTY, GROUP_FAILED, GROUP_GONE, GROUP_MESSAGE_MAX, MESSAGE_PLACEHOLDER,
-  MESSAGE_PLACEHOLDER_SHORT, NOT_IN_GROUP, SEND_FAILED, SHOW_EARLIER, TRY_AGAIN,
-  MARK_READ_DEBOUNCE_MS, clusterGroupMessages, groupErrorSentence, groupLoadProblem, isRateLimited, newestFromOthers,
-  ofMax, readMarkKey, sendSchema, threadInOrder, untilEarlierPage, type SendValues,
+  MESSAGE_PLACEHOLDER_SHORT, NOT_IN_GROUP, SEND_FAILED, SHOW_EARLIER, TRY_AGAIN, TRYING_AGAIN,
+  clusterGroupMessages, groupErrorSentence, groupLoadProblem, isRateLimited, newestFromOthers,
+  markReadDelay, ofMax, readMarkKey, sendSchema, threadInOrder, untilEarlierPage, type SendValues,
 } from './group-chat-text';
 
 // ─── A group chat, open in Messages (26 Oct 2026, C12, COM-04) ───
@@ -71,20 +72,41 @@ export default function GroupThread({ groupId }: { groupId: string }) {
   const readable = detail.isSuccess && thread.isSuccess;
 
   // Read when the group opens with something unread, and when someone else's newer message arrives; never from a tab in
-  // the background, and once per burst (readMarkKey and MARK_READ_DEBOUNCE_MS: each mark costs the member's group reads).
-  // The clean-up cancels a waiting mark when a newer message comes first, so a burst ends in one mark. A mark that fails
-  // is not the member's to put right: the next one tries again, so it is not reported.
+  // the background, and once per burst (readMarkKey and markReadDelay: each mark costs the member's group reads). The
+  // clean-up cancels a waiting mark when a newer message comes first, so a burst ends in one mark; a burst that never
+  // pauses is still marked within five seconds of the first wait (P1 item 21). A mark that fails is not the member's to
+  // put right: the next one tries again, so it is not reported.
   const marked = useRef<string | null>(null);
+  const waitingSince = useRef<number | null>(null);
   const unread = detail.data?.unreadCount ?? 0;
   useEffect(() => {
     const mark = readMarkKey({ loaded: readable, seen: pageSeen, unread, groupId, newestOther, marked: marked.current });
-    if (!mark) return;
+    if (!mark) { waitingSince.current = null; return; }
+    const delay = markReadDelay(waitingSince.current, Date.now());
+    if (waitingSince.current === null) waitingSince.current = Date.now();
     const timer = window.setTimeout(() => {
+      waitingSince.current = null;
       marked.current = mark;
       markRead(undefined, { onError: () => { marked.current = null; } });
-    }, MARK_READ_DEBOUNCE_MS);
+    }, delay);
     return () => window.clearTimeout(timer);
   }, [readable, pageSeen, unread, groupId, newestOther, markRead]);
+
+  // Try again on a group that could not load: a first read refused for going too fast waits out the limit before its
+  // own retry, and a plain refetch would only join that wait. So the waiting reads are stopped and asked again at once,
+  // and the button says so meanwhile (P1 items 18 and 19).
+  const qc = useQueryClient();
+  const [retrying, setRetrying] = useState(false);
+  const tryAgain = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    await Promise.all([
+      qc.cancelQueries({ queryKey: groupKeys.detail(groupId) }),
+      qc.cancelQueries({ queryKey: groupKeys.messages(groupId) }),
+    ]);
+    await Promise.allSettled([detail.refetch(), thread.refetch()]);
+    setRetrying(false);
+  };
 
   // A new message at the end (or the first page) comes into view while the member reads near the end, and always when it
   // is their own; an earlier page loaded above keeps the place they were reading. The list is drawn only once the group's
@@ -135,7 +157,7 @@ export default function GroupThread({ groupId }: { groupId: string }) {
     // with Try again, rather than left loading for a minute.
     const limited = isRateLimited(detail.failureReason) || isRateLimited(thread.failureReason);
     if (problem === 'failed' || limited) {
-      return <ThreadProblem text={GROUP_FAILED} onRetry={() => { void detail.refetch(); void thread.refetch(); }} />;
+      return <ThreadProblem text={GROUP_FAILED} onRetry={tryAgain} busy={retrying} />;
     }
     return <ThreadLoading />;
   }
@@ -399,7 +421,7 @@ function ThreadLoading() {
 }
 
 /** Why the group cannot be shown, and the way back (on a phone the inbox beside it is hidden). */
-function ThreadProblem({ text, onRetry }: { text: string; onRetry?: () => void }) {
+function ThreadProblem({ text, onRetry, busy = false }: { text: string; onRetry?: () => void; busy?: boolean }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-gray-200 px-3 py-2 lg:hidden">
@@ -411,8 +433,14 @@ function ThreadProblem({ text, onRetry }: { text: string; onRetry?: () => void }
         <p className="text-sm text-gray-700">{text}</p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           {onRetry && (
-            <button type="button" onClick={onRetry} className={`${TEXT_BUTTON} border border-gray-300 bg-white text-gray-800 hover:bg-gray-50`}>
-              {TRY_AGAIN}
+            <button
+              type="button"
+              onClick={onRetry}
+              disabled={busy}
+              className={`${TEXT_BUTTON} border border-gray-300 bg-white text-gray-800 hover:bg-gray-50 disabled:opacity-60`}
+            >
+              {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              {busy ? TRYING_AGAIN : TRY_AGAIN}
             </button>
           )}
           <Link to="/messages" className={`${TEXT_BUTTON} text-rsn-red hover:bg-rsn-red/5`}>{BACK_TO_MESSAGES}</Link>

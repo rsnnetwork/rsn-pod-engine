@@ -3,13 +3,15 @@
 // signed-in page (the profile and the meeting room are outside the shell). It listens to the one-to-one dm:message and
 // to a group's bell (notification:new of type group_message, at most one per group in 10 minutes), and plays at most
 // one chime per message across all of the member's open tabs, by the rule in lib/message-chime-policy.ts. No sound for
-// meeting requests or any other bell (Stefan asked for messages).
+// meeting requests or any other bell (Stefan asked for messages). An incoming call (call:request) rings through the same
+// vote and setting (X3, 2 Nov 2026): one sound path, never a second player in the call layer.
 import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { getSocket } from '@/lib/socket';
-import { messageSoundOn, playMessageChime, readyAudioOnFirstPress } from '@/lib/chime';
+import { useCallStore } from '@/stores/callStore';
+import { messageSoundOn, playCallRing, playMessageChime, readyAudioOnFirstPress } from '@/lib/chime';
 import {
-  CHIME_VOTE_WINDOW_MS, chimeFromDm, chimeFromNotification, playsHere, quietHere,
+  CHIME_VOTE_WINDOW_MS, RING_REPEAT_MS, chimeFromCall, chimeFromDm, chimeFromNotification, keepsRinging, playsHere, quietHere,
   type ChimeEvent, type ChimeVote, type DmMessageLike, type NotificationLike,
 } from '@/lib/message-chime-policy';
 
@@ -33,6 +35,7 @@ export function useMessageChime(userId: string | undefined): void {
     const played = new Set<string>();
     let lastPlayedAt: number | null = null;
     const timers = new Set<number>();
+    const intervals = new Set<number>();
     const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL) : null;
 
     const remember = (vote: ChimeVote) => {
@@ -67,27 +70,52 @@ export function useMessageChime(userId: string | undefined): void {
       const t = window.setTimeout(() => {
         timers.delete(t);
         const now = Date.now();
-        if (!playsHere(votes.get(ev.id) ?? [vote], tabId, { alreadyPlayed: played.has(ev.id), lastPlayedAt, now })) return;
+        // A ring is never held back by a message chime a moment before it.
+        const history = { alreadyPlayed: played.has(ev.id), lastPlayedAt: ev.ring ? null : lastPlayedAt, now };
+        if (!playsHere(votes.get(ev.id) ?? [vote], tabId, history)) return;
         played.add(ev.id);
         lastPlayedAt = now;
         channel?.postMessage({ kind: 'played', id: ev.id, at: now } satisfies ChannelMessage);
-        playMessageChime(ev.id);
+        if (ev.ring) ringUntilAnswered(ev);
+        else playMessageChime(ev.id);
       }, CHIME_VOTE_WINDOW_MS);
       timers.add(t);
     };
 
+    // A call rings for up to two minutes: the tab that won the vote rings again every few seconds while the call layer
+    // still holds that call and this device may sound, so someone away from the screen for the first ring still hears
+    // it (T16 fix round 1). It stops on an answer, a decline, a withdrawal, an answer elsewhere, or when it lapses.
+    const ringUntilAnswered = (ev: ChimeEvent) => {
+      const requestId = ev.id.slice('call:'.length);
+      playCallRing(ev.id);
+      const repeat = window.setInterval(() => {
+        const tab = { pathname: where.current, visible: document.visibilityState === 'visible', soundOn: messageSoundOn() };
+        if (!keepsRinging(ev, useCallStore.getState().incoming, requestId, Date.now(), tab)) {
+          window.clearInterval(repeat);
+          intervals.delete(repeat);
+          return;
+        }
+        playCallRing(ev.id);
+      }, RING_REPEAT_MS);
+      intervals.add(repeat);
+    };
+
     const onDm = (msg: DmMessageLike) => consider(chimeFromDm(msg, userId));
     const onBell = (n: NotificationLike) => consider(chimeFromNotification(n));
+    const onCall = (d: { requestId: string; conversationId: string }) => consider(chimeFromCall(d));
     const socket = getSocket();
     socket.on('dm:message', onDm);
     socket.on('notification:new', onBell);
+    socket.on('call:request', onCall);
     const unready = readyAudioOnFirstPress();
 
     return () => {
       socket.off('dm:message', onDm);
       socket.off('notification:new', onBell);
+      socket.off('call:request', onCall);
       unready();
       for (const t of timers) window.clearTimeout(t);
+      for (const r of intervals) window.clearInterval(r);
       channel?.close();
     };
   }, [userId]);
