@@ -16,7 +16,7 @@ import { useQuery } from '@tanstack/react-query';
 import { LiveKitRoom, RoomAudioRenderer, ParticipantTile, ControlBar, useTracks, useRoomContext, type TrackReference } from '@livekit/components-react';
 import '@livekit/components-styles';
 import { Track } from 'livekit-client';
-import { ArrowLeft, CalendarClock, Maximize2, Minimize2, PhoneOff } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Maximize2, MessageSquare, Minimize2, PhoneOff } from 'lucide-react';
 import { MEETING_JOIN_EARLY_MIN } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
@@ -27,6 +27,11 @@ import { afterRoomPath } from '@/features/meetings/meeting-feedback';
 import PartnerSeen from './PartnerSeen';
 import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
 import { schedulingKey, type Scheduling } from './scheduling-types';
+import { useAuthStore } from '@/stores/authStore';
+import CallChatPanel from '@/features/meet/CallChatPanel';
+import { newestAt, unreadFrom } from '@/features/meet/call-chat';
+import { useThreadMessages } from './thread/useThreadMessages';
+import { useConversationPartner, type ConversationPartner } from './thread/useConversationPartner';
 
 /** A stable key for a track reference (participant + source + track sid). */
 function trackId(t: TrackReference | { participant?: { identity?: string }; source?: string; publication?: { trackSid?: string } }): string {
@@ -330,13 +335,49 @@ export default function MeetPage() {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
   }
 
+  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} onPartnerSeen={partnerSeen} />;
+}
+
+/**
+ * The room itself: the top bar, the stage, LiveKit's controls and, since 1 Nov 2026 (T7, 30 Oct review 5a), the
+ * pair's chat. The chat is closed when the room opens (the video is the point of it) and the Chat button counts
+ * what the other person writes meanwhile. Open, it sits beside the stage from 640px and under the controls on a
+ * phone, with the stage shrinking above it; it lives inside the LiveKit room, so the call runs on while they type.
+ * The page is 100dvh and keeps the iPhone's home-indicator inset clear under whatever is lowest.
+ */
+function CallRoom({ conversationId, kind, live, leaveRoom, onPartnerSeen }: {
+  conversationId: string;
+  kind: 'audio' | 'video';
+  live: { token: string; url: string };
+  /** Leaving the room: to the feedback question after a meeting the other person was in, else to the chat (T8). */
+  leaveRoom: () => void;
+  onPartnerSeen: () => void;
+}) {
+  const myUserId = useAuthStore((s) => s.user?.id);
+  // Kept once known: a block made during the call takes the conversation off the inbox, and the panel must still
+  // try the send, so the person reads the server's refusal instead of a Send that went dead.
+  const found = useConversationPartner(conversationId);
+  const [partner, setPartner] = useState<ConversationPartner | null>(null);
+  useEffect(() => {
+    if (found) setPartner(found);
+  }, [found?.userId, found?.name, found?.isFormerMember]); // eslint-disable-line react-hooks/exhaustive-deps -- the fields stand for the object
+  const { data: messages } = useThreadMessages(conversationId, { markRead: false });
+  const [chatOpen, setChatOpen] = useState(false);
+  // The newest message's time when the panel was last open (or when the room opened): what came after is unread.
+  const [seenAt, setSeenAt] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!messages) return;
+    if (seenAt === undefined || chatOpen) setSeenAt(newestAt(messages));
+  }, [messages, chatOpen]); // eslint-disable-line react-hooks/exhaustive-deps -- seenAt is what this effect sets
+  const unread = chatOpen || !messages || seenAt === undefined ? 0 : unreadFrom(messages, partner?.userId, seenAt);
+
   return (
     <div
       className="flex h-[100dvh] flex-col bg-[#0b0b12] text-white"
       data-lk-theme="default"
       style={{ paddingTop: 'env(safe-area-inset-top)' }}
     >
-      {/* Slim top bar — leave affordance + what kind of call this is. */}
+      {/* Slim top bar — leave affordance + what kind of call this is, and the chat. */}
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
         <button
           onClick={leaveRoom}
@@ -345,10 +386,29 @@ export default function MeetPage() {
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">{kind === 'audio' ? 'Audio call' : 'Video call'}</p>
           <p className="text-[11px] text-white/50">Connected on REASON</p>
         </div>
+        <button
+          type="button"
+          onClick={() => setChatOpen((v) => !v)}
+          aria-pressed={chatOpen}
+          aria-label={unread > 0 ? `Chat, ${unread} unread` : 'Chat'}
+          data-testid="call-chat-toggle"
+          className={`relative inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium ${chatOpen ? 'bg-white text-gray-900' : 'text-white/85 hover:bg-white/10 hover:text-white'}`}
+        >
+          <MessageSquare className="h-5 w-5" aria-hidden="true" />
+          <span className="hidden min-[400px]:inline">Chat</span>
+          {unread > 0 && (
+            <span
+              data-testid="call-chat-unread"
+              className="absolute -right-0.5 -top-0.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rsn-red px-1 text-[11px] font-bold leading-none text-white"
+            >
+              {unread > 9 ? '9+' : unread}
+            </span>
+          )}
+        </button>
       </div>
 
       <LiveKitRoom
@@ -360,14 +420,28 @@ export default function MeetPage() {
         onDisconnected={leaveRoom}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'transparent' }}
       >
-        <CallStage />
-        <RoomAudioRenderer />
-        <CallEndWatcher onLeave={leaveRoom} />
-        <PartnerSeen onSeen={partnerSeen} />
-        <div className="shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-          <ControlBar variation="minimal" />
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+            <CallStage />
+            <CallEndWatcher onLeave={leaveRoom} />
+            <PartnerSeen onSeen={onPartnerSeen} />
+            <div className={`shrink-0 pb-[env(safe-area-inset-bottom)] ${chatOpen ? 'max-sm:pb-0' : ''}`}>
+              <ControlBar variation="minimal" />
+            </div>
+          </div>
+          <aside className={`h-[45dvh] shrink-0 sm:h-auto sm:w-80 ${chatOpen ? 'flex flex-col' : 'hidden'}`} aria-label="Chat panel">
+            <CallChatPanel
+              conversationId={conversationId}
+              open={chatOpen}
+              onClose={() => setChatOpen(false)}
+              partner={partner}
+              myUserId={myUserId}
+            />
+          </aside>
         </div>
+        <RoomAudioRenderer />
       </LiveKitRoom>
     </div>
   );
 }
+

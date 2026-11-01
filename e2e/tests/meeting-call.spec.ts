@@ -203,13 +203,17 @@ test.describe.serial('meeting + call', () => {
     await expect(banner.getByRole('button', { name: /^Join$/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Join meeting/i }).first()).toBeVisible({ timeout: 10_000 });
 
-    // Universal calendar (Stefan, 9 Sep): "Add to calendar", never Google-only,
-    // and the .ics endpoint serves a real invite. Scoped to the card in the
-    // thread, which is where it stays: since 21 Sep the scheduler panel offers
-    // the same thing while it is open, and a page-wide match finds both.
+    // Add to calendar (1 Nov 2026, T7, L10; it was a file only from 9 Sep): the card's menu offers Google Calendar,
+    // Outlook.com and a file, and the .ics endpoint serves a real invite. Scoped to the card in the thread, which is
+    // where it stays: the scheduler panel offers the same menu while it is open, and a page-wide match finds both.
     const card = page.getByTestId('system-message-card').filter({ hasText: /Meeting confirmed/i });
     await expect(card.getByRole('button', { name: /Add to calendar/i })).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/Google Calendar/i)).toHaveCount(0);
+    await card.getByRole('button', { name: /Add to calendar/i }).click();
+    const menu = page.getByTestId('add-to-calendar-menu');
+    await expect(menu.getByRole('menuitem', { name: 'Google Calendar' })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: 'Outlook.com' })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: 'Apple Calendar or other (.ics)' })).toBeVisible();
+    await page.keyboard.press('Escape');
     const icsRes = await fetch(`${SERVER}/api/dm/conversations/${convId}/meeting.ics`, {
       headers: { Authorization: `Bearer ${a.accessToken}` },
     });

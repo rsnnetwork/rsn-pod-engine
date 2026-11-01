@@ -182,7 +182,13 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   await expect(banner.getByText(/Meeting confirmed/i)).toBeVisible({ timeout: 20_000 });
   await expect(banner.getByText(/20 minutes · shown in your local time/i)).toBeVisible();
   await expect(banner.getByRole('button', { name: /Add to calendar/i })).toBeVisible();
-  await expect(page.getByText(/Google Calendar/i)).toHaveCount(0);
+  // 1 Nov 2026 (T7, L10): the menu offers Google Calendar, Outlook.com and a file (it was a file only from 9 Sep).
+  await banner.getByRole('button', { name: /Add to calendar/i }).click();
+  const calendarMenu = page.getByTestId('add-to-calendar-menu');
+  await expect(calendarMenu.getByRole('menuitem', { name: 'Google Calendar' })).toBeVisible();
+  await expect(calendarMenu.getByRole('menuitem', { name: 'Outlook.com' })).toBeVisible();
+  await expect(calendarMenu.getByRole('menuitem', { name: 'Apple Calendar or other (.ics)' })).toBeVisible();
+  await page.keyboard.press('Escape');
 
   // The thread line carries the instant and is rendered in MY local time, not raw ISO.
   const thread = page.locator('[data-message-id]').filter({ hasText: 'Meeting confirmed' }).first();

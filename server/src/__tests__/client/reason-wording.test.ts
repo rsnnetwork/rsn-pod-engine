@@ -151,11 +151,14 @@ describe('the words the client asked for, screen by screen (19 Oct feedback)', (
     expect(support).toContain("a: 'REASON has a strict no-selling policy.");
   });
 
-  it('a calendar file is saved as reason-meeting.ics, from the thread and from the scheduler (lower case, so the scan above cannot see it)', () => {
-    for (const page of ['features/messages/MessagesPage.tsx', 'features/messages/useSchedulerActions.ts']) {
-      const downloads = source(page);
-      expect(downloads).toContain("a.download = 'reason-meeting.ics';");
-      expect(downloads).not.toContain('rsn-meeting.ics');
+  // 1 Nov 2026 (T7): every Add to calendar is one shared component, which saves the file.
+  it('a calendar file is saved as reason-meeting.ics, or reason-event.ics for an event (lower case, so the scan above cannot see it)', () => {
+    const downloads = source('components/calendar/AddToCalendar.tsx');
+    expect(downloads).toContain("fileName = 'reason-meeting.ics'");
+    expect(downloads).toContain('a.download = fileName;');
+    expect(source('features/sessions/SessionDetailPage.tsx')).toContain('fileName="reason-event.ics"');
+    for (const page of ['components/calendar/AddToCalendar.tsx', 'features/messages/MessagesPage.tsx', 'features/messages/useSchedulerActions.ts']) {
+      expect(source(page)).not.toContain('rsn-meeting.ics');
     }
   });
 });

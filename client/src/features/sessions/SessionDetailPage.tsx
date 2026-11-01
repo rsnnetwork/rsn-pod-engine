@@ -10,7 +10,9 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
-import { liveKindOf, resolveEventFormat } from '@rsn/shared';
+import { eventDurationMinutes, liveKindOf, resolveEventFormat } from '@rsn/shared';
+import AddToCalendar from '@/components/calendar/AddToCalendar';
+import { eventEntry, icsFile } from '@/components/calendar/calendar-links';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
@@ -432,6 +434,26 @@ export default function SessionDetailPage() {
             >
               <Play className="h-4 w-4 mr-2" /> Enter Live Event
             </Button>
+          )}
+          {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). The
+              entry links back to this page on this site. */}
+          {session.status === 'scheduled' && session.scheduledAt && (
+            <AddToCalendar
+              entry={eventEntry({
+                title: session.title || 'Event',
+                startAt: session.scheduledAt,
+                durationMin: eventDurationMinutes(eventFormat, session.config),
+                pageUrl: `${window.location.origin}/sessions/${session.id}`,
+              })}
+              file={async () => icsFile(eventEntry({
+                title: session.title || 'Event',
+                startAt: session.scheduledAt,
+                durationMin: eventDurationMinutes(eventFormat, session.config),
+                pageUrl: `${window.location.origin}/sessions/${session.id}`,
+              }), `event-${session.id}`)}
+              fileName="reason-event.ics"
+              className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 inline-flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+            />
           )}
           {phase === 'done' && (
             <Button variant="primary" className="btn-glow" onClick={openRecap}>
