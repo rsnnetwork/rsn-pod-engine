@@ -11,8 +11,8 @@
 //                         and not under a fixed bar, no private want anywhere in the page
 //   Save                  persists across a reload, and so does un-saving; each press raises its toast, and a
 //                         double press is one request and one toast
-//   Pass                  on the profile hides the person from For You (also after a reload); Undo pass
-//                         brings them back
+//   Remove                on the profile hides the person from For You (also after a reload); Undo remove
+//                         brings them back (the × was "Pass" until 30 Oct 2026)
 //   Meet                  a double press on Send request is ONE request on the wire and ONE stored row, the
 //                         note first and then the format; the private want is not in For You, the open sheet,
 //                         the sent request or the profile
@@ -197,7 +197,7 @@ async function resetViewer(): Promise<void> {
 const responseOf = async (from: TestUser, to: TestUser): Promise<string | undefined> =>
   (await pool.query<{ response: string }>(`SELECT response FROM person_responses WHERE user_id = $1 AND target_user_id = $2`, [from.id, to.id])).rows[0]?.response;
 const pokesOf = async (from: TestUser, to: TestUser) =>
-  (await pool.query<{ message: string; preferred_format: string | null }>(`SELECT message, preferred_format FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [from.id, to.id])).rows;
+  (await pool.query<{ message: string; reason_line: string | null; preferred_format: string | null }>(`SELECT message, reason_line, preferred_format FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [from.id, to.id])).rows;
 const outcomesOf = async (from: TestUser, to: TestUser) =>
   (await pool.query<{ worth_continuing: string; outcome_keys: string[] }>(`SELECT worth_continuing, outcome_keys FROM meeting_outcomes WHERE user_id = $1 AND target_user_id = $2`, [from.id, to.id])).rows;
 
@@ -699,8 +699,8 @@ async function shot(page: Page, width: number, what: string, target?: Locator): 
 
 const moveBar = (page: Page): Locator => page.getByRole('region', { name: 'Your move' });
 const backButton = (page: Page): Locator => page.getByRole('button', { name: '← Back' });
-const passButton = (page: Page): Locator => moveBar(page).getByRole('button', { name: /^(Pass: not relevant right now|Undo pass)$/ });
-const primaryButton = (page: Page): Locator => moveBar(page).getByRole('button', { name: /^(Meet|Request sent|Respond|Request declined|Continue)$/ });
+const passButton = (page: Page): Locator => moveBar(page).getByRole('button', { name: /^(Remove from For You|Put back in For You)$/ });
+const primaryButton = (page: Page): Locator => moveBar(page).getByRole('button', { name: /^(Meet|Request sent|Respond|Request declined|Message)$/ });
 
 /** The profile on screen is this member's: its one h1 is their name, and so is the address. */
 async function expectProfileOf(page: Page, who: TestUser, name: string): Promise<void> {
@@ -901,7 +901,7 @@ test.describe('REASON milestone 1', () => {
             const view = c.getByRole('link', { name: `View profile of ${name}`, exact: true });
             await inReach(page, view, `${where} View profile on ${whose}'s card`);
             await expect(view, `${where} View profile on ${whose}'s card goes to the profile`).toHaveAttribute('href', `/people/${person.id}?from=For%20You`);
-            await inReach(page, c.getByRole('button', { name: /^(Meet|Request sent|Continue)$/ }), `${where} the main button on ${whose}'s card`);
+            await inReach(page, c.getByRole('button', { name: /^(Meet|Request sent|Message)$/ }), `${where} the main button on ${whose}'s card`);
             await inReach(page, c.getByRole('button', { name: /^(Save|Saved)$/ }), `${where} Save on ${whose}'s card`);
           }
           await page.locator('main').evaluate((m) => m.scrollTo({ top: m.scrollHeight, behavior: 'instant' as ScrollBehavior }));
@@ -956,7 +956,7 @@ test.describe('REASON milestone 1', () => {
           await inReach(page, backButton(page), `${where} Back`, { centre: false });
           await inReach(page, primaryButton(page), `${where} the move bar's main button`, { centre: false });
           await inReach(page, moveBar(page).getByRole('button', { name: 'Save', exact: true }), `${where} the move bar's Save`, { centre: false });
-          await inReach(page, passButton(page), `${where} the move bar's Pass`, { centre: false });
+          await inReach(page, passButton(page), `${where} the move bar's Remove`, { centre: false });
           await scrollWindowTo(page, 'top');
           await shot(page, width, 'profile-top');
           await scrollWindowTo(page, 'bottom');
@@ -1060,7 +1060,7 @@ test.describe('REASON milestone 1', () => {
   // Pass
   // ═══════════════════════════════════════════════════════════════════════════════════════════
 
-  test(`${engineLabel()} phone: Pass on the profile hides the person from For You, and Undo pass brings them back`, async () => {
+  test(`${engineLabel()} phone: Remove on the profile hides the person from For You, and Undo remove brings them back`, async () => {
     test.setTimeout(240_000);
     await using(viewer, PHONE, async (o) => {
       const { page } = o;
@@ -1070,10 +1070,12 @@ test.describe('REASON milestone 1', () => {
       await expectProfileOf(page, giver, NAME.giver);
       await settle(page);
 
-      await expect(passButton(page), 'a person nobody passed on offers Pass').toHaveAccessibleName('Pass: not relevant right now');
-      await tap(page, passButton(page), 'Pass', { centre: false });
-      await expectToast(page, 'Gil will not be suggested in For You. You can undo this here.');
-      await expect(passButton(page), 'the button turns into Undo pass').toHaveAccessibleName('Undo pass');
+      await expect(passButton(page), 'a person nobody removed offers Remove').toHaveAccessibleName('Remove from For You');
+      await expect(passButton(page), 'Remove says so in words').toHaveText('Remove');
+      await tap(page, passButton(page), 'Remove', { centre: false });
+      await expectToast(page, 'Gil is removed from your For You. You can undo this here.');
+      await expect(passButton(page), 'the button turns into Undo remove').toHaveAccessibleName('Put back in For You');
+      await expect(passButton(page)).toHaveText('Undo remove');
       expect(await responseOf(viewer, giver), 'the Pass is stored').toBe('passed');
 
       await tap(page, backButton(page), 'Back', { centre: false });
@@ -1085,10 +1087,10 @@ test.describe('REASON milestone 1', () => {
       // Undo from the profile, opened by its own address this time.
       await visit(page, `/people/${giver.id}`);
       await expectProfileOf(page, giver, NAME.giver);
-      await expect(passButton(page), 'the profile remembers the Pass').toHaveAccessibleName('Undo pass');
-      await tap(page, passButton(page), 'Undo pass', { centre: false });
+      await expect(passButton(page), 'the profile remembers the Remove').toHaveAccessibleName('Put back in For You');
+      await tap(page, passButton(page), 'Undo remove', { centre: false });
       await expectToast(page, 'Gil can be suggested in For You again.');
-      await expect(passButton(page), 'Undo pass turns back into Pass').toHaveAccessibleName('Pass: not relevant right now');
+      await expect(passButton(page), 'Undo remove turns back into Remove').toHaveAccessibleName('Remove from For You');
       expect(await responseOf(viewer, giver), 'the Pass is gone').toBeUndefined();
 
       await visit(page, '/');
@@ -1134,9 +1136,10 @@ test.describe('REASON milestone 1', () => {
       expect(posts.count(), 'a double press is ONE request on the wire').toBe(1);
       const rows = await pokesOf(viewer, secretive);
       expect(rows, 'a double press stores ONE request').toHaveLength(1);
-      expect(rows[0].message.startsWith(`${note}\n\nWhy REASON suggested this: `), `the stored message is the note, a blank line, then REASON's reason: ${JSON.stringify(rows[0].message)}`).toBe(true);
-      for (const w of WORDS) expect(rows[0].message, `the reason is made of the sender's own words (${w})`).toContain(w);
-      expect(rows[0].message, 'the request never carries the other member\'s private want').not.toContain(SECRET);
+      // 30 Oct 2026: the note and REASON's line are stored apart (migration 120).
+      expect(rows[0].message, 'the stored message is exactly the note').toBe(note);
+      for (const w of WORDS) expect(rows[0].reason_line, `REASON's line is made of the sender's own words (${w})`).toContain(w);
+      expect(`${rows[0].message} ${rows[0].reason_line}`, 'the request never carries the other member\'s private want').not.toContain(SECRET);
       expect(rows[0].preferred_format, 'the chosen format is stored').toBe('coffee');
 
       await reload(page);
@@ -1215,7 +1218,11 @@ test.describe('REASON milestone 1', () => {
       await expectProfileOf(page, met, NAME.met);
       await expect(page.getByText('You have met 1 time.'), 'the meeting is counted').toBeVisible();
       await expect(page.getByText('You found Mia through Messages'), 'the known source is named').toBeVisible();
-      await expect(primaryButton(page), 'people who met are offered Continue').toHaveAccessibleName('Continue');
+      // 30 Oct 2026: the bar leaves once two people have met. These two met without both saying "meet again",
+      // so the hero says why there is no Message button instead of offering one that cannot send.
+      await expect(moveBar(page), 'people who met get no move bar').toHaveCount(0);
+      await expect(page.getByText('Messages open when you both say you would meet again'), 'and are told when messages open').toBeVisible();
+      await expect(page.getByRole('link', { name: 'Message' }), 'with no Message button that could not send').toHaveCount(0);
 
       await tap(page, page.getByRole('button', { name: 'Record what happened' }), 'Record what happened');
       const sheet = page.getByRole('dialog', { name: `What happened with ${NAME.met}?` });
@@ -1490,21 +1497,25 @@ test.describe('REASON milestone 1', () => {
   test(`${engineLabel()} phone: a profile in a new tab, then its main button, then the browser's Back, then the page's Back, still goes somewhere`, async () => {
     test.setTimeout(240_000);
     await using(viewer, PHONE, async (o) => {
-      // The viewer has met this member, so the profile's main button is Continue: it opens the conversation, a new entry in this tab.
+      // The viewer has met this member. For this test both said "meet again", so the hero offers Message (30 Oct
+      // 2026: it replaced the bar's Continue): it opens the conversation, a new entry in this tab.
+      const [x, y] = viewer.id < met.id ? [viewer.id, met.id] : [met.id, viewer.id];
+      await pool.query(`UPDATE encounter_history SET mutual_meet_again = true WHERE user_a_id = $1 AND user_b_id = $2`, [x, y]);
       const tab = await newTab(o);
       await visit(tab, `/people/${met.id}?from=Messages`);
       await expectProfileOf(tab, met, NAME.met);
-      await tap(tab, primaryButton(tab), 'Continue', { centre: false });
+      await tap(tab, tab.getByRole('link', { name: 'Message' }), 'Message', { centre: false });
       await expect(tab, 'the conversation opens in this tab').toHaveURL(new RegExp(`/messages/new/${met.id}$`), { timeout: SLOW });
       // The browser's Back returns to the profile, which is still the first page of this tab: nothing is behind it.
       await tab.goBack();
       await expectProfileOf(tab, met, NAME.met);
-      await tap(tab, backButton(tab), 'Back (after Continue)', { centre: false });
+      await tap(tab, backButton(tab), 'Back (after Message)', { centre: false });
       await expect(tab, 'the page\'s Back goes to the screen the profile names, not nowhere').toHaveURL(`${APP}/messages`, { timeout: SLOW });
       await settle(tab);
       await tab.close();
-      await expectQuiet(o, 'a profile in a new tab, then Continue');
-      console.log('  ✓ A profile in a new tab, then Continue, then the browser\'s Back, then the page\'s Back, goes to the screen its ?from= names.');
+      await pool.query(`UPDATE encounter_history SET mutual_meet_again = false WHERE user_a_id = $1 AND user_b_id = $2`, [x, y]);
+      await expectQuiet(o, 'a profile in a new tab, then Message');
+      console.log('  ✓ A profile in a new tab, then Message, then the browser\'s Back, then the page\'s Back, goes to the screen its ?from= names.');
     });
   });
 

@@ -81,7 +81,7 @@ const aliToken = () => jwt.sign(
 test.beforeAll(async () => {
   admin = await createTestUser('walkadmin', 'super_admin');
   mate = await createTestUser('walkmate');
-  await pool.query(`UPDATE users SET display_name = 'Walkthrough Mate' WHERE id = $1`, [mate.id]);
+  await pool.query(`UPDATE users SET display_name = 'Walkthrough Mate', first_name = 'Walkthrough' WHERE id = $1`, [mate.id]);
   browser = await chromium.launch({ headless: false });
 });
 
@@ -211,7 +211,7 @@ test("Ali's script, steps 1 to 8, on production", async () => {
   expect(poke.status, JSON.stringify(poke.json)).toBe(201);
   await gotoRetry(ali, `${APP}/`);
   await ali.locator('button:has(.lucide-bell):visible').first().click();
-  await expect(ali.getByText('Walkthrough Mate asked to meet you')).toBeVisible({ timeout: 30_000 });
+  await expect(ali.getByText('Walkthrough wants to meet you')).toBeVisible({ timeout: 30_000 });
   await shot(ali, 'bell-meeting-request-accept-decline');
   await ali.getByRole('button', { name: /^Accept$/ }).first().click();
   await expect(ali).toHaveURL(/\/messages\/[0-9a-f-]{36}/, { timeout: 30_000 });

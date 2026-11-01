@@ -72,7 +72,7 @@ interface PokeJson {
   id: string; senderId: string; recipientId: string; status: string;
   message: string | null; preferredFormat: string | null;
 }
-interface ReceivedPoke extends PokeJson { senderDisplayName: string | null }
+interface ReceivedPoke extends PokeJson { senderDisplayName: string | null; note?: string | null; reasonLine?: string | null }
 interface AcceptedJson { poke: PokeJson; conversationId: string }
 interface OutcomeJson { id: string; worthContinuing: string; outcomes: string[]; createdAt: string }
 
@@ -407,13 +407,17 @@ test('A4 one-tap request is unchanged, the note limit holds, and a declined requ
   const received = dataOf(await api<ReceivedPoke[]>(asked, 'GET', '/pokes/received'), 'received list');
   const item = received.find((p) => p.id === poke.id);
   expect(item, 'the recipient lists the request').toBeDefined();
-  expect(item?.message, 'the old one-tap wording').toMatch(/We think you two should meet\.$/);
+  // 30 Oct 2026: REASON's line is kept apart from the note and has no "We think you two should meet." any more;
+  // message, which production's card draws, is that line under its heading, or nothing when REASON has no reason.
+  expect(item?.note ?? null, 'one tap writes no note').toBeNull();
+  const line = item?.reasonLine ?? null;
+  expect(item?.message ?? null, 'message is REASON\'s line under its heading, or nothing').toBe(line ? `Why REASON suggested this: ${line}` : null);
   expect(item?.preferredFormat, 'no format on the list item').toBeNull();
   const stored = (await pool.query<{ preferred_format: string | null; status: string }>(
     `SELECT preferred_format, status FROM user_pokes WHERE id = $1`, [poke.id])).rows[0];
   expect(stored.preferred_format, 'no format stored').toBeNull();
   expect(stored.status).toBe('pending');
-  console.log('  ✓ no body: 201, "...We think you two should meet.", preferredFormat null; 400 for bad id, format, 301 characters.');
+  console.log('  ✓ no body: 201, no note and REASON\'s line apart, preferredFormat null; 400 for bad id, format, 301 characters.');
 
   // Declined: 200, the row says declined, and the sender cannot ask again.
   const declined = await api<PokeJson>(asked, 'POST', `/pokes/${poke.id}/decline`);

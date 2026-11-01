@@ -358,8 +358,9 @@ test('the introduction names the agent that caused it, in the recipient\'s voice
   const intro = await apiAs(owner, 'POST', `/agents/${devAgent.id}/interest`, { userId: voiceDev.id });
   expect(intro.status).toBe(201);
 
+  // 30 Oct 2026: REASON's line is stored apart from the note (reason_line, migration 120).
   const msg = await pool.query<{ message: string }>(
-    `SELECT message FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2
+    `SELECT reason_line AS message FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2
       ORDER BY created_at DESC LIMIT 1`, [owner.id, voiceDev.id]);
   const text = msg.rows[0]?.message ?? '';
   console.log(`  introduction sent: "${text}"`);
