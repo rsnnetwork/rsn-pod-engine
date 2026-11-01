@@ -4,6 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { leaveEvent, leaveOnUnmount } from '../../../../client/src/features/live/leave-event';
 import { REFUSED_DETAIL, refusalOf } from '../../../../client/src/features/live/session-guard-state';
 import { chimeFromCall, quietHere } from '../../../../client/src/lib/message-chime-policy';
 
@@ -116,5 +117,52 @@ describe('P1 item 9: a refused person\'s live page is final, and says T11\'s ref
     expect(guard.match(/safeSetState\(\{ kind: 'refused', \.\.\.refusalOf\(err\) \}\)/g)).toHaveLength(2);
     expect(guard).toMatch(/\{state\.detail\}/);
     expect(guard).toMatch(/state\.requestOnEventPage && \(/);
+  });
+});
+
+describe('P1 item 7: Leave tells the server once', () => {
+  const socket = () => {
+    const sent: string[] = [];
+    return { sent, emit: (_e: 'session:leave', d: { sessionId: string }) => { sent.push(d.sessionId); } };
+  };
+
+  it('Leave then the clean-up: one session:leave; the clean-up alone (going away without Leave): one', () => {
+    const s = socket();
+    leaveEvent(s, 'e-1');
+    leaveOnUnmount(s, 'e-1');
+    expect(s.sent).toEqual(['e-1']);
+    leaveOnUnmount(s, 'e-1');
+    expect(s.sent).toEqual(['e-1', 'e-1']);
+  });
+
+  it('a Leave from another event does not quiet this one', () => {
+    const s = socket();
+    leaveEvent(s, 'e-2');
+    leaveOnUnmount(s, 'e-3');
+    expect(s.sent).toEqual(['e-2', 'e-3']);
+    leaveOnUnmount(s, 'e-2');
+    expect(s.sent).toEqual(['e-2', 'e-3']);
+  });
+
+  it('both Leave buttons and the live hook go through it, and nothing else sends session:leave', () => {
+    expect(read('features/live/LiveSessionPage.tsx')).toMatch(/leaveEvent\(getSocket\(\), sessionId!\);/);
+    expect(read('features/live/meeting/MeetingControlBar.tsx')).toMatch(/leaveEvent\(getSocket\(\), sessionId\);/);
+    expect(read('hooks/useSessionSocket.ts')).toMatch(/leaveOnUnmount\(socket, sessionId\);/);
+    for (const f of ['features/live/LiveSessionPage.tsx', 'features/live/meeting/MeetingControlBar.tsx', 'hooks/useSessionSocket.ts']) {
+      expect(read(f)).not.toMatch(/emit\('session:leave'/);
+    }
+  });
+});
+
+describe('P1 item 7: a message taken down during a socket gap leaves the open live panel', () => {
+  it('the reconnect reads the chat page once, through the same reconcile the chat tag runs', () => {
+    const live = read('hooks/useSessionSocket.ts');
+    expect(live).toMatch(/if \(Array\.isArray\(data\?\.entities\) && data\.entities\.includes\(chatTag\)\) reconcileChat\(\);/);
+    const reconnect = live.slice(live.indexOf('const onReconnect = () => {'), live.indexOf('const onReconnectAttempt'));
+    expect(reconnect).toMatch(/reconcileChat\(\);/);
+  });
+
+  it('the message-everyone panel has no whitespace-only lines', () => {
+    expect(read('features/sessions/MessageParticipantsPanel.tsx')).not.toMatch(/\n[ \t]+\n/);
   });
 });

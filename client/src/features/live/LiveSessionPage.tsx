@@ -25,6 +25,7 @@ import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Rad
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { connectSocket, getSocket } from '@/lib/socket';
+import { leaveEvent } from './leave-event';
 import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -210,7 +211,7 @@ function LiveEventRoom() {
       ? 'You are in a breakout room. Leaving ends your conversation.'
       : 'You can come back while it is running.';
     if (!(await ask({ title: 'Leave this event?', body, confirmLabel: 'Leave', tone: 'danger' }))) return;
-    getSocket()?.emit('session:leave', { sessionId: sessionId! });
+    leaveEvent(getSocket(), sessionId!);
     reset();
     navigate(`/sessions/${sessionId}`, { replace: true });
   };

@@ -273,7 +273,8 @@ describe('Leave keeps the app\'s live connection and lands on the event page', (
     const leave = blockFrom(page, 'const handleLeave');
     // T2 (1 Nov 2026): it asks first in the page (useConfirm), never window.confirm.
     expect(leave).toMatch(/if \(!\(await ask\(\{ title: 'Leave this event\?'/);
-    expect(leave).toMatch(/emit\('session:leave', \{ sessionId: sessionId! \}\)/);
+    // Through leaveEvent, so the live hook's clean-up does not say it again (P1 item 7).
+    expect(leave).toMatch(/leaveEvent\(getSocket\(\), sessionId!\)/);
     expect(leave).not.toMatch(/disconnectSocket/);
     expect(leave).toMatch(/navigate\(`\/sessions\/\$\{sessionId\}`, \{ replace: true \}\)/);
     expect(page).not.toMatch(/disconnectSocket/);
@@ -281,7 +282,7 @@ describe('Leave keeps the app\'s live connection and lands on the event page', (
 
   it('a video meeting: Leave does the same (it cut the connection too, and the guest read "Reconnecting…")', () => {
     const leave = blockFrom(bar, 'const leaveMeeting');
-    expect(leave).toMatch(/emit\('session:leave', \{ sessionId \}\)/);
+    expect(leave).toMatch(/leaveEvent\(getSocket\(\), sessionId\)/);
     expect(leave).not.toMatch(/disconnectSocket/);
     expect(bar).not.toMatch(/disconnectSocket/);
   });

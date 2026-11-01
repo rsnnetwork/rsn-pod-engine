@@ -47,7 +47,7 @@ describe('WS3/G3+G4 — leave buttons are distinct and not duplicated', () => {
     const src = readClient('features/live/LiveSessionPage.tsx').replace(/\r\n/g, '\n');
     const start = src.indexOf('const handleLeave');
     const leave = src.slice(start, src.indexOf('\n  };\n', start));
-    expect(leave).toMatch(/session:leave/);
+    expect(leave).toMatch(/leaveEvent\(/);
     expect(leave).not.toMatch(/disconnectSocket/);
     expect(leave).toMatch(/navigate\(`\/sessions\/\$\{sessionId\}`, \{ replace: true \}\)/);
     expect(leave).not.toMatch(/navigate\('\/sessions'\)/);
