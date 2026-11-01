@@ -2,7 +2,7 @@ import { test, expect, chromium, webkit, devices, type Browser, type BrowserCont
 import * as fs from 'fs';
 import * as path from 'path';
 import { createTestUser, pool, type TestUser } from '../helpers/auth';
-import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
+import { gotoRetry, cleanup, wait, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { expectReachable } from '../helpers/viewport-fit';
 
@@ -194,11 +194,17 @@ test('1. a new message: "(1) REASON" in both of B\'s tabs, one chime across them
   expect(played, 'one chime across the two tabs').toEqual([`dm:${firstMessageId}`]);
   expect(await notReloaded(forYou) && await notReloaded(profile)).toBe(true);
 
-  // Reading it in one tab clears both.
+  // Reading it in one tab clears both, also when that tab's read lands before its socket is up, as it does from far away
+  // (the preview against production, 1 Nov): the tab opening the conversation has its read held 1 s and its socket 2.5 s,
+  // so its first count is taken before the read and the server's tag for the read goes out while the tab cannot hear it.
+  const readPath = /\/dm\/conversations\/[^/]+\/read$/;
+  await forYou.route(readPath, async (route) => { await wait(1_000); await route.continue(); });
+  await forYou.routeWebSocket(/socket\.io/, async (ws) => { await wait(2_500); ws.connectToServer(); });
   await forYou.goto(`${APP}/messages/${conversationId}`);
   await expect(bubble(forYou, FIRST)).toBeVisible({ timeout: 20_000 });
   await expect(forYou).toHaveTitle('REASON', { timeout: 20_000 });
   await expect(profile).toHaveTitle('REASON', { timeout: 20_000 });
+  await forYou.unroute(readPath);
   // A message in the conversation B has open and in front: no chime anywhere. (The reloaded tab's socket first has to
   // be up to hear it, as above.)
   await forYou.waitForTimeout(3_000);
