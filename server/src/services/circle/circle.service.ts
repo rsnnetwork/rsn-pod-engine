@@ -13,9 +13,20 @@
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
-import { ErrorCodes } from '@rsn/shared';
+import { ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { activeMemberSql } from '../users/active-member';
+import { visibleEventSql } from '../session/session-access';
 
 export const MAX_NESTING_DEPTH = 3;
+
+/**
+ * T2 (1 Nov 2026): a circle's member count as members see it, the members list's own rule (an account an admin
+ * removed, suspended or banned is neither listed nor counted). `circleRef` is the SQL that names the circle's id.
+ * The stored member_count counter still moves on join and leave; it is no longer what anyone reads.
+ */
+const activeCircleMemberCount = (circleRef: string) => `(SELECT count(*)::int FROM circle_members cm_n
+    JOIN users cm_u ON cm_u.id = cm_n.user_id
+   WHERE cm_n.circle_id = ${circleRef} AND ${activeMemberSql('cm_u')})`;
 
 export interface CircleSummary {
   id: string;
@@ -204,12 +215,12 @@ export async function listCircles(userId: string): Promise<CircleSummary[]> {
     parent_circle_id: string | null; member_count: number;
     pod_count: string; is_member: boolean; created_at: Date;
   }>(
-    `SELECT c.id, c.name, c.description, c.parent_circle_id, c.member_count, c.created_at,
+    `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c.id')} AS member_count, c.created_at,
             (SELECT count(*) FROM circle_pods cp WHERE cp.circle_id = c.id)::text AS pod_count,
             EXISTS(SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $1) AS is_member
      FROM circles c
      WHERE c.archived_at IS NULL
-     ORDER BY c.member_count DESC, c.created_at ASC`,
+     ORDER BY member_count DESC, c.created_at ASC`,
     [userId],
   );
   return r.rows.map(c => ({
@@ -231,13 +242,13 @@ export async function listCirclesOfPod(podId: string): Promise<Array<{ id: strin
   return r.rows;
 }
 
-export async function getCircleDetail(circleId: string, userId: string): Promise<CircleDetail> {
+export async function getCircleDetail(circleId: string, userId: string, userRole?: string): Promise<CircleDetail> {
   const c = await query<{
     id: string; name: string; description: string | null;
     parent_circle_id: string | null; member_count: number; created_at: Date;
     is_member: boolean;
   }>(
-    `SELECT c.id, c.name, c.description, c.parent_circle_id, c.member_count, c.created_at,
+    `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c.id')} AS member_count, c.created_at,
             EXISTS(SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $2) AS is_member
      FROM circles c WHERE c.id = $1 AND c.archived_at IS NULL`,
     [circleId, userId],
@@ -247,11 +258,14 @@ export async function getCircleDetail(circleId: string, userId: string): Promise
 
   // Three indexed queries, no N+1: members (joined users), pods, events of
   // those pods. Members capped at 100 for the page; full list can paginate later.
+  // T2 (1 Nov 2026): members are the active accounts only, and an attached pod's event is named only to someone who
+  // may open it (D3: a private pod's event titles were shown to any signed-in member). Admins see every event.
+  const seesEveryEvent = !!userRole && hasRoleAtLeast(userRole as UserRole, UserRole.ADMIN);
   const [members, pods, events, children] = await Promise.all([
     query<{ user_id: string; display_name: string | null; avatar_url: string | null; role: string; joined_at: Date }>(
       `SELECT m.user_id, u.display_name, u.avatar_url, m.role, m.joined_at
        FROM circle_members m JOIN users u ON u.id = m.user_id
-       WHERE m.circle_id = $1 ORDER BY m.joined_at ASC LIMIT 100`,
+       WHERE m.circle_id = $1 AND ${activeMemberSql('u')} ORDER BY m.joined_at ASC LIMIT 100`,
       [circleId],
     ),
     query<{ pod_id: string; name: string; description: string | null }>(
@@ -265,12 +279,13 @@ export async function getCircleDetail(circleId: string, userId: string): Promise
        FROM sessions s
        WHERE s.pod_id IN (SELECT pod_id FROM circle_pods WHERE circle_id = $1)
          AND s.status = 'scheduled' AND s.scheduled_at > NOW()
+         AND ($3::boolean OR ${visibleEventSql('s', '$2')})
        ORDER BY s.scheduled_at ASC LIMIT 10`,
-      [circleId],
+      [circleId, userId, seesEveryEvent],
     ),
     query<{ id: string; name: string; member_count: number }>(
-      `SELECT id, name, member_count FROM circles
-       WHERE parent_circle_id = $1 AND archived_at IS NULL
+      `SELECT ch.id, ch.name, ${activeCircleMemberCount('ch.id')} AS member_count FROM circles ch
+       WHERE ch.parent_circle_id = $1 AND ch.archived_at IS NULL
        ORDER BY member_count DESC`,
       [circleId],
     ),

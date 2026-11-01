@@ -29,6 +29,7 @@ import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, EVENT_FORMAT_KEYS, liveKindOf } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import { BroadcastBlockedError } from './broadcast-errors';
+import { FORMER_MEMBER_NAME, activeMemberSql } from '../users/active-member';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -119,7 +120,15 @@ export interface ConversationSummary {
   /** 'system' → the inbox drops the "You: " prefix; the product wrote it. */
   lastMessageKind: DmMessageKind;
   unreadCount: number;
+  /**
+   * T2 (1 Nov 2026): the other person's account was removed, suspended or banned. The conversation and its messages
+   * stay; the person reads "Former member", with no picture, title, company or bio, and cannot be written to.
+   */
+  otherIsFormerMember: boolean;
 }
+
+/** What someone writing to a removed, suspended or banned account is told (T2). */
+export const FORMER_MEMBER_DM_REFUSAL = 'This person is no longer a member of REASON, so they cannot get messages.';
 
 // ─── Internal helpers ──────────────────────────────────────────────────────
 
@@ -134,6 +143,8 @@ function normalizePair(userA: string, userB: string): [string, string] {
  *
  * Evaluation order (spec #5, 26 May 2026):
  *   1. self              → {allowed:false, reason:'self'}
+ *   2b. former member    → {allowed:false, reason:'former_member'} when the other account is not active (removed,
+ *                          suspended or banned; T2, 1 Nov 2026). Nobody, an admin included, writes to it.
  *   2. blocked           → {allowed:false, reason:'blocked'}
  *   3. admin override    → {allowed:true} if userA's global role is admin/super_admin
  *                          (role read from DB — never trusted from client)
@@ -160,11 +171,16 @@ export async function canMessage(
     return { allowed: false, reason: 'blocked' };
   }
 
-  // Admin override (step 3) — role must come from the DB, never the client.
-  const roleResult = await query<{ role: string }>(
-    `SELECT role FROM users WHERE id = $1 LIMIT 1`,
-    [userA],
+  // Admin override (step 3) — role must come from the DB, never the client. The same read says whether the other
+  // account is still active (step 1b, T2): false only for an account that exists and is not active.
+  const roleResult = await query<{ role: string; recipient_active?: boolean | null }>(
+    `SELECT role, (SELECT ${activeMemberSql('r')} FROM users r WHERE r.id = $2) AS recipient_active
+       FROM users WHERE id = $1 LIMIT 1`,
+    [userA, userB],
   );
+  if (roleResult.rows[0]?.recipient_active === false) {
+    return { allowed: false, reason: 'former_member' };
+  }
   const fromRole = roleResult.rows[0]?.role;
   if (fromRole === 'admin' || fromRole === 'super_admin') {
     return { allowed: true };
@@ -307,7 +323,8 @@ export async function sendMessage(
   const auth = await canMessage(fromUserId, toUserId);
   if (!auth.allowed) {
     const message =
-      auth.reason === 'blocked'     ? 'You can no longer message this user'
+      auth.reason === 'former_member' ? FORMER_MEMBER_DM_REFUSAL
+      : auth.reason === 'blocked'     ? 'You can no longer message this user'
       : auth.reason === 'not_mutual'  ? "You can message once you both say 'meet again'"
       : auth.reason === 'no_encounter' ? "You can't DM someone you haven't met yet"
       : 'You cannot DM this user';
@@ -493,6 +510,7 @@ export async function listConversations(
     other_job_title: string | null;
     other_company: string | null;
     other_bio: string | null;
+    other_former: boolean;
     last_message: string | null;
     last_message_at: Date | null;
     last_message_from: string | null;
@@ -516,6 +534,7 @@ export async function listConversations(
         u.job_title    AS other_job_title,
         u.company      AS other_company,
         LEFT(u.bio, 180) AS other_bio,
+        (NOT ${activeMemberSql('u')}) AS other_former,
         last_msg.content    AS last_message,
         c.last_message_at,
         last_msg.from_user_id AS last_message_from,
@@ -561,11 +580,13 @@ export async function listConversations(
       return {
         conversationId: r.conversation_id,
         otherUserId: r.other_user_id,
-        otherDisplayName: r.other_display_name,
-        otherAvatarUrl: r.other_avatar_url,
-        otherJobTitle: r.other_job_title,
-        otherCompany: r.other_company,
-        otherBio: r.other_bio,
+        // T2: a former member's old conversation stays, without their name, picture or card.
+        otherDisplayName: r.other_former ? FORMER_MEMBER_NAME : r.other_display_name,
+        otherAvatarUrl: r.other_former ? null : r.other_avatar_url,
+        otherJobTitle: r.other_former ? null : r.other_job_title,
+        otherCompany: r.other_former ? null : r.other_company,
+        otherBio: r.other_former ? null : r.other_bio,
+        otherIsFormerMember: !!r.other_former,
         lastMessage: previewText,
         lastMessageAt: r.last_message_at,
         // A system card was not written BY anyone, so the inbox never says

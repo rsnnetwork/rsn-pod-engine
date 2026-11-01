@@ -9,7 +9,7 @@ import config from '../../config';
 import logger from '../../config/logger';
 import {
   User, UserRole, CreateUserInput, UpdateUserInput,
-  AuthTokenPair, JwtPayload, ErrorCodes,
+  AuthTokenPair, JwtPayload, ErrorCodes, UserStatusCounts,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, UnauthorizedError, AppError } from '../../middleware/errors';
 import { invalidateUserStatusCache } from '../../middleware/auth';
@@ -980,7 +980,9 @@ export async function getUsers(params: {
   industry?: string;
   /** Leave out anyone blocked in either direction with this member (26 Oct 2026: the admin's invite search). */
   notBlockedWith?: string;
-}): Promise<{ users: User[]; total: number }> {
+  /** Also count each status for the same filters (the admin Users page's tabs, T2). */
+  withStatusCounts?: boolean;
+}): Promise<{ users: User[]; total: number; statusCounts?: UserStatusCounts }> {
   const page = params.page || 1;
   const pageSize = Math.min(params.pageSize || 20, 100);
   const offset = (page - 1) * pageSize;
@@ -995,10 +997,11 @@ export async function getUsers(params: {
     paramIdx++;
   }
 
+  // T2 (1 Nov 2026): the status is added last of the filters, after the counts per status below have been read with
+  // every other filter (so each tab of the admin Users page says how many it holds for the same search).
+  let statusFilter: { clause: string; value: string } | null = null;
   if (params.status) {
-    whereClause += ` AND status = $${paramIdx}`;
-    values.push(params.status);
-    paramIdx++;
+    statusFilter = { clause: ` AND status = $`, value: params.status };
   }
 
   if (params.search) {
@@ -1031,6 +1034,24 @@ export async function getUsers(params: {
   if (params.notBlockedWith) {
     whereClause += ` AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id = $${paramIdx} AND b.blocked_id = users.id) OR (b.blocker_id = users.id AND b.blocked_id = $${paramIdx}))`;
     values.push(params.notBlockedWith);
+    paramIdx++;
+  }
+
+  let statusCounts: UserStatusCounts | undefined;
+  if (params.withStatusCounts) {
+    const byStatus = await query<{ status: string; count: string }>(
+      `SELECT status, COUNT(*)::text AS count FROM users ${whereClause} GROUP BY status`,
+      values
+    );
+    statusCounts = { active: 0, suspended: 0, deactivated: 0, banned: 0 };
+    for (const row of byStatus.rows) {
+      if (row.status in statusCounts) statusCounts[row.status as keyof UserStatusCounts] = parseInt(row.count, 10);
+    }
+  }
+
+  if (statusFilter) {
+    whereClause += `${statusFilter.clause}${paramIdx}`;
+    values.push(statusFilter.value);
     paramIdx++;
   }
 
@@ -1088,7 +1109,7 @@ export async function getUsers(params: {
     values
   );
 
-  return { users: result.rows, total };
+  return { users: result.rows, total, statusCounts };
 }
 
 // ─── Admin User Management ──────────────────────────────────────────────────

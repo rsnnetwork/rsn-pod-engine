@@ -30,6 +30,7 @@ jest.mock('../../../index', () => ({
 
 import logger from '../../../config/logger';
 import { canBring } from '@rsn/shared';
+import { visibleEventSql } from '../../../services/session/session-access';
 import { REQUEST_MESSAGE_MAX } from '../../../services/poke/request-message';
 import {
   scoreFit, scoreWants, scoreWantsForRecipient, wantedDesignations, getPlatformMatches, expressInterest,
@@ -216,12 +217,14 @@ describe('getPlatformMatches', () => {
     expect(candidateSql).toMatch(/pr\.response IS NULL OR pr\.response <> 'passed'/);
   });
 
-  it('the next event never reveals a private pod\'s event', async () => {
+  it('the next event never reveals a private pod\'s event, nor an invite-only one the member cannot open (T2, D1)', async () => {
     armQueries({ me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true }, candidates: [] });
     await getPlatformMatches('u-founder');
     const call = mockQuery.mock.calls.find(c => /FROM sessions/.test(String(c[0])))!;
-    expect(String(call[0])).toMatch(/visibility IN \('public', 'invite_only'\)/);
-    expect(String(call[0])).toMatch(/pod_members/);
+    // The events list's own rule (visibleEventSql): a public pod, the member's own pod, or an event they host,
+    // co-host or hold a place in.
+    expect(String(call[0])).toContain(visibleEventSql('s', '$1'));
+    expect(String(call[0])).not.toMatch(/invite_only/);
     expect(call[1]).toEqual(['u-founder']);
   });
 

@@ -13,6 +13,8 @@ import {
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
+import { activeMemberSql } from '../users/active-member';
+import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql, visibleEventSql } from './session-access';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
 
@@ -259,13 +261,14 @@ export async function listSessions(params: {
   } else if (params.isAdmin) {
     // Admins see all sessions across all pods
   } else if (params.userId) {
-    // Show sessions from public/invite_only pods AND private pods user is a member of
-    whereClause += ` AND (s.pod_id IN (SELECT id FROM pods WHERE visibility IN ('public', 'invite_only')) OR s.pod_id IN (SELECT pod_id FROM pod_members WHERE user_id = $${paramIdx} AND status = 'active'))`;
+    // T2 (1 Nov 2026), D1: the events this member may open, and only those (visibleEventSql is canViewSession's
+    // rule). An invite-only pod's events were listed to everyone, who were then refused on open.
+    whereClause += ` AND ${visibleEventSql('s', `$${paramIdx}`)}`;
     values.push(params.userId);
     paramIdx++;
   } else {
-    // Browsing all sessions: hide sessions from private pods
-    whereClause += ` AND s.pod_id IN (SELECT id FROM pods WHERE visibility IN ('public', 'invite_only'))`;
+    // Nobody asking: only public pods' events (D1: an invite-only pod's events open to nobody outside it)
+    whereClause += ` AND s.pod_id IN (SELECT id FROM pods WHERE visibility = 'public')`;
   }
 
   if (params.status) {
@@ -332,9 +335,12 @@ export async function registerParticipant(
   // before that moment is lifted: a kick made after it (an old invite the kick's
   // withdrawal missed, or one accepted again) stands. Every other caller (direct
   // join, socket reconnect, shared link) passes nothing → still bounced.
-  options?: { personalInviteCreatedAt?: Date },
+  // T2 (1 Nov 2026), D2: `viaInvite` says the invite-accept path is registering someone the host invited, so a pod
+  // that asks for approval takes them (a shared link records who used it only after the registration).
+  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean },
 ): Promise<SessionParticipant & { isNewRegistration: boolean }> {
   const invitedAt = options?.personalInviteCreatedAt ?? null;
+  const viaInvite = !!options?.viaInvite || !!invitedAt;
   const participant = await transaction(async (client) => {
     // Read session without lock — ON CONFLICT handles concurrent inserts safely.
     // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously.
@@ -380,6 +386,15 @@ export async function registerParticipant(
         // For private/invite-only pods, only allow if user has a valid (accepted) invite
         // User must go through acceptInvite() first which adds them to pod + marks invite
         throw new ForbiddenError('You must be a pod member to register for events in a private pod');
+      } else if (podVisibility === 'public_with_approval' && !isMember && !viaInvite) {
+        // T2 (1 Nov 2026), D2: a pod that asks for approval takes into its events only the people it approved (its
+        // active members), the host, a co-host and people invited to the event. Anyone else with the id used to be
+        // registered, and so let into the live room.
+        const outsider = await client.query<{ outsider: boolean }>(
+          `SELECT ${approvalPodOutsiderSql('s', '$2')} AS outsider FROM sessions s WHERE s.id = $1`,
+          [sessionId, userId],
+        );
+        if (outsider.rows[0]?.outsider) throw new ForbiddenError(APPROVAL_POD_EVENT_REFUSAL);
       }
     }
 
@@ -388,8 +403,10 @@ export async function registerParticipant(
       ? JSON.parse(session.config as unknown as string)
       : session.config;
 
+    // T2: a removed, suspended or banned account holds no place (the participants list leaves them out too).
     const countResult = await client.query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left')`,
+      `SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id
+        WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left') AND ${activeMemberSql('u')}`,
       [sessionId]
     );
     const currentCount = parseInt(countResult.rows[0].count, 10);
@@ -559,7 +576,8 @@ export async function getSessionParticipants(
                              AND sc.user_id = session_participants.user_id) AS "isCohost"
              FROM session_participants
              JOIN users u ON u.id = session_participants.user_id
-             WHERE session_id = $1`;
+             WHERE session_id = $1 AND ${activeMemberSql('u')}`;
+  // T2 (1 Nov 2026): an account an admin removed, suspended or banned is not listed (nor counted, below).
   const values: unknown[] = [sessionId];
 
   if (status) {
@@ -574,8 +592,8 @@ export async function getSessionParticipants(
 
 export async function getParticipantCount(sessionId: string): Promise<number> {
   const result = await query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM session_participants
-     WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+    `SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id
+     WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show') AND ${activeMemberSql('u')}`,
     [sessionId]
   );
   return parseInt(result.rows[0].count, 10);
@@ -1048,10 +1066,10 @@ export async function getParticipantStatusCounts(sessionId: string): Promise<{
   const hostUserId = sessionResult.rows[0]?.host_user_id;
 
   const statusResult = await query<{ status: string; count: string }>(
-    `SELECT status, COUNT(*)::text AS count
-     FROM session_participants
-     WHERE session_id = $1
-     GROUP BY status`,
+    `SELECT sp.status, COUNT(*)::text AS count
+     FROM session_participants sp JOIN users u ON u.id = sp.user_id
+     WHERE sp.session_id = $1 AND ${activeMemberSql('u')}
+     GROUP BY sp.status`,
     [sessionId]
   );
 

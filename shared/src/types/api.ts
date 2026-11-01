@@ -25,7 +25,12 @@ export interface PaginationMeta {
   totalPages: number;
   hasNext: boolean;
   hasPrev: boolean;
+  /** The admin users list only (T2, 1 Nov 2026): how many accounts each status holds for the same search and role. */
+  statusCounts?: UserStatusCounts;
 }
+
+/** How many accounts hold each status: the admin Users page's tabs (T2, 1 Nov 2026). */
+export interface UserStatusCounts { active: number; suspended: number; deactivated: number; banned: number }
 
 export interface PaginationQuery {
   page?: number;

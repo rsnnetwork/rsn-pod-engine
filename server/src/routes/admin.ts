@@ -9,7 +9,7 @@ import { query } from '../db';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as joinRequestService from '../services/join-request/join-request.service';
 import * as reportService from '../services/report/report.service';
-import { fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
+import { fanoutAccountStatusChange, fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
 
 const router = Router();
 
@@ -237,6 +237,8 @@ router.post(
       fanoutAdminEntities('users').catch(() => {});
       for (const row of result.rows) {
         fanoutUserEntity(row.id).catch(() => {});
+        // T2 (1 Nov 2026): and the people around each account, so open lists drop or regain them live.
+        fanoutAccountStatusChange(row.id).catch(() => {});
       }
 
       const response: ApiResponse = { success: true, data: { affected: result.rowCount } };

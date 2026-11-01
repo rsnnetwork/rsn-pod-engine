@@ -15,12 +15,16 @@ import { listUserEntities } from '../services/entity/entity.service';
 import { getAvatarBlob } from '../services/onboarding/avatar.service';
 import { entityReadLimiter } from '../middleware/rateLimit';
 import {
+  accountAudience,
+  fanoutAccountAudience,
+  fanoutAccountStatusChange,
   fanoutAdminEntities,
   fanoutPodEntities,
   fanoutProfileChange,
   fanoutUserBlocks,
   fanoutUserEntity,
 } from '../realtime/fanout';
+import { NotFoundError } from '../middleware/errors';
 import { query } from '../db';
 import { ApiResponse, PICTURE_MAX_ZOOM, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import * as bannerService from '../services/user/banner.service';
@@ -387,6 +391,11 @@ router.get(
       // profile; anyone else gets the public card — who they are and what
       // they offer, never why they're here.
       const isOwnerOrAdmin = req.user!.userId === user.id || hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+      // T2 (1 Nov 2026): a removed, suspended or banned account's card no longer opens for other members (the person
+      // brief already answered so); admins still see it.
+      if (!isOwnerOrAdmin && user.status !== 'active') {
+        throw new NotFoundError('User', undefined, 'This person is no longer a member of REASON.');
+      }
       const data = isOwnerOrAdmin ? user : toPublicMember(user);
 
       const response: ApiResponse = { success: true, data };
@@ -413,12 +422,15 @@ router.get(
         role: role as UserRole | undefined,
         status: status as 'active' | 'suspended' | 'banned' | 'deactivated' | undefined,
         search,
+        withStatusCounts: true,
       });
 
       const pg = parseInt(page || '1');
       const ps = parseInt(pageSize || '20');
       const totalPages = Math.ceil(result.total / ps);
 
+      // T2 (1 Nov 2026): `statusCounts` (additive) is how many accounts each status tab holds for the same search and
+      // role, whichever tab is asked for.
       const response: ApiResponse = {
         success: true,
         data: result.users,
@@ -429,6 +441,7 @@ router.get(
           totalPages,
           hasNext: pg < totalPages,
           hasPrev: pg > 1,
+          statusCounts: result.statusCounts,
         },
       };
       res.json(response);
@@ -490,6 +503,8 @@ router.put(
       // (the auth-cache invalidation happens server-side already).
       fanoutAdminEntities('users').catch(() => {});
       fanoutUserEntity(req.params.id).catch(() => {});
+      // T2 (1 Nov 2026): and everyone who could be looking at them, so they leave (or come back to) open lists live.
+      fanoutAccountStatusChange(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: user };
       return res.json(response);
     } catch (err) {
@@ -511,8 +526,11 @@ router.delete(
       // sees the change even if it later disconnects.
       fanoutAdminEntities('users').catch(() => {});
       fanoutUserEntity(req.params.id).catch(() => {});
+      // T2: the people around them, read before the delete leaves their pods and events.
+      const around = await accountAudience(req.params.id).catch(() => null);
       await identityService.deleteUser(req.params.id);
       await recordAudit({ actorId: req.user!.userId, action: 'user.deleted', entityType: 'user', entityId: req.params.id, ipAddress: req.ip });
+      if (around) fanoutAccountAudience(around).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'User deleted' } };
       res.json(response);
     } catch (err) {

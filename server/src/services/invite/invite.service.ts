@@ -854,7 +854,8 @@ async function applyInviteRegistration(
     const personalInviteCreatedAt = invite.inviteeEmail ? new Date(invite.createdAt) : undefined;
     try {
       try {
-        await sessionService.registerParticipant(invite.sessionId, userId, undefined, { personalInviteCreatedAt });
+        // T2 (D2): an invite is the host's say-so, so a pod that asks for approval takes the person into this event.
+        await sessionService.registerParticipant(invite.sessionId, userId, undefined, { personalInviteCreatedAt, viaInvite: true });
       } catch (err) {
         // Already registered — fine, idempotent. Capacity (SESSION_FULL, also a ConflictError), status, or
         // other validation error — bubble up so the user gets a definitive error and nobody is written in below.
