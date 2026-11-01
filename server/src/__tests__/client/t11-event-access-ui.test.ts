@@ -24,6 +24,12 @@ describe('the event page (D11, L17)', () => {
     expect(detail).toMatch(/const access: EventAccess \| undefined = session\?\.access;/);
   });
 
+  it('shows "This event is private" when the server refuses with EVENT_PRIVATE (fix round 1)', () => {
+    expect(detail).toMatch(/error\?\.code === 'EVENT_PRIVATE'/);
+    expect(detail).toMatch(/ACCESS_COPY\.privateTitle/);
+    expect(actions).toContain("privateTitle: 'This event is private'");
+  });
+
   it('auto-registers only when the server says so (the audience and invitees); an old server keeps the old behaviour', () => {
     expect(detail).toMatch(/if \(access && !access\.autoRegister\) return;/);
   });

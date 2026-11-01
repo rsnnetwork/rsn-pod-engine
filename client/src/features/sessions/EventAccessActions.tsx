@@ -21,6 +21,8 @@ export interface EventAccess {
 }
 
 export const ACCESS_COPY = {
+  privateTitle: 'This event is private',
+  privateWho: "It is for its pod's members and the people the host invites.",
   privateNotice: 'This event is private. It is for its pod\'s members and the people the host invites.',
   requestTitle: 'Request to join',
   requestBody: 'The host approves each place. You can add a short note for them.',

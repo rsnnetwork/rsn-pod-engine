@@ -24,7 +24,7 @@ import EditEventModal from './EditEventModal';
 import { eventFacts, eventFactsLine } from './event-format-form';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
-import EventAccessActions, { type EventAccess } from './EventAccessActions';
+import EventAccessActions, { ACCESS_COPY, type EventAccess } from './EventAccessActions';
 import EventJoinRequestsCard from './EventJoinRequestsCard';
 
 /** The icon over each figure under an event's title. */
@@ -261,6 +261,8 @@ export default function SessionDetailPage() {
   // 403 — user isn't registered, not a pod member, and the pod isn't public.
   // Show a clean access-denied card instead of the broken "0 participants" fallback.
   if ((sessionError as any)?.response?.status === 403) {
+    // T11 fix round 1: a private event says so (the server's code EVENT_PRIVATE); any other refusal reads as before.
+    const isPrivateEvent = (sessionError as any)?.response?.data?.error?.code === 'EVENT_PRIVATE';
     // The way out goes home (For You): the old one went to a dashboard address that has no page.
     return (
       <div className="max-w-3xl mx-auto space-y-6">
@@ -274,10 +276,19 @@ export default function SessionDetailPage() {
             <div className="h-14 w-14 rounded-full bg-amber-100 flex items-center justify-center mb-4">
               <AlertTriangle className="h-7 w-7 text-amber-600" />
             </div>
-            <h1 className="text-xl font-bold text-[#1a1a2e] mb-2">Access restricted</h1>
-            <p className="text-gray-500 text-sm max-w-md">
-              You don't have access to this event. Ask the host for an invite or join the pod to see details.
-            </p>
+            {isPrivateEvent ? (
+              <>
+                <h1 data-testid="event-private-title" className="text-xl font-bold text-[#1a1a2e] mb-2">{ACCESS_COPY.privateTitle}</h1>
+                <p data-testid="event-private-notice" className="text-gray-500 text-sm max-w-md">{ACCESS_COPY.privateWho}</p>
+              </>
+            ) : (
+              <>
+                <h1 className="text-xl font-bold text-[#1a1a2e] mb-2">Access restricted</h1>
+                <p className="text-gray-500 text-sm max-w-md">
+                  You don't have access to this event. Ask the host for an invite or join the pod to see details.
+                </p>
+              </>
+            )}
             <Button variant="primary" onClick={() => navigate('/')} className="mt-6">
               Back to For You
             </Button>
