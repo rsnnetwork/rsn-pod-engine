@@ -47,12 +47,21 @@ export const WITHDRAW_BODY = 'Its link stops working, and you can invite them ag
 export const WITHDRAWN = 'Invite withdrawn. Its link no longer works.';
 export const NOT_WITHDRAWN = 'The invite could not be withdrawn. Please try again.';
 export const NOT_REMINDED = 'The reminder could not be sent. Please try again.';
+/** A Remind all that sent nothing (a refusal or no answer); the reason follows it. */
+export const NOT_REMINDED_ALL = 'No reminders were sent.';
 export const SHAREABLE_LINK = 'Shareable link';
 
-/** One person across their invites: the member, or for an address with no member the address itself. */
+/** How the server hides an address from a co-host (maskEmail): "a•••@example.com". The mask is no person. */
+const HIDDEN_ADDRESS = '•••';
+
+/**
+ * One person across their invites: the member, or for an address with no member the address itself. A hidden
+ * address names nobody (ann@ and al@ read alike), so each such invite is its own row (P1 item 26).
+ */
 function personKey(row: InviteListRow): string {
   if (row.inviteeUserId) return row.inviteeUserId;
-  return row.inviteeEmail ? `email:${row.inviteeEmail.trim().toLowerCase()}` : `invite:${row.id}`;
+  if (!row.inviteeEmail || row.inviteeEmail.includes(HIDDEN_ADDRESS)) return `invite:${row.id}`;
+  return `email:${row.inviteeEmail.trim().toLowerCase()}`;
 }
 
 const at = (iso: string | null) => (iso ? new Date(iso).getTime() : Number.NaN);
@@ -107,11 +116,12 @@ export function statusSummary(kind: 'pod' | 'session', presentCount: number, gro
   ];
 }
 
-/** A row's name, and the address on a line of its own only when it says something the name does not. */
-export function personLine(row: InviteListRow): { name: string; detail: string | null } {
-  const name = row.inviteeName || row.inviteeEmail || 'Someone';
-  const detail = row.inviteeName && row.inviteeEmail && row.inviteeEmail !== row.inviteeName ? row.inviteeEmail : null;
-  return { name, detail };
+/**
+ * Who a row is for: a member by their name, never their address (the platform's member lists carry none); an address
+ * with no account by the address, which is all there is (P1 item 27: the default until Stefan decides otherwise).
+ */
+export function personName(row: InviteListRow): string {
+  return row.inviteeName || row.inviteeEmail || 'Someone';
 }
 
 /** "26 Oct 2026", the way the event page writes dates. */
@@ -141,6 +151,18 @@ export function remindAllSentence({ reminded, total, recentlyReminded }: { remin
   return { message: `Reminders sent to ${people(reminded)}.${also}`, tone: 'success' };
 }
 
+/** A pod's Remind all as it runs: which reminder is on its way (P1 item 34). */
+export function remindingProgress(done: number, total: number): string {
+  return `Sending ${done} of ${total}…`;
+}
+
+/** A pod's Remind all stopped part way: what went, of everyone it was going to remind. Never "all sent". */
+export function remindAllStopped({ reminded }: { reminded: number }, of: number): Notice {
+  return reminded === 0
+    ? { message: 'Remind all stopped. No reminders were sent.', tone: 'info' }
+    : { message: `Remind all stopped. Reminders sent to ${reminded} of ${people(of)}.`, tone: 'info' };
+}
+
 /**
  * A pod has no remind-all route, so its page reminds each invite on its own and counts the answers the way the event's
  * route does: sent, reminded within the hour (left out of the total), or failed (anything that did not answer "sent").
@@ -165,20 +187,32 @@ export const REMIND_GAP_MS = 500;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
+export interface InTurnOptions {
+  /** Told the 1-based number of the item about to run. */
+  onProgress?: (done: number) => void;
+  /** Once aborted, no further item starts (the one under way finishes). */
+  signal?: AbortSignal;
+}
+
 /**
  * Runs `run` for each item in turn, one at a time, pausing `gapMs` between two (not after the last), and keeps every
  * answer as Promise.allSettled would: a failure is recorded and the rest still run. The pod's Remind all sends its
- * reminders this way, because every reminder is an email and the provider drops sends that arrive together.
+ * reminders this way, because every reminder is an email and the provider drops sends that arrive together. It says
+ * which item is on its way, and stops starting new ones once its signal is aborted (P1 item 34).
  */
 export async function settleInTurn<T, R>(
   items: readonly T[],
   run: (item: T) => Promise<R>,
   gapMs: number,
   wait: (ms: number) => Promise<void> = sleep,
+  { onProgress, signal }: InTurnOptions = {},
 ): Promise<PromiseSettledResult<R>[]> {
   const results: PromiseSettledResult<R>[] = [];
   for (let i = 0; i < items.length; i++) {
+    if (signal?.aborted) break;
     if (i > 0) await wait(gapMs);
+    if (signal?.aborted) break;
+    onProgress?.(i + 1);
     try {
       results.push({ status: 'fulfilled', value: await run(items[i]) });
     } catch (reason) {

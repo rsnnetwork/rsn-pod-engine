@@ -27,7 +27,7 @@ import {
 } from '../../../../client/src/features/invites/invite-picker';
 import {
   REMIND_GAP_MS, STATUS_TITLE, WITHDRAW_BODY, WITHDRAW_TITLE,
-  inviteStatusGroups, personLine, remindAllSentence, remindSentence, settleInTurn, statusSummary, tallyReminders,
+  inviteStatusGroups, personName, remindAllSentence, remindAllStopped, remindingProgress, remindSentence, settleInTurn, statusSummary, tallyReminders,
   type InviteListRow,
 } from '../../../../client/src/features/invites/invite-status';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
@@ -289,11 +289,29 @@ describe('the organisers\' list: Invited, Declined and the open links', () => {
     expect(STATUS_TITLE).toBe('Invitations');
   });
 
-  it('a row reads the name, and the address under it only when it is a different line', () => {
-    expect(personLine(row({ id: 'a' }))).toEqual({ name: 'Name a', detail: 'a@example.com' });
-    // A co-host's list puts the member's name where the address was: said once, not twice.
-    expect(personLine(row({ id: 'a', inviteeEmail: 'Name a' }))).toEqual({ name: 'Name a', detail: null });
-    expect(personLine(row({ id: 'a', inviteeName: null }))).toEqual({ name: 'a@example.com', detail: null });
+  it('a member is shown by name, never by address; an address with no account is shown as the address (P1 item 27)', () => {
+    // Default until Stefan decides: the card prints no member's address (the platform's member lists carry none).
+    expect(personName(row({ id: 'a' }))).toBe('Name a');
+    // A co-host's list puts the member's name where the address was: said once.
+    expect(personName(row({ id: 'a', inviteeEmail: 'Name a' }))).toBe('Name a');
+    expect(personName(row({ id: 'a', inviteeName: null, inviteeUserId: null }))).toBe('a@example.com');
+    const card = fs.readFileSync(path.join(__dirname, '../../../../client/src/features/invites/InviteStatusList.tsx'), 'utf8');
+    expect(card).not.toMatch(/inviteeEmail/);
+  });
+
+  it('two people whose hidden addresses look alike on a co-host\'s list stay two rows (P1 item 26)', () => {
+    // A co-host reads "a•••@example.com" for each address someone else sent that has no account: the same mask for
+    // ann@ and al@, so the mask is no person. Each such invite is its own row.
+    const ann = row({ id: 'ann', inviteeUserId: null, inviteeName: null, inviteeEmail: 'a•••@example.com' });
+    const al = row({ id: 'al', inviteeUserId: null, inviteeName: null, inviteeEmail: 'a•••@example.com' });
+    expect(inviteStatusGroups([ann, al], [], new Set()).invited.map((r) => r.id)).toEqual(['ann', 'al']);
+    const annNo = { ...ann, status: 'revoked', declinedAt: '2026-10-21T10:00:00.000Z' };
+    const alNo = { ...al, status: 'revoked', declinedAt: '2026-10-22T10:00:00.000Z' };
+    expect(inviteStatusGroups([], [annNo, alNo], new Set()).declined.map((r) => r.id)).toEqual(['al', 'ann']);
+    // A whole address is still one person across its invites.
+    const one = row({ id: 'o1', inviteeUserId: null, inviteeName: null, inviteeEmail: 'out@side.com' });
+    const two = row({ id: 'o2', inviteeUserId: null, inviteeName: null, inviteeEmail: 'Out@Side.com' });
+    expect(inviteStatusGroups([one, two], [], new Set()).invited.map((r) => r.id)).toEqual(['o1']);
   });
 });
 
@@ -357,11 +375,42 @@ describe('the pod page reminds one invite at a time, half a second apart', () =>
     expect(wait).not.toHaveBeenCalled();
   });
 
+  it('says which reminder is on its way, and a Stop sends no further one (P1 item 34)', async () => {
+    const seen: number[] = [];
+    const stop = new AbortController();
+    const run = jest.fn(async (id: string) => {
+      if (id === 'b') stop.abort();
+      return { reminded: true };
+    });
+    const wait = jest.fn(async () => {});
+    const results = await settleInTurn(['a', 'b', 'c', 'd'], run, 500, wait, { onProgress: (n) => seen.push(n), signal: stop.signal });
+    // a and b were sent (b's own send was under way when Stop was pressed); c and d never started, and no pause after b.
+    expect(run.mock.calls.map((c) => c[0])).toEqual(['a', 'b']);
+    expect(seen).toEqual([1, 2]);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(2);
+    expect(remindingProgress(2, 4)).toBe('Sending 2 of 4…');
+  });
+
+  it('a stopped Remind all says how many went of how many, never "all sent"', () => {
+    expect(remindAllStopped({ reminded: 2 }, 5)).toEqual({ message: 'Remind all stopped. Reminders sent to 2 of 5 people.', tone: 'info' });
+    expect(remindAllStopped({ reminded: 0 }, 5)).toEqual({ message: 'Remind all stopped. No reminders were sent.', tone: 'info' });
+  });
+
+  it('while Remind all runs, it shows its progress and a Stop for a pod, and every row\'s Remind waits (P1 item 34)', () => {
+    const rows = read('features/invites/InviteStatusRows.tsx');
+    expect(rows).toMatch(/remindingProgress\(progress\.done, progress\.total\)/);
+    expect(rows).toMatch(/disabled=\{reminding \|\| remindAllBusy\}/);
+    expect(rows).toMatch(/onStop && \(/);
+    const list = read('features/invites/InviteStatusList.tsx');
+    expect(list).toMatch(/onProgress: \(done\) => setProgress\(\{ done, total: rows\.length \}\)/);
+  });
+
   it('the pod page uses it, half a second apart, and no longer fires them all at once', () => {
     const list = read('features/invites/InviteStatusList.tsx');
     expect(REMIND_GAP_MS).toBe(500);
     expect(list).toMatch(/settleInTurn\(\s*rows,\s*\(row\) => api\.post\(`\/invites\/\$\{row\.id\}\/remind`\)/);
-    expect(list).toMatch(/REMIND_GAP_MS,?\s*\)/);
+    expect(list).toMatch(/REMIND_GAP_MS,\s*undefined,\s*options,?\s*\)/);
     expect(list).not.toMatch(/Promise\.allSettled/);
   });
 });

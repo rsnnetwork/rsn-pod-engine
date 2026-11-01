@@ -6,9 +6,8 @@
 // host, co-hosts and admins while the event can still take people (the same people the server lets read the lists).
 // Each invite can be reminded or withdrawn; Remind all goes to everyone still waiting. What it reads follows the
 // pod's or event's invites tag, so an invite sent, accepted, declined or withdrawn changes it without a reload.
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
-import { Link2, Send, Trash2 } from 'lucide-react';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useToastStore } from '@/stores/toastStore';
@@ -17,10 +16,11 @@ import { cn } from '@/lib/utils';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { inviteErrorSentence, targetTags, type InviteTarget, type Notice } from './invite-picker';
 import {
-  CHOOSE_PEOPLE, LOAD_FAILED, NOBODY_INVITED, NOT_REMINDED, NOT_WITHDRAWN, REMIND_GAP_MS, SHAREABLE_LINK, STATUS_TITLE, WITHDRAWN, WITHDRAW_BODY, WITHDRAW_TITLE,
-  dayOf, inviteStatusGroups, personLine, remindAllSentence, remindSentence, settleInTurn, statusSummary, tallyReminders,
-  type InviteListRow,
+  CHOOSE_PEOPLE, LOAD_FAILED, NOBODY_INVITED, NOT_REMINDED, NOT_REMINDED_ALL, NOT_WITHDRAWN, REMIND_GAP_MS, STATUS_TITLE, WITHDRAWN,
+  WITHDRAW_BODY, WITHDRAW_TITLE, inviteStatusGroups, remindAllSentence, remindAllStopped, remindSentence, settleInTurn,
+  statusSummary, tallyReminders, type InTurnOptions, type InviteListRow,
 } from './invite-status';
+import { DeclinedSection, InvitedSection, LinksSection, ROW_BUTTON, type RemindProgress } from './InviteStatusRows';
 import { invalidateTags } from './useInviteCandidates';
 
 interface Props {
@@ -37,7 +37,6 @@ interface Props {
 interface ReminderAnswer { reminded?: boolean; recentlyReminded?: boolean }
 
 const CARD = 'rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5';
-const ROW_BUTTON = 'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60';
 
 export default function InviteStatusList(props: Props) {
   return props.target.type === 'pod'
@@ -58,14 +57,17 @@ function PodInviteStatus({ podId, ...props }: Props & { podId: string }) {
   });
   // A pod has no remind-all route: each invite is reminded on its own, one at a time half a second apart (every reminder
   // is an email, and the provider drops sends that arrive together), and every answer is counted, so a reminder that did
-  // not go is never called sent.
-  const remindEveryoneInPod = async (rows: InviteListRow[]): Promise<Notice> => {
+  // not go is never called sent. It says which reminder is on its way, and Stop sends no further one (P1 item 34).
+  const remindEveryoneInPod = async (rows: InviteListRow[], options: InTurnOptions): Promise<Notice> => {
     const results = await settleInTurn(
       rows,
       (row) => api.post(`/invites/${row.id}/remind`).then((r) => r.data.data as ReminderAnswer),
       REMIND_GAP_MS,
+      undefined,
+      options,
     );
-    return remindAllSentence(tallyReminders(results));
+    const tally = tallyReminders(results);
+    return results.length < rows.length ? remindAllStopped(tally, rows.length) : remindAllSentence(tally);
   };
   return <InviteStatusCard {...props} kind="pod" pending={pending} history={history} remindAll={remindEveryoneInPod} />;
 }
@@ -92,7 +94,7 @@ interface CardProps extends Props {
   kind: 'pod' | 'session';
   pending: UseQueryResult<InviteListRow[]>;
   history: UseQueryResult<InviteListRow[]>;
-  remindAll: (rows: InviteListRow[]) => Promise<Notice>;
+  remindAll: (rows: InviteListRow[], options: InTurnOptions) => Promise<Notice>;
 }
 
 function InviteStatusCard({ target, kind, pending, history, remindAll, present, presentCount, onInvite }: CardProps) {
@@ -107,11 +109,19 @@ function InviteStatusCard({ target, kind, pending, history, remindAll, present, 
     onSuccess: (answer) => say(remindSentence(answer)),
     onError: (err) => addToast(inviteErrorSentence(err, NOT_REMINDED), 'error'),
   });
+  // A pod's Remind all runs a reminder at a time: how far it is, and the Stop that ends it before the next one.
+  const [progress, setProgress] = useState<RemindProgress | null>(null);
+  const stopRef = useRef<AbortController | null>(null);
   const remindEveryone = useMutation({
     networkMode: 'always',
-    mutationFn: remindAll,
+    mutationFn: (rows: InviteListRow[]) => {
+      stopRef.current = new AbortController();
+      return remindAll(rows, { onProgress: (done) => setProgress({ done, total: rows.length }), signal: stopRef.current.signal });
+    },
     onSuccess: say,
-    onError: (err) => addToast(inviteErrorSentence(err, NOT_REMINDED), 'error'),
+    // Nothing was sent: said as such, with the server's reason when it gives one (P1 item 13).
+    onError: (err) => addToast(`${NOT_REMINDED_ALL} ${inviteErrorSentence(err, 'Please try again in a moment.')}`, 'error'),
+    onSettled: () => { setProgress(null); stopRef.current = null; },
   });
   const revokeInviteMutation = useMutation({
     networkMode: 'always',
@@ -160,6 +170,7 @@ function InviteStatusCard({ target, kind, pending, history, remindAll, present, 
 
   const groups = inviteStatusGroups(pending.data, history.data, new Set(present));
   const nothing = groups.invited.length === 0 && groups.declined.length === 0 && groups.links.length === 0;
+  const withdrawingId = revokeInviteMutation.isPending ? revokeInviteMutation.variables ?? null : null;
   return (
     <section data-testid="invite-status" aria-labelledby={titleId} className={CARD}>
       <h2 id={titleId} className="text-lg font-semibold text-[#1a1a2e]">{STATUS_TITLE}</h2>
@@ -182,104 +193,20 @@ function InviteStatusCard({ target, kind, pending, history, remindAll, present, 
       ) : (
         <>
           {groups.invited.length > 0 && (
-            <div className="mt-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-gray-700">Invited ({groups.invited.length})</h3>
-                {groups.invited.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => { if (!remindEveryone.isPending) remindEveryone.mutate(groups.invited); }}
-                    disabled={remindEveryone.isPending}
-                    className={cn(ROW_BUTTON, 'border-purple-200 bg-white text-purple-700 hover:bg-purple-50')}
-                  >
-                    <Send className="h-3.5 w-3.5" aria-hidden="true" />
-                    {remindEveryone.isPending ? 'Reminding…' : `Remind all (${groups.invited.length})`}
-                  </button>
-                )}
-              </div>
-              <ul className="mt-2 grid grid-cols-1 gap-2">
-                {groups.invited.map((row) => {
-                  const { name, detail } = personLine(row);
-                  const reminding = remind.isPending && remind.variables === row.id;
-                  const withdrawing = revokeInviteMutation.isPending && revokeInviteMutation.variables === row.id;
-                  return (
-                    <li key={row.id} data-testid={`invite-row-${row.id}`} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border border-gray-100 p-3">
-                      <div className="min-w-0 flex-[1_1_11rem]">
-                        <p className="truncate text-sm font-medium text-gray-800">{name}</p>
-                        {detail && <p className="truncate text-xs text-gray-500">{detail}</p>}
-                        <p className="text-xs text-gray-500">Invited {dayOf(row.createdAt)}</p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => { if (!reminding) remind.mutate(row.id); }}
-                          disabled={reminding}
-                          className={cn(ROW_BUTTON, 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50')}
-                        >
-                          <Send className="h-3.5 w-3.5" aria-hidden="true" /> {reminding ? 'Sending…' : 'Remind'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => withdraw(row.id)}
-                          disabled={withdrawing}
-                          className={cn(ROW_BUTTON, 'border-red-200 bg-white text-red-600 hover:bg-red-50')}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" /> Withdraw
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+            <InvitedSection
+              rows={groups.invited}
+              remindAllBusy={remindEveryone.isPending}
+              progress={progress}
+              onRemindAll={() => remindEveryone.mutate(groups.invited)}
+              onStop={kind === 'pod' ? () => stopRef.current?.abort() : undefined}
+              remindingId={remind.isPending ? remind.variables ?? null : null}
+              withdrawingId={withdrawingId}
+              onRemind={(id) => remind.mutate(id)}
+              onWithdraw={withdraw}
+            />
           )}
-
-          {groups.declined.length > 0 && (
-            <div className="mt-4">
-              <h3 className="text-sm font-semibold text-gray-700">Declined ({groups.declined.length})</h3>
-              <ul className="mt-2 grid grid-cols-1 gap-2">
-                {groups.declined.map((row) => {
-                  const { name, detail } = personLine(row);
-                  return (
-                    <li key={row.id} data-testid={`invite-row-${row.id}`} className="min-w-0 rounded-xl bg-gray-50 p-3">
-                      <p className="truncate text-sm font-medium text-gray-700">{name}</p>
-                      {detail && <p className="truncate text-xs text-gray-500">{detail}</p>}
-                      <p className="text-xs text-gray-500">Declined {row.declinedAt ? dayOf(row.declinedAt) : ''}</p>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
-
-          {groups.links.length > 0 && (
-            <div className="mt-4">
-              <h3 className="text-sm font-semibold text-gray-700">Shareable links ({groups.links.length})</h3>
-              <ul className="mt-2 grid grid-cols-1 gap-2">
-                {groups.links.map((row) => (
-                  <li key={row.id} data-testid={`invite-row-${row.id}`} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border border-gray-100 p-3">
-                    <div className="min-w-0 flex-[1_1_11rem]">
-                      <p className="flex items-center gap-1.5 text-sm font-medium text-gray-800">
-                        <Link2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> {SHAREABLE_LINK}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        Made {dayOf(row.createdAt)}
-                        {row.maxUses !== undefined && row.useCount !== undefined ? ` · used ${row.useCount} of ${row.maxUses}` : ''}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => withdraw(row.id)}
-                      disabled={revokeInviteMutation.isPending && revokeInviteMutation.variables === row.id}
-                      className={cn(ROW_BUTTON, 'border-red-200 bg-white text-red-600 hover:bg-red-50')}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" /> Withdraw
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {groups.declined.length > 0 && <DeclinedSection rows={groups.declined} />}
+          {groups.links.length > 0 && <LinksSection rows={groups.links} withdrawingId={withdrawingId} onWithdraw={withdraw} />}
         </>
       )}
       <ConfirmDialog
