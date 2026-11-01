@@ -281,6 +281,7 @@ describe('getMeetingSummary', () => {
 describe('getMeeting', () => {
   it('is the viewer\'s meeting, read through the same participant and block checks', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [row({ start_at: new Date('2026-11-05T12:10:00Z') })] });
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // the viewer's own feedback: none yet
 
     const meeting = await getMeeting(A, MEETING, NOW);
 
@@ -290,6 +291,29 @@ describe('getMeeting', () => {
     expect(flat(sql)).toMatch(/AND m\.id = \$2$/);
     expect(params).toEqual([A, MEETING]);
     expect(meeting).toMatchObject({ id: MEETING, phase: 'upcoming', partner: { userId: B } });
+  });
+
+  // 30 Oct 2026 (feedback after meetings): production's client reads every field it always had, unchanged; the
+  // viewer's own answer is added beside them, and only ever the viewer's.
+  it('keeps every field it always answered, and adds the viewer\'s own feedback (null until they answer)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ start_at: new Date('2026-11-05T11:30:00Z'), joined_a_at: new Date('2026-11-05T11:31:00Z') })] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const unanswered = await getMeeting(A, MEETING, NOW);
+    expect(unanswered).toEqual({
+      id: MEETING, conversationId: 'conv-1',
+      partner: { userId: B, displayName: 'Bo Meyer', avatarUrl: 'https://cdn.example/bo.png' },
+      startAt: '2026-11-05T11:30:00.000Z', durationMin: 30, kind: 'video', status: 'scheduled', phase: 'live',
+      context: 'Coffee about your seed round?', joinPath: '/meet/conv-1?scheduled=1&kind=video',
+      attended: { me: true, them: false },
+      myFeedback: null,
+    });
+    const [feedbackSql, feedbackParams] = mockQuery.mock.calls[1];
+    expect(flat(feedbackSql)).toBe('SELECT worth_continuing, problems, problem_text FROM meeting_outcomes WHERE user_id = $1 AND meeting_id = $2');
+    expect(feedbackParams).toEqual([A, MEETING]);
+
+    mockQuery.mockResolvedValueOnce({ rows: [row()] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ worth_continuing: 'maybe', problems: ['other', 'audio'], problem_text: 'Echo' }] });
+    expect((await getMeeting(A, MEETING, NOW)).myFeedback).toEqual({ worthContinuing: 'maybe', problems: ['audio', 'other'], problemText: 'Echo' });
   });
 
   it('is not found for anyone else, and for a pair a block stands between: the two read the same', async () => {

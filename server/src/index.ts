@@ -56,6 +56,7 @@ import joinRequestRoutes from './routes/join-requests';
 import adminRoutes from './routes/admin';
 import adminActionRoutes from './routes/admin-actions';
 import adminInspectRoutes from './routes/admin-inspect';
+import adminFeedbackRoutes from './routes/admin-feedback';
 import notificationRoutes from './routes/notifications';
 import dmRoutes from './routes/dm';
 import pokeRoutes from './routes/pokes';
@@ -345,6 +346,8 @@ app.use('/api/join-requests', joinRequestRoutes);
 app.use('/api/admin', adminRoutes);
 // Task E2 — admin per-user inspection API (onboarding, conversations, interactions).
 app.use('/api/admin', adminInspectRoutes);
+// Feedback after meetings (30 Oct 2026): every answer, and a CSV of them, admins only.
+app.use('/api/admin', adminFeedbackRoutes);
 // Admin email-action routes — unauthenticated by design (the token IS the auth).
 app.use('/api/admin/join-request-action', adminActionRoutes);
 app.use('/api/notifications', notificationRoutes);

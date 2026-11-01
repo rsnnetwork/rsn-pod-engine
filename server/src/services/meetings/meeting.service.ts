@@ -25,6 +25,7 @@ import { meetingJoinPath } from '../dm/meeting-windows.service';
 import { emitMeetingChanged } from './meeting-tags';
 import { meetingTime } from './meeting-time';
 import { CURRENT_MEETING_ID, lockConversation } from './current-meeting';
+import { readMyFeedback } from './meeting-feedback.service';
 
 /** A meeting row with the other person's columns, as every read here selects it. */
 interface MeetingRow {
@@ -178,8 +179,10 @@ async function loadVisible(userId: string, meetingId: string): Promise<MeetingRo
   return found.rows[0];
 }
 
+/** One meeting, with the viewer's own answer to "How did it go?" (never the other person's). */
 export async function getMeeting(userId: string, meetingId: string, now = new Date()): Promise<Meeting> {
-  return toMeeting(await loadVisible(userId, meetingId), userId, now);
+  const row = await loadVisible(userId, meetingId);
+  return { ...toMeeting(row, userId, now), myFeedback: await readMyFeedback(userId, meetingId) };
 }
 
 type CancelOutcome =

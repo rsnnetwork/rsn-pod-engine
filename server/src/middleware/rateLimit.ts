@@ -482,6 +482,43 @@ export const meetingCancelLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have cancelled a lot of meetings this hour. Try again later.' } },
 });
 
+// Feedback after a meeting (30 Oct 2026). Each person answers once per meeting and may change the answer, so 30 an hour
+// is far more than anyone needs; each save tells every admin's feedback list. Keyed per member: the route signs in first.
+// Only a save that happened counts: a refusal (not your meeting, not started yet) changed nothing.
+export const meetingFeedbackLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('meeting-feedback'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have sent a lot of feedback this hour. Try again later.' } },
+});
+
+// The admin feedback list (30 Oct 2026): a page is read whenever an answer arrives, so 120 a minute per admin.
+export const adminFeedbackReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('admin-feedback-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// The admin feedback CSV (30 Oct 2026): every row at once, and each download is written to the audit log, so 10 in
+// 10 minutes per admin.
+export const adminFeedbackExportLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('admin-feedback-export'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have downloaded the feedback a lot just now. Try again in a few minutes.' } },
+});
+
 // The banner picture itself. It is public (an <img> sends no token), so it is counted per network address.
 // Each banner's URL is versioned and cached for a day, so one person opening profiles asks for each only once,
 // and a refused picture only means the page draws the default banner in its place.
