@@ -11,7 +11,9 @@
 // opens at its top and its heading takes the focus, which is where a screen
 // reader and the keyboard pick it up.
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuthStore } from '@/stores/authStore';
 import SheepAvatar, { type SheepPose } from '@/components/brand/SheepAvatar';
 
 interface Props {
@@ -31,15 +33,40 @@ interface Props {
 
 const SIDES = 'pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]';
 
+/** The app's own sign-out (the same as the sidebar's), then the sign-in page. */
+function SignOutButton() {
+  const logout = useAuthStore(s => s.logout);
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        await logout();
+        navigate('/login', { replace: true });
+      }}
+      className="min-h-[44px] rounded-lg px-3 text-sm font-medium text-gray-600 hover:text-[#1a1a2e] disabled:opacity-60"
+    >
+      Sign out
+    </button>
+  );
+}
+
 export default function OnboardingShell({ pose, sheepSize = 112, progress, title, subtitle, subtitleId, children, footer }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-gradient-to-b from-white to-gray-50 text-[#1a1a2e]">
+      {/* Onboarding is required before anything else (30 Oct review, L3), so every screen keeps a way out. */}
+      <div className={`flex shrink-0 justify-end pt-[max(env(safe-area-inset-top),0.25rem)] ${SIDES}`}>
+        <SignOutButton />
+      </div>
       {progress && (
         <div
-          className={`shrink-0 pt-[max(env(safe-area-inset-top),0.75rem)] ${SIDES}`}
+          className={`shrink-0 ${SIDES}`}
           role="progressbar"
           aria-valuenow={progress.current}
           aria-valuemin={1}
@@ -62,8 +89,8 @@ export default function OnboardingShell({ pose, sheepSize = 112, progress, title
         data-testid="onboarding-body"
         // A scroll that brings a field into view (focus, a caret, an error) stops 4rem short of the footer, so the counter under it shows too.
         className={`flex flex-1 flex-col overflow-y-auto overscroll-contain scroll-pb-16 py-6 ${SIDES} ${
-          progress ? '' : 'pt-[max(env(safe-area-inset-top),1.5rem)]'
-        } ${footer ? '' : 'pb-[max(env(safe-area-inset-bottom),1.5rem)]'}`}
+          footer ? '' : 'pb-[max(env(safe-area-inset-bottom),1.5rem)]'
+        }`}
       >
         <div className="mx-auto my-auto flex w-full max-w-xl flex-col items-center">
           <SheepAvatar pose={pose} size={sheepSize} className="mb-3" />

@@ -58,9 +58,19 @@ describe('onboardingDue: who is taken where', () => {
 describe('isGateExempt: pages never diverted', () => {
   it.each([
     '/onboarding', '/invite/abc123', '/session/s-1/live', '/meet/x', '/meet/0a1b2c', '/session/s-1/host',
-    '/logout', '/signout', '/privacy', '/terms', '/legal', '/legal/terms',
   ])('%s is exempt', (p) => {
     expect(isGateExempt(p)).toBe(true);
+  });
+
+  // Review fix 1: sign-out is not a route. Every onboarding screen has a Sign out of its own, 44px tall, that uses the
+  // app's own logout and goes to sign-in, so a member the gate holds always has a way out.
+  it('every onboarding screen has a Sign out that uses the app\'s logout and goes to sign-in', () => {
+    const shell = fs.readFileSync(path.join(__dirname, '../../../../client/src/features/onboarding/OnboardingShell.tsx'), 'utf8');
+    expect(shell).toContain('<SignOutButton />');
+    expect(shell).toMatch(/useAuthStore\(s => s\.logout\)/);
+    expect(shell).toMatch(/await logout\(\);\s*navigate\('\/login', \{ replace: true \}\);/);
+    expect(shell).toMatch(/className="min-h-\[44px\][^"]*"\s*>\s*Sign out\s*<\/button>/);
+    expect(shell).toMatch(/pt-\[max\(env\(safe-area-inset-top\)/);
   });
 
   it.each(['/', '/profile', '/profile/edit', '/session/s-1', '/sessions', '/meetings', '/admin/users', '/meet', '/meetx', '/onboarding/x'])(

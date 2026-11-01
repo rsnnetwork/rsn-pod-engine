@@ -31,8 +31,8 @@ export function onboardingDue(user: SessionMember | null | undefined): Onboardin
 
 /**
  * Pages the gate never diverts: onboarding itself (no loop), an invite being accepted, a live event, a 1:1 meeting
- * someone is waiting in, and a host's dashboard at the start of their event. Sign-out and the legal pages are never
- * gated either; none of them is a protected page today, and they are listed so none ever is.
+ * someone is waiting in, and a host's dashboard at the start of their event. Sign-out is not a page: every onboarding
+ * screen has its own Sign out (OnboardingShell).
  */
 const EXEMPT = [
   /^\/onboarding$/,
@@ -40,9 +40,6 @@ const EXEMPT = [
   /^\/session\/[^/]+\/live(?:\/|$)/,
   /^\/session\/[^/]+\/host(?:\/|$)/,
   /^\/meet\//,
-  /^\/(?:logout|signout)$/,
-  /^\/(?:privacy|terms)$/,
-  /^\/legal(?:\/|$)/,
 ];
 
 export function isGateExempt(pathname: string): boolean {
