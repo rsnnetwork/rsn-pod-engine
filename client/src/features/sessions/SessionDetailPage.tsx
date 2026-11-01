@@ -12,6 +12,7 @@ import Input from '@/components/ui/Input';
 import Modal from '@/components/ui/Modal';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
+import { remindAllToast, remindAllFailure } from './remind-all-toast';
 import api from '@/lib/api';
 import { formatDateTime, LOCAL_TIME_LABEL, toLocalDatetimeInput, localTimezoneLabel } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
@@ -185,10 +186,10 @@ export default function SessionDetailPage() {
   const remindAllMutation = useMutation({
     mutationFn: () => api.post(`/invites/remind-all/${sessionId}`),
     onSuccess: (res) => {
-      const { reminded, total } = res.data.data;
-      addToast(`Reminders sent to ${reminded}/${total} pending invites`, 'success');
+      const { message, type } = remindAllToast(res.data.data);
+      addToast(message, type);
     },
-    onError: () => addToast('Failed to send bulk reminders', 'error'),
+    onError: (err: any) => addToast(remindAllFailure(err?.response?.data?.error?.message), 'error'),
   });
 
   // #6 (9 Jun, Ali) — revoke a pending invite from the event page. The backend

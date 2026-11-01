@@ -25,12 +25,33 @@ import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
 import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
 
+/** The final screen for a person the host removed: one sentence and the way out. */
+function RemovedFromEvent({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="min-h-[100dvh] flex items-center justify-center bg-white px-6" data-testid="removed-from-event">
+      <div className="text-center max-w-md">
+        <AlertCircle className="h-10 w-10 text-amber-500 mx-auto mb-4" />
+        <h2 className="text-lg font-semibold text-gray-900 mb-2">You have been removed from this event.</h2>
+        <p className="text-sm text-gray-500 mb-6">The host has taken you out of it, so you can't join it again. You can still use the rest of REASON.</p>
+        <button
+          onClick={onBack}
+          className="min-h-[44px] rounded-lg bg-rsn-red px-5 text-sm font-medium text-white hover:opacity-90 transition-opacity"
+        >
+          Back to events
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const phase = useSessionStore(s => s.phase);
   const broadcasts = useSessionStore(s => s.broadcasts);
   const sessionError = useSessionStore(s => s.error);
+  const removedFromEvent = useSessionStore(s => s.removedFromEvent);
+  const registrationKnown = useSessionStore(s => s.registrationKnown);
   const connectionStatus = useSessionStore(s => s.connectionStatus);
   const transitionStatus = useSessionStore(s => s.transitionStatus);
   const reconnectCount = useSessionStore(s => s.reconnectCount);
@@ -165,6 +186,12 @@ export default function LiveSessionPage() {
   };
 
   if (!sessionId) return <PageLoader />;
+
+  // P2 items 9 and 10 (1 Nov 2026): nothing of the live shell (top bar, controls, room) is drawn until the register
+  // call has answered, and a removed person gets a final screen instead of the shell: on a reload the top bar used
+  // to flash for the moment before the refusal landed.
+  if (removedFromEvent) return <RemovedFromEvent onBack={() => navigate('/sessions')} />;
+  if (!registrationKnown) return <PageLoader />;
 
   return (
     // Phase 7-audit fix — overflow-x-hidden on the root prevents any

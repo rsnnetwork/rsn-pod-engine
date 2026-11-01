@@ -20,6 +20,7 @@ import {
 import '@livekit/components-styles';
 import { Track, ConnectionState, RoomEvent, VideoPresets } from 'livekit-client';
 import api from '@/lib/api';
+import { planRoomRecovery } from './room-retry';
 
 // Prefer displayName → name → email local-part → "Partner".
 // Avoids raw email addresses (and their trailing @domain) rendering full-width
@@ -568,6 +569,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
   const { setLiveKitToken } = useSessionStore.getState();
   const [retrying, setRetrying] = useState(false);
   const retryCountRef = useRef(0);
+  const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { sessionId } = useParams();
 
   // WS3/B3 (27 May remaining work) — "final stretch sticks". The displayed
@@ -608,9 +610,57 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
     }
   }, [liveKitToken, sessionId, currentRoomId]);
 
-  const handleReturnToLobby = () => {
+  const handleReturnToLobby = useCallback(() => {
     if (sessionId) getSocket()?.emit('participant:leave_conversation', { sessionId });
-  };
+  }, [sessionId]);
+
+  // P2 item 8 (1 Nov 2026). <LiveKitRoom> calls room.connect() again whenever the identity of onError (and of
+  // the token or url) changes, and this component re-renders every second for the timer. These three callbacks
+  // were inline arrows, so a healthy room was reconnected once a second. They keep their identity now: what they
+  // read that changes lives in refs and in the store, and a drop is recovered through one explicit, bounded plan
+  // (room-retry.ts): two retries with backoff, then the main room. One recovery is pending at a time, so a drop
+  // that raises both onDisconnected and onError counts once.
+  const recoverRoom = useCallback(() => {
+    if (useSessionStore.getState().phase !== 'matched') return;
+    if (recoveryTimerRef.current) return;
+    const plan = planRoomRecovery(retryCountRef.current);
+    recoveryTimerRef.current = setTimeout(() => {
+      recoveryTimerRef.current = null;
+      if (useSessionStore.getState().phase !== 'matched') return;
+      if (plan.kind === 'lobby') {
+        handleReturnToLobby();
+        return;
+      }
+      retryCountRef.current++;
+      setRetrying(true);
+      useSessionStore.getState().setLiveKitToken(null, null);
+      setTimeout(() => setRetrying(false), 2000);
+    }, plan.delayMs);
+  }, [handleReturnToLobby]);
+
+  useEffect(() => () => {
+    if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current);
+  }, []);
+
+  const handleRoomError = useCallback(() => { recoverRoom(); }, [recoverRoom]);
+  const handleRoomDisconnected = useCallback(() => { recoverRoom(); }, [recoverRoom]);
+  const handleRoomConnected = useCallback(() => {
+    // T0-2 (Issue 7) — confirm LiveKit room membership to the server so
+    // host dashboard reports real "in-breakout" presence instead of just
+    // socket presence. Skipped if we don't have all 3 identifiers yet
+    // (race during fast room swaps — server tolerates the gap).
+    if (sessionId && currentMatchId && currentRoomId) {
+      getSocket()?.emit('presence:room_joined', {
+        sessionId,
+        matchId: currentMatchId,
+        roomId: currentRoomId,
+      });
+    }
+    // D (25 May) — a successful (re)connect refreshes the retry budget so a
+    // user who drops several times over a long event always gets a clean
+    // reconnect attempt instead of being permanently bounced to the lobby.
+    retryCountRef.current = 0;
+  }, [sessionId, currentMatchId, currentRoomId]);
 
   // D (25 May) — force a fresh LiveKit reconnect when the room has gone dead
   // after a suspended tab. Reuses the proven token-clear path: null token →
@@ -691,51 +741,9 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
         // them on for every breakout capture.
         audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       }}
-      onConnected={() => {
-        // T0-2 (Issue 7) — confirm LiveKit room membership to the server so
-        // host dashboard reports real "in-breakout" presence instead of just
-        // socket presence. Skipped if we don't have all 3 identifiers yet
-        // (race during fast room swaps — server tolerates the gap).
-        if (sessionId && currentMatchId && currentRoomId) {
-          getSocket()?.emit('presence:room_joined', {
-            sessionId,
-            matchId: currentMatchId,
-            roomId: currentRoomId,
-          });
-        }
-        // D (25 May) — a successful (re)connect refreshes the retry budget so a
-        // user who drops several times over a long event always gets a clean
-        // reconnect attempt instead of being permanently bounced to the lobby.
-        retryCountRef.current = 0;
-      }}
-      onDisconnected={() => {
-        if (useSessionStore.getState().phase !== 'matched') return;
-        setTimeout(() => {
-          if (useSessionStore.getState().phase !== 'matched') return;
-          if (retryCountRef.current < 2) {
-            retryCountRef.current++;
-            setRetrying(true);
-            setLiveKitToken(null, null);
-            setTimeout(() => setRetrying(false), 2000);
-          } else {
-            handleReturnToLobby();
-          }
-        }, 2000);
-      }}
-      onError={() => {
-        if (useSessionStore.getState().phase !== 'matched') return;
-        setTimeout(() => {
-          if (useSessionStore.getState().phase !== 'matched') return;
-          if (retryCountRef.current < 2) {
-            retryCountRef.current++;
-            setRetrying(true);
-            setLiveKitToken(null, null);
-            setTimeout(() => setRetrying(false), 2000);
-          } else {
-            handleReturnToLobby();
-          }
-        }, 2000);
-      }}
+      onConnected={handleRoomConnected}
+      onDisconnected={handleRoomDisconnected}
+      onError={handleRoomError}
       className="flex-1 flex flex-col"
     >
       {/* D (25 May Ali) — recover the connection (and the user's matchability +

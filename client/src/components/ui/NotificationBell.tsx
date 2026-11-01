@@ -11,6 +11,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
+import { pokeAnswerView } from './poke-answer';
 
 interface Notification {
   id: string;
@@ -23,8 +24,10 @@ interface Notification {
   inviteStatus?: string | null; // 'pending' | 'accepted' | 'revoked' | 'expired'
   podId?: string | null;
   sessionId?: string | null;
-  /** 4 Sep 2026: a meeting request acted on from the bell, local state only. */
-  pokeStatus?: 'accepted' | 'declined';
+  /** A meeting request's answer: set locally when acted on from the bell, and by the server's list ('gone' when it can no longer be answered). */
+  pokeStatus?: 'accepted' | 'declined' | 'gone' | null;
+  /** From the server's list; null when the request is no longer there (withdrawn). Absent on a notification that just arrived. */
+  requestState?: { status: string } | null;
 }
 
 const INVITE_TYPES = ['pod_invite', 'event_invite'];
@@ -472,7 +475,7 @@ export default function NotificationBell() {
                     </div>
                   )}
                   {/* Meeting request: answer it here, accept lands in the conversation. */}
-                  {n.type === 'poke' && extractPokeId(n.link) && !n.pokeStatus && (
+                  {pokeAnswerView(n).actions && (
                     <div className="flex items-center gap-2 mt-2 ml-4" data-testid={`poke-actions-${n.id}`}>
                       <button
                         onClick={() => handleAcceptPoke(n)}
@@ -492,9 +495,9 @@ export default function NotificationBell() {
                       </button>
                     </div>
                   )}
-                  {n.type === 'poke' && n.pokeStatus && (
-                    <p className={`ml-4 mt-1 text-[10px] font-medium ${n.pokeStatus === 'accepted' ? 'text-emerald-500' : 'text-gray-400'}`}>
-                      {n.pokeStatus === 'accepted' ? 'Accepted' : 'Declined'}
+                  {pokeAnswerView(n).label && (
+                    <p className={`ml-4 mt-1 text-[10px] font-medium ${pokeAnswerView(n).label!.tone === 'accepted' ? 'text-emerald-500' : 'text-gray-400'}`}>
+                      {pokeAnswerView(n).label!.text}
                     </p>
                   )}
                 </div>

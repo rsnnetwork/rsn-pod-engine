@@ -109,7 +109,11 @@ export default function useSessionSocket(sessionId: string) {
 
   useEffect(() => {
     const token = localStorage.getItem('rsn_access');
-    if (!token || !sessionId) return;
+    if (!token || !sessionId) {
+      // Nothing will ask the server, so there is no answer to wait for.
+      if (sessionId) store.setRegistrationKnown(true);
+      return;
+    }
 
     // Prevent double-initialization for the same session (React strict mode)
     if (initializedRef.current === sessionId) return;
@@ -142,6 +146,10 @@ export default function useSessionSocket(sessionId: string) {
       if (code !== 'SESSION_ALREADY_REGISTERED') {
         console.warn('auto-register failed', { sessionId, code, err });
       }
+    }).finally(() => {
+      // Whatever the answer was, the live page may draw now (P2 item 10): a refusal has already marked the
+      // person removed above, so the page shows the final screen and never the shell.
+      store.setRegistrationKnown(true);
     });
 
     connectSocket(token);
