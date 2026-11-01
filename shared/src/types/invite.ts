@@ -95,9 +95,11 @@ export type InviteBatchOutcome =
   | 'failed';
 
 export interface InviteBatchInput {
-  type: 'pod' | 'session';
+  /** 'circle' (1 Nov 2026): the circle page's Invite opens the same sheet. */
+  type: 'pod' | 'session' | 'circle';
   podId?: string;
   sessionId?: string;
+  circleId?: string;
   /** 1 to 50 member ids; may be empty only with allPodMembers. */
   inviteeUserIds: string[];
   /** Events in a pod: also invite every pod member who is not going, invited or declined yet. */

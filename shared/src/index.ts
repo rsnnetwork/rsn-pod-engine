@@ -6,6 +6,7 @@ export * from './types/pod';
 export * from './types/session';
 export * from './types/match';
 export * from './types/invite';
+export * from './types/circle';
 export * from './types/subscription';
 export * from './types/video';
 export * from './types/events';
