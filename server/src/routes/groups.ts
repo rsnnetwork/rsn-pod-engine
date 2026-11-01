@@ -9,7 +9,7 @@
 // GET    /groups                                               DmGroupSummary[], most recent first
 // GET    /groups/:id                                           DmGroupDetail (members, maxMembers)
 // GET    /groups/:id/messages?before=<messageId>&limit=1..100  GroupChatMessagePage, newest first
-// POST   /groups/:id/messages           { content }            201 { messageId, createdAt, message }
+// POST   /groups/:id/messages           { content, replyToId? } 201 { messageId, createdAt, message }
 // POST   /groups/:id/read                                      { lastReadAt }
 // POST   /groups/:id/leave                                     { left, newAdminId }
 // POST   /groups/:id/members            { userIds }            { added, memberCount }   (the group's admin)
@@ -62,6 +62,8 @@ const sendBody = z.object({
     .min(1, 'Write a message first.')
     .max(4000, 'Messages can be up to 4000 characters.')
     .refine(storable, 'That message has a character that cannot be sent.'),
+  // 30 Oct 2026: the earlier message of this group the new one answers (a quoted reply); optional, as before.
+  replyToId: uuid('That message cannot be replied to.').optional().nullable(),
 });
 
 const addBody = z.object({ userIds: people.min(1, 'Choose someone to add.') });
@@ -182,7 +184,7 @@ router.post(
   validateAll({ params: groupParams, body: sendBody }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const sent = await groupService.sendGroupMessage(req.params.id, req.user!.userId, req.body.content);
+      const sent = await groupService.sendGroupMessage(req.params.id, req.user!.userId, req.body.content, req.body.replyToId ?? null);
       void fanoutGroupEntities(req.params.id);
       void groupService.pushGroupBells(sent.bells);
       const data = { messageId: sent.message.id, createdAt: sent.message.createdAt, message: sent.message };

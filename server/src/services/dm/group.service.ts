@@ -24,12 +24,15 @@ import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../mi
 import {
   ErrorCodes, GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS, UserRole, hasRoleAtLeast,
   type DmGroupDetail, type DmGroupMember, type DmGroupRole, type DmGroupSummary, type DmGroupType,
-  type GroupCandidate, type GroupChatMessage, type GroupChatMessagePage,
+  type GroupCandidate, type GroupChatMessage, type GroupChatMessagePage, type MessageReplyQuote,
 } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { E } from '../../realtime/entities';
 import { userRoom } from '../orchestration/state/session-state';
+import {
+  FORMER_MEMBER, REPLY_COLUMNS, REPLY_COPY, replyQuoteFromOriginal, replyQuoteOf, type OriginalRow, type ReplyColumns,
+} from './reply-quote';
 
 export interface DmGroup {
   id: string;
@@ -73,7 +76,7 @@ export const GROUP_COPY = {
   adminRemoves: "Only the group's admin can remove people.",
   removeSelf: 'To leave the group, use Leave.',
   memberNotFound: 'This person is not in the group.',
-  formerMember: 'Former member',
+  formerMember: FORMER_MEMBER,
 } as const;
 
 /** How long one bell stands for every message after it in the same group, per person. */
@@ -592,6 +595,8 @@ export async function sendGroupMessage(
   groupId: string,
   fromUserId: string,
   content: string,
+  /** The earlier message of this group it answers (30 Oct 2026); one the writer may see, or the message is refused. */
+  replyToId?: string | null,
 ): Promise<SentGroupMessage> {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
@@ -612,11 +617,29 @@ export async function sendGroupMessage(
     );
     if (sender.rows.length === 0) throw new ForbiddenError(GROUP_COPY.notMember);
 
+    // A reply answers a message of this group the writer may see (30 Oct 2026): not one from someone blocked with them
+    // either way, nor one from before they (last) joined, as their own thread shows neither.
+    let replyTo: MessageReplyQuote | null = null;
+    if (replyToId) {
+      const original = await client.query<OriginalRow>(
+        `SELECT o.id, o.content, o.kind, o.attachment_type, ou.display_name, ou.status
+           FROM direct_messages o
+           JOIN users ou ON ou.id = o.from_user_id
+           JOIN dm_group_members me ON me.group_id = o.group_id AND me.user_id = $3
+          WHERE o.id = $1 AND o.group_id = $2
+            AND o.created_at >= me.joined_at
+            AND ${notBlockedBetween('$3', 'o.from_user_id')}`,
+        [replyToId, groupId, fromUserId],
+      );
+      if (original.rows.length === 0) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, REPLY_COPY.notInGroup);
+      replyTo = replyQuoteFromOriginal(original.rows[0]);
+    }
+
     const inserted = await client.query<{ id: string; created_at: Date }>(
-      `INSERT INTO direct_messages (group_id, from_user_id, content)
-       VALUES ($1, $2, $3)
+      `INSERT INTO direct_messages (group_id, from_user_id, content, reply_to_id)
+       VALUES ($1, $2, $3, $4)
        RETURNING id, created_at`,
-      [groupId, fromUserId, trimmed],
+      [groupId, fromUserId, trimmed, replyTo ? replyTo.id : null],
     );
     const { id, created_at: createdAt } = inserted.rows[0];
     await client.query(`UPDATE dm_groups SET last_message_at = $2 WHERE id = $1`, [groupId, createdAt]);
@@ -646,7 +669,7 @@ export async function sendGroupMessage(
     return {
       message: {
         id, groupId, fromUserId, senderName, senderAvatarUrl: sender.rows[0].avatar_url,
-        content: trimmed, createdAt: new Date(createdAt).toISOString(),
+        content: trimmed, createdAt: new Date(createdAt).toISOString(), replyTo,
       },
       bells: {
         title, body, link,
@@ -800,14 +823,20 @@ export async function listGroupMessages(
 ): Promise<GroupChatMessagePage> {
   await requireMember(groupId, userId);
   const limit = Math.min(Math.max(options.limit ?? PAGE_DEFAULT, 1), PAGE_MAX);
+  // 30 Oct 2026: each message also reads the one it answers, if any (REPLY_COLUMNS). An original the reader may not see
+  // (from someone blocked with them either way, or from before they joined) is marked hidden, and nothing of it is sent.
   const result = await query<{
     id: string; from_user_id: string; content: string | null; created_at: Date;
     display_name: string; avatar_url: string | null; status: string;
-  }>(
-    `SELECT d.id, d.from_user_id, d.content, d.created_at, u.display_name, u.avatar_url, u.status
+  } & ReplyColumns>(
+    `SELECT d.id, d.from_user_id, d.content, d.created_at, u.display_name, u.avatar_url, u.status,
+            d.reply_to_id, ${REPLY_COLUMNS},
+            (o.id IS NOT NULL AND (o.created_at < me.joined_at OR NOT (${notBlockedBetween('$2', 'o.from_user_id')}))) AS reply_hidden
        FROM direct_messages d
        JOIN users u ON u.id = d.from_user_id
        JOIN dm_group_members me ON me.group_id = d.group_id AND me.user_id = $2
+       LEFT JOIN direct_messages o ON o.id = d.reply_to_id
+       LEFT JOIN users ou ON ou.id = o.from_user_id
       WHERE d.group_id = $1
         AND d.created_at >= me.joined_at
         AND ${notBlockedBetween('$2', 'd.from_user_id')}
@@ -821,7 +850,7 @@ export async function listGroupMessages(
     messages: rows.map((r) => ({
       id: r.id, groupId, fromUserId: r.from_user_id,
       senderName: nameOf(r.display_name, r.status), senderAvatarUrl: avatarOf(r.avatar_url, r.status),
-      content: r.content ?? '', createdAt: new Date(r.created_at).toISOString(),
+      content: r.content ?? '', createdAt: new Date(r.created_at).toISOString(), replyTo: replyQuoteOf(r),
     })),
     nextCursor: result.rows.length > limit ? rows[rows.length - 1].id : null,
   };

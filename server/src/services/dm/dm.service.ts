@@ -26,10 +26,11 @@ import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
-import { ErrorCodes, EVENT_FORMAT_KEYS, liveKindOf } from '@rsn/shared';
+import { ErrorCodes, EVENT_FORMAT_KEYS, liveKindOf, type MessageReplyQuote } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import { BroadcastBlockedError } from './broadcast-errors';
 import { FORMER_MEMBER_NAME, activeMemberSql } from '../users/active-member';
+import { REPLY_COLUMNS, REPLY_COPY, replyQuoteFromOriginal, replyQuoteOf, type OriginalRow, type ReplyColumns } from './reply-quote';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,8 @@ export interface DmMessage {
   attachmentUrl?: string | null;
   attachmentType?: string | null;
   attachmentMeta?: Record<string, any> | null;
+  /** The message this one answers, as the reader may see it (30 Oct 2026); null when it answers none. */
+  replyTo?: MessageReplyQuote | null;
 }
 
 // ─── Reaction allow-list ───────────────────────────────────────────────────
@@ -291,6 +294,8 @@ export async function sendMessage(
   toUserId: string,
   content: string,
   attachment?: SendMessageAttachment | null,
+  /** The earlier message of this conversation it answers (30 Oct 2026); checked inside the insert. */
+  replyToId?: string | null,
 ): Promise<{ message: DmMessage; conversationId: string }> {
   if (fromUserId === toUserId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot DM yourself');
@@ -331,7 +336,7 @@ export async function sendMessage(
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, message);
   }
 
-  return insertDirectMessage(fromUserId, toUserId, hasText ? trimmed : null, hasAttachment ? attachment! : null);
+  return insertDirectMessage(fromUserId, toUserId, hasText ? trimmed : null, hasAttachment ? attachment! : null, { replyToId });
 }
 
 // ─── Broadcast send (no mutual gate) ──────────────────────────────────────
@@ -359,6 +364,8 @@ async function insertDirectMessage(
 export interface InsertMessageOpts {
   kind?: DmMessageKind;
   systemMeta?: DmSystemMeta | null;
+  /** The earlier message of this same conversation the new one answers; anything else is refused (400). */
+  replyToId?: string | null;
 }
 
 /**
@@ -395,6 +402,23 @@ export async function insertDirectMessageOn(
     );
     const conversationId = convResult.rows[0].id;
 
+    // A reply answers a message of this very conversation (30 Oct 2026). The id came from the writer's screen, so it
+    // is looked up here, in the transaction: an id of another conversation, or of none, is refused and nothing is kept.
+    let replyTo: MessageReplyQuote | null = null;
+    if (opts.replyToId) {
+      const original = await client.query<OriginalRow>(
+        `SELECT o.id, o.content, o.kind, o.attachment_type, ou.display_name, ou.status
+           FROM direct_messages o
+           JOIN users ou ON ou.id = o.from_user_id
+          WHERE o.id = $1 AND o.conversation_id = $2`,
+        [opts.replyToId, conversationId],
+      );
+      if (original.rows.length === 0) {
+        throw new AppError(400, ErrorCodes.VALIDATION_ERROR, REPLY_COPY.notInConversation);
+      }
+      replyTo = replyQuoteFromOriginal(original.rows[0]);
+    }
+
     const hasText = content !== null && content.length > 0;
     const hasAttachment = !!attachment?.url;
 
@@ -407,9 +431,9 @@ export async function insertDirectMessageOn(
     }>(
       `INSERT INTO direct_messages (
          id, conversation_id, from_user_id, content,
-         attachment_url, attachment_type, attachment_meta, kind, system_meta
+         attachment_url, attachment_type, attachment_meta, kind, system_meta, reply_to_id
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id, conversation_id, from_user_id, content, read_at, created_at,
                  attachment_url, attachment_type, attachment_meta, kind, system_meta`,
       [
@@ -420,6 +444,7 @@ export async function insertDirectMessageOn(
         hasAttachment ? (attachment!.meta ?? null) : null,
         opts.kind ?? 'user',
         opts.systemMeta ? JSON.stringify(opts.systemMeta) : null,
+        replyTo ? replyTo.id : null,
       ],
     );
 
@@ -440,6 +465,7 @@ export async function insertDirectMessageOn(
         attachmentMeta: m.attachment_meta,
         kind: (m.kind ?? 'user') as DmMessageKind,
         systemMeta: (m.system_meta ?? null) as DmSystemMeta | null,
+        replyTo,
       },
     };
   }
@@ -653,14 +679,18 @@ export async function listMessages(
     attachment_meta: Record<string, any> | null;
     kind: string | null;
     system_meta: DmSystemMeta | null;
-  }>(
+  } & ReplyColumns>(
+    // 30 Oct 2026: each message also reads the one it answers, if any (REPLY_COLUMNS), so the thread can quote it.
     `SELECT
         m.id, m.conversation_id, m.from_user_id,
         m.content, m.read_at, m.created_at,
         m.attachment_url, m.attachment_type, m.attachment_meta,
         m.kind, m.system_meta,
-        COALESCE(r.reactions, '{}'::jsonb) AS reactions
+        COALESCE(r.reactions, '{}'::jsonb) AS reactions,
+        m.reply_to_id, ${REPLY_COLUMNS}
      FROM direct_messages m
+     LEFT JOIN direct_messages o ON o.id = m.reply_to_id
+     LEFT JOIN users ou ON ou.id = o.from_user_id
      LEFT JOIN LATERAL (
        SELECT jsonb_object_agg(emoji, users) AS reactions
        FROM (
@@ -690,6 +720,7 @@ export async function listMessages(
       attachmentMeta: r.attachment_meta,
       kind: (r.kind ?? 'user') as DmMessageKind,
       systemMeta: r.system_meta ?? null,
+      replyTo: replyQuoteOf(r),
     })),
     total,
   };

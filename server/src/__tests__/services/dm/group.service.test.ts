@@ -109,7 +109,8 @@ const INSERT_MESSAGE = /INSERT INTO direct_messages/;
 const TOUCH = /UPDATE dm_groups SET last_message_at/;
 const BELLS = /INSERT INTO notifications/;
 const ACCESS = /FROM dm_groups g LEFT JOIN dm_group_members me ON me\.group_id = g\.id AND me\.user_id = \$2 WHERE g\.id = \$1/;
-const THREAD = /FROM direct_messages d JOIN users u ON u\.id = d\.from_user_id JOIN dm_group_members me ON me\.group_id = d\.group_id AND me\.user_id = \$2 WHERE d\.group_id = \$1/;
+// 30 Oct 2026: the thread also LEFT JOINs the message each one answers (quoted replies, message-replies.test.ts).
+const THREAD = /FROM direct_messages d JOIN users u ON u\.id = d\.from_user_id JOIN dm_group_members me ON me\.group_id = d\.group_id AND me\.user_id = \$2 LEFT JOIN direct_messages o ON o\.id = d\.reply_to_id LEFT JOIN users ou ON ou\.id = o\.from_user_id WHERE d\.group_id = \$1/;
 const SUMMARY = /FROM dm_group_members me JOIN dm_groups g ON g\.id = me\.group_id/;
 const MEMBERS = /FROM dm_group_members m JOIN users u ON u\.id = m\.user_id WHERE m\.group_id = \$1 ORDER BY/;
 const READ_MARK = /UPDATE dm_group_members SET last_read_at = NOW\(\)/;
@@ -579,8 +580,10 @@ describe('sendGroupMessage', () => {
     expect(out.message).toEqual({
       id: MSG, groupId: GROUP, fromUserId: CREATOR, senderName: 'Claus Meyer',
       senderAvatarUrl: 'https://res.cloudinary.com/x/claus.jpg', content: 'Thanks for coming!', createdAt: NOW.toISOString(),
+      replyTo: null,
     });
-    expect(callTo(mockTx, INSERT_MESSAGE)![1]).toEqual([GROUP, CREATOR, 'Thanks for coming!']);
+    // The fourth value is the message it answers: none here (quoted replies, 30 Oct 2026).
+    expect(callTo(mockTx, INSERT_MESSAGE)![1]).toEqual([GROUP, CREATOR, 'Thanks for coming!', null]);
     expect(callTo(mockTx, TOUCH)![1]).toEqual([GROUP, NOW]);
     expect(indexOf(mockTx, LOCK)).toBe(0);
     expect(indexOf(mockTx, SENDER)).toBeGreaterThan(0);

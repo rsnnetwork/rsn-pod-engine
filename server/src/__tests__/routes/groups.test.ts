@@ -243,7 +243,7 @@ describe('POST /groups/:id/messages', () => {
     const res = await request(app).post(`/groups/${GROUP}/messages`).set(me).send({ content: '  Hello all  ' });
     expect(res.status).toBe(201);
     expect(res.body).toEqual({ success: true, data: { messageId: 'm-1', createdAt: '2026-10-26T10:00:00.000Z', message: sent.message } });
-    expect(mockSend).toHaveBeenCalledWith(GROUP, 'u-send', 'Hello all');
+    expect(mockSend).toHaveBeenCalledWith(GROUP, 'u-send', 'Hello all', null);
     expect(mockFanoutGroup).toHaveBeenCalledWith(GROUP);
     expect(mockPush).toHaveBeenCalledWith(sent.bells);
   });
