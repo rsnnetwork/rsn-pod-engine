@@ -614,3 +614,17 @@ export const eventChatWriteLimiter = rateLimit({
   store: buildStore('event-chat-write'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
+
+// The notifications page (30 Oct 2026): each "Load more" and each change to the list reads a page. Sixty a minute per
+// member is far more than anyone scrolls, while a runaway client is stopped. The bell's own read (no query string) is
+// never counted here: production's bell polls it every 30 seconds and refreshes on every change, as it always has.
+export const notificationPageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  skip: (req) => req.query.before === undefined && req.query.limit === undefined,
+  store: buildStore('notification-page'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});

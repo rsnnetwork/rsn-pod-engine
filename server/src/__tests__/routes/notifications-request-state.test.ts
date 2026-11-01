@@ -271,11 +271,13 @@ describe('the request link format is pinned', () => {
     return request(app).get('/notifications').set(auth).then(() => {
       const [sql, params] = listQuery();
       const flat = String(sql).replace(/\s+/g, ' ');
-      expect(params).toEqual([ME, REQUEST_BELL_LINK_PATTERN]);
+      // 30 Oct 2026: the list pages (notification-list.service.ts). With no query string it starts at the newest and
+      // reads the bell's 20, plus one to know whether an older page follows.
+      expect(params).toEqual([ME, REQUEST_BELL_LINK_PATTERN, null, null, 21]);
       expect(flat).toMatch(/LEFT JOIN user_pokes p ON n\.type = 'poke'/);
       expect(flat).toMatch(/p\.id = substring\(n\.link FROM \$2::text\)::uuid/);
       expect(flat).toMatch(/p\.status = 'accepted'/);
-      expect(flat).toMatch(/LIMIT 20/);
+      expect(flat).toMatch(/LIMIT \$5/);
     });
   });
 });
