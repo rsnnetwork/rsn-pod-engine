@@ -14,6 +14,7 @@ import { callRequestIdInPath, conversationIdInPath } from '../middleware/dm-path
 import * as meetingService from '../services/dm/meeting-windows.service';
 import * as callService from '../services/dm/meeting-call.service';
 import { areActive } from '../services/presence/presence.service';
+import { callReadLimiter, callRequestLimiter } from '../middleware/rateLimit';
 import { buildMeetingFile, MEETING_FILE_HEADERS } from '../services/meetings/meeting-calendar';
 import { NotFoundError } from '../middleware/errors';
 import { query } from '../db';
@@ -197,12 +198,15 @@ router.post(
 );
 
 // POST /dm/conversations/:id/call/request — ask the partner for a call of a
-// chosen length (9 Sep 2026). Requires calls to be unlocked (first meeting
-// happened) and the partner online. The caller then waits for accept/decline.
+// chosen length (9 Sep 2026). The partner must be online; the caller then waits
+// for accept/decline. 1 Nov 2026: a video call needs a connection, not a held
+// meeting; audio still needs calls unlocked. 10 rings per 10 minutes per member,
+// one bucket with POST /calls/user/:userId.
 router.post(
   '/conversations/:id/call/request',
   authenticate,
   conversationIdInPath,
+  callRequestLimiter,
   validate(callRequestBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -223,6 +227,31 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await callService.getPendingCallRequest(req.params.id, req.user!.userId);
+      res.json({ success: true, data: result } as ApiResponse);
+    } catch (err) { next(err); }
+  },
+);
+
+// GET /dm/call/requests/incoming — the call ringing me now, if any; /outgoing — the one I rang that is still
+// waiting (1 Nov 2026). Any screen opened or refreshed while a call rings shows it again from these.
+router.get(
+  '/call/requests/incoming',
+  authenticate,
+  callReadLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await callService.getIncomingCallRequest(req.user!.userId);
+      res.json({ success: true, data: result } as ApiResponse);
+    } catch (err) { next(err); }
+  },
+);
+router.get(
+  '/call/requests/outgoing',
+  authenticate,
+  callReadLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await callService.getOutgoingCallRequest(req.user!.userId);
       res.json({ success: true, data: result } as ApiResponse);
     } catch (err) { next(err); }
   },

@@ -339,6 +339,25 @@ export async function sendMessage(
   return insertDirectMessage(fromUserId, toUserId, hasText ? trimmed : null, hasAttachment ? attachment! : null, { replyToId });
 }
 
+/**
+ * The pair's conversation, made if they have none yet (1 Nov 2026). The profile's Video call knows a person,
+ * not a conversation, and two people who met at an event may never have written. Same pair key as every
+ * message (insertDirectMessageOn), but nothing else is touched: no message, no time stamped, and a thread
+ * either side hid stays hidden until a message un-hides it. The caller decides who may have one: the call
+ * route asks call-eligibility.ts first, as a conversation itself makes the two a connection.
+ */
+export async function findOrCreateConversation(userA: string, userB: string): Promise<string> {
+  const [orderedA, orderedB] = normalizePair(userA, userB);
+  const r = await query<{ id: string }>(
+    `INSERT INTO dm_conversations (id, user_a_id, user_b_id)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_a_id, user_b_id) DO UPDATE SET user_a_id = EXCLUDED.user_a_id
+     RETURNING id`,
+    [uuid(), orderedA, orderedB],
+  );
+  return r.rows[0].id;
+}
+
 // ─── Broadcast send (no mutual gate) ──────────────────────────────────────
 
 /**

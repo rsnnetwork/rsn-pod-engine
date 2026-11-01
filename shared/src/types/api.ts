@@ -122,6 +122,10 @@ export const ErrorCodes = {
   MEETING_NOT_STARTED: 'MEETING_NOT_STARTED',  // 409; feedback on a meeting waits for its start
   MEETING_CANCELLED: 'MEETING_CANCELLED',  // 409; a cancelled meeting takes no feedback
 
+  // Call errors (1 Nov 2026)
+  CALL_PARTNER_OFFLINE: 'CALL_PARTNER_OFFLINE',  // 409; the person rung is not on REASON right now (no ring, no bell)
+  CALL_ALREADY_WAITING: 'CALL_ALREADY_WAITING',  // 409; this pair already has a call ringing, from either side
+
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',
   MATCH_ALREADY_RATED: 'MATCH_ALREADY_RATED',

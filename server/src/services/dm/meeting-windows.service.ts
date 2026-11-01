@@ -22,6 +22,7 @@ import { combinedRequestMessage } from '../poke/request-text';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
 import { meetingTime } from '../meetings/meeting-time';
 import { CURRENT_MEETING_ID, lockConversation } from '../meetings/current-meeting';
+import { canVideoCall } from './call-eligibility';
 
 export const DAYPARTS = ['morning', 'afternoon', 'evening'] as const;
 export type Daypart = typeof DAYPARTS[number];
@@ -62,9 +63,16 @@ export interface ConversationScheduling {
   schedulingUpdated: boolean;
   /** 9 Sep 2026 (Ali): calls unlock once this pair's first scheduled meeting has
    *  happened (both joined). Until then the chat shows the scheduler, not calls;
-   *  after, the scheduler steps aside and calls appear. */
+   *  after, the scheduler steps aside and calls appear. Unchanged on 1 Nov 2026:
+   *  production's thread hides its scheduler once this is true. */
   callsUnlocked: boolean;
+  /** 1 Nov 2026 (L12): the viewer may ring the other person for a video call now, held meeting or
+   *  not: the two are connected, neither has blocked the other, both are members (call-eligibility.ts). */
+  canCall: boolean;
 }
+
+/** The scheduling answer as it is built from the conversation alone, before canCall is asked. */
+type SchedulingCore = Omit<ConversationScheduling, 'canCall'>;
 
 export type MeetingKind = 'audio' | 'video';
 
@@ -215,7 +223,7 @@ function buildScheduling(
   conv: ConversationRow,
   userId: string,
   rows: Array<{ user_id: string; window_key: string }>,
-): ConversationScheduling {
+): SchedulingCore {
   const mine = rows.filter(r => r.user_id === userId).map(r => r.window_key).sort();
   const theirs = rows.filter(r => r.user_id !== userId).map(r => r.window_key).sort();
   const theirSet = new Set(theirs);
@@ -358,7 +366,8 @@ export async function getScheduling(conversationId: string, userId: string): Pro
     `SELECT user_id, window_key FROM meeting_availability WHERE conversation_id = $1`,
     [conversationId],
   );
-  return buildScheduling(conv, userId, rows.rows);
+  const core = buildScheduling(conv, userId, rows.rows);
+  return { ...core, canCall: await canVideoCall(userId, core.partnerId) };
 }
 
 /**

@@ -104,6 +104,22 @@ describe('getPersonBrief', () => {
     expect(brief.relationship.state).toBe(state);
   });
 
+  // 1 Nov 2026 (L12): the profile's Video call. Connected or met is the one definition of a connection
+  // (connections.service.ts), and a blocked pair or a closed account never gets a brief at all.
+  it.each([
+    [false, 'none', {}],
+    [false, 'requested', { poke: { id: 'p1', status: 'pending', sentByMe: true } }],
+    [false, 'incoming', { poke: { id: 'p2', status: 'pending', sentByMe: false } }],
+    [false, 'declined', { poke: { id: 'p3', status: 'declined', sentByMe: true } }],
+    [true, 'connected by an accepted request', { poke: { id: 'p4', status: 'accepted', sentByMe: false } }],
+    [true, 'connected by a conversation', { conv: { id: 'c1', joined_a: null, joined_b: null } }],
+    [true, 'met at an event', { enc: { times_met: 1, last_met_at: new Date('2026-09-01'), last_session_id: 's1' } }],
+    [true, 'met in a 1:1 meeting', { conv: { id: 'c1', joined_a: new Date(), joined_b: new Date() } }],
+  ] as const)('canCall is %s for %s, with no meeting held first', async (canCall, _label, o) => {
+    arm(o as never);
+    expect((await getPersonBrief(VIEWER, TARGET)).canCall).toBe(canCall);
+  });
+
   it('counts meetings from events and from a held 1:1 meeting', async () => {
     arm({ enc: { times_met: 2, last_met_at: new Date('2026-09-01'), last_session_id: 's1' }, conv: { id: 'c1', joined_a: new Date(), joined_b: new Date() } });
     expect((await getPersonBrief(VIEWER, TARGET)).relationship.timesMet).toBe(3);

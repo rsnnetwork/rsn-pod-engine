@@ -62,7 +62,7 @@ function row(extra: Record<string, unknown> = {}) {
     id: MEETING, conversation_id: 'conv-1', user_a_id: A, user_b_id: B,
     start_at: new Date('2026-11-05T17:00:00Z'), duration_min: 30, kind: 'video', status: 'scheduled',
     context: 'Coffee about your seed round?', joined_a_at: null, joined_b_at: null,
-    calendar_sequence: 0, confirmed_by: B,
+    calendar_sequence: 0, confirmed_by: B, source: 'scheduled',
     partner_id: B, partner_name: 'Bo Meyer', partner_avatar_url: 'https://cdn.example/bo.png', partner_status: 'active',
     ...extra,
   };
@@ -153,10 +153,29 @@ describe('listMeetings', () => {
         partner: { userId: B, displayName: 'Bo Meyer', avatarUrl: 'https://cdn.example/bo.png' },
         startAt: '2026-11-05T17:00:00.000Z', durationMin: 30, kind: 'video', status: 'scheduled', phase: 'upcoming',
         context: 'Coffee about your seed round?', joinPath: '/meet/conv-1?scheduled=1&kind=video',
-        attended: { me: false, them: false },
+        attended: { me: false, them: false }, source: 'scheduled',
       }],
       nextBefore: null,
     });
+  });
+
+  // 1 Nov 2026 (migration 124): every meeting booked before is a scheduled one, and reads as before.
+  it('reads each meeting\'s source; a meeting booked in the scheduler says scheduled and keeps its scheduled Join', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row()] });
+
+    const list = await listMeetings(A, { scope: 'upcoming', limit: 20 }, NOW);
+
+    expect(flat(mockQuery.mock.calls[0][0])).toMatch(/m\.confirmed_by, m\.source,/);
+    expect(list.items[0]).toMatchObject({ source: 'scheduled', joinPath: '/meet/conv-1?scheduled=1&kind=video' });
+  });
+
+  it('an answered call is listed once under past as an instant meeting, whose Join opens the room with no countdown', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ source: 'instant', start_at: new Date('2026-11-05T09:00:00Z'), duration_min: 15, confirmed_by: A })] });
+
+    const list = await listMeetings(A, { scope: 'past', limit: 20 }, NOW);
+
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]).toMatchObject({ source: 'instant', phase: 'ended', durationMin: 15, joinPath: '/meet/conv-1?kind=video' });
   });
 
   it('past: the scheduled meetings that have ended, latest first', async () => {
@@ -371,7 +390,7 @@ describe('cancelMeeting', () => {
     const claim = calls(/UPDATE meetings SET status = 'cancelled'/);
     expect(claim).toHaveLength(1);
     expect(flat(claim[0][0])).toMatch(
-      /SET status = 'cancelled', cancelled_by = \$2, cancelled_at = NOW\(\), calendar_sequence = calendar_sequence \+ 1, updated_at = NOW\(\) WHERE id = \$1 AND status = 'scheduled' AND start_at > \$3 RETURNING/,
+      /SET status = 'cancelled', cancelled_by = \$2, cancelled_at = NOW\(\), calendar_sequence = calendar_sequence \+ 1, updated_at = NOW\(\) WHERE id = \$1 AND status = 'scheduled' AND source = 'scheduled' AND start_at > \$3 RETURNING/,
     );
     expect(claim[0][1]).toEqual([MEETING, A, NOW]);
     // The conversation row is locked before the meeting row, the order a booking and a move use, so a
@@ -380,6 +399,17 @@ describe('cancelMeeting', () => {
     const claimAt = mockTxSql.findIndex((s) => /UPDATE meetings SET status = 'cancelled'/.test(flat(s)));
     expect(lock).toBeGreaterThanOrEqual(0);
     expect(claimAt).toBeGreaterThan(lock);
+  });
+
+  // 1 Nov 2026: an answered call starts when it is answered, so it is under way or over by the time
+  // anyone could press Cancel; the claim never takes one either way, and nothing is said or sent.
+  it('an answered call is never cancelled: the claim takes only scheduled meetings, and the refusal says it started', async () => {
+    armCancel({ claims: 0, statusAfter: 'scheduled', current: null, meeting: { source: 'instant', start_at: new Date(NOW.getTime() - 60_000), duration_min: 15 } });
+
+    await expect(cancelMeeting(A, MEETING, NOW)).rejects.toMatchObject({ statusCode: 409, code: 'MEETING_ALREADY_STARTED' });
+    expect(calls(/UPDATE dm_conversations|DELETE FROM meeting_availability/)).toHaveLength(0);
+    expect(mockInsertOn).not.toHaveBeenCalled();
+    expect(mockCancelEmail).not.toHaveBeenCalled();
   });
 
   it('takes the meeting off the conversation, so production\'s banner and Join disappear, and frees the time from the canceller\'s own list', async () => {

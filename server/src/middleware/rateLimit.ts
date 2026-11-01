@@ -482,6 +482,33 @@ export const meetingCancelLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have cancelled a lot of meetings this hour. Try again later.' } },
 });
 
+// Ringing someone for a call (1 Nov 2026, L12). Each ring is a bell, a banner on every screen the other person
+// has open and a line in the thread, so a member rings at most 10 calls in 10 minutes, whether from a profile
+// (POST /calls/user/:userId) or a thread (POST /dm/conversations/:id/call/request): one limiter, one bucket.
+// Only a ring counts: a refusal (offline, not a connection, one already ringing) rang nobody.
+export const callRequestLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-request'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have rung a lot of calls in the last few minutes. Try again in a little while.' } },
+});
+
+// The call ringing me, or the one I rang (1 Nov 2026): read when the app opens, after a refresh and when the
+// connection comes back, and again when a call changes. A minute's worth is far more than a member's screens ask.
+export const callReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // Feedback after a meeting (30 Oct 2026). Each person answers once per meeting and may change the answer, so 30 an hour
 // is far more than anyone needs; each save tells every admin's feedback list. Keyed per member: the route signs in first.
 // Only a save that happened counts: a refusal (not your meeting, not started yet) changed nothing.

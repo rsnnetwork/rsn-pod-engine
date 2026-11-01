@@ -213,6 +213,11 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
     entities,
     canMessage: messaging.allowed,
     canMessageReason: messaging.allowed ? null : refusalOf(messaging.reason),
+    // 1 Nov 2026 (L12): connected or met is the one definition of a connection (connections.service.ts: an
+    // accepted request, a conversation, a 1:1 meeting both joined, an event meeting), read from the same rows
+    // above, so the profile's Video call costs no extra read. A block or a closed account never reaches here
+    // (both are a 404 above), and the viewer is signed in, so active.
+    canCall: state === 'connected' || state === 'met',
   };
 }
 
