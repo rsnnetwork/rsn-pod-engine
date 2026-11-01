@@ -15,6 +15,7 @@ import {
 import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
 import { readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
+import { readEventCircle } from '../services/circle/circle-events.service';
 import * as eventRequests from '../services/session/event-requests.service';
 import { eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
@@ -85,6 +86,8 @@ export const createSessionSchema = z.object({
   scheduledAt: z.string().datetime().nullable(),
   format: eventFormatSchema.optional(),
   visibility: eventVisibilitySchema.optional(),
+  // T13 (1 Nov 2026) — an event for a whole circle. Optional: production's form sends none, and nothing changes.
+  circleId: z.string().uuid().optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -125,6 +128,8 @@ export const updateSessionSchema = z.object({
   scheduledAt: z.string().datetime().optional(),
   format: eventFormatSchema.optional(),
   visibility: eventVisibilitySchema.optional(),
+  // T13 (1 Nov 2026) — name a circle (one its managers run) or clear it with null. Production's edit form sends none.
+  circleId: z.string().uuid().nullable().optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -227,10 +232,12 @@ router.get(
       // so the event page stops guessing from the pod.
       const facts = await readEventAccessFacts(req.params.id, req.user!.userId);
       const access = facts ? summariseEventAccess(facts, req.user!.role) : undefined;
+      // T13 (1 Nov 2026) — additive: the circle the event is for, so its page says "For <circle>" with a link.
+      const circle = await readEventCircle(session?.circleId);
 
       const response: ApiResponse = {
         success: true,
-        data: { ...session, participantCount, ...(access ? { access } : {}) },
+        data: { ...session, participantCount, ...(access ? { access } : {}), ...(circle ? { circle } : {}) },
       };
       res.json(response);
     } catch (err) {

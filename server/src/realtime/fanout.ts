@@ -23,8 +23,20 @@
 // See: docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
 
 import logger from '../config/logger';
+import { activeMemberSql } from '../services/users/active-member';
 import { emitEntities, getRealtimeIo } from './emit';
 import { E } from './entities';
+
+/**
+ * T13 (1 Nov 2026): an event for a whole circle has the circle's active members in its audience as well as its
+ * pod's (event-access.ts). One UNION arm, for the event in `$1`, so every helper below that tells an event's
+ * people about a change to it (renamed, rescheduled, cancelled, started, deleted) tells them too.
+ */
+const CIRCLE_AUDIENCE_ARM = `
+     SELECT cm.user_id FROM circle_members cm
+       JOIN sessions cs ON cs.circle_id = cm.circle_id
+       JOIN users cu ON cu.id = cm.user_id
+      WHERE cs.id = $1 AND ${activeMemberSql('cu')}`;
 
 // ─── Pod-scoped fanout ──────────────────────────────────────────────────────
 //
@@ -121,7 +133,8 @@ export async function fanoutPodWall(
 // ─── Session-scoped fanout ──────────────────────────────────────────────────
 //
 // Mirrors the legacy notifySessionListChanged audience: anyone who is a
-// session participant OR a member of the pod the session lives under. Emits
+// session participant OR a member of the pod the session lives under, plus
+// (T13) the active members of the circle a circle event is for. Emits
 // session + sessionParticipants + (optional) podSessions by default.
 
 export async function fanoutSessionEntities(
@@ -139,7 +152,8 @@ export async function fanoutSessionEntities(
        UNION
        SELECT user_id FROM pod_members
          WHERE pod_id = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
-           AND status NOT IN ('removed', 'declined')`,
+           AND status NOT IN ('removed', 'declined')
+       UNION${CIRCLE_AUDIENCE_ARM}`,
       [sessionId, podId],
     );
     const entities: string[] = [E.session(sessionId), E.sessionParticipants(sessionId)];
@@ -162,7 +176,8 @@ export async function fanoutSessionEntities(
 // everyone's: the payload stays two tags long however big the pod is, and no
 // client is told another member's id.
 //
-// Audience: the event's participants, its pod's members and its host. The host
+// Audience: the event's participants, its pod's members, its host and, for an
+// event for a whole circle, the circle's active members (T13). The host
 // is read on its own because a host who has left their own event, or an admin
 // who runs one in a pod they do not belong to, is in neither of the others.
 
@@ -185,7 +200,8 @@ export async function resolveSessionListAudience(
          AND status NOT IN ('removed', 'declined')
      UNION
      SELECT host_user_id FROM sessions
-       WHERE id = $1 AND host_user_id IS NOT NULL`,
+       WHERE id = $1 AND host_user_id IS NOT NULL
+     UNION${CIRCLE_AUDIENCE_ARM}`,
     [sessionId, podId],
   );
   return result.rows.map(r => r.user_id);
@@ -520,6 +536,48 @@ export async function fanoutCircleChange(
     ));
   } catch (err) {
     logger.warn({ err, circleId }, 'fanoutCircleChange: failed to fan out');
+  }
+}
+
+// ─── Circle-event fanout (T13, 1 Nov 2026) ──────────────────────────────────
+//
+// An event now names a circle (made for it, or edited to it), or stopped naming it. Everyone in the circle
+// hears it, as the circle is after the write: its ACTIVE members, the person who made it (who manages it with
+// no member row), and the actor. Each recipient is sent, in an emit of their own:
+//   circle:<id>                    the circle page, whose events list moved;
+//   session:<id>                   the event page;
+//   user:<recipient>:sessions      their own Home and Events lists.
+// The bells' own tag (user:<id>:notifications) goes with each bell, from circle-events.service.ts.
+// Modelled on resolveSessionListAudience + fanoutSessionListEntities: a recipient's tags name only themselves,
+// so no client is told another member's id. A big circle is told in batches of CIRCLE_EVENT_FANOUT_BATCH.
+
+export const CIRCLE_EVENT_FANOUT_BATCH = 200;
+
+export async function resolveCircleEventAudience(circleId: string): Promise<string[]> {
+  const { query } = await import('../db');
+  const result = await query<{ user_id: string }>(
+    `SELECT cm.user_id FROM circle_members cm
+       JOIN users u ON u.id = cm.user_id
+      WHERE cm.circle_id = $1 AND ${activeMemberSql('u')}
+     UNION
+     SELECT created_by FROM circles WHERE id = $1`,
+    [circleId],
+  );
+  return result.rows.map(r => r.user_id);
+}
+
+export async function fanoutCircleEvent(circleId: string, sessionId: string, actorId?: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const recipients = [...new Set([...(await resolveCircleEventAudience(circleId)), actorId].filter(Boolean))] as string[];
+    for (let i = 0; i < recipients.length; i += CIRCLE_EVENT_FANOUT_BATCH) {
+      await Promise.all(recipients.slice(i, i + CIRCLE_EVENT_FANOUT_BATCH).map(userId =>
+        emitEntities(io, [userId], [E.circle(circleId), E.session(sessionId), E.userSessions(userId)]),
+      ));
+    }
+  } catch (err) {
+    logger.warn({ err, circleId, sessionId }, 'fanoutCircleEvent: failed to fan out');
   }
 }
 

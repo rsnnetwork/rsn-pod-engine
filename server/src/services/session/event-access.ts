@@ -12,8 +12,8 @@
 // say-so). A removed participant stays removed (registerParticipant's own row checks). A removed, suspended or
 // banned account sees nothing and joins nothing.
 //
-// "The event's audience" is one fragment, eventAudienceSql: today the pod's active members. A circle event (T13)
-// widens it there, so every rule here follows.
+// "The event's audience" is one fragment, eventAudienceSql: the pod's active members, and for an event for a whole
+// circle (T13, sessions.circle_id) the circle's active members too. Every rule here follows it.
 
 import {
   ErrorCodes, UserRole, hasRoleAtLeast, isEventVisibility,
@@ -39,13 +39,22 @@ function checked(sessionAlias: string, userParam: string): void {
 // ─── SQL fragments ───────────────────────────────────────────────────────────
 
 /**
- * The event's audience: the people it is for, who see a private event and never wait for approval. Today the
- * pod's active members. T13 (circle events) adds the circle's members here.
+ * The event's audience: the people it is for, who see a private event and never wait for approval. The pod's
+ * active members, and (T13, L20) for an event for a whole circle the circle's members whose account is active:
+ * they see it and register without joining the pod, and someone who joins the circle later is in at once.
+ * Leaving the circle keeps a place already taken (that is a participant row, not the audience). The circle arm
+ * needs an explicit visibility: a NULL event follows its pod alone, exactly as before, and every circle event is
+ * made with one (createSession / updateSession).
  */
 export function eventAudienceSql(sessionAlias: string, userParam: string): string {
   checked(sessionAlias, userParam);
-  return `EXISTS (SELECT 1 FROM pod_members ea_m
-                   WHERE ea_m.pod_id = ${sessionAlias}.pod_id AND ea_m.user_id = ${userParam} AND ea_m.status = 'active')`;
+  const s = sessionAlias;
+  const u = userParam;
+  return `(EXISTS (SELECT 1 FROM pod_members ea_m
+                    WHERE ea_m.pod_id = ${s}.pod_id AND ea_m.user_id = ${u} AND ea_m.status = 'active')
+           OR (${s}.circle_id IS NOT NULL AND ${s}.visibility IS NOT NULL AND EXISTS (
+                SELECT 1 FROM circle_members ea_cm JOIN users ea_cu ON ea_cu.id = ea_cm.user_id
+                 WHERE ea_cm.circle_id = ${s}.circle_id AND ea_cm.user_id = ${u} AND ${activeMemberSql('ea_cu')})))`;
 }
 
 /**

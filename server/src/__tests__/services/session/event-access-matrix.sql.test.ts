@@ -134,10 +134,13 @@ suite('event access matrix and requests (real Postgres)', () => {
     for (const table of TABLES) {
       await admin.query(`CREATE TABLE ${schema}.${table} (LIKE public.${table} INCLUDING ALL)`);
     }
-    // Migration 125 inside the schema (its constraint name is global, so the column check may already exist).
-    const migration = fs.readFileSync(path.join(__dirname, '../../../db/migrations/125_event_visibility.sql'), 'utf8');
+    // Migrations 125 and 127 inside the schema (125's constraint name is global, so the column check may already
+    // exist). 127 (T13) adds sessions.circle_id, which the audience fragment reads; every event here leaves it NULL,
+    // so this matrix also holds that an event with no circle answers exactly as before.
     await admin.query(`SET search_path TO ${schema}`);
-    await admin.query(migration);
+    for (const file of ['125_event_visibility.sql', '127_circle_events.sql']) {
+      await admin.query(fs.readFileSync(path.join(__dirname, '../../../db/migrations', file), 'utf8'));
+    }
     await admin.query(`SET search_path TO public`);
     process.env.DATABASE_URL = `${url}${url!.includes('?') ? '&' : '?'}options=${encodeURIComponent(`-c search_path=${schema}`)}`;
     db = await import('../../../db');
