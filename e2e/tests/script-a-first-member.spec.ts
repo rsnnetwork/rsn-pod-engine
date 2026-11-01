@@ -7,7 +7,7 @@
 //   02 The tour shows its heading and explanation before "Examples only. These are not real members.", above the
 //      picture of made-up people.
 //   03 LinkedIn is offered, and the whole flow finishes without it (Continue with email).
-//   04 On For You they find another member, open the profile and come Back to the same place.
+//   04 They find another member by name (search), open the profile and come Back to the same results.
 //   05 They send a request: the other member's Messages, open the whole time, shows "<First> wants to meet you" (T5)
 //      without a reload; the button reads "Request sent" and a second press sends nothing more. The other accepts: the
 //      sender's open profile loses the bar and offers Message (T5) without a reload. A third member asks the new
@@ -26,9 +26,6 @@ const SLOW = 60_000;
 const LIVE = 25_000;
 const WELCOME = "Answer a few quick questions and we'll suggest potential mutuals for you.";
 const CAPTION = 'Examples only. These are not real members.';
-// Made-up words (no vowels, six letters) that only this run's members share, so For You shows exactly them.
-const LETTERS = 'bcdfhjklmnpqvwxz';
-const WORDS = Array.from({ length: 3 }, () => Array.from({ length: 6 }, () => LETTERS[Math.floor(Math.random() * LETTERS.length)]).join('')).join(' ');
 
 let browser: Browser;
 let ava: TestUser, ben: TestUser, cleo: TestUser;
@@ -40,13 +37,12 @@ async function press(page: Page, target: Locator) {
 }
 const tick = (page: Page, label: string) => press(page, page.getByRole('checkbox', { name: label, exact: true }));
 const button = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
-const card = (page: Page, u: TestUser) => page.locator(`[data-person-id="${u.id}"]`).first();
 
 test.beforeAll(async () => {
   browser = await launch();
-  ava = await throwaway('Ava', { onboarding: 'fresh', set: { who_i_want_to_meet: WORDS } });
-  ben = await throwaway('Ben', { set: { expertise_text: WORDS, job_title: 'Head of Product', company: 'Harbor Labs' } });
-  cleo = await throwaway('Cleo', { set: { expertise_text: WORDS } });
+  ava = await throwaway('Ava', { onboarding: 'fresh' });
+  ben = await throwaway('Ben', { set: { job_title: 'Head of Product', company: 'Harbor Labs' } });
+  cleo = await throwaway('Cleo');
   console.log(`[script-a] ${where()} app=${APP}`);
 });
 
@@ -143,27 +139,38 @@ test('Script A: a first-time employee onboards, finds a member, sends, accepts a
     await expect(tour).toHaveCount(0);
   });
 
-  await test.step('04 For You shows another member; a profile opens and Back returns to the same place', async () => {
-    await expect(card(page, ben)).toBeVisible({ timeout: SLOW });
-    await noSidewaysScroll(page, 'For You');
-    await card(page, ben).getByRole('link', { name: ben.displayName, exact: true }).click();
+  await test.step('04 they find another member by name (the search every member has), open the profile and come Back to the results', async () => {
+    // For You ranks the whole network, so on production a throwaway member is not reliably on a new member's first
+    // screen; search by name is the path the product guarantees for "find another member" (search.spec.ts).
+    const search = page.getByRole('search').getByRole('textbox', { name: 'Search people' });
+    await search.fill(ben.displayName);
+    await search.press('Enter');
+    await expect(page).toHaveURL(/\/search\?q=/, { timeout: SLOW });
+    const result = page.locator(`a[href^="/people/${ben.id}"]`).first();
+    await expect(result).toBeVisible({ timeout: SLOW });
+    await noSidewaysScroll(page, 'the search results');
+    const resultsAt = page.url();
+    await result.click();
     await expect(page.getByRole('heading', { level: 1, name: ben.displayName })).toBeVisible({ timeout: SLOW });
     expect(new URL(page.url()).pathname).toBe(`/people/${ben.id}`);
     await page.getByRole('button', { name: '← Back' }).click();
-    await expect(page).toHaveURL(`${APP}/`);
-    await expect(card(page, ben)).toBeVisible({ timeout: SLOW });
+    await expect(page).toHaveURL(resultsAt);
+    await expect(result).toBeVisible({ timeout: SLOW });
+    await result.click();
+    await expect(page.getByRole('heading', { level: 1, name: ben.displayName })).toBeVisible({ timeout: SLOW });
   });
 
   await test.step('05 send: one request, "Request sent"; Ben\'s open Messages shows "<First> wants to meet you" without a reload', async () => {
     const note = `Hello Ben, I would like to learn how you hire (${RUN}).`;
-    await card(page, ben).getByRole('button', { name: 'Meet', exact: true }).click();
+    const bar = page.getByRole('region', { name: 'Your move' });
+    await bar.getByRole('button', { name: 'Meet', exact: true }).click();
     const sheet = page.getByRole('dialog', { name: `Meet ${ben.displayName}` });
     await expect(sheet).toBeVisible();
     await sheet.getByRole('textbox').fill(note);
     await tall(sheet.getByRole('button', { name: 'Send request' }), 'Send request');
     await sheet.getByRole('button', { name: 'Send request' }).click();
     await expect(sheet).toBeHidden({ timeout: LIVE });
-    const sent = card(page, ben).getByRole('button', { name: 'Request sent', exact: true });
+    const sent = bar.getByRole('button', { name: 'Request sent', exact: true });
     await expect(sent).toHaveAttribute('aria-disabled', 'true');
     // Pressed again it sends nothing more.
     await sent.click({ force: true }).catch(() => undefined);
