@@ -9,7 +9,7 @@ import { query } from '../db';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as joinRequestService from '../services/join-request/join-request.service';
 import * as reportService from '../services/report/report.service';
-import { fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
+import { fanoutAccountStatusChange, fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
 
 const router = Router();
 
@@ -238,6 +238,11 @@ router.post(
       for (const row of result.rows) {
         fanoutUserEntity(row.id).catch(() => {});
       }
+      // T2 (1 Nov 2026): and the people around each account, so open lists drop or regain them live. One account at a
+      // time, after the answer (up to 100 accounts would otherwise run their reads at once against the pool).
+      void (async () => {
+        for (const row of result.rows) await fanoutAccountStatusChange(row.id).catch(() => {});
+      })();
 
       const response: ApiResponse = { success: true, data: { affected: result.rowCount } };
       return res.json(response);

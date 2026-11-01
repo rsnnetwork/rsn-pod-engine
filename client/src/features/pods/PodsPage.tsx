@@ -136,26 +136,28 @@ export default function PodsPage() {
           action={filter !== 'archived' ? <Button onClick={() => setShowCreate(true)}>Create Pod</Button> : undefined}
         />
       ) : (
-        <div className="grid gap-4 animate-fade-in-up">
+        <div className="grid grid-cols-1 gap-4 animate-fade-in-up">
           {filteredData.map((pod: any) => {
             const vis = VISIBILITY_CONFIG[pod.visibility] || VISIBILITY_CONFIG.public;
             const VisIcon = vis.icon;
             return (
-              <Card key={pod.id} hover onClick={() => navigate(`/pods/${pod.id}`)} className="card-hover">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+              <Card key={pod.id} hover onClick={() => navigate(`/pods/${pod.id}`)} className="card-hover min-w-0">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-1 basis-56 items-center gap-3">
                     <div className="h-10 w-10 rounded-xl bg-rsn-red-light flex items-center justify-center shrink-0">
                       <Users className="h-5 w-5 text-rsn-red" />
                     </div>
-                    <div>
-                      <p className="font-medium text-gray-800">{pod.name}</p>
-                      <p className="text-sm text-gray-500">
+                    {/* min-w-0 + break-words: a long unbroken name or description wraps inside the card
+                        instead of pushing the page wider than a 360px phone (P2 item 2, 1 Nov 2026). */}
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-800 break-words">{pod.name}</p>
+                      <p className="text-sm text-gray-500 break-words">
                         {pod.memberCount || 0} members · {pod.sessionCount || 0} events
                         {pod.description ? ` · ${pod.description}` : ''}
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     {/* Always show visibility badge on browse; show on my-pods too for context */}
                     <Badge variant={vis.variant} className="text-xs flex items-center gap-1">
                       <VisIcon className="h-3 w-3" /> {vis.label}

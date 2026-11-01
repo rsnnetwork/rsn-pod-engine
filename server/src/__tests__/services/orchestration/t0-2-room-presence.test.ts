@@ -120,7 +120,8 @@ describe('T0-2 — client side: VideoRoom emits presence:room_joined', () => {
       nodePath.join(__dirname, '../../../../../client/src/features/live/VideoRoom.tsx'),
       'utf8',
     );
-    expect(src).toMatch(/onConnected=\{\(\)\s*=>\s*\{[\s\S]*?presence:room_joined/);
+    expect(src).toMatch(/const handleRoomConnected = useCallback\(\(\)\s*=>\s*\{[\s\S]*?presence:room_joined/);
+    expect(src).toMatch(/onConnected=\{handleRoomConnected\}/);
   });
 
   it('payload includes sessionId, matchId, roomId', () => {
@@ -128,7 +129,7 @@ describe('T0-2 — client side: VideoRoom emits presence:room_joined', () => {
       nodePath.join(__dirname, '../../../../../client/src/features/live/VideoRoom.tsx'),
       'utf8',
     );
-    const onConnectIdx = src.indexOf('onConnected={() => {');
+    const onConnectIdx = src.indexOf('const handleRoomConnected = useCallback(');
     const block = src.slice(onConnectIdx, onConnectIdx + 600);
     expect(block).toMatch(/sessionId,/);
     expect(block).toMatch(/matchId:\s*currentMatchId/);

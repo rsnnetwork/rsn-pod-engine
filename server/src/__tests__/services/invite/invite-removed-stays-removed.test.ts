@@ -95,7 +95,7 @@ describe('accepting an event invite while a kick lands', () => {
     invite = sessionInvite(null);
     registeredThenKicked();
     await acceptInvite('CODE123', MEMBER);
-    expect(mockRegister).toHaveBeenCalledWith(EVENT, MEMBER, undefined, { personalInviteCreatedAt: undefined });
+    expect(mockRegister).toHaveBeenCalledWith(EVENT, MEMBER, undefined, { personalInviteCreatedAt: undefined, viaInvite: true });
     expect(participants.get(key(MEMBER))?.status).toBe('removed');
   });
 
@@ -103,7 +103,7 @@ describe('accepting an event invite while a kick lands', () => {
     invite = sessionInvite('member@rsn-e2e.invalid');
     registeredThenKicked();
     const accepted = await acceptInvite('CODE123', MEMBER);
-    expect(mockRegister).toHaveBeenCalledWith(EVENT, MEMBER, undefined, { personalInviteCreatedAt: invite.createdAt });
+    expect(mockRegister).toHaveBeenCalledWith(EVENT, MEMBER, undefined, { personalInviteCreatedAt: invite.createdAt, viaInvite: true });
     expect(participants.get(key(MEMBER))?.status).toBe('removed');
     expect(accepted.participantStatus).toBe('removed');
   });

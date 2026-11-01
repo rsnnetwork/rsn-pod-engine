@@ -11,8 +11,15 @@ import {
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError } from '../../middleware/errors';
 import { UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { activeMemberSql } from '../users/active-member';
 
 // ─── Column select helpers ──────────────────────────────────────────────────
+
+/** Each pod's member count as members see it (T2): active memberships of active accounts, the list's own rule. */
+const ACTIVE_MEMBER_COUNTS = `SELECT pm.pod_id, COUNT(*) AS cnt
+    FROM pod_members pm JOIN users u ON u.id = pm.user_id
+   WHERE pm.status = 'active' AND ${activeMemberSql('u')}
+   GROUP BY pm.pod_id`;
 
 const POD_COLUMNS = `
   id, name, description, pod_type AS "podType", orchestration_mode AS "orchestrationMode",
@@ -73,13 +80,13 @@ export async function getPodById(podId: string): Promise<Pod & { memberCount?: n
             dir.display_name AS "directorName",
             dir.user_id AS "directorId"
      FROM pods
-     LEFT JOIN (SELECT pod_id, COUNT(*) AS cnt FROM pod_members WHERE status = 'active' GROUP BY pod_id) mc ON mc.pod_id = pods.id
+     LEFT JOIN (${ACTIVE_MEMBER_COUNTS}) mc ON mc.pod_id = pods.id
      LEFT JOIN (SELECT pod_id, COUNT(*) AS cnt FROM sessions GROUP BY pod_id) sc ON sc.pod_id = pods.id
      LEFT JOIN (
        SELECT pm.pod_id, pm.user_id, u.display_name
        FROM pod_members pm
        JOIN users u ON u.id = pm.user_id
-       WHERE pm.role = 'director' AND pm.status = 'active'
+       WHERE pm.role = 'director' AND pm.status = 'active' AND ${activeMemberSql('u')}
      ) dir ON dir.pod_id = pods.id
      WHERE pods.id = $1`,
     [podId]
@@ -208,7 +215,7 @@ export async function listPods(params: {
             COALESCE(sc.cnt, 0)::int AS "sessionCount",
             ${memberRoleSelect}
      FROM pods p
-     LEFT JOIN (SELECT pod_id, COUNT(*) AS cnt FROM pod_members WHERE status = 'active' GROUP BY pod_id) mc ON mc.pod_id = p.id
+     LEFT JOIN (${ACTIVE_MEMBER_COUNTS}) mc ON mc.pod_id = p.id
      LEFT JOIN (SELECT pod_id, COUNT(*) AS cnt FROM sessions GROUP BY pod_id) sc ON sc.pod_id = p.id
      ${memberRoleJoin}
      ${whereClause}
@@ -241,8 +248,10 @@ export async function addMember(
 
     // Check capacity (only for active memberships)
     if (pod.maxMembers && status === PodMemberStatus.ACTIVE) {
+      // T2: the count the pod shows (a removed, suspended or banned account takes no place).
       const countResult = await client.query<{ count: string }>(
-        `SELECT COUNT(*) as count FROM pod_members WHERE pod_id = $1 AND status = 'active'`,
+        `SELECT COUNT(*) as count FROM pod_members pm JOIN users u ON u.id = pm.user_id
+          WHERE pm.pod_id = $1 AND pm.status = 'active' AND ${activeMemberSql('u')}`,
         [podId]
       );
       if (parseInt(countResult.rows[0].count, 10) >= pod.maxMembers) {
@@ -371,7 +380,9 @@ export async function getPodMembers(podId: string, status?: PodMemberStatus): Pr
                     u.avatar_url AS "avatarUrl", u.job_title AS "jobTitle", u.company, u.interests
              FROM pod_members
              JOIN users u ON u.id = pod_members.user_id
-             WHERE pod_id = $1`;
+             WHERE pod_id = $1 AND ${activeMemberSql('u')}`;
+  // T2 (1 Nov 2026): an account an admin removed, suspended or banned is not listed, nor counted (getPodById,
+  // listPods, getMemberStatusCounts read the same rule).
   const values: unknown[] = [podId];
 
   if (status) {
@@ -404,7 +415,10 @@ export async function getMemberStatusCounts(podId: string): Promise<{
   pendingInvites: number;
 }> {
   const statusResult = await query<{ status: string; count: string }>(
-    `SELECT status, COUNT(*)::text AS count FROM pod_members WHERE pod_id = $1 GROUP BY status`,
+    `SELECT pm.status, COUNT(*)::text AS count
+       FROM pod_members pm JOIN users u ON u.id = pm.user_id
+      WHERE pm.pod_id = $1 AND ${activeMemberSql('u')}
+      GROUP BY pm.status`,
     [podId]
   );
 

@@ -10,6 +10,9 @@ import { profileLinkSelector } from '../helpers/profile-link';
 // idempotent join + transactional counter, and the detail aggregation
 // (members + attached pod + that pod's upcoming event). Headed: a member on a
 // phone width joins from the real UI.
+// T2 (1 Nov 2026), D3: the circle page names an attached pod's event only to someone who may open it. The pod starts
+// private, so a member of the circle who is not in the pod is not told its event's title, the admin is; once the pod
+// is public, everyone is.
 
 let browser: Browser;
 let admin: TestUser, m1: TestUser, m2: TestUser;
@@ -74,8 +77,15 @@ test('circles core: admin creates, members join idempotently, detail aggregates 
   expect(detail1.json.data.memberCount, 'double-join must count ONCE').toBe(1);
   expect(detail1.json.data.isMember).toBe(true);
   expect(detail1.json.data.pods.map((p: any) => p.podId)).toContain(podId);
-  expect(detail1.json.data.upcomingEvents.map((e: any) => e.id)).toContain(sessionId);
-  console.log('  ✓ idempotent join (count=1) + detail aggregates the pod and its upcoming event.');
+  // D3: the pod is private and m1 is not in it, so its event is not named to them; the admin may open it.
+  expect(detail1.json.data.upcomingEvents.map((e: any) => e.id), "a private pod's event is not named to a non-member").not.toContain(sessionId);
+  const adminDetail = await apiAs(admin, 'GET', `/circles/${circleId}`);
+  expect(adminDetail.json.data.upcomingEvents.map((e: any) => e.id)).toContain(sessionId);
+  // Once the pod is public, anyone may open its event, and the circle page names it to everyone.
+  expect((await apiAs(admin, 'PUT', `/pods/${podId}`, { visibility: 'public' })).status).toBe(200);
+  const detailPublic = await apiAs(m1, 'GET', `/circles/${circleId}`);
+  expect(detailPublic.json.data.upcomingEvents.map((e: any) => e.id)).toContain(sessionId);
+  console.log('  ✓ idempotent join (count=1) + detail aggregates the pod; its event is named only to people who may open it.');
 
   // (5) Leave decrements exactly once.
   await apiAs(m1, 'POST', `/circles/${circleId}/leave`);

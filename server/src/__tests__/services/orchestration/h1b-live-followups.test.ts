@@ -222,10 +222,11 @@ function answer(sql: string, params: unknown[]): Answer {
   if (sql === "SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'") {
     return { rows: world.podMembers.filter((m) => m.pod_id === a && m.user_id === b && m.status === 'active') };
   }
-  if (sql === "SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left')") {
+  // T2 (1 Nov 2026): the counts join the account and leave out one that is not active; every account here is active.
+  if (sql === "SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left') AND u.status = 'active'") {
     return { rows: [{ count: String(world.participants.filter((p) => p.session_id === a && !['removed', 'left'].includes(p.status)).length) }] };
   }
-  if (sql === "SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')") {
+  if (sql === "SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show') AND u.status = 'active'") {
     return { rows: [{ count: String(world.participants.filter((p) => p.session_id === a && !['removed', 'left', 'no_show'].includes(p.status)).length) }] };
   }
   // The registration's read of the person's row (with when a removal of theirs was made), and the plain re-read.

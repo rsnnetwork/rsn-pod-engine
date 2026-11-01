@@ -50,7 +50,7 @@ router.get('/of-pod/:podId', authenticate, circleReadLimiter, async (req: Reques
 // GET /circles/:id — detail (any member). A malformed id is a 400 in a member's words (26 Oct 2026).
 router.get('/:id', authenticate, circleReadLimiter, uuidInPath('id', PATH_REFUSALS.circle), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await circleService.getCircleDetail(req.params.id, req.user!.userId);
+    const data = await circleService.getCircleDetail(req.params.id, req.user!.userId, req.user!.role);
     res.json({ success: true, data } satisfies ApiResponse);
   } catch (err) { next(err); }
 });

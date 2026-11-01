@@ -246,7 +246,8 @@ describe('production\'s client: the calls its circle screens make are answered a
     expect(list.body).toEqual({ success: true, data: [{ id: CIRCLE, name: 'Doctors', isMember: true }] });
     const detail = await request(app).get(`/circles/${CIRCLE}`).set(as(MEMBER));
     expect(detail.body).toEqual({ success: true, data: { id: CIRCLE } });
-    expect(circleService.getCircleDetail).toHaveBeenCalledWith(CIRCLE, MEMBER);
+    // T2 (1 Nov 2026): with the viewer's role, so an admin is named every attached pod's event and a member only those they may open (D3).
+    expect(circleService.getCircleDetail).toHaveBeenCalledWith(CIRCLE, MEMBER, 'member');
   });
 
   it('join and leave (the Join circle button) answer { ok: true } to any member, role-gated by nothing', async () => {

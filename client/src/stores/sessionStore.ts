@@ -255,9 +255,16 @@ interface SessionLiveState {
    * the main room. Cleared only by a full store reset (a fresh invite re-entry).
    */
   removedFromEvent: boolean;
+  /**
+   * The auto-register call has answered (any answer, a refusal included). The live page draws nothing of the
+   * event until then, so a removed person who reloads never sees the top bar flash before the refusal lands
+   * (P2 item 10, 1 Nov 2026). Cleared by a full store reset.
+   */
+  registrationKnown: boolean;
 
   setPhase: (phase: SessionPhase) => void;
   setRemovedFromEvent: (removed: boolean) => void;
+  setRegistrationKnown: (known: boolean) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setTransitionStatus: (status: TransitionStatus) => void;
   setSessionStatus: (status: SessionStatus) => void;
@@ -401,6 +408,7 @@ export interface SessionStateSnapshot {
 export const useSessionStore = create<SessionLiveState>((set) => ({
   phase: 'lobby',
   removedFromEvent: false,
+  registrationKnown: false,
   connectionStatus: 'connecting',
   transitionStatus: null,
   sessionStatus: 'scheduled',
@@ -467,6 +475,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   // back into the main room. A fresh-invite re-entry resets the store first.
   setPhase: (phase) => set((s) => (s.removedFromEvent && phase !== 'complete') ? {} : { phase }),
   setRemovedFromEvent: (removedFromEvent) => set({ removedFromEvent }),
+  setRegistrationKnown: (registrationKnown) => set({ registrationKnown }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
   setTransitionStatus: (transitionStatus) => set({ transitionStatus }),
   setSessionStatus: (sessionStatus) => set({ sessionStatus }),
@@ -727,7 +736,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     };
   }),
   reset: () => set({
-    phase: 'lobby', removedFromEvent: false, connectionStatus: 'connecting', transitionStatus: null,
+    phase: 'lobby', removedFromEvent: false, registrationKnown: false, connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
     participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null, timerWarning: null, roomNotice: null,
     timerSeconds: 0, timerEndsAt: null, clockOffset: 0, hasClockOffset: false, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
