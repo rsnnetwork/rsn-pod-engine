@@ -98,9 +98,10 @@ export interface PersonBrief {
   entities: PersonEntity[];
   /**
    * The viewer may ring this person for a video call now (1 Nov 2026): the two are connected, neither has blocked
-   * the other, and both are members. Whether they are online is asked when the call is rung.
+   * the other, and both are members. Whether they are online is asked when the call is rung. Every server from then
+   * on sends it; optional so a branch whose server predates it still compiles, and a screen reads a missing one as no.
    */
-  canCall: boolean;
+  canCall?: boolean;
 }
 
 export interface RecentConnection {
