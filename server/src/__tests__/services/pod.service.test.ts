@@ -52,7 +52,7 @@ describe('Pod Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
       await expect(podService.getPodById('missing'))
-        .rejects.toThrow('not found');
+        .rejects.toThrow("We couldn't find that pod.");
     });
   });
 

@@ -127,7 +127,7 @@ describe('an event invite', () => {
       mockAddMember.mockRejectedValueOnce(refusal());
       await expect(acceptInvite('CODE123', MEMBER)).resolves.toMatchObject({ redirectTo: `/sessions/${EVENT}` });
       // A shared link (no address) passes no invite time: a removed member stays removed (H1b).
-      expect(mockRegister).toHaveBeenLastCalledWith(EVENT, MEMBER, undefined, { personalInviteCreatedAt: undefined });
+      expect(mockRegister).toHaveBeenLastCalledWith(EVENT, MEMBER, undefined, { personalInviteCreatedAt: undefined, viaInvite: true });
     }
   });
 

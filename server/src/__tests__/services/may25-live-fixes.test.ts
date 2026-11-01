@@ -160,7 +160,8 @@ describe('25 May live-test fixes', () => {
       expect(body).toMatch(/setLiveKitToken\(null, null\)/);
     });
     it('a successful connect resets the retry budget (no permanent kick over a long event)', () => {
-      const i = src.indexOf('onConnected={');
+      const i = src.indexOf('const handleRoomConnected = useCallback(');
+      expect(i).toBeGreaterThan(-1);
       expect(src.slice(i, i + 900)).toMatch(/retryCountRef\.current = 0/);
     });
     it('ReconnectOnReturn is mounted inside the LiveKitRoom', () => {

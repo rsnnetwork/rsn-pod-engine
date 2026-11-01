@@ -18,6 +18,7 @@ import * as blockService from '../block/block.service';
 import * as emailService from '../email/email.service';
 import * as prefsService from '../notification-prefs/notification-prefs.service';
 import { REQUEST_MESSAGE_MAX } from './request-message';
+import { activeMemberSql } from '../users/active-member';
 import { requestBellLink } from './request-link';
 import { REASON_HEADING, combinedRequestMessage, requestBellBody, requestText } from './request-text';
 
@@ -392,9 +393,10 @@ export async function sendPoke(
         );
       }
 
-      // Recipient existence check (avoid silent FK errors)
+      // Recipient existence check (avoid silent FK errors). T2 (1 Nov 2026): an account an admin removed, suspended
+      // or banned cannot be asked either.
       const recipientExists = await client.query<{ id: string }>(
-        `SELECT id FROM users WHERE id = $1`, [recipientId],
+        `SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')}`, [recipientId],
       );
       if (recipientExists.rows.length === 0) {
         throw new NotFoundError('User', undefined, 'That member is no longer available.');

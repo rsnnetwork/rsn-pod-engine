@@ -306,6 +306,84 @@ export async function fanoutAdminEntities(
   }
 }
 
+// ─── An admin changed an account's status (T2, 1 Nov 2026) ──────────────────
+//
+// Removing, suspending, banning or reactivating an account changes what everyone around it sees: the person leaves
+// (or comes back to) pod member lists and counts, event participant lists, People, and their name turns into
+// "Former member" (or back) in old conversations, group chats and pod walls. Nothing about the memberships changes,
+// so the audience is read from them: the members of every pod the account is in or asked to join (pod tags and the
+// pod's wall), the people of every event it holds a place in that has not ended (the event's participant tags), each
+// of its connections and conversation partners (their own Messages and People, `user:<id>:dms`), and each group chat
+// it is in, and every circle it is in (the circle's page and its member list, through fanoutCircleChange, with the
+// person counted as a changed member so lists that show their circles redraw).
+
+/** The most connections one status change tells live. */
+export const ACCOUNT_AUDIENCE_PEOPLE_MAX = 2000;
+
+/** Who could be looking at an account, read from its memberships. */
+export interface AccountAudience {
+  podIds: string[];
+  events: Array<{ podId: string | null; sessionId: string }>;
+  people: string[];
+  groupIds: string[];
+  circleIds: string[];
+}
+
+export async function accountAudience(userId: string): Promise<AccountAudience> {
+  const { query } = await import('../db');
+  const { CONNECTION_SIGNALS_SQL } = await import('../services/people/connections.service');
+  const [pods, events, people, groups, circles] = await Promise.all([
+    query<{ pod_id: string }>(
+      `SELECT pod_id FROM pod_members WHERE user_id = $1 AND status IN ('active', 'pending_approval')`,
+      [userId],
+    ),
+    query<{ session_id: string; pod_id: string | null }>(
+      `SELECT sp.session_id, s.pod_id FROM session_participants sp JOIN sessions s ON s.id = sp.session_id
+        WHERE sp.user_id = $1 AND sp.status <> 'removed' AND s.status NOT IN ('completed', 'cancelled')`,
+      [userId],
+    ),
+    // Bounded (CLAUDE.md §7): the newest connections first; anyone past the cap catches up on their next read.
+    query<{ person_id: string }>(
+      `WITH ${CONNECTION_SIGNALS_SQL} SELECT person_id FROM people WHERE person_id <> $1 ORDER BY since DESC LIMIT ${ACCOUNT_AUDIENCE_PEOPLE_MAX}`,
+      [userId],
+    ),
+    query<{ group_id: string }>(`SELECT group_id FROM dm_group_members WHERE user_id = $1`, [userId]),
+    query<{ circle_id: string }>(`SELECT circle_id FROM circle_members WHERE user_id = $1`, [userId]),
+  ]);
+  return {
+    podIds: pods.rows.map(r => r.pod_id),
+    events: events.rows.map(r => ({ podId: r.pod_id, sessionId: r.session_id })),
+    people: people.rows.map(r => r.person_id),
+    groupIds: groups.rows.map(r => r.group_id),
+    circleIds: circles.rows.map(r => r.circle_id),
+  };
+}
+
+export async function fanoutAccountAudience(audience: AccountAudience, userId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    await Promise.all([
+      ...audience.podIds.map(podId => Promise.all([fanoutPodEntities(podId), fanoutPodWall(podId)])),
+      ...audience.events.map(e => fanoutSessionEntities(e.podId, e.sessionId)),
+      ...audience.people.map(personId => emitEntities(io, [personId], [E.userDms(personId)])),
+      ...audience.groupIds.map(groupId => fanoutGroupEntities(groupId)),
+      ...audience.circleIds.map(circleId => fanoutCircleChange(circleId, userId, [userId])),
+    ]);
+  } catch (err) {
+    logger.warn({ err }, 'fanoutAccountAudience: failed to fan out');
+  }
+}
+
+export async function fanoutAccountStatusChange(userId: string): Promise<void> {
+  if (!getRealtimeIo()) return;
+  try {
+    await fanoutAccountAudience(await accountAudience(userId), userId);
+  } catch (err) {
+    logger.warn({ err, userId }, 'fanoutAccountStatusChange: failed to fan out');
+  }
+}
+
 // ─── Single-user notifications fanout ───────────────────────────────────────
 //
 // Cross-tab notification list update for ONE user (mark-read, mark-all-read,

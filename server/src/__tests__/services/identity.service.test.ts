@@ -134,7 +134,7 @@ describe('Identity Service', () => {
 
       await expect(identityService.getUserById('missing-id'))
         .rejects
-        .toThrow('User with id missing-id not found');
+        .toThrow("We couldn't find that member.");
     });
 
     it('should include onboarding_status and last_onboarded_at in SQL query', async () => {
@@ -236,7 +236,7 @@ describe('Identity Service', () => {
 
       await expect(
         identityService.updateUser('missing-id', { displayName: 'xxx' })
-      ).rejects.toThrow('not found');
+      ).rejects.toThrow("We couldn't find that member.");
     });
   });
 

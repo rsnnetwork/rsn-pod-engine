@@ -101,7 +101,7 @@ jest.mock('../../../services/rating/rating.service', () => ({
 
 import { randomUUID } from 'crypto';
 import type { Server as SocketServer, Socket } from 'socket.io';
-import { ParticipantStatus } from '@rsn/shared';
+import { ParticipantStatus, SessionStatus } from '@rsn/shared';
 import {
   activeSessions, disconnectTimeouts, sessionRoom, userRoom,
 } from '../../../services/orchestration/state/session-state';
@@ -151,10 +151,11 @@ function answer(sql: string, params: unknown[]): Answer {
     else world.podMembers.push({ pod_id: a, user_id: b, role: 'member', status: 'active' });
     return { rows: [], rowCount: 1 };
   }
-  if (sql === "SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left')") {
+  // T2 (1 Nov 2026): the counts join the account and leave out one that is not active; every account here is active.
+  if (sql === "SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left') AND u.status = 'active'") {
     return { rows: [{ count: String(world.participants.filter((p) => p.session_id === a && !['removed', 'left'].includes(p.status)).length) }] };
   }
-  if (sql === "SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')") {
+  if (sql === "SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show') AND u.status = 'active'") {
     return { rows: [{ count: String(world.participants.filter((p) => p.session_id === a && !['removed', 'left', 'no_show'].includes(p.status)).length) }] };
   }
   // The registration's read of the person's row (H1b: with when a removal of theirs was made), and the plain re-read.
@@ -218,6 +219,23 @@ function answer(sql: string, params: unknown[]): Answer {
   }
   if (sql === "SELECT user_id FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')") {
     return { rows: world.participants.filter((p) => p.session_id === a && !['removed', 'left', 'no_show'].includes(p.status)).map((p) => ({ user_id: p.user_id })) };
+  }
+  // T2 (D2): the registration asks whether a person outside an approval pod may take a NEW place in its event (no invites
+  // in this world: the host, a co-host and an active member may, and anyone who already holds a row goes on as before).
+  if (/AS outsider FROM sessions s WHERE s\.id = \$1$/.test(sql)) {
+    const s = world.sessions.get(a as string);
+    if (!s) return { rows: [] };
+    const outsider = world.pods.get(s.pod_id)?.visibility === 'public_with_approval'
+      && s.host_user_id !== b
+      && !world.podMembers.some((m) => m.pod_id === s.pod_id && m.user_id === b && m.status === 'active')
+      && !world.cohosts.some((c) => c.session_id === a && c.user_id === b)
+      && !participant(a, b);
+    return { rows: [{ outsider }] };
+  }
+  // The leave's lookup of the leaver's running match (T2 fix round 1: a socket that was in the room leaves in full).
+  if (/^SELECT id, participant_a_id, participant_b_id, participant_c_id FROM matches WHERE session_id = \$1 AND status = 'active' AND round_number = \$3/.test(sql)) {
+    const m = world.matches.find((r) => r.session_id === a && r.status === 'active' && [r.a, r.b, r.c].includes(b));
+    return { rows: m ? [{ id: m.id, participant_a_id: m.a, participant_b_id: m.b, participant_c_id: m.c }] : [] };
   }
   if (sql === 'SELECT user_id FROM session_cohosts WHERE session_id = $1 AND user_id = $2') {
     return { rows: world.cohosts.filter((c) => c.session_id === a && c.user_id === b).map((c) => ({ user_id: c.user_id })) };
@@ -514,6 +532,64 @@ describe('a stranger to a private pod\'s running event', () => {
     await join(s, ev.sessionId);
     expect(inRoom(s, ev.sessionId)).toBe(false);
     expect(s.got).toEqual([{ event: 'error', payload: POD_ONLY }]);
+  });
+});
+
+// ── T2 fix round 1 (1 Nov 2026): an approval pod's event keeps strangers out at a NEW place only ───────────────
+
+describe('an event in a pod that asks for approval (T2, D2)', () => {
+  it("refuses a stranger's first entry, with the pod-only sentence and no row", async () => {
+    const ev = event({ visibility: 'public_with_approval' });
+    const stranger = person('Stranger');
+    const s = connect(stranger);
+    await join(s, ev.sessionId);
+    expectRefused(s, ev.sessionId, POD_ONLY);
+    expect(participant(ev.sessionId, stranger)).toBeUndefined();
+  });
+
+  it('lets in again, after a server restart, someone already admitted who has since left the pod', async () => {
+    const ev = event({ visibility: 'public_with_approval' });
+    const member = person('Member');
+    podMember(ev.podId, member);
+    register(ev.sessionId, member);
+    const first = connect(member);
+    await join(first, ev.sessionId);
+    expectAdmitted(first, ev.sessionId);
+    // The director takes them out of the pod mid-event, then the server restarts: memory is gone, every socket reconnects.
+    world.podMembers = world.podMembers.filter((m) => m.user_id !== member);
+    activeSessions.clear();
+    const again = connect(member);
+    await join(again, ev.sessionId);
+    expectAdmitted(again, ev.sessionId);
+    expect(statusOf(ev.sessionId, member)).not.toBe('removed');
+  });
+});
+
+describe('a socket that was in the room always leaves in full (T2 fix round 1)', () => {
+  it('a co-host in a breakout who was stood down (no row, now refused) leaves: their status is written and their partner is told', async () => {
+    const ev = event({ visibility: 'private' });
+    const helper = person('Helper');
+    const partner = person('Partner');
+    podMember(ev.podId, partner);
+    register(ev.sessionId, partner);
+    world.cohosts.push({ session_id: ev.sessionId, user_id: helper, role: 'co_host' });
+    const helperSock = connect(helper);
+    const partnerSock = connect(partner);
+    await join(helperSock, ev.sessionId);
+    await join(partnerSock, ev.sessionId);
+    expect(inRoom(helperSock, ev.sessionId)).toBe(true);
+    world.matches.push({ id: randomUUID(), session_id: ev.sessionId, room_id: 'room-1', a: helper, b: partner, c: null, status: 'active' });
+    const live = activeSessions.get(ev.sessionId)!;
+    live.status = SessionStatus.ROUND_ACTIVE;
+    live.currentRound = 1;
+    world.cohosts = [];
+    partnerSock.got = [];
+    const statusWrites = jest.spyOn(sessionService, 'updateParticipantStatus');
+    await handleLeaveSession(io, asSocket(helperSock), { sessionId: ev.sessionId });
+    await flush();
+    expect(statusWrites).toHaveBeenCalledWith(ev.sessionId, helper, ParticipantStatus.LEFT);
+    expect(partnerSock.got.map((g) => g.event)).toContain('match:partner_disconnected');
+    expect(inRoom(helperSock, ev.sessionId)).toBe(false);
   });
 });
 

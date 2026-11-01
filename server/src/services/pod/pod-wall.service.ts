@@ -34,6 +34,7 @@ import type {
   PodWallComment, PodWallCommentList, PodWallFeed, PodWallPost, WallCommentCreated, WallCommentLike, WallReactionSummary,
 } from '@rsn/shared';
 import { canViewPod } from '../pods/pod-access';
+import { activeMemberSql } from '../users/active-member';
 import { E } from '../../realtime/entities';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { fanoutPodWall } from '../../realtime/fanout';
@@ -185,7 +186,8 @@ interface CommentRow {
 
 const iso = (when: Date | string) => new Date(when).toISOString();
 
-/** A closed account's posts stay, as "Former member" with no picture, and the screen draws no profile link. */
+/** A closed account's posts stay, as "Former member" with no picture, and the screen draws no profile link. T2 (1 Nov
+ * 2026): "closed" is every account that is not active (removed, suspended or banned), as on the circle wall. */
 function authorOf(row: { display_name: string | null; avatar_url: string | null; author_closed: boolean }) {
   return row.author_closed
     ? { authorName: FORMER_MEMBER, authorAvatarUrl: null, authorClosed: true }
@@ -225,7 +227,7 @@ function mapComment(row: CommentRow): PodWallComment {
 
 /** The post columns every read shares. $2 is always the viewer. */
 const POST_SELECT = `
-  SELECT p.id, p.pod_id, p.author_id, u.display_name, u.avatar_url, (u.status = 'deactivated') AS author_closed,
+  SELECT p.id, p.pod_id, p.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_closed,
          p.content, p.media, p.link_url, p.comment_count, p.pinned_at, p.created_at,
          (SELECT count(*)::int FROM pod_post_reactions r WHERE r.post_id = p.id) AS reaction_count,
          (SELECT COALESCE(json_object_agg(x.reaction, x.n), '{}'::json)
@@ -668,7 +670,7 @@ export async function listComments(podId: string, postId: string, viewer: WallVi
   await resolveAccess(podId, viewer);
   await loadPostHead(podId, postId, viewer.userId);
   const r = await query<CommentRow>(
-    `SELECT c.id, c.author_id, u.display_name, u.avatar_url, (u.status = 'deactivated') AS author_closed,
+    `SELECT c.id, c.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_closed,
             c.content, c.created_at, c.parent_comment_id,
             (SELECT count(*)::int FROM pod_comment_likes l WHERE l.comment_id = c.id) AS like_count,
             EXISTS (SELECT 1 FROM pod_comment_likes l WHERE l.comment_id = c.id AND l.user_id = $2) AS liked_by_me

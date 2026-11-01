@@ -195,7 +195,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       await expect(inviteService.createInvite('user-host', {
         type: InviteType.POD, podId: 'pod-123', inviteeUserId: 'user-ghost',
-      })).rejects.toThrow(/not found/i);
+      })).rejects.toThrow("We couldn't find that member.");
     });
 
     it('should reject self-invites', async () => {

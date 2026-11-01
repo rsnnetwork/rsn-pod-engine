@@ -25,6 +25,7 @@ import { E } from '../../realtime/entities';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
+import { FORMER_MEMBER_NAME, activeMemberSql } from '../users/active-member';
 
 export const POST_RATE_PER_MIN = 6;
 export const COMMENT_RATE_PER_MIN = 20;
@@ -50,6 +51,8 @@ export interface WallPost {
   authorId: string;
   authorName: string | null;
   authorAvatarUrl: string | null;
+  /** T2 (1 Nov 2026): the author's account was removed, suspended or banned; the post stays as "Former member". */
+  authorClosed: boolean;
   content: string;
   media: WallMediaItem[];
   linkUrl: string | null;
@@ -171,14 +174,15 @@ async function displayNameOf(userId: string): Promise<string> {
 
 /** The post columns every read shares. $2 is always the viewer. */
 const POST_SELECT = `
-  SELECT p.id, p.circle_id, p.author_id, u.display_name, u.avatar_url,
+  SELECT p.id, p.circle_id, p.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_former,
          p.content, p.media, p.link_url, p.comment_count, p.pinned_at, p.created_at,
          (SELECT count(*)::int FROM circle_post_reactions r WHERE r.post_id = p.id) AS reaction_count,
          (SELECT COALESCE(json_object_agg(x.reaction, x.n), '{}'::json)
             FROM (SELECT reaction, count(*)::int AS n FROM circle_post_reactions WHERE post_id = p.id GROUP BY reaction) x) AS reactions,
          (SELECT r.reaction FROM circle_post_reactions r WHERE r.post_id = p.id AND r.user_id = $2) AS my_reaction,
          (SELECT json_build_object('id', o.id, 'circleId', o.circle_id, 'circleName', oc.name,
-                                   'authorName', ou.display_name, 'content', left(o.content, 600), 'media', o.media)
+                                   'authorName', CASE WHEN ${activeMemberSql('ou')} THEN ou.display_name ELSE '${FORMER_MEMBER_NAME}' END,
+                                   'content', left(o.content, 600), 'media', o.media)
             FROM circle_posts o
             JOIN circles oc ON oc.id = o.circle_id
             JOIN users ou ON ou.id = o.author_id
@@ -269,10 +273,17 @@ export async function getPost(postId: string, viewerId: string): Promise<WallPos
   return row ? mapPost(row) : null;
 }
 
+/** An author whose account is not active keeps their words, as "Former member" with no picture (T2). */
+function authorOf(row: { display_name: string | null; avatar_url: string | null; author_former: boolean | null }) {
+  return row.author_former
+    ? { authorName: FORMER_MEMBER_NAME, authorAvatarUrl: null, authorClosed: true }
+    : { authorName: row.display_name, authorAvatarUrl: row.avatar_url, authorClosed: false };
+}
+
 function mapPost(row: any): WallPost {
   return {
     id: row.id, circleId: row.circle_id, authorId: row.author_id,
-    authorName: row.display_name, authorAvatarUrl: row.avatar_url,
+    ...authorOf(row),
     content: row.content, media: row.media ?? [], linkUrl: row.link_url,
     commentCount: row.comment_count, pinnedAt: row.pinned_at, createdAt: row.created_at,
     reactionCount: row.reaction_count ?? 0,
@@ -514,13 +525,16 @@ export async function addComment(
 
 export interface WallComment {
   id: string; authorId: string; authorName: string | null; authorAvatarUrl: string | null;
+  /** T2: as on a post. */
+  authorClosed: boolean;
   content: string; createdAt: Date; parentCommentId: string | null;
   likeCount: number; likedByMe: boolean;
 }
 
 export async function listComments(postId: string, viewerId: string): Promise<WallComment[]> {
   const r = await query<any>(
-    `SELECT c.id, c.author_id, u.display_name, u.avatar_url, c.content, c.created_at, c.parent_comment_id,
+    `SELECT c.id, c.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_former,
+            c.content, c.created_at, c.parent_comment_id,
             (SELECT count(*)::int FROM circle_comment_likes l WHERE l.comment_id = c.id) AS like_count,
             EXISTS (SELECT 1 FROM circle_comment_likes l WHERE l.comment_id = c.id AND l.user_id = $2) AS liked_by_me
      FROM circle_post_comments c JOIN users u ON u.id = c.author_id
@@ -535,8 +549,7 @@ export async function listComments(postId: string, viewerId: string): Promise<Wa
     [postId, viewerId],
   );
   return r.rows.map((row: any) => ({
-    id: row.id, authorId: row.author_id, authorName: row.display_name,
-    authorAvatarUrl: row.avatar_url, content: row.content, createdAt: row.created_at,
+    id: row.id, authorId: row.author_id, ...authorOf(row), content: row.content, createdAt: row.created_at,
     parentCommentId: row.parent_comment_id ?? null,
     likeCount: row.like_count ?? 0, likedByMe: !!row.liked_by_me,
   }));

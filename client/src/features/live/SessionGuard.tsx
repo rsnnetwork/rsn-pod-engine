@@ -11,6 +11,9 @@
 //   2. If the fetch fails with 404 OR network error: show "Reconnecting..."
 //      with retry. Backoff: 1s, 2s, 4s. After 3 retries: "This event no
 //      longer exists" with a Back-to-Dashboard button.
+//   2b. A 403 is final at once (P2 item 9, 1 Nov 2026): the server has said the
+//      event is not open to this person, so there is nothing to retry and the
+//      page says so in one sentence instead of "Reconnecting…" and a library error.
 //   3. Re-runs on document visibility change (handles tab-switch where
 //      the session ended elsewhere).
 //
@@ -24,15 +27,15 @@ import { Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
+import { RETRY_DELAYS_MS, REFUSED_SENTENCE, UNREACHABLE_SENTENCE, classifyGuardFailure } from './session-guard-state';
 
 type GuardState =
   | { kind: 'checking' }
   | { kind: 'ready' }
   | { kind: 'retrying'; attempt: number }
+  | { kind: 'refused' }
   | { kind: 'gone' }
   | { kind: 'error'; message: string };
-
-const RETRY_DELAYS_MS = [1000, 2000, 4000]; // 3 retries with backoff
 
 export default function SessionGuard({ children }: { children: ReactNode }) {
   const { sessionId } = useParams();
@@ -47,7 +50,7 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
 
   const checkSession = useCallback(async (attempt: number): Promise<void> => {
     if (!sessionId) {
-      safeSetState({ kind: 'error', message: 'Missing session ID' });
+      safeSetState({ kind: 'error', message: UNREACHABLE_SENTENCE });
       return;
     }
     try {
@@ -58,16 +61,20 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
       }
       throw new Error('Session response not ok');
     } catch (err: any) {
-      const status = err?.response?.status;
-      // Distinguish "session genuinely gone" (404) from transient errors
-      // (network blip, 5xx, race). Both get retried, but a sustained 404
-      // ends in "gone"; sustained other errors end in a generic error.
-      if (attempt >= RETRY_DELAYS_MS.length) {
-        if (status === 404) {
-          safeSetState({ kind: 'gone' });
-        } else {
-          safeSetState({ kind: 'error', message: err?.message || 'Could not reach the event' });
-        }
+      // Distinguish "refused" (403, final) and "session genuinely gone" (404) from
+      // transient errors (network blip, 5xx, race). The transient ones get retried,
+      // but a sustained 404 ends in "gone"; sustained other errors end in a generic error.
+      const outcome = classifyGuardFailure(err?.response?.status, attempt);
+      if (outcome === 'refused') {
+        safeSetState({ kind: 'refused' });
+        return;
+      }
+      if (outcome === 'gone') {
+        safeSetState({ kind: 'gone' });
+        return;
+      }
+      if (outcome === 'error') {
+        safeSetState({ kind: 'error', message: UNREACHABLE_SENTENCE });
         return;
       }
       const delay = RETRY_DELAYS_MS[attempt];
@@ -89,6 +96,7 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
         // Cheap re-validate: if it 404s now, we transition to gone.
         api.get(`/sessions/${sessionId}`).catch((err) => {
           if (err?.response?.status === 404) safeSetState({ kind: 'gone' });
+          if (err?.response?.status === 403) safeSetState({ kind: 'refused' });
         });
       }
     };
@@ -113,6 +121,21 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
           <p className="text-sm text-gray-500">
             Trying to load this event (attempt {state.attempt} of {RETRY_DELAYS_MS.length})
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.kind === 'refused') {
+    return (
+      <div className="min-h-[100dvh] flex items-center justify-center bg-white px-6">
+        <div className="text-center max-w-md">
+          <AlertCircle className="h-10 w-10 text-amber-500 mx-auto mb-4" />
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">{REFUSED_SENTENCE}</h2>
+          <p className="text-sm text-gray-500 mb-6">
+            If you think this is a mistake, ask the person who runs the event.
+          </p>
+          <Button onClick={() => navigate('/sessions')}>Back to events</Button>
         </div>
       </div>
     );

@@ -5,14 +5,77 @@
 // are in one of its breakout rooms (mayClaimBreakoutRoom). What the live join
 // does with those facts lives in orchestration/event-room-entry.ts.
 
-import { UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { query } from '../../db';
+import { AppError } from '../../middleware/errors';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function isAdminRole(role: string | undefined): boolean {
   return !!role && hasRoleAtLeast(role as UserRole, UserRole.ADMIN);
 }
+
+/** A SQL placeholder such as `$2`: the only thing the fragments below accept for the person. */
+const PLACEHOLDER = /^\$[1-9][0-9]*$/;
+/** A plain lower-case SQL name, for the alias of the sessions table. */
+const ALIAS = /^[a-z_][a-z0-9_]*$/;
+
+function checkedSqlParts(sessionAlias: string, userParam: string): void {
+  if (!ALIAS.test(sessionAlias) || !PLACEHOLDER.test(userParam)) {
+    throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'An event access fragment was given something that is not an alias and a placeholder');
+  }
+}
+
+/**
+ * T2 (1 Nov 2026), D1 and D3: the SQL condition "the person in `userParam` may open the event aliased
+ * `sessionAlias`", for lists (the Events list, For You's next event, a circle page). It is canViewSession's own rule,
+ * so an event is listed exactly to the people who may open it: its host or a co-host, someone whose participant row
+ * is not removed, an active member of its pod, or anyone when the pod is public. Admins see every event and are
+ * left to the caller. An invite-only pod's events used to be listed to everyone and then refused on open (D1); a
+ * circle page named every attached pod's events, private ones included (D3).
+ */
+export function visibleEventSql(sessionAlias: string, userParam: string): string {
+  checkedSqlParts(sessionAlias, userParam);
+  const s = sessionAlias;
+  const u = userParam;
+  return `(
+    ${s}.host_user_id = ${u}
+    OR EXISTS (SELECT 1 FROM pods ve_p WHERE ve_p.id = ${s}.pod_id AND ve_p.visibility = 'public')
+    OR EXISTS (SELECT 1 FROM pod_members ve_m WHERE ve_m.pod_id = ${s}.pod_id AND ve_m.user_id = ${u} AND ve_m.status = 'active')
+    OR EXISTS (SELECT 1 FROM session_cohosts ve_c WHERE ve_c.session_id = ${s}.id AND ve_c.user_id = ${u})
+    OR EXISTS (SELECT 1 FROM session_participants ve_sp WHERE ve_sp.session_id = ${s}.id AND ve_sp.user_id = ${u} AND ve_sp.status <> 'removed')
+  )`;
+}
+
+/**
+ * T2 (1 Nov 2026), D2: the SQL condition "the event aliased `sessionAlias` is in a pod that asks for approval
+ * (public_with_approval) and the person in `userParam` is none of the people it takes": an active member of the pod
+ * (someone the pod approved), the event's host, a co-host, or someone invited to the event (an invite to this event
+ * for their address or accepted by them, not withdrawn, declined or expired). Admins are left to the caller.
+ * Anyone with the event's id could register for such an event, and so enter its live room.
+ */
+export function approvalPodOutsiderSql(sessionAlias: string, userParam: string): string {
+  checkedSqlParts(sessionAlias, userParam);
+  const s = sessionAlias;
+  const u = userParam;
+  return `(
+    EXISTS (SELECT 1 FROM pods ao_p WHERE ao_p.id = ${s}.pod_id AND ao_p.visibility = 'public_with_approval')
+    AND ${s}.host_user_id IS DISTINCT FROM ${u}
+    AND NOT EXISTS (SELECT 1 FROM pod_members ao_m WHERE ao_m.pod_id = ${s}.pod_id AND ao_m.user_id = ${u} AND ao_m.status = 'active')
+    AND NOT EXISTS (SELECT 1 FROM session_cohosts ao_c WHERE ao_c.session_id = ${s}.id AND ao_c.user_id = ${u})
+    AND NOT EXISTS (
+      SELECT 1 FROM invites ao_i
+       WHERE ao_i.session_id = ${s}.id
+         AND (ao_i.accepted_by_user_id = ${u}
+              OR lower(ao_i.invitee_email) = (SELECT lower(ao_u.email) FROM users ao_u WHERE ao_u.id = ${u}))
+         AND (ao_i.status = 'accepted'
+              OR (ao_i.status = 'pending' AND (ao_i.expires_at IS NULL OR ao_i.expires_at > NOW())))
+    )
+  )`;
+}
+
+/** The words someone outside an approval pod hears when they try to take a place in one of its events (D2). */
+export const APPROVAL_POD_EVENT_REFUSAL = "This event is for the pod's members. Ask to join the pod first, or ask the host for an invite.";
 
 /**
  * Determines if a user is allowed to view a session's details.
@@ -84,8 +147,8 @@ export type EventRoomAdmission = 'admitted' | 'removed' | 'refused';
  * (session_cohosts); a platform admin or super admin, who may act as host; anyone whose participant row
  * is not removed: someone who left and is coming back (left is recoverable), someone reconnecting, a
  * refresh or a second tab, a late joiner the registration has just admitted. A removed row is terminal
- * and wins over every role, as the registration's own REMOVED_FROM_EVENT does. Anyone else, and an event
- * that does not exist, is refused. One read.
+ * and wins over every role, as the registration's own REMOVED_FROM_EVENT does. Anyone else, and an event that
+ * does not exist, is refused. One read.
  */
 export async function eventRoomAdmission(
   sessionId: string,
@@ -104,6 +167,9 @@ export async function eventRoomAdmission(
   const facts = result.rows[0];
   if (!facts) return 'refused';
   if (facts.participant_status === 'removed') return 'removed';
+  // T2 fix round 1 (1 Nov 2026): a participant row is a place the event already gave, so it admits on every
+  // reconnect. An approval pod's outsider is kept out where a place is first given (registerParticipant), never
+  // here, so someone already in a live event is not refused after a restart or after leaving the pod mid-event.
   if (facts.is_host || facts.is_cohost || isAdminRole(userRole) || facts.participant_status !== null) return 'admitted';
   return 'refused';
 }
