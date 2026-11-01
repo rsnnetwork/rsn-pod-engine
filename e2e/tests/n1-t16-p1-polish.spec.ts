@@ -97,8 +97,9 @@ test.afterAll(async () => {
     await pool.query('DELETE FROM invites WHERE pod_id = $1', [id]).catch(() => {});
     await pool.query('DELETE FROM session_participants WHERE session_id IN (SELECT id FROM sessions WHERE pod_id = $1)', [id]).catch(() => {});
   }
-  await cleanup(pool, { ids: idsOf(director, member, stranger), podId: podId || undefined });
+  // The second pod first: its director is one of the users, whose delete it would otherwise block.
   if (longPodId) await cleanup(pool, { ids: [], podId: longPodId });
+  await cleanup(pool, { ids: idsOf(director, member, stranger), podId: podId || undefined });
 });
 
 test(`A: a meeting under way offers no Cancel; one still to come does (${engineLabel()})`, async () => {
