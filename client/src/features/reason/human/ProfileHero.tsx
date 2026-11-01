@@ -8,6 +8,7 @@ import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import ReasonSheep from '../brand/ReasonSheep';
 import { visibleText } from '../person';
+import ProfileCallButton from '@/features/calls/ProfileCallButton';
 import ProfileHeroActions from './ProfileHeroActions';
 import { SIGNAL, foundThrough, isSmallPhoto, reasonText, type KnownSource, type PersonFacts } from './profile-text';
 
@@ -150,7 +151,7 @@ export default function ProfileHero({ brief, who, source, userId }: Props) {
       photo={brief.person.avatarUrl}
       who={who}
       kicker="The human"
-      actions={<ProfileHeroActions brief={brief} userId={userId} />}
+      actions={<ProfileHeroActions brief={brief} userId={userId} call={brief.canCall && <ProfileCallButton brief={brief} userId={userId} name={who.name} />} />}
       badge={brief.match && (
         <span className="absolute left-[18px] top-[18px] flex items-center gap-[7px] rounded-full bg-white px-3 py-2 text-[11px] font-extrabold shadow-[0_8px_24px_rgba(0,0,0,.08)]">
           <i aria-hidden="true" className="h-[7px] w-[7px] rounded-full bg-reason-red" />{SIGNAL[brief.match.strength]}

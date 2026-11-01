@@ -138,7 +138,9 @@ test.afterAll(async () => {
 });
 
 test.describe.serial('meeting + call', () => {
-  test('1) before the first meeting: the scheduler is offered, calls are not', async () => {
+  // 1 Nov 2026 (30 Oct review item 4): a connection can ring for VIDEO with no meeting held first; audio still waits
+  // for the first meeting, and the scheduler keeps its place.
+  test('1) before the first meeting: the scheduler and Video call are offered, audio is not', async () => {
     test.setTimeout(90_000);
     const convId = await convBetween(a.id, b.id);
     expect(convId).toBeTruthy();
@@ -150,14 +152,20 @@ test.describe.serial('meeting + call', () => {
     if (MOBILE) {
       await page.getByRole('button', { name: /More actions/i }).click();
       await expect(page.getByRole('button', { name: /Find a time to meet/i })).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByRole('button', { name: /Video call|Audio call/i })).toHaveCount(0);
+      await expect(page.getByTestId('video-call-button').filter({ visible: true })).toHaveText('Video call');
+      await expect(page.getByRole('button', { name: /Audio call/i })).toHaveCount(0);
     } else {
       await expect(page.getByRole('button', { name: /Find a time to meet/i })).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByRole('button', { name: /Start a video call now|Start an audio call now/i })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Video call', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: /Start an audio call now/i })).toHaveCount(0);
     }
-    // The server refuses a call request while locked, whatever the client shows.
-    const r = await apiAs(a, 'POST', `/dm/conversations/${convId}/call/request`, { kind: 'video', durationMin: 15 });
-    expect(r.status).toBe(403);
+    // The server refuses an AUDIO request while locked, whatever the client shows; a video one reaches the
+    // presence check, and B is offline.
+    const audio = await apiAs(a, 'POST', `/dm/conversations/${convId}/call/request`, { kind: 'audio', durationMin: 15 });
+    expect(audio.status).toBe(403);
+    const video = await apiAs(a, 'POST', `/dm/conversations/${convId}/call/request`, { kind: 'video', durationMin: 15 });
+    expect(video.status).toBe(409);
+    expect(video.json.error.message).toBe("Meet Bo isn't online right now. Send a message instead.");
     await page.close();
   });
 
@@ -268,14 +276,14 @@ test.describe.serial('meeting + call', () => {
       await expect(async () => {
         await aPage.getByRole('button', { name: /More actions/i }).click();
         await expect(aPage.getByRole('button', { name: /Find a time to meet/i })).toHaveCount(0);
-        const vid = aPage.getByRole('button', { name: /^Video call now$/ });
+        const vid = aPage.getByTestId('video-call-button').filter({ visible: true });
         await expect(vid).toBeVisible({ timeout: 2000 });
         await expect(vid).toBeEnabled();
       }).toPass({ timeout: 35_000 });
-      await aPage.getByRole('button', { name: /^Video call now$/ }).click();
+      await aPage.getByTestId('video-call-button').filter({ visible: true }).click();
     } else {
       await expect(aPage.getByRole('button', { name: /Find a time to meet/i })).toHaveCount(0);
-      const vid = aPage.getByRole('button', { name: /Start a video call now/i });
+      const vid = aPage.getByRole('button', { name: 'Video call', exact: true });
       await expect(vid).toBeEnabled({ timeout: 35_000 });
       await vid.click();
     }
@@ -283,12 +291,15 @@ test.describe.serial('meeting + call', () => {
     // Request dialog: type the length, send.
     await aPage.locator('#call-minutes').fill('15');
     await aPage.getByRole('button', { name: /Send request/i }).click();
-    await expect(aPage.getByTestId('call-waiting')).toBeVisible({ timeout: 15_000 });
-    await expect(aPage.getByTestId('call-waiting')).toContainText(/15-min video/i);
+    // 1 Nov 2026: the caller's card and the callee's banner are app-wide (features/calls).
+    await expect(aPage.getByTestId('call-outgoing')).toBeVisible({ timeout: 15_000 });
+    await expect(aPage.getByTestId('call-outgoing')).toContainText(/15-min video/i);
 
     // B is rung with the length, accepts → both enter the room. Scope to the
-    // request dialog: the same words also land in the thread line + inbox preview.
-    const ring = bPage.getByRole('dialog', { name: /wants a 15-minute video call/i });
+    // banner: the same words also land in the thread line + inbox preview.
+    const ring = bPage.getByTestId('call-incoming');
+    await expect(ring).toContainText('Meet Ana is calling you', { timeout: 20_000 });
+    await expect(ring).toContainText('15-min video call');
     await expect(ring).toBeVisible({ timeout: 20_000 });
     await ring.getByRole('button', { name: /^Accept$/ }).click();
     await expect(bPage).toHaveURL(new RegExp(`/meet/${convId}`), { timeout: 20_000 });

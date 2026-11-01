@@ -22,7 +22,7 @@ import { ACTION, JoinOrCountdown, PhaseChip } from './MeetingParts';
 import MeetingFeedback from './MeetingFeedback';
 import { useCancelMeeting, useMeeting, useMeetingClock } from './useMeetings';
 import {
-  canJoin, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError, meetingLine, meetingTimes, MEETING_GONE,
+  canJoin, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError, meetingLine, meetingTimes, meetingTitle, MEETING_GONE,
 } from './meeting-words';
 
 const SECONDARY = 'border border-reason-line bg-white text-[#2d3440] hover:bg-[#f5f6f7]';
@@ -66,7 +66,7 @@ function MeetingView({ meeting }: { meeting: Meeting }) {
         <p className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-[#646a77]">Meeting</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
           <h1 className="min-w-0 text-[28px] font-extrabold leading-[1.05] tracking-[-0.04em] [overflow-wrap:anywhere] min-[721px]:text-[36px]">
-            Meeting with {meeting.partner.displayName}
+            {meetingTitle(meeting)}
           </h1>
           {chip && <PhaseChip chip={chip} />}
         </div>
@@ -136,11 +136,14 @@ function MeetingFacts({ meeting }: { meeting: Meeting }) {
 
 interface ActionsProps { meeting: Meeting; now: number; standing: boolean; onCancel: () => void }
 
-function MeetingActions({ meeting, now, standing, onCancel }: ActionsProps) {
+function MeetingActions({ meeting, now, standing: stands, onCancel }: ActionsProps) {
+  // An answered call (1 Nov 2026) is under way or over: it has no calendar entry, no time to move and nothing to
+  // cancel, so while it stands it offers only Join and the conversation.
+  const standing = stands && meeting.source !== 'instant';
   return (
     <div className="mt-4 grid gap-2 min-[721px]:flex min-[721px]:flex-wrap min-[721px]:items-center">
       {/* On a phone Join is in the bar at the foot of the screen instead. */}
-      {standing && <JoinOrCountdown meeting={meeting} now={now} className="hidden min-[721px]:inline-flex" />}
+      {stands && <JoinOrCountdown meeting={meeting} now={now} className="hidden min-[721px]:inline-flex" />}
       {/* Google Calendar, Outlook.com or the meeting's own file (1 Nov 2026, T7). The file has the identity the emailed
           invite has, so adding it again updates that entry instead of adding a second one. The links join on this
           site, so an entry made on the preview joins on the preview. */}

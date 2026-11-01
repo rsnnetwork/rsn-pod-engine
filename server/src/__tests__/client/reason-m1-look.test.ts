@@ -599,16 +599,23 @@ describe('Weights the page loads, and the waiting-call card above the phone bar 
     expect(tooHeavy).toEqual([]);
   });
 
-  // Measured in Chromium with the home-indicator inset emulated (34px) and without: the card's bottom edge is 27px above
-  // the bar's top edge in both. The inset reaches the card through its margin: a fixed box with `bottom` set is placed
-  // by its margin edge, so `marginBottom: env(safe-area-inset-bottom)` lifts it by the inset, like the bar's own padding.
-  // Without that margin the card would sit 96px up on a bar that is 103px tall, and overlap it by 7px.
-  it('the waiting-call card stays above the phone bar with or without a home indicator: bottom-24 plus the inset as its margin, against the bar\'s height plus the same inset', () => {
-    const card = read('src/features/messages/CallRequest.tsx').match(/<div\s+className="(fixed [^"]*)"\s+style=\{\{([^}]*)\}\}\s+role="status"\s+data-testid="call-waiting"/);
+  // Measured in Chromium with the home-indicator inset emulated (34px) and without: the card's bottom edge stays above
+  // the bar's top edge in both. 1 Nov 2026: the waiting card is the app-wide "Calling {Name}…" card
+  // (features/calls/OutgoingCallCard.tsx), set 92px plus the inset from the foot of the window, so it clears the phone
+  // bar and also a profile's move bar (MoveBar, 66px plus the inset on a phone and 72px from md), which the thread's
+  // card never met.
+  it('the Calling card stays above the phone bar and the profile\'s move bar with or without a home indicator: 92px plus the inset, against each bar\'s height plus the same inset', () => {
+    const card = read('src/features/calls/OutgoingCallCard.tsx').match(/data-testid="call-outgoing"\s+className="(fixed [^"]*)"/);
     expect(card).not.toBeNull();
-    const liftedByInset = /marginBottom: 'env\(safe-area-inset-bottom\)'/.test(card![2]);
-    const offset = Number(card![1].match(/(?<![\w-])bottom-(\d+)(?![\w-])/)?.[1]) * 4; // Tailwind: n * 0.25rem = n * 4px
-    expect(offset).toBe(96);
+    const lifted = card![1].match(/(?<![\w-])bottom-\[calc\((\d+)px\+env\(safe-area-inset-bottom\)\)\]/);
+    expect(lifted).not.toBeNull();
+    const offset = Number(lifted![1]);
+    expect(offset).toBe(92);
+    const move = read('src/features/reason/human/MoveBar.tsx');
+    const moveButton = Number(move.match(/min-h-\[(\d+)px\] rounded-\[11px\] px-5/)?.[1]);
+    const movePad = Number(move.match(/md:pt-(\d+) md:pb-\[calc\((\d+)px\+env/)?.[1]) * 4 + Number(move.match(/md:pb-\[calc\((\d+)px\+env/)?.[1]);
+    expect(Number.isFinite(moveButton) && Number.isFinite(movePad)).toBe(true);
+    for (const inset of [0, 34, 47]) expect(offset + inset - (1 + moveButton + movePad + inset)).toBeGreaterThanOrEqual(8);
 
     const nav = read('src/features/reason/shell/MobileNav.tsx');
     const tab = Number(nav.match(/const TAB = '[^']*\bmin-h-\[(\d+)px\]/)?.[1]);
@@ -619,7 +626,7 @@ describe('Weights the page loads, and the waiting-call card above the phone bar 
 
     for (const inset of [0, 34, 47]) {
       const barHeight = 1 + above + tab + below + inset;
-      const cardBottom = offset + (liftedByInset ? inset : 0);
+      const cardBottom = offset + inset;
       expect({ inset, barHeight, cardBottom, clear: cardBottom - barHeight >= 8 }).toEqual({ inset, barHeight, cardBottom, clear: true });
     }
   });
@@ -975,6 +982,7 @@ describe('The hero links to the member\'s LinkedIn, on the Human Profile and on 
   const text = require('../../../../client/src/features/reason/human/profile-text');
   const frameOf = () => loadModule('src/features/reason/human/ProfileHero.tsx', {
     '@/components/ui/Avatar': { __esModule: true, default: () => null },
+    '@/features/calls/ProfileCallButton': { __esModule: true, default: () => null },
     '@/lib/utils': joinClasses,
     '../brand/ReasonSheep': { __esModule: true, default: () => null },
     '../person': require('../../../../client/src/features/reason/person'),

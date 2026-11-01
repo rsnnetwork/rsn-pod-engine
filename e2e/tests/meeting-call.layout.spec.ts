@@ -127,11 +127,12 @@ test.afterAll(async () => {
 });
 
 for (const vp of WIDTHS) {
-  test(`locked chat (scheduler, no calls) fits at ${vp.name}`, async () => {
+  test(`locked chat (scheduler and Video call, no audio) fits at ${vp.name}`, async () => {
     test.setTimeout(90_000);
     const page = await pageAt(a, `/messages/${convId}`, vp);
     await expect(page.getByTestId('thread-meeting-banner')).toBeVisible({ timeout: 25_000 });
-    await expect(page.getByRole('button', { name: /Start a video call now|Start an audio call now/i })).toHaveCount(0);
+    // 1 Nov 2026: a connection may ring for video before any meeting; audio still waits for the first one.
+    await expect(page.getByRole('button', { name: /Start an audio call now/i })).toHaveCount(0);
     await expectNoHorizontalOverflow(page, `locked ${vp.name}`);
     await expectTapTargets(page, `locked ${vp.name}`);
     await page.screenshot({ path: path.join(OUT, `locked-${vp.name}.png`) });
@@ -181,13 +182,13 @@ for (const vp of WIDTHS) {
     await page.screenshot({ path: path.join(OUT, `unlocked-${vp.name}.png`) });
 
     // Open the request dialog (header button on ≥640px, More-actions menu below).
-    const desktopBtn = page.getByRole('button', { name: /Start a video call now/i });
+    const desktopBtn = page.getByRole('button', { name: 'Video call', exact: true });
     if (await desktopBtn.isVisible().catch(() => false)) {
       await expect(desktopBtn).toBeEnabled({ timeout: 35_000 });
       await desktopBtn.click();
     } else {
       await page.getByRole('button', { name: /More actions/i }).click();
-      const item = page.getByRole('button', { name: /^Video call now$/ });
+      const item = page.getByTestId('video-call-button').filter({ visible: true });
       await expect(item).toBeEnabled({ timeout: 35_000 });
       await item.click();
     }

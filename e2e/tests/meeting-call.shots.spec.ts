@@ -95,10 +95,10 @@ test('capture meeting + call UI', async () => {
   });
 
   // 1) Desktop thread BEFORE the first meeting: pinned Join card, scheduler icon,
-  //    and NO call buttons (calls are locked until they've met).
+  //    Video call (any connection, 1 Nov 2026) and NO audio call (that waits until they've met).
   const desk = await pageAt(a, `/messages/${convId}`, { width: 1280, height: 900 });
   await expect(desk.getByTestId('thread-meeting-banner')).toBeVisible({ timeout: 25_000 });
-  await expect(desk.getByRole('button', { name: /Start a video call now/i })).toHaveCount(0);
+  await expect(desk.getByRole('button', { name: /Start an audio call now/i })).toHaveCount(0);
   await desk.screenshot({ path: path.join(OUT, '01-desktop-thread-join-card-locked.png') });
 
   // 2) Scheduler panel with the confirmed meeting + "Add to calendar".
@@ -154,7 +154,7 @@ test('capture meeting + call UI', async () => {
   await aDesk.screenshot({ path: path.join(OUT, '07-desktop-unlocked-call-buttons.png') });
 
   // 8) Request-a-call dialog: video/audio + typed minutes.
-  const vid = aDesk.getByRole('button', { name: /Start a video call now/i });
+  const vid = aDesk.getByRole('button', { name: 'Video call', exact: true });
   await expect(vid).toBeEnabled({ timeout: 35_000 });
   await vid.click();
   await aDesk.locator('#call-minutes').fill('15');
@@ -162,9 +162,9 @@ test('capture meeting + call UI', async () => {
 
   // 9) Caller waiting; 10) callee rung with the length.
   await aDesk.getByRole('button', { name: /Send request/i }).click();
-  await expect(aDesk.getByTestId('call-waiting')).toBeVisible({ timeout: 15_000 });
+  await expect(aDesk.getByTestId('call-outgoing')).toBeVisible({ timeout: 15_000 });
   await aDesk.screenshot({ path: path.join(OUT, '09-call-waiting.png') });
-  await expect(bDesk.getByText(/wants to call/i)).toBeVisible({ timeout: 20_000 });
+  await expect(bDesk.getByText(/is calling you/i)).toBeVisible({ timeout: 20_000 });
   await bDesk.screenshot({ path: path.join(OUT, '10-incoming-call-request.png') });
   await bDesk.getByRole('button', { name: /^Accept$/ }).click();
   await expect(bDesk).toHaveURL(new RegExp(`/meet/${convId}`), { timeout: 20_000 });

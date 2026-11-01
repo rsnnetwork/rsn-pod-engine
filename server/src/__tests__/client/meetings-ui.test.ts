@@ -13,7 +13,7 @@ import * as ts from 'typescript';
 import type { Meeting, MeetingSummary } from '@rsn/shared';
 import {
   canJoin, eventsBadge, eventsLinkName, firstLine, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError,
-  meetingLine, meetingTimes, meetingWhen, nextChangeAt, startsIn, tickDelay, EMPTY_MEETINGS, NO_PAST_MEETINGS,
+  meetingLine, meetingTimes, meetingTitle, meetingWhen, nextChangeAt, startsIn, tickDelay, EMPTY_MEETINGS, NO_PAST_MEETINGS,
   NO_CANCELLED_MEETINGS,
 } from '../../../../client/src/features/meetings/meeting-words';
 
@@ -40,6 +40,7 @@ const meeting = (over: Partial<Meeting> = {}): Meeting => ({
   context: 'Coffee about your seed round?',
   joinPath: '/meet/c-1?scheduled=1&kind=video',
   attended: { me: false, them: false },
+  source: 'scheduled',
   ...over,
 });
 const START = Date.parse('2026-10-25T12:00:00.000Z');
@@ -366,9 +367,17 @@ describe('a meeting on Events', () => {
     }
   });
 
-  it('a card: "Meeting with {name}", the time line, the first line of why, the chip, Join or when it starts, and Open chat', () => {
+  // 1 Nov 2026: an answered call is listed too (source instant), headed as the call it was.
+  it('a heading says "Meeting with {name}" for a time agreed, "Video call with {name}" for an answered call', () => {
+    expect(meetingTitle(meeting())).toBe('Meeting with Stefan Avivson');
+    expect(meetingTitle(meeting({ source: 'instant' }))).toBe('Video call with Stefan Avivson');
+    expect(meetingTitle(meeting({ source: 'instant', kind: 'audio' }))).toBe('Audio call with Stefan Avivson');
+    expect(meetingTitle({ ...meeting(), source: undefined })).toBe('Meeting with Stefan Avivson');
+  });
+
+  it('a card: its heading, the time line, the first line of why, the chip, Join or when it starts, and Open chat', () => {
     const src = read('features/meetings/MeetingCard.tsx');
-    expect(src).toMatch(/Meeting with \{name\}/);
+    expect(src).toMatch(/\{meetingTitle\(meeting\)\}/);
     expect(src).toMatch(/meetingLine\(meeting\)/);
     expect(src).toMatch(/firstLine\(meeting\.context\)/);
     expect(src).toMatch(/meetingChip\(meeting, now\)/);
