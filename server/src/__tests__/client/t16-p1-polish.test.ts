@@ -75,7 +75,7 @@ describe('X3: one "Former member" on the client', () => {
       for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, f.name);
         if (f.isDirectory()) walk(p);
-        else if (/\.tsx?$/.test(f.name) && /=\s*'Former member'/.test(fs.readFileSync(p, 'utf8'))) defined.push(path.relative(CLIENT, p).replace(/\/g, '/'));
+        else if (/\.tsx?$/.test(f.name) && /=\s*'Former member'/.test(fs.readFileSync(p, 'utf8'))) defined.push(path.relative(CLIENT, p).split(path.sep).join('/'));
       }
     };
     walk(CLIENT);
@@ -99,6 +99,16 @@ describe('P1 item 9: a refused person\'s live page is final, and says T11\'s ref
     expect(refusalOf(refused('AUTH_FORBIDDEN', 'Forbidden'))).toEqual({ detail: REFUSED_DETAIL, requestOnEventPage: false });
     expect(refusalOf(refused('EVENT_PRIVATE', ''))).toEqual({ detail: REFUSED_DETAIL, requestOnEventPage: false });
     expect(refusalOf(undefined)).toEqual({ detail: REFUSED_DETAIL, requestOnEventPage: false });
+  });
+
+  it('item 10: every format waits for the register answer, and a removed person gets the final screen, before any room', () => {
+    const page = read('features/live/LiveSessionPage.tsx');
+    const removed = page.indexOf("if (removedFromEvent) return <RemovedFromEvent onBack={() => navigate('/sessions')} />;");
+    const known = page.indexOf('if (!registrationKnown) return <PageLoader />;');
+    const meeting = page.indexOf('<MeetingRoom');
+    expect(removed).toBeGreaterThan(-1);
+    expect(known).toBeGreaterThan(removed);
+    expect(meeting).toBeGreaterThan(known);
   });
 
   it('the guard keeps the refusal it read, on the first read and on the re-check when the tab comes back', () => {

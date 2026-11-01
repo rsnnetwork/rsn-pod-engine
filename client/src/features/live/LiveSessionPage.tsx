@@ -217,6 +217,12 @@ function LiveEventRoom() {
 
   if (!sessionId) return <PageLoader />;
 
+  // P2 items 9 and 10 (1 Nov 2026): nothing of the live page (top bar, controls, room) is drawn until the register
+  // call has answered, and a removed person gets a final screen instead: on a reload the top bar used to flash for
+  // the moment before the refusal landed. Before the format is read (P1 item 10), so a video meeting waits too.
+  if (removedFromEvent) return <RemovedFromEvent onBack={() => navigate('/sessions')} />;
+  if (!registrationKnown) return <PageLoader />;
+
   // 26 Oct 2026 (VID-04) — the event's format decides the room, read once from the event itself. Until it is
   // known nothing renders, so a video meeting never flashes the speed-networking grid.
   if (!session) return sessionFailed ? <LiveEventUnavailable onRetry={() => { void refetch(); }} /> : <PageLoader />;
@@ -236,11 +242,6 @@ function LiveEventRoom() {
     );
   }
 
-  // P2 items 9 and 10 (1 Nov 2026): nothing of the live shell (top bar, controls, room) is drawn until the register
-  // call has answered, and a removed person gets a final screen instead of the shell: on a reload the top bar used
-  // to flash for the moment before the refusal landed.
-  if (removedFromEvent) return <RemovedFromEvent onBack={() => navigate('/sessions')} />;
-  if (!registrationKnown) return <PageLoader />;
 
   return (
     // Phase 7-audit fix — overflow-x-hidden on the root prevents any
