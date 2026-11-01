@@ -45,8 +45,11 @@ export interface Meeting {
    * it; the lists leave it out. The other person's answer is never sent.
    */
   myFeedback?: MyMeetingFeedback | null;
-  /** Agreed in the scheduler, or an answered call (1 Nov 2026). */
-  source: MeetingSource;
+  /**
+   * Agreed in the scheduler, or an answered call (1 Nov 2026). Every server from then on sends it; optional so a
+   * branch whose server predates it still compiles, and a screen reads a missing one as scheduled.
+   */
+  source?: MeetingSource;
 }
 
 /**
