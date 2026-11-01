@@ -186,7 +186,9 @@ export const ENDONYMS: Readonly<Record<string, readonly string[]>> = {
 
 /** City states and cities the tables above list as a country's name: a place someone lives in. */
 const CITIES_NAMED_AS_COUNTRIES = new Set(
-  ['singapore', 'hong kong', 'macao', 'macau', 'monaco', 'vatican city', 'dubai', 'abu dhabi'],
+  ['singapore', 'hong kong', 'macao', 'macau', 'monaco', 'vatican city', 'dubai', 'abu dhabi',
+    // capitals that share their country's name
+    'luxembourg', 'kuwait', 'san marino', 'djibouti', 'panama', 'andorra'],
 );
 
 /** A name as "only a country?" compares it: folded, without full stops, without a leading "the". */
