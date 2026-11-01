@@ -40,8 +40,8 @@ async function makePerson(label: string): Promise<Person> {
   const email = `n1t12-${label}-${Date.now()}@rsn-e2e.invalid`;
   await pool.query(
     `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed,
-                        onboarding_status, onboarding_version, email_verified, company, job_title, industry, reasons_to_connect)
-     VALUES ($1, $2, $3, 'N1T12', $4, 'active', 'member', true, true, 'completed', 2, true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[])`,
+                        onboarding_status, onboarding_version, email_verified, company, job_title, industry, reasons_to_connect, location)
+     VALUES ($1, $2, $3, 'N1T12', $4, 'active', 'member', true, true, 'completed', 2, true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[], 'Copenhagen, Denmark')`,
     [id, email, `N1T12 ${label}`, label],
   );
   const sessionId = uuid();

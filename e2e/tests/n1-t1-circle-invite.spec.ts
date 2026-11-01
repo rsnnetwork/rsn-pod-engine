@@ -23,8 +23,8 @@ async function makePerson(label: string, role: 'member' | 'admin'): Promise<Pers
   const email = `n1t1-${label}-${Date.now()}@rsn-e2e.invalid`;
   await pool.query(
     `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed,
-                        onboarding_status, email_verified, company, job_title, industry, reasons_to_connect)
-     VALUES ($1, $2, $3, 'N1T1', $4, 'active', $5, true, true, 'completed', true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[])`,
+                        onboarding_status, onboarding_version, email_verified, company, job_title, industry, reasons_to_connect, location)
+     VALUES ($1, $2, $3, 'N1T1', $4, 'active', $5, true, true, 'completed', 2, true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[], 'Copenhagen, Denmark')`,
     [id, email, `N1T1 ${label}`, label, role],
   );
   const token = jwt.sign({ sub: id, email, role, displayName: `N1T1 ${label}`, sessionId: uuid() }, SECRET!, { expiresIn: '1h' });

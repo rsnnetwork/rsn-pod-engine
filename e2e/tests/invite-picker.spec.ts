@@ -201,9 +201,9 @@ test.beforeAll(async () => {
   ];
   const made = await pool.query<{ id: string; name: string }>(
     `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed,
-                        onboarding_status, email_verified, company, job_title, industry)
+                        onboarding_status, email_verified, company, job_title, industry, onboarding_version, location)
      SELECT gen_random_uuid(), 'e2etest-invpick-p' || n || '-' || $2 || '@rsn-e2e.invalid', name, split_part(name, ' ', 1), split_part(name, ' ', 2),
-            'active', 'member', true, true, 'completed', true, ($3::text[])[1 + (n % 5)::int], ($4::text[])[1 + (n % 5)::int], 'Tech'
+            'active', 'member', true, true, 'completed', true, ($3::text[])[1 + (n % 5)::int], ($4::text[])[1 + (n % 5)::int], 'Tech', 2, 'Copenhagen, Denmark'
        FROM unnest($1::text[]) WITH ORDINALITY AS t(name, n)
      RETURNING id, display_name AS name`,
     [people, RUN, FIRMS, TITLES],
