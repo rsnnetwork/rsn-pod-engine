@@ -136,21 +136,39 @@ describe('computeEligibilityV2', () => {
       expect(computeEligibilityV2(inputs({ recentSends: [t1, t2] })).reason).toBe('ok');
     });
 
+    // Asked the same evening (H2b item 18): the next send falls on the next calendar day, so the sentence says so.
+    const thatEvening = new Date('2026-10-25T20:00:00Z');
+
     it('the third send uses the last one: the next may go 24 hours after the OLDEST (verbatim sentence, UTC without a zone)', () => {
-      const result = computeEligibilityV2(inputs({ recentSends: [t1, t2, t3] }));
+      const result = computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], now: thatEvening }));
       expect(result).toMatchObject({
         enabled: false, visible: true, reason: 'limit',
-        explanation: 'You can send another message at 14:20.',
+        explanation: 'You can send another message tomorrow at 14:20.',
         nextSendAt: '2026-10-26T14:20:00.000Z',
       });
     });
 
     it('writes the time in the sender\'s own zone, so the sentence is true on their clock', () => {
       // 26 Oct 2026 is after Europe's clocks went back (25 Oct): Berlin is UTC+1. New York is still on summer time.
-      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'Europe/Berlin' })).explanation)
+      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'Europe/Berlin', now: thatEvening })).explanation)
+        .toBe('You can send another message tomorrow at 15:20.');
+      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'America/New_York', now: thatEvening })).explanation)
+        .toBe('You can send another message tomorrow at 10:20.');
+    });
+
+    it('says the time alone when the next send falls on the same day (H2b item 18: "at 10:46" was a time already passed)', () => {
+      // Asked the next morning: the oldest send ages out at 14:20 that same day.
+      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], now: new Date('2026-10-26T09:00:00Z') })).explanation)
+        .toBe('You can send another message at 14:20.');
+    });
+
+    it('reads "today" and "tomorrow" on the sender\'s own clock, not UTC', () => {
+      // 23:30 UTC on the 25th is already 00:30 on the 26th in Berlin, and 15:20 Berlin on the 26th is the same day there.
+      const justPastMidnightInBerlin = new Date('2026-10-25T23:30:00Z');
+      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'Europe/Berlin', now: justPastMidnightInBerlin })).explanation)
         .toBe('You can send another message at 15:20.');
-      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'America/New_York' })).explanation)
-        .toBe('You can send another message at 10:20.');
+      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], now: justPastMidnightInBerlin })).explanation)
+        .toBe('You can send another message tomorrow at 14:20.');
     });
 
     it('still gives the instant in UTC, whatever zone the sentence uses', () => {
@@ -158,14 +176,16 @@ describe('computeEligibilityV2', () => {
         .toBe('2026-10-26T14:20:00.000Z');
     });
 
+    // These two are asked on the day the next send falls (the clock is the test's, not the machine's: on the real
+    // clock they began to say "tomorrow" once the day they were written had passed; H2b fix round 1).
     it('falls back to UTC when the stored zone is not one the platform knows', () => {
-      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'Not/AZone' })).explanation)
+      expect(computeEligibilityV2(inputs({ recentSends: [t1, t2, t3], timeZone: 'Not/AZone', now: new Date('2026-10-26T09:00:00Z') })).explanation)
         .toBe('You can send another message at 14:20.');
     });
 
     it('writes midnight as 00:05, never 24:05', () => {
       const a = new Date('2026-10-25T00:05:00Z');
-      expect(computeEligibilityV2(inputs({ recentSends: [a, t2, t3] })).explanation)
+      expect(computeEligibilityV2(inputs({ recentSends: [a, t2, t3], now: new Date('2026-10-26T00:01:00Z') })).explanation)
         .toBe('You can send another message at 00:05.');
     });
 
@@ -317,9 +337,15 @@ describe('getEligibilityV2ForEvent', () => {
         new Date('2026-10-25T14:20:00Z'), new Date('2026-10-25T18:00:00Z'), new Date('2026-10-25T19:00:00Z'),
       ],
     });
-    expect(await getEligibilityV2ForEvent('host', UserRole.MEMBER, SESSION)).toMatchObject({
-      reason: 'limit', explanation: 'You can send another message at 15:20.',
-    });
+    // Asked at 10:00 Berlin on the 26th, the day the oldest send ages out (the route asks at the real now).
+    jest.useFakeTimers({ now: new Date('2026-10-26T09:00:00Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      expect(await getEligibilityV2ForEvent('host', UserRole.MEMBER, SESSION)).toMatchObject({
+        reason: 'limit', explanation: 'You can send another message at 15:20.',
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('counts only THIS person\'s sends for THIS event, inside the window, and never a job that failed before sending anyone', async () => {

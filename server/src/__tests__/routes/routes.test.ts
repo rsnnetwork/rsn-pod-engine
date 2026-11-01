@@ -82,7 +82,7 @@ function createApp() {
 
 function makeToken(overrides: Partial<{ sub: string; email: string; role: string; sessionId: string }> = {}) {
   return jwt.sign({
-    sub: overrides.sub || 'user-123',
+    sub: overrides.sub || '05e70000-0000-4000-8000-000000000123',
     email: overrides.email || 'test@example.com',
     role: overrides.role || 'member',
     sessionId: overrides.sessionId || 'sess-1',
@@ -92,7 +92,7 @@ function makeToken(overrides: Partial<{ sub: string; email: string; role: string
 // ─── Shared Mocks ───────────────────────────────────────────────────────────
 
 const mockUser = {
-  id: 'user-123',
+  id: '05e70000-0000-4000-8000-000000000123',
   email: 'test@example.com',
   displayName: 'Test User',
   firstName: 'Test',
@@ -118,7 +118,7 @@ const mockUser = {
 };
 
 const mockPod = {
-  id: 'pod-123',
+  id: 'd0d0d0d0-0000-4000-8000-000000000123',
   name: 'Test Pod',
   description: null,
   podType: PodType.SPEED_NETWORKING,
@@ -128,14 +128,14 @@ const mockPod = {
   status: 'active',
   maxMembers: 50,
   rules: null,
-  createdBy: 'user-123',
+  createdBy: '05e70000-0000-4000-8000-000000000123',
   createdAt: new Date(),
   updatedAt: new Date(),
 };
 
 const mockSession = {
-  id: 'session-123',
-  podId: 'pod-123',
+  id: '5e550000-0000-4000-8000-000000000123',
+  podId: 'd0d0d0d0-0000-4000-8000-000000000123',
   title: 'Test Session',
   description: null,
   scheduledAt: new Date(),
@@ -144,7 +144,7 @@ const mockSession = {
   status: SessionStatus.SCHEDULED,
   currentRound: 0,
   config: DEFAULT_SESSION_CONFIG,
-  hostUserId: 'user-123',
+  hostUserId: '05e70000-0000-4000-8000-000000000123',
   lobbyRoomId: null,
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -245,7 +245,7 @@ describe('Auth Routes', () => {
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      expect(res.body.data.user.id).toBe('user-123');
+      expect(res.body.data.user.id).toBe('05e70000-0000-4000-8000-000000000123');
     });
 
     it('should return 401 without token', async () => {
@@ -306,7 +306,7 @@ describe('Auth Routes', () => {
 
     // 21 Oct 2026: the member's banner rides the session like their photo does, as its address or null.
     it('carries the banner\'s address, and null when the member has none', async () => {
-      const bannerUrl = 'http://localhost:3001/api/users/user-123/banner?v=1761040000000';
+      const bannerUrl = 'http://localhost:3001/api/users/05e70000-0000-4000-8000-000000000123/banner?v=1761040000000';
       (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, bannerUrl });
       const withOne = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
       expect(withOne.status).toBe(200);
@@ -378,7 +378,7 @@ describe('User Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.id).toBe('user-123');
+      expect(res.body.data.id).toBe('05e70000-0000-4000-8000-000000000123');
     });
 
     it('should return 401 when not authenticated', async () => {
@@ -422,7 +422,7 @@ describe('User Routes', () => {
 
       const token = makeToken();
       const res = await request(app)
-        .get('/users/user-123')
+        .get('/users/05e70000-0000-4000-8000-000000000123')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
@@ -471,7 +471,7 @@ describe('Pod Routes', () => {
 
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.id).toBe('pod-123');
+      expect(res.body.data.id).toBe('d0d0d0d0-0000-4000-8000-000000000123');
     });
 
     it('should reject pod without name', async () => {
@@ -509,11 +509,11 @@ describe('Pod Routes', () => {
       // Admin role bypasses canViewPod DB lookups (short-circuits on role check).
       const token = makeToken({ role: 'admin' });
       const res = await request(app)
-        .get('/pods/pod-123')
+        .get('/pods/d0d0d0d0-0000-4000-8000-000000000123')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      expect(res.body.data.id).toBe('pod-123');
+      expect(res.body.data.id).toBe('d0d0d0d0-0000-4000-8000-000000000123');
     });
   });
 });
@@ -536,7 +536,7 @@ describe('Session Routes', () => {
         });
 
       expect(res.status).toBe(201);
-      expect(res.body.data.id).toBe('session-123');
+      expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
     });
 
     it('should reject session without title', async () => {
@@ -557,11 +557,11 @@ describe('Session Routes', () => {
       // Admin role bypasses canViewSession DB lookups (short-circuits on role check).
       const token = makeToken({ role: 'admin' });
       const res = await request(app)
-        .get('/sessions/session-123')
+        .get('/sessions/5e550000-0000-4000-8000-000000000123')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      expect(res.body.data.id).toBe('session-123');
+      expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
     });
   });
 });
@@ -573,9 +573,9 @@ describe('Invite Routes', () => {
     id: 'invite-1',
     code: 'ABC123',
     type: InviteType.POD,
-    inviterId: 'user-123',
+    inviterId: '05e70000-0000-4000-8000-000000000123',
     inviteeEmail: null,
-    podId: 'pod-123',
+    podId: 'd0d0d0d0-0000-4000-8000-000000000123',
     sessionId: null,
     status: InviteStatus.PENDING,
     maxUses: 1,
@@ -650,7 +650,7 @@ describe('Pod Routes - Extended', () => {
 
       const token = makeToken();
       const res = await request(app)
-        .put('/pods/pod-123')
+        .put('/pods/d0d0d0d0-0000-4000-8000-000000000123')
         .set('Authorization', `Bearer ${token}`)
         .send({ name: 'Updated' });
 
@@ -662,12 +662,12 @@ describe('Pod Routes - Extended', () => {
   describe('GET /pods/:id/members', () => {
     it('should return pod members', async () => {
       (podService.getPodMembers as jest.Mock).mockResolvedValue([
-        { id: 'pm-1', podId: 'pod-123', userId: 'user-123', role: 'director', status: 'active' },
+        { id: 'pm-1', podId: 'd0d0d0d0-0000-4000-8000-000000000123', userId: '05e70000-0000-4000-8000-000000000123', role: 'director', status: 'active' },
       ]);
 
       const token = makeToken();
       const res = await request(app)
-        .get('/pods/pod-123/members')
+        .get('/pods/d0d0d0d0-0000-4000-8000-000000000123/members')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
@@ -678,12 +678,12 @@ describe('Pod Routes - Extended', () => {
   describe('POST /pods/:id/members', () => {
     it('should add a member', async () => {
       (podService.addMember as jest.Mock).mockResolvedValue({
-        id: 'pm-2', podId: 'pod-123', userId: '00000000-0000-0000-0000-000000000002', role: 'member', status: 'active',
+        id: 'pm-2', podId: 'd0d0d0d0-0000-4000-8000-000000000123', userId: '00000000-0000-0000-0000-000000000002', role: 'member', status: 'active',
       });
 
       const token = makeToken();
       const res = await request(app)
-        .post('/pods/pod-123/members')
+        .post('/pods/d0d0d0d0-0000-4000-8000-000000000123/members')
         .set('Authorization', `Bearer ${token}`)
         .send({ userId: '00000000-0000-0000-0000-000000000002' });
 
@@ -693,7 +693,7 @@ describe('Pod Routes - Extended', () => {
     it('should reject without userId', async () => {
       const token = makeToken();
       const res = await request(app)
-        .post('/pods/pod-123/members')
+        .post('/pods/d0d0d0d0-0000-4000-8000-000000000123/members')
         .set('Authorization', `Bearer ${token}`)
         .send({});
 
@@ -707,7 +707,7 @@ describe('Pod Routes - Extended', () => {
 
       const token = makeToken();
       const res = await request(app)
-        .delete('/pods/pod-123/members/user-456')
+        .delete('/pods/d0d0d0d0-0000-4000-8000-000000000123/members/user-456')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
@@ -720,7 +720,7 @@ describe('Pod Routes - Extended', () => {
 
       const token = makeToken();
       const res = await request(app)
-        .post('/pods/pod-123/leave')
+        .post('/pods/d0d0d0d0-0000-4000-8000-000000000123/leave')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
@@ -739,7 +739,7 @@ describe('Session Routes - Extended', () => {
 
       const token = makeToken();
       const res = await request(app)
-        .put('/sessions/session-123')
+        .put('/sessions/5e550000-0000-4000-8000-000000000123')
         .set('Authorization', `Bearer ${token}`)
         .send({ title: 'Updated' });
 
@@ -768,12 +768,12 @@ describe('Session Routes - Extended', () => {
   describe('POST /sessions/:id/register', () => {
     it('should register participant', async () => {
       (sessionService.registerParticipant as jest.Mock).mockResolvedValue({
-        id: 'sp-1', sessionId: 'session-123', userId: 'user-123', status: 'registered',
+        id: 'sp-1', sessionId: '5e550000-0000-4000-8000-000000000123', userId: '05e70000-0000-4000-8000-000000000123', status: 'registered',
       });
 
       const token = makeToken();
       const res = await request(app)
-        .post('/sessions/session-123/register')
+        .post('/sessions/5e550000-0000-4000-8000-000000000123/register')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(201);
@@ -786,7 +786,7 @@ describe('Session Routes - Extended', () => {
 
       const token = makeToken();
       const res = await request(app)
-        .delete('/sessions/session-123/register')
+        .delete('/sessions/5e550000-0000-4000-8000-000000000123/register')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
@@ -796,12 +796,12 @@ describe('Session Routes - Extended', () => {
   describe('GET /sessions/:id/participants', () => {
     it('should return participants', async () => {
       (sessionService.getSessionParticipants as jest.Mock).mockResolvedValue([
-        { id: 'sp-1', userId: 'user-123', status: 'registered' },
+        { id: 'sp-1', userId: '05e70000-0000-4000-8000-000000000123', status: 'registered' },
       ]);
 
       const token = makeToken();
       const res = await request(app)
-        .get('/sessions/session-123/participants')
+        .get('/sessions/5e550000-0000-4000-8000-000000000123/participants')
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
@@ -817,7 +817,7 @@ describe('Invite Routes - Extended', () => {
 
   const mockInviteData = {
     id: 'invite-1', code: 'ABC123', type: InviteType.POD,
-    inviterId: 'user-123', inviteeEmail: null, podId: 'pod-123',
+    inviterId: '05e70000-0000-4000-8000-000000000123', inviteeEmail: null, podId: 'd0d0d0d0-0000-4000-8000-000000000123',
     sessionId: null, status: InviteStatus.PENDING, maxUses: 1, useCount: 0,
     expiresAt: null, acceptedByUserId: null, acceptedAt: null,
     createdAt: new Date(), updatedAt: new Date(),
@@ -861,7 +861,7 @@ describe('Rating Routes', () => {
   const app = createApp();
 
   const mockRating = {
-    id: 'rating-1', matchId: 'match-1', fromUserId: 'user-123',
+    id: 'rating-1', matchId: 'match-1', fromUserId: '05e70000-0000-4000-8000-000000000123',
     toUserId: 'user-456', qualityScore: 4, meetAgain: true,
     feedback: null, createdAt: new Date(),
   };

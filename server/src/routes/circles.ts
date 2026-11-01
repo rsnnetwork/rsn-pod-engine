@@ -3,12 +3,17 @@
 // REASON v1 Phase 3a (19 Jul 2026). Authz per the architecture matrix:
 // create/update/archive/attach = admin+; join/leave/read = any authenticated
 // member. Every gate is server-side — nothing trusted from the client.
+// 1 Nov 2026: every route is rate limited (circleReadLimiter, circleWriteLimiter, and wallWriteLimiter on the wall's
+// writes) and every change to a circle tells the people it touches through fanoutCircleChange.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { requireRole } from '../middleware/rbac';
+import { circleReadLimiter, circleWriteLimiter, wallWriteLimiter } from '../middleware/rateLimit';
+import { fanoutCircleChange } from '../realtime/fanout';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as circleService from '../services/circle/circle.service';
 import * as wallService from '../services/circle/circle-wall.service';
@@ -26,7 +31,7 @@ const updateBodySchema = createBodySchema.partial();
 const attachBodySchema = z.object({ podId: z.string().uuid() });
 
 // GET /circles — list (any member)
-router.get('/', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/', authenticate, circleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await circleService.listCircles(req.user!.userId);
     res.json({ success: true, data } satisfies ApiResponse);
@@ -35,15 +40,15 @@ router.get('/', authenticate, async (req: Request, res: Response, next: NextFunc
 
 // GET /circles/of-pod/:podId — circles a pod is attached to (any member).
 // Two path segments, so it can never be shadowed by GET /:id below.
-router.get('/of-pod/:podId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/of-pod/:podId', authenticate, circleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await circleService.listCirclesOfPod(req.params.podId);
     res.json({ success: true, data } satisfies ApiResponse);
   } catch (err) { next(err); }
 });
 
-// GET /circles/:id — detail (any member)
-router.get('/:id', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+// GET /circles/:id — detail (any member). A malformed id is a 400 in a member's words (26 Oct 2026).
+router.get('/:id', authenticate, circleReadLimiter, uuidInPath('id', PATH_REFUSALS.circle), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await circleService.getCircleDetail(req.params.id, req.user!.userId);
     res.json({ success: true, data } satisfies ApiResponse);
@@ -51,62 +56,69 @@ router.get('/:id', authenticate, async (req: Request, res: Response, next: NextF
 });
 
 // POST /circles — create (admin+)
-router.post('/', authenticate, requireRole(UserRole.ADMIN), validate(createBodySchema),
+router.post('/', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN), validate(createBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await circleService.createCircle(req.user!.userId, req.body);
+      void fanoutCircleChange(data.id, req.user!.userId, [req.user!.userId]);
       res.status(201).json({ success: true, data } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
 // PATCH /circles/:id — update (admin+)
-router.patch('/:id', authenticate, requireRole(UserRole.ADMIN), validate(updateBodySchema),
+router.patch('/:id', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN), validate(updateBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await circleService.updateCircle(req.params.id, req.body);
+      void fanoutCircleChange(req.params.id, req.user!.userId);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
 // POST /circles/:id/archive — archive (admin+); never a hard delete
-router.post('/:id/archive', authenticate, requireRole(UserRole.ADMIN),
+router.post('/:id/archive', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await circleService.archiveCircle(req.params.id);
+      void fanoutCircleChange(req.params.id, req.user!.userId);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
 // POST /circles/:id/pods — attach a pod (admin+)
-router.post('/:id/pods', authenticate, requireRole(UserRole.ADMIN), validate(attachBodySchema),
+router.post('/:id/pods', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN), validate(attachBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await circleService.attachPod(req.params.id, req.body.podId, req.user!.userId);
+      void fanoutCircleChange(req.params.id, req.user!.userId);
       res.status(201).json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
 // DELETE /circles/:id/pods/:podId — detach (admin+)
-router.delete('/:id/pods/:podId', authenticate, requireRole(UserRole.ADMIN),
+router.delete('/:id/pods/:podId', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await circleService.detachPod(req.params.id, req.params.podId);
+      void fanoutCircleChange(req.params.id, req.user!.userId);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
 // POST /circles/:id/join — open join (any member)
-router.post('/:id/join', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/join', authenticate, circleWriteLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     await circleService.joinCircle(req.params.id, req.user!.userId);
+    void fanoutCircleChange(req.params.id, req.user!.userId, [req.user!.userId]);
     res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
   } catch (err) { next(err); }
 });
 
 // POST /circles/:id/leave — (any member)
-router.post('/:id/leave', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/leave', authenticate, circleWriteLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     await circleService.leaveCircle(req.params.id, req.user!.userId);
+    void fanoutCircleChange(req.params.id, req.user!.userId, [req.user!.userId]);
     res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
   } catch (err) { next(err); }
 });
@@ -147,7 +159,7 @@ router.get('/:id/posts', authenticate, async (req: Request, res: Response, next:
 });
 
 // POST /circles/:id/posts — create (CIRCLE MEMBERS only, enforced in service)
-router.post('/:id/posts', authenticate, validate(createPostSchema),
+router.post('/:id/posts', authenticate, wallWriteLimiter, validate(createPostSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await wallService.createPost(req.params.id, req.user!.userId, req.body);
@@ -168,7 +180,7 @@ router.get('/posts/:postId', authenticate, async (req: Request, res: Response, n
 });
 
 // POST /circles/posts/:postId/react — set or clear (reaction: null) the member's one reaction
-router.post('/posts/:postId/react', authenticate, validate(reactSchema),
+router.post('/posts/:postId/react', authenticate, wallWriteLimiter, validate(reactSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await wallService.reactToPost(req.params.postId, req.user!.userId, req.body.reaction);
@@ -177,7 +189,7 @@ router.post('/posts/:postId/react', authenticate, validate(reactSchema),
   });
 
 // POST /circles/posts/:postId/share — repost into another circle with attribution
-router.post('/posts/:postId/share', authenticate, validate(shareSchema),
+router.post('/posts/:postId/share', authenticate, wallWriteLimiter, validate(shareSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await wallService.sharePost(req.params.postId, req.user!.userId, req.body);
@@ -186,7 +198,7 @@ router.post('/posts/:postId/share', authenticate, validate(shareSchema),
   });
 
 // DELETE /circles/posts/:postId — author (own) or admin (any); soft delete
-router.delete('/posts/:postId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.delete('/posts/:postId', authenticate, wallWriteLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     await wallService.deletePost(req.params.postId, req.user!.userId, isAdminRole(req.user!.role));
     res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
@@ -194,14 +206,14 @@ router.delete('/posts/:postId', authenticate, async (req: Request, res: Response
 });
 
 // POST /circles/posts/:postId/pin + /unpin — admin only
-router.post('/posts/:postId/pin', authenticate, requireRole(UserRole.ADMIN),
+router.post('/posts/:postId/pin', authenticate, wallWriteLimiter, requireRole(UserRole.ADMIN),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await wallService.pinPost(req.params.postId, true);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
-router.post('/posts/:postId/unpin', authenticate, requireRole(UserRole.ADMIN),
+router.post('/posts/:postId/unpin', authenticate, wallWriteLimiter, requireRole(UserRole.ADMIN),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await wallService.pinPost(req.params.postId, false);
@@ -218,7 +230,7 @@ router.get('/posts/:postId/comments', authenticate, async (req: Request, res: Re
 });
 
 // POST /circles/posts/:postId/comments — circle members only (service-enforced)
-router.post('/posts/:postId/comments', authenticate, validate(commentSchema),
+router.post('/posts/:postId/comments', authenticate, wallWriteLimiter, validate(commentSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await wallService.addComment(req.params.postId, req.user!.userId, req.body.content, req.body.parentCommentId ?? null);
@@ -227,7 +239,7 @@ router.post('/posts/:postId/comments', authenticate, validate(commentSchema),
   });
 
 // POST /circles/comments/:commentId/like — like / unlike a comment (members)
-router.post('/comments/:commentId/like', authenticate, validate(likeSchema),
+router.post('/comments/:commentId/like', authenticate, wallWriteLimiter, validate(likeSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await wallService.likeComment(req.params.commentId, req.user!.userId, req.body.liked);
@@ -236,7 +248,7 @@ router.post('/comments/:commentId/like', authenticate, validate(likeSchema),
   });
 
 // DELETE /circles/comments/:commentId — author or admin; soft delete (replies go with it)
-router.delete('/comments/:commentId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.delete('/comments/:commentId', authenticate, wallWriteLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     await wallService.deleteComment(req.params.commentId, req.user!.userId, isAdminRole(req.user!.role));
     res.json({ success: true, data: { ok: true } } satisfies ApiResponse);

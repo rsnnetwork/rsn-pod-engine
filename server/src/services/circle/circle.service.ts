@@ -77,13 +77,22 @@ export async function createCircle(
   if (input.parentCircleId) await assertValidParent(input.parentCircleId, null);
 
   try {
-    const r = await query<{ id: string }>(
-      `INSERT INTO circles (name, description, parent_circle_id, created_by)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [name, input.description?.trim() || null, input.parentCircleId ?? null, adminUserId],
-    );
-    logger.info({ circleId: r.rows[0].id, name, adminUserId }, 'Circle created');
-    return r.rows[0];
+    // The creator is the circle's owner from the first moment, in the same transaction as the circle row, so the
+    // circle never exists without the person who runs it and member_count matches the member rows (1 Nov 2026, L21).
+    const created = await transaction(async (client) => {
+      const r = await client.query<{ id: string }>(
+        `INSERT INTO circles (name, description, parent_circle_id, created_by, member_count)
+         VALUES ($1, $2, $3, $4, 1) RETURNING id`,
+        [name, input.description?.trim() || null, input.parentCircleId ?? null, adminUserId],
+      );
+      await client.query(
+        `INSERT INTO circle_members (circle_id, user_id, role) VALUES ($1, $2, 'owner')`,
+        [r.rows[0].id, adminUserId],
+      );
+      return r.rows[0];
+    });
+    logger.info({ circleId: created.id, name, adminUserId }, 'Circle created');
+    return created;
   } catch (err: any) {
     if (err?.code === '23505') {
       throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'A circle with that name already exists here');

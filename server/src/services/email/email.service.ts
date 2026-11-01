@@ -8,6 +8,9 @@ import logger from '../../config/logger';
 import { generateIcsContent } from '../calendar/calendar.service';
 import { meetingTime } from '../meetings/meeting-time';
 import { query } from '../../db';
+import { isReservedTestAddress, maskAddress } from '../identity/reserved-address';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { SIGN_IN_CODE_TTL_MINUTES } from '../identity/sign-in-code';
 
 let resend: Resend | null = null;
 
@@ -57,7 +60,97 @@ export function emailCardClose(): string {
   ].join("");
 }
 
-// Centralized email sender with deliverability best-practices headers
+/** A burst of emails refused for the day's quota is logged once: the first as an error, the rest within this at debug. */
+const DAILY_QUOTA_NOTICE_MS = 60_000;
+let dailyQuotaNoticedAt = 0;
+
+/** The provider's "daily sending quota used up" refusal (429 `daily_quota_exceeded`), which no retry can get past. */
+function isDailyQuotaRefusal(error: unknown): boolean {
+  const e = error as { statusCode?: unknown; name?: unknown; message?: unknown } | null;
+  return !!e && e.statusCode === 429 && /daily_quota/i.test(`${String(e.name ?? '')} ${String(e.message ?? '')}`);
+}
+
+/** Tests only: the next daily-quota refusal is logged as an error again. */
+export function __resetDailyQuotaNoticeForTests(): void {
+  dailyQuotaNoticedAt = 0;
+}
+
+/**
+ * What sendEmail answers. `sent` is true for an email the provider took, and also for one to an address reserved for
+ * testing, which is never offered to the provider and says so in `skipped`.
+ */
+export interface SendEmailResult {
+  sent: boolean;
+  skipped?: 'reserved-test-address';
+}
+
+// Centralized email sender with deliverability best-practices headers.
+//
+// It is also the one place that decides whether an email is offered to the provider at all (26 Oct 2026). That day the
+// production account's daily sending quota ran out at 06:51 UTC and every email after it, real members' sign-in links
+// and meeting confirmations included, was refused. The platform's own end-to-end runs and production smokes had used
+// it up: their throwaway members sit on addresses reserved for testing (…@rsn-e2e.invalid, …@example.com) and every
+// email to them went to the provider. Nobody has a mailbox on a domain that RFC 2606 and RFC 6761 reserve, so the
+// provider is not asked. The answer is the one a delivered email gets, marked `skipped`: a reminder keeps its hour, a
+// batch counts the email as sent and nothing is tried again. The provider's own test sink (delivered+label@resend.dev)
+// is an address like any other here and goes as before. A call to the provider from anywhere else would get round this;
+// email-provider-single-door.test.ts fails if one appears.
+
+// ─── One pace for every email (H2b item 7, 26 Oct 2026) ──────────────────────────────────────────────────────
+// The provider takes two sends a second. Every email — a bulk invite, Remind all's one-at-a-time sends, a job's
+// burst, a member's single email — reaches it through one process-wide gate that releases a provider call every
+// SEND_GAP_MS at most, retries included. A burst runs its sends inside asBulkEmail(); a single email is released ahead
+// of the burst waiting behind the gate, so the answer to a member's press waits for one slot at most, never for the
+// burst. A waiter is released in its turn whatever became of the one before, so nothing is lost.
+export const SEND_GAP_MS = 500;
+export interface SendPace { now(): number; pause(ms: number): Promise<void> }
+// A clock that only goes forward: the wall clock set back (an NTP step) would hold every email for the size of the step.
+const REAL_SEND_PACE: SendPace = { now: () => performance.now(), pause: (ms) => new Promise((r) => setTimeout(r, ms)) };
+let sendPace: SendPace = REAL_SEND_PACE;
+let lastReleaseAt = Number.NEGATIVE_INFINITY;
+const waitingToSend: Array<{ release: () => void; bulk: boolean }> = [];
+let releasing = false;
+const bulkLane = new AsyncLocalStorage<boolean>();
+
+/** Runs `send` with every email it sends in the bulk lane: behind any single email waiting its turn. */
+export function asBulkEmail<T>(send: () => Promise<T>): Promise<T> {
+  return bulkLane.run(true, send);
+}
+
+/** Resolves when this email may be offered to the provider: single emails go in ahead of the bulk lane. */
+function awaitSendTurn(bulk: boolean): Promise<void> {
+  return new Promise<void>((release) => {
+    const waiter = { release, bulk };
+    const firstBulk = bulk ? -1 : waitingToSend.findIndex((w) => w.bulk);
+    if (firstBulk === -1) waitingToSend.push(waiter);
+    else waitingToSend.splice(firstBulk, 0, waiter);
+    void releaseInTurn();
+  });
+}
+
+async function releaseInTurn(): Promise<void> {
+  if (releasing) return;
+  releasing = true;
+  try {
+    while (waitingToSend.length > 0) {
+      const wait = lastReleaseAt + SEND_GAP_MS - sendPace.now();
+      if (wait > 0) await sendPace.pause(wait);
+      lastReleaseAt = sendPace.now();
+      waitingToSend.shift()?.release();
+    }
+  } finally {
+    releasing = false;
+  }
+}
+
+/** Tests run the gate on a clock of their own; `null` puts the real one back. Either way the queue starts empty. */
+export function __setSendPaceForTests(pace: SendPace | null): void {
+  sendPace = pace ?? REAL_SEND_PACE;
+  lastReleaseAt = Number.NEGATIVE_INFINITY;
+  waitingToSend.length = 0;
+  releasing = false;
+}
+
 async function sendEmail(opts: {
   to: string;
   subject: string;
@@ -68,10 +161,15 @@ async function sendEmail(opts: {
    *  is what makes Gmail/Outlook/Apple render an inline Accept/Decline invite
    *  instead of a bare .ics download (Stefan, 9 Sep 2026). */
   attachments?: { filename: string; content: string; contentType?: string }[];
-}): Promise<{ sent: boolean }> {
+}): Promise<SendEmailResult> {
   if (!config.resendApiKey) {
     logger.warn({ to: opts.to, subject: opts.subject }, 'No email provider — email skipped');
     return { sent: false };
+  }
+
+  if (isReservedTestAddress(opts.to)) {
+    logger.debug({ subject: opts.subject, to: maskAddress(opts.to) }, 'email to a reserved test address not sent');
+    return { sent: true, skipped: 'reserved-test-address' };
   }
 
   const senderName = 'REASON';
@@ -102,12 +200,27 @@ async function sendEmail(opts: {
   // Retry with exponential backoff for rate-limit and transient errors
   const MAX_RETRIES = 3;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    await awaitSendTurn(bulkLane.getStore() === true);
     const { error } = await client.emails.send(emailPayload);
 
     if (!error) {
       if (attempt > 0) logger.warn({ to: opts.to, attempt }, `Email sent after ${attempt} retries: ${opts.subject}`);
       else logger.info({ to: opts.to }, `Email sent: ${opts.subject}`);
       return { sent: true };
+    }
+
+    // The day's sending quota is used up (H2b item 8b, 26 Oct 2026): nothing goes until it resets, so this is not
+    // tried again (it used to be, three more times and seven seconds per email), and a burst of refused emails is
+    // logged as an error once, the rest at debug.
+    if (isDailyQuotaRefusal(error)) {
+      const now = Date.now();
+      if (now - dailyQuotaNoticedAt > DAILY_QUOTA_NOTICE_MS) {
+        dailyQuotaNoticedAt = now;
+        logger.error({ error, to: opts.to }, `The mail provider's daily quota is used up; emails are not sent until it resets: ${opts.subject}`);
+      } else {
+        logger.debug({ to: opts.to }, `Not sent: the mail provider's daily quota is used up: ${opts.subject}`);
+      }
+      return { sent: false };
     }
 
     const statusCode = (error as any).statusCode;
@@ -119,15 +232,28 @@ async function sendEmail(opts: {
     }
 
     // Exponential backoff: 1s, 2s, 4s
-    await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    await sendPace.pause(1000 * Math.pow(2, attempt));
   }
 
   return { sent: false };
 }
 
+// 1 Nov 2026 (30 Oct review: Stefan expected a password): the email says no password is needed, and carries the
+// 6-digit code from services/identity/sign-in-code.ts, large, for a member who reads it on another device or in a
+// mail app's own browser and types it on the waiting screen instead.
+function signInCodeHtml(code: string): string {
+  return `
+          <div style="text-align:center;margin:28px 0 8px 0;">
+            <p style="color:#64748b;font-size:14px;line-height:1.5;margin:0 0 10px 0;">Or type this code on the sign-in page:</p>
+            <p data-sign-in-code style="display:inline-block;color:#1a1a2e;background:#f4f5f7;border:1px solid #dfe3ea;border-radius:12px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:36px;font-weight:700;letter-spacing:8px;padding:14px 18px 14px 26px;margin:0;">${escapeHtml(code)}</p>
+            <p style="color:#64748b;font-size:13px;line-height:1.5;margin:10px 0 0 0;">The code works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.</p>
+          </div>`;
+}
+
 export async function sendMagicLinkEmail(
   to: string,
-  magicLinkUrl: string
+  magicLinkUrl: string,
+  code?: string
 ): Promise<void> {
   const subject = 'Sign in to REASON';
   const html = `
@@ -142,7 +268,7 @@ export async function sendMagicLinkEmail(
         ${emailCardOpen()}
           
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            Click the button below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.
+            No password needed. Click the button below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.
           </p>
           
           <div style="text-align:center;margin:32px 0;">
@@ -151,6 +277,7 @@ export async function sendMagicLinkEmail(
               Sign In
             </a>
           </div>
+          ${code ? signInCodeHtml(code) : ''}
           
           <p style="color:#64748b;font-size:13px;line-height:1.5;margin:24px 0 0 0;">
             If the button doesn't work, copy and paste this link into your browser:
@@ -169,7 +296,10 @@ export async function sendMagicLinkEmail(
 
   // Use Resend if API key is configured
   if (config.resendApiKey) {
-    const text = `Sign in to REASON\n\nClick the link below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.\n\n${magicLinkUrl}\n\nIf you didn't request this email, you can safely ignore it.`;
+    const codeText = code
+      ? `\n\nOr type this code on the sign-in page: ${code}\nThe code works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.`
+      : '';
+    const text = `Sign in to REASON\n\nNo password needed. Click the link below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.\n\n${magicLinkUrl}${codeText}\n\nIf you didn't request this email, you can safely ignore it.`;
     const result = await sendEmail({ to, subject, html, text });
     if (!result.sent) {
       throw new Error('Email send failed');
@@ -518,12 +648,13 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
 /**
  * Sends an invite email and says whether it went. The mail provider answers a refusal (a bad address, its rate limit
  * after the retries, an outage, the network) rather than throwing, so `sent` is false for those, and with no provider
- * configured nothing goes either (26 Oct 2026: a reminder keeps an invite's hour only for an email that went).
+ * configured nothing goes either (26 Oct 2026: a reminder keeps an invite's hour only for an email that went). An
+ * address reserved for testing is not offered to the provider and counts as sent (see sendEmail).
  */
 export async function sendInviteEmail(
   to: string,
   data: InviteEmailData
-): Promise<{ sent: boolean }> {
+): Promise<SendEmailResult> {
   const { subject, html, text } = buildInviteEmail(data);
 
   if (config.resendApiKey) {
@@ -1136,7 +1267,7 @@ export async function isEmailTypeEnabled(emailType: string): Promise<boolean> {
  * 7 Sep 2026: the prepaid Anthropic balance is empty. Sent by
  * llm-balance-alert.ts at most once an hour while Anthropic keeps refusing.
  */
-export async function sendLlmBalanceAlertEmail(opts: { to: string; where: string; at: string }): Promise<{ sent: boolean }> {
+export async function sendLlmBalanceAlertEmail(opts: { to: string; where: string; at: string }): Promise<SendEmailResult> {
   const subject = 'REASON: Anthropic balance is empty, onboarding chat and LinkedIn fill are down';
   const text = [
     `At ${opts.at} the Anthropic API refused a call (${opts.where}) with "Your credit balance is too low".`,

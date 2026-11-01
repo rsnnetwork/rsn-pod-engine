@@ -130,12 +130,10 @@ describe('requestToJoin — approver notifications', () => {
       isRead: false,
     }));
 
-    // Entity tags: userNotifications for each recipient
-    expect(mockEmitEntities).toHaveBeenCalledWith(
-      expect.anything(),
-      ['director-1', 'host-1'],
-      expect.arrayContaining(['user:director-1:notifications', 'user:host-1:notifications']),
-    );
+    // Entity tags: each recipient their own userNotifications, in an emit of their own (H2b review M6)
+    expect(mockEmitEntities).toHaveBeenCalledTimes(2);
+    expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), ['director-1'], ['user:director-1:notifications']);
+    expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), ['host-1'], ['user:host-1:notifications']);
   });
 
   it('does NOT create notifications for a public pod direct join', async () => {

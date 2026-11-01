@@ -348,6 +348,16 @@ describe('persistEventChatMessage', () => {
     mockQuery.mockRejectedValueOnce(new Error('connection terminated'));
     await expect(persistEventChatMessage(lobby)).rejects.toThrow('connection terminated');
   });
+
+  // H1b (26 Oct 2026): the end is checked on the event's row as it stands when the message is written. Without the
+  // lock, a send whose read of the row came before the completion's commit was still stored a few ms after the end.
+  // The ordering itself is proved against a real Postgres in event-chat-end-order.sql.test.ts.
+  it('reads the event\'s row with a share lock, so a message is stored before the event ends or not at all', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: MSG_A, created_at: new Date() }] });
+    await persistEventChatMessage(lobby);
+    const sql = sqlOf(mockQuery.mock.calls[0]);
+    expect(sql).toMatch(/FROM sessions s LEFT JOIN matches m ON m\.id = \$7::uuid AND m\.session_id = s\.id WHERE s\.id = \$1 AND s\.status NOT IN \('completed', 'cancelled'\) FOR SHARE OF s ON CONFLICT/);
+  });
 });
 
 // ── Reactions ────────────────────────────────────────────────────────────────
@@ -392,6 +402,13 @@ describe('toggleEventChatReaction', () => {
     expect(await toggleEventChatReaction({ ...input, emoji: 'fire' })).toBeNull();
     expect(mockQuery).not.toHaveBeenCalled();
   });
+
+  // H1b — the same end guard as a message: the share lock on the event's row is held until the reaction is written.
+  it('reads the event\'s row with a share lock, so a reaction is changed before the event ends or not at all', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await toggleEventChatReaction(input);
+    expect(sqlOf(mockQuery.mock.calls[0])).toMatch(/FOR SHARE OF s\s*$/);
+  });
 });
 
 // ── Taking a message down ────────────────────────────────────────────────────
@@ -405,21 +422,32 @@ describe('deleteEventChatMessage', () => {
     ['a co-host', stored({ is_cohost: true }), 'member'],
     ['a platform admin', stored(), 'admin'],
   ])('lets %s delete it: the message is hidden, not erased, and who did it is kept', async (_who, s, role) => {
-    mockQuery.mockResolvedValueOnce({ rows: [s] }).mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    // The message under its lock, then who runs the event, then the update.
+    mockQuery.mockResolvedValueOnce({ rows: [s] }).mockResolvedValueOnce({ rows: [s] }).mockResolvedValueOnce({ rows: [], rowCount: 1 });
     expect(await deleteEventChatMessage(EVENT, MSG_A, { id: ME, role })).toEqual({ deleted: true });
     const update = callsMatching(/UPDATE event_chat_messages SET deleted_at = NOW\(\), deleted_by = \$2/);
     expect(update).toHaveLength(1);
     expect(paramsOf(update[0])).toEqual([MSG_A, ME]);
   });
 
+  it('locks the message in its own statement and reads who runs the event in the next (H2b item 10)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [stored()] }).mockResolvedValueOnce({ rows: [stored({ host_user_id: ME })] }).mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    expect(await deleteEventChatMessage(EVENT, MSG_A, { id: ME, role: 'member' })).toEqual({ deleted: true });
+    const [lock, runs] = mockQuery.mock.calls.map((c) => String(c[0]).replace(/\s+/g, ' '));
+    expect(lock).toMatch(/^SELECT sender_id, deleted_at FROM event_chat_messages WHERE id = \$1 AND session_id = \$2 FOR UPDATE$/);
+    expect(runs).toMatch(/FROM sessions s WHERE s\.id = \$1$/);
+    expect(runs).not.toMatch(/FOR UPDATE/);
+    expect(paramsOf(mockQuery.mock.calls[1])).toEqual([EVENT, ME]);
+  });
+
   it('refuses anyone else and changes nothing', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [stored()] });
+    mockQuery.mockResolvedValueOnce({ rows: [stored()] }).mockResolvedValueOnce({ rows: [stored()] });
     await expectAppError(deleteEventChatMessage(EVENT, MSG_A, { id: ME, role: 'member' }), 403, ErrorCodes.AUTH_FORBIDDEN);
     expect(callsMatching(/UPDATE event_chat_messages/)).toHaveLength(0);
   });
 
   it('a message already deleted is a quiet success that changes nothing (a double click)', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [stored({ sender_id: ME, deleted_at: new Date() })] });
+    mockQuery.mockResolvedValueOnce({ rows: [stored({ sender_id: ME, deleted_at: new Date() })] }).mockResolvedValueOnce({ rows: [stored()] });
     expect(await deleteEventChatMessage(EVENT, MSG_A, { id: ME, role: 'member' })).toEqual({ deleted: false });
     expect(callsMatching(/UPDATE event_chat_messages/)).toHaveLength(0);
   });

@@ -63,7 +63,7 @@ const token = (sub: string, role = 'member') =>
   jwt.sign({ sub, email: `${sub}@example.com`, role, type: 'access' }, JWT_SECRET, { expiresIn: '1h' });
 
 const subject = {
-  id: 'u-subject',
+  id: '5ab1ec70-0000-4000-8000-00000000005b',
   email: 'subject@example.com',
   phone: '+1',
   displayName: 'Bart Q',
@@ -118,7 +118,7 @@ beforeEach(() => {
 
 describe('GET /users/:id', () => {
   it('another member sees the public card only', async () => {
-    const res = await request(app).get('/users/u-subject').set('Authorization', `Bearer ${token('u-viewer')}`);
+    const res = await request(app).get('/users/5ab1ec70-0000-4000-8000-00000000005b').set('Authorization', `Bearer ${token('u-viewer')}`);
     expect(res.status).toBe(200);
     const d = res.body.data;
     expect(d.displayName).toBe('Bart Q');
@@ -130,7 +130,7 @@ describe('GET /users/:id', () => {
   });
 
   it('the owner sees the full profile', async () => {
-    const res = await request(app).get('/users/u-subject').set('Authorization', `Bearer ${token('u-subject')}`);
+    const res = await request(app).get('/users/5ab1ec70-0000-4000-8000-00000000005b').set('Authorization', `Bearer ${token('5ab1ec70-0000-4000-8000-00000000005b')}`);
     expect(res.status).toBe(200);
     expect(res.body.data.whoIWantToMeet).toBe('founders who need a technical partner');
     expect(res.body.data.interests).toEqual(['sailing']);
@@ -138,7 +138,7 @@ describe('GET /users/:id', () => {
   });
 
   it('an admin sees the full profile', async () => {
-    const res = await request(app).get('/users/u-subject').set('Authorization', `Bearer ${token('u-admin', 'admin')}`);
+    const res = await request(app).get('/users/5ab1ec70-0000-4000-8000-00000000005b').set('Authorization', `Bearer ${token('u-admin', 'admin')}`);
     expect(res.status).toBe(200);
     expect(res.body.data.myIntent).toBe('become CTO');
     expect(res.body.data.reasonsToConnect).toEqual(['cofounder']);

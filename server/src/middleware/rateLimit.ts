@@ -1,7 +1,8 @@
 // ─── Rate Limiting Middleware ─────────────────────────────────────────────────
 import rateLimit, { Options as RateLimitOptions } from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
-import { Request } from 'express';
+import { Request, Response } from 'express';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import config from '../config';
 import logger from '../config/logger';
@@ -142,6 +143,56 @@ export const authLimiter = rateLimit({
 });
 
 /**
+ * Typing the 6-digit sign-in code (1 Nov 2026). Ten tries per address per 15 minutes, on top of the five wrong
+ * tries a single code allows before it dies with its link: a million codes cannot be walked through from one
+ * place. Development keeps a wider bucket, as authLimiter does, so local runs of the sign-in spec do not lock
+ * each other out.
+ */
+const SIGN_IN_CODE_WINDOW_MS = 15 * 60 * 1000;
+const SIGN_IN_CODE_MAX = config.env === 'development' ? 100 : 10;
+const signInCodeLimited = (_req: Request, res: Response) => {
+  const response: ApiResponse = {
+    success: false,
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many codes tried. Please wait 15 minutes, then try again.',
+    },
+  };
+  res.status(429).json(response);
+};
+
+export const signInCodeLimiter = rateLimit({
+  windowMs: SIGN_IN_CODE_WINDOW_MS,
+  max: SIGN_IN_CODE_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => `ip:${clientIp(req)}`,
+  store: buildStore('signin-code'),
+  handler: signInCodeLimited,
+});
+
+/**
+ * The per-email bucket for the sign-in code (1 Nov 2026, T4 review). clientIp() trusts cf-connecting-ip as sent,
+ * so a request that reaches the server without Cloudflare in front can name a new address on every try and never
+ * fill the bucket above. Ten tries per email per 15 minutes caps guessing at any one member whatever the address.
+ * The key is a hash of the normalised address (no email in the store), and the refusal is the same sentence for
+ * every address, with or without an account. It runs after validation, so req.body.email is a trimmed string.
+ */
+export function signInCodeEmailKey(email: string): string {
+  return `email:${crypto.createHash('sha256').update(email.trim().toLowerCase()).digest('hex')}`;
+}
+
+export const signInCodeEmailLimiter = rateLimit({
+  windowMs: SIGN_IN_CODE_WINDOW_MS,
+  max: SIGN_IN_CODE_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => signInCodeEmailKey(typeof req.body?.email === 'string' ? req.body.email : ''),
+  store: buildStore('signin-code-email'),
+  handler: signInCodeLimited,
+});
+
+/**
  * Invite endpoint rate limiter
  */
 export const inviteLimiter = rateLimit({
@@ -162,14 +213,21 @@ export const inviteLimiter = rateLimit({
   },
 });
 
-// Group chats (26 Oct 2026). Every limit is per signed-in member (the routes sign in first). Reads are
-// generous: a busy group of 50 refetches the thread and the list on every message. Messages are held to
-// 30 a minute, faster than anyone types. Read marks, leaving, adding and removing share a write allowance.
-// Starting a group has a small hourly one, and only a group that was started uses it: a refusal (too few
-// people, an event not yet over) started nothing.
+// Group chats (26 Oct 2026). Every limit is per signed-in member (the routes sign in first). Messages are
+// held to 30 a minute, faster than anyone types. Read marks, leaving, adding and removing share a write
+// allowance. Starting a group has a small hourly one, and only a group that was started uses it: a refusal
+// (too few people, an event not yet over) started nothing.
+//
+// Reads are sized for a group of 50 in a busy minute (H2b item 22, 26 Oct 2026). Every message that arrives
+// makes a member's open thread read the group three times (the thread, the group's details, the Messages
+// list); a busy minute carries about 60 messages (two a second is fast typing for fifty people), so 180
+// reads, and twice that as headroom for a member with two tabs open. The reader's own read marks no longer
+// cost a read (fanoutGroupReadMark). The limit used to be 120, and a group of twenty messages a minute hit
+// it: the thread then stopped updating until the minute passed.
+export const GROUP_READS_A_MINUTE = 400;
 export const groupReadLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: GROUP_READS_A_MINUTE,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
@@ -360,6 +418,29 @@ export const entityCreateLimiter = rateLimit({
   keyGenerator: userOrIpKey,
   store: buildStore('entity-create'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have added a lot of entities this hour. Try again later.' } },
+});
+
+// Circles (1 Nov 2026). Reading a circle's list or page is limited like entities, because any circle can be
+// asked for by id. Making, editing, archiving, attaching a pod, joining and leaving share a write allowance,
+// as entities do. The wall's own writes keep wallWriteLimiter.
+export const circleReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('circle-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const circleWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('circle-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
 // REASON milestone 1 (7 Oct 2026): opening a person's brief and listing recent connections. The brief can

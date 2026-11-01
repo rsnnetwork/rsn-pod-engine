@@ -21,6 +21,8 @@
 
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
+import { E } from '../../realtime/entities';
+import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 
@@ -152,6 +154,9 @@ async function bell(
     io.to(`user:${userId}`).emit('notification:new', {
       id: r.rows[0].id, type, title, body, link, isRead: false, createdAt: r.rows[0].created_at,
     });
+    // And the member's bell learns of the row through its entity tag, as every notification write tells it
+    // (H2b item 6, 26 Oct 2026); the row is committed (no transaction here) before anyone is told.
+    await emitEntities(io, [userId], [E.userNotifications(userId)]);
   } catch (err) {
     logger.warn({ err, userId, type, link }, 'wall bell failed (non-fatal)');
   }
@@ -224,8 +229,9 @@ export async function createPost(
 
   // Bell the other circle members — ONE statement, deduped per member per
   // circle per hour so a busy wall never becomes a notification firehose.
+  // Each member rung is then told through their notifications tag (H2b item 6, 26 Oct 2026), once the rows are in.
   try {
-    await query(
+    const rung = await query<{ user_id: string }>(
       `INSERT INTO notifications (id, user_id, type, title, body, link)
        SELECT gen_random_uuid(), m.user_id, 'circle_post', $3, $4, $5
        FROM circle_members m
@@ -233,12 +239,16 @@ export async function createPost(
          AND NOT EXISTS (
            SELECT 1 FROM notifications n
            WHERE n.user_id = m.user_id AND n.type = 'circle_post' AND n.link = $5
-             AND n.created_at > NOW() - INTERVAL '1 hour')`,
+             AND n.created_at > NOW() - INTERVAL '1 hour')
+       RETURNING user_id`,
       [circleId, userId,
         `New post in ${circle.rows[0].name}`,
         content.slice(0, 120) || (sharedFromPostId ? 'Shared a post' : 'Shared an attachment'),
         `/circles/${circleId}`],
     );
+    // One emit per member with their own tag (every member's tag to every member was N squared for a big circle).
+    const io = getRealtimeIo();
+    if (io) await Promise.all(rung.rows.map((r) => emitEntities(io, [r.user_id], [E.userNotifications(r.user_id)])));
   } catch (err) {
     logger.warn({ err, circleId }, 'circle_post notifications failed (non-fatal)');
   }

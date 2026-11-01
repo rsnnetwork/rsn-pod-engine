@@ -52,7 +52,7 @@ const token = (sub = 'u-1') =>
 // promise kept Jest workers alive and crashed suites under parallel load. The
 // self-heal tests set lastMatchedAt: null explicitly.
 const agent = (over: Record<string, unknown> = {}) => ({
-  id: 'a-1', userId: 'u-1', label: 'Developers', wantText: 'react developers',
+  id: 'a1a1a1a1-0000-4000-8000-0000000000a1', userId: 'u-1', label: 'Developers', wantText: 'react developers',
   matchingTags: [], status: 'active', lastMatchedAt: new Date(),
   createdAt: new Date(), updatedAt: new Date(), matchCount: 3, askedCount: 0, ...over,
 });
@@ -92,7 +92,7 @@ describe('GET /agents', () => {
 
   it('reactivating an archived agent searches again', async () => {
     mockRepo.setStatus.mockResolvedValue(agent({ status: 'active' }));
-    const res = await request(app).post('/agents/a-1/status')
+    const res = await request(app).post('/agents/a1a1a1a1-0000-4000-8000-0000000000a1/status')
       .set('Authorization', `Bearer ${token()}`).send({ status: 'active' });
     expect(res.status).toBe(200);
     await new Promise(r => setImmediate(r));
@@ -161,15 +161,15 @@ describe('GET /agents/:id', () => {
   it('returns the agent with the people it found', async () => {
     mockRepo.getAgent.mockResolvedValue(agent());
     mockRepo.listMatches.mockResolvedValue([{ candidateUserId: 'u-2', score: 0.8, reason: 'fits' }]);
-    const res = await request(app).get('/agents/a-1').set('Authorization', `Bearer ${token()}`);
+    const res = await request(app).get('/agents/a1a1a1a1-0000-4000-8000-0000000000a1').set('Authorization', `Bearer ${token()}`);
     expect(res.status).toBe(200);
-    expect(res.body.data.agent.id).toBe('a-1');
+    expect(res.body.data.agent.id).toBe('a1a1a1a1-0000-4000-8000-0000000000a1');
     expect(res.body.data.matches).toHaveLength(1);
   });
 
   it('404s on someone else\'s agent', async () => {
     mockRepo.getAgent.mockResolvedValue(null);
-    const res = await request(app).get('/agents/a-9').set('Authorization', `Bearer ${token()}`);
+    const res = await request(app).get('/agents/a9a9a9a9-0000-4000-8000-0000000000a9').set('Authorization', `Bearer ${token()}`);
     expect(res.status).toBe(404);
   });
 });
@@ -177,7 +177,7 @@ describe('GET /agents/:id', () => {
 describe('PATCH /agents/:id', () => {
   it('rescores when what it looks for changed', async () => {
     mockRepo.updateAgent.mockResolvedValue(agent({ wantText: 'senior react developers' }));
-    const res = await request(app).patch('/agents/a-1')
+    const res = await request(app).patch('/agents/a1a1a1a1-0000-4000-8000-0000000000a1')
       .set('Authorization', `Bearer ${token()}`)
       .send({ wantText: 'senior react developers' });
     expect(res.status).toBe(200);
@@ -187,7 +187,7 @@ describe('PATCH /agents/:id', () => {
 
   it('does not rescore for a rename alone', async () => {
     mockRepo.updateAgent.mockResolvedValue(agent({ label: 'Engineers' }));
-    await request(app).patch('/agents/a-1')
+    await request(app).patch('/agents/a1a1a1a1-0000-4000-8000-0000000000a1')
       .set('Authorization', `Bearer ${token()}`)
       .send({ label: 'Engineers' });
     await new Promise(r => setImmediate(r));
@@ -198,7 +198,7 @@ describe('PATCH /agents/:id', () => {
 describe('POST /agents/:id/status', () => {
   it.each(['paused', 'archived'] as const)('accepts %s without rescoring', async (status) => {
     mockRepo.setStatus.mockResolvedValue(agent({ status }));
-    const res = await request(app).post('/agents/a-1/status')
+    const res = await request(app).post('/agents/a1a1a1a1-0000-4000-8000-0000000000a1/status')
       .set('Authorization', `Bearer ${token()}`).send({ status });
     expect(res.status).toBe(200);
     expect(res.body.data.status).toBe(status);
@@ -208,14 +208,14 @@ describe('POST /agents/:id/status', () => {
 
   it('rescores when resumed, since the world moved on while it was paused', async () => {
     mockRepo.setStatus.mockResolvedValue(agent({ status: 'active' }));
-    await request(app).post('/agents/a-1/status')
+    await request(app).post('/agents/a1a1a1a1-0000-4000-8000-0000000000a1/status')
       .set('Authorization', `Bearer ${token()}`).send({ status: 'active' });
     await new Promise(r => setImmediate(r));
     expect(mockRecompute).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a status outside the lifecycle', async () => {
-    const res = await request(app).post('/agents/a-1/status')
+    const res = await request(app).post('/agents/a1a1a1a1-0000-4000-8000-0000000000a1/status')
       .set('Authorization', `Bearer ${token()}`).send({ status: 'deleted' });
     expect(res.status).toBe(400);
   });
@@ -226,13 +226,13 @@ describe('POST /agents/:id/interest', () => {
     mockRepo.getAgent.mockResolvedValue(agent());
     mockExpressInterest.mockResolvedValue({ id: 'p-1', status: 'pending' });
 
-    const res = await request(app).post('/agents/a-1/interest')
+    const res = await request(app).post('/agents/a1a1a1a1-0000-4000-8000-0000000000a1/interest')
       .set('Authorization', `Bearer ${token()}`)
       .send({ userId: '11111111-1111-4111-8111-111111111111' });
 
     expect(res.status).toBe(201);
     // The agent id must reach expressInterest — it is what words the introduction.
-    expect(mockExpressInterest).toHaveBeenCalledWith('u-1', '11111111-1111-4111-8111-111111111111', 'a-1');
+    expect(mockExpressInterest).toHaveBeenCalledWith('u-1', '11111111-1111-4111-8111-111111111111', 'a1a1a1a1-0000-4000-8000-0000000000a1');
     // Asking someone used to DELETE them from the agent that found them, so a
     // person vanished the moment you asked to meet them. They stay put now.
     expect(mockRepo.removeMatch).not.toHaveBeenCalled();
@@ -240,7 +240,7 @@ describe('POST /agents/:id/interest', () => {
 
   it('refuses to introduce someone to themselves', async () => {
     mockRepo.getAgent.mockResolvedValue(agent({ userId: '11111111-1111-4111-8111-111111111111' }));
-    const res = await request(app).post('/agents/a-1/interest')
+    const res = await request(app).post('/agents/a1a1a1a1-0000-4000-8000-0000000000a1/interest')
       .set('Authorization', `Bearer ${token()}`)
       .send({ userId: '11111111-1111-4111-8111-111111111111' });
     expect(res.status).toBe(400);
@@ -251,7 +251,7 @@ describe('POST /agents/:id/interest', () => {
   it('refuses to introduce someone to themselves, however their id is typed', async () => {
     const own = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     mockRepo.getAgent.mockResolvedValue(agent({ userId: own }));
-    const res = await request(app).post('/agents/a-1/interest')
+    const res = await request(app).post('/agents/a1a1a1a1-0000-4000-8000-0000000000a1/interest')
       .set('Authorization', `Bearer ${token()}`)
       .send({ userId: own.toUpperCase() });
     expect(res.status).toBe(400);
@@ -262,10 +262,10 @@ describe('POST /agents/:id/interest', () => {
     const target = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     mockRepo.getAgent.mockResolvedValue(agent());
     mockExpressInterest.mockResolvedValue({ id: 'p-1', status: 'pending' });
-    const res = await request(app).post('/agents/a-1/interest')
+    const res = await request(app).post('/agents/a1a1a1a1-0000-4000-8000-0000000000a1/interest')
       .set('Authorization', `Bearer ${token()}`)
       .send({ userId: target.toUpperCase() });
     expect(res.status).toBe(201);
-    expect(mockExpressInterest).toHaveBeenCalledWith('u-1', target, 'a-1');
+    expect(mockExpressInterest).toHaveBeenCalledWith('u-1', target, 'a1a1a1a1-0000-4000-8000-0000000000a1');
   });
 });

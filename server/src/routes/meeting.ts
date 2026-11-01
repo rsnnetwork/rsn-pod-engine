@@ -123,6 +123,9 @@ const confirmBodySchema = z.object({
   durationMin: z.number().int().min(5).max(240).optional(),
   // W-meet: audio or video call.
   type: z.enum(['audio', 'video']).optional(),
+  // H2b item 9 (26 Oct 2026): the meeting the client saw (its window key, or null for none). When the standing
+  // meeting no longer matches, the answer is 409 MEETING_CHANGED_SINCE_SEEN with details.scheduling.
+  expectedWindow: z.string().max(30).nullable().optional(),
 });
 
 router.get(
@@ -168,7 +171,7 @@ router.post(
     try {
       const result = await meetingService.confirmWindow(
         req.params.id, req.user!.userId, req.body.window,
-        { startAt: req.body.startAt, durationMin: req.body.durationMin, type: req.body.type },
+        { startAt: req.body.startAt, durationMin: req.body.durationMin, type: req.body.type, expectedWindow: req.body.expectedWindow },
       );
       const response: ApiResponse = { success: true, data: result };
       res.json(response);

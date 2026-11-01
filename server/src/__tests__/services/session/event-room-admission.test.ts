@@ -221,4 +221,14 @@ describe('mayClaimBreakoutRoom: who may say they are in a breakout room (presenc
     expect(await mayClaimBreakoutRoom('not-an-event', MATCH, ROOM_ID, ME, 'member')).toBe(false);
     expect(mockQuery).not.toHaveBeenCalled();
   });
+
+  // H1b (26 Oct 2026): a room is claimed only while its match runs. Every path that puts people in a room makes the
+  // match active before telling them, so their own claim always finds it so; a late claim for a room they were moved
+  // out of (its match completed or reassigned), or for a room whose round has ended, finds no row and is ignored.
+  it('asks only about a match that is still running', async () => {
+    match(null);
+    expect(await mayClaimBreakoutRoom(EVENT, MATCH, ROOM_ID, ME, 'member')).toBe(false);
+    const [sql] = mockQuery.mock.calls[0];
+    expect(String(sql).replace(/\s+/g, ' ')).toMatch(/WHERE m\.id = \$1 AND m\.session_id = \$2 AND m\.room_id = \$4 AND m\.status = 'active'/);
+  });
 });

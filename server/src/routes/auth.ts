@@ -3,7 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
-import { authLimiter } from '../middleware/rateLimit';
+import { authLimiter, signInCodeEmailLimiter, signInCodeLimiter } from '../middleware/rateLimit';
 import * as identityService from '../services/identity/identity.service';
 import { ApiResponse, ErrorCodes } from '@rsn/shared';
 import config from '../config';
@@ -24,10 +24,20 @@ const magicLinkSchema = z.object({
   email: z.string().email('Valid email is required').max(255),
   clientUrl: z.string().url('Valid client URL is required').max(2048).optional(),
   inviteCode: z.string().max(20).optional(),
+  // 1 Nov 2026: the page to come back to after sign-in. Optional (production's client never sends it); the service
+  // keeps it only when it is a path on the same site (services/identity/return-path.ts).
+  redirect: z.string().max(2048).optional(),
 });
 
 const verifySchema = z.object({
   token: z.string().min(1, 'Token is required'),
+});
+
+// 1 Nov 2026: the 6-digit code from the sign-in email. People paste it with a space or a dash in the middle.
+const SIGN_IN_CODE_MESSAGE = 'Enter the 6-digit code from the email.';
+const signInCodeSchema = z.object({
+  email: z.string().trim().email('Valid email is required').max(255),
+  code: z.string().max(32).transform((c) => c.replace(/[\s-]/g, '')).pipe(z.string().regex(/^\d{6}$/, SIGN_IN_CODE_MESSAGE)),
 });
 
 const refreshSchema = z.object({
@@ -42,8 +52,8 @@ router.post(
   validate(magicLinkSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { email, clientUrl, inviteCode } = req.body;
-      const result = await identityService.sendMagicLink(email, clientUrl, inviteCode);
+      const { email, clientUrl, inviteCode, redirect } = req.body;
+      const result = await identityService.sendMagicLink(email, clientUrl, inviteCode, redirect);
 
       const response: ApiResponse = {
         success: true,
@@ -66,6 +76,31 @@ router.post(
     try {
       const { token } = req.body;
       const tokens = await identityService.verifyMagicLink(token);
+
+      const response: ApiResponse = {
+        success: true,
+        data: tokens,
+      };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /auth/magic-link/code ─────────────────────────────────────────────
+// The 6-digit code from the same email, typed on the waiting screen (1 Nov 2026). Answers exactly what
+// /auth/verify answers, so the client installs the session the same way.
+
+router.post(
+  '/magic-link/code',
+  signInCodeLimiter,
+  validate(signInCodeSchema, 'body', SIGN_IN_CODE_MESSAGE),
+  signInCodeEmailLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { email, code } = req.body;
+      const tokens = await identityService.verifySignInCode(email, code);
 
       const response: ApiResponse = {
         success: true,

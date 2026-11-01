@@ -76,18 +76,34 @@ export interface EligibilityV2Inputs {
   lastSent: { at: Date; recipients: number } | null;
   /** The person's own time zone, so a time in a sentence is true on their clock. */
   timeZone: string | null;
+  /** The moment the question is asked (now unless a test says otherwise): the sentence says "tomorrow" by it. */
+  now?: Date;
 }
 
-/** HH:mm on the clock of `timeZone`; UTC when none is stored or the stored one is not a zone the platform knows. */
-function clock(at: Date, timeZone: string | null): string {
-  const format = (zone: string) => new Intl.DateTimeFormat('en-GB', {
-    timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).format(at);
+/** A date/time in `timeZone`, falling back to UTC when none is stored or the stored one is not a zone the platform knows. */
+function inZone(at: Date, timeZone: string | null, options: Intl.DateTimeFormatOptions): string {
+  const format = (zone: string) => new Intl.DateTimeFormat('en-GB', { timeZone: zone, ...options }).format(at);
   try {
     return format(timeZone ?? 'UTC');
   } catch {
     return format('UTC');
   }
+}
+
+/** HH:mm on the clock of `timeZone`. */
+function clock(at: Date, timeZone: string | null): string {
+  return inZone(at, timeZone, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+}
+
+/**
+ * "at 10:46" when the moment falls on today's date on the person's clock, "tomorrow at 10:46" when on the next day's
+ * (H2b item 18, 26 Oct 2026: after three sends the same day the sentence named a time already passed). The next
+ * allowed send is at most 24 hours away, so there is no later day to name.
+ */
+function whenSentence(at: Date, now: Date, timeZone: string | null): string {
+  const day = (d: Date) => inZone(d, timeZone, { year: 'numeric', month: '2-digit', day: '2-digit' });
+  const time = clock(at, timeZone);
+  return day(at) === day(now) ? `at ${time}` : `tomorrow at ${time}`;
 }
 
 /** The answer, before the latest send is attached. Checked in the order the person would meet them. */
@@ -124,7 +140,7 @@ function decideV2(i: EligibilityV2Inputs): BroadcastEligibilityV2 {
     const nextSendAt = new Date(sends[sends.length - perDay].getTime() + DAY_MS);
     return {
       enabled: false, visible: true, reason: 'limit',
-      explanation: `You can send another message at ${clock(nextSendAt, i.timeZone)}.`,
+      explanation: `You can send another message ${whenSentence(nextSendAt, i.now ?? new Date(), i.timeZone)}.`,
       audience: i.audience,
       nextSendAt: nextSendAt.toISOString(),
     };

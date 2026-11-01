@@ -350,6 +350,8 @@ export async function handleHostStart(
       pendingRoundNumber: null,
       manuallyLeftRound: existing?.manuallyLeftRound ?? new Set(),
       participantStates: existing?.participantStates,
+      // H1b — a kick in the pre-event lobby that the database has not taken yet is still finished after Go Live.
+      unsavedRemovals: existing?.unsavedRemovals,
     };
 
     activeSessions.set(data.sessionId, activeSession);
@@ -926,6 +928,26 @@ export async function handleHostRemoveParticipant(
     // hold supreme authority over their own event. Co-hosts and other
     // acting hosts still can't kick admins.
     if (!await refuseIfAdminTarget(socket, data.sessionId, data.userId)) return;
+    // The event's director is never removed from their own event (H2b item 27, 26 Oct 2026): a co-host, a pod
+    // director or an acting host could, and the event lost the person running it.
+    const directorRow = await query<{ host_user_id: string }>(`SELECT host_user_id FROM sessions WHERE id = $1`, [data.sessionId]);
+    if (directorRow.rows[0]?.host_user_id === data.userId) {
+      socket.emit('error', { code: 'DIRECTOR_TARGET', message: "The event's director cannot be removed from their own event." });
+      return;
+    }
+    // Decided before anything changes (H2b item 25): someone the engine does not have and who holds no row is not in
+    // this event. A kick aimed at them used to leave a removal in memory (and an unfinished-kick marker) that the
+    // reconciler wrote into their row once they registered and came; now nothing changes and the presser is told.
+    const inEngine = activeSessions.get(data.sessionId)?.participantStates?.has(data.userId) ?? false;
+    if (!inEngine) {
+      const held = await query<{ status: string }>(
+        `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`, [data.sessionId, data.userId],
+      );
+      if (held.rows.length === 0) {
+        socket.emit('error', { code: 'NOT_IN_EVENT', message: 'That person is not in this event.' });
+        return;
+      }
+    }
 
     // WS2 (27 May remaining work) — a kick must END the kicked user's active
     // match, not orphan it. Immediate (kick is decisive — no grace): the
@@ -987,6 +1009,31 @@ export async function handleHostRemoveParticipant(
     await sessionService.updateParticipantStatus(
       data.sessionId, data.userId, ParticipantStatus.REMOVED
     );
+    // H1b fix round 1 (26 Oct 2026) — a removal is a row. Someone the event let in without one (refused only because
+    // it was full) gets a removed row, stamped with the kick's time, so every later gate (the join, a registration,
+    // the video token, a personal invite made before now) sees them as removed. A row that exists was written by the
+    // transition above and is left as it is, but for its left_at: a second kick of someone already removed stamps
+    // the row with this kick's time (H2b item 26), as memory does, so a personal invite made between the two kicks
+    // no longer re-admits. Only someone the engine had is given a row (H2b item 25). Best-effort, as the rest of the
+    // kick's housekeeping: if it fails, the removal stays unsaved in memory and the reconciler writes it once a row
+    // appears.
+    try {
+      if (inEngine) {
+        await query(
+          `INSERT INTO session_participants (session_id, user_id, status, left_at)
+           VALUES ($1, $2, 'removed', NOW())
+           ON CONFLICT (session_id, user_id) DO UPDATE SET left_at = NOW() WHERE session_participants.status = 'removed'`,
+          [data.sessionId, data.userId],
+        );
+      } else {
+        await query(
+          `UPDATE session_participants SET left_at = NOW() WHERE session_id = $1 AND user_id = $2 AND status = 'removed'`,
+          [data.sessionId, data.userId],
+        );
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId: data.sessionId, userId: data.userId }, 'Kick: could not write a removed row for someone without one');
+    }
 
     // #4B (June-10 debrief) — kill the kicked user's OLD personal invite link(s)
     // so the only way back in is a FRESH invite from the host. Targets only the

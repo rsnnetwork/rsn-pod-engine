@@ -343,6 +343,23 @@ describe('26 Oct — the event format on the snapshot', () => {
     expect(snapshot).toMatchObject({ durationMinutes: 60, scheduledEndAt: '2026-11-01T13:00:00.000Z' });
   });
 
+  it('a running event keeps the format its engine started with, whatever the row says now (H2b item 12 ruling)', async () => {
+    // A PUT during a live event must not change the running engine's format; a scheduled event (no engine) reads
+    // the row, so a PUT before the start shows at once. The snapshot resolves the format that way, not through
+    // activeFormat(), which would call a scheduled video meeting speed networking.
+    mockGetSessionById.mockResolvedValue(makeSession({
+      status: 'in_progress', format: 'video_meeting', startedAt: new Date('2026-11-01T12:00:00.000Z'),
+      config: { numberOfRounds: 3, eventType: 'video_meeting' },
+    }));
+    activeSessions.set(SESSION_ID, {
+      sessionId: SESSION_ID, hostUserId: 'host-1', status: 'round_active', currentRound: 1,
+      config: { numberOfRounds: 3 }, format: 'speed_networking', timer: null, timerSyncInterval: null, timerEndsAt: null,
+      isPaused: false, pausedTimeRemaining: null, presenceMap: new Map(), pendingRoundNumber: null, manuallyLeftRound: new Set(),
+    } as never);
+    const snapshot = await buildSessionStateSnapshot(SESSION_ID, null);
+    expect(snapshot).toMatchObject({ format: 'speed_networking', live: 'rounds' });
+  });
+
   it('speed networking keeps its rounds, and says it runs in rounds', async () => {
     mockGetSessionById.mockResolvedValue(makeSession({ format: 'speed_networking', scheduledAt: null, startedAt: null }));
     const snapshot = await buildSessionStateSnapshot(SESSION_ID, null);

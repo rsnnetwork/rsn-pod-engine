@@ -12,8 +12,8 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import { z } from 'zod';
 import logger from '../../../config/logger';
 import { query } from '../../../db';
-import { SessionStatus, ErrorCodes } from '@rsn/shared';
-import type { ChatSendAck } from '@rsn/shared';
+import { SessionStatus, ErrorCodes, liveKindOf, resolveEventFormat } from '@rsn/shared';
+import type { ChatSendAck, Session } from '@rsn/shared';
 import { AppError } from '../../../middleware/errors';
 import {
   activeSessions, sessionRoom, userRoom, getUserIdFromSocket,
@@ -41,6 +41,17 @@ const chatSendSchema = z.object({
 
 /** chat:request_history. Production's client also sends a matchId, no longer needed: a room message records who it reached. */
 const historyRequestSchema = z.object({ sessionId: z.string().uuid() });
+
+/**
+ * H1b (26 Oct 2026) — a meeting (a video meeting today) the director has started: everyone is in one room until it
+ * ends, and its chat and reactions do not wait for the director, who may step out. Speed networking keeps its lobby
+ * gate, and so does a meeting that has not started yet (its pre-event lobby waits for the director, as before).
+ */
+function isRunningMeeting(session: Session | null): boolean {
+  if (!session) return false;
+  return liveKindOf(resolveEventFormat(session)) === 'meeting'
+    && session.status !== SessionStatus.SCHEDULED && !isChatClosed(session.status);
+}
 
 // ─── Chat Send ─────────────────────────────────────────────────────────────
 
@@ -110,8 +121,9 @@ export async function handleChatSend(
     // In lobby phase, only allow chat when host is present (host/co-hosts always allowed)
     // Ship B — this gate deliberately stays on the presenceMap: heartbeat
     // freshness is the right "host is actively here" signal for unlocking chat.
+    // H1b — a running video meeting's chat does not wait for its director.
     const activeSession = activeSessions.get(sessionId);
-    if (!isHost && !isCohost && scope === 'lobby') {
+    if (!isHost && !isCohost && scope === 'lobby' && !isRunningMeeting(session)) {
       const hostPresent = activeSession?.presenceMap.has(session?.hostUserId || '');
       if (!hostPresent) {
         refuse('CHAT_DISABLED', 'Chat is available once the host joins');
@@ -345,7 +357,8 @@ export async function handleReactionSend(
     // Hoisted: needed both for the lobby-host-presence guard below AND for
     // the room-scope resolution further down (Phase A fix).
     const activeSession = activeSessions.get(sessionId);
-    if (!isHost && !isCohost) {
+    // H1b — nor do a running video meeting's reactions.
+    if (!isHost && !isCohost && !isRunningMeeting(session)) {
       // Ship B — deliberate presenceMap stay (heartbeat freshness gate).
       const hostPresent = activeSession?.presenceMap.has(session?.hostUserId || '');
       if (!hostPresent && (!activeSession || activeSession.status === SessionStatus.LOBBY_OPEN || activeSession.status === SessionStatus.SCHEDULED)) {

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { query } from '../db';
 import { fanoutOwnNotifications } from '../realtime/fanout';
 import { REQUEST_BELL_LINK_PATTERN } from '../services/poke/request-link';
@@ -91,7 +92,7 @@ router.get(
                 END AS "requestStatus",
                 rc.id AS "requestConversationId"
          FROM notifications n
-         LEFT JOIN invites i ON n.type IN ('pod_invite', 'event_invite')
+         LEFT JOIN invites i ON n.type IN ('pod_invite', 'event_invite', 'circle_invite')
            AND n.link LIKE '/invite/%'
            AND i.code = SUBSTRING(n.link FROM '/invite/(.+)$')
          -- substring() is NULL when the link does not match, and the pattern only
@@ -166,10 +167,11 @@ router.post(
   }
 );
 
-// POST /notifications/:id/read — mark one as read
+// POST /notifications/:id/read — mark one as read. A malformed id is a 400 in a member's words (26 Oct 2026).
 router.post(
   '/:id/read',
   authenticate,
+  uuidInPath('id', PATH_REFUSALS.notification),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await query(

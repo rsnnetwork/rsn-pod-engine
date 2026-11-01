@@ -5,10 +5,14 @@
 // invisible, and the route-level authz (admin gates pinned via source).
 
 const mockQuery = jest.fn();
+// The statements run on a transaction's client, apart from those run on the pool (1 Nov 2026).
+const mockClientSql: string[] = [];
 
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
-  transaction: (cb: Function) => cb({ query: (...a: unknown[]) => mockQuery(...a) }),
+  transaction: (cb: Function) => cb({
+    query: (...a: unknown[]) => { mockClientSql.push(String(a[0])); return mockQuery(...a); },
+  }),
   __esModule: true,
 }));
 jest.mock('../../../config/logger', () => ({
@@ -21,7 +25,7 @@ import {
   MAX_NESTING_DEPTH,
 } from '../../../services/circle/circle.service';
 
-beforeEach(() => mockQuery.mockReset());
+beforeEach(() => { mockQuery.mockReset(); mockClientSql.length = 0; });
 
 describe('nesting integrity', () => {
   it('rejects a circle that would contain itself (cycle)', async () => {
@@ -133,5 +137,38 @@ describe('route authz matrix (source pins)', () => {
       expect(block).toMatch(/authenticate/);
       expect(block).not.toMatch(/requireRole/);
     }
+  });
+});
+
+describe('creating a circle (1 Nov 2026, L21)', () => {
+  function armCreate() {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/INSERT INTO circles/.test(sql)) return Promise.resolve({ rowCount: 1, rows: [{ id: 'new-circle' }] });
+      return Promise.resolve({ rowCount: 1, rows: [] });
+    });
+  }
+
+  it('the creator becomes its owner, in the same transaction as the circle, with member_count 1', async () => {
+    armCreate();
+    const created = await createCircle('admin-1', { name: 'Doctors' });
+    expect(created).toEqual({ id: 'new-circle' });
+
+    const insertCircle = mockQuery.mock.calls.find(c => /INSERT INTO circles/.test(c[0] as string));
+    expect(insertCircle![0]).toMatch(/member_count/);
+    expect(insertCircle![0]).toMatch(/VALUES \(\$1, \$2, \$3, \$4, 1\)/);
+    const insertOwner = mockQuery.mock.calls.find(c => /INSERT INTO circle_members/.test(c[0] as string));
+    expect(insertOwner![0]).toMatch(/'owner'/);
+    expect(insertOwner![1]).toEqual(['new-circle', 'admin-1']);
+    expect(mockClientSql.some(s => /INSERT INTO circles/.test(s))).toBe(true);
+    expect(mockClientSql.some(s => /INSERT INTO circle_members/.test(s))).toBe(true);
+  });
+
+  it('a name already taken adds no owner row', async () => {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/INSERT INTO circles/.test(sql)) return Promise.reject(Object.assign(new Error('dup'), { code: '23505' }));
+      return Promise.resolve({ rowCount: 1, rows: [] });
+    });
+    await expect(createCircle('admin-1', { name: 'Doctors' })).rejects.toMatchObject({ statusCode: 409 });
+    expect(mockQuery.mock.calls.some(c => /INSERT INTO circle_members/.test(c[0] as string))).toBe(false);
   });
 });

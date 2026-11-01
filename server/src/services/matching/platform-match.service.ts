@@ -26,6 +26,8 @@
 
 import { query } from '../../db';
 import logger from '../../config/logger';
+import { E } from '../../realtime/entities';
+import { emitEntities } from '../../realtime/emit';
 import { normalizeDesignation, tokenizeTerms, termOverlapRelated, isRelatedTerm, designationsWanted } from './intent-signals';
 import { expandWantTags } from './want-synonyms';
 import { extractConstraints, checkConstraints, matchedPlace } from './want-constraints';
@@ -815,6 +817,8 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
       notified++;
       try {
         const { io } = await import('../../index');
+        // The member's bell learns of the row through its tag too (H2b item 6, 26 Oct 2026).
+        await emitEntities(io, [member.id], [E.userNotifications(member.id)]);
         io.to(`user:${member.id}`).emit('notification:new', {
           id: inserted.rows[0].id,
           type: 'platform_match',
@@ -900,6 +904,8 @@ async function notifyAgentsOfNewUser(newUserId: string): Promise<Set<string>> {
         owners.add(g.ownerId);
         try {
           const { io } = await import('../../index');
+          // The owner's bell learns of the row through its tag too (H2b item 6, 26 Oct 2026).
+          await emitEntities(io, [g.ownerId], [E.userNotifications(g.ownerId)]);
           io.to(`user:${g.ownerId}`).emit('notification:new', {
             id: inserted.rows[0].id,
             type: 'platform_match',

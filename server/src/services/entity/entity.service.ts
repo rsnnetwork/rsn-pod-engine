@@ -129,25 +129,30 @@ const toSummary = (row: SummaryRow): EntitySummary => ({
   myRole: row.my_role,
 });
 
-/** The entity row, locked for this transaction, or a 404 when it is missing or archived. */
+/**
+ * The entity row, locked for this transaction, or a 404 when it is missing or archived; with the viewer's link to it.
+ * The lock is its own statement and the link is read in the next one (H2b item 10, 26 Oct 2026): a statement that
+ * joined the link under FOR UPDATE OF e read the link as it stood before the lock was granted, so an admin action
+ * queued behind the actor's own demotion went through once.
+ */
 async function lockEntity(
   client: PoolClient, entityId: string, viewerId: string,
 ): Promise<{ name: string; is_admin: boolean | null }> {
-  const r = await client.query<{ name: string; is_admin: boolean | null }>(
-    `SELECT e.name, m.is_admin
-       FROM entities e
-       LEFT JOIN entity_members m ON m.entity_id = e.id AND m.user_id = $2
-      WHERE e.id = $1 AND e.archived_at IS NULL
-      FOR UPDATE OF e`,
+  const locked = await client.query<{ name: string }>(
+    `SELECT name FROM entities WHERE id = $1 AND archived_at IS NULL FOR UPDATE`,
+    [entityId],
+  );
+  const row = locked.rows[0];
+  if (!row) throw entityNotFound(entityId);
+  const link = await client.query<{ is_admin: boolean | null }>(
+    `SELECT is_admin FROM entity_members WHERE entity_id = $1 AND user_id = $2`,
     [entityId, viewerId],
   );
-  const row = r.rows[0];
-  if (!row) throw entityNotFound(entityId);
-  return row;
+  return { name: row.name, is_admin: link.rows[0]?.is_admin ?? null };
 }
 
 /** As lockEntity, and a 403 unless the actor is one of its admins or a platform admin. */
-async function lockForAdmin(client: PoolClient, entityId: string, actorId: string, actorIsPlatformAdmin: boolean): Promise<void> {
+export async function lockForAdmin(client: PoolClient, entityId: string, actorId: string, actorIsPlatformAdmin: boolean): Promise<void> {
   const row = await lockEntity(client, entityId, actorId);
   if (row.is_admin !== true && !actorIsPlatformAdmin) throw notAnAdmin();
 }

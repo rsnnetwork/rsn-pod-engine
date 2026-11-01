@@ -49,7 +49,7 @@ export async function submitRating(
   );
 
   if (matchResult.rows.length === 0) {
-    throw new NotFoundError('Match not found');
+    throw new NotFoundError('Match', undefined, "We couldn't find that conversation.");
   }
 
   const match = matchResult.rows[0];
@@ -345,7 +345,7 @@ export async function getPeopleMet(
   );
 
   if (sessionResult.rows.length === 0) {
-    throw new NotFoundError('Session not found');
+    throw new NotFoundError('Session', undefined, "We couldn't find that event.");
   }
 
   const session = sessionResult.rows[0];
@@ -696,7 +696,7 @@ export async function exportSessionData(sessionId: string): Promise<{
   );
 
   if (sessionResult.rows.length === 0) {
-    throw new NotFoundError('Session not found');
+    throw new NotFoundError('Session', undefined, "We couldn't find that event.");
   }
 
   // Participants

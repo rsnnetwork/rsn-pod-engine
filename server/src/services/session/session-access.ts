@@ -111,8 +111,10 @@ export async function eventRoomAdmission(
 /**
  * Whether someone may say they are in a breakout room (presence:room_joined), which puts them among the
  * people that room's chat and reactions reach: someone in that match, or the event's host, a co-host or an
- * admin visiting it. The match must belong to the event and carry that room id; a removed person never
- * may. One read.
+ * admin visiting it. The match must belong to the event, carry that room id and still be running (H1b): a
+ * late signal for a room the host moved them out of, or one whose round has ended, would otherwise put them
+ * back in it. Every path that puts people in a room makes its match active before telling them, so their own
+ * signal always finds it running. A removed person never may. One read.
  */
 export async function mayClaimBreakoutRoom(
   sessionId: string,
@@ -129,7 +131,7 @@ export async function mayClaimBreakoutRoom(
             p.status::text AS participant_status
        FROM matches m JOIN sessions s ON s.id = m.session_id
        LEFT JOIN session_participants p ON p.session_id = s.id AND p.user_id = $3
-      WHERE m.id = $1 AND m.session_id = $2 AND m.room_id = $4`,
+      WHERE m.id = $1 AND m.session_id = $2 AND m.room_id = $4 AND m.status = 'active'`,
     [matchId, sessionId, userId, roomId],
   );
   const facts = result.rows[0];

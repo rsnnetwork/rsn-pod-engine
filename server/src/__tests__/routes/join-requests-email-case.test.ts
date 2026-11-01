@@ -171,7 +171,8 @@ describe('the sign-in gate finds the request however the email was typed', () =>
     joinRows[0].status = 'approved'; // what an admin's Approve does
 
     await expect(sendMagicLink(TYPED)).resolves.toEqual({ sent: true });
-    expect(sendMagicLinkEmail).toHaveBeenCalledWith(STORED, expect.stringContaining('/auth/verify?token='));
+    // The email carries the link and, since 1 Nov 2026, the 6-digit sign-in code.
+    expect(sendMagicLinkEmail).toHaveBeenCalledWith(STORED, expect.stringContaining('/auth/verify?token='), expect.stringMatching(/^\d{6}$/));
   });
 
   it('and is still turned away while the request is only pending', async () => {

@@ -17,7 +17,9 @@ export class AppError extends Error {
     this.statusCode = statusCode;
     this.code = code;
     this.details = details;
-    Object.setPrototypeOf(this, AppError.prototype);
+    // The prototype of the class that was constructed, so `err instanceof ConflictError` (or any subclass) holds.
+    // It was AppError.prototype, which pointed every subclass's instances back at AppError (26 Oct 2026).
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 

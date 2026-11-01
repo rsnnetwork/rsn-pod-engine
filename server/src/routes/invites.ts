@@ -8,12 +8,13 @@ import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
 import * as inviteCandidates from '../services/invite/invite-candidates.service';
 import * as inviteReminders from '../services/invite/invite-reminders.service';
-import { fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
+import { fanoutCircleChange, fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { AppError } from '../middleware/errors';
 import { query } from '../db';
-import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse, eventDurationMinutes, resolveEventFormat } from '@rsn/shared';
+import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse } from '@rsn/shared';
+import { eventDurationOf } from '../services/session/event-duration';
 
 const router = Router();
 
@@ -99,6 +100,10 @@ router.post(
       }
       if (invite.sessionId) {
         fanoutSessionEntities(invite.podId ?? null, invite.sessionId, [E.sessionInvites(invite.sessionId)]).catch(() => {});
+      }
+      if (invite.circleId) {
+        // 1 Nov 2026: the circle's people see the new pending invite without a refresh.
+        fanoutCircleChange(invite.circleId, req.user!.userId, [], [E.circleInvites(invite.circleId)]).catch(() => {});
       }
       const response: ApiResponse = { success: true, data: invite };
       res.status(201).json(response);
@@ -385,7 +390,9 @@ router.post(
         // way no email went out, the invite has not been "reminded within the hour", and nothing is counted.
         let sent = false;
         try {
-          const context = await inviteService.buildInviteContext(req.user!.userId, inv.type, {
+          // The email names the invite's own inviter (H2b item 8, 26 Oct 2026): a co-host reminding the host's invite
+          // used to read "{co-host} invited you". The presser still spends their own allowance (above).
+          const context = await inviteService.buildInviteContext(inv.inviter_id, inv.type, {
             podId: inv.pod_id, sessionId: inv.session_id, circleId: inv.circle_id,
           });
           sent = (await inviteService.emailInvite(context, { code: inv.code, inviteeEmail: inv.invitee_email })).sent;
@@ -409,6 +416,10 @@ router.post(
 // Bulk remind: resend invite emails to the pending invites of a session. Fix round 3: an invite reminded within the last
 // hour is skipped and not counted, and at most as many are reminded as the member has reminder emails left for the hour.
 // Fix round 4: nothing is claimed until everything the emails need is in hand, and `reminded` counts only emails that went.
+// H2b (review I1): every email waits its turn at the provider's gate, two a second, and the answer comes once they have
+// gone, so a press reminds at most REMIND_ALL_PER_PRESS invites (about 25 seconds), inside the 60 seconds production's
+// page waits for an answer; the oldest go first and the next press reminds the next ones.
+const REMIND_ALL_PER_PRESS = 50;
 
 router.post(
   '/remind-all/:sessionId',
@@ -432,8 +443,8 @@ router.post(
       // Get all pending invites for this session (only those with an email to send to). An invite whose expiry has
       // passed keeps the status 'pending' but its link is dead, so nobody is reminded with it.
       // Oldest first, so a member short of allowance reminds the invites that have waited longest (fix round 3).
-      const allPending = await query<{ id: string; invitee_email: string; code: string }>(
-        `SELECT id, invitee_email, code FROM invites
+      const allPending = await query<{ id: string; invitee_email: string; code: string; inviter_id: string }>(
+        `SELECT id, invitee_email, code, inviter_id FROM invites
          WHERE session_id = $1 AND status = 'pending' AND invitee_email IS NOT NULL AND invitee_email != ''
            AND (expires_at IS NULL OR expires_at > NOW())
          ORDER BY created_at`,
@@ -459,15 +470,18 @@ router.post(
 
       // Everything the emails need is in hand BEFORE any invite is claimed (fix round 4): a question that fails here (the
       // sender's name, the host for the calendar entry) fails the call with nothing claimed, so pressing again reminds them.
-      const inviterResult = await query<{ displayName: string }>(
-        `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [req.user!.userId]
+      // Each reminder names the person who made its invite (H2b item 8, review I2): a co-host's Remind all used to
+      // read "{co-host} invited you" for every invite the host made. The presser still spends their own allowance.
+      const inviterIds = [...new Set(eligible.map((inv) => inv.inviter_id))];
+      const inviterRows = await query<{ id: string; display_name: string | null }>(
+        `SELECT id, display_name FROM users WHERE id = ANY($1::uuid[])`, [inviterIds]
       );
-      const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
+      const inviterNames = new Map(inviterRows.rows.map((r) => [r.id, r.display_name || 'Someone']));
 
       let calendarEvent: any = undefined;
       if (session.scheduled_at) {
-        // 26 Oct 2026 — the same length as the first invite: the shared eventDurationMinutes.
-        const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
+        // 26 Oct 2026 — the same length as the first invite (eventDurationOf).
+        const totalMinutes = eventDurationOf(session);
         const hostResult = await query<{ display_name: string; email: string }>(
           'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
         );
@@ -486,7 +500,9 @@ router.post(
       const { default: appConfig } = await import('../config');
       const emailService = await import('../services/email/email.service');
 
-      const { claimed, recent } = await inviteReminders.claimReminders(eligible.map((inv) => inv.id), allowance);
+      const { claimed, recent } = await inviteReminders.claimReminders(
+        eligible.map((inv) => inv.id), Math.min(allowance, REMIND_ALL_PER_PRESS),
+      );
       const claimedIds = new Set(claimed);
       const pendingInvites = { rows: eligible.filter((inv) => claimedIds.has(inv.id)) };
       const total = eligible.length - recent.size;
@@ -500,24 +516,27 @@ router.post(
       // went count against the member's allowance (fix round 3) and in `reminded`.
       const emailed = new Set<string>();
       try {
-        const BATCH = 10;
-        for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
-          const batch = pendingInvites.rows.slice(i, i + BATCH);
-          const results = await Promise.allSettled(
-            batch.map(inv =>
-              emailService.sendInviteEmail(inv.invitee_email, {
-                inviterName,
-                type: 'session',
-                targetName: session.title,
-                inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
-                calendarEvent,
-              })
-            )
-          );
-          results.forEach((result, at) => {
-            if (result.status === 'fulfilled' && result.value.sent) emailed.add(batch[at].id);
-          });
-        }
+        // In the bulk lane (H2b item 7): a member's single email elsewhere goes ahead of these at the provider's gate.
+        await emailService.asBulkEmail(async () => {
+          const BATCH = 10;
+          for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
+            const batch = pendingInvites.rows.slice(i, i + BATCH);
+            const results = await Promise.allSettled(
+              batch.map(inv =>
+                emailService.sendInviteEmail(inv.invitee_email, {
+                  inviterName: inviterNames.get(inv.inviter_id) ?? 'Someone',
+                  type: 'session',
+                  targetName: session.title,
+                  inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
+                  calendarEvent,
+                })
+              )
+            );
+            results.forEach((result, at) => {
+              if (result.status === 'fulfilled' && result.value.sent) emailed.add(batch[at].id);
+            });
+          }
+        });
       } finally {
         const notSent = claimed.filter((id) => !emailed.has(id));
         if (notSent.length > 0) await inviteReminders.releaseReminders(notSent);
@@ -654,7 +673,8 @@ router.post(
       // just the accepter. The accepter's userPods / userSessions entities
       // ensure their own "My Pods" / "My Events" list flips too.
       if (result.registeredFor?.podId) {
-        fanoutPodEntities(result.registeredFor.podId, [E.userPods(req.user!.userId)]).catch(() => {});
+        // The pod's invite list shows this invite accepted too (H2b item 28).
+        fanoutPodEntities(result.registeredFor.podId, [E.userPods(req.user!.userId), E.podInvites(result.registeredFor.podId)]).catch(() => {});
       }
       if (result.registeredFor?.sessionId) {
         // R2-audit (20 May 2026 — live-test post-mortem). Also fanout
@@ -670,8 +690,16 @@ router.post(
           [
             E.userSessions(req.user!.userId),
             E.sessionParticipants(result.registeredFor.sessionId),
+            // The event's invite list shows this invite accepted (H2b item 28, 26 Oct 2026: ENTITIES.md said so;
+            // the route never sent it, so the host's Invitations card stayed on Invited until a reload).
+            E.sessionInvites(result.registeredFor.sessionId),
           ],
         ).catch(() => {});
+      }
+      if (result.registeredFor?.circleId) {
+        // 1 Nov 2026: accepting a circle invite joins the circle, so its page, members, count and invites change for
+        // everyone in it, and the accepter's own circles list changes.
+        fanoutCircleChange(result.registeredFor.circleId, req.user!.userId, [req.user!.userId], [E.circleInvites(result.registeredFor.circleId)]).catch(() => {});
       }
       // Cover the accepter even if they're not yet in the active-member
       // SELECT on a slow replica — invite list shrinks and they pick up
@@ -767,6 +795,9 @@ router.post(
         // 26 Oct 2026: the event's invites tag too, so an organiser's list flips to "declined" without a refresh.
         fanoutSessionEntities(declined.podId, declined.sessionId, [E.sessionInvites(declined.sessionId)]).catch(() => {});
       }
+      if (declined.circleId) {
+        fanoutCircleChange(declined.circleId, req.user!.userId, [], [E.circleInvites(declined.circleId)]).catch(() => {});
+      }
       emitEntities(
         getRealtimeIo(),
         [req.user!.userId],
@@ -796,6 +827,9 @@ router.delete(
       }
       if (revoked.sessionId) {
         fanoutSessionEntities(revoked.podId, revoked.sessionId, [E.sessionInvites(revoked.sessionId)]).catch(() => {});
+      }
+      if (revoked.circleId) {
+        fanoutCircleChange(revoked.circleId, req.user!.userId, [], [E.circleInvites(revoked.circleId)]).catch(() => {});
       }
       // Fix round 3 (every mutation emits): the sender's sent list and, when the address is a member's, that member's
       // received list change whoever withdrew the invite. A platform or circle invite has no pod or event whose screens

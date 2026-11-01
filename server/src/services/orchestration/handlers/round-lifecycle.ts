@@ -137,6 +137,9 @@ export async function recoverActiveSessions(io: SocketServer): Promise<void> {
             }])
           ),
           manuallyLeftRound: new Set(data.manuallyLeftRound || []),
+          // H1b fix round 1 — kicks the database had not taken yet, each with the kick's own time.
+          unsavedRemovals: new Map(Object.entries(data.unsavedRemovals || {})
+            .map(([userId, kickedAt]): [string, number] => [userId, Number(kickedAt)])),
         };
 
         activeSessions.set(sessionId, activeSession);
@@ -1254,7 +1257,13 @@ export async function cleanupLiveKitRooms(sessionId: string): Promise<void> {
 // SEND RECAP EMAILS
 // ═════════════════════════════════════════════════════════════════════════════
 
+// Every recap of an event goes in the bulk lane (H2b item 7, review I1): a member's single email, a sign-in link say,
+// goes ahead of them at the provider's gate rather than behind the whole event's recaps.
 export async function sendRecapEmails(sessionId: string): Promise<void> {
+  await emailService.asBulkEmail(() => sendRecapEmailsInLane(sessionId));
+}
+
+async function sendRecapEmailsInLane(sessionId: string): Promise<void> {
   const { config: appConfig } = await import('../../../config');
 
   const sessionResult = await query<{ title: string; hostUserId: string }>(

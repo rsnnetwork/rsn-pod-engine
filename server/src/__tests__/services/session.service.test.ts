@@ -49,11 +49,11 @@ describe('Session Service', () => {
       expect(session).toEqual(mockSession);
     });
 
-    it('should throw NotFoundError when session not found', async () => {
+    it('a missing event is a 404 that says "event" in words, with the code production\'s client knows and no id (H2b review M8)', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
       await expect(sessionService.getSessionById('missing'))
-        .rejects.toThrow('not found');
+        .rejects.toMatchObject({ statusCode: 404, code: 'SESSION_NOT_FOUND', message: "We couldn't find that event." });
     });
   });
 
@@ -89,6 +89,52 @@ describe('Session Service', () => {
         expect.stringContaining('INSERT INTO sessions'),
         expect.any(Array),
       );
+    });
+
+    // H2b item 5 (26 Oct 2026): the forms only offer active pods, but the server never checked, so an event could be
+    // scheduled in an archived, suspended or draft pod by anyone who kept the id.
+    it.each([
+      ['archived', 'This pod is archived, so no new events can be scheduled in it.'],
+      ['suspended', 'This pod is suspended, so no new events can be scheduled in it.'],
+      ['draft', 'This pod is not open yet, so no events can be scheduled in it.'],
+    ])('refuses to schedule an event in a pod that is %s, in a member\'s words, and writes nothing', async (status, sentence) => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status, maxMembers: 50, createdBy: 'user-host' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+
+      await expect(sessionService.createSession('user-host', { podId: 'pod-123', title: 'Test Session', scheduledAt: '2025-01-15T18:00:00Z' }))
+        .rejects.toMatchObject({ statusCode: 409, code: 'POD_NOT_ACTIVE', message: sentence });
+      expect(mockQuery.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO sessions'))).toBe(false);
+    });
+
+    // H2b item 4: what the refusals say. A member reads these as a toast, so they say "event", never "session".
+    it('refuses a plain member in a word a member reads: events, not sessions', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active', maxMembers: 50, createdBy: 'user-host' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
+
+      await expect(sessionService.createSession('user-member', { podId: 'pod-123', title: 'Test Session', scheduledAt: '2025-01-15T18:00:00Z' }))
+        .rejects.toMatchObject({ statusCode: 403, message: 'Only pod directors and hosts can create events' });
+    });
+
+    it('no sentence a member reads from this service says "session"', () => {
+      const src = require('fs').readFileSync(require('path').join(__dirname, '../../services/session/session.service.ts'), 'utf8') as string;
+      // Every thrown sentence: the quoted arguments of a new *Error(...), in either quotes.
+      // (A code such as SESSION_FULL is not a sentence; a member never reads it. Nor is the entity of a
+      // NotFoundError(entity, id, message) given its own message: it only names the code, SESSION_NOT_FOUND.)
+      const sentences = [...src.matchAll(/new (Forbidden|NotFound|Conflict|Validation|App)Error\(([^)]*)\)/g)]
+        .flatMap((m) => {
+          const quoted = [...m[2].matchAll(/'([^']+)'|"([^"]+)"/g)].map((q) => q[1] ?? q[2]);
+          return m[1] === 'NotFound' && quoted.length > 1 ? quoted.slice(1) : quoted;
+        })
+        .filter((s) => !/^[A-Z_]+$/.test(s));
+      expect(sentences.length).toBeGreaterThan(0);
+      expect(sentences.filter((s) => /session/i.test(s))).toEqual([]);
+      expect(sentences).toEqual(expect.arrayContaining([
+        "We couldn't find that event.",
+        'Only pod directors and hosts can create events',
+        'Only the host of the event can change it',
+        'Only the host of the event can delete it',
+        'You must be a pod member to register for events in a private pod',
+      ]));
     });
   });
 
@@ -302,7 +348,7 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [mockSession], rowCount: 1 });
 
       await expect(sessionService.updateSession('session-123', 'user-other', { title: 'X' }))
-        .rejects.toThrow('Only the session host');
+        .rejects.toThrow('Only the host of the event');
     });
 
     it('should throw when session is already started', async () => {

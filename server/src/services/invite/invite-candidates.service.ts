@@ -24,6 +24,7 @@ import {
 import { CONNECTION_SIGNALS_SQL, pageBySince } from '../people/connections.service';
 import { escapeLike } from '../user/user-search.service';
 import * as invites from './invite.service';
+import { asBulkEmail } from '../email/email.service';
 
 /** Who is asking, as the route knows them. */
 export interface Asker {
@@ -285,9 +286,17 @@ export type BatchSummary = InviteBatchResponse & {
   delivery: Promise<void>;
 };
 
+/** The clock the paced sender keeps: the time now, and a pause. Real time by default; a test may bring its own. */
+export interface Pace {
+  now(): number;
+  pause(ms: number): Promise<void>;
+}
+
 export interface BatchOptions {
   /** How far apart the emails start. The default is EMAIL_GAP_MS; the tests do not wait half a second per person. */
   emailGapMs?: number;
+  /** The paced sender's clock (H2b item 17, 26 Oct 2026): a test about the pace itself brings a clock of its own. */
+  pace?: Pace;
 }
 
 /** An invite the batch made, with what its bell and its email need. */
@@ -405,6 +414,26 @@ function decide(userId: string, row: RecipientRow | undefined, asker: { id: stri
   return { userId, outcome: 'create', email: row.email };
 }
 
+/**
+ * For an event: someone whose pending invite was made before they were removed from it is invited afresh, as POST
+ * /invites does (H2b item 24, review M5). That invite can no longer let them in, so already_invited would leave the
+ * sheet saying Invited with no way back but Withdraw. Read only here; the stale invite is withdrawn at the insert.
+ */
+async function renewInvitesFromBeforeRemoval(
+  target: Target, decisions: Decision[], recipients: Map<string, RecipientRow>,
+): Promise<Decision[]> {
+  if (target.kind !== 'session') return decisions;
+  const held = decisions.flatMap((d) => (d.outcome === 'already_invited' && d.inviteId ? [d.inviteId] : []));
+  const stale = await invites.invitesFromBeforeRemoval(held);
+  if (stale.size === 0) return decisions;
+  return decisions.map((d) => {
+    const email = recipients.get(d.userId)?.email;
+    return d.outcome === 'already_invited' && d.inviteId && stale.has(d.inviteId) && email
+      ? { userId: d.userId, outcome: 'create', email }
+      : d;
+  });
+}
+
 /** The bells of the invites just made, ten at a time. A failure is logged: the invite exists, and its email is still to go. */
 async function ringBells(context: invites.InviteContext, made: MadeInvite[]): Promise<void> {
   for (let from = 0; from < made.length; from += BELLS_AT_ONCE) {
@@ -419,7 +448,11 @@ async function ringBells(context: invites.InviteContext, made: MadeInvite[]): Pr
   }
 }
 
-const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Real time: what the paced sender keeps unless a test brings its own clock. */
+const REAL_PACE: Pace = {
+  now: () => Date.now(),
+  pause: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+};
 
 /**
  * The emails of a batch, one at a time, each starting at least `gapMs` after the one before, and only once the answer
@@ -435,14 +468,16 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * the answer; a check that cannot be made means no email rather than a guess. The pace is kept between the emails that
  * are sent: a skipped invite costs no pause.
  */
-async function sendEmailsSlowly(context: invites.InviteContext, made: MadeInvite[], gapMs: number, senderId: string): Promise<void> {
+async function sendEmailsSlowly(
+  context: invites.InviteContext, made: MadeInvite[], gapMs: number, senderId: string, pace: Pace = REAL_PACE,
+): Promise<void> {
   try {
     await new Promise<void>((resolve) => setImmediate(resolve));
     let lastStart: number | null = null;
     for (const m of made) {
       if (lastStart !== null) {
-        const wait = lastStart + gapMs - Date.now();
-        if (wait > 0) await pause(wait);
+        const wait = lastStart + gapMs - pace.now();
+        if (wait > 0) await pace.pause(wait);
       }
       try {
         if (!(await invites.isStillEmailable(m.inviteId, senderId))) {
@@ -453,9 +488,10 @@ async function sendEmailsSlowly(context: invites.InviteContext, made: MadeInvite
         logger.warn({ err, inviteeId: m.userId, inviteId: m.inviteId }, 'Batch invite email not sent: the invite could not be checked first (the invite exists and the bell was sent)');
         continue;
       }
-      lastStart = Date.now();
+      lastStart = pace.now();
       try {
-        await invites.emailInvite(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId });
+        // In the bulk lane (H2b item 7): a member's single email elsewhere goes ahead of this burst at the provider's gate.
+        await asBulkEmail(() => invites.emailInvite(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId }));
       } catch (err) {
         logger.warn({ err, inviteeId: m.userId, inviteId: m.inviteId }, 'Batch invite email failed (the invite exists and the bell was sent)');
       }
@@ -509,7 +545,9 @@ export async function createInvitesBatch(
   }
 
   const recipients = ids.length > 0 ? await readRecipients(asker.userId, target, ids) : new Map<string, RecipientRow>();
-  const decisions = ids.map((id) => decide(id, recipients.get(id), { id: asker.userId, isAdmin, target }));
+  const decisions = await renewInvitesFromBeforeRemoval(
+    target, ids.map((id) => decide(id, recipients.get(id), { id: asker.userId, isAdmin, target })), recipients,
+  );
 
   const results = new Map<string, InviteBatchResult>();
   for (const decision of decisions) {
@@ -547,7 +585,7 @@ export async function createInvitesBatch(
       }
       const code = invites.generateCode();
       try {
-        const inserted = await invites.insertPendingInvite({
+        const pending: invites.NewInvite = {
           code,
           type: target.kind === 'pod' ? InviteType.POD : InviteType.SESSION,
           inviterId: asker.userId,
@@ -557,7 +595,12 @@ export async function createInvitesBatch(
           circleId: null,
           maxUses: 1,
           expiresAt: target.kind === 'pod' ? new Date(Date.now() + POD_INVITE_HOURS * 60 * 60 * 1000) : null,
-        });
+        };
+        let inserted = await invites.insertPendingInvite(pending);
+        // A pending invite made before the person was removed is withdrawn and the fresh one made (H2b item 24).
+        if (inserted.duplicate && await invites.withdrawInviteFromBeforeRemoval(inserted.existingId)) {
+          inserted = await invites.insertPendingInvite(pending);
+        }
         if (inserted.duplicate) {
           // Someone else's batch (or a second tab) got there first: one invite exists, and this caller is told so.
           results.set(decision.userId, { userId: decision.userId, outcome: 'already_invited', inviteId: inserted.existingId });
@@ -575,7 +618,7 @@ export async function createInvitesBatch(
     // The bells go out now, so "invited" means the invite exists and the invitee has been told in the app. The emails
     // go out after the answer, slowly (see sendEmailsSlowly).
     await ringBells(context, made);
-    if (made.length > 0) delivery = sendEmailsSlowly(context, made, options.emailGapMs ?? EMAIL_GAP_MS, asker.userId);
+    if (made.length > 0) delivery = sendEmailsSlowly(context, made, options.emailGapMs ?? EMAIL_GAP_MS, asker.userId, options.pace);
   }
 
   const ordered = ids.map((id) => results.get(id) as InviteBatchResult);

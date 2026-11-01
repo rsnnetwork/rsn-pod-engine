@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import * as pokeService from '../services/poke/poke.service';
 import { REQUEST_MESSAGE_MAX } from '../services/poke/request-message';
 import { fanoutUserEntity } from '../realtime/fanout';
@@ -43,6 +44,8 @@ router.post(
 
 // A request id that is not a UUID used to reach SQL and come back as a Postgres 500.
 const requestParams = z.object({ id: z.string().uuid('Not a request id') });
+// The other member in the two "where do we stand" reads: a malformed id is a 400 in a member's words (26 Oct 2026).
+const otherMemberInPath = uuidInPath('userId', PATH_REFUSALS.member);
 
 /**
  * Everyone whose screens show a request just answered: both people's request
@@ -113,6 +116,7 @@ router.post(
 router.get(
   '/with/:userId',
   authenticate,
+  otherMemberInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await pokeService.getPokeWith(req.user!.userId, req.params.userId);
@@ -143,6 +147,7 @@ router.get(
 router.get(
   '/has-pending/:userId',
   authenticate,
+  otherMemberInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const hasPending = await pokeService.hasPendingPoke(req.user!.userId, req.params.userId);

@@ -438,8 +438,10 @@ const SELF_GUESS_BY_BUCKET: Partial<Record<string, SelfV2Key>> = {
   student: 'self_student_early_career',
 };
 
-/** Between two titles: "Founder & CEO | Angel investor", "Owner, Bakery Schmidt", "Founder – helping …". */
-const BETWEEN_TITLES = /\s*[|·•,;/]\s*|\s+[-–—]\s+/;
+/** Between one role and the next: "Founder & CEO | Angel investor", "Founder – helping …". */
+const BETWEEN_ROLES = /\s*[|·•;]\s*|\s+[-–—]\s+/;
+/** Inside one role, before what it goes on to name: "Owner, Bakery Schmidt", "Coordinator, Office of the VP", "CTO / Co-founder". */
+const WITHIN_A_ROLE = /\s*[,/]\s*/;
 /** Where a title ends and its company, or the people it serves, begin: "Investor at Northwind", "Advisor to founders". */
 const AFTER_THE_TITLE = /\s(?:at|@|for|to|with)\s[\s\S]*$/;
 /** Two titles in one: "Founder & CEO", "Mentor and board advisor". */
@@ -467,9 +469,20 @@ const saysWhatTheyDo = (phrase: string): boolean => {
 const EXECUTIVE_WHO_LEADS = new RegExp([
   'chief', 'c[-\\s]?suite',
   'ceo', 'cto', 'cfo', 'coo', 'cmo', 'cpo', 'cio', 'cso', 'cco', 'cdo', 'cro', 'ciso',
-  'executive (?:director|vice president|chair(?:man|woman|person)?)', 'evp', 'svp',
-  'vice president', 'vp', 'chair(?:man|woman|person)', 'managing director', 'head of',
+  'executive (?:director|vice[-\\s]president|chair(?:man|woman|person)?)', 'evp', 'svp',
+  'vice[-\\s]president', 'vp', 'chair(?:man|woman|person)', 'managing director', 'head of',
 ].map(t => `\\b${t}\\b`).join('|'));
+
+/**
+ * A title that names whom its holder assists is not the leader's own (H2b item 13, 26 Oct 2026): an executive
+ * assistant of the CEO, a secretary to the managing director or a coordinator in the office of the VP is not
+ * suggested as someone who leads or owns, whatever leader the title names. Read per role (review M10): from the
+ * assisting title to the end of its role, so "Founder & CEO | Board Secretary" is still a founder. In front of a rank
+ * the word names a junior holder of that rank, who runs people: an assistant manager or an assistant director leads.
+ */
+const ASSISTS_A_LEADER =
+  /\b(assistant|secretary|coordinator)s?\b(?!\s+(?:general\s+manager|manager|director|head|principal|vice[-\s]president|vp)s?\b)/i;
+const LEADER_GUESSES: ReadonlySet<SelfV2Key> = new Set<SelfV2Key>(['self_manager_leader', 'self_founder_owner']);
 
 /**
  * Every answer one title names, the most specific kind first. A match that is
@@ -507,11 +520,20 @@ export function selfGuessesFromText(role: string | null | undefined, headline: s
   const text = stated ?? words(headline);
   if (!text) return [];
   const out: SelfV2Key[] = [];
-  for (const piece of text.toLowerCase().split(BETWEEN_TITLES)) {
-    const segment = piece.trim();
-    if (!segment || (!stated && saysWhatTheyDo(segment))) continue;
-    for (const title of segment.replace(AFTER_THE_TITLE, '').split(AND)) {
-      for (const key of guessesIn(title.trim())) if (!out.includes(key)) out.push(key);
+  for (const role of text.toLowerCase().split(BETWEEN_ROLES)) {
+    // Once a title in this role assists a leader, the leader it goes on to name is not theirs: "Coordinator, Office
+    // of the VP" names the VP in the role's second piece.
+    let assisting = false;
+    for (const piece of role.split(WITHIN_A_ROLE)) {
+      const segment = piece.trim();
+      if (!segment || (!stated && saysWhatTheyDo(segment))) continue;
+      for (const part of segment.replace(AFTER_THE_TITLE, '').split(AND)) {
+        const title = part.trim();
+        if (ASSISTS_A_LEADER.test(title)) assisting = true;
+        for (const key of guessesIn(title)) {
+          if (!(assisting && LEADER_GUESSES.has(key)) && !out.includes(key)) out.push(key);
+        }
+      }
     }
   }
   return out;

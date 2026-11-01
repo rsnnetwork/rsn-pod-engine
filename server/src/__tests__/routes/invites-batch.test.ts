@@ -49,6 +49,8 @@ jest.mock('../../services/invite/invite.service', () => {
 const mockSendInviteEmail = jest.fn();
 jest.mock('../../services/email/email.service', () => ({
   sendInviteEmail: (...args: unknown[]) => mockSendInviteEmail(...args),
+  // The bulk lane only orders sends at the provider's gate; here it runs the callback as it is.
+  asBulkEmail: (run: () => Promise<unknown>) => run(),
   __esModule: true,
 }));
 
@@ -1030,9 +1032,9 @@ describe('POST /invites/:id/remind', () => {
 
 describe('POST /invites/remind-all/:sessionId', () => {
   const pending = [
-    { id: 'a', invitee_email: 'a@example.com', code: 'CA' },
-    { id: 'b', invitee_email: 'b@example.com', code: 'CB' },
-    { id: 'c', invitee_email: 'c@example.com', code: 'CC' },
+    { id: 'a', invitee_email: 'a@example.com', code: 'CA', inviter_id: 'u-host' },
+    { id: 'b', invitee_email: 'b@example.com', code: 'CB', inviter_id: 'u-host' },
+    { id: 'c', invitee_email: 'c@example.com', code: 'CC', inviter_id: 'u-host' },
   ];
   let pendingSql = '';
   const given = (opts: { eventExists?: boolean; rows?: typeof pending } = {}) => {
@@ -1044,7 +1046,7 @@ describe('POST /invites/remind-all/:sessionId', () => {
         return { rows: opts.eventExists === false ? [] : [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: null, config: {}, event_format: 'video_meeting' }] };
       }
       if (/FROM invites WHERE session_id = \$1/.test(text)) { pendingSql = text; return { rows: opts.rows ?? pending }; }
-      if (/display_name AS "displayName"/.test(text)) return { rows: [{ displayName: 'Organiser' }] };
+      if (/SELECT id, display_name FROM users WHERE id = ANY/.test(text)) return { rows: [{ id: 'u-host', display_name: 'Organiser' }] };
       return { rows: [] };
     });
   };
@@ -1353,9 +1355,9 @@ describe('POST /invites/:code/mark-accepted', () => {
 describe('reminders: an invite once an hour, a member 300 emails an hour', () => {
   const INVITE = '11111111-1111-4111-8111-111111111111';
   const PENDING = [
-    { id: 'a', invitee_email: 'a@example.com', code: 'CA' },
-    { id: 'b', invitee_email: 'b@example.com', code: 'CB' },
-    { id: 'c', invitee_email: 'c@example.com', code: 'CC' },
+    { id: 'a', invitee_email: 'a@example.com', code: 'CA', inviter_id: 'u-host' },
+    { id: 'b', invitee_email: 'b@example.com', code: 'CB', inviter_id: 'u-host' },
+    { id: 'c', invitee_email: 'c@example.com', code: 'CC', inviter_id: 'u-host' },
   ];
   const sentTo = () => mockSendInviteEmail.mock.calls.map((call) => call[0]);
   const SPENT = { code: 'RATE_LIMIT_EXCEEDED', message: 'You have sent a lot of reminders this hour. Please try again later.' };
@@ -1372,6 +1374,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
       if (/^SELECT title, scheduled_at, host_user_id/.test(text)) return { rows: [{ title: 'Kickoff', scheduled_at: null, host_user_id: 'u-host', config: {}, event_format: 'video_meeting' }] };
       if (/FROM invites WHERE session_id = \$1/.test(text)) return { rows: PENDING };
       if (/display_name AS "displayName"/.test(text)) return { rows: [{ displayName: 'Organiser' }] };
+      if (/SELECT id, display_name FROM users WHERE id = ANY/.test(text)) return { rows: [{ id: 'u-host', display_name: 'Organiser' }] };
       return { rows: [] };
     });
   };
@@ -1532,12 +1535,12 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
 
   // ── everyone at once ─────────────────────────────────────────────────────────────────────────
   describe('Remind All (POST /invites/remind-all/:sessionId)', () => {
-    it('claims the invites that are due, with the member\'s allowance as the most it may claim, emails them, and counts what went out', async () => {
+    it('claims the invites that are due, with the member\'s allowance (and 50 a press) as the most it may claim, emails them, and counts what went out', async () => {
       const res = await remindAll();
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual({ reminded: 3, total: 3, recentlyReminded: 0 });
       expect(mockAllowance).toHaveBeenCalledWith('u-host');
-      expect(mockClaim).toHaveBeenCalledWith(['a', 'b', 'c'], 300);
+      expect(mockClaim).toHaveBeenCalledWith(['a', 'b', 'c'], 50);
       expect(sentTo()).toEqual(['a@example.com', 'b@example.com', 'c@example.com']);
       expect(mockCountSent).toHaveBeenCalledWith('u-host', 3);
     });
@@ -1567,6 +1570,27 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
       expect(sentTo()).toEqual(['a@example.com', 'b@example.com']);
     });
 
+    // H2b review I1: every email waits its turn at the provider's gate, two a second, so a press that emailed 300
+    // invites answered after two and a half minutes, and the page had given up at one (production's client waits 60 s)
+    // while the server went on sending. A press reminds at most 50, about 25 seconds; the next press reminds the next.
+    it('a press reminds at most 50 invites, so its answer comes inside the minute a page waits; the next press reminds the next ones', async () => {
+      const many = Array.from({ length: 120 }, (_, i) => ({ id: `inv-${i}`, invitee_email: `p${i}@example.com`, code: `C${i}`, inviter_id: 'u-host' }));
+      mockDb.mockImplementation(async (sql: string) => {
+        const text = sql.replace(/\s+/g, ' ').trim();
+        if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+        if (/^SELECT host_user_id, title/.test(text)) return { rows: [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: null, config: {}, event_format: 'video_meeting' }] };
+        if (/FROM invites WHERE session_id = \$1/.test(text)) return { rows: many };
+        if (/SELECT id, display_name FROM users WHERE id = ANY/.test(text)) return { rows: [{ id: 'u-host', display_name: 'Organiser' }] };
+        return { rows: [] };
+      });
+      rememberingLedger();
+      expect((await remindAll()).body.data).toEqual({ reminded: 50, total: 120, recentlyReminded: 0 });
+      expect(mockClaim).toHaveBeenLastCalledWith(many.map((m) => m.id), 50);
+      expect((await remindAll()).body.data).toEqual({ reminded: 50, total: 70, recentlyReminded: 50 });
+      expect((await remindAll()).body.data).toEqual({ reminded: 20, total: 20, recentlyReminded: 100 });
+      expect(new Set(sentTo()).size).toBe(120);
+    });
+
     it('a member with nothing left is refused in a plain sentence (429); nothing is claimed or sent', async () => {
       mockAllowance.mockResolvedValue(0);
       const res = await remindAll();
@@ -1579,7 +1603,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
     it('people who cannot be invited are left out BEFORE the claim, so a block never uses up an invite\'s hour', async () => {
       (inviteService.unreachableAddresses as jest.Mock).mockResolvedValue(new Set(['b@example.com']));
       const res = await remindAll();
-      expect(mockClaim).toHaveBeenCalledWith(['a', 'c'], 300);
+      expect(mockClaim).toHaveBeenCalledWith(['a', 'c'], 50);
       expect(res.body.data).toEqual({ reminded: 2, total: 2, recentlyReminded: 0 });
     });
 
@@ -1628,7 +1652,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
       expect(sentTo()).toEqual(['a@example.com', 'b@example.com', 'c@example.com', 'a@example.com', 'b@example.com']);
     });
 
-    // Fix round 4: what the emails need (the sender's name, the host for the calendar entry) was asked AFTER the invites
+    // Fix round 4: what the emails need (the inviters' names, the host for the calendar entry) was asked AFTER the invites
     // were claimed, outside anything that gave the claims back: a database hiccup there was a 500 that left every invite
     // "reminded within the hour", and the next press said 0/0.
     describe('a failure before the emails go leaves no invite claimed', () => {
@@ -1645,14 +1669,14 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
             return { rows: [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: '2026-11-01T12:00:00.000Z', config: { durationMinutes: 60 }, event_format: 'video_meeting' }] };
           }
           if (/FROM invites WHERE session_id = \$1/.test(text)) return { rows: PENDING };
-          if (/display_name AS "displayName"/.test(text)) return { rows: [{ displayName: 'Organiser' }] };
+          if (/SELECT id, display_name FROM users WHERE id = ANY/.test(text)) return { rows: [{ id: 'u-host', display_name: 'Organiser' }] };
           if (/^SELECT display_name, email FROM users/.test(text)) return { rows: [{ display_name: 'Host', email: 'host@example.com' }] };
           return { rows: [] };
         });
       };
 
       it.each([
-        ['the sender\'s name', /display_name AS "displayName"/],
+        ['the inviters\' names', /SELECT id, display_name FROM users WHERE id = ANY/],
         ['the host, for the calendar entry', /^SELECT display_name, email FROM users/],
       ])('a database failure reading %s fails the call with nothing claimed, so the next press reminds every invite', async (_what, failsOnce) => {
         const held = rememberingLedger();

@@ -15,6 +15,8 @@ jest.mock('../../../db', () => ({
 jest.mock('../../../config', () => ({
   default: {
     magicLinkExpiryMinutes: 15,
+    // The email's 6-digit code is hashed with the server's secret (sign-in-code.ts, 1 Nov 2026).
+    jwtSecret: 'test-jwt-secret',
     clientUrl: 'https://app.rsn.network',
     isDev: false,
   },

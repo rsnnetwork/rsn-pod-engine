@@ -340,7 +340,6 @@ describe('connectLinkedin', () => {
   });
 
   it('refuses an address that is not a LinkedIn profile, and saves nothing', async () => {
-    // AppError resets the prototype, so the class is checked by what it carries.
     await expect(connectLinkedin('u-1', 'https://example.com/jane')).rejects.toMatchObject({
       statusCode: 400, code: 'VALIDATION_ERROR', message: LINKEDIN_PROFILE_HELP, details: { url: [LINKEDIN_PROFILE_HELP] },
     });

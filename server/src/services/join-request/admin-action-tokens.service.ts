@@ -30,6 +30,8 @@ import {
 } from '../email/email.service';
 import { reopenClosedAccount, announceReopened } from '../identity/account-access';
 import { fanoutAdminEntities } from '../../realtime/fanout';
+import { E } from '../../realtime/entities';
+import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { applicantBaseUrl } from './applicant-links';
 
 const TOKEN_PURPOSE = 'join_request_review';
@@ -311,14 +313,22 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
       .then((url) => sendJoinRequestWelcomeEmail(reviewed.email, reviewed.full_name, url))
       .catch((err) => logger.error({ err, email: reviewed.email }, 'Welcome email failed (email-action path)'));
 
-    query(
+    // The approved member's bell is told through its tag once the row is in (H2b item 6, 26 Oct 2026).
+    query<{ user_id: string }>(
       `INSERT INTO notifications (user_id, type, title, body, link, created_at)
          SELECT id, 'approval', 'Welcome to REASON!',
                 'Your request to join has been approved. Start exploring!', '/pods', NOW()
            FROM users WHERE LOWER(email) = LOWER($1)
-          LIMIT 1`,
+          LIMIT 1
+          RETURNING user_id`,
       [reviewed.email],
-    ).catch((err) => logger.warn({ err }, 'Approval notification insert failed (best-effort)'));
+    )
+      .then(async (rung) => {
+        const io = getRealtimeIo();
+        const approvedId = rung.rows[0]?.user_id;
+        if (io && approvedId) await emitEntities(io, [approvedId], [E.userNotifications(approvedId)]);
+      })
+      .catch((err) => logger.warn({ err }, 'Approval notification insert failed (best-effort)'));
   } else {
     sendJoinRequestDeclineEmail(reviewed.email, reviewed.full_name).catch((err) =>
       logger.error({ err, email: reviewed.email }, 'Decline email failed (email-action path)'),

@@ -20,6 +20,8 @@ jest.mock('../../../services/poke/poke.service', () => ({ sendPoke: jest.fn(), _
 const mockEmit = jest.fn();
 const mockTo = jest.fn((_room: string) => ({ emit: (...a: unknown[]) => mockEmit(...a) }));
 jest.mock('../../../index', () => ({ io: { to: (room: string) => mockTo(room) }, __esModule: true }));
+// The bell's entity tag (H2b item 6) travels separately from the bell itself; this suite counts the bells.
+jest.mock('../../../realtime/emit', () => ({ emitEntities: jest.fn().mockResolvedValue(undefined), getRealtimeIo: () => null, __esModule: true }));
 const mockScoreNewcomer = jest.fn();
 jest.mock('../../../services/matching/agent-matching.service', () => ({
   scoreNewcomerAgainstAgents: (...a: unknown[]) => mockScoreNewcomer(...a),

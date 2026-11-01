@@ -529,11 +529,10 @@ async function notifyApproversOfJoinRequest(pod: Pod, requesterId: string): Prom
     }
     const { emitEntities } = await import('../../realtime/emit');
     const { E } = await import('../../realtime/entities');
-    emitEntities(
-      io,
-      inserted.rows.map(r => r.user_id),
-      inserted.rows.map(r => E.userNotifications(r.user_id)),
-    ).catch(() => {});
+    // One emit per director or host with their own tag (H2b review M6), never every one's tag to each of them.
+    for (const row of inserted.rows) {
+      emitEntities(io, [row.user_id], [E.userNotifications(row.user_id)]).catch(() => {});
+    }
   } catch { /* socket push is non-fatal */ }
 }
 

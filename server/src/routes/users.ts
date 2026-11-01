@@ -3,6 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { recordAudit } from '../middleware/audit';
 import { requireRole } from '../middleware/rbac';
 import * as identityService from '../services/identity/identity.service';
@@ -71,6 +72,9 @@ const bannerBodySchema = z.object({
 });
 type BannerBody = z.infer<typeof bannerBodySchema>;
 const memberIdParams = z.object({ id: z.string().uuid('Not a member id') });
+// The member a route names (26 Oct 2026): a malformed id is a 400 in a member's words, not a Postgres 500, and an id
+// in capitals is lower-cased, so the services' string compares and the tags they send match.
+const memberIdInPath = uuidInPath('id', PATH_REFUSALS.member);
 
 const listUsersQuerySchema = z.object({
   page: z.coerce.number().int().positive().optional(),
@@ -289,11 +293,29 @@ router.get(
   }
 );
 
+// GET /users/blocked — list users I have blocked (for the Settings UI).
+// Note: this must come BEFORE /:id routes to avoid being shadowed (it sat below GET /:id, which read
+// "blocked" as a member id, until 26 Oct 2026).
+router.get(
+  '/blocked',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const blocked = await blockService.listBlocked(req.user!.userId);
+      const response: ApiResponse = { success: true, data: blocked };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── GET /users/:id ─────────────────────────────────────────────────────────
 
 router.get(
   '/:id',
   authenticate,
+  memberIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const user = await identityService.getUserById(req.params.id);
@@ -447,26 +469,12 @@ const blockBodySchema = z.object({
   reason: z.string().max(500).optional(),
 });
 
-// GET /users/blocked — list users I have blocked (for the Settings UI).
-// Note: this must come BEFORE /:id routes to avoid being shadowed.
-router.get(
-  '/blocked',
-  authenticate,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const blocked = await blockService.listBlocked(req.user!.userId);
-      const response: ApiResponse = { success: true, data: blocked };
-      res.json(response);
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-// POST /users/:id/block — block another user
+// POST /users/:id/block — block another user. The id is checked and lower-cased first (26 Oct 2026), so the tags
+// fanoutUserBlocks sends (user:<id>:blocks) are the ones the screens listen for.
 router.post(
   '/:id/block',
   authenticate,
+  memberIdInPath,
   validate(blockBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -487,10 +495,11 @@ router.post(
   }
 );
 
-// DELETE /users/:id/block — unblock
+// DELETE /users/:id/block — unblock (the id checked and lower-cased, as for block)
 router.delete(
   '/:id/block',
   authenticate,
+  memberIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await blockService.unblock(req.user!.userId, req.params.id);
@@ -510,6 +519,7 @@ router.delete(
 router.get(
   '/:id/block-status',
   authenticate,
+  memberIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const hasBlocked = await blockService.hasBlocked(req.user!.userId, req.params.id);

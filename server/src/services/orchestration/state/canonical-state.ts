@@ -186,6 +186,28 @@ export async function clearCanonicalLocationToMain(sessionId: string, userId: st
 }
 
 /**
+ * H1b (26 Oct 2026) — a removal the database has lifted (a host's fresh personal invite) is lifted here too: the
+ * person is back in the event and not yet here ('disconnected'); their join's presence makes them 'connected'.
+ * Checked inside the serialized write, so a 'connected' the join wrote first is never overwritten. Best-effort.
+ */
+export function liftCanonicalRemoval(sessionId: string, userId: string): Promise<void> {
+  return serializeRmw(sessionId, async () => {
+    const redis = getRedisClient();
+    if (!redis) return;
+    try {
+      const doc = await readCanonical(sessionId);
+      const p = doc?.participants[userId];
+      if (!doc || p?.connState !== 'removed') return;
+      doc.participants[userId] = { ...p, connState: 'disconnected', userSeq: doc.seq + 1 };
+      doc.seq += 1;
+      await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
+    } catch (err) {
+      logger.warn({ err, sessionId, userId }, 'liftCanonicalRemoval failed');
+    }
+  });
+}
+
+/**
  * Serialized MERGE for the shadow projection (4 Jun ghost root cause).
  * Pre-fix the shadow OVERWROTE the whole doc from in-memory state on every
  * persistSessionState — and its location source (roomParticipants) is never

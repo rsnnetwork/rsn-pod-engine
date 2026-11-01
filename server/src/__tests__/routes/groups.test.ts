@@ -47,13 +47,15 @@ jest.mock('../../services/dm/group.service', () => ({
   leaveGroup: (...a: unknown[]) => mockLeave(...a),
   addGroupMembers: (...a: unknown[]) => mockAdd(...a),
   removeGroupMember: (...a: unknown[]) => mockRemove(...a),
+  eventGroupCandidates: (...a: unknown[]) => mockCandidates(...a),
   __esModule: true,
 }));
+const mockCandidates = jest.fn();
 const mockFanoutGroup = jest.fn();
-const mockFanoutGroupForUser = jest.fn();
+const mockFanoutGroupReadMark = jest.fn();
 jest.mock('../../realtime/fanout', () => ({
   fanoutGroupEntities: (...a: unknown[]) => mockFanoutGroup(...a),
-  fanoutGroupForUser: (...a: unknown[]) => mockFanoutGroupForUser(...a),
+  fanoutGroupReadMark: (...a: unknown[]) => mockFanoutGroupReadMark(...a),
   __esModule: true,
 }));
 
@@ -84,7 +86,7 @@ const services = [mockCreateFromEvent, mockCreateCustom, mockList, mockGet, mock
 const nothingCalled = () => {
   for (const m of services) expect(m).not.toHaveBeenCalled();
   expect(mockFanoutGroup).not.toHaveBeenCalled();
-  expect(mockFanoutGroupForUser).not.toHaveBeenCalled();
+  expect(mockFanoutGroupReadMark).not.toHaveBeenCalled();
   expect(mockPush).not.toHaveBeenCalled();
 };
 const full = () => new ConflictError(ErrorCodes.GROUP_FULL, 'This group is full (50 people).');
@@ -108,7 +110,7 @@ beforeEach(() => {
   mockAdd.mockResolvedValue({ added: [B], memberCount: 4 });
   mockRemove.mockResolvedValue({ removedUserId: B });
   mockFanoutGroup.mockResolvedValue(undefined);
-  mockFanoutGroupForUser.mockResolvedValue(undefined);
+  mockFanoutGroupReadMark.mockResolvedValue(undefined);
 });
 
 describe('POST /groups/from-event/:sessionId', () => {
@@ -270,7 +272,8 @@ describe('POST /groups/:id/read', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, data: { lastReadAt: '2026-10-26T10:00:00.000Z' } });
     expect(mockRead).toHaveBeenCalledWith(GROUP, 'u-read');
-    expect(mockFanoutGroupForUser).toHaveBeenCalledWith(GROUP, 'u-read');
+    // Only the reader's Messages list (H2b item 22): the group's tag sent back to the reader cost a read per mark.
+    expect(mockFanoutGroupReadMark).toHaveBeenCalledWith('u-read');
     expect(mockFanoutGroup).not.toHaveBeenCalled();
   });
 });
@@ -416,5 +419,20 @@ describe('the routes are rate limited', () => {
     const refused = await request(app).post(`/groups/from-event/${SESSION}`).set(starter).send({});
     expect(refused.status).toBe(429);
     expect(refused.body.error.message).toBe('You have started a lot of group chats this hour. Try again later.');
+  });
+});
+
+describe('GET /groups/event/:sessionId/candidates (H2b item 23)', () => {
+  it('answers who may be added, for the signed-in member', async () => {
+    mockCandidates.mockResolvedValueOnce([{ id: 'p-1', displayName: 'Ana', avatarUrl: null, jobTitle: null, company: null }]);
+    const res = await request(app).get(`/groups/event/${SESSION}/candidates`).set(as('u-cand'));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: [{ id: 'p-1', displayName: 'Ana', avatarUrl: null, jobTitle: null, company: null }] });
+    expect(mockCandidates).toHaveBeenCalledWith({ userId: 'u-cand', role: 'member' }, SESSION);
+  });
+
+  it('refuses an event id that is not an id, before asking the service', async () => {
+    expect((await request(app).get('/groups/event/nope/candidates').set(as('u-cand'))).status).toBe(400);
+    expect(mockCandidates).not.toHaveBeenCalled();
   });
 });

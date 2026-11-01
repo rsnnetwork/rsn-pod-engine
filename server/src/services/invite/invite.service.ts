@@ -5,12 +5,14 @@ import { customAlphabet } from 'nanoid';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
-  Invite, InviteStatus, InviteType, CreateInviteInput, Session, eventDurationMinutes, resolveEventFormat,
+  Invite, InviteStatus, InviteType, CreateInviteInput, Session, ErrorCodes,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
+import { eventDurationOf } from '../session/event-duration';
 import * as circleService from '../circle/circle.service';
+import { mayInviteToCircle } from '../circle/circle-managers';
 import * as emailService from '../email/email.service';
 import config from '../../config';
 
@@ -244,6 +246,39 @@ export async function insertPendingInvite(row: NewInvite): Promise<InsertedInvit
   });
 }
 
+/** An invite `i` that is pending, for an event, and older than its person's (`u`) removal from it (`sp`). */
+const PENDING_FROM_BEFORE_REMOVAL = `i.status = 'pending' AND i.session_id IS NOT NULL
+        AND lower(u.email) = i.invitee_email
+        AND sp.session_id = i.session_id AND sp.user_id = u.id
+        AND sp.status = 'removed' AND sp.left_at > i.created_at`;
+
+/**
+ * Withdraws a pending event invite made before its person was removed from the event (H2b item 24, 26 Oct 2026).
+ * The kick withdraws such invites best-effort; one it missed refused every fresh invite for the person as a
+ * duplicate until someone found and withdrew it. True when the invite was withdrawn.
+ */
+export async function withdrawInviteFromBeforeRemoval(inviteId: string): Promise<boolean> {
+  const r = await query<{ id: string }>(
+    `UPDATE invites i SET status = 'revoked'
+       FROM users u, session_participants sp
+      WHERE i.id = $1 AND ${PENDING_FROM_BEFORE_REMOVAL}
+      RETURNING i.id`,
+    [inviteId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** Which of these invites are pending event invites made before their person was removed (read only; for a batch). */
+export async function invitesFromBeforeRemoval(inviteIds: string[]): Promise<Set<string>> {
+  if (inviteIds.length === 0) return new Set();
+  const r = await query<{ id: string }>(
+    `SELECT i.id FROM invites i, users u, session_participants sp
+      WHERE i.id = ANY($1::uuid[]) AND ${PENDING_FROM_BEFORE_REMOVAL}`,
+    [inviteIds],
+  );
+  return new Set(r.rows.map((row) => row.id));
+}
+
 type InviteCalendarEvent = NonNullable<Parameters<typeof emailService.sendInviteEmail>[1]['calendarEvent']>;
 
 /** What one invite's email and bell say about the pod, circle or event: looked up once, so a batch asks once. */
@@ -251,6 +286,8 @@ export interface InviteContext {
   type: InviteType | undefined;
   podId: string | null;
   sessionId: string | null;
+  /** The circle, for a circle invite; the bell tells that circle's invites list. */
+  circleId?: string | null;
   inviterName: string;
   targetName?: string;
   calendarEvent?: InviteCalendarEvent;
@@ -293,8 +330,8 @@ export async function buildInviteContext(
 
     // Build calendar event data if session has a scheduled time
     if (session?.scheduled_at) {
-      // 26 Oct 2026 — the event's own length: a meeting's, or the rounds estimate (eventDurationMinutes).
-      const totalMinutes = eventDurationMinutes(resolveEventFormat({ format: session.event_format, config: session.config }), session.config);
+      // 26 Oct 2026 — the event's own length: a meeting's, or the rounds estimate (eventDurationOf).
+      const totalMinutes = eventDurationOf(session);
 
       // Get host email for organizer
       const hostResult = await query<{ display_name: string; email: string }>(
@@ -314,7 +351,9 @@ export async function buildInviteContext(
     }
   }
   return {
-    type, podId: target.podId ?? null, sessionId: target.sessionId ?? null, inviterName, targetName, calendarEvent, scheduledAt,
+    type, podId: target.podId ?? null, sessionId: target.sessionId ?? null,
+    circleId: type === InviteType.CIRCLE ? target.circleId ?? null : null,
+    inviterName, targetName, calendarEvent, scheduledAt,
   };
 }
 
@@ -409,6 +448,8 @@ export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery):
     }
   } else if (type === InviteType.POD) {
     notifBody = `Join ${targetName || 'this pod'} — invited by ${inviterName}`;
+  } else if (type === InviteType.CIRCLE) {
+    notifBody = `Join ${targetName || 'this circle'}, invited by ${inviterName}`;
   }
   const notifResult = await query<{ id: string; created_at: string }>(
     `INSERT INTO notifications (user_id, type, title, body, link) VALUES ($1, $2, $3, $4, $5)
@@ -431,6 +472,7 @@ export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery):
         inviteStatus: 'pending',
         podId: ctx.podId,
         sessionId: ctx.sessionId,
+        ...(type === InviteType.CIRCLE ? { circleId: ctx.circleId ?? null } : {}),
       });
       // Phase 2 dual-emit — invitee's bell + received-invites surfaces
       // refresh in the same tick as the bespoke event.
@@ -438,7 +480,10 @@ export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery):
       const { E } = await import('../../realtime/entities');
       emitEntities(
         io, [inviteeId],
-        [E.userNotifications(inviteeId), E.userInvites(inviteeId)],
+        [
+          E.userNotifications(inviteeId), E.userInvites(inviteeId),
+          ...(type === InviteType.CIRCLE && ctx.circleId ? [E.circleInvites(ctx.circleId)] : []),
+        ],
       ).catch(() => {});
     } catch { /* socket push is non-fatal */ }
   }
@@ -512,7 +557,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     if (circle.rows.length === 0) {
       throw new NotFoundError('Circle', input.circleId);
     }
-    if (!isAdmin && !(await circleService.isCircleMember(input.circleId, userId))) {
+    if (!(await mayInviteToCircle(input.circleId, userId, userRole))) {
       throw new AppError(403, 'AUTH_FORBIDDEN', 'Only circle members can invite to a circle');
     }
     if (input.inviteeEmail) {
@@ -582,7 +627,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
 
   // Block duplicate pending invites (checked AFTER membership so the right error shows). The check and the insert
   // run together, behind a lock for this person and target (see insertPendingInvite).
-  const inserted = await insertPendingInvite({
+  const pending = {
     code,
     type: input.type || InviteType.PLATFORM,
     inviterId: userId,
@@ -592,7 +637,14 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     circleId: input.circleId || null,
     maxUses: input.maxUses || 2,
     expiresAt,
-  });
+  };
+  let inserted = await insertPendingInvite(pending);
+  if (inserted.duplicate && pending.sessionId) {
+    // A pending event invite from before its person was removed from the event is the kick's leftover (the kick
+    // withdraws them, best-effort; H2b item 24, 26 Oct 2026): it is withdrawn now and the fresh one made, so the
+    // host can invite back someone they removed without first finding the old invite.
+    if (await withdrawInviteFromBeforeRemoval(inserted.existingId)) inserted = await insertPendingInvite(pending);
+  }
   if (inserted.duplicate) {
     throw new AppError(409, 'DUPLICATE_INVITE', 'A pending invite already exists for this user');
   }
@@ -722,7 +774,7 @@ export interface AcceptInviteResult {
   invite: Invite;
   /** Where the client should navigate next (lobby for session invites, pod page for pod invites). */
   redirectTo: string;
-  registeredFor: { sessionId?: string; podId?: string };
+  registeredFor: { sessionId?: string; podId?: string; circleId?: string };
   /**
    * Phase 4 (1 May spec) — server-confirmed participant status. Client uses
    * this to know the registration is fully committed before navigating, so
@@ -730,6 +782,21 @@ export interface AcceptInviteResult {
    * for pod-only invites.
    */
   participantStatus?: string;
+}
+
+/**
+ * H1b fix round 1 (26 Oct 2026) — after a host's personal invite to a live event has been accepted, the event's memory
+ * follows the database (readmitAfterPersonalInvite): a removal it holds from before the invite was made is lifted
+ * when the database has the person in the event and not removed. Never throws: it runs in a `finally`, and the
+ * reconciler follows the database at its next tick anyway.
+ */
+async function followDatabaseAfterPersonalInvite(sessionId: string, userId: string, invitedAt: Date): Promise<void> {
+  try {
+    const { readmitAfterPersonalInvite } = await import('../orchestration/state/participant-state-machine');
+    await readmitAfterPersonalInvite(sessionId, userId, invitedAt);
+  } catch (err) {
+    logger.warn({ err, sessionId, userId }, 'Could not bring the live event\'s memory in line after a personal invite');
+  }
 }
 
 async function applyInviteRegistration(
@@ -749,8 +816,8 @@ async function applyInviteRegistration(
     try {
       await podService.addMember(invite.podId, userId);
     } catch (err) {
-      // Already a member — that's fine, the invite still resolves to "you're in".
-      if (!(err instanceof ConflictError)) throw err;
+      // Already a member — that's fine, the invite still resolves to "you're in". A full pod is a refusal.
+      if (!(err instanceof ConflictError && err.code === ErrorCodes.POD_MEMBER_EXISTS)) throw err;
     }
     out.podId = invite.podId;
   }
@@ -766,13 +833,13 @@ async function applyInviteRegistration(
       try {
         await podService.addMember(podId, userId);
       } catch (err) {
-        // Already a member is fine — the invite still resolves to "you're in".
-        // #4B — swallow by error CODE as well as instanceof: addMember throws its
-        // ConflictError from inside its own transaction, and the instanceof check
-        // proved unreliable across that boundary (a re-invited but still-pod-member
-        // kicked user hit POD_MEMBER_EXISTS here, blocking the re-admit below).
+        // Already a member is fine — the invite still resolves to "you're in" — and so is a full pod:
+        // registerParticipant decides whether the event needs its pod. These are the only two
+        // ConflictErrors addMember throws. (#4B read them by code because `instanceof ConflictError` was
+        // false for every ConflictError until 26 Oct 2026; a re-invited, still-pod-member kicked user hit
+        // POD_MEMBER_EXISTS here, blocking the re-admit below.)
         const code = (err as { code?: string } | undefined)?.code;
-        if (!(err instanceof ConflictError) && code !== 'POD_MEMBER_EXISTS' && code !== 'POD_FULL') throw err;
+        if (code !== ErrorCodes.POD_MEMBER_EXISTS && code !== ErrorCodes.POD_FULL) throw err;
       }
       out.podId = podId;
     }
@@ -781,35 +848,42 @@ async function applyInviteRegistration(
     // host's way to re-admit a kicked user, so it lifts the removed-bar. A
     // shareable/multi-use link (no inviteeEmail) must NOT silently re-admit a
     // removed user — they stay bounced until personally re-invited.
-    const allowRemovedReadmit = !!invite.inviteeEmail;
+    // H1b fix round 1 (26 Oct 2026) — "fresh" is exact: it lifts only a removal
+    // made before the host made the invite. An older invite (one the kick's
+    // withdrawal missed, or one accepted again) never undoes a later kick.
+    const personalInviteCreatedAt = invite.inviteeEmail ? new Date(invite.createdAt) : undefined;
     try {
-      await sessionService.registerParticipant(invite.sessionId, userId, undefined, { allowRemovedReadmit });
-    } catch (err) {
-      if (err instanceof ConflictError) {
-        // Already registered — fine, idempotent.
-      } else {
-        // Capacity, status, or other validation error — bubble up so the
-        // tx rolls back and the user gets a definitive error.
-        throw err;
+      try {
+        await sessionService.registerParticipant(invite.sessionId, userId, undefined, { personalInviteCreatedAt });
+      } catch (err) {
+        // Already registered — fine, idempotent. Capacity (SESSION_FULL, also a ConflictError), status, or
+        // other validation error — bubble up so the user gets a definitive error and nobody is written in below.
+        if (!(err instanceof ConflictError && err.code === ErrorCodes.SESSION_ALREADY_REGISTERED)) throw err;
       }
-    }
 
-    // Defensive idempotent INSERT to handle the rare case where
-    // registerParticipant returned successfully but the row was wiped by
-    // a parallel removal. ON CONFLICT preserves invariant.
-    // H1 fix round 1 — a row a kick has just made 'removed' is lifted only by a
-    // personal invite; a shared link leaves it removed (a removal is terminal).
-    await query(
-      allowRemovedReadmit
-        ? `INSERT INTO session_participants (session_id, user_id, status)
-           VALUES ($1, $2, 'registered')
-           ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
-           WHERE session_participants.status = 'removed'`
-        : `INSERT INTO session_participants (session_id, user_id, status)
-           VALUES ($1, $2, 'registered')
-           ON CONFLICT (session_id, user_id) DO NOTHING`,
-      [invite.sessionId, userId],
-    );
+      // Defensive idempotent INSERT to handle the rare case where
+      // registerParticipant returned successfully but the row was wiped by
+      // a parallel removal. ON CONFLICT preserves invariant.
+      // H1 fix round 1 — a row a kick has just made 'removed' is lifted only by a
+      // personal invite; a shared link leaves it removed (a removal is terminal).
+      // H1b fix round 1 — and only when that removal was made before the invite.
+      await query(
+        personalInviteCreatedAt
+          ? `INSERT INTO session_participants (session_id, user_id, status)
+             VALUES ($1, $2, 'registered')
+             ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
+             WHERE session_participants.status = 'removed'
+               AND (session_participants.left_at IS NULL OR session_participants.left_at < $3::timestamptz)`
+          : `INSERT INTO session_participants (session_id, user_id, status)
+             VALUES ($1, $2, 'registered')
+             ON CONFLICT (session_id, user_id) DO NOTHING`,
+        personalInviteCreatedAt ? [invite.sessionId, userId, personalInviteCreatedAt] : [invite.sessionId, userId],
+      );
+    } finally {
+      // H1b fix round 1 — whatever the registration answered (an "already registered" included: a kick whose own
+      // write never reached the database leaves the row as it was), the live event's memory follows the database.
+      if (personalInviteCreatedAt) await followDatabaseAfterPersonalInvite(invite.sessionId, userId, personalInviteCreatedAt);
+    }
 
     out.sessionId = invite.sessionId;
   }
@@ -1324,11 +1398,11 @@ export async function listPodInvites(
 export async function declineInvite(
   code: string,
   userEmail: string,
-): Promise<{ podId: string | null; sessionId: string | null }> {
-  const result = await query<{ pod_id: string | null; session_id: string | null }>(
+): Promise<{ podId: string | null; sessionId: string | null; circleId: string | null }> {
+  const result = await query<{ pod_id: string | null; session_id: string | null; circle_id: string | null }>(
     `UPDATE invites SET status = 'revoked', declined_at = NOW()
      WHERE code = $1 AND invitee_email = $2 AND status = 'pending'
-     RETURNING pod_id, session_id`,
+     RETURNING pod_id, session_id, circle_id`,
     [code, userEmail.toLowerCase()]
   );
 
@@ -1351,6 +1425,7 @@ export async function declineInvite(
   return {
     podId: result.rows[0]?.pod_id ?? null,
     sessionId: result.rows[0]?.session_id ?? null,
+    circleId: result.rows[0]?.circle_id ?? null,
   };
 }
 
@@ -1374,6 +1449,7 @@ export async function declineInvite(
 export interface RevokedInvite {
   podId: string | null;
   sessionId: string | null;
+  circleId: string | null;
   inviterId: string;
   /** The member the invite's address belongs to; null when it belongs to no member or the invite is an open link. */
   inviteeUserId: string | null;
@@ -1398,9 +1474,9 @@ export async function revokeInvite(
   if (!mayWithdraw) throw new NotFoundError('Invite', inviteId);
 
   // Only a pending invite is withdrawn: one answered since the check above is simply not found.
-  const result = await query<{ pod_id: string | null; session_id: string | null }>(
+  const result = await query<{ pod_id: string | null; session_id: string | null; circle_id: string | null }>(
     `UPDATE invites SET status = 'revoked' WHERE id = $1 AND status = 'pending'
-     RETURNING pod_id, session_id`,
+     RETURNING pod_id, session_id, circle_id`,
     [inviteId]
   );
 
@@ -1411,6 +1487,7 @@ export async function revokeInvite(
   return {
     podId: result.rows[0]?.pod_id ?? null,
     sessionId: result.rows[0]?.session_id ?? null,
+    circleId: result.rows[0]?.circle_id ?? null,
     inviterId: invite.inviter_id,
     inviteeUserId: invite.invitee_user_id,
   };

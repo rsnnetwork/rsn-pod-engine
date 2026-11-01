@@ -14,6 +14,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import * as agentRepo from '../services/matching/agent.repo';
 import * as agentMatching from '../services/matching/agent-matching.service';
 import * as platformMatch from '../services/matching/platform-match.service';
@@ -40,12 +41,36 @@ const statusSchema = z.object({
   status: z.enum(['active', 'paused', 'archived']),
 });
 
-/** Rescore without making the caller wait. Never rejects into the request. */
-function rescoreInBackground(agent: { id: string; userId: string; wantText: string; label: string }): void {
+type RescoredAgent = { id: string; userId: string; wantText: string; label: string };
+
+/** The agents being rescored right now, and for each the newest words to score once the running one ends. */
+const rescoring = new Set<string>();
+const rescoreAgain = new Map<string, RescoredAgent>();
+
+/**
+ * Rescore without making the caller wait. Never rejects into the request. One rescoring at a time per agent (H2b
+ * item 14, 26 Oct 2026): the dashboard polls and a second tab reads too, and each read used to start another search
+ * over the whole member base for the same unscored agent. A read (`onlyIfIdle`) starts nothing while one runs; an
+ * edit, a creation or a resume is never dropped: it is scored once more, with its words, when the running one ends.
+ */
+function rescoreInBackground(agent: RescoredAgent, opts: { onlyIfIdle?: boolean } = {}): void {
+  if (rescoring.has(agent.id)) {
+    if (!opts.onlyIfIdle) rescoreAgain.set(agent.id, agent);
+    return;
+  }
+  rescoring.add(agent.id);
   agentMatching
     .recomputeAgent(agent)
     .then((n) => fanoutUserEntity(agent.userId).catch(() => { void n; }))
-    .catch((err) => logger.warn({ err, agentId: agent.id }, 'background agent rescore failed'));
+    .catch((err) => logger.warn({ err, agentId: agent.id }, 'background agent rescore failed'))
+    .finally(() => {
+      rescoring.delete(agent.id);
+      const again = rescoreAgain.get(agent.id);
+      if (again) {
+        rescoreAgain.delete(agent.id);
+        rescoreInBackground(again);
+      }
+    });
 }
 
 // GET /agents — the dashboard: every agent with its live count.
@@ -61,7 +86,7 @@ router.get('/', authenticate, async (req: Request, res: Response, next: NextFunc
     const agents = await agentRepo.listAgents(req.user!.userId, { includeArchived });
     res.json({ success: true, data: agents } as ApiResponse);
     for (const a of agents) {
-      if (a.status === 'active' && a.lastMatchedAt === null) rescoreInBackground(a);
+      if (a.status === 'active' && a.lastMatchedAt === null) rescoreInBackground(a, { onlyIfIdle: true });
     }
   } catch (err) { next(err); }
 });
@@ -83,8 +108,8 @@ router.post('/', authenticate, validate(createSchema), async (req: Request, res:
   } catch (err) { next(err); }
 });
 
-// GET /agents/:id — one agent plus the people it found.
-router.get('/:id', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+// GET /agents/:id — one agent plus the people it found. A malformed id is a 400 in a member's words (26 Oct 2026).
+router.get('/:id', authenticate, uuidInPath('id', PATH_REFUSALS.agent), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const agent = await agentRepo.getAgent(req.params.id, req.user!.userId);
     if (!agent) throw new NotFoundError('Agent', req.params.id);

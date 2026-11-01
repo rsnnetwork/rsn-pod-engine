@@ -691,6 +691,83 @@ describe('setAvailability — agreeing a time books it', () => {
 });
 
 describe('confirmWindow', () => {
+  // H2b item 9 (26 Oct 2026): the client says which meeting it saw (expectedWindow: the standing meeting's window
+  // key, or null for none). A standing meeting that no longer matches is refused with where things stand.
+  describe('the meeting the client saw', () => {
+    const standing = (window: string | null) => ({
+      ...CONV,
+      meeting_confirmed_window: window,
+      meeting_start_at: window ? new Date(Date.now() + 3 * 86_400_000) : null,
+      meeting_duration_min: window ? 30 : null,
+    });
+    const wanted = () => futureSlot(5, 9);
+    const both = (slot: string) => [{ user_id: 'u-a', window_key: slot }, { user_id: 'u-b', window_key: slot }];
+
+    it('a Move that names a meeting the partner has since moved is refused (409) with where things stand, and writes nothing', async () => {
+      const slot = wanted();
+      armConv(both(slot), standing('the-partner-moved-it'));
+      await expect(confirmWindow('conv-1', 'u-a', slot, { expectedWindow: 'what-i-saw' })).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'MEETING_CHANGED_SINCE_SEEN',
+        message: 'The meeting time changed a moment ago. Here is where it stands now.',
+        details: { scheduling: { conversationId: 'conv-1', partnerId: 'u-b' } },
+      });
+      expect(confirmations()).toHaveLength(0);
+      expect(mockInsertOn).not.toHaveBeenCalled();
+    });
+
+    it('expecting no meeting while one now stands is refused the same way', async () => {
+      const slot = wanted();
+      armConv(both(slot), standing('booked-meanwhile'));
+      await expect(confirmWindow('conv-1', 'u-a', slot, { expectedWindow: null })).rejects.toMatchObject({ statusCode: 409, code: 'MEETING_CHANGED_SINCE_SEEN' });
+      expect(confirmations()).toHaveLength(0);
+    });
+
+    it('expecting no meeting when none stands books as before', async () => {
+      const slot = wanted();
+      armConv(both(slot), standing(null));
+      await confirmWindow('conv-1', 'u-a', slot, { expectedWindow: null });
+      expect(confirmations()).toHaveLength(1);
+    });
+
+    it('a Move that names the standing meeting goes through', async () => {
+      const slot = wanted();
+      armConv(both(slot), standing('what-i-saw'));
+      await confirmWindow('conv-1', 'u-a', slot, { expectedWindow: 'what-i-saw' });
+      expect(confirmations()).toHaveLength(1);
+    });
+
+    it('a meeting that is over is still what the client saw: naming its window books afresh, no 409 (review M3)', async () => {
+      // The client is shown the confirmed window even once the meeting is over, so that is what it names.
+      const slot = wanted();
+      armConv(both(slot), {
+        ...CONV, meeting_confirmed_window: 'over-and-done', meeting_start_at: new Date(Date.now() - 2 * 86_400_000), meeting_duration_min: 30,
+      });
+      await confirmWindow('conv-1', 'u-a', slot, { expectedWindow: 'over-and-done' });
+      expect(confirmations()).toHaveLength(1);
+    });
+
+    it('a legacy day part the conversation holds (no time of its own) is matched by its key: naming it goes through, naming another is refused (review M3)', async () => {
+      const dayPart = futureKey(2, 'evening');
+      const dayPartHeld = { ...CONV, meeting_confirmed_window: dayPart, meeting_start_at: null, meeting_duration_min: null };
+      const slot = wanted();
+      armConv(both(slot), dayPartHeld);
+      await confirmWindow('conv-1', 'u-a', slot, { expectedWindow: dayPart });
+      expect(confirmations()).toHaveLength(1);
+
+      armConv(both(slot), dayPartHeld);
+      await expect(confirmWindow('conv-1', 'u-a', slot, { expectedWindow: futureKey(3, 'morning') }))
+        .rejects.toMatchObject({ statusCode: 409, code: 'MEETING_CHANGED_SINCE_SEEN' });
+    });
+
+    it('without the field (production\'s client) nothing is checked', async () => {
+      const slot = wanted();
+      armConv(both(slot), standing('the-partner-moved-it'));
+      await confirmWindow('conv-1', 'u-a', slot);
+      expect(confirmations()).toHaveLength(1);
+    });
+  });
+
   it('rejects a window only ONE side selected', async () => {
     const windowKey = futureKey(2);
     armConv([{ user_id: 'u-a', window_key: windowKey }]); // partner never picked it

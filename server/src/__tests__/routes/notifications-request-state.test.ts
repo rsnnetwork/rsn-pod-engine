@@ -193,6 +193,13 @@ describe('GET /notifications — a meeting request row says where the request st
     expect(rows[1]).toEqual({ ...messageFields, inviteStatus: null, podId: null, sessionId: null });
   });
 
+  // 1 Nov 2026: a circle invite's bell is joined to its invite like a pod's and an event's, so it carries the
+  // invite's status (pending, accepted, revoked, expired) and the preview's bell can offer Accept and Decline.
+  it('a circle invite bell is joined to its invite, as a pod invite and an event invite are', async () => {
+    await fetchBell([bell('n1', 'circle_invite', '/invite/ABC123')]);
+    expect(String(listQuery()[0]).replace(/\s+/g, ' ')).toMatch(/n\.type IN \('pod_invite', 'event_invite', 'circle_invite'\)/);
+  });
+
   // 26 Oct 2026 (H2a): the bell offered Accept on requests that could not be accepted, because the
   // list lacked listReceivedPokes' rule (accepting refuses a block either way, and a closed sender).
   it('a request from a closed account, or with a block between the two either way, is not offered: it reads as gone', async () => {

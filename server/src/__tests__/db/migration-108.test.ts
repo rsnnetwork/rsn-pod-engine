@@ -63,11 +63,13 @@ describe('migration 108 (notification types for the 25 Oct batch)', () => {
     expect(allowedTypes(sql, FILE)).toEqual(expect.arrayContaining(previous));
   });
 
-  it('is the latest definition: no other migration file restates the allowlist after 099', () => {
+  it('is restated after 099 by this file and by 118 only, and 118 carries every one of these types forward (a later restatement is a new migration; migration-118.test.ts follows it)', () => {
     const restating = fs.readdirSync(MIGRATIONS)
       .filter((file) => /^\d{3}_.+\.sql$/.test(file) && Number(file.slice(0, 3)) > 99)
       .filter((file) => /notifications_type_check/.test(code(fs.readFileSync(path.join(MIGRATIONS, file), 'utf8'))));
-    expect(restating).toEqual([FILE]);
+    expect(restating).toEqual([FILE, '118_notification_types_circles.sql']);
+    const later = allowedTypes(fs.readFileSync(path.join(MIGRATIONS, restating[1]), 'utf8'), restating[1]);
+    expect(later).toEqual(expect.arrayContaining(allowedTypes(sql, FILE)));
   });
 
   it('touches nothing but the constraint: no table, column or row is dropped, deleted or rewritten', () => {

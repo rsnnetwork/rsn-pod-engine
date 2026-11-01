@@ -1,7 +1,7 @@
 // ─── /api/pods/:podId/wall: the routes (26 Oct 2026) ─────────────────────────
 // What each route accepts, whom it lets through, what it answers, and that a write is rate limited.
 // The service is a stand-in; its rules (who may do what, the bells, the tags) are tested in
-// services/pod/pod-wall.service.test.ts. The routes are mounted beside the real pods router, as in
+// __tests__/services/pod/pod-wall.service.test.ts. The routes are mounted beside the real pods router, as in
 // index.ts, so a wall path that the pods router swallowed would show here.
 
 import express from 'express';

@@ -157,17 +157,19 @@ function answer(sql: string, params: unknown[]): Answer {
   if (sql === "SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')") {
     return { rows: [{ count: String(world.participants.filter((p) => p.session_id === a && !['removed', 'left', 'no_show'].includes(p.status)).length) }] };
   }
-  if (sql === 'SELECT id, status FROM session_participants WHERE session_id = $1 AND user_id = $2'
+  // The registration's read of the person's row (H1b: with when a removal of theirs was made), and the plain re-read.
+  if (sql === 'SELECT id, status, left_at FROM session_participants WHERE session_id = $1 AND user_id = $2'
       || sql === 'SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2') {
     const p = participant(a, b);
-    return { rows: p ? [{ id: p.id, status: p.status }] : [] };
+    return { rows: p ? [{ id: p.id, status: p.status, left_at: p.left_at ?? null }] : [] };
   }
   // A status write: the state machine's, the legacy fallback's and the reconciler's all start this way. One that
-  // carries the removal guard leaves a removed row as it is, as Postgres would.
+  // carries the removal guard leaves a removed row as it is, as Postgres would. A removal is stamped (left_at).
   if (sql.startsWith('UPDATE session_participants SET status = $1')) {
     const p = participant(params[params.length - 2], params[params.length - 1]);
     if (!p || (sql.includes("status <> 'removed'") && p.status === 'removed')) return { rows: [], rowCount: 0 };
     p.status = params[0];
+    if (sql.includes('left_at = NOW()')) p.left_at = new Date();
     return { rows: [], rowCount: 1 };
   }
   // The reconciler reads every row of the event, to write memory into it.
@@ -641,7 +643,9 @@ describe('a removal is terminal: nothing a removed person sends undoes it (fix r
 
   it('a fresh personal invite still re-admits them (the registration\'s own write), and they come back in', async () => {
     const t = await kickedMember();
-    await sessionService.registerParticipant(t.sessionId, t.member, undefined, { allowRemovedReadmit: true });
+    // H1b fix round 1 — a fresh invite is one the host made after the kick (here a second after it).
+    const invitedAt = new Date(participant(t.sessionId, t.member)!.left_at.getTime() + 1000);
+    await sessionService.registerParticipant(t.sessionId, t.member, undefined, { personalInviteCreatedAt: invitedAt });
     expect(statusOf(t.sessionId, t.member)).toBe('registered');
     const back = connect(t.member);
     await join(back, t.sessionId);

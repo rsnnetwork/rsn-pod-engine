@@ -36,6 +36,8 @@ jest.mock('../../../config/logger', () => ({
 const mockSendInviteEmail = jest.fn();
 jest.mock('../../../services/email/email.service', () => ({
   sendInviteEmail: (...args: unknown[]) => mockSendInviteEmail(...args),
+  // The bulk lane (H2b item 7) is the real service's gate; here a burst's send simply runs.
+  asBulkEmail: <T>(send: () => Promise<T>) => send(),
   __esModule: true,
 }));
 
@@ -705,6 +707,62 @@ describe('createInvitesBatch', () => {
       expect(world.invites).toHaveLength(0);
     });
 
+    // H2b review M5 (item 24 on the batch path): a pending event invite made before its person was removed from the
+    // event can no longer let them in, yet the sheet answered already_invited for it, so they could not be invited
+    // back from the sheet. It is withdrawn and a fresh invite made, as POST /invites does.
+    describe('a pending event invite from before the person was removed', () => {
+      const STALE = 'e0000000-0000-4000-8000-0000000000aa';
+      /** A world where person 1's pending invite STALE was made before they were removed from the event. */
+      const removedAfterInvite = () => {
+        const stale: WorldInvite = {
+          id: STALE, code: 'OLD', type: 'session', inviterId: VIEWER, email: 'person1@example.com', podId: EVENT_POD,
+          sessionId: EVENT, circleId: null, status: 'pending', maxUses: 1, expiresAt: null, declinedAt: null, createdAt: new Date(0),
+        };
+        world = inviteWorld({ answers: (text, params) => {
+          const beforeRemoval = /sp\.status = 'removed' AND sp\.left_at > i\.created_at/.test(text);
+          if (beforeRemoval && /^SELECT i\.id FROM invites i/.test(text)) {
+            return { rows: (params[0] as string[]).filter((id) => id === STALE && stale.status === 'pending').map((id) => ({ id })) };
+          }
+          if (beforeRemoval && /^UPDATE invites i SET status = 'revoked'/.test(text)) {
+            if (params[0] !== STALE || stale.status !== 'pending') return { rows: [], rowCount: 0 };
+            stale.status = 'revoked';
+            return { rows: [{ id: STALE }], rowCount: 1 };
+          }
+          return batchAnswers(text, params);
+        } });
+        world.invites.push(stale);
+        mockQuery.mockImplementation(world.query);
+        mockTransaction.mockImplementation(world.transaction);
+      };
+
+      it('is withdrawn and a fresh one made: invited, with the new invite, its bell and its email', async () => {
+        const id = person(1, { state: 'invited', latestInviteId: STALE });
+        removedAfterInvite();
+        const result = await eventBatch([id]);
+        expect(outcomes(result)).toEqual([[id, 'invited']]);
+        expect(result.results[0].inviteId).not.toBe(STALE);
+        expect(world.invites.find((i) => i.id === STALE)?.status).toBe('revoked');
+        expect(world.invites.filter((i) => i.status === 'pending')).toHaveLength(1);
+        await result.delivery;
+        expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
+      });
+
+      it('a live invite made after any removal stays as it is: already_invited, nothing withdrawn', async () => {
+        const id = person(1, { state: 'invited', latestInviteId: 'inv-live' });
+        removedAfterInvite();
+        const result = await eventBatch([id]);
+        expect(result.results).toEqual([{ userId: id, outcome: 'already_invited', inviteId: 'inv-live' }]);
+        expect(statementsMatching(/^UPDATE invites i SET status = 'revoked'/)).toHaveLength(0);
+      });
+
+      it('a pod batch never asks', async () => {
+        const id = person(1, { state: 'invited', latestInviteId: STALE });
+        removedAfterInvite();
+        expect(outcomes(await podBatch([id]))).toEqual([[id, 'already_invited']]);
+        expect(statementsMatching(/sp\.left_at > i\.created_at/)).toHaveLength(0);
+      });
+    });
+
     it('a declined person among others is counted, and the others are still invited', async () => {
       const ids = [person(1), person(2, { state: 'declined', latestInviteId: 'inv-old' }), person(3)];
       const result = await podBatch(ids);
@@ -940,19 +998,27 @@ describe('createInvitesBatch', () => {
       expect(mockSendInviteEmail).toHaveBeenCalledTimes(4);
     });
 
-    it('go one at a time, each starting at least the gap after the one before (at 500 ms: never more than 2 a second)', async () => {
+    it('go one at a time, each starting the gap after the one before (at 500 ms: never more than 2 a second)', async () => {
+      // On a clock of the test's own (H2b item 17, 26 Oct 2026): measured on the wall clock this flaked on a loaded CI
+      // runner (34 ms read for a 40 ms gap). Here a pause moves the clock by exactly what was asked and a send takes
+      // 5 ms of it, so the gaps are exact and the test is instant.
+      let clock = 1_000_000;
+      const pace = { now: () => clock, pause: jest.fn(async (ms: number) => { clock += ms; }) };
       const starts: number[] = [];
       const inFlight = { now: 0, most: 0 };
       mockSendInviteEmail.mockImplementation(async () => {
-        starts.push(Date.now());
+        starts.push(clock);
         inFlight.now += 1; inFlight.most = Math.max(inFlight.most, inFlight.now);
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        clock += 5;
+        await Promise.resolve();
         inFlight.now -= 1;
       });
-      const result = await podBatch([person(1), person(2), person(3), person(4), person(5)], {}, { emailGapMs: 40 });
+      const result = await podBatch([person(1), person(2), person(3), person(4), person(5)], {}, { emailGapMs: 40, pace });
       await result.delivery;
       expect(starts).toHaveLength(5);
-      for (let i = 1; i < starts.length; i += 1) expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(36);
+      for (let i = 1; i < starts.length; i += 1) expect(starts[i] - starts[i - 1]).toBe(40);
+      // The pause is the gap less the send before it, and there is none before the first.
+      expect(pace.pause.mock.calls.map((c) => c[0])).toEqual([35, 35, 35, 35]);
       expect(inFlight.most).toBe(1);
     });
 

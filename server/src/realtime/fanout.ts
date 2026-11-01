@@ -407,6 +407,44 @@ export async function fanoutEntityChange(
   }
 }
 
+// ─── Circle-change fanout ───────────────────────────────────────────────────
+//
+// 1 Nov 2026. Everyone a change to a circle can touch hears it, as the circle is after the write:
+//   circle:<id>, circle:<id>:members  its page, with who is in it and the counts;
+//   user:<recipient>:circles          their own Circles list, whose names and counts may have moved;
+//   user:<changed>:circles            for each member whose link changed, so a list that shows that member's
+//                                     circles redraws for the people who share the circle.
+// The audience is the circle's members, the person who made it (its creator manages it even with no member row),
+// the actor and the changed people. A circle's invites change through `extra` (circle:<id>:invites). Someone
+// outside the circle with its page open is not told, and catches up on focus, as with an entity.
+// The circle's wall keeps its own refresh and is not told.
+
+export async function fanoutCircleChange(
+  circleId: string,
+  actorId: string,
+  changedUserIds: string[] = [],
+  extra: string[] = [],
+): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const people = await query<{ user_id: string }>(
+      `SELECT user_id FROM circle_members WHERE circle_id = $1
+       UNION
+       SELECT created_by FROM circles WHERE id = $1`,
+      [circleId],
+    );
+    const recipients = new Set([...people.rows.map(r => r.user_id), actorId, ...changedUserIds].filter(Boolean));
+    const told = [E.circle(circleId), E.circleMembers(circleId), ...changedUserIds.map(E.userCircles), ...extra];
+    await Promise.all([...recipients].map(userId =>
+      emitEntities(io, [userId], [...new Set([...told, E.userCircles(userId)])]),
+    ));
+  } catch (err) {
+    logger.warn({ err, circleId }, 'fanoutCircleChange: failed to fan out');
+  }
+}
+
 // ─── Profile-change fanout ──────────────────────────────────────────────────
 //
 // A member's public card changed without the profile form: creating or joining their company as its
@@ -478,14 +516,19 @@ export async function fanoutGroupEntities(
   }
 }
 
-// One member marked a group read: only their own tabs and devices redraw its unread count.
-export async function fanoutGroupForUser(groupId: string, userId: string): Promise<void> {
+/**
+ * A member's own read mark moves only their Messages list (the unread counts: user:<id>:dms), on every tab they
+ * have open. It no longer sends the group's own tag back to the reader (H2b item 22, 26 Oct 2026): the reader
+ * then read the group again for a mark they had just made, about six reads for every message that arrived, and a
+ * busy group ran into the read limit and stopped updating. Nobody else learns of a read mark.
+ */
+export async function fanoutGroupReadMark(userId: string): Promise<void> {
   const io = getRealtimeIo();
   if (!io) return;
   try {
-    await emitEntities(io, [userId], [E.dmGroup(groupId), E.userDms(userId)]);
+    await emitEntities(io, [userId], [E.userDms(userId)]);
   } catch (err) {
-    logger.warn({ err, groupId, userId }, 'fanoutGroupForUser: failed to fan out');
+    logger.warn({ err, userId }, 'fanoutGroupReadMark: failed to fan out');
   }
 }
 

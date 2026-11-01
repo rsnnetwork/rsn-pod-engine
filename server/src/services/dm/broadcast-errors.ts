@@ -10,7 +10,5 @@ import { AppError } from '../../middleware/errors';
 export class BroadcastBlockedError extends AppError {
   constructor() {
     super(403, ErrorCodes.AUTH_FORBIDDEN, 'You can no longer message this user');
-    // AppError points every subclass back at its own prototype, which would make `instanceof` false here.
-    Object.setPrototypeOf(this, BroadcastBlockedError.prototype);
   }
 }
