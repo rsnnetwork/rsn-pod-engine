@@ -19,6 +19,9 @@ import type { EnrichResult } from '../onboarding/enrichment.service';
 import { statusFromResult } from '../onboarding/providers/registry';
 import { hasAvatar, tryGravatar } from '../onboarding/avatar.service';
 import { bannerUrlFor } from '../user/banner.service';
+import { savePicture } from '../user/picture.service';
+import { fanoutProfileChange } from '../../realtime/fanout';
+import { captureGooglePhoto } from './google-photo-link';
 import { assertCanSignIn, signInRefusal } from './account-access';
 import { clientOriginConfig, resolveClientBaseUrl } from './client-origin';
 import { safeReturnPath } from './return-path';
@@ -44,6 +47,18 @@ function seedPhotoFallback(userId: string, enriched: EnrichResult): void {
   hasAvatar(userId)
     .then(async (has) => { if (!has) await tryGravatar(userId); })
     .catch((e) => logger.warn({ err: e, userId }, 'gravatar fallback at first sign-in failed (non-fatal)'));
+}
+
+/**
+ * The photo a Google sign-in brings, kept as our own copy at 1024 pixels (30 Oct review, T3a, "pictures look
+ * pixelated": Google's link is a 96-pixel photo that can change or expire). The link is already on the account, so a
+ * photo shows at once; the copy replaces it when the download lands, and the member's screens and pods are told.
+ * In the background: a slow download never holds up the sign-in. Never throws.
+ */
+function keepGooglePhoto(userId: string, picture: string): void {
+  captureGooglePhoto(userId, picture)
+    .then((kept) => (kept ? fanoutProfileChange(userId) : undefined))
+    .catch((e) => logger.warn({ err: e, userId }, 'google photo: could not keep a copy (non-fatal)'));
 }
 
 // ─── Registration Gate ──────────────────────────────────────────────────────
@@ -195,6 +210,16 @@ export async function createUser(input: CreateUserInput): Promise<User> {
 export async function updateUser(id: string, input: UpdateUserInput): Promise<User> {
   // Verify user exists
   await getUserById(id);
+
+  // Production's own form (origin/main ProfilePage.tsx) still sends a new photo as a data URL in avatarUrl. Since the
+  // 30 Oct review (T3a) it is kept the way the pencil keeps one: as a picture behind its own address, cut to the
+  // 1024 square, placed in the middle. A picture that is not one is refused before anything is saved. Any other
+  // value (a web address, or null) is written as it always was.
+  if (typeof input.avatarUrl === 'string' && input.avatarUrl.startsWith('data:')) {
+    await savePicture('avatar', id, { image: input.avatarUrl });
+    const { avatarUrl: _kept, ...rest } = input;
+    input = rest;
+  }
 
   const setClauses: string[] = [];
   const values: unknown[] = [];
@@ -911,11 +936,13 @@ export async function findOrCreateGoogleUser(
 
     user = await getUserById(id);
     logger.info({ userId: id, email: normalizedEmail }, 'Google OAuth: new user created');
+    if (profile.picture) keepGooglePhoto(id, profile.picture);
   } else {
     assertCanSignIn(user);
     // Update avatar if provided and user doesn't have one
     if (profile.picture && !user.avatarUrl) {
       await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [profile.picture, user.id]);
+      keepGooglePhoto(user.id, profile.picture);
     }
     if (!user.emailVerified) {
       await query('UPDATE users SET email_verified = TRUE WHERE id = $1', [user.id]);

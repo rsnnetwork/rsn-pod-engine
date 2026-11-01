@@ -17,13 +17,16 @@ import { entityReadLimiter } from '../middleware/rateLimit';
 import {
   fanoutAdminEntities,
   fanoutPodEntities,
+  fanoutProfileChange,
   fanoutUserBlocks,
   fanoutUserEntity,
 } from '../realtime/fanout';
 import { query } from '../db';
-import { ApiResponse, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { ApiResponse, PICTURE_MAX_ZOOM, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import * as bannerService from '../services/user/banner.service';
-import { bannerReadLimiter, bannerWriteLimiter } from '../middleware/rateLimit';
+import { getPictureSource, savePicture } from '../services/user/picture.service';
+import { PICTURE_MAX_DATA_URL_CHARS } from '../services/user/picture-file';
+import { avatarWriteLimiter, bannerReadLimiter, bannerWriteLimiter, pictureSourceLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 
@@ -64,13 +67,26 @@ const updateUserSchema = z.object({
   inviteOptOutPublicEvents: z.boolean().optional(),
 });
 
-// The member banner (21 Oct 2026). The page sends a data URL; the service checks the type, the bytes and the
-// decoded size. This cap is only the longest text that can hold the largest picture allowed, with the same words.
-const bannerBodySchema = z.object({
-  image: z.string().min(1, 'Choose a picture for your banner.')
-    .max(bannerService.BANNER_MAX_DATA_URL_CHARS, 'Your banner must be 3 MB or smaller.'),
-});
-type BannerBody = z.infer<typeof bannerBodySchema>;
+// Where a member placed their picture (30 Oct review, T3a): the middle of the kept part as shares of the picture's
+// width and height, and the zoom. The server holds the part inside the picture whatever it is sent; these bounds only
+// refuse what no editor sends.
+const pictureCropSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  zoom: z.number().min(1).max(PICTURE_MAX_ZOOM),
+}).strict();
+
+// The member banner (21 Oct 2026) and photo (30 Oct review, T3a). A new picture is a data URL; the service checks the
+// type, the bytes and the decoded size. This cap is only the longest text that can hold the largest picture allowed,
+// with the same words. A crop alone places the kept picture again. The banner's old body, { image }, is still this.
+const pictureBodySchema = (name: 'banner' | 'photo') => z.object({
+  image: z.string().min(1, `Choose a picture for your ${name}.`)
+    .max(PICTURE_MAX_DATA_URL_CHARS, `Your ${name} must be 3 MB or smaller.`).optional(),
+  crop: pictureCropSchema.optional(),
+}).refine((b) => b.image !== undefined || b.crop !== undefined, { message: `Choose a picture for your ${name}.`, path: ['image'] });
+const bannerBodySchema = pictureBodySchema('banner');
+const avatarBodySchema = pictureBodySchema('photo');
+type PictureBody = z.infer<typeof bannerBodySchema>;
 const memberIdParams = z.object({ id: z.string().uuid('Not a member id') });
 // The member a route names (26 Oct 2026): a malformed id is a 400 in a member's words, not a Postgres 500, and an id
 // in capitals is lower-cased, so the services' string compares and the tags they send match.
@@ -148,10 +164,10 @@ router.put(
   validate(bannerBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { image }: BannerBody = req.body;
-      const data = await bannerService.saveBanner(req.user!.userId, image);
+      const { image, crop }: PictureBody = req.body;
+      const { url } = await savePicture('banner', req.user!.userId, { image, crop });
       fanoutUserEntity(req.user!.userId).catch(() => {});
-      res.json({ success: true, data } as ApiResponse);
+      res.json({ success: true, data: { bannerUrl: url } } as ApiResponse);
     } catch (err) {
       next(err);
     }
@@ -172,6 +188,44 @@ router.delete(
     }
   }
 );
+
+// ─── PUT /users/me/avatar, GET /users/me/{avatar,banner}/source (30 Oct review, T3a) ─────────────────────────
+// The photo placed with the pencil: a new picture with where it was placed, or only a new crop for the kept one. It
+// is the photo every list shows, so it tells the same screens a profile save does. The source is what the editor
+// opens on, and only ever the member's own.
+
+router.put(
+  '/me/avatar',
+  authenticate,
+  avatarWriteLimiter,
+  validate(avatarBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { image, crop }: PictureBody = req.body;
+      const { url } = await savePicture('avatar', req.user!.userId, { image, crop });
+      fanoutProfileChange(req.user!.userId).catch(() => {});
+      res.json({ success: true, data: { avatarUrl: url } } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+for (const kind of ['avatar', 'banner'] as const) {
+  router.get(
+    `/me/${kind}/source`,
+    authenticate,
+    pictureSourceLimiter,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const data = await getPictureSource(kind, req.user!.userId);
+        res.json({ success: true, data } as ApiResponse);
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+}
 
 // ─── GET /users/connected ───────────────────────────────────────────────────
 // Returns users the requester has previously interacted with (shared at least one
@@ -579,6 +633,9 @@ router.get(
       }
       res.setHeader('Content-Type', avatar.contentType);
       res.setHeader('Cache-Control', 'public, max-age=86400');
+      // Since 30 Oct (T3a) a member's own upload is served here too: a browser must never read the bytes as
+      // anything but the picture type they were kept as.
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.send(avatar.blob);
     } catch (err) {
       next(err);

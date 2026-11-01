@@ -12,6 +12,7 @@ import jwt from 'jsonwebtoken';
 import logger from '../../../config/logger';
 import {
   mintPhotoLinkToken, readPhotoLinkToken, safeRedirectPath, buildOauthState, parseOauthState, applyGooglePhoto,
+  googlePhotoAt, captureGooglePhoto,
 } from '../../../services/identity/google-photo-link';
 
 beforeEach(() => { mockQuery.mockReset(); mockCapture.mockReset(); mockQuery.mockResolvedValue({ rows: [], rowCount: 1 }); });
@@ -181,15 +182,64 @@ describe('oauth state', () => {
   });
 });
 
+// 30 Oct review (T3a), "pictures look pixelated": Google hands over its photo at 96 pixels (=s96-c, every one of the 29
+// on production). Its image server gives any size when the address asks, so the photo is asked for at 1024 and kept.
+describe('googlePhotoAt', () => {
+  it('asks Google for the photo at 1024 pixels, keeping its other options', () => {
+    expect(googlePhotoAt('https://lh3.googleusercontent.com/a/ACg8ocK=s96-c')).toBe('https://lh3.googleusercontent.com/a/ACg8ocK=s1024-c');
+    expect(googlePhotoAt('https://lh3.googleusercontent.com/a/ACg8ocK=s96')).toBe('https://lh3.googleusercontent.com/a/ACg8ocK=s1024');
+    expect(googlePhotoAt('https://lh5.googleusercontent.com/a-/AOh14G=s96-c-mo')).toBe('https://lh5.googleusercontent.com/a-/AOh14G=s1024-c-mo');
+  });
+
+  it('gives a size to an address that has none', () => {
+    expect(googlePhotoAt('https://lh3.googleusercontent.com/a/photo')).toBe('https://lh3.googleusercontent.com/a/photo=s1024-c');
+    expect(googlePhotoAt('https://lh3.googleusercontent.com/a/ACg8ocK=c')).toBe('https://lh3.googleusercontent.com/a/ACg8ocK=s1024-c');
+  });
+
+  it('rewrites an old address whose size is a folder of its path', () => {
+    expect(googlePhotoAt('https://lh3.googleusercontent.com/-Abc/AAAAAAAAAAI/AAAAAAAAAAA/xyz/s96-c/photo.jpg'))
+      .toBe('https://lh3.googleusercontent.com/-Abc/AAAAAAAAAAI/AAAAAAAAAAA/xyz/s1024-c/photo.jpg');
+  });
+
+  it("leaves alone anything that is not Google's photo server, or not https", () => {
+    expect(googlePhotoAt('https://media.licdn.com/dms/image/x=s96-c')).toBeNull();
+    expect(googlePhotoAt('https://googleusercontent.com.evil.example/a=s96-c')).toBeNull();
+    expect(googlePhotoAt('http://lh3.googleusercontent.com/a/x=s96-c')).toBeNull();
+    expect(googlePhotoAt('not a url')).toBeNull();
+  });
+});
+
+describe('captureGooglePhoto', () => {
+  it('keeps the photo at 1024 pixels when Google has it', async () => {
+    mockCapture.mockResolvedValue(true);
+    expect(await captureGooglePhoto('u-1', 'https://lh3.googleusercontent.com/a/x=s96-c')).toBe(true);
+    expect(mockCapture.mock.calls).toEqual([['u-1', 'https://lh3.googleusercontent.com/a/x=s1024-c']]);
+  });
+
+  it('falls back to the address Google gave when the larger one cannot be had', async () => {
+    mockCapture.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    expect(await captureGooglePhoto('u-1', 'https://lh3.googleusercontent.com/a/x=s96-c')).toBe(true);
+    expect(mockCapture.mock.calls.map((c) => c[1])).toEqual([
+      'https://lh3.googleusercontent.com/a/x=s1024-c', 'https://lh3.googleusercontent.com/a/x=s96-c',
+    ]);
+  });
+
+  it("asks once for an address that is not Google's, as it is", async () => {
+    mockCapture.mockResolvedValue(false);
+    expect(await captureGooglePhoto('u-1', 'https://example.com/me.jpg')).toBe(false);
+    expect(mockCapture.mock.calls).toEqual([['u-1', 'https://example.com/me.jpg']]);
+  });
+});
+
 describe('applyGooglePhoto', () => {
-  it('stores a durable copy when the download works', async () => {
+  it('stores a durable copy, asked for at 1024 pixels, when the download works', async () => {
     mockCapture.mockResolvedValue(true);
     expect(await applyGooglePhoto('u-1', 'https://lh3.googleusercontent.com/a/photo')).toBe('done');
-    expect(mockCapture).toHaveBeenCalledWith('u-1', 'https://lh3.googleusercontent.com/a/photo');
+    expect(mockCapture).toHaveBeenCalledWith('u-1', 'https://lh3.googleusercontent.com/a/photo=s1024-c');
     expect(mockQuery).not.toHaveBeenCalled();
   });
 
-  it('falls back to the picture url when the download fails, so the photo still shows', async () => {
+  it('falls back to the picture url when neither download works, so the photo still shows', async () => {
     mockCapture.mockResolvedValue(false);
     expect(await applyGooglePhoto('u-1', 'https://lh3.googleusercontent.com/a/photo')).toBe('done');
     const [sql, params] = mockQuery.mock.calls[0];

@@ -60,6 +60,8 @@ const VICTIM = 'b0000000-0000-4000-8000-000000000002';
 const SECRET = 'test-secret-with-enough-length-0123456789';
 const PURPOSE = 'google-oauth-state';
 const PICTURE = 'https://lh3.googleusercontent.com/a/photo';
+// Google's photo is asked for at 1024 pixels first (30 Oct review, T3a); this is the address that is fetched.
+const PICTURE_1024 = 'https://lh3.googleusercontent.com/a/photo=s1024-c';
 
 const app = express();
 app.use('/auth', authRoutes);
@@ -359,7 +361,7 @@ describe('GET /auth/google/callback: where the member comes back to', () => {
       expect((await callback(photoState(PREVIEW))).headers.location).toBe(`${PREVIEW}/profile?photo=done`);
       // The photo goes to the member the signed state names, and to nobody else.
       expect(mockCapture).toHaveBeenCalledTimes(1);
-      expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE);
+      expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE_1024);
       googleKnowsTheMember({ email: 'a@b.co' });
       expect((await callback(photoState(PREVIEW))).headers.location).toBe(`${PREVIEW}/profile?photo=none`);
       googleRefusesTheCode();
@@ -397,7 +399,7 @@ describe('GET /auth/google/callback: a state we signed, in the browser that star
     googleKnowsTheMember({ email: 'a@b.co', picture: PICTURE });
     const res = await callback(stateWith({ photoLinkUserId: MEMBER, redirect: '/profile', origin: PREVIEW }));
     expect(res.headers.location).toBe(`${PREVIEW}/profile?photo=done`);
-    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE);
+    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE_1024);
     expect(mockFindOrCreate).not.toHaveBeenCalled();
 
     googleKnowsTheMember();

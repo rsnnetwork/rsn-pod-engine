@@ -57,6 +57,15 @@ export function avatarUrlFor(userId: string): string {
   return base ? `${base}${relative}` : relative;
 }
 
+/**
+ * The photo's address as members are given it (30 Oct review, T3a): avatarUrlFor with the time it changed as ?v=,
+ * as the banner's has, so the day-long cache on the picture never shows an old photo after a new one. Addresses
+ * stored before carry no ?v= and keep working: the route reads only the id.
+ */
+export function avatarAddress(userId: string, changedAt: Date): string {
+  return `${avatarUrlFor(userId)}?v=${changedAt.getTime()}`;
+}
+
 /** Read the previously-captured avatar for the public serving route. Null
  *  when the user has no row, or has a row but nothing captured yet. */
 export async function getAvatarBlob(userId: string): Promise<{ blob: Buffer; contentType: string } | null> {
@@ -184,10 +193,15 @@ export async function captureAvatar(userId: string, photoUrl: string): Promise<b
     }
 
     const blob = Buffer.concat(chunks);
-    const avatarUrl = avatarUrlFor(userId);
+    // A captured photo replaces any picture the member placed (30 Oct review, T3a): the kept picture and its crop
+    // go with it, so the editor opens on the photo they now have, and its address changes so no cache shows the old.
+    const changedAt = new Date();
+    const avatarUrl = avatarAddress(userId, changedAt);
     await query(
-      `UPDATE users SET avatar_blob = $2, avatar_blob_type = $3, avatar_url = $4, updated_at = NOW() WHERE id = $1`,
-      [userId, blob, contentType, avatarUrl],
+      `UPDATE users SET avatar_blob = $2, avatar_blob_type = $3, avatar_url = $4, avatar_updated_at = $5,
+              avatar_source_blob = NULL, avatar_source_mime = NULL, avatar_crop = NULL, updated_at = NOW()
+        WHERE id = $1`,
+      [userId, blob, contentType, avatarUrl, changedAt],
     );
     return true;
   } catch (err) {
