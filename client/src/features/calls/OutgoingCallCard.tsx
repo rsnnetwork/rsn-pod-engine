@@ -32,7 +32,7 @@ export default function OutgoingCallCard() {
       role="status"
       aria-live="polite"
       data-testid="call-outgoing"
-      className="fixed left-1/2 z-[98] w-[min(24rem,calc(100%-24px))] -translate-x-1/2 rounded-2xl border border-gray-200 bg-white p-4 shadow-xl bottom-[calc(92px+env(safe-area-inset-bottom))]"
+      className="fixed left-[max(12px,env(safe-area-inset-left))] right-[max(12px,env(safe-area-inset-right))] z-[98] mx-auto max-w-sm rounded-2xl border border-gray-200 bg-white p-4 shadow-xl bottom-[calc(92px+env(safe-area-inset-bottom))]"
     >
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rsn-red-light text-rsn-red">
