@@ -32,8 +32,8 @@ jest.mock('../../../services/block/block.service', () => ({
 }));
 
 import {
-  archiveEntity, createEntity, entitiesOf, getEntity, leaveEntity, listEntities, listUserEntities,
-  setMyMembership, updateEntity,
+  approveMember, archiveEntity, createEntity, declineMember, entitiesOf, getEntity, leaveEntity, listEntities, listUserEntities,
+  removeMember, setMyMembership, updateEntity,
 } from '../../../services/entity/entity.service';
 import { ENTITY_ROLES, COMPANY_ROLES } from '@rsn/shared';
 
@@ -640,5 +640,158 @@ describe('a person\'s entities', () => {
     expect(await entitiesOf(OTHER)).toEqual(shown);
     expect(mockPool).toHaveBeenCalledTimes(1);
     expect(callTo(mockPool, THEIRS)![1]).toEqual([OTHER]);
+  });
+});
+
+// ── 30 Oct review (T15, L23): the admins' answers, in CI (review I1) ─────────────────────────────────────────────
+// The same rules the opt-in real-Postgres suite (entity-members.sql.test.ts) runs on real tables, pinned here on the
+// SQL the service sends, so a regression cannot ship with CI green.
+
+const WAITING = /FROM entity_members m JOIN users u ON u\.id = m\.user_id WHERE m\.entity_id = \$1 AND m\.user_id = \$2 AND u\.status = 'active' AND \(m\.status = 'pending' OR \(m\.status = 'active' AND m\.requested_role IS NOT NULL\)\)/;
+const APPROVED = /^UPDATE entity_members SET status = 'active', role = \$3, title = \$4, requested_role = NULL, requested_title = NULL, requested_at = NULL WHERE entity_id = \$1 AND user_id = \$2$/;
+const TARGET = /^SELECT m\.is_admin, u\.status = 'active' AS account_active FROM entity_members m JOIN users u ON u\.id = m\.user_id WHERE m\.entity_id = \$1 AND m\.user_id = \$2 AND m\.status = 'active'$/;
+const OTHER_ADMINS = /^SELECT count\(\*\)::int AS n FROM entity_members m JOIN users u ON u\.id = m\.user_id WHERE m\.entity_id = \$1 AND m\.user_id <> \$2 AND m\.is_admin AND m\.status = 'active' AND u\.status = 'active'$/;
+const REMOVED = /^UPDATE entity_members SET status = 'removed', is_admin = false, requested_role = NULL, requested_title = NULL, requested_at = NULL WHERE entity_id = \$1 AND user_id = \$2$/;
+const claim = (more: Record<string, unknown> = {}) => activeLink(false, { status: 'pending', role: 'founder', title: 'CEO', ...more });
+
+describe('approveMember', () => {
+  it('lists a claim: active with the role and title claimed, under the entity lock, read from an active account', async () => {
+    tx([...locked(true), [WAITING, [claim()]], [/UPDATE users/, { rows: [], rowCount: 1 }]]);
+    expect(await approveMember(ME, ENTITY, OTHER, false)).toEqual({ companyUpdated: true });
+    expect(sqlOf(mockTx)[0]).toMatch(LOCKED);
+    expect(callTo(mockTx, APPROVED)![1]).toEqual([ENTITY, OTHER, 'founder', 'CEO']);
+    expect(callTo(mockTx, /UPDATE users/)![1]).toEqual([OTHER, 'Acme Ltd']);
+    // The approval bell: "You're listed at {entity}", to the member.
+    const bell = callTo(mockPool, /INSERT INTO notifications/)!;
+    expect(bell[1]).toEqual([OTHER, "You're listed at Acme Ltd", 'Your request was approved.', `/entities/${ENTITY}`]);
+    expect(String(bell[0])).toMatch(/'approval'/);
+  });
+
+  it('applies a change an active member asked for: the requested role and title, and clears the request', async () => {
+    tx([...locked(true), [WAITING, [activeLink(false, { role: 'follower', requested_role: 'advisor', requested_title: 'Chair' })]]]);
+    expect(await approveMember(ME, ENTITY, OTHER, false)).toEqual({ companyUpdated: false });
+    expect(callTo(mockTx, APPROVED)![1]).toEqual([ENTITY, OTHER, 'advisor', 'Chair']);
+    expect(ran(mockTx, /UPDATE users/)).toBe(false); // an advisor fills no company
+  });
+
+  it('answers 404 in words when nothing waits (answered already, withdrawn, never made), and writes nothing', async () => {
+    tx(locked(true));
+    expect(await caught(approveMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 404, message: 'This request has already been answered.' });
+    expect(ran(mockTx, APPROVED)).toBe(false);
+    expect(ran(mockPool, /INSERT INTO notifications/)).toBe(false);
+  });
+
+  it.each([[false], [null]])('refuses someone who is not one of its active admins (link is_admin %p), before it reads the request', async (isAdmin) => {
+    tx([...locked(isAdmin), [WAITING, [claim()]]]);
+    expect(await caught(approveMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 403 });
+    expect(ran(mockTx, WAITING)).toBe(false);
+  });
+
+  it('lets a platform admin answer for an entity with no active admin', async () => {
+    tx([...locked(null), [WAITING, [claim({ role: 'investor', title: null })]]]);
+    await approveMember(ME, ENTITY, OTHER, true);
+    expect(callTo(mockTx, APPROVED)![1]).toEqual([ENTITY, OTHER, 'investor', null]);
+  });
+});
+
+describe('declineMember', () => {
+  it('declines a claim: status declined, the request cleared, and no bell', async () => {
+    tx([...locked(true), [WAITING, [claim()]]]);
+    await declineMember(ME, ENTITY, OTHER, false);
+    const write = callTo(mockTx, /^UPDATE entity_members SET/)!;
+    expect(flat(write[0])).toMatch(/^UPDATE entity_members SET status = 'declined', requested_role = NULL, requested_title = NULL, requested_at = NULL WHERE entity_id = \$1 AND user_id = \$2$/);
+    expect(write[1]).toEqual([ENTITY, OTHER]);
+    expect(ran(mockPool, /INSERT INTO notifications/)).toBe(false);
+  });
+
+  it('declines a change: the request is cleared and the member stays as listed (status untouched)', async () => {
+    tx([...locked(true), [WAITING, [activeLink(false, { requested_role: 'founder' })]]]);
+    await declineMember(ME, ENTITY, OTHER, false);
+    const write = flat(callTo(mockTx, /^UPDATE entity_members SET/)![0]);
+    expect(write).toMatch(/^UPDATE entity_members SET requested_role = NULL, requested_title = NULL, requested_at = NULL WHERE/);
+    expect(write).not.toMatch(/status/);
+  });
+
+  it('answers 404 when nothing waits, and 403 for someone who is not an admin', async () => {
+    tx(locked(true));
+    expect(await caught(declineMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 404 });
+    tx([...locked(false), [WAITING, [claim()]]]);
+    expect(await caught(declineMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe('removeMember', () => {
+  it('refuses removing yourself with a 400 before it asks the database anything (you leave instead)', async () => {
+    expect(await caught(removeMember(ME, ENTITY, ME, true))).toMatchObject({ statusCode: 400, message: 'To leave this entity, use Leave.' });
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('removes an active member who is not an admin: status removed, admin flag off, any request cleared', async () => {
+    tx([...locked(true), [TARGET, [{ is_admin: false, account_active: true }]]]);
+    await removeMember(ME, ENTITY, OTHER, false);
+    expect(callTo(mockTx, REMOVED)![1]).toEqual([ENTITY, OTHER]);
+    expect(ran(mockTx, OTHER_ADMINS)).toBe(false);
+    expect(ran(mockPool, /INSERT INTO notifications/)).toBe(false); // no bell, as for pods
+  });
+
+  it('answers 404 for someone not listed (a pending, declined or removed link is not "listed")', async () => {
+    tx(locked(true));
+    expect(await caught(removeMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 404, message: 'They are not listed at this entity.' });
+    expect(ran(mockTx, REMOVED)).toBe(false);
+  });
+
+  it('only a platform admin removes another admin: an entity admin gets 403', async () => {
+    tx([...locked(true), [TARGET, [{ is_admin: true, account_active: true }]], [OTHER_ADMINS, [{ n: 1 }]]]);
+    expect(await caught(removeMember(ME, ENTITY, OTHER, false))).toMatchObject({ statusCode: 403, message: 'Only a platform admin can remove one of its admins.' });
+    expect(ran(mockTx, REMOVED)).toBe(false);
+    tx([...locked(null), [TARGET, [{ is_admin: true, account_active: true }]], [OTHER_ADMINS, [{ n: 1 }]]]);
+    await removeMember(ME, ENTITY, OTHER, true);
+    expect(callTo(mockTx, REMOVED)![1]).toEqual([ENTITY, OTHER]);
+  });
+
+  it('nobody removes the last active admin: 409 ENTITY_LAST_ADMIN, even a platform admin', async () => {
+    tx([...locked(null), [TARGET, [{ is_admin: true, account_active: true }]], [OTHER_ADMINS, [{ n: 0 }]]]);
+    expect(await caught(removeMember(ME, ENTITY, OTHER, true))).toMatchObject({ statusCode: 409, code: 'ENTITY_LAST_ADMIN' });
+    expect(ran(mockTx, REMOVED)).toBe(false);
+  });
+
+  it('a closed admin account is no active admin: a platform admin may remove it though no other admin is left', async () => {
+    tx([...locked(null), [TARGET, [{ is_admin: true, account_active: false }]], [OTHER_ADMINS, [{ n: 0 }]]]);
+    await removeMember(ME, ENTITY, OTHER, true);
+    expect(callTo(mockTx, REMOVED)![1]).toEqual([ENTITY, OTHER]);
+  });
+});
+
+// Review Focus 2 and 3, always on (the real-Postgres suite runs them on real rows; these pin the SQL that does it).
+describe('legacy links, and people who are pending, removed, closed or blocked', () => {
+  it('a legacy link (status defaulted to active) keeps its admin rights: the admin flag counts on an active link', async () => {
+    expect(String(ADMIN_LINK)).toContain("m\\.is_admin AND m\\.status = 'active'");
+    tx(locked(true));
+    await updateEntity(ME, ENTITY, { about: 'x' }, false);
+    expect(ran(mockTx, /^UPDATE entities SET about/)).toBe(true);
+  });
+
+  it('a pending or removed link carries no admin rights: the lock reads is_admin false and refuses', async () => {
+    tx([[LOCKED, [{ name: 'Acme Ltd' }]], [ADMIN_LINK, [activeLink(false, { status: 'removed' })]]]);
+    expect(await caught(updateEntity(ME, ENTITY, { about: 'x' }, false))).toMatchObject({ statusCode: 403 });
+  });
+
+  it('the people list and the requests leave out closed accounts and anyone blocked either way; the people are approved links only', async () => {
+    pool([[/FROM entities e LEFT JOIN entity_members my/, [{
+      id: ENTITY, name: 'Acme Ltd', kind: 'company', about: null, location: null, size: null, website: null,
+      created_at: new Date(), updated_at: new Date(), my_role: 'founder', my_status: 'active', my_admin: true,
+      my_requested_role: null, my_requested_title: null, people_count: 1, has_logo: false, has_banner: false, pictures_updated_at: null,
+    }]]]);
+    const page = await getEntity(ME, ENTITY, false);
+    expect(page.requests).toEqual([]);
+    const people = sqlOf(mockPool).find((s) => /ORDER BY m\.is_admin DESC/.test(s))!;
+    expect(people).toMatch(/m\.status = 'active' AND u\.status = 'active' AND NOT EXISTS \(SELECT 1 FROM user_blocks b WHERE \(b\.blocker_id = \$2 AND b\.blocked_id = m\.user_id\) OR \(b\.blocker_id = m\.user_id AND b\.blocked_id = \$2\)\)/);
+    const requests = sqlOf(mockPool).find((s) => /AS total/.test(s))!;
+    expect(requests).toMatch(/\(m\.status = 'pending' OR \(m\.status = 'active' AND m\.requested_role IS NOT NULL\)\) AND u\.status = 'active' AND NOT EXISTS \(SELECT 1 FROM user_blocks b/);
+  });
+
+  it('a pending claim is on nobody else\'s view of the person: entitiesOf reads approved links only', async () => {
+    await entitiesOf(OTHER);
+    expect(sqlOf(mockPool)[0]).toMatch(/AND m\.status = 'active'/);
   });
 });

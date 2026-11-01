@@ -50,17 +50,20 @@ async function isEntityAdmin(entityId: string, userId: string): Promise<boolean>
 
 /**
  * Take an entity off a circle: the people who run the circle, or the entity's own active admins. 404 for an archived
- * circle (its page is gone); a link that was not there changes nothing.
+ * circle or entity (its page is gone). Answers whether a link was removed: one that was not there changes nothing.
  */
-export async function unlinkEntity(circleId: string, entityId: string, actor: LinkActor): Promise<void> {
+export async function unlinkEntity(circleId: string, entityId: string, actor: LinkActor): Promise<{ unlinked: boolean }> {
   const circle = await query(`SELECT 1 FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
+  await liveEntity(entityId);
   const allowed = (await isCircleManager(circleId, actor.userId, actor.role)) || (await isEntityAdmin(entityId, actor.userId));
   if (!allowed) {
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Only the people who run this circle, or the entity\'s admins, can unlink it.');
   }
-  await query(`DELETE FROM circle_entities WHERE circle_id = $1 AND entity_id = $2`, [circleId, entityId]);
-  logger.info({ circleId, entityId, actorId: actor.userId }, 'Entity unlinked from circle');
+  const gone = await query(`DELETE FROM circle_entities WHERE circle_id = $1 AND entity_id = $2`, [circleId, entityId]);
+  const unlinked = (gone.rowCount ?? 0) > 0;
+  if (unlinked) logger.info({ circleId, entityId, actorId: actor.userId }, 'Entity unlinked from circle');
+  return { unlinked };
 }
 
 /** The entities on a circle's page: not archived, by name, at most 50. The caller decides the viewer may see them. */

@@ -33,6 +33,7 @@ jest.mock('../../db', () => ({
   __esModule: true,
 }));
 jest.mock('../../services/entity/entity.service');
+jest.mock('../../services/entity/entity-pictures.service');
 
 const mockIo = { name: 'the socket server' };
 const mockEmitEntities = jest.fn();
@@ -44,6 +45,7 @@ jest.mock('../../realtime/emit', () => ({
 }));
 
 import * as entityService from '../../services/entity/entity.service';
+import * as entityPictures from '../../services/entity/entity-pictures.service';
 import entityRoutes from '../../routes/entities';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { ForbiddenError } from '../../middleware/errors';
@@ -59,13 +61,21 @@ const JOINER = 'user-joiner';       // links themselves to it in the test
 const PLATFORM = 'user-platform';   // a platform admin, not linked to it
 const PODMATE = 'user-podmate';     // shares a pod with the joiner, nothing to do with the entity
 const OUTSIDER = 'user-outsider';   // linked to another entity only
+// T15 review M2: two circles the entity is linked to, and people who have their pages open.
+const CIRCLE_A = '6c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f';
+const CIRCLE_B = '0f9e8d7c-6b5a-4f3e-9d2c-1b0a9f8e7d6c';
+const CIRCLE_MEMBER = 'user-circle-member';       // in both circles, nothing to do with the entity
+const OTHER_CIRCLE_PERSON = 'user-circle-b-only'; // in circle B only
 
 /** Who is linked to which entity, as the fake database holds it; a test changes it to mirror its write. */
 let people: Record<string, string[]>;
+/** T15 review M2: whether the entity is linked to the two circles (only that block's tests link it). */
+let linkedToCircles = false;
 
 beforeEach(() => {
   jest.clearAllMocks();
   people = { [ENTITY]: [ADMIN, COLLEAGUE], [OTHER_ENTITY]: [OUTSIDER] };
+  linkedToCircles = false;
   mockEmitEntities.mockResolvedValue(undefined);
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
@@ -73,6 +83,14 @@ beforeEach(() => {
     // T15: the live links only (active and pending); a declined or removed person is told only as a changed user.
     if (/SELECT m\.user_id FROM entity_members m WHERE m\.entity_id = \$1 AND m\.status IN \('active', 'pending'\)/.test(text)) {
       return { rows: (people[String(params[0])] ?? []).map(user_id => ({ user_id })) };
+    }
+    // T15 review M2: the people of each circle the entity is linked to (members and creator, active accounts).
+    if (/FROM circle_entities ce/.test(text)) {
+      if (params[0] !== ENTITY || !linkedToCircles) return { rows: [] };
+      return { rows: [
+        { circle_id: CIRCLE_A, user_id: CIRCLE_MEMBER }, { circle_id: CIRCLE_A, user_id: ADMIN },
+        { circle_id: CIRCLE_B, user_id: CIRCLE_MEMBER }, { circle_id: CIRCLE_B, user_id: OTHER_CIRCLE_PERSON },
+      ] };
     }
     if (/SELECT pod_id FROM pod_members WHERE user_id = \$1 AND status = 'active'/.test(text)) {
       return { rows: params[0] === JOINER ? [{ pod_id: POD }] : [] };
@@ -91,6 +109,8 @@ beforeEach(() => {
   jest.mocked(entityService.approveMember).mockResolvedValue({ companyUpdated: false });
   jest.mocked(entityService.declineMember).mockResolvedValue(undefined);
   jest.mocked(entityService.removeMember).mockResolvedValue(undefined);
+  jest.mocked(entityPictures.saveEntityPicture).mockResolvedValue({ url: `https://api.example/api/entities/${ENTITY}/logo?v=1` });
+  jest.mocked(entityPictures.removeEntityPicture).mockResolvedValue(undefined);
   jest.mocked(entityService.leaveEntity).mockResolvedValue({ left: true, archived: false });
 });
 
@@ -243,6 +263,39 @@ describe('who hears a claim and its answer (T15)', () => {
       [ADMIN]: sorted([E.entity(ENTITY), E.userEntities(ADMIN), E.userEntities(member)]),
       [member]: sorted([E.entity(ENTITY), E.userEntities(member)]),
     });
+  });
+});
+
+// T15 review M2 (CLAUDE.md §1): a circle's page lists the entities linked to it with their name, kind and logo, so a
+// rename, an archive or a new logo must reach the people of every linked circle too, each with only their circles.
+describe('the circles an entity is linked to hear what their pages show of it (T15, review M2)', () => {
+  beforeEach(() => { linkedToCircles = true; });
+  const circlesHeard = () => {
+    const all = heard();
+    return Object.fromEntries(Object.entries(all).map(([who, tags]) => [who, tags.filter((t) => t.startsWith('circle:')).sort()]));
+  };
+
+  it.each([
+    ['a rename', () => request(app).patch(`/entities/${ENTITY}`).set(as(ADMIN)).send({ name: 'Acme Boats' })],
+    ['an archive', () => request(app).delete(`/entities/${ENTITY}`).set(as(ADMIN))],
+    ['a new logo', () => request(app).put(`/entities/${ENTITY}/logo`).set(as(ADMIN)).send({ crop: { x: 0.5, y: 0.5, zoom: 1 } })],
+    ['a removed banner', () => request(app).delete(`/entities/${ENTITY}/banner`).set(as(ADMIN))],
+  ])('%s: each circle\'s people hear that circle, and nobody hears a circle they are not in', async (_what, send) => {
+    expect((await send()).status).toBe(200);
+    await settle();
+    const tags = circlesHeard();
+    expect(tags[CIRCLE_MEMBER]).toEqual([`circle:${CIRCLE_A}`, `circle:${CIRCLE_B}`].sort());
+    expect(tags[OTHER_CIRCLE_PERSON]).toEqual([`circle:${CIRCLE_B}`]);
+    expect(tags[ADMIN]).toEqual(expect.arrayContaining([`circle:${CIRCLE_A}`]));
+    expect(tags[ADMIN]).not.toContain(`circle:${CIRCLE_B}`);
+    expect(tags[COLLEAGUE] ?? []).toEqual([]);
+  });
+
+  it('a claim, an answer or a removal changes nothing a circle page shows, so no circle hears it', async () => {
+    await request(app).post(`/entities/${ENTITY}/members`).set(as(JOINER)).send({ role: 'fan' });
+    await request(app).post(`/entities/${ENTITY}/members/8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d/approve`).set(as(ADMIN));
+    await settle();
+    expect(Object.values(circlesHeard()).flat()).toEqual([]);
   });
 });
 

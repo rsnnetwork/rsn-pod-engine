@@ -7,9 +7,11 @@
 //     white tile (EntityMark), so a see-through PNG looks the same on white as it did; one output format means one
 //     cut, and a square JPEG is a fraction of a PNG's size.
 //   * The banner is cut as a member's banner is: 3:1, 2400 by 800 at most, JPEG at 0.85.
-// Only the entity's admins and platform admins change them (lockForAdmin). The bytes are opened and cut outside any
-// transaction (a cut waits for one of two render slots), and written under the entity's row lock, which checks the
-// writer is still an admin and the entity is not archived at that moment.
+// Only the entity's admins and platform admins change them. They are checked without a lock before a picture is
+// opened (assertEntityAdmin), the bytes are cut outside any transaction (a cut waits for one of two render slots), and
+// written under the entity's row lock (lockForAdmin), which checks again that the writer is still an admin and the
+// entity is not archived at that moment. An entity picture is always written with the picture it was cut from, so a
+// crop alone always has one to cut again.
 
 import type { PictureCrop, PictureKind, PictureSource } from '@rsn/shared';
 import { PICTURE_CENTRED } from '@rsn/shared';
@@ -18,7 +20,7 @@ import { NotFoundError, ValidationError } from '../../middleware/errors';
 import { renderPicture, type PictureInput, type RenderedPicture } from '../user/picture.service';
 import { namedPictureWords, parsePicture } from '../user/picture-file';
 import { entityPictureUrl, type EntityPictureKind } from './entity-picture-url';
-import { lockForAdmin } from './entity.service';
+import { assertEntityAdmin, lockForAdmin } from './entity.service';
 
 export type { EntityPictureKind } from './entity-picture-url';
 
@@ -34,17 +36,12 @@ const COLUMNS: Record<EntityPictureKind, { shown: string; mime: string; crop: st
 const CHOOSE_FIRST = 'Choose a picture first.';
 const entityGone = (entityId: string) => new NotFoundError('Entity', entityId, 'This entity could not be found.');
 
-/** A 403 or 404 before any picture is opened. */
-async function assertMayChange(actorId: string, entityId: string, actorIsPlatformAdmin: boolean): Promise<void> {
-  await transaction((client) => lockForAdmin(client, entityId, actorId, actorIsPlatformAdmin));
-}
-
-interface Stored { source: Buffer | null; source_mime: string | null; crop: unknown; shown: Buffer | null; shown_mime: string | null }
+interface Stored { source: Buffer | null; source_mime: string | null; crop: unknown }
 
 async function readStored(entityId: string, kind: EntityPictureKind): Promise<Stored> {
   const c = COLUMNS[kind];
   const r = await query<Stored>(
-    `SELECT ${c.source} AS source, ${c.sourceMime} AS source_mime, ${c.crop} AS crop, ${c.shown} AS shown, ${c.mime} AS shown_mime
+    `SELECT ${c.source} AS source, ${c.sourceMime} AS source_mime, ${c.crop} AS crop
        FROM entities WHERE id = $1 AND archived_at IS NULL`,
     [entityId],
   );
@@ -85,30 +82,23 @@ async function writePicture(
 
 /**
  * Keep an entity's logo or banner. With a new picture: it is kept as it came, with its crop (the middle when none is
- * given), and the picture everyone sees is cut from it. With only a crop: the kept picture is cut again. Answers with
- * the picture's new address. 403 for anyone but its admins and platform admins, 404 for a missing or archived entity.
+ * given), and the picture everyone sees is cut from it. With only a crop: the kept picture is cut again (none kept: a
+ * 400 asking for a picture). Answers the picture's new address. 403 for anyone but its admins and platform admins,
+ * 404 for a missing or archived entity.
  */
 export async function saveEntityPicture(
   actorId: string, entityId: string, kind: EntityPictureKind, input: PictureInput, actorIsPlatformAdmin: boolean,
 ): Promise<{ url: string }> {
-  await assertMayChange(actorId, entityId, actorIsPlatformAdmin);
+  await assertEntityAdmin(entityId, actorId, actorIsPlatformAdmin);
   if (input.image !== undefined) {
     const chosen = parsePicture(input.image, namedPictureWords(kind));
     const out = await renderPicture(chosen.bytes, CUT_AS[kind], input.crop ?? PICTURE_CENTRED);
     return { url: await writePicture(actorId, entityId, kind, out, chosen, actorIsPlatformAdmin) };
   }
   const stored = await readStored(entityId, kind);
-  const crop = input.crop ?? storedCrop(stored.crop) ?? PICTURE_CENTRED;
-  if (stored.source) {
-    const out = await renderPicture(stored.source, CUT_AS[kind], crop);
-    return { url: await writePicture(actorId, entityId, kind, out, null, actorIsPlatformAdmin) };
-  }
-  if (stored.shown && stored.shown_mime) {
-    const out = await renderPicture(stored.shown, CUT_AS[kind], crop);
-    const keep = { bytes: stored.shown, mime: bareType(stored.shown_mime) };
-    return { url: await writePicture(actorId, entityId, kind, out, keep, actorIsPlatformAdmin) };
-  }
-  throw new ValidationError(CHOOSE_FIRST);
+  if (!stored.source) throw new ValidationError(CHOOSE_FIRST);
+  const out = await renderPicture(stored.source, CUT_AS[kind], input.crop ?? storedCrop(stored.crop) ?? PICTURE_CENTRED);
+  return { url: await writePicture(actorId, entityId, kind, out, null, actorIsPlatformAdmin) };
 }
 
 /** Take the logo or banner away, with the picture it was cut from. The page goes back to the letter tile / no strip. */
@@ -127,16 +117,14 @@ export async function removeEntityPicture(
   });
 }
 
-/** What the admin's editor opens on: the kept picture and its crop, else the picture everyone sees, else none. */
+/** What the admin's editor opens on: the kept picture and its crop, or none. A read: it takes no lock. */
 export async function getEntityPictureSource(
   actorId: string, entityId: string, kind: EntityPictureKind, actorIsPlatformAdmin: boolean,
 ): Promise<PictureSource> {
-  await assertMayChange(actorId, entityId, actorIsPlatformAdmin);
+  await assertEntityAdmin(entityId, actorId, actorIsPlatformAdmin);
   const stored = await readStored(entityId, kind);
-  const asDataUrl = (mime: string, bytes: Buffer) => `data:${bareType(mime)};base64,${bytes.toString('base64')}`;
-  if (stored.source && stored.source_mime) return { image: asDataUrl(stored.source_mime, stored.source), crop: storedCrop(stored.crop) };
-  if (stored.shown && stored.shown_mime) return { image: asDataUrl(stored.shown_mime, stored.shown), crop: null };
-  return { image: null, crop: null };
+  if (!stored.source || !stored.source_mime) return { image: null, crop: null };
+  return { image: `data:${bareType(stored.source_mime)};base64,${stored.source.toString('base64')}`, crop: storedCrop(stored.crop) };
 }
 
 /** The picture for the public route. Null when there is none, or the entity is archived (its address stops working). */

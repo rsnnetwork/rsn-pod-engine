@@ -31,7 +31,7 @@ import { validate } from '../middleware/validate';
 import {
   bannerReadLimiter, entityCreateLimiter, entityReadLimiter, entityWriteLimiter, pictureSourceLimiter,
 } from '../middleware/rateLimit';
-import { fanoutEntityChange, fanoutProfileChange } from '../realtime/fanout';
+import { fanoutEntityChange, fanoutEntityCircles, fanoutProfileChange } from '../realtime/fanout';
 import * as entities from '../services/entity/entity.service';
 import * as entityPictures from '../services/entity/entity-pictures.service';
 import { blankToNull, characterCount, normaliseName, normaliseWebsite } from '../services/entity/entity-fields';
@@ -150,6 +150,7 @@ router.patch('/:id', authenticate, entityWriteLimiter, validate(entityParams, 'p
       const me = req.user!.userId;
       await entities.updateEntity(me, req.params.id, req.body as UpdateBody, isPlatformAdmin(req));
       void fanoutEntityChange(req.params.id, me);
+      void fanoutEntityCircles(req.params.id); // its name or kind on the circle pages that list it
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) {
       next(err);
@@ -162,6 +163,7 @@ router.delete('/:id', authenticate, entityWriteLimiter, validate(entityParams, '
       const me = req.user!.userId;
       await entities.archiveEntity(me, req.params.id, isPlatformAdmin(req));
       void fanoutEntityChange(req.params.id, me);
+      void fanoutEntityCircles(req.params.id); // it leaves the circle pages that list it
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) {
       next(err);
@@ -188,6 +190,8 @@ router.delete('/:id/members/me', authenticate, entityWriteLimiter, validate(enti
       const data = await entities.leaveEntity(me, req.params.id);
       // Someone who was not linked to it changed nothing, so no screen needs telling.
       if (data.left) void fanoutEntityChange(req.params.id, me, [me]);
+      // The last person out archives it, and it leaves the circle pages that list it.
+      if (data.archived) void fanoutEntityCircles(req.params.id);
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);
@@ -256,6 +260,7 @@ for (const { kind, field } of PICTURES) {
         const { image, crop } = req.body as PictureBody;
         const { url } = await entityPictures.saveEntityPicture(me, req.params.id, kind, { image, crop }, isPlatformAdmin(req));
         void fanoutEntityChange(req.params.id, me);
+        void fanoutEntityCircles(req.params.id); // the logo on the circle pages that list it
         res.json({ success: true, data: { [field]: url } } satisfies ApiResponse);
       } catch (err) {
         next(err);
@@ -268,6 +273,7 @@ for (const { kind, field } of PICTURES) {
         const me = req.user!.userId;
         await entityPictures.removeEntityPicture(me, req.params.id, kind, isPlatformAdmin(req));
         void fanoutEntityChange(req.params.id, me);
+        void fanoutEntityCircles(req.params.id);
         res.json({ success: true, data: { [field]: null } } satisfies ApiResponse);
       } catch (err) {
         next(err);

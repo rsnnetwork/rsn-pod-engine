@@ -110,7 +110,7 @@ beforeEach(() => {
   jest.mocked(joinService.listJoinRequests).mockResolvedValue([]);
   jest.mocked(joinService.listAttachablePods).mockResolvedValue({ items: [], nextPage: null });
   jest.mocked(linkService.linkEntity).mockResolvedValue(undefined);
-  jest.mocked(linkService.unlinkEntity).mockResolvedValue(undefined);
+  jest.mocked(linkService.unlinkEntity).mockResolvedValue({ unlinked: true });
 });
 
 const app = express();
@@ -469,6 +469,14 @@ describe('linking an entity to a circle: who may, and who hears it', () => {
     const all = heard();
     expect(all[MEMBER]).toEqual(page(MEMBER));
     expect(all[ENTITY_ADMIN]).toEqual(expect.arrayContaining([E.entity(LINKED_ENTITY), E.circle(CIRCLE)]));
+  });
+
+  it('an unlink of a link that was not there tells nobody (review M5)', async () => {
+    jest.mocked(linkService.unlinkEntity).mockResolvedValueOnce({ unlinked: false });
+    const res = await request(app).delete(`/circles/${CIRCLE}/entities/${LINKED_ENTITY}`).set(as(ADMIN));
+    expect(res.body).toEqual({ success: true, data: { ok: true } });
+    await settle();
+    expect(mockEmitEntities).not.toHaveBeenCalled();
   });
 
   it('a refused link tells nobody; a bad id or no entity is a 400 before the service', async () => {

@@ -498,6 +498,38 @@ suite('entities: approval, removal, pictures and circles (real Postgres)', () =>
       expect(await caught(links.linkEntity(c, e, { userId: manager, role: 'member' }))).toMatchObject({ statusCode: 404 });
     }, 30_000);
 
+    it('unlinking an archived entity is a 404, and unlinking what is not linked answers unlinked false (review M5)', async () => {
+      const manager = await person('Manager');
+      const owner = await person('Owner');
+      const c = await circle(manager);
+      const e = await legacyEntity([owner]);
+      expect(await links.unlinkEntity(c, e, { userId: manager, role: 'member' })).toEqual({ unlinked: false });
+      await links.linkEntity(c, e, { userId: manager, role: 'member' });
+      await run(`UPDATE {s}.entities SET archived_at = NOW() WHERE id = $1`, [e]);
+      expect(await caught(links.unlinkEntity(c, e, { userId: owner, role: 'member' }))).toMatchObject({ statusCode: 404 });
+    }, 30_000);
+
+    it('the picture source is read without the lock, for its admins only, and is none before any picture (review M3, M4)', async () => {
+      const owner = await person('Owner');
+      const member = await person('Member');
+      const e = await legacyEntity([owner], [member]);
+      expect(await pictures.getEntityPictureSource(owner, e, 'banner', false)).toEqual({ image: null, crop: null });
+      expect(await caught(pictures.getEntityPictureSource(member, e, 'banner', false))).toMatchObject({ statusCode: 403 });
+      // Held by another write's row lock, the source still reads at once.
+      const holder = new Client({ connectionString: url });
+      await holder.connect();
+      try {
+        await holder.query(`SET search_path = ${schema}`);
+        await holder.query('BEGIN');
+        await holder.query('SELECT id FROM entities WHERE id = $1 FOR UPDATE', [e]);
+        const read = pictures.getEntityPictureSource(owner, e, 'banner', false);
+        expect(await Promise.race([read.then(() => 'read'), new Promise((r) => setTimeout(() => r('waited'), 2000))])).toBe('read');
+      } finally {
+        await holder.query('ROLLBACK').catch(() => undefined);
+        await holder.end();
+      }
+    }, 30_000);
+
     it('a manager or the entity\'s own admin unlinks it; anyone else is refused', async () => {
       const manager = await person('Manager');
       const owner = await person('Owner');

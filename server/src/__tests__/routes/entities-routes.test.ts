@@ -59,9 +59,11 @@ jest.mock('../../services/entity/entity.service', () => ({
 }));
 const mockFanoutEntity = jest.fn().mockResolvedValue(undefined);
 const mockFanoutProfile = jest.fn().mockResolvedValue(undefined);
+const mockFanoutCircles = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({
   fanoutEntityChange: (...a: unknown[]) => mockFanoutEntity(...a),
   fanoutProfileChange: (...a: unknown[]) => mockFanoutProfile(...a),
+  fanoutEntityCircles: (...a: unknown[]) => mockFanoutCircles(...a),
   __esModule: true,
 }));
 
@@ -706,5 +708,38 @@ describe("production's shapes are unchanged (additive only)", () => {
     const page = await request(app).get(`/entities/${ID}`).set(as('u-compat'));
     expect(page.body.data).toMatchObject({ entity, people: [], myRole: null, canEdit: false });
     expect(Object.keys(page.body.data).sort()).toEqual(['canEdit', 'circles', 'entity', 'myPendingChange', 'myRole', 'myStatus', 'people']);
+  });
+});
+
+// T15 review M2: the writes that change what a circle page shows of an entity (its name, kind, logo, or it leaving
+// with an archive) also tell the circles it is linked to; claims, answers and removals do not.
+describe('the circle pages that list an entity are told when what they show changes (review M2)', () => {
+  const me = as('u-circles');
+  it.each([
+    ['an edit', () => request(app).patch(`/entities/${ID}`).set(me).send({ name: 'Acme Boats' })],
+    ['an archive', () => request(app).delete(`/entities/${ID}`).set(me)],
+    ['a new logo', () => request(app).put(`/entities/${ID}/logo`).set(me).send({ crop: { x: 0.5, y: 0.5, zoom: 1 } })],
+    ['a removed banner', () => request(app).delete(`/entities/${ID}/banner`).set(me)],
+  ])('%s', async (_what, send) => {
+    expect((await send()).status).toBe(200);
+    expect(mockFanoutCircles).toHaveBeenCalledWith(ID);
+  });
+
+  it('a leave that archives it tells them; a leave that does not, and claims and answers, do not', async () => {
+    mockLeave.mockResolvedValueOnce({ left: true, archived: false });
+    await request(app).delete(`/entities/${ID}/members/me`).set(me);
+    await request(app).post(`/entities/${ID}/members`).set(me).send({ role: 'fan' });
+    await request(app).post(`/entities/${ID}/members/${OTHER}/approve`).set(me);
+    await request(app).delete(`/entities/${ID}/members/${OTHER}`).set(me);
+    expect(mockFanoutCircles).not.toHaveBeenCalled();
+    mockLeave.mockResolvedValueOnce({ left: true, archived: true });
+    await request(app).delete(`/entities/${ID}/members/me`).set(me);
+    expect(mockFanoutCircles).toHaveBeenCalledWith(ID);
+  });
+
+  it('a refused edit tells nobody', async () => {
+    mockUpdate.mockRejectedValueOnce(new ForbiddenError("Only this entity's admins can change or archive it."));
+    expect((await request(app).patch(`/entities/${ID}`).set(me).send({ about: 'x' })).status).toBe(403);
+    expect(mockFanoutCircles).not.toHaveBeenCalled();
   });
 });

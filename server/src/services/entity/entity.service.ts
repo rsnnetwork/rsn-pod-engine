@@ -200,6 +200,24 @@ export async function lockForAdmin(
   return { name: row.name };
 }
 
+/**
+ * The same rule as lockForAdmin without taking the row lock, for a read (the picture editor's source) or a check made
+ * before slow work that is checked again under the lock when it writes: 404 for a missing or archived entity, 403
+ * unless the actor is one of its active admins or a platform admin. Answers its name.
+ */
+export async function assertEntityAdmin(entityId: string, actorId: string, actorIsPlatformAdmin: boolean): Promise<{ name: string }> {
+  const r = await query<{ name: string; is_admin: boolean }>(
+    `SELECT e.name, EXISTS (SELECT 1 FROM entity_members m
+                             WHERE m.entity_id = e.id AND m.user_id = $2 AND m.is_admin AND ${activeLinkSql('m')}) AS is_admin
+       FROM entities e WHERE e.id = $1 AND e.archived_at IS NULL`,
+    [entityId, actorId],
+  );
+  const row = r.rows[0];
+  if (!row) throw entityNotFound(entityId);
+  if (!row.is_admin && !actorIsPlatformAdmin) throw notAnAdmin();
+  return { name: row.name };
+}
+
 /** The entity moved: the list with no search shows the most recently active first. */
 async function touch(client: PoolClient, entityId: string): Promise<void> {
   await client.query(`UPDATE entities SET updated_at = NOW() WHERE id = $1`, [entityId]);

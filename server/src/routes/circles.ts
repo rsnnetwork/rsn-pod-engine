@@ -246,9 +246,12 @@ router.delete('/:id/entities/:entityId', authenticate, circleWriteLimiter,
   uuidInPath('id', PATH_REFUSALS.circle), uuidInPath('entityId', "We couldn't find that entity."),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await linkService.unlinkEntity(req.params.id, req.params.entityId, { userId: req.user!.userId, role: req.user!.role });
-      void fanoutCircleChange(req.params.id, req.user!.userId);
-      void fanoutEntityChange(req.params.entityId, req.user!.userId);
+      const { unlinked } = await linkService.unlinkEntity(req.params.id, req.params.entityId, { userId: req.user!.userId, role: req.user!.role });
+      // A link that was not there changed nothing, so no screen needs telling.
+      if (unlinked) {
+        void fanoutCircleChange(req.params.id, req.user!.userId);
+        void fanoutEntityChange(req.params.entityId, req.user!.userId);
+      }
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
