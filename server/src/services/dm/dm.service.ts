@@ -54,7 +54,10 @@ export type DmSystemMeta =
       /** Its meetings row (26 Oct 2026). */
       meetingId?: string;
     }
-  | { type: 'meeting_cancelled'; meetingId: string; startAt: string; durationMin: number; meetingType: 'audio' | 'video' };
+  | { type: 'meeting_cancelled'; meetingId: string; startAt: string; durationMin: number; meetingType: 'audio' | 'video' }
+  /** The first line of a conversation a meeting request opened (30 Oct 2026): who asked whom, and
+   *  REASON's line on why, drawn per reader. Written by connectInTx in poke.service.ts. */
+  | { type: 'introduction'; requesterId: string; recipientId: string; reasonLine: string | null };
 
 export interface DmMessage {
   id: string;

@@ -352,14 +352,11 @@ describe('expressInterest — the introduction rides the poke rails', () => {
     // The INVESTOR expresses interest in the FOUNDER. This test used to expect
     // "why the investor fits what the FOUNDER wanted", which is the recipient's
     // own want, and the sender reads the message back (5 Oct 2026). The investor
-    // stated no want, so the message is now the neutral sentence.
+    // stated no want. 30 Oct 2026: with no reason REASON says nothing at all, rather than a
+    // sentence that only looks like a reason, and there is no note, so the request carries neither.
     await expressInterest('u-investor', 'u-founder');
     expect(mockSendPoke).toHaveBeenCalledTimes(1);
-    const [senderId, recipientId, message] = mockSendPoke.mock.calls[0] as string[];
-    expect(senderId).toBe('u-investor');
-    expect(recipientId).toBe('u-founder');
-    expect(message).toBe("Iqbal thinks you fit what they're looking for. We think you two should meet.");
-    expect(message.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
+    expect(mockSendPoke.mock.calls[0]).toEqual(['u-investor', 'u-founder', undefined, undefined, undefined, undefined]);
   });
 });
 
@@ -426,10 +423,12 @@ describe('expressInterest with a personal note and format (milestone 1)', () => 
   it('leads with the member\'s own note and attaches REASON\'s reason, with the format', async () => {
     armProfiles();
     await expressInterest('u-founder', 'u-investor', undefined, { note: '  I would love your view on our seed round.  ', format: 'coffee' });
-    const [sender, recipient, message, agentId, format] = mockSendPoke.mock.calls[0];
+    const [sender, recipient, message, agentId, format, reasonLine] = mockSendPoke.mock.calls[0];
     expect([sender, recipient, agentId, format]).toEqual(['u-founder', 'u-investor', undefined, 'coffee']);
-    expect(message).toMatch(/^I would love your view on our seed round\.\n\nWhy REASON suggested this: Fatima is looking to meet .+ — you're an Angel Investor\.$/);
-    expect(String(message).length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
+    // 30 Oct 2026: the note and REASON's line travel apart, the line in the third person.
+    expect(message).toBe('I would love your view on our seed round.');
+    expect(reasonLine).toMatch(/^Fatima is looking to meet .+, and Iqbal is an Angel Investor\.$/);
+    expect(String(reasonLine).length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
   });
 
   it('a note is still sent as written when the profiles cannot be loaded', async () => {
@@ -446,22 +445,25 @@ describe('expressInterest with a personal note and format (milestone 1)', () => 
         : Promise.resolve({ rows: [] })
     ));
     await expressInterest('u-a', 'u-b', undefined, { note: '  Hello there  ', format: 'video_20' });
-    const [, , message, , format] = mockSendPoke.mock.calls[0];
+    const [, , message, , format, reasonLine] = mockSendPoke.mock.calls[0];
     expect(message).toBe('Hello there');
     expect(format).toBe('video_20');
+    expect(reasonLine).toBeUndefined();
 
-    // The premise: without a note this same pair gets the neutral sentence, which
-    // is only used when there is no reason, so the note above did hit that branch.
+    // The premise: without a note this same pair sends nothing at all, so there really was no reason.
     mockSendPoke.mockClear();
     await expressInterest('u-a', 'u-b');
-    expect(mockSendPoke.mock.calls[0][2]).toBe("Quinn thinks you fit what they're looking for. We think you two should meet.");
+    expect(mockSendPoke.mock.calls[0].slice(2)).toEqual([undefined, undefined, undefined, undefined]);
   });
 
   it('without a note it still writes the introduction itself, and passes no format', async () => {
     armProfiles();
     await expressInterest('u-founder', 'u-investor');
-    const [, , message, agentId, format] = mockSendPoke.mock.calls[0];
-    expect(message).toMatch(/We think you two should meet\.$/);
+    const [, , message, agentId, format, reasonLine] = mockSendPoke.mock.calls[0];
+    expect(message).toBeUndefined();
+    // REASON's own line, with no em dash and none of the old "We think you two should meet.".
+    expect(reasonLine).toBe('Fatima is looking to meet investors, and Iqbal is an Angel Investor.');
+    expect(reasonLine).not.toMatch(/—|We think you two should meet/);
     expect(agentId).toBeUndefined();
     expect(format).toBeUndefined();
   });
@@ -495,7 +497,6 @@ describe('expressInterest never quotes the recipient\'s own want', () => {
     });
   }
 
-  const NEUTRAL = "Iqbal thinks you fit what they're looking for. We think you two should meet.";
   // The founder's own words ('investors and angels for my seed round'), and the
   // three openings the old fallback wrote its sentence with.
   const THE_RECIPIENTS_WANT = [
@@ -521,12 +522,12 @@ describe('expressInterest never quotes the recipient\'s own want', () => {
 
     await expressInterest('u-investor', 'u-founder');
 
-    const message = mockSendPoke.mock.calls[0][2] as string;
-    expect(message).toBe(NEUTRAL);
-    expectNoneOf(message, THE_RECIPIENTS_WANT);
+    const [, , message, , , reasonLine] = mockSendPoke.mock.calls[0];
+    expect([message, reasonLine]).toEqual([undefined, undefined]);
+    expectNoneOf(JSON.stringify(mockSendPoke.mock.calls[0]), THE_RECIPIENTS_WANT);
   });
 
-  it('a sender whose own want does not fit the recipient: the same neutral sentence', async () => {
+  it('a sender whose own want does not fit the recipient: nothing either', async () => {
     // Most senders HAVE a want; it just is not this person. That must not open
     // the door to the recipient's want either.
     const investorWantingChefs = { ...INVESTOR, whoIWantToMeet: 'pastry chefs and bakers' };
@@ -534,9 +535,9 @@ describe('expressInterest never quotes the recipient\'s own want', () => {
 
     await expressInterest('u-investor', 'u-founder');
 
-    const message = mockSendPoke.mock.calls[0][2] as string;
-    expect(message).toBe(NEUTRAL);
-    expectNoneOf(message, THE_RECIPIENTS_WANT);
+    const [, , message, , , reasonLine] = mockSendPoke.mock.calls[0];
+    expect([message, reasonLine]).toEqual([undefined, undefined]);
+    expectNoneOf(JSON.stringify(mockSendPoke.mock.calls[0]), THE_RECIPIENTS_WANT);
   });
 
   it('the same pair with a note: the message is exactly the trimmed note', async () => {
@@ -544,22 +545,22 @@ describe('expressInterest never quotes the recipient\'s own want', () => {
 
     await expressInterest('u-investor', 'u-founder', undefined, { note: '  I would value a short chat.  ' });
 
-    const message = mockSendPoke.mock.calls[0][2] as string;
+    const [, , message, , , reasonLine] = mockSendPoke.mock.calls[0];
     expect(message).toBe('I would value a short chat.');
-    expectNoneOf(message, [...THE_RECIPIENTS_WANT, 'Why REASON suggested this']);
+    expect(reasonLine).toBeUndefined();
+    expectNoneOf(JSON.stringify(mockSendPoke.mock.calls[0]), [...THE_RECIPIENTS_WANT, 'Why REASON suggested this']);
   });
 
-  it('the sender\'s own want that fits the recipient is still attached, word for word as before', async () => {
+  it('the sender\'s own want that fits the recipient is still the reason, now its own line in the third person', async () => {
     armPair([FOUNDER_SEEKING_INVESTORS, INVESTOR]);
+    const LINE = 'Fatima is looking to meet investors, and Iqbal is an Angel Investor.';
 
     await expressInterest('u-founder', 'u-investor');
-    expect(mockSendPoke.mock.calls[0][2])
-      .toBe("Fatima is looking to meet investors — you're an Angel Investor. We think you two should meet.");
+    expect(mockSendPoke.mock.calls[0].slice(2)).toEqual([undefined, undefined, undefined, LINE]);
 
     mockSendPoke.mockClear();
     await expressInterest('u-founder', 'u-investor', undefined, { note: 'Hello there' });
-    expect(mockSendPoke.mock.calls[0][2])
-      .toBe("Hello there\n\nWhy REASON suggested this: Fatima is looking to meet investors — you're an Angel Investor.");
+    expect(mockSendPoke.mock.calls[0].slice(2)).toEqual(['Hello there', undefined, undefined, LINE]);
   });
 
   it('an agent introduction says what the agent was looking for, never the recipient\'s own want', async () => {
@@ -567,10 +568,11 @@ describe('expressInterest never quotes the recipient\'s own want', () => {
 
     await expressInterest('u-investor', 'u-founder', 'agent-founders');
 
-    const [, , message, agentId] = mockSendPoke.mock.calls[0];
-    expect(message).toBe("Iqbal is looking to meet founders — you're a Founder. We think you two should meet.");
+    const [, , message, agentId, , reasonLine] = mockSendPoke.mock.calls[0];
+    expect(message).toBeUndefined();
+    expect(reasonLine).toBe('Iqbal is looking to meet founders, and Fatima is a Founder.');
     expect(agentId).toBe('agent-founders');
-    expectNoneOf(message, THE_RECIPIENTS_WANT);
+    expectNoneOf(reasonLine, THE_RECIPIENTS_WANT);
   });
 
   it('an agent whose want does not fit the recipient: the neutral sentence, not the recipient\'s want', async () => {
@@ -578,29 +580,25 @@ describe('expressInterest never quotes the recipient\'s own want', () => {
 
     await expressInterest('u-investor', 'u-founder', 'agent-chefs');
 
-    const [, , message, agentId] = mockSendPoke.mock.calls[0];
-    expect(message).toBe(NEUTRAL);
+    const [, , message, agentId, , reasonLine] = mockSendPoke.mock.calls[0];
+    expect([message, reasonLine]).toEqual([undefined, undefined]);
     expect(agentId).toBe('agent-chefs');
-    expectNoneOf(message, THE_RECIPIENTS_WANT);
   });
 });
 
-// ─── A long note cannot cut REASON's reason mid-word (5 Oct 2026) ────────────
+// ─── A long note and a long reason are each kept whole (5 Oct 2026, 30 Oct 2026) ─────────────────
 //
-// A request holds REQUEST_MESSAGE_MAX characters (500): the member's note (up to 300), a
-// blank line, and "Why REASON suggested this: <reason>.". With a long note and a long
-// reason the whole was cut at the cap, so the reason stopped in the middle of a word. The
-// note is the member's own words and stays whole; the reason is REASON's, so it is what
-// gives way: cut between words, ending in an ellipsis. Every number below is measured
-// against the one shared cap, the same one the route and the stored text use.
-describe('expressInterest: a long note cannot cut the reason mid-word', () => {
+// A request held REQUEST_MESSAGE_MAX characters (500): the member's note, a blank line and
+// "Why REASON suggested this: <reason>.", so a long note cut REASON's reason short. Since 30 Oct
+// the two are stored apart (migration 120): the note is the request's message and the reason is
+// its own line, each whole. Only the one text older clients read still runs them together within
+// the cap, and request-text.test.ts pins how the line gives way there.
+describe('expressInterest: a long note and a long reason are each kept whole', () => {
   beforeEach(() => { mockQuery.mockReset(); mockSendPoke.mockReset(); mockSendPoke.mockResolvedValue({ id: 'p1' }); });
 
-  const LEAD = '\n\nWhy REASON suggested this: ';
   // A 100-character name (the longest the database holds) and a long title make a long reason.
   const LONG_NAME = 'Fatima Zahra Al-Hassan Rodriguez de la Vega Montgomery Featherstonehaugh the Third of Westminster Abbey';
   const LONG_TITLE = 'Managing Partner of a Seed Stage Venture Capital Fund';
-  const noteOf = (length: number) => 'x'.repeat(length);
 
   function arm(senderName = LONG_NAME) {
     const sender = { ...FOUNDER_SEEKING_INVESTORS, displayName: senderName };
@@ -614,95 +612,26 @@ describe('expressInterest: a long note cannot cut the reason mid-word', () => {
     });
   }
 
-  /** What the request message is for a given note. */
-  async function messageFor(note: string): Promise<string> {
-    mockSendPoke.mockClear();
+  it('a 300-character note goes whole as the message, and the whole reason as its own line', async () => {
+    arm();
+    const note = 'x'.repeat(300);
     await expressInterest('u-founder', 'u-investor', undefined, { note });
-    return mockSendPoke.mock.calls[0][2] as string;
-  }
-
-  /** The reason REASON gives for this pair, read off a short note. */
-  async function wholeReason(): Promise<string> {
-    const message = await messageFor('Hi');
-    expect(message.startsWith(`Hi${LEAD}`)).toBe(true);
-    return message.slice(`Hi${LEAD}`.length, -1); // without the closing full stop
-  }
-
-  it('a 300-character note and a long reason: the note whole, the reason cut at a word, within the cap', async () => {
-    arm();
-    const reason = await wholeReason();
-    const note = noteOf(300);
-    // The premise: with a note this long the whole reason cannot fit.
-    expect(note.length + LEAD.length + reason.length + 1).toBeGreaterThan(REQUEST_MESSAGE_MAX);
-
-    const message = await messageFor(note);
-
-    expect(message.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
-    expect(message.startsWith(`${note}${LEAD}`)).toBe(true); // the note is whole
-    expect(message.endsWith('…')).toBe(true);
-    const shown = message.slice(`${note}${LEAD}`.length, -1);
-    expect(shown.length).toBeGreaterThan(0);
-    expect(reason.startsWith(shown)).toBe(true); // it is the start of the reason
-    expect(reason.charAt(shown.length)).toMatch(/[^\p{L}\p{N}]/u); // and stops between words
-    // Not shortened more than it had to be: the next word would not have fitted.
-    const nextWord = /^\s*\S+/.exec(reason.slice(shown.length))![0];
-    expect(message.length - 1 + nextWord.length + 1).toBeGreaterThan(REQUEST_MESSAGE_MAX);
+    const [, , message, , , reasonLine] = mockSendPoke.mock.calls[0];
+    expect(message).toBe(note);
+    expect(reasonLine).toBe(`${LONG_NAME} is looking to meet investors, and Iqbal is a ${LONG_TITLE}.`);
+    expect(String(reasonLine).length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
   });
 
-  it('the reason gives way a step at a time: whole, then without its full stop, then cut at a word', async () => {
-    arm();
-    const reason = await wholeReason();
-    const justFits = REQUEST_MESSAGE_MAX - LEAD.length - reason.length - 1;
-
-    // Exactly the cap: sent as it is.
-    const whole = await messageFor(noteOf(justFits));
-    expect(whole).toBe(`${noteOf(justFits)}${LEAD}${reason}.`);
-    expect(whole.length).toBe(REQUEST_MESSAGE_MAX);
-
-    // One character over: only the closing full stop goes, nothing of the reason is lost.
-    const noStop = await messageFor(noteOf(justFits + 1));
-    expect(noStop).toBe(`${noteOf(justFits + 1)}${LEAD}${reason}`);
-    expect(noStop.length).toBe(REQUEST_MESSAGE_MAX);
-
-    // Two over: the reason has to be cut, between words, ending in an ellipsis.
-    const cut = await messageFor(noteOf(justFits + 2));
-    expect(cut.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
-    expect(cut.endsWith('…')).toBe(true);
-    expect(cut).not.toContain(reason);
-  });
-
-  it('a short note leaves the reason alone', async () => {
-    arm();
-    const reason = await wholeReason();
-    expect(await messageFor('I would value a short chat.')).toBe(`I would value a short chat.${LEAD}${reason}.`);
-  });
-
-  it('counts UTF-16 units, as the stored cap does, so emoji in the reason cannot push it over the cap', async () => {
-    // Each emoji is one character but two units. With a name made of them there is a note length
-    // at which the reason fits its room counted in characters and does not fit counted in units.
-    arm('🌸'.repeat(50));
-    const reason = await wholeReason();
-    const characters = Array.from(reason).length;
-    const room = Math.floor((characters + reason.length) / 2);
-    expect(characters).toBeLessThanOrEqual(room); // the premise
-    expect(reason.length).toBeGreaterThan(room);
-
-    const message = await messageFor(noteOf(REQUEST_MESSAGE_MAX - LEAD.length - room));
-
-    expect(message.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
-    expect(message.endsWith('…')).toBe(true);
-    expect(new TextDecoder().decode(new TextEncoder().encode(message))).toBe(message); // no half emoji
-  });
-
-  it('a note too long to leave any room is sent alone, whole, with no reason', async () => {
-    arm();
-    const note = noteOf(REQUEST_MESSAGE_MAX - LEAD.length); // the note and the lead use up the whole cap
-    const message = await messageFor(note);
-    expect(message.startsWith(note)).toBe(true);
-    expect(message.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
-    expect(message).not.toContain('REASON');
+  it('a line longer than the cap is cut between words, and an emoji is never cut in half', async () => {
+    arm('🌸'.repeat(300));
+    await expressInterest('u-founder', 'u-investor');
+    const line = String(mockSendPoke.mock.calls[0][5]);
+    expect(line.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
+    expect(line.endsWith('…')).toBe(true);
+    expect(new TextDecoder().decode(new TextEncoder().encode(line))).toBe(line); // no half emoji
   });
 });
+
 
 // ─── An agent's private want is read only for its owner (5 Oct 2026) ─────────
 //
@@ -714,8 +643,9 @@ describe('expressInterest reads an agent\'s want only for its owner', () => {
   beforeEach(() => { mockQuery.mockReset(); mockSendPoke.mockReset(); mockSendPoke.mockResolvedValue({ id: 'p1' }); });
 
   const AGENT = 'agent-founders';
-  const NEUTRAL = "Iqbal thinks you fit what they're looking for. We think you two should meet.";
-  const WORDED_BY_THE_AGENT = "Iqbal is looking to meet founders — you're a Founder. We think you two should meet.";
+  const WORDED_BY_THE_AGENT = 'Iqbal is looking to meet founders, and Fatima is a Founder.';
+  /** REASON's line on the one request sent, the sixth thing sendPoke is given. */
+  const lineSent = () => mockSendPoke.mock.calls[0][5];
 
   /**
    * The two members, and one agent that belongs to `owner`. The agent row is returned the way
@@ -741,14 +671,14 @@ describe('expressInterest reads an agent\'s want only for its owner', () => {
   it('the owner\'s own agent still words the introduction', async () => {
     armAgent('u-investor');
     await expressInterest('u-investor', 'u-founder', AGENT);
-    expect(mockSendPoke.mock.calls[0][2]).toBe(WORDED_BY_THE_AGENT);
+    expect(lineSent()).toBe(WORDED_BY_THE_AGENT);
   });
 
   it('another member\'s agent id gives no want: the request is worded without it', async () => {
     armAgent('u-someone-else');
     await expressInterest('u-investor', 'u-founder', AGENT);
-    expect(mockSendPoke.mock.calls[0][2]).toBe(NEUTRAL);
-    expect(String(mockSendPoke.mock.calls[0][2])).not.toMatch(/founders/i);
+    expect(lineSent()).toBeUndefined();
+    expect(mockSendPoke.mock.calls[0][2]).toBeUndefined(); // and no note stands in for it
   });
 
   it('asks the database for the agent AND its owner, who is the sender', async () => {
@@ -773,7 +703,7 @@ describe('expressInterest reads an agent\'s want only for its owner', () => {
     await expressInterest('u-investor', 'u-founder', AGENT);
 
     expect(mockSendPoke).toHaveBeenCalledTimes(1);
-    expect(mockSendPoke.mock.calls[0][2]).toBe(NEUTRAL);
+    expect(lineSent()).toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ err: failure, agentId: AGENT }), expect.any(String));
   });
 });
@@ -791,7 +721,7 @@ describe('a reason names only words from the other member\'s public card', () =>
   const viewer = profile({ id: 'u-viewer', displayName: 'Ali', whoIWantToMeet: 'manufacturers' });
   // Public card: a strategy consultant. Private: two interests that are synonyms of the want.
   const consultant = profile({
-    id: 'u-consultant', displayName: 'Sarah Chen', professionalRole: ['Strategy consultant'], jobTitle: 'Strategy consultant',
+    id: 'u-consultant', displayName: 'Sarah Chen', firstName: 'Sarah', professionalRole: ['Strategy consultant'], jobTitle: 'Strategy consultant',
     industry: 'Consulting', whatICanHelpWith: 'Go-to-market strategy',
     interests: ['industrial design', 'production of short films'],
   });
@@ -847,9 +777,9 @@ describe('a reason names only words from the other member\'s public card', () =>
     it('scoreWantsForRecipient (the introduction) prints none of the private words and keeps the score', () => {
       const fit = scoreWantsForRecipient(['manufacturers'], consultant, 'Ali');
       expect(fit.score).toBeCloseTo(0.4667, 3);
-      expect(fit.reason).toBe('Your profile matches what Ali is looking for');
+      expect(fit.reason).toBe("Sarah's profile matches what Ali is looking for");
       expect(scoreWantsForRecipient(['manufacturers'], fabricator, 'Ali').reason)
-        .toMatch(/^What Ali is looking for matches your profile: .*fabrication/);
+        .toMatch(/^What Ali is looking for matches Sarah's profile: .*fabrication/);
     });
   });
 
@@ -890,9 +820,9 @@ describe('a reason names only words from the other member\'s public card', () =>
         return Promise.resolve({ rows: [] });
       });
       await expressInterest('u-viewer', 'u-consultant');
-      const message = mockSendPoke.mock.calls[0][2] as string;
-      expect(message).toBe('Your profile matches what Ali is looking for. We think you two should meet.');
-      expect(message).not.toMatch(privateWords);
+      const line = mockSendPoke.mock.calls[0][5] as string;
+      expect(line).toBe("Sarah's profile matches what Ali is looking for.");
+      expect(JSON.stringify(mockSendPoke.mock.calls[0])).not.toMatch(privateWords);
     });
   });
 });

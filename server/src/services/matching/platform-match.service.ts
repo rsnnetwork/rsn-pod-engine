@@ -34,8 +34,9 @@ import { extractConstraints, checkConstraints, matchedPlace } from './want-const
 import { placeLabel } from './want-regions';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
-import { clip, clipAtWord } from '../people/text';
+import { clip } from '../people/text';
 import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
+import { fitToUnits } from '../poke/request-text';
 import { isReservedTestAddress } from '../identity/reserved-address';
 import { canBring, type MatchStrength, type MeetingFormat } from '@rsn/shared';
 
@@ -44,6 +45,8 @@ import { canBring, type MatchStrength, type MeetingFormat } from '@rsn/shared';
 export interface IntentProfile {
   id: string;
   displayName: string | null;
+  /** users.first_name: how REASON's line on an introduction names them (30 Oct 2026). Optional: not every reader loads it. */
+  firstName?: string | null;
   avatarUrl: string | null;
   professionalRole: unknown;  // text[] in DB (e.g. {Founder}) — never assume string
   jobTitle: string | null;
@@ -219,18 +222,22 @@ export function scoreWants(
 }
 
 /**
- * The SAME fit, addressed to the person who was found rather than the person
- * searching. An introduction is read by the recipient, so the sentence has to
- * name the sender as the one doing the looking:
+ * The SAME fit, as REASON's line on an introduction: the sender is the one doing
+ * the looking, and the person found is named in the third person:
  *
- *   seeker:    "You're looking to meet developers — jack rajaa is a frontend engineer"
- *   recipient: "Raja Ali King is looking to meet developers — you're a frontend engineer"
+ *   seeker:       "You're looking to meet developers — jack rajaa is a frontend engineer"
+ *   introduction: "Raja Ali King is looking to meet developers, and jack is a frontend engineer"
  *
- * Until now the introduction dodged this by scoring the RECIPIENT's wants
- * instead, which reads fine but states the wrong cause: jack was told "you're
- * looking to meet founders" when what actually reached him was Ali's Developers
- * agent. Same facts, wrong reason — so the flip is done in the wording, not by
- * swapping whose want it is.
+ * Until 5 Aug the introduction scored the RECIPIENT's wants instead, which reads
+ * fine but states the wrong cause: jack was told "you're looking to meet founders"
+ * when what actually reached him was Ali's Developers agent. Same facts, wrong
+ * reason — so the flip is done in the wording, not by swapping whose want it is.
+ *
+ * 30 Oct 2026 (Stefan: "It looks like the sender wrote it"): the line is REASON's
+ * own, kept apart from the member's note, and read by BOTH people, on the request
+ * and in the conversation once it is accepted. Addressed to the recipient ("you're
+ * a Founder") it told the sender they were a Founder, so it names both people,
+ * with no em dash. The recipient is named by their first name.
  */
 export function scoreWantsForRecipient(
   wants: Array<string | null | undefined>,
@@ -239,7 +246,8 @@ export function scoreWantsForRecipient(
   own?: Array<string | null | undefined>,
 ): { score: number; reason: string } {
   const f = analyzeWants(wants, recipient, undefined, own);
-  return { score: f.score, reason: f.score <= 0 ? '' : formatForRecipient(f, senderName) };
+  const recipientName = recipient.firstName?.trim() || f.name;
+  return { score: f.score, reason: f.score <= 0 ? '' : formatForIntroduction(f, senderName, recipientName) };
 }
 
 interface WantFit {
@@ -260,11 +268,11 @@ const article = (w: string) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
 
 /** Append what the explicit constraints contributed, so the card is honest
  *  about WHY someone is here (and about what we couldn't verify). */
-function withConstraintNotes(base: string, f: WantFit): string {
+function withConstraintNotes(base: string, f: WantFit, unstated = `they don't state their years of experience`): string {
   const notes: string[] = [];
   // A region says what the member wrote ("in DACH", "in the Nordics"), a country or city is capitalised properly.
   if (f.placeMatched) notes.push(`in ${placeLabel(f.placeMatched)}`);
-  if (f.yearsUnknown) notes.push(`they don't state their years of experience`);
+  if (f.yearsUnknown) notes.push(unstated);
   return notes.length ? `${base} (${notes.join('; ')})` : base;
 }
 
@@ -282,18 +290,19 @@ function formatForSeeker(f: WantFit): string {
   return withConstraintNotes(base, f);
 }
 
-function formatForRecipient(f: WantFit, senderName: string): string {
+function formatForIntroduction(f: WantFit, senderName: string, recipientName: string): string {
   let base: string;
   if (f.designationLabel && f.matchedTitle) {
-    base = `${senderName} is looking to meet ${f.designationLabel} — you're ${article(f.matchedTitle)} ${f.matchedTitle}`;
+    base = `${senderName} is looking to meet ${f.designationLabel}, and ${recipientName} is ${article(f.matchedTitle)} ${f.matchedTitle}`;
   } else if (f.designationLabel) {
-    base = `${senderName} is looking to meet ${f.designationLabel} — you fit`;
+    base = `${senderName} is looking to meet ${f.designationLabel}, and ${recipientName} fits`;
   } else {
     base = f.sharedTerms.length
-      ? `What ${senderName} is looking for matches your profile: ${f.sharedTerms.join(', ')}`
-      : `Your profile matches what ${senderName} is looking for`;
+      ? `What ${senderName} is looking for matches ${recipientName}'s profile: ${f.sharedTerms.join(', ')}`
+      : `${recipientName}'s profile matches what ${senderName} is looking for`;
   }
-  return withConstraintNotes(base, f);
+  // The note on unstated years is about the recipient, so it names them too (it said "they" to them).
+  return withConstraintNotes(base, f, `${recipientName} does not state their years of experience`);
 }
 
 /**
@@ -470,7 +479,7 @@ const strengthOf = (score: number): MatchStrength => (score >= MATCH_THRESHOLD ?
 // ── Data access ──────────────────────────────────────────────────────────────
 
 const PROFILE_COLUMNS = `
-  u.id, u.display_name AS "displayName", u.avatar_url AS "avatarUrl",
+  u.id, u.display_name AS "displayName", u.first_name AS "firstName", u.avatar_url AS "avatarUrl",
   u.professional_role AS "professionalRole", u.job_title AS "jobTitle",
   u.job_title_source AS "jobTitleSource",
   u.company, u.expertise_text AS "expertiseText",
@@ -669,10 +678,14 @@ export async function expressInterest(
   opts: { note?: string; format?: MeetingFormat } = {},
 ): Promise<UserPoke> {
   const [me, target] = await Promise.all([loadProfile(userId), loadProfile(targetUserId)]);
+  // 30 Oct 2026 (migration 120): the member's note and REASON's line are stored apart. The note is
+  // the request's message, exactly as written (or nothing); the line is REASON's own, read by both
+  // people, so it names both in the third person. With no reason there is no line: a request is never
+  // given a sentence that only sounds like one.
   const note = opts.note?.trim() || null;
-  let message = note ?? 'We think you two should meet.';
+  let reasonLine: string | null = null;
   if (me && target) {
-    const senderName = me.displayName || 'This member';
+    const senderName = me.firstName?.trim() || me.displayName || 'This member';
     // Say WHY this introduction exists, strongest known cause first, using only
     // what the SENDER chose to share.
     //
@@ -682,53 +695,19 @@ export async function expressInterest(
     //    rajaa was told "you're looking to meet founders" when what actually
     //    reached him was Ali's Developers agent.
     // 2. No agent, but the sender stated who they want → that is the cause.
-    // 3. Nothing to say → a neutral sentence, never an invented reason.
+    // 3. Nothing to say → no line at all, never an invented reason.
     //
     // Never the recipient's own want (a fallback to it was removed on 5 Oct
-    // 2026): the sender reads this text in the response and, after Accept, as the
-    // first message, so it showed them what the recipient privately wants to
-    // meet. Stefan's approved point 1.
+    // 2026): the sender reads this line in the response and, after Accept, in the
+    // conversation, so it showed them what the recipient privately wants to meet.
+    // Stefan's approved point 1.
     const agentWant = agentId ? await agentWantText(agentId, userId) : null;
     const { reason } = scoreWantsForRecipient(
       agentWant ? [agentWant] : wantSources(me), target, senderName,
     );
-    if (note) {
-      // The v4 Meet sheet: the member's own words first, "with the reason attached".
-      message = reason ? attachReason(note, reason) : note;
-    } else {
-      message = reason
-        ? `${reason}. We think you two should meet.`
-        : `${senderName} thinks you fit what they're looking for. We think you two should meet.`;
-    }
+    reasonLine = reason ? fitToUnits(`${reason}.`, REQUEST_MESSAGE_MAX) : null;
   }
-  return pokeService.sendPoke(userId, targetUserId, message.slice(0, REQUEST_MESSAGE_MAX), agentId, opts.format);
-}
-
-const REASON_LEAD = '\n\nWhy REASON suggested this: ';
-
-/**
- * The member's own words, then REASON's reason, within REQUEST_MESSAGE_MAX (the
- * one cap the route accepts and the stored text is cut to). When the two would not
- * fit, the reason is what gives way: first its closing full stop, then the reason
- * itself, cut between words and ending in an ellipsis (which closes the sentence,
- * so no full stop follows it). The note is never cut, so a long note can no longer
- * take the end of the reason off mid-word, which is what slicing the whole message
- * at the cap did.
- */
-function attachReason(note: string, reason: string): string {
-  const lead = `${note}${REASON_LEAD}`;
-  const whole = `${lead}${reason}.`;
-  if (whole.length <= REQUEST_MESSAGE_MAX) return whole;
-  // The cap counts UTF-16 units and clipAtWord counts characters, so an emoji in the
-  // reason can leave the cut text a unit or two over: take the excess off the budget
-  // and cut again. No room left at all means the note goes alone.
-  let room = REQUEST_MESSAGE_MAX - lead.length;
-  for (let shortened = clipAtWord(reason, room); shortened; shortened = clipAtWord(reason, room)) {
-    const excess = lead.length + shortened.length - REQUEST_MESSAGE_MAX;
-    if (excess <= 0) return `${lead}${shortened}`;
-    room -= excess;
-  }
-  return note;
+  return pokeService.sendPoke(userId, targetUserId, note ?? undefined, agentId, opts.format, reasonLine ?? undefined);
 }
 
 /**

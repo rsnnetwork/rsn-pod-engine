@@ -14,7 +14,7 @@ const readSource = (rel: string) => fs.readFileSync(path.join(SERVER_SRC, rel), 
 const PLACES = [
   'routes/pokes.ts', // validates the message on the way in
   'services/poke/poke.service.ts', // cleans it for storage
-  'services/matching/platform-match.service.ts', // words the introduction to fit
+  'services/matching/platform-match.service.ts', // fits REASON's line to it
 ];
 
 describe('the request message cap is one number', () => {
@@ -29,7 +29,8 @@ describe('the request message cap is one number', () => {
     // A cap written out as a number: .max(500), .slice(0, 500), = 500.
     expect(source).not.toMatch(/\.max\(\s*500\s*\)|\.slice\(\s*0\s*,\s*500\s*\)|=\s*500\b/);
     // And it is the constant that is actually applied.
-    expect(source).toMatch(/\.max\(REQUEST_MESSAGE_MAX\)|\.slice\(0,\s*REQUEST_MESSAGE_MAX\)|REQUEST_MESSAGE_MAX\s*-/);
+    // (30 Oct 2026: REASON's line is fitted to it on its own, apart from the note.)
+    expect(source).toMatch(/\.max\(REQUEST_MESSAGE_MAX\)|\.slice\(0,\s*REQUEST_MESSAGE_MAX\)|REQUEST_MESSAGE_MAX\s*-|fitToUnits\([^;]*REQUEST_MESSAGE_MAX\)/);
   });
 
   it('is declared once, in request-message', () => {

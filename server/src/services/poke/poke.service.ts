@@ -13,12 +13,13 @@ import logger from '../../config/logger';
 import config from '../../config';
 import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
-import type { MeetingFormat } from '@rsn/shared';
+import type { MeetingFormat, MeetingRequestText } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import * as emailService from '../email/email.service';
 import * as prefsService from '../notification-prefs/notification-prefs.service';
 import { REQUEST_MESSAGE_MAX } from './request-message';
 import { requestBellLink } from './request-link';
+import { REASON_HEADING, combinedRequestMessage, requestBellBody, requestText } from './request-text';
 
 // Task F2 (23 Jul 2026) — the truthful-loop audit found the poke loop was
 // in-app-only: a logged-out founder never learned someone wanted to meet
@@ -39,7 +40,7 @@ const POKE_ACCEPTED_EMAIL_TYPE = 'poke_accepted';
 async function notifyPokeReceivedByEmail(
   recipientId: string,
   senderName: string,
-  introMessage: string | null,
+  text: MeetingRequestText,
 ): Promise<void> {
   try {
     const recipientResult = await query<{
@@ -60,7 +61,8 @@ async function notifyPokeReceivedByEmail(
 
     await emailService.sendPokeReceivedEmail(recipient.email, recipient.display_name || 'there', {
       senderName,
-      introMessage,
+      note: text.note,
+      reasonLine: text.reasonLine,
       messagesUrl: `${config.clientUrl}/messages`,
     });
   } catch (err) {
@@ -101,11 +103,12 @@ async function notifyPokeAcceptedByEmail(
   }
 }
 
-export interface UserPoke {
+export interface UserPoke extends MeetingRequestText {
   id: string;
   senderId: string;
   recipientId: string;
   status: 'pending' | 'accepted' | 'declined';
+  /** The note and REASON's line run together, as clients before 30 Oct 2026 read them (combinedRequestMessage). */
   message: string | null;
   respondedAt: Date | null;
   createdAt: Date;
@@ -113,6 +116,8 @@ export interface UserPoke {
 }
 
 export interface PokeWithSender extends UserPoke {
+  /** "Shradha wants to meet you" (30 Oct 2026): users.first_name, null when it is blank. */
+  senderFirstName: string | null;
   senderDisplayName: string | null;
   senderAvatarUrl: string | null;
   // 7 Sep 2026 (Ali): the accept surface shows a profile card, so the recipient
@@ -166,18 +171,24 @@ interface PokeRow {
   recipient_id: string;
   status: UserPoke['status'];
   message: string | null;
+  /** REASON's own line (migration 120); null on rows written before it, whose message holds both. */
+  reason_line: string | null;
   responded_at: Date | null;
   created_at: Date;
   preferred_format: MeetingFormat | null;
 }
 
-const POKE_COLUMNS = 'id, sender_id, recipient_id, status, message, responded_at, created_at, preferred_format';
+const POKE_COLUMNS = 'id, sender_id, recipient_id, status, message, reason_line, responded_at, created_at, preferred_format';
 
+/**
+ * A request as every answer carries it: the note and REASON's line apart, and `message`, the two
+ * run together, which production's client draws (a legacy row keeps its text as stored).
+ */
 function toUserPoke(r: PokeRow): UserPoke {
   return {
     id: r.id, senderId: r.sender_id, recipientId: r.recipient_id,
-    status: r.status, message: r.message, respondedAt: r.responded_at,
-    createdAt: r.created_at, preferredFormat: r.preferred_format ?? null,
+    status: r.status, message: combinedRequestMessage(r, REQUEST_MESSAGE_MAX), ...requestText(r),
+    respondedAt: r.responded_at, createdAt: r.created_at, preferredFormat: r.preferred_format ?? null,
   };
 }
 
@@ -319,6 +330,9 @@ export async function sendPoke(
   agentId?: string,
   /** Milestone 1: the format the sender would like (shown to the recipient). */
   preferredFormat?: MeetingFormat,
+  /** REASON's own line on why it suggested the two (30 Oct 2026), stored apart from the
+   *  member's note. Only "I want to meet" gives one; POST /pokes never does. */
+  reasonLine?: string,
 ): Promise<SentPoke> {
   if (senderId === recipientId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, "You can't send a meeting request to yourself.");
@@ -328,6 +342,7 @@ export async function sendPoke(
   }
 
   const trimmedMessage = cleanRequestMessage(message);
+  const storedReasonLine = cleanRequestMessage(reasonLine);
   const pokeId = uuid();
   let outcome: SendOutcome;
   try {
@@ -384,10 +399,10 @@ export async function sendPoke(
       }
 
       const inserted = await client.query<PokeRow>(
-        `INSERT INTO user_pokes (id, sender_id, recipient_id, message, status, agent_id, preferred_format)
-         VALUES ($1, $2, $3, $4, 'pending', $5, $6)
-         RETURNING id, sender_id, recipient_id, status, message, responded_at, created_at, preferred_format`,
-        [pokeId, senderId, recipientId, trimmedMessage, agentId ?? null, preferredFormat ?? null],
+        `INSERT INTO user_pokes (id, sender_id, recipient_id, message, status, agent_id, preferred_format, reason_line)
+         VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
+         RETURNING ${POKE_COLUMNS}`,
+        [pokeId, senderId, recipientId, trimmedMessage, agentId ?? null, preferredFormat ?? null, storedReasonLine],
       );
       return { sent: inserted.rows[0] };
     });
@@ -405,13 +420,18 @@ export async function sendPoke(
 
   const r = outcome.sent;
   logger.info({ senderId, recipientId, pokeId: r.id }, 'Poke sent');
+  const text = requestText(r);
 
   // Fire bell notification for the recipient — same pattern as invites + DMs.
   try {
-    const senderResult = await query<{ display_name: string | null }>(
-      `SELECT display_name FROM users WHERE id = $1`, [senderId],
+    const senderResult = await query<{ first_name: string | null; display_name: string | null }>(
+      `SELECT first_name, display_name FROM users WHERE id = $1`, [senderId],
     );
     const senderName = senderResult.rows[0]?.display_name || 'Someone';
+    // 30 Oct 2026 (Stefan): "<First name> wants to meet you", in REASON's voice. The body is the
+    // member's own note, else REASON's line under its heading, else what to do.
+    const bellTitle = `${senderResult.rows[0]?.first_name?.trim() || senderName} wants to meet you`;
+    const bellBody = requestBellBody(text);
 
     // pokes-notification-prefs (23 Jul 2026) — Settings "Pokes" bell toggle.
     // Gates the notification row + its live socket push only; the email
@@ -424,10 +444,9 @@ export async function sendPoke(
         `INSERT INTO notifications (id, user_id, type, title, body, link)
          VALUES ($1, $2, 'poke', $3, $4, $5)
          RETURNING id, created_at`,
-        // 4 Sep 2026 (Ali): "asked to meet you" is the product's language, "poke"
-        // was ours. The poke id rides in the link so the bell can answer the
-        // request in place and accept straight into the conversation.
-        [notifId, recipientId, `${senderName} asked to meet you`, trimmedMessage || 'Accept to start chatting.', requestBellLink(pokeId)],
+        // The poke id rides in the link so the bell can answer the request in
+        // place and accept straight into the conversation.
+        [notifId, recipientId, bellTitle, bellBody, requestBellLink(pokeId)],
       );
 
       // Emit via dynamic import of the io instance (same pattern as invites).
@@ -436,8 +455,8 @@ export async function sendPoke(
         io.to(`user:${recipientId}`).emit('notification:new', {
           id: notifResult.rows[0].id,
           type: 'poke',
-          title: `${senderName} asked to meet you`,
-          body: trimmedMessage || 'Accept to start chatting.',
+          title: bellTitle,
+          body: bellBody,
           link: requestBellLink(pokeId),
           isRead: false,
           createdAt: notifResult.rows[0].created_at,
@@ -459,7 +478,7 @@ export async function sendPoke(
     // on notify_email + email_config + poke_email inside the helper; a
     // rejection there is already caught internally so this can never
     // throw or block the poke response.
-    void notifyPokeReceivedByEmail(recipientId, senderName, trimmedMessage);
+    void notifyPokeReceivedByEmail(recipientId, senderName, text);
   } catch (notifErr) {
     logger.warn({ notifErr }, 'Poke notification insert failed (non-fatal)');
   }
@@ -474,31 +493,64 @@ export async function sendPoke(
     emitEntities(io, [recipientId], [E.user(recipientId), E.userInvites(recipientId)]).catch(() => {});
   } catch { /* realtime is non-fatal */ }
 
-  return {
-    id: r.id, senderId: r.sender_id, recipientId: r.recipient_id,
-    status: r.status, message: r.message, respondedAt: r.responded_at,
-    createdAt: r.created_at, preferredFormat: r.preferred_format ?? null,
-  };
+  return toUserPoke(r);
 }
 
-/** The first message of a thread opened by a request that carried no message (Task F3). */
+/** The introduction card's text when the request carried neither a line nor a note (Task F3). */
 const FALLBACK_INTRO = "You're connected. Say hello.";
+
+/** A line written into the new conversation by an accept, as the fan-out sends it. */
+interface ThreadRow {
+  id: string; conversationId: string; fromUserId: string;
+  content: string | null; readAt: Date | null; createdAt: Date;
+  kind: 'user' | 'system'; systemMeta: Record<string, unknown> | null;
+}
 
 /** What accepting a request wrote, for the steps that run once it has committed. */
 interface Connected {
   conversationId: string;
-  intro: {
-    id: string; conversationId: string; fromUserId: string;
-    content: string | null; readAt: Date | null; createdAt: Date;
-  };
+  /** The introduction card, then each note, oldest first: the order they were written in. */
+  messages: ThreadRow[];
   senderBell: { id: string; title: string; body: string; createdAt: Date; accepterName: string };
+}
+
+/** The sender's "accepted" bell body: the conversation is open (30 Oct 2026; it used to repeat the request). */
+const ACCEPTED_BELL_BODY = 'You can message each other now.';
+
+/**
+ * One line of the new conversation. clock_timestamp(), not NOW(): every line an accept writes is in
+ * one transaction, where NOW() is the same instant for all of them, and the thread is read in
+ * created_at order, so the card and the notes after it would come back in any order.
+ */
+async function insertThreadRow(
+  client: PoolClient,
+  conversationId: string,
+  fromUserId: string,
+  content: string,
+  kind: ThreadRow['kind'],
+  systemMeta: Record<string, unknown> | null,
+): Promise<ThreadRow> {
+  const r = await client.query<{
+    id: string; conversation_id: string; from_user_id: string;
+    content: string | null; read_at: Date | null; created_at: Date;
+  }>(
+    `INSERT INTO direct_messages (id, conversation_id, from_user_id, content, kind, system_meta, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp())
+     RETURNING id, conversation_id, from_user_id, content, read_at, created_at`,
+    [uuid(), conversationId, fromUserId, content.slice(0, 4000), kind, systemMeta ? JSON.stringify(systemMeta) : null],
+  );
+  const row = r.rows[0];
+  return {
+    id: row.id, conversationId: row.conversation_id, fromUserId: row.from_user_id,
+    content: row.content, readAt: row.read_at, createdAt: row.created_at, kind, systemMeta,
+  };
 }
 
 /**
  * Accept a request whose claim has just won, inside the claim's transaction: the
- * pair can message from now on, the conversation opens with the request's message
- * as its first line, and the sender's bell gets a row. A refusal here rolls the
- * claim back with everything else.
+ * pair can message from now on, the conversation opens with REASON's introduction
+ * card and then the member's own note, and the sender's bell gets a row. A refusal
+ * here rolls the claim back with everything else.
  *
  * Task F1 (23 Jul 2026) — the sender previously heard nothing when their
  * poke was accepted (only a silent fanoutUserEntity badge refresh from the
@@ -510,11 +562,19 @@ interface Connected {
  *
  * Task F3 (23 Jul 2026) — a message-less poke used to leave the new
  * conversation with zero messages, which canMessage()'s grandfather
- * clause can never open (dm.service.ts L138-165: the "existing thread
- * with >=1 message" gate never fires, and encounter_history.mutual_meet_again
- * starts false, so `not_mutual` blocks the pair forever). Every accepted
- * poke now seeds a first message — the poke's own message when present,
- * else a fallback line — so the thread is always usable.
+ * clause can never open (dm.service.ts: the "existing thread with >=1
+ * message" gate never fires, and encounter_history.mutual_meet_again
+ * starts false, so `not_mutual` blocks the pair forever). Every accept
+ * writes at least the introduction card, so the thread is always usable.
+ *
+ * 30 Oct 2026 (Stefan: "It looks like the sender wrote it") — the request's one
+ * text used to become the SENDER's first message, REASON's sentence included, so
+ * the sender read "you're a Founder" in their own bubble. Now the first line is a
+ * system card in REASON's voice ('introduction'), which says who asked whom and
+ * REASON's line; then, only if the member wrote a note, the note as their own
+ * message. When both had asked each other there is still one card, then each
+ * note that exists, oldest first. Production's client draws an unknown card kind
+ * with its content, so the content reads right on its own.
  */
 async function connectInTx(client: PoolClient, request: PokeRow): Promise<Connected> {
   const senderId = request.sender_id;
@@ -528,6 +588,7 @@ async function connectInTx(client: PoolClient, request: PokeRow): Promise<Connec
   if (await blockService.areBlocked(senderId, accepterId, client)) {
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, "You can't accept a meeting request from this person.");
   }
+  // Switch to activeMemberSql after T2.
   const sender = await client.query<{ status: string }>(`SELECT status FROM users WHERE id = $1`, [senderId]);
   if (sender.rows[0]?.status !== 'active') {
     throw new NotFoundError('User', undefined, 'That member is no longer available.');
@@ -554,49 +615,54 @@ async function connectInTx(client: PoolClient, request: PokeRow): Promise<Connec
   );
   const conversationId = convResult.rows[0].id;
 
-  // REASON Phase 2 (19 Jul) — "we introduce them to each other": the poke's
-  // message (for platform matches, the composed introduction) becomes the
-  // FIRST message of the new thread instead of dying with the accepted poke.
-  // Pre-fix the chat opened cold and the intro text was lost. Sender-authored
-  // (it is their expressed interest), same transaction so accept+intro are
-  // atomic.
-  //
-  // Task F3 — message-less pokes used to skip this block entirely, leaving
-  // a 0-message conversation canMessage() can never open. Now a fallback
-  // line seeds the thread instead, still sender-authored, so the grandfather
-  // clause opens it from the first read.
-  const introText = request.message && request.message.trim().length > 0
-    ? request.message.trim().slice(0, 4000)
-    : FALLBACK_INTRO;
-  const introInsert = await client.query<{
-    id: string; conversation_id: string; from_user_id: string;
-    content: string | null; read_at: Date | null; created_at: Date;
-  }>(
-    `INSERT INTO direct_messages (id, conversation_id, from_user_id, content)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, conversation_id, from_user_id, content, read_at, created_at`,
-    [uuid(), conversationId, senderId, introText],
+  // 25 Oct 2026: when the accepter had asked the sender too, that request is answered
+  // by this one: one connection, one introduction, one bell. Left pending, it went on
+  // offering Accept on both screens, and accepting it ran all of this a second time.
+  // Answered before anything is written, so its note can follow the card too.
+  const askedBack = await acceptPendingFrom(client, accepterId, senderId);
+
+  const people = await client.query<{ id: string; first_name: string | null; display_name: string | null }>(
+    `SELECT id, first_name, display_name FROM users WHERE id = ANY($1::uuid[])`, [[senderId, accepterId]],
   );
-  const introRow = introInsert.rows[0];
+  const person = (id: string) => people.rows.find((p) => p.id === id);
+  const accepterName = person(accepterId)?.display_name || 'Someone';
+  const firstOf = (id: string, fallback: string) => person(id)?.first_name?.trim() || person(id)?.display_name || fallback;
+  const requesterFirst = firstOf(senderId, 'A member');
+  const accepterFirst = firstOf(accepterId, 'they');
+
+  // REASON's line and each note. A legacy line, written to the recipient, is put in the third
+  // person, because both of them read the card.
+  const theirs = requestText(request, accepterFirst);
+  const back = askedBack ? requestText(askedBack, requesterFirst) : null;
+  const reasonLine = theirs.reasonLine ?? back?.reasonLine ?? null;
+  const notes = [
+    { fromUserId: senderId, note: theirs.note, at: request.created_at },
+    ...(askedBack && back ? [{ fromUserId: accepterId, note: back.note, at: askedBack.created_at }] : []),
+  ]
+    .filter((n): n is { fromUserId: string; note: string; at: Date } => !!n.note)
+    .sort((x, y) => new Date(x.at).getTime() - new Date(y.at).getTime());
+
+  const asked = `${requesterFirst} asked to meet ${accepterFirst}, and ${accepterFirst} accepted.`;
+  const cardContent = reasonLine
+    ? `${asked} ${REASON_HEADING}: ${reasonLine}`
+    : notes.length > 0 ? asked : FALLBACK_INTRO;
+  // From the sender, as the old first message was, so neither person's unread count changes.
+  const messages: ThreadRow[] = [await insertThreadRow(client, conversationId, senderId, cardContent, 'system', {
+    type: 'introduction', requesterId: senderId, recipientId: accepterId, reasonLine,
+  })];
+  for (const n of notes) {
+    messages.push(await insertThreadRow(client, conversationId, n.fromUserId, n.note, 'user', null));
+  }
   await client.query(
     `UPDATE dm_conversations SET last_message_at = NOW() WHERE id = $1`,
     [conversationId],
   );
 
-  // 25 Oct 2026: when the accepter had asked the sender too, that request is answered
-  // by this one: one connection, one first message, one bell. Left pending, it went on
-  // offering Accept on both screens, and accepting it ran all of this a second time.
-  const askedBack = await acceptPendingFrom(client, accepterId, senderId);
-
   // Task F1 — bell notification for the SENDER, inserted in the same
   // transaction as the accept so it can never exist without a
   // corresponding accepted poke (and vice versa).
-  const accepterResult = await client.query<{ display_name: string | null }>(
-    `SELECT display_name FROM users WHERE id = $1`, [accepterId],
-  );
-  const accepterName = accepterResult.rows[0]?.display_name || 'Someone';
   const title = `${accepterName} accepted your meeting request`;
-  const body = introText.slice(0, 120);
+  const body = ACCEPTED_BELL_BODY;
   const notifId = uuid();
   // Deliberately INSIDE this transaction, not best-effort — it's atomic
   // with the accept by design (see the Task F1 comment above this
@@ -623,14 +689,7 @@ async function connectInTx(client: PoolClient, request: PokeRow): Promise<Connec
   logger.info({ pokeId: request.id, accepterId, conversationId, askedBack: askedBack?.id ?? null }, 'Poke accepted');
   return {
     conversationId,
-    intro: {
-      id: introRow.id,
-      conversationId: introRow.conversation_id,
-      fromUserId: introRow.from_user_id,
-      content: introRow.content,
-      readAt: introRow.read_at,
-      createdAt: introRow.created_at,
-    },
+    messages,
     senderBell: { id: notifResult.rows[0].id, title, body, createdAt: notifResult.rows[0].created_at, accepterName },
   };
 }
@@ -664,15 +723,19 @@ async function announceAccepted(request: PokeRow, done: Connected): Promise<void
     logger.warn({ err, senderId }, 'Poke-accepted socket push failed (non-fatal)');
   }
 
-  // 7 Sep 2026 — fan the intro out to BOTH participants so the SENDER's inbox
+  // 7 Sep 2026 — fan the first lines out to BOTH participants so the SENDER's inbox
   // gains the new conversation live (pre-fix only the sender's bell fired and
   // their Messages list stayed empty until a manual refresh) and the accepter's
   // thread updates on every device. notify:false: the poke_accepted bell above
-  // is the notification, so no duplicate "sent you a message" bell.
+  // is the notification, so no duplicate "sent you a message" bell. One at a time,
+  // in the order they were written: the card, then each note.
   try {
     const { io } = await import('../../index');
     const { broadcastDmMessage } = await import('../orchestration/handlers/dm-handlers');
-    await broadcastDmMessage(io, senderId, request.recipient_id, done.conversationId, done.intro, { notify: false });
+    for (const message of done.messages) {
+      const to = message.fromUserId === senderId ? request.recipient_id : senderId;
+      await broadcastDmMessage(io, message.fromUserId, to, done.conversationId, message, { notify: false });
+    }
   } catch (err) {
     logger.warn({ err, conversationId: done.conversationId }, 'Poke-accepted DM fan-out failed (non-fatal)');
   }
@@ -751,22 +814,22 @@ export async function declinePoke(pokeId: string, userId: string): Promise<UserP
  * inbox UI can render each one with avatar + name.
  */
 export async function listReceivedPokes(userId: string): Promise<PokeWithSender[]> {
-  const result = await query<{
-    id: string; sender_id: string; recipient_id: string; status: 'pending' | 'accepted' | 'declined';
-    message: string | null; responded_at: Date | null; created_at: Date;
-    preferred_format: MeetingFormat | null;
-    display_name: string | null; avatar_url: string | null;
-    job_title: string | null; company: string | null;
+  const result = await query<PokeRow & {
+    first_name: string | null; display_name: string | null; avatar_url: string | null;
+    job_title: string | null; company: string | null; recipient_name: string | null;
   }>(
-    `SELECT p.id, p.sender_id, p.recipient_id, p.status, p.message,
+    `SELECT p.id, p.sender_id, p.recipient_id, p.status, p.message, p.reason_line,
             p.responded_at, p.created_at, p.preferred_format,
-            u.display_name, u.avatar_url, u.job_title, u.company
+            u.first_name, u.display_name, u.avatar_url, u.job_title, u.company,
+            COALESCE(NULLIF(TRIM(me.first_name), ''), me.display_name) AS recipient_name
      FROM user_pokes p
      JOIN users u ON u.id = p.sender_id
+     JOIN users me ON me.id = p.recipient_id
      WHERE p.recipient_id = $1 AND p.status = 'pending'
        -- 25 Oct 2026: only requests that can still be answered. Accepting refuses a
        -- pair a block stands between (either way) and a sender who is no longer
        -- active, so the card would offer an Accept that cannot work.
+       -- Switch to activeMemberSql('u') after T2.
        AND u.status = 'active'
        AND NOT EXISTS (
          SELECT 1 FROM user_blocks b
@@ -775,10 +838,12 @@ export async function listReceivedPokes(userId: string): Promise<PokeWithSender[
      ORDER BY p.created_at DESC`,
     [userId],
   );
+  // The note and REASON's line apart (30 Oct 2026); a legacy line, written to the recipient, in the
+  // third person as new lines are. `message` keeps the one text production's cards draw.
   return result.rows.map(r => ({
-    id: r.id, senderId: r.sender_id, recipientId: r.recipient_id,
-    status: r.status, message: r.message, respondedAt: r.responded_at,
-    createdAt: r.created_at, preferredFormat: r.preferred_format ?? null,
+    ...toUserPoke(r),
+    ...requestText(r, r.recipient_name),
+    senderFirstName: r.first_name?.trim() || null,
     senderDisplayName: r.display_name,
     senderAvatarUrl: r.avatar_url,
     senderJobTitle: r.job_title,
@@ -786,12 +851,15 @@ export async function listReceivedPokes(userId: string): Promise<PokeWithSender[
   }));
 }
 
-export interface PokeWith {
+export interface PokeWith extends MeetingRequestText {
   id: string;
   status: 'pending' | 'accepted' | 'declined';
   /** True when the caller sent it, false when they received it. */
   sentByMe: boolean;
 }
+
+/** The SQL that names a request's recipient for requestText: their first name, else their display name. */
+const RECIPIENT_NAME_SQL = `(SELECT COALESCE(NULLIF(TRIM(r.first_name), ''), r.display_name) FROM users r WHERE r.id = p.recipient_id)`;
 
 /** Where a request stands, plus the thread if it turned into one. */
 export interface PokeState extends PokeWith {
@@ -813,9 +881,10 @@ export interface PokeState extends PokeWith {
 export async function getPokeState(pokeId: string, userId: string): Promise<PokeState | null> {
   const r = await query<{
     id: string; status: PokeState['status']; sender_id: string; recipient_id: string;
-    conversation_id: string | null;
+    conversation_id: string | null; message: string | null; reason_line: string | null; recipient_name: string | null;
   }>(
-    `SELECT p.id, p.status, p.sender_id, p.recipient_id,
+    `SELECT p.id, p.status, p.sender_id, p.recipient_id, p.message, p.reason_line,
+            ${RECIPIENT_NAME_SQL} AS recipient_name,
             (SELECT c.id FROM dm_conversations c
               WHERE (c.user_a_id = p.sender_id AND c.user_b_id = p.recipient_id)
                  OR (c.user_a_id = p.recipient_id AND c.user_b_id = p.sender_id)
@@ -832,6 +901,7 @@ export async function getPokeState(pokeId: string, userId: string): Promise<Poke
     sentByMe: row.sender_id === userId,
     otherUserId: row.sender_id === userId ? row.recipient_id : row.sender_id,
     conversationId: row.status === 'accepted' ? row.conversation_id : null,
+    ...requestText(row, row.recipient_name),
   };
 }
 
@@ -842,16 +912,22 @@ export async function getPokeState(pokeId: string, userId: string): Promise<Poke
  * wall when the way through is right there. The page needs the state to say so.
  */
 export async function getPokeWith(userId: string, otherId: string): Promise<PokeWith | null> {
-  const r = await query<{ id: string; status: PokeWith['status']; sender_id: string }>(
-    `SELECT id, status, sender_id FROM user_pokes
-      WHERE (sender_id = $1 AND recipient_id = $2)
-         OR (sender_id = $2 AND recipient_id = $1)
-      ORDER BY created_at DESC
+  const r = await query<{
+    id: string; status: PokeWith['status']; sender_id: string;
+    message: string | null; reason_line: string | null; recipient_name: string | null;
+  }>(
+    `SELECT p.id, p.status, p.sender_id, p.message, p.reason_line, ${RECIPIENT_NAME_SQL} AS recipient_name
+       FROM user_pokes p
+      WHERE (p.sender_id = $1 AND p.recipient_id = $2)
+         OR (p.sender_id = $2 AND p.recipient_id = $1)
+      ORDER BY p.created_at DESC
       LIMIT 1`,
     [userId, otherId],
   );
   const row = r.rows[0];
-  return row ? { id: row.id, status: row.status, sentByMe: row.sender_id === userId } : null;
+  return row
+    ? { id: row.id, status: row.status, sentByMe: row.sender_id === userId, ...requestText(row, row.recipient_name) }
+    : null;
 }
 
 /**

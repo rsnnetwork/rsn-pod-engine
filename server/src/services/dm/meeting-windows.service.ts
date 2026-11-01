@@ -17,6 +17,8 @@ import logger from '../../config/logger';
 import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import * as dmService from './dm.service';
+import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
+import { combinedRequestMessage } from '../poke/request-text';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
 import { meetingTime } from '../meetings/meeting-time';
 import { CURRENT_MEETING_ID, lockConversation } from '../meetings/current-meeting';
@@ -760,8 +762,8 @@ async function writeMeetingRow(
 
   // Otherwise a new row. A meeting that still stands without a row of its own (the old server booked
   // it while this one was deploying) is replaced by one, and moved_from says what it replaced.
-  const request = await client.query<{ id: string; message: string | null }>(
-    `SELECT id, message FROM user_pokes
+  const request = await client.query<{ id: string; message: string | null; reason_line: string | null }>(
+    `SELECT id, message, reason_line FROM user_pokes
       WHERE status = 'accepted'
         AND ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1))
       ORDER BY responded_at DESC NULLS LAST, created_at DESC
@@ -775,7 +777,8 @@ async function writeMeetingRow(
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id`,
     [
-      conv.id, conv.user_a_id, conv.user_b_id, connectedBy?.id ?? null, connectedBy?.message?.trim() || null,
+      conv.id, conv.user_a_id, conv.user_b_id, connectedBy?.id ?? null,
+      connectedBy ? combinedRequestMessage(connectedBy, REQUEST_MESSAGE_MAX) : null,
       meeting.startAt, meeting.durationMin, meeting.type, actorId, movedFrom ? new Date(movedFrom) : null,
     ],
   );

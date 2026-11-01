@@ -220,14 +220,14 @@ const cases: EmailCase[] = [
     brandLine: MEET, underCard: "You're receiving this because someone wants to meet you on REASON.",
     says: ['wants to meet you on REASON.'],
     run: () => emailService.sendPokeReceivedEmail('delivered+ana@resend.dev', 'Ana', {
-      senderName: 'Fatima', introMessage: 'I would value your view on our seed round.', messagesUrl: 'https://app.rsn.network/messages',
+      senderName: 'Fatima', note: 'I would value your view on our seed round.', reasonLine: 'Fatima is looking to meet investors, and Ana is an Angel Investor.', messagesUrl: 'https://app.rsn.network/messages',
     }),
   },
   {
     fn: 'sendPokeReceivedEmail', label: 'a meeting request without a note', subject: 'Fatima wants to meet you on REASON',
     brandLine: MEET, underCard: "You're receiving this because someone wants to meet you on REASON.",
     says: ['wants to meet you on REASON.'],
-    run: () => emailService.sendPokeReceivedEmail('delivered+ana@resend.dev', 'Ana', { senderName: 'Fatima', introMessage: null, messagesUrl: 'https://app.rsn.network/messages' }),
+    run: () => emailService.sendPokeReceivedEmail('delivered+ana@resend.dev', 'Ana', { senderName: 'Fatima', note: null, reasonLine: null, messagesUrl: 'https://app.rsn.network/messages' }),
   },
   {
     fn: 'sendPokeAcceptedEmail', label: 'a meeting request accepted', subject: 'Bo accepted your meeting request',

@@ -1148,7 +1148,10 @@ export async function sendJoinRequestAdminReviewEmail(
 
 interface PokeReceivedEmailData {
   senderName: string;
-  introMessage: string | null;
+  /** What the member wrote, if anything. */
+  note: string | null;
+  /** REASON's own line on why it suggested the two, if it has one (30 Oct 2026). */
+  reasonLine: string | null;
   messagesUrl: string;
 }
 
@@ -1158,13 +1161,19 @@ export async function sendPokeReceivedEmail(
   data: PokeReceivedEmailData,
 ): Promise<void> {
   const subject = `${data.senderName} wants to meet you on REASON`;
-  // The message is a note, a blank line and "Why REASON suggested this: ...". HTML collapses
-  // a raw line break to a space, so the breaks become <br>, and only AFTER escaping: a <br>
-  // the sender typed is then shown as text instead of being run.
-  const introBlock = data.introMessage
+  // 30 Oct 2026 (Stefan: "It looks like the sender wrote it"): the quote holds only what the
+  // member wrote, and REASON's line is its own plain paragraph under its own heading, outside
+  // the quote. HTML collapses a raw line break to a space, so the breaks in the note become
+  // <br>, and only AFTER escaping: a <br> the sender typed is then shown as text instead of
+  // being run.
+  const introBlock = data.note
     ? `<div style="background:#f8f9fa;border-left:3px solid #DE322E;border-radius:6px;padding:12px 16px;margin:0 0 24px 0;">
-         <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${escapeHtml(data.introMessage).replace(/\r?\n/g, '<br>')}</p>
+         <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${escapeHtml(data.note).replace(/\r?\n/g, '<br>')}</p>
        </div>`
+    : '';
+  const reasonBlock = data.reasonLine
+    ? `<p style="color:#6b7280;font-size:12px;font-weight:600;line-height:1.5;margin:0 0 4px 0;">Why REASON suggested this</p>
+       <p style="color:#374151;font-size:14px;line-height:1.5;margin:0 0 24px 0;">${escapeHtml(data.reasonLine)}</p>`
     : '';
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
@@ -1177,6 +1186,7 @@ export async function sendPokeReceivedEmail(
             <strong>${escapeHtml(data.senderName)}</strong> wants to meet you on REASON.
           </p>
           ${introBlock}
+          ${reasonBlock}
           <div style="text-align:center;margin:24px 0;">
             <a href="${escapeAttr(data.messagesUrl)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Request</a>
           </div>
@@ -1189,7 +1199,7 @@ export async function sendPokeReceivedEmail(
     </body></html>`;
 
   if (config.resendApiKey) {
-    const text = `Hey ${recipientDisplayName},\n\n${data.senderName} wants to meet you on REASON.${data.introMessage ? `\n\n"${data.introMessage}"` : ''}\n\nView it: ${data.messagesUrl}\n\nREASON — Meet people you have a reason to know.`;
+    const text = `Hey ${recipientDisplayName},\n\n${data.senderName} wants to meet you on REASON.${data.note ? `\n\n"${data.note}"` : ''}${data.reasonLine ? `\n\nWhy REASON suggested this\n${data.reasonLine}` : ''}\n\nView it: ${data.messagesUrl}\n\nREASON — Meet people you have a reason to know.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
