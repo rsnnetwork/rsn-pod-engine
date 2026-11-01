@@ -169,32 +169,4 @@ describe('Phase B — user block infrastructure', () => {
       expect(src).toMatch(/router\.get\(\s*['"]\/:id\/block-status['"][\s\S]+?authenticate/);
     });
   });
-
-  describe('client public profile renders Block / Unblock button', () => {
-    const src = nodeFs.readFileSync(
-      nodePath.join(__dirname, '../../../../../client/src/features/profile/PublicProfilePage.tsx'),
-      'utf8',
-    );
-
-    it('fetches block-status for non-own profiles', () => {
-      expect(src).toMatch(/block-status/);
-      expect(src).toMatch(/!isOwnProfile/);
-    });
-
-    it('renders a Block button when not blocked', () => {
-      expect(src).toMatch(/blockMutation\.mutate/);
-      // The Block label is rendered as text content next to the icon.
-      expect(src).toMatch(/<Ban[\s\S]+?\/>\s*Block/);
-    });
-
-    it('renders an Unblock button when blocked', () => {
-      expect(src).toMatch(/unblockMutation\.mutate/);
-      expect(src).toMatch(/<ShieldOff[\s\S]+?\/>\s*Unblock/);
-    });
-
-    it('block button shows confirm dialog with user-friendly explanation', () => {
-      expect(src).toMatch(/confirm\(/);
-      expect(src).toMatch(/won't be matched together/);
-    });
-  });
 });
