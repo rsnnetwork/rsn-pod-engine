@@ -15,6 +15,7 @@ import { isAdmin } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useConfirm } from '@/hooks/useConfirm';
+import { acceptedDestination } from '@/features/notifications/notification-logic';
 
 const TYPE_CONFIG: Record<string, { label: string; icon: typeof Users; variant: 'info' | 'warning' | 'default' }> = {
   pod: { label: 'Pod Invite', icon: Users, variant: 'info' },
@@ -118,8 +119,8 @@ export default function InvitesPage() {
       qc.invalidateQueries({ queryKey: ['my-pods'] });
       qc.invalidateQueries({ queryKey: ['my-sessions'] });
       addToast('Invite accepted!', 'success');
-      const data = res.data?.data;
-      const dest = data?.sessionId ? `/sessions/${data.sessionId}` : data?.podId ? `/pods/${data.podId}` : null;
+      // T14: a circle invite lands on the circle, as the bell's Accept does.
+      const dest = acceptedDestination(res.data?.data);
       if (dest) navigate(dest);
     },
     onError: async (err: any) => {
@@ -135,7 +136,7 @@ export default function InvitesPage() {
           try { await api.post(`/sessions/${sessionId}/register`); } catch { /* already registered */ }
         }
         addToast("You're already in! Taking you there now.", 'success');
-        const dest = sessionId ? `/sessions/${sessionId}` : podId ? `/pods/${podId}` : null;
+        const dest = acceptedDestination({ sessionId, podId, circleId: inv?.circleId });
         if (dest) navigate(dest);
         return;
       }
@@ -261,9 +262,9 @@ export default function InvitesPage() {
     return userIsAdmin || s.hostUserId === user?.id;
   });
 
-  // Circles you are in (admins: all). Circles are open-join, so the gate is
-  // membership, not a director role.
-  const invitableCircles = (circles || []).filter((c: any) => userIsAdmin || c.isMember);
+  // The circles the server says you may invite to (T14: anyone in an open circle, only the people who run a closed
+  // one); a server from before canInvite answers by membership, as before (admins: all).
+  const invitableCircles = (circles || []).filter((c: any) => c.canInvite ?? (userIsAdmin || c.isMember));
 
   const needsTarget = (inviteType === 'pod' && !podId) || (inviteType === 'session' && !sessionId) || (inviteType === 'circle' && !circleId);
 
@@ -300,7 +301,7 @@ export default function InvitesPage() {
             {receivedInvites.map((inv: any) => {
               const typeConf = TYPE_CONFIG[inv.type] || TYPE_CONFIG.platform;
               const TypeIcon = typeConf.icon;
-              const targetName = inv.podName || inv.sessionTitle || 'REASON';
+              const targetName = inv.podName || inv.sessionTitle || inv.circleName || 'REASON';
               return (
                 <Card key={inv.id} className="border-rsn-red-200 bg-rsn-red-light/30">
                   <div className="flex items-center justify-between">

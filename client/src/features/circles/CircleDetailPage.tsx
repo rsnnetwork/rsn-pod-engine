@@ -1,85 +1,66 @@
 // ─── Circle Detail ───────────────────────────────────────────────────────────
 //
 // REASON v1 Phase 3a (19 Jul 2026). A circle's home: who's in it, which pods
-// are attached, upcoming events those pods run, nested child circles. The
-// wall lands here in Phase 4.
+// are attached, upcoming events those pods run, nested child circles, the wall.
+// T14 (1 Nov 2026; 30 Oct review 7.4 to 7.6): the server says what the viewer may do (CircleAccess). One button joins,
+// asks to join a closed circle, withdraws the ask or leaves; Invite opens the shared invite sheet for whoever may
+// invite; the people who run it choose who can join, answer the asks (also opened by a bell's ?requests=1), make or
+// attach pods and remove members. A closed circle shows people outside it its name and counts and nothing else.
+// The page follows circle:<id> and the member's own circles (and, for its managers, the asks), so every change shows
+// without a refresh.
 
 import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Users, Calendar, Box, CircleDashed, MessagesSquare, Plus, X, Mail } from 'lucide-react';
+import { ArrowLeft, Users, Calendar, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox } from 'lucide-react';
 import Card from '@/components/ui/Card';
-import Avatar from '@/components/ui/Avatar';
-import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
-import { isAdmin } from '@/lib/utils';
-import { E } from '@/realtime/entities';
-import { personHref } from '@/features/reason/human/profile-text';
 import { useAuthStore } from '@/stores/authStore';
-import { useToastStore } from '@/stores/toastStore';
-import { useConfirm } from '@/hooks/useConfirm';
+import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import CircleWall from './CircleWall';
+import CircleJoinButton from './CircleJoinButton';
+import CircleSettingsSheet from './CircleSettingsSheet';
+import CircleRequestsSheet from './CircleRequestsSheet';
+import CirclePodsSection from './CirclePodsSection';
+import CircleMembersSection from './CircleMembersSection';
+import { LOCKED_COPY, WHO_CAN_JOIN, circleEntities, requestsLabel, type CircleDetail } from './circle-logic';
 
-interface CircleDetail {
-  id: string;
-  name: string;
-  description: string | null;
-  memberCount: number;
-  isMember: boolean;
-  members: Array<{ userId: string; displayName: string | null; avatarUrl: string | null; role: string }>;
-  pods: Array<{ podId: string; name: string; description: string | null }>;
-  upcomingEvents: Array<{ id: string; title: string; scheduledAt: string; podId: string }>;
-  children: Array<{ id: string; name: string; memberCount: number }>;
-}
+const HEADER_ACTION = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50';
 
 export default function CircleDetailPage() {
   const { circleId } = useParams();
-  // ?post=<id>: a shared link or a bell entry lands on one post; the wall scrolls to it.
-  const [searchParams] = useSearchParams();
+  // ?post=<id>: a shared link or a bell entry lands on one post; the wall scrolls to it. ?requests=1: a manager's
+  // join_request bell opens the asks.
+  const [searchParams, setSearchParams] = useSearchParams();
   const highlightPostId = searchParams.get('post') || undefined;
-  const { addToast } = useToastStore();
-  const queryClient = useQueryClient();
   const { user } = useAuthStore();
-  const admin = isAdmin(user?.role);
-  const [attaching, setAttaching] = useState(false);
-  const [podChoice, setPodChoice] = useState('');
-  const { ask, confirmDialog } = useConfirm();
+  const [sheet, setSheet] = useState<'invite' | 'settings' | null>(null);
 
-  // realtime: skip — admin attach picker only; fetched when the picker opens
-  const { data: allPods } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ['podsForAttach'],
-    queryFn: () => api.get('/pods').then(r => r.data.data ?? []),
-    enabled: admin && attaching,
-  });
-
-  // Whether the member is in this circle is their own entity's business, as on the list
-  // page. What refreshes the circle: that entity, the invalidations below (after a join or
-  // leave, and after a pod is attached or detached), and window focus. The circle routes
-  // emit no entity, so another member joining or leaving, or a pod attached from elsewhere,
-  // does not refresh it.
-  const { data: circle, isLoading } = useQuery<CircleDetail>({
+  const { data: circle, isLoading, isError, refetch } = useQuery<CircleDetail>({
     queryKey: ['circle', circleId],
     queryFn: () => api.get(`/circles/${circleId}`).then(r => r.data.data),
     enabled: !!circleId,
-    meta: { entities: user?.id ? [E.user(user.id)] : [] },
+    meta: { entities: circleEntities(circleId ?? '', user?.id) },
   });
 
-  const joinLeave = async () => {
-    if (!circle) return;
-    try {
-      await api.post(`/circles/${circle.id}/${circle.isMember ? 'leave' : 'join'}`);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['circle', circleId] }),
-        queryClient.invalidateQueries({ queryKey: ['circles'] }),
-      ]);
-      addToast(circle.isMember ? `Left ${circle.name}` : `Welcome to ${circle.name}!`, 'success');
-    } catch {
-      addToast('That didn\'t work — try again.', 'error');
-    }
-  };
+  if (isLoading) return <PageLoader />;
+  if (isError || !circle) {
+    return (
+      <div className="max-w-3xl mx-auto space-y-4">
+        <Link to="/circles" className="inline-flex items-center gap-1.5 min-h-[44px] text-sm text-gray-500 hover:text-gray-800"><ArrowLeft className="h-4 w-4" /> All circles</Link>
+        <Card>
+          <p className="text-sm text-gray-700" role="alert">We could not open this circle. It may have been archived.</p>
+          <button type="button" onClick={() => void refetch()} className={`${HEADER_ACTION} mt-3`}>Try again</button>
+        </Card>
+      </div>
+    );
+  }
 
-  if (isLoading || !circle) return <PageLoader />;
+  const requestsOpen = !!circle.canManage && searchParams.get('requests') === '1';
+  const closeRequests = () => { const next = new URLSearchParams(searchParams); next.delete('requests'); setSearchParams(next, { replace: true }); };
+  const openRequests = () => { const next = new URLSearchParams(searchParams); next.set('requests', '1'); setSearchParams(next); };
+  const canInvite = circle.canInvite ?? circle.isMember;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -87,36 +68,44 @@ export default function CircleDetailPage() {
         <ArrowLeft className="h-4 w-4" /> All circles
       </Link>
 
-      <div className="flex items-start justify-between gap-3 animate-fade-in">
+      {/* The title, then its actions on a row of their own at every width: beside a long name they squeezed it at 768. */}
+      <div className="flex flex-col gap-3 animate-fade-in">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-[#1a1a2e]">{circle.name}</h1>
-          {circle.description && <p className="text-gray-500 text-sm mt-1">{circle.description}</p>}
-          <p className="flex items-center gap-1.5 text-xs text-gray-400 mt-2">
+          <h1 className="text-2xl font-bold text-[#1a1a2e] break-words">{circle.name}</h1>
+          {circle.description && <p className="text-gray-500 text-sm mt-1 break-words">{circle.description}</p>}
+          <p className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400 mt-2">
             <Users className="h-3.5 w-3.5" /> {circle.memberCount} {circle.memberCount === 1 ? 'member' : 'members'}
+            {circle.joinPolicy === 'closed' && <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-gray-600" data-testid="circle-closed-badge"><Lock className="h-3 w-3" /> Closed</span>}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {/* 13 Aug 2026 (C3): circle-level invites. The Invites page carries
-              the email / people / link options, so this hands off to it with
-              the circle preselected rather than duplicating the form here. */}
-          {circle.isMember && (
-            <Link
-              to={`/invites?type=circle&circleId=${circle.id}`}
-              data-testid="circle-invite"
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50"
-            >
+        <div className="flex flex-wrap items-center gap-2">
+          {canInvite && (
+            <button type="button" onClick={() => setSheet('invite')} data-testid="circle-invite" className={HEADER_ACTION}>
               <Mail className="h-4 w-4" /> Invite
-            </Link>
+            </button>
           )}
-          <Button
-            variant={circle.isMember ? 'ghost' : 'primary'}
-            onClick={joinLeave}
-            className="min-h-[44px] shrink-0"
-          >
-            {circle.isMember ? 'Leave' : 'Join circle'}
-          </Button>
+          {circle.canManage && circle.joinPolicy !== undefined && (
+            <button type="button" onClick={() => setSheet('settings')} data-testid="circle-settings" className={HEADER_ACTION} aria-label={WHO_CAN_JOIN}>
+              <Settings2 className="h-4 w-4" /> {WHO_CAN_JOIN}
+            </button>
+          )}
+          {circle.canManage && (circle.joinPolicy === 'closed' || (circle.requestCount ?? 0) > 0) && (
+            <button type="button" onClick={openRequests} data-testid="circle-requests-open" className={HEADER_ACTION}>
+              <Inbox className="h-4 w-4" /> {requestsLabel(circle.requestCount)}
+            </button>
+          )}
+          <CircleJoinButton circle={circle} />
         </div>
       </div>
+
+      {circle.locked && (
+        <Card className="animate-fade-in-up" data-testid="circle-locked">
+          <div className="flex items-start gap-3">
+            <Lock className="mt-0.5 h-5 w-5 shrink-0 text-rsn-red" aria-hidden="true" />
+            <p className="text-sm text-gray-700">{LOCKED_COPY}</p>
+          </div>
+        </Card>
+      )}
 
       {circle.children.length > 0 && (
         <div className="space-y-2 animate-fade-in-up">
@@ -158,107 +147,24 @@ export default function CircleDetailPage() {
         </div>
       )}
 
-      {(circle.pods.length > 0 || admin) && (
+      {!circle.locked && <CirclePodsSection circle={circle} />}
+
+      {!circle.locked && (
         <div className="space-y-2 animate-fade-in-up">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
-              <Box className="h-4 w-4 text-rsn-red" /> Pods in this circle
-            </h2>
-            {admin && (
-              <button
-                onClick={() => setAttaching(v => !v)}
-                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 min-h-[36px]"
-              >
-                {attaching ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                {attaching ? 'Cancel' : 'Attach pod'}
-              </button>
-            )}
-          </div>
-          {attaching && admin && (
-            <Card className="!p-3">
-              <div className="flex items-center gap-2">
-                <select
-                  value={podChoice} onChange={e => setPodChoice(e.target.value)}
-                  className="flex-1 rounded-lg border border-gray-200 px-2 py-2 text-sm min-h-[44px]"
-                >
-                  <option value="">Choose a pod…</option>
-                  {(allPods ?? [])
-                    .filter(p => !circle.pods.some(cp => cp.podId === p.id))
-                    .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-                <Button
-                  size="sm" className="min-h-[44px]"
-                  disabled={!podChoice}
-                  onClick={async () => {
-                    try {
-                      await api.post(`/circles/${circle.id}/pods`, { podId: podChoice });
-                      setPodChoice(''); setAttaching(false);
-                      await queryClient.invalidateQueries({ queryKey: ['circle', circleId] });
-                    } catch { addToast('Could not attach that pod.', 'error'); }
-                  }}
-                >Attach</Button>
-              </div>
-            </Card>
-          )}
-          <div className="grid gap-2">
-            {circle.pods.map(p => (
-              <Card key={p.podId} className="card-hover !p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <Link to={`/pods/${p.podId}`} className="block min-h-[36px] min-w-0 flex-1">
-                    <p className="font-medium text-gray-900">{p.name}</p>
-                    {p.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{p.description}</p>}
-                  </Link>
-                  {admin && (
-                    <button
-                      onClick={async () => {
-                        if (!(await ask({ title: `Detach ${p.name}?`, body: 'It leaves this circle. The pod itself is untouched.', confirmLabel: 'Detach', tone: 'danger' }))) return;
-                        try {
-                          await api.delete(`/circles/${circle.id}/pods/${p.podId}`);
-                          await queryClient.invalidateQueries({ queryKey: ['circle', circleId] });
-                        } catch { addToast('Could not detach.', 'error'); }
-                      }}
-                      className="flex min-h-[44px] min-w-[44px] items-center justify-center text-gray-400 hover:text-red-500"
-                      title="Detach from circle"
-                      aria-label={`Detach ${p.name} from this circle`}
-                    ><X className="h-4 w-4" /></button>
-                  )}
-                </div>
-              </Card>
-            ))}
-          </div>
+          <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
+            <MessagesSquare className="h-4 w-4 text-rsn-red" /> Wall
+          </h2>
+          <CircleWall circleId={circle.id} isMember={circle.isMember} highlightPostId={highlightPostId} />
         </div>
       )}
 
-      <div className="space-y-2 animate-fade-in-up">
-        <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
-          <MessagesSquare className="h-4 w-4 text-rsn-red" /> Wall
-        </h2>
-        <CircleWall circleId={circle.id} isMember={circle.isMember} highlightPostId={highlightPostId} />
-      </div>
+      {!circle.locked && <CircleMembersSection circle={circle} />}
 
-      <div className="space-y-2 animate-fade-in-up">
-        <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
-          <Users className="h-4 w-4 text-rsn-red" /> Members
-        </h2>
-        {circle.members.length === 0 ? (
-          <Card><p className="text-sm text-gray-500 text-center py-2">Nobody here yet — be the first to join.</p></Card>
-        ) : (
-          <div className="grid grid-cols-1 gap-2">
-            {circle.members.map(m => (
-              <Card key={m.userId} className="!p-3">
-                <Link to={personHref(m.userId, 'Circles')} className="flex items-center gap-3 min-h-[44px] hover:opacity-80 transition-opacity">
-                  <Avatar src={m.avatarUrl || undefined} name={m.displayName || 'User'} size="sm" />
-                  <p className="text-sm font-medium text-gray-900 truncate">{m.displayName || 'Member'}</p>
-                  {m.role === 'moderator' && (
-                    <span className="ml-auto text-[10px] font-semibold text-rsn-red bg-rsn-red-light px-2 py-0.5 rounded-full">MOD</span>
-                  )}
-                </Link>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
-      {confirmDialog}
+      <InvitePickerSheet open={sheet === 'invite'} onClose={() => setSheet(null)} target={{ type: 'circle', circleId: circle.id }} />
+      {sheet === 'settings' && circle.joinPolicy && (
+        <CircleSettingsSheet circleId={circle.id} name={circle.name} current={circle.joinPolicy} waiting={circle.requestCount ?? 0} onClose={() => setSheet(null)} />
+      )}
+      {requestsOpen && <CircleRequestsSheet circleId={circle.id} onClose={closeRequests} />}
     </div>
   );
 }

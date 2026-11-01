@@ -102,7 +102,8 @@ describe('the words the client asked for, screen by screen (19 Oct feedback)', (
 
   it('invites: the platform is called REASON, in a pending invite, in the list of invite types and on the page that accepts one', () => {
     const invites = source('features/invites/InvitesPage.tsx');
-    expect(invites).toContain("inv.podName || inv.sessionTitle || 'REASON';");
+    // T14: a circle invite names its circle.
+    expect(invites).toContain("inv.podName || inv.sessionTitle || inv.circleName || 'REASON';");
     expect(invites).toContain('<option value="platform">Platform Invite (new to REASON)</option>');
     expect(invites).not.toContain('someone new to REASON');
     expect(source('features/invites/InviteAcceptPage.tsx')).toContain("invite?.type === 'circle' ? 'a circle' : 'REASON';");

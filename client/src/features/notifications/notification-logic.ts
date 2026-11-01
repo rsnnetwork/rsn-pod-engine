@@ -37,13 +37,22 @@ export const NOTIFICATIONS_PAGE_KEY = ['notifications', 'page'] as const;
 /** A page of the notifications page. */
 export const NOTIFICATIONS_PAGE_SIZE = 30;
 
-const INVITE_TYPES = ['pod_invite', 'event_invite'];
+// T14 (1 Nov 2026): a circle invite is answered in place too (the server sends its inviteStatus since migration 118).
+const INVITE_TYPES = ['pod_invite', 'event_invite', 'circle_invite'];
 
 /** The invite code a `/invite/{code}` link carries. */
 export function extractInviteCode(link?: string | null): string | null {
   if (!link) return null;
   const match = link.match(/^\/invite\/([A-Za-z0-9]+)$/);
   return match ? match[1] : null;
+}
+
+/** Where an accepted invite takes the person: the event, the pod or the circle it let them into (POST /invites/:code/accept). */
+export function acceptedDestination(data: { sessionId?: string | null; podId?: string | null; circleId?: string | null } | null | undefined): string | null {
+  if (data?.sessionId) return `/sessions/${data.sessionId}`;
+  if (data?.podId) return `/pods/${data.podId}`;
+  if (data?.circleId) return `/circles/${data.circleId}`;
+  return null;
 }
 
 /** Where a notification opens. */

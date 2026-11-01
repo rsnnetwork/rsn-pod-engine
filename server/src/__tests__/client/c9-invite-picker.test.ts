@@ -368,7 +368,20 @@ describe('the pod page reminds one invite at a time, half a second apart', () =>
 // ─── The wiring, pinned by its source ────────────────────────────────────────────────────────────
 
 describe('the sheet is the REASON Sheet, with the footer the brief asks for', () => {
-  const sheet = read('features/invites/InvitePickerSheet.tsx');
+  // P29 (T14, 1 Nov 2026): the sheet is split into parts of at most 200 lines; these read them as one.
+  const PARTS = [
+    'features/invites/InvitePickerSheet.tsx', 'features/invites/InviteChosenChips.tsx', 'features/invites/InviteCandidateList.tsx',
+    'features/invites/InviteExtras.tsx', 'features/invites/useInvitePicker.ts', 'features/invites/invite-sheet-style.ts',
+  ];
+  const sheet = read(PARTS[0]);
+  const whole = PARTS.map(read).join('\n');
+
+  it('is split into parts of at most 200 lines (CLAUDE.md §14, P29)', () => {
+    for (const part of PARTS) {
+      expect(read(part)).not.toBe('');
+      expect(read(part).split('\n').length).toBeLessThanOrEqual(200);
+    }
+  });
 
   it('is built on the REASON Sheet (a bottom sheet on phones, a dialog from 768px, portalled, focus kept inside)', () => {
     expect(sheet).toMatch(/import Sheet from '@\/features\/reason\/ui\/Sheet';/);
@@ -385,14 +398,14 @@ describe('the sheet is the REASON Sheet, with the footer the brief asks for', ()
   it('searches as you type (debounced), browses with "Show more", folds chips, and offers email and a link with the real cap', () => {
     expect(sheet).toMatch(/useDebouncedValue\(/);
     expect(sheet).toMatch(/placeholder=\{SEARCH_PLACEHOLDER\}/);
-    expect(sheet).toMatch(/isFetchingNextPage \? 'Loading more…' : SHOW_MORE/);
-    expect(sheet).toMatch(/chipsView\(/);
+    expect(whole).toMatch(/isFetchingNextPage \? 'Loading more…' : SHOW_MORE/);
+    expect(whole).toMatch(/chipsView\(/);
     expect(sheet).toContain('{INVITE_BY_EMAIL}');
     expect(sheet).toContain('{SHARE_A_LINK}');
-    expect(sheet).toMatch(/shareLinkNote\(/);
+    expect(whole).toMatch(/shareLinkNote\(/);
     expect(sheet).toMatch(/const cap = linkCap\(capacity\)/);
-    expect(sheet).toMatch(/useShareLink\(target, cap,/);
-    expect(sheet).not.toMatch(/maxUses: 10\b/);
+    expect(whole).toMatch(/useShareLink\(target, cap,/);
+    expect(whole).not.toMatch(/maxUses: 10\b/);
   });
 
   it('the typed search is dark ink on a white field (it was white on white once, 9 Jun) and 16px on a phone', () => {
@@ -408,7 +421,17 @@ describe('the sheet is the REASON Sheet, with the footer the brief asks for', ()
   });
 
   it('never asks the old encounters search', () => {
-    expect(sheet).not.toMatch(/\/users\/connected/);
+    expect(whole).not.toMatch(/\/users\/connected/);
+  });
+
+  it('P25: what a send answered stands only until the list is read again, so a withdrawal elsewhere frees the row', () => {
+    const state = read('features/invites/useInvitePicker.ts');
+    expect(state).toMatch(/if \(sentAt\.current > 0 && listReadAt > sentAt\.current\) \{\s*sentAt\.current = 0;\s*setSent\(new Map\(\)\);/);
+    expect(sheet).toMatch(/useInvitePicker\(target, list\.dataUpdatedAt\)/);
+  });
+
+  it('P35: the candidates read passes React Query\'s abort signal, so a cancelled refetch stops reading', () => {
+    expect(read('features/invites/useInviteCandidates.ts')).toMatch(/queryFn: \(\{ pageParam, signal \}\) =>[\s\S]{0,160}\{ params: candidateParams\(target, source, q, pageParam\), signal \}/);
   });
 });
 

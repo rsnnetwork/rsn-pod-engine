@@ -1,13 +1,15 @@
 // ─── Circles Page ────────────────────────────────────────────────────────────
 //
 // REASON v1 Phase 3a (19 Jul 2026). Circles are communities — groups of people
-// with the same intent/type (Stefan's definition). Open join. Admins can
-// create circles here (v1 is admin-created, per his answer "we do").
+// with the same intent/type (Stefan's definition). Admins can create circles
+// here (v1 is admin-created, per his answer "we do"). T14 (1 Nov 2026): a circle
+// is Open or Closed; each card's one button joins, asks to join, withdraws the ask
+// or leaves (CircleJoinButton), and the list follows the member's own circles.
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
-import { CircleDashed, Users, Plus, X } from 'lucide-react';
+import { CircleDashed, Users, Plus, X, Lock } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -17,16 +19,8 @@ import { isAdmin } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
-
-interface CircleSummary {
-  id: string;
-  name: string;
-  description: string | null;
-  parentCircleId: string | null;
-  memberCount: number;
-  podCount: number;
-  isMember: boolean;
-}
+import CircleJoinButton from './CircleJoinButton';
+import type { CircleSummary } from './circle-logic';
 
 export default function CirclesPage() {
   const { user } = useAuthStore();
@@ -37,17 +31,15 @@ export default function CirclesPage() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
 
   // This page has its own key under 'circles', not the bare ['circles'] that AppLayout reads
   // for the nav. React Query keeps ONE set of options per key, and whichever observer rendered
   // last applies its own. AppLayout is always mounted, renders again on every navigation and
   // declares no entities, so a tag on the shared key was overwritten the moment this page
   // opened (the home page tile has its own key for the same reason).
-  // What refreshes the list: the member's own entity (circle membership belongs to the member),
-  // the invalidations below after a join, leave or create (the prefix ['circles'] reaches this
-  // key too), and window focus. The circle routes emit no entity, so someone else joining or
-  // leaving a circle does not refresh it.
+  // What refreshes the list: the member's own circles tag (user:<me>:circles, which the server sends whenever their
+  // place in a circle changes: a join, a leave, an ask answered, an invite accepted), their own entity, and the
+  // invalidations after a write here (the prefix ['circles'] reaches this key too).
   // The nav's list is the same endpoint with the same shape. It is read here, never written,
   // to stand in while this key has no answer of its own, so the page opens on the list and not
   // on a loader.
@@ -55,22 +47,8 @@ export default function CirclesPage() {
     queryKey: ['circles', 'list'],
     queryFn: () => api.get('/circles').then(r => r.data.data ?? []),
     placeholderData: () => queryClient.getQueryData<CircleSummary[]>(['circles']),
-    meta: { entities: user?.id ? [E.user(user.id)] : [] },
+    meta: { entities: user?.id ? [E.userCircles(user.id), E.user(user.id)] : [] },
   });
-
-  const joinLeave = async (c: CircleSummary) => {
-    if (busy) return;
-    setBusy(c.id);
-    try {
-      await api.post(`/circles/${c.id}/${c.isMember ? 'leave' : 'join'}`);
-      await queryClient.invalidateQueries({ queryKey: ['circles'] });
-      addToast(c.isMember ? `Left ${c.name}` : `Welcome to ${c.name}!`, 'success');
-    } catch {
-      addToast('That didn\'t work — try again.', 'error');
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const create = async () => {
     const name = newName.trim();
@@ -148,17 +126,10 @@ export default function CirclesPage() {
                     <Users className="h-3.5 w-3.5" />
                     {c.memberCount} {c.memberCount === 1 ? 'member' : 'members'}
                     {c.podCount > 0 && <> · {c.podCount} {c.podCount === 1 ? 'pod' : 'pods'}</>}
+                    {c.joinPolicy === 'closed' && <> · <Lock className="h-3 w-3" aria-hidden="true" /> Closed</>}
                   </p>
                 </Link>
-                <Button
-                  size="sm"
-                  variant={c.isMember ? 'ghost' : 'primary'}
-                  onClick={() => joinLeave(c)}
-                  disabled={busy === c.id}
-                  className="min-h-[44px] shrink-0"
-                >
-                  {busy === c.id ? '…' : c.isMember ? 'Leave' : 'Join'}
-                </Button>
+                <CircleJoinButton circle={c} size="sm" />
               </div>
             </Card>
           ))}
