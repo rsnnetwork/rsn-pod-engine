@@ -6,8 +6,9 @@
 //
 //   - A one-to-one reply is kept with its original and read back quoted; a reply to a message of another conversation
 //     is refused and nothing is kept; a message from before migration 121 reads replyTo null; an original whose writer's
-//     account is closed is quoted under "Former member"; when an original is deleted the reply stays (ON DELETE SET
-//     NULL) and is drawn without a quote.
+//     account is closed is quoted under "Former member"; when an original is deleted the reply stays, still pointing
+//     at it (a plain column, no foreign key: T6 fix round 1), and its quote reads deleted (the client says "Original
+//     message deleted"), one-to-one and in a group.
 //   - In a group, an original from someone blocked with the reader, or from before the reader joined, is hidden from
 //     that reader only; a reply to a message the writer may not see is refused.
 //   - 75 notifications, a dozen of them written in the very same microsecond, page thirty at a time in order with no row
@@ -116,13 +117,17 @@ suite('quoted replies and the notifications page (real Postgres, one rolled-back
       expect(messages.find((m) => m.id === reply.message.id)!.replyTo).toMatchObject({ senderName: 'Former member' });
     });
 
-    it('when an original is deleted the reply stays, unquoted (ON DELETE SET NULL)', async () => {
+    it('when an original is deleted the reply stays and its quote says deleted (no foreign key clears it)', async () => {
+      const fk = await sql(
+        `SELECT 1 FROM pg_constraint WHERE conrelid = 'direct_messages'::regclass AND contype = 'f' AND pg_get_constraintdef(oid) LIKE '%reply_to_id%'`,
+      );
+      expect(fk).toHaveLength(0);
       const first = await sendMessage(ids.admin, ids.cleo, 'Delete me');
       const reply = await sendMessage(ids.admin, ids.cleo, 'Answering it', null, first.message.id);
       await sql(`DELETE FROM direct_messages WHERE id = $1`, [first.message.id]);
       const { messages } = await listMessages(first.conversationId, ids.cleo);
       expect(messages.map((m) => m.id)).toEqual([reply.message.id]);
-      expect(messages[0].replyTo).toBeNull();
+      expect(messages[0].replyTo).toEqual({ id: first.message.id, senderName: '', content: '', kind: 'user', deleted: true });
     });
   });
 
@@ -154,6 +159,10 @@ suite('quoted replies and the notifications page (real Postgres, one rolled-back
 
       await expect(sendGroupMessage(g.id, ids.cleo, 'Replying across a block', original.id)).rejects.toMatchObject({ statusCode: 400, message: REPLY_COPY.notInGroup });
       await expect(sendGroupMessage(g.id, ids.dev, 'Replying to before I joined', original.id)).rejects.toMatchObject({ statusCode: 400 });
+
+      // The original deleted: the reply stays, and its quote says the original is gone.
+      await sql(`DELETE FROM direct_messages WHERE id = $1`, [original.id]);
+      expect(await quoteFor(ids.ben)).toEqual({ id: original.id, senderName: '', content: '', kind: 'user', deleted: true });
     });
   });
 
