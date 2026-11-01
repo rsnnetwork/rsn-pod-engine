@@ -8,6 +8,7 @@ import { query } from '../../../db';
 import { SessionStatus, SessionConfig, EventFormat, ErrorCodes, formatRule, liveKindOf } from '@rsn/shared';
 import { getRedisClient } from '../../redis/redis.client';
 import { shadowWriteCanonical } from './canonical-shadow';
+import { NO_VIDEO_ROOM, hasVideoRoom } from '../../session/video-room';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -319,6 +320,18 @@ export function refuseIfFormatLacks(socket: Socket, sessionId: string, need: 'ro
       : 'This event has no rounds. Everyone stays in the main room.',
   });
   logger.info({ sessionId, format, need }, 'Refused a round action on an event without rounds');
+  return true;
+}
+
+/**
+ * The socket twin of assertVideoRoom (30 Oct 2026): Go Live and joining the live room are refused for an event
+ * with no video room (In person). Emits NOT_A_VIDEO_EVENT to the caller and returns true, so the handler stops
+ * before it opens a room or tracks anyone; returns false for every other event.
+ */
+export function refuseIfNoVideoRoom(socket: Socket, sessionId: string, format: EventFormat): boolean {
+  if (hasVideoRoom(format)) return false;
+  socket.emit('error', { code: NO_VIDEO_ROOM.code, message: NO_VIDEO_ROOM.message });
+  logger.info({ sessionId, format }, 'Refused the live room of an event with no video room');
   return true;
 }
 

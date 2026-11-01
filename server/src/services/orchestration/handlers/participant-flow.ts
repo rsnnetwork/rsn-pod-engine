@@ -15,7 +15,7 @@ import {
 import {
   ActiveSession, activeSessions, disconnectTimeouts, withSessionGuard, withMatchGenerationLock,
   sessionRoom, userRoom, getUserIdFromSocket,
-  emitRatingWindowOnce, activeFormat,
+  emitRatingWindowOnce, activeFormat, refuseIfNoVideoRoom,
 } from '../state/session-state';
 import { sendJoinChatHistory } from './chat-handlers';
 import * as sessionService from '../../session/session.service';
@@ -456,6 +456,8 @@ export async function handleJoinSession(
       }
 
       const session = await sessionService.getSessionById(data.sessionId);
+      // 30 Oct 2026 — an in-person event has no live room to join (kept apart from the room-entry checks below).
+      if (refuseIfNoVideoRoom(socket, data.sessionId, resolveEventFormat(session))) return;
 
       // ── Single-socket enforcement for same session ──
       // If this user already has a socket in this session, evict the old one

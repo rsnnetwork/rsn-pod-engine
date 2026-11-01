@@ -57,6 +57,7 @@ authors reference.
 | `admin:violations` | Admin violations queue | `admin-violations` |
 | `admin:support-tickets` | Admin ticket queue | `admin-support-tickets` |
 | `admin:analytics` | Admin analytics dashboards | `admin-stats`, `admin-analytics-*`, `admin-recent-matches` |
+| `admin:templates` | A matching template is created, edited or deleted on the admin page, a speed-networking preset included (every admin, from `routes/admin.ts` through `fanoutAdminEntities('templates')`) | `admin-templates`, `matching-presets` |
 | `admin:meeting-feedback` | An answer to "How did it go?" is saved or changed after a meeting (`POST /api/meetings/:id/feedback`), or the profile's outcome sheet records what happened (`POST /api/people/:userId/outcome`): every admin, through `fanoutAdminEntities('meeting-feedback')` (`services/meetings/meeting-feedback.service.ts`). The person who answered is sent `meeting:<meetingId>` (the page's card goes) and `user:<userId>` (the person brief), never the other person | the admin feedback list (`GET /api/admin/feedback`); preview branch (`reason-m1`) screens only |
 
 ## Rules

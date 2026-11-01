@@ -28,6 +28,8 @@ import logger from '../config/logger';
 import * as emailService from '../services/email/email.service';
 import { buildSessionCalendarEvent } from '../services/calendar/calendar.service';
 import type { Server as SocketServer } from 'socket.io';
+import { matchingPresetsLimiter } from '../middleware/rateLimit';
+import { listMatchingPresets } from '../services/matching/matching-template-choice';
 
 const router = Router();
 
@@ -70,6 +72,9 @@ export const createSessionSchema = z.object({
     // checked by the service on every path (old body included), so a refusal reads in the definition's words.
     durationMinutes: z.number().int().optional(),
     roundMinutes: z.number().finite().optional(),
+    // 30 Oct 2026 — where an in-person event happens. Its limit (300 once trimmed) and whether it is required are
+    // the shared definition's, checked by the service; this only keeps a body from carrying a book.
+    location: z.string().max(2000).optional(),
   }).optional(),
 });
 
@@ -105,6 +110,9 @@ export const updateSessionSchema = z.object({
     // checked by the service on every path (old body included), so a refusal reads in the definition's words.
     durationMinutes: z.number().int().optional(),
     roundMinutes: z.number().finite().optional(),
+    // 30 Oct 2026 — where an in-person event happens. Its limit (300 once trimmed) and whether it is required are
+    // the shared definition's, checked by the service; this only keeps a body from carrying a book.
+    location: z.string().max(2000).optional(),
   }).optional(),
 });
 
@@ -134,6 +142,24 @@ router.post(
 
       const response: ApiResponse = { success: true, data: session };
       res.status(201).json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /sessions/matching-presets ─────────────────────────────────────────
+// 30 Oct 2026 — who should meet whom: the presets any organiser may choose for a speed-networking event,
+// { id, name, description }. Declared before /:id, which would read "matching-presets" as an event id.
+
+router.get(
+  '/matching-presets',
+  authenticate,
+  matchingPresetsLimiter,
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const response: ApiResponse = { success: true, data: await listMatchingPresets() };
+      res.json(response);
     } catch (err) {
       next(err);
     }

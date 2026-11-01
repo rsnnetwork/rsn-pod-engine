@@ -6,7 +6,8 @@ import { authenticate, invalidateUserStatusCache } from '../middleware/auth';
 import { recordAudit } from '../middleware/audit';
 import { requireRole } from '../middleware/rbac';
 import { query } from '../db';
-import { ApiResponse, UserRole } from '@rsn/shared';
+import { ApiResponse, ErrorCodes, UserRole } from '@rsn/shared';
+import { ConflictError } from '../middleware/errors';
 import * as joinRequestService from '../services/join-request/join-request.service';
 import * as reportService from '../services/report/report.service';
 import { fanoutAccountStatusChange, fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
@@ -479,6 +480,7 @@ router.get(
                 exploration_level AS "explorationLevel",
                 same_company_allowed AS "sameCompanyAllowed",
                 fallback_strategy AS "fallbackStrategy",
+                is_preset AS "isPreset",
                 created_at AS "createdAt"
          FROM matching_templates ORDER BY is_default DESC, created_at DESC`
       );
@@ -579,6 +581,15 @@ router.delete(
   requireRole(UserRole.ADMIN),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // 30 Oct 2026 — a speed-networking preset is what organisers' events pair with, so it stays. Its weights can
+      // still be changed (PUT). Any other template is deleted as before.
+      const preset = await query(`SELECT 1 FROM matching_templates WHERE id::text = $1 AND is_preset = TRUE`, [req.params.id]);
+      if (preset.rows.length > 0) {
+        throw new ConflictError(
+          ErrorCodes.TEMPLATE_IS_PRESET,
+          "This is one of REASON's speed-networking presets, so it can't be deleted. You can change its weights.",
+        );
+      }
       await query(`DELETE FROM matching_templates WHERE id = $1 AND is_default = FALSE`, [req.params.id]);
       // Phase May-19 realtime — admin-templates list refresh.
       fanoutAdminEntities('templates').catch(() => {});

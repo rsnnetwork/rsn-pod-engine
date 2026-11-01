@@ -65,7 +65,9 @@ describe('Self-registration confirmation + calendar (26 May, Stefan)', () => {
       expect(i).toBeGreaterThan(-1);
       const next = src.indexOf('\nexport async function ', i + 1);
       const fn = src.slice(i, next > -1 ? next : src.length);
-      expect(fn).toMatch(/generateIcsContent/);
+      // 30 Oct 2026 — through the one event file builder (an in-person event's place as LOCATION).
+      expect(fn).toMatch(/eventIcs\(data\.calendarEvent\)/);
+      expect(src).toMatch(/function eventIcs\([\s\S]*?generateIcsContent\(/);
       expect(fn).toMatch(/filename: 'event\.ics'/);
     });
 

@@ -10,7 +10,7 @@ import {
 import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
-import { eventDurationOf } from '../session/event-duration';
+import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
 import * as circleService from '../circle/circle.service';
 import { mayInviteToCircle } from '../circle/circle-managers';
 import * as emailService from '../email/email.service';
@@ -347,6 +347,7 @@ export async function buildInviteContext(
         organizerName: host?.display_name || 'REASON',
         organizerEmail: host?.email,
         sessionId: target.sessionId,
+        place: eventPlaceOf(session),
       };
     }
   }

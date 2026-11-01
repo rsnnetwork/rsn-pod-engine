@@ -71,7 +71,7 @@ const STARTS = new Date('2026-11-05T17:00:00Z');
 const APP = 'https://app.rsn.network';
 const calendarEvent = {
   title: 'Founders Evening', description: 'An evening of founders.', startTime: STARTS, durationMinutes: 60,
-  organizerName: 'Host', organizerEmail: 'host@example.com', sessionId: 's-1',
+  organizerName: 'Host', organizerEmail: 'host@example.com', sessionId: 's-1', place: 'The Ivy, 1-5 West St, London',
 };
 const inviteData = {
   inviterName: 'Stefan', type: 'session' as const, targetName: 'Founders Evening', inviteUrl: `${APP}/invite/ABC123`, calendarEvent,

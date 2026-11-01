@@ -18,8 +18,9 @@ import {
 import {
   ActiveSession, activeSessions, withSessionGuard, withMatchGenerationLock,
   sessionRoom, userRoom, getUserIdFromSocket, persistSessionState,
-  emitRatingWindowOnce, activeFormat, refuseIfFormatLacks,
+  emitRatingWindowOnce, activeFormat, refuseIfFormatLacks, refuseIfNoVideoRoom,
 } from '../state/session-state';
+import { assertVideoRoom } from '../../session/video-room';
 import { startSegmentTimer, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
 // WS2 (27 May remaining work) — shared survivor flow for early room ends.
 import { endRoomEarlyForSurvivors } from './room-end-early';
@@ -297,6 +298,8 @@ export async function handleHostStart(
     if (!await verifyHost(socket, data.sessionId)) return;
 
     const session = await sessionService.getSessionById(data.sessionId);
+    // 30 Oct 2026 — an in-person event happens at a place: Go Live opens no room for it.
+    if (refuseIfNoVideoRoom(socket, data.sessionId, resolveEventFormat(session))) return;
 
     if (session.status !== SessionStatus.SCHEDULED) {
       socket.emit('error', { code: 'INVALID_STATE', message: 'Session can only start from scheduled state' });
@@ -2484,6 +2487,7 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
   if (session.hostUserId !== hostUserId) {
     throw new ForbiddenError('Only the host can start a session');
   }
+  assertVideoRoom(resolveEventFormat(session));
   if (session.status !== SessionStatus.SCHEDULED) {
     throw new ValidationError('Session can only start from scheduled state');
   }

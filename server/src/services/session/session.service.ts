@@ -9,12 +9,14 @@ import {
   ParticipantStatus, CreateSessionInput, UpdateSessionInput, SessionConfigInput, EventInputIssue,
   UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType, PodStatus,
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
-  liveKindOf, eventDurationMinutes,
+  liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import { activeMemberSql } from '../users/active-member';
 import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql, visibleEventSql } from './session-access';
+import { assertTemplateChoice } from '../matching/matching-template-choice';
+import { assertVideoRoom } from './video-room';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
 
@@ -36,9 +38,13 @@ const LIVE_STATUSES: SessionStatus[] = [
 
 // ─── Event format (26 Oct 2026) ─────────────────────────────────────────────
 
-/** Refuses a format the pod's type does not hold, or one not offered yet: 400 EVENT_FORMAT_NOT_ALLOWED, at the field. */
+/**
+ * Refuses a format the pod's type does not hold, or one not offered yet: 400 EVENT_FORMAT_NOT_ALLOWED, at the field.
+ * The server accepts every format any form offers, In person included (30 Oct 2026): production's form never sends
+ * it, because it never offers it.
+ */
 function assertFormatAllowed(podType: PodType, format: EventFormat): void {
-  const refusal = formatRefusal(podType, format);
+  const refusal = formatRefusal(podType, format, IN_PERSON_ENABLED_CLIENTS);
   if (refusal) throw new AppError(400, ErrorCodes.EVENT_FORMAT_NOT_ALLOWED, refusal, { format: [refusal] });
 }
 
@@ -50,26 +56,33 @@ function throwIfIssues(issues: EventInputIssue[]): void {
   throw new ValidationError(issues[0].message, details);
 }
 
-/** An explicit format: every setting the event will be stored with must be inside the format's limits. */
+/**
+ * An explicit format: every setting the event will be stored with must be inside the format's limits, and a
+ * setting it cannot do without (an in-person event's place) must be there.
+ */
 function assertEventInput(format: EventFormat, storedConfig: Record<string, unknown>): void {
-  throwIfIssues(checkEventInput(format, valuesFromConfig(format, storedConfig)));
+  const values = valuesFromConfig(format, storedConfig);
+  throwIfIssues([...missingRequired(format, values), ...checkEventInput(format, values)]);
 }
 
 /**
- * The settings only the new event forms send: a round length in minutes and a meeting's length. Production's
- * old form never sends them, so they are checked even when no format is sent; its own settings (a "Video
- * Meeting" for 500 people, by default) stay unchecked on that path, exactly as before. A setting the event's
- * format does not have is not checked here: normaliseConfig never stores it.
+ * The settings only the new event forms send: a round length in minutes, a meeting's length and an in-person
+ * event's place. Production's old form never sends them, so they are checked even when no format is sent; its own
+ * settings (a "Video Meeting" for 500 people, by default) stay unchecked on that path, exactly as before. A
+ * setting the event's format does not have is not checked here: normaliseConfig never stores it. What the format
+ * cannot do without is required on this path too (30 Oct 2026): config.eventType names a format only when the
+ * config carries it (resolveEventFormat), so a copy of an old row tagged physical_event is never a place-less event.
  */
-const FORM_ONLY_SETTINGS = ['roundMinutes', 'durationMinutes'] as const;
+const FORM_ONLY_SETTINGS = ['roundMinutes', 'durationMinutes', 'location'] as const;
 
-function assertFormOnlySettings(format: EventFormat, config: SessionConfigInput | undefined): void {
-  if (!config) return;
+function assertFormOnlySettings(
+  format: EventFormat, config: SessionConfigInput | undefined, storedConfig: Record<string, unknown>,
+): void {
   const sent: Record<string, unknown> = {};
   for (const key of FORM_ONLY_SETTINGS) {
-    if (config[key] !== undefined) sent[key] = config[key];
+    if (config?.[key] !== undefined) sent[key] = config[key];
   }
-  throwIfIssues(checkEventInput(format, sent));
+  throwIfIssues([...missingRequired(format, valuesFromConfig(format, storedConfig)), ...checkEventInput(format, sent)]);
 }
 
 const PARTICIPANT_COLUMNS = `
@@ -115,7 +128,9 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   if (explicit) assertFormatAllowed(pod.podType, format);
   const sessionConfig = normaliseConfig(format, input.config);
   if (explicit) assertEventInput(format, sessionConfig);
-  else assertFormOnlySettings(format, input.config);
+  else assertFormOnlySettings(format, input.config, sessionConfig);
+  // 30 Oct 2026 — who should meet whom: a preset for anyone, any template for a platform admin.
+  await assertTemplateChoice(sessionConfig.matchingTemplateId, !!isAdmin);
 
   const sessionId = uuid();
 
@@ -213,7 +228,12 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     const merged = formatChanges ? { ...input.config } : { ...currentConfig, ...input.config };
     const newConfig = normaliseConfig(nextFormat, merged);
     if (input.format !== undefined) assertEventInput(nextFormat, newConfig);
-    else assertFormOnlySettings(nextFormat, input.config);
+    else assertFormOnlySettings(nextFormat, input.config, newConfig);
+    // A template the event already had stays without a check (one stored before ids were checked included); a new
+    // choice is checked as on create.
+    if (newConfig.matchingTemplateId !== currentConfig?.matchingTemplateId) {
+      await assertTemplateChoice(newConfig.matchingTemplateId, !!isAdmin);
+    }
     setClauses.push(`config = $${paramIdx}`);
     values.push(JSON.stringify(newConfig));
     paramIdx++;
@@ -607,7 +627,8 @@ export async function getParticipantCount(sessionId: string): Promise<number> {
 
 // Valid session status transitions — prevents illegal state jumps
 const VALID_SESSION_TRANSITIONS: Record<string, string[]> = {
-  [SessionStatus.SCHEDULED]: [SessionStatus.LOBBY_OPEN, SessionStatus.CANCELLED],
+  // An in-person event never opens a lobby: it goes from scheduled to completed at its end time (30 Oct 2026).
+  [SessionStatus.SCHEDULED]: [SessionStatus.LOBBY_OPEN, SessionStatus.COMPLETED, SessionStatus.CANCELLED],
   [SessionStatus.LOBBY_OPEN]: [SessionStatus.ROUND_ACTIVE, SessionStatus.COMPLETED, SessionStatus.CANCELLED],
   [SessionStatus.ROUND_ACTIVE]: [SessionStatus.ROUND_RATING, SessionStatus.COMPLETED, SessionStatus.CANCELLED],
   [SessionStatus.ROUND_RATING]: [SessionStatus.ROUND_TRANSITION, SessionStatus.CLOSING_LOBBY, SessionStatus.COMPLETED],
@@ -930,6 +951,8 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
 
   // Verify session exists
   const session = await getSessionById(sessionId);
+  // 30 Oct 2026 — an in-person event has no video room, so no token into one (409 in a sentence).
+  assertVideoRoom(resolveEventFormat(session));
 
   // Verify user is an ACTIVE participant or the host.
   const participantResult = await query<SessionParticipant>(
