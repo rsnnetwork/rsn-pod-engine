@@ -165,8 +165,11 @@ export interface OnboardingV2Profile {
   /** IANA zone, for example "Asia/Kathmandu". Only the member sees it. */
   timezone: string | null;
   linkedinUrl: string | null;
-  /** "Where are you based?", as the member wrote it ("Copenhagen, Denmark"); null when they never said. */
-  location: string | null;
+  /**
+   * "Where are you based?", as the member wrote it ("Copenhagen, Denmark"); null when they never said. Always sent since
+   * the 30 Oct review; optional so a client built against it still compiles beside a server from before it.
+   */
+  location?: string | null;
 }
 
 export type OnboardingV2LinkedinStatus = 'none' | 'searching' | 'found' | 'partial' | 'not_found' | 'failed';
