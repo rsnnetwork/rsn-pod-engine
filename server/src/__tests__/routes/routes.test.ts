@@ -987,6 +987,62 @@ describe('Session Routes - Extended', () => {
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(1);
     });
+
+    // T13 fix (1 Nov 2026): the event's audience reads the list as its pod's members do. A circle event's audience is
+    // the circle's active members too (event-access.ts), so a circle member who is not in the pod is not refused, and
+    // the preview's event page, which waits for this list, registers them on opening it (L20). Everyone else: as before.
+    describe('who reads it', () => {
+      const SESSION = '5e550000-0000-4000-8000-000000000123';
+      const facts = (inAudience: boolean) => ({
+        visibility: 'private', pod_id: 'p1', pod_visibility: 'private', is_host: false, is_cohost: false, is_pod_organiser: false,
+        in_audience: inAudience, is_invited: false, participant_status: null, account_active: true, my_request: null,
+        outside_closed_circle: false,
+      });
+      const arm = (world: { podMember: boolean; inAudience: boolean }) => {
+        (sessionService.getSessionById as jest.Mock).mockResolvedValue({ ...mockSession, hostUserId: 'someone-else', podId: 'p1' });
+        (sessionService.isSessionParticipant as jest.Mock).mockResolvedValue(false);
+        (podService.getMemberRole as jest.Mock).mockResolvedValue(world.podMember ? 'member' : null);
+        (sessionService.getSessionParticipants as jest.Mock).mockResolvedValue([
+          { id: 'sp-1', userId: 'someone-else', status: 'registered', email: 'host@example.com' },
+        ]);
+        (dbQuery as jest.Mock).mockImplementation(async (sql: string) => {
+          if (sql.includes('SELECT status FROM users')) return { rows: [{ status: 'active' }], rowCount: 1 };
+          if (sql.includes('event_join_requests')) return { rows: [facts(world.inAudience)], rowCount: 1 };
+          return { rows: [], rowCount: 0 };
+        });
+      };
+      const read = async () => {
+        const res = await request(app).get(`/sessions/${SESSION}/participants`).set('Authorization', `Bearer ${makeToken()}`);
+        // Put back what the tests below read: the event hosted by the token's member, and the pod role.
+        (dbQuery as jest.Mock).mockReset();
+        (podService.getMemberRole as jest.Mock).mockResolvedValue('director');
+        (sessionService.getSessionById as jest.Mock).mockResolvedValue(mockSession);
+        (sessionService.isSessionParticipant as jest.Mock).mockReset();
+        return res;
+      };
+
+      it('a circle member who is not in the pod reads it (the public card, no email)', async () => {
+        arm({ podMember: false, inAudience: true });
+        const res = await read();
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).not.toHaveProperty('email');
+      });
+
+      it('someone outside the event\'s audience is refused with the same words as before', async () => {
+        arm({ podMember: false, inAudience: false });
+        const res = await read();
+        expect(res.status).toBe(403);
+        expect(res.body.error.message).toBe('You must be a participant or pod member to view this list');
+      });
+
+      it('a pod member reads it as before, without the audience read', async () => {
+        arm({ podMember: true, inAudience: false });
+        const res = await read();
+        expect(res.status).toBe(200);
+        expect((dbQuery as jest.Mock).mock.calls.some(([sql]) => String(sql).includes('event_join_requests'))).toBe(false);
+      });
+    });
   });
 });
 

@@ -635,7 +635,13 @@ router.get(
         const isPodMember = session.podId
           ? !!(await podService.getMemberRole(session.podId, req.user!.userId))
           : false;
-        if (!isHost && !isParticipant && !isPodMember) {
+        // T13 fix (1 Nov 2026): the event's audience reads it as its pod's members do. For an event for a whole circle
+        // that is the circle's active members too (event-access.ts), who are not in the pod; for every other event the
+        // audience is exactly the pod's active members, so nothing changes there. Read only when nothing above allowed.
+        const inAudience = !isHost && !isParticipant && !isPodMember
+          ? await readEventAccessFacts(req.params.id, req.user!.userId).then((f) => !!f && f.accountActive && f.inAudience)
+          : false;
+        if (!isHost && !isParticipant && !isPodMember && !inAudience) {
           throw new ForbiddenError('You must be a participant or pod member to view this list');
         }
         const cohost = isHost ? null : await query(
