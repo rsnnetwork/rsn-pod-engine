@@ -10,8 +10,8 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Settings } from 'lucide-react';
-import { POD_TYPES, defaultTitle } from '@rsn/shared';
-import type { EventFormat, OrchestrationMode, PodType } from '@rsn/shared';
+import { POD_TYPES, defaultTitle, defaultEventVisibility } from '@rsn/shared';
+import type { EventFormat, EventVisibility, OrchestrationMode, PodType } from '@rsn/shared';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -23,6 +23,7 @@ import { cn, isAdmin as isAdminRole, localTimezoneLabel } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder } from './EventFormatFields';
 import { useMatchingChoices } from './useMatchingChoices';
+import EventAccessField from './EventAccessField';
 import {
   DESCRIPTION_MAX, TITLE_MAX, autoTitle, eventBody, newEventSchema, newEventValues, nextQuarterHour, offeredFormats,
   podChangeFormat, shownEventKeys, startingPreset, type EventPod, type NewEventBody,
@@ -36,6 +37,8 @@ interface PodRow {
   orchestrationMode?: OrchestrationMode | null;
   memberRole?: string | null;
   status?: string;
+  /** T11: the pod's own access, where the event's "Who can join" starts. */
+  visibility?: string | null;
 }
 
 const CREATE_COPY = {
@@ -189,6 +192,9 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
   const pod = podOf(watch('podId'));
   const matchingChoices = useMatchingChoices(isAdmin);
   const offered = offeredFormats(pod?.podType ?? null);
+  // T11 (L17): "Who can join" starts from the pod's own access and follows the pod until the organiser chooses.
+  const [chosenVisibility, setChosenVisibility] = useState<EventVisibility | null>(null);
+  const visibility = chosenVisibility ?? defaultEventVisibility(pod?.visibility);
 
   /** The filled-in title follows the type and the pod until the member writes their own. */
   function refreshTitle(nextFormat: EventFormat) {
@@ -220,7 +226,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
 
   const create = useMutation({
     networkMode: 'always',
-    mutationFn: (body: NewEventBody) => api.post('/sessions', body),
+    mutationFn: (body: NewEventBody & { visibility: EventVisibility }) => api.post('/sessions', body),
     onSuccess: (res) => {
       addToast('Event scheduled!', 'success');
       const id = res.data?.data?.id;
@@ -233,7 +239,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
     onError: ev.refused,
     onSettled: ev.settled,
   });
-  const submit = ev.onSubmit((values) => create.mutate(eventBody(values, { isAdmin })));
+  const submit = ev.onSubmit((values) => create.mutate({ ...eventBody(values, { isAdmin }), visibility }));
   const typeLabel = pod ? POD_TYPES[pod.podType]?.label : undefined;
 
   return (
@@ -299,6 +305,10 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
             </p>
           </div>
         </div>
+      </Card>
+
+      <Card className="animate-fade-in-up stagger-1">
+        <EventAccessField value={visibility} onChange={setChosenVisibility} podName={pod?.name} podVisibility={pod?.visibility} />
       </Card>
 
       <Card className="animate-fade-in-up stagger-1">

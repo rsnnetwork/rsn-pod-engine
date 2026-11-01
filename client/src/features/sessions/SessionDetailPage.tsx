@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -27,6 +27,8 @@ import { useMatchingPresets } from './useMatchingChoices';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
+import EventAccessActions, { ACCESS_COPY, type EventAccess } from './EventAccessActions';
+import EventJoinRequestsCard from './EventJoinRequestsCard';
 
 /** The icon over each figure under an event's title. */
 const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
@@ -156,9 +158,8 @@ export default function SessionDetailPage() {
     .filter((p: { userId: string; status: string }) => p.status !== 'removed' && p.status !== 'left' && p.userId !== session?.hostUserId)
     .map((p: { userId: string }) => p.userId);
   const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
-  const isMember = !!pod?.memberRole || isAdmin;
-  const isRestrictedPod = pod?.visibility === 'invite_only' || pod?.visibility === 'private';
-  const canRegister = isMember || !isRestrictedPod;
+  // T11 (1 Nov 2026), D11: what this viewer may do comes from the server (session.access), never from the pod.
+  const access: EventAccess | undefined = session?.access;
   const [autoRegistering, setAutoRegistering] = useState(false);
   // Bug 13 (April 19) — block the auto-register useEffect after an EXPLICIT
   // unregister click. Without this, unregister → isRegistered flips false →
@@ -179,6 +180,9 @@ export default function SessionDetailPage() {
     // An event that has ended or was cancelled takes nobody (the server refuses, and the refusal showed as an error
     // to anyone opening it who had not registered: a pod member reading the chat, someone following a link).
     if (phase === 'done' || phase === 'cancelled') return;
+    // T11 (L17): opening the page registers only the event's audience and its invitees. A server before T11 sends
+    // no access block, and the page registers as it always did.
+    if (access && !access.autoRegister) return;
     if (session && user && participants && !isRegistered && !autoRegistering && sessionId) {
       setAutoRegistering(true);
       api.post(`/sessions/${sessionId}/register`).then(() => {
@@ -231,6 +235,8 @@ export default function SessionDetailPage() {
       title: `${session?.title || 'Event'} (copy)`,
       description: session?.description || '',
       scheduledAt: null,
+      // D9: the copy keeps who can join (a NULL visibility stays NULL: follow the pod) and the event's type.
+      ...(session?.visibility ? { visibility: session.visibility } : {}),
       format: session ? resolveEventFormat(session) : undefined,
       config: session?.config,
     }),
@@ -263,6 +269,8 @@ export default function SessionDetailPage() {
   // 403 — user isn't registered, not a pod member, and the pod isn't public.
   // Show a clean access-denied card instead of the broken "0 participants" fallback.
   if ((sessionError as any)?.response?.status === 403) {
+    // T11 fix round 1: a private event says so (the server's code EVENT_PRIVATE); any other refusal reads as before.
+    const isPrivateEvent = (sessionError as any)?.response?.data?.error?.code === 'EVENT_PRIVATE';
     // The way out goes home (For You): the old one went to a dashboard address that has no page.
     return (
       <div className="max-w-3xl mx-auto space-y-6">
@@ -276,10 +284,19 @@ export default function SessionDetailPage() {
             <div className="h-14 w-14 rounded-full bg-amber-100 flex items-center justify-center mb-4">
               <AlertTriangle className="h-7 w-7 text-amber-600" />
             </div>
-            <h1 className="text-xl font-bold text-[#1a1a2e] mb-2">Access restricted</h1>
-            <p className="text-gray-500 text-sm max-w-md">
-              You don't have access to this event. Ask the host for an invite or join the pod to see details.
-            </p>
+            {isPrivateEvent ? (
+              <>
+                <h1 data-testid="event-private-title" className="text-xl font-bold text-[#1a1a2e] mb-2">{ACCESS_COPY.privateTitle}</h1>
+                <p data-testid="event-private-notice" className="text-gray-500 text-sm max-w-md">{ACCESS_COPY.privateWho}</p>
+              </>
+            ) : (
+              <>
+                <h1 className="text-xl font-bold text-[#1a1a2e] mb-2">Access restricted</h1>
+                <p className="text-gray-500 text-sm max-w-md">
+                  You don't have access to this event. Ask the host for an invite or join the pod to see details.
+                </p>
+              </>
+            )}
             <Button variant="primary" onClick={() => navigate('/')} className="mt-6">
               Back to For You
             </Button>
@@ -397,16 +414,13 @@ export default function SessionDetailPage() {
         <div className="flex flex-wrap items-center gap-3">
           {/* Non-host participant flows: Register / Join Late / Pending-invite notice */}
           {!isHost && sessionStatusPhase(session.status) !== 'done' && sessionStatusPhase(session.status) !== 'cancelled' && !isRegistered && (
-            canRegister ? (
-              <Button onClick={() => registerMutation.mutate()} isLoading={registerMutation.isPending} className="btn-glow">
-                <UserPlus className="h-4 w-4 mr-2" /> {session.status === 'scheduled' ? 'Register' : 'Join Late'}
-              </Button>
-            ) : (
-              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 text-sm">
-                <Mail className="h-4 w-4 flex-shrink-0" />
-                <span>You have a pending invite — accept it from your <button onClick={() => navigate('/invites')} className="underline font-medium hover:text-amber-900">Invites page</button> to join this event.</span>
-              </div>
-            )
+            <EventAccessActions
+              sessionId={sessionId!}
+              access={access}
+              registerLabel={session.status === 'scheduled' ? 'Register' : 'Join Late'}
+              onRegister={() => registerMutation.mutate()}
+              registering={registerMutation.isPending}
+            />
           )}
           {!isHost && isRegistered && sessionStatusPhase(session.status) === 'live' && (
             <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
@@ -553,6 +567,11 @@ export default function SessionDetailPage() {
 
       {/* Who is invited and who declined, for the people who run the event, while it can still take people. It
           replaces the "Pending Invites" chip and the grey rows that sat at the end of the participants. */}
+      {/* T11: the people who run an event that asks for approval answer its requests here (the bell opens ?requests=1). */}
+      {access?.canManageRequests && access.visibility === 'public_with_approval' && (phase === 'pre' || phase === 'live') && sessionId && (
+        <EventJoinRequestsCard sessionId={sessionId} focus={searchParams.get('requests') === '1'} />
+      )}
+
       {mayInvite && sessionId && (
         <InviteStatusList
           target={{ type: 'session', sessionId, podId: session.podId ?? null }}
@@ -694,7 +713,7 @@ export default function SessionDetailPage() {
       )}
 
       {/* Edit Event: the same type picker and settings as Schedule an Event */}
-      <EditEventModal open={editOpen} onClose={() => setEditOpen(false)} session={session} podType={pod?.podType} isAdmin={isAdmin} />
+      <EditEventModal open={editOpen} onClose={() => setEditOpen(false)} session={session} podType={pod?.podType} podVisibility={pod?.visibility} podName={pod?.name} isAdmin={isAdmin} />
       {confirmDialog}
     </div>
   );

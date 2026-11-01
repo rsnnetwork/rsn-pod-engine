@@ -7,7 +7,7 @@
 // exist.
 import { useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { PodType } from '@rsn/shared';
+import { defaultEventVisibility, type EventVisibility, type PodType } from '@rsn/shared';
 import Sheet from '@/features/reason/ui/Sheet';
 import Input from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -22,6 +22,7 @@ import {
   type EventFormValues,
 } from './event-format-form';
 import { useEventFormatForm } from './useEventFormatForm';
+import EventAccessField from './EventAccessField';
 
 export interface EditableEvent {
   id: string;
@@ -30,6 +31,8 @@ export interface EditableEvent {
   description?: string | null;
   scheduledAt?: string | null;
   format?: unknown;
+  /** T11: who can join; NULL follows the pod. */
+  visibility?: EventVisibility | null;
   config?: Record<string, unknown> | null;
 }
 
@@ -39,6 +42,9 @@ interface Props {
   session: EditableEvent;
   /** The event's pod type: the types it may switch to. Unknown (the pod not loaded), only its own type is offered. */
   podType?: PodType | null;
+  /** T11: the pod's own access and name, for "Who can join". */
+  podVisibility?: string | null;
+  podName?: string;
   isAdmin: boolean;
 }
 
@@ -55,7 +61,7 @@ export default function EditEventModal({ open, ...rest }: Props) {
   return <EditEventSheet {...rest} />;
 }
 
-function EditEventSheet({ onClose, session, podType, isAdmin }: Omit<Props, 'open'>) {
+function EditEventSheet({ onClose, session, podType, podVisibility, podName, isAdmin }: Omit<Props, 'open'>) {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const formId = useId();
@@ -77,9 +83,15 @@ function EditEventSheet({ onClose, session, podType, isAdmin }: Omit<Props, 'ope
   const savedFormat = start.values.format;
   const formats = podType ? offeredFormats(podType, savedFormat) : [savedFormat];
 
+  const [visibility, setVisibility] = useState<EventVisibility>(session.visibility ?? defaultEventVisibility(podVisibility));
+  const [visibilityChosen, setVisibilityChosen] = useState(false);
   const save = useMutation({
     networkMode: 'always',
-    mutationFn: (values: EventFormValues) => api.put(`/sessions/${session.id}`, eventChanges(values, { isAdmin })),
+    // T11: "Who can join" is sent only when the organiser changed it, so an event that follows its pod keeps doing so.
+    mutationFn: (values: EventFormValues) => api.put(`/sessions/${session.id}`, {
+      ...eventChanges(values, { isAdmin }),
+      ...(visibilityChosen ? { visibility } : {}),
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['session', session.id] });
       addToast('Event updated', 'success');
@@ -126,6 +138,14 @@ function EditEventSheet({ onClose, session, podType, isAdmin }: Omit<Props, 'ope
           <Input label="Date and time" type="datetime-local" error={errors.scheduledAt?.message} className={FIELD_SCROLL_MARGINS} {...register('scheduledAt')} />
           <p className="text-xs text-gray-400 mt-1">Shown in your local time — {localTimezoneLabel()}.</p>
         </div>
+
+        <EventAccessField
+          value={visibility}
+          onChange={(next) => { setVisibility(next); setVisibilityChosen(true); }}
+          podName={podName}
+          podVisibility={podVisibility}
+          editing
+        />
 
         <EventFormatFields
           format={ev.format}
