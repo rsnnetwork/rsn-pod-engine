@@ -8,8 +8,8 @@
 
 import { query } from '../../db';
 import {
-  ErrorCodes, canBring, usableAnswer, type OutcomeKey, type PersonBrief, type PublicMember, type RecentConnection,
-  type RelationshipState, type WorthContinuing,
+  ErrorCodes, canBring, usableAnswer, type MessageRefusal, type OutcomeKey, type PersonBrief, type PublicMember,
+  type RecentConnection, type RelationshipState, type WorthContinuing,
 } from '@rsn/shared';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import * as blockService from '../block/block.service';
@@ -18,7 +18,12 @@ import { getUserById } from '../identity/identity.service';
 import { toPublicIntentProfile, toPublicMember } from '../user/public-card';
 import { loadProfile, scoreFit, MATCH_THRESHOLD, BROWSE_THRESHOLD } from '../matching/platform-match.service';
 import { getPokeWith } from '../poke/poke.service';
+import { canMessage } from '../dm/dm.service';
 import { getResponse } from './person-response.service';
+
+const MESSAGE_REFUSALS: readonly MessageRefusal[] = ['self', 'blocked', 'not_mutual', 'no_encounter'];
+const refusalOf = (reason: string | undefined): MessageRefusal | null =>
+  MESSAGE_REFUSALS.find((r) => r === reason) ?? null;
 
 // An answer is shown by usableAnswer (@rsn/shared): clipped to 160 characters, and blank when no letter or digit is
 // left (a member who types ".", "…" or "!!!" to get past a box has given no answer), so the reading goes on to the
@@ -152,6 +157,11 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
       [viewerId, targetId]),
     findPath(viewerId, targetId),
   ]);
+  // 30 Oct 2026: whether the viewer may message them, so the profile offers Message only when it can
+  // send (a pair who met without both saying "meet again" may not). The same rule as
+  // GET /dm/can-message/:userId. Asked last, on its own: its reads run one after another, so it never
+  // holds more than one connection, and the groups above stay at four.
+  const messaging = await canMessage(viewerId, targetId);
 
   // The brief can be aimed at ANY member by id, so the fit is judged on the public card only:
   // the scorer counts private interests as offers and words its reason from what matched.
@@ -201,6 +211,8 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
     shared: { circles: circles.rows, pods: pods.rows, upcomingEvents },
     path,
     entities,
+    canMessage: messaging.allowed,
+    canMessageReason: messaging.allowed ? null : refusalOf(messaging.reason),
   };
 }
 

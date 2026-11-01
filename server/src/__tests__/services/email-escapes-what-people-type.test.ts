@@ -113,7 +113,7 @@ const cases: Case[] = [
     expiresInHours: 48,
   }]),
   email('sendPokeReceivedEmail', 'a meeting request', ['to', 'recipientDisplayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
-    senderName: 'Fatima', introMessage: 'I would value your view on our seed round.', messagesUrl: `${APP}/messages`,
+    senderName: 'Fatima', note: 'I would value your view on our seed round.', reasonLine: 'Fatima is looking to meet investors, and Ana is an Angel Investor.', messagesUrl: `${APP}/messages`,
   }]),
   email('sendPokeAcceptedEmail', 'a meeting request accepted', ['to', 'recipientDisplayName', 'data'],
     ['delivered+ana@resend.dev', 'Ana', { accepterName: 'Bo', messagesUrl: `${APP}/messages` }]),

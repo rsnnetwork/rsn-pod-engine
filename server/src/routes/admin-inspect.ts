@@ -19,6 +19,8 @@ import { NotFoundError } from '../middleware/errors';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as stageEventsRepo from '../services/onboarding/stage-events.repo';
 import * as blockService from '../services/block/block.service';
+import { REQUEST_MESSAGE_MAX } from '../services/poke/request-message';
+import { combinedRequestMessage, requestText } from '../services/poke/request-text';
 
 const router = Router();
 
@@ -243,16 +245,20 @@ interface PokeRow {
   other_display_name: string | null;
   status: 'pending' | 'accepted' | 'declined';
   message: string | null;
+  reason_line: string | null;
   created_at: Date;
   responded_at: Date | null;
 }
 
+// The note and REASON's line apart (30 Oct 2026), and message, the two run together, as the
+// inspector has always shown it.
 function mapPokeRow(r: PokeRow) {
   return {
     id: r.id,
     otherUser: { id: r.other_id, displayName: r.other_display_name },
     status: r.status,
-    message: r.message,
+    message: combinedRequestMessage(r, REQUEST_MESSAGE_MAX),
+    ...requestText(r),
     createdAt: r.created_at,
     respondedAt: r.responded_at,
   };
@@ -271,7 +277,7 @@ router.get(
         await Promise.all([
           query<PokeRow>(
             `SELECT p.id, p.recipient_id AS other_id, u.display_name AS other_display_name,
-                    p.status, p.message, p.created_at, p.responded_at
+                    p.status, p.message, p.reason_line, p.created_at, p.responded_at
                FROM user_pokes p
                JOIN users u ON u.id = p.recipient_id
               WHERE p.sender_id = $1
@@ -280,7 +286,7 @@ router.get(
           ),
           query<PokeRow>(
             `SELECT p.id, p.sender_id AS other_id, u.display_name AS other_display_name,
-                    p.status, p.message, p.created_at, p.responded_at
+                    p.status, p.message, p.reason_line, p.created_at, p.responded_at
                FROM user_pokes p
                JOIN users u ON u.id = p.sender_id
               WHERE p.recipient_id = $1

@@ -213,9 +213,11 @@ describe('real signals still match', () => {
 // wrong reason: what reached him was Ali's DEVELOPERS agent. An introduction
 // has to state the cause it actually came from, in the voice of whoever reads
 // it.
-describe('an introduction states its real cause, addressed to the reader', () => {
+// 30 Oct 2026: the introduction is REASON's own line, read by both people (on the request and in the
+// conversation once accepted), so it names both in the third person instead of saying "you".
+describe('an introduction states its real cause, in the third person', () => {
   const JACK = profile({
-    id: 'u-jack', displayName: 'jack rajaa',
+    id: 'u-jack', displayName: 'jack rajaa', firstName: 'jack',
     professionalRole: ['Manager'], jobTitle: 'frontend engineer',
     whoIWantToMeet: 'founders building something new',
   });
@@ -229,14 +231,15 @@ describe('an introduction states its real cause, addressed to the reader', () =>
   it('names the designation the agent searched for and the title that matched', () => {
     const { reason } = scoreWantsForRecipient([WANT_DEVELOPER], JACK, 'Raja Ali King');
     expect(reason).toMatch(/developers and engineers/);
-    expect(reason).toMatch(/you're a frontend engineer/);
+    expect(reason).toMatch(/, and jack is a frontend engineer$/);
     // The exact sentence that went out was about founders. It must not survive.
     expect(reason).not.toMatch(/founders/i);
   });
 
-  it('addresses the recipient in the second person throughout', () => {
+  it('names the recipient by their first name and never says "you", with no em dash', () => {
     const { reason } = scoreWantsForRecipient([WANT_DEVELOPER], JACK, 'Raja Ali King');
     expect(reason).not.toMatch(/jack rajaa/);
+    expect(reason).not.toMatch(/\byou\b|\byour\b|—/i);
   });
 
   it('says the same thing to the seeker, in their voice', () => {
