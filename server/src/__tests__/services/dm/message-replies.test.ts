@@ -67,7 +67,8 @@ const refusal = (e: Caught | null) => (e ? { status: e.statusCode, code: e.code,
 
 // ─── One-to-one ─────────────────────────────────────────────────────────────
 
-const ROLE = /SELECT role FROM users WHERE id = \$1/;
+// canMessage's one read of the sender's role and whether the other account is still active (T2).
+const ROLE = /SELECT role, \(SELECT .* AS recipient_active FROM users WHERE id = \$1/;
 const UPSERT_CONV = /INSERT INTO dm_conversations/;
 const DM_ORIGINAL = /FROM direct_messages o JOIN users ou ON ou\.id = o\.from_user_id WHERE o\.id = \$1 AND o\.conversation_id = \$2/;
 const INSERT_DM = /INSERT INTO direct_messages \( id, conversation_id, from_user_id, content, attachment_url, attachment_type, attachment_meta, kind, system_meta, reply_to_id \)/;
@@ -86,7 +87,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockAreBlocked.mockResolvedValue(false);
   // An admin may message anyone (canMessage's step 3), so the gate is passed and the tests are about the reply.
-  answerWith(mockPool, [[ROLE, [{ role: 'admin' }]]]);
+  answerWith(mockPool, [[ROLE, [{ role: 'admin', recipient_active: true }]]]);
 });
 
 describe('sendMessage with a reply (one-to-one)', () => {
@@ -119,6 +120,15 @@ describe('sendMessage with a reply (one-to-one)', () => {
     sends([original()]);
     const e = await caught(sendMessage(ME, THEM, 'Yes', null, ORIGINAL));
     expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'You can no longer message this user' });
+    expect(ran(mockTx, DM_ORIGINAL)).toBe(false);
+    expect(ran(mockTx, INSERT_DM)).toBe(false);
+  });
+
+  it('a reply to someone whose account is closed is refused before anything else (T2\'s rule), and nothing is kept', async () => {
+    answerWith(mockPool, [[ROLE, [{ role: 'member', recipient_active: false }]]]);
+    sends([original()]);
+    const e = await caught(sendMessage(ME, THEM, 'Yes', null, ORIGINAL));
+    expect(e?.statusCode).toBe(403);
     expect(ran(mockTx, DM_ORIGINAL)).toBe(false);
     expect(ran(mockTx, INSERT_DM)).toBe(false);
   });

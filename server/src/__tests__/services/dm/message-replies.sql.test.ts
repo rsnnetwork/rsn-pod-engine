@@ -105,16 +105,21 @@ suite('quoted replies and the notifications page (real Postgres, one rolled-back
       expect(after[0].n).toBe(before[0].n);
     });
 
-    it('an original whose writer\'s account is closed is quoted under "Former member"', async () => {
-      const conv = (await sendMessage(ids.admin, ids.gone, 'Are you still there?')).conversationId;
+    it('an original whose writer\'s account is closed is quoted under "Former member", and no new reply reaches them (T2)', async () => {
+      // The conversation and the reply were written while the account was open; it has been closed since.
+      const [orderedA, orderedB] = [ids.admin, ids.gone].sort();
+      const [conv] = await sql(`INSERT INTO dm_conversations (user_a_id, user_b_id) VALUES ($1, $2) RETURNING id`, [orderedA, orderedB]);
       const [theirs] = await sql(
         `INSERT INTO direct_messages (conversation_id, from_user_id, content) VALUES ($1, $2, 'I am leaving') RETURNING id`,
-        [conv, ids.gone],
+        [conv.id, ids.gone],
       );
-      const reply = await sendMessage(ids.admin, ids.gone, 'Sorry to hear it', null, theirs.id);
-      expect(reply.message.replyTo).toMatchObject({ senderName: 'Former member', content: 'I am leaving' });
-      const { messages } = await listMessages(conv, ids.admin);
-      expect(messages.find((m) => m.id === reply.message.id)!.replyTo).toMatchObject({ senderName: 'Former member' });
+      const [reply] = await sql(
+        `INSERT INTO direct_messages (conversation_id, from_user_id, content, reply_to_id) VALUES ($1, $2, 'Sorry to hear it', $3) RETURNING id`,
+        [conv.id, ids.admin, theirs.id],
+      );
+      const { messages } = await listMessages(conv.id, ids.admin);
+      expect(messages.find((m) => m.id === reply.id)!.replyTo).toMatchObject({ senderName: 'Former member', content: 'I am leaving' });
+      await expect(sendMessage(ids.admin, ids.gone, 'Another answer', null, theirs.id)).rejects.toMatchObject({ statusCode: 403 });
     });
 
     it('when an original is deleted the reply stays and its quote says deleted (no foreign key clears it)', async () => {

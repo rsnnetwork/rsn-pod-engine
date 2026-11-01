@@ -6,12 +6,13 @@
 // thread reads for it, and how a row becomes a quote.
 
 import type { MessageReplyQuote } from '@rsn/shared';
+import { FORMER_MEMBER_NAME } from '../users/active-member';
 
 /** How much of the original a quote carries, in characters (a whole emoji is one). */
 export const REPLY_EXCERPT_MAX = 140;
 
-/** A closed account's name wherever a message of theirs is shown. */
-export const FORMER_MEMBER = 'Former member';
+/** A closed account's name wherever a message of theirs is shown: T2's one constant (services/users/active-member.ts). */
+export const FORMER_MEMBER = FORMER_MEMBER_NAME;
 
 /** The words people read. */
 export const REPLY_COPY = {
