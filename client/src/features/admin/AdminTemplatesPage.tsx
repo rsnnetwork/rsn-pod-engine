@@ -13,6 +13,8 @@ import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
 import { useConfirm } from '@/hooks/useConfirm';
+import { errorMessage } from '@/features/reason/errors';
+import { E } from '@/realtime/entities';
 
 // Phase 3 — templates now configure the FULL engine weight set (was 5 lossy
 // columns). Keys match the engine's MatchingWeights exactly and ride in a JSONB
@@ -119,6 +121,7 @@ export default function AdminTemplatesPage() {
     queryKey: ['admin-templates'],
     queryFn: () => api.get('/admin/templates').then(r => r.data.data ?? []),
     enabled: isAdmin(user?.role),
+    meta: { entities: [E.adminTemplates] },
   });
 
   const saveMutation = useMutation({
@@ -142,7 +145,8 @@ export default function AdminTemplatesPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/templates/${id}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-templates'] }); addToast('Template deleted', 'success'); },
-    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'The template was not deleted. Please try again.', 'error'),
+    // A speed-networking preset is refused in a sentence (30 Oct 2026): say it, rather than nothing.
+    onError: (err) => addToast(errorMessage(err, 'The template was not deleted. Please try again.'), 'error'),
   });
 
   const openCreate = () => { setEditId(null); setForm(DEFAULTS); setEditModal(true); };

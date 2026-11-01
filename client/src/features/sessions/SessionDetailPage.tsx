@@ -21,7 +21,9 @@ import MessageParticipantsPanel from './MessageParticipantsPanel';
 import StartGroupChatCard from './StartGroupChatCard';
 import EventChatHistory from './EventChatHistory';
 import EditEventModal from './EditEventModal';
-import { eventFacts, eventFactsLine } from './event-format-form';
+import { eventFacts, eventFactsLine, eventPlace, presetNameOf } from './event-format-form';
+import EventPlace from './EventPlace';
+import { useMatchingPresets } from './useMatchingChoices';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -96,6 +98,8 @@ export default function SessionDetailPage() {
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
   // Where the event is in its life: before, live, done (completed) or cancelled.
   const phase = sessionStatusPhase(session?.status);
+  // The preset the facts line names (30 Oct 2026): "Speed networking · Founders and investors · …".
+  const { data: presets } = useMatchingPresets();
 
   // S16 (Ali, 6 Jun) — co-host management lives HERE too, not only in the
   // live page's participant drawer: the host plans co-hosts before the
@@ -219,12 +223,15 @@ export default function SessionDetailPage() {
     },
   });
 
+  // The copy names its type (D9): sent as config only, the server read it from config.eventType, which a row from
+  // before 26 Oct may name wrongly.
   const duplicateMutation = useMutation({
     mutationFn: () => api.post('/sessions', {
       podId: session?.podId,
       title: `${session?.title || 'Event'} (copy)`,
       description: session?.description || '',
       scheduledAt: null,
+      format: session ? resolveEventFormat(session) : undefined,
       config: session?.config,
     }),
     onSuccess: (res: any) => {
@@ -288,6 +295,9 @@ export default function SessionDetailPage() {
   // The facts follow the event's type: a video meeting has a length, not rounds (25 Oct walkthrough).
   const eventFormat = resolveEventFormat(session);
   const isRoundsEvent = liveKindOf(eventFormat) === 'rounds';
+  // 30 Oct 2026 — an in-person event has no video room: no Go Live, no Enter Event; its place instead.
+  const hasRoom = liveKindOf(eventFormat) !== 'none';
+  const place = eventPlace(eventFormat, session.config);
   const facts = eventFacts(eventFormat, session.config);
   // The people who may run the event: its host and co-hosts, the pod's director or host, admins. The server has the
   // last word (the panel hides itself for anyone else); this only spares everyone else a loading card.
@@ -330,11 +340,15 @@ export default function SessionDetailPage() {
             </p>
             <p className="text-gray-500 mt-1 text-sm flex items-center gap-1.5">
               <Radio className="h-4 w-4 shrink-0" />
-              {eventFactsLine(eventFormat, session.config)}
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {eventFactsLine(eventFormat, session.config, presetNameOf(session.config, presets))}
+              </span>
             </p>
           </div>
           <Badge variant={statusVariant}>{sessionStatusLabel(session.status)}</Badge>
         </div>
+        {/* The place spans the card, under the title and the status, so a long address has room on a phone. */}
+        {place && <EventPlace place={place} over={phase === 'done'} />}
 
         <div className={`grid ${facts.length + 1 === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'} gap-4 mt-4 pt-4 border-t border-gray-200`}>
           <div className="text-center">
@@ -418,7 +432,7 @@ export default function SessionDetailPage() {
               live -> Enter Live Event
               done -> View Recap
            */}
-          {(isRegistered || isHost) && sessionStatusPhase(session.status) === 'pre' && (
+          {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'pre' && (
             <Button
               variant="primary"
               onClick={() => navigate(`/session/${sessionId}/live`)}
@@ -428,7 +442,7 @@ export default function SessionDetailPage() {
               {isHost ? 'Go Live' : 'Enter Event'}
             </Button>
           )}
-          {(isRegistered || isHost) && sessionStatusPhase(session.status) === 'live' && (
+          {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'live' && (
             <Button
               variant="primary"
               onClick={() => navigate(`/session/${sessionId}/live`)}
@@ -437,7 +451,8 @@ export default function SessionDetailPage() {
               <Play className="h-4 w-4 mr-2" /> Enter Live Event
             </Button>
           )}
-          {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). The
+          {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). An
+              in-person event carries its place as where it is (30 Oct 2026, T12). The
               entry links back to this page on this site. */}
           {session.status === 'scheduled' && session.scheduledAt && (
             <AddToCalendar
@@ -446,12 +461,14 @@ export default function SessionDetailPage() {
                 startAt: session.scheduledAt,
                 durationMin: eventDurationMinutes(eventFormat, session.config),
                 pageUrl: `${window.location.origin}/sessions/${session.id}`,
+                place,
               })}
               file={async () => icsFile(eventEntry({
                 title: session.title || 'Event',
                 startAt: session.scheduledAt,
                 durationMin: eventDurationMinutes(eventFormat, session.config),
                 pageUrl: `${window.location.origin}/sessions/${session.id}`,
+                place,
               }), `event-${session.id}`)}
               fileName="reason-event.ics"
               className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 inline-flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"

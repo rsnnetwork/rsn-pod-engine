@@ -11,8 +11,9 @@
 
 import { z } from 'zod';
 import {
-  EVENT_FORMAT_KEYS, applyFormatChange, checkEventInput, defaultEventFormat, defaultTitle, defaultsFor,
-  effectiveOrchestration, eventFormatsForPod, fieldsFor, formatRule, liveKindOf, resolveEventFormat, valuesFromConfig,
+  EVENT_FORMAT_KEYS, IN_PERSON_ENABLED_CLIENTS, MATCHING_PRESET_IDS, applyFormatChange, checkEventInput,
+  defaultEventFormat, defaultTitle, defaultsFor, effectiveOrchestration, eventFormatsForPod, fieldsFor, formatOffered, formatRule,
+  liveKindOf, missingRequired, resolveEventFormat, valuesFromConfig,
 } from '@rsn/shared';
 import type { EventFormat, OrchestrationMode, PodType } from '@rsn/shared';
 import { errorMessage, memberSentence } from '../reason/errors';
@@ -32,17 +33,24 @@ export interface EventFormValues {
   roundMinutes: number;
   timerVisibility: string;
   matchingPolicy: string;
+  /** The months of the cooldown rule (30 Oct 2026): sent only under that rule. */
+  cooldownMonths: number;
+  /** Who should meet whom: a preset's id (MATCHING_PRESET_IDS), an admin's template, or empty. */
   matchingTemplateId: string;
   maxParticipants: number;
   durationMinutes: number;
+  /** Where an in-person event happens (30 Oct 2026). */
+  location: string;
 }
 
 export type EventSettingKey =
-  'numberOfRounds' | 'roundMinutes' | 'timerVisibility' | 'matchingPolicy' | 'matchingTemplateId' | 'maxParticipants' | 'durationMinutes';
+  'numberOfRounds' | 'roundMinutes' | 'timerVisibility' | 'matchingPolicy' | 'cooldownMonths' | 'matchingTemplateId'
+  | 'maxParticipants' | 'durationMinutes' | 'location';
 
 /** Every setting an event form holds, of every type: a switch of type puts them all back, the schema checks them all. */
 export const SETTING_KEYS: EventSettingKey[] = [
-  'numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'matchingTemplateId', 'maxParticipants', 'durationMinutes',
+  'numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'cooldownMonths', 'matchingTemplateId',
+  'maxParticipants', 'durationMinutes', 'location',
 ];
 
 /** A pod as the event forms need it. */
@@ -62,8 +70,12 @@ export const CHECK_SETTINGS = "Check the event's settings and try again.";
 export const DATE_REQUIRED = 'Choose a date and time.';
 export const POD_REQUIRED = 'Choose a pod.';
 
-/** Every type the forms may offer today, in the table's order. */
-const OFFERED: EventFormat[] = EVENT_FORMAT_KEYS.filter((f) => formatRule(f).available);
+/**
+ * Every type these forms may offer, in the table's order. They draw an in-person event's place, so they ask for In
+ * person too (IN_PERSON_ENABLED_CLIENTS); production's form does not, and never offers it.
+ */
+const OFFER = IN_PERSON_ENABLED_CLIENTS;
+const OFFERED: EventFormat[] = EVENT_FORMAT_KEYS.filter((f) => formatOffered(f, OFFER));
 
 /**
  * The types an event in a pod of this type may be: the pod's, offered, its default first. With no pod chosen yet,
@@ -71,7 +83,7 @@ const OFFERED: EventFormat[] = EVENT_FORMAT_KEYS.filter((f) => formatRule(f).ava
  * lets an event keep its type after its pod's type changes.
  */
 export function offeredFormats(podType?: PodType | null, keep?: EventFormat): EventFormat[] {
-  const list = podType ? eventFormatsForPod(podType) : [...OFFERED];
+  const list = podType ? eventFormatsForPod(podType, OFFER) : [...OFFERED];
   return keep && !list.includes(keep) ? [...list, keep] : list;
 }
 
@@ -92,17 +104,32 @@ const FORMAT_FOR_ORCHESTRATION: Record<string, EventFormat> = {
  */
 export function startingFormat(pod?: Pick<EventPod, 'podType' | 'orchestrationMode'> | null): EventFormat {
   if (!pod) return OFFERED[0];
-  const offered = eventFormatsForPod(pod.podType);
+  // A Physical Event pod's events are in person: its type says so before its orchestration (Freeform) does.
+  if ((pod.podType as string) === 'physical_event') return defaultEventFormat(pod.podType, OFFER);
+  const offered = eventFormatsForPod(pod.podType, OFFER);
   const byMode = FORMAT_FOR_ORCHESTRATION[effectiveOrchestration(pod)];
-  return byMode && offered.includes(byMode) ? byMode : defaultEventFormat(pod.podType);
+  return byMode && offered.includes(byMode) ? byMode : defaultEventFormat(pod.podType, OFFER);
+}
+
+/**
+ * Who a new event's speed networking pairs first (30 Oct 2026): General, except in a Two-Sided Networking pod, whose
+ * events start on Founders and investors (its two groups are meant to meet each other).
+ */
+export function startingPreset(podType?: PodType | null): string {
+  return (podType as string | null | undefined) === 'two_sided_networking' ? MATCHING_PRESET_IDS.foundersInvestors : MATCHING_PRESET_IDS.general;
+}
+
+/** Whether an id is one of REASON's presets, which any organiser may choose. */
+export function isPresetId(id: unknown): boolean {
+  return (Object.values(MATCHING_PRESET_IDS) as string[]).includes(id as string);
 }
 
 /**
  * Every setting's starting value: each offered type's defaults, the starting type's last, so a setting two types
  * share (capacity) starts at the starting type's. The admin-only template has no default and starts empty.
  */
-function settingDefaults(format: EventFormat): Pick<EventFormValues, EventSettingKey> {
-  const merged: Record<string, unknown> = { matchingTemplateId: '' };
+function settingDefaults(format: EventFormat, podType?: PodType | null): Pick<EventFormValues, EventSettingKey> {
+  const merged: Record<string, unknown> = { matchingTemplateId: startingPreset(podType), location: '' };
   for (const f of OFFERED) Object.assign(merged, defaultsFor(f));
   Object.assign(merged, defaultsFor(format));
   return merged as unknown as Pick<EventFormValues, EventSettingKey>;
@@ -131,7 +158,7 @@ export function newEventValues(o: { pod?: EventPod | null; scheduledAt: string }
     description: '',
     scheduledAt: o.scheduledAt,
     format,
-    ...settingDefaults(format),
+    ...settingDefaults(format, o.pod?.podType),
   };
 }
 
@@ -153,6 +180,7 @@ export function editEventValues(
       scheduledAt,
       format,
       ...settingDefaults(format),
+      // An event saved with no template pairs on the engine's defaults, which General is: it shows as General.
       ...(valuesFromConfig(format, session.config) as Partial<EventFormValues>),
     },
     touched: new Set(fieldsFor(format)),
@@ -189,7 +217,7 @@ function readableMinutes(m: number): number {
  */
 export function podChangeFormat(current: EventFormat, pod: EventPod | null, chosen: boolean): { format: EventFormat; notice: string | null } {
   if (!pod) return { format: current, notice: null };
-  if (chosen && eventFormatsForPod(pod.podType).includes(current)) return { format: current, notice: null };
+  if (chosen && eventFormatsForPod(pod.podType, OFFER).includes(current)) return { format: current, notice: null };
   const next = startingFormat(pod);
   if (!chosen || next === current) return { format: next, notice: null };
   return { format: next, notice: `Changed to ${formatRule(next).label}: ${formatRule(current).label} isn't available in this pod.` };
@@ -201,12 +229,17 @@ export function autoTitle(current: string, lastAuto: string, next: string): stri
 }
 
 /** Counts the server keeps whole (zod int). A round may last a minute and a half: it is kept as 90 seconds. */
-const WHOLE = new Set(['numberOfRounds', 'maxParticipants', 'durationMinutes']);
+const WHOLE = new Set(['numberOfRounds', 'maxParticipants', 'durationMinutes', 'cooldownMonths']);
 
 /** What is wrong with one setting of this type, in the definition's words, or null. Another type's field is not checked. */
 export function settingProblem(format: EventFormat, key: string, value: unknown): string | null {
   const field = formatRule(format).fields[key];
   if (!field) return null;
+  // A place the event cannot do without, said as the server says it.
+  if (field.required) {
+    const missing = missingRequired(format, { [key]: value }).find((m) => m.field === key);
+    if (missing) return missing.message;
+  }
   const issue = checkEventInput(format, { [key]: value })[0];
   if (issue) return issue.message;
   if (WHOLE.has(key) && typeof value === 'number' && !Number.isInteger(value)) return `${field.label} must be a whole number.`;
@@ -230,7 +263,11 @@ function eventIssues(values: EventFormValues, ctx: z.RefinementCtx, o: { pod: bo
   say('title', titleProblem(values.title));
   say('scheduledAt', values.scheduledAt ? null : DATE_REQUIRED);
   // Only the chosen type's settings are checked: settingProblem says nothing about another type's field.
-  for (const key of SETTING_KEYS) say(key, settingProblem(values.format, key, values[key]));
+  for (const key of SETTING_KEYS) {
+    // The months are checked only under the cooldown rule, the one that uses them.
+    if (key === 'cooldownMonths' && values.matchingPolicy !== 'cooldown') continue;
+    say(key, settingProblem(values.format, key, values[key]));
+  }
 }
 
 /** The form's values as they are: the refinements check them and nothing is stripped or changed. */
@@ -242,12 +279,12 @@ export const newEventSchema = eventFormValues.superRefine((v, ctx) => eventIssue
 /** Edit Event's schema. The date is required here too: an emptied date used to save "successfully" and keep the old one. */
 export const eventChangesSchema = eventFormValues.superRefine((v, ctx) => eventIssues(v, ctx, { pod: false }));
 
-/** The fields an event form draws for a type, the pod picker aside: a problem with any other goes beside the button. */
-export function shownEventKeys(format: EventFormat, isAdmin: boolean): string[] {
-  return [
-    'format', 'title', 'description', 'scheduledAt',
-    ...fieldsFor(format).filter((key) => isAdmin || !formatRule(format).fields[key]?.adminOnly),
-  ];
+/**
+ * The fields an event form draws for a type, the pod picker aside: a problem with any other goes beside the button.
+ * Who should meet whom is drawn for everyone (the presets); only its other templates are an admin's.
+ */
+export function shownEventKeys(format: EventFormat, _isAdmin: boolean): string[] {
+  return ['format', 'title', 'description', 'scheduledAt', ...fieldsFor(format)];
 }
 
 export interface NewEventBody {
@@ -268,17 +305,19 @@ export interface EventChangesBody {
 }
 
 /**
- * The chosen type's settings, as the API takes them (the round length in minutes). The admin-only template is sent
- * by admins only, and an empty one never: the engine stores it in a uuid column, where an empty string fails.
+ * The chosen type's settings, as the API takes them (the round length in minutes, a place trimmed). The template is
+ * sent when it is a preset (anyone may choose one) or by an admin, and an empty one never: the engine stores it in a
+ * uuid column, where an empty string fails. The months of the cooldown rule go only with that rule.
  */
 function settingsFor(values: EventFormValues, isAdmin: boolean): Record<string, unknown> {
   const all = values as unknown as Record<string, unknown>;
   const config: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(formatRule(values.format).fields)) {
-    if (field.adminOnly && !isAdmin) continue;
+    if (field.adminOnly && !isAdmin && !(key === 'matchingTemplateId' && isPresetId(all[key]))) continue;
     // A setting that applies only under another one's value (the cooldown rule's months) is sent only then.
     if (field.when && all[field.when.key] !== field.when.equals) continue;
-    const value = all[key];
+    const raw = all[key];
+    const value = typeof raw === 'string' ? raw.trim() : raw;
     if (value === undefined || value === null || value === '') continue;
     config[key] = value;
   }
@@ -466,7 +505,7 @@ export interface EventFact {
   caption: string;
 }
 
-/** The figures under an event's title, by its type: rounds and their length, or the meeting's length; and capacity. */
+/** The figures under an event's title, by its type: rounds and their length, or the meeting's length; and capacity. The place has its own line. */
 export function eventFacts(format: EventFormat, config: object | null | undefined): EventFact[] {
   const v = valuesFromConfig(format, config);
   const facts: EventFact[] = [];
@@ -480,10 +519,14 @@ export function eventFacts(format: EventFormat, config: object | null | undefine
   return facts;
 }
 
-/** "Video meeting · 60 min · up to 25", "Speed networking · 5 rounds × 8 min · up to 500". */
-export function eventFactsLine(format: EventFormat, config: object | null | undefined): string {
+/**
+ * "Video meeting · 60 min · up to 25", "Speed networking · Founders and investors · 5 rounds × 8 min · up to 500",
+ * "In person · 60 min · up to 25 · The Ivy, London". `presetName` is the name of the event's preset, when it has one.
+ */
+export function eventFactsLine(format: EventFormat, config: object | null | undefined, presetName?: string | null): string {
   const v = valuesFromConfig(format, config);
   const parts = [formatRule(format).label];
+  if (liveKindOf(format) === 'rounds' && presetName) parts.push(presetName);
   if (liveKindOf(format) === 'rounds') {
     const rounds = Number(v.numberOfRounds);
     parts.push(`${rounds} ${rounds === 1 ? 'round' : 'rounds'} × ${roundLength(v.roundMinutes, ' min', ' s')}`);
@@ -491,11 +534,31 @@ export function eventFactsLine(format: EventFormat, config: object | null | unde
     parts.push(minutes(v.durationMinutes));
   }
   if (v.maxParticipants !== undefined) parts.push(`up to ${v.maxParticipants}`);
+  const place = eventPlace(format, config);
+  if (place) parts.push(place);
   return parts.join(' · ');
 }
 
+/** Where an in-person event happens, as stored; null for any other event. */
+export function eventPlace(format: EventFormat, config: object | null | undefined): string | null {
+  if (liveKindOf(format) !== 'none') return null;
+  const place = (config as { location?: unknown } | null | undefined)?.location;
+  return typeof place === 'string' && place.trim() ? place.trim() : null;
+}
+
+/** A maps search for a place, for its "Open in maps" link. */
+export function mapsUrl(place: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
+}
+
+/** The preset an event's config names, from the presets list, or null. */
+export function presetNameOf(config: object | null | undefined, presets: { id: string; name: string }[] | undefined): string | null {
+  const id = (config as { matchingTemplateId?: unknown } | null | undefined)?.matchingTemplateId;
+  return presets?.find((p) => p.id === id)?.name ?? null;
+}
+
 /** The lengths a meeting may be set to: the presets inside the type's limits, and its own length if it is not one. */
-const LENGTH_PRESETS = [15, 30, 45, 60, 90, 120, 180, 240];
+const LENGTH_PRESETS = [15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 480];
 
 export function lengthOptions(format: EventFormat, current?: number): { value: number; label: string }[] {
   const field = formatRule(format).fields.durationMinutes;

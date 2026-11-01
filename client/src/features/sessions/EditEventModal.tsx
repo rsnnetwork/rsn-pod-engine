@@ -6,7 +6,7 @@
 // round settings, kept round length in minutes where create kept seconds, and asked a templates route that does not
 // exist.
 import { useId, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { PodType } from '@rsn/shared';
 import Sheet from '@/features/reason/ui/Sheet';
 import Input from '@/components/ui/Input';
@@ -15,7 +15,8 @@ import FormSummary from '@/components/ui/FormSummary';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { cn, localTimezoneLabel, toLocalDatetimeInput } from '@/lib/utils';
-import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder, type TemplateOption } from './EventFormatFields';
+import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder } from './EventFormatFields';
+import { useMatchingChoices } from './useMatchingChoices';
 import {
   DESCRIPTION_MAX, TITLE_MAX, editEventValues, eventChanges, eventChangesSchema, offeredFormats, shownEventKeys,
   type EventFormValues,
@@ -70,13 +71,8 @@ function EditEventSheet({ onClose, session, podType, isAdmin }: Omit<Props, 'ope
     copy: EDIT_COPY,
     shownKeys: (f) => shownEventKeys(f, isAdmin),
   });
-  const { register, watch, formState: { errors } } = ev.form;
-
-  const templatesQuery = useQuery({
-    queryKey: ['admin-templates'],
-    queryFn: () => api.get('/admin/templates').then((r) => (r.data.data ?? []) as TemplateOption[]),
-    enabled: isAdmin,
-  });
+  const { register, watch, setValue, formState: { errors } } = ev.form;
+  const matchingChoices = useMatchingChoices(isAdmin);
 
   const savedFormat = start.values.format;
   const formats = podType ? offeredFormats(podType, savedFormat) : [savedFormat];
@@ -137,10 +133,14 @@ function EditEventSheet({ onClose, session, podType, isAdmin }: Omit<Props, 'ope
           errors={errors}
           durationMinutes={watch('durationMinutes')}
           isAdmin={isAdmin}
-          templates={templatesQuery.data}
-          templatesLoading={isAdmin && templatesQuery.isLoading}
-          hasTemplate={!!session.config?.matchingTemplateId}
-          templateId={watch('matchingTemplateId')}
+          matching={{
+            ...matchingChoices,
+            templateId: watch('matchingTemplateId'),
+            policy: watch('matchingPolicy'),
+            onTemplate: (id) => setValue('matchingTemplateId', id),
+            offered: formats,
+            onChooseFormat: ev.chooseFormat,
+          }}
           onTouched={ev.touch}
         />
       </form>

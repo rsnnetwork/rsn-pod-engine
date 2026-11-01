@@ -41,3 +41,21 @@ test('deployed server persists config.matchingPolicy = platform_wide (zod no lon
   console.log('  persisted matchingPolicy:', policy, '| full config:', JSON.stringify(fetched.data?.config));
   expect(policy).toBe('platform_wide');
 });
+
+// 30 Oct 2026 (T12) — the cooldown rule keeps its months, and a pod's director (no admin) may choose a preset, which
+// the server keeps; a template that is no preset is refused for them, at the field.
+test('deployed server keeps the cooldown rule, its months and a preset chosen by a director', async () => {
+  const director = await createTestUser('mpdirector', 'member');
+  const pod = await createPod(director, 'E2E Presets Pod');
+  const sched = new Date(Date.now() + 3_600_000);
+  const founders = '5e7b1a5e-0000-4000-8000-000000000002';
+  const created = await apiRequest(director, 'POST', '/sessions', {
+    podId: pod.id, title: 'E2E Presets Test', scheduledAt: sched.toISOString(), format: 'speed_networking',
+    config: { eventType: 'speed_networking', numberOfRounds: 3, matchingPolicy: 'cooldown', cooldownMonths: 6, matchingTemplateId: founders },
+  });
+  const fetched = await apiRequest(director, 'GET', `/sessions/${created.data.id}`);
+  expect(fetched.data?.config).toMatchObject({ matchingPolicy: 'cooldown', cooldownMonths: 6, matchingTemplateId: founders });
+  const presets = await apiRequest(director, 'GET', '/sessions/matching-presets');
+  expect((presets.data as Array<{ name: string }>).map((p) => p.name))
+    .toEqual(['General', 'Founders and investors', 'Jobs and hiring', 'Mentorship']);
+});

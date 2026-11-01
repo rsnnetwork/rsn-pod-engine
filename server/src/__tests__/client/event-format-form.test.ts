@@ -11,7 +11,9 @@ import {
   eventChangesSchema, eventFacts, eventFactsLine, eventProblems, lengthOptions, newEventSchema, newEventValues,
   nextQuarterHour, offeredFormats, podChangeFormat, problemSummary, settingProblem, shownEventKeys, startingFormat,
   switchFormat, titleProblem, type EventFormValues,
+  eventPlace, isPresetId, mapsUrl, presetNameOf, startingPreset,
 } from '../../../../client/src/features/sessions/event-format-form';
+import { MATCHING_PRESET_IDS } from '@rsn/shared';
 import { formResolver } from '../../../../client/src/lib/form-resolver';
 import { formResolver as entityFormResolver } from '../../../../client/src/features/reason/entities/entity-form';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
@@ -30,14 +32,21 @@ const CREATE_COPY = {
 };
 
 describe('the event types a pod offers, and the one a new event starts on', () => {
-  it('a Reason pod offers Video meeting first, then Speed networking; a Chat pod only Video meeting', () => {
-    expect(offeredFormats('reason' as never)).toEqual(['video_meeting', 'speed_networking']);
+  it('a Reason pod offers Video meeting first, then Speed networking and In person; a Chat pod only Video meeting', () => {
+    expect(offeredFormats('reason' as never)).toEqual(['video_meeting', 'speed_networking', 'physical_event']);
     expect(offeredFormats('chat' as never)).toEqual(['video_meeting']);
-    expect(offeredFormats('speed_networking' as never)).toEqual(['speed_networking', 'video_meeting']);
+    expect(offeredFormats('webinar' as never)).toEqual(['video_meeting']);
+    expect(offeredFormats('speed_networking' as never)).toEqual(['speed_networking', 'video_meeting', 'physical_event']);
   });
 
-  it('with no pod chosen yet, every offered type is listed, and nothing unoffered (webinar, in person)', () => {
-    expect(offeredFormats(null)).toEqual(['speed_networking', 'video_meeting']);
+  it('with no pod chosen yet, every offered type is listed, In person included, and nothing unoffered (webinar, voice)', () => {
+    expect(offeredFormats(null)).toEqual(['speed_networking', 'video_meeting', 'physical_event']);
+  });
+
+  it('a Physical Event pod starts its events in person', () => {
+    expect(startingFormat({ podType: 'physical_event', orchestrationMode: 'free_form' } as never)).toBe('physical_event');
+    expect(newEventValues({ pod: { id: 'p', name: 'Dinners', podType: 'physical_event', orchestrationMode: 'free_form' } as never, scheduledAt: '2026-11-02T10:00' }))
+      .toMatchObject({ format: 'physical_event', title: 'In person · Dinners', durationMinutes: 60, maxParticipants: 25, location: '' });
   });
 
   it("an event keeps its own type on the list when its pod no longer offers it (an edit after the pod's type changed)", () => {
@@ -73,7 +82,9 @@ describe('a new event: its defaults per type, and a title already filled in', ()
     expect(v.format).toBe('speed_networking');
     expect([v.numberOfRounds, v.roundMinutes, v.timerVisibility, v.matchingPolicy, v.maxParticipants])
       .toEqual([5, 8, 'last_10s', 'within_event', 500]);
-    expect(v.matchingTemplateId).toBe('');
+    // Who should meet whom starts on General (30 Oct 2026).
+    expect(v.matchingTemplateId).toBe(MATCHING_PRESET_IDS.general);
+    expect(v.cooldownMonths).toBe(12);
     expect(v.title).toBe('Speed networking · Founders');
   });
 
@@ -237,7 +248,8 @@ describe('what the forms send', () => {
     const body = eventBody({ ...v, matchingPolicy: 'platform_wide', roundMinutes: 6 }, { isAdmin: false });
     expect(body.format).toBe('speed_networking');
     expect(body.config).toEqual({
-      numberOfRounds: 5, roundMinutes: 6, timerVisibility: 'last_10s', matchingPolicy: 'platform_wide', maxParticipants: 500,
+      numberOfRounds: 5, roundMinutes: 6, timerVisibility: 'last_10s', matchingPolicy: 'platform_wide',
+      matchingTemplateId: MATCHING_PRESET_IDS.general, maxParticipants: 500,
     });
   });
 
@@ -458,13 +470,17 @@ describe("the event forms' Zod schemas say what the field checks said, at the sa
 
 describe('what both event forms share', () => {
   it('every setting key, once: what a switch puts back and what the schema checks', () => {
-    expect(SETTING_KEYS).toEqual(['numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'matchingTemplateId', 'maxParticipants', 'durationMinutes']);
+    expect(SETTING_KEYS).toEqual([
+      'numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'cooldownMonths', 'matchingTemplateId',
+      'maxParticipants', 'durationMinutes', 'location',
+    ]);
   });
 
-  it("the fields a form draws for a type: the admin-only template only for admins", () => {
+  it("the fields a form draws for a type: who should meet whom for everyone (the presets), a place for in person", () => {
     expect(shownEventKeys('video_meeting', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'durationMinutes', 'maxParticipants']);
-    expect(shownEventKeys('speed_networking', false)).not.toContain('matchingTemplateId');
+    expect(shownEventKeys('speed_networking', false)).toContain('matchingTemplateId');
     expect(shownEventKeys('speed_networking', true)).toContain('matchingTemplateId');
+    expect(shownEventKeys('physical_event', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'location', 'durationMinutes', 'maxParticipants']);
   });
 });
 
@@ -485,5 +501,99 @@ describe('a round length that is not whole minutes reads rounded; the stored sec
     expect(r.values.roundMinutes).toBe(values.roundMinutes);
     // Saved again as speed networking, untouched: the same 100 seconds go back.
     expect(eventChanges(values, { isAdmin: false }).config.roundMinutes).toBe(values.roundMinutes);
+  });
+});
+
+// ─── 30 Oct 2026 (T12): in person, the presets, the cooldown ─────────────────────────────────────
+describe('an in-person event on the forms', () => {
+  const inPerson = (over: Partial<EventFormValues> = {}): EventFormValues => ({
+    ...newEventValues({ pod: reasonPod as never, scheduledAt: '2026-11-02T19:00' }), format: 'physical_event', ...over,
+  });
+
+  it('needs its place, in the server\'s sentence; at most 300 characters', () => {
+    expect(settingProblem('physical_event', 'location', '')).toBe('Say where the event happens: an address or a venue.');
+    expect(settingProblem('physical_event', 'location', '   ')).toBe('Say where the event happens: an address or a venue.');
+    expect(settingProblem('physical_event', 'location', 'x'.repeat(301))).toBe('Where must be 300 characters or fewer.');
+    expect(settingProblem('physical_event', 'location', 'The Ivy')).toBeNull();
+    // Another type has no place to check.
+    expect(settingProblem('video_meeting', 'location', '')).toBeNull();
+  });
+
+  it('may last up to eight hours, and its length picker goes that far', () => {
+    expect(settingProblem('physical_event', 'durationMinutes', 480)).toBeNull();
+    expect(settingProblem('physical_event', 'durationMinutes', 481)).toBe('Length must be between 15 and 480 minutes.');
+    expect(lengthOptions('physical_event').map((o) => o.value)).toEqual([15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 480]);
+    expect(lengthOptions('video_meeting').map((o) => o.value)).toEqual([15, 30, 45, 60, 90, 120, 180, 240]);
+  });
+
+  it('sends its type, its place trimmed, its length and capacity, and nothing of speed networking', () => {
+    const body = eventBody(inPerson({ location: '  The Ivy, London  ', durationMinutes: 180 }), { isAdmin: false });
+    expect(body.format).toBe('physical_event');
+    expect(body.config).toEqual({ location: 'The Ivy, London', durationMinutes: 180, maxParticipants: 25 });
+  });
+
+  it('the schema stops it without a place, at the field', async () => {
+    const resolve = formResolver(newEventSchema);
+    const out = await resolve(inPerson({ location: '' }), undefined, { fields: {}, shouldUseNativeValidation: false } as never);
+    expect((out.errors as Record<string, { message: string }>).location.message).toBe('Say where the event happens: an address or a venue.');
+  });
+
+  it('the facts line: "In person · 60 min · up to 25 · {place}"; the place has its own maps link', () => {
+    const config = { location: 'The Ivy, London', durationMinutes: 60, maxParticipants: 25 };
+    expect(eventFactsLine('physical_event', config)).toBe('In person · 60 min · up to 25 · The Ivy, London');
+    expect(eventPlace('physical_event', config)).toBe('The Ivy, London');
+    expect(eventPlace('video_meeting', config)).toBeNull();
+    expect(mapsUrl('The Ivy, 1-5 West St & Co')).toBe('https://www.google.com/maps/search/?api=1&query=The%20Ivy%2C%201-5%20West%20St%20%26%20Co');
+  });
+
+  it('an edit of an in-person event shows its place', () => {
+    const { values } = editEventValues({ format: 'physical_event', config: { location: 'Soho', durationMinutes: 120 } }, '2026-11-02T19:00');
+    expect(values).toMatchObject({ format: 'physical_event', location: 'Soho', durationMinutes: 120 });
+  });
+});
+
+describe('who should meet whom, and the cooldown rule', () => {
+  it('a new event starts on General; a Two-Sided Networking pod\'s on Founders and investors', () => {
+    expect(startingPreset('speed_networking' as never)).toBe(MATCHING_PRESET_IDS.general);
+    expect(startingPreset(null)).toBe(MATCHING_PRESET_IDS.general);
+    expect(startingPreset('two_sided_networking' as never)).toBe(MATCHING_PRESET_IDS.foundersInvestors);
+    const twoSided = { id: 'p', name: 'Founders × Investors', podType: 'two_sided_networking', orchestrationMode: 'timed_rounds' } as never;
+    expect(newEventValues({ pod: twoSided, scheduledAt: '2026-11-02T10:00' }).matchingTemplateId).toBe(MATCHING_PRESET_IDS.foundersInvestors);
+  });
+
+  it('a preset is sent for anyone; another template only by an admin', () => {
+    const v = newEventValues({ pod: speedPod as never, scheduledAt: '2026-11-02T10:00' });
+    for (const id of Object.values(MATCHING_PRESET_IDS)) {
+      expect(isPresetId(id)).toBe(true);
+      expect(eventBody({ ...v, matchingTemplateId: id }, { isAdmin: false }).config.matchingTemplateId).toBe(id);
+    }
+    expect(isPresetId('tpl-1')).toBe(false);
+  });
+
+  it('the cooldown rule sends its months (1 to 60); any other rule sends none', () => {
+    const v = newEventValues({ pod: speedPod as never, scheduledAt: '2026-11-02T10:00' });
+    expect(eventBody({ ...v, matchingPolicy: 'cooldown', cooldownMonths: 6 }, { isAdmin: false }).config).toMatchObject({ matchingPolicy: 'cooldown', cooldownMonths: 6 });
+    expect(eventBody({ ...v, matchingPolicy: 'within_event', cooldownMonths: 6 }, { isAdmin: false }).config).not.toHaveProperty('cooldownMonths');
+    expect(settingProblem('speed_networking', 'cooldownMonths', 61)).toBe('Months apart must be between 1 and 60 months.');
+    expect(settingProblem('speed_networking', 'cooldownMonths', 2.5)).toBe('Months apart must be a whole number.');
+  });
+
+  it('the schema checks the months only under the cooldown rule', async () => {
+    const resolve = formResolver(newEventSchema);
+    const v = newEventValues({ pod: speedPod as never, scheduledAt: '2026-11-02T10:00' });
+    const ctx = { fields: {}, shouldUseNativeValidation: false } as never;
+    expect((await resolve({ ...v, matchingPolicy: 'within_event', cooldownMonths: NaN }, undefined, ctx)).errors).toEqual({});
+    const out = await resolve({ ...v, matchingPolicy: 'cooldown', cooldownMonths: 0 }, undefined, ctx);
+    expect((out.errors as Record<string, { message: string }>).cooldownMonths.message).toBe('Months apart must be between 1 and 60 months.');
+  });
+
+  it('the facts line names the preset: "Speed networking · Founders and investors · 5 rounds × 8 min · up to 500"', () => {
+    const presets = [{ id: MATCHING_PRESET_IDS.foundersInvestors, name: 'Founders and investors' }];
+    const config = { matchingTemplateId: MATCHING_PRESET_IDS.foundersInvestors, numberOfRounds: 5, roundDurationSeconds: 480, maxParticipants: 500 };
+    expect(presetNameOf(config, presets)).toBe('Founders and investors');
+    expect(eventFactsLine('speed_networking', config, presetNameOf(config, presets))).toBe('Speed networking · Founders and investors · 5 rounds × 8 min · up to 500');
+    // A stored value that is no preset (an admin's template, or one written before ids were checked) names nothing.
+    expect(presetNameOf({ matchingTemplateId: 'Investor Day' }, presets)).toBeNull();
+    expect(eventFactsLine('speed_networking', { ...config, matchingTemplateId: 'Investor Day' }, null)).toBe('Speed networking · 5 rounds × 8 min · up to 500');
   });
 });
