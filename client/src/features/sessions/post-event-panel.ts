@@ -42,15 +42,19 @@ export function sentSentence(recipients: number, at: string): string {
 }
 
 /**
- * "You can send another message at 14:20." in the reader's own clock. The server writes the time in the sender's
- * stored time zone and also gives the instant (nextSendAt), so the screen can match the reader's clock; without it
- * the server's sentence stands.
+ * "You can send another message at 14:20." in the reader's own clock, or "… tomorrow at 09:15." when that moment falls
+ * on the reader's next day (the server's own rule since H2b item 18; P1 items 14 and 37). The server writes the time
+ * in the sender's stored time zone and also gives the instant (nextSendAt), so the screen can match the reader's
+ * clock; without it the server's sentence stands. The next send is at most a day away, so no later day is named.
  */
-export function limitSentence(nextSendAt: string | undefined, fallback: string): string {
+export function limitSentence(nextSendAt: string | undefined, fallback: string, now: number = Date.now()): string {
   const at = nextSendAt ? new Date(nextSendAt) : null;
   if (!at || Number.isNaN(at.getTime())) return fallback;
   const clock = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-  return `You can send another message at ${clock}.`;
+  const today = new Date(now).toDateString();
+  return at.toDateString() === today
+    ? `You can send another message at ${clock}.`
+    : `You can send another message tomorrow at ${clock}.`;
 }
 
 export interface PanelView {
@@ -80,7 +84,11 @@ function problemOf(job: PostEventMessageJob | null | undefined): string | null {
  * The panel for one organiser. Nobody who does not run the event sees it (visible: false); nor does anyone when
  * nobody else took part, since there is no one to write to (the controller's ruling on S6's no_recipients).
  */
-export function panelView(e: BroadcastEligibilityV2 | undefined, job: PostEventMessageJob | null | undefined): PanelView {
+export function panelView(
+  e: BroadcastEligibilityV2 | undefined,
+  job: PostEventMessageJob | null | undefined,
+  now: number = Date.now(),
+): PanelView {
   if (!e || !e.visible || e.reason === 'no_recipients') return HIDDEN;
   const sent = e.lastSent ? sentSentence(e.lastSent.recipients, e.lastSent.at) : null;
   const action = e.lastSent ? SEND_ANOTHER : WRITE_MESSAGE;
@@ -90,7 +98,7 @@ export function panelView(e: BroadcastEligibilityV2 | undefined, job: PostEventM
     case 'sending':
       return { show: true, status: e.explanation || null, sent: null, problem: null, action: null };
     case 'limit':
-      return { show: true, status: limitSentence(e.nextSendAt, e.explanation), sent, problem: problemOf(job), action: null };
+      return { show: true, status: limitSentence(e.nextSendAt, e.explanation, now), sent, problem: problemOf(job), action: null };
     default:
       return { show: true, status: e.explanation || null, sent, problem: problemOf(job), action: e.enabled ? action : null };
   }
