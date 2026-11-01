@@ -422,7 +422,10 @@ test('9) one person leaves the room and comes back in; the other stays in it and
       args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
     });
     try {
-      const enter = async (u: TestUser): Promise<Page> => {
+      // What each LiveKit connection logged (1 Nov 2026): when Bo is never told, the failure says whether his room
+      // heard Ana go, and whether either room was reconnecting or resuming at the time.
+      const log: string[] = [];
+      const enter = async (u: TestUser, who: string): Promise<Page> => {
         const ctx = await media.newContext({ viewport: { width: 390, height: 844 }, permissions: ['microphone'] });
         await ctx.addInitScript((t: { a: string; r: string }) => {
           localStorage.setItem('rsn_access', t.a);
@@ -432,13 +435,16 @@ test('9) one person leaves the room and comes back in; the other stays in it and
         await primePreview(ctx);
         const page = await ctx.newPage();
         page.on('pageerror', () => {});
+        page.on('console', (m) => {
+          if (/reconnect|resum|disconnect|signal/i.test(m.text())) log.push(`${who} console: ${m.text().slice(0, 240)}`);
+        });
         await gotoRetry(page, `${APP}/meet/${convId}?kind=audio`);
         await expect(page.getByText(/^Audio call$/)).toBeVisible({ timeout: 30_000 });
         return page;
       };
       const tiles = (p: Page) => p.locator('.lk-participant-tile');
-      const anaPage = await enter(ana);
-      const boPage = await enter(bo);
+      const anaPage = await enter(ana, 'Ana');
+      const boPage = await enter(bo, 'Bo');
       await expect(tiles(anaPage)).toHaveCount(2, { timeout: 45_000 });
       await expect(tiles(boPage)).toHaveCount(2, { timeout: 45_000 });
 
@@ -446,7 +452,9 @@ test('9) one person leaves the room and comes back in; the other stays in it and
       await anaPage.getByRole('button', { name: 'Leave call and go back to chat' }).click();
       await expect(anaPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });
       const notice = boPage.getByTestId('partner-left');
-      await expect(notice).toContainText('Rejoin Ana left the call', { timeout: 30_000 });
+      await expect(notice).toContainText('Rejoin Ana left the call', { timeout: 30_000 }).catch((e: Error) => {
+        throw new Error(`${e.message}\nBo was never told. What the rooms logged:\n${log.join('\n') || '(nothing)'}`);
+      });
       await boPage.waitForTimeout(6_000);
       await expect(boPage).toHaveURL(new RegExp(`/meet/${convId}`));
       await expect(boPage.getByText(/^Audio call$/)).toBeVisible();

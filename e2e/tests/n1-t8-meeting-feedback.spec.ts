@@ -50,7 +50,9 @@ async function apiAs(u: TestUser, method: string, p: string, body?: unknown) {
   return { status: res.status, json: await res.json().catch(() => null) };
 }
 
-async function openAs(u: TestUser, p: string, viewport = { width: 1280, height: 900 }, b: Browser = browser): Promise<Page> {
+async function openAs(
+  u: TestUser, p: string, viewport = { width: 1280, height: 900 }, b: Browser = browser, watch?: (page: Page) => void,
+): Promise<Page> {
   const ctx = await b.newContext({ ...contextOptions(viewport), acceptDownloads: true });
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
@@ -61,9 +63,34 @@ async function openAs(u: TestUser, p: string, viewport = { width: 1280, height: 
   await primePreview(ctx);
   const page = await ctx.newPage();
   page.on('pageerror', () => {});
+  watch?.(page);
   await gotoRetry(page, `${APP}${p}`);
   return page;
 }
+
+// What a room read and what its LiveKit connection said, from its first load (fix round 2): when a leave misses the
+// question on the preview, the failure says whether the room's scheduling reads named the meeting, and whether either
+// connection was reconnecting or resuming while the other person came in.
+function recordRoom(who: string, log: string[]) {
+  const isScheduling = (url: string) => new URL(url).pathname.endsWith('/scheduling');
+  return (page: Page) => {
+    page.on('response', (r) => {
+      if (r.request().method() !== 'GET' || !isScheduling(r.url())) return;
+      void r.json().then(
+        (j) => log.push(`${who}: scheduling read ${r.status()}, meeting ${j?.data?.confirmed?.meetingId ?? 'none'}`),
+        () => log.push(`${who}: scheduling read ${r.status()}`),
+      );
+    });
+    page.on('requestfailed', (r) => {
+      if (isScheduling(r.url())) log.push(`${who}: scheduling read failed (${r.failure()?.errorText ?? 'no answer'})`);
+    });
+    page.on('console', (m) => {
+      if (/reconnect|resum|disconnect|signal/i.test(m.text())) log.push(`${who} console: ${m.text().slice(0, 240)}`);
+    });
+  };
+}
+const withLog = (e: Error, who: string, log: string[]) =>
+  new Error(`${e.message}\n${who}'s leave missed the question. What the rooms read and said:\n${log.join('\n') || '(nothing)'}`);
 
 const sheetOf = (page: Page, name: string) => page.getByRole('dialog', { name: `How did your meeting with ${name} go?` });
 // No sideways scroll, measured once the window has a size: Windows WebKit now and then gives a window that reads 0 wide
@@ -159,15 +186,18 @@ test('1) leaving the 1:1 room after the other person was in it asks how it went'
     args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--disable-features=MediaFoundationD3D11VideoCapture'],
   });
   try {
-    const enter = (u: TestUser) => openAs(u, `/meet/${convId}?scheduled=1&kind=video`, { width: 390, height: 844 }, media);
-    const anaRoom = await enter(ana);
-    const boRoom = await enter(bo);
+    const log: string[] = [];
+    const enter = (u: TestUser, who: string) =>
+      openAs(u, `/meet/${convId}?scheduled=1&kind=video`, { width: 390, height: 844 }, media, recordRoom(who, log));
+    const anaRoom = await enter(ana, 'Ana');
+    const boRoom = await enter(bo, 'Bo');
     const tiles = (p: Page) => p.locator('.lk-participant-tile');
     await expect(tiles(anaRoom)).toHaveCount(2, { timeout: 45_000 });
     await expect(tiles(boRoom)).toHaveCount(2, { timeout: 45_000 });
 
     await anaRoom.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-    await expect(anaRoom).toHaveURL(new RegExp(`/meetings/${roomMeeting}\\?feedback=1`), { timeout: 15_000 });
+    await expect(anaRoom).toHaveURL(new RegExp(`/meetings/${roomMeeting}\\?feedback=1`), { timeout: 15_000 })
+      .catch((e: Error) => { throw withLog(e, 'Ana', log); });
     await expect(sheetOf(anaRoom, BO)).toBeVisible({ timeout: 20_000 });
     // Bo stays in the room after Ana has gone, past the notice's 5 s grace, and is never asked anything while he
     // does. (The "{name} left the call" notice itself is meeting-call.spec.ts test 9's; its Leave calls the same
@@ -176,7 +206,8 @@ test('1) leaving the 1:1 room after the other person was in it asks how it went'
     await expect(boRoom).toHaveURL(new RegExp(`/meet/${convId}`));
     await expect(sheetOf(boRoom, ANA)).toHaveCount(0);
     await boRoom.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-    await expect(boRoom).toHaveURL(new RegExp(`/meetings/${roomMeeting}\\?feedback=1`), { timeout: 15_000 });
+    await expect(boRoom).toHaveURL(new RegExp(`/meetings/${roomMeeting}\\?feedback=1`), { timeout: 15_000 })
+      .catch((e: Error) => { throw withLog(e, 'Bo', log); });
     await expect(sheetOf(boRoom, ANA)).toBeVisible({ timeout: 20_000 });
     meetingId = roomMeeting;
   } finally {
