@@ -47,13 +47,23 @@ describe('the admin pods list (AdminPodsPage.tsx)', () => {
 describe('a pod\'s page (PodDetailPage.tsx)', () => {
   const src = read('features/pods/PodDetailPage.tsx');
 
+  // The events list is its own section (PodEventsSection.tsx) since item 16.
+  const events = read('features/pods/PodEventsSection.tsx');
+
   it('reads up to a hundred of the pod\'s events, not the default page of twenty (item 15)', () => {
-    expect(src).toMatch(/const EVENTS_PAGE = 100;/);
-    expect(src).toMatch(/\/sessions\?podId=\$\{podId\}&pageSize=\$\{EVENTS_PAGE\}/);
+    expect(events).toMatch(/export const EVENTS_PAGE = 100;/);
+    expect(events).toMatch(/\/sessions\?podId=\$\{podId\}&pageSize=\$\{EVENTS_PAGE\}/);
   });
 
-  it('says when there are more events than it shows (item 15)', () => {
-    expect(src).toMatch(/and more/);
+  it('says when there are more events than it shows, and no count to someone who may not read them (item 15)', () => {
+    expect(events).toMatch(/and more/);
+    expect(events).toMatch(/Events\{podSessions && mayReadEvents && !eventsRefused \? /);
+  });
+
+  it('the page draws the events section, and the Invitations card above the members (items 16, 33)', () => {
+    expect(src).toMatch(/<PodEventsSection podId=\{podId\} mayReadEvents=\{mayReadEvents\} \/>/);
+    expect(src.indexOf('<InviteStatusList')).toBeGreaterThan(0);
+    expect(src.indexOf('<InviteStatusList')).toBeLessThan(src.indexOf('id="pod-members"'));
   });
 
   it('asks whether the viewer is an admin through the one helper every screen uses (item 16)', () => {

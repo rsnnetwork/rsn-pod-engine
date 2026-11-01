@@ -34,7 +34,10 @@ describe('Realtime migration Phase 3 — client meta.entities', () => {
       expect(podBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.pod\(podId\)/);
       const membersBlock = src.slice(src.indexOf("queryKey: ['pod-members', podId]"));
       expect(membersBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podMembers\(podId\)/);
-      const sessionsBlock = src.slice(src.indexOf("queryKey: ['pod-sessions', podId]"));
+      // The events list is its own section since P1 item 16, 1 Nov 2026.
+      const events = readClient('features/pods/PodEventsSection.tsx');
+      expect(events).toMatch(/import\s*\{\s*E\s*\}\s*from\s*['"]@\/realtime\/entities['"]/);
+      const sessionsBlock = events.slice(events.indexOf("queryKey: ['pod-sessions', podId]"));
       expect(sessionsBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.podSessions\(podId\)/);
       // 26 Oct 2026 (C9): the pod's pending invites are read by the organisers' list the page draws
       // (InviteStatusList), with the same key and tag.

@@ -8,28 +8,22 @@ import {
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
-import { sessionStatusLabel, sessionStatusColor } from '@/features/sessions/statusConfig';
 import Avatar from '@/components/ui/Avatar';
 import ProfileCard from '@/components/ui/ProfileCard';
 import { Button } from '@/components/ui/Button';
 import Modal from '@/components/ui/Modal';
-import { PageLoader, Skeleton } from '@/components/ui/Spinner';
+import { PageLoader } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
-import { formatDateTime, isAdmin } from '@/lib/utils';
+import { isAdmin } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import CreatePodModal from './CreatePodModal';
 import EditPodModal from './EditPodModal';
 import PodWall from './PodWall';
 import { orchestrationLabel, podStatusLabel } from './pod-header-text';
-import { podEventsInOrder } from './pod-event-order';
-import { isForbidden, retryUnlessAnswered } from '@/components/wall/wall-logic';
-
-/** The most events the page reads (the route's largest page); the heading says "and more" past it. */
-const EVENTS_PAGE = 100;
-const eventsCount = (n: number): string => (n >= EVENTS_PAGE ? `${EVENTS_PAGE} and more` : String(n));
+import PodEventsSection from './PodEventsSection';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -55,13 +49,6 @@ const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; color
 };
 
 /** What the page lists of each of the pod's events. */
-interface PodEventRow {
-  id: string;
-  title: string | null;
-  scheduledAt: string | null;
-  status: string;
-}
-
 // The sections a phone's chip row jumps to; the ids are on the sections below.
 const SECTIONS = [
   { id: 'pod-discussion', label: 'Discussion' },
@@ -123,19 +110,6 @@ export default function PodDetailPage() {
   // The server lists a pod's events to its active members (the only ones it names a role for) and to admins, and
   // answers 403 to anyone else, so nobody else asks.
   const mayReadEvents = !!pod?.memberRole || isAdmin(user?.role);
-  const {
-    data: podSessions, isError: sessionsFailed, error: sessionsError, refetch: refetchSessions,
-  } = useQuery({
-    queryKey: ['pod-sessions', podId],
-    // The route's largest page (P1 item 15, 26 Oct 2026): the default page of twenty, newest first, dropped a busy
-    // pod's soonest upcoming events; past a hundred the heading says "and more".
-    queryFn: () => api.get(`/sessions?podId=${podId}&pageSize=${EVENTS_PAGE}`).then(r => (r.data.data ?? []) as PodEventRow[]),
-    enabled: !!podId && mayReadEvents,
-    retry: retryUnlessAnswered,
-    meta: { entities: podId ? [E.pod(podId), E.podSessions(podId)] : [] },
-  });
-  // Refused all the same: this page's copy of the pod still named a role the member has just lost.
-  const eventsRefused = isForbidden(sessionsError);
 
   const { data: podMemberCounts } = useQuery({
     queryKey: ['pod-member-counts', podId],
@@ -637,55 +611,20 @@ export default function PodDetailPage() {
 
         <div className="min-w-0 space-y-6">
           {/* ── Events ──────────────────────────────────────────────────── */}
-          <section id="pod-events" className="scroll-mt-4 animate-fade-in-up stagger-2">
-            <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-              {/* No count for someone who may not read the events: a just-removed member kept a cached "Events (3)"
-                  above "Members see the pod's events here." (P1 item 15). */}
-              <Calendar className="h-5 w-5 text-rsn-red" /> Events{podSessions && mayReadEvents && !eventsRefused ? ` (${eventsCount(podSessions.length)})` : ''}
-            </h2>
-            {!mayReadEvents || eventsRefused ? (
-              <Card className="!p-4">
-                <p className="text-center text-sm text-gray-500">Members see the pod's events here.</p>
-              </Card>
-            ) : sessionsFailed && !podSessions ? (
-              <Card className="!p-4 text-center">
-                <p className="text-sm text-gray-600">We could not load the events just now.</p>
-                <Button variant="ghost" onClick={() => void refetchSessions()} className="mx-auto mt-2 min-h-[44px]">Try again</Button>
-              </Card>
-            ) : !podSessions ? (
-              <Skeleton className="h-16" />
-            ) : podSessions.length > 0 ? (
-              <div className="grid grid-cols-1 gap-2">
-                {podEventsInOrder(podSessions).map((s) => (
-                  <Card
-                    key={s.id}
-                    className="!p-4 cursor-pointer hover:border-gray-300 transition-colors"
-                    onClick={() => navigate(`/sessions/${s.id}`)}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="break-words text-sm font-medium text-[#1a1a2e]">{s.title || 'Untitled Event'}</p>
-                        <p className="text-xs text-gray-400">
-                          {s.scheduledAt ? formatDateTime(s.scheduledAt) : 'No date set'}
-                        </p>
-                      </div>
-                      {/* This showed the raw column value, so a member read
-                          "round_transition" here (21 Sep 2026). One helper names
-                          every state in plain words now. 'active' was never a
-                          real status, so the old colour test never matched. */}
-                      <Badge variant={sessionStatusColor(s.status)} className="shrink-0">
-                        {sessionStatusLabel(s.status)}
-                      </Badge>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            ) : (
-              <Card className="!p-4">
-                <p className="text-center text-sm text-gray-400">No events yet.</p>
-              </Card>
-            )}
-          </section>
+          {podId && <PodEventsSection podId={podId} mayReadEvents={mayReadEvents} />}
+
+          {/* ── Invitations: who is invited, who declined (the pod's director, host and admins), for any pod that is not
+               archived: a draft or suspended pod can be invited to (the button above shows; the server refuses only an
+               archived pod), so its organisers see the card too. Above the members, so a director sees it without
+               scrolling past the whole list (P1 item 33). ─────── */}
+          {isDirectorOrHost && pod.status !== 'archived' && podId && (
+            <InviteStatusList
+              target={{ type: 'pod', podId }}
+              present={activeMembers.map((m: { userId: string }) => m.userId)}
+              presentCount={activeMembers.length}
+              onInvite={() => setInviteOpen(true)}
+            />
+          )}
 
           {/* ── Members ──────────────────────────────────────────────────── */}
           <section id="pod-members" className="scroll-mt-4 animate-fade-in-up stagger-2">
@@ -775,17 +714,6 @@ export default function PodDetailPage() {
             </div>
           </section>
 
-          {/* ── Invitations: who is invited, who declined (the pod's director, host and admins), for any pod that is not
-               archived: a draft or suspended pod can be invited to (the button above shows; the server refuses only an
-               archived pod), so its organisers see the card too. ─────── */}
-          {isDirectorOrHost && pod.status !== 'archived' && podId && (
-            <InviteStatusList
-              target={{ type: 'pod', podId }}
-              present={activeMembers.map((m: { userId: string }) => m.userId)}
-              presentCount={activeMembers.length}
-              onInvite={() => setInviteOpen(true)}
-            />
-          )}
         </div>
       </div>
       {confirmDialog}

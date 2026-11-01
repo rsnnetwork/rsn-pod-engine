@@ -363,7 +363,9 @@ describe('the order of the pod\'s events: what is live, then what is coming soon
 });
 
 describe('the pod page', () => {
+  // The events list is its own section since P1 item 16 (PodEventsSection.tsx); the page draws it.
   const page = read('features/pods/PodDetailPage.tsx');
+  const events = read('features/pods/PodEventsSection.tsx');
 
   it('shows that label in the header, and no raw orchestration value and no communication badge', () => {
     expect(page).toMatch(/<Badge variant="brand">\{orchestrationLabel\(pod\)\}<\/Badge>/);
@@ -377,7 +379,8 @@ describe('the pod page', () => {
   });
 
   it('lists the pod\'s events in that order', () => {
-    expect(page).toMatch(/podEventsInOrder\(podSessions\)\.map\(/);
+    expect(events).toMatch(/podEventsInOrder\(podSessions\)\.map\(/);
+    expect(page).toMatch(/<PodEventsSection podId=\{podId\} mayReadEvents=\{mayReadEvents\} \/>/);
   });
 
   it('asks for the events only when the server will list them (an active member or an admin), and tells everyone else in words', () => {
@@ -385,15 +388,15 @@ describe('the pod page', () => {
     // "No events yet." about a pod that has events.
     // Whether the viewer is an admin is asked through the one helper every screen uses (P1 item 16).
     expect(page).toMatch(/const mayReadEvents = !!pod\?\.memberRole \|\| isAdmin\(user\?\.role\);/);
-    expect(page).toMatch(/enabled: !!podId && mayReadEvents,/);
-    expect(page).toMatch(/\{!mayReadEvents \|\| eventsRefused \? \(/);
-    expect(page).toContain("Members see the pod's events here.");
+    expect(events).toMatch(/enabled: !!podId && mayReadEvents,/);
+    expect(events).toMatch(/\{!mayReadEvents \|\| eventsRefused \? \(/);
+    expect(events).toContain("Members see the pod's events here.");
   });
 
   it('a list of events that could not be loaded says so and offers to try again, instead of "No events yet."', () => {
-    expect(page).toContain('We could not load the events just now.');
-    expect(page).toMatch(/onClick=\{\(\) => void refetchSessions\(\)\}[^>]*min-h-\[44px\]/);
-    expect(page).toMatch(/retry: retryUnlessAnswered,/);
+    expect(events).toContain('We could not load the events just now.');
+    expect(events).toMatch(/onClick=\{\(\) => void refetchSessions\(\)\}[^>]*min-h-\[44px\]/);
+    expect(events).toMatch(/retry: retryUnlessAnswered,/);
   });
 
   it('reads ?post= and hands it to the wall, so a bell or a link lands on the post', () => {
@@ -410,7 +413,8 @@ describe('the pod page', () => {
     expect(page).toMatch(/aria-label="Jump to a section"[^>]*className="[^"]*\blg:hidden\b/);
     for (const [label, id] of [['Discussion', 'pod-discussion'], ['Events', 'pod-events'], ['Members', 'pod-members']]) {
       expect(page).toContain(`id: '${id}', label: '${label}'`);
-      expect(page).toMatch(new RegExp(`id="${id}"`));
+      // The events section draws its own id (PodEventsSection.tsx, P1 item 16).
+      expect(`${page}\n${events}`).toMatch(new RegExp(`id="${id}"`));
     }
     expect(page).toMatch(/min-h-\[44px\][^"]*\brounded-full\b|\brounded-full\b[^"]*min-h-\[44px\]/);
   });
