@@ -147,28 +147,28 @@ describe('a toast in the live room opens below the top bar, never over it', () =
     const html = drawToasts({});
     expect(html).toContain('Thanks, we will use this for your matches.');
     const classes = stackClasses(html);
-    expect(classes).toEqual(expect.arrayContaining(['fixed', 'top-4', 'right-4', 'z-[100]', 'max-w-sm']));
+    expect(classes).toEqual(expect.arrayContaining(['fixed', 'top-4', 'right-4', 'z-[210]', 'sm:max-w-sm']));
   });
 
   it('opens just below its bar, inside the screen with the notch kept clear, when placed below the bar', () => {
     const html = drawToasts({ placement: 'below-bar' });
     expect(html).toContain('Thanks, we will use this for your matches.');
     const classes = stackClasses(html);
-    expect(classes).toEqual(expect.arrayContaining(['absolute', 'top-full', 'mt-2', 'z-[100]', 'sm:left-auto', 'sm:max-w-sm']));
+    expect(classes).toEqual(expect.arrayContaining(['absolute', 'top-full', 'mt-2', 'z-[210]', 'sm:left-auto', 'sm:max-w-sm']));
     expect(classes).not.toContain('fixed');
     expect(classes).not.toContain('top-4');
     expect(classes.some((c) => /^left-\[max\(1rem,env\(safe-area-inset-left\)\)\]$/.test(c))).toBe(true);
     expect(classes.some((c) => /^right-\[max\(1rem,env\(safe-area-inset-right\)\)\]$/.test(c))).toBe(true);
   });
 
-  it('draws an opaque card below the bar, so the room under it never shows through its words', () => {
+  it('draws a solid card in both placements, so the room under it never shows through its words', () => {
     const card = (html: string) => html.match(/<div[^>]*\sclass="([^"]*rounded-xl[^"]*)"/)?.[1].split(/\s+/) ?? [];
-    const below = card(drawToasts({ placement: 'below-bar' }));
-    expect(below).toEqual(expect.arrayContaining(['bg-emerald-50', 'text-emerald-800', 'border-emerald-200', 'shadow-lg']));
-    // No see-through background (a Tailwind opacity suffix such as bg-emerald-500/10).
-    expect(below.filter((c) => c.startsWith('bg-') && c.includes('/'))).toEqual([]);
-    // Every other page keeps its card as it was.
-    expect(card(drawToasts({}))).toEqual(expect.arrayContaining(['bg-emerald-500/10', 'text-emerald-400', 'border-emerald-500/30']));
+    for (const placement of ['below-bar', 'viewport'] as const) {
+      const classes = card(drawToasts({ placement }));
+      expect(classes).toEqual(expect.arrayContaining(['bg-emerald-50', 'border-emerald-600', 'shadow-lg']));
+      // No see-through background (a Tailwind opacity suffix such as bg-emerald-500/10).
+      expect(classes.filter((c) => c.startsWith('bg-') && c.includes('/'))).toEqual([]);
+    }
   });
 
   it('still shows the host only actionable errors', () => {
