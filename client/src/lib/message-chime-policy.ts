@@ -60,6 +60,25 @@ export function chimeFromCall(d: { requestId: string; conversationId: string }):
   return { id: `call:${d.requestId}`, path: `/messages/${d.conversationId}`, ring: true };
 }
 
+/** How often the tab that rings plays the ring again while the call still rings (T16 fix round 1). */
+export const RING_REPEAT_MS = 4000;
+
+/**
+ * Whether the tab that rang should ring again now: the call layer still holds this same call (an answer, a decline, a
+ * withdrawal or an answer on another device takes it away), it has not lapsed, and this device may still sound here
+ * (the setting, a meeting or a live event, by quietHere).
+ */
+export function keepsRinging(
+  ev: ChimeEvent,
+  ringing: { requestId: string; expiresAt: number } | null | undefined,
+  requestId: string,
+  now: number,
+  tab: { pathname: string; visible: boolean; soundOn: boolean },
+): boolean {
+  if (!ringing || ringing.requestId !== requestId || now >= ringing.expiresAt) return false;
+  return !quietHere(ev, tab);
+}
+
 /** Whether this tab says quiet for this message. */
 export function quietHere(ev: ChimeEvent, tab: { pathname: string; visible: boolean; soundOn: boolean }): boolean {
   if (!tab.soundOn) return true;

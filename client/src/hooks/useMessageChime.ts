@@ -8,9 +8,10 @@
 import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { getSocket } from '@/lib/socket';
+import { useCallStore } from '@/stores/callStore';
 import { messageSoundOn, playCallRing, playMessageChime, readyAudioOnFirstPress } from '@/lib/chime';
 import {
-  CHIME_VOTE_WINDOW_MS, chimeFromCall, chimeFromDm, chimeFromNotification, playsHere, quietHere,
+  CHIME_VOTE_WINDOW_MS, RING_REPEAT_MS, chimeFromCall, chimeFromDm, chimeFromNotification, keepsRinging, playsHere, quietHere,
   type ChimeEvent, type ChimeVote, type DmMessageLike, type NotificationLike,
 } from '@/lib/message-chime-policy';
 
@@ -34,6 +35,7 @@ export function useMessageChime(userId: string | undefined): void {
     const played = new Set<string>();
     let lastPlayedAt: number | null = null;
     const timers = new Set<number>();
+    const intervals = new Set<number>();
     const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL) : null;
 
     const remember = (vote: ChimeVote) => {
@@ -74,10 +76,28 @@ export function useMessageChime(userId: string | undefined): void {
         played.add(ev.id);
         lastPlayedAt = now;
         channel?.postMessage({ kind: 'played', id: ev.id, at: now } satisfies ChannelMessage);
-        if (ev.ring) playCallRing(ev.id);
+        if (ev.ring) ringUntilAnswered(ev);
         else playMessageChime(ev.id);
       }, CHIME_VOTE_WINDOW_MS);
       timers.add(t);
+    };
+
+    // A call rings for up to two minutes: the tab that won the vote rings again every few seconds while the call layer
+    // still holds that call and this device may sound, so someone away from the screen for the first ring still hears
+    // it (T16 fix round 1). It stops on an answer, a decline, a withdrawal, an answer elsewhere, or when it lapses.
+    const ringUntilAnswered = (ev: ChimeEvent) => {
+      const requestId = ev.id.slice('call:'.length);
+      playCallRing(ev.id);
+      const repeat = window.setInterval(() => {
+        const tab = { pathname: where.current, visible: document.visibilityState === 'visible', soundOn: messageSoundOn() };
+        if (!keepsRinging(ev, useCallStore.getState().incoming, requestId, Date.now(), tab)) {
+          window.clearInterval(repeat);
+          intervals.delete(repeat);
+          return;
+        }
+        playCallRing(ev.id);
+      }, RING_REPEAT_MS);
+      intervals.add(repeat);
     };
 
     const onDm = (msg: DmMessageLike) => consider(chimeFromDm(msg, userId));
@@ -95,6 +115,7 @@ export function useMessageChime(userId: string | undefined): void {
       socket.off('call:request', onCall);
       unready();
       for (const t of timers) window.clearTimeout(t);
+      for (const r of intervals) window.clearInterval(r);
       channel?.close();
     };
   }, [userId]);

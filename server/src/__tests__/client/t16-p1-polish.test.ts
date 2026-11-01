@@ -11,7 +11,7 @@ import { sendErrorSentence } from '../../../../client/src/features/sessions/post
 import { onboardingError } from '../../../../client/src/features/onboarding/flow';
 import { leaveEvent, leaveOnUnmount } from '../../../../client/src/features/live/leave-event';
 import { REFUSED_DETAIL, refusalOf } from '../../../../client/src/features/live/session-guard-state';
-import { chimeFromCall, quietHere } from '../../../../client/src/lib/message-chime-policy';
+import { RING_REPEAT_MS, chimeFromCall, keepsRinging, quietHere } from '../../../../client/src/lib/message-chime-policy';
 
 const CLIENT = path.join(__dirname, '../../../../client/src');
 const read = (rel: string) => fs.readFileSync(path.join(CLIENT, rel), 'utf8').replace(/\r\n/g, '\n');
@@ -68,7 +68,8 @@ describe('X3: an incoming call rings once, in one tab, under the device\'s sound
     const hook = read('hooks/useMessageChime.ts');
     expect(hook).toMatch(/socket\.on\('call:request', onCall\);/);
     expect(hook).toMatch(/socket\.off\('call:request', onCall\);/);
-    expect(hook).toMatch(/if \(ev\.ring\) playCallRing\(ev\.id\);\s*else playMessageChime\(ev\.id\);/);
+    expect(hook).toMatch(/if \(ev\.ring\) ringUntilAnswered\(ev\);\s*else playMessageChime\(ev\.id\);/);
+    expect(hook).toMatch(/playCallRing\(ev\.id\);/);
     expect(hook).toMatch(/lastPlayedAt: ev\.ring \? null : lastPlayedAt/);
     expect(read('features/calls/useCallSignals.ts')).not.toMatch(/playCallRing|AudioContext/);
   });
@@ -213,5 +214,32 @@ describe('one "no answer" rule for every failed-request sentence (review T16, Im
       expect(read(f)).not.toMatch(/isAxiosError === true/);
       expect(read(f)).toMatch(/gotNoAnswer\(/);
     }
+  });
+});
+
+describe('X3, fix round 1: the ring repeats in the one tab until the call stops ringing', () => {
+  const ringing = { requestId: 'r-1', expiresAt: 1_000_000 };
+  const here = { pathname: '/for-you', visible: false, soundOn: true };
+  const ev = { id: 'call:r-1', path: '/messages/c-1', ring: true as const };
+
+  it('every few seconds, while the same call still rings, before it lapses, and while this device may sound', () => {
+    expect(RING_REPEAT_MS).toBe(4000);
+    expect(keepsRinging(ev, ringing, 'r-1', 900_000, here)).toBe(true);
+    // Answered, declined, withdrawn or answered elsewhere: the call layer no longer holds it, or holds another.
+    expect(keepsRinging(ev, null, 'r-1', 900_000, here)).toBe(false);
+    expect(keepsRinging(ev, { requestId: 'r-2', expiresAt: 1_000_000 }, 'r-1', 900_000, here)).toBe(false);
+    // Lapsed.
+    expect(keepsRinging(ev, ringing, 'r-1', 1_000_000, here)).toBe(false);
+    // The sound switched off meanwhile, or the member walked into a meeting or a live event.
+    expect(keepsRinging(ev, ringing, 'r-1', 900_000, { ...here, soundOn: false })).toBe(false);
+    expect(keepsRinging(ev, ringing, 'r-1', 900_000, { ...here, pathname: '/meet/c-9' })).toBe(false);
+  });
+
+  it('the chime hook repeats the ring through keepsRinging, reading the call layer, and clears its timer', () => {
+    const hook = read('hooks/useMessageChime.ts');
+    expect(hook).toMatch(/useCallStore\.getState\(\)\.incoming/);
+    expect(hook).toMatch(/keepsRinging\(ev, /);
+    expect(hook).toMatch(/window\.setInterval\(/);
+    expect(hook).toMatch(/window\.clearInterval\(/);
   });
 });
