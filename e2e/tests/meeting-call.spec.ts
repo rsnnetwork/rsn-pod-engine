@@ -434,7 +434,9 @@ test('9) one person leaves the room and comes back in; the other stays in it and
     });
     try {
       // What each LiveKit connection logged (1 Nov 2026): when Bo is never told, the failure says whether his room
-      // heard Ana go, and whether either room was reconnecting or resuming at the time.
+      // heard Ana go, and whether either room was reconnecting or resuming at the time. Fix round 3 (2 Nov 2026):
+      // LiveKit logs at debug here, so every room event each page sees (data received, participant connected and
+      // disconnected, connection state, signal and peer-connection state) is in it, with the time it came.
       const log: string[] = [];
       const enter = async (u: TestUser, who: string): Promise<Page> => {
         const ctx = await media.newContext({ viewport: { width: 390, height: 844 }, permissions: ['microphone'] });
@@ -443,11 +445,16 @@ test('9) one person leaves the room and comes back in; the other stays in it and
           localStorage.setItem('rsn_refresh', t.r);
           localStorage.setItem('rsn_tokens', JSON.stringify({ access: t.a, refresh: t.r }));
         }, { a: u.accessToken, r: u.refreshToken });
+        await ctx.addInitScript(() => {
+          for (const name of ['livekit', 'livekit-room', 'livekit-engine', 'livekit-signal', 'livekit-participant']) localStorage.setItem(`loglevel:${name}`, 'DEBUG');
+        });
         await primePreview(ctx);
         const page = await ctx.newPage();
         page.on('pageerror', () => {});
         page.on('console', (m) => {
-          if (/reconnect|resum|disconnect|signal/i.test(m.text())) log.push(`${who} console: ${m.text().slice(0, 240)}`);
+          if (/room event|reconnect|resum|disconnect|signal|pc state|leave/i.test(m.text())) {
+            log.push(`${new Date().toISOString().slice(11, 23)} ${who}: ${m.text().slice(0, 200)}`);
+          }
         });
         await gotoRetry(page, `${APP}/meet/${convId}?kind=audio`);
         await expect(page.getByText(/^Audio call$/)).toBeVisible({ timeout: 30_000 });
@@ -460,11 +467,14 @@ test('9) one person leaves the room and comes back in; the other stays in it and
       await expect(tiles(boPage)).toHaveCount(2, { timeout: 45_000 });
 
       // Ana leaves. Bo is told who left, and stays: no timer takes him back to the chat.
+      const pressedAt = new Date().toISOString().slice(11, 23);
       await anaPage.getByRole('button', { name: 'Leave call and go back to chat' }).click();
       await expect(anaPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });
       const notice = boPage.getByTestId('partner-left');
-      await expect(notice).toContainText('Rejoin Ana left the call', { timeout: 30_000 }).catch((e: Error) => {
-        throw new Error(`${e.message}\nBo was never told. What the rooms logged:\n${log.join('\n') || '(nothing)'}`);
+      await expect(notice).toContainText('Rejoin Ana left the call', { timeout: 30_000 }).catch(async (e: Error) => {
+        const fromPress = log.filter((l) => l.slice(0, 12) >= pressedAt).slice(0, 150);
+        throw new Error(`${e.message}\nBo was never told. Pressed at ${pressedAt}; Bo is on ${boPage.url()} with ${await tiles(boPage).count()} tiles.\n`
+          + `What the rooms logged from the press on:\n${fromPress.join('\n') || '(nothing)'}`);
       });
       await boPage.waitForTimeout(6_000);
       await expect(boPage).toHaveURL(new RegExp(`/meet/${convId}`));

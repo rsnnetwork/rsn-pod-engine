@@ -254,7 +254,7 @@ describe('someone who leaves on purpose is announced at once', () => {
 });
 
 /** The part of the room leaveCall uses, with a disconnect that can be held open. */
-function leavingRoom(state: ConnectionState = ConnectionState.Connected, others: Person[] = [stefan]) {
+function leavingRoom(state: ConnectionState = ConnectionState.Connected, others: Person[] = [stefan], sid = 'PA_ana1') {
   const order: string[] = [];
   let finishDisconnect: () => void = () => {};
   const events = new EventEmitter();
@@ -267,6 +267,7 @@ function leavingRoom(state: ConnectionState = ConnectionState.Connected, others:
     connects: () => { room.state = ConnectionState.Connected; events.emit(RoomEvent.ConnectionStateChanged, ConnectionState.Connected); },
     listeners: () => events.listenerCount(RoomEvent.ConnectionStateChanged),
     localParticipant: {
+      sid,
       publishData: jest.fn(async (_data: Uint8Array, opts: { reliable?: boolean; topic?: string }) => {
         order.push(`goodbye:${opts.topic}:${opts.reliable ? 'reliable' : 'lossy'}`);
       }),
@@ -371,6 +372,54 @@ describe('leaveCall: the goodbye, then the room\'s own disconnect, before the pa
     expect(order).toEqual(['disconnect', 'disconnected']);
   });
 
+  // Fix round 3 (preview rr4, 2 Nov 2026): on LiveKit Cloud the person still in the room was once told nothing for
+  // over 30 s: neither the goodbye nor LiveKit's own leave reached the room. The leave now also hands its connection's
+  // sid to onLeaving, after the goodbye and before the disconnect, and MeetPage asks our server to take exactly that
+  // connection out of the room (POST /dm/conversations/:id/call/leave).
+  it('names the connection that is leaving (its sid) after the goodbye and before the disconnect', async () => {
+    const { room, order, finish } = leavingRoom();
+    const left = leaveCall(room as unknown as DepartingRoom, { onLeaving: (sid) => order.push(`leaving:${sid}`) });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(order).toEqual([`goodbye:${GOODBYE_TOPIC}:reliable`, 'leaving:PA_ana1', 'disconnect']);
+    finish();
+    await left;
+  });
+
+  it('names it even when nobody else is in the room or the goodbye failed', async () => {
+    const alone = leavingRoom(ConnectionState.Connected, []);
+    const named: string[] = [];
+    const left = leaveCall(alone.room as unknown as DepartingRoom, { onLeaving: (sid) => named.push(sid) });
+    await jest.advanceTimersByTimeAsync(0);
+    alone.finish();
+    await left;
+    const failed = leavingRoom();
+    failed.room.localParticipant.publishData.mockRejectedValueOnce(new Error('engine closed'));
+    const left2 = leaveCall(failed.room as unknown as DepartingRoom, { onLeaving: (sid) => named.push(sid) });
+    await jest.advanceTimersByTimeAsync(0);
+    failed.finish();
+    await left2;
+    expect(named).toEqual(['PA_ana1', 'PA_ana1']);
+  });
+
+  it('a room that never joined has no connection to name', async () => {
+    const { room, finish } = leavingRoom(ConnectionState.Connecting, [], '');
+    const named: string[] = [];
+    const left = leaveCall(room as unknown as DepartingRoom, { onLeaving: (sid) => named.push(sid) });
+    await jest.advanceTimersByTimeAsync(0);
+    finish();
+    await left;
+    expect(named).toEqual([]);
+  });
+
+  it('a failing onLeaving never stops the disconnect', async () => {
+    const { room, order, finish } = leavingRoom();
+    const left = leaveCall(room as unknown as DepartingRoom, { onLeaving: () => { throw new Error('no network'); } });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(order).toEqual([`goodbye:${GOODBYE_TOPIC}:reliable`, 'disconnect']);
+    finish();
+    await left;
+  });
+
   it('never holds the person in the room: a disconnect that does not finish is given up after DEPART_MS', async () => {
     const { room } = leavingRoom();
     let done = false;
@@ -451,13 +500,22 @@ describe('MeetPage, read from source', () => {
     const src = meetPage();
     expect(src).toMatch(/import \{ leaveCall, leftCallText, watchPartner \} from '\.\/call-presence';/);
     // Set inside the room (the leave buttons sit outside it), and put back when the room goes.
-    expect(src).toMatch(/depart\.current = \(\) => leaveCall\(room\);\s*return \(\) => \{ depart\.current = noDeparture; \};/);
-    expect(src).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} leaving=\{leaving\} depart=\{departRef\} \/>/);
+    expect(src).toMatch(/depart\.current = \(\) => leaveCall\(room, \{ onLeaving: \(sid\) => leftCallRoom\(conversationId, sid\) \}\);\s*return \(\) => \{ depart\.current = noDeparture; \};/);
+    expect(src).toMatch(/<CallEndWatcher conversationId=\{conversationId\} onLeave=\{leaveRoom\} leaving=\{leaving\} depart=\{departRef\} \/>/);
     // The question (read as the person leaves, before the room empties) and the departure run together; the page
     // moves on once both are done, each with its own bound (LEAVE_READ_MS, DEPART_MS).
     const leave = src.slice(src.indexOf('const leaveRoom = useCallback'));
     expect(leave).toMatch(/^const leaveRoom = useCallback\(\(\) => \{\s*if \(leftRoom\.current\) return;\s*leftRoom\.current = true;\s*setLeaving\(true\);\s*void Promise\.all\(\[\s*afterRoomLeave\(\{[\s\S]*?\}\),\s*departRef\.current\(\),\s*\]\)\.then\(\(\[to\]\) => navigate\(to\)\);/);
     expect(src.match(/navigate\(to\)/g)).toHaveLength(1);
+  });
+
+  it('the leave asks our server to take the connection that left out of the room (fix round 3)', () => {
+    const src = meetPage();
+    expect(src).toMatch(/depart\.current = \(\) => leaveCall\(room, \{ onLeaving: \(sid\) => leftCallRoom\(conversationId, sid\) \}\);/);
+    expect(src).toMatch(/<CallEndWatcher conversationId=\{conversationId\} onLeave=\{leaveRoom\} leaving=\{leaving\} depart=\{departRef\} \/>/);
+    const callApi = fs.readFileSync(path.join(__dirname, '../../../../client/src/features/calls/call-api.ts'), 'utf8').replace(/\r\n/g, '\n');
+    const fn = callApi.slice(callApi.indexOf('export function leftCallRoom'));
+    expect(fn).toMatch(/^export function leftCallRoom\(conversationId: string, sid: string\): void \{\s*void api\.post\(`\/dm\/conversations\/\$\{encodeURIComponent\(conversationId\)\}\/call\/leave`, \{ sid \}\)\.catch\(\(\) => undefined\);/);
   });
 
   // Fix round 1 (review Important): LiveKit's ControlBar draws its own red Leave, which disconnects the room itself, so
