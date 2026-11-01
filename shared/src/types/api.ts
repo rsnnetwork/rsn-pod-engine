@@ -44,6 +44,11 @@ export const ErrorCodes = {
   AUTH_FORBIDDEN: 'AUTH_FORBIDDEN',
   AUTH_MAGIC_LINK_EXPIRED: 'AUTH_MAGIC_LINK_EXPIRED',
   AUTH_MAGIC_LINK_USED: 'AUTH_MAGIC_LINK_USED',
+  // The 6-digit sign-in code in the sign-in email (1 Nov 2026): a wrong code (details.attemptsLeft), a code past
+  // its 15 minutes, and a link and code killed together by the fifth wrong code.
+  AUTH_SIGN_IN_CODE_WRONG: 'AUTH_SIGN_IN_CODE_WRONG',
+  AUTH_SIGN_IN_CODE_EXPIRED: 'AUTH_SIGN_IN_CODE_EXPIRED',
+  AUTH_SIGN_IN_LOCKED: 'AUTH_SIGN_IN_LOCKED',
 
   // User errors
   USER_NOT_FOUND: 'USER_NOT_FOUND',

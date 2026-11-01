@@ -21,6 +21,10 @@ import { hasAvatar, tryGravatar } from '../onboarding/avatar.service';
 import { bannerUrlFor } from '../user/banner.service';
 import { assertCanSignIn, signInRefusal } from './account-access';
 import { clientOriginConfig, resolveClientBaseUrl } from './client-origin';
+import { safeReturnPath } from './return-path';
+import {
+  SIGN_IN_CODE_MAX_ATTEMPTS, SIGN_IN_CODE_TTL_MINUTES, hashSignInCode, newSignInCode, signInCodeMatches,
+} from './sign-in-code';
 
 /**
  * A photo for a member signing in for the first time — but never their
@@ -284,7 +288,12 @@ export async function updateLastActive(userId: string): Promise<void> {
 
 // ─── Magic Link Authentication ──────────────────────────────────────────────
 
-export async function sendMagicLink(email: string, requestedClientUrl?: string, inviteCode?: string): Promise<{ sent: boolean; devLink?: string }> {
+export async function sendMagicLink(
+  email: string,
+  requestedClientUrl?: string,
+  inviteCode?: string,
+  returnPath?: string,
+): Promise<{ sent: boolean; devLink?: string; devCode?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
 
   // Allow existing users to log in without gate check — unless the account is
@@ -328,6 +337,9 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const expiresAt = new Date(Date.now() + config.magicLinkExpiryMinutes * 60 * 1000);
+  // The 6-digit code the same email carries (sign-in-code.ts): stored only as a keyed hash bound to this link.
+  const code = newSignInCode();
+  const codeHash = hashSignInCode(tokenHash, code);
 
   // Invalidate existing SHORT-LIVED login links for this email, but never the
   // long-lived (7-day) approval "one-click" link. 7 Sep 2026 (Stefan): a member
@@ -343,10 +355,10 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
     [normalizedEmail]
   );
 
-  // Store the hashed token (purpose defaults to 'login').
+  // Store the hashed token and the hashed code (purpose defaults to 'login').
   await query(
-    `INSERT INTO magic_links (email, token_hash, expires_at) VALUES ($1, $2, $3)`,
-    [normalizedEmail, tokenHash, expiresAt]
+    `INSERT INTO magic_links (email, token_hash, expires_at, code_hash) VALUES ($1, $2, $3, $4)`,
+    [normalizedEmail, tokenHash, expiresAt, codeHash]
   );
 
   // Build the magic link URL. It opens the asking page's origin only when that
@@ -359,26 +371,31 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
   // and the invitee never reaches the invite-accept step, so they're never
   // registered for the event. The Google-OAuth path already embeds inviteCode in
   // the verify URL; magic link must too so VerifyPage routes them to /invite/:code.
-  const magicLinkUrl = inviteCode
-    ? `${clientBaseUrl}/auth/verify?token=${token}&inviteCode=${encodeURIComponent(inviteCode)}`
-    : `${clientBaseUrl}/auth/verify?token=${token}`;
+  // 1 Nov 2026: the page the member was going to (a meeting link they followed signed out) rides in the link too,
+  // so the verify page lands there even in another tab or on another device. Same-site paths only (return-path.ts).
+  const params = new URLSearchParams({ token });
+  if (inviteCode) params.set('inviteCode', inviteCode);
+  const back = safeReturnPath(returnPath);
+  if (back) params.set('redirect', back);
+  const magicLinkUrl = `${clientBaseUrl}/auth/verify?${params.toString()}`;
 
-  // In development, return the link directly (also send email if configured)
+  // In development, return the link and the code directly (also send email if configured). Never in production:
+  // config.isDev is true only when NODE_ENV is development.
   if (config.isDev) {
     logger.info({ email: normalizedEmail, magicLinkUrl }, 'Magic link generated (dev mode)');
     // Still try to send email in dev if Resend is configured
     if (config.resendApiKey) {
       try {
-        await sendMagicLinkEmail(normalizedEmail, magicLinkUrl);
+        await sendMagicLinkEmail(normalizedEmail, magicLinkUrl, code);
       } catch (error) {
         logger.warn({ error, email: normalizedEmail }, 'Email send failed in dev mode; returning devLink');
       }
     }
-    return { sent: true, devLink: magicLinkUrl };
+    return { sent: true, devLink: magicLinkUrl, devCode: code };
   }
 
   // Production: send email via Resend
-  await sendMagicLinkEmail(normalizedEmail, magicLinkUrl);
+  await sendMagicLinkEmail(normalizedEmail, magicLinkUrl, code);
   logger.info({ email: normalizedEmail }, 'Magic link email sent');
   return { sent: true };
 }
@@ -481,6 +498,14 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
     await query('UPDATE magic_links SET used_at = NOW() WHERE id = $1', [magicLink.id]);
   }
 
+  return signInByEmail(magicLink.email);
+}
+
+/**
+ * The session a spent sign-in link or sign-in code gives (1 Nov 2026: the code reuses it, so the two can never
+ * sign anyone in differently). The caller has already proved the link or the code and spent it.
+ */
+async function signInByEmail(email: string): Promise<AuthTokenPair> {
   // Find or create the user (handle concurrent verify race condition).
   //
   // NO registration gate here. sendMagicLink already enforces assertRegistration
@@ -492,17 +517,17 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
   // account was never created and the user saw a fresh link as "expired". The
   // send-time gate is the single source of truth; the link's existence is proof
   // registration was allowed.
-  let user = await getUserByEmail(magicLink.email);
+  let user = await getUserByEmail(email);
   // No session for a closed or suspended account: the next request would
   // refuse it anyway, and the member would be bounced with no reason.
   assertCanSignIn(user);
   if (!user) {
     // Seed name + LinkedIn from the applicant's approved join request so onboarding
     // can use the fast high-confidence LinkedIn path (falls back to email prefix).
-    const seed = await getApprovedJoinRequestSeed(magicLink.email);
+    const seed = await getApprovedJoinRequestSeed(email);
     try {
       user = await createUser({
-        email: magicLink.email,
+        email,
         firstName: seed.firstName,
         lastName: seed.lastName,
         displayName: seed.displayName,
@@ -511,7 +536,7 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
     } catch (err: any) {
       // Race condition: another request created the user between our check and insert
       if (err?.code === '23505' || err?.message?.includes('already exists')) {
-        user = await getUserByEmail(magicLink.email);
+        user = await getUserByEmail(email);
         if (!user) throw err; // Should never happen, but rethrow if it does
       } else {
         throw err;
@@ -568,6 +593,91 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
 
   // Generate auth tokens
   return generateTokenPair(user);
+}
+
+// ─── The 6-digit sign-in code (1 Nov 2026, sign-in-code.ts) ─────────────────
+
+interface SignInCodeRow {
+  id: string;
+  email: string;
+  token_hash: string;
+  code_hash: string;
+  used_at: Date | null;
+  code_attempts: number;
+  code_live: boolean;
+  link_live: boolean;
+}
+
+const SIGN_IN_CODE_COLUMNS = `id, email, token_hash, code_hash, used_at, code_attempts,
+       created_at > NOW() - make_interval(mins => $2::int) AS code_live, expires_at > NOW() AS link_live`;
+
+const codeWrong = (attemptsLeft?: number) => new AppError(
+  400, ErrorCodes.AUTH_SIGN_IN_CODE_WRONG, 'That code is not right.', attemptsLeft === undefined ? undefined : { attemptsLeft },
+);
+
+/** Why this link's code can no longer be used, or null while it can. Locked first: it explains the rest. */
+function signInCodeRefusal(row: SignInCodeRow): AppError | null {
+  if (row.code_attempts >= SIGN_IN_CODE_MAX_ATTEMPTS) {
+    return new AppError(400, ErrorCodes.AUTH_SIGN_IN_LOCKED, 'This code was entered wrongly too many times.');
+  }
+  if (row.used_at) return new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_USED, 'This code has already been used');
+  if (!row.code_live || !row.link_live) return new AppError(400, ErrorCodes.AUTH_SIGN_IN_CODE_EXPIRED, 'This code has expired');
+  return null;
+}
+
+/**
+ * Sign in with the 6-digit code from the sign-in email: the same session the link gives.
+ *
+ * Only the newest login link of that email that carries a code is tried (asking again kills the older ones, in
+ * sendMagicLink). A try is reserved before the code is compared, in one statement that refuses once five have been
+ * made, so even tries sent all at once compare at most five codes. A wrong fifth try kills the link and the code
+ * together: the link's expiry is pulled to now, so it is refused at once rather than after the scanner grace.
+ * The right code spends the link (and gives back the try it reserved, so only wrong tries count).
+ */
+export async function verifySignInCode(email: string, code: string): Promise<AuthTokenPair> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const found = await query<SignInCodeRow>(
+    `SELECT ${SIGN_IN_CODE_COLUMNS}
+       FROM magic_links WHERE email = $1 AND purpose = 'login' AND code_hash IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
+    [normalizedEmail, SIGN_IN_CODE_TTL_MINUTES]
+  );
+  const link = found.rows[0];
+  if (!link) throw codeWrong();
+  const refusal = signInCodeRefusal(link);
+  if (refusal) throw refusal;
+
+  const reserved = await query<{ code_attempts: number }>(
+    `UPDATE magic_links SET code_attempts = code_attempts + 1
+      WHERE id = $1 AND used_at IS NULL AND code_attempts < $2 RETURNING code_attempts`,
+    [link.id, SIGN_IN_CODE_MAX_ATTEMPTS]
+  );
+  if (!reserved.rows[0]) {
+    // Another try spent the last attempt, or the link, between the read and now.
+    const now = await query<SignInCodeRow>(
+      `SELECT ${SIGN_IN_CODE_COLUMNS} FROM magic_links WHERE id = $1`,
+      [link.id, SIGN_IN_CODE_TTL_MINUTES]
+    );
+    throw (now.rows[0] && signInCodeRefusal(now.rows[0])) || codeWrong();
+  }
+  const attempts = reserved.rows[0].code_attempts;
+
+  if (!signInCodeMatches(link.token_hash, code, link.code_hash)) {
+    if (attempts < SIGN_IN_CODE_MAX_ATTEMPTS) throw codeWrong(SIGN_IN_CODE_MAX_ATTEMPTS - attempts);
+    await query(
+      `UPDATE magic_links SET used_at = COALESCE(used_at, NOW()), expires_at = LEAST(expires_at, NOW()) WHERE id = $1`,
+      [link.id]
+    );
+    logger.warn({ email: normalizedEmail }, 'Sign-in code locked after too many wrong tries');
+    throw new AppError(400, ErrorCodes.AUTH_SIGN_IN_LOCKED, 'This code was entered wrongly too many times.');
+  }
+
+  const claimed = await query<{ id: string }>(
+    `UPDATE magic_links SET used_at = NOW(), code_attempts = code_attempts - 1
+      WHERE id = $1 AND used_at IS NULL RETURNING id`,
+    [link.id]
+  );
+  if (!claimed.rows[0]) throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_USED, 'This code has already been used');
+  return signInByEmail(link.email);
 }
 
 // ─── Token Management ───────────────────────────────────────────────────────

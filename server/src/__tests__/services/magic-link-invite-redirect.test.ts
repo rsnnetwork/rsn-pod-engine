@@ -17,9 +17,10 @@ const clientSrc = (rel: string) =>
 describe('Magic-link invite redirect (new user reaches the event)', () => {
   it('the magic-link URL embeds the invite code when one is present', () => {
     const svc = serverSrc('services/identity/identity.service.ts');
-    expect(svc).toMatch(
-      /inviteCode\s*\?\s*`\$\{clientBaseUrl\}\/auth\/verify\?token=\$\{token\}&inviteCode=\$\{encodeURIComponent\(inviteCode\)\}`/,
-    );
+    // 1 Nov 2026: the link is built from URLSearchParams (it may also carry the page to return to), which
+    // encodes the code exactly as encodeURIComponent did for the codes invites use.
+    expect(svc).toMatch(/if \(inviteCode\) params\.set\('inviteCode', inviteCode\);/);
+    expect(svc).toMatch(/const magicLinkUrl = `\$\{clientBaseUrl\}\/auth\/verify\?\$\{params\.toString\(\)\}`;/);
   });
 
   it('VerifyPage routes to /invite/:code using the URL inviteCode param', () => {

@@ -10,6 +10,7 @@ import { meetingTime } from '../meetings/meeting-time';
 import { query } from '../../db';
 import { isReservedTestAddress, maskAddress } from '../identity/reserved-address';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { SIGN_IN_CODE_TTL_MINUTES } from '../identity/sign-in-code';
 
 let resend: Resend | null = null;
 
@@ -237,9 +238,22 @@ async function sendEmail(opts: {
   return { sent: false };
 }
 
+// 1 Nov 2026 (30 Oct review: Stefan expected a password): the email says no password is needed, and carries the
+// 6-digit code from services/identity/sign-in-code.ts, large, for a member who reads it on another device or in a
+// mail app's own browser and types it on the waiting screen instead.
+function signInCodeHtml(code: string): string {
+  return `
+          <div style="text-align:center;margin:28px 0 8px 0;">
+            <p style="color:#64748b;font-size:14px;line-height:1.5;margin:0 0 10px 0;">Or type this code on the sign-in page:</p>
+            <p data-sign-in-code style="display:inline-block;color:#1a1a2e;background:#f4f5f7;border:1px solid #dfe3ea;border-radius:12px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:36px;font-weight:700;letter-spacing:8px;padding:14px 18px 14px 26px;margin:0;">${escapeHtml(code)}</p>
+            <p style="color:#64748b;font-size:13px;line-height:1.5;margin:10px 0 0 0;">The code works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.</p>
+          </div>`;
+}
+
 export async function sendMagicLinkEmail(
   to: string,
-  magicLinkUrl: string
+  magicLinkUrl: string,
+  code?: string
 ): Promise<void> {
   const subject = 'Sign in to REASON';
   const html = `
@@ -254,7 +268,7 @@ export async function sendMagicLinkEmail(
         ${emailCardOpen()}
           
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            Click the button below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.
+            No password needed. Click the button below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.
           </p>
           
           <div style="text-align:center;margin:32px 0;">
@@ -263,6 +277,7 @@ export async function sendMagicLinkEmail(
               Sign In
             </a>
           </div>
+          ${code ? signInCodeHtml(code) : ''}
           
           <p style="color:#64748b;font-size:13px;line-height:1.5;margin:24px 0 0 0;">
             If the button doesn't work, copy and paste this link into your browser:
@@ -281,7 +296,10 @@ export async function sendMagicLinkEmail(
 
   // Use Resend if API key is configured
   if (config.resendApiKey) {
-    const text = `Sign in to REASON\n\nClick the link below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.\n\n${magicLinkUrl}\n\nIf you didn't request this email, you can safely ignore it.`;
+    const codeText = code
+      ? `\n\nOr type this code on the sign-in page: ${code}\nThe code works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.`
+      : '';
+    const text = `Sign in to REASON\n\nNo password needed. Click the link below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.\n\n${magicLinkUrl}${codeText}\n\nIf you didn't request this email, you can safely ignore it.`;
     const result = await sendEmail({ to, subject, html, text });
     if (!result.sent) {
       throw new Error('Email send failed');

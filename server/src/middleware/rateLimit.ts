@@ -144,6 +144,31 @@ export const authLimiter = rateLimit({
 /**
  * Invite endpoint rate limiter
  */
+/**
+ * Typing the 6-digit sign-in code (1 Nov 2026). Ten tries per address per 15 minutes, on top of the five wrong
+ * tries a single code allows before it dies with its link: a million codes cannot be walked through from one
+ * place. Development keeps a wider bucket, as authLimiter does, so local runs of the sign-in spec do not lock
+ * each other out.
+ */
+export const signInCodeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: config.env === 'development' ? 100 : 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => `ip:${clientIp(req)}`,
+  store: buildStore('signin-code'),
+  handler: (_req, res) => {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many codes tried. Please wait 15 minutes, then try again.',
+      },
+    };
+    res.status(429).json(response);
+  },
+});
+
 export const inviteLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 50,                   // 50 invites per hour
