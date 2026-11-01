@@ -1,16 +1,23 @@
-// ─── Every tagged read is refreshed when the socket connects, the first time and after a gap (P1 item 17 + X1) ──────
+// ─── Tagged reads are refreshed when the socket connects, the first time and after a gap (P1 item 17 + X1) ─────────
 //
 // A socket that was down heard none of the entity:changed sent meanwhile, and neither did a freshly opened tab between
 // its first reads and its socket's first connect (seen on the preview: a message landing in that window left the new
-// tab's count at 1). So on every connect, the first included, each read that declares meta.entities is refreshed once,
-// through the same rule entity:changed uses. The screens' own "refetch on connect" listeners are then redundant and go.
+// tab's count at 1). So on a connect, the first included, the reads that declare meta.entities are refreshed, through
+// the same rule entity:changed uses. The screens' own "refetch on connect" listeners are then redundant and went.
+//
+// Fix round 1 (review of T16): the refresh must not storm. A flapping phone socket reconnects every second or so, and
+// every tagged read (every loaded page of an infinite one) counts against the 60 and 120 reads a minute. So:
+//   - connects are coalesced: the first in a window refreshes at once, any more within the window cause ONE more
+//     refresh when the window ends;
+//   - a read still on its way is never cancelled, and a read that answered within the last moments is not read again
+//     (a page load's first reads, or the focus refetch of a phone that came back, are not doubled).
 
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import { QueryClient } from '@tanstack/query-core';
 import {
-  invalidateEveryTaggedRead, subscribeEntitySync, type EntitySignals,
+  CONNECT_RESYNC_WINDOW_MS, RECENTLY_READ_MS, subscribeEntitySync, type EntitySignals,
 } from '../../../../client/src/realtime/invalidate-entities';
 
 const CLIENT = path.join(__dirname, '../../../../client/src');
@@ -26,68 +33,134 @@ async function cacheWith(): Promise<QueryClient> {
 }
 const invalidated = (qc: QueryClient, key: unknown[]) => qc.getQueryCache().find({ queryKey: key, exact: true })?.state.isInvalidated;
 const fakeSocket = () => new EventEmitter() as EventEmitter & EntitySignals;
+const flush = () => new Promise((r) => setImmediate(r));
 
-describe('invalidateEveryTaggedRead', () => {
-  it('refreshes every read that declares at least one tag, and nothing else', async () => {
-    const qc = await cacheWith();
-    await invalidateEveryTaggedRead(qc);
-    expect(invalidated(qc, ['dm-unread-count'])).toBe(true);
-    expect(invalidated(qc, ['pod', 'p1'])).toBe(true);
-    expect(invalidated(qc, ['empty-tags'])).toBe(false);
-    expect(invalidated(qc, ['untagged'])).toBe(false);
-    qc.clear();
+describe('subscribeEntitySync: a connect refreshes what may have been missed, without storming', () => {
+  it('the window is a few seconds, and "just read" is a couple of seconds', () => {
+    expect(CONNECT_RESYNC_WINDOW_MS).toBe(5000);
+    expect(RECENTLY_READ_MS).toBe(2000);
   });
-});
 
-describe('subscribeEntitySync: one listener set for the whole app', () => {
-  it('the socket\'s FIRST connect refreshes every tagged read (a new tab missed what came before it)', async () => {
+  it('the socket\'s FIRST connect refreshes every tagged read answered before the last moments (a new tab missed what came before it)', async () => {
     const qc = await cacheWith();
     const socket = fakeSocket();
-    subscribeEntitySync(socket, qc);
+    const later = Date.now() + 10_000;
+    subscribeEntitySync(socket, qc, { now: () => later });
     socket.emit('connect');
-    await Promise.resolve();
+    await flush();
     expect(invalidated(qc, ['dm-unread-count'])).toBe(true);
     expect(invalidated(qc, ['pod', 'p1'])).toBe(true);
     expect(invalidated(qc, ['untagged'])).toBe(false);
     qc.clear();
   });
 
-  it('a reconnect after a gap refreshes them again', async () => {
+  it('a read that answered within the last moments is not read again (no double read on every page load)', async () => {
     const qc = await cacheWith();
     const socket = fakeSocket();
-    subscribeEntitySync(socket, qc);
+    subscribeEntitySync(socket, qc, { now: () => Date.now() + 500 });
     socket.emit('connect');
-    await qc.refetchQueries();
+    await flush();
     expect(invalidated(qc, ['pod', 'p1'])).toBe(false);
-    socket.emit('connect');
-    await Promise.resolve();
-    expect(invalidated(qc, ['pod', 'p1'])).toBe(true);
+    expect(invalidated(qc, ['dm-unread-count'])).toBe(false);
     qc.clear();
   });
 
-  it('entity:changed refreshes exactly the reads that declare one of its tags', async () => {
+  it('a read still on its way is never cancelled', async () => {
+    const qc = new QueryClient();
+    let release: (v: number) => void = () => {};
+    let calls = 0;
+    const slow = qc.fetchQuery({
+      queryKey: ['slow'], meta: { entities: ['pod:p1'] },
+      queryFn: () => { calls += 1; return new Promise<number>((r) => { release = r; }); },
+    });
+    const socket = fakeSocket();
+    subscribeEntitySync(socket, qc, { now: () => Date.now() + 10_000 });
+    socket.emit('connect');
+    await flush();
+    release(7);
+    await expect(slow).resolves.toBe(7);
+    expect(calls).toBe(1);
+    qc.clear();
+  });
+
+  it('a burst of five connects refreshes once at once and once more when the window ends, never five times', async () => {
+    jest.useFakeTimers();
+    try {
+      const qc = new QueryClient();
+      const spy = jest.spyOn(qc, 'invalidateQueries');
+      const socket = fakeSocket();
+      let t = 1_000_000;
+      subscribeEntitySync(socket, qc, { now: () => t });
+      for (let i = 0; i < 5; i++) { socket.emit('connect'); t += 400; jest.advanceTimersByTime(400); }
+      expect(spy).toHaveBeenCalledTimes(1);
+      t += CONNECT_RESYNC_WINDOW_MS;
+      jest.advanceTimersByTime(CONNECT_RESYNC_WINDOW_MS);
+      expect(spy).toHaveBeenCalledTimes(2);
+      // Quiet afterwards: no more.
+      t += 20_000;
+      jest.advanceTimersByTime(20_000);
+      expect(spy).toHaveBeenCalledTimes(2);
+      // A connect long after the window is answered at once again.
+      socket.emit('connect');
+      expect(spy).toHaveBeenCalledTimes(3);
+      // Never a cancelling refetch.
+      for (const call of spy.mock.calls) expect(call[1]).toEqual({ cancelRefetch: false });
+      qc.clear();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('a lone connect in a quiet window refreshes once, with no second refresh at its end', () => {
+    jest.useFakeTimers();
+    try {
+      const qc = new QueryClient();
+      const spy = jest.spyOn(qc, 'invalidateQueries');
+      const socket = fakeSocket();
+      let t = 5_000_000;
+      subscribeEntitySync(socket, qc, { now: () => t });
+      socket.emit('connect');
+      t += 3 * CONNECT_RESYNC_WINDOW_MS;
+      jest.advanceTimersByTime(3 * CONNECT_RESYNC_WINDOW_MS);
+      expect(spy).toHaveBeenCalledTimes(1);
+      qc.clear();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('entity:changed refreshes exactly the reads that declare one of its tags, at once (never coalesced)', async () => {
     const qc = await cacheWith();
     const socket = fakeSocket();
     subscribeEntitySync(socket, qc);
     socket.emit('entity:changed', { entities: ['pod:p1'] });
-    await Promise.resolve();
+    await flush();
     expect(invalidated(qc, ['pod', 'p1'])).toBe(true);
     expect(invalidated(qc, ['dm-unread-count'])).toBe(false);
     socket.emit('entity:changed', {});
     qc.clear();
   });
 
-  it('unsubscribing takes both listeners off', async () => {
-    const qc = await cacheWith();
-    const socket = fakeSocket();
-    const off = subscribeEntitySync(socket, qc);
-    off();
-    expect(socket.listenerCount('connect')).toBe(0);
-    expect(socket.listenerCount('entity:changed')).toBe(0);
-    socket.emit('connect');
-    await Promise.resolve();
-    expect(invalidated(qc, ['pod', 'p1'])).toBe(false);
-    qc.clear();
+  it('unsubscribing takes both listeners off and drops a waiting refresh', () => {
+    jest.useFakeTimers();
+    try {
+      const qc = new QueryClient();
+      const spy = jest.spyOn(qc, 'invalidateQueries');
+      const socket = fakeSocket();
+      let t = 9_000_000;
+      const off = subscribeEntitySync(socket, qc, { now: () => t });
+      socket.emit('connect');
+      socket.emit('connect');
+      off();
+      expect(socket.listenerCount('connect')).toBe(0);
+      expect(socket.listenerCount('entity:changed')).toBe(0);
+      t += CONNECT_RESYNC_WINDOW_MS;
+      jest.advanceTimersByTime(CONNECT_RESYNC_WINDOW_MS);
+      expect(spy).toHaveBeenCalledTimes(1);
+      qc.clear();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
