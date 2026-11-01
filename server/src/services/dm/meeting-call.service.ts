@@ -298,7 +298,8 @@ function isExpired(rq: RequestRow): boolean {
 
 /**
  * Tell both people's screens that the pair's call changed: the conversation (its thread and scheduler) and each
- * one's DMs (the app-wide incoming and outgoing call reads). Best-effort: the change is already saved.
+ * one's own calls (user:<id>:calls, the app-wide incoming and outgoing call reads). A tag of its own, so a busy
+ * chat (user:<id>:dms on every message) never makes those reads run. Best-effort: the change is already saved.
  */
 async function emitCallChanged(conversationId: string, userIds: string[]): Promise<void> {
   try {
@@ -306,7 +307,7 @@ async function emitCallChanged(conversationId: string, userIds: string[]): Promi
     const { emitEntities } = await import('../../realtime/emit');
     const { E } = await import('../../realtime/entities');
     await Promise.all([...new Set(userIds)].map((id) =>
-      emitEntities(io, [id], [E.dmConversation(conversationId), E.userDms(id)])));
+      emitEntities(io, [id], [E.dmConversation(conversationId), E.userCalls(id)])));
   } catch (err) {
     logger.warn({ err, conversationId }, 'call entity emit failed (non-fatal)');
   }

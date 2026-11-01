@@ -68,7 +68,7 @@ jest.mock('../../../realtime/entities', () => ({
   E: {
     userNotifications: (id: string) => `user:${id}:notifications`, dmConversation: (id: string) => `dm-conversation:${id}`,
     userMeetings: (id: string) => `user:${id}:meetings`, meeting: (id: string) => `meeting:${id}`,
-    userDms: (id: string) => `user:${id}:dms`,
+    userCalls: (id: string) => `user:${id}:calls`,
   },
 }));
 
@@ -433,9 +433,9 @@ describe('requestCall', () => {
     expect(payload).toMatchObject({ requestId: 'rq-1', conversationId: 'conv-1', fromUserId: 'u-a', kind: 'audio', durationMin: 20 });
   });
 
-  it('tells both people\'s screens: the conversation and each one\'s DMs', async () => {
+  it('tells both people\'s screens: the conversation and each one\'s own calls', async () => {
     await requestCall('conv-1', 'u-a', 'video', 15);
-    for (const id of ['u-a', 'u-b']) expect(tagsSentTo(id)).toEqual(expect.arrayContaining(['dm-conversation:conv-1', `user:${id}:dms`]));
+    for (const id of ['u-a', 'u-b']) expect(tagsSentTo(id)).toEqual(expect.arrayContaining(['dm-conversation:conv-1', `user:${id}:calls`]));
   });
 
   it('clamps an out-of-range duration rather than rejecting it', async () => {
@@ -532,7 +532,7 @@ describe('acceptCallRequest', () => {
       { room: 'user:u-b', event: 'call:cancelled', payload: { requestId: 'rq-1', conversationId: 'conv-1' } },
     ]));
     for (const id of ['u-a', 'u-b']) {
-      expect(tagsSentTo(id)).toEqual(expect.arrayContaining(['dm-conversation:conv-1', `user:${id}:dms`, `user:${id}:meetings`, 'meeting:mtg-instant']));
+      expect(tagsSentTo(id)).toEqual(expect.arrayContaining(['dm-conversation:conv-1', `user:${id}:calls`, `user:${id}:meetings`, 'meeting:mtg-instant']));
     }
   });
 
@@ -560,7 +560,7 @@ describe('declineCallRequest / cancelCallRequest', () => {
       { room: 'user:u-a', event: 'call:declined', payload: expect.objectContaining({ requestId: 'rq-1' }) },
       { room: 'user:u-b', event: 'call:cancelled', payload: { requestId: 'rq-1', conversationId: 'conv-1' } },
     ]));
-    for (const id of ['u-a', 'u-b']) expect(tagsSentTo(id)).toContain('dm-conversation:conv-1');
+    for (const id of ['u-a', 'u-b']) expect(tagsSentTo(id)).toEqual(expect.arrayContaining(['dm-conversation:conv-1', `user:${id}:calls`]));
     expect(insertedMeeting).toBeNull();
   });
   it('only the callee can decline', async () => {
