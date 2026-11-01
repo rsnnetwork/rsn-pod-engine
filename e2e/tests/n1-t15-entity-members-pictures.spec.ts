@@ -99,8 +99,10 @@ async function noSidewaysScroll(page: Page, label: string) {
     { message: `${label}: the page is wider than the window`, timeout: 5_000 }).toBeLessThanOrEqual(0);
 }
 
+// Polled: on the local dev server WebKit can paint a frame before the stylesheet applies (an unstyled button is ~25px).
 async function tall(target: Locator, label: string) {
-  expect((await target.boundingBox())!.height, `${label}: at least 44px`).toBeGreaterThanOrEqual(44);
+  await expect.poll(async () => (await target.boundingBox())?.height ?? 0, { message: `${label}: at least 44px`, timeout: 10_000 })
+    .toBeGreaterThanOrEqual(44);
 }
 
 /** A JPEG made in the page: red left half, blue right half. */
@@ -146,6 +148,16 @@ function pinch(frame: Locator) {
     fire('pointerup', 12, cx + 60);
   });
 }
+
+/**
+ * Scroll a control to the middle of the window before checking it can be pressed. scrollIntoViewIfNeeded leaves alone a
+ * control that is in the window but under the phone's fixed tab bar (the bar sits over the page), so the reach check
+ * then hit the bar (preview run, 2 Nov 2026). The page itself leaves room to scroll every control clear of the bar
+ * (main's bottom padding is 96px plus the safe area; the bar is 69px).
+ */
+// 'instant': the app scrolls smoothly (index.css), and the check would otherwise read the control mid-scroll.
+const scrollClear = (target: Locator) =>
+  target.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' as ScrollBehavior }));
 
 const zoomOf = (sheet: Locator) => sheet.getByRole('slider', { name: 'Zoom' }).inputValue().then(Number);
 const personCard = (page: Page, u: TestUser) => page.locator(`a[data-person-id="${u.id}"]`);
@@ -204,7 +216,7 @@ for (const width of WIDTHS) {
     const decline = row.getByRole('button', { name: 'Decline' });
     await tall(approve, `${at}: Approve`);
     await tall(decline, `${at}: Decline`);
-    await decline.scrollIntoViewIfNeeded();
+    await scrollClear(decline);
     await expectReachable(own.page, decline, `${at}: Decline`);
     if (width && width < 768) {
       // Two lines (name, role) and the buttons on a row of their own.
@@ -223,7 +235,7 @@ for (const width of WIDTHS) {
 
     // ── The logo ───────────────────────────────────────────────────────────────────────────────────────────
     const pencil = own.page.getByRole('button', { name: 'Add logo' });
-    await pencil.scrollIntoViewIfNeeded();
+    await scrollClear(pencil);
     await expectReachable(own.page, pencil, `${at}: the logo's pencil`);
     await tall(pencil, `${at}: the logo's pencil`);
     await expect(cla.page.getByRole('button', { name: /logo$/ }), 'no pencil for a member').toHaveCount(0);
@@ -268,7 +280,7 @@ for (const width of WIDTHS) {
     await expect(personCard(own.page, second)).toBeVisible();
     await expect(own.page.getByRole('button', { name: `Remove ${owner.displayName}` }), 'never on yourself').toHaveCount(0);
     const remove = own.page.getByRole('button', { name: `Remove ${second.displayName}` });
-    await remove.scrollIntoViewIfNeeded();
+    await scrollClear(remove);
     await expectReachable(own.page, remove, `${at}: Remove`);
     await tall(remove, `${at}: Remove`);
     await remove.click();
@@ -298,7 +310,7 @@ for (const width of WIDTHS) {
     const orgs = man.page.getByTestId('circle-organisations');
     await expect(orgs.getByText('No organisations are linked to this circle yet.')).toBeVisible();
     const linkButton = orgs.getByRole('button', { name: 'Link an entity' });
-    await linkButton.scrollIntoViewIfNeeded();
+    await scrollClear(linkButton);
     await expectReachable(man.page, linkButton, `${at}: Link an entity`);
     await tall(linkButton, `${at}: Link an entity`);
     await linkButton.click();
