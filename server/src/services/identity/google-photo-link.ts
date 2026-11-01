@@ -122,17 +122,69 @@ export function parseOauthState(raw: string | undefined): GoogleOauthState {
   }
 }
 
+/** The size a Google photo is asked for (30 Oct review, T3a): the photo is kept as a 1024 square (L1). */
+export const GOOGLE_PHOTO_SIZE = 1024;
+
+const isGooglePhotoHost = (host: string) => host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com');
+const SIZE_OPTION = /^s\d+$/;
+const SIZE_FOLDER = /^s\d+(-c)?$/;
+
+/**
+ * The same Google photo at `size` pixels, or null for an address that is not Google's photo server over https.
+ * Google hands a site its photo at 96 pixels ("...=s96-c": all 29 linked on production, 1 Nov 2026), and its image
+ * server answers any size the address asks for: in the options after the last "=" (s96, then -c for a square crop),
+ * or, in old addresses, as a folder of the path (/s96-c/photo.jpg). The other options are kept as they are.
+ */
+export function googlePhotoAt(picture: string, size = GOOGLE_PHOTO_SIZE): string | null {
+  let url: URL;
+  try {
+    url = new URL(picture);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || !isGooglePhotoHost(url.hostname)) return null;
+  const path = url.pathname;
+  const folders = path.split('/');
+  const folder = folders.findIndex((f) => SIZE_FOLDER.test(f));
+  if (folder > 0 && !path.includes('=')) {
+    folders[folder] = `s${size}-c`;
+    url.pathname = folders.join('/');
+    return url.toString();
+  }
+  const eq = path.lastIndexOf('=');
+  if (eq < 0) {
+    url.pathname = `${path}=s${size}-c`;
+    return url.toString();
+  }
+  const options = path.slice(eq + 1).split('-').filter(Boolean);
+  const at = options.findIndex((o) => SIZE_OPTION.test(o));
+  if (at >= 0) options[at] = `s${size}`;
+  else options.unshift(`s${size}`);
+  url.pathname = `${path.slice(0, eq)}=${options.join('-')}`;
+  return url.toString();
+}
+
+/**
+ * Keep the member's Google photo as our own copy: asked for at 1024 pixels first, then at the address Google gave if
+ * the larger one cannot be had. True when a copy is kept (captureAvatar's own guards apply to both). Never throws.
+ */
+export async function captureGooglePhoto(userId: string, picture: string): Promise<boolean> {
+  const larger = googlePhotoAt(picture);
+  if (larger && larger !== picture && await captureAvatar(userId, larger)) return true;
+  return captureAvatar(userId, picture);
+}
+
 /**
  * Attach the Google picture to the member. A durable copy is preferred
- * (captureAvatar stores the bytes and serves them from our own endpoint);
- * if that download fails, the Google URL itself is stored so the photo
- * still shows. Returns 'done' when a photo is on the account, 'none' when
- * Google had no picture for that account.
+ * (captureAvatar stores the bytes and serves them from our own endpoint),
+ * asked for at 1024 pixels (30 Oct review, T3a); if no download works, the
+ * Google URL itself is stored so the photo still shows. Returns 'done' when a
+ * photo is on the account, 'none' when Google had no picture for that account.
  */
 export async function applyGooglePhoto(userId: string, picture: string | undefined): Promise<'done' | 'none'> {
   if (!picture) return 'none';
   const startedAt = Date.now();
-  const captured = await captureAvatar(userId, picture);
+  const captured = await captureGooglePhoto(userId, picture);
   if (!captured) {
     await query(`UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2`, [picture, userId]).catch((err) =>
       logger.warn({ err, userId }, 'google photo: could not store the picture url'));

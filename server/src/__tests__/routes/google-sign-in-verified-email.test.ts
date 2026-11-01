@@ -51,6 +51,8 @@ const MAIN = 'https://app.rsn.network';
 const PREVIEW = 'https://preview.rsn.network';
 const MEMBER = '5f0c3a3e-8d7b-4a57-9d0e-1f2a3b4c5d6e';
 const PICTURE = 'https://lh3.googleusercontent.com/a/photo';
+// Google's photo is asked for at 1024 pixels first (30 Oct review, T3a); this is the address that is fetched.
+const PICTURE_1024 = 'https://lh3.googleusercontent.com/a/photo=s1024-c';
 
 const app = express();
 app.use('/auth', authRoutes);
@@ -138,7 +140,7 @@ describe('GET /auth/google/callback: everything else goes on exactly as before',
     const res = await callback(stateWith({ photoLinkUserId: MEMBER, redirect: '/profile', origin: PREVIEW }));
 
     expect(res.headers.location).toBe(`${PREVIEW}/profile?photo=done`);
-    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE);
+    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE_1024);
     expect(mockFindOrCreate).not.toHaveBeenCalled();
   });
 });

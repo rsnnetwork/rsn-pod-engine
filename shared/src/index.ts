@@ -175,3 +175,16 @@ export const MEETING_PROBLEMS = _MEETING_PROBLEMS;
 export const MEETING_PROBLEM_LABELS = _MEETING_PROBLEM_LABELS;
 export const MEETING_FEEDBACK_SOURCES = _MEETING_FEEDBACK_SOURCES;
 export const MEETING_PROBLEM_TEXT_MAX = _MEETING_PROBLEM_TEXT_MAX;
+export * from './picture/crop';
+// The profile picture's crop (30 Oct review, T3a): VALUES the server cuts a picture with and the editor shows it with,
+// so each needs its own statically analysable named export, same as the meeting values above.
+import {
+  PICTURE_SHAPES as _PICTURE_SHAPES, PICTURE_MAX_ZOOM as _PICTURE_MAX_ZOOM, PICTURE_CENTRED as _PICTURE_CENTRED,
+  clampPictureCrop as _clampPictureCrop, pictureCropRect as _pictureCropRect, pictureOutputSize as _pictureOutputSize,
+} from './picture/crop';
+export const PICTURE_SHAPES = _PICTURE_SHAPES;
+export const PICTURE_MAX_ZOOM = _PICTURE_MAX_ZOOM;
+export const PICTURE_CENTRED = _PICTURE_CENTRED;
+export const clampPictureCrop = _clampPictureCrop;
+export const pictureCropRect = _pictureCropRect;
+export const pictureOutputSize = _pictureOutputSize;

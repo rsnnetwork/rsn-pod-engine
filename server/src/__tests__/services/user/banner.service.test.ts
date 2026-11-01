@@ -6,12 +6,17 @@ const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), __esModule: true }));
 const mockConfig = { apiBaseUrl: 'https://api.example.test' };
 jest.mock('../../../config', () => ({ default: mockConfig, __esModule: true }));
+jest.mock('../../../config/logger', () => ({
+  default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  __esModule: true,
+}));
 
 import {
   BANNER_MAX_BYTES, BANNER_MAX_SIDE, BANNER_TYPES, bannerUrlFor, getBannerBlob, parseBannerImage, pictureSize,
-  removeBanner, saveBanner,
+  removeBanner,
 } from '../../../services/user/banner.service';
 import { AppError } from '../../../middleware/errors';
+import { savePicture } from '../../../services/user/picture.service';
 import { dataUrl, jpeg, jpegWithoutFrame, png, webpExtended, webpLossless, webpLossy } from '../../fixtures/pictures';
 
 const GIF = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
@@ -203,7 +208,7 @@ describe('parseBannerImage: at most 4096 pixels on a side', () => {
   });
 
   it('writes nothing for a picture that is too large', async () => {
-    await expect(saveBanner('3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', dataUrl('image/png', png(9000, 3000)))).rejects.toMatchObject({ statusCode: 400 });
+    await expect(savePicture('banner', '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', { image: dataUrl('image/png', png(9000, 3000)) })).rejects.toMatchObject({ statusCode: 400 });
     expect(mockQuery).not.toHaveBeenCalled();
   });
 });
@@ -229,39 +234,21 @@ describe('bannerUrlFor: the address members load the banner from', () => {
   });
 });
 
-describe('saveBanner, removeBanner and getBannerBlob', () => {
+// Keeping a banner is savePicture('banner', ...) since the 30 Oct review (T3a): picture.service.test.ts, with real
+// pictures, since the banner is now cut on the server from the picture the member chose.
+describe('removeBanner and getBannerBlob', () => {
   const ID = '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03';
 
-  it('keeps the bytes and the type, stamps the time in the database, and answers with the new address', async () => {
-    const at = new Date('2026-10-21T10:00:00.000Z');
-    mockQuery.mockResolvedValueOnce({ rows: [{ banner_updated_at: at }] });
-    const bytes = picture('image/png', 500);
-    const out = await saveBanner(ID, dataUrl('image/png', bytes));
-    expect(out).toEqual({ bannerUrl: `https://api.example.test/api/users/${ID}/banner?v=${at.getTime()}` });
-    const [sql, params] = mockQuery.mock.calls[0];
-    expect(sql).toMatch(/UPDATE users SET banner_blob = \$2, banner_mime = \$3, banner_updated_at = NOW\(\)/);
-    expect(sql).toMatch(/WHERE id = \$1/);
-    expect(sql).toMatch(/RETURNING banner_updated_at/);
-    expect(params[0]).toBe(ID);
-    expect(Buffer.compare(params[1], bytes)).toBe(0);
-    expect(params[2]).toBe('image/png');
-  });
-
   it('writes nothing for a refused picture', async () => {
-    await expect(saveBanner(ID, dataUrl('image/gif', picture('image/gif')))).rejects.toThrow(WRONG_TYPE);
+    await expect(savePicture('banner', ID, { image: dataUrl('image/gif', picture('image/gif')) })).rejects.toThrow(WRONG_TYPE);
     expect(mockQuery).not.toHaveBeenCalled();
   });
 
-  it('says the member is gone when there is no row to keep it in', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [] });
-    await expect(saveBanner(ID, dataUrl('image/jpeg', picture('image/jpeg')))).rejects.toMatchObject({ statusCode: 404 });
-  });
-
-  it('removes all three together, so "no banner" is one state', async () => {
+  it('removes the banner, its time, and the picture it was cut from with its crop together, so "no banner" is one state', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ id: ID }] });
     await removeBanner(ID);
     const [sql, params] = mockQuery.mock.calls[0];
-    expect(sql).toMatch(/UPDATE users SET banner_blob = NULL, banner_mime = NULL, banner_updated_at = NULL WHERE id = \$1/);
+    expect(String(sql).replace(/\s+/g, ' ')).toMatch(/UPDATE users SET banner_blob = NULL, banner_mime = NULL, banner_updated_at = NULL, banner_source_blob = NULL, banner_source_mime = NULL, banner_crop = NULL WHERE id = \$1/);
     expect(params).toEqual([ID]);
   });
 

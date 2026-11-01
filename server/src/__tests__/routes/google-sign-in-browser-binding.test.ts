@@ -71,6 +71,8 @@ const VICTIM = 'b0000000-0000-4000-8000-000000000002';
 const SECRET = 'test-secret-with-enough-length-0123456789';
 const PURPOSE = 'google-oauth-state';
 const PICTURE = 'https://lh3.googleusercontent.com/a/photo';
+// Google's photo is asked for at 1024 pixels first (30 Oct review, T3a); this is the address that is fetched.
+const PICTURE_1024 = 'https://lh3.googleusercontent.com/a/photo=s1024-c';
 
 // The two hosts the API answers on in production. The client builds its start from CLIENT_API (runtimeEndpoints.ts);
 // Google is told to return to API_BASE_URL (CANONICAL), so that is the host that has to hold the cookie.
@@ -516,7 +518,7 @@ describe('a sign-in from the client, through both API hosts', () => {
     expect(start.chain.map((hop) => new URL(hop.url).host)).toEqual([CANONICAL]);
     googleKnowsTheMember({ email: 'a@b.co', picture: PICTURE });
     expect((await browser.comesBack(start.state)).headers.location).toBe(`${PREVIEW}/profile?photo=done`);
-    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE);
+    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE_1024);
   });
 
   describe('in development, where API_BASE_URL is localhost', () => {
@@ -613,7 +615,7 @@ describe('GET /auth/google/callback: in the browser that started the sign-in', (
     const res = await browser.comesBack(state);
     expect(res.headers.location).toBe(`${PREVIEW}/profile?photo=done`);
     expect(mockCapture).toHaveBeenCalledTimes(1);
-    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE);
+    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE_1024);
     expect(mockFindOrCreate).not.toHaveBeenCalled();
     expectCleared(res);
   });

@@ -534,6 +534,30 @@ export const meetingCalendarLimiter = rateLimit({
 // The banner picture itself. It is public (an <img> sends no token), so it is counted per network address.
 // Each banner's URL is versioned and cached for a day, so one person opening profiles asks for each only once,
 // and a refused picture only means the page draws the default banner in its place.
+// The member's photo, placed with the pencil (30 Oct review, T3a). Each save opens and cuts a picture of up to 3 MB on
+// the server, so a member is held to 10 a minute, as the banner is. Keyed per member: the route signs in first.
+export const avatarWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('avatar-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// The picture the editor opens on (30 Oct review, T3a): up to 3 MB a time, only ever the member's own, read once each
+// time they open the editor. 30 a minute is far past any real use.
+export const pictureSourceLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('picture-source'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 export const bannerReadLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 120,

@@ -677,6 +677,33 @@ describe('Identity Service', () => {
       expect(params[params.length - 1]).toBeNull(); // linkedin_url
       expect(enrichRepo.saveEnrichedCandidate).not.toHaveBeenCalled();
     });
+
+    // 30 Oct review (T3a): Google's photo comes at 96 pixels and was only ever linked to. It still shows at once (the
+    // link, as before), and is then fetched at 1024 and kept, without holding up the sign-in.
+    it('findOrCreateGoogleUser keeps the Google photo, asked for at 1024 pixels, after the account is made', async () => {
+      (avatar.captureAvatar as jest.Mock).mockResolvedValue(true);
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 1 getUserByEmail → null (new user)
+        .mockResolvedValueOnce({ rows: [{ id: 'jr-1' }], rowCount: 1 }) // 2 isEmailApproved → approved
+        .mockResolvedValueOnce({
+          rows: [{ full_name: 'Photo Person', linkedin_url: null, enriched: null, reason: null }],
+          rowCount: 1,
+        }) // 3 getApprovedJoinRequestSeed
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 4 INSERT users
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 INSERT subscription
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT entitlements
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 7 getUserById
+
+      const picture = 'https://lh3.googleusercontent.com/a/ACg8ocPhoto=s96-c';
+      await identityService.findOrCreateGoogleUser({ email: 'photo-google@example.com', name: 'Photo Person', picture });
+      await new Promise((r) => setImmediate(r));
+
+      const [, params] = insertUsers()!;
+      expect(params[5]).toBe(picture); // avatar_url: the link, so a photo shows before the copy is kept
+      const newId = params[0];
+      expect(avatar.captureAvatar).toHaveBeenCalledWith(newId, 'https://lh3.googleusercontent.com/a/ACg8ocPhoto=s1024-c');
+    });
   });
 
   describe('findOrCreateGoogleUser (preload copy-forward parity with verifyMagicLink)', () => {

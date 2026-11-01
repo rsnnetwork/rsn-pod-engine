@@ -103,10 +103,21 @@ describe('captureAvatar', () => {
     expect(params).toContain(USER_ID);
     expect(params).toContain('image/jpeg');
     // Absolute, not relative — a relative `/api/...` resolves against the
-    // Vercel client origin (no API there) and renders a broken image.
-    expect(params).toContain(`https://api.example.com/api/users/${USER_ID}/avatar`);
+    // Vercel client origin (no API there) and renders a broken image. Since
+    // 30 Oct (T3a) it carries the time of the change as ?v=, the same time
+    // stored in avatar_updated_at, so no cache shows the photo it replaced.
+    const changedAt = params.find((p: unknown) => p instanceof Date) as Date;
+    expect(params).toContain(`https://api.example.com/api/users/${USER_ID}/avatar?v=${changedAt.getTime()}`);
+    expect(sql).toMatch(/avatar_updated_at = \$5/);
     const blobParam = params.find((p: unknown) => Buffer.isBuffer(p)) as Buffer;
     expect(blobParam.toString('utf8')).toBe('fake-jpeg-bytes');
+  });
+
+  it('a captured photo replaces a picture the member placed: the kept picture and its crop go with it (T3a)', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockImageResponse(200, 'image/jpeg', new TextEncoder().encode('jpeg')));
+    expect(await captureAvatar(USER_ID, PHOTO_URL)).toBe(true);
+    const sql = String(mockQuery.mock.calls[0][0]).replace(/\s+/g, ' ');
+    expect(sql).toMatch(/avatar_source_blob = NULL, avatar_source_mime = NULL, avatar_crop = NULL/);
   });
 
   it('D2: overwrites avatar_url unconditionally on success, even if a non-LinkedIn (e.g. Google) avatar_url already exists', async () => {
@@ -119,7 +130,7 @@ describe('captureAvatar', () => {
 
     expect(result).toBe(true);
     const [, params] = mockQuery.mock.calls[0];
-    expect(params).toContain(`https://api.example.com/api/users/${USER_ID}/avatar`);
+    expect(params.some((p: unknown) => typeof p === 'string' && p.startsWith(`https://api.example.com/api/users/${USER_ID}/avatar?v=`))).toBe(true);
   });
 
   it('download failure (non-2xx status): returns false, logs, writes nothing', async () => {

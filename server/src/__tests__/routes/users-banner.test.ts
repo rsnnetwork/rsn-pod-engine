@@ -1,10 +1,11 @@
-// ─── The member banner routes (21 Oct 2026) ──────────────────────────────────
-// PUT    /users/me/banner  { image: <data URL> }   the member's own banner, JPEG/PNG/WebP, at most 3 MB decoded
+// ─── The member banner routes (21 Oct 2026; cut on the server since the 30 Oct review, T3a) ──────────────────────
+// PUT    /users/me/banner  { image?: <data URL>, crop? }  the member's own banner, JPEG/PNG/WebP, at most 3 MB decoded;
+//                                                     the old body { image } (the preview's page before T3a) still works
 // DELETE /users/me/banner                          back to the default banner
 // GET    /users/:id/banner                         the picture, public like the photo, cached for a day
 //
-// The real banner service runs here against a database stand-in, so what the routes accept is exactly what
-// the service accepts.
+// The real banner and picture services, and the real decoder, run here against a stand-in for one member's row, so
+// what the routes accept is exactly what the services accept, and what is kept is what a test reads back.
 
 import express from 'express';
 import request from 'supertest';
@@ -25,7 +26,6 @@ jest.mock('../../config/logger', () => ({
 }));
 const mockQuery = jest.fn();
 jest.mock('../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), transaction: jest.fn(), __esModule: true }));
-jest.mock('../../services/onboarding/avatar.service', () => ({ __esModule: true, getAvatarBlob: jest.fn(), captureAvatar: jest.fn() }));
 const mockFanoutUser = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({
   __esModule: true,
@@ -40,7 +40,9 @@ import { authenticate } from '../../middleware/auth';
 import { bannerReadLimiter, bannerWriteLimiter } from '../../middleware/rateLimit';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { BANNER_MAX_BYTES } from '../../services/user/banner.service';
-import { dataUrl, jpeg, png, webpLossy } from '../fixtures/pictures';
+import { fakeUserRow } from '../fixtures/fake-user-row';
+import { BLUE, RED, colourAt, near, sizeOf, solid } from '../fixtures/real-pictures';
+import { dataUrl, png } from '../fixtures/pictures';
 
 const app = express();
 app.use(express.json({ limit: '10mb' })); // as index.ts has it
@@ -51,75 +53,89 @@ app.use(errorHandler);
 // A fresh member for every test: the write limit counts per member, and a file of tests is one minute.
 let ME = randomUUID();
 const OTHER = '9b2d5c1e-3f4a-4b6c-8d7e-0a1b2c3d4e5f';
+let db = fakeUserRow({ id: ME });
 const token = (sub: string) => jwt.sign({ sub, email: `${sub}@example.com`, role: 'member', sessionId: 's-1' }, JWT_SECRET, { expiresIn: '1h' });
 const auth = (sub: string = ME) => ({ Authorization: `Bearer ${token(sub)}` });
 
-// The three kinds kept, as files with real headers (the server reads the size from them), and the start of other files.
-type Kind = 'jpeg' | 'png' | 'webp';
-const JPEG: Kind = 'jpeg';
-const PNG: Kind = 'png';
-const WEBP: Kind = 'webp';
+// The start of files that are no picture we keep.
 const GIF = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
-const file = (head: Kind | number[], size = 256): Buffer => {
-  if (head === 'jpeg') return jpeg(1500, 500, size);
-  if (head === 'png') return png(1500, 500, size);
-  if (head === 'webp') return webpLossy(1500, 500, size);
+const notAPicture = (head: number[], size = 256) => {
   const bytes = Buffer.alloc(Math.max(size, head.length), 1);
   Buffer.from(head).copy(bytes);
   return bytes;
 };
+/** A real picture of exactly `size` bytes: a JPEG, then nothing after its end (which a decoder ignores). */
+const jpegOfSize = async (size: number) => {
+  const j = await solid(1500, 500);
+  return Buffer.concat([j, Buffer.alloc(size - j.length, 0)]);
+};
 
-const STAMP = new Date('2026-10-21T11:00:00.000Z');
-let stored: { banner_blob: Buffer | null; banner_mime: string | null } = { banner_blob: null, banner_mime: null };
+// The banner columns of the stand-in row, and another member's banner for the public route.
+let other: { banner_blob: Buffer | null; banner_mime: string | null } = { banner_blob: null, banner_mime: null };
 
-// What the database answers: the member is active (authenticate asks), and the banner columns behave like a row.
 beforeEach(() => {
   ME = randomUUID();
+  db = fakeUserRow({ id: ME, status: 'active' });
+  other = { banner_blob: null, banner_mime: null };
   mockFanoutUser.mockClear();
-  stored = { banner_blob: null, banner_mime: null };
   mockQuery.mockReset().mockImplementation((sql: string, params: unknown[] = []) => {
-    if (/SELECT status FROM users/.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }] });
-    if (/UPDATE users SET banner_blob = \$2/.test(sql)) {
-      stored = { banner_blob: params[1] as Buffer, banner_mime: params[2] as string };
-      return Promise.resolve({ rows: [{ banner_updated_at: STAMP }] });
-    }
-    if (/UPDATE users SET banner_blob = NULL/.test(sql)) {
-      stored = { banner_blob: null, banner_mime: null };
-      return Promise.resolve({ rows: [{ id: params[0] }] });
-    }
-    if (/SELECT banner_blob, banner_mime FROM users/.test(sql)) return Promise.resolve({ rows: [stored] });
-    return Promise.resolve({ rows: [] });
+    if (/SELECT banner_blob, banner_mime FROM users/.test(sql) && params[0] === OTHER) return Promise.resolve({ rows: [other] });
+    if (/UPDATE users SET banner_blob = NULL/.test(sql) && params[0] === OTHER) return Promise.resolve({ rows: [{ id: OTHER }] });
+    if (/SELECT status FROM users/.test(sql) && params[0] === OTHER) return Promise.resolve({ rows: [{ status: 'active' }] });
+    return Promise.resolve(db.handle(sql, params) ?? { rows: [] });
   });
 });
 
-const writes = () => mockQuery.mock.calls.filter((c) => /UPDATE users SET banner/.test(String(c[0])));
+const writes = () => db.writes.filter((w) => /banner/.test(w.sql));
 
 describe('PUT /users/me/banner', () => {
   it.each([
-    ['image/jpeg', JPEG], ['image/png', PNG], ['image/webp', WEBP],
-  ])('keeps a %s for the member who sent it, answers with its address, and tells their screens', async (mime, head) => {
-    const bytes = file(head as Kind);
-    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl(mime as string, bytes) });
+    ['image/jpeg', 'jpeg'], ['image/png', 'png'], ['image/webp', 'webp'],
+  ] as const)('keeps a %s as it came, cuts the 2400 by 800 banner from it, answers with its address, and tells their screens', async (mime, format) => {
+    const bytes = await solid(3000, 1200, BLUE, format);
+    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl(mime, bytes) });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, data: { bannerUrl: `https://api.example.test/api/users/${ME}/banner?v=${STAMP.getTime()}` } });
+    expect(res.body).toEqual({ success: true, data: { bannerUrl: `https://api.example.test/api/users/${ME}/banner?v=${(db.row.banner_updated_at as Date).getTime()}` } });
     // The member is the one the token names; nothing in the body can aim it at someone else.
     expect(writes()).toHaveLength(1);
-    expect(writes()[0][1][0]).toBe(ME);
-    expect(Buffer.compare(stored.banner_blob!, bytes)).toBe(0);
-    expect(stored.banner_mime).toBe(mime);
+    expect(writes()[0].params[0]).toBe(ME);
+    expect(Buffer.compare(db.row.banner_source_blob as Buffer, bytes)).toBe(0);
+    expect(db.row.banner_source_mime).toBe(mime);
+    expect(db.row.banner_mime).toBe('image/jpeg');
+    expect(await sizeOf(db.row.banner_blob as Buffer)).toEqual({ width: 2400, height: 800, format: 'jpeg' });
     expect(mockFanoutUser).toHaveBeenCalledWith(ME);
   });
 
-  it('ignores an id in the body: it is always your own banner', async () => {
-    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', file(JPEG)), userId: OTHER });
+  it('the old body, a 1500 by 500 strip the page cut itself, is still kept: as the whole strip, never enlarged', async () => {
+    const strip = await solid(1500, 500, RED);
+    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', strip) });
     expect(res.status).toBe(200);
-    expect(writes()[0][1][0]).toBe(ME);
+    expect(await sizeOf(db.row.banner_blob as Buffer)).toEqual({ width: 1500, height: 500, format: 'jpeg' });
+    expect(JSON.parse(db.row.banner_crop as string)).toEqual({ x: 0.5, y: 0.5, zoom: 1 });
+  });
+
+  it('a crop alone places the kept picture again, without sending it', async () => {
+    const tall = Buffer.concat([await solid(1500, 1500, RED)]);
+    await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', tall) });
+    db.writes.length = 0;
+    const res = await request(app).put('/users/me/banner').set(auth()).send({ crop: { x: 0.5, y: 0, zoom: 1 } });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(db.row.banner_crop as string)).toEqual({ x: 0.5, y: 1 / 6, zoom: 1 });
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0].sql).not.toMatch(/banner_source_blob/);
+    expect(near(await colourAt(db.row.banner_blob as Buffer, 10, 10), RED)).toBe(true);
+  });
+
+  it('ignores an id in the body: it is always your own banner', async () => {
+    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', await solid(1500, 500)), userId: OTHER });
+    expect(res.status).toBe(200);
+    expect(writes()[0].params[0]).toBe(ME);
   });
 
   it.each([
     ['image/gif', GIF], ['image/svg+xml', [0x3c, 0x73, 0x76, 0x67]], ['text/html', [0x3c, 0x68]],
   ])('refuses %s with a sentence, keeps nothing and tells no screens', async (mime, head) => {
-    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl(mime as string, file(head as number[])) });
+    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl(mime as string, notAPicture(head as number[])) });
     expect(res.status).toBe(400);
     expect(res.body.error.message).toBe('Choose a JPG, PNG or WebP picture for your banner.');
     expect(writes()).toHaveLength(0);
@@ -127,23 +143,23 @@ describe('PUT /users/me/banner', () => {
   });
 
   it('refuses a file whose bytes are not the picture it claims to be', async () => {
-    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', file(GIF)) });
+    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', notAPicture(GIF)) });
     expect(res.status).toBe(400);
     expect(res.body.error.message).toBe('That file is not a picture we can use. Choose a JPG, PNG or WebP picture.');
     expect(writes()).toHaveLength(0);
   });
 
   it('keeps a picture of exactly 3 MB once decoded, and refuses one byte more', async () => {
-    const atLimit = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', file(JPEG, BANNER_MAX_BYTES)) });
+    const atLimit = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', await jpegOfSize(BANNER_MAX_BYTES)) });
     expect(atLimit.status).toBe(200);
-    const over = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', file(JPEG, BANNER_MAX_BYTES + 1)) });
+    const over = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', await jpegOfSize(BANNER_MAX_BYTES + 1)) });
     expect(over.status).toBe(400);
     expect(over.body.error.message).toBe('Your banner must be 3 MB or smaller.');
     expect(writes()).toHaveLength(1);
   });
 
   it('refuses a body far past the limit with the same size sentence, before the service reads it', async () => {
-    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', file(JPEG, BANNER_MAX_BYTES + 200_000)) });
+    const res = await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', await jpegOfSize(BANNER_MAX_BYTES + 200_000)) });
     expect(res.status).toBe(400);
     expect(res.body.error.details.image).toEqual(['Your banner must be 3 MB or smaller.']);
     expect(writes()).toHaveLength(0);
@@ -157,17 +173,20 @@ describe('PUT /users/me/banner', () => {
     expect(mockFanoutUser).not.toHaveBeenCalled();
   });
 
-  it('refuses a body with no picture in it', async () => {
-    for (const body of [{}, { image: 42 }, { image: '' }]) {
+  it('refuses a body with no picture in it, and a crop with nothing kept to place', async () => {
+    for (const body of [{}, { image: 42 }, { image: '' }, { crop: { x: 0.5, y: 0.5, zoom: 7 } }]) {
       const res = await request(app).put('/users/me/banner').set(auth()).send(body);
       expect({ body, status: res.status }).toEqual({ body, status: 400 });
     }
+    const nothingKept = await request(app).put('/users/me/banner').set(auth()).send({ crop: { x: 0.5, y: 0.5, zoom: 1 } });
+    expect(nothingKept.status).toBe(400);
+    expect(nothingKept.body.error.message).toBe('Choose a picture first.');
     expect(writes()).toHaveLength(0);
     expect(mockFanoutUser).not.toHaveBeenCalled();
   });
 
   it('refuses a request with no token, and keeps nothing', async () => {
-    const res = await request(app).put('/users/me/banner').send({ image: dataUrl('image/jpeg', file(JPEG)) });
+    const res = await request(app).put('/users/me/banner').send({ image: dataUrl('image/jpeg', await solid(1500, 500)) });
     expect(res.status).toBe(401);
     expect(writes()).toHaveLength(0);
     expect(mockFanoutUser).not.toHaveBeenCalled();
@@ -175,14 +194,17 @@ describe('PUT /users/me/banner', () => {
 });
 
 describe('DELETE /users/me/banner', () => {
-  it('takes the banner away, answers that there is none, and tells the member\'s screens', async () => {
-    stored = { banner_blob: file(JPEG), banner_mime: 'image/jpeg' };
+  it('takes the banner and the picture it was cut from away, answers that there is none, and tells the member\'s screens', async () => {
+    await request(app).put('/users/me/banner').set(auth()).send({ image: dataUrl('image/jpeg', await solid(1500, 500)) });
+    db.writes.length = 0;
     const res = await request(app).delete('/users/me/banner').set(auth());
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, data: { bannerUrl: null } });
     expect(writes()).toHaveLength(1);
-    expect(writes()[0][1]).toEqual([ME]);
-    expect(stored.banner_blob).toBeNull();
+    expect(writes()[0].params).toEqual([ME]);
+    expect(db.row.banner_blob).toBeNull();
+    expect(db.row.banner_source_blob).toBeNull();
+    expect(db.row.banner_crop).toBeNull();
     expect(mockFanoutUser).toHaveBeenCalledWith(ME);
   });
 
@@ -196,14 +218,14 @@ describe('DELETE /users/me/banner', () => {
 
 describe('GET /users/:id/banner', () => {
   it('needs no token: a banner shows wherever the profile does', async () => {
-    stored = { banner_blob: file(PNG, 900), banner_mime: 'image/png' };
+    other = { banner_blob: await solid(30, 10, RED, 'png'), banner_mime: 'image/png' };
     const res = await request(app).get(`/users/${OTHER}/banner`);
     expect(res.status).toBe(200);
   });
 
   it('serves the bytes with the stored type and a day-long public cache', async () => {
-    const bytes = file(WEBP, 1200);
-    stored = { banner_blob: bytes, banner_mime: 'image/webp' };
+    const bytes = await solid(30, 10, BLUE, 'webp');
+    other = { banner_blob: bytes, banner_mime: 'image/webp' };
     const res = await request(app).get(`/users/${OTHER}/banner?v=1761040000000`).buffer(true).parse((r, done) => {
       const chunks: Buffer[] = [];
       r.on('data', (c: Buffer) => chunks.push(c));
@@ -267,7 +289,7 @@ describe('the banner routes are rate limited', () => {
     for (let i = 0; i < 10; i += 1) {
       expect((await request(app).delete('/users/me/banner').set(heavy)).status).toBe(200);
     }
-    const refused = await request(app).put('/users/me/banner').set(heavy).send({ image: dataUrl('image/jpeg', file(JPEG)) });
+    const refused = await request(app).put('/users/me/banner').set(heavy).send({ image: dataUrl('image/jpeg', await solid(1500, 500)) });
     expect(refused.status).toBe(429);
     expect(refused.body).toEqual({ success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } });
     expect((await request(app).delete('/users/me/banner').set(auth(OTHER))).status).toBe(200);
