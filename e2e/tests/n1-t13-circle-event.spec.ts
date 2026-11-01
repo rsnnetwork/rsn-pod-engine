@@ -161,7 +161,9 @@ test(`a manager schedules for the whole circle; a member outside the pod sees it
   const row = mem.page.getByTestId('circle-event').filter({ hasText: title });
   await expect(row).toBeVisible({ timeout: 30_000 });
   await expect(row.getByTestId('circle-event-for-circle')).toHaveText('For this circle');
-  await until(() => got(mem.frames, 'notification:new').some((f) => f.payload?.title === `New event in ${circleName}`), 30_000, 'the member\'s bell');
+  // The bell, as the member sees it (its count), not a socket frame: Socket.IO may still be on HTTP polling, which a
+  // page's websocket listener never sees.
+  await expect(mem.page.getByRole('button', { name: 'Notifications' }).locator('span').filter({ hasText: /^\d+$/ })).toBeVisible({ timeout: 30_000 });
   const bells = await pool.query(`SELECT user_id, type FROM notifications WHERE link = $1`, [`/sessions/${sessionId}`]);
   expect(bells.rows.map((b) => b.user_id).sort()).toEqual([member!.id, plain!.id].sort());
   expect(bells.rows.every((b) => b.type === 'event_invite')).toBe(true);
@@ -202,14 +204,19 @@ test(`a manager schedules for the whole circle; a member outside the pod sees it
   const host = await connectSocket(manager!);
   sockets.push(host);
   const hostGot: string[] = [];
-  host.onAny((e: string, payload: any) => { hostGot.push(e === 'session:status_changed' ? `${e}:${payload?.status}` : e); });
+  host.onAny((e: string, payload: any) => {
+    if (e === 'session:status_changed') hostGot.push(`${e}:${payload?.status}`);
+    else if (e === 'participant:joined') hostGot.push(`${e}:${payload?.userId}`);
+    else hostGot.push(e);
+  });
   host.emit('session:join', { sessionId });
   await until(() => hostGot.includes('session:state'), 20_000, 'the host in the room');
   host.emit('host:start_session', { sessionId });
   await until(() => hostGot.includes('session:status_changed:lobby_open'), 30_000, 'the event live');
 
   await gotoRetry(mem.page, `${APP}/session/${sessionId}/live`);
-  await until(() => got(mem.frames, 'session:state').some((f) => f.at > 0), 45_000, 'the member\'s session:state in the room');
+  // The server tells the room only once it has admitted them (the host's own socket is pure WebSocket, so nothing is missed).
+  await until(() => hostGot.includes(`participant:joined:${member!.id}`), 45_000, 'the member admitted to the room');
   const memberRefusals = got(mem.frames, 'error').map((f) => f.payload?.message ?? f.payload);
   expect(memberRefusals, 'the member is never refused').toEqual([]);
   const inRoom = await call(member!, 'GET', `/sessions/${sessionId}/state`);
