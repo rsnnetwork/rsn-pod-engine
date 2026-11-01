@@ -91,7 +91,7 @@ test('a meeting request shows the sender as a profile card, name links to their 
   // Back did nothing because a new tab has no history; in this tab, Back returns to the request.
   expect(await card.getByText('Dana Sender').getAttribute('target'), 'a same-tab link has no target').toBeNull();
   const tabsBefore = page.context().pages().length;
-  await card.getByText('Dana Sender').click();
+  await card.getByRole('link', { name: 'Dana Sender' }).click();
   await expect(page).toHaveURL(new RegExp(`/profile/${sender.id}$`));
   await expect(page.getByTestId('profile-card')).toContainText('Dana Sender');
   expect(page.context().pages().length, 'no second tab was opened').toBe(tabsBefore);
@@ -100,7 +100,7 @@ test('a meeting request shows the sender as a profile card, name links to their 
   await page.getByRole('button', { name: /^Back$/ }).click();
   await expect(page).toHaveURL(new RegExp(`/messages\\?poke=${pokeId}`));
   await expect(card).toBeVisible({ timeout: 20_000 });
-  await card.getByText('Dana Sender').click();
+  await card.getByRole('link', { name: 'Dana Sender' }).click();
   await expect(page).toHaveURL(new RegExp(`/profile/${sender.id}$`));
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`/messages\\?poke=${pokeId}`));

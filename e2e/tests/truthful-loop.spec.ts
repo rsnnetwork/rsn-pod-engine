@@ -203,7 +203,9 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
   const inbox = await apiAs(investor, 'GET', '/pokes/received');
   const poke = inbox.json.data.find((p: any) => p.senderId === founder.id);
   expect(poke, 'investor must have the pending introduction').toBeTruthy();
-  expect(poke.message).toMatch(/should meet/i);
+  // 30 Oct 2026: REASON's line comes apart from the note; message, the one text older clients draw, heads it.
+  expect(poke.reasonLine, 'REASON says why it introduced them').toBeTruthy();
+  expect(poke.message).toBe(`Why REASON suggested this: ${poke.reasonLine}`);
 
   const accept = await apiAs(investor, 'POST', `/pokes/${poke.id}/accept`);
   expect(accept.status).toBe(200);
