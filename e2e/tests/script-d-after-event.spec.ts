@@ -41,6 +41,18 @@ let claus: TestUser, sara: TestUser, tom: TestUser, ida: TestUser;
 let podId = '';
 let sessionId = '';
 let hostSocket: Socket | null = null;
+// The host "stays in the room" as the live page does: a heartbeat every 15 s (useSessionSocket; after-event-path.spec.ts,
+// 95fa8a11). Without it the server clears the host's presence after 90 s and lobby chat answers "Chat is available once the
+// host joins" (CHAT_DISABLED): on the preview, where the pages take long to open, Sara's first message was refused so.
+let heartbeat: ReturnType<typeof setInterval> | null = null;
+function joinAsHost(socket: Socket, id: string): void {
+  socket.emit('session:join', { sessionId: id });
+  socket.emit('presence:heartbeat', { sessionId: id });
+  heartbeat = setInterval(() => socket.emit('presence:heartbeat', { sessionId: id }), 15_000);
+}
+// Set E2E_HOST_IDLE_MS to hold the members back after the host has come in (the local proof used 100 s: past the 90 s a
+// host without heartbeats lasts), so a run proves the host is still counted present when the chat is used.
+const HOST_IDLE_MS = Number(process.env.E2E_HOST_IDLE_MS || 0);
 
 function connectSocket(u: TestUser): Promise<Socket> {
   return new Promise((resolve, reject) => {
@@ -79,6 +91,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  if (heartbeat) clearInterval(heartbeat);
   hostSocket?.disconnect();
   await cleanupRun();
   await browser?.close().catch(() => undefined);
@@ -93,7 +106,8 @@ test('Script D: the chat of an event, its pod\'s wall, a message to everyone and
     hostSocket = await connectSocket(claus);
     hostSocket.emit('host:start_session', { sessionId });
     await expect.poll(statusOf, { timeout: 30_000, message: 'the event is live' }).toBe('lobby_open');
-    hostSocket.emit('session:join', { sessionId });
+    joinAsHost(hostSocket, sessionId);
+    if (HOST_IDLE_MS) await new Promise((r) => setTimeout(r, HOST_IDLE_MS));
     saraPage = (await openAs(browser, sara, `/session/${sessionId}/live`)).page;
     tomPage = (await openAs(browser, tom, `/session/${sessionId}/live`)).page;
     for (const p of [saraPage, tomPage]) await acceptConfirmDialogs(p);
