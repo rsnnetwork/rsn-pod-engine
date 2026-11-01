@@ -8,11 +8,13 @@
 //                     company), stores exactly what was typed, and Back returns to /entities with the sheet closed and
 //                     the entity under "Your entities" with the member's role
 //   2 the name taken  the same name in other case and spacing: "There is already an entity called X." Open it opens it;
-//                     Join it waits until the lookup says you are not linked, then joins with the role and title chosen
-//                     in the form, and no second entity is made; once linked, only Open it is offered
-//   3 join, change, leave
-//                     a member who is not linked joins with a role, changes role and title, and leaves; the admin's page,
-//                     open in another window the whole time, follows each step without a reload
+//                     Ask to join waits until the lookup says you are not linked, then asks with the role and title
+//                     chosen in the form (30 Oct review, T15: the claim waits for the entity's admins), and no second
+//                     entity is made; once the admin approves, only Open it is offered
+//   3 ask, approve, change, leave
+//                     a member who is not linked asks to join with a role; the admin's page, open in another window the
+//                     whole time, shows the request and approves it; the member's role change waits for the admin too;
+//                     then the member leaves. Every step shows on the other window without a reload
 //   4 Human Profile   a person's entities with role and title, each opening the entity; with none, the company, or
 //                     "No organisation shared yet"
 //   4b Your profile   your own entities with role and title, each opening the entity, and "Add your company" (to the
@@ -23,8 +25,8 @@
 //                     says it is not available; a member's Human Profile open elsewhere drops it without a reload
 //   6 last one out    leaving an entity you are alone in warns first, archives it and returns you to the list, the
 //                     same way
-//   7 widths          /entities and an entity page at 360, 390, 768, 1024 and 1440: no sideways scroll, and two cards a
-//                     row only from 1024px
+//   7 widths          /entities and an entity page at 360, 390, 414, 768, 1024, 1280 and 1440: no sideways scroll, and two
+//                     cards a row only from 1024px
 //   8 a failed search is said under the search box, which keeps what was typed (and the focus); your entities stay;
 //                     Try again asks again
 //
@@ -61,7 +63,8 @@ const SLOW = 75_000;
 const SHOTS = process.env.E2E_SHOTS_DIR ? path.resolve(process.env.E2E_SHOTS_DIR) : '';
 const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 800 };
-const BENIGN_PAGE_ERROR = /ResizeObserver loop (limit exceeded|completed with undelivered notifications)/i;
+// WebKit reports a request it cancelled on a route change (after an archive) as "... due to access control checks".
+const BENIGN_PAGE_ERROR = /ResizeObserver loop (limit exceeded|completed with undelivered notifications)|due to access control checks/i;
 
 const run = Date.now().toString(36);
 // 40 characters, the longest name the brief asks to look at.
@@ -142,13 +145,13 @@ const createSheet = (page: Page) => page.getByRole('dialog', { name: 'Create you
 const field = (scope: Locator, label: string) => scope.getByLabel(label, { exact: label === 'Name' || label === 'Type' || label === 'Your role' });
 const personCard = (page: Page, u: TestUser) => page.locator(`a[data-person-id="${u.id}"]`);
 
+// Polled: on the local dev server WebKit can paint a frame before the stylesheet applies, which is wider than the window.
 async function expectNoSidewaysScroll(page: Page, where: string): Promise<void> {
-  const m = await page.evaluate(() => {
+  const over = () => page.evaluate(() => {
     const main = document.querySelector('main');
-    return { docW: document.documentElement.scrollWidth, innerW: window.innerWidth, mainOver: main ? main.scrollWidth - main.clientWidth : 0 };
+    return Math.max(document.documentElement.scrollWidth - window.innerWidth, main ? main.scrollWidth - main.clientWidth - 1 : 0);
   });
-  expect(m.docW, `${where}: the window scrolls sideways`).toBeLessThanOrEqual(m.innerW);
-  expect(m.mainOver, `${where}: the page area scrolls sideways`).toBeLessThanOrEqual(1);
+  await expect.poll(over, { message: `${where}: the window or the page area scrolls sideways`, timeout: 10_000 }).toBeLessThanOrEqual(0);
 }
 
 async function shot(page: Page, name: string): Promise<void> {
@@ -232,7 +235,15 @@ test('1 create: the sheet from the address, a refused name, then your company on
   expect(errors).toEqual([]);
 });
 
-test('2 the name taken: Open it opens it, Join it joins it with the role from the form, and only once it is known you are not linked', async () => {
+/** The entity's admin answers, through the API the Requests panel calls. */
+async function apiApprove(admin: TestUser, entity: string, u: TestUser): Promise<void> {
+  const r = await fetch(`${SERVER}/api/entities/${entity}/members/${u.id}/approve`, {
+    method: 'POST', headers: { Authorization: `Bearer ${admin.accessToken}` },
+  });
+  expect(r.status, await r.text()).toBe(200);
+}
+
+test('2 the name taken: Open it opens it, Ask to join asks with the role from the form, and only once it is known you are not linked', async () => {
   test.setTimeout(240_000);
   const { page, errors } = await openAs(ben, DESKTOP);
   const taken = `  ${NAME.toUpperCase().replace(/ /g, '   ')} `;
@@ -262,10 +273,10 @@ test('2 the name taken: Open it opens it, Join it joins it with the role from th
   });
   let sheet = await tryToCreate('Engineer');
   await expect(sheet.getByText('Checking it…')).toBeVisible();
-  await expect(sheet.getByRole('button', { name: 'Join it' }), 'no Join it before the lookup answers').toHaveCount(0);
+  await expect(sheet.getByRole('button', { name: 'Ask to join' }), 'no Ask to join before the lookup answers').toHaveCount(0);
   releaseLookup();
-  await expect(sheet.getByText('You can join it instead, as Employee.')).toBeVisible({ timeout: SLOW });
-  await expect(sheet.getByRole('button', { name: 'Join it' })).toBeVisible();
+  await expect(sheet.getByText('You can ask to join it instead, as Employee.', { exact: false })).toBeVisible({ timeout: SLOW });
+  await expect(sheet.getByRole('button', { name: 'Ask to join' })).toBeVisible();
   await page.unroute(lookup);
   await sheet.getByRole('link', { name: 'Open it' }).click();
   await expect(page).toHaveURL(new RegExp(`/entities/${entityId}$`));
@@ -276,11 +287,15 @@ test('2 the name taken: Open it opens it, Join it joins it with the role from th
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
   sheet = await tryToCreate('Engineer');
-  await expect(sheet.getByText('You can join it instead, as Employee.')).toBeVisible();
-  await sheet.getByRole('button', { name: 'Join it' }).click();
+  await expect(sheet.getByText('You can ask to join it instead, as Employee.', { exact: false })).toBeVisible();
+  await sheet.getByRole('button', { name: 'Ask to join' }).click();
   await expect(page).toHaveURL(new RegExp(`/entities/${entityId}$`), { timeout: SLOW });
-  await expect(page.getByText(`You joined ${NAME}.`)).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Employee', level: 2 })).toBeVisible();
+  await expect(page.getByText(`Your request is sent to ${NAME}'s admins.`, { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: `Waiting for ${NAME}'s admins to approve you.` })).toBeVisible();
+  expect((await pool.query(`SELECT status FROM entity_members WHERE entity_id = $1 AND user_id = $2`, [entityId, ben.id])).rows[0].status).toBe('pending');
+  // Its admin approves: Ben's page, open, shows the role without a reload.
+  await apiApprove(ana, entityId, ben);
+  await expect(page.getByRole('heading', { name: 'Employee', level: 2 })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('Your title here: Engineer.')).toBeVisible();
 
   // Linked now: the same name again offers only Open it, and nothing about Ben's link changes.
@@ -288,20 +303,20 @@ test('2 the name taken: Open it opens it, Join it joins it with the role from th
   await expect(page).toHaveURL(/\/entities$/);
   sheet = await tryToCreate('');
   await expect(sheet.getByText('You are already linked to it, as Employee.')).toBeVisible({ timeout: SLOW });
-  await expect(sheet.getByRole('button', { name: 'Join it' })).toHaveCount(0);
+  await expect(sheet.getByRole('button', { name: 'Ask to join' })).toHaveCount(0);
   await expect(sheet.getByRole('link', { name: 'Open it' })).toBeVisible();
   await sheet.getByRole('button', { name: 'Cancel' }).click();
   await expect(sheet).toBeHidden();
 
   const same = await pool.query(`SELECT count(*)::int AS n FROM entities WHERE lower(name) = lower($1) AND archived_at IS NULL`, [NAME]);
   expect(same.rows[0].n, 'no second entity with the same name').toBe(1);
-  const link = await pool.query(`SELECT role, title, is_admin FROM entity_members WHERE entity_id = $1 AND user_id = $2`, [entityId, ben.id]);
-  expect(link.rows[0]).toEqual({ role: 'employee', title: 'Engineer', is_admin: false });
+  const link = await pool.query(`SELECT role, title, is_admin, status FROM entity_members WHERE entity_id = $1 AND user_id = $2`, [entityId, ben.id]);
+  expect(link.rows[0]).toEqual({ role: 'employee', title: 'Engineer', is_admin: false, status: 'active' });
   expect((await pool.query(`SELECT company FROM users WHERE id = $1`, [ben.id])).rows[0].company, 'a company already set is left alone').toBe('Elsewhere Ltd');
   expect(errors).toEqual([]);
 });
 
-test('3 join, change, leave: the admin\'s open page follows each step without a reload', async () => {
+test('3 ask, approve, change, leave: each window follows the other without a reload', async () => {
   test.setTimeout(300_000);
   const admin = await openAs(ana, DESKTOP);
   const member = await openAs(cleo, PHONE);
@@ -313,13 +328,19 @@ test('3 join, change, leave: the admin\'s open page follows each step without a 
   await gotoRetry(page, `${APP}/entities/${entityId}`);
   await expect(page.getByRole('heading', { name: `Are you part of ${NAME}?` })).toBeVisible({ timeout: SLOW });
   await expect(page.getByRole('button', { name: 'Edit', exact: true }), 'no Edit for someone who is not an admin').toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Join', exact: true }), 'Join waits for a role').toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Ask to join', exact: true }), 'Ask to join waits for a role').toBeDisabled();
   await expect(page.getByText('Choose your role first.')).toBeVisible();
   await page.getByLabel('Your role', { exact: true }).selectOption('advisor');
-  await page.getByRole('button', { name: 'Join', exact: true }).click();
-  await expect(page.getByText(`You joined ${NAME}.`)).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Advisor', level: 2 })).toBeVisible();
+  await page.getByRole('button', { name: 'Ask to join', exact: true }).click();
+  await expect(page.getByText(`Your request is sent to ${NAME}'s admins.`, { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: `Waiting for ${NAME}'s admins to approve you.` })).toBeVisible();
+  await expect(personCard(admin.page, cleo), 'not listed while it waits').toHaveCount(0);
+  // The admin's Requests panel shows it without a reload, and approving lists Cleo on both screens.
+  const request = admin.page.getByTestId('entity-requests').locator(`[data-request-id="${cleo.id}"]`);
+  await expect(request).toContainText('Says they are Advisor', { timeout: 20_000 });
+  await request.getByRole('button', { name: 'Approve' }).click();
   await expect(personCard(admin.page, cleo), 'the admin sees the new person without a reload').toContainText('Advisor', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: 'Advisor', level: 2 }), 'and Cleo her role').toBeVisible({ timeout: 20_000 });
 
   await page.getByRole('button', { name: 'Change', exact: true }).click();
   const roleSheet = page.getByRole('dialog', { name: 'Your role' });
@@ -329,13 +350,20 @@ test('3 join, change, leave: the admin\'s open page follows each step without a 
   await roleSheet.getByLabel('Your title').fill('Chair');
   await roleSheet.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(roleSheet).toBeHidden();
-  await expect(page.getByRole('heading', { name: 'Board member', level: 2 })).toBeVisible();
+  // The change waits for the admin: Cleo keeps Advisor, and is told what she asked for.
+  await expect(page.getByText(`Your change is sent to ${NAME}'s admins.`, { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Advisor', level: 2 })).toBeVisible();
+  await expect(page.getByTestId('pending-change')).toHaveText('Asked to change to Board member · Chair. Waiting for approval.');
+  const change = admin.page.getByTestId('entity-requests').locator(`[data-request-id="${cleo.id}"]`);
+  await expect(change).toContainText('Asks to change from Advisor to Board member · Chair', { timeout: 20_000 });
+  await change.getByRole('button', { name: 'Approve' }).click();
+  await expect(page.getByRole('heading', { name: 'Board member', level: 2 }), 'Cleo\'s panel follows the approval').toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('Your title here: Chair.')).toBeVisible();
   await expect(personCard(admin.page, cleo), 'and the new role and title').toContainText('Board member · Chair', { timeout: 20_000 });
 
   await page.getByRole('button', { name: 'Leave', exact: true }).click();
   const confirm = page.getByRole('dialog', { name: `Leave ${NAME}?` });
-  await expect(confirm.getByText('You are no longer listed among its people. You can join again at any time.')).toBeVisible();
+  await expect(confirm.getByText('You are no longer listed among its people. You can ask to join again at any time.')).toBeVisible();
   await confirm.getByRole('button', { name: 'Leave', exact: true }).click();
   await expect(page.getByText(`You left ${NAME}.`)).toBeVisible();
   await expect(page.getByRole('heading', { name: `Are you part of ${NAME}?` })).toBeVisible();
@@ -487,23 +515,31 @@ test('6 the last one out is warned, and the entity is archived with them', async
 
 test('7 widths: no sideways scroll, and two cards a row only from 1024px', async () => {
   test.setTimeout(300_000);
-  const ids = [];
-  for (const name of WIDE) ids.push(await apiCreate(ana, { name, kind: 'company', role: 'founder', location: 'Aarhus' }));
   const sizes = DEVICE
     ? [contextOptions().viewport ?? PHONE]
-    : [{ width: 360, height: 780 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1024, height: 768 }, { width: 1440, height: 900 }];
+    : [
+      { width: 360, height: 780 }, { width: 390, height: 844 }, { width: 414, height: 896 }, { width: 768, height: 1024 },
+      { width: 1024, height: 768 }, { width: 1280, height: 800 }, { width: 1440, height: 900 },
+    ];
   for (const size of sizes) {
     const where = `${size.width}px`;
-    const { page, errors } = await openAs(ana, size);
+    // A member of their own at each width: one member opening fourteen pages a minute meets the entity read limit.
+    const owner = await makeUser(`wide${size.width}`, 'Wes', null);
+    const ids = [];
+    // Named apart from WIDE, which test 8 searches for among Ana's own.
+    for (const n of [1, 2]) ids.push(await apiCreate(owner, { name: `Span ${n} E2E ${run} ${size.width}`, kind: 'company', role: 'founder', location: 'Aarhus' }));
+    const { page, errors } = await openAs(owner, size);
     await gotoRetry(page, `${APP}/entities`);
     const cards = page.locator('section[aria-labelledby="your-entities-title"] a[data-entity-id]');
     await expect(cards, `${where}: your two entities`).toHaveCount(2, { timeout: SLOW });
-    const tops = await cards.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
-    expect(tops[0] === tops[1] ? 2 : 1, `${where}: cards a row`).toBe(size.width >= 1024 ? 2 : 1);
+    // Polled: on the local dev server WebKit can draw the cards a moment before the stylesheet applies (stacked).
+    const perRow = () => cards.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)))
+      .then((tops) => (tops[0] === tops[1] ? 2 : 1));
+    await expect.poll(perRow, { message: `${where}: cards a row`, timeout: 10_000 }).toBe(size.width >= 1024 ? 2 : 1);
     await expectNoSidewaysScroll(page, `${where} /entities`);
     await shot(page, `${size.width}-list`);
     await gotoRetry(page, `${APP}/entities/${ids[0]}`);
-    await expect(page.getByRole('heading', { name: WIDE[0], level: 1 })).toBeVisible({ timeout: SLOW });
+    await expect(page.getByRole('heading', { name: `Span 1 E2E ${run} ${size.width}`, level: 1 })).toBeVisible({ timeout: SLOW });
     await expectNoSidewaysScroll(page, `${where} entity page`);
     await shot(page, `${size.width}-entity`);
     expect(errors, `${where}: script errors`).toEqual([]);
@@ -512,6 +548,7 @@ test('7 widths: no sideways scroll, and two cards a row only from 1024px', async
 
 test('8 a search that fails is said under the box, which keeps what was typed, and Try again asks again', async () => {
   test.setTimeout(240_000);
+  for (const name of WIDE) await apiCreate(ana, { name, kind: 'company', role: 'founder', location: 'Aarhus' });
   const { page, errors } = await openAs(ana, DESKTOP);
   await gotoRetry(page, `${APP}/entities`);
   const mine = page.locator('section[aria-labelledby="your-entities-title"] a[data-entity-id]');
