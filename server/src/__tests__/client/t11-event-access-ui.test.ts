@@ -54,8 +54,8 @@ describe('the event page (D11, L17)', () => {
   });
 
   it('duplicates with the event\'s format and visibility (D9)', () => {
-    expect(detail).toMatch(/format: session\?\.format,/);
-    expect(detail).toMatch(/\.\.\.\(session\?\.visibility \? \{ visibility: session\.visibility \} : \{\}\)/);
+    // With T12 (1 Nov 2026): the type is the resolved one, so a legacy row with no stored format copies as it ran.
+    expect(detail).toMatch(/\.\.\.\(session\?\.visibility \? \{ visibility: session\.visibility \} : \{\}\),\n\s*format: session \? resolveEventFormat\(session\) : undefined,/);
   });
 });
 
