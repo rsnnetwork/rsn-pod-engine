@@ -102,6 +102,8 @@ test(`B: an event from a Reason pod follows its type, asks before dropping round
   const title = page.getByLabel('Title', { exact: true });
   await expect(page.getByText(`In ${reasonPod.name} · Reason Pod`)).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('radio', { name: /^Video meeting/ })).toBeChecked();
+  // 30 Oct 2026 (T12) — a Reason pod also holds In person on the preview's form: a third card.
+  await expect(page.getByRole('radio', { name: /^In person/ })).toHaveCount(1);
   await expect(title).toHaveValue(`Video meeting · ${reasonPod.name}`);
   await expect(page.getByLabel('Number of rounds')).toHaveCount(0);
   await expect(page.getByLabel('Length')).toHaveValue('60');
