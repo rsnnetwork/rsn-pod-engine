@@ -10,8 +10,8 @@ import { expectReachable } from '../helpers/viewport-fit';
 // Messaging after the 30 Oct 2026 review (items 4.3 to 4.6, L7 to L9), in real browsers, with two throwaway members,
 // Shradha (A) and Ben (B), connected by an accepted request:
 //   1. A writes to B. B's two tabs, For You and A's profile, both read "(1) REASON" without a reload, and a chime is
-//      played once across the two (lib/chime announces each chime it plays). Reading the conversation in one tab puts
-//      both back to "REASON".
+//      played once across the two (lib/chime announces each chime it plays). Opening the conversation in a third tab puts
+//      all three back to "REASON", even when that tab's read lands before its socket is up.
 //   2. B replies to A's message: the "Replying to Shradha: …" strip, then the quote in B's bubble, and in A's open thread
 //      live, without a reload. Tapping the quote brings the original into view.
 //   3. The name and the picture in B's thread header, and the picture beside A's messages, open A's profile.
@@ -87,10 +87,12 @@ async function contextFor(u: TestUser, width = 1280, height = 860): Promise<Brow
   return ctx;
 }
 
-async function openIn(ctx: BrowserContext, who: string, p: string): Promise<Page> {
+/** A new tab of the context at this address. `before` runs on the blank tab, ahead of its first navigation. */
+async function openIn(ctx: BrowserContext, who: string, p: string, before?: (page: Page) => Promise<void>): Promise<Page> {
   const page = await ctx.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
   page.on('pageerror', (e) => { if (!/ResizeObserver loop/.test(e.message)) pageErrors.push(`${who}: ${e.message}`); });
+  if (before) await before(page);
   await gotoRetry(page, `${APP}${p}`);
   return page;
 }
@@ -194,25 +196,32 @@ test('1. a new message: "(1) REASON" in both of B\'s tabs, one chime across them
   expect(played, 'one chime across the two tabs').toEqual([`dm:${firstMessageId}`]);
   expect(await notReloaded(forYou) && await notReloaded(profile)).toBe(true);
 
-  // Reading it in one tab clears both, also when that tab's read lands before its socket is up, as it does from far away
-  // (the preview against production, 1 Nov): the tab opening the conversation has its read held 1 s and its socket 2.5 s,
-  // so its first count is taken before the read and the server's tag for the read goes out while the tab cannot hear it.
+  // Reading it in a new tab clears all three, also when that tab's read lands before its socket is up, as it does from
+  // far away (the preview against production, 1 Nov): the new tab has its read held 1 s and its socket 2.5 s, so its
+  // first count is taken before the read and the server's tag for the read goes out while the tab cannot hear it. The
+  // holds go on the blank tab before its first navigation (a fresh tab, as a member opens one), and it is opened like
+  // every other tab here (gotoRetry: DOMContentLoaded, a retry, Vercel's checkpoint), not by waiting for "load".
   const readPath = /\/dm\/conversations\/[^/]+\/read$/;
-  await forYou.route(readPath, async (route) => { await wait(1_000); await route.continue(); });
-  await forYou.routeWebSocket(/socket\.io/, async (ws) => { await wait(2_500); ws.connectToServer(); });
-  await forYou.goto(`${APP}/messages/${conversationId}`);
-  await expect(bubble(forYou, FIRST)).toBeVisible({ timeout: 20_000 });
+  let readerSocket = false;
+  const reader = await openIn(ctx, 'B/reader', `/messages/${conversationId}`, async (page) => {
+    await page.route(readPath, async (route) => { await wait(1_000); await route.continue(); });
+    await page.routeWebSocket(/socket\.io/, async (ws) => { await wait(2_500); ws.connectToServer(); readerSocket = true; });
+  });
+  await expect(bubble(reader, FIRST)).toBeVisible({ timeout: 20_000 });
+  await expect(reader).toHaveTitle('REASON', { timeout: 20_000 });
   await expect(forYou).toHaveTitle('REASON', { timeout: 20_000 });
   await expect(profile).toHaveTitle('REASON', { timeout: 20_000 });
-  await forYou.unroute(readPath);
-  // A message in the conversation B has open and in front: no chime anywhere. (The reloaded tab's socket first has to
-  // be up to hear it, as above.)
-  await forYou.waitForTimeout(3_000);
-  const before = (await chimes(profile)).length + (await chimes(forYou)).length;
+  await reader.unroute(readPath);
+  // A message in the conversation B has open and in front: no chime anywhere. (The new tab's socket first has to be up
+  // to hear it, as above.)
+  await expect.poll(() => readerSocket, { message: 'the reading tab\'s socket was let through', timeout: 20_000 }).toBe(true);
+  await reader.waitForTimeout(3_000);
+  const allChimes = async () => (await chimes(profile)).length + (await chimes(forYou)).length + (await chimes(reader)).length;
+  const before = await allChimes();
   await api(a, 'POST', '/dm/messages', { toUserId: b.id, content: `Seen at once ${RUN}` });
-  await expect(bubble(forYou, `Seen at once ${RUN}`)).toBeVisible({ timeout: 20_000 });
-  await forYou.waitForTimeout(1_500);
-  expect((await chimes(profile)).length + (await chimes(forYou)).length).toBe(before);
+  await expect(bubble(reader, `Seen at once ${RUN}`)).toBeVisible({ timeout: 20_000 });
+  await reader.waitForTimeout(1_500);
+  expect(await allChimes()).toBe(before);
   await ctx.close();
 });
 
