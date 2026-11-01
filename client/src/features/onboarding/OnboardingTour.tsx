@@ -18,17 +18,20 @@ import HowRsnWorks from './HowRsnWorks';
 import { useTourState } from './useTourState';
 import { isLanded } from './flow';
 import { forgetReturned, hasReturned } from './tour-landing';
+import { onboardingDue } from '@/components/layout/onboarding-gate';
 
 export default function OnboardingTour() {
   const { pending, failed, markSeen } = useTourState();
   const { pathname, state } = useLocation();
   const navigate = useNavigate();
-  const memberId = useAuthStore(s => s.user?.id as string | undefined);
+  const user = useAuthStore(s => s.user);
+  const memberId = user?.id as string | undefined;
   // Decided at the first press and kept: a press after a save that did not go through decides the same way.
   const decided = useRef<boolean | null>(null);
 
-  // Not over the flow itself: they are still answering.
-  if (pathname.startsWith('/onboarding')) return null;
+  // Not over the flow itself: they are still answering. And never while onboarding is still due (30 Oct review, L3):
+  // only once it is complete, so it can never open over a screen the gate is about to take them to.
+  if (pathname.startsWith('/onboarding') || onboardingDue(user) !== null) return null;
 
   // Where the flow put them, read without using anything up until the first press.
   const stays = decided.current ?? (isLanded(state) || hasReturned(memberId));

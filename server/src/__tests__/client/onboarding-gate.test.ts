@@ -81,6 +81,18 @@ describe('gateTarget: where the gate sends them, carrying the page', () => {
   });
 });
 
+// Controller, 1 Nov: the "How REASON works" tour was seen open over the onboarding screens. It opens only once
+// onboarding is complete: never on an /onboarding page, and never while the gate still has them due.
+describe('the tour never opens over onboarding', () => {
+  const tour = fs.readFileSync(path.join(__dirname, '../../../../client/src/features/onboarding/OnboardingTour.tsx'), 'utf8');
+
+  it('returns nothing on /onboarding and while onboarding is due, before it renders the tour', () => {
+    const guard = tour.indexOf("if (pathname.startsWith('/onboarding') || onboardingDue(user) !== null) return null;");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(tour.indexOf('<HowRsnWorks'));
+  });
+});
+
 describe('ProtectedRoute uses the helper', () => {
   const src = fs.readFileSync(path.join(__dirname, '../../../../client/src/components/layout/ProtectedRoute.tsx'), 'utf8');
 
