@@ -65,7 +65,9 @@ describe('Self-registration confirmation + calendar (26 May, Stefan)', () => {
       expect(i).toBeGreaterThan(-1);
       const next = src.indexOf('\nexport async function ', i + 1);
       const fn = src.slice(i, next > -1 ? next : src.length);
-      expect(fn).toMatch(/generateIcsContent/);
+      // 30 Oct 2026 — through the one event file builder (an in-person event's place as LOCATION).
+      expect(fn).toMatch(/eventIcs\(data\.calendarEvent\)/);
+      expect(src).toMatch(/function eventIcs\([\s\S]*?generateIcsContent\(/);
       expect(fn).toMatch(/filename: 'event\.ics'/);
     });
 
@@ -75,8 +77,13 @@ describe('Self-registration confirmation + calendar (26 May, Stefan)', () => {
       const i = src.indexOf("'/:id/register'");
       expect(i).toBeGreaterThan(-1);
       const block = src.slice(i, i + 2800);
-      expect(block).toMatch(/sendSessionRegistrationConfirmationEmail/);
-      expect(block).toMatch(/buildSessionCalendarEvent/);
+      // T11 (1 Nov 2026): the email is one helper, shared with the approval of a request to join.
+      expect(block).toMatch(/void sendRegistrationEmail\(req\.params\.id, req\.user!\.userId\)/);
+      const h = src.indexOf('async function sendRegistrationEmail');
+      expect(h).toBeGreaterThan(-1);
+      const helper = src.slice(h, src.indexOf('\n}\n', h));
+      expect(helper).toMatch(/sendSessionRegistrationConfirmationEmail/);
+      expect(helper).toMatch(/buildSessionCalendarEvent/);
     });
 
     // S15 (live-test 2026-06-06) — the live page auto-registers on every
@@ -87,7 +94,7 @@ describe('Self-registration confirmation + calendar (26 May, Stefan)', () => {
       const src = readServer('routes/sessions.ts');
       const i = src.indexOf("'/:id/register'");
       const block = src.slice(i, i + 2800);
-      expect(block).toMatch(/if \(participant\.isNewRegistration\) void \(async \(\) =>/);
+      expect(block).toMatch(/if \(participant\.isNewRegistration\) void sendRegistrationEmail\(/);
     });
 
     it('registerParticipant marks re-activations and race-losses as NOT new', () => {

@@ -15,6 +15,7 @@ import * as sessionService from '../session/session.service';
 import * as blockService from '../block/block.service';
 import { normalizeDesignation, pairConfidence, profileCompleteness, withinCooldown } from './intent-signals';
 import { NotFoundError } from '../../middleware/errors';
+import { templateIdOf } from './matching-template-choice';
 
 // ─── Default Weights ────────────────────────────────────────────────────────
 
@@ -235,7 +236,7 @@ export async function generateSessionSchedule(
 
   // Build matching config
   const config: MatchingConfig = {
-    weights: customConfig?.weights || DEFAULT_WEIGHTS,
+    weights: customConfig?.weights || (await templateWeightsFor(session, sessionConfig)).weights,
     hardConstraints: customConfig?.hardConstraints || [],
     numberOfRounds: customConfig?.numberOfRounds || sessionConfig.numberOfRounds || 5,
     avoidDuplicates: customConfig?.avoidDuplicates ?? true,
@@ -260,9 +261,66 @@ export async function generateSessionSchedule(
   const output = await engine.generateSchedule(input);
 
   // Persist matches to database
-  await persistMatches(sessionId, output.rounds, (sessionConfig as any)?.matchingTemplateId ?? null);
+  await persistMatches(sessionId, output.rounds, templateIdOf(sessionConfig));
 
   return output;
+}
+
+/**
+ * Phase 3 — the weights an event pairs people with: its own template (a preset or an admin's), else its pod's,
+ * else the engine defaults. A template's `weights` JSONB holds the FULL engine weight set; it is merged over
+ * DEFAULT_WEIGHTS so any unset signal falls back to the engine default. Pre-072 templates (no JSONB) fall back to
+ * the legacy 5-column mapping so their behaviour is unchanged.
+ *
+ * 30 Oct 2026 — the pre-event plan (generateSessionSchedule) reads them too: it used the engine defaults whatever
+ * the event chose, so a preset changed only rounds made one at a time. Only the weights are taken: a template's
+ * matching_policy and cooldown_months are never applied over the event's own rule (resolveMatchingPolicy), and
+ * nothing here adds a hard constraint, so a preset makes some pairings likelier and forbids none. A stored id that
+ * is not a UUID reads as no template (templateIdOf) instead of failing the read.
+ */
+async function templateWeightsFor(
+  session: { podId?: string | null },
+  sessionConfig: unknown,
+): Promise<{ weights: MatchingWeights; templateId: string | null }> {
+  let weights = DEFAULT_WEIGHTS;
+
+  let effectiveTemplateId: string | null = templateIdOf(sessionConfig);
+  if (!effectiveTemplateId && session.podId) {
+    effectiveTemplateId = await query<{ matching_template_id: string | null }>(
+      `SELECT matching_template_id FROM pods WHERE id = $1`,
+      [session.podId]
+    ).then((r) => r.rows[0]?.matching_template_id || null).catch(() => null);
+  }
+
+  if (effectiveTemplateId) {
+    const tplResult = await query<{
+      weights: any;
+      weight_industry: number | null; weight_interests: number | null; weight_intent: number | null;
+      weight_experience: number | null; weight_location: number | null;
+      same_company_allowed: boolean;
+    }>(`SELECT * FROM matching_templates WHERE id = $1`, [effectiveTemplateId]);
+    if (tplResult.rows.length > 0) {
+      const t = tplResult.rows[0];
+      if (t.weights && typeof t.weights === 'object') {
+        // Phase 3 — full, correctly-named weight set, merged over defaults.
+        weights = { ...DEFAULT_WEIGHTS, ...(t.weights as Partial<typeof DEFAULT_WEIGHTS>) };
+      } else {
+        // Legacy template (pre-072): map the 5 columns; premium/learning/intent
+        // stay at engine defaults — identical to pre-Phase-3 behaviour.
+        weights = {
+          ...DEFAULT_WEIGHTS,
+          sharedInterests: t.weight_interests ?? DEFAULT_WEIGHTS.sharedInterests,
+          sharedReasons: t.weight_intent ?? DEFAULT_WEIGHTS.sharedReasons,
+          industryDiversity: t.weight_industry ?? DEFAULT_WEIGHTS.industryDiversity,
+          companyDiversity: t.same_company_allowed ? 0 : DEFAULT_WEIGHTS.companyDiversity,
+          languageMatch: t.weight_location ?? DEFAULT_WEIGHTS.languageMatch,
+          encounterFreshness: t.weight_experience ?? DEFAULT_WEIGHTS.encounterFreshness,
+        };
+      }
+      logger.info({ templateId: effectiveTemplateId }, 'Using matching template weights');
+    }
+  }
+  return { weights, templateId: effectiveTemplateId };
 }
 
 // ─── Generate Single Round ──────────────────────────────────────────────────
@@ -506,50 +564,7 @@ export async function generateSingleRound(
     hardConstraints.push({ type: 'user_block', params: { pairs: blockedPairs } });
   }
 
-  // Phase 3 — load the matching template (session-level first, then pod-level).
-  // A template's `weights` JSONB holds the FULL engine weight set; we merge it
-  // over DEFAULT_WEIGHTS so any unset signal falls back to the engine default.
-  // Pre-072 templates (no JSONB) fall back to the legacy 5-column mapping so
-  // their behaviour is unchanged.
-  const sessionTemplateId = sessionConfig.matchingTemplateId || null;
-  let weights = DEFAULT_WEIGHTS;
-
-  let effectiveTemplateId: string | null = sessionTemplateId;
-  if (!effectiveTemplateId && (session as any).podId) {
-    effectiveTemplateId = await query<{ matching_template_id: string | null }>(
-      `SELECT matching_template_id FROM pods WHERE id = $1`,
-      [(session as any).podId]
-    ).then((r) => r.rows[0]?.matching_template_id || null).catch(() => null);
-  }
-
-  if (effectiveTemplateId) {
-    const tplResult = await query<{
-      weights: any;
-      weight_industry: number | null; weight_interests: number | null; weight_intent: number | null;
-      weight_experience: number | null; weight_location: number | null;
-      same_company_allowed: boolean;
-    }>(`SELECT * FROM matching_templates WHERE id = $1`, [effectiveTemplateId]);
-    if (tplResult.rows.length > 0) {
-      const t = tplResult.rows[0];
-      if (t.weights && typeof t.weights === 'object') {
-        // Phase 3 — full, correctly-named weight set, merged over defaults.
-        weights = { ...DEFAULT_WEIGHTS, ...(t.weights as Partial<typeof DEFAULT_WEIGHTS>) };
-      } else {
-        // Legacy template (pre-072): map the 5 columns; premium/learning/intent
-        // stay at engine defaults — identical to pre-Phase-3 behaviour.
-        weights = {
-          ...DEFAULT_WEIGHTS,
-          sharedInterests: t.weight_interests ?? DEFAULT_WEIGHTS.sharedInterests,
-          sharedReasons: t.weight_intent ?? DEFAULT_WEIGHTS.sharedReasons,
-          industryDiversity: t.weight_industry ?? DEFAULT_WEIGHTS.industryDiversity,
-          companyDiversity: t.same_company_allowed ? 0 : DEFAULT_WEIGHTS.companyDiversity,
-          languageMatch: t.weight_location ?? DEFAULT_WEIGHTS.languageMatch,
-          encounterFreshness: t.weight_experience ?? DEFAULT_WEIGHTS.encounterFreshness,
-        };
-      }
-      logger.info({ templateId: effectiveTemplateId }, 'Using matching template weights');
-    }
-  }
+  const { weights, templateId: effectiveTemplateId } = await templateWeightsFor(session, sessionConfig);
 
   const config: MatchingConfig = {
     weights,

@@ -21,6 +21,9 @@ const mockGetResponse = jest.fn();
 jest.mock('../../../services/people/person-response.service', () => ({ getResponse: (...a: unknown[]) => mockGetResponse(...a), __esModule: true }));
 const mockCanMessage = jest.fn();
 jest.mock('../../../services/dm/dm.service', () => ({ canMessage: (...a: unknown[]) => mockCanMessage(...a), __esModule: true }));
+// Fix round 1: canCall is the call routes' own helper (call-eligibility.ts canVideoCall), never a second reading.
+const mockCanVideoCall = jest.fn().mockResolvedValue(false);
+jest.mock('../../../services/dm/call-eligibility', () => ({ canVideoCall: (...a: unknown[]) => mockCanVideoCall(...a), __esModule: true }));
 
 import { getOwnCard, getPersonBrief, listRecentConnections } from '../../../services/people/person-brief.service';
 import { PRIVATE_MEMBER_KEYS, toPublicMember } from '../../../services/user/public-card';
@@ -102,6 +105,26 @@ describe('getPersonBrief', () => {
     arm(o as never);
     const brief = await getPersonBrief(VIEWER, TARGET);
     expect(brief.relationship.state).toBe(state);
+  });
+
+  // 1 Nov 2026 (L12; fix round 1): the profile's Video call asks exactly what the call routes ask, through the one
+  // helper (call-eligibility.ts canVideoCall: a real mutual connection, no block, both members). A conversation an
+  // admin or a broadcast opened, or only having been at the same event, is not enough, so the relationship state
+  // ("connected", "met") is not what decides it.
+  it.each([true, false])('canCall is what canVideoCall answers for this viewer and this person (%s)', async (allowed) => {
+    arm({ conv: { id: 'c1', joined_a: null, joined_b: null } } as never);
+    mockCanVideoCall.mockResolvedValue(allowed);
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect(mockCanVideoCall).toHaveBeenCalledWith(VIEWER, TARGET);
+    expect(brief.canCall).toBe(allowed);
+  });
+
+  it('a pair connected only by a conversation reads "connected" but cannot call when the helper says no', async () => {
+    arm({ conv: { id: 'c1', joined_a: null, joined_b: null } } as never);
+    mockCanVideoCall.mockResolvedValue(false);
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect(brief.relationship.state).toBe('connected');
+    expect(brief.canCall).toBe(false);
   });
 
   it('counts meetings from events and from a held 1:1 meeting', async () => {

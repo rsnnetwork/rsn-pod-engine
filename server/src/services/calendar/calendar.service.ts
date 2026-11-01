@@ -4,7 +4,7 @@
 
 import { v4 as uuid } from 'uuid';
 import { eventDurationMinutes } from '@rsn/shared';
-import { eventDurationOf } from '../session/event-duration';
+import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
 import { query } from '../../db';
 
 interface CalendarEventData {
@@ -134,6 +134,31 @@ export interface SessionCalendarEvent {
   organizerName?: string;
   organizerEmail?: string;
   sessionId?: string;
+  /** Where an in-person event happens (30 Oct 2026); absent for an event online. */
+  place?: string;
+}
+
+/**
+ * What an event's emailed calendar file and its calendar links say (30 Oct 2026). An in-person event's place is
+ * where it is (LOCATION, and the links' location), and its page goes into the description. An event online keeps
+ * its page as where, exactly as before, and gets no links here (its emails stay as they were).
+ */
+export function eventCalendarEntry(
+  event: SessionCalendarEvent,
+  clientUrl: string,
+): { description: string; location?: string; links?: CalendarLinks } {
+  const page = event.sessionId ? `${clientUrl}/sessions/${event.sessionId}` : undefined;
+  const base = event.description || `REASON event — ${event.title}`;
+  if (!event.place) return { description: base, location: page };
+  const description = page ? `${base}. Event page: ${page}` : base;
+  const links = buildCalendarLinks({
+    title: event.title,
+    start: event.startTime,
+    end: new Date(event.startTime.getTime() + event.durationMinutes * 60 * 1000),
+    details: description,
+    location: event.place,
+  });
+  return { description, location: event.place, links };
 }
 
 /**
@@ -173,6 +198,7 @@ export async function buildSessionCalendarEvent(sessionId: string): Promise<Sess
     organizerName: host?.display_name || 'REASON',
     organizerEmail: host?.email,
     sessionId,
+    place: eventPlaceOf(session),
   };
 }
 

@@ -9,7 +9,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  EVENT_FORMATS, EVENT_FORMAT_KEYS, POD_TYPES, ORCHESTRATION_MODES,
+  EVENT_FORMATS, EVENT_FORMAT_KEYS, POD_TYPES, ORCHESTRATION_MODES, IN_PERSON_ENABLED_CLIENTS, formatOffered,
   PodType, OrchestrationMode, CommunicationMode, DEFAULT_SESSION_CONFIG,
 } from '@rsn/shared';
 
@@ -42,10 +42,17 @@ describe('event formats', () => {
     expect(rule.matchingEngineId !== null).toBe(rule.live === 'rounds');
   });
 
-  it('offers a format only when the live engine has a way to run it (rounds or a meeting room)', () => {
+  it('offers a format only when the live engine has a way to run it (rounds, a meeting room, or none at a place)', () => {
     for (const rule of Object.values(EVENT_FORMATS)) {
-      if (rule.available) expect(['rounds', 'meeting']).toContain(rule.live);
+      if (rule.available || rule.offeredTo) expect(['rounds', 'meeting', 'none']).toContain(rule.live);
     }
+  });
+
+  it('a format kept for the forms that ask for it is not `available`, so a form that reads `available` alone never shows it', () => {
+    for (const [key, rule] of Object.entries(EVENT_FORMATS)) {
+      if (rule.offeredTo) expect(`${key}: ${rule.available}`).toBe(`${key}: false`);
+    }
+    expect(EVENT_FORMAT_KEYS.filter((f) => EVENT_FORMATS[f].available)).toEqual(['speed_networking', 'video_meeting']);
   });
 
   it.each(formatKeys)('%s: every field has a label, a default (unless an admin-only pick) and limits that hold the default', (key) => {
@@ -55,6 +62,13 @@ describe('event formats', () => {
     for (const [name, field] of entries) {
       expect(`${name}: ${field.label.trim()}`).not.toBe(`${name}: `);
       if (field.adminOnly) continue;
+      if (field.kind === 'text') {
+        // A text field (a place) has no default: a required one says what to do when it is empty.
+        expect(field.default).toBeUndefined();
+        expect(field.maxLength).toBeGreaterThan(0);
+        if (field.required) expect(field.missing?.trim()).toBeTruthy();
+        continue;
+      }
       expect(field.default).toBeDefined();
       if (typeof field.default === 'number') {
         expect(typeof field.min).toBe('number');
@@ -78,6 +92,10 @@ describe('event formats', () => {
     expect(sn.fields.roundMinutes).toMatchObject({ default: 8, min: 1, max: 60 });
     expect(sn.fields.timerVisibility).toMatchObject({ default: 'last_10s' });
     expect(sn.fields.matchingPolicy).toMatchObject({ default: 'within_event' });
+    expect(sn.fields.matchingPolicy.options).toEqual(['platform_wide', 'within_event', 'none', 'cooldown']);
+    expect(sn.fields.cooldownMonths).toMatchObject({
+      default: 12, min: 1, max: 60, when: { key: 'matchingPolicy', equals: 'cooldown' },
+    });
     expect(sn.fields.matchingTemplateId).toMatchObject({ adminOnly: true });
     expect(sn.fields.maxParticipants).toMatchObject({ default: 500, min: 2, max: 10000 });
 
@@ -92,7 +110,18 @@ describe('event formats', () => {
 
     expect(EVENT_FORMATS.voice_meeting.available).toBe(false);
     expect(EVENT_FORMATS.webinar.available).toBe(false);
-    expect(EVENT_FORMATS.physical_event.available).toBe(false);
+
+    // In person (30 Oct 2026, L18): a place, a length up to eight hours, no video room, who took part afterwards;
+    // offered to the forms that draw the place, never to production's.
+    const ip = EVENT_FORMATS.physical_event;
+    expect(ip).toMatchObject({
+      label: 'In person', live: 'none', available: false, offeredTo: 'inPerson', recap: 'attendance',
+      breakouts: false, matchingEngineId: null,
+    });
+    expect(Object.keys(ip.fields)).toEqual(['location', 'durationMinutes', 'maxParticipants']);
+    expect(ip.fields.location).toMatchObject({ label: 'Where', kind: 'text', required: true, maxLength: 300 });
+    expect(ip.fields.durationMinutes).toMatchObject({ default: 60, min: 15, max: 480 });
+    expect(ip.fields.maxParticipants).toMatchObject({ default: 25, min: 2, max: 10000 });
   });
 
   it('agrees with the speed-networking defaults the engine already uses, so a new event runs as before', () => {
@@ -135,8 +164,14 @@ describe('pod types', () => {
     expect(new Set(events.allowed).size).toBe(events.allowed.length);
     for (const format of events.allowed) expect(EVENT_FORMAT_KEYS).toContain(format);
     expect(events.allowed).toContain(events.default);
-    // No unavailable format as a default: an organiser must be able to create the event the form preselects.
-    expect(EVENT_FORMATS[events.default].available).toBe(true);
+    // No unoffered format as a default: an organiser must be able to create the event the form preselects.
+    expect(formatOffered(events.default, IN_PERSON_ENABLED_CLIENTS)).toBe(true);
+  });
+
+  it('In person is allowed in every pod type except Webinar and Chat (L18)', () => {
+    const holding = podTypeKeys.filter((t) => POD_TYPES[t as PodType].events.allowed.includes('physical_event')).sort();
+    expect(holding).toEqual(Object.values(PodType).filter((t) => t !== PodType.WEBINAR && t !== PodType.CHAT).sort());
+    expect(POD_TYPES[PodType.PHYSICAL_EVENT].events.default).toBe('physical_event');
   });
 
   it('holds the Reason pod row of the definition sheet', () => {
@@ -144,7 +179,7 @@ describe('pod types', () => {
       label: 'Reason Pod',
       summary: expect.any(String),
       orchestration: { default: OrchestrationMode.FREE_FORM, allowed: [OrchestrationMode.FREE_FORM, OrchestrationMode.MODERATED] },
-      events: { default: 'video_meeting', allowed: ['video_meeting', 'speed_networking'] },
+      events: { default: 'video_meeting', allowed: ['video_meeting', 'speed_networking', 'physical_event'] },
       communication: CommunicationMode.VIDEO,
       sizeHint: 12,
     });
@@ -176,6 +211,7 @@ describe('the shared index exports each value by name (Rollup reads only static 
     'formatRule', 'podTypeRule', 'isEventFormat', 'liveKindOf', 'effectiveOrchestration', 'eventFormatsForPod',
     'defaultEventFormat', 'fieldsFor', 'defaultsFor', 'defaultTitle', 'checkEventInput', 'normaliseConfig',
     'valuesFromConfig', 'eventDurationMinutes', 'applyTypeChange', 'applyFormatChange', 'resolveEventFormat', 'formatRefusal',
+    'IN_PERSON_ENABLED_CLIENTS', 'MATCHING_PRESET_IDS', 'formatOffered', 'missingRequired',
   ])('%s', (name) => {
     expect(index).toMatch(new RegExp(`\\nexport const ${name} = `));
   });

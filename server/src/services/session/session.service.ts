@@ -9,12 +9,15 @@ import {
   ParticipantStatus, CreateSessionInput, UpdateSessionInput, SessionConfigInput, EventInputIssue,
   UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType, PodStatus,
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
-  liveKindOf, eventDurationMinutes,
+  liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import { activeMemberSql } from '../users/active-member';
-import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql, visibleEventSql } from './session-access';
+import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-access';
+import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
+import { assertVideoRoom } from './video-room';
+import { canRegister, publicEventsSql, readEventAccessFacts, visibleEventsSql } from './event-access';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
 
@@ -25,6 +28,7 @@ const SESSION_COLUMNS = `
   lobby_room_id AS "lobbyRoomId",
   host_visibility_mode AS "hostVisibilityMode",
   event_format AS "format",
+  visibility,
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
@@ -36,9 +40,13 @@ const LIVE_STATUSES: SessionStatus[] = [
 
 // ─── Event format (26 Oct 2026) ─────────────────────────────────────────────
 
-/** Refuses a format the pod's type does not hold, or one not offered yet: 400 EVENT_FORMAT_NOT_ALLOWED, at the field. */
+/**
+ * Refuses a format the pod's type does not hold, or one not offered yet: 400 EVENT_FORMAT_NOT_ALLOWED, at the field.
+ * The server accepts every format any form offers, In person included (30 Oct 2026): production's form never sends
+ * it, because it never offers it.
+ */
 function assertFormatAllowed(podType: PodType, format: EventFormat): void {
-  const refusal = formatRefusal(podType, format);
+  const refusal = formatRefusal(podType, format, IN_PERSON_ENABLED_CLIENTS);
   if (refusal) throw new AppError(400, ErrorCodes.EVENT_FORMAT_NOT_ALLOWED, refusal, { format: [refusal] });
 }
 
@@ -50,26 +58,33 @@ function throwIfIssues(issues: EventInputIssue[]): void {
   throw new ValidationError(issues[0].message, details);
 }
 
-/** An explicit format: every setting the event will be stored with must be inside the format's limits. */
+/**
+ * An explicit format: every setting the event will be stored with must be inside the format's limits, and a
+ * setting it cannot do without (an in-person event's place) must be there.
+ */
 function assertEventInput(format: EventFormat, storedConfig: Record<string, unknown>): void {
-  throwIfIssues(checkEventInput(format, valuesFromConfig(format, storedConfig)));
+  const values = valuesFromConfig(format, storedConfig);
+  throwIfIssues([...missingRequired(format, values), ...checkEventInput(format, values)]);
 }
 
 /**
- * The settings only the new event forms send: a round length in minutes and a meeting's length. Production's
- * old form never sends them, so they are checked even when no format is sent; its own settings (a "Video
- * Meeting" for 500 people, by default) stay unchecked on that path, exactly as before. A setting the event's
- * format does not have is not checked here: normaliseConfig never stores it.
+ * The settings only the new event forms send: a round length in minutes, a meeting's length and an in-person
+ * event's place. Production's old form never sends them, so they are checked even when no format is sent; its own
+ * settings (a "Video Meeting" for 500 people, by default) stay unchecked on that path, exactly as before. A
+ * setting the event's format does not have is not checked here: normaliseConfig never stores it. What the format
+ * cannot do without is required on this path too (30 Oct 2026): config.eventType names a format only when the
+ * config carries it (resolveEventFormat), so a copy of an old row tagged physical_event is never a place-less event.
  */
-const FORM_ONLY_SETTINGS = ['roundMinutes', 'durationMinutes'] as const;
+const FORM_ONLY_SETTINGS = ['roundMinutes', 'durationMinutes', 'location'] as const;
 
-function assertFormOnlySettings(format: EventFormat, config: SessionConfigInput | undefined): void {
-  if (!config) return;
+function assertFormOnlySettings(
+  format: EventFormat, config: SessionConfigInput | undefined, storedConfig: Record<string, unknown>,
+): void {
   const sent: Record<string, unknown> = {};
   for (const key of FORM_ONLY_SETTINGS) {
-    if (config[key] !== undefined) sent[key] = config[key];
+    if (config?.[key] !== undefined) sent[key] = config[key];
   }
-  throwIfIssues(checkEventInput(format, sent));
+  throwIfIssues([...missingRequired(format, valuesFromConfig(format, storedConfig)), ...checkEventInput(format, sent)]);
 }
 
 const PARTICIPANT_COLUMNS = `
@@ -115,13 +130,18 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   if (explicit) assertFormatAllowed(pod.podType, format);
   const sessionConfig = normaliseConfig(format, input.config);
   if (explicit) assertEventInput(format, sessionConfig);
-  else assertFormOnlySettings(format, input.config);
+  else assertFormOnlySettings(format, input.config, sessionConfig);
+  // 30 Oct 2026 — who should meet whom: a preset for anyone, any template for a platform admin. A form that sends the
+  // format chose it, so a choice it may not make is refused; a body with no format (production's Duplicate, its old
+  // forms) carries a stored config as it is, so a template that cannot be kept is dropped instead (fix round 1).
+  if (explicit) await assertTemplateChoice(sessionConfig.matchingTemplateId, !!isAdmin);
+  else if (!(await templateKeepable(sessionConfig.matchingTemplateId, !!isAdmin))) delete sessionConfig.matchingTemplateId;
 
   const sessionId = uuid();
 
   const result = await query<Session>(
-    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING ${SESSION_COLUMNS}`,
     [
       sessionId,
@@ -132,6 +152,8 @@ export async function createSession(userId: string, input: CreateSessionInput, u
       JSON.stringify(sessionConfig),
       userId,
       format,
+      // T11 (1 Nov 2026): who can join. Production's form sends none: NULL, the event follows its pod as before.
+      input.visibility ?? null,
     ]
   );
 
@@ -213,7 +235,17 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     const merged = formatChanges ? { ...input.config } : { ...currentConfig, ...input.config };
     const newConfig = normaliseConfig(nextFormat, merged);
     if (input.format !== undefined) assertEventInput(nextFormat, newConfig);
-    else assertFormOnlySettings(nextFormat, input.config);
+    else assertFormOnlySettings(nextFormat, input.config, newConfig);
+    // A template the event already had stays without a check (one stored before ids were checked included); a new
+    // choice is checked as on create: refused from a form that sends the format, and from a body with none (production's
+    // edit form) not taken, so the event keeps the template it had (fix round 1).
+    if (newConfig.matchingTemplateId !== currentConfig?.matchingTemplateId) {
+      if (input.format !== undefined) await assertTemplateChoice(newConfig.matchingTemplateId, !!isAdmin);
+      else if (!(await templateKeepable(newConfig.matchingTemplateId, !!isAdmin))) {
+        if (currentConfig?.matchingTemplateId === undefined) delete newConfig.matchingTemplateId;
+        else newConfig.matchingTemplateId = currentConfig.matchingTemplateId;
+      }
+    }
     setClauses.push(`config = $${paramIdx}`);
     values.push(JSON.stringify(newConfig));
     paramIdx++;
@@ -222,6 +254,13 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   if (formatChanges) {
     setClauses.push(`event_format = $${paramIdx}`);
     values.push(nextFormat);
+    paramIdx++;
+  }
+
+  // T11 (1 Nov 2026): who can join, while the event is scheduled. Going private removes nobody already in.
+  if (input.visibility !== undefined && input.visibility !== session.visibility) {
+    setClauses.push(`visibility = $${paramIdx}`);
+    values.push(input.visibility);
     paramIdx++;
   }
 
@@ -261,14 +300,15 @@ export async function listSessions(params: {
   } else if (params.isAdmin) {
     // Admins see all sessions across all pods
   } else if (params.userId) {
-    // T2 (1 Nov 2026), D1: the events this member may open, and only those (visibleEventSql is canViewSession's
-    // rule). An invite-only pod's events were listed to everyone, who were then refused on open.
-    whereClause += ` AND ${visibleEventSql('s', `$${paramIdx}`)}`;
+    // T2 (1 Nov 2026), D1: the events this member may open, and only those (canViewSession's rule). An
+    // invite-only pod's events were listed to everyone, who were then refused on open. T11: an event with its own
+    // visibility follows it (a private one is listed only to its audience, invitees and participants); NULL as T2.
+    whereClause += ` AND ${visibleEventsSql('s', `$${paramIdx}`)}`;
     values.push(params.userId);
     paramIdx++;
   } else {
     // Nobody asking: only public pods' events (D1: an invite-only pod's events open to nobody outside it)
-    whereClause += ` AND s.pod_id IN (SELECT id FROM pods WHERE visibility = 'public')`;
+    whereClause += ` AND ${publicEventsSql('s')}`;
   }
 
   if (params.status) {
@@ -290,6 +330,7 @@ export async function listSessions(params: {
             s.current_round AS "currentRound", s.config, s.host_user_id AS "hostUserId",
             s.lobby_room_id AS "lobbyRoomId", s.created_at AS "createdAt", s.updated_at AS "updatedAt",
             s.event_format AS "format",
+            s.visibility,
             p.name AS "podName",
             u.display_name AS "hostDisplayName"
      FROM sessions s
@@ -337,7 +378,9 @@ export async function registerParticipant(
   // join, socket reconnect, shared link) passes nothing → still bounced.
   // T2 (1 Nov 2026), D2: `viaInvite` says the invite-accept path is registering someone the host invited, so a pod
   // that asks for approval takes them (a shared link records who used it only after the registration).
-  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean },
+  // T11 (1 Nov 2026): `approvedRequest` says the host has approved this person's request to join an event that asks
+  // for approval (the approve route), so that event takes them; capacity and their own row still decide.
+  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean },
 ): Promise<SessionParticipant & { isNewRegistration: boolean }> {
   const invitedAt = options?.personalInviteCreatedAt ?? null;
   const viaInvite = !!options?.viaInvite || !!invitedAt;
@@ -359,13 +402,23 @@ export async function registerParticipant(
       throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'This event is no longer accepting participants');
     }
 
-    // Enforce pod visibility rules for session access (admin/super_admin bypass)
     const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+
+    // T11 (1 Nov 2026): an event with its own visibility follows the one rule (event-access.ts) and never adds
+    // anyone to its pod. A NULL event follows its pod's rules below, exactly as before.
+    if (session.visibility) {
+      const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
+      if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+      const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
+      if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
+    }
+
+    // Enforce pod visibility rules for session access (admin/super_admin bypass)
     const podResult = await client.query(
       `SELECT visibility FROM pods WHERE id = $1`,
       [session.podId]
     );
-    if (podResult.rows.length > 0 && !isAdmin) {
+    if (podResult.rows.length > 0 && !isAdmin && !session.visibility) {
       const podVisibility = podResult.rows[0].visibility;
       const memberResult = await client.query(
         `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
@@ -607,7 +660,8 @@ export async function getParticipantCount(sessionId: string): Promise<number> {
 
 // Valid session status transitions — prevents illegal state jumps
 const VALID_SESSION_TRANSITIONS: Record<string, string[]> = {
-  [SessionStatus.SCHEDULED]: [SessionStatus.LOBBY_OPEN, SessionStatus.CANCELLED],
+  // An in-person event never opens a lobby: it goes from scheduled to completed at its end time (30 Oct 2026).
+  [SessionStatus.SCHEDULED]: [SessionStatus.LOBBY_OPEN, SessionStatus.COMPLETED, SessionStatus.CANCELLED],
   [SessionStatus.LOBBY_OPEN]: [SessionStatus.ROUND_ACTIVE, SessionStatus.COMPLETED, SessionStatus.CANCELLED],
   [SessionStatus.ROUND_ACTIVE]: [SessionStatus.ROUND_RATING, SessionStatus.COMPLETED, SessionStatus.CANCELLED],
   [SessionStatus.ROUND_RATING]: [SessionStatus.ROUND_TRANSITION, SessionStatus.CLOSING_LOBBY, SessionStatus.COMPLETED],
@@ -930,6 +984,8 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
 
   // Verify session exists
   const session = await getSessionById(sessionId);
+  // 30 Oct 2026 — an in-person event has no video room, so no token into one (409 in a sentence).
+  assertVideoRoom(resolveEventFormat(session));
 
   // Verify user is an ACTIVE participant or the host.
   const participantResult = await query<SessionParticipant>(

@@ -13,6 +13,7 @@ export * from './types/api';
 // Group chats (26 Oct 2026). The two sizes are real VALUES the client shows ("12 of 50"), so each has its
 // own statically analysable named export for Rollup's CJS interop, as OPENINGS below explains.
 export * from './types/group-chat';
+export * from './types/message-reply';
 import { GROUP_CHAT_MAX_MEMBERS as _GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS as _GROUP_CHAT_MIN_MEMBERS } from './types/group-chat';
 export const GROUP_CHAT_MAX_MEMBERS = _GROUP_CHAT_MAX_MEMBERS;
 export const GROUP_CHAT_MIN_MEMBERS = _GROUP_CHAT_MIN_MEMBERS;
@@ -52,7 +53,7 @@ export * from './onboarding/options-v2';
 import {
   ONBOARDING_V2_MEET as _V2_MEET, ONBOARDING_V2_FIND as _V2_FIND, ONBOARDING_V2_OFFER as _V2_OFFER,
   ONBOARDING_V2_SELF as _V2_SELF, ONBOARDING_V2_COPY as _V2_COPY, ONBOARDING_V2_OTHER_KEYS as _V2_OTHER_KEYS,
-  ONBOARDING_V2_LIMITS as _V2_LIMITS, ONBOARDING_V2_STEPS as _V2_STEPS,
+  ONBOARDING_V2_LIMITS as _V2_LIMITS, ONBOARDING_V2_STEPS as _V2_STEPS, onboardingDone as _onboardingDone,
 } from './onboarding/options-v2';
 export const ONBOARDING_V2_MEET = _V2_MEET;
 export const ONBOARDING_V2_FIND = _V2_FIND;
@@ -62,6 +63,7 @@ export const ONBOARDING_V2_COPY = _V2_COPY;
 export const ONBOARDING_V2_OTHER_KEYS = _V2_OTHER_KEYS;
 export const ONBOARDING_V2_LIMITS = _V2_LIMITS;
 export const ONBOARDING_V2_STEPS = _V2_STEPS;
+export const onboardingDone = _onboardingDone;
 // The made-up people the tour's pictures show (25 Oct 2026): a real VALUE both tours render, so it has its
 // own named export for the same Rollup reason as OPENINGS above.
 export * from './onboarding/example-people';
@@ -119,10 +121,14 @@ export const ENTITY_ROLE_LABELS = _ENTITY_ROLE_LABELS;
 // as OPENINGS above.
 export * from './events/definitions';
 export * from './events/rules';
+export * from './events/presets';
 import {
   EVENT_FORMATS as _EVENT_FORMATS, EVENT_FORMAT_KEYS as _EVENT_FORMAT_KEYS, POD_TYPES as _POD_TYPES,
-  ORCHESTRATION_MODES as _ORCHESTRATION_MODES,
+  ORCHESTRATION_MODES as _ORCHESTRATION_MODES, IN_PERSON_ENABLED_CLIENTS as _IN_PERSON_ENABLED_CLIENTS,
+  EVENT_ACCESS as _EVENT_ACCESS, EVENT_VISIBILITY_KEYS as _EVENT_VISIBILITY_KEYS,
+  defaultEventVisibility as _defaultEventVisibility, isEventVisibility as _isEventVisibility,
 } from './events/definitions';
+import { MATCHING_PRESET_IDS as _MATCHING_PRESET_IDS } from './events/presets';
 import {
   formatRule as _formatRule, podTypeRule as _podTypeRule, isEventFormat as _isEventFormat, liveKindOf as _liveKindOf,
   effectiveOrchestration as _effectiveOrchestration, eventFormatsForPod as _eventFormatsForPod,
@@ -131,11 +137,21 @@ import {
   valuesFromConfig as _valuesFromConfig, eventDurationMinutes as _eventDurationMinutes,
   applyTypeChange as _applyTypeChange, applyFormatChange as _applyFormatChange,
   resolveEventFormat as _resolveEventFormat, formatRefusal as _formatRefusal,
+  formatOffered as _formatOffered, missingRequired as _missingRequired,
 } from './events/rules';
+export const IN_PERSON_ENABLED_CLIENTS = _IN_PERSON_ENABLED_CLIENTS;
+export const MATCHING_PRESET_IDS = _MATCHING_PRESET_IDS;
+export const formatOffered = _formatOffered;
+export const missingRequired = _missingRequired;
 export const EVENT_FORMATS = _EVENT_FORMATS;
 export const EVENT_FORMAT_KEYS = _EVENT_FORMAT_KEYS;
 export const POD_TYPES = _POD_TYPES;
 export const ORCHESTRATION_MODES = _ORCHESTRATION_MODES;
+// T11 (1 Nov 2026): who can join an event.
+export const EVENT_ACCESS = _EVENT_ACCESS;
+export const EVENT_VISIBILITY_KEYS = _EVENT_VISIBILITY_KEYS;
+export const defaultEventVisibility = _defaultEventVisibility;
+export const isEventVisibility = _isEventVisibility;
 export const formatRule = _formatRule;
 export const podTypeRule = _podTypeRule;
 export const isEventFormat = _isEventFormat;
@@ -188,3 +204,18 @@ export const PICTURE_CENTRED = _PICTURE_CENTRED;
 export const clampPictureCrop = _clampPictureCrop;
 export const pictureCropRect = _pictureCropRect;
 export const pictureOutputSize = _pictureOutputSize;
+export * from './location/countries';
+// "Where are you based?" (30 Oct review, 1.2): VALUES the onboarding screens, the profile form and the server judge
+// a location with, and the matcher reads places with, so each needs its own statically analysable named export, same
+// as the meeting values above.
+import {
+  COUNTRY_ALIASES as _COUNTRY_ALIASES, COUNTRY_NAMES as _COUNTRY_NAMES, COUNTRIES_IN_NO_REGION as _COUNTRIES_IN_NO_REGION,
+  ENDONYMS as _ENDONYMS, fold as _fold, isCountryOnly as _isCountryOnly, isLocationComplete as _isLocationComplete,
+} from './location/countries';
+export const COUNTRY_ALIASES = _COUNTRY_ALIASES;
+export const COUNTRY_NAMES = _COUNTRY_NAMES;
+export const COUNTRIES_IN_NO_REGION = _COUNTRIES_IN_NO_REGION;
+export const ENDONYMS = _ENDONYMS;
+export const fold = _fold;
+export const isCountryOnly = _isCountryOnly;
+export const isLocationComplete = _isLocationComplete;

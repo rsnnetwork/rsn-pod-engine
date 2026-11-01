@@ -84,12 +84,17 @@ export const draftSchemaV2 = z.object({
 
 export type DraftInputV2 = z.infer<typeof draftSchemaV2>;
 
-/** A name can never be cleared, so a blank one keeps the stored one; the role, company and industry can. */
+/**
+ * A name can never be cleared, so a blank one keeps the stored one; the role, company and industry can. Where they
+ * are based (30 Oct review, 1.2) is never cleared either; whether what it leaves is enough is the confirm's question,
+ * since it depends on what is stored (answers-v2.repo.ts).
+ */
 const profileSchema = z.object({
   displayName: line(L.displayNameMaxLen).optional(),
   jobTitle: clearableLine(L.jobTitleMaxLen).optional(),
   company: clearableLine(L.companyMaxLen).optional(),
   industry: clearableLine(L.industryMaxLen).optional(),
+  location: line(L.locationMaxLen).optional(),
   timezone,
   useLinkedinPhoto: z.boolean().optional(),
 }).strict();
@@ -112,7 +117,9 @@ export const confirmSchemaV2 = z.object({
   offerOther: line(L.otherMaxLen).optional().default(null),
   selfKinds: uniqueKeys(selfKey).refine(v => v.length >= L.selfMin, atLeastOne),
   selfOther: line(L.otherMaxLen).optional().default(null),
-  profile: profileSchema.optional().default({}),
+  // Left out, it stays out: an answer saved in edit mode sends none, and only a confirm that sends one is held to
+  // "Where are you based?" (30 Oct review, 1.2).
+  profile: profileSchema.optional(),
 }).strict()
   // "Something else" with no words says nothing at all.
   .superRefine((d, ctx) => {

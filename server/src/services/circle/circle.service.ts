@@ -15,7 +15,7 @@ import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
-import { visibleEventSql } from '../session/session-access';
+import { visibleEventsSql } from '../session/event-access';
 
 export const MAX_NESTING_DEPTH = 3;
 
@@ -284,7 +284,7 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
        FROM sessions s
        WHERE s.pod_id IN (SELECT pod_id FROM circle_pods WHERE circle_id = $1)
          AND s.status = 'scheduled' AND s.scheduled_at > NOW()
-         AND ($3::boolean OR ${visibleEventSql('s', '$2')})
+         AND ($3::boolean OR ${visibleEventsSql('s', '$2')})
        ORDER BY s.scheduled_at ASC LIMIT 10`,
       [circleId, userId, seesEveryEvent],
     ),

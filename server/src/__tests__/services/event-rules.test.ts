@@ -8,6 +8,7 @@ import {
   resolveEventFormat, liveKindOf, formatRule, podTypeRule, isEventFormat, effectiveOrchestration,
   eventFormatsForPod, defaultEventFormat, fieldsFor, defaultsFor, defaultTitle, checkEventInput,
   normaliseConfig, valuesFromConfig, eventDurationMinutes, applyTypeChange, applyFormatChange, formatRefusal,
+  formatOffered, missingRequired, IN_PERSON_ENABLED_CLIENTS,
   PodType, OrchestrationMode, CommunicationMode, DEFAULT_SESSION_CONFIG,
 } from '@rsn/shared';
 import { computeSessionDurationMinutes } from '../../services/calendar/calendar.service';
@@ -25,6 +26,20 @@ describe('resolveEventFormat: the column, then an offered legacy config.eventTyp
 
   it('reads a legacy format that is not offered yet as speed networking', () => {
     expect(resolveEventFormat({ config: { eventType: 'webinar' } })).toBe('speed_networking');
+  });
+
+  it('reads a row from before 26 Oct tagged physical_event, with no place, as the speed networking it ran as', () => {
+    // Its column says speed networking (migration 111's default): read by the column, it stays speed networking.
+    expect(resolveEventFormat({ format: 'speed_networking', config: { eventType: 'physical_event', numberOfRounds: 5 } }))
+      .toBe('speed_networking');
+    // Its config alone, as production's duplicate button posts it: no place, so not an in-person event.
+    expect(resolveEventFormat({ config: { eventType: 'physical_event', numberOfRounds: 5 } })).toBe('speed_networking');
+    expect(resolveEventFormat({ config: { eventType: 'physical_event', location: '   ' } })).toBe('speed_networking');
+  });
+
+  it('reads an in-person config with its place as in person (production duplicating a preview event)', () => {
+    expect(resolveEventFormat({ config: { eventType: 'physical_event', location: 'The Ivy, London', durationMinutes: 90 } }))
+      .toBe('physical_event');
   });
 
   it('lets the column win over the legacy config value', () => {
@@ -82,6 +97,23 @@ describe('formats a pod may hold', () => {
     expect(defaultEventFormat(PodType.REASON)).toBe('video_meeting');
   });
 
+  it('In person is offered only to a caller that asks for it, in every pod type but Webinar and Chat', () => {
+    expect(formatOffered('physical_event')).toBe(false);
+    expect(formatOffered('physical_event', IN_PERSON_ENABLED_CLIENTS)).toBe(true);
+    expect(formatOffered('webinar', IN_PERSON_ENABLED_CLIENTS)).toBe(false);
+    expect(eventFormatsForPod(PodType.REASON, IN_PERSON_ENABLED_CLIENTS)).toEqual(['video_meeting', 'speed_networking', 'physical_event']);
+    expect(eventFormatsForPod(PodType.TWO_SIDED_NETWORKING, IN_PERSON_ENABLED_CLIENTS))
+      .toEqual(['speed_networking', 'video_meeting', 'physical_event']);
+    expect(eventFormatsForPod(PodType.WEBINAR, IN_PERSON_ENABLED_CLIENTS)).toEqual(['video_meeting']);
+    expect(eventFormatsForPod(PodType.CHAT, IN_PERSON_ENABLED_CLIENTS)).toEqual(['video_meeting']);
+  });
+
+  it('a Physical Event pod starts its events in person where that is offered, and on a video meeting where it is not', () => {
+    expect(defaultEventFormat(PodType.PHYSICAL_EVENT, IN_PERSON_ENABLED_CLIENTS)).toBe('physical_event');
+    expect(eventFormatsForPod(PodType.PHYSICAL_EVENT, IN_PERSON_ENABLED_CLIENTS)).toEqual(['physical_event', 'video_meeting']);
+    expect(defaultEventFormat(PodType.PHYSICAL_EVENT)).toBe('video_meeting');
+  });
+
   it('a speed-networking pod defaults to speed networking', () => {
     expect(eventFormatsForPod(PodType.SPEED_NETWORKING)).toEqual(['speed_networking', 'video_meeting']);
     expect(defaultEventFormat(PodType.SPEED_NETWORKING)).toBe('speed_networking');
@@ -106,7 +138,18 @@ describe('formatRefusal: why a pod cannot hold a format, in a sentence', () => {
 
   it('says a format is not offered yet, wherever it is asked for', () => {
     expect(formatRefusal(PodType.WEBINAR, 'webinar')).toBe("Webinar isn't offered yet.");
+    expect(formatRefusal(PodType.WEBINAR, 'webinar', IN_PERSON_ENABLED_CLIENTS)).toBe("Webinar isn't offered yet.");
+    // Asked as production's form asks (no offer), In person is still not offered.
     expect(formatRefusal(PodType.REASON, 'physical_event')).toBe("In person isn't offered yet.");
+  });
+
+  it('allows In person in the pod types that hold it, for a caller that offers it, and names the way out elsewhere', () => {
+    expect(formatRefusal(PodType.REASON, 'physical_event', IN_PERSON_ENABLED_CLIENTS)).toBeNull();
+    expect(formatRefusal(PodType.SPEED_NETWORKING, 'physical_event', IN_PERSON_ENABLED_CLIENTS)).toBeNull();
+    expect(formatRefusal(PodType.CHAT, 'physical_event', IN_PERSON_ENABLED_CLIENTS))
+      .toBe("In person isn't available in Chat pods. Choose Video meeting.");
+    expect(formatRefusal(PodType.WEBINAR, 'physical_event', IN_PERSON_ENABLED_CLIENTS))
+      .toBe("In person isn't available in Webinar pods. Choose Video meeting.");
   });
 });
 
@@ -115,12 +158,16 @@ describe('fields, defaults and the title', () => {
     expect(fieldsFor('video_meeting')).toEqual(['durationMinutes', 'maxParticipants']);
     expect(defaultsFor('video_meeting')).toEqual({ durationMinutes: 60, maxParticipants: 25 });
     expect(fieldsFor('speed_networking')).toEqual(
-      ['numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'matchingTemplateId', 'maxParticipants'],
+      ['numberOfRounds', 'roundMinutes', 'timerVisibility', 'matchingPolicy', 'cooldownMonths', 'matchingTemplateId', 'maxParticipants'],
     );
-    // The admin-only template has no default: "Default" is simply leaving it empty.
+    // The template has no default: "Default" is simply leaving it empty. The months field starts at 12 on a form.
     expect(defaultsFor('speed_networking')).toEqual({
-      numberOfRounds: 5, roundMinutes: 8, timerVisibility: 'last_10s', matchingPolicy: 'within_event', maxParticipants: 500,
+      numberOfRounds: 5, roundMinutes: 8, timerVisibility: 'last_10s', matchingPolicy: 'within_event', cooldownMonths: 12,
+      maxParticipants: 500,
     });
+    // A place has no default.
+    expect(fieldsFor('physical_event')).toEqual(['location', 'durationMinutes', 'maxParticipants']);
+    expect(defaultsFor('physical_event')).toEqual({ durationMinutes: 60, maxParticipants: 25 });
   });
 
   it('prefills the title from the format and the pod', () => {
@@ -164,6 +211,34 @@ describe('checkEventInput', () => {
   it('leaves an empty field to its default', () => {
     expect(checkEventInput('video_meeting', { durationMinutes: undefined, maxParticipants: '' })).toEqual([]);
   });
+
+  it('checks a place as text: at most 300 characters once trimmed, and text, not a number', () => {
+    expect(checkEventInput('physical_event', { location: `  ${'x'.repeat(300)}  `, durationMinutes: 480 })).toEqual([]);
+    expect(checkEventInput('physical_event', { location: 'x'.repeat(301) })).toEqual([
+      { field: 'location', message: 'Where must be 300 characters or fewer.' },
+    ]);
+    expect(checkEventInput('physical_event', { location: 42 })).toEqual([
+      { field: 'location', message: 'Where must be text.' },
+    ]);
+    expect(checkEventInput('physical_event', { durationMinutes: 481 })).toEqual([
+      { field: 'durationMinutes', message: 'Length must be between 15 and 480 minutes.' },
+    ]);
+  });
+});
+
+describe('missingRequired: what an event cannot be stored without', () => {
+  it('an in-person event needs its place; an empty or blank place is missing, in a sentence', () => {
+    const missing = [{ field: 'location', message: 'Say where the event happens: an address or a venue.' }];
+    expect(missingRequired('physical_event', {})).toEqual(missing);
+    expect(missingRequired('physical_event', { location: '   ' })).toEqual(missing);
+    expect(missingRequired('physical_event', null)).toEqual(missing);
+    expect(missingRequired('physical_event', { location: 'Room 4, Soho House' })).toEqual([]);
+  });
+
+  it('nothing else has a required setting', () => {
+    expect(missingRequired('speed_networking', {})).toEqual([]);
+    expect(missingRequired('video_meeting', {})).toEqual([]);
+  });
 });
 
 describe('normaliseConfig: the stored config for an event of this format', () => {
@@ -201,16 +276,43 @@ describe('normaliseConfig: the stored config for an event of this format', () =>
     expect(normaliseConfig('video_meeting', { durationMinutes: 90, maxParticipants: 8 }))
       .toEqual({ durationMinutes: 90, maxParticipants: 8, eventType: 'video_meeting' });
   });
+
+  it('stores an in-person event with its place trimmed, and nothing of another format', () => {
+    expect(normaliseConfig('physical_event', {
+      location: '  The Ivy, 1-5 West St, London  ', durationMinutes: 180, numberOfRounds: 5, roundDurationSeconds: 480,
+    })).toEqual({ location: 'The Ivy, 1-5 West St, London', durationMinutes: 180, maxParticipants: 25, eventType: 'physical_event' });
+    expect(normaliseConfig('physical_event', { location: '  ' })).toEqual({ durationMinutes: 60, maxParticipants: 25, eventType: 'physical_event' });
+  });
+
+  it('never carries a place into speed networking or a video meeting', () => {
+    expect(normaliseConfig('speed_networking', { location: 'Soho' })).not.toHaveProperty('location');
+    expect(normaliseConfig('video_meeting', { location: 'Soho' })).not.toHaveProperty('location');
+  });
+
+  it('stores the months of the cooldown rule only under that rule (12 when not given), so other events are stored as before', () => {
+    expect(normaliseConfig('speed_networking', { matchingPolicy: 'cooldown' })).toMatchObject({ matchingPolicy: 'cooldown', cooldownMonths: 12 });
+    expect(normaliseConfig('speed_networking', { matchingPolicy: 'cooldown', cooldownMonths: 6 })).toMatchObject({ cooldownMonths: 6 });
+    expect(normaliseConfig('speed_networking', { matchingPolicy: 'platform_wide' })).not.toHaveProperty('cooldownMonths');
+    expect(normaliseConfig('speed_networking', {})).not.toHaveProperty('cooldownMonths');
+  });
 });
 
 describe('valuesFromConfig: what an edit form shows', () => {
   it('shows a stored round length in minutes', () => {
     expect(valuesFromConfig('speed_networking', { numberOfRounds: 3, roundDurationSeconds: 150, maxParticipants: 40 }))
-      .toEqual({ numberOfRounds: 3, roundMinutes: 2.5, timerVisibility: 'last_10s', matchingPolicy: 'within_event', maxParticipants: 40 });
+      .toEqual({
+        numberOfRounds: 3, roundMinutes: 2.5, timerVisibility: 'last_10s', matchingPolicy: 'within_event', cooldownMonths: 12,
+        maxParticipants: 40,
+      });
   });
 
   it('shows a meeting’s length and capacity, defaulting what is missing', () => {
     expect(valuesFromConfig('video_meeting', { durationMinutes: 45 })).toEqual({ durationMinutes: 45, maxParticipants: 25 });
+  });
+
+  it('shows an in-person event’s place', () => {
+    expect(valuesFromConfig('physical_event', { location: 'Soho', durationMinutes: 120 }))
+      .toEqual({ location: 'Soho', durationMinutes: 120, maxParticipants: 25 });
   });
 });
 
@@ -234,6 +336,8 @@ describe('eventDurationMinutes: one formula for every length (token, calendar, i
   });
 
   it('is the length for a meeting, its default when unset', () => {
+    expect(eventDurationMinutes('physical_event', { durationMinutes: 480 })).toBe(480);
+    expect(eventDurationMinutes('physical_event', {})).toBe(60);
     expect(eventDurationMinutes('video_meeting', { durationMinutes: 90 })).toBe(90);
     expect(eventDurationMinutes('video_meeting', {})).toBe(60);
     expect(eventDurationMinutes('video_meeting', null)).toBe(60);

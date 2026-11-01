@@ -86,6 +86,7 @@ import {
 // Timer Manager
 import { clearSessionTimers, TimerCallbacks } from './handlers/timer-manager';
 import { markActive, clearActive } from '../presence/presence.service';
+import { endFinishedInPersonEvents, IN_PERSON_ENDING_INTERVAL_MS } from '../session/in-person-ending';
 
 let io: SocketServer;
 
@@ -328,6 +329,19 @@ export function initOrchestration(socketServer: SocketServer): void {
     logger.info({ mode: config.abandonedEventReaper, afterHours: config.abandonedEventAfterHours },
       'Abandoned-event reaper started');
   }
+
+  // ── In-person events end themselves (30 Oct 2026) ──
+  //
+  // Nobody goes live for an in-person event, so the reaper above (live statuses only) never sees one. Each minute
+  // the scheduled in-person events whose start plus length has passed are completed (in-person-ending.ts). Not
+  // behind the reaper's flag: this is the event's normal end, not a clean-up.
+  setInterval(async () => {
+    try {
+      await endFinishedInPersonEvents();
+    } catch (err) {
+      logger.warn({ err }, 'In-person ending tick failed');
+    }
+  }, IN_PERSON_ENDING_INTERVAL_MS);
 
   // ── Register socket handlers ──
 

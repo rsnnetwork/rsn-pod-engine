@@ -70,6 +70,12 @@ jest.mock('../../../services/calendar/calendar.service', () => ({
   meetingCalendarUid: (meetingId: string) => `meeting-${meetingId}`,
   __esModule: true,
 }));
+// 1 Nov 2026: the scheduling answer says whether this pair can ring each other for video (call-eligibility.ts).
+const mockCanCall = jest.fn().mockResolvedValue(true);
+jest.mock('../../../services/dm/call-eligibility', () => ({
+  canVideoCall: (...args: unknown[]) => mockCanCall(...args),
+  __esModule: true,
+}));
 jest.mock('../../../services/email/email.service', () => ({
   sendMeetingConfirmedEmail: (...args: unknown[]) => mockSendMtgEmail(...args),
   __esModule: true,
@@ -121,6 +127,7 @@ beforeEach(() => {
   mockInsertOn.mockResolvedValue({ message: { id: 'm1' }, conversationId: 'conv-1' });
   mockAreBlocked.mockClear();
   mockAreBlocked.mockResolvedValue(false);
+  mockCanCall.mockReset().mockResolvedValue(true);
 });
 
 /**
@@ -255,6 +262,24 @@ describe('getScheduling', () => {
   it('a stranger to the conversation is rejected', async () => {
     armConv([]);
     await expect(getScheduling('conv-1', 'u-intruder')).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockCanCall).not.toHaveBeenCalled();
+  });
+
+  // 1 Nov 2026 (L12): callsUnlocked keeps its 9 Sep meaning, because production's thread hides its scheduler
+  // once it is true; the new canCall beside it says whether the two can ring each other for video now.
+  it('callsUnlocked is still only a held meeting: false for a pair that never held one, true once calls_unlocked_at is set', async () => {
+    armConv([], { ...CONV, calls_unlocked_at: null });
+    expect(await getScheduling('conv-1', 'u-a')).toMatchObject({ callsUnlocked: false, canCall: true });
+    armConv([], { ...CONV, calls_unlocked_at: new Date('2026-10-30T16:40:00Z') });
+    expect(await getScheduling('conv-1', 'u-a')).toMatchObject({ callsUnlocked: true, canCall: true });
+  });
+
+  it('canCall asks whether the viewer may ring the other person, and is false when they may not (blocked, removed, not connected)', async () => {
+    armConv([], { ...CONV, calls_unlocked_at: new Date() });
+    mockCanCall.mockResolvedValue(false);
+    const s = await getScheduling('conv-1', 'u-b');
+    expect(mockCanCall).toHaveBeenCalledWith('u-b', 'u-a');
+    expect(s).toMatchObject({ callsUnlocked: true, canCall: false });
   });
 });
 

@@ -10,7 +10,7 @@ import {
 import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
-import { eventDurationOf } from '../session/event-duration';
+import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
 import * as circleService from '../circle/circle.service';
 import { mayInviteToCircle } from '../circle/circle-managers';
 import * as emailService from '../email/email.service';
@@ -347,6 +347,7 @@ export async function buildInviteContext(
         organizerName: host?.display_name || 'REASON',
         organizerEmail: host?.email,
         sessionId: target.sessionId,
+        place: eventPlaceOf(session),
       };
     }
   }
@@ -829,7 +830,16 @@ async function applyInviteRegistration(
       [invite.sessionId],
     );
     const podId = sessionRow.rows[0]?.podId;
-    if (podId) {
+    // T11 (1 Nov 2026), D4: an event with its own visibility takes its invitee without making them a member of its
+    // pod (an invite to one event is not an invite to the pod). A NULL event adds them to the pod first, as before.
+    const visibilityRow = await query<{ visibility: string | null }>(
+      `SELECT visibility FROM sessions WHERE id = $1`,
+      [invite.sessionId],
+    );
+    const ownVisibility = !!visibilityRow?.rows?.[0]?.visibility;
+    if (podId && ownVisibility) {
+      out.podId = podId;
+    } else if (podId) {
       try {
         await podService.addMember(podId, userId);
       } catch (err) {

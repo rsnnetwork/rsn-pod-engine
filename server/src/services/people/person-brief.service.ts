@@ -20,6 +20,7 @@ import { loadProfile, scoreFit, MATCH_THRESHOLD, BROWSE_THRESHOLD } from '../mat
 import { getPokeWith } from '../poke/poke.service';
 import { canMessage } from '../dm/dm.service';
 import { getResponse } from './person-response.service';
+import { canVideoCall } from '../dm/call-eligibility';
 
 const MESSAGE_REFUSALS: readonly MessageRefusal[] = ['self', 'blocked', 'not_mutual', 'no_encounter'];
 const refusalOf = (reason: string | undefined): MessageRefusal | null =>
@@ -160,8 +161,10 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
   // 30 Oct 2026: whether the viewer may message them, so the profile offers Message only when it can
   // send (a pair who met without both saying "meet again" may not). The same rule as
   // GET /dm/can-message/:userId. Asked last, on its own: its reads run one after another, so it never
-  // holds more than one connection, and the groups above stay at four.
-  const messaging = await canMessage(viewerId, targetId);
+  // holds more than one connection, and the groups above stay at four. Beside it, whether the viewer may ring them
+  // for a video call: the call routes' own helper (call-eligibility.ts, one read), never a second reading of the
+  // relationship (fix round 1).
+  const [messaging, canCall] = await Promise.all([canMessage(viewerId, targetId), canVideoCall(viewerId, targetId)]);
 
   // The brief can be aimed at ANY member by id, so the fit is judged on the public card only:
   // the scorer counts private interests as offers and words its reason from what matched.
@@ -213,6 +216,7 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
     entities,
     canMessage: messaging.allowed,
     canMessageReason: messaging.allowed ? null : refusalOf(messaging.reason),
+    canCall,
   };
 }
 

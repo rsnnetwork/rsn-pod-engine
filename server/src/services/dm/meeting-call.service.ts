@@ -12,18 +12,27 @@
 // pair and the scheduler steps aside. Calls then go request → accept, with a
 // duration the caller types (Stefan: "choose the intended duration, start once
 // the other accepts").
+//
+// 1 Nov 2026 (30 Oct review item 4, L12): "Users should be able to start a video call right away with a
+// connection, without scheduling a meeting." A VIDEO call now needs a connection (call-eligibility.ts),
+// not a held meeting; audio keeps the unlock. calls_unlocked_at keeps its meaning and is still set only by
+// a scheduled meeting both attended (production's thread hides its scheduler once it is set). An answered
+// call is a meetings row of its own (source 'instant', migration 124), written with the accept: it lists
+// under Events, and its window lets both people into the room. An offline callee is told in a sentence,
+// with no missed-call bell.
 
 import { query, transaction } from '../../db';
 import config from '../../config';
 import logger from '../../config/logger';
-import { AppError, NotFoundError } from '../../middleware/errors';
-import { ErrorCodes } from '@rsn/shared';
+import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
+import { ErrorCodes, type LiveCallRequest } from '@rsn/shared';
 import { getVideoProvider } from '../video/video.service';
 import * as blockService from '../block/block.service';
 import { isActive } from '../presence/presence.service';
 import { stampAttendance } from '../meetings/meeting.service';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
 import { CURRENT_MEETING_ID } from '../meetings/current-meeting';
+import { requireConnection, requireMembers } from './call-eligibility';
 
 const CALL_TOKEN_TTL_SECONDS = 4 * 60 * 60; // a call can run a while
 // The scheduled-meeting window: you may enter from 5 min before, and it stays
@@ -124,6 +133,32 @@ function hasUnendedMeeting(conv: ConvParticipants): boolean {
   return Date.now() <= end + MEETING_GRACE_MS;
 }
 
+/** A meetings row that lets the pair into the room now, and whose attendance entering it stamps. */
+interface StandingMeeting {
+  id: string;
+  source: 'scheduled' | 'instant';
+}
+
+/**
+ * The meeting standing on the conversation now: a meetings row, scheduled (not cancelled), whose window holds
+ * now (its start − 5 min … its end + 30 min). A booked one counts only when it is the one the conversation names
+ * (the guarded pointer, current-meeting.ts: a stale row is never stamped); an answered call counts as itself.
+ * When both stand, the booked meeting wins: entering in its window is attending it.
+ */
+async function standingMeeting(conv: ConvParticipants): Promise<StandingMeeting | null> {
+  const r = await query<StandingMeeting>(
+    `SELECT id, source FROM meetings
+      WHERE conversation_id = $1 AND status = 'scheduled'
+        AND (source = 'instant' OR id = $2)
+        AND start_at - INTERVAL '5 minutes' <= NOW()
+        AND NOW() <= start_at + (duration_min + 30) * INTERVAL '1 minute'
+      ORDER BY (source = 'scheduled') DESC, start_at DESC
+      LIMIT 1`,
+    [conv.id, conv.current_meeting_id],
+  );
+  return r.rows[0] ?? null;
+}
+
 /** The refusal production's call screen shows, above its "Back to chat", when there is no meeting to enter. */
 async function noMeetingToJoin(conversationId: string): Promise<AppError> {
   const latest = await query<{ status: string }>(
@@ -136,25 +171,31 @@ async function noMeetingToJoin(conversationId: string): Promise<AppError> {
   return new AppError(403, ErrorCodes.AUTH_FORBIDDEN, message);
 }
 
-/**
- * Entering the room inside the scheduled meeting's window counts as attending it, on the meeting's
- * own row (26 Oct 2026: the "attended" Events shows), whether or not calls are already unlocked.
- * Before they are, it is also stamped on the conversation; once BOTH sides have attended, calls
- * unlock for the pair and both clients are told (the scheduler goes away, the call buttons appear).
- * Both stamps are one transaction, the conversation first: the order every booking locks them in.
- */
-async function recordScheduledJoin(conv: ConvParticipants, userId: string): Promise<void> {
-  if (!conv.meeting_start_at) return; // nothing scheduled → nothing to attend
+/** The conversation's scheduled meeting window (start − 5 min … end + 30 min) holds now. */
+function insideScheduledWindow(conv: ConvParticipants): boolean {
+  if (!conv.meeting_start_at) return false; // nothing scheduled → nothing to attend
   const start = conv.meeting_start_at.getTime();
   const end = start + (conv.meeting_duration_min ?? 30) * 60_000;
   const now = Date.now();
-  if (now < start - EARLY_JOIN_MS || now > end + MEETING_GRACE_MS) return; // outside the window
+  return now >= start - EARLY_JOIN_MS && now <= end + MEETING_GRACE_MS;
+}
 
-  const meetingId = conv.current_meeting_id;
-  if (conv.calls_unlocked_at && !meetingId) return; // nothing left to stamp
+/**
+ * Entering the room counts as attending the meeting that stands (standingMeeting), on that meeting's
+ * own row (26 Oct 2026: the "attended" Events shows): the scheduled meeting inside its window, whether
+ * or not calls are already unlocked, or else an answered call (1 Nov 2026).
+ * Inside the scheduled meeting's window, and before calls unlock, it is also stamped on the conversation;
+ * once BOTH sides have attended, calls unlock for the pair and both clients are told (the scheduler goes
+ * away, the call buttons appear). An answered call never stamps the conversation, so it never unlocks.
+ * Both stamps are one transaction, the conversation first: the order every booking locks them in.
+ */
+async function recordJoin(conv: ConvParticipants, userId: string, standing: StandingMeeting | null): Promise<void> {
+  const stampConversation = !conv.calls_unlocked_at && insideScheduledWindow(conv);
+  if (!stampConversation && !standing) return; // nothing to attend, or nothing left to stamp
+  const meetingId = standing?.id ?? null;
   const { attended, unlocked } = await transaction(async (client) => {
     let bothJoined = false;
-    if (!conv.calls_unlocked_at) {
+    if (stampConversation) {
       const col = conv.iAmA ? 'meeting_joined_a_at' : 'meeting_joined_b_at';
       const stamped = await client.query<{ a: Date | null; b: Date | null }>(
         `UPDATE dm_conversations SET ${col} = COALESCE(${col}, NOW())
@@ -198,9 +239,11 @@ export async function getCallToken(
   // 26 Oct 2026: before calls unlock, the room is the scheduled meeting's. It is never refused for
   // being early (production's MeetPage mints this token on mount, under its own countdown); it is
   // refused once no meeting stands (none booked, cancelled, or over), so an old Join lands on a clear
-  // sentence instead of an empty room.
-  if (!conv.calls_unlocked_at && !hasUnendedMeeting(conv)) throw await noMeetingToJoin(conversationId);
-  await recordScheduledJoin(conv, userId);
+  // sentence instead of an empty room. 1 Nov 2026: an answered call standing (its own meetings row)
+  // lets the two in too, whatever the conversation's schedule says.
+  const standing = await standingMeeting(conv);
+  if (!conv.calls_unlocked_at && !hasUnendedMeeting(conv) && !standing) throw await noMeetingToJoin(conversationId);
+  await recordJoin(conv, userId, standing);
   const me = (await query<{ display_name: string | null }>(
     `SELECT display_name FROM users WHERE id = $1`, [userId],
   )).rows[0];
@@ -254,10 +297,50 @@ function isExpired(rq: RequestRow): boolean {
 }
 
 /**
- * Ask the partner for a call of a chosen length. Requires calls to be unlocked
- * (first meeting happened) and the partner to be online right now. Rings them
- * with a bell notification + a live `call:request`, and leaves a line in the
- * thread. The caller then waits for accept/decline.
+ * Tell both people's screens that the pair's call changed: the conversation (its thread and scheduler) and each
+ * one's own calls (user:<id>:calls, the app-wide incoming and outgoing call reads). A tag of its own, so a busy
+ * chat (user:<id>:dms on every message) never makes those reads run. Best-effort: the change is already saved.
+ */
+async function emitCallChanged(conversationId: string, userIds: string[]): Promise<void> {
+  try {
+    const { io } = await import('../../index');
+    const { emitEntities } = await import('../../realtime/emit');
+    const { E } = await import('../../realtime/entities');
+    await Promise.all([...new Set(userIds)].map((id) =>
+      emitEntities(io, [id], [E.dmConversation(conversationId), E.userCalls(id)])));
+  } catch (err) {
+    logger.warn({ err, conversationId }, 'call entity emit failed (non-fatal)');
+  }
+}
+
+/** Close the banner on the callee's other devices: the existing call:cancelled, to their own user room. */
+async function closeCalleeBanners(rq: RequestRow): Promise<void> {
+  try {
+    const { io } = await import('../../index');
+    io.to(`user:${rq.to_user_id}`).emit('call:cancelled', { requestId: rq.id, conversationId: rq.conversation_id });
+  } catch (err) {
+    logger.warn({ err, requestId: rq.id }, 'callee banner close failed (non-fatal)');
+  }
+}
+
+/** Video asks a real mutual connection; audio keeps its own rule (calls unlocked) and asks only the two accounts. */
+function requireCallable(kind: 'audio' | 'video', callerId: string, calleeId: string): Promise<{ name: string }> {
+  return kind === 'audio' ? requireMembers(callerId, calleeId) : requireConnection(callerId, calleeId);
+}
+
+/** A ring that leaves no line in the thread (the two may not message each other yet). */
+class SkipLine extends Error {}
+
+/** What the offline refusal says: exactly the plan's sentence (L12). */
+export function offlineSentence(name: string): string {
+  return `${name} isn't online right now. Send a message instead.`;
+}
+
+/**
+ * Ask the partner for a call of a chosen length. A video call needs a real mutual connection, no block and
+ * both members (requireConnection); an audio call keeps the 9 Sep rule, calls unlocked (the first meeting
+ * happened), with no block and both members (requireMembers). The partner must be online right now. Rings them with a bell notification + a live
+ * `call:request`, and leaves a line in the thread. The caller then waits for accept/decline.
  */
 export async function requestCall(
   conversationId: string,
@@ -266,12 +349,13 @@ export async function requestCall(
   durationMin: number,
 ): Promise<CallRequest> {
   const conv = await requireCallParticipant(conversationId, userId);
-  requireUnlocked(conv);
   const callKind: 'audio' | 'video' = kind === 'audio' ? 'audio' : 'video';
+  if (callKind === 'audio') requireUnlocked(conv);
+  const { name: partnerName } = await requireCallable(callKind, userId, conv.partnerId);
   const minutes = clampDuration(durationMin);
 
   if (!(await partnerIsOnline(conv.partnerId, conversationId))) {
-    throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'They are offline right now — try again when they are online.');
+    throw new ConflictError(ErrorCodes.CALL_PARTNER_OFFLINE, offlineSentence(partnerName));
   }
 
   // A stale unanswered request shouldn't block a new one.
@@ -291,7 +375,7 @@ export async function requestCall(
     inserted = ins.rows[0];
   } catch (err: any) {
     if (err?.code === '23505') {
-      throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'A call request is already waiting for an answer.');
+      throw new ConflictError(ErrorCodes.CALL_ALREADY_WAITING, 'A call request is already waiting for an answer.');
     }
     throw err;
   }
@@ -301,15 +385,21 @@ export async function requestCall(
   )).rows[0];
   const callerName = me?.display_name || 'Someone';
 
-  // A line in the thread so the request shows in history for both sides.
+  // A line in the thread so the request shows in history for both sides, only where the two may already
+  // message each other: one message in a thread lets both write freely (dm.service canMessage, its grandfather
+  // rule), so a ring must not be what opens it (fix round 1). Without the line the ring still rings, bell and all.
   try {
     const dmService = await import('./dm.service');
+    const [mine, theirs] = await Promise.all([
+      dmService.canMessage(userId, conv.partnerId), dmService.canMessage(conv.partnerId, userId),
+    ]);
+    if (!mine.allowed || !theirs.allowed) throw new SkipLine();
     const sent = await dmService.sendBroadcastMessage(userId, conv.partnerId, `📞 Requested a ${minutes}-min ${callKind} call`);
     const { io } = await import('../../index');
     const { broadcastDmMessage } = await import('../orchestration/handlers/dm-handlers');
     await broadcastDmMessage(io, userId, conv.partnerId, sent.conversationId, sent.message, { notify: false });
   } catch (err) {
-    logger.warn({ err, conversationId }, 'call request system message failed (non-fatal)');
+    if (!(err instanceof SkipLine)) logger.warn({ err, conversationId }, 'call request system message failed (non-fatal)');
   }
 
   // Ring the partner: bell notification + a live event they can accept/decline.
@@ -335,11 +425,26 @@ export async function requestCall(
   } catch (err) {
     logger.warn({ err, conversationId }, 'call request ring failed (non-fatal)');
   }
+  // A lapsed request this replaced, and the new one, on both people's screens.
+  await emitCallChanged(conversationId, [userId, conv.partnerId]);
 
   return {
     id: inserted.id, conversationId, fromUserId: userId, toUserId: conv.partnerId,
     kind: callKind, durationMin: minutes, status: 'pending', createdAt: inserted.created_at,
   };
+}
+
+/**
+ * Ring a person for a video call (POST /calls/user/:userId, 1 Nov 2026): for screens that know a person, not a
+ * conversation (the profile). The connection is checked FIRST, before the pair's conversation is found or made:
+ * a conversation itself makes the two a connection, so making one for a stranger would open the door it guards.
+ * Then it is requestCall, exactly as the thread's call button rings.
+ */
+export async function requestCallToUser(callerId: string, calleeId: string, durationMin: number): Promise<CallRequest> {
+  await requireConnection(callerId, calleeId);
+  const dmService = await import('./dm.service');
+  const conversationId = await dmService.findOrCreateConversation(callerId, calleeId);
+  return requestCall(conversationId, callerId, 'video', durationMin);
 }
 
 /** The live (pending, unexpired) request on a conversation, if any — lets a
@@ -355,16 +460,92 @@ export async function getPendingCallRequest(conversationId: string, userId: stri
   return r.rows[0] ? mapRequest(r.rows[0]) : null;
 }
 
-/** The callee accepts → the caller is told, and the callee gets a room token. */
+interface LiveRow extends RequestRow {
+  partner_name: string | null;
+}
+
+function mapLive(r: LiveRow): LiveCallRequest {
+  const createdAt = new Date(r.created_at);
+  return {
+    id: r.id, conversationId: r.conversation_id, fromUserId: r.from_user_id, toUserId: r.to_user_id,
+    partnerName: r.partner_name?.trim() || 'Member', kind: r.kind, durationMin: r.duration_min,
+    createdAt: createdAt.toISOString(), expiresAt: new Date(createdAt.getTime() + CALL_REQUEST_TTL_MS).toISOString(),
+  };
+}
+
+/**
+ * The newest unanswered, unexpired request on one side of me ('to' = ringing me, 'from' = rung by me), named after
+ * the other person, who is a member and not blocked either way. For any screen opened or refreshed while it rings.
+ * The other person's status check is inline: switch to activeMemberSql after T2.
+ */
+async function liveRequest(userId: string, side: 'to' | 'from'): Promise<LiveCallRequest | null> {
+  const mine = side === 'to' ? 'r.to_user_id' : 'r.from_user_id';
+  const theirs = side === 'to' ? 'r.from_user_id' : 'r.to_user_id';
+  const r = await query<LiveRow>(
+    `SELECT r.*, p.display_name AS partner_name
+       FROM call_requests r
+       JOIN users p ON p.id = ${theirs}
+      WHERE ${mine} = $1 AND r.status = 'pending' AND r.created_at >= NOW() - INTERVAL '2 minutes'
+        AND p.status = 'active'
+        AND NOT EXISTS (SELECT 1 FROM user_blocks b
+                         WHERE (b.blocker_id = $1 AND b.blocked_id = p.id) OR (b.blocker_id = p.id AND b.blocked_id = $1))
+      ORDER BY r.created_at DESC LIMIT 1`,
+    [userId],
+  );
+  return r.rows[0] ? mapLive(r.rows[0]) : null;
+}
+
+/** A call ringing me now, wherever I am in the app (the banner after a refresh). */
+export function getIncomingCallRequest(userId: string): Promise<LiveCallRequest | null> {
+  return liveRequest(userId, 'to');
+}
+
+/** A call I rang that is still waiting for an answer (the "Calling…" card after a refresh). */
+export function getOutgoingCallRequest(userId: string): Promise<LiveCallRequest | null> {
+  return liveRequest(userId, 'from');
+}
+
+/**
+ * The callee accepts → the call is a meeting, the caller is told, and the callee gets a room token.
+ *
+ * In one transaction: the request is claimed (pending → accepted, only once), and one meetings row is written
+ * for the call (1 Nov 2026): source 'instant', starting now, the length asked for, booked by the caller, and
+ * already counted as reminded so the reminder worker never picks it. The conversation's meeting columns and its
+ * pointer stay as they are: they describe the pair's scheduled meeting, and only that unlocks calls. A second
+ * accept (another device, a double press) finds the request taken and writes nothing.
+ */
 export async function acceptCallRequest(requestId: string, userId: string): Promise<CallToken & { conversationId: string }> {
   const rq = await loadRequest(requestId);
   if (rq.to_user_id !== userId) throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Not your call request');
   if (rq.status !== 'pending') throw new AppError(409, ErrorCodes.VALIDATION_ERROR, `This call request was ${rq.status}.`);
   if (isExpired(rq)) {
     await query(`UPDATE call_requests SET status = 'expired', responded_at = NOW() WHERE id = $1`, [requestId]);
+    await emitCallChanged(rq.conversation_id, [rq.from_user_id, rq.to_user_id]);
     throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'This call request has expired — ask them to call again.');
   }
-  await query(`UPDATE call_requests SET status = 'accepted', responded_at = NOW() WHERE id = $1 AND status = 'pending'`, [requestId]);
+  // Blocked, closed or no longer connected since it rang: nothing is answered.
+  const conv = await requireCallParticipant(rq.conversation_id, userId);
+  await requireCallable(rq.kind, userId, rq.from_user_id);
+
+  const meetingId = await transaction(async (client) => {
+    const claimed = await client.query<{ id: string }>(
+      `UPDATE call_requests SET status = 'accepted', responded_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [requestId],
+    );
+    if (!claimed.rows[0]) return null;
+    const written = await client.query<{ id: string }>(
+      `INSERT INTO meetings (conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, source, confirmed_by, reminder_sent_at)
+       VALUES ($1, $2, $3, NOW(), $4, $5, 'instant', $6, NOW())
+       RETURNING id`,
+      [conv.id, conv.user_a_id, conv.user_b_id, rq.duration_min, rq.kind, rq.from_user_id],
+    );
+    return written.rows[0].id;
+  });
+  if (!meetingId) {
+    const now = await loadRequest(requestId);
+    throw new AppError(409, ErrorCodes.VALIDATION_ERROR, `This call request was ${now.status}.`);
+  }
+
   try {
     const { io } = await import('../../index');
     io.to(`user:${rq.from_user_id}`).emit('call:accepted', {
@@ -373,16 +554,31 @@ export async function acceptCallRequest(requestId: string, userId: string): Prom
   } catch (err) {
     logger.warn({ err, requestId }, 'call accepted signal failed (non-fatal)');
   }
+  await closeCalleeBanners(rq);
+  await emitCallChanged(rq.conversation_id, [rq.from_user_id, rq.to_user_id]);
+  await emitMeetingChanged(meetingId, [rq.from_user_id, rq.to_user_id]);
   const token = await getCallToken(rq.conversation_id, userId, rq.kind);
   return { ...token, conversationId: rq.conversation_id };
 }
 
-/** The callee declines → the caller is told. */
+/**
+ * Claim a request that still waits for an answer, as the accept does: one statement, so of an accept, a decline and
+ * a cancel landing at once exactly one changes it, and the others find it taken (fix round 1).
+ */
+async function claimAnswer(requestId: string, status: 'declined' | 'cancelled'): Promise<boolean> {
+  const claimed = await query<{ id: string }>(
+    `UPDATE call_requests SET status = '${status}', responded_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING id`,
+    [requestId],
+  );
+  return claimed.rows.length > 0;
+}
+
+/** The callee declines → the caller is told. Already answered (here or on another device): nothing is said. */
 export async function declineCallRequest(requestId: string, userId: string): Promise<void> {
   const rq = await loadRequest(requestId);
   if (rq.to_user_id !== userId) throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Not your call request');
   if (rq.status !== 'pending') return; // already answered — idempotent
-  await query(`UPDATE call_requests SET status = 'declined', responded_at = NOW() WHERE id = $1`, [requestId]);
+  if (!(await claimAnswer(requestId, 'declined'))) return; // answered on another device a moment ago
   const me = (await query<{ display_name: string | null }>(`SELECT display_name FROM users WHERE id = $1`, [userId])).rows[0];
   try {
     const { io } = await import('../../index');
@@ -392,18 +588,34 @@ export async function declineCallRequest(requestId: string, userId: string): Pro
   } catch (err) {
     logger.warn({ err, requestId }, 'call declined signal failed (non-fatal)');
   }
+  await closeCalleeBanners(rq);
+  await emitCallChanged(rq.conversation_id, [rq.from_user_id, rq.to_user_id]);
 }
 
-/** The caller withdraws a request they're still waiting on → the callee is told. */
-export async function cancelCallRequest(requestId: string, userId: string): Promise<void> {
+/** What a withdraw ends as: cancelled, or whatever answered first (accepted: the caller goes into the room). */
+export interface CancelOutcome {
+  status: CallRequestStatus;
+  conversationId: string;
+  kind: 'audio' | 'video';
+}
+
+/**
+ * The caller withdraws a request they're still waiting on → the callee is told. When the answer came first (the
+ * callee accepted as the caller pressed Cancel), nothing changes and the answer says so, so the caller's screen can
+ * still go into the room the callee is in.
+ */
+export async function cancelCallRequest(requestId: string, userId: string): Promise<CancelOutcome> {
   const rq = await loadRequest(requestId);
   if (rq.from_user_id !== userId) throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Not your call request');
-  if (rq.status !== 'pending') return; // idempotent
-  await query(`UPDATE call_requests SET status = 'cancelled', responded_at = NOW() WHERE id = $1`, [requestId]);
+  const outcome = (status: CallRequestStatus): CancelOutcome => ({ status, conversationId: rq.conversation_id, kind: rq.kind });
+  if (rq.status !== 'pending') return outcome(rq.status); // idempotent
+  if (!(await claimAnswer(requestId, 'cancelled'))) return outcome((await loadRequest(requestId)).status);
   try {
     const { io } = await import('../../index');
     io.to(`user:${rq.to_user_id}`).emit('call:cancelled', { requestId, conversationId: rq.conversation_id });
   } catch (err) {
     logger.warn({ err, requestId }, 'call cancelled signal failed (non-fatal)');
   }
+  await emitCallChanged(rq.conversation_id, [rq.from_user_id, rq.to_user_id]);
+  return outcome('cancelled');
 }

@@ -5,7 +5,7 @@ import { Resend } from 'resend';
 import { v4 as uuid } from 'uuid';
 import config from '../../config';
 import logger from '../../config/logger';
-import { generateIcsContent } from '../calendar/calendar.service';
+import { generateIcsContent, eventCalendarEntry } from '../calendar/calendar.service';
 import { meetingTime } from '../meetings/meeting-time';
 import { query } from '../../db';
 import { isReservedTestAddress, maskAddress } from '../identity/reserved-address';
@@ -547,6 +547,40 @@ export async function sendHostRecapEmail(
   logger.warn({ to, sessionTitle: data.sessionTitle }, 'No email provider — host recap email skipped');
 }
 
+// ─── An in-person event's place, in an event email (30 Oct 2026) ───────────────────────────────
+
+/**
+ * The lines an in-person event's invite and registration emails add: "In person, at {place}." and its Google
+ * Calendar and Outlook.com links, which carry the place. Empty for an event online, whose emails are unchanged.
+ */
+function inPersonLines(calendarEvent: InviteEmailData['calendarEvent']): { html: string; text: string } {
+  if (!calendarEvent?.place) return { html: '', text: '' };
+  const { links } = eventCalendarEntry(calendarEvent, config.clientUrl);
+  const linkStyle = 'display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;';
+  const html = `<p data-place style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 16px 0;text-align:center;">In person, at <strong>${escapeHtml(calendarEvent.place)}</strong>.</p>`
+    + (links
+      ? `<p style="text-align:center;margin:0 0 16px 0;"><a href="${escapeAttr(links.google)}" style="${linkStyle}">Add to Google Calendar</a>`
+        + ` &nbsp;·&nbsp; <a href="${escapeAttr(links.outlook)}" style="${linkStyle}">Add to Outlook.com</a></p>`
+      : '');
+  const text = `In person, at ${calendarEvent.place}.`
+    + (links ? `\nAdd to Google Calendar: ${links.google}\nAdd to Outlook.com: ${links.outlook}` : '');
+  return { html, text };
+}
+
+/** The emailed .ics of an event: an in-person event's place as LOCATION, else the event's page as before. */
+function eventIcs(calendarEvent: NonNullable<InviteEmailData['calendarEvent']>): string {
+  const entry = eventCalendarEntry(calendarEvent, config.clientUrl);
+  return generateIcsContent({
+    title: calendarEvent.title,
+    description: entry.description,
+    startTime: calendarEvent.startTime,
+    durationMinutes: calendarEvent.durationMinutes,
+    organizerName: calendarEvent.organizerName,
+    organizerEmail: calendarEvent.organizerEmail,
+    location: entry.location,
+  });
+}
+
 // ─── Invite Email ───────────────────────────────────────────────────────────
 
 interface InviteEmailData {
@@ -562,6 +596,8 @@ interface InviteEmailData {
     organizerName?: string;
     organizerEmail?: string;
     sessionId?: string;
+    /** Where an in-person event happens (30 Oct 2026); absent for an event online. */
+    place?: string;
   };
 }
 
@@ -596,6 +632,7 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
   const whatHappensNext = data.type === 'platform'
     ? 'Joining takes a few minutes: a short conversation about who you want to meet, and you are in.'
     : '';
+  const place = inPersonLines(data.calendarEvent);
 
   const html = `
     <!DOCTYPE html>
@@ -615,6 +652,7 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
             ${whatItIs}
           </p>
           ${whatHappensNext ? `<p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 24px 0;">${whatHappensNext}</p>` : ''}
+          ${place.html}
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${escapeAttr(data.inviteUrl)}"
@@ -638,7 +676,7 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
     </html>
   `;
 
-  const text = [openingText, '', whatItIs, whatHappensNext, '', `Accept Invite: ${data.inviteUrl}`, '', 'REASON — Meet people you have a reason to know.']
+  const text = [openingText, '', whatItIs, whatHappensNext, ...(place.text ? ['', place.text] : []), '', `Accept Invite: ${data.inviteUrl}`, '', 'REASON — Meet people you have a reason to know.']
     .filter((line, i, all) => !(line === '' && all[i - 1] === ''))
     .join('\n');
 
@@ -662,17 +700,7 @@ export async function sendInviteEmail(
 
     // Attach .ics calendar invite for session invites with scheduled time
     if (data.calendarEvent) {
-      const icsContent = generateIcsContent({
-        title: data.calendarEvent.title,
-        description: data.calendarEvent.description || `REASON event — ${data.calendarEvent.title}`,
-        startTime: data.calendarEvent.startTime,
-        durationMinutes: data.calendarEvent.durationMinutes,
-        organizerName: data.calendarEvent.organizerName,
-        organizerEmail: data.calendarEvent.organizerEmail,
-        location: data.calendarEvent.sessionId
-          ? `${config.clientUrl}/sessions/${data.calendarEvent.sessionId}`
-          : undefined,
-      });
+      const icsContent = eventIcs(data.calendarEvent);
       attachments.push({ filename: 'event.ics', content: icsContent });
     }
 
@@ -700,6 +728,8 @@ interface RegistrationConfirmationData {
     organizerName?: string;
     organizerEmail?: string;
     sessionId?: string;
+    /** Where an in-person event happens (30 Oct 2026); absent for an event online. */
+    place?: string;
   };
 }
 
@@ -714,6 +744,7 @@ export async function sendSessionRegistrationConfirmationEmail(
   const calendarNote = data.calendarEvent
     ? `<p style="color:#64748b;font-size:13px;line-height:1.5;margin:20px 0 0 0;text-align:center;">A calendar invite is attached — add it to get a reminder 15 minutes before.</p>`
     : '';
+  const place = inPersonLines(data.calendarEvent);
   const subject = `You're registered — ${data.sessionTitle}`;
   const html = `
     <!DOCTYPE html>
@@ -730,6 +761,7 @@ export async function sendSessionRegistrationConfirmationEmail(
             You're all set for <strong>${escapeHtml(data.sessionTitle)}</strong>.
           </p>
           ${whenLine}
+          ${place.html}
           <div style="text-align:center;margin:32px 0;">
             <a href="${escapeAttr(data.sessionUrl)}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
@@ -747,21 +779,12 @@ export async function sendSessionRegistrationConfirmationEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `You're registered for ${data.sessionTitle}.${data.calendarEvent ? ' A calendar invite is attached.' : ''}\n\nView event: ${data.sessionUrl}\n\nREASON — Meet people you have a reason to know.`;
+    const placeText = place.text ? `\n\n${place.text}` : '';
+    const text = `You're registered for ${data.sessionTitle}.${data.calendarEvent ? ' A calendar invite is attached.' : ''}${placeText}\n\nView event: ${data.sessionUrl}\n\nREASON — Meet people you have a reason to know.`;
     const attachments: { filename: string; content: string }[] = [];
 
     if (data.calendarEvent) {
-      const icsContent = generateIcsContent({
-        title: data.calendarEvent.title,
-        description: data.calendarEvent.description || `REASON event — ${data.calendarEvent.title}`,
-        startTime: data.calendarEvent.startTime,
-        durationMinutes: data.calendarEvent.durationMinutes,
-        organizerName: data.calendarEvent.organizerName,
-        organizerEmail: data.calendarEvent.organizerEmail,
-        location: data.calendarEvent.sessionId
-          ? `${config.clientUrl}/sessions/${data.calendarEvent.sessionId}`
-          : undefined,
-      });
+      const icsContent = eventIcs(data.calendarEvent);
       attachments.push({ filename: 'event.ics', content: icsContent });
     }
 

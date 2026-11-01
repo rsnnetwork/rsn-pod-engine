@@ -482,6 +482,33 @@ export const meetingCancelLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have cancelled a lot of meetings this hour. Try again later.' } },
 });
 
+// Ringing someone for a call (1 Nov 2026, L12). Each ring is a bell, a banner on every screen the other person
+// has open and a line in the thread, so a member rings at most 10 calls in 10 minutes, whether from a profile
+// (POST /calls/user/:userId) or a thread (POST /dm/conversations/:id/call/request): one limiter, one bucket.
+// Only a ring counts: a refusal (offline, not a connection, one already ringing) rang nobody.
+export const callRequestLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-request'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have rung a lot of calls in the last few minutes. Try again in a little while.' } },
+});
+
+// The call ringing me, or the one I rang (1 Nov 2026): read when the app opens, after a refresh and when the
+// connection comes back, and again when a call changes. A minute's worth is far more than a member's screens ask.
+export const callReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // Feedback after a meeting (30 Oct 2026). Each person answers once per meeting and may change the answer, so 30 an hour
 // is far more than anyone needs; each save tells every admin's feedback list. Keyed per member: the route signs in first.
 // Only a save that happened counts: a refusal (not your meeting, not started yet) changed nothing.
@@ -519,6 +546,18 @@ export const adminFeedbackExportLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have downloaded the feedback a lot just now. Try again in a few minutes.' } },
 });
 
+// The admin onboarding answers CSV (30 Oct review, 2.3): every active member at once, and each download is written to
+// the audit log, so 10 in 10 minutes per admin.
+export const adminOnboardingExportLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('admin-onboarding-export'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have downloaded the onboarding answers a lot just now. Try again in a few minutes.' } },
+});
+
 // A meeting's calendar file (1 Nov 2026, T7): one press of "Add to calendar" is one read, so 20 a minute per member
 // is far more than a person needs, and keeps a script from reading every meeting's file in a loop.
 export const meetingCalendarLimiter = rateLimit({
@@ -528,6 +567,18 @@ export const meetingCalendarLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
   store: buildStore('meeting-calendar'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// The speed-networking presets (30 Oct 2026, T12): read once when an event form opens and again when a preset
+// changes, so 60 a minute per member leaves room for a busy organiser and none for a loop.
+export const matchingPresetsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('matching-presets'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
@@ -613,4 +664,38 @@ export const eventChatWriteLimiter = rateLimit({
   keyGenerator: userOrIpKey,
   store: buildStore('event-chat-write'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// The notifications page (30 Oct 2026): each "Load more" and each change to the list reads a page. Sixty a minute per
+// member is far more than anyone scrolls, while a runaway client is stopped. The bell's own read (no query string) is
+// never counted here: production's bell polls it every 30 seconds and refreshes on every change, as it always has.
+export const notificationPageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  skip: (req) => req.query.before === undefined && req.query.limit === undefined,
+  store: buildStore('notification-page'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// T11 (1 Nov 2026): requests to join an event that asks the host to approve each place, and the host's answers.
+export const eventRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 60,                   // 60 request writes per hour per person (asking, withdrawing, approving, declining)
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-request'),
+  handler: (_req, res) => {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'You have done that a lot this hour. Please try again later.',
+      },
+    };
+    res.status(429).json(response);
+  },
 });

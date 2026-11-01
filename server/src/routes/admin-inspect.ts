@@ -21,6 +21,7 @@ import * as stageEventsRepo from '../services/onboarding/stage-events.repo';
 import * as blockService from '../services/block/block.service';
 import { REQUEST_MESSAGE_MAX } from '../services/poke/request-message';
 import { combinedRequestMessage, requestText } from '../services/poke/request-text';
+import { ANSWER_COLUMNS, answersFromRow, type AnswerRow } from '../services/onboarding/onboarding-report';
 
 const router = Router();
 
@@ -45,7 +46,7 @@ router.get(
       await assertUserExists(userId);
 
       const [joined, stageEvents] = await Promise.all([
-        query<{
+        query<AnswerRow & {
           linkedin_url: string | null;
           onboarding_status: string;
           last_onboarded_at: Date | null;
@@ -67,7 +68,8 @@ router.get(
                   uip.enrichment_started_at, uip.enrichment_completed_at,
                   uip.inferred_profile->'enriched' AS enrichment_result,
                   uip.onboarding_conversation, uip.matching_intent, uip.matching_tags,
-                  uip.avoid_preferences, uip.profile_strength, uip.confidence
+                  uip.avoid_preferences, uip.profile_strength, uip.confidence,
+                  ${ANSWER_COLUMNS}
              FROM users u
              LEFT JOIN user_intent_profiles uip ON uip.user_id = u.id
             WHERE u.id = $1`,
@@ -102,6 +104,9 @@ router.get(
           confidence: r.confidence ?? {},
         },
         stageEvents,
+        // 30 Oct review (2.3): the answers as the member gave them, for the "Onboarding answers" card. Added
+        // beside the fields above, which production's inspector reads unchanged.
+        answers: answersFromRow(r),
       };
 
       const response: ApiResponse = { success: true, data };

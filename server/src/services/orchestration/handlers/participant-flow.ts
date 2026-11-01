@@ -15,11 +15,12 @@ import {
 import {
   ActiveSession, activeSessions, disconnectTimeouts, withSessionGuard, withMatchGenerationLock,
   sessionRoom, userRoom, getUserIdFromSocket,
-  emitRatingWindowOnce, activeFormat,
+  emitRatingWindowOnce, activeFormat, refuseIfNoVideoRoom,
 } from '../state/session-state';
 import { sendJoinChatHistory } from './chat-handlers';
 import * as sessionService from '../../session/session.service';
-import { eventRoomAdmission, mayClaimBreakoutRoom } from '../../session/session-access';
+import { mayClaimBreakoutRoom } from '../../session/session-access';
+import { canEnterRoom } from '../../session/event-access';
 import { decideRoomEntry, refuseOnce } from '../event-room-entry';
 import * as matchingService from '../../matching/matching.service';
 import * as ratingService from '../../rating/rating.service';
@@ -456,6 +457,8 @@ export async function handleJoinSession(
       }
 
       const session = await sessionService.getSessionById(data.sessionId);
+      // 30 Oct 2026 — an in-person event has no live room to join (kept apart from the room-entry checks below).
+      if (refuseIfNoVideoRoom(socket, data.sessionId, resolveEventFormat(session))) return;
 
       // ── Single-socket enforcement for same session ──
       // If this user already has a socket in this session, evict the old one
@@ -1168,7 +1171,7 @@ export async function handleLeaveSession(
     // as before. T2 fix round 1 (1 Nov 2026): a socket that was in the event's room always leaves in full, whatever
     // the admission read says now (someone let in over capacity, a co-host stood down), so a partner's breakout room
     // gets its grace and their status is written; only a socket that was never in the room stops here.
-    const admission = await eventRoomAdmission(data.sessionId, userId, socket.data?.role).catch(() => null);
+    const admission = await canEnterRoom(data.sessionId, userId, socket.data?.role).catch(() => null);
     if (admission === 'refused' && !wasInRoom) return;
 
     // Check if leaving user is host

@@ -14,7 +14,7 @@ import type { PoolClient } from 'pg';
 import type { Server as SocketServer } from 'socket.io';
 import {
   ErrorCodes, MEETING_GRACE_MIN, meetingPhase,
-  type Meeting, type MeetingKind, type MeetingList, type MeetingScope, type MeetingStatus, type MeetingSummary,
+  type Meeting, type MeetingKind, type MeetingList, type MeetingScope, type MeetingSource, type MeetingStatus, type MeetingSummary,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
 import config from '../../config';
@@ -43,6 +43,8 @@ interface MeetingRow {
   joined_b_at: Date | null;
   calendar_sequence: number;
   confirmed_by: string | null;
+  /** Agreed in the scheduler, or an answered call (migration 124). */
+  source: MeetingSource;
   partner_id: string;
   partner_name: string | null;
   partner_avatar_url: string | null;
@@ -51,7 +53,7 @@ interface MeetingRow {
 
 /** The meeting's own columns, as a write returns them. */
 const OWN_COLUMNS = `id, conversation_id, user_a_id, user_b_id, start_at, duration_min, kind, status,
-         context, joined_a_at, joined_b_at, calendar_sequence, confirmed_by`;
+         context, joined_a_at, joined_b_at, calendar_sequence, confirmed_by, source`;
 
 /**
  * $1 is the viewer. Their meetings, each joined to the other person, leaving out every pair a block
@@ -67,7 +69,7 @@ const VIEWERS_MEETINGS = `
 
 const SELECT_MEETINGS = `
   SELECT m.id, m.conversation_id, m.user_a_id, m.user_b_id, m.start_at, m.duration_min, m.kind, m.status,
-         m.context, m.joined_a_at, m.joined_b_at, m.calendar_sequence, m.confirmed_by,
+         m.context, m.joined_a_at, m.joined_b_at, m.calendar_sequence, m.confirmed_by, m.source,
          p.id AS partner_id, p.display_name AS partner_name, p.avatar_url AS partner_avatar_url, p.status AS partner_status
   ${VIEWERS_MEETINGS}`;
 
@@ -80,6 +82,15 @@ const MAX_TIED = 50;
 function partnerName(row: { partner_name: string | null; partner_status: string }): string {
   if (row.partner_status !== 'active') return 'Former member';
   return row.partner_name?.trim() || 'Member';
+}
+
+/**
+ * Where Join goes. A scheduled meeting's room opens on its countdown (scheduled=1); an answered call is happening
+ * already, so its room opens straight away: with scheduled=1 the room would count down to the pair's next booked
+ * meeting instead.
+ */
+function joinPathOf(row: Pick<MeetingRow, 'conversation_id' | 'kind' | 'source'>): string {
+  return row.source === 'instant' ? `/meet/${row.conversation_id}?kind=${row.kind}` : meetingJoinPath(row.conversation_id, row.kind);
 }
 
 function toMeeting(row: MeetingRow, viewerId: string, now: Date): Meeting {
@@ -95,8 +106,9 @@ function toMeeting(row: MeetingRow, viewerId: string, now: Date): Meeting {
     status: row.status,
     phase: meetingPhase({ status: row.status, startAt: row.start_at, durationMin: row.duration_min }, now),
     context: row.context,
-    joinPath: meetingJoinPath(row.conversation_id, row.kind),
+    joinPath: joinPathOf(row),
     attended: { me: !!(iAmA ? row.joined_a_at : row.joined_b_at), them: !!(iAmA ? row.joined_b_at : row.joined_a_at) },
+    source: row.source,
   };
 }
 
@@ -226,7 +238,7 @@ function tooLateToCancel(meeting: { start_at: Date; duration_min: number }, now:
 /**
  * Cancel a meeting, once. In one transaction, with the conversation row locked first (the order
  * every booking and move takes, so a cancel and a move of the same meeting settle in turn):
- *   - the row is claimed only while it is scheduled and has not started;
+ *   - the row is claimed only while it is scheduled, was booked (an answered call never is), and has not started;
  *   - the conversation's meeting_* columns are cleared, so production's banner and Join go away;
  *   - the time is taken off the canceller's own list, so a later save cannot book it again;
  *   - a "Meeting cancelled" card goes into the thread.
@@ -255,7 +267,7 @@ export async function cancelMeeting(userId: string, meetingId: string, now = new
       `UPDATE meetings
           SET status = 'cancelled', cancelled_by = $2, cancelled_at = NOW(),
               calendar_sequence = calendar_sequence + 1, updated_at = NOW()
-        WHERE id = $1 AND status = 'scheduled' AND start_at > $3
+        WHERE id = $1 AND status = 'scheduled' AND source = 'scheduled' AND start_at > $3
         RETURNING ${OWN_COLUMNS}`,
       [meetingId, userId, now],
     );

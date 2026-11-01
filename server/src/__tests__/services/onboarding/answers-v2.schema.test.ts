@@ -212,8 +212,10 @@ describe('confirm: the finished answers', () => {
     expect(issues(r).join('|')).toMatch(/canOffer\.0: Choose one of the answers shown\./);
   });
 
+  // Left out, it stays out (30 Oct review, 1.2): an answer saved in edit mode sends no profile, and only a confirm that
+  // sends one is held to "Where are you based?".
   it('the profile is optional, and a field left out stays out', () => {
-    expect(confirmSchemaV2.parse(GOOD).profile).toEqual({});
+    expect(confirmSchemaV2.parse(GOOD).profile).toBeUndefined();
     const r = confirmSchemaV2.parse({ ...GOOD, profile: { company: 'Vokt' } });
     expect(r.profile).toEqual({ company: 'Vokt' });
   });
@@ -234,21 +236,32 @@ describe('confirm: the finished answers', () => {
   });
 
   it('a role, company or industry is still tidied: a line break is a space, and the outer spaces go', () => {
-    expect(confirmSchemaV2.parse({ ...GOOD, profile: { jobTitle: '  Head\nPastry   Chef ' } }).profile.jobTitle).toBe('Head Pastry Chef');
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { jobTitle: '  Head\nPastry   Chef ' } }).profile!.jobTitle).toBe('Head Pastry Chef');
   });
 
   it('a blank name or time zone means "not given": the name can never be cleared', () => {
     const r = confirmSchemaV2.parse({ ...GOOD, profile: { displayName: '   ', timezone: '' } });
-    expect(r.profile.displayName).toBeNull();
-    expect(r.profile.timezone).toBeNull();
-    expect(confirmSchemaV2.parse({ ...GOOD, profile: { displayName: '' } }).profile.displayName).toBeNull();
+    expect(r.profile!.displayName).toBeNull();
+    expect(r.profile!.timezone).toBeNull();
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { displayName: '' } }).profile!.displayName).toBeNull();
   });
 
   it('accepts a real time zone and refuses an invented one', () => {
-    expect(confirmSchemaV2.parse({ ...GOOD, profile: { timezone: 'Asia/Kathmandu' } }).profile.timezone).not.toBeNull();
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { timezone: 'Asia/Kathmandu' } }).profile!.timezone).not.toBeNull();
     const bad = confirmSchemaV2.safeParse({ ...GOOD, profile: { timezone: 'Mars/Base' } });
     expect(bad.success).toBe(false);
     expect(issues(bad).join('|')).toMatch(/^profile\.timezone: /);
+  });
+
+  // "Where are you based?" (30 Oct review, 1.2): tidied like every typed line, and never cleared, like the name: a
+  // blank one is "not given" and keeps the stored one. Whether it is enough is the confirm's question (the repo).
+  it('takes where they are based, tidied, and a blank one as not given', () => {
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { location: '  Malmö,\n Sweden ' } }).profile!.location).toBe('Malmö, Sweden');
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { location: '   ' } }).profile!.location).toBeNull();
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { location: null } }).profile!.location).toBeNull();
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { location: 'x'.repeat(200) } }).profile!.location).toHaveLength(200);
+    const long = confirmSchemaV2.safeParse({ ...GOOD, profile: { location: 'x'.repeat(201) } });
+    expect(issues(long)).toEqual(['profile.location: Keep this under 200 characters.']);
   });
 
   it('holds profile fields to their columns', () => {

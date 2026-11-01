@@ -1,144 +1,45 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { authenticate } from '../middleware/auth';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
+import { validate } from '../middleware/validate';
+import { notificationPageLimiter } from '../middleware/rateLimit';
 import { query } from '../db';
 import { fanoutOwnNotifications } from '../realtime/fanout';
-import { REQUEST_BELL_LINK_PATTERN } from '../services/poke/request-link';
+import {
+  NOTIFICATION_BELL_COUNT, NOTIFICATION_PAGE_DEFAULT, NOTIFICATION_PAGE_MAX, decodeNotificationCursor, listNotifications,
+} from '../services/notifications/notification-list.service';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
 
-/** Where a request stands for its recipient; 'gone' is a pending request they can no longer answer. */
-type RequestStatus = 'pending' | 'accepted' | 'declined' | 'gone';
+const PAGE_GONE = 'That page of notifications could not be found. Open the list again.';
 
-/** One row of the list query: the notification, its invite's state, and its meeting request's. */
-interface NotificationRow {
-  id: string;
-  type: string;
-  title: string;
-  body: string | null;
-  link: string | null;
-  isRead: boolean;
-  createdAt: Date;
-  inviteStatus: string | null;
-  podId: string | null;
-  sessionId: string | null;
-  requestStatus: RequestStatus | null;
-  requestConversationId: string | null;
-}
+// ?before=<cursor from the last page>&limit=1..50. Both optional: with neither, the bell's newest 20 exactly as before.
+const listQuery = z.object({
+  before: z.string().max(200, PAGE_GONE).refine((c) => decodeNotificationCursor(c) !== null, PAGE_GONE).optional(),
+  limit: z.coerce.number({ invalid_type_error: 'Ask for between 1 and 50 notifications.' }).int()
+    .min(1, 'Ask for between 1 and 50 notifications.').max(NOTIFICATION_PAGE_MAX, 'Ask for between 1 and 50 notifications.').optional(),
+});
 
-// GET /notifications — last 20 for current user
-// For invite-type notifications, includes invite status so the client knows
-// whether to show Accept/Decline buttons.
-//
-// 25 Oct 2026: the same for a meeting request (`poke` rows). On production Claus
-// accepted Stefan's request on the Messages card and the bell entry went on
-// offering Accept, because the bell kept the answer only in its own memory and
-// this list told it nothing. Each `poke` row now carries, from user_pokes:
-//   pokeStatus   'accepted' | 'declined' | null — the field production's bell
-//                already draws (null keeps its Accept and Decline);
-//   requestState { status, conversationId } | null — for the preview's bell.
-// The request is found through the id its link carries (/messages?poke=<id>,
-// REQUEST_BELL_LINK_PATTERN): a link that does not hold a whole UUID matches
-// nothing and reads null, and only a request sent to the bell's owner counts.
-//
-// 26 Oct 2026: a request still pending that can no longer be answered is 'gone',
-// by listReceivedPokes' own rule (accepting refuses it): its sender's account is
-// not active, or a block stands between the two, whoever made it. The bell went on
-// offering Accept on those. A gone request reads pokeStatus 'gone' (production's
-// bell draws no Accept or Decline for any pokeStatus) and requestState null (the
-// preview's bell offers nothing then).
+// GET /notifications — the member's notifications, newest first, with their unread count (services/notifications/
+// notification-list.service.ts says what each row carries). With no query string: the newest 20, as the bell has always
+// read them (production's bell is unchanged). The notifications page (30 Oct 2026) pages with ?before= and ?limit=
+// (30 a page unless it asks, at most 50); every answer adds `nextBefore`, the cursor of the next older page or null.
 router.get(
   '/',
   authenticate,
+  notificationPageLimiter,
+  validate(listQuery, 'query', 'We could not read that page of notifications.'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await query<NotificationRow>(
-        `SELECT n.id, n.type, n.title, n.body, n.link, n.is_read AS "isRead", n.created_at AS "createdAt",
-                -- Smart invite status: if user is already a member/participant, show as accepted
-                -- regardless of raw invite status. Single source of truth.
-                CASE
-                  WHEN i.id IS NULL THEN NULL
-                  WHEN i.status = 'accepted' THEN 'accepted'
-                  WHEN i.status = 'revoked' THEN 'revoked'
-                  WHEN i.status = 'expired' THEN 'expired'
-                  WHEN i.session_id IS NOT NULL AND EXISTS (
-                    SELECT 1 FROM session_participants sp
-                    WHERE sp.session_id = i.session_id AND sp.user_id = $1 AND sp.status != 'removed'
-                  ) THEN 'accepted'
-                  WHEN i.pod_id IS NOT NULL AND EXISTS (
-                    SELECT 1 FROM pod_members pm
-                    WHERE pm.pod_id = i.pod_id AND pm.user_id = $1
-                      -- Bug 30 (19 May Ali) — exclude history rows. A
-                      -- 'removed'/'left'/'declined' row means the user is
-                      -- NOT currently in the pod, so the new pending
-                      -- invite must NOT silently report as 'accepted'.
-                      -- Sessions branch above already mirrors this rule.
-                      AND pm.status NOT IN ('removed', 'left', 'declined')
-                  ) THEN 'accepted'
-                  ELSE i.status
-                END AS "inviteStatus",
-                i.pod_id AS "podId",
-                i.session_id AS "sessionId",
-                CASE
-                  WHEN p.status = 'pending' AND (
-                    ps.status IS DISTINCT FROM 'active'
-                    OR EXISTS (
-                      SELECT 1 FROM user_blocks b
-                       WHERE (b.blocker_id = n.user_id AND b.blocked_id = p.sender_id)
-                          OR (b.blocker_id = p.sender_id AND b.blocked_id = n.user_id))
-                  ) THEN 'gone'
-                  ELSE p.status
-                END AS "requestStatus",
-                rc.id AS "requestConversationId"
-         FROM notifications n
-         LEFT JOIN invites i ON n.type IN ('pod_invite', 'event_invite', 'circle_invite')
-           AND n.link LIKE '/invite/%'
-           AND i.code = SUBSTRING(n.link FROM '/invite/(.+)$')
-         -- substring() is NULL when the link does not match, and the pattern only
-         -- captures a whole UUID, so the cast never sees anything else.
-         LEFT JOIN user_pokes p ON n.type = 'poke'
-           AND p.id = substring(n.link FROM $2::text)::uuid
-           AND p.recipient_id = n.user_id
-         LEFT JOIN users ps ON ps.id = p.sender_id
-         LEFT JOIN LATERAL (
-           SELECT c.id FROM dm_conversations c
-            WHERE p.status = 'accepted'
-              AND ((c.user_a_id = p.sender_id AND c.user_b_id = p.recipient_id)
-                OR (c.user_a_id = p.recipient_id AND c.user_b_id = p.sender_id))
-            LIMIT 1
-         ) rc ON TRUE
-         WHERE n.user_id = $1
-         ORDER BY n.created_at DESC
-         LIMIT 20`,
-        [req.user!.userId, REQUEST_BELL_LINK_PATTERN]
-      );
-
-      const unreadCount = await query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM notifications WHERE user_id = $1 AND is_read = FALSE`,
-        [req.user!.userId]
-      );
-
-      // Only `poke` rows carry the request fields; every other row is sent exactly as before.
-      const notifications = result.rows.map(({ requestStatus, requestConversationId, ...row }) => {
-        if (row.type !== 'poke') return row;
-        if (requestStatus === 'gone') return { ...row, pokeStatus: 'gone', requestState: null };
-        return {
-          ...row,
-          pokeStatus: requestStatus === 'accepted' || requestStatus === 'declined' ? requestStatus : null,
-          requestState: requestStatus
-            ? { status: requestStatus, conversationId: requestStatus === 'accepted' ? requestConversationId : null }
-            : null,
-        };
+      const { before, limit } = req.query as unknown as z.infer<typeof listQuery>;
+      const paging = before !== undefined || limit !== undefined;
+      const data = await listNotifications(req.user!.userId, {
+        before: before ? decodeNotificationCursor(before) : null,
+        limit: limit ?? (paging ? NOTIFICATION_PAGE_DEFAULT : NOTIFICATION_BELL_COUNT),
       });
-
-      const response: ApiResponse = {
-        success: true,
-        data: {
-          notifications,
-          unreadCount: parseInt(unreadCount.rows[0]?.count || '0', 10),
-        },
-      };
+      const response: ApiResponse = { success: true, data };
       res.json(response);
     } catch (err) {
       next(err);

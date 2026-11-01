@@ -12,6 +12,11 @@ export type MeetingStatus = 'scheduled' | 'cancelled';
 export type MeetingPhase = 'upcoming' | 'joinable' | 'live' | 'ended' | 'cancelled';
 /** The three lists under Events: still to come (live and joinable included), over, and cancelled. */
 export type MeetingScope = 'upcoming' | 'past' | 'cancelled';
+/**
+ * How the meeting came about (migration 124, 1 Nov 2026): a time the two agreed in the scheduler, or a call one of
+ * them rang and the other answered. An instant one starts when it was answered and is never cancelled.
+ */
+export type MeetingSource = 'scheduled' | 'instant';
 
 export interface MeetingPartner {
   userId: string;
@@ -40,6 +45,29 @@ export interface Meeting {
    * it; the lists leave it out. The other person's answer is never sent.
    */
   myFeedback?: MyMeetingFeedback | null;
+  /**
+   * Agreed in the scheduler, or an answered call (1 Nov 2026). Every server from then on sends it; optional so a
+   * branch whose server predates it still compiles, and a screen reads a missing one as scheduled.
+   */
+  source?: MeetingSource;
+}
+
+/**
+ * A call one member rang and the other has not answered yet (1 Nov 2026), as GET /dm/call/requests/incoming and
+ * /outgoing read it, so a screen opened or refreshed while it rings can show it again. It lapses two minutes after
+ * it was rung (expiresAt).
+ */
+export interface LiveCallRequest {
+  id: string;
+  conversationId: string;
+  fromUserId: string;
+  toUserId: string;
+  /** The other person, as the banner ("{name} is calling you") or the caller's card ("Calling {name}…") says them. */
+  partnerName: string;
+  kind: MeetingKind;
+  durationMin: number;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface MeetingList {

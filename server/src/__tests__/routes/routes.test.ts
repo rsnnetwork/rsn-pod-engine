@@ -304,6 +304,40 @@ describe('Auth Routes', () => {
       expect(res.body.data.user.lastOnboardedAt).toBeNull();
     });
 
+    // 30 Oct review (2.1): the preview takes everyone who has not done the new onboarding through it, so the
+    // session says which version they finished: 2, or null for an earlier one or none.
+    it('carries which onboarding the member finished: 2, and null when they have not done the new one', async () => {
+      (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, onboardingStatus: 'completed', onboardingVersion: 2 });
+      const v2 = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
+      expect(v2.status).toBe(200);
+      expect(v2.body.data.user.onboardingVersion).toBe(2);
+
+      for (const onboardingVersion of [null, undefined]) {
+        (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, onboardingStatus: 'completed', onboardingVersion });
+        const v1 = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
+        expect(v1.body.data.user).toHaveProperty('onboardingVersion', null);
+      }
+    });
+
+    // Production's client (origin/main: authStore.checkSession, ProtectedRoute, the profile and Settings pages)
+    // reads the session as it was; the new field is only added beside every one of them.
+    it('production\'s client still gets every field it read before onboardingVersion was added', async () => {
+      const before = [
+        'id', 'email', 'displayName', 'firstName', 'lastName', 'avatarUrl', 'bannerUrl', 'bio', 'company', 'jobTitle',
+        'industry', 'location', 'linkedinUrl', 'interests', 'reasonsToConnect', 'languages', 'timezone', 'phone', 'role',
+        'profileComplete', 'onboardingCompleted', 'onboardingStatus', 'lastOnboardedAt', 'expertiseText', 'whatICareAbout',
+        'whatICanHelpWith', 'whoIWantToMeet', 'whyIWantToMeet', 'myIntent', 'notifyEmail', 'notifyEventReminders',
+        'notifyMatches', 'profileVisible', 'inviteOptOutPublicEvents',
+      ];
+      // Every field held (null where the member has nothing), so a field the route stopped sending cannot hide as undefined.
+      const stored = { ...Object.fromEntries(before.map(k => [k, null])), ...mockUser, onboardingStatus: 'completed', onboardingVersion: 2 };
+      (identityService.getUserById as jest.Mock).mockResolvedValue(stored);
+      const res = await request(app).get('/auth/session').set('Authorization', `Bearer ${makeToken()}`);
+      expect(res.status).toBe(200);
+      expect(Object.keys(res.body.data.user).sort()).toEqual([...before, 'onboardingVersion'].sort());
+      expect(res.body.data.user).toMatchObject({ id: mockUser.id, email: mockUser.email, onboardingStatus: 'completed', location: null });
+    });
+
     // 21 Oct 2026: the member's banner rides the session like their photo does, as its address or null.
     it('carries the banner\'s address, and null when the member has none', async () => {
       const bannerUrl = 'http://localhost:3001/api/users/05e70000-0000-4000-8000-000000000123/banner?v=1761040000000';
@@ -403,6 +437,26 @@ describe('User Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.displayName).toBe('Updated Name');
+    });
+
+    // 30 Oct review (1.2): location is required on the preview's screens, never here. Production's profile form
+    // (origin/main ProfilePage.tsx) posts location: '' for every member who has none (44 of 81 on 1 Nov), and the
+    // old onboarding and Settings saves post no location at all; each still saves.
+    it.each([
+      ['an empty location, as production\'s form sends it', { location: '' }],
+      ['no location at all', {}],
+      ['only a country', { location: 'USA' }],
+    ])('production\'s profile save with %s still saves', async (_label, location) => {
+      (identityService.updateUser as jest.Mock).mockResolvedValue({ ...mockUser, displayName: 'Jane Doe' });
+      const productionForm = {
+        displayName: 'Jane Doe', firstName: 'Jane', lastName: 'Doe', bio: '', company: '', jobTitle: '', industry: '',
+        linkedinUrl: '', timezone: 'Europe/Copenhagen', phone: '', interests: [], reasonsToConnect: [], languages: ['english'],
+        expertiseText: null, whatICareAbout: null, whatICanHelpWith: null, whoIWantToMeet: null, whyIWantToMeet: null, myIntent: null,
+        ...location,
+      };
+      const res = await request(app).put('/users/me').set('Authorization', `Bearer ${makeToken()}`).send(productionForm);
+      expect(res.status).toBe(200);
+      expect(identityService.updateUser).toHaveBeenCalledWith(mockUser.id, expect.objectContaining(location));
     });
 
     it('should reject invalid update data', async () => {
@@ -539,6 +593,26 @@ describe('Session Routes', () => {
       expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
     });
 
+    // T11 (1 Nov 2026) — production's form sends no visibility: the event is created NULL (it follows its pod).
+    it('passes no visibility when the production form sends none, and the preview visibility when it does', async () => {
+      (sessionService.createSession as jest.Mock).mockClear().mockResolvedValue(mockSession);
+      const token = makeToken();
+      const base = {
+        podId: '00000000-0000-0000-0000-000000000001', title: 'Test Session', scheduledAt: '2025-01-15T18:00:00Z',
+        format: 'speed_networking', config: { numberOfRounds: 5, roundDurationSeconds: 480, maxParticipants: 25 },
+      };
+      const old = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`).send(base);
+      expect(old.status).toBe(201);
+      expect((sessionService.createSession as jest.Mock).mock.calls[0][1]).not.toHaveProperty('visibility');
+      const preview = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`)
+        .send({ ...base, visibility: 'public_with_approval' });
+      expect(preview.status).toBe(201);
+      expect((sessionService.createSession as jest.Mock).mock.calls[1][1]).toMatchObject({ visibility: 'public_with_approval' });
+      const wrong = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`)
+        .send({ ...base, visibility: 'invite_only' });
+      expect(wrong.status).toBe(400);
+    });
+
     it('should reject session without title', async () => {
       const token = makeToken();
       const res = await request(app)
@@ -553,6 +627,9 @@ describe('Session Routes', () => {
   describe('GET /sessions/:id', () => {
     it('should return session by id', async () => {
       (sessionService.getSessionById as jest.Mock).mockResolvedValue(mockSession);
+      // T11: the additive access block reads one row; none here, so the answer is today's shape.
+      (dbQuery as jest.Mock).mockImplementation(async (sql: string) =>
+        (sql.includes('event_join_requests') ? { rows: [], rowCount: 0 } : undefined));
 
       // Admin role bypasses canViewSession DB lookups (short-circuits on role check).
       const token = makeToken({ role: 'admin' });
@@ -562,6 +639,41 @@ describe('Session Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
+      (dbQuery as jest.Mock).mockReset();
+    });
+
+    // T11 fix round 1: a private event refuses a stranger with today's 403 and words (production's client reads
+    // them) plus the code EVENT_PRIVATE, so the preview can say "This event is private". A NULL event: unchanged.
+    const refusalFor = async (visibility: string | null) => {
+      (dbQuery as jest.Mock).mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM sessions s') && sql.includes('pod_visibility')) {
+          return { rows: [{ host_user_id: 'someone-else', pod_id: 'p1', pod_visibility: 'private', is_cohost: false, visibility, account_closed: false }], rowCount: 1 };
+        }
+        if (sql.includes('event_join_requests')) {
+          return { rows: [{ visibility, pod_id: 'p1', pod_visibility: 'private', is_host: false, is_cohost: false, is_pod_organiser: false,
+            in_audience: false, is_invited: false, participant_status: null, account_active: true, my_request: null }], rowCount: 1 };
+        }
+        if (sql.startsWith('SELECT visibility FROM sessions')) return { rows: [{ visibility }], rowCount: 1 };
+        if (sql.includes('SELECT status FROM users')) return { rows: [{ status: 'active' }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      });
+      const res = await request(app)
+        .get('/sessions/5e550000-0000-4000-8000-000000000123')
+        .set('Authorization', `Bearer ${makeToken()}`);
+      (dbQuery as jest.Mock).mockReset();
+      return res;
+    };
+
+    it('answers a stranger on a private event 403 with the code EVENT_PRIVATE and the words production shows', async () => {
+      const res = await refusalFor('private');
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatchObject({ code: 'EVENT_PRIVATE', message: 'You must be registered or a pod member to view this event.' });
+    });
+
+    it('answers a stranger on a NULL event in a private pod exactly as before', async () => {
+      const res = await refusalFor(null);
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatchObject({ code: 'AUTH_FORBIDDEN', message: 'You must be registered or a pod member to view this event.' });
     });
   });
 });

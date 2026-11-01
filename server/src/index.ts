@@ -65,6 +65,7 @@ import peopleRoutes from './routes/people';
 import agentRoutes from './routes/agents';
 import meetingRoutes from './routes/meeting';
 import meetingsRoutes from './routes/meetings';
+import callsRoutes from './routes/calls';
 import circleRoutes from './routes/circles';
 import entityRoutes from './routes/entities';
 import reportRoutes from './routes/reports';
@@ -353,6 +354,7 @@ app.use('/api/admin/join-request-action', adminActionRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dm', dmRoutes);
 app.use('/api/dm', meetingRoutes); // scheduling endpoints — path shapes disjoint from dmRoutes
+app.use('/api/calls', callsRoutes); // ring a connection by person (the profile's Video call), 1 Nov 2026
 app.use('/api/meetings', meetingsRoutes); // confirmed 1:1 meetings: Events, the Events count, one meeting, cancel
 app.use('/api/pokes', pokeRoutes);
 app.use('/api/matches', matchesRoutes);

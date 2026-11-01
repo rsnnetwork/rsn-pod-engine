@@ -32,12 +32,11 @@ function cleanText(text: string | undefined | null): string | null {
 }
 
 /**
- * Where an answer about this meeting comes from. Every meetings row is a scheduled 1:1 meeting until direct calls
- * are recorded as meetings too (meetings.source, migration 124): the release that adds that column maps its
- * 'instant' rows to 'instant' here, in this one place.
+ * Where an answer about this meeting comes from: an answered call (meetings.source 'instant', migration 124) or a
+ * 1:1 meeting the two booked, in this one place.
  */
-function sourceOf(_meeting: { id: string }): MeetingFeedbackSource {
-  return 'meeting';
+function sourceOf(meeting: { source?: string | null }): MeetingFeedbackSource {
+  return meeting.source === 'instant' ? 'instant' : 'meeting';
 }
 
 interface FeedbackTarget {
@@ -46,6 +45,8 @@ interface FeedbackTarget {
   user_b_id: string;
   start_at: Date;
   status: string;
+  /** 'scheduled' or 'instant' (migration 124). */
+  source: string;
   /** The person answering, read fresh: the sign-in check keeps a status for up to a minute. */
   author_active: boolean;
   /** A block stands between the two, whichever of them made it. */
@@ -66,7 +67,7 @@ export async function submitMeetingFeedback(
 ): Promise<SavedMeetingFeedback> {
   // activeMemberSql: `author.status = 'active'` is written inline here (switch to activeMemberSql after T2).
   const found = await query<FeedbackTarget>(
-    `SELECT m.id, m.user_a_id, m.user_b_id, m.start_at, m.status,
+    `SELECT m.id, m.user_a_id, m.user_b_id, m.start_at, m.status, m.source,
             (author.status = 'active') AS author_active,
             EXISTS (
               SELECT 1 FROM user_blocks ub

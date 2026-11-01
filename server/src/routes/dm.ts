@@ -12,7 +12,7 @@ import { authenticate } from '../middleware/auth';
 import { conversationIdInPath, memberIdInPath, messageIdInPath, reactionInPath } from '../middleware/dm-path-ids';
 import * as dmService from '../services/dm/dm.service';
 import { broadcastDmMessage } from '../services/orchestration/handlers/dm-handlers';
-import { fanoutDmConversation } from '../realtime/fanout';
+import { fanoutDmConversation, fanoutDmRead } from '../realtime/fanout';
 import { query } from '../db';
 import { ApiResponse } from '@rsn/shared';
 
@@ -31,6 +31,10 @@ const sendBodySchema = z.object({
     type: z.enum(['image', 'audio']),
     meta: z.record(z.any()).optional().nullable(),
   }).optional().nullable(),
+  // 30 Oct 2026: the earlier message of this conversation the new one answers (a quoted reply). Optional, so
+  // production's client, which never sends it, is answered exactly as before. Lower-cased: Postgres reads either case
+  // as the same row, and the quote's id is compared with the thread's own.
+  replyToId: z.string().uuid('That message cannot be replied to.').transform((s) => s.toLowerCase()).optional().nullable(),
 }).refine(
   v => (v.content && v.content.trim().length > 0) || !!v.attachment?.url,
   { message: 'Either content or attachment is required', path: ['content'] },
@@ -124,6 +128,7 @@ router.post(
         req.body.toUserId,
         req.body.content || '',
         req.body.attachment || null,
+        req.body.replyToId ?? null,
       );
       // Real-time fan-out (15 May fix) — pre-refactor only the socket
       // handler emitted dm:message, so REST-path sends (which is what
@@ -172,7 +177,8 @@ router.post(
             const otherUserId = conv.user_a_id === req.user!.userId
               ? conv.user_b_id
               : conv.user_a_id;
-            fanoutDmConversation(req.params.id, [req.user!.userId, otherUserId]).catch(() => {});
+            // The same tags as dm:read: the conversation, and both people's Messages counts (1 Nov 2026).
+            fanoutDmRead(req.params.id, req.user!.userId, otherUserId).catch(() => {});
           }
         } catch { /* non-fatal */ }
       }

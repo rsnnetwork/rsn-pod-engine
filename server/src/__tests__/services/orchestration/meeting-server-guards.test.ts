@@ -72,7 +72,7 @@ jest.mock('../../../services/redis/redis.client', () => ({
 import { SessionStatus } from '@rsn/shared';
 import { activeSessions, ActiveSession } from '../../../services/orchestration/state/session-state';
 import {
-  handleHostStart, handleHostStartRound, handleHostEnd, handleHostCreateBreakout, handleHostMoveToRoom,
+  handleHostStart, handleHostStartRound, handleHostEnd, handleHostCreateBreakout, handleHostMoveToRoom, startSession,
   injectHostActionDeps,
 } from '../../../services/orchestration/handlers/host-actions';
 import {
@@ -383,5 +383,49 @@ describe('every place that makes an ActiveSession knows the format', () => {
     });
     await handleJoinSession(io, fakeSocket(GUEST), { sessionId: 'join-meeting' });
     expect(activeSessions.get('join-meeting')!.format).toBe('video_meeting');
+  });
+});
+
+// ─── In person has no video room (30 Oct 2026, T12, D10) ─────────────────────────────────────────
+// Go Live and the live room are refused with NOT_A_VIDEO_EVENT and the sentence; nothing opens a LiveKit room,
+// moves the event out of scheduled or tracks anyone. A video meeting still goes live (above).
+describe('an in-person event has no video room', () => {
+  const NO_ROOM = { code: 'NOT_A_VIDEO_EVENT', message: 'This event happens in person, so there is no video room.' };
+
+  function inPerson(sessionId: string) {
+    mockGetSessionById.mockResolvedValue({
+      id: sessionId, status: 'scheduled', hostUserId: HOST, format: 'physical_event', currentRound: 0,
+      config: { location: 'Soho', durationMinutes: 60, eventType: 'physical_event' },
+    });
+  }
+
+  it('host:start_session is refused and changes nothing', async () => {
+    inPerson('ip-start');
+    gMockQuery.mockResolvedValue({ rows: [{ is_host: true }], rowCount: 1 });
+    const { updateSessionStatus } = jest.requireMock('../../../services/session/session.service');
+    const { createLobbyRoom } = jest.requireMock('../../../services/video/video.service');
+    (updateSessionStatus as jest.Mock).mockClear();
+    (createLobbyRoom as jest.Mock).mockClear();
+    const socket = fakeSocket();
+    await handleHostStart(io, socket, { sessionId: 'ip-start' });
+    expect(socket.emit).toHaveBeenCalledWith('error', NO_ROOM);
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+    expect(createLobbyRoom).not.toHaveBeenCalled();
+    expect(activeSessions.has('ip-start')).toBe(false);
+  });
+
+  it('the REST Go Live twin answers 409 with the sentence', async () => {
+    inPerson('ip-rest');
+    await expect(startSession('ip-rest', HOST)).rejects.toMatchObject({ statusCode: 409, ...NO_ROOM });
+    expect(activeSessions.has('ip-rest')).toBe(false);
+  });
+
+  it('joining its live room is refused, and no live state is made for it', async () => {
+    inPerson('ip-join');
+    const socket = fakeSocket(GUEST);
+    await handleJoinSession(io, socket, { sessionId: 'ip-join' });
+    expect(socket.emit).toHaveBeenCalledWith('error', NO_ROOM);
+    expect(socket.join).not.toHaveBeenCalled();
+    expect(activeSessions.has('ip-join')).toBe(false);
   });
 });

@@ -14,7 +14,7 @@ import { E } from '../realtime/entities';
 import { AppError } from '../middleware/errors';
 import { query } from '../db';
 import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse } from '@rsn/shared';
-import { eventDurationOf } from '../services/session/event-duration';
+import { eventDurationOf, eventPlaceOf } from '../services/session/event-duration';
 
 const router = Router();
 
@@ -494,6 +494,7 @@ router.post(
           organizerName: host?.display_name || 'REASON',
           organizerEmail: host?.email,
           sessionId,
+          place: eventPlaceOf(session),
         };
       }
 

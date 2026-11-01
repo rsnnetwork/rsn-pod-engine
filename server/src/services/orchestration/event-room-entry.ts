@@ -6,7 +6,8 @@
 import type { Socket } from 'socket.io';
 import { ErrorCodes } from '@rsn/shared';
 import logger from '../../config/logger';
-import { eventRoomAdmission, type EventRoomAdmission } from '../session/session-access';
+import type { EventRoomAdmission } from '../session/session-access';
+import { canEnterRoom } from '../session/event-access';
 import { sessionRoom } from './state/session-state';
 
 /** A refusal production's live page shows as a toast and a banner: a code and a sentence. */
@@ -30,16 +31,23 @@ export interface RegistrationOutcome {
 export function eventRoomRefusal(eventStatus: string, registrationCode: string | undefined): EventRoomRefusal {
   if (eventStatus === 'completed') return { code: ErrorCodes.EVENT_ENDED, message: 'This event has ended.' };
   if (eventStatus === 'cancelled') return { code: ErrorCodes.EVENT_ENDED, message: 'This event was cancelled.' };
+  // T11 (1 Nov 2026): an event with its own visibility refuses in its own words.
+  if (registrationCode === ErrorCodes.EVENT_NEEDS_APPROVAL) {
+    return { code: ErrorCodes.EVENT_NEEDS_APPROVAL, message: 'This event asks the host to approve each place. Request to join from the event page.' };
+  }
+  if (registrationCode === ErrorCodes.EVENT_PRIVATE) {
+    return { code: ErrorCodes.EVENT_PRIVATE, message: "This event is private. It is for its pod's members and the people the host invites." };
+  }
   if (registrationCode === ErrorCodes.AUTH_FORBIDDEN) {
     return { code: ErrorCodes.AUTH_FORBIDDEN, message: 'This event is only open to its pod\'s members.' };
   }
   return { code: 'JOIN_FAILED', message: 'You could not join this event. Refresh the page to try again.' };
 }
 
-/** eventRoomAdmission, or null when the read fails (logged). */
+/** canEnterRoom (the event-access rule for the live room), or null when the read fails (logged). */
 async function readAdmission(sessionId: string, userId: string, role: string | undefined): Promise<EventRoomAdmission | null> {
   try {
-    return await eventRoomAdmission(sessionId, userId, role);
+    return await canEnterRoom(sessionId, userId, role);
   } catch (err) {
     logger.warn({ err, sessionId, userId }, 'Could not read who the event admits');
     return null;

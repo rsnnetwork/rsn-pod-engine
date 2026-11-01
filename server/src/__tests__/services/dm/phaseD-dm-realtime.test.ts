@@ -61,18 +61,23 @@ describe('Phase D — DM real-time + notifications', () => {
       expect(fn).toMatch(/dm:conversation_updated/);
     });
 
+    // 1 Nov 2026: the bell entry moved into its own function, ringDmBell, which first asks the recipient's
+    // "Direct messages" bell switch (dm-bell-switch.test.ts runs it); broadcastDmMessage calls it.
+    const ringBell = () => {
+      const fnStart = src.indexOf('async function ringDmBell(');
+      return src.slice(fnStart, src.indexOf('\n}\n', fnStart));
+    };
+
     it('broadcastDmMessage writes a notifications row with type=direct_message', () => {
       const fnStart = src.indexOf('export async function broadcastDmMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/INSERT INTO notifications[\s\S]+?'direct_message'/);
+      expect(fn).toMatch(/await ringDmBell\(io, fromUserId, toUserId, conversationId, message, options\.bellTitle\)/);
+      expect(ringBell()).toMatch(/INSERT INTO notifications[\s\S]+?'direct_message'/);
     });
 
     it('broadcastDmMessage emits notification:new (bell badge integration)', () => {
-      const fnStart = src.indexOf('export async function broadcastDmMessage(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/notification:new/);
+      expect(ringBell()).toMatch(/notification:new/);
     });
 
     it('REST POST /dm/messages also calls broadcastDmMessage so the realtime fan-out fires from either transport', () => {
