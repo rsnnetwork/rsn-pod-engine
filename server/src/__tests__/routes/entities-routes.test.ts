@@ -743,3 +743,22 @@ describe('the circle pages that list an entity are told when what they show chan
     expect(mockFanoutCircles).not.toHaveBeenCalled();
   });
 });
+
+// T15 client review item 5 (measured on the local stack, 2 Nov 2026): an admin working through the Requests panel with
+// the Entities list and their profile open in two more tabs makes 4 entity reads per approval (every entity screen of
+// theirs is told and reads again). At 60 a minute the 15th approval in a row met a 429 and the panel froze on people
+// already approved. Reads are allowed 120 a minute per member, as the picture reads are.
+describe('the entity read allowance (T15 client review item 5)', () => {
+  it('lets one member read 120 times in a minute, and refuses the 121st in words', async () => {
+    const busy = as('u-reads-120');
+    for (let i = 0; i < 120; i += 1) {
+      const res = await request(app).get('/entities').set(busy);
+      expect({ i, status: res.status }).toEqual({ i, status: 200 });
+    }
+    const refused = await request(app).get('/entities').set(busy);
+    expect(refused.status).toBe(429);
+    expect(refused.body.error).toEqual({ code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' });
+    // Someone else still reads.
+    expect((await request(app).get('/entities').set(as('u-reads-other'))).status).toBe(200);
+  });
+});
