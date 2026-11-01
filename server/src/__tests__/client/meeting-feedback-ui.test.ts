@@ -9,10 +9,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { RoomEvent } from 'livekit-client';
 import type { Meeting } from '@rsn/shared';
-import { watchPartnerSeen, type SeenRoom } from '../../../../client/src/features/messages/partner-seen';
+import { partnerInRoom, watchPartnerSeen, type SeenRoom } from '../../../../client/src/features/messages/partner-seen';
 import {
-  afterRoomPath, canGiveFeedback, cardLine, feedbackBody, feedbackCardDue, feedbackTitle, reportLine, toggleProblem,
-  CARD_TITLE, FEEDBACK_PRIVACY, PROBLEMS_QUESTION, PROBLEM_OPTIONS, WORTH_OPTIONS, WORTH_QUESTION,
+  afterRoomLeave, afterRoomPath, canGiveFeedback, cardLine, feedbackBody, feedbackCardDue, feedbackTitle, reportLine, toggleProblem,
+  CARD_TITLE, FEEDBACK_PRIVACY, LEAVE_READ_MS, PROBLEMS_QUESTION, PROBLEM_OPTIONS, WORTH_OPTIONS, WORTH_QUESTION,
 } from '../../../../client/src/features/meetings/meeting-feedback';
 import { E as clientE } from '../../../../client/src/realtime/entities';
 
@@ -162,7 +162,91 @@ describe('whether the other person has been in the room', () => {
     watchPartnerSeen(room.asRoom(), seen)();
     room.emit(RoomEvent.ParticipantConnected, { identity: 'b' });
     expect(seen).not.toHaveBeenCalled();
-    expect(room.listenerCount(RoomEvent.Connected)).toBe(0);
+    for (const e of [RoomEvent.Connected, RoomEvent.Reconnected, RoomEvent.TrackSubscribed, RoomEvent.ConnectionStateChanged]) {
+      expect(room.listenerCount(e)).toBe(0);
+    }
+  });
+
+  // Fix round 2 (1 Nov 2026). livekit-client does not always announce a person with ParticipantConnected: it sends it
+  // only while the room reads as connected (Room.ts emitWhenConnected), holds it back while the room resumes, and
+  // drops what it held back when the signal resumes (Room.ts, SignalResumed: bufferedEvents = []). The person is still
+  // listed, and their tile still draws from the track and connection events. So whoever is listed counts, whichever
+  // event the room sends.
+  it('is said for someone the room lists without ever announcing them', () => {
+    for (const event of [RoomEvent.Reconnected, RoomEvent.TrackSubscribed, RoomEvent.TrackPublished, RoomEvent.ConnectionStateChanged, RoomEvent.ParticipantActive]) {
+      const room = new StubRoom();
+      const seen = jest.fn();
+      watchPartnerSeen(room.asRoom(), seen);
+      room.emit(RoomEvent.Connected);
+      room.remoteParticipants.set('b', { identity: 'b' });
+      room.emit(event);
+      expect({ event, seen: seen.mock.calls.length > 0 }).toEqual({ event, seen: true });
+    }
+  });
+
+  it('answers, as the person leaves, whether anyone else is in the room right now', () => {
+    const room = new StubRoom();
+    expect(partnerInRoom(room.asRoom())).toBe(false);
+    room.remoteParticipants.set('b', { identity: 'b' });
+    expect(partnerInRoom(room.asRoom())).toBe(true);
+  });
+});
+
+describe('where leaving the room goes (worked out as the person leaves)', () => {
+  const chat = '/messages/c-1';
+  const asked = '/meetings/m-1?feedback=1';
+
+  it('to the question when the other person was seen, or is in the room as I leave, and the meeting is known', async () => {
+    expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: 'm-1', hadPartner: true, partnerHere: false })).toBe(asked);
+    // The room never announced them, but they are in it as I press leave (their tile is on my screen).
+    expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: 'm-1', hadPartner: false, partnerHere: true })).toBe(asked);
+  });
+
+  it('to the chat when nobody else was ever in the room, without asking the server anything', async () => {
+    const read = jest.fn(async () => 'm-1');
+    expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: null, hadPartner: false, partnerHere: false, readMeetingId: read })).toBe(chat);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('reads the meeting afresh when the room does not know it yet, and goes to the chat if that read fails or finds none', async () => {
+    const read = jest.fn(async () => 'm-1');
+    expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: undefined, hadPartner: true, partnerHere: true, readMeetingId: read })).toBe(asked);
+    expect(read).toHaveBeenCalledTimes(1);
+    const known = jest.fn(async () => 'm-2');
+    expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: 'm-1', hadPartner: true, partnerHere: false, readMeetingId: known })).toBe(asked);
+    expect(known).not.toHaveBeenCalled();
+    expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: null, hadPartner: true, partnerHere: false, readMeetingId: async () => { throw new Error('offline'); } })).toBe(chat);
+    expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: null, hadPartner: true, partnerHere: false, readMeetingId: async () => null })).toBe(chat);
+    // A room with nothing to read (an instant call, no ?scheduled=1) goes to the chat, as before.
+    expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: undefined, hadPartner: true, partnerHere: true })).toBe(chat);
+  });
+
+  // Fix round 3: that read is the only wait between pressing leave and leaving, so it is bounded. A read that never
+  // answers (axios gives up only after 60 s) must not hold the person in a call they asked to leave.
+  it('goes to the chat once the fresh read has taken LEAVE_READ_MS, even if the read never answers', async () => {
+    expect(LEAVE_READ_MS).toBe(3_000);
+    jest.useFakeTimers();
+    try {
+      const never = jest.fn(() => new Promise<string>(() => {}));
+      let to: string | null = null;
+      void afterRoomLeave({ conversationId: 'c-1', meetingId: null, hadPartner: true, partnerHere: true, readMeetingId: never })
+        .then((p) => { to = p; });
+      await jest.advanceTimersByTimeAsync(LEAVE_READ_MS - 1);
+      expect(to).toBeNull();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(to).toBe(chat);
+      expect(never).toHaveBeenCalledTimes(1);
+      // A read that answers inside the bound still takes them to the question.
+      let quick: string | null = null;
+      void afterRoomLeave({
+        conversationId: 'c-1', meetingId: null, hadPartner: true, partnerHere: true,
+        readMeetingId: () => new Promise<string>((ok) => setTimeout(() => ok('m-1'), LEAVE_READ_MS - 500)),
+      }).then((p) => { quick = p; });
+      await jest.advanceTimersByTimeAsync(LEAVE_READ_MS - 500);
+      expect(quick).toBe(asked);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
@@ -189,13 +273,29 @@ describe('the meeting room', () => {
   const room = read('features/messages/MeetPage.tsx');
 
   it('notes whether the other person was ever in the room, and leaving goes to the question only then', () => {
-    expect(room).toMatch(/<PartnerSeen onSeen=\{/);
-    expect(room).toMatch(/afterRoomPath\(\{ conversationId: conversationId \?\? '', meetingId: meeting\?\.meetingId, hadPartner: hadPartner\.current \}\)/);
+    expect(room).toMatch(/<PartnerSeen onSeen=\{onPartnerSeen\} probe=\{partnerProbe\} \/>/);
     expect(room).toMatch(/onDisconnected=\{leaveRoom\}/);
   });
 
+  // Fix round 2: the leave reads what the room holds as the person leaves (who is in it now, and the meeting afresh
+  // when the scheduler's read gave none), instead of trusting only what earlier events and reads left behind.
+  it('decides as the person leaves: who is in the room now, and the meeting read afresh when it is not known', () => {
+    expect(room).toMatch(/afterRoomLeave\(\{\s*conversationId: conversationId \?\? '',\s*meetingId: meeting\?\.meetingId,\s*hadPartner: hadPartner\.current,\s*partnerHere: partnerProbe\.current\(\),\s*readMeetingId: isScheduled \? readMeetingId : undefined,\s*\}\)/);
+    expect(room).toMatch(/queryClient\.fetchQuery\(\{ queryKey: schedulingKey\(conversationId \?\? ''\), queryFn: readScheduling, staleTime: 0 \}\)/);
+    const seen = read('features/messages/PartnerSeen.tsx');
+    expect(seen).toMatch(/probe\.current = \(\) => partnerInRoom\(room\)/);
+  });
+
+  // Fix round 3: a press visibly does something at once, while the leave may wait (up to LEAVE_READ_MS) on that read.
+  it('shows the leave buttons as busy from the moment they are pressed', () => {
+    expect(room).toMatch(/leftRoom\.current = true;\s*setLeaving\(true\);/);
+    expect(room).toMatch(/onClick=\{leaveRoom\}\s*disabled=\{leaving\}\s*aria-busy=\{leaving\}/);
+    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} leaving=\{leaving\} \/>/);
+    expect(room).toMatch(/\{leaving \? 'Leaving…' : 'Leave'\}/);
+  });
+
   it('the Wait / Leave notice never asks itself; its Leave is the person leaving, like the room\'s own buttons', () => {
-    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} \/>/);
+    expect(room).toMatch(/<CallEndWatcher onLeave=\{leaveRoom\} /);
     // The pages outside the room (error, ended, countdown) go back to the chat, as before.
     expect(room.match(/onClick=\{leave\}/g)?.length).toBe(3);
   });

@@ -10,20 +10,20 @@
 // is read from the same query the scheduler and the thread read, so a move
 // made while this page waits on its countdown moves the countdown too.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LiveKitRoom, RoomAudioRenderer, ParticipantTile, ControlBar, useTracks, useRoomContext, type TrackReference } from '@livekit/components-react';
 import '@livekit/components-styles';
 import { Track } from 'livekit-client';
-import { ArrowLeft, CalendarClock, Maximize2, MessageSquare, Minimize2, PhoneOff } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Loader2, Maximize2, MessageSquare, Minimize2, PhoneOff } from 'lucide-react';
 import { MEETING_JOIN_EARLY_MIN } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { PageLoader } from '@/components/ui/Spinner';
 import { errorMessage } from '@/features/reason/errors';
 import { leftCallText, watchPartner } from './call-presence';
-import { afterRoomPath } from '@/features/meetings/meeting-feedback';
+import { afterRoomLeave } from '@/features/meetings/meeting-feedback';
 import PartnerSeen from './PartnerSeen';
 import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
 import { schedulingKey, type Scheduling } from './scheduling-types';
@@ -141,7 +141,7 @@ function CallStage() {
 // and rejoin without ending the other person's meeting" could not be done.
 // Now the one still here is told who left, and chooses: Wait (stay in the
 // room; the notice clears by itself when they come back in) or Leave.
-function CallEndWatcher({ onLeave }: { onLeave: () => void }) {
+function CallEndWatcher({ onLeave, leaving }: { onLeave: () => void; leaving: boolean }) {
   const room = useRoomContext();
   // Who left ('' when the room has no name for them); null while nobody has, or once they are back.
   const [leftName, setLeftName] = useState<string | null>(null);
@@ -169,9 +169,11 @@ function CallEndWatcher({ onLeave }: { onLeave: () => void }) {
           <button
             type="button"
             onClick={onLeave}
-            className="inline-flex min-h-[44px] min-w-[88px] items-center justify-center rounded-lg bg-rsn-red px-4 text-sm font-medium text-white hover:opacity-90"
+            disabled={leaving}
+            aria-busy={leaving}
+            className="inline-flex min-h-[44px] min-w-[88px] items-center justify-center rounded-lg bg-rsn-red px-4 text-sm font-medium text-white hover:opacity-90 disabled:opacity-70"
           >
-            Leave
+            {leaving ? 'Leaving…' : 'Leave'}
           </button>
         </div>
       </div>
@@ -200,15 +202,24 @@ export default function MeetPage() {
   const hadPartner = useRef(false);
   const leftRoom = useRef(false);
   const partnerSeen = useCallback(() => { hadPartner.current = true; }, []);
+  // Whether anyone else is in the room right now, asked as the person leaves (PartnerSeen sets it inside the room).
+  const partnerProbe = useRef<() => boolean>(() => false);
+  // Pressed: the leave buttons show it at once, while the leave may wait (up to LEAVE_READ_MS) on the meeting's read.
+  const [leaving, setLeaving] = useState(false);
+  const queryClient = useQueryClient();
 
   // A scheduled meeting's start and length: the scheduler's own query, kept live
   // by the dm-conversation entity, so a move (or a cancel) reaches a page that is
   // already open. The page decides on a fresh read (never on what an earlier
   // page left in the cache); with no schedule to read (none, or the request
   // failed) it does not gate, and the server says whether there is a meeting.
+  const readScheduling = useCallback(
+    (): Promise<Scheduling> => api.get(`/dm/conversations/${conversationId}/scheduling`).then(r => r.data.data),
+    [conversationId],
+  );
   const schedule = useQuery<Scheduling>({
     queryKey: schedulingKey(conversationId ?? ''),
-    queryFn: () => api.get(`/dm/conversations/${conversationId}/scheduling`).then(r => r.data.data),
+    queryFn: readScheduling,
     enabled: isScheduled && !!conversationId,
     refetchOnMount: 'always',
     meta: { entities: conversationId ? [E.dmConversation(conversationId)] : [] },
@@ -217,11 +228,26 @@ export default function MeetPage() {
   const startMs = meeting?.startAt ? Date.parse(meeting.startAt) : null;
   const scheduleChecked = !isScheduled || schedule.isFetchedAfterMount;
   const roomKey = `${conversationId}:${kind}`;
+  // Fix round 2 (1 Nov 2026): when the scheduler's read named no meeting (it failed, or had not answered), the leave
+  // reads it once more rather than sending someone who met the other person back to the chat unasked.
+  const readMeetingId = useCallback(
+    () => queryClient.fetchQuery({ queryKey: schedulingKey(conversationId ?? ''), queryFn: readScheduling, staleTime: 0 })
+      .then((s) => s.confirmed?.meetingId),
+    [queryClient, conversationId, readScheduling],
+  );
+  // Decided as the person leaves, from what the room holds then: who is in it now, as well as who it said came in.
   const leaveRoom = useCallback(() => {
     if (leftRoom.current) return;
     leftRoom.current = true;
-    navigate(afterRoomPath({ conversationId: conversationId ?? '', meetingId: meeting?.meetingId, hadPartner: hadPartner.current }));
-  }, [navigate, conversationId, meeting?.meetingId]);
+    setLeaving(true);
+    void afterRoomLeave({
+      conversationId: conversationId ?? '',
+      meetingId: meeting?.meetingId,
+      hadPartner: hadPartner.current,
+      partnerHere: partnerProbe.current(),
+      readMeetingId: isScheduled ? readMeetingId : undefined,
+    }).then((to) => navigate(to));
+  }, [navigate, conversationId, meeting?.meetingId, isScheduled, readMeetingId]);
   const live = conn && conn.room === roomKey ? conn : null;
 
   // A scheduled meeting opened early waits on a countdown; one long over says
@@ -335,7 +361,7 @@ export default function MeetPage() {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
   }
 
-  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} onPartnerSeen={partnerSeen} />;
+  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} leaving={leaving} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} />;
 }
 
 /**
@@ -345,13 +371,17 @@ export default function MeetPage() {
  * phone, with the stage shrinking above it; it lives inside the LiveKit room, so the call runs on while they type.
  * The page is 100dvh and keeps the iPhone's home-indicator inset clear under whatever is lowest.
  */
-function CallRoom({ conversationId, kind, live, leaveRoom, onPartnerSeen }: {
+function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSeen, partnerProbe }: {
   conversationId: string;
   kind: 'audio' | 'video';
   live: { token: string; url: string };
   /** Leaving the room: to the feedback question after a meeting the other person was in, else to the chat (T8). */
   leaveRoom: () => void;
+  /** The person has pressed leave and is on their way out. */
+  leaving: boolean;
   onPartnerSeen: () => void;
+  /** Set inside the room: whether anyone else is in it now, read by the leave (outside the room). */
+  partnerProbe: MutableRefObject<() => boolean>;
 }) {
   const myUserId = useAuthStore((s) => s.user?.id);
   // Kept once known: a block made during the call takes the conversation off the inbox, and the panel must still
@@ -381,10 +411,12 @@ function CallRoom({ conversationId, kind, live, leaveRoom, onPartnerSeen }: {
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
         <button
           onClick={leaveRoom}
-          className="flex h-11 w-11 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
+          disabled={leaving}
+          aria-busy={leaving}
+          className="flex h-11 w-11 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-70"
           aria-label="Leave call and go back to chat"
         >
-          <ArrowLeft className="h-5 w-5" />
+          {leaving ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : <ArrowLeft className="h-5 w-5" />}
         </button>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">{kind === 'audio' ? 'Audio call' : 'Video call'}</p>
@@ -423,8 +455,8 @@ function CallRoom({ conversationId, kind, live, leaveRoom, onPartnerSeen }: {
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             <CallStage />
-            <CallEndWatcher onLeave={leaveRoom} />
-            <PartnerSeen onSeen={onPartnerSeen} />
+            <CallEndWatcher onLeave={leaveRoom} leaving={leaving} />
+            <PartnerSeen onSeen={onPartnerSeen} probe={partnerProbe} />
             <div className={`shrink-0 pb-[env(safe-area-inset-bottom)] ${chatOpen ? 'max-sm:pb-0' : ''}`}>
               <ControlBar variation="minimal" />
             </div>
