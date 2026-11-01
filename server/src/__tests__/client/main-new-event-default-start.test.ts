@@ -35,9 +35,11 @@ describe('the new event form default start', () => {
 });
 
 describe('the new event form uses it', () => {
-  it('getDefaultScheduledAt hands the clock to the helper', () => {
+  it('the preview form starts the new event on the helper, the one rule, with no second rounding of its own', () => {
     const src = require('./load-client-module').readClientSource('features/sessions/CreateSessionPage.tsx') as string;
     expect(src).toContain("import { nextQuarterHourAfter } from './default-start'");
-    expect(src).toMatch(/function getDefaultScheduledAt\(\): string \{\s*return nextQuarterHourAfter\(new Date\(\)\);\s*\}/);
+    expect(src).toContain("scheduledAt: nextQuarterHourAfter(new Date())");
+    const form = require('./load-client-module').readClientSource('features/sessions/event-format-form.ts') as string;
+    expect(form).not.toContain("function nextQuarterHour(");
   });
 });

@@ -135,24 +135,6 @@ function settingDefaults(format: EventFormat, podType?: PodType | null): Pick<Ev
   return merged as unknown as Pick<EventFormValues, EventSettingKey>;
 }
 
-/** A Date as a datetime-local field holds it, in local time. */
-function localInputValue(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** The next quarter hour from now (now, when it is one), as a datetime-local field holds it. */
-export function nextQuarterHour(now: Date): string {
-  const d = new Date(now.getTime());
-  // T13 fix round 1: a quarter that has begun (23:30:15) is past, so the default is the next one (23:45), never a
-  // start already behind the clock. Exactly on the quarter (09:15:00.000) it stays.
-  const begun = d.getSeconds() > 0 || d.getMilliseconds() > 0;
-  d.setSeconds(0, 0);
-  const into = d.getMinutes() % 15;
-  d.setMinutes(d.getMinutes() + (into === 0 ? (begun ? 15 : 0) : 15 - into));
-  return localInputValue(d);
-}
-
 /** A new event's form: the pod's starting type with that type's defaults, and a title already filled in. */
 export function newEventValues(o: { pod?: EventPod | null; scheduledAt: string }): EventFormValues {
   const format = startingFormat(o.pod);

@@ -29,10 +29,11 @@ import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCR
 import { useMatchingChoices } from './useMatchingChoices';
 import EventAccessField from './EventAccessField';
 import {
-  DESCRIPTION_MAX, TITLE_MAX, autoTitle, eventBody, newEventSchema, newEventValues, nextQuarterHour, offeredFormats,
+  DESCRIPTION_MAX, TITLE_MAX, autoTitle, eventBody, newEventSchema, newEventValues, offeredFormats,
   podChangeFormat, shownEventKeys, startingPreset, type EventPod, type NewEventBody,
 } from './event-format-form';
 import { useEventFormatForm } from './useEventFormatForm';
+import { nextQuarterHourAfter } from './default-start';
 import { circleEntities, type CircleDetail } from '@/features/circles/circle-logic';
 import { circleForLine, circleGate, podsForCircle } from './circle-preset';
 
@@ -231,7 +232,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
   const addToast = useToastStore((s) => s.addToast);
   const podFieldId = useId();
   const descriptionId = useId();
-  const [start] = useState(() => newEventValues({ pod: toEventPod(fixedPod ?? null), scheduledAt: nextQuarterHour(new Date()) }));
+  const [start] = useState(() => newEventValues({ pod: toEventPod(fixedPod ?? null), scheduledAt: nextQuarterHourAfter(new Date()) }));
   const lastAutoTitle = useRef(start.title);
   const ev = useEventFormatForm({
     defaultValues: start,
