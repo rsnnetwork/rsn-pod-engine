@@ -90,6 +90,17 @@ test('circles core: admin creates, members join idempotently, detail aggregates 
   expect(detail1.json.data.upcomingEvents.map((e: any) => e.id), "a private pod's event is not named to a non-member").not.toContain(sessionId);
   const adminDetail = await apiAs(admin, 'GET', `/circles/${circleId}`);
   expect(adminDetail.json.data.upcomingEvents.map((e: any) => e.id)).toContain(sessionId);
+  // T13: an event for the whole circle, in the same private pod, is listed to m1 (a circle member outside the pod),
+  // marked as the circle's own, while the pod's own event stays hidden from them.
+  const forCircle = await apiAs(admin, 'POST', '/sessions', {
+    podId, circleId, title: 'E2E For the whole circle', scheduledAt: new Date(Date.now() + 7200_000).toISOString(),
+    format: 'speed_networking', config: { numberOfRounds: 1, roundDurationSeconds: 60, maxParticipants: 20 },
+  });
+  expect(forCircle.status).toBe(201);
+  expect(forCircle.json.data).toMatchObject({ circleId, visibility: 'private' });
+  const withCircleEvent = (await apiAs(m1, 'GET', `/circles/${circleId}`)).json.data.upcomingEvents;
+  expect(withCircleEvent.find((e: any) => e.id === forCircle.json.data.id), 'the circle\'s own event is listed to its member').toMatchObject({ forCircle: true });
+  expect(withCircleEvent.map((e: any) => e.id), "the private pod's own event is still not named to them").not.toContain(sessionId);
   // Once the pod is public, anyone may open its event, and the circle page names it to everyone.
   expect((await apiAs(admin, 'PUT', `/pods/${podId}`, { visibility: 'public' })).status).toBe(200);
   const detailPublic = await apiAs(m1, 'GET', `/circles/${circleId}`);
