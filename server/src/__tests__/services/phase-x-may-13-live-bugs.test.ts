@@ -168,7 +168,9 @@ describe('Phase X — 13 May live-test bug fixes', () => {
 
     it('MessagesPage send mutation uploads then POSTs with attachment payload', () => {
       expect(messagesPage).toMatch(/uploadImageToCloudinary\(args\.image\.file/);
-      expect(messagesPage).toMatch(/attachment\s*=\s*\{[\s\S]{0,80}type:\s*['"]image['"]/);
+      // Since 1 Nov 2026 (T7) the page's prepareAttachment answers the attachment and useSendMessage posts it.
+      expect(messagesPage).toMatch(/prepareAttachment:[\s\S]{0,400}return \{ url: result\.url, type: ['"]image['"]/);
+      expect(readClientSource('features/messages/thread/useSendMessage.ts')).toMatch(/content: vars\.content,\s*attachment,/);
     });
 
     it('MessagesPage renders <img> in the bubble when attachmentType is image', () => {
@@ -223,7 +225,9 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     });
 
     it('MessagesPage sendMutation POSTs to /dm/messages and replaces URL with new conv id after first send', () => {
-      expect(messagesPage).toMatch(/api\.post\(['"]\/dm\/messages['"]/);
+      // The POST moved into features/messages/thread/useSendMessage.ts (1 Nov 2026, T7); the page sends through it.
+      expect(readClientSource('features/messages/thread/useSendMessage.ts')).toMatch(/api\.post\(['"]\/dm\/messages['"]/);
+      expect(messagesPage).toMatch(/useSendMessage</);
       expect(messagesPage).toMatch(/isComposeMode[\s\S]{0,200}navigate\(`\/messages\/\$\{data\.conversationId\}`/);
     });
 

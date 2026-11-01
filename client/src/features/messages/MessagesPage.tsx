@@ -14,7 +14,7 @@ import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as Imag
 import MeetingScheduler, { type SchedulerHandle } from './MeetingScheduler';
 import ThreadMeetingBanner from './ThreadMeetingBanner';
 import { confirmable, isMeetingOver, localizeMeetingText } from './scheduler-flow';
-import SystemMessageCard, { type DmMessageKind, type DmSystemMeta } from './SystemMessageCard';
+import SystemMessageCard, { type DmMessageKind } from './SystemMessageCard';
 import { CallRequestModal, CallWaitingCard, IncomingCallCard } from './CallRequest';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
@@ -38,9 +38,10 @@ import {
   uploadImageToCloudinary,
   uploadAudioToCloudinary,
   MAX_AUDIO_DURATION_MS,
-  type CloudinaryImageResult,
-  type CloudinaryAudioResult,
 } from '@/lib/cloudinary';
+import type { DmMessage } from './thread/dm-message';
+import { useThreadMessages } from './thread/useThreadMessages';
+import { useSendMessage } from './thread/useSendMessage';
 
 interface ConversationSummary {
   conversationId: string;
@@ -57,29 +58,6 @@ interface ConversationSummary {
   lastMessageFromMe: boolean;
   lastMessageKind?: DmMessageKind;
   unreadCount: number;
-}
-
-interface DmMessage {
-  id: string;
-  conversationId: string;
-  fromUserId: string;
-  content: string;
-  readAt: string | null;
-  createdAt: string;
-  /** A line the product wrote, not a person: drawn as one neutral card both
-   *  people see the same way. Absent on rows written before 21 Sep 2026, which
-   *  fall back to an ordinary bubble — their text still reads correctly. */
-  kind?: DmMessageKind;
-  systemMeta?: DmSystemMeta | null;
-  // Phase E — server returns aggregated reactions per emoji type
-  reactions?: Record<string, string[]>;
-  // Feature 19 + 20 (13 May spec) — Cloudinary image / audio attachment.
-  attachmentUrl?: string | null;
-  attachmentType?: 'image' | 'audio' | string | null;
-  attachmentMeta?: {
-    width?: number; height?: number; bytes?: number; format?: string;
-    durationSec?: number;
-  } | null;
 }
 
 // Phase E — client-side reaction palette. Server stores type strings so the
@@ -266,13 +244,8 @@ export default function MessagesPage() {
     refetchOnWindowFocus: true,
   });
 
-  // Thread: messages in the active conversation.
-  const { data: messagesData } = useQuery({
-    queryKey: ['dm-messages', activeId],
-    queryFn: () => api.get(`/dm/conversations/${activeId}/messages`).then(r => r.data.data as DmMessage[]),
-    enabled: !!activeId,
-    meta: { entities: activeId ? [E.dmConversation(activeId)] : [] },
-  });
+  // Thread: messages in the active conversation, marked read on opening it (features/messages/thread, 1 Nov 2026).
+  const { data: messagesData } = useThreadMessages(activeId);
 
   // Feature 18 — compose-new mode: fetch the target user's profile for the
   // header so the composer doesn't show "User" before the conversation exists.
@@ -293,17 +266,6 @@ export default function MessagesPage() {
       navigate(`/messages/${existing.conversationId}`, { replace: true });
     }
   }, [composeToUserId, inboxData, navigate]);
-
-  // Mark-as-read: fire on opening a conversation.
-  useEffect(() => {
-    if (!activeId) return;
-    const socket = getSocket();
-    if (socket?.connected) {
-      socket.emit('dm:read', { conversationId: activeId });
-    } else {
-      api.post(`/dm/conversations/${activeId}/read`).catch(err => console.warn('mark-read failed', err));
-    }
-  }, [activeId]);
 
   // Real-time subscriptions: refresh inbox + active thread on incoming events.
   useEffect(() => {
@@ -670,42 +632,32 @@ export default function MessagesPage() {
     otherBio: string | null;
   } | null = activeConv ?? composeTarget;
 
-  const sendMutation = useMutation({
-    mutationFn: async (args: {
-      content: string;
-      image: { file: File } | null;
-      audio: { blob: Blob; durationMs: number } | null;
-    }) => {
-      const toUserId = activeConv?.otherUserId ?? composeToUserId;
-      if (!toUserId) throw new Error('No recipient');
-
-      // Feature 19/20 (13 May spec) — at most one attachment per message.
-      // Image takes precedence if both are queued, but the UI disallows
-      // simultaneous capture so this is just a belt-and-braces guard.
-      let attachment:
-        | { url: string; type: 'image'; meta: CloudinaryImageResult }
-        | { url: string; type: 'audio'; meta: CloudinaryAudioResult }
-        | null = null;
+  // The send (features/messages/thread/useSendMessage, 1 Nov 2026): it posts to /dm/messages, refreshes the thread
+  // and the inbox, and says a refusal in the server's words. The uploads and the composer's own state stay here.
+  const sendMutation = useSendMessage<{
+    content: string;
+    image: { file: File } | null;
+    audio: { blob: Blob; durationMs: number } | null;
+  }>(activeId, activeConv?.otherUserId ?? composeToUserId, {
+    // Feature 19/20 (13 May spec) — at most one attachment per message.
+    // Image takes precedence if both are queued, but the UI disallows
+    // simultaneous capture so this is just a belt-and-braces guard.
+    prepareAttachment: async (args) => {
       if (args.image) {
         setUploadFraction(0);
         const result = await uploadImageToCloudinary(args.image.file, setUploadFraction);
-        attachment = { url: result.url, type: 'image', meta: result };
         setUploadFraction(null);
-      } else if (args.audio) {
+        return { url: result.url, type: 'image', meta: result };
+      }
+      if (args.audio) {
         setUploadFraction(0);
         const result = await uploadAudioToCloudinary(args.audio.blob, args.audio.durationMs, setUploadFraction);
-        attachment = { url: result.url, type: 'audio', meta: result };
         setUploadFraction(null);
+        return { url: result.url, type: 'audio', meta: result };
       }
-
-      const res = await api.post('/dm/messages', {
-        toUserId,
-        content: args.content,
-        attachment,
-      });
-      return res.data.data as { conversationId: string };
+      return null;
     },
-    onSuccess: (data) => {
+    onSent: (data) => {
       setDraft('');
       if (pendingImage) {
         URL.revokeObjectURL(pendingImage.previewUrl);
@@ -716,8 +668,6 @@ export default function MessagesPage() {
         setPendingAudio(null);
         setRecordingState('idle');
       }
-      qc.invalidateQueries({ queryKey: ['dm-messages', activeId ?? data.conversationId] });
-      qc.invalidateQueries({ queryKey: ['dm-conversations'] });
       // Feature 18 — first send in compose-new mode flips the URL from
       // /messages/new/:userId to /messages/:conversationId so subsequent
       // sends use the existing-thread path and the back button works.
@@ -725,10 +675,7 @@ export default function MessagesPage() {
         navigate(`/messages/${data.conversationId}`, { replace: true });
       }
     },
-    onError: (err: any) => {
-      setUploadFraction(null);
-      addToast(err?.response?.data?.error?.message || err?.message || 'Failed to send message', 'error');
-    },
+    onFailed: () => setUploadFraction(null),
   });
 
   // Feature 19 — file picker handler. Validates client-side before showing

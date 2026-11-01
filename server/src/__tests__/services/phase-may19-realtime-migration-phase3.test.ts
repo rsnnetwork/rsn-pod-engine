@@ -151,8 +151,12 @@ describe('Realtime migration Phase 3 — client meta.entities', () => {
       expect(src).toMatch(/from\s*['"]@\/realtime\/entities['"]/);
       const convBlock = src.slice(src.indexOf("queryKey: ['dm-conversations']"));
       expect(convBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.userDms\(myUserId\)/);
-      const msgBlock = src.slice(src.indexOf("queryKey: ['dm-messages', activeId]"));
-      expect(msgBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.dmConversation\(activeId\)/);
+      // The thread's messages moved into features/messages/thread/useThreadMessages.ts (1 Nov 2026, T7): the page
+      // calls it with the open conversation, and the hook's query keeps the conversation's tag.
+      expect(src).toContain('useThreadMessages(activeId)');
+      const thread = readClient('features/messages/thread/useThreadMessages.ts');
+      const msgBlock = thread.slice(thread.indexOf("queryKey: ['dm-messages', conversationId]"));
+      expect(msgBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.dmConversation\(conversationId\)/);
       const userBlock = src.slice(src.indexOf("queryKey: ['user', composeToUserId]"));
       expect(userBlock).toMatch(/meta:\s*\{\s*entities:[\s\S]{0,200}E\.user\(composeToUserId\)/);
     });
