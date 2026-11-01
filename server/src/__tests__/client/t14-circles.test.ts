@@ -73,7 +73,8 @@ describe('who may do what on a member row', () => {
 
 describe('realtime: the circle screens follow the server\'s circle tags', () => {
   it('the page follows the circle, its members and the member\'s own circles (and the asks for its managers)', () => {
-    expect(circleEntities(C, 'me')).toEqual(['circle:c1', 'circle:c1:members', 'user:me:circles', 'user:me']);
+    // T13: and the member's own events (a new event for the circle reaches their events list).
+    expect(circleEntities(C, 'me')).toEqual(['circle:c1', 'circle:c1:members', 'user:me:circles', 'user:me', 'user:me:sessions']);
     expect(circleEntities(C, 'me', true)).toContain('circle:c1:requests');
     const page = read('features/circles/CircleDetailPage.tsx');
     expect(page).toMatch(/meta: \{ entities: circleEntities\(circleId \?\? '', user\?\.id\) \}/);

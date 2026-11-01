@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio, CircleDashed } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -29,6 +29,8 @@ import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
 import EventAccessActions, { ACCESS_COPY, type EventAccess } from './EventAccessActions';
 import EventJoinRequestsCard from './EventJoinRequestsCard';
+import { duplicateCircleField, eventCircleLine } from './circle-preset';
+import { circleErrorSentence } from '@/features/circles/useCircleActions';
 
 /** The icon over each figure under an event's title. */
 const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
@@ -239,13 +241,15 @@ export default function SessionDetailPage() {
       ...(session?.visibility ? { visibility: session.visibility } : {}),
       format: session ? resolveEventFormat(session) : undefined,
       config: session?.config,
+      // T13: and the circle it is for (the server lets only the circle's managers name it).
+      ...duplicateCircleField(session ?? {}),
     }),
     onSuccess: (res: any) => {
       const newId = res.data?.data?.id;
       addToast('Event duplicated! Edit the new event to set a date.', 'success');
       if (newId) navigate(`/sessions/${newId}`);
     },
-    onError: () => addToast('Failed to duplicate event', 'error'),
+    onError: (err: unknown) => addToast(circleErrorSentence(err, 'Failed to duplicate event'), 'error'),
   });
 
   const unregisterMutation = useMutation({
@@ -351,6 +355,12 @@ export default function SessionDetailPage() {
           <div>
             <h1 className="text-2xl font-bold text-[#1a1a2e]">{session.title || 'Event'}</h1>
             {session.description && <p className="text-gray-500 mt-1 text-sm">{session.description}</p>}
+            {/* T13: an event for a whole circle says so, and links the circle. */}
+            {session.circle && (
+              <Link to={`/circles/${session.circle.id}`} data-testid="event-circle" className="mt-1 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-medium text-rsn-red hover:underline [overflow-wrap:anywhere]">
+                <CircleDashed className="h-4 w-4 shrink-0" /> {eventCircleLine(session.circle.name)}
+              </Link>
+            )}
             <p className="text-gray-400 mt-2 text-sm flex items-center gap-1.5">
               <Calendar className="h-4 w-4" />
               {session.scheduledAt ? `${formatDateTime(session.scheduledAt)} ${LOCAL_TIME_LABEL}` : 'No date set'}

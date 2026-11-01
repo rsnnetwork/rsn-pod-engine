@@ -6,6 +6,10 @@
 //
 // 25 Oct walkthrough: the form defaulted to speed networking whatever the pod, a "Video meeting" was created with five
 // 8-minute rounds, and the title's "Required" sat three screens above the button on a phone.
+//
+// T13 (1 Nov 2026; 30 Oct review 6.5, L20): from a circle (?circleId=, its managers only) the form is for everyone in
+// it: it says so, lists the circle's pods you run first, starts Private (the circle's members and the people invited)
+// and sends the circle. The event still lives in a pod you run; with none, "No pod to schedule in yet" as before.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -29,6 +33,11 @@ import {
   podChangeFormat, shownEventKeys, startingPreset, type EventPod, type NewEventBody,
 } from './event-format-form';
 import { useEventFormatForm } from './useEventFormatForm';
+import { circleEntities, type CircleDetail } from '@/features/circles/circle-logic';
+import { circleForLine, circleGate, podsForCircle } from './circle-preset';
+
+/** What the form reads of the circle an event is for. */
+type PresetCircle = Pick<CircleDetail, 'id' | 'name' | 'memberCount' | 'pods'>;
 
 interface PodRow {
   id: string;
@@ -56,6 +65,7 @@ export default function CreateSessionPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const fromPodId = params.get('podId');
+  const fromCircleId = params.get('circleId');
   const user = useAuthStore((s) => s.user);
   const userId = user?.id as string | undefined;
   const isAdmin = isAdminRole(user?.role);
@@ -74,13 +84,41 @@ export default function CreateSessionPage() {
     enabled: !fromPodId,
     meta: { entities: [...(userId ? [E.userPods(userId)] : []), ...(isAdmin ? [E.adminPods] : [])] },
   });
+  // The circle's page shares this query (same key and answer), so arriving from it the preset shows at once.
+  const circleQuery = useQuery<CircleDetail>({
+    queryKey: ['circle', fromCircleId],
+    queryFn: () => api.get(`/circles/${fromCircleId}`).then((r) => r.data.data),
+    enabled: !!fromCircleId,
+    retry: (failureCount, err) => statusOf(err) !== 404 && failureCount < 2,
+    meta: { entities: fromCircleId ? circleEntities(fromCircleId, userId) : [] },
+  });
+  const circle = circleQuery.data;
+  const gate = fromCircleId ? circleGate({ isLoading: circleQuery.isLoading, circle }) : 'ok';
   const pod = podQuery.data;
-  const back = fromPodId ? `/pods/${fromPodId}` : '/sessions';
-  const backLabel = fromPodId ? (pod ? `Back to ${pod.name}` : 'Back to Pod') : 'Back to Events';
-  const formProps = { isAdmin, back };
+  const back = fromCircleId ? `/circles/${fromCircleId}` : fromPodId ? `/pods/${fromPodId}` : '/sessions';
+  const backLabel = fromCircleId ? (circle ? `Back to ${circle.name}` : 'Back to circle')
+    : fromPodId ? (pod ? `Back to ${pod.name}` : 'Back to Pod') : 'Back to Events';
+  const formProps = { isAdmin, back, circle: fromCircleId && gate === 'ok' ? circle : undefined };
 
   let body: ReactNode;
-  if (fromPodId) {
+  if (gate === 'loading') body = <FormSkeleton />;
+  else if (gate === 'missing') {
+    body = (
+      <Notice
+        title="We couldn't open that circle"
+        text="It may have been archived. You can still schedule an event in one of your pods."
+        action={{ label: 'Schedule without the circle', onClick: () => navigate('/sessions/new') }}
+      />
+    );
+  } else if (gate === 'refused' && circle) {
+    body = (
+      <Notice
+        title={`Only the people who run ${circle.name} can schedule an event for it.`}
+        text="Ask its owner to schedule it, or schedule an event in one of your pods."
+        action={{ label: `Back to ${circle.name}`, onClick: () => navigate(back) }}
+      />
+    );
+  } else if (fromPodId) {
     if (podQuery.isLoading) body = <FormSkeleton />;
     else if (!pod) {
       body = (
@@ -131,7 +169,7 @@ export default function CreateSessionPage() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <button onClick={() => navigate(back)} className="flex min-h-[44px] items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
+      <button onClick={() => navigate(back)} className="flex min-h-[44px] items-center gap-2 text-left text-gray-500 hover:text-gray-800 transition-colors text-sm">
         <ArrowLeft className="h-4 w-4" /> {backLabel}
       </button>
       <h1 className="text-2xl font-bold text-[#1a1a2e] animate-fade-in">Schedule an Event</h1>
@@ -171,9 +209,11 @@ interface FormProps {
   pods: PodRow[];
   isAdmin: boolean;
   back: string;
+  /** T13: the circle the event is for (?circleId=, one the organiser runs). */
+  circle?: PresetCircle;
 }
 
-function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
+function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
   const podFieldId = useId();
@@ -193,8 +233,10 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
   const matchingChoices = useMatchingChoices(isAdmin);
   const offered = offeredFormats(pod?.podType ?? null);
   // T11 (L17): "Who can join" starts from the pod's own access and follows the pod until the organiser chooses.
+  // T13: a circle's event starts Private, which for it means the circle's members (and the pod's) and the invited.
   const [chosenVisibility, setChosenVisibility] = useState<EventVisibility | null>(null);
-  const visibility = chosenVisibility ?? defaultEventVisibility(pod?.visibility);
+  const visibility = chosenVisibility ?? (circle ? 'private' : defaultEventVisibility(pod?.visibility));
+  const { inCircle, others } = podsForCircle(pods, circle?.pods.map((p) => p.podId) ?? []);
 
   /** The filled-in title follows the type and the pod until the member writes their own. */
   function refreshTitle(nextFormat: EventFormat) {
@@ -226,7 +268,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
 
   const create = useMutation({
     networkMode: 'always',
-    mutationFn: (body: NewEventBody & { visibility: EventVisibility }) => api.post('/sessions', body),
+    mutationFn: (body: NewEventBody & { visibility: EventVisibility; circleId?: string }) => api.post('/sessions', body),
     onSuccess: (res) => {
       addToast('Event scheduled!', 'success');
       const id = res.data?.data?.id;
@@ -239,7 +281,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
     onError: ev.refused,
     onSettled: ev.settled,
   });
-  const submit = ev.onSubmit((values) => create.mutate({ ...eventBody(values, { isAdmin }), visibility }));
+  const submit = ev.onSubmit((values) => create.mutate({ ...eventBody(values, { isAdmin }), visibility, ...(circle ? { circleId: circle.id } : {}) }));
   const typeLabel = pod ? POD_TYPES[pod.podType]?.label : undefined;
 
   return (
@@ -250,6 +292,12 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
           <Settings className="h-5 w-5 text-rsn-red" /> Basic Info
         </h2>
         <div className="space-y-5">
+          {circle && (
+            <div data-testid="event-circle-preset" className="rounded-xl border border-rsn-red/20 bg-rsn-red/5 px-4 py-3">
+              <p className="text-xs font-medium text-gray-500">Circle</p>
+              <p className="mt-0.5 text-sm font-semibold text-[#1a1a2e] [overflow-wrap:anywhere]">{circleForLine(circle.name, circle.memberCount)}</p>
+            </div>
+          )}
           {fixedPod ? (
             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
               <p className="text-xs font-medium text-gray-500">Pod</p>
@@ -267,7 +315,18 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
                 {...register('podId', { onChange: (e) => followPod(podOf(e.target.value), ev.formatChosen.current) })}
               >
                 <option value="">Select a pod</option>
-                {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {circle && inCircle.length > 0 ? (
+                  <>
+                    <optgroup label={`In ${circle.name}`}>
+                      {inCircle.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </optgroup>
+                    {others.length > 0 && (
+                      <optgroup label="Your other pods">
+                        {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </optgroup>
+                    )}
+                  </>
+                ) : pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               {errors.podId && <p className="text-xs text-red-500 mt-1">{errors.podId.message}</p>}
             </div>
@@ -308,7 +367,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, back }: FormProps) {
       </Card>
 
       <Card className="animate-fade-in-up stagger-1">
-        <EventAccessField value={visibility} onChange={setChosenVisibility} podName={pod?.name} podVisibility={pod?.visibility} />
+        <EventAccessField value={visibility} onChange={setChosenVisibility} podName={pod?.name} podVisibility={pod?.visibility} circleName={circle?.name} />
       </Card>
 
       <Card className="animate-fade-in-up stagger-1">
