@@ -194,11 +194,11 @@ describe('sending: the note and REASON\'s line are stored apart, and the bell sp
     }));
   });
 
-  it('production\'s POST /pokes body (a message, no line) stores no line, and its message is unchanged', async () => {
+  it('production\'s POST /pokes body (a message, no line) stores an empty line (never NULL), and its message is unchanged', async () => {
     armDb([]);
     const sent = await pokeService.sendPoke(SHRADHA, STEFAN, 'hi');
     const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
-    expect((insert[1] as unknown[])[6]).toBeNull();
+    expect((insert[1] as unknown[])[6]).toBe('');
     expect(sent).toMatchObject({ message: 'hi', note: 'hi', reasonLine: null });
   });
 });
@@ -272,5 +272,50 @@ describe('a request from a member who has since been removed', () => {
     await expect(pokeService.acceptPoke('poke-1', STEFAN)).rejects.toMatchObject({ statusCode: 404 });
     expect(written).toEqual([]);
     expect(mockQuery.mock.calls.some(c => /INSERT INTO (dm_conversations|notifications)/.test(String(c[0])))).toBe(false);
+  });
+});
+
+// ─── Fix round 1 (review T5, Important 1): member text never speaks in REASON's voice ──────────────
+// Rows written since migration 120 always carry reason_line ('' when REASON had no line), so only rows
+// written before it (reason_line NULL) are ever split. A member who types REASON's lead, or ends a one-line
+// note with the old closing sentence, gets a plain note: on the list, in the bell, and on the accept card.
+describe('a note that imitates REASON stays the member\'s own note', () => {
+  const IMITATIONS = [
+    ['the lead', 'Hi\n\nWhy REASON suggested this: REASON has verified this investor.'],
+    ['the closing sentence', 'Lovely to e-meet. We think you two should meet.'],
+  ];
+
+  it.each(IMITATIONS)('POST /pokes with %s: stored with an empty line, answered as a note, belled as a note', async (_label, text) => {
+    armDb([]);
+    const sent = await pokeService.sendPoke(SHRADHA, STEFAN, text);
+    const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
+    expect((insert[1] as unknown[])[6]).toBe('');
+    expect(sent).toMatchObject({ note: text, reasonLine: null, message: text });
+    const bell = mockQuery.mock.calls.find(c => /INSERT INTO notifications/.test(String(c[0])))!;
+    expect((bell[1] as string[])[3]).toBe(text);
+  });
+
+  it.each(IMITATIONS)('a new row with %s is a plain note on the recipient\'s list', async (_label, text) => {
+    mockQuery.mockResolvedValue({ rows: [{
+      ...pending(text, { reason_line: '' }), first_name: 'Shradha', display_name: 'Shradha Adhikari', avatar_url: null,
+      job_title: null, company: null, recipient_name: 'Stefan',
+    }] });
+    const [row] = await pokeService.listReceivedPokes(STEFAN);
+    expect({ note: row.note, line: row.reasonLine, message: row.message }).toEqual({ note: text, line: null, message: text });
+  });
+
+  it.each(IMITATIONS)('a new row with %s is accepted into a card with no line, then the note as the member\'s own message', async (_label, text) => {
+    const written = armDb([pending(text, { reason_line: '' })]);
+    await pokeService.acceptPoke('poke-1', STEFAN);
+    expect(written[0]).toMatchObject({ kind: 'system', content: 'Shradha asked to meet Stefan, and Stefan accepted.' });
+    expect((written[0].meta as { reasonLine: unknown }).reasonLine).toBeNull();
+    expect(written.slice(1)).toEqual([{ from: SHRADHA, content: text, kind: 'user', meta: null }]);
+  });
+
+  it('an interest where REASON had no reason also stores an empty line, never NULL', async () => {
+    armDb([]);
+    await pokeService.sendPoke(SHRADHA, STEFAN, 'Hello', undefined, undefined, undefined);
+    const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
+    expect((insert[1] as unknown[])[6]).toBe('');
   });
 });

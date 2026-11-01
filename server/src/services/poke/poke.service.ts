@@ -342,7 +342,9 @@ export async function sendPoke(
   }
 
   const trimmedMessage = cleanRequestMessage(message);
-  const storedReasonLine = cleanRequestMessage(reasonLine);
+  // Never NULL on a row written now ('' when REASON has no line): NULL marks a row from before migration
+  // 120, the only kind whose one text is split (request-text.ts), so a member's note is never read as REASON's.
+  const storedReasonLine = cleanRequestMessage(reasonLine) ?? '';
   const pokeId = uuid();
   let outcome: SendOutcome;
   try {
@@ -628,7 +630,7 @@ async function connectInTx(client: PoolClient, request: PokeRow): Promise<Connec
   const accepterName = person(accepterId)?.display_name || 'Someone';
   const firstOf = (id: string, fallback: string) => person(id)?.first_name?.trim() || person(id)?.display_name || fallback;
   const requesterFirst = firstOf(senderId, 'A member');
-  const accepterFirst = firstOf(accepterId, 'they');
+  const accepterFirst = firstOf(accepterId, 'the other member');
 
   // REASON's line and each note. A legacy line, written to the recipient, is put in the third
   // person, because both of them read the card.
@@ -646,7 +648,8 @@ async function connectInTx(client: PoolClient, request: PokeRow): Promise<Connec
   const cardContent = reasonLine
     ? `${asked} ${REASON_HEADING}: ${reasonLine}`
     : notes.length > 0 ? asked : FALLBACK_INTRO;
-  // From the sender, as the old first message was, so neither person's unread count changes.
+  // From the sender, as the old first message was. The accepter therefore has the card unread, and the
+  // sender's note after it when there is one; the sender has the accepter's own note unread when both asked.
   const messages: ThreadRow[] = [await insertThreadRow(client, conversationId, senderId, cardContent, 'system', {
     type: 'introduction', requesterId: senderId, recipientId: accepterId, reasonLine,
   })];

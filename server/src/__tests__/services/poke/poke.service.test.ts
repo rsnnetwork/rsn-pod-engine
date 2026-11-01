@@ -861,7 +861,7 @@ describe('sendPoke — both members\' screens refresh (29 Sep 2026)', () => {
     armSend('hi');
     const poke = await pokeService.sendPoke(SENDER, RECIPIENT, 'hi', undefined, 'coffee');
     const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
-    expect(insert[1]).toEqual([expect.any(String), SENDER, RECIPIENT, 'hi', null, 'coffee', null]);
+    expect(insert[1]).toEqual([expect.any(String), SENDER, RECIPIENT, 'hi', null, 'coffee', '']);
     // The value itself, not just the key: armSend answers like the database, so
     // this fails if the INSERT stops writing the column or RETURNING stops naming it.
     expect(poke.preferredFormat).toBe('coffee');

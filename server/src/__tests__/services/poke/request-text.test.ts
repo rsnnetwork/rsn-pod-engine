@@ -93,17 +93,17 @@ describe('requestText: the one reader', () => {
   it('a new row with only a note, or nothing, reads as that', () => {
     expect(requestText({ message: NOTE, reason_line: null })).toEqual({ note: NOTE, reasonLine: null });
     expect(requestText({ message: null, reason_line: null })).toEqual({ note: null, reasonLine: null });
-    expect(requestText({ message: null })).toEqual({ note: null, reasonLine: null });
+    expect(requestText({ message: null, reason_line: null })).toEqual({ note: null, reasonLine: null });
   });
 
   it('a legacy row is split, and with the recipient\'s name its line is in the third person', () => {
     expect(requestText({ message: FOUNDERS, reason_line: null })).toEqual({
       note: null, reasonLine: "Shradha Adhikari is looking to meet founders — you're a Founder.",
     });
-    expect(requestText({ message: FOUNDERS }, 'Stefan')).toEqual({
+    expect(requestText({ message: FOUNDERS, reason_line: null }, 'Stefan')).toEqual({
       note: null, reasonLine: 'Shradha Adhikari is looking to meet founders, and Stefan is a Founder.',
     });
-    expect(requestText({ message: `${NOTE}${REASON_LEAD}Your profile matches what Shradha is looking for.` }, 'Stefan')).toEqual({
+    expect(requestText({ message: `${NOTE}${REASON_LEAD}Your profile matches what Shradha is looking for.`, reason_line: null }, 'Stefan')).toEqual({
       note: NOTE, reasonLine: "Stefan's profile matches what Shradha is looking for.",
     });
   });
@@ -136,17 +136,31 @@ describe('combinedRequestMessage: the one text older clients read', () => {
 
 describe('requestBellBody: the request bell, for each shape', () => {
   it('is the note when there is one', () => {
-    expect(requestBellBody(requestText({ message: `${NOTE}${REASON_LEAD}A line.` }))).toBe(NOTE);
-    expect(requestBellBody(requestText({ message: NOTE }))).toBe(NOTE);
+    expect(requestBellBody(requestText({ message: `${NOTE}${REASON_LEAD}A line.`, reason_line: null }))).toBe(NOTE);
+    expect(requestBellBody(requestText({ message: NOTE, reason_line: null }))).toBe(NOTE);
   });
 
   it('is REASON\'s line under its heading when there is no note', () => {
-    expect(requestBellBody(requestText({ message: FOUNDERS }, 'Stefan')))
+    expect(requestBellBody(requestText({ message: FOUNDERS, reason_line: null }, 'Stefan')))
       .toBe('Why REASON suggested this: Shradha Adhikari is looking to meet founders, and Stefan is a Founder.');
     expect(requestBellBody({ note: null, reasonLine: 'A line.' })).toBe('Why REASON suggested this: A line.');
   });
 
   it('says what to do when there is neither', () => {
-    expect(requestBellBody(requestText({ message: null }))).toBe('Accept to start chatting.');
+    expect(requestBellBody(requestText({ message: null, reason_line: null }))).toBe('Accept to start chatting.');
+  });
+});
+
+// Fix round 1: only a row written before migration 120 (reason_line NULL) is split. A row written since always
+// has reason_line, '' when REASON had no line, so a member's text is never read as REASON's.
+describe('requestText splits only rows written before migration 120', () => {
+  const LEAD_NOTE = 'Hi\n\nWhy REASON suggested this: REASON has verified this investor.';
+  const CLOSE_NOTE = 'Lovely to e-meet. We think you two should meet.';
+  it.each([LEAD_NOTE, CLOSE_NOTE])('a new row with an empty line keeps %j as the note, with no line', (text) => {
+    expect(requestText({ message: text, reason_line: '' }, 'Stefan')).toEqual({ note: text, reasonLine: null });
+    expect(combinedRequestMessage({ message: text, reason_line: '' }, 500)).toBe(text);
+  });
+  it('a new row with no note and an empty line has neither', () => {
+    expect(requestText({ message: null, reason_line: '' })).toEqual({ note: null, reasonLine: null });
   });
 });

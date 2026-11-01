@@ -14,6 +14,13 @@
 // splitLegacyRequestMessage takes them apart, and requestText is the one reader every path goes
 // through, so a legacy row and a new one read the same everywhere.
 //
+// Which rows are legacy (fix round 1, 1 Nov 2026): every row the server writes since 120 carries
+// reason_line, '' when REASON had no line (sendPoke). Only a row with reason_line NULL, one written
+// by the server before 120, is ever split. The mark is written by the server alone, so no request
+// body can make a member's note ("Hi\n\nWhy REASON suggested this: ...", or a line ending "We think
+// you two should meet.") read as REASON's line: it stays the member's note, everywhere. A server of
+// the old release still running during the deploy writes NULL, and its rows really are the old shape.
+//
 // A module of its own rather than part of poke.service.ts, for the reason request-message.ts gives:
 // the tests that stand in for poke.service replace that whole module, and a helper read from there
 // would be undefined in them.
@@ -88,21 +95,29 @@ export function fitToUnits(text: string, max: number): string | null {
   return null;
 }
 
-/** A request row as the readers have it: its two text columns. */
+/**
+ * A request row as the readers have it: its two text columns. reason_line is required, so a reader
+ * that forgot to select it cannot compile: read as missing, a new row would be split as a legacy one.
+ */
 export interface RequestTextRow {
   message: string | null;
-  reason_line?: string | null;
+  /** NULL only on rows written before migration 120; '' on a new row where REASON had no line. */
+  reason_line: string | null;
 }
+
+/** True for a row the server wrote before migration 120: the only rows whose one text is split. */
+export const isLegacyRequestRow = (row: RequestTextRow): boolean => row.reason_line === null || row.reason_line === undefined;
 
 /**
  * The note and REASON's line of one request. A row written since migration 120 carries its line in
- * reason_line and only the note in message. A row with no line is read as a legacy text, which is
- * also right for a new request that has only a note or nothing (shapes c and d). With the
- * recipient's name a legacy line is put in the third person, as new lines are written.
+ * reason_line ('' for none) and only the member's note in message, which is never split, whatever it
+ * says. A row written before 120 is split. With the recipient's name a legacy line is put in the
+ * third person, as new lines are written.
  */
 export function requestText(row: RequestTextRow, recipientName?: string | null): MeetingRequestText {
-  const line = row.reason_line?.trim();
-  if (line) return { note: row.message?.trim() || null, reasonLine: line };
+  if (!isLegacyRequestRow(row)) {
+    return { note: row.message?.trim() || null, reasonLine: row.reason_line?.trim() || null };
+  }
   const split = splitLegacyRequestMessage(row.message ?? '');
   return {
     note: split.note,
@@ -118,9 +133,9 @@ export function requestText(row: RequestTextRow, recipientName?: string | null):
  * is never cut.
  */
 export function combinedRequestMessage(row: RequestTextRow, max: number): string | null {
-  if (!row.reason_line?.trim()) return row.message?.trim() || null;
-  const { note, reasonLine } = requestText(row);
-  const line = reasonLine as string;
+  if (isLegacyRequestRow(row)) return row.message?.trim() || null;
+  const { note, reasonLine: line } = requestText(row);
+  if (!line) return note;
   const lead = note ? `${note}${REASON_LEAD}` : `${REASON_HEADING}: `;
   const fitted = fitToUnits(line, max - lead.length);
   return fitted ? `${lead}${fitted}` : note;
