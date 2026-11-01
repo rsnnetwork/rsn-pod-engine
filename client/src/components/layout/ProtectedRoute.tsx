@@ -3,21 +3,13 @@ import { useAuthStore } from '@/stores/authStore';
 import { PageLoader } from '@/components/ui/Spinner';
 import { type ReactNode } from 'react';
 import { signInPathFor } from '@/features/auth/return-path';
+import { gateTarget, isGateExempt, onboardingDue } from './onboarding-gate';
 
 /**
- * D2 — always-on re-onboarding gate, keyed on `user.onboardingStatus`
- * (D1: GET /auth/session now returns this; see shared/src/types/user.ts).
- * Supersedes T1-2's flag-gated legacy block (env-flagged, off by default),
- * which is deleted entirely — no rollback flag, this gate is always on.
- *
- *   - Any status other than 'completed' gates the user to /onboarding,
- *     except the exempt paths below (deliberately no role exemption —
- *     admins go through onboarding too, they're the first test cohort).
- *   - `undefined` (a stale cached session payload mid-deploy, from before
- *     D1 shipped) fails OPEN — never lock a client out over a field it
- *     doesn't know about yet.
- *   - Exempt: /onboarding itself (no redirect loop), /invite/:code (accept
- *     flow must complete), and live-event session paths (/session/:id/live).
+ * The onboarding gate, always on (D2, then the 30 Oct review: L3). onboarding-gate.ts says who is due and for what:
+ * the whole new onboarding for anyone who has not done it (admins too: deliberately no role exemption), or only
+ * where they are based for someone who did it without. Its exempt pages are never diverted, and a session that does
+ * not say fails open, never locking a client out over a field it does not know yet.
  */
 export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   const { user, isLoading } = useAuthStore();
@@ -28,15 +20,9 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   // /welcome only redirects to /login, and that redirect dropped the page.
   if (!user) return <Navigate to={signInPathFor(location.pathname, location.search)} replace />;
 
-  const status = user.onboardingStatus;
-  const needsOnboarding = status !== undefined && status !== 'completed';
-  const exempt =
-    location.pathname === '/onboarding' ||
-    location.pathname.startsWith('/invite/') ||
-    (location.pathname.startsWith('/session/') && location.pathname.includes('/live'));
-  if (needsOnboarding && !exempt) {
-    const safeRedirect = location.pathname.startsWith('/onboarding') ? '/' : location.pathname;
-    return <Navigate to={`/onboarding?redirect=${encodeURIComponent(safeRedirect)}`} replace />;
+  const due = onboardingDue(user);
+  if (due && !isGateExempt(location.pathname)) {
+    return <Navigate to={gateTarget(due, location.pathname, location.search)} replace />;
   }
 
   return <>{children}</>;

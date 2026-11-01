@@ -18,8 +18,10 @@ export function useFlowSteps(state: OnboardingV2State, answers: OnboardingV2Answ
   const [params, setParams] = useSearchParams();
   const location = useLocation();
   const openedByFlow = (location.state as { openedByFlow?: boolean } | null)?.openedByFlow === true;
-  // Decided when the page opened: finishing the flow must not turn it into edit mode on the way out.
-  const finished = useRef(state.status === 'completed');
+  // Decided when the page opened: finishing the flow must not turn it into edit mode on the way out. Only the new
+  // onboarding counts (30 Oct review, 2.1): someone who finished the earlier one is taken through this one, prefilled
+  // from their earlier answers, never into edit mode.
+  const finished = useRef(state.status === 'completed' && state.version === 2);
   // The answer screen 7 was left from for [Edit]: on the way back it lands there, not at the top of the page.
   const [returnedFrom, setReturnedFrom] = useState<QuestionStepKey | null>(null);
 

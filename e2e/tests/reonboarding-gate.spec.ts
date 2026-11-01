@@ -1,6 +1,6 @@
 import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
+import { gotoRetry, cleanup, APP } from '../helpers/live-ui';
 
 // Task D2 — always-on re-onboarding route gate. D1 made GET /auth/session
 // return onboardingStatus ('not_started'|'in_progress'|'completed'|
@@ -15,15 +15,10 @@ import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 // under test — the same "real user + direct DB setup" pattern the rest of
 // the harness uses (see e2e/helpers/auth.ts, e2e/tests/onboarding-states.spec.ts).
 //
-// Scenario (b) drives the real ChatbotOnboarding UI through to the confirm
-// step, but stubs the three onboarding endpoints that would otherwise need a
-// real LLM round trip (status/chat/confirm) — same route.fetch()+fulfill()
-// technique as onboarding-states.spec.ts's stubStatus, which forwards the
-// real response and only swaps the JSON body. The confirm stub also performs
-// the real DB flip (onboarding_status='completed') that the real backend
-// would do, so the subsequent GET /auth/session (never stubbed) reports the
-// gate as satisfied exactly like it would after a real confirm — proving the
-// CLIENT gate/redirect contract without needing a live Anthropic call.
+// 30 Oct review (T3b): the gate also takes members who finished only the earlier onboarding through the new
+// one (onboarding_version 2), and createTestUser() seeds completed members as v2 finishers based in a city. Scenario
+// (b) walks the new onboarding against the real server, with no stub (the chatbot onboarding it once drove is gone
+// from the preview).
 
 let browser: Browser;
 const ctxs: BrowserContext[] = [];
@@ -90,98 +85,62 @@ test('completed user is untouched — no redirect away from /', async () => {
   console.log('  ✓ completed status: no gate redirect, stayed on /.');
 });
 
-test('completing onboarding (stubbed chat + confirm) exits the gate and lands on the redirect target', async () => {
-  test.setTimeout(60_000);
+// 30 Oct review (T3b): the gate now takes members through the NEW onboarding (v2), so this walks it for real, against
+// the real server: no stub. The member is update_required; the gate sends them to /onboarding?redirect=/profile; they
+// answer the four questions, screen 7 shows where they are based, and "Show me my matches" lands them on /profile
+// with no loop back into onboarding.
+const tile = (page: Page, label: string) => page.getByRole('checkbox', { name: label, exact: true });
+const button = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+
+test('completing the new onboarding exits the gate and lands on the redirect target', async () => {
+  test.setTimeout(120_000);
   const user = await createTestUser('reonb-b');
   userIds.push(user.id);
   await setStatus(user.id, 'update_required');
-  // Task asklink: ChatbotOnboarding now asks once for a LinkedIn URL up front
-  // when GET /onboarding/known has none on file (a new 'asklink' stage,
-  // decided before this test's stubbed /onboarding/status is ever consulted
-  // — see ChatbotOnboarding.tsx). createTestUser() never seeds linkedin_url,
-  // so without this the member would land on the ask screen instead of the
-  // chat textarea this test drives. This test is about the re-onboarding
-  // GATE/confirm flow, not the ask screen, so give it a linkedin_url here
-  // (same reconciliation as e2e/tests/onboarding-states.spec.ts).
-  await pool.query("UPDATE users SET linkedin_url = $2 WHERE id = $1", [
-    user.id,
-    'https://www.linkedin.com/in/reonb-b-e2e',
-  ]);
 
   const page = await openPage(user);
-
-  // Force the fast not_found path (skips the confirm card, opens straight to
-  // chat) so the test never depends on real enrichment timing.
-  await page.route(`${SERVER}/api/onboarding/status`, async (route) => {
-    if (route.request().method() !== 'GET') return route.continue();
-    const response = await route.fetch();
-    await route.fulfill({
-      response,
-      json: {
-        success: true,
-        data: {
-          status: 'update_required',
-          enrichment: { status: 'not_found', error: null, startedAt: null, completedAt: null },
-          opening: 'not_found',
-        },
-      },
-    });
-  });
-
-  // Stub the one chat turn so "ready" flips immediately — no real LLM call.
-  await page.route(`${SERVER}/api/onboarding/chat`, async (route) => {
-    if (route.request().method() !== 'POST') return route.continue();
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ success: true, data: { reply: 'Thanks, that helps.', ready: true } }),
-    });
-  });
-
-  // Best-effort live-profile call fired in the background — stub so it never
-  // reaches a real LLM either (fire-and-forget on the client, .catch()'d).
-  await page.route(`${SERVER}/api/onboarding/profile`, async (route) => {
-    if (route.request().method() !== 'POST') return route.continue();
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ success: true, data: { profile: {} } }),
-    });
-  });
-
-  // Stub confirm: perform the real DB flip a genuine confirm call would do
-  // (onboarding_status='completed'), then answer success — this is the
-  // "stubbing the confirm" path the task brief allows in place of driving a
-  // real LLM extraction call.
-  await page.route(`${SERVER}/api/onboarding/confirm`, async (route) => {
-    if (route.request().method() !== 'POST') return route.continue();
-    await setStatus(user.id, 'completed');
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ success: true, data: { summary: 'stub summary', profileComplete: true } }),
-    });
-  });
-
-  // Land on a distinct protected path so "lands on the redirect target" is a
-  // meaningful assertion (not just the same path we started from).
   await gotoRetry(page, `${APP}/profile`);
-  await page.waitForURL(/\/onboarding\?redirect=/, { timeout: 20_000 });
+  await page.waitForURL(/\/onboarding\?(.*&)?redirect=/, { timeout: 20_000 });
   expect(decodeURIComponent(page.url())).toContain('redirect=/profile');
 
-  await expect(page.locator('textarea[aria-label="Your answer"]')).toBeVisible({ timeout: 20_000 });
-  await page.locator('textarea[aria-label="Your answer"]').fill('I want to meet other founders.');
-  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByRole('heading', { name: "Welcome to REASON. We're glad you're here." })).toBeVisible({ timeout: 30_000 });
+  await button(page, "Let's go").click();
+  await button(page, 'Continue with email').click();
+  for (const [title, answer] of [
+    ['Who would you like to meet?', 'I would like to meet investors.'],
+    ['What are you hoping to find?', 'I am looking to raise funding.'],
+    ['What can you offer others?', 'I can give advice and mentoring.'],
+    ['How would you describe yourself?', 'I am a founder or business owner.'],
+  ]) {
+    await expect(page.getByRole('heading', { name: title })).toBeVisible({ timeout: 20_000 });
+    await tile(page, answer).click();
+    await button(page, 'Continue').click();
+  }
+  await expect(page.getByRole('heading', { name: "Here's how others will see you" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByLabel('Where are you based?', { exact: true })).toHaveValue('Copenhagen, Denmark');
+  await button(page, 'Show me my matches').click();
 
-  await expect(page.getByRole('button', { name: /Yes, use this/i })).toBeVisible({ timeout: 15_000 });
-  await page.getByRole('button', { name: /Yes, use this/i }).click();
-
-  // checkSession() re-fetches the REAL /auth/session (never stubbed), which
-  // now reports 'completed' thanks to the DB flip above — the gate should
-  // let the client-side navigate(redirect) land on /profile and stay there.
-  await page.waitForURL(/\/profile$/, { timeout: 20_000 });
+  // useConfirm re-reads the real GET /auth/session (onboardingVersion 2, a city), so the gate lets go.
+  await page.waitForURL(/\/profile$/, { timeout: 30_000 });
+  await page.waitForTimeout(2000);
   expect(page.url()).not.toContain('/onboarding');
-  console.log('  ✓ confirm completes onboarding_status and lands on the original redirect target (/profile).');
+  const row = (await pool.query(`SELECT onboarding_status, onboarding_version FROM users WHERE id = $1`, [user.id])).rows[0];
+  expect(row).toEqual({ onboarding_status: 'completed', onboarding_version: 2 });
+  console.log('  ✓ the new onboarding completes and lands on the original redirect target (/profile).');
+});
+
+test('a member who finished only the earlier onboarding is sent to the new one', async () => {
+  test.setTimeout(60_000);
+  const user = await createTestUser('reonb-v1');
+  userIds.push(user.id);
+  await pool.query(`UPDATE users SET onboarding_version = NULL WHERE id = $1`, [user.id]);
+
+  const page = await openPage(user);
+  await gotoRetry(page, `${APP}/`);
+  await page.waitForURL(/\/onboarding\?(.*&)?redirect=/, { timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: "Welcome to REASON. We're glad you're here." })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
+  console.log('  ✓ completed (earlier onboarding) + / -> the new onboarding, not edit mode.');
 });
 
 test('/invite/:code passes through ungated for an update_required user', async () => {

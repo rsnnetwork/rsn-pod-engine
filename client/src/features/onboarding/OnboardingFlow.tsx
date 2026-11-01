@@ -15,7 +15,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { OnboardingV2Answers, OnboardingV2State, OnboardingV2Step } from '@rsn/shared';
+import { isLocationComplete, type OnboardingV2Answers, type OnboardingV2State, type OnboardingV2Step } from '@rsn/shared';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
@@ -89,6 +89,11 @@ function Flow({ state }: { state: OnboardingV2State }) {
   const ownWordsRef = useRef<HTMLInputElement>(null);
   const steps = useFlowSteps(state, answers);
   const { edit, screen } = steps;
+  // Sent here by the gate only for where they are based (30 Oct review, 1.2): a finished member with no location, or
+  // only a country. Decided when the page opened, like edit mode. The location field starts with the cursor in it,
+  // Cancel is not offered (it would only bounce off the gate), and Save goes on to the page they were going to.
+  const [locationDue] = useState(() => edit === 'profile' && state.status === 'completed' && state.version === 2
+    && !isLocationComplete(state.profile.location));
 
   // Screen 6: every answer LinkedIn's stated role supports, ticked for them to confirm or change, when they chose LinkedIn.
   const guesses = linkedinOn ? state.linkedin.prefill?.selfGuesses : undefined;
@@ -144,7 +149,8 @@ function Flow({ state }: { state: OnboardingV2State }) {
           // A save that opens the tour (a member who has never seen it) says nothing: on a phone the toast sat over the
           // tour's Skip, and the tour, over the changed page they come back to, says it was saved (fix round 1).
           if (!tourOpensAfterConfirm(state.tour)) addToast('Your changes are saved.', 'success');
-          leave(edit);
+          if (locationDue) navigate(steps.redirect, { replace: true, state: LANDED });
+          else leave(edit);
         } else {
           // Where the gate sent them from, when that is a page of this app; else For You. The tour opens either way,
           // and LANDED tells it to leave them on that page when it closes.
@@ -259,6 +265,8 @@ function Flow({ state }: { state: OnboardingV2State }) {
         fieldError={form.fieldError}
         formError={form.formError}
         nameRef={form.nameRef}
+        locationRef={form.locationRef}
+        focusLocation={locationDue}
         zone={form.zone}
         onZone={form.setZone}
         keptLinkedinPhoto={form.keptPhoto}
@@ -271,7 +279,7 @@ function Flow({ state }: { state: OnboardingV2State }) {
         askForLinkedin={!linkedinOn && !form.linkedinLater && (!edit || !state.profile.linkedinUrl)}
         onLinkedinLater={() => form.setLinkedinLater(true)}
         footer={edit
-          ? <FooterButtons back={{ label: 'Cancel', onClick: () => leave(edit) }} primary={{ label: 'Save', onClick: finishProfile, busy }} />
+          ? <FooterButtons back={locationDue ? undefined : { label: 'Cancel', onClick: () => leave(edit) }} primary={{ label: 'Save', onClick: finishProfile, busy }} />
           : <FooterButtons primary={{ label: PROFILE.finish, onClick: finishProfile, busy }} />}
       />
     );

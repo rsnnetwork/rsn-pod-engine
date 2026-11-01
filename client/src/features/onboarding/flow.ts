@@ -12,7 +12,7 @@
 
 import {
   ONBOARDING_V2_MEET, ONBOARDING_V2_FIND, ONBOARDING_V2_OFFER, ONBOARDING_V2_SELF,
-  ONBOARDING_V2_COPY, ONBOARDING_V2_LIMITS, ONBOARDING_V2_OTHER_KEYS, ONBOARDING_V2_STEPS, shortLabelFor,
+  ONBOARDING_V2_COPY, ONBOARDING_V2_LIMITS, ONBOARDING_V2_OTHER_KEYS, ONBOARDING_V2_STEPS, isCountryOnly, shortLabelFor,
   type OnboardingOption, type OnboardingV2Answers, type OnboardingV2ConfirmRequest,
   type OnboardingV2LinkedinStatus, type OnboardingV2ProfileInput, type OnboardingV2State, type OnboardingV2Step,
 } from '@rsn/shared';
@@ -26,7 +26,8 @@ export const WELCOME = {
   lead: 'Every good connection starts with a reason.',
   lines: [
     'On REASON, you connect with people you want to meet, who also want to meet you, for a specific reason.',
-    'Answer quick questions and we will suggest the potential mutuals for you.',
+    // The 30 Oct review's sentence (2.2), in place of the brief's.
+    "Answer a few quick questions and we'll suggest potential mutuals for you.",
   ],
   button: "Let's go",
 } as const;
@@ -54,6 +55,23 @@ export const PROFILE = {
   later: 'Later',
   finish: 'Show me my matches',
 } as const;
+
+/**
+ * Screen 7's "Where are you based?" (30 Oct review, 1.2): one "City, country" field, required. Only a country ("USA")
+ * is not where someone is based, so it asks for the city too. The server refuses both with `missing`.
+ */
+export const LOCATION = {
+  label: 'Where are you based?',
+  placeholder: 'City, country',
+  missing: 'Please add your city and country.',
+  addCity: 'Add your city too',
+} as const;
+
+/** What to say about a location: nothing when it says where they are based. */
+export function locationProblem(value: string): string | null {
+  if (!value.trim()) return LOCATION.missing;
+  return isCountryOnly(value) ? LOCATION.addCity : null;
+}
 
 /** Screen 6, when LinkedIn's stated role points at some answers and they have not chosen yet. */
 export const SELF_GUESS_LINE = "We picked these from your LinkedIn. Change them if they're wrong.";
@@ -335,6 +353,7 @@ export interface ProfileFields {
   jobTitle: string;
   company: string;
   industry: string;
+  location: string;
 }
 
 /** The longest each screen 7 field may be: the server's limits. */
@@ -343,6 +362,7 @@ export const PROFILE_MAX: Record<keyof ProfileFields, number> = {
   jobTitle: L.jobTitleMaxLen,
   company: L.companyMaxLen,
   industry: L.industryMaxLen,
+  location: L.locationMaxLen,
 };
 
 /** What the profile already holds for the fields screen 7 may leave empty. */
@@ -354,7 +374,8 @@ const MAY_BE_EMPTY = ['jobTitle', 'company', 'industry'] as const;
  * The profile half of confirm, on the server's contract: a role, company or industry that is missing (or null) is
  * kept, and "" clears it. So what they typed is sent; a field they emptied that the profile holds is sent as "", and
  * the server clears it; a field never filled and left empty is not sent at all. The name is never cleared: a blank
- * one is "not given" (null), and the screen does not send one.
+ * one is "not given" (null), and the screen does not send one. Where they are based is never cleared either: it is
+ * required, the screen refuses it empty before anything is sent, so only a value is sent.
  */
 export function profileInput(
   fields: ProfileFields, stored: StoredProfile, timezone: string | null, useLinkedinPhoto: boolean,
@@ -365,6 +386,8 @@ export function profileInput(
     if (typed) input[key] = typed;
     else if (tidy(stored[key])) input[key] = '';
   }
+  const location = tidy(fields.location);
+  if (location) input.location = location;
   if (useLinkedinPhoto) input.useLinkedinPhoto = true;
   return input;
 }
@@ -599,7 +622,7 @@ const QUESTION_OF: Readonly<Record<string, QuestionStepKey>> = {
   selfKinds: 'q4', selfOther: 'q4',
 };
 const OWN_WORDS_FIELDS = new Set(['meetOther', 'findOther', 'offerOther', 'selfOther']);
-const PROFILE_FIELDS = new Set(['displayName', 'jobTitle', 'company', 'industry', 'timezone']);
+const PROFILE_FIELDS = new Set(['displayName', 'jobTitle', 'company', 'industry', 'location', 'timezone']);
 
 export interface ConfirmProblem {
   /** Said as the server said it when it is a sentence for members; otherwise the caller's own. */

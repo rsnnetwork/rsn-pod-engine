@@ -1,13 +1,15 @@
 // ─── Screen 7: "Here's how others will see you" ────────────────────────────
 //
-// Photo, name, role and company, industry and time zone, then "Your answers".
+// Photo, name, role and company, industry, where they are based and time zone,
+// then "Your answers".
 // What LinkedIn suggested is filled in and marked, and is only saved when they
 // press the last button; nothing it says is written over what the profile
 // already holds. While the lookup is still running a calm line says so, and
 // its result fills in whatever they have not typed by then.
 
-import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
-import type { OnboardingV2Answers, OnboardingV2State } from '@rsn/shared';
+import { useEffect, useId, useRef, useState, type ReactNode, type Ref, type RefObject } from 'react';
+import { isCountryOnly, type OnboardingV2Answers, type OnboardingV2State } from '@rsn/shared';
+import { LOCATION_SUGGESTIONS } from '@/lib/location-suggestions';
 import { Linkedin } from 'lucide-react';
 import { Spinner } from '@/components/ui/Spinner';
 import OnboardingShell from './OnboardingShell';
@@ -17,7 +19,7 @@ import YourAnswers from './YourAnswers';
 import AddLinkedinCard from './AddLinkedinCard';
 import LinkedinField from './LinkedinField';
 import {
-  PROFILE, PROFILE_MAX, linkedinForInput, linkedinNote,
+  LOCATION, PROFILE, PROFILE_MAX, linkedinForInput, linkedinNote,
   type ProfileFields, type QuestionStepKey,
 } from './flow';
 
@@ -33,6 +35,9 @@ interface Props {
   /** A refusal or a failure about the screen as a whole. */
   formError: string | null;
   nameRef: Ref<HTMLInputElement>;
+  locationRef: RefObject<HTMLInputElement>;
+  /** Sent here only for where they are based (the gate): the cursor starts in that field. */
+  focusLocation?: boolean;
   zone: string | null;
   onZone: (zone: string) => void;
   keptLinkedinPhoto: string | null;
@@ -51,11 +56,16 @@ interface Props {
 
 const INPUT = 'h-12 w-full rounded-xl border bg-white px-3 text-base text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rsn-red sm:text-sm';
 
-function Field({ label, field, shown, onField, max, placeholder, error, inputRef }: {
+function Field({ label, field, shown, onField, max, placeholder, error, hint, list, inputRef }: {
   label: string; field: keyof ProfileFields; shown: ShownField; onField: Props['onField']; max: number;
   placeholder: string; error?: string | null; inputRef?: Ref<HTMLInputElement>;
+  /** A line under the field while nothing is wrong with it yet ("Add your city too"). */
+  hint?: string | null;
+  /** The id of a datalist of suggestions. */
+  list?: string;
 }) {
   const id = useId();
+  const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : shown.fromLinkedin ? `${id}-from` : undefined;
   return (
     <div className="min-w-0">
       <label htmlFor={id} className="mb-1 block text-sm font-medium">{label}</label>
@@ -66,14 +76,16 @@ function Field({ label, field, shown, onField, max, placeholder, error, inputRef
         value={shown.value}
         maxLength={max}
         placeholder={placeholder}
+        list={list}
         autoComplete={field === 'displayName' ? 'name' : field === 'jobTitle' ? 'organization-title' : field === 'company' ? 'organization' : 'off'}
         onChange={e => onField(field, e.target.value)}
         aria-invalid={!!error}
-        aria-describedby={error ? `${id}-error` : shown.fromLinkedin ? `${id}-from` : undefined}
+        aria-describedby={describedBy}
         className={`${INPUT} ${error ? 'border-rsn-red' : 'border-gray-300'}`}
       />
       {error && <p id={`${id}-error`} className="mt-1 text-sm text-rsn-red" role="alert">{error}</p>}
-      {!error && shown.fromLinkedin && (
+      {!error && hint && <p id={`${id}-hint`} className="mt-1 text-sm text-gray-600">{hint}</p>}
+      {!error && !hint && shown.fromLinkedin && (
         <p id={`${id}-from`} className="mt-1 flex items-center gap-1 text-xs text-gray-500">
           <Linkedin className="h-3 w-3" aria-hidden /> From your LinkedIn
         </p>
@@ -84,11 +96,18 @@ function Field({ label, field, shown, onField, max, placeholder, error, inputRef
 
 export default function ProfileScreen(props: Props) {
   const {
-    state, answers, fields, onField, fieldError, formError, nameRef, zone, onZone, keptLinkedinPhoto, onKeepLinkedinPhoto,
-    onEditAnswer, returnedFrom, onLinkedin, linkedinOn, askForLinkedin, onLinkedinLater, footer,
+    state, answers, fields, onField, fieldError, formError, nameRef, locationRef, focusLocation, zone, onZone, keptLinkedinPhoto,
+    onKeepLinkedinPhoto, onEditAnswer, returnedFrom, onLinkedin, linkedinOn, askForLinkedin, onLinkedinLater, footer,
   } = props;
   const [changingLink, setChangingLink] = useState(false);
   const formErrorLine = useRef<HTMLParagraphElement>(null);
+  const locationList = useId();
+
+  useEffect(() => {
+    if (!focusLocation) return;
+    locationRef.current?.scrollIntoView({ block: 'center' });
+    locationRef.current?.focus({ preventScroll: true });
+  }, [focusLocation, locationRef]);
 
   useEffect(() => {
     if (returnedFrom) document.querySelector(`[data-testid="answer-${returnedFrom}"]`)?.scrollIntoView({ block: 'center' });
@@ -165,6 +184,14 @@ export default function ProfileScreen(props: Props) {
             label="Industry" field="industry" shown={fields.industry} onField={onField} max={PROFILE_MAX.industry}
             placeholder="For example, food and drink" error={fieldError('industry')}
           />
+          <Field
+            label={LOCATION.label} field="location" shown={fields.location} onField={onField} max={PROFILE_MAX.location}
+            placeholder={LOCATION.placeholder} error={fieldError('location')} inputRef={locationRef} list={locationList}
+            hint={isCountryOnly(fields.location.value) ? LOCATION.addCity : null}
+          />
+          <datalist id={locationList}>
+            {LOCATION_SUGGESTIONS.map(place => <option key={place} value={place} />)}
+          </datalist>
           <TimeZoneField zone={zone} onChange={onZone} error={fieldError('timezone')} />
         </section>
 

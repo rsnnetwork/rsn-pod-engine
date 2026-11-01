@@ -7,7 +7,7 @@ import {
   type OnboardingV2Answers,
 } from '@rsn/shared';
 import {
-  QUESTIONS, WELCOME, SIGNUP, PROFILE, SELF_GUESS_LINE, FROM_LINKEDIN, SPECIFIC, OWN_WORDS_MAX,
+  QUESTIONS, WELCOME, SIGNUP, PROFILE, SELF_GUESS_LINE, FROM_LINKEDIN, SPECIFIC, OWN_WORDS_MAX, LOCATION, PROFILE_MAX, locationProblem,
   LINKEDIN_EMPTY, LINKEDIN_EXAMPLE,
   questionFor, questionProblem, firstIncomplete, stepToShow, stepAfter, stepBefore, parseEdit,
   toggleKey, confirmBody, draftPatch, profileValue, profileInput, linkedinForInput, linkedinInputProblem,
@@ -36,7 +36,7 @@ describe('the brief\'s words, verbatim', () => {
     expect(WELCOME.lead).toBe('Every good connection starts with a reason.');
     expect(WELCOME.lines).toEqual([
       'On REASON, you connect with people you want to meet, who also want to meet you, for a specific reason.',
-      'Answer quick questions and we will suggest the potential mutuals for you.',
+      "Answer a few quick questions and we'll suggest potential mutuals for you.",
     ]);
     expect(WELCOME.button).toBe("Let's go");
   });
@@ -398,30 +398,55 @@ describe('what goes to the server', () => {
   // member was told "Your changes are saved." for a change that was not made.
   const NOTHING_STORED = { jobTitle: null, company: null, industry: null };
   it('the profile half: what they typed, trimmed; a field never filled and left empty sends nothing; the LinkedIn photo only when kept', () => {
-    expect(profileInput({ displayName: ' Ana Baker ', jobTitle: '', company: ' Crumb ', industry: '  ' }, NOTHING_STORED, 'Asia/Kathmandu', false)).toEqual({
+    expect(profileInput({ displayName: ' Ana Baker ', jobTitle: '', company: ' Crumb ', industry: '  ', location: '' }, NOTHING_STORED, 'Asia/Kathmandu', false)).toEqual({
       displayName: 'Ana Baker', company: 'Crumb', timezone: 'Asia/Kathmandu',
     });
-    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '' }, NOTHING_STORED, null, true)).toEqual({
+    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '', location: '' }, NOTHING_STORED, null, true)).toEqual({
       displayName: 'Ana', timezone: null, useLinkedinPhoto: true,
     });
   });
 
   it('a stored role, company or industry they emptied is sent as "", which clears it; one they left as it was is sent as it is', () => {
     const stored = { jobTitle: 'Head chef', company: 'Crumb', industry: 'Food and drink' };
-    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '   ', industry: 'Food and drink' }, stored, 'Europe/Berlin', false)).toEqual({
+    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '   ', industry: 'Food and drink', location: '' }, stored, 'Europe/Berlin', false)).toEqual({
       displayName: 'Ana', jobTitle: '', company: '', industry: 'Food and drink', timezone: 'Europe/Berlin',
     });
     // A stored value that is only spaces is no value: leaving it empty sends nothing.
-    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '' }, { jobTitle: '  ', company: null, industry: undefined }, null, false))
+    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '', location: '' }, { jobTitle: '  ', company: null, industry: undefined }, null, false))
       .toEqual({ displayName: 'Ana', timezone: null });
     // A new value over a stored one is just the new value.
-    expect(profileInput({ displayName: 'Ana', jobTitle: 'Pastry chef', company: 'Crumb', industry: '' }, stored, null, false))
+    expect(profileInput({ displayName: 'Ana', jobTitle: 'Pastry chef', company: 'Crumb', industry: '', location: '' }, stored, null, false))
       .toEqual({ displayName: 'Ana', jobTitle: 'Pastry chef', company: 'Crumb', industry: '', timezone: null });
+  });
+
+  // 30 Oct review (1.2): "Where are you based?" is required and never cleared, so only a value is sent, tidied; it is
+  // not one of the fields that may be emptied.
+  it('sends where they are based, trimmed, and never "" for it', () => {
+    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '', location: '  Copenhagen, Denmark ' }, NOTHING_STORED, null, false))
+      .toEqual({ displayName: 'Ana', location: 'Copenhagen, Denmark', timezone: null });
+    // Emptied over a stored one, it is still not sent as "": location is not a field that may be emptied.
+    const stored = { ...NOTHING_STORED, location: 'Manchester, UK' };
+    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '', location: '  ' }, stored, null, false))
+      .toEqual({ displayName: 'Ana', timezone: null });
+  });
+
+  it('says what is missing from a location: all of it, or the city', () => {
+    expect(LOCATION).toEqual({
+      label: 'Where are you based?', placeholder: 'City, country',
+      missing: 'Please add your city and country.', addCity: 'Add your city too',
+    });
+    expect(locationProblem('')).toBe('Please add your city and country.');
+    expect(locationProblem('   ')).toBe('Please add your city and country.');
+    expect(locationProblem('USA')).toBe('Add your city too');
+    expect(locationProblem('United Kingdom')).toBe('Add your city too');
+    expect(locationProblem('Copenhagen, Denmark')).toBeNull();
+    expect(locationProblem('Omaha, NE ')).toBeNull();
+    expect(PROFILE_MAX.location).toBe(200);
   });
 
   it('never sends "" for the name: it is never cleared', () => {
     for (const displayName of ['', '   ']) {
-      const sent = profileInput({ displayName, jobTitle: '', company: '', industry: '' }, { jobTitle: 'CEO', company: null, industry: null }, null, false);
+      const sent = profileInput({ displayName, jobTitle: '', company: '', industry: '', location: '' }, { jobTitle: 'CEO', company: null, industry: null }, null, false);
       expect(sent.displayName).toBeNull();
     }
   });
@@ -681,6 +706,9 @@ describe('where a refusal from confirm is shown: on the thing it is about', () =
     expect(confirmProblem(refused({ 'profile.timezone': ['Choose your time zone from the list, for example Asia/Kathmandu.'] }), FALLBACK))
       .toEqual({ message: 'Choose your time zone from the list, for example Asia/Kathmandu.', question: null, ownWords: false, field: 'timezone' });
     expect(confirmProblem(refused({ 'profile.company': ['Keep this under 120 characters.'] }), FALLBACK).field).toBe('company');
+    // 30 Oct review (1.2): the server's refusal of a missing or country-only location, under the location field.
+    expect(confirmProblem(refused({ 'profile.location': ['Please add your city and country.'] }), FALLBACK))
+      .toEqual({ message: 'Please add your city and country.', question: null, ownWords: false, field: 'location' });
   });
 
   it('anything else, a lost connection or a refusal about nothing on screen, belongs to the screen as a whole', () => {

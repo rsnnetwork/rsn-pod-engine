@@ -19,6 +19,8 @@ import { linkedinBoxValue, linkedinSave } from './linkedin-box';
 import PencilButton from '@/components/picture/PencilButton';
 import PictureEditor from '@/components/picture/PictureEditor';
 import { useMemberPicture } from '@/components/picture/useMemberPicture';
+import { LOCATION, locationProblem } from '@/features/onboarding/flow';
+import { LOCATION_SUGGESTIONS } from '@/lib/location-suggestions';
 
 interface ProfileForm {
   displayName: string;
@@ -407,35 +409,26 @@ export default function ProfilePage() {
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">
-                <MapPin className="h-4 w-4 text-gray-400" /> Location
+              {/* Required (30 Oct review, 1.2): a city and a country. Save is refused, with the words under the field,
+                  while it is empty or only a country. */}
+              <label htmlFor="location" className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">
+                <MapPin className="h-4 w-4 text-gray-400" /> Location <span className="text-rsn-red" aria-hidden>*</span>
               </label>
               <input
-                {...register('location')}
-                placeholder="Start typing a city..."
+                id="location"
+                {...register('location', { validate: (v) => locationProblem(v ?? '') ?? true })}
+                placeholder={LOCATION.placeholder}
                 list="location-options"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200"
+                aria-required="true"
+                aria-invalid={errors.location ? true : undefined}
+                aria-describedby={errors.location ? 'location-error' : undefined}
+                className={`w-full scroll-mt-32 rounded-xl border bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 ${errors.location ? 'border-rsn-red' : 'border-gray-200'}`}
               />
+              {errors.location?.message && (
+                <p id="location-error" role="alert" className="mt-1 text-xs text-red-700">{errors.location.message}</p>
+              )}
               <datalist id="location-options">
-                {[
-                  'New York, US', 'Los Angeles, US', 'San Francisco, US', 'Chicago, US', 'Miami, US', 'Austin, US', 'Seattle, US', 'Boston, US', 'Denver, US', 'Washington DC, US',
-                  'London, UK', 'Manchester, UK', 'Edinburgh, UK',
-                  'Berlin, DE', 'Munich, DE', 'Hamburg, DE', 'Frankfurt, DE',
-                  'Paris, FR', 'Lyon, FR',
-                  'Amsterdam, NL', 'Rotterdam, NL',
-                  'Copenhagen, DK', 'Aarhus, DK',
-                  'Stockholm, SE', 'Gothenburg, SE',
-                  'Oslo, NO', 'Helsinki, FI',
-                  'Zurich, CH', 'Geneva, CH',
-                  'Barcelona, ES', 'Madrid, ES',
-                  'Lisbon, PT', 'Dublin, IE',
-                  'Milan, IT', 'Rome, IT',
-                  'Vienna, AT', 'Brussels, BE', 'Prague, CZ', 'Warsaw, PL',
-                  'Tel Aviv, IL', 'Dubai, AE', 'Singapore, SG', 'Hong Kong, HK',
-                  'Tokyo, JP', 'Sydney, AU', 'Melbourne, AU', 'Toronto, CA', 'Vancouver, CA',
-                  'São Paulo, BR', 'Mexico City, MX', 'Buenos Aires, AR',
-                  'Mumbai, IN', 'Bangalore, IN', 'Bangkok, TH', 'Seoul, KR',
-                ].map(city => <option key={city} value={city} />)}
+                {LOCATION_SUGGESTIONS.map(city => <option key={city} value={city} />)}
               </datalist>
             </div>
             <Input label="Timezone" {...register('timezone')} placeholder="America/New_York" />
