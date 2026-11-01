@@ -494,3 +494,54 @@ describe('linking an entity to a circle: who may, and who hears it', () => {
     expect(linkService.unlinkEntity).not.toHaveBeenCalled();
   });
 });
+
+// ─── Final fix wave SM3 (2 Nov 2026): a malformed id in a circle path is a 400 in words, never a Postgres 500 ─────
+
+describe('every circle route checks the ids in its path', () => {
+  const COMMENT = '9e3f1a2b-6c4d-4e5f-8a7b-1c2d3e4f5a66';
+  const CIRCLE_WORDS = "We couldn't find that circle.";
+  const POD_WORDS = "We couldn't find that pod.";
+  const POST_WORDS = "We couldn't find that post.";
+  const COMMENT_WORDS = "We couldn't find that comment.";
+  type Probe = { method: 'get' | 'post' | 'delete'; path: (bad: string) => string; says: string; reached: () => unknown[][]; role?: string; body?: object };
+  const probes: Array<[string, Probe]> = [
+    ['POST /:id/join', { method: 'post', path: (b) => `/circles/${b}/join`, says: CIRCLE_WORDS, reached: () => jest.mocked(circleService.joinCircle).mock.calls }],
+    ['POST /:id/leave', { method: 'post', path: (b) => `/circles/${b}/leave`, says: CIRCLE_WORDS, reached: () => jest.mocked(circleService.leaveCircle).mock.calls }],
+    ['POST /:id/archive', { method: 'post', path: (b) => `/circles/${b}/archive`, says: CIRCLE_WORDS, role: 'admin', reached: () => jest.mocked(circleService.archiveCircle).mock.calls }],
+    ['GET /of-pod/:podId', { method: 'get', path: (b) => `/circles/of-pod/${b}`, says: POD_WORDS, reached: () => jest.mocked(circleService.listCirclesOfPod).mock.calls }],
+    ['DELETE /:id/pods/:podId', { method: 'delete', path: (b) => `/circles/${CIRCLE}/pods/${b}`, says: POD_WORDS, role: 'admin', reached: () => jest.mocked(circleService.detachPod).mock.calls }],
+    ['GET /:id/posts', { method: 'get', path: (b) => `/circles/${b}/posts`, says: CIRCLE_WORDS, reached: () => jest.mocked(wallService.listPosts).mock.calls }],
+    ['POST /:id/posts', { method: 'post', path: (b) => `/circles/${b}/posts`, says: CIRCLE_WORDS, body: { clientId: COMMENT, content: 'Hi' }, reached: () => jest.mocked(wallService.createPost).mock.calls }],
+    ['GET /posts/:postId', { method: 'get', path: (b) => `/circles/posts/${b}`, says: POST_WORDS, reached: () => jest.mocked(wallService.getPost).mock.calls }],
+    ['POST /posts/:postId/react', { method: 'post', path: (b) => `/circles/posts/${b}/react`, says: POST_WORDS, body: { reaction: 'like' }, reached: () => jest.mocked(wallService.reactToPost).mock.calls }],
+    ['POST /posts/:postId/share', { method: 'post', path: (b) => `/circles/posts/${b}/share`, says: POST_WORDS, body: { circleId: CIRCLE, clientId: COMMENT }, reached: () => jest.mocked(wallService.sharePost).mock.calls }],
+    ['DELETE /posts/:postId', { method: 'delete', path: (b) => `/circles/posts/${b}`, says: POST_WORDS, reached: () => jest.mocked(wallService.deletePost).mock.calls }],
+    ['POST /posts/:postId/pin', { method: 'post', path: (b) => `/circles/posts/${b}/pin`, says: POST_WORDS, role: 'admin', reached: () => jest.mocked(wallService.pinPost).mock.calls }],
+    ['POST /posts/:postId/unpin', { method: 'post', path: (b) => `/circles/posts/${b}/unpin`, says: POST_WORDS, role: 'admin', reached: () => jest.mocked(wallService.pinPost).mock.calls }],
+    ['GET /posts/:postId/comments', { method: 'get', path: (b) => `/circles/posts/${b}/comments`, says: POST_WORDS, reached: () => jest.mocked(wallService.listComments).mock.calls }],
+    ['POST /posts/:postId/comments', { method: 'post', path: (b) => `/circles/posts/${b}/comments`, says: POST_WORDS, body: { content: 'Hi' }, reached: () => jest.mocked(wallService.addComment).mock.calls }],
+    ['POST /comments/:commentId/like', { method: 'post', path: (b) => `/circles/comments/${b}/like`, says: COMMENT_WORDS, body: { liked: true }, reached: () => jest.mocked(wallService.likeComment).mock.calls }],
+    ['DELETE /comments/:commentId', { method: 'delete', path: (b) => `/circles/comments/${b}`, says: COMMENT_WORDS, reached: () => jest.mocked(wallService.deleteComment).mock.calls }],
+  ];
+
+  describe.each(probes)('%s', (_label, probe) => {
+    const send = (id: string) => request(app)[probe.method](probe.path(id)).set(as(MEMBER, probe.role ?? 'member')).send(probe.body ?? {});
+
+    it.each(['undefined', 'not-a-uuid', `${CIRCLE}x`])('refuses %s with a 400 in words, and the service is never reached', async (bad) => {
+      const res = await send(bad);
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.message).toBe(probe.says);
+      expect(probe.reached()).toEqual([]);
+    });
+
+    it("lets a well-formed id through, lower-cased, as production's client sends it", async () => {
+      const id = probe.says === POD_WORDS ? POD : probe.says === POST_WORDS ? POST : probe.says === COMMENT_WORDS ? COMMENT : CIRCLE;
+      const res = await send(id.toUpperCase());
+      expect(res.status).not.toBe(400);
+      expect(res.status).toBeLessThan(500);
+      expect(probe.reached().length).toBeGreaterThan(0);
+      expect(probe.reached()[0]).toContain(id);
+    });
+  });
+});
