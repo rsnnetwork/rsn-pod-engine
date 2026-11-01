@@ -84,7 +84,7 @@ function MessageNotificationPrefsCard() {
 }
 
 /**
- * "Sound for new messages" (30 Oct 2026, L8): a chime when a message comes in. Kept on this device, as volume is, so a
+ * "Sound for new messages and calls" (30 Oct 2026, L8; calls X3, 2 Nov): a chime when a message comes in, a ring for a call. Kept on this device, as volume is, so a
  * laptop at work can be quiet while a phone is not. On until it is switched off.
  */
 function MessageSoundToggle() {
@@ -94,8 +94,8 @@ function MessageSoundToggle() {
       <Toggle
         enabled={on}
         onToggle={() => { setMessageSoundOn(!on); setOn(!on); }}
-        label="Sound for new messages"
-        description="A short sound on this device when a message comes in, unless you are reading that conversation, in an event or in a meeting."
+        label="Sound for new messages and calls"
+        description="A short sound on this device when a message comes in (unless you are reading that conversation) or someone calls you, never while you are in an event or a meeting."
       />
     </div>
   );

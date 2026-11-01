@@ -69,6 +69,26 @@ export function playMessageChime(messageId?: string): void {
 }
 
 /**
+ * An incoming call (X3, 2 Nov 2026): the same rising pair three times over, so it reads as a ring and not a message.
+ * Who plays it, and when not, is useMessageChime's business, under the same per-device setting. Silent on failure.
+ */
+export function playCallRing(ringId?: string): void {
+  try {
+    const audio = getCtx();
+    if (audio) {
+      const now = audio.currentTime;
+      for (let i = 0; i < 3; i++) {
+        tone(audio, 988, now + i * 0.5, 0.12);
+        tone(audio, 1319, now + i * 0.5 + 0.14, 0.2);
+      }
+    }
+  } catch {
+    /* fail-open: a missed ring must never break the page */
+  }
+  window.dispatchEvent(new CustomEvent('reason:call-ring', { detail: { id: ringId ?? null } }));
+}
+
+/**
  * Browsers keep audio locked until the page is pressed or typed in; the first press of either readies it, so the first
  * message after that can sound. A message before any press stays silent: no page can change that. Returns the undo.
  */
@@ -86,7 +106,7 @@ export function readyAudioOnFirstPress(): () => void {
   return stop;
 }
 
-/** The setting "Sound for new messages", kept on this device (as volume is), on until it is switched off. */
+/** The setting "Sound for new messages and calls", kept on this device (as volume is), on until it is switched off. */
 const MESSAGE_SOUND_KEY = 'reason:message-sound';
 
 export function messageSoundOn(): boolean {

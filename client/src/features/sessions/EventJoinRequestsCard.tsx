@@ -53,9 +53,9 @@ export default function EventJoinRequestsCard({ sessionId, focus }: Props) {
   const { data, isLoading, isError, refetch } = useQuery<RequestRow[]>({
     queryKey: ['session-join-requests', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/requests`, { params: { status: 'pending' } }).then((r) => r.data.data ?? []),
-    // The server sends session:<id> with session:<id>:join-requests on every request write; the client key for the
-    // second lands with main's server key (see task-T11-report.md).
-    meta: { entities: [E.session(sessionId)] },
+    // The server sends session:<id> with session:<id>:join-requests on every request write; the card follows its own
+    // tag too, so it keeps working if the broad one is ever narrowed (X3, 2 Nov 2026).
+    meta: { entities: [E.session(sessionId), E.sessionJoinRequests(sessionId)] },
   });
 
   useEffect(() => {

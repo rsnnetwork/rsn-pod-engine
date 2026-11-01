@@ -61,8 +61,9 @@ export const ADD_TITLE = 'Add people who took part';
 export const ADD_PEOPLE = 'Add people';
 export const ADD_FAILED = 'They could not be added. Try again.';
 export const EVERYONE_IN = 'Everyone who took part is already in the group.';
-// The server's words (routes/groups.ts): the name a closed account goes by, and an add with nobody chosen.
-export const FORMER_MEMBER = 'Former member';
+// The server's words (routes/groups.ts): the name a closed account goes by (the client's one constant), and an add with
+// nobody chosen.
+export { FORMER_MEMBER } from '../../lib/former-member';
 export const CHOOSE_SOMEONE = 'Choose someone to add.';
 
 // ── The message box: the server's limits and its words for them (routes/groups.ts) ──

@@ -9,7 +9,7 @@ import Linkify from '@/components/ui/Linkify';
 import { Spinner } from '@/components/ui/Spinner';
 import { cn } from '@/lib/utils';
 import { errorMessage } from '@/features/reason/errors';
-import { FORMER_MEMBER } from '@/features/messages/group-chat-text';
+import { FORMER_MEMBER } from '@/lib/former-member';
 import { localizeMeetingText } from '@/features/messages/scheduler-flow';
 import { localWhen } from '@/features/messages/SystemMessageCard';
 import type { DmMessage } from '@/features/messages/thread/dm-message';

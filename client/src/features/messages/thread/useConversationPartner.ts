@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
-import { FORMER_MEMBER } from '../group-chat-text';
+import { FORMER_MEMBER } from '@/lib/former-member';
 import { schedulingKey, type Scheduling } from '../scheduling-types';
 
 /** The inbox row's fields this reads; the inbox query (MessagesPage, ChatQuickAccess) has the same key and request. */
