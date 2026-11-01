@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwrig
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // THE WALL AS A SOCIAL FEED (4 Sep 2026, Ali).
 //
@@ -240,6 +241,7 @@ test('on a phone: react from the picker, comment, reply, like, share, follow the
   await expect(page.getByTestId(`comment-like-${cId}`)).toHaveText(/Liked · 1/);
 
   page.once('dialog', d => d.accept());
+  await acceptConfirmDialogs(page);
   await page.getByTestId(`comment-delete-${rep.rows[0].id}`).click();
   await expect(page.getByText('Adding: happy to test it.')).toHaveCount(0, { timeout: 15_000 });
   await expect.poll(async () => (await postAs(reactor, postId)).commentCount).toBe(1);
@@ -291,6 +293,7 @@ test('on a phone: react from the picker, comment, reply, like, share, follow the
   console.log('  ✓ bell entry → the post.');
 
   aPage.once('dialog', d => d.accept());
+  await acceptConfirmDialogs(aPage);
   await aPage.getByTestId(`delete-post-${postId}`).click();
   await expect(aPage.getByTestId(`wall-post-${postId}`)).toHaveCount(0, { timeout: 15_000 });
   const gone = await pool.query(`SELECT deleted_at FROM circle_posts WHERE id = $1`, [postId]);

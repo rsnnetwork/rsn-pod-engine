@@ -1,6 +1,7 @@
 import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // Task E3 — admin per-user inspector UI, driven through the REAL client:
 //   1. An admin opens /admin/users/:id for a seeded member and sees the
@@ -193,6 +194,7 @@ test('Refresh enrichment fires the admin endpoint with the target user id (via r
   });
 
   page.once('dialog', (dialog) => dialog.accept());
+  await acceptConfirmDialogs(page);
   await page.getByRole('button', { name: /Refresh enrichment/i }).click();
   await requestSeen;
 

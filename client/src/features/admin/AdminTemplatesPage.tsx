@@ -12,6 +12,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
+import { useConfirm } from '@/hooks/useConfirm';
 
 // Phase 3 — templates now configure the FULL engine weight set (was 5 lossy
 // columns). Keys match the engine's MatchingWeights exactly and ride in a JSONB
@@ -112,6 +113,7 @@ export default function AdminTemplatesPage() {
   const [editModal, setEditModal] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<TemplateForm>(DEFAULTS);
+  const { ask, confirmDialog } = useConfirm();
 
   const { data: templates, isLoading } = useQuery({
     queryKey: ['admin-templates'],
@@ -140,6 +142,7 @@ export default function AdminTemplatesPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/templates/${id}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-templates'] }); addToast('Template deleted', 'success'); },
+    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'The template was not deleted. Please try again.', 'error'),
   });
 
   const openCreate = () => { setEditId(null); setForm(DEFAULTS); setEditModal(true); };
@@ -211,7 +214,7 @@ export default function AdminTemplatesPage() {
                       <Pencil className="h-4 w-4" />
                     </button>
                     {!t.isDefault && (
-                      <button aria-label="Delete template" onClick={() => { if (confirm('Delete this template?')) deleteMutation.mutate(t.id); }} className="p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500">
+                      <button aria-label="Delete template" onClick={async () => { if (await ask({ title: `Delete ${t.name}?`, body: 'This cannot be undone.', confirmLabel: 'Delete', tone: 'danger' })) deleteMutation.mutate(t.id); }} className="p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500">
                         <Trash2 className="h-4 w-4" />
                       </button>
                     )}
@@ -305,6 +308,7 @@ export default function AdminTemplatesPage() {
           </div>
         </div>
       </Modal>
+      {confirmDialog}
     </div>
   );
 }

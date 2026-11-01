@@ -4,6 +4,7 @@ import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers
 import { createPod, addPodMember, createSession, registerForSession, endSession, apiRequest } from '../helpers/api';
 import { skipEventCheckIn } from '../helpers/event-check-in';
 import { Pool } from 'pg';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED edge-case smoke for WS2/WS3 against PRODUCTION — the cases the main
 // smokes left to unit pins, now browser-driven:
@@ -88,6 +89,7 @@ async function openUserPage(user: TestUser, sessionId: string): Promise<{ contex
   await context.addInitScript((sid: string) => { sessionStorage.setItem(`rsn_checkin_${sid}`, '1'); }, sessionId);
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page, sessionId);
   // The event check-in question covers the top bar (and Leave Event) until it is skipped.
   await skipEventCheckIn(page);
@@ -483,6 +485,7 @@ test('edges: trio browser-close → grace demote → reopen gets the late-return
   console.log(`  ${closer.displayName} reopens the tab…`);
   const reopened = await sessions.get(closer.id)!.context.newPage();
   reopened.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(reopened);
   await gotoLive(reopened, sessionId);
   // A new tab asks the check-in question again (it is kept per tab).
   await skipEventCheckIn(reopened);

@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwrig
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for WS2 "nobody waits alone" against PRODUCTION.
 //
@@ -93,6 +94,7 @@ async function openUserPage(user: TestUser): Promise<{ context: BrowserContext; 
   const page = await context.newPage();
   // The "Main Room" leave button uses window.confirm — auto-accept.
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page);
   return { context, page };
 }
@@ -104,6 +106,7 @@ async function openUserPage(user: TestUser): Promise<{ context: BrowserContext; 
 async function reopenPage(entry: { context: BrowserContext; page: Page }, frames?: string[]): Promise<Page> {
   const page = await entry.context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   if (frames) {
     page.on('websocket', (ws) => {
       if (!ws.url().includes('/socket.io/')) return;

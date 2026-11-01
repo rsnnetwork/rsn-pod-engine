@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwrig
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession } from '../helpers/api';
 import { Pool } from 'pg';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for S16 against PRODUCTION — co-host management on the EVENT
 // DETAIL page (Ali, 6 Jun: "we need co-host pre event here on this page too").
@@ -40,6 +41,7 @@ async function openUser(user: TestUser, url: string, viewport?: { width: number;
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoWithRetry(page, url);
   return { context, page };
 }

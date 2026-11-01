@@ -22,6 +22,7 @@ import { useToastStore } from '@/stores/toastStore';
 import WallComments from './WallComments';
 import { REACTIONS, canDeleteWallItem, canPinWallPost, domainOf, isConflict, reactionOf, timeAgo, wallErrorSentence } from './wall-logic';
 import type { ReactionKey, WallConfig, WallPost, WallViewer } from './wall-types';
+import { useConfirm } from '@/hooks/useConfirm';
 
 const actionBtn = 'flex items-center gap-1.5 min-h-[44px] px-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-800';
 
@@ -43,6 +44,7 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
   const [pickerOpen, setPickerOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState<null | 'menu' | 'target'>(null);
   const [reacting, setReacting] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
   // What the server answered to my last reaction, until the post itself brings the same numbers back.
   const [local, setLocal] = useState<{ reactionCount: number; reactions: WallPost['reactions']; myReaction: ReactionKey | null } | null>(null);
   const reactionsSeen = `${p.reactionCount}|${p.myReaction}|${JSON.stringify(p.reactions)}`;
@@ -97,7 +99,7 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
   };
 
   const del = async () => {
-    if (!confirm('Delete this post?')) return;
+    if (!(await ask({ title: 'Delete this post?', body: 'Its comments go with it. This cannot be undone.', confirmLabel: 'Delete', tone: 'danger' }))) return;
     try {
       await api.delete(`${config.itemBase}/posts/${p.id}`);
       addToast('Post deleted.', 'info');
@@ -330,6 +332,7 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
           </div>
         </div>
       </Card>
+      {confirmDialog}
     </div>
   );
 }

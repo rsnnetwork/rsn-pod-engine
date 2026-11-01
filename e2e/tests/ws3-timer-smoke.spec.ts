@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwrig
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for WS3/B2+B3 (timer warnings + final-stretch reveal) vs PROD:
 //   60s round, timerVisibility=last_30s, 2 participants.
@@ -57,6 +58,7 @@ async function openUserPage(user: TestUser): Promise<{ context: BrowserContext; 
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page);
   return { context, page };
 }

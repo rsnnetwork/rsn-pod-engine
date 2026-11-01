@@ -4,6 +4,7 @@ import { createPod, addPodMember, createSession, registerForSession, apiRequest 
 import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { expectReachable } from '../helpers/viewport-fit';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Group chats in Messages (COM-04, 25 Oct 2026, Stefan: "Can there be 3, 5, 10, 20, 50 people in a chat? There should
@@ -77,6 +78,7 @@ async function open(u: TestUser, who: string, path: string, viewport: { width: n
   await primePreview(ctx);
   const page = await ctx.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   page.on('pageerror', (e) => { if (!/ResizeObserver loop/.test(e.message)) pageErrors.push(`${who}: ${e.message}`); });
   await gotoRetry(page, `${APP}${path}`);
   return page;

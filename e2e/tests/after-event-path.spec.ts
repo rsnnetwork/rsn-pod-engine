@@ -6,6 +6,7 @@ import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { skipEventCheckIn } from '../helpers/event-check-in';
 import { expectReachable } from '../helpers/viewport-fit';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // After the event (COM-02/03/05, 25 Oct 2026, Stefan and Claus on production): Stefan left and landed on the events
@@ -91,6 +92,7 @@ async function open(u: TestUser, who: string, path: string, viewport: { width: n
   await primePreview(ctx);
   const page = await ctx.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   page.on('pageerror', (e) => { if (!BENIGN.test(e.message)) pageErrors.push(`${who}: ${e.message}`); });
   await gotoRetry(page, `${APP}${path}`);
   return page;

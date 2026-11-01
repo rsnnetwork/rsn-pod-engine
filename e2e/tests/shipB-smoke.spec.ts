@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for canonical Ship B (087ba44) + the room-end location fix
 // (9a496c2) against PRODUCTION. Covers the 4-Jun live-test regression:
@@ -104,6 +105,7 @@ async function newUserPage(user: TestUser, errors: string[]): Promise<Page> {
   // The breakout header's Main Room / Leave buttons use native confirm()
   // dialogs — Playwright auto-dismisses those unless explicitly accepted.
   page.on('dialog', (d) => d.accept().catch(() => {}));
+  await acceptConfirmDialogs(page);
   page.on('websocket', (ws) => {
     ws.on('framesent', (f) => {
       const p = typeof f.payload === 'string' ? f.payload : f.payload.toString();

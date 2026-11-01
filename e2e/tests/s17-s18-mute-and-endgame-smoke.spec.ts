@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import { Pool } from 'pg';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for S17 + S18 against PRODUCTION (live-test 2026-06-06, b1):
 //   S17 — host mute/unmute must be FAST and must STICK. The unmute relay
@@ -68,6 +69,7 @@ async function openUserPage(user: TestUser, sessionId: string): Promise<{ contex
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page, sessionId);
   return { context, page };
 }

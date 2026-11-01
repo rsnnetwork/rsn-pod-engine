@@ -14,6 +14,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { isAdmin } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import { useConfirm } from '@/hooks/useConfirm';
 
 const TYPE_CONFIG: Record<string, { label: string; icon: typeof Users; variant: 'info' | 'warning' | 'default' }> = {
   pod: { label: 'Pod Invite', icon: Users, variant: 'info' },
@@ -51,6 +52,7 @@ export default function InvitesPage() {
   const [maxUses, setMaxUses] = useState(10);
   const [generatedLink, setGeneratedLink] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState('');
+  const { ask, confirmDialog } = useConfirm();
   const debouncedSearch = useDebouncedValue(userSearch, 300);
   const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
 
@@ -642,7 +644,7 @@ export default function InvitesPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => { if (confirm('Revoke this invite? It will no longer be usable.')) revokeMutation.mutate(inv.id); }}
+                        onClick={async () => { if (await ask({ title: 'Withdraw this invite?', body: 'Its link stops working.', confirmLabel: 'Withdraw', tone: 'danger' })) revokeMutation.mutate(inv.id); }}
                         title="Revoke invite"
                         className="text-red-400 hover:text-red-600 hover:bg-red-50"
                       >
@@ -656,6 +658,7 @@ export default function InvitesPage() {
           </div>
         )}
       </div>
+      {confirmDialog}
     </div>
   );
 }

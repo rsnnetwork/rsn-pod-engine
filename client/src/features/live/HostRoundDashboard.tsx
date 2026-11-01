@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { Clock, Wifi, WifiOff, UserMinus, Radio, AlertTriangle, ArrowRightLeft, UserPlus } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
+import { useConfirm } from '@/hooks/useConfirm';
 
 interface Props { sessionId: string; }
 
@@ -35,6 +36,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   const [moveMode, setMoveMode] = useState<{ userId: string; fromMatchId: string; displayName: string } | null>(null);
   // S25 — "+ Add person" picker open for this manual room's matchId.
   const [addMode, setAddMode] = useState<string | null>(null);
+  const { ask, confirmDialog } = useConfirm();
   const mainRoomParticipants = useInRoomParticipants();
   const hostUserId = useSessionStore(s => s.hostUserId);
   // Bug 18 — local 1s tick so per-manual-room timers re-render. This
@@ -83,8 +85,9 @@ export default function HostRoundDashboard({ sessionId }: Props) {
     return () => { socket.off('host:action_confirmed' as any, handler); };
   }, [socket, sessionId]);
 
-  const removeFromRoom = (matchId: string, userId: string) => {
-    if (!confirm('Remove this participant from their current room? Their partner will be unmatched.')) return;
+  // T2 (1 Nov 2026): each of these asks first in the page (useConfirm), never window.confirm.
+  const removeFromRoom = async (matchId: string, userId: string) => {
+    if (!(await ask({ title: 'Take them out of this room?', body: 'Their partner is left without a match.', confirmLabel: 'Take out', tone: 'danger' }))) return;
     socket?.emit('host:remove_from_room' as any, { sessionId, matchId, userId });
   };
 
@@ -100,15 +103,15 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   // panel (was only reachable inside Control Center). Mirrors HostControls'
   // bulkEndAll → host:end_breakout_all (server ends is_manual rooms only;
   // algorithm rooms are untouched). Participants are routed to rating.
-  const endAllManualRooms = () => {
+  const endAllManualRooms = async () => {
     const count = roundDashboard?.rooms.filter(r => r.status === 'active' && (r as any).isManual).length ?? 0;
-    if (!confirm(`End all ${count} manual breakout room${count !== 1 ? 's' : ''}? Participants will move to rating.`)) return;
+    if (!(await ask({ title: `End all ${count} breakout room${count !== 1 ? 's' : ''}?`, body: 'Everyone in them moves to the rating screen.', confirmLabel: 'End rooms', tone: 'danger' }))) return;
     socket?.emit('host:end_breakout_all' as any, { sessionId });
   };
 
-  const moveToRoom = (targetMatchId: string) => {
+  const moveToRoom = async (targetMatchId: string) => {
     if (!moveMode) return;
-    if (!confirm(`Move ${moveMode.displayName} to this room?`)) return;
+    if (!(await ask({ title: `Move ${moveMode.displayName} to this room?`, body: 'They leave the room they are in now.', confirmLabel: 'Move' }))) return;
     socket?.emit('host:move_to_room' as any, {
       sessionId,
       userId: moveMode.userId,
@@ -502,6 +505,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
           </div>
         )}
       </div>
+      {confirmDialog}
     </div>
   );
 }

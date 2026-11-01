@@ -16,6 +16,7 @@ import Linkify from '@/components/ui/Linkify';
 import { Spinner } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
+import { useConfirm } from '@/hooks/useConfirm';
 import { canDeleteWallItem, isConflict, normalizeComments, retryUnlessAnswered, threadOf, timeAgo, wallErrorSentence } from './wall-logic';
 import type { WallCommentList, WallComment, WallConfig, WallViewer } from './wall-types';
 
@@ -34,6 +35,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
   const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [replyDraft, setReplyDraft] = useState('');
+  const { ask, confirmDialog } = useConfirm();
   const replyRef = useRef<HTMLInputElement>(null);
 
   const thread = useQuery<WallCommentList>({
@@ -83,7 +85,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
   };
 
   const remove = async (c: WallComment) => {
-    if (!confirm('Delete this comment?')) return;
+    if (!(await ask({ title: 'Delete this comment?', body: 'Its replies go with it. This cannot be undone.', confirmLabel: 'Delete', tone: 'danger' }))) return;
     try {
       await api.delete(`${config.itemBase}/comments/${c.id}`);
       void reload();
@@ -203,6 +205,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
       {!viewer.canPost && !thread.isLoading && all.length === 0 && !thread.isError && (
         <p className="text-xs text-gray-400">No comments yet.</p>
       )}
+      {confirmDialog}
     </div>
   );
 }

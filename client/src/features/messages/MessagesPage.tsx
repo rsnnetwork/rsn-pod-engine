@@ -32,6 +32,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import { useConfirm } from '@/hooks/useConfirm';
 import {
   isCloudinaryConfigured,
   validateImageFile,
@@ -58,6 +59,8 @@ interface ConversationSummary {
   lastMessageFromMe: boolean;
   lastMessageKind?: DmMessageKind;
   unreadCount: number;
+  /** T2 (1 Nov 2026): their account was removed, suspended or banned. The thread stays; they read "Former member". */
+  otherIsFormerMember?: boolean;
 }
 
 // Phase E — client-side reaction palette. Server stores type strings so the
@@ -138,6 +141,7 @@ export default function MessagesPage() {
   const myUserId = user?.id;
   const [draft, setDraft] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
   // REASON Phase 2 — "Find a time" panel (availability windows) per thread.
   const [schedulerOpen, setSchedulerOpen] = useState(false);
   // A time on a proposal card asks the panel for that time's confirm card (26 Oct 2026).
@@ -452,7 +456,7 @@ export default function MessagesPage() {
   // Block the conversation partner (8 Sep 2026, Ali). Blocking stops future
   // messages and matches (enforced server-side); we leave the thread afterwards.
   const blockUser = async (userId: string, name: string | null) => {
-    if (!confirm(`Block ${name || 'this person'}? They won't be able to message you, and you won't be matched again. You can unblock them from their profile.`)) return;
+    if (!(await ask({ title: `Block ${name || 'this person'}?`, body: "They won't be able to message you, and you won't be matched again. You can unblock them from their profile.", confirmLabel: 'Block', tone: 'danger' }))) return;
     try {
       await api.post(`/users/${userId}/block`, {});
       addToast(`You blocked ${name || 'this person'}.`, 'success');
@@ -612,6 +616,8 @@ export default function MessagesPage() {
     otherCompany: string | null;
     otherBio: string | null;
   } | null = activeConv ?? composeTarget;
+  // T2 (1 Nov 2026): a former member's thread keeps its messages, links to no profile and takes no new ones.
+  const otherIsFormer = !!activeConv?.otherIsFormerMember;
 
   // The send (features/messages/thread/useSendMessage, 1 Nov 2026): it posts to /dm/messages, refreshes the thread
   // and the inbox, and says a refusal in the server's words. The uploads and the composer's own state stay here.
@@ -1070,13 +1076,13 @@ export default function MessagesPage() {
                   company / bio give the recipient a sense of who this is
                   before they even open the thread. truncate + line-clamp-2
                   keep this from overflowing at 360px. */}
-              <Link to={`/people/${headerContext.otherUserId}?from=Messages`} className="min-w-0 flex-1 hover:opacity-80">
+              <PersonHeaderLink to={`/people/${headerContext.otherUserId}?from=Messages`} former={otherIsFormer}>
                 <p className="truncate text-sm font-bold text-[#1a1a2e] hover:underline">
                   {headerContext.otherDisplayName || 'User'}
                 </p>
                 {/* Online status (8 Sep 2026) — green when the partner is actually
                     on the platform now (drives the Meet-now buttons too). */}
-                {activeConv && (
+                {activeConv && !otherIsFormer && (
                   <span
                     className="flex items-center gap-1 text-[11px]"
                     title={partnerOnline ? 'On the platform now' : 'Not on the platform right now'}
@@ -1094,11 +1100,12 @@ export default function MessagesPage() {
                 {headerContext.otherBio && (
                   <p className="mt-0.5 line-clamp-1 sm:line-clamp-2 text-xs text-gray-400">{headerContext.otherBio}</p>
                 )}
-              </Link>
+                {otherIsFormer && <p className="text-xs text-gray-500">No longer a member of REASON</p>}
+              </PersonHeaderLink>
               <div className="hidden sm:flex items-center gap-1">
               {/* Calls appear only once the pair's first meeting has happened
                   (Ali, 9 Sep); enabled only while the other person is online. */}
-              {activeConv && callsUnlocked && (
+              {activeConv && !otherIsFormer && callsUnlocked && (
                 <button
                   onClick={() => startCall('video')}
                   disabled={!partnerOnline || calling}
@@ -1109,7 +1116,7 @@ export default function MessagesPage() {
                   <Video className="h-4.5 w-4.5" />
                 </button>
               )}
-              {activeConv && callsUnlocked && (
+              {activeConv && !otherIsFormer && callsUnlocked && (
                 <button
                   onClick={() => startCall('audio')}
                   disabled={!partnerOnline || calling}
@@ -1123,7 +1130,7 @@ export default function MessagesPage() {
               {/* REASON Phase 2 — arrange a time to meet (availability windows).
                   A red dot appears when the partner changed their availability
                   since I last opened this (W-meet, 8 Sep 2026). */}
-              {activeConv && !callsUnlocked && (
+              {activeConv && !otherIsFormer && !callsUnlocked && (
                 <button
                   onClick={openScheduler}
                   data-scheduler-toggle
@@ -1144,9 +1151,8 @@ export default function MessagesPage() {
               {activeConv && (
                 <button
                   onClick={() => {
-                    if (confirm('Delete this conversation from your view? The other person\'s view is unaffected.')) {
-                      deleteMutation.mutate(activeConv.conversationId);
-                    }
+                    void ask({ title: 'Delete this conversation?', body: "It goes from your Messages only. The other person's view is unaffected.", confirmLabel: 'Delete', tone: 'danger' })
+                      .then((yes) => { if (yes) deleteMutation.mutate(activeConv.conversationId); });
                   }}
                   className="flex h-11 w-11 items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"
                   title="Delete conversation"
@@ -1169,7 +1175,7 @@ export default function MessagesPage() {
                   <Flag className="h-4 w-4" />
                 </button>
               )}
-              {headerContext.otherUserId !== myUserId && (
+              {headerContext.otherUserId !== myUserId && !otherIsFormer && (
                 <button
                   onClick={() => blockUser(headerContext.otherUserId, headerContext.otherDisplayName)}
                   className="p-1.5 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
@@ -1197,21 +1203,21 @@ export default function MessagesPage() {
                 </button>
                 {moreOpen && (
                   <div className="absolute right-0 top-12 z-30 w-60 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
-                    {activeConv && callsUnlocked && (
+                    {activeConv && !otherIsFormer && callsUnlocked && (
                       <button type="button" disabled={!partnerOnline || calling}
                         onClick={() => { setMoreOpen(false); startCall('video'); }}
                         className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">
                         <Video className="h-4 w-4 text-gray-400" /> {partnerOnline ? 'Video call now' : 'Video call (they are offline)'}
                       </button>
                     )}
-                    {activeConv && callsUnlocked && (
+                    {activeConv && !otherIsFormer && callsUnlocked && (
                       <button type="button" disabled={!partnerOnline || calling}
                         onClick={() => { setMoreOpen(false); startCall('audio'); }}
                         className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">
                         <Phone className="h-4 w-4 text-gray-400" /> {partnerOnline ? 'Audio call now' : 'Audio call (they are offline)'}
                       </button>
                     )}
-                    {activeConv && !callsUnlocked && (
+                    {activeConv && !otherIsFormer && !callsUnlocked && (
                       <button type="button" onClick={() => { setMoreOpen(false); openScheduler(); }}
                         data-scheduler-toggle
                         className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50">
@@ -1225,7 +1231,7 @@ export default function MessagesPage() {
                         <Flag className="h-4 w-4 text-gray-400" /> Report this member
                       </button>
                     )}
-                    {headerContext.otherUserId !== myUserId && (
+                    {headerContext.otherUserId !== myUserId && !otherIsFormer && (
                       <button type="button" onClick={() => { setMoreOpen(false); blockUser(headerContext.otherUserId, headerContext.otherDisplayName); }}
                         className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50">
                         <Ban className="h-4 w-4" /> Block this member
@@ -1235,9 +1241,8 @@ export default function MessagesPage() {
                       <button type="button"
                         onClick={() => {
                           setMoreOpen(false);
-                          if (confirm('Delete this conversation from your view? The other person\'s view is unaffected.')) {
-                            deleteMutation.mutate(activeConv.conversationId);
-                          }
+                          void ask({ title: 'Delete this conversation?', body: "It goes from your Messages only. The other person's view is unaffected.", confirmLabel: 'Delete', tone: 'danger' })
+                            .then((yes) => { if (yes) deleteMutation.mutate(activeConv.conversationId); });
                         }}
                         className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50">
                         <Trash2 className="h-4 w-4" /> Delete conversation
@@ -1573,6 +1578,15 @@ export default function MessagesPage() {
                 with a remove button + an upload progress overlay when the
                 send is in flight. The picker is hidden if Cloudinary isn't
                 configured for this deployment. */}
+            {otherIsFormer ? (
+              <p
+                data-testid="former-member-composer"
+                className="border-t border-gray-200 px-4 py-3 text-sm text-gray-500"
+                style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.75rem)' }}
+              >
+                This person is no longer a member of REASON, so they cannot get messages.
+              </p>
+            ) : (
             <div
               className="relative px-3 py-2 border-t border-gray-200"
               style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
@@ -1783,9 +1797,17 @@ export default function MessagesPage() {
               </div>
               )}
             </div>
+            )}
           </>
         )}
       </div>
+      {confirmDialog}
     </div>
   );
+}
+
+/** The thread header's name and card: a link to their profile, or plain text for a former member (T2). */
+function PersonHeaderLink({ to, former, children }: { to: string; former: boolean; children: ReactNode }) {
+  if (former) return <div className="min-w-0 flex-1" data-testid="former-member-header">{children}</div>;
+  return <Link to={to} className="min-w-0 flex-1 hover:opacity-80">{children}</Link>;
 }

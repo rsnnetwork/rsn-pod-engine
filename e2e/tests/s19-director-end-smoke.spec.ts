@@ -4,6 +4,7 @@ import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import axios from 'axios';
 import { Pool } from 'pg';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for S19 against PRODUCTION — only the DIRECTOR ends the event.
 //   1. Co-host's End Event button is DISABLED with the why.
@@ -56,6 +57,7 @@ async function openUserPage(user: TestUser, sessionId: string): Promise<{ contex
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page, sessionId);
   return { context, page };
 }

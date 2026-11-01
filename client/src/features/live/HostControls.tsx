@@ -11,6 +11,7 @@ import EventPlanStrip from './EventPlanStrip';
 import { useEventInviteLink } from './useEventInviteLink';
 import { useActionLock } from '@/hooks/useActionLock';
 import { useEscapeKey } from '@/hooks/useEscapeKey';
+import { useConfirm } from '@/hooks/useConfirm';
 import HostControlCenter from './HostControlCenter';
 
 interface Props {
@@ -64,6 +65,7 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
   const [bulkDurationValue, setBulkDurationValue] = useState(300);
   // Phase 7C.1 — Host Control Center drawer toggle.
   const [showControlCenter, setShowControlCenter] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
 
   // 18 Sep 2026 (Shradha): the modal used to share a bare /sessions/:id URL
   // under "Anyone with this link can join the event", and a member outside
@@ -106,21 +108,26 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
   const { runLocked } = useActionLock();
 
   const startSession = () => runLocked('start_session', () => { socket?.emit('host:start_session', { sessionId }); });
-  const endCurrentRound = () => runLocked('end_round', () => {
-    if (!confirm('End this round early? Participants will move to the rating screen.')) return;
-    socket?.emit('host:end_session', { sessionId });
-  });
-  const endEvent = () => runLocked('end_event', () => {
-    const msg = isInRound
-      ? 'A round is currently active. Ending the event will cut all conversations short. Are you sure?'
-      : 'Are you sure you want to end this event? All participants will be disconnected.';
-    if (!confirm(msg)) return;
-    // #11 (23 May) — endEvent:true marks this as a whole-event end. "End Round"
-    // (endCurrentRound above) emits the same socket event WITHOUT this flag, so
-    // the server ends just the round and continues. Without the flag, ending a
-    // round early killed the entire event (a 3-round event ended after round 1).
-    socket?.emit('host:end_session', { sessionId, endEvent: true });
-  });
+  // T2 (1 Nov 2026): each asks first in the page (useConfirm), outside the lock, so a Cancel does not hold it.
+  const endCurrentRound = async () => {
+    if (!(await ask({ title: 'End this round early?', body: 'Everyone moves to the rating screen.', confirmLabel: 'End round', tone: 'danger' }))) return;
+    runLocked('end_round', () => {
+      socket?.emit('host:end_session', { sessionId });
+    });
+  };
+  const endEvent = async () => {
+    const body = isInRound
+      ? 'A round is running. Ending the event cuts every conversation short.'
+      : 'Everyone is disconnected.';
+    if (!(await ask({ title: 'End this event?', body, confirmLabel: 'End event', tone: 'danger' }))) return;
+    runLocked('end_event', () => {
+      // #11 (23 May) — endEvent:true marks this as a whole-event end. "End Round"
+      // (endCurrentRound above) emits the same socket event WITHOUT this flag, so
+      // the server ends just the round and continues. Without the flag, ending a
+      // round early killed the entire event (a 3-round event ended after round 1).
+      socket?.emit('host:end_session', { sessionId, endEvent: true });
+    });
+  };
 
   // Count non-host/co-host participants for matching eligibility.
   // Bug 14 (13 May live test) — pre-fix only excluded formal session_cohosts
@@ -316,8 +323,8 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
     socket?.emit('host:extend_breakout_all' as any, { sessionId, additionalSeconds: 120 });
   });
 
-  const bulkEndAll = () => {
-    if (!confirm(`End all ${activeManualCount} manual breakout rooms? Participants will move to rating.`)) return;
+  const bulkEndAll = async () => {
+    if (!(await ask({ title: `End all ${activeManualCount} breakout rooms?`, body: 'Everyone in them moves to the rating screen.', confirmLabel: 'End rooms', tone: 'danger' }))) return;
     runLocked('bulk_end_all', () => {
       socket?.emit('host:end_breakout_all' as any, { sessionId });
     });
@@ -1068,6 +1075,7 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
           </div>
         </div>
       </div>
+      {confirmDialog}
     </div>
   );
 }

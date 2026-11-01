@@ -6,6 +6,7 @@ import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/liv
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable, tapReachable } from '../helpers/viewport-fit';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INVITE PEOPLE FROM YOUR CONNECTIONS (POD-02 and the invites half of POD-04, 26 Oct 2026). Stefan, inviting to a
@@ -114,8 +115,9 @@ const statusCard = (page: Page) => page.getByTestId('invite-status');
 const sendButton = (sheet: Locator) => sheet.getByTestId('invite-send');
 
 /** The next confirm() on this page is accepted. Register it BEFORE the click that opens it. */
-function acceptNextDialog(page: Page) {
+async function acceptNextDialog(page: Page) {
   page.once('dialog', (d) => { void d.accept(); });
+  await acceptConfirmDialogs(page);
 }
 
 /** A button on the page itself: scrolled to the middle of its scroll area, as a person scrolls to it, then pressed where a
@@ -390,7 +392,7 @@ test('the pod page: browse 30 at a time, find Claus by "Cla", choose people as c
   await expect(page.getByText(reminderSentence)).toBeVisible({ timeout: 20_000 });
 
   // Withdraw asks first, then the invite is gone from the card and the database.
-  acceptNextDialog(page);
+  await acceptNextDialog(page);
   await clausRow.getByRole('button', { name: 'Withdraw' }).click();
   await expect(page.getByText('Invite withdrawn. Its link no longer works.')).toBeVisible({ timeout: 20_000 });
   await expect(card.getByText('Invited (4)')).toBeVisible({ timeout: 20_000 });

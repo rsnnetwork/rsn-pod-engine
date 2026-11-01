@@ -27,6 +27,8 @@ const more = () => read('features/reason/human/ProfileMoreMenu.tsx');
 const form = () => read('features/profile/ProfilePage.tsx');
 const app = () => read('App.tsx');
 const api = () => read('features/reason/api.ts');
+const UNBLOCK_TITLE_TEXT = 'Unblock this member?';
+const UNBLOCK_BODY_TEXT = 'They will be able to message you again, and you may be matched together in future events.';
 const count = (src: string, re: RegExp) => src.match(re)?.length ?? 0;
 
 type Person = PersonBrief['person'];
@@ -286,7 +288,8 @@ describe('Human Profile: More, with Block and Report this member', () => {
   });
 
   it('Block uses the old public profile\'s confirmation and its call', () => {
-    expect(human()).toMatch(/confirm\(`Block \$\{[^}]+\}\? They won't be able to message you and you won't be matched together in future events\.`\)/);
+    // T2 (1 Nov 2026): the same words, asked in the page (ConfirmDialog through useConfirm) rather than window.confirm.
+    expect(human()).toMatch(/await ask\(\{ title: `Block \$\{name\}\?`, body: "They won't be able to message you, and you won't be matched together in future events\.", confirmLabel: 'Block', tone: 'danger' \}\)/);
     expect(api()).toMatch(/export const blockMember = \(userId: string\) => api\.post\(`\/users\/\$\{memberSegment\(userId\)\}\/block`\);/);
     expect(human()).toMatch(/mutationFn: \(\) => blockMember\(userId\)/);
   });
@@ -323,8 +326,12 @@ describe('Human Profile: More, with Block and Report this member', () => {
     expect(hook).toMatch(/meta: \{ entities: me \? \[E\.userBlocks\(me\)\] : \[\] \}/);
     expect(hook).toMatch(/blockedByYou: status\.data\?\.hasBlocked === true/);
     // The old profile unblocked at once; now a question comes first, in the dialog Block uses.
-    expect(hook).toMatch(/UNBLOCK_QUESTION = 'Unblock this member\? They will be able to message you again, and you may be matched together in future events\.';/);
-    expect(hook).toMatch(/if \(confirm\(UNBLOCK_QUESTION\)\) unblock\.mutate\(\);/);
+    // T2 (1 Nov 2026): the question is a ConfirmDialog in the page, never window.confirm, and the page renders it.
+    expect(hook).toMatch(/if \(await ask\(\{ title: UNBLOCK_TITLE, body: UNBLOCK_BODY, confirmLabel: 'Unblock' \}\)\) unblock\.mutate\(\);/);
+    expect(`${UNBLOCK_TITLE_TEXT} ${UNBLOCK_BODY_TEXT}`).toBe('Unblock this member? They will be able to message you again, and you may be matched together in future events.');
+    expect(hook).toContain(`const UNBLOCK_TITLE = '${UNBLOCK_TITLE_TEXT}';`);
+    expect(hook).toContain(`const UNBLOCK_BODY = '${UNBLOCK_BODY_TEXT}';`);
+    expect(human()).toContain('{blocked.confirmDialog}');
     expect(hook).toMatch(/mutationFn: \(\) => unblockMember\(userId\)/);
     // Final review (C8): said plainly, as the profile comes back on screen.
     expect(hook).toMatch(/addToast\('Unblocked\.', 'success'\);/);

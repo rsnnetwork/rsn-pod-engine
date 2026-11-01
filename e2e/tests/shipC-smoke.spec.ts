@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, Page } from '@playwright/test';
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED smoke for canonical Ship C (token cutover) against PRODUCTION.
 // Asserts ON THE WIRE that the legacy token rail is gone while video still
@@ -62,6 +63,7 @@ async function newUserPage(user: TestUser, errors: string[]): Promise<Page> {
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
   page.on('dialog', (d) => d.accept().catch(() => {}));
+  await acceptConfirmDialogs(page);
   page.on('websocket', (ws) => {
     ws.on('framereceived', (f) => {
       const p = typeof f.payload === 'string' ? f.payload : f.payload.toString();

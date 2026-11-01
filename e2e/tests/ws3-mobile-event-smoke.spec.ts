@@ -4,6 +4,7 @@ import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import { profileLinkSelector } from '../helpers/profile-link';
 import { skipEventCheckIn } from '../helpers/event-check-in';
+import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 
 // HEADED mobile-event smoke vs PRODUCTION — every surface a phone user
 // touches, INCLUDING the host running the event from a phone:
@@ -68,6 +69,7 @@ async function openUserPage(user: TestUser, viewport?: { width: number; height: 
   await context.addInitScript((sid: string) => { sessionStorage.setItem(`rsn_checkin_${sid}`, '1'); }, sessionId);
   const page = await context.newPage();
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  await acceptConfirmDialogs(page);
   await gotoLive(page);
   return { context, page };
 }
