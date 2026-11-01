@@ -39,6 +39,36 @@ describe('item 8: the speed-networking room retries in a bounded, explicit way',
     expect(planRoomRecovery(50)).toEqual({ kind: 'lobby', delayMs: 2000 });
   });
 
+  // Review fix round 1: every retry clears the token, which makes the backup fetch run; that fetch used to set the
+  // count back to 0, so a connection that never succeeds was retried every 2 s for the whole round.
+  it('keeps counting through a failure that does not go away: retry at 2 s, retry at 4 s, then the main room', () => {
+    const { planRoomRecovery } = roomRetry();
+    let attempts = 0; // only a successful connect or a return to the foreground sets this back
+    const steps: Array<{ kind: string; delayMs: number }> = [];
+    for (let failure = 0; failure < 3; failure++) {
+      const plan = planRoomRecovery(attempts);
+      steps.push(plan);
+      if (plan.kind === 'retry') attempts++; // the token fetch that follows must not reset it
+    }
+    expect(steps).toEqual([{ kind: 'retry', delayMs: 2000 }, { kind: 'retry', delayMs: 4000 }, { kind: 'lobby', delayMs: 2000 }]);
+  });
+
+  it('does not reset the count when the backup token arrives', () => {
+    const src = readClientSource('features/live/VideoRoom.tsx');
+    const effect = src.slice(src.indexOf('// Backup token fetch if not provided inline'), src.indexOf('const handleReturnToLobby'));
+    expect(effect).toMatch(/setLiveKitToken\(token, url\)/);
+    expect(effect).not.toMatch(/retryCountRef/);
+    const resets = src.match(/retryCountRef\.current = 0/g) ?? [];
+    expect(resets.length).toBe(2); // handleRoomConnected and reconnectRoom only
+  });
+
+  it("computes the bell's answer once per row, and ends a refused press's server sentence with a full stop", () => {
+    const bell = readClientSource('components/ui/NotificationBell.tsx');
+    expect(bell.match(/pokeAnswerView\(n\)/g)!.length).toBe(1);
+    expect(remind().remindAllFailure('Only the host can send reminders'))
+      .toBe('No reminders were sent. Only the host can send reminders.');
+  });
+
   // LiveKitRoom reconnects whenever the identity of `onError` changes (its connect effect lists it as a
   // dependency), and VideoRoom re-renders every second for the timer: an inline `onError={() => ...}` was a
   // room.connect() once a second. A room that is up and stable must keep the very same callback.

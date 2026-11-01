@@ -420,6 +420,7 @@ export default function NotificationBell() {
               const showActions = canActOnInvite(n);
               const statusLabel = getInviteStatusLabel(n);
               const isActing = actionLoading === n.id;
+              const pokeView = pokeAnswerView(n);
               const isClickable = true; // All notifications are clickable — navigate to destination
 
               return (
@@ -475,7 +476,7 @@ export default function NotificationBell() {
                     </div>
                   )}
                   {/* Meeting request: answer it here, accept lands in the conversation. */}
-                  {pokeAnswerView(n).actions && (
+                  {pokeView.actions && (
                     <div className="flex items-center gap-2 mt-2 ml-4" data-testid={`poke-actions-${n.id}`}>
                       <button
                         onClick={() => handleAcceptPoke(n)}
@@ -495,9 +496,9 @@ export default function NotificationBell() {
                       </button>
                     </div>
                   )}
-                  {pokeAnswerView(n).label && (
-                    <p className={`ml-4 mt-1 text-[10px] font-medium ${pokeAnswerView(n).label!.tone === 'accepted' ? 'text-emerald-500' : 'text-gray-400'}`}>
-                      {pokeAnswerView(n).label!.text}
+                  {pokeView.label && (
+                    <p className={`ml-4 mt-1 text-[10px] font-medium ${pokeView.label.tone === 'accepted' ? 'text-emerald-500' : 'text-gray-400'}`}>
+                      {pokeView.label.text}
                     </p>
                   )}
                 </div>

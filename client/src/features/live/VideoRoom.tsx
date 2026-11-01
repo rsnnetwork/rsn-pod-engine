@@ -604,8 +604,10 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
     if (!liveKitToken && sessionId) {
       api.post(`/sessions/${sessionId}/token`, currentRoomId ? { roomId: currentRoomId } : {}).then(res => {
         const { token, livekitUrl: url } = res.data.data;
+        // The retry count is NOT reset here: every retry clears the token, so this fetch runs before every
+        // attempt, and a reset would make a connection that never succeeds retry every 2 s for ever. A connect
+        // that works (handleRoomConnected) or a return to the foreground (reconnectRoom) restarts the count.
         setLiveKitToken(token, url);
-        retryCountRef.current = 0;
       }).catch(() => { /* Token fetch failed — VideoRoom will show loading state, user can leave */ });
     }
   }, [liveKitToken, sessionId, currentRoomId]);

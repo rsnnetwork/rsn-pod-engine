@@ -32,5 +32,6 @@ export function remindAllToast({ reminded, total, recentlyReminded = 0 }: Remind
 
 /** A refused press: the server's own sentence when it gave one. */
 export function remindAllFailure(serverMessage: string | undefined): string {
-  return `${NO_REMINDERS} ${serverMessage || TRY_AGAIN}`;
+  const reason = serverMessage || TRY_AGAIN;
+  return `${NO_REMINDERS} ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`;
 }
