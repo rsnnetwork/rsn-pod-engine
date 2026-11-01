@@ -19,6 +19,7 @@ import { FieldError, selectClass } from './form-parts';
 import RoundsSettings from './RoundsSettings';
 import type { MatchingTemplate } from './RoundsSettings';
 import { useEventFormat } from './useEventFormat';
+import { nextQuarterHourAfter } from './default-start';
 
 // 26 Oct 2026 (Stefan and Claus, 25 Oct): "Video meeting. There's no timing configuration for a video meeting" — the
 // form showed 5 rounds of 8 minutes and speed networking's description whatever was chosen, and offered formats the
@@ -28,16 +29,9 @@ import { useEventFormat } from './useEventFormat';
 // the format's, the title starts as "Video meeting · <pod>", and the body carries the format. A refusal from the
 // server is said at its own field.
 
-/** Returns current datetime rounded up to next 15-min slot, formatted for datetime-local input */
+/** The form's default start: the next quarter hour after now, formatted for the datetime-local input */
 function getDefaultScheduledAt(): string {
-  const now = new Date();
-  const mins = now.getMinutes();
-  const roundedMins = Math.ceil(mins / 15) * 15;
-  now.setMinutes(roundedMins, 0, 0);
-  if (roundedMins >= 60) now.setHours(now.getHours() + 1, 0, 0, 0);
-  // Format as YYYY-MM-DDTHH:MM for datetime-local input
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return nextQuarterHourAfter(new Date());
 }
 
 /** Held where the format's picker goes while the pod's type is not known: it is not guessed, then swapped. */
