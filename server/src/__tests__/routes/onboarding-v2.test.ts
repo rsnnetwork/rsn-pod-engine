@@ -64,10 +64,11 @@ jest.mock('../../services/matching/platform-match.service', () => ({
 }));
 const mockFanout = jest.fn().mockResolvedValue(undefined);
 const mockProfileFanout = jest.fn().mockResolvedValue(undefined);
+const mockAdminFanout = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({
   fanoutUserEntity: (...a: unknown[]) => mockFanout(...a),
   fanoutProfileChange: (...a: unknown[]) => mockProfileFanout(...a),
-  fanoutAdminEntities: jest.fn().mockResolvedValue(undefined),
+  fanoutAdminEntities: (...a: unknown[]) => mockAdminFanout(...a),
   __esModule: true,
 }));
 const mockStage = jest.fn().mockResolvedValue(undefined);
@@ -293,6 +294,19 @@ describe('POST /onboarding/v2/confirm', () => {
     expect(order).toEqual(['saved', 'told']);
   });
 
+  // Final sweep F2 (2 Nov 2026): an admin with the member's inspector open sees the new answers, where they are based
+  // and that the new onboarding is done, without a reload. Every admin is sent admin:users, once the answers are saved.
+  it('tells every admin\'s user pages (admin:users) once the answers are saved', async () => {
+    const order: string[] = [];
+    mockConfirm.mockImplementation(async () => { order.push('saved'); return { changed: true, firstCompletion: true, answers: ANSWERS }; });
+    mockAdminFanout.mockImplementation(async () => { order.push('admins told'); });
+    const res = await authAs('u-admins-told')(request(app).post('/onboarding/v2/confirm').send({ ...ANSWERS, profile: { location: 'Copenhagen, Denmark' } }));
+    expect(res.status).toBe(200);
+    expect(mockAdminFanout).toHaveBeenCalledTimes(1);
+    expect(mockAdminFanout).toHaveBeenCalledWith('users');
+    expect(order).toEqual(['saved', 'admins told']);
+  });
+
   // 30 Oct review (1.2): the refusal of a missing location reaches screen 7 on the field it is about, in words.
   it('a confirm refused for its location answers 400 on profile.location, says why, and tells nobody', async () => {
     mockConfirm.mockRejectedValue(new ValidationError('Please add your city and country.', { 'profile.location': ['Please add your city and country.'] }));
@@ -317,6 +331,7 @@ describe('POST /onboarding/v2/confirm', () => {
     expect(res.status).toBe(400);
     expect(mockProfileFanout).not.toHaveBeenCalled();
     expect(mockFanout).not.toHaveBeenCalled();
+    expect(mockAdminFanout).not.toHaveBeenCalled();
   });
 
   it('changed answers of a member who finished before: searches synced, the network not told again', async () => {

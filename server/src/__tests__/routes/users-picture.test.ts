@@ -30,12 +30,13 @@ jest.mock('../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), tran
 const mockFanoutUser = jest.fn().mockResolvedValue(undefined);
 const mockFanoutPod = jest.fn().mockResolvedValue(undefined);
 const mockFanoutProfile = jest.fn().mockResolvedValue(undefined);
+const mockFanoutAdmins = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({
   __esModule: true,
   fanoutProfileChange: (...a: unknown[]) => mockFanoutProfile(...a),
   fanoutUserEntity: (...a: unknown[]) => mockFanoutUser(...a),
   fanoutPodEntities: (...a: unknown[]) => mockFanoutPod(...a),
-  fanoutAdminEntities: jest.fn().mockResolvedValue(undefined),
+  fanoutAdminEntities: (...a: unknown[]) => mockFanoutAdmins(...a),
   fanoutUserBlocks: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -66,6 +67,7 @@ beforeEach(() => {
   mockFanoutUser.mockClear();
   mockFanoutProfile.mockClear();
   mockFanoutPod.mockClear();
+  mockFanoutAdmins.mockClear();
   mockQuery.mockReset().mockImplementation((sql: string, params?: unknown[]) => {
     if (/SELECT pod_id FROM pod_members/.test(sql)) return Promise.resolve({ rows: PODS.map((pod_id) => ({ pod_id })) });
     return Promise.resolve(db.handle(sql, params) ?? { rows: [] });
@@ -200,11 +202,28 @@ describe('production\'s form: PUT /users/me with the photo as a data URL', () =>
     expect(db.row.avatar_url).toBeNull();
   });
 
+  // Final sweep F2 (2 Nov 2026): where a member is based and their time zone are on the admin inspector's onboarding
+  // card, and a profile save can change both. Production's form (origin/main ProfilePage.tsx) sends the whole form;
+  // the save tells the member's own screens, their pods, and every admin's user pages (admin:users).
+  it('production\'s whole-form save tells every admin\'s user pages too', async () => {
+    const res = await request(app).put('/users/me').set(auth()).send({
+      displayName: 'Ada Lovelace', firstName: 'Ada', lastName: 'Lovelace', bio: '', company: '', jobTitle: '', industry: '',
+      location: 'Lisbon, Portugal', linkedinUrl: '', timezone: 'Europe/Lisbon', phone: '', interests: [], reasonsToConnect: [],
+      languages: ['english'], expertiseText: null, whatICareAbout: null, whatICanHelpWith: null, whoIWantToMeet: null,
+      whyIWantToMeet: null, myIntent: null,
+    });
+    expect(res.status).toBe(200);
+    expect(db.row.location).toBe('Lisbon, Portugal');
+    expect(mockFanoutUser).toHaveBeenCalledWith(ME);
+    expect(mockFanoutAdmins).toHaveBeenCalledWith('users');
+  });
+
   it('a data URL that is no picture is refused in a sentence, and nothing is saved', async () => {
     const res = await request(app).put('/users/me').set(auth()).send({ avatarUrl: 'data:text/html;base64,PGgxPg==', company: 'X' });
     expect(res.status).toBe(400);
     expect(res.body.error.message).toBe('Choose a JPG, PNG or WebP picture for your photo.');
     expect(db.row.company).toBeUndefined();
+    expect(mockFanoutAdmins).not.toHaveBeenCalled();
   });
 });
 
