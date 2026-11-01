@@ -613,6 +613,33 @@ describe('Session Routes', () => {
       expect(wrong.status).toBe(400);
     });
 
+    // T13 (1 Nov 2026) — production's form (origin/main client/src/features/sessions/event-form.ts, sessionBody) sends no
+    // circleId: the service gets none, so the event names no circle, exactly as before. The preview's circle preset
+    // passes its circle through; anything that is not an id is refused before the service.
+    it('passes no circleId for production\'s form body, the preview\'s circleId when sent, and refuses one that is not an id', async () => {
+      (sessionService.createSession as jest.Mock).mockClear().mockResolvedValue(mockSession);
+      const token = makeToken();
+      const productionBody = {
+        podId: '00000000-0000-0000-0000-000000000001', title: 'Speed networking · Founding RSN Circle',
+        scheduledAt: '2026-11-08T18:00:00.000Z', format: 'speed_networking',
+        config: {
+          eventType: 'speed_networking', numberOfRounds: 5, roundDurationSeconds: 480, maxParticipants: 25,
+          timerVisibility: 'always_visible', matchingPolicy: 'platform_wide',
+        },
+      };
+      const old = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`).send(productionBody);
+      expect(old.status).toBe(201);
+      expect((sessionService.createSession as jest.Mock).mock.calls[0][1]).not.toHaveProperty('circleId');
+      expect((sessionService.createSession as jest.Mock).mock.calls[0][1]).not.toHaveProperty('visibility');
+      const circleId = '0c1c0000-0000-4000-8000-000000000001';
+      const preview = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`).send({ ...productionBody, circleId });
+      expect(preview.status).toBe(201);
+      expect((sessionService.createSession as jest.Mock).mock.calls[1][1]).toMatchObject({ circleId });
+      const wrong = await request(app).post('/sessions').set('Authorization', `Bearer ${token}`).send({ ...productionBody, circleId: 'founders' });
+      expect(wrong.status).toBe(400);
+      expect(sessionService.createSession).toHaveBeenCalledTimes(2);
+    });
+
     it('should reject session without title', async () => {
       const token = makeToken();
       const res = await request(app)
@@ -639,7 +666,34 @@ describe('Session Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
+      // T13: an event with no circle reads no circle and carries no circle block (production's shape).
+      expect(res.body.data).not.toHaveProperty('circle');
+      expect((dbQuery as jest.Mock).mock.calls.some(([sql]) => /FROM circles/.test(String(sql)))).toBe(false);
       (dbQuery as jest.Mock).mockReset();
+    });
+
+    // T13 (1 Nov 2026) — additive: an event for a whole circle names it, so the preview's page says "For <circle>".
+    it('names the circle an event is for, beside every field it had', async () => {
+      const circleId = '0c1c0000-0000-4000-8000-000000000001';
+      (sessionService.getSessionById as jest.Mock).mockResolvedValue({ ...mockSession, circleId, visibility: 'private' });
+      (sessionService.getParticipantCount as jest.Mock).mockResolvedValue(3);
+      (dbQuery as jest.Mock).mockImplementation(async (sql: string) => {
+        if (/SELECT id, name FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(sql)) {
+          return { rows: [{ id: circleId, name: 'Founding Circle' }], rowCount: 1 };
+        }
+        if (sql.includes('SELECT status FROM users')) return { rows: [{ status: 'active' }], rowCount: 1 };
+        if (sql.includes('event_join_requests')) return { rows: [], rowCount: 0 };
+        return undefined;
+      });
+      const res = await request(app)
+        .get('/sessions/5e550000-0000-4000-8000-000000000123')
+        .set('Authorization', `Bearer ${makeToken({ role: 'admin' })}`);
+      (dbQuery as jest.Mock).mockReset();
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        id: mockSession.id, podId: mockSession.podId, title: mockSession.title, participantCount: 3,
+        circleId, circle: { id: circleId, name: 'Founding Circle' },
+      });
     });
 
     // T11 fix round 1: a private event refuses a stranger with today's 403 and words (production's client reads
@@ -857,6 +911,18 @@ describe('Session Routes - Extended', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.title).toBe('Updated');
+    });
+
+    // T13 (1 Nov 2026) — production's edit form sends no circleId (the event keeps its circle); the preview may clear it.
+    it('passes no circleId for production\'s edit body and passes a clear (null) through', async () => {
+      (sessionService.updateSession as jest.Mock).mockClear().mockResolvedValue(mockSession);
+      const token = makeToken();
+      const path = '/sessions/5e550000-0000-4000-8000-000000000123';
+      expect((await request(app).put(path).set('Authorization', `Bearer ${token}`).send({ title: 'Updated' })).status).toBe(200);
+      expect((sessionService.updateSession as jest.Mock).mock.calls[0][2]).not.toHaveProperty('circleId');
+      expect((await request(app).put(path).set('Authorization', `Bearer ${token}`).send({ circleId: null })).status).toBe(200);
+      expect((sessionService.updateSession as jest.Mock).mock.calls[1][2]).toEqual({ circleId: null });
+      expect((await request(app).put(path).set('Authorization', `Bearer ${token}`).send({ circleId: 'x' })).status).toBe(400);
     });
   });
 

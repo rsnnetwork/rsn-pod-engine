@@ -170,6 +170,8 @@ export interface Session {
   format?: EventFormat;
   /** T11 (1 Nov 2026) — who can join (sessions.visibility). NULL: the event follows its pod, as before. */
   visibility?: EventVisibility | null;
+  /** T13 (1 Nov 2026) — the circle the event is for (sessions.circle_id); its members are the event's audience too. NULL: none. */
+  circleId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -207,6 +209,11 @@ export interface CreateSessionInput {
   format?: EventFormat;
   /** T11 (1 Nov 2026) — who can join. Production's form omits it: the event then follows its pod (NULL). */
   visibility?: EventVisibility;
+  /**
+   * T13 (1 Nov 2026) — an event for a whole circle: its managers (and admins) may name it. The event still lives in
+   * the pod; with no visibility it is private (the circle). Production's form omits it: no circle, as before.
+   */
+  circleId?: string;
   config?: SessionConfigInput;
 }
 
@@ -218,7 +225,15 @@ export interface UpdateSessionInput {
   format?: EventFormat;
   /** T11 (1 Nov 2026) — who can join; a scheduled event may change it. Going private removes nobody. */
   visibility?: EventVisibility;
+  /** T13 (1 Nov 2026) — set (a circle's manager) or clear (null) the circle the event is for. */
+  circleId?: string | null;
   config?: SessionConfigInput;
+}
+
+/** T13 (1 Nov 2026) — the circle an event is for, as GET /sessions/:id names it (additive). */
+export interface SessionCircle {
+  id: string;
+  name: string;
 }
 
 export interface SessionSegment {

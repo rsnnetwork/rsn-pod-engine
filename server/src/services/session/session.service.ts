@@ -9,7 +9,7 @@ import {
   ParticipantStatus, CreateSessionInput, UpdateSessionInput, SessionConfigInput, EventInputIssue,
   UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType, PodStatus,
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
-  liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS,
+  liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS, type SessionCircle,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
@@ -18,6 +18,7 @@ import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-ac
 import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
 import { assertVideoRoom } from './video-room';
 import { canRegister, publicEventsSql, readEventAccessFacts, visibleEventsSql } from './event-access';
+import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
 
@@ -29,6 +30,7 @@ const SESSION_COLUMNS = `
   host_visibility_mode AS "hostVisibilityMode",
   event_format AS "format",
   visibility,
+  circle_id AS "circleId",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
@@ -137,11 +139,17 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   if (explicit) await assertTemplateChoice(sessionConfig.matchingTemplateId, !!isAdmin);
   else if (!(await templateKeepable(sessionConfig.matchingTemplateId, !!isAdmin))) delete sessionConfig.matchingTemplateId;
 
+  // T13 (1 Nov 2026, L20): an event for a whole circle. The pod rule above still holds; on top of it, the circle
+  // exists, is not archived and is run by this person. With no visibility sent it is private: the circle's members
+  // (and the pod's) and the people invited. Production's form sends no circleId: nothing here runs.
+  const circle = input.circleId ? await assertMayScheduleForCircle(input.circleId, userId, userRole) : null;
+  const visibility = input.visibility ?? (circle ? 'private' : null);
+
   const sessionId = uuid();
 
   const result = await query<Session>(
-    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility, circle_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING ${SESSION_COLUMNS}`,
     [
       sessionId,
@@ -153,7 +161,8 @@ export async function createSession(userId: string, input: CreateSessionInput, u
       userId,
       format,
       // T11 (1 Nov 2026): who can join. Production's form sends none: NULL, the event follows its pod as before.
-      input.visibility ?? null,
+      visibility,
+      circle?.id ?? null,
     ]
   );
 
@@ -164,7 +173,10 @@ export async function createSession(userId: string, input: CreateSessionInput, u
     [sessionId, userId]
   );
 
-  logger.info({ sessionId, podId: input.podId, userId }, 'Session created');
+  // The circle's members are rung (no email) and their pages told.
+  if (circle) await announceCircleEvent({ sessionId, actorId: userId, circle });
+
+  logger.info({ sessionId, podId: input.podId, userId, circleId: circle?.id }, 'Session created');
   return result.rows[0];
 }
 
@@ -264,6 +276,25 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     paramIdx++;
   }
 
+  // T13 (1 Nov 2026): name or clear the circle the event is for, under the create rule: one of that circle's managers
+  // (or an admin). Naming one on an event that follows its pod makes it private, as on create, unless a visibility is
+  // sent. Clearing it keeps the visibility, so the event stays for its pod's members and the people invited.
+  const previousCircleId = session.circleId ?? null;
+  const circleChanges = input.circleId !== undefined && input.circleId !== previousCircleId;
+  let namedCircle: SessionCircle | null = null;
+  if (circleChanges) {
+    if (input.circleId) namedCircle = await assertMayScheduleForCircle(input.circleId, userId, userRole);
+    else if (previousCircleId) await assertMayClearCircle(previousCircleId, userId, userRole);
+    setClauses.push(`circle_id = $${paramIdx}`);
+    values.push(input.circleId ?? null);
+    paramIdx++;
+    if (namedCircle && input.visibility === undefined && !session.visibility) {
+      setClauses.push(`visibility = $${paramIdx}`);
+      values.push('private');
+      paramIdx++;
+    }
+  }
+
   if (setClauses.length === 0) {
     return session;
   }
@@ -273,6 +304,8 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     `UPDATE sessions SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING ${SESSION_COLUMNS}`,
     values
   );
+
+  if (circleChanges) await announceCircleEvent({ sessionId, actorId: userId, circle: namedCircle, previousCircleId });
 
   return result.rows[0];
 }
@@ -331,6 +364,7 @@ export async function listSessions(params: {
             s.lobby_room_id AS "lobbyRoomId", s.created_at AS "createdAt", s.updated_at AS "updatedAt",
             s.event_format AS "format",
             s.visibility,
+            s.circle_id AS "circleId",
             p.name AS "podName",
             u.display_name AS "hostDisplayName"
      FROM sessions s

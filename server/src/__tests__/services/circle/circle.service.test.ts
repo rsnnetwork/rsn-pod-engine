@@ -113,6 +113,50 @@ describe('archive semantics', () => {
   });
 });
 
+describe('the circle page (T13, 1 Nov 2026)', () => {
+  // Production's client (origin/main CircleDetailPage.tsx) reads id, name, description, memberCount, isMember,
+  // members, pods, upcomingEvents { id, title, scheduledAt, podId } and children. Those stay; forCircle and
+  // canManage are additive.
+  function arm(manager: boolean) {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (/FROM circles c WHERE c\.id = \$1 AND c\.archived_at IS NULL/.test(sql)) {
+        return { rows: [{ id: 'c1', name: 'Founders', description: null, parent_circle_id: null, member_count: 2, created_at: new Date(), is_member: true }] };
+      }
+      if (/FROM sessions s/.test(sql)) {
+        return { rows: [
+          { id: 'e1', title: 'For the circle', scheduled_at: new Date(), pod_id: 'p9', for_circle: true },
+          { id: 'e2', title: 'Pod event', scheduled_at: new Date(), pod_id: 'p1', for_circle: false },
+        ] };
+      }
+      if (/c\.created_by = \$2/.test(sql)) return { rows: manager ? [{ x: 1 }] : [] };
+      return { rows: [] };
+    });
+  }
+
+  it('lists the circle\'s own events and its pods\' events, each under the viewer rule, with production\'s fields', async () => {
+    arm(false);
+    const detail = await getCircleDetail('c1', 'u1', 'member');
+    const events = mockQuery.mock.calls.find(([sql]) => /FROM sessions s/.test(String(sql)))!;
+    expect(String(events[0])).toMatch(/WHERE \(s\.circle_id = \$1 OR s\.pod_id IN \(SELECT pod_id FROM circle_pods WHERE circle_id = \$1\)\)/);
+    expect(events[1]).toEqual(['c1', 'u1', false]);
+    for (const key of ['id', 'name', 'description', 'memberCount', 'isMember', 'members', 'pods', 'upcomingEvents', 'children']) {
+      expect(detail).toHaveProperty(key);
+    }
+    expect(detail.upcomingEvents[0]).toEqual({ id: 'e1', title: 'For the circle', scheduledAt: expect.any(Date), podId: 'p9', forCircle: true });
+    expect(detail.upcomingEvents[1]).toMatchObject({ id: 'e2', podId: 'p1', forCircle: false });
+    expect(detail.canManage).toBe(false);
+  });
+
+  it('says canManage for someone who runs the circle, and for an admin without asking the database', async () => {
+    arm(true);
+    expect((await getCircleDetail('c1', 'u1', 'member')).canManage).toBe(true);
+    mockQuery.mockClear();
+    arm(false);
+    expect((await getCircleDetail('c1', 'u1', 'admin')).canManage).toBe(true);
+    expect(mockQuery.mock.calls.some(([sql]) => /c\.created_by = \$2/.test(String(sql)))).toBe(false);
+  });
+});
+
 describe('route authz matrix (source pins)', () => {
   const fs = jest.requireActual('fs') as typeof import('fs');
   const path = jest.requireActual('path') as typeof import('path');

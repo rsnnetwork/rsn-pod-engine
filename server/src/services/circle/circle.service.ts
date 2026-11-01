@@ -16,6 +16,7 @@ import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 import { visibleEventsSql } from '../session/event-access';
+import { isCircleManager } from './circle-managers';
 
 export const MAX_NESTING_DEPTH = 3;
 
@@ -50,8 +51,11 @@ export interface CircleDetail extends Omit<CircleSummary, 'podCount'> {
     role: string; joinedAt: Date;
   }>;
   pods: Array<{ podId: string; name: string; description: string | null }>;
-  upcomingEvents: Array<{ id: string; title: string; scheduledAt: Date; podId: string }>;
+  /** T13: `forCircle` (additive) is true for an event made for this circle, false for an attached pod's event. */
+  upcomingEvents: Array<{ id: string; title: string; scheduledAt: Date; podId: string; forCircle: boolean }>;
   children: Array<{ id: string; name: string; memberCount: number }>;
+  /** T13 (additive): whether the viewer runs the circle (isCircleManager), so the page offers Schedule an event. */
+  canManage: boolean;
 }
 
 // ── Nesting integrity ────────────────────────────────────────────────────────
@@ -265,8 +269,9 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
   // those pods. Members capped at 100 for the page; full list can paginate later.
   // T2 (1 Nov 2026): members are the active accounts only, and an attached pod's event is named only to someone who
   // may open it (D3: a private pod's event titles were shown to any signed-in member). Admins see every event.
+  // T13 (1 Nov 2026): the events are the circle's own (sessions.circle_id) and its pods', each under the same rule.
   const seesEveryEvent = !!userRole && hasRoleAtLeast(userRole as UserRole, UserRole.ADMIN);
-  const [members, pods, events, children] = await Promise.all([
+  const [members, pods, events, children, canManage] = await Promise.all([
     query<{ user_id: string; display_name: string | null; avatar_url: string | null; role: string; joined_at: Date }>(
       `SELECT m.user_id, u.display_name, u.avatar_url, m.role, m.joined_at
        FROM circle_members m JOIN users u ON u.id = m.user_id
@@ -279,10 +284,10 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
        WHERE cp.circle_id = $1 ORDER BY cp.created_at ASC`,
       [circleId],
     ),
-    query<{ id: string; title: string; scheduled_at: Date; pod_id: string }>(
-      `SELECT s.id, s.title, s.scheduled_at, s.pod_id
+    query<{ id: string; title: string; scheduled_at: Date; pod_id: string; for_circle: boolean }>(
+      `SELECT s.id, s.title, s.scheduled_at, s.pod_id, (s.circle_id IS NOT DISTINCT FROM $1::uuid) AS for_circle
        FROM sessions s
-       WHERE s.pod_id IN (SELECT pod_id FROM circle_pods WHERE circle_id = $1)
+       WHERE (s.circle_id = $1 OR s.pod_id IN (SELECT pod_id FROM circle_pods WHERE circle_id = $1))
          AND s.status = 'scheduled' AND s.scheduled_at > NOW()
          AND ($3::boolean OR ${visibleEventsSql('s', '$2')})
        ORDER BY s.scheduled_at ASC LIMIT 10`,
@@ -294,6 +299,7 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
        ORDER BY member_count DESC`,
       [circleId],
     ),
+    isCircleManager(circleId, userId, userRole),
   ]);
 
   return {
@@ -306,8 +312,9 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
     })),
     pods: pods.rows.map(p => ({ podId: p.pod_id, name: p.name, description: p.description })),
     upcomingEvents: events.rows.map(e => ({
-      id: e.id, title: e.title, scheduledAt: e.scheduled_at, podId: e.pod_id,
+      id: e.id, title: e.title, scheduledAt: e.scheduled_at, podId: e.pod_id, forCircle: !!e.for_circle,
     })),
     children: children.rows.map(ch => ({ id: ch.id, name: ch.name, memberCount: ch.member_count })),
+    canManage,
   };
 }

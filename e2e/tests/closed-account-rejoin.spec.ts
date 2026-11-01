@@ -16,7 +16,7 @@ import { cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 // sign in, and stay in. Plus: a member deleted mid-session is told why, and a
 // suspended account is never let in by an approval.
 //
-// No LinkedIn address is given (it is optional since 21 Oct 2026), so no approval
+// The request carries no LinkedIn address (optional since 21 Oct), so no approval
 // here spends a paid ScrapingDog lookup, and every approval and first sign-in
 // here is also a request with no LinkedIn going through.
 
