@@ -65,10 +65,13 @@ export function joinToast(action: CircleAction, name: string, answer?: { status?
   return `Welcome to ${name}!`;
 }
 
-/** The tags a circle's page follows: the circle (and its members) and the member's own circles; managers add the asks. */
+/**
+ * The tags a circle's page follows: the circle (and its members) and the member's own circles and events (T13: a new
+ * event for the circle, or a change to one of its events, reaches the member's own events list); managers add the asks.
+ */
 export function circleEntities(circleId: string, me: string | undefined, manager = false): string[] {
   const tags = [E.circle(circleId), E.circleMembers(circleId)];
-  if (me) tags.push(E.userCircles(me), E.user(me));
+  if (me) tags.push(E.userCircles(me), E.user(me), E.userSessions(me));
   if (manager) tags.push(E.circleRequests(circleId));
   return tags;
 }

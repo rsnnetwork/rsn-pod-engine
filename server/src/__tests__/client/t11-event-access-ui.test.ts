@@ -67,8 +67,10 @@ describe('the forms and the list', () => {
   });
 
   it('schedules with the visibility at the top level, starting from the pod', () => {
-    expect(create).toMatch(/chosenVisibility \?\? defaultEventVisibility\(pod\?\.visibility\)/);
-    expect(create).toMatch(/create\.mutate\(\{ \.\.\.eventBody\(values, \{ isAdmin \}\), visibility \}\)/);
+    // T13: a circle's event starts Private (the circle); every other event starts from its pod, as before.
+    expect(create).toMatch(/chosenVisibility \?\? \(circle \? 'private' : defaultEventVisibility\(pod\?\.visibility\)\)/);
+    // T13: plus the circle, only when the form came from one.
+    expect(create).toMatch(/create\.mutate\(\{ \.\.\.eventBody\(values, \{ isAdmin \}\), visibility, \.\.\.\(circle \? \{ circleId: circle\.id \} : \{\}\) \}\)/);
   });
 
   it('edits send the visibility only when the organiser changed it', () => {

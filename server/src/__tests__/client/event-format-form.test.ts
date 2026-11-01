@@ -100,6 +100,10 @@ describe('a new event: its defaults per type, and a title already filled in', ()
     expect(nextQuarterHour(new Date(2026, 10, 2, 9, 50))).toBe('2026-11-02T10:00');
     expect(nextQuarterHour(new Date(2026, 10, 2, 23, 59))).toBe('2026-11-03T00:00');
     expect(nextQuarterHour(new Date(2026, 10, 2, 9, 15))).toBe('2026-11-02T09:15');
+    // T13 fix round 1: seconds into a quarter (23:30:15) the quarter has begun, so the default is the next one. It was
+    // 23:30, already past: the event left "upcoming" lists (a circle's page) as soon as it was made.
+    expect(nextQuarterHour(new Date(2026, 10, 2, 23, 30, 15))).toBe('2026-11-02T23:45');
+    expect(nextQuarterHour(new Date(2026, 10, 2, 23, 45, 0, 1))).toBe('2026-11-03T00:00');
   });
 
   it('the title follows the type and pod until the member writes their own', () => {

@@ -315,7 +315,8 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
   // Old pages inside <main> scrolled sideways on a phone. Measured as main.scrollWidth - main.clientWidth at 360 and 390.
   it('a list of cards that hold a truncated title or name is a one-column grid, not an auto track (an auto track grows to the longest truncated line, and the page scrolls sideways on a phone)', () => {
     // Circle detail: events (a truncated title beside a date that never wraps) and members. +53px at a 360px window for a 33-character title.
-    const circle = read('features/circles/CircleDetailPage.tsx');
+    // T13: the events moved into their own section.
+    const circle = read('features/circles/CircleEventsSection.tsx');
     expect(circle).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.upcomingEvents\.map/);
     // T14: the member rows (and the pod rows) moved into their own sections.
     expect(read('features/circles/CircleMembersSection.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.members\.map/);

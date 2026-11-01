@@ -8,11 +8,14 @@
 // attach pods and remove members. A closed circle shows people outside it its name and counts and nothing else.
 // The page follows circle:<id> and the member's own circles (and, for its managers, the asks), so every change shows
 // without a refresh.
+// T13 (1 Nov 2026; 30 Oct review 6.5): its managers schedule an event for everyone in it ("Schedule an event" in the
+// header's row of actions). Its events are its own and its pods', as the server lists them, and the page follows the
+// member's own events too, so a new circle event shows without a refresh.
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Users, Calendar, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox } from 'lucide-react';
+import { ArrowLeft, Users, CalendarPlus, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
@@ -24,6 +27,8 @@ import CircleSettingsSheet from './CircleSettingsSheet';
 import CircleRequestsSheet from './CircleRequestsSheet';
 import CirclePodsSection from './CirclePodsSection';
 import CircleMembersSection from './CircleMembersSection';
+import CircleEventsSection from './CircleEventsSection';
+import { scheduleForCircleHref } from '@/features/sessions/circle-preset';
 import { LOCKED_COPY, WHO_CAN_JOIN, circleEntities, requestsLabel, type CircleDetail } from './circle-logic';
 
 const HEADER_ACTION = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50';
@@ -79,6 +84,12 @@ export default function CircleDetailPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* T13: its managers schedule an event for everyone in it. */}
+          {circle.canManage && (
+            <Link to={scheduleForCircleHref(circle.id)} data-testid="circle-schedule-event" className={HEADER_ACTION}>
+              <CalendarPlus className="h-4 w-4" /> Schedule an event
+            </Link>
+          )}
           {canInvite && (
             <button type="button" onClick={() => setSheet('invite')} data-testid="circle-invite" className={HEADER_ACTION}>
               <Mail className="h-4 w-4" /> Invite
@@ -125,27 +136,7 @@ export default function CircleDetailPage() {
         </div>
       )}
 
-      {circle.upcomingEvents.length > 0 && (
-        <div className="space-y-2 animate-fade-in-up">
-          <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
-            <Calendar className="h-4 w-4 text-rsn-red" /> Upcoming events
-          </h2>
-          {/* grid-cols-1, not an auto track: an auto track grows to the longest truncated title
-              in it, and the row (and with it the page) then scrolls sideways on a phone. */}
-          <div className="grid grid-cols-1 gap-2">
-            {circle.upcomingEvents.map(e => (
-              <Card key={e.id} className="card-hover !p-4">
-                <Link to={`/sessions/${e.id}`} className="flex items-center justify-between gap-2 min-h-[36px]">
-                  <p className="font-medium text-gray-900 truncate">{e.title}</p>
-                  <p className="text-xs text-gray-400 whitespace-nowrap">
-                    {new Date(e.scheduledAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                </Link>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+      {!circle.locked && <CircleEventsSection circle={circle} />}
 
       {!circle.locked && <CirclePodsSection circle={circle} />}
 
