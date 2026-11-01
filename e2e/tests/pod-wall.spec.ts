@@ -596,10 +596,12 @@ test('a thread of more than 400 comments shows the first 400 and says so', async
   const page = await pageAt(alice, `/pods/${bigPodId}?post=${busy}`, { width: 390, height: 844 });
   const thread = page.getByTestId(`comments-${busy}`);
   await expect(thread).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId(`comments-truncated-${busy}`)).toHaveText('Showing the first 400 comments.', { timeout: 15_000 });
+  await expect(page.getByTestId(`comments-truncated-${busy}`)).toHaveText('Showing the first 400 comments. New comments are closed on this post.', { timeout: 15_000 });
   await expect(thread.getByTestId(/^comment-[0-9a-f-]{36}$/)).toHaveCount(400);
   await expect(thread.getByText('Comment 1', { exact: true })).toBeVisible();
   await expect(thread.getByText('Comment 401', { exact: true }), 'the newest is not in the list').toHaveCount(0);
+  // A comment written now would not be shown either: the box is closed (P1 item 16).
+  await expect(thread.getByLabel('Your comment')).toBeDisabled();
 });
 
 test('a populated pod at 360, 390, 414, 768, 1024, 1280 and 1440: no sideways scroll, 44px controls, two columns from 1024px', async () => {
