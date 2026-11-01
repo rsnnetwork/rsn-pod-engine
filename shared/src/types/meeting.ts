@@ -5,6 +5,8 @@
 // The VALUES here are used by the client, so index.ts also gives each its own named re-export
 // (Rollup CJS interop; see OPENINGS there).
 
+import type { MyMeetingFeedback } from './meeting-feedback';
+
 export type MeetingKind = 'audio' | 'video';
 export type MeetingStatus = 'scheduled' | 'cancelled';
 export type MeetingPhase = 'upcoming' | 'joinable' | 'live' | 'ended' | 'cancelled';
@@ -33,6 +35,11 @@ export interface Meeting {
   /** The pair's own call room, the same place every Join has always opened. */
   joinPath: string;
   attended: { me: boolean; them: boolean };
+  /**
+   * The viewer's own answer to "How did it go?" (30 Oct 2026), null until they answer. Only GET /meetings/:id sends
+   * it; the lists leave it out. The other person's answer is never sent.
+   */
+  myFeedback?: MyMeetingFeedback | null;
 }
 
 export interface MeetingList {

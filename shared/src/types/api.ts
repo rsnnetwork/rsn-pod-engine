@@ -114,6 +114,8 @@ export const ErrorCodes = {
   MEETING_TIME_NOT_SHARED: 'MEETING_TIME_NOT_SHARED',  // 409; details.scheduling is where the two people's times stand now
   MEETING_ALREADY_ENDED: 'MEETING_ALREADY_ENDED',  // 409; a meeting that is over can no longer be cancelled
   MEETING_ALREADY_STARTED: 'MEETING_ALREADY_STARTED',  // 409; a meeting under way can no longer be cancelled
+  MEETING_NOT_STARTED: 'MEETING_NOT_STARTED',  // 409; feedback on a meeting waits for its start
+  MEETING_CANCELLED: 'MEETING_CANCELLED',  // 409; a cancelled meeting takes no feedback
 
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',

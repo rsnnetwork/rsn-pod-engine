@@ -18,6 +18,7 @@ import * as responses from '../services/people/person-response.service';
 import * as outcomes from '../services/people/meeting-outcome.service';
 import * as brief from '../services/people/person-brief.service';
 import * as connections from '../services/people/connections.service';
+import { announceFeedbackToAdmins } from '../services/meetings/meeting-feedback.service';
 
 const router = Router();
 
@@ -152,6 +153,8 @@ router.post(
         req.user!.userId, req.params.userId, body.worthContinuing, body.outcomes,
       );
       void fanoutUserEntity(req.user!.userId);
+      // The admin feedback list shows the profile sheet's answers too (as "Profile").
+      void announceFeedbackToAdmins();
       res.status(201).json({ success: true, data } as ApiResponse);
     } catch (err) {
       next(err);

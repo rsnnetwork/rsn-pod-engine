@@ -42,7 +42,12 @@ jest.mock('../../services/people/connections.service', () => ({
   __esModule: true,
 }));
 const mockFanout = jest.fn().mockResolvedValue(undefined);
-jest.mock('../../realtime/fanout', () => ({ fanoutUserEntity: (...a: unknown[]) => mockFanout(...a), __esModule: true }));
+const mockAdminFanout = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../realtime/fanout', () => ({
+  fanoutUserEntity: (...a: unknown[]) => mockFanout(...a),
+  fanoutAdminEntities: (...a: unknown[]) => mockAdminFanout(...a),
+  __esModule: true,
+}));
 
 import { query } from '../../db';
 import peopleRoutes from '../../routes/people';
@@ -106,7 +111,7 @@ describe('PUT/DELETE /people/:userId/response', () => {
 });
 
 describe('POST /people/:userId/outcome', () => {
-  beforeEach(() => { mockRecord.mockClear(); mockFanout.mockClear(); });
+  beforeEach(() => { mockRecord.mockClear(); mockFanout.mockClear(); mockAdminFanout.mockClear(); });
 
   it('records and returns 201', async () => {
     const res = await request(app).post(`/people/${TARGET}/outcome`).set('Authorization', `Bearer ${token()}`)
@@ -136,6 +141,18 @@ describe('POST /people/:userId/outcome', () => {
     expect(res.status).toBe(409);
     expect(res.body.error.message).toBe(message);
     expect(mockFanout).not.toHaveBeenCalled();
+    expect(mockAdminFanout).not.toHaveBeenCalled();
+  });
+
+  // 30 Oct 2026: the admin feedback list (GET /admin/feedback) lists the profile sheet's answers as "Profile".
+  // The preview's outcome sheet posts { worthContinuing, outcomes }: it is taken, and answered, exactly as before.
+  it('tells every admin\'s feedback list too, with the body and the answer exactly as before', async () => {
+    const res = await request(app).post(`/people/${TARGET}/outcome`).set('Authorization', `Bearer ${token()}`)
+      .send({ worthContinuing: 'yes', outcomes: ['advice'] });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ success: true, data: { id: 'o1', worthContinuing: 'yes', outcomes: ['advice'], createdAt: '2026-09-30T10:00:00.000Z' } });
+    expect(mockRecord).toHaveBeenCalledWith('u-viewer', TARGET, 'yes', ['advice']);
+    expect(mockAdminFanout).toHaveBeenCalledWith('meeting-feedback');
   });
 
   it('treats a missing outcomes list as none, and refuses more than the Foundation answers', async () => {

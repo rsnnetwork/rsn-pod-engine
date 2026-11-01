@@ -75,4 +75,6 @@ export const E = {
   adminViolations: 'admin:violations',
   adminSupportTickets: 'admin:support-tickets',
   adminAnalytics: 'admin:analytics',
+  /** Feedback after meetings (30 Oct 2026): the admin feedback list. */
+  adminMeetingFeedback: 'admin:meeting-feedback',
 } as const;

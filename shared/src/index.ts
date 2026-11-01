@@ -164,3 +164,14 @@ import {
 export const MEETING_JOIN_EARLY_MIN = _MEETING_JOIN_EARLY_MIN;
 export const MEETING_GRACE_MIN = _MEETING_GRACE_MIN;
 export const meetingPhase = _meetingPhase;
+export * from './types/meeting-feedback';
+// Real VALUES the client renders (the feedback sheet after a meeting, the admin feedback page), so each needs its own
+// statically analysable named export, same as OPENINGS above.
+import {
+  MEETING_PROBLEMS as _MEETING_PROBLEMS, MEETING_PROBLEM_LABELS as _MEETING_PROBLEM_LABELS,
+  MEETING_FEEDBACK_SOURCES as _MEETING_FEEDBACK_SOURCES, MEETING_PROBLEM_TEXT_MAX as _MEETING_PROBLEM_TEXT_MAX,
+} from './types/meeting-feedback';
+export const MEETING_PROBLEMS = _MEETING_PROBLEMS;
+export const MEETING_PROBLEM_LABELS = _MEETING_PROBLEM_LABELS;
+export const MEETING_FEEDBACK_SOURCES = _MEETING_FEEDBACK_SOURCES;
+export const MEETING_PROBLEM_TEXT_MAX = _MEETING_PROBLEM_TEXT_MAX;
