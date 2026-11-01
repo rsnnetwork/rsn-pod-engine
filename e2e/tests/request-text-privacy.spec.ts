@@ -148,7 +148,9 @@ test('a meeting request says only what the sender shared, never the recipient\'s
   expect([item?.message, item?.note, item?.reasonLine], 'the recipient is shown no text either').toEqual([null, null, null]);
   const stored = (await pool.query<{ message: string | null; reason_line: string | null }>(
     `SELECT message, reason_line FROM user_pokes WHERE id = $1`, [poke.id])).rows[0];
-  expect([stored.message, stored.reason_line], 'the row stores no note and no line').toEqual([null, null]);
+  // A row written since migration 120 always stores reason_line: empty when REASON had no line (NULL marks only the
+  // rows from before 120, the only ones whose one text is ever split).
+  expect([stored.message, stored.reason_line], 'the row stores no note and an empty line').toEqual([null, '']);
   console.log('  ✓ 201; the response, the recipient\'s list and the row carry no text at all.');
 
   // ── 2. The recipient accepts: REASON's card in the conversation and the sender's bell ──
@@ -190,7 +192,7 @@ test('a meeting request says only what the sender shared, never the recipient\'s
 
   const notedRow = (await pool.query<{ message: string | null; reason_line: string | null }>(
     `SELECT message, reason_line FROM user_pokes WHERE id = $1`, [notedPoke.id])).rows[0];
-  expect([notedRow.message, notedRow.reason_line], 'the stored message is exactly the note, with no line').toEqual([note, null]);
+  expect([notedRow.message, notedRow.reason_line], 'the stored message is exactly the note, with an empty line').toEqual([note, '']);
   const notedList = dataOf(await api<PokeJson[]>(noteRecipient, 'GET', '/pokes/received'), 'received list of the note recipient');
   expect(notedList.find((p) => p.id === notedPoke.id)?.message, 'the recipient is shown exactly the note').toBe(note);
   console.log(`  ✓ with a note: 201; the response, the row and the recipient's list are exactly "${note}".`);
