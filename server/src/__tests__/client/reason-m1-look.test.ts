@@ -965,6 +965,7 @@ describe('The hero links to the member\'s LinkedIn, on the Human Profile and on 
     '../brand/ReasonSheep': { __esModule: true, default: () => null },
     '../person': require('../../../../client/src/features/reason/person'),
     './profile-text': text,
+    './ProfileHeroActions': { __esModule: true, default: () => null },
   }).HeroFrame as (props: Record<string, unknown>) => ReactElement;
   const person = (over: Record<string, unknown>) => ({
     id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null,

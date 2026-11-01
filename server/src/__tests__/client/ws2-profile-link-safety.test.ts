@@ -162,8 +162,9 @@ describe('WS2/S3 + CON-01 — ProfileLink: the same tab by default, a marked new
       }
     }
     expect(offenders).toEqual([]);
-    const requests = readClient('features/messages/MeetingRequests.tsx');
-    expect(requests.match(/<ProfileLink\b/g)!.length).toBeGreaterThanOrEqual(5);
+    // Since 30 Oct 2026 both forms of a meeting request are one card: its avatar, its name and View full profile.
+    const requests = readClient('features/messages/MeetingRequestCard.tsx');
+    expect(requests.match(/<ProfileLink\b/g)!.length).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -247,8 +248,8 @@ describe('CON-01 — every link to a profile is an in-app link, so what is behin
         if (!/\bfrom=/.test(tag)) offenders.push(`${path.relative(CLIENT_SRC, file)}: ${tag.replace(/\s+/g, ' ')}`);
       }
     }
-    // The meeting requests (5) and the live event (4).
-    expect(seen).toBeGreaterThanOrEqual(9);
+    // The meeting request card (3, both forms since 30 Oct 2026) and the live event (4).
+    expect(seen).toBeGreaterThanOrEqual(7);
     expect(offenders).toEqual([]);
   });
 });

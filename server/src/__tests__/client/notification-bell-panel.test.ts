@@ -209,6 +209,9 @@ describe('the bell and the request cards, read from source', () => {
   const bell = () => BELL;
   const requests = () => fs.readFileSync(path.join(__dirname, '../../../../client/src/features/messages/MeetingRequests.tsx'), 'utf8')
     .replace(/\r\n/g, '\n');
+  // Both forms of a request are one card since 30 Oct 2026.
+  const card = () => fs.readFileSync(path.join(__dirname, '../../../../client/src/features/messages/MeetingRequestCard.tsx'), 'utf8')
+    .replace(/\r\n/g, '\n');
   const hook = () => fs.readFileSync(path.join(__dirname, '../../../../client/src/features/messages/useRequestAnswer.ts'), 'utf8')
     .replace(/\r\n/g, '\n');
 
@@ -248,22 +251,35 @@ describe('the bell and the request cards, read from source', () => {
     for (const call of calls) expect(call).toMatch(/await patchList\(qc,/);
   });
 
-  it('the request cards\' profile links are 44px to press and look as they did: padding taken back by margins', () => {
-    const src = requests();
-    // The list card: a 40px avatar plus 2px all round, and a 20px name line plus 12px above and below.
-    expect(src).toMatch(/className="-m-0\.5 shrink-0 p-0\.5"/);
-    expect(src).toMatch(/className="relative -my-3 block truncate py-3 text-sm font-semibold/);
-    // The focused card: a 28px name line plus 8px, and the 16px "View full profile" line plus 14px.
-    expect(src).toMatch(/className="relative mt-1 -mb-2 block py-2 text-lg font-bold/);
-    expect(src).toMatch(/className="relative -mt-0\.5 -mb-3\.5 inline-block py-3\.5 text-xs font-medium text-rsn-red underline"/);
+  // 30 Oct 2026 (Stefan: "Text overlaps on the connection request card"): the 44px tap boxes used to be
+  // padding taken back by negative margins, so a box reached over the line beside it. Each is its own row now.
+  it('the request card\'s profile links are their own 44px rows, and no box is pulled over another line', () => {
+    const src = card();
+    expect(src).toMatch(/className="flex min-h-\[44px\] min-w-\[44px\] shrink-0 items-center justify-center"/);
+    expect(src).toMatch(/className="flex min-h-\[44px\] items-center text-sm font-semibold text-\[#1a1a2e\] \[overflow-wrap:anywhere\]/);
+    expect(src).toMatch(/className="mt-1 flex min-h-\[44px\] w-fit items-center text-xs font-medium text-rsn-red underline"/);
+    expect(src).not.toMatch(/(?:^|[\s"'])-m[trblxy]?-/m);
+    expect(src).not.toMatch(/\brelative\b/);
     // Profiles open in the same tab now; nothing here says otherwise.
     expect(src).not.toMatch(/new tab/i);
   });
 
-  it('the Messages list card and the focused card both answer through it, one request at a time', () => {
-    const src = requests();
-    expect(src.match(/<RequestAnswerButtons\b/g)).toHaveLength(2);
-    expect(src).toMatch(/useRequestAnswer\(requestId, \{/);
-    expect(src).not.toMatch(/acceptMutation|declineMutation|usePokeActions/);
+  it('the card says "<First name> wants to meet you", the note under "<First name>\'s note" as a quote, and REASON\'s line in its own box', () => {
+    const src = card();
+    expect(src).toMatch(/\{first\} wants to meet you/);
+    expect(src).toMatch(/\{first\}&rsquo;s note/);
+    expect(src).toMatch(/<blockquote /);
+    expect(src).toMatch(/\{reasonLine && <ReasonLineBox line=\{reasonLine\}/);
+    // A server from before 30 Oct sends only message: shown as it always was, with no "note" heading.
+    expect(src).toMatch(/return \{ note: null, reasonLine: null, plain: r\.message\?\.trim\(\) \|\| null \};/);
+  });
+
+  it('the Messages list card and the focused card are one card, and both answer through the hook, one request at a time', () => {
+    expect(requests().match(/<MeetingRequestCard\b/g)).toHaveLength(2);
+    expect(requests()).toMatch(/variant="focused"/);
+    expect(requests()).toMatch(/variant="list"/);
+    expect(card().match(/<RequestAnswerButtons\b/g)).toHaveLength(1);
+    expect(card()).toMatch(/useRequestAnswer\(requestId, \{/);
+    expect(card() + requests()).not.toMatch(/acceptMutation|declineMutation|usePokeActions/);
   });
 });

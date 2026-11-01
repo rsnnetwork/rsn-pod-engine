@@ -126,8 +126,9 @@ describe('every ?from= the app writes is one the profile accepts', () => {
   // CON-01 (25 Oct 2026): the request opens the profile in THIS tab, so Back returns to the request. Only the live
   // event, where leaving the tab drops the call, opens a new one.
   it('a meeting request in Messages opens the Human Profile through ProfileLink in the same tab, and the live event\'s chat, participant list and end screen in a new one', () => {
-    const requests = clientFile('features/messages/MeetingRequests.tsx');
-    expect(requests.match(/<ProfileLink\b[^>]*\bfrom="Messages"/g)).toHaveLength(5);
+    // One card draws both forms since 30 Oct 2026: the avatar, the name and View full profile.
+    const requests = clientFile('features/messages/MeetingRequestCard.tsx');
+    expect(requests.match(/<ProfileLink\b[^>]*\bfrom="Messages"/g)).toHaveLength(3);
     expect(requests).not.toMatch(/<ProfileLink\b(?![^>]*\bfrom=)/);
     expect(requests).not.toMatch(/<ProfileLink\b[^>]*\bnewTab\b/);
     for (const file of ['features/live/ChatPanel.tsx', 'features/live/ParticipantList.tsx', 'features/live/SessionComplete.tsx']) {
@@ -421,11 +422,12 @@ describe('relationship memory', () => {
   });
 });
 
-describe('moveToast: every Save and Pass press answers', () => {
+describe('moveToast: every Save and Remove press answers', () => {
   it('says the four sentences, with the name', () => {
     expect(moveToast('save', 'Nora')).toEqual({ message: 'Nora saved', type: 'success' });
     expect(moveToast('unsave', 'Nora')).toEqual({ message: 'Nora removed from saved', type: 'success' });
-    expect(moveToast('pass', 'Nora')).toEqual({ message: 'Nora will not be suggested in For You. You can undo this here.', type: 'info' });
+    // 30 Oct 2026: the × is Remove now, and its toast says so.
+    expect(moveToast('pass', 'Nora')).toEqual({ message: 'Nora is removed from your For You. You can undo this here.', type: 'info' });
     expect(moveToast('unpass', 'Nora')).toEqual({ message: 'Nora can be suggested in For You again.', type: 'info' });
   });
   it('sends one request per move, and clearing is the same request for both ways of clearing', () => {

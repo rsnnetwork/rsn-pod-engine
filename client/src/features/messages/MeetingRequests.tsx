@@ -10,77 +10,14 @@
 // Realtime: sendPoke fans out E.userInvites(recipient), so keying this query to
 // that entity makes a new request appear without a refresh.
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { Check, Loader2, X } from 'lucide-react';
-import Avatar from '@/components/ui/Avatar';
-import ProfileLink from '@/components/ui/ProfileLink';
 import { Spinner } from '@/components/ui/Spinner';
-import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import api from '@/lib/api';
-import { MEETING_FORMATS } from '@rsn/shared';
-import { useRequestAnswer } from './useRequestAnswer';
-
-export interface PendingRequest {
-  id: string;
-  senderId: string;
-  message: string | null;
-  createdAt: string;
-  senderDisplayName: string | null;
-  senderAvatarUrl: string | null;
-  senderJobTitle: string | null;
-  senderCompany: string | null;
-  preferredFormat?: 'video_20' | 'coffee' | 'message_first' | null;
-}
-
-const formatLabel = (f: PendingRequest['preferredFormat']) => MEETING_FORMATS.find(m => m.key === f)?.label ?? null;
-
-/**
- * Accept and Decline for one request (26 Oct 2026). The list card and the
- * focused card both draw this, and the bell answers through the same hook: one
- * mutation key per request, so while any of them is answering it, every one of
- * them is busy and none offers a second answer. Accepting lands in the
- * conversation (a repeated accept too: the server answers with the same one).
- * An answer given the other way already is said, and the card redraws.
- */
-function RequestAnswerButtons({ requestId, className, onDeclined }: {
-  requestId: string; className: string; onDeclined?: () => void;
-}) {
-  const navigate = useNavigate();
-  const addToast = useToastStore(s => s.addToast);
-  const { answer, busy, answering } = useRequestAnswer(requestId, {
-    onAccepted: (result) => {
-      addToast('Connected — say hello', 'success');
-      if (result.conversationId) navigate(`/messages/${result.conversationId}`);
-    },
-    onDeclined,
-  });
-  const accept = () => answer('accept');
-  const decline = () => answer('decline');
-  return (
-    <div className={className}>
-      <button
-        type="button"
-        onClick={accept}
-        disabled={busy}
-        className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-      >
-        {answering === 'accept' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Accept
-      </button>
-      <button
-        type="button"
-        onClick={decline}
-        disabled={busy}
-        className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
-      >
-        {answering === 'decline' ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} Decline
-      </button>
-    </div>
-  );
-}
+import MeetingRequestCard, { type PendingRequest } from './MeetingRequestCard';
 
 /** Where one request stands, from GET /pokes/:id (either person in it may ask). */
 interface PokeState {
@@ -200,116 +137,9 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
   }
 
   return (
-    <div className="flex-1 flex items-center justify-center p-6">
-      <div className="w-full max-w-sm rounded-2xl border border-rsn-red/30 bg-white p-6 shadow-sm text-center" data-testid="focused-meeting-request" data-poke-id={req.id}>
-        <p className="text-xs font-semibold uppercase tracking-wider text-rsn-red">Meeting request</p>
-        <ProfileLink from="Messages" userId={req.senderId} className="mt-4 inline-block" title={`View ${req.senderDisplayName || 'this member'}'s profile`}>
-          <Avatar src={req.senderAvatarUrl || undefined} name={req.senderDisplayName || 'Member'} size="xl" />
-        </ProfileLink>
-        {/* The name and "View full profile" are at least 44px to press: the
-            padding is taken back by the margins, so nothing moves. */}
-        <ProfileLink
-          from="Messages"
-          userId={req.senderId}
-          className="relative mt-1 -mb-2 block py-2 text-lg font-bold text-[#1a1a2e] hover:text-rsn-red hover:underline"
-          title={`View ${req.senderDisplayName || 'this member'}'s profile`}
-        >
-          {req.senderDisplayName || 'A member'}
-        </ProfileLink>
-        {(req.senderJobTitle || req.senderCompany) && (
-          <p className="mt-0.5 text-sm text-gray-500">{[req.senderJobTitle, req.senderCompany].filter(Boolean).join(' · ')}</p>
-        )}
-        {req.message && (
-          <p className="mt-3 whitespace-pre-line break-words text-sm text-gray-600">{req.message}</p>
-        )}
-        {formatLabel(req.preferredFormat) && (
-          <p className="mt-1 text-xs text-gray-500">Prefers {formatLabel(req.preferredFormat)?.toLowerCase()}</p>
-        )}
-        <ProfileLink from="Messages" userId={req.senderId} className="relative -mt-0.5 -mb-3.5 inline-block py-3.5 text-xs font-medium text-rsn-red underline">
-          View full profile
-        </ProfileLink>
-        <RequestAnswerButtons
-          requestId={req.id}
-          className="mt-5 flex gap-2"
-          onDeclined={() => navigate('/messages')}
-        />
-      </div>
+    <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
+      <MeetingRequestCard request={req} variant="focused" onDeclined={() => navigate('/messages')} />
     </div>
-  );
-}
-
-// The number in the line-clamp-6 class below. Tailwind needs that class written out in
-// full, so the two are kept equal by hand.
-const MESSAGE_LINES = 6;
-
-/**
- * A request's note inside its list row: six lines, and "Show more" under it ONLY
- * while the text really is cut off (5 Oct 2026). The full-text card is not shown
- * below 1024px, so on a phone this row is the only place a long note, with REASON's
- * reason after it, can be read before the member accepts. A note that fits gets no
- * button, so a short row is exactly as tall as it was.
- *
- * The text is measured, not guessed from its length: how many lines it takes
- * depends on the width of the window and on the font, so it is measured again when
- * the paragraph is resized and when the fonts finish loading. scrollHeight is the
- * full height of the text whether or not the clamp is on, so the same test works
- * for the collapsed and the expanded paragraph.
- *
- * The button is a full 44px box after the note and before the "Prefers" line, and it
- * overlaps neither. A box pulled over that text (a negative margin, made tappable again
- * with `relative`) put its focus ring over the last line of the note and the top of the
- * "Prefers" line. The ring is drawn inside the box, because the default one reaches 4px
- * outside it and a box that only touches the text would still have its ring over the
- * text. The box is square so that every row of it is the button.
- */
-function ClampedMessage({ text }: { text: string }) {
-  const id = useId();
-  const paragraphRef = useRef<HTMLParagraphElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [cutOff, setCutOff] = useState(false);
-
-  useLayoutEffect(() => {
-    const paragraph = paragraphRef.current;
-    if (!paragraph) return;
-    let stale = false;
-    const measure = () => {
-      if (stale) return;
-      const style = getComputedStyle(paragraph);
-      const parsed = parseFloat(style.lineHeight);
-      const lineHeight = Number.isFinite(parsed) ? parsed : parseFloat(style.fontSize) * 1.2;
-      setCutOff(paragraph.scrollHeight > lineHeight * MESSAGE_LINES + 1);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(paragraph);
-    void document.fonts?.ready.then(measure);
-    return () => {
-      stale = true;
-      observer.disconnect();
-    };
-  }, [text]);
-
-  return (
-    <>
-      <p
-        id={id}
-        ref={paragraphRef}
-        className={`mt-1 whitespace-pre-line break-words text-xs text-gray-600 ${expanded ? '' : 'line-clamp-6'}`}
-      >
-        {text}
-      </p>
-      {cutOff && (
-        <button
-          type="button"
-          onClick={() => setExpanded(open => !open)}
-          aria-expanded={expanded}
-          aria-controls={id}
-          className="flex min-h-[44px] w-fit min-w-[44px] items-center text-xs font-medium text-rsn-red underline underline-offset-2 hover:text-rsn-red-hover focus-visible:ring-inset focus-visible:ring-offset-0"
-        >
-          {expanded ? 'Show less' : 'Show more'}
-        </button>
-      )}
-    </>
   );
 }
 
@@ -348,46 +178,8 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
       </div>
       <div className="flex flex-col gap-2 px-3 pb-3 pt-2">
         {requests.map(r => (
-          <div
-            key={r.id}
-            ref={focusPokeId === r.id ? focusRef : undefined}
-            data-testid="meeting-request"
-            data-sender-id={r.senderId}
-            data-poke-id={r.id}
-            className={`rounded-xl border bg-white p-3 transition-shadow ${
-              focusPokeId === r.id ? 'border-rsn-red ring-2 ring-rsn-red/40' : 'border-rsn-red/20'
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              {/* 7 Sep 2026 (Ali): the request is a profile card — avatar and
-                  name open the sender's profile (in the same tab, since 26 Oct
-                  2026) so the recipient can check who is asking before
-                  accepting. Each is at least 44px to press: padding cancelled
-                  by an equal negative margin, so the card looks as it did. */}
-              <ProfileLink from="Messages" userId={r.senderId} title={`View ${r.senderDisplayName || 'this member'}'s profile`} className="-m-0.5 shrink-0 p-0.5">
-                <Avatar src={r.senderAvatarUrl || undefined} name={r.senderDisplayName || 'Member'} size="md" />
-              </ProfileLink>
-              <div className="min-w-0 flex-1">
-                <ProfileLink
-                  from="Messages"
-                  userId={r.senderId}
-                  className="relative -my-3 block truncate py-3 text-sm font-semibold text-[#1a1a2e] hover:text-rsn-red hover:underline"
-                  title={`View ${r.senderDisplayName || 'this member'}'s profile`}
-                >
-                  {r.senderDisplayName || 'A member'}
-                </ProfileLink>
-                {(r.senderJobTitle || r.senderCompany) && (
-                  <p className="truncate text-xs text-gray-500">
-                    {[r.senderJobTitle, r.senderCompany].filter(Boolean).join(' · ')}
-                  </p>
-                )}
-                <ClampedMessage text={r.message || 'They would like to meet you.'} />
-                {formatLabel(r.preferredFormat) && (
-                  <p className="mt-0.5 text-[11px] text-gray-500">Prefers {formatLabel(r.preferredFormat)?.toLowerCase()}</p>
-                )}
-              </div>
-            </div>
-            <RequestAnswerButtons requestId={r.id} className="mt-3 flex gap-2" />
+          <div key={r.id} ref={focusPokeId === r.id ? focusRef : undefined}>
+            <MeetingRequestCard request={r} variant="list" highlighted={focusPokeId === r.id} />
           </div>
         ))}
       </div>

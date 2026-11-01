@@ -14,7 +14,7 @@
 //        also what the sender of a pending or a declined request reads, a request that is not
 //        theirs, a fetch that is paused offline, a network blip that is asked again by itself,
 //        and a question that keeps failing, with its Try again button
-//   3. The bell shows a note and "Why REASON suggested this:" on separate lines
+//   3. The bell shows the member's note alone, under "<First name> wants to meet you"
 //   3. The bell clamps a long note to six lines and keeps its Accept and Decline reachable
 //   4. Matches: an open page changes on its own when a request is sent from another tab and when
 //      it is answered, with no reload
@@ -105,6 +105,7 @@ async function makeUser(label: string, profile: Profile = {}): Promise<TestUser>
     `UPDATE users
         SET email = $2,
             display_name = COALESCE($3, display_name),
+            first_name = COALESCE(split_part($3, ' ', 1), first_name),
             who_i_want_to_meet = COALESCE($4, who_i_want_to_meet),
             expertise_text = COALESCE($5, expertise_text)
       WHERE id = $1`,
@@ -337,29 +338,6 @@ function strayRows(el: HTMLElement): string[] {
     from = to + 1;
   }
   return runs;
-}
-
-interface BodyReading { whiteSpace: string; overflowWrap: string; lineHeight: number; tops: number[] }
-
-// The computed wrapping of a paragraph, and the top edge of the first character of each
-// needle, so two pieces of text can be compared by the line they sit on.
-function readBody(el: HTMLElement, needles: string[]): BodyReading {
-  const cs = window.getComputedStyle(el);
-  const parsed = parseFloat(cs.lineHeight);
-  const lineHeight = isFinite(parsed) ? parsed : parseFloat(cs.fontSize) * 1.2;
-  const node = Array.from(el.childNodes).find((n) => n.nodeType === Node.TEXT_NODE) as Text | undefined;
-  const tops = needles.map((needle) => {
-    if (!node) return NaN;
-    const at = node.data.indexOf(needle);
-    if (at < 0) return NaN;
-    const range = document.createRange();
-    range.setStart(node, at);
-    range.setEnd(node, at + needle.length);
-    // WebKit lists the line break before a range as an extra zero-width rectangle first.
-    const rect = Array.from(range.getClientRects()).find((r) => r.width > 0 && r.height > 0);
-    return rect ? rect.top : NaN;
-  });
-  return { whiteSpace: cs.whiteSpace, overflowWrap: cs.overflowWrap, lineHeight, tops };
 }
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
@@ -877,28 +855,29 @@ test('2. A pending request is never called "already answered"; an answered one s
 // 3. The bell keeps the line break in a note
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('3. The bell shows a note and "Why REASON suggested this:" on separate lines', async () => {
+// 30 Oct 2026 (Stefan: "It looks like the sender wrote it"): the bell used to carry the note, a blank line and
+// "Why REASON suggested this: ...". REASON's line is kept apart from the note now, so the bell's body is the note
+// alone, under "<First name> wants to meet you"; the line is on the request card, in a box of its own.
+test('3. The bell shows the member\'s note alone, under "<First name> wants to meet you"', async () => {
   test.setTimeout(240_000);
   const words = madeUpWords(0);
-  // The sender wants what the recipient offers, so the request carries REASON's reason.
+  // The sender wants what the recipient offers, so the request carries REASON's line too.
   const sender = await makeUser('bell-asker', { name: `C2 Bell Sender ${RUN}`, want: words });
   const recipient = await makeUser('bell-asked', { offer: words });
   const note = `Hello ${RUN}`;
-  const sent = await api<PokeJson>(sender, 'POST', `/matches/platform/${recipient.id}/interest`, { note });
+  const sent = await api<PokeJson & { note?: string | null; reasonLine?: string | null }>(sender, 'POST', `/matches/platform/${recipient.id}/interest`, { note });
   expect(sent.status, `interest: ${JSON.stringify(sent.body)}`).toBe(201);
-  const pokeId = dataOf(sent, 'interest').id;
+  const poke = dataOf(sent, 'interest');
+  expect(poke.reasonLine, 'the request has REASON\'s line, apart').toBeTruthy();
 
-  // What the bell is given: the note, a blank line, then the reason.
   const bell = (await pool.query<{ title: string; body: string | null }>(
     `SELECT title, body FROM notifications WHERE user_id = $1 AND type = 'poke' AND link = $2`,
-    [recipient.id, `/messages?poke=${pokeId}`])).rows;
+    [recipient.id, `/messages?poke=${poke.id}`])).rows;
   expect(bell, 'one bell row for this request').toHaveLength(1);
-  expect(bell[0].title).toBe(`C2 Bell Sender ${RUN} asked to meet you`);
-  expect(bell[0].body, 'the bell body is the note, a blank line and the reason').toMatch(new RegExp(`^${note}\\n\\nWhy REASON suggested this: .+`));
+  expect(bell[0].title).toBe('C2 wants to meet you'); // the first name is the name's first word here
+  expect(bell[0].body, 'the bell body is the note alone').toBe(note);
 
-  const REASON_LEAD = 'Why REASON suggested this:';
   const sizes: Viewport[] = DEVICE ? [contextOptions().viewport ?? { width: 390, height: 844 }] : [{ width: 360, height: 780 }, { width: 1280, height: 800 }];
-  const problems: string[] = [];
   const pageErrors: string[] = [];
   for (const vp of sizes) {
     const size = `${vp.width}x${vp.height}`;
@@ -908,34 +887,16 @@ test('3. The bell shows a note and "Why REASON suggested this:" on separate line
       await settle(page);
       await tap(page, page.locator('button[aria-label="Notifications"]:visible').first(), `${size} the bell`);
       await expect(page.getByText(bell[0].title), `${size}: the request is in the bell`).toBeVisible({ timeout: 30_000 });
-      const body = page.locator('p', { hasText: REASON_LEAD });
-      await expect(body, `${size}: the bell body paragraph`).toHaveCount(1);
-      await settle(page);
-
-      const read = await body.evaluate(readBody, [note, REASON_LEAD]);
-      expect(read.whiteSpace, `${size}: computed white-space of the bell body`).toBe('pre-line');
-      expect(read.overflowWrap, `${size}: computed overflow-wrap of the bell body`).toBe('break-word');
-      expect(Number.isFinite(read.tops[0]) && Number.isFinite(read.tops[1]), `${size}: both pieces of text were found (${read.tops.join(', ')})`).toBe(true);
-      const gap = read.tops[1] - read.tops[0];
-      expect(gap, `${size}: the reason starts a blank line below the note: ${Math.round(gap)}px apart, line height ${read.lineHeight}px`).toBeGreaterThanOrEqual(2 * read.lineHeight - 2);
-
-      // The paragraphs are on screen and inside the panel, not cut off sideways.
-      const fit = await body.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
-      expect(fit.scroll, `${size}: the bell body does not overflow sideways`).toBeLessThanOrEqual(fit.client + 1);
+      await expect(page.locator('p', { hasText: note }), `${size}: the note is the bell body`).toHaveCount(1);
+      await expect(page.getByText('Why REASON suggested this'), `${size}: REASON's line is not in the bell`).toHaveCount(0);
       const sw = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth }));
       expect(sw.scroll, `${size}: sideways scroll`).toBeLessThanOrEqual(sw.inner);
       await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${vp.width}-bell.png`) });
-      console.log(`  ✓ ${size}: white-space ${read.whiteSpace}, overflow-wrap ${read.overflowWrap}; the note and "${REASON_LEAD}" are ${Math.round(gap)}px apart (line height ${read.lineHeight}px).`);
-    } catch (e) {
-      problems.push(`${size}: ${firstLineOf(e)}`);
-      console.log(`  ✗ ${size}: ${firstLineOf(e)}`);
-      await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${vp.width}-bell-FAILED.png`) }).catch(() => undefined);
     } finally {
       await page.context().close().catch(() => undefined);
     }
   }
   expect(pageErrors, 'no script errors on any page').toEqual([]);
-  expect(problems, `sizes with a problem:\n${problems.join('\n')}`).toEqual([]);
 });
 
 test('3. The bell clamps a long note to six lines and keeps its Accept and Decline reachable', async () => {

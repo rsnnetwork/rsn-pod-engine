@@ -71,6 +71,19 @@ export function primaryActionFor(state: RelationshipState): PrimaryAction {
   }
 }
 
+/**
+ * A meeting request's two texts, kept apart (30 Oct 2026): what the member wrote, and REASON's own line
+ * on why it suggested the two. Either may be missing. The request's older `message` field still carries
+ * the two run together, for the clients that read only that.
+ */
+export interface MeetingRequestText {
+  note: string | null;
+  reasonLine: string | null;
+}
+
+/** Why the viewer may not message a person, from the same rule as GET /dm/can-message/:userId. */
+export type MessageRefusal = 'self' | 'blocked' | 'not_mutual' | 'no_encounter';
+
 export interface PersonBrief {
   person: PublicMember;
   match: { reason: string; strength: MatchStrength } | null;
@@ -96,6 +109,10 @@ export interface PersonBrief {
   path: { id: string; displayName: string } | null;
   /** The person's own entities (their company, fund…) with their role and title in each (21 Oct 2026). */
   entities: PersonEntity[];
+  /** Whether the viewer may message them now, by the rule GET /dm/can-message/:userId applies (30 Oct 2026). */
+  canMessage: boolean;
+  /** Why not, when canMessage is false; null when it is true. */
+  canMessageReason: MessageRefusal | null;
 }
 
 export interface RecentConnection {

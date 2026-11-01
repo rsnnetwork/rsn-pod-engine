@@ -182,7 +182,8 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
   expect(bInbox.status).toBe(200);
   const pokeNotif = bInbox.json.data.notifications.find((n: any) => n.type === 'poke');
   expect(pokeNotif, 'investor must have a poke bell notification').toBeTruthy();
-  expect(pokeNotif.title).toContain(founder.displayName);
+  // 30 Oct 2026: "<First name> wants to meet you" (test members' first name is the helper's own, not the display name).
+  expect(pokeNotif.title).toMatch(/^\S+ wants to meet you$/);
   console.log(`  ✓ (2) investor's bell (API): "${pokeNotif.title}"`);
 
   const bPage = await openAs(investor, '/');
@@ -203,7 +204,9 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
   const inbox = await apiAs(investor, 'GET', '/pokes/received');
   const poke = inbox.json.data.find((p: any) => p.senderId === founder.id);
   expect(poke, 'investor must have the pending introduction').toBeTruthy();
-  expect(poke.message).toMatch(/should meet/i);
+  // 30 Oct 2026: REASON's line comes apart from the note; message, the one text older clients draw, heads it.
+  expect(poke.reasonLine, 'REASON says why it introduced them').toBeTruthy();
+  expect(poke.message).toBe(`Why REASON suggested this: ${poke.reasonLine}`);
 
   const accept = await apiAs(investor, 'POST', `/pokes/${poke.id}/accept`);
   expect(accept.status).toBe(200);
@@ -232,8 +235,10 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
   expect(msgs.status).toBe(200);
   const list = msgs.json.data?.messages ?? msgs.json.data ?? [];
   expect(list.length, 'thread must have >=1 message even though the poke carried one (Task F3)').toBeGreaterThanOrEqual(1);
-  const introMsg = list.find((m: any) => /should meet/i.test(m.content));
+  // 30 Oct 2026: the thread opens with REASON's introduction card (a system row), not a message in the sender's name.
+  const introMsg = list.find((m: any) => m.kind === 'system' && m.systemMeta?.type === 'introduction');
   expect(introMsg, 'the introduction must be seeded as a real thread message').toBeTruthy();
+  expect(introMsg.content).toMatch(/asked to meet .+ accepted\.|You're connected\. Say hello\./);
   console.log(`  ✓ (4) thread seeded: "${introMsg.content.slice(0, 60)}..."`);
 
   // ── (5) Both pick the same time -> the second save books it -> pinned + notified ───

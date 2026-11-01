@@ -140,13 +140,16 @@ function armAccept(
     senderNotifyEmail?: boolean;
     senderHasEmail?: boolean;
     preferredFormat?: string | null;
+    /** REASON's own line (migration 120); absent on a legacy row. */
+    reasonLine?: string | null;
   } = {},
 ) {
   const senderNotifyEmail = opts.senderNotifyEmail ?? true;
   const senderHasEmail = opts.senderHasEmail ?? true;
   const request = {
     id: 'poke-1', sender_id: SENDER, recipient_id: RECIPIENT,
-    status: 'pending', message, responded_at: null as Date | null, created_at: new Date('2026-07-20T00:00:00Z'),
+    status: 'pending', message, reason_line: opts.reasonLine ?? null,
+    responded_at: null as Date | null, created_at: new Date('2026-07-20T00:00:00Z'),
     preferred_format: opts.preferredFormat ?? null,
   };
   mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
@@ -174,20 +177,21 @@ function armAccept(
         }],
       });
     }
-    if (/SELECT display_name FROM users WHERE id/.test(sql)) {
-      return Promise.resolve({ rows: [{ display_name: ACCEPTER_NAME }] });
+    if (/SELECT id, first_name, display_name FROM users WHERE id = ANY/.test(sql)) {
+      return Promise.resolve({ rows: [
+        { id: SENDER, first_name: 'Sam', display_name: SENDER_DISPLAY_NAME },
+        { id: RECIPIENT, first_name: 'Jamie', display_name: ACCEPTER_NAME },
+      ] });
     }
     if (/INSERT INTO notifications/.test(sql)) {
       if (opts.notifInsertImpl) return opts.notifInsertImpl();
       return Promise.resolve({ rows: [{ id: 'notif-accept-1', created_at: NOTIF_CREATED_AT }] });
     }
     if (/INSERT INTO direct_messages/.test(sql)) {
-      // acceptPoke now RETURNs the seeded intro row so it can broadcast it.
+      // Each line the accept writes comes back as written, so it can be broadcast.
       return Promise.resolve({ rows: [{
-        id: 'dm-intro-1', conversation_id: 'conv-9', from_user_id: SENDER,
-        content: message ?? "You're connected. Say hello.", read_at: null,
-        created_at: new Date('2026-07-20T00:00:01Z'),
-        attachment_url: null, attachment_type: null, attachment_meta: null,
+        id: `dm-${params[0]}`, conversation_id: params[1], from_user_id: params[2],
+        content: params[3], read_at: null, created_at: new Date('2026-07-20T00:00:01Z'),
       }] });
     }
     // INSERT INTO encounter_history, UPDATE dm_conversations SET
@@ -246,8 +250,8 @@ function armSend(
         rows: [Object.fromEntries(Object.entries(row).filter(([column]) => returned.includes(column)))],
       });
     }
-    if (/SELECT display_name FROM users WHERE id/.test(sql)) {
-      return Promise.resolve({ rows: [{ display_name: SENDER_NAME }] });
+    if (/SELECT first_name, display_name FROM users WHERE id/.test(sql)) {
+      return Promise.resolve({ rows: [{ first_name: 'Sam', display_name: SENDER_NAME }] });
     }
     if (/INSERT INTO notifications/.test(sql)) {
       if (opts.notifInsertImpl) return opts.notifInsertImpl();
@@ -290,9 +294,14 @@ describe('acceptPoke — F1 acceptance notification for the sender', () => {
     expect(params).toContain(`${ACCEPTER_NAME} accepted your meeting request`);
   });
 
-  it('body is the first ~120 chars of the intro message', async () => {
-    const longMessage = 'A'.repeat(200);
-    armAccept(longMessage);
+  // 30 Oct 2026: the body used to repeat the request's text, REASON's sentence included, which the
+  // sender read as their own words. It says what the accept means now.
+  it.each([
+    ['a note and a line', 'A'.repeat(200), 'A line.'],
+    ['a legacy text', "Sam is looking to meet founders — you're a Founder. We think you two should meet.", null],
+    ['nothing', null, null],
+  ])('body is "You can message each other now." whatever the request carried (%s)', async (_label, message, reasonLine) => {
+    armAccept(message, { reasonLine });
 
     await pokeService.acceptPoke('poke-1', RECIPIENT);
 
@@ -300,20 +309,7 @@ describe('acceptPoke — F1 acceptance notification for the sender', () => {
       (c: unknown[]) => typeof c[0] === 'string' && /INSERT INTO notifications/.test(c[0] as string),
     );
     const params = notifCall![1] as string[];
-    const body = params.find(p => typeof p === 'string' && p.startsWith('A'))!;
-    expect(body.length).toBeLessThanOrEqual(120);
-  });
-
-  it('body is empty-safe: a message-less poke falls back to the seeded first-message text', async () => {
-    armAccept(null);
-
-    await pokeService.acceptPoke('poke-1', RECIPIENT);
-
-    const notifCall = mockQuery.mock.calls.find(
-      (c: unknown[]) => typeof c[0] === 'string' && /INSERT INTO notifications/.test(c[0] as string),
-    );
-    const params = notifCall![1] as string[];
-    expect(params).toContain("You're connected. Say hello.");
+    expect(params[3]).toBe('You can message each other now.');
   });
 
   it('emits notification:new to the SENDER\'s user room only after the transaction resolves', async () => {
@@ -364,19 +360,21 @@ describe('acceptPoke — F1 acceptance notification for the sender', () => {
 });
 
 describe('acceptPoke — fans the new conversation out to BOTH inboxes', () => {
-  it('broadcasts the intro (notify:false) so the sender inbox gains the conversation with no duplicate DM bell', async () => {
+  it('broadcasts the card, then the note (notify:false), so the sender inbox gains the conversation with no duplicate DM bell', async () => {
     const pokeService = await import('../../../services/poke/poke.service');
-    armAccept('You fit what they want. We think you two should meet.');
+    armAccept('Hello there', { reasonLine: 'A line.' });
     await pokeService.acceptPoke('poke-1', RECIPIENT);
     await flushPromises();
 
-    expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
-    const call = mockBroadcastDm.mock.calls[0] as unknown[];
+    expect(mockBroadcastDm).toHaveBeenCalledTimes(2);
+    const [card, note] = mockBroadcastDm.mock.calls as unknown[][];
     // (io, fromUserId, toUserId, conversationId, message, options)
-    expect(call[1]).toBe(SENDER);      // intro is authored by the sender
-    expect(call[2]).toBe(RECIPIENT);   // delivered to the accepter
-    expect(call[3]).toBe('conv-9');
-    expect(call[5]).toMatchObject({ notify: false });
+    expect(card.slice(1, 4)).toEqual([SENDER, RECIPIENT, 'conv-9']);
+    expect(card[4]).toMatchObject({ kind: 'system', systemMeta: { type: 'introduction' } });
+    expect(card[5]).toMatchObject({ notify: false });
+    expect(note.slice(1, 4)).toEqual([SENDER, RECIPIENT, 'conv-9']);
+    expect(note[4]).toMatchObject({ kind: 'user', content: 'Hello there' });
+    expect(note[5]).toMatchObject({ notify: false });
   });
 });
 
@@ -447,30 +445,16 @@ describe('acceptPoke — F2 email notification to the sender', () => {
 });
 
 describe('acceptPoke — F3 message-less poke edge', () => {
-  it('a poke WITH a message still seeds it as the first thread message from the sender (unchanged)', async () => {
-    armAccept('You fit what they want. We think you two should meet.');
-
-    await pokeService.acceptPoke('poke-1', RECIPIENT);
-
-    const dmInsert = mockQuery.mock.calls.find(c => /INSERT INTO direct_messages/.test(c[0] as string));
-    expect(dmInsert).toBeTruthy();
-    const params = dmInsert![1] as string[];
-    expect(params[1]).toBe('conv-9');
-    expect(params[2]).toBe(SENDER);
-    expect(params[3]).toMatch(/should meet/);
-  });
-
-  it('a message-less poke seeds the fallback "You\'re connected. Say hello." authored by the sender', async () => {
+  it('a message-less poke opens the thread with the introduction card reading "You\'re connected. Say hello."', async () => {
     armAccept(null);
 
     await pokeService.acceptPoke('poke-1', RECIPIENT);
 
-    const dmInsert = mockQuery.mock.calls.find(c => /INSERT INTO direct_messages/.test(c[0] as string));
-    expect(dmInsert).toBeTruthy();
-    const params = dmInsert![1] as string[];
-    expect(params[1]).toBe('conv-9');
-    expect(params[2]).toBe(SENDER);
-    expect(params[3]).toBe("You're connected. Say hello.");
+    const inserts = mockQuery.mock.calls.filter(c => /INSERT INTO direct_messages/.test(c[0] as string));
+    expect(inserts).toHaveLength(1);
+    const params = inserts[0][1] as unknown[];
+    expect(params.slice(1, 5)).toEqual(['conv-9', SENDER, "You're connected. Say hello.", 'system']);
+    expect(JSON.parse(params[5] as string)).toEqual({ type: 'introduction', requesterId: SENDER, recipientId: RECIPIENT, reasonLine: null });
   });
 
   it('a message-less poke still bumps last_message_at so the thread surfaces in the inbox', async () => {
@@ -538,13 +522,14 @@ describe('sendPoke — F2 email notification to the recipient', () => {
       RECIPIENT_DISPLAY_NAME,
       expect.objectContaining({
         senderName: SENDER_NAME,
-        introMessage: 'Would love to connect and swap notes.',
+        note: 'Would love to connect and swap notes.',
+        reasonLine: null,
         messagesUrl: MESSAGES_URL,
       }),
     );
   });
 
-  it('passes introMessage: null for a message-less poke', async () => {
+  it('passes note: null and reasonLine: null for a message-less poke', async () => {
     armSend(null);
 
     await pokeService.sendPoke(SENDER, RECIPIENT);
@@ -553,7 +538,7 @@ describe('sendPoke — F2 email notification to the recipient', () => {
     expect(mockSendPokeReceivedEmail).toHaveBeenCalledWith(
       RECIPIENT_EMAIL,
       RECIPIENT_DISPLAY_NAME,
-      expect.objectContaining({ introMessage: null }),
+      expect.objectContaining({ note: null, reasonLine: null }),
     );
   });
 
@@ -750,7 +735,8 @@ describe('email.service.ts — F2 poke email templates + kill-switch', () => {
     const fn = src.slice(i, src.indexOf('\nexport async function ', i + 1));
     expect(fn).toMatch(/subject = `\$\{data\.senderName\} wants to meet you on REASON`/);
     expect(fn).toMatch(/data\.messagesUrl/);
-    expect(fn).toMatch(/escapeHtml\(data\.introMessage\)/);
+    expect(fn).toMatch(/escapeHtml\(data\.note\)/);
+    expect(fn).toMatch(/escapeHtml\(data\.reasonLine\)/);
   });
 
   it('sendPokeAcceptedEmail subject is "{accepterName} accepted your meeting request"', () => {
@@ -782,22 +768,22 @@ describe('getPokeWith — the state of a request between two people', () => {
     mockQuery.mockResolvedValue({ rows: [] });
     await pokeService.getPokeWith('u-me', 'u-them');
     const [sql, params] = mockQuery.mock.calls[0];
-    expect(String(sql)).toMatch(/sender_id = \$1 AND recipient_id = \$2/);
-    expect(String(sql)).toMatch(/sender_id = \$2 AND recipient_id = \$1/);
-    expect(String(sql)).toMatch(/ORDER BY created_at DESC/);
+    expect(String(sql)).toMatch(/p\.sender_id = \$1 AND p\.recipient_id = \$2/);
+    expect(String(sql)).toMatch(/p\.sender_id = \$2 AND p\.recipient_id = \$1/);
+    expect(String(sql)).toMatch(/ORDER BY p\.created_at DESC/);
     expect(params).toEqual(['u-me', 'u-them']);
   });
 
   it('reports one I sent', async () => {
     mockQuery.mockResolvedValue({ rows: [{ id: 'p1', status: 'pending', sender_id: 'u-me' }] });
     expect(await pokeService.getPokeWith('u-me', 'u-them'))
-      .toEqual({ id: 'p1', status: 'pending', sentByMe: true });
+      .toEqual({ id: 'p1', status: 'pending', sentByMe: true, note: null, reasonLine: null });
   });
 
   it('reports one I received, so the profile can point at Messages', async () => {
     mockQuery.mockResolvedValue({ rows: [{ id: 'p2', status: 'pending', sender_id: 'u-them' }] });
     expect(await pokeService.getPokeWith('u-me', 'u-them'))
-      .toEqual({ id: 'p2', status: 'pending', sentByMe: false });
+      .toEqual({ id: 'p2', status: 'pending', sentByMe: false, note: null, reasonLine: null });
   });
 
   it('returns null when nothing was ever sent, so the page offers to ask', async () => {
@@ -875,7 +861,7 @@ describe('sendPoke — both members\' screens refresh (29 Sep 2026)', () => {
     armSend('hi');
     const poke = await pokeService.sendPoke(SENDER, RECIPIENT, 'hi', undefined, 'coffee');
     const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
-    expect(insert[1]).toEqual([expect.any(String), SENDER, RECIPIENT, 'hi', null, 'coffee']);
+    expect(insert[1]).toEqual([expect.any(String), SENDER, RECIPIENT, 'hi', null, 'coffee', '']);
     // The value itself, not just the key: armSend answers like the database, so
     // this fails if the INSERT stops writing the column or RETURNING stops naming it.
     expect(poke.preferredFormat).toBe('coffee');
@@ -998,6 +984,11 @@ function pendingRequest(id: string, from: string, to: string, status: RequestRow
 const bellFor = (r: RequestRow): BellRow => ({ user_id: r.recipient_id, type: 'poke', link: `/messages?poke=${r.id}`, is_read: false });
 
 const statements = (pattern: RegExp) => mockQuery.mock.calls.filter(c => pattern.test(String(c[0])));
+
+/** The introduction cards an accept wrote (30 Oct 2026): one per connection, whatever notes follow it. */
+const introCards = () => statements(/INSERT INTO direct_messages/).filter(c => (c[1] as unknown[])[4] === 'system');
+/** The cards that were fanned out to the two inboxes. */
+const broadcastCards = () => mockBroadcastDm.mock.calls.filter(c => (c[4] as { kind?: string }).kind === 'system');
 
 /** Every statement a transaction of the model ran, in order, with the client that ran it. */
 interface TxRecord { client: MockClient; sql: string[] }
@@ -1183,10 +1174,10 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
     expect(second).toMatchObject({ poke: { id: 'poke-1', status: 'accepted' }, conversationId: 'conv-1' });
     // Everything an accept does happened once: the stale second press repeats none of it.
     expect(statements(/INSERT INTO dm_conversations/)).toHaveLength(1);
-    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(introCards()).toHaveLength(1);
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(1);
     expect(mockEmit).toHaveBeenCalledTimes(1);
-    expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
+    expect(broadcastCards()).toHaveLength(1);
     expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
   });
 
@@ -1262,7 +1253,7 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
     await flushPromises();
 
     expect(world.requests.map(r => r.status)).toEqual(['accepted', 'accepted']);
-    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(introCards()).toHaveLength(1);
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toEqual([expect.objectContaining({ user_id: SENDER })]);
     // Both bell entries now read as answered, so neither person is offered Accept again.
     expect(world.bells.filter(b => b.type === 'poke').map(b => b.is_read)).toEqual([true, true]);
@@ -1292,7 +1283,7 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toEqual([expect.objectContaining({ user_id: RECIPIENT })]);
     expect(world.bells.filter(b => b.type === 'poke')).toEqual([expect.objectContaining({ user_id: SENDER, is_read: true })]);
     expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
-    expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
+    expect(broadcastCards()).toHaveLength(1);
     // Both people's screens and bells refresh.
     const tagsFor = (u: string) => (mockEmitEntities.mock.calls as Array<[unknown, string[], string[]]>)
       .filter(([, users]) => users.includes(u)).flatMap(([, , tags]) => tags);
@@ -1465,7 +1456,7 @@ describe('a pair\'s requests are answered one transaction at a time', () => {
     expect(theirs).toMatchObject({ status: 'fulfilled', value: { conversationId: 'conv-1' } });
     expect(world.requests.map(r => r.status)).toEqual(['accepted', 'accepted']);
     expect(world.conversations).toHaveLength(1);
-    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(introCards()).toHaveLength(1);
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(1);
     expect(world.bells.filter(b => b.type === 'poke').every(b => b.is_read)).toBe(true);
     expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
@@ -1503,7 +1494,7 @@ describe('a pair\'s requests are answered one transaction at a time', () => {
     expect(accepted).toMatchObject({ status: 'fulfilled', value: { conversationId: 'conv-1' } });
     expect(world.requests.map(r => r.status)).toEqual(['accepted', 'accepted']);
     expect(world.conversations).toHaveLength(1);
-    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(introCards()).toHaveLength(1);
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(1);
   });
 
@@ -1524,7 +1515,7 @@ describe('a pair\'s requests are answered one transaction at a time', () => {
     expect(world.requests).toHaveLength(2);
     expect(world.requests.every(r => r.status === 'accepted')).toBe(true);
     expect(world.conversations).toHaveLength(1);
-    expect(statements(/INSERT INTO direct_messages/)).toHaveLength(1);
+    expect(introCards()).toHaveLength(1);
   });
 
   it('two people asking each other at the same moment are a match: one request, accepted, one conversation', async () => {

@@ -1,6 +1,6 @@
 // client/src/features/reason/human/HumanProfilePage.tsx
 // Stefan's v4 "live relationship brief": full screen, its own header, and a
-// bar at the bottom that always offers one useful move.
+// bar at the bottom that offers one useful move until the two are connected.
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -62,9 +62,11 @@ function Notice({ title, text, children }: { title: string; text: string; childr
   );
 }
 
-// The profile itself, once the brief is in. Keyed by the person in the page, so Save, Pass and the two
+// The profile itself, once the brief is in. Keyed by the person in the page, so Save, Remove and the two
 // sheets start fresh when one profile opens another (the "Your path" link). The bar steps aside while the
 // report dialog is open: the dialog sits under it otherwise, and the bar would cover its buttons on a phone.
+// 30 Oct 2026 (Stefan: "Once two people are connected, the bar should disappear"): connected and met
+// people get no bar, and the hero's Message button takes its place.
 function Profile({ brief, userId, source, hideBar }: { brief: PersonBrief; userId: string; source: KnownSource | null; hideBar: boolean }) {
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
@@ -110,30 +112,32 @@ function Profile({ brief, userId, source, hideBar }: { brief: PersonBrief; userI
     respond.mutate(move, { onSettled: () => { pressing.current = false; } });
   };
 
+  const connected = r.state === 'connected' || r.state === 'met';
+  const showBar = !hideBar && !connected;
+
   const onPrimary = () => {
     const action = primaryActionFor(r.state);
     if (action === 'meet') setMeetOpen(true);
-    else if (action === 'continue') navigate(`/messages/new/${userId}`);
     else if (action === 'respond') navigate(r.pokeId ? `/messages?poke=${r.pokeId}` : '/messages');
   };
 
   return (
     <>
-      <main className={cn(MAIN, SIDES, 'pb-[calc(116px+env(safe-area-inset-bottom))] pt-3 md:pt-6')}>
+      <main className={cn(MAIN, SIDES, 'pt-3 md:pt-6', connected ? 'pb-[calc(24px+env(safe-area-inset-bottom))]' : 'pb-[calc(116px+env(safe-area-inset-bottom))]')}>
         {/* The person's banner, or the default one, across the top of the hero (21 Oct 2026). */}
         <div className="mb-[11px] md:mb-[18px]">
           <ProfileBanner src={brief.person.bannerUrl} />
         </div>
-        <ProfileHero brief={brief} who={who} source={source} />
+        <ProfileHero brief={brief} who={who} source={source} userId={userId} />
         <ProfileDetails brief={brief} who={who} source={source} onRecordOutcome={() => setOutcomeOpen(true)} />
       </main>
-      {!hideBar && (
+      {showBar && (
         <MoveBar
           brief={brief}
           busy={respond.isPending}
           onPrimary={onPrimary}
           onToggleSave={() => press(r.saved ? 'unsave' : 'save')}
-          onTogglePass={() => press(r.passed ? 'unpass' : 'pass')}
+          onToggleRemove={() => press(r.passed ? 'unpass' : 'pass')}
         />
       )}
       <MeetSheet person={meetPerson} onClose={() => setMeetOpen(false)} />

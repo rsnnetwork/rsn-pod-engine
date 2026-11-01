@@ -83,12 +83,12 @@ test('a meeting request shows the sender as a profile card, name links to their 
   const profileLink = card.locator(profileLinkSelector(sender.id, 'Messages'));
   await expect(profileLink.first()).toBeVisible();
   // Name text is inside a profile link, not plain text.
-  await expect(card.getByText('Dana Sender')).toHaveAttribute('href', profileHref(sender.id, 'Messages'));
+  await expect(card.getByRole('link', { name: 'Dana Sender' })).toHaveAttribute('href', profileHref(sender.id, 'Messages'));
 
   // CON-01 (25 Oct 2026, Stefan and Claus): clicking it opens the sender's profile in THIS tab, so Back returns to the
   // request. It used to open a new tab, where Back did nothing (a new tab has no history behind it).
   const requestUrl = page.url();
-  await card.getByText('Dana Sender').click();
+  await card.getByRole('link', { name: 'Dana Sender' }).click();
   await expect(page, 'the profile opens in this tab').toHaveURL(profilePage(sender.id), { timeout: 30_000 });
   expect(page.context().pages().length, 'no second tab was opened').toBe(1);
   // The browser's own Back returns to the request, with its card showing.
@@ -96,7 +96,7 @@ test('a meeting request shows the sender as a profile card, name links to their 
   await expect(page, 'Back returns to the request').toHaveURL(requestUrl, { timeout: 30_000 });
   await expect(card, 'and the request is showing').toBeVisible({ timeout: 30_000 });
   // The page's own Back button does the same.
-  await card.getByText('Dana Sender').click();
+  await card.getByRole('link', { name: 'Dana Sender' }).click();
   await expect(page).toHaveURL(profilePage(sender.id), { timeout: 30_000 });
   await page.getByRole('button', { name: /Back/ }).first().click();
   await expect(page, "the profile's own Back returns to the request").toHaveURL(requestUrl, { timeout: 30_000 });

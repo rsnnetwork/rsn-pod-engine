@@ -79,7 +79,7 @@ async function reopenBellOn(page: Page) {
   await bellButton(page).click();
   await fetched;
   await page.waitForTimeout(500);
-  await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
 }
 
 test.beforeAll(async () => {
@@ -87,7 +87,7 @@ test.beforeAll(async () => {
   recipient = await createTestUser('mrbellrecipient');
   decliner = await createTestUser('mrbelldecliner');
   carder = await createTestUser('mrbellcarder');
-  await pool.query(`UPDATE users SET display_name = 'Bell Sender' WHERE id = $1`, [sender.id]);
+  await pool.query(`UPDATE users SET display_name = 'Bell Sender', first_name = 'Bell' WHERE id = $1`, [sender.id]);
   browser = await launchBrowser();
 });
 
@@ -107,12 +107,12 @@ test('a meeting request can be accepted from the bell and lands in the conversat
 
   // The row itself carries the id in its link, and the product's wording.
   const n = await pool.query(`SELECT title, link FROM notifications WHERE user_id = $1 AND type = 'poke' ORDER BY created_at DESC LIMIT 1`, [recipient.id]);
-  expect(n.rows[0].title).toBe('Bell Sender asked to meet you');
+  expect(n.rows[0].title).toBe('Bell wants to meet you');
   expect(n.rows[0].link).toBe(`/messages?poke=${pokeId}`);
 
   const page = await openAs(recipient, '/');
   await bellButton(page).click();
-  await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
   const accept = page.getByRole('button', { name: /^Accept$/ }).first();
   const box = await accept.boundingBox();
   expect(box!.height, 'Accept tap target').toBeGreaterThanOrEqual(44);
@@ -165,7 +165,7 @@ test('a meeting request can be declined from the bell', async () => {
 
   const page = await openAs(decliner, '/');
   await bellButton(page).click();
-  await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
   await page.getByRole('button', { name: /^Decline$/ }).first().click();
   await expect(page.getByText(/^Declined$/)).toBeVisible({ timeout: 15_000 });
 
@@ -218,7 +218,7 @@ test('a bell left open on another device turns to Accepted by itself, and the se
     // The phone: the bell open on the request, and left alone from here on.
     const phone = await openAs(two, '/', { width: 390, height: 844 });
     await bellButton(phone).click();
-    await expect(phone.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+    await expect(phone.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
     await expect(phone.getByRole('button', { name: /^Accept$/ })).toBeVisible();
     // The sender's laptop, its bell open too.
     const senderDesk = await openAs(sender, '/', { width: 1280, height: 900 });
@@ -252,7 +252,7 @@ test('pressing the other answer on a bell that has not caught up says which answ
     expect(p.status).toBe(201);
     const page = await openAs(late, '/', { width: 390, height: 844 });
     await bellButton(page).click();
-    await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
 
     // Hold the bell's list where it is (a phone that lost its connection for a moment), and accept elsewhere.
     await page.route('**/api/notifications', (route) => (route.request().method() === 'GET' ? route.abort() : route.continue()));
@@ -329,7 +329,7 @@ test('a double click on Accept answers once: one request to the server, one trip
       if (r.method() === 'POST' && /\/api\/pokes\/[^/]+\/(accept|decline)$/.test(new URL(r.url()).pathname)) answers.push(r.url());
     });
     await bellButton(page).click();
-    await expect(page.getByText('Bell Sender asked to meet you')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Bell wants to meet you')).toBeVisible({ timeout: 30_000 });
     // Two presses in the same instant, before the page can redraw: the button's disabled state only comes a render later.
     await page.getByRole('button', { name: /^Accept$/ }).first().evaluate((el: HTMLElement) => { el.click(); el.click(); });
     await expect(page).toHaveURL(/\/messages\/[0-9a-f-]{36}/, { timeout: 30_000 });

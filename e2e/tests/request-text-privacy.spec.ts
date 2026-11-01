@@ -66,7 +66,7 @@ function dataOf<T>(r: { status: number; body: Envelope<T> | null }, what: string
   return r.body.data;
 }
 
-interface PokeJson { id: string; senderId: string; recipientId: string; status: string; message: string | null }
+interface PokeJson { id: string; senderId: string; recipientId: string; status: string; message: string | null; note?: string | null; reasonLine?: string | null }
 interface AcceptedJson { poke: PokeJson; conversationId: string }
 interface MatchesJson { matches: Array<{ userId: string; reason: string; score: number }> }
 
@@ -132,47 +132,55 @@ test('a meeting request says only what the sender shared, never the recipient\'s
   }
   console.log('  ✓ the sender has no want; each recipient\'s own want fits the sender (the old fallback would have fired).');
 
-  // ── 1. One tap, no note: the neutral sentence, everywhere the sender can read it ──
-  const neutral = `${sender.displayName} thinks you fit what they're looking for. We think you two should meet.`;
+  // ── 1. One tap, no note: nothing at all, everywhere the sender can read it ──
+  // 30 Oct 2026 (migration 120): the note and REASON's line are stored apart, and a request with no
+  // reason gets no line, rather than a sentence that only sounds like one. With no note either, the
+  // request carries no text.
   const sent = await api<PokeJson>(sender, 'POST', `/matches/platform/${recipient.id}/interest`);
   expect(sent.status, `interest: ${JSON.stringify(sent.body)}`).toBe(201);
   const poke = dataOf(sent, 'interest');
   expectNoWant(JSON.stringify(sent.body), 'the 201 response');
-  expect(poke.message, 'the 201 response carries the neutral sentence').toBe(neutral);
+  expect([poke.message, poke.note, poke.reasonLine], 'the 201 response carries no text').toEqual([null, null, null]);
 
   const received = dataOf(await api<Array<PokeJson & { senderDisplayName: string | null }>>(recipient, 'GET', '/pokes/received'), 'received list');
   const item = received.find((p) => p.id === poke.id);
   expect(item, 'the recipient lists the request').toBeDefined();
-  expect(item?.message, 'the recipient is shown the same safe message').toBe(neutral);
-  const stored = (await pool.query<{ message: string | null }>(`SELECT message FROM user_pokes WHERE id = $1`, [poke.id])).rows[0];
-  expect(stored.message, 'the stored message is the neutral sentence').toBe(neutral);
-  console.log(`  ✓ 201; the response, the recipient's list and the row all say: "${neutral}"`);
+  expect([item?.message, item?.note, item?.reasonLine], 'the recipient is shown no text either').toEqual([null, null, null]);
+  const stored = (await pool.query<{ message: string | null; reason_line: string | null }>(
+    `SELECT message, reason_line FROM user_pokes WHERE id = $1`, [poke.id])).rows[0];
+  // A row written since migration 120 always stores reason_line: empty when REASON had no line (NULL marks only the
+  // rows from before 120, the only ones whose one text is ever split).
+  expect([stored.message, stored.reason_line], 'the row stores no note and an empty line').toEqual([null, '']);
+  console.log('  ✓ 201; the response, the recipient\'s list and the row carry no text at all.');
 
-  // ── 2. The recipient accepts: the first message and the sender's bell ──────
+  // ── 2. The recipient accepts: REASON's card in the conversation and the sender's bell ──
   const accepted = await api<AcceptedJson>(recipient, 'POST', `/pokes/${poke.id}/accept`);
   expect(accepted.status, `accept: ${JSON.stringify(accepted.body)}`).toBe(200);
   const { conversationId } = dataOf(accepted, 'accept');
   expect(conversationId, 'accepting opens a conversation').toMatch(/^[0-9a-f-]{36}$/);
 
-  const first = (await pool.query<{ content: string | null; from_user_id: string }>(
-    `SELECT content, from_user_id FROM direct_messages
-      WHERE conversation_id = $1 ORDER BY created_at ASC, id ASC LIMIT 1`, [conversationId])).rows[0];
-  expect(first, 'accepting seeds the conversation with a first message').toBeDefined();
-  expect(first.from_user_id, 'the first message is written as the sender').toBe(sender.id);
-  expect(first.content, 'the first message is the neutral sentence').toBe(neutral);
-  expectNoWant(first.content, 'the first message');
+  const lines = (await pool.query<{ content: string | null; from_user_id: string; kind: string; system_meta: Record<string, unknown> | null }>(
+    `SELECT content, from_user_id, kind, system_meta FROM direct_messages
+      WHERE conversation_id = $1 ORDER BY created_at ASC, id ASC`, [conversationId])).rows;
+  expect(lines, 'accepting opens the conversation with REASON\'s card alone (there was no note)').toHaveLength(1);
+  expect(lines[0].kind, 'the first line is REASON\'s, not the sender\'s').toBe('system');
+  expect(lines[0].system_meta, 'the card is the introduction, with no line').toEqual({
+    type: 'introduction', requesterId: sender.id, recipientId: recipient.id, reasonLine: null,
+  });
+  expect(lines[0].content, 'with neither a line nor a note the card says so').toBe("You're connected. Say hello.");
+  expectNoWant(lines[0].content, 'the first line');
 
   // What the sender actually receives for that conversation.
   const thread = await api(sender, 'GET', `/dm/conversations/${conversationId}/messages`);
   expect(thread.status, `the sender reads the thread: ${JSON.stringify(thread.body)}`).toBe(200);
   expectNoWant(JSON.stringify(thread.body), 'the sender\'s view of the conversation');
 
-  // The "accepted your request" bell carries the first 120 characters of that message.
+  // The "accepted your request" bell says what the accept means, and repeats nothing.
   const bell = (await pool.query<{ body: string | null }>(
     `SELECT body FROM notifications WHERE user_id = $1 AND type = 'poke_accepted'`, [sender.id])).rows;
   expect(bell, 'the sender got one accepted bell').toHaveLength(1);
-  expect(bell[0].body, 'the bell body is the neutral sentence').toBe(neutral);
-  console.log('  ✓ accepted: 200; the first message (from the sender), the sender\'s view of the thread and the accepted bell carry no recipient want.');
+  expect(bell[0].body, 'the bell body').toBe('You can message each other now.');
+  console.log('  ✓ accepted: 200; REASON\'s card, the sender\'s view of the thread and the accepted bell carry no recipient want.');
 
   // ── 3. With a note: exactly the note, with no "Why REASON suggested this" line ──
   const note = `Hello ${RUN}`;
@@ -180,10 +188,11 @@ test('a meeting request says only what the sender shared, never the recipient\'s
   expect(noted.status, `interest with a note: ${JSON.stringify(noted.body)}`).toBe(201);
   const notedPoke = dataOf(noted, 'interest with a note');
   expectNoWant(JSON.stringify(noted.body), 'the 201 response with a note');
-  expect(notedPoke.message, 'the 201 response carries exactly the note').toBe(note);
+  expect([notedPoke.message, notedPoke.note, notedPoke.reasonLine], 'the 201 response carries exactly the note').toEqual([note, note, null]);
 
-  const notedRow = (await pool.query<{ message: string | null }>(`SELECT message FROM user_pokes WHERE id = $1`, [notedPoke.id])).rows[0];
-  expect(notedRow.message, 'the stored message is exactly the note').toBe(note);
+  const notedRow = (await pool.query<{ message: string | null; reason_line: string | null }>(
+    `SELECT message, reason_line FROM user_pokes WHERE id = $1`, [notedPoke.id])).rows[0];
+  expect([notedRow.message, notedRow.reason_line], 'the stored message is exactly the note, with an empty line').toEqual([note, '']);
   const notedList = dataOf(await api<PokeJson[]>(noteRecipient, 'GET', '/pokes/received'), 'received list of the note recipient');
   expect(notedList.find((p) => p.id === notedPoke.id)?.message, 'the recipient is shown exactly the note').toBe(note);
   console.log(`  ✓ with a note: 201; the response, the row and the recipient's list are exactly "${note}".`);

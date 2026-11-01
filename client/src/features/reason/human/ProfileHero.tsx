@@ -8,6 +8,7 @@ import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import ReasonSheep from '../brand/ReasonSheep';
 import { visibleText } from '../person';
+import ProfileHeroActions from './ProfileHeroActions';
 import { SIGNAL, foundThrough, isSmallPhoto, reasonText, type KnownSource, type PersonFacts } from './profile-text';
 
 // The Human Profile fills the window. Your own profile sits beside the app's sidebar (232px from 981px), so its columns
@@ -76,6 +77,8 @@ interface FrameProps {
   note: ReactNode;
   /** The dark panel beside the person. */
   panel: ReactNode;
+  /** Buttons under the name (a connection's Message, ProfileHeroActions). */
+  actions?: ReactNode;
   /** The Human Profile fills the window (screen); your own profile sits beside the sidebar (shell). */
   fit?: HeroFit;
 }
@@ -85,7 +88,7 @@ interface FrameProps {
 const FILL = '[&>img]:absolute [&>img]:inset-0 [&>img]:h-full [&>img]:w-full [&>img]:rounded-none';
 const NATIVE = '[&>img]:h-auto [&>img]:w-auto [&>img]:max-w-full [&>img]:max-h-full [&>img]:rounded-[18px]';
 
-export function HeroFrame({ photo, who, kicker, badge, photoAction, note, panel, fit = 'screen' }: FrameProps) {
+export function HeroFrame({ photo, who, kicker, badge, photoAction, note, panel, actions, fit = 'screen' }: FrameProps) {
   const roleLine = [who.role, who.company].filter(Boolean).join(' · ');
   // Which photo was measured small: a new photo (a new address) is measured again.
   const [smallSrc, setSmallSrc] = useState<string | null>(null);
@@ -116,6 +119,7 @@ export function HeroFrame({ photo, who, kicker, badge, photoAction, note, panel,
             LinkedIn <span aria-hidden="true">↗</span><span className="sr-only"> (opens in a new tab)</span>
           </a>
         )}
+        {actions}
         {who.bio && <p className="mt-[17px] max-w-[620px] text-[18px] leading-[1.38] tracking-[-0.024em] [overflow-wrap:anywhere] md:mt-6 md:text-[21px]">{who.bio}</p>}
         <div className="mt-auto flex flex-col gap-4 pt-4 md:pt-6">
           {who.tags.length > 0 && (
@@ -134,9 +138,9 @@ export function HeroFrame({ photo, who, kicker, badge, photoAction, note, panel,
   );
 }
 
-interface Props { brief: PersonBrief; who: PersonFacts; source: KnownSource | null }
+interface Props { brief: PersonBrief; who: PersonFacts; source: KnownSource | null; userId: string }
 
-export default function ProfileHero({ brief, who, source }: Props) {
+export default function ProfileHero({ brief, who, source, userId }: Props) {
   const bring = visibleText(brief.theyCanBring);
   const looking = visibleText(brief.youAreLookingFor);
   const found = foundThrough(source, who.first);
@@ -146,6 +150,7 @@ export default function ProfileHero({ brief, who, source }: Props) {
       photo={brief.person.avatarUrl}
       who={who}
       kicker="The human"
+      actions={<ProfileHeroActions brief={brief} userId={userId} />}
       badge={brief.match && (
         <span className="absolute left-[18px] top-[18px] flex items-center gap-[7px] rounded-full bg-white px-3 py-2 text-[11px] font-extrabold shadow-[0_8px_24px_rgba(0,0,0,.08)]">
           <i aria-hidden="true" className="h-[7px] w-[7px] rounded-full bg-reason-red" />{SIGNAL[brief.match.strength]}

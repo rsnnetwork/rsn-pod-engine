@@ -1355,16 +1355,19 @@ describe('acceptPoke intro seeding', () => {
     });
   }
 
-  it('a poke WITH a message seeds it as the first thread message from the sender', async () => {
+  // 30 Oct 2026: the thread opens with REASON's introduction card (a system row from the sender, so
+  // unread counts are as before), and REASON's line is on the card, not in a bubble of the sender's.
+  it('a poke WITH REASON\'s sentence opens the thread with the introduction card carrying it', async () => {
     const pokeService = await import('../../../services/poke/poke.service');
     armAccept('You fit what they want. We think you two should meet.');
     await pokeService.acceptPoke('poke-1', 'u-recv');
-    const dmInsert = mockQuery.mock.calls.find(c => /INSERT INTO direct_messages/.test(c[0] as string));
-    expect(dmInsert).toBeTruthy(); // the intro must land in the thread
-    const params = dmInsert![1] as string[];
+    const dmInserts = mockQuery.mock.calls.filter(c => /INSERT INTO direct_messages/.test(c[0] as string));
+    expect(dmInserts).toHaveLength(1); // the card only: the request carried no note of the member's own
+    const params = dmInserts[0][1] as string[];
     expect(params[1]).toBe('conv-9');            // conversation
-    expect(params[2]).toBe('u-send');            // authored by the sender
-    expect(params[3]).toMatch(/should meet/);
+    expect(params[2]).toBe('u-send');            // from the sender
+    expect(params[3]).toMatch(/accepted\. Why REASON suggested this: You fit what they want\.$/);
+    expect(params[4]).toBe('system');
   });
 
   // Task F3 (23 Jul 2026) — a message-less poke used to seed nothing, leaving

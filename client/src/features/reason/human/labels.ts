@@ -1,7 +1,9 @@
 import type { PrimaryAction, RelationshipState } from '@rsn/shared';
 
 export const PRIMARY_LABEL: Record<PrimaryAction, string> = {
-  meet: 'Meet', requested: 'Request sent', respond: 'Respond', declined: 'Request declined', continue: 'Continue',
+  meet: 'Meet', requested: 'Request sent', respond: 'Respond', declined: 'Request declined',
+  // 30 Oct 2026 (Stefan): "Rename 'Continue' to 'Message' after a connection is made." The key stays continue.
+  continue: 'Message',
 };
 
 export const STATE_LABEL: Record<RelationshipState, string> = {
@@ -12,8 +14,8 @@ export const STATE_LABEL: Record<RelationshipState, string> = {
 export const NEXT_MOVE: Record<RelationshipState, string> = {
   none: 'Decide whether there is a reason to meet.',
   requested: 'Wait for their answer, then have the conversation.',
-  incoming: 'They asked to meet you. Answer in Messages.',
+  incoming: 'They asked to meet you. Accept or decline here.',
   declined: 'They declined your earlier request.',
-  connected: 'Pick a time together in Messages.',
-  met: 'Record what happened, then continue while the reason is live.',
+  connected: 'Message them, and pick a time together.',
+  met: 'Record what happened, then message them while the reason is live.',
 };

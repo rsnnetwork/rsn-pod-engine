@@ -19,6 +19,8 @@ const mockPokeWith = jest.fn();
 jest.mock('../../../services/poke/poke.service', () => ({ getPokeWith: (...a: unknown[]) => mockPokeWith(...a), __esModule: true }));
 const mockGetResponse = jest.fn();
 jest.mock('../../../services/people/person-response.service', () => ({ getResponse: (...a: unknown[]) => mockGetResponse(...a), __esModule: true }));
+const mockCanMessage = jest.fn();
+jest.mock('../../../services/dm/dm.service', () => ({ canMessage: (...a: unknown[]) => mockCanMessage(...a), __esModule: true }));
 
 import { getOwnCard, getPersonBrief, listRecentConnections } from '../../../services/people/person-brief.service';
 import { PRIVATE_MEMBER_KEYS, toPublicMember } from '../../../services/user/public-card';
@@ -37,6 +39,7 @@ const target = {
 function arm(o: {
   blocked?: boolean; poke?: unknown; response?: string | null;
   enc?: Record<string, unknown> | null; conv?: Record<string, unknown> | null; score?: number;
+  canMessage?: { allowed: boolean; reason?: string };
 } = {}) {
   mockBlocked.mockResolvedValue(!!o.blocked);
   mockGetUser.mockResolvedValue(target);
@@ -48,6 +51,7 @@ function arm(o: {
   mockScore.mockReturnValue({ score: o.score ?? 0.6, reason: "You're looking to meet founders — Sarah Chen is a Founder" });
   mockPokeWith.mockResolvedValue(o.poke ?? null);
   mockGetResponse.mockResolvedValue(o.response ?? null);
+  mockCanMessage.mockResolvedValue(o.canMessage ?? { allowed: true });
   mockQuery.mockImplementation((sql: string) => {
     if (/FROM encounter_history WHERE/.test(sql)) return Promise.resolve({ rows: o.enc ? [o.enc] : [] });
     if (/FROM dm_conversations WHERE/.test(sql)) return Promise.resolve({ rows: o.conv ? [o.conv] : [] });
@@ -788,6 +792,7 @@ describe('getPersonBrief: one profile open takes at most four database connectio
     watch(mockLoadProfile, args => (args[0] === VIEWER ? 'loadProfile viewer' : 'loadProfile person'));
     watch(mockPokeWith, () => 'getPokeWith');
     watch(mockGetResponse, () => 'getResponse');
+    watch(mockCanMessage, () => 'canMessage');
     watch(mockQuery, args => QUERIES.find(([, re]) => re.test(String(args[0])))?.[0] ?? 'unknown query');
     return seen;
   };
@@ -797,8 +802,10 @@ describe('getPersonBrief: one profile open takes at most four database connectio
     const seen = watchReads();
     await getPersonBrief(VIEWER, TARGET);
     // The block check and the member lookup, then the twelve reads (the person's entities joined them on
-    // 21 Oct 2026): one dropped to stay under the limit shows here.
-    expect(seen.started).toHaveLength(14);
+    // 21 Oct 2026), then whether the viewer may message them (30 Oct 2026): one dropped to stay under the
+    // limit shows here.
+    expect(seen.started).toHaveLength(15);
+    expect(seen.started[14]).toBe('canMessage');
     expect(seen.started).not.toContain('unknown query');
     expect(seen.peak).toBeLessThanOrEqual(4);
     expect(seen.peak).toBeGreaterThan(1); // in groups, not one after another
@@ -810,5 +817,44 @@ describe('getPersonBrief: one profile open takes at most four database connectio
     await getPersonBrief(VIEWER, TARGET);
     const firstGroup = seen.started.filter(name => name !== 'areBlocked' && name !== 'getUserById').slice(0, 4);
     expect(firstGroup).toEqual(expect.arrayContaining(['getPokeWith', 'encounter', 'conversation']));
+  });
+});
+
+// ─── canMessage on the brief (30 Oct 2026) ──────────────────────────────────────────────────────
+// Stefan: "When I open a connection's profile, there should be a 'Message' button". The page offers it
+// only when the server says messaging is allowed, by the same rule GET /dm/can-message/:userId applies,
+// so a pair who met but did not both say "meet again" is never handed a button that cannot send.
+describe('getPersonBrief: whether the viewer may message the person', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('asks the messaging rule about this viewer and this person, and passes its answer on', async () => {
+    arm({ poke: { id: 'p4', status: 'accepted', sentByMe: true } });
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect(mockCanMessage).toHaveBeenCalledWith(VIEWER, TARGET);
+    expect(brief.canMessage).toBe(true);
+    expect(brief.canMessageReason).toBeNull();
+  });
+
+  it('a pair who met without both saying "meet again" may not, and the brief says why', async () => {
+    arm({ enc: { times_met: 1, last_met_at: new Date(), last_session_id: 's1' }, canMessage: { allowed: false, reason: 'not_mutual' } });
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect(brief.relationship.state).toBe('met');
+    expect(brief.canMessage).toBe(false);
+    expect(brief.canMessageReason).toBe('not_mutual');
+  });
+
+  it('a refusal the rule does not name a reason for still says false, with no reason', async () => {
+    arm({ canMessage: { allowed: false } });
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect([brief.canMessage, brief.canMessageReason]).toEqual([false, null]);
+  });
+
+  it('a blocked pair and a removed member get no brief at all, so no Message button, and the rule is never asked', async () => {
+    arm({ blocked: true });
+    await expect(getPersonBrief(VIEWER, TARGET)).rejects.toMatchObject({ statusCode: 404 });
+    arm();
+    mockGetUser.mockResolvedValue({ ...target, status: 'deactivated' });
+    await expect(getPersonBrief(VIEWER, TARGET)).rejects.toMatchObject({ statusCode: 404 });
+    expect(mockCanMessage).not.toHaveBeenCalled();
   });
 });

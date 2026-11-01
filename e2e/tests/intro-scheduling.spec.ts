@@ -76,7 +76,8 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   // (2) THE INTRO IS THE FIRST MESSAGE of the thread (Phase 2a).
   const msgs = await apiAs(investor, 'GET', `/dm/conversations/${conversationId}/messages`);
   expect(msgs.status).toBe(200);
-  const introMsg = (msgs.json.data?.messages ?? msgs.json.data ?? []).find?.((m: any) => /should meet/i.test(m.content));
+  // 30 Oct 2026: the thread opens with REASON's introduction card, a system row, not a message in the sender's name.
+  const introMsg = (msgs.json.data?.messages ?? msgs.json.data ?? []).find?.((m: any) => m.kind === 'system' && m.systemMeta?.type === 'introduction');
   expect(introMsg, 'the introduction must be seeded into the thread').toBeTruthy();
   console.log(`  ✓ intro seeded into the thread: "${introMsg.content.slice(0, 60)}..."`);
 
@@ -120,9 +121,8 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   });
   await gotoRetry(page, `${APP}/messages/${conversationId}`);
 
-  // NB: the inbox pane's hidden preview line ALSO matches this text — .first()
-  // latches onto that hidden node. Assert on the visible thread bubble instead.
-  await expect(page.locator(':text-matches("should meet", "i"):visible').first()).toBeVisible({ timeout: 20_000 });
+  // 30 Oct 2026: the thread opens with REASON's introduction card, worded for its reader.
+  await expect(page.locator('[data-card="introduction"]:visible').first()).toBeVisible({ timeout: 20_000 });
   console.log('  ✓ headed: intro message visible in the thread.');
 
   // On phones the thread actions live under "More actions" (4 Sep 2026).
