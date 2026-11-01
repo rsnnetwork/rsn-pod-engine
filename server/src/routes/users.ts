@@ -530,7 +530,7 @@ router.delete(
       const around = await accountAudience(req.params.id).catch(() => null);
       await identityService.deleteUser(req.params.id);
       await recordAudit({ actorId: req.user!.userId, action: 'user.deleted', entityType: 'user', entityId: req.params.id, ipAddress: req.ip });
-      if (around) fanoutAccountAudience(around).catch(() => {});
+      if (around) fanoutAccountAudience(around, req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'User deleted' } };
       res.json(response);
     } catch (err) {

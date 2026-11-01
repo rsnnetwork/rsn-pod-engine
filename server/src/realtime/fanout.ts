@@ -314,7 +314,8 @@ export async function fanoutAdminEntities(
 // so the audience is read from them: the members of every pod the account is in or asked to join (pod tags and the
 // pod's wall), the people of every event it holds a place in that has not ended (the event's participant tags), each
 // of its connections and conversation partners (their own Messages and People, `user:<id>:dms`), and each group chat
-// it is in. Circle pages catch up on their next read: circles have no tag of their own yet.
+// it is in, and every circle it is in (the circle's page and its member list, through fanoutCircleChange, with the
+// person counted as a changed member so lists that show their circles redraw).
 
 /** Who could be looking at an account, read from its memberships. */
 export interface AccountAudience {
@@ -322,12 +323,13 @@ export interface AccountAudience {
   events: Array<{ podId: string | null; sessionId: string }>;
   people: string[];
   groupIds: string[];
+  circleIds: string[];
 }
 
 export async function accountAudience(userId: string): Promise<AccountAudience> {
   const { query } = await import('../db');
   const { CONNECTION_SIGNALS_SQL } = await import('../services/people/connections.service');
-  const [pods, events, people, groups] = await Promise.all([
+  const [pods, events, people, groups, circles] = await Promise.all([
     query<{ pod_id: string }>(
       `SELECT pod_id FROM pod_members WHERE user_id = $1 AND status IN ('active', 'pending_approval')`,
       [userId],
@@ -342,16 +344,18 @@ export async function accountAudience(userId: string): Promise<AccountAudience> 
       [userId],
     ),
     query<{ group_id: string }>(`SELECT group_id FROM dm_group_members WHERE user_id = $1`, [userId]),
+    query<{ circle_id: string }>(`SELECT circle_id FROM circle_members WHERE user_id = $1`, [userId]),
   ]);
   return {
     podIds: pods.rows.map(r => r.pod_id),
     events: events.rows.map(r => ({ podId: r.pod_id, sessionId: r.session_id })),
     people: people.rows.map(r => r.person_id),
     groupIds: groups.rows.map(r => r.group_id),
+    circleIds: circles.rows.map(r => r.circle_id),
   };
 }
 
-export async function fanoutAccountAudience(audience: AccountAudience): Promise<void> {
+export async function fanoutAccountAudience(audience: AccountAudience, userId: string): Promise<void> {
   const io = getRealtimeIo();
   if (!io) return;
   try {
@@ -360,6 +364,7 @@ export async function fanoutAccountAudience(audience: AccountAudience): Promise<
       ...audience.events.map(e => fanoutSessionEntities(e.podId, e.sessionId)),
       ...audience.people.map(personId => emitEntities(io, [personId], [E.userDms(personId)])),
       ...audience.groupIds.map(groupId => fanoutGroupEntities(groupId)),
+      ...audience.circleIds.map(circleId => fanoutCircleChange(circleId, userId, [userId])),
     ]);
   } catch (err) {
     logger.warn({ err }, 'fanoutAccountAudience: failed to fan out');
@@ -369,7 +374,7 @@ export async function fanoutAccountAudience(audience: AccountAudience): Promise<
 export async function fanoutAccountStatusChange(userId: string): Promise<void> {
   if (!getRealtimeIo()) return;
   try {
-    await fanoutAccountAudience(await accountAudience(userId));
+    await fanoutAccountAudience(await accountAudience(userId), userId);
   } catch (err) {
     logger.warn({ err, userId }, 'fanoutAccountStatusChange: failed to fan out');
   }

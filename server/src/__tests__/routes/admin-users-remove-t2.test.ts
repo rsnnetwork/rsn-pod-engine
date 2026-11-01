@@ -47,7 +47,7 @@ jest.mock('../../services/identity/identity.service', () => ({
 jest.mock('../../middleware/audit', () => ({ __esModule: true, recordAudit: jest.fn(async () => {}), auditMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next() }));
 jest.mock('../../realtime/fanout', () => ({
   __esModule: true,
-  accountAudience: jest.fn(async () => ({ podIds: ['pod-1'], events: [], people: ['u-friend'], groupIds: [] })),
+  accountAudience: jest.fn(async () => ({ podIds: ['pod-1'], events: [], people: ['u-friend'], groupIds: [], circleIds: [] })),
   fanoutAccountAudience: jest.fn(async () => {}),
   fanoutAccountStatusChange: jest.fn(async () => {}),
   fanoutAdminEntities: jest.fn(async () => {}),
@@ -143,14 +143,14 @@ describe('PUT /users/:id/status (production\'s Remove, Suspend, Ban and Reactiva
 describe('DELETE /users/:id (production\'s Delete Forever)', () => {
   it('reads who is around the person before the delete takes them out of their pods and events, and tells them after', async () => {
     const order: string[] = [];
-    (fanout.accountAudience as jest.Mock).mockImplementation(async () => { order.push('audience'); return { podIds: ['pod-1'], events: [], people: [], groupIds: [] }; });
+    (fanout.accountAudience as jest.Mock).mockImplementation(async () => { order.push('audience'); return { podIds: ['pod-1'], events: [], people: [], groupIds: [], circleIds: ['circle-1'] }; });
     (identityService.deleteUser as jest.Mock).mockImplementation(async () => { order.push('delete'); });
     (fanout.fanoutAccountAudience as jest.Mock).mockImplementation(async () => { order.push('tell'); });
     const res = await request(app).delete(`/users/${GONE}`).set('Authorization', `Bearer ${token('u-super', 'super_admin')}`);
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ message: 'User deleted' });
     expect(order).toEqual(['audience', 'delete', 'tell']);
-    expect(fanout.fanoutAccountAudience).toHaveBeenCalledWith({ podIds: ['pod-1'], events: [], people: [], groupIds: [] });
+    expect(fanout.fanoutAccountAudience).toHaveBeenCalledWith({ podIds: ['pod-1'], events: [], people: [], groupIds: [], circleIds: ['circle-1'] }, GONE);
   });
 });
 

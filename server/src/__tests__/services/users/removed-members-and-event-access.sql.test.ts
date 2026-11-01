@@ -398,7 +398,7 @@ suite('removed members vanish, and who sees and joins a pod\'s events (real Post
     it.each(['invite_only', 'private'])('a %s pod\'s event refuses a stranger with the same words as before', async (visibility) => {
       const { stranger, e } = await podWithEvent(visibility);
       await expect(sessions.registerParticipant(e, stranger, 'member' as never)).rejects.toMatchObject({
-        statusCode: 403, message: 'You must be a pod member to register for sessions in a private pod',
+        statusCode: 403, message: 'You must be a pod member to register for events in a private pod',
       });
     }, 30_000);
 
