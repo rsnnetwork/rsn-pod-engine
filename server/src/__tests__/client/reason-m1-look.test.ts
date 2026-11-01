@@ -841,6 +841,8 @@ describe('The short tour hands the member to For You when it is finished or skip
       '@/stores/authStore': { useAuthStore: (select: (s: unknown) => unknown) => select({ user: { id: 'u1' } }) },
       './useTourState': { useTourState: () => ({ pending: true, failed, markSeen }) },
       './flow': flow,
+      // The real gate rule (30 Oct review, L3): this member's session says nothing about onboarding, so it is not due.
+      '@/components/layout/onboarding-gate': require('../../../../client/src/components/layout/onboarding-gate'),
       './tour-landing': { hasReturned, forgetReturned },
       './HowRsnWorks': {
         __esModule: true,
