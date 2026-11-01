@@ -109,6 +109,10 @@ export const ErrorCodes = {
   MEETING_ALREADY_ENDED: 'MEETING_ALREADY_ENDED',  // 409; a meeting that is over can no longer be cancelled
   MEETING_ALREADY_STARTED: 'MEETING_ALREADY_STARTED',  // 409; a meeting under way can no longer be cancelled
 
+  // Call errors (1 Nov 2026)
+  CALL_PARTNER_OFFLINE: 'CALL_PARTNER_OFFLINE',  // 409; the person rung is not on REASON right now (no ring, no bell)
+  CALL_ALREADY_WAITING: 'CALL_ALREADY_WAITING',  // 409; this pair already has a call ringing, from either side
+
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',
   MATCH_ALREADY_RATED: 'MATCH_ALREADY_RATED',

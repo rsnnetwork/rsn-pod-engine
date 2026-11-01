@@ -96,6 +96,11 @@ export interface PersonBrief {
   path: { id: string; displayName: string } | null;
   /** The person's own entities (their company, fund…) with their role and title in each (21 Oct 2026). */
   entities: PersonEntity[];
+  /**
+   * The viewer may ring this person for a video call now (1 Nov 2026): the two are connected, neither has blocked
+   * the other, and both are members. Whether they are online is asked when the call is rung.
+   */
+  canCall: boolean;
 }
 
 export interface RecentConnection {
