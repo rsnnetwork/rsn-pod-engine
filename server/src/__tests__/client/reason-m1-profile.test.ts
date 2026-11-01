@@ -93,13 +93,13 @@ describe('Human Profile: the way back stays in the app', () => {
   });
 });
 
-describe('Human Profile: Save and Pass', () => {
+describe('Human Profile: Save and Remove (Pass until 30 Oct 2026)', () => {
   it('a quick second tap is ignored until the first one has finished', () => {
     expect(page()).toMatch(/const pressing = useRef\(false\)/);
     expect(page()).toMatch(/if \(pressing\.current\) return;/);
     expect(page()).toMatch(/onSettled: \(\) => \{ pressing\.current = false; \}/);
     expect(page()).toMatch(/onToggleSave=\{\(\) => press\(/);
-    expect(page()).toMatch(/onTogglePass=\{\(\) => press\(/);
+    expect(page()).toMatch(/onToggleRemove=\{\(\) => press\(/);
   });
   it('the buttons stay busy until the fresh brief is in: the refresh is returned, so the press is not done before the star changes', () => {
     expect(page()).toMatch(/return qc\.invalidateQueries\(\{ queryKey: reasonKeys\.all \}\)/);
@@ -115,23 +115,43 @@ describe('Human Profile: Save and Pass', () => {
     expect(page()).toMatch(/<MeetSheet person=\{meetPerson\}/);
     expect(page()).toMatch(/<OutcomeSheet person=\{outcomePerson\}/);
   });
-  it('the buttons are named for the state they offer, and carry no pressed state (a name that flips AND a pressed flag is read twice)', () => {
-    expect(bar()).toMatch(/'Pass: not relevant right now'/);
-    expect(bar()).toMatch(/'Undo pass'/);
-    expect(bar()).toMatch(/'Remove from saved'/);
-    expect(bar()).toMatch(/: 'Save'/);
+  // 30 Oct 2026 (Stefan: "The 'X' button is unclear"): the side buttons say what they do in words, and
+  // the × is "Remove", never "Decline", which stays the word for turning a request down.
+  it('the buttons say what they do in words, are named for the state they offer, and carry no pressed state', () => {
+    expect(bar()).toMatch(/aria-label=\{r\.passed \? 'Put back in For You' : 'Remove from For You'\}/);
+    expect(bar()).toMatch(/\{r\.passed \? 'Undo remove' : 'Remove'\}/);
+    expect(bar()).toMatch(/aria-label=\{r\.saved \? 'Remove from saved' : 'Save'\}/);
+    expect(bar()).toMatch(/\{r\.saved \? 'Saved' : 'Save'\}/);
+    expect(bar()).not.toMatch(/'×'|'↺'|Pass: not relevant|Undo pass/);
     expect(bar()).not.toMatch(/aria-pressed/);
+    // Room for words: the side columns size to them, each at least 48px.
+    expect(bar()).toMatch(/grid-cols-\[1fr_auto_auto\]/);
+    expect(bar()).toMatch(/min-w-\[48px\]/);
   });
   it('while busy the buttons say aria-disabled, show the busy look and ignore presses, but never become disabled (that drops the keyboard focus)', () => {
-    // Save and Pass follow busy alone; the main button follows busy and the inert states (the next test).
-    expect(count(bar(), /aria-disabled=\{busy \|\| undefined\}/g)).toBe(2);
+    // Save and Remove follow busy alone, and so do the incoming request's Accept and Decline; the main button
+    // follows busy and the inert states (the next test).
+    expect(count(bar(), /aria-disabled=\{busy \|\| undefined\}/g)).toBe(4);
     expect(bar()).not.toMatch(/(?<![-\w])disabled=\{[^}]*busy/);
     expect(count(bar(), /(?<![-\w])disabled=\{/g)).toBe(0);
     expect(bar()).toMatch(/if \(!busy\) fn\(\);/);
   });
+  it('a request from this person is answered in the bar with its own Accept and Decline, through the hook the bell and Messages share', () => {
+    expect(bar()).toMatch(/import \{ useRequestAnswer \} from '@\/features\/messages\/useRequestAnswer';/);
+    expect(bar()).toMatch(/const answering = r\.state === 'incoming' && !!r\.pokeId;/);
+    expect(bar()).toMatch(/\{answering \? <IncomingAnswer pokeId=\{r\.pokeId as string\} \/> : \(/);
+    // Decline is the request's answer there, so Remove steps aside.
+    expect(bar()).toMatch(/\{!answering && \(/);
+  });
+  it('the bar is not drawn once the two are connected or have met, and the page drops the room it kept for it', () => {
+    expect(page()).toMatch(/const connected = r\.state === 'connected' \|\| r\.state === 'met';/);
+    expect(page()).toMatch(/const showBar = !hideBar && !connected;/);
+    expect(page()).toMatch(/\{showBar && \(\n\s*<MoveBar/);
+    expect(page()).toMatch(/connected \? 'pb-\[calc\(24px\+env\(safe-area-inset-bottom\)\)\]' : 'pb-\[calc\(116px\+env\(safe-area-inset-bottom\)\)\]'/);
+  });
   it('Request sent and Request declined are aria-disabled and stay focusable: the Meet sheet gives focus back to the button that opened it, and a disabled button would drop it to the page', () => {
     expect(bar()).toMatch(/aria-disabled=\{busy \|\| inert \|\| undefined\}/);
-    expect(count(bar(), /aria-disabled=/g)).toBe(3);
+    expect(count(bar(), /aria-disabled=/g)).toBe(5);
     // The page's onPrimary has no branch for those two states: a press does nothing.
     const from = page().indexOf('const onPrimary = () => {');
     const onPrimary = page().slice(from, page().indexOf('return (', from));

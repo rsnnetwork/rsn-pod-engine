@@ -15,6 +15,7 @@ import SheepAvatar from '@/components/brand/SheepAvatar';
 import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { meetingEntry } from '@/components/calendar/calendar-links';
 import { conversationMeetingFile, meetingFile } from '@/components/calendar/calendar-files';
+import ReasonLineBox from './ReasonLineBox';
 
 export type DmMessageKind = 'user' | 'system';
 
@@ -28,7 +29,9 @@ export type DmSystemMeta =
       movedFrom?: string;
       /** The meeting's own record (26 Oct 2026). Absent on cards written before meetings had one. */
       meetingId?: string;
-    };
+    }
+  /** The first line of a conversation a meeting request opened (30 Oct 2026): who asked whom, and REASON's line. */
+  | { type: 'introduction'; requesterId: string; recipientId: string; reasonLine: string | null };
 
 /** One instant, in the reader's own time zone, in the form the scheduler and the emails use: "Sun 25 Oct, 13:00". */
 export function localWhen(iso: string): string {
@@ -61,15 +64,43 @@ interface Props {
   /** The thread's meeting as it stands now, once the scheduling has loaded
    *  (null: none stands, it was cancelled). A card for another time is history. */
   currentMeeting?: { startAt: string | null } | null;
+  /** Who is reading, and the other person's first name: the introduction card is worded for its reader. */
+  viewerId?: string;
+  partnerName?: string;
+}
+
+/**
+ * "Shradha wanted to meet you. You accepted." for the person who was asked, "You asked to meet
+ * Stefan. Stefan accepted." for the person who asked (30 Oct 2026), or the card's own words for
+ * anyone else, which the server writes in nobody's voice.
+ */
+function introductionHeadline(meta: { requesterId: string; recipientId: string }, content: string, viewerId?: string, partnerName?: string): string {
+  const name = partnerName?.trim();
+  if (!name) return content;
+  if (viewerId === meta.recipientId) return `${name} wanted to meet you. You accepted.`;
+  if (viewerId === meta.requesterId) return `You asked to meet ${name}. ${name} accepted.`;
+  return content;
 }
 
 const sameInstant = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && Date.parse(a) === Date.parse(b);
 
 export default function SystemMessageCard({
   content, meta, liveSlots, onPickSlot, onOpenScheduler, meetingConfirmed, calendar,
-  onCallNow, callsUnlocked, meetingOver, currentMeeting,
+  onCallNow, callsUnlocked, meetingOver, currentMeeting, viewerId, partnerName,
 }: Props) {
   const navigate = useNavigate();
+
+  if (meta?.type === 'introduction') {
+    // REASON introduces the two, in its own voice: the member's note, if they wrote one, follows as
+    // their own message.
+    const headline = introductionHeadline(meta, content, viewerId, partnerName);
+    return (
+      <Shell tone="plain" icon={<SheepAvatar pose="matched" size={44} />} card="introduction">
+        <p className="text-sm font-medium text-[#1a1a2e] [overflow-wrap:anywhere]">{headline}</p>
+        {meta.reasonLine && <ReasonLineBox line={meta.reasonLine} className="mt-2" />}
+      </Shell>
+    );
+  }
 
   if (meta?.type === 'meeting_confirmed') {
     // The card outlives the meeting it announces. While the time is still
@@ -212,7 +243,11 @@ export default function SystemMessageCard({
   );
 }
 
-function Shell({ tone, icon, children }: { tone: 'plain' | 'proposal' | 'confirmed'; icon: React.ReactNode; children: React.ReactNode }) {
+function Shell({ tone, icon, children, card }: {
+  tone: 'plain' | 'proposal' | 'confirmed'; icon: React.ReactNode; children: React.ReactNode;
+  /** Which card this is, for the specs that look for one (data-card). */
+  card?: string;
+}) {
   const skin = tone === 'confirmed'
     ? 'border-emerald-200 bg-emerald-50'
     : tone === 'proposal'
@@ -220,7 +255,7 @@ function Shell({ tone, icon, children }: { tone: 'plain' | 'proposal' | 'confirm
       : 'border-gray-200 bg-white';
   return (
     <div className="flex justify-center py-2">
-      <div className={`max-w-[85%] rounded-xl border px-3 py-2.5 text-center ${skin}`} data-testid="system-message-card">
+      <div className={`max-w-[85%] rounded-xl border px-3 py-2.5 text-center ${skin}`} data-testid="system-message-card" data-card={card}>
         <div className="mb-1 flex justify-center">{icon}</div>
         {children}
       </div>

@@ -126,7 +126,10 @@ export default function ProfileDetails({ brief, who, source, onRecordOutcome }: 
       </Section>
 
       <Section kicker="What happens next" title="One useful move.">
-        <p className={BODY}>REASON does not want you living on the profile. Meet, continue, save, or pass. The relationship state should move.</p>
+        {/* 30 Oct 2026: a connection's profile has no bar any more, so the line says what is left to do. */}
+        <p className={BODY}>{r.state === 'connected' || r.state === 'met'
+          ? `You are connected. Message ${first}, meet, and record what came of it.`
+          : 'REASON does not want you living on the profile. Meet, save, or remove. The relationship state should move.'}</p>
       </Section>
     </section>
   );

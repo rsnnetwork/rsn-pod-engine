@@ -1365,6 +1365,8 @@ export default function MessagesPage() {
                             callsUnlocked={callsUnlocked}
                             meetingOver={confirmedMeetingOver}
                             currentMeeting={scheduling ? (scheduling.confirmed ? { startAt: scheduling.confirmed.startAt ?? null } : null) : undefined}
+                            viewerId={myUserId}
+                            partnerName={headerContext?.otherDisplayName?.trim().split(/\s+/)[0]}
                           />
                         </div>,
                       );

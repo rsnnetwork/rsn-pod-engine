@@ -293,7 +293,8 @@ describe('Human Profile: More, with Block and Report this member', () => {
 
   it('Report opens the old public profile\'s report dialog, and the move bar steps aside while it is open', () => {
     expect(human()).toMatch(/<ReportUserModal\b/);
-    expect(human()).toMatch(/\{!hideBar && \(/);
+    expect(human()).toMatch(/const showBar = !hideBar && !connected;/);
+    expect(human()).toMatch(/\{showBar && \(/);
     expect(human()).toMatch(/hideBar=\{reportOpen\}/);
   });
 

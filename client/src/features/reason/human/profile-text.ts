@@ -229,7 +229,7 @@ export function memoryRows(r: PersonBrief['relationship']): Row[] {
   ];
 }
 
-// ---- Save and Pass ----------------------------------------------------------------------------
+// ---- Save and Remove (called Pass until 30 Oct 2026; the response stored is still 'passed') --------------
 
 // What each press does. Clearing is the same request for "remove from saved" and "undo pass", so the move, not
 // the response, decides the sentence.
@@ -240,7 +240,7 @@ export function moveToast(move: Move, name: string): { message: string; type: 's
   switch (move) {
     case 'save': return { message: `${name} saved`, type: 'success' };
     case 'unsave': return { message: `${name} removed from saved`, type: 'success' };
-    case 'pass': return { message: `${name} will not be suggested in For You. You can undo this here.`, type: 'info' };
+    case 'pass': return { message: `${name} is removed from your For You. You can undo this here.`, type: 'info' };
     case 'unpass': return { message: `${name} can be suggested in For You again.`, type: 'info' };
   }
 }
