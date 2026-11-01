@@ -25,6 +25,9 @@ interface AuthState {
   verifyCode: (email: string, code: string) => Promise<void>;
   setTokensAndLoad: (accessToken: string, refreshToken: string) => Promise<void>;
   checkSession: () => Promise<void>;
+  /** Read the session again for the member this tab already shows, when the server says it changed (user:<id>).
+   *  Resolves to the session's member; puts it in place only when something in it changed. */
+  rereadSession: () => Promise<unknown>;
   refreshAccessToken: () => Promise<void>;
   logout: () => Promise<void>;
   setTokens: (access: string, refresh: string) => void;
@@ -329,6 +332,20 @@ export const useAuthStore = create<AuthState>((set, get) => {
           return;
         }
       }
+    },
+
+    rereadSession: async () => {
+      const { data } = await api.get('/auth/session', { timeout: 15000 });
+      const fresh = data?.data?.user ?? null;
+      const now = get();
+      // Only the member this tab shows, and only while signed in: a tab signed out while the read was on its way stays
+      // signed out, and a session that is another member's (a sign-in in another tab) is followed by the storage
+      // listener, which also empties the cache.
+      if (!fresh || !now.isAuthenticated || !now.user || now.user.id !== fresh.id) return fresh;
+      // The same session again (most user:<id> tags change other things) leaves the store as it was: nothing redraws,
+      // and a profile form being typed in is not reset.
+      if (JSON.stringify(now.user) !== JSON.stringify(fresh)) set({ user: fresh });
+      return fresh;
     },
 
     refreshAccessToken: async () => {

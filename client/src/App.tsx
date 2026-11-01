@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { connectSocket, disconnectSocket, getSocket, reconnectSocket } from '@/lib/socket';
 import { useEntityChangedHandler } from '@/realtime/useEntityChangedHandler';
+import { useSessionFollowsServer } from '@/realtime/useSessionFollowsServer';
 import { useToastStore } from '@/stores/toastStore';
 import { useTabTitleCount } from '@/hooks/useTabTitleCount';
 import { useMessageChime } from '@/hooks/useMessageChime';
@@ -199,6 +200,9 @@ export default function App() {
   // now owns all realtime cache invalidation; every query declares
   // meta.entities and the server emits entity:changed for every mutation.
   useEntityChangedHandler();
+  // The session in the auth store (the onboarding gate, the top bar) follows the member's own user:<id> on every tab
+  // and device, as the cached reads follow their tags (final sweep F1, 2 Nov 2026).
+  useSessionFollowsServer();
 
   // 30 Oct 2026 (L8): "(N) REASON" in the browser tab while messages are unread, and a chime when one comes in. Here,
   // not in the shell: the profile and the meeting room are outside it. Signed out, the tab reads "REASON" and nothing
