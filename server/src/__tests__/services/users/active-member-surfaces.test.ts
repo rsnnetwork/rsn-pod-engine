@@ -104,7 +104,7 @@ describe('circles', () => {
     mockQuery.mockResolvedValue({ rows: [{ id: 'c1', author_id: THEM, display_name: 'Gone', avatar_url: 'x', author_former: true, content: 'hi', created_at: new Date() }] });
     const [comment] = await wall.listComments(POD, ME);
     expect(sent()[0]).toContain(`(NOT ${ACTIVE}) AS author_former`);
-    expect(comment).toMatchObject({ authorName: 'Former member', authorAvatarUrl: null, authorIsFormerMember: true, content: 'hi' });
+    expect(comment).toMatchObject({ authorName: 'Former member', authorAvatarUrl: null, authorClosed: true, content: 'hi' });
   });
 });
 

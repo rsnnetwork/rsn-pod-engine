@@ -52,7 +52,7 @@ export interface WallPost {
   authorName: string | null;
   authorAvatarUrl: string | null;
   /** T2 (1 Nov 2026): the author's account was removed, suspended or banned; the post stays as "Former member". */
-  authorIsFormerMember: boolean;
+  authorClosed: boolean;
   content: string;
   media: WallMediaItem[];
   linkUrl: string | null;
@@ -276,8 +276,8 @@ export async function getPost(postId: string, viewerId: string): Promise<WallPos
 /** An author whose account is not active keeps their words, as "Former member" with no picture (T2). */
 function authorOf(row: { display_name: string | null; avatar_url: string | null; author_former: boolean | null }) {
   return row.author_former
-    ? { authorName: FORMER_MEMBER_NAME, authorAvatarUrl: null, authorIsFormerMember: true }
-    : { authorName: row.display_name, authorAvatarUrl: row.avatar_url, authorIsFormerMember: false };
+    ? { authorName: FORMER_MEMBER_NAME, authorAvatarUrl: null, authorClosed: true }
+    : { authorName: row.display_name, authorAvatarUrl: row.avatar_url, authorClosed: false };
 }
 
 function mapPost(row: any): WallPost {
@@ -526,7 +526,7 @@ export async function addComment(
 export interface WallComment {
   id: string; authorId: string; authorName: string | null; authorAvatarUrl: string | null;
   /** T2: as on a post. */
-  authorIsFormerMember: boolean;
+  authorClosed: boolean;
   content: string; createdAt: Date; parentCommentId: string | null;
   likeCount: number; likedByMe: boolean;
 }

@@ -186,7 +186,7 @@ suite('removed members vanish, and who sees and joins a pod\'s events (real Post
 
       const feed = await wall.listPosts(c, stays);
       expect(feed.posts).toHaveLength(1);
-      expect(feed.posts[0]).toMatchObject({ content: 'Hello circle', authorName: 'Former member', authorAvatarUrl: null, authorIsFormerMember: true });
+      expect(feed.posts[0]).toMatchObject({ content: 'Hello circle', authorName: 'Former member', authorAvatarUrl: null, authorClosed: true });
     }, 30_000);
 
     it('reads "Former member" on a pod wall', async () => {
