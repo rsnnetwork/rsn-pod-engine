@@ -193,10 +193,11 @@ test('1.2, 2.1, 2.2: an earlier-onboarding member is taken through the new onboa
       .toEqual({ onboarding_version: 2, location: 'Copenhagen, Denmark' });
   });
 
-  await test.step('2.1 the second browser: the gate it was held at stays until it loads again (finding F1, see the next test)', async () => {
-    // What a member sees on the other device today: it is not stuck, it lets go at its next load, with no loop.
-    await gotoRetry(second.page, `${APP}/connections`);
+  await test.step('2.1 the second browser lets go without a reload once the first one finished', async () => {
+    // The session follows user:<id> on every device (final sweep F1): a move inside the app is not sent back.
+    await second.page.evaluate(() => { window.history.pushState({}, '', '/connections'); window.dispatchEvent(new PopStateEvent('popstate')); });
     await expect.poll(() => new URL(second.page.url()).pathname, { timeout: SLOW }).toBe('/connections');
+    await expectNotReloaded(second.page, 'the second browser');
   });
 
   await test.step('1.2 legacy: a new-onboarding member with no location is sent straight to the field, with no Cancel', async () => {
@@ -225,13 +226,11 @@ test('1.2, 2.1, 2.2: an earlier-onboarding member is taken through the new onboa
   });
 });
 
-// FINDING F1 (T19, 2 Nov 2026): a member's other device, held at the onboarding gate, is not told when they finish on
-// the first one. The server sends user:<id> on the confirm (routes/onboarding-v2.ts: "their other tabs only learn from
-// this"), but nothing on the client re-reads the session on it (checkSession runs only in the tab that confirmed), so a
-// move inside the app on the other device is sent back to onboarding until that device loads the page again. Marked
-// as expected to fail, so the walk stays green on what is built and turns red, as a reminder, once it is fixed.
+// FINDING F1 (T19, 2 Nov 2026), fixed by F12: a member's other device, held at the onboarding gate, is told when they
+// finish on the first one. The server sends user:<id> on the confirm, and the client re-reads the session on it
+// (realtime/useSessionFollowsServer.ts), so a move inside the app on the other device is no longer sent back to
+// onboarding and the device is never reloaded.
 test('2.1 (finding F1): a second device held at the gate lets go without a reload once the member finishes on the first', async () => {
-  test.fail(true, 'F1: the other device re-reads its session only when it loads again; reported to the controller, not fixed here');
   test.setTimeout(150_000);
   const una = await throwaway('Una', { onboarding: 'old' });
   const second = await openAs(browser, una, '/');
@@ -266,6 +265,20 @@ test('2.3: an admin sees a member\'s onboarding answers on the inspector and dow
     expect(csv.split('\n')[0]).toMatch(/^Name,Email,Onboarding,Status/);
     expect(csv).toContain(`bakers in Vienna ${RUN}`);
     expect(csv, 'a removed member is not in the CSV of active members').not.toContain(rex.email);
+  });
+
+  await test.step('2.3 the open card follows the member\'s new answers and city without a reload (finding F2)', async () => {
+    const card = page.getByTestId('onboarding-answers-card');
+    await markNotReloaded(page);
+    expect((await api(mo, 'POST', '/onboarding/v2/confirm', {
+      ...ANSWERS, lookingToMeet: ['meet_investors', 'meet_other'], meetOther: `potters in Porto ${RUN}`, profile: { location: 'Porto, Portugal' },
+    })).status).toBe(200);
+    await expect(card.getByText(`“potters in Porto ${RUN}”`, { exact: true })).toBeVisible({ timeout: SLOW });
+    await expect(card.getByText('Porto, Portugal', { exact: true })).toBeVisible();
+    // A profile save is told to the admins too: where they are based is on the card.
+    expect((await api(mo, 'PUT', '/users/me', { location: 'Braga, Portugal' })).status).toBe(200);
+    await expect(card.getByText('Braga, Portugal', { exact: true })).toBeVisible({ timeout: SLOW });
+    await expectNotReloaded(page, 'the admin\'s inspector');
   });
 });
 
