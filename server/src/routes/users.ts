@@ -119,9 +119,18 @@ router.get(
 
 // ─── PUT /users/me ──────────────────────────────────────────────────────────
 
+// Production's form sends a new photo here as a data URL, and since 30 Oct (T3a) each one is opened and cut on the
+// server, so it counts against the same limit as the pencil's (10 a minute per member). A save without one is not held.
+const photoInBodyLimit = (req: Request, res: Response, next: NextFunction) => {
+  const avatarUrl: unknown = req.body?.avatarUrl;
+  if (typeof avatarUrl === 'string' && avatarUrl.startsWith('data:')) return avatarWriteLimiter(req, res, next);
+  return next();
+};
+
 router.put(
   '/me',
   authenticate,
+  photoInBodyLimit,
   validate(updateUserSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

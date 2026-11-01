@@ -17,7 +17,8 @@ jest.mock('../../../config/logger', () => ({
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), __esModule: true }));
 
-import { getPictureSource, renderPicture, savePicture } from '../../../services/user/picture.service';
+import sharp from 'sharp';
+import { PICTURE_RENDER_SLOTS, getPictureSource, pictureRenderLoad, renderPicture, savePicture } from '../../../services/user/picture.service';
 import { fakeUserRow } from '../../fixtures/fake-user-row';
 import { BLUE, RED, WHITE, clear, colourAt, halves, near, sizeOf, solid } from '../../fixtures/real-pictures';
 import { dataUrl, jpeg } from '../../fixtures/pictures';
@@ -178,5 +179,38 @@ describe('getPictureSource', () => {
 
   it('with no picture at all, gives none', async () => {
     expect(await getPictureSource('avatar', ME)).toEqual({ image: null, crop: null });
+  });
+});
+
+// Fix round 1 (review of T3a): a tiny one-colour 4096 square PNG opens to about 67 MB, so the server keeps the cutting
+// within bounds on its 512 MB instance: at most two pictures are cut at once (the rest wait their turn), libvips keeps no
+// cache, and each cut uses one thread.
+describe('cutting is bounded on the server', () => {
+  it('libvips keeps no cache and uses one thread per picture', () => {
+    expect(sharp.cache().memory.max).toBe(0);
+    expect(sharp.cache().items.max).toBe(0);
+    expect(sharp.concurrency()).toBe(1);
+  });
+
+  it('at most two pictures are cut at once; the others wait their turn, and every one is cut', async () => {
+    expect(PICTURE_RENDER_SLOTS).toBe(2);
+    const source = await solid(1200, 900);
+    const jobs = Array.from({ length: 6 }, () => renderPicture(source, 'avatar', { x: 0.5, y: 0.5, zoom: 1 }));
+    expect(pictureRenderLoad()).toEqual({ running: 2, waiting: 4 });
+    const done = await Promise.all(jobs);
+    expect(done.map((d) => d.mime)).toEqual(Array(6).fill('image/jpeg'));
+    expect(pictureRenderLoad()).toEqual({ running: 0, waiting: 0 });
+  });
+
+  it('a slot is given back when a cut fails, so a bad picture never blocks the next one', async () => {
+    const bad = Array.from({ length: 3 }, () => renderPicture(jpeg(800, 800, 4000), 'avatar', { x: 0.5, y: 0.5, zoom: 1 }).catch((e) => e));
+    await Promise.all(bad);
+    expect(pictureRenderLoad()).toEqual({ running: 0, waiting: 0 });
+    await expect(renderPicture(await solid(100, 100), 'avatar', { x: 0.5, y: 0.5, zoom: 1 })).resolves.toMatchObject({ mime: 'image/jpeg' });
+  });
+
+  it('a stored picture past 4096 by 4096 pixels (never checked on upload, e.g. a capture) is refused by the decoder as a 400', async () => {
+    const huge = await sharp({ create: { width: 5000, height: 5000, channels: 3, background: '#888' } }).png().toBuffer();
+    await expect(renderPicture(huge, 'avatar', { x: 0.5, y: 0.5, zoom: 1 })).rejects.toMatchObject({ statusCode: 400 });
   });
 });

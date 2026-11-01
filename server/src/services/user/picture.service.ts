@@ -29,10 +29,40 @@ const CHOOSE_FIRST = 'Choose a picture first.';
 // checked by picture-file.ts, so the decoder holds the line too).
 const OPEN: sharp.SharpOptions = { failOn: 'error', limitInputPixels: PICTURE_MAX_SIDE * PICTURE_MAX_SIDE };
 
+// Bounded on purpose (review of T3a): a tiny one-colour 4096 square PNG opens to about 67 MB, and the API runs on a
+// 512 MB instance during live events. So libvips keeps no cache of opened pictures, each cut uses one thread, and at
+// most PICTURE_RENDER_SLOTS pictures are cut at once across all requests; the others wait their turn (a save takes
+// well under a second). The photo's write limit (10 a minute per member) also covers production's PUT /users/me.
+sharp.cache(false);
+sharp.concurrency(1);
+export const PICTURE_RENDER_SLOTS = 2;
+let running = 0;
+const waiting: Array<() => void> = [];
+
+/** Run `job` in one of the render slots. A finished job hands its slot straight to the next in line. */
+async function inRenderSlot<T>(job: () => Promise<T>): Promise<T> {
+  if (running < PICTURE_RENDER_SLOTS) running += 1;
+  else await new Promise<void>((resume) => waiting.push(resume));
+  try {
+    return await job();
+  } finally {
+    const next = waiting.shift();
+    if (next) next();
+    else running -= 1;
+  }
+}
+
+/** How many cuts are running and how many wait (for tests and logs). */
+export const pictureRenderLoad = () => ({ running, waiting: waiting.length });
+
 export interface RenderedPicture { bytes: Buffer; mime: 'image/jpeg'; crop: PictureCrop }
 
 /** The picture everyone sees, cut from `source` where `crop` places it. A file that cannot be opened is a 400. */
-export async function renderPicture(source: Buffer, kind: PictureKind, crop: PictureCrop): Promise<RenderedPicture> {
+export function renderPicture(source: Buffer, kind: PictureKind, crop: PictureCrop): Promise<RenderedPicture> {
+  return inRenderSlot(() => cutPicture(source, kind, crop));
+}
+
+async function cutPicture(source: Buffer, kind: PictureKind, crop: PictureCrop): Promise<RenderedPicture> {
   const shape = PICTURE_SHAPES[kind];
   try {
     const meta = await sharp(source, OPEN).metadata();

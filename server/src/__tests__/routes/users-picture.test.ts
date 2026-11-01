@@ -245,4 +245,25 @@ describe('the photo routes are signed in and rate limited', () => {
     expect(refused.status).toBe(429);
     expect(refused.body).toEqual({ success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } });
   });
+
+  // Fix round 1: production's form sends a new photo through PUT /users/me, and each one is opened and cut on the server,
+  // so a photo sent that way counts against the same 10 a minute as the pencil's. A profile save without one does not.
+  it("a burst of photos sent as data URLs through PUT /users/me is told to slow down after 10, sharing the pencil's limit", async () => {
+    const heavy = auth();
+    const photo = dataUrl('image/jpeg', await solid(64, 64));
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i += 1) statuses.push((await request(app).put('/users/me').set(heavy).send({ avatarUrl: photo })).status);
+    expect(statuses.slice(0, 10)).toEqual(Array(10).fill(200));
+    expect(statuses.slice(10)).toEqual([429, 429]);
+    const pencil = await request(app).put('/users/me/avatar').set(heavy).send({ image: photo });
+    expect(pencil.status).toBe(429);
+  });
+
+  it('PUT /users/me without a photo, or with a web address, is not held by the photo limit', async () => {
+    const heavy = auth();
+    for (let i = 0; i < 12; i += 1) {
+      expect((await request(app).put('/users/me').set(heavy).send({ company: `Co ${i}` })).status).toBe(200);
+    }
+    expect((await request(app).put('/users/me').set(heavy).send({ avatarUrl: 'https://lh3.googleusercontent.com/a/x=s96-c' })).status).toBe(200);
+  });
 });
