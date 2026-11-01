@@ -31,6 +31,13 @@ export const E = {
   userDms: (userId: string) => `user:${userId}:dms`,
   userNotifications: (userId: string) => `user:${userId}:notifications`,
 
+  // Circle (1 Nov 2026): a community of members. The detail, who is in it, its pending invites, and a
+  // member's own circles list
+  circle: (circleId: string) => `circle:${circleId}`,
+  circleMembers: (circleId: string) => `circle:${circleId}:members`,
+  circleInvites: (circleId: string) => `circle:${circleId}:invites`,
+  userCircles: (userId: string) => `user:${userId}:circles`,
+
   // Session
   session: (sessionId: string) => `session:${sessionId}`,
   sessionParticipants: (sessionId: string) => `session:${sessionId}:participants`,
