@@ -27,24 +27,40 @@ export function templateIdOf(config: unknown): string | null {
   return uuid.safeParse(value).success ? (value as string) : null;
 }
 
-/**
- * Refuses a template choice an organiser may not make, each at the field: not an id (400), no such template
- * (400), a template that is not a preset chosen by someone who is not a platform admin (403). An empty value
- * means no template and is fine.
- */
-export async function assertTemplateChoice(value: unknown, isAdmin: boolean): Promise<void> {
-  if (value === undefined || value === null || value === '') return;
-  if (!uuid.safeParse(value).success) {
-    throw new ValidationError(NOT_AN_ID, { matchingTemplateId: [NOT_AN_ID] });
-  }
+/** What is wrong with a template choice, or null when this organiser may make it. An empty value means no template. */
+async function templateChoiceProblem(value: unknown, isAdmin: boolean): Promise<'not-an-id' | 'missing' | 'admins-only' | null> {
+  if (value === undefined || value === null || value === '') return null;
+  if (!uuid.safeParse(value).success) return 'not-an-id';
   const row = (await query<{ is_preset: boolean }>(
     `SELECT is_preset FROM matching_templates WHERE id = $1`,
     [value],
   )).rows[0];
-  if (!row) throw new ValidationError(NO_SUCH_TEMPLATE, { matchingTemplateId: [NO_SUCH_TEMPLATE] });
-  if (!row.is_preset && !isAdmin) {
+  if (!row) return 'missing';
+  return !row.is_preset && !isAdmin ? 'admins-only' : null;
+}
+
+/**
+ * Refuses a template choice an organiser may not make, each at the field: not an id (400), no such template
+ * (400), a template that is not a preset chosen by someone who is not a platform admin (403). An empty value
+ * means no template and is fine. For a form that sends the event's format: it chose the template.
+ */
+export async function assertTemplateChoice(value: unknown, isAdmin: boolean): Promise<void> {
+  const problem = await templateChoiceProblem(value, isAdmin);
+  if (problem === 'not-an-id') throw new ValidationError(NOT_AN_ID, { matchingTemplateId: [NOT_AN_ID] });
+  if (problem === 'missing') throw new ValidationError(NO_SUCH_TEMPLATE, { matchingTemplateId: [NO_SUCH_TEMPLATE] });
+  if (problem === 'admins-only') {
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, ADMINS_ONLY, { matchingTemplateId: [ADMINS_ONLY] });
   }
+}
+
+/**
+ * Whether a template carried in a body with no format may be kept (fix round 1). Production's Duplicate button and
+ * its old forms post an event's stored config as it is, so a template stored before ids were checked, one deleted
+ * since, or an admin's template copied by a non-admin arrive without anyone choosing them. Such a body is never
+ * refused for it (Global Constraint 4): the caller drops the template and the copy pairs on the engine's defaults.
+ */
+export async function templateKeepable(value: unknown, isAdmin: boolean): Promise<boolean> {
+  return (await templateChoiceProblem(value, isAdmin)) === null;
 }
 
 /** The presets any organiser may choose, in the order the form lists them. */

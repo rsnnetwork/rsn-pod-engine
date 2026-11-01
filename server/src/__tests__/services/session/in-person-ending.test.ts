@@ -51,7 +51,8 @@ describe('endFinishedInPersonEvents', () => {
     const sql = (mockQuery.mock.calls[0][0] as string).replace(/\s+/g, ' ');
     expect(sql).toContain("event_format = 'physical_event' AND status = 'scheduled' AND scheduled_at IS NOT NULL");
     expect(sql).toContain('scheduled_at + make_interval(mins =>');
-    expect(sql).toContain("LEAST(480, GREATEST(1, CEIL((config->>'durationMinutes')::numeric)::int))");
+    // Clamped while still numeric, THEN cast: a stored 2^31 or more would otherwise fail the whole query (fix round 1).
+    expect(sql).toContain("LEAST(480, GREATEST(1, CEIL((config->>'durationMinutes')::numeric)))::int");
     expect(sql).toContain('ELSE 60 END');
     expect(sql).toContain('WHERE ends_at <= NOW()');
     expect(sql).toMatch(/LIMIT 50$/);

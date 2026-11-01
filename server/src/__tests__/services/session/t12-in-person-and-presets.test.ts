@@ -255,7 +255,7 @@ describe('who should meet whom: the template id is checked', () => {
       id: SESSION_ID, podId: POD_ID, status: 'scheduled', hostUserId: DIRECTOR, format: 'speed_networking',
       config: { numberOfRounds: 5, eventType: 'speed_networking' },
     });
-    await expect(updateSession(SESSION_ID, DIRECTOR, { config: { matchingTemplateId: ADMIN_TEMPLATE } }, UserRole.MEMBER))
+    await expect(updateSession(SESSION_ID, DIRECTOR, { format: 'speed_networking', config: { matchingTemplateId: ADMIN_TEMPLATE } }, UserRole.MEMBER))
       .rejects.toMatchObject({ statusCode: 403 });
   });
 
@@ -312,5 +312,68 @@ describe('someone the host removed cannot register for an in-person event (Revie
       statusCode: 403, code: 'REMOVED_FROM_EVENT',
     });
     expect(mockQuery.mock.calls.some(([sql]) => /UPDATE session_participants SET status = 'registered'/.test(sql as string))).toBe(false);
+  });
+});
+
+// ─── Fix round 1: production's Duplicate (and its old edit form) is never refused for a template ──────────────────
+// origin/main client/src/features/sessions/SessionDetailPage.tsx:322-329 posts the source event's stored config as it
+// is, with no format. A template stored there that this person may not choose now is dropped, not refused (Global
+// Constraint 4, Review Focus 2); a form that sends the format chose its template, and is still told at the field.
+describe("production's Duplicate keeps working whatever template the source event stored", () => {
+  /** Exactly origin/main's duplicate body for a source event with this stored config. */
+  const duplicate = (config: Record<string, unknown>) => ({
+    podId: POD_ID, title: 'Founders night (copy)', description: '', scheduledAt: null as unknown as string, config,
+  });
+  const stored = (matchingTemplateId: string) => ({
+    ...{ numberOfRounds: 5, roundDurationSeconds: 480, maxParticipants: 500, timerVisibility: 'last_10s', matchingPolicy: 'within_event' },
+    eventType: 'speed_networking', matchingTemplateId,
+  });
+
+  it.each([
+    ['a stored value that is not a UUID', 'Investor Day', UserRole.ADMIN],
+    ['a template deleted since', GONE_TEMPLATE, UserRole.ADMIN],
+    ["an admin's template, copied by a director who is not an admin", ADMIN_TEMPLATE, UserRole.MEMBER],
+  ])('%s: the copy is made, without that template', async (_label, id, role) => {
+    mockGetPodById.mockResolvedValue(pod(PodType.SPEED_NETWORKING));
+    answer();
+    await expect(createSession(DIRECTOR, duplicate(stored(id)), role)).resolves.toBeDefined();
+    const { format, config } = inserted();
+    expect(format).toBe('speed_networking');
+    expect(config).not.toHaveProperty('matchingTemplateId');
+    expect(config).toMatchObject({ numberOfRounds: 5, matchingPolicy: 'within_event' });
+  });
+
+  it('a template the person may use is kept on the copy (a preset for anyone, an admin\'s template for an admin)', async () => {
+    mockGetPodById.mockResolvedValue(pod(PodType.SPEED_NETWORKING));
+    answer();
+    await createSession(DIRECTOR, duplicate(stored(MATCHING_PRESET_IDS.foundersInvestors)), UserRole.MEMBER);
+    expect(inserted().config.matchingTemplateId).toBe(MATCHING_PRESET_IDS.foundersInvestors);
+    mockQuery.mockClear();
+    await createSession('admin-user', duplicate(stored(ADMIN_TEMPLATE)), UserRole.ADMIN);
+    expect(inserted().config.matchingTemplateId).toBe(ADMIN_TEMPLATE);
+  });
+
+  it.each([
+    ['not a UUID', 'Investor Day', UserRole.ADMIN, 400],
+    ['a deleted template', GONE_TEMPLATE, UserRole.ADMIN, 400],
+    ["an admin's template from a director", ADMIN_TEMPLATE, UserRole.MEMBER, 403],
+  ])('a form that sends the format with %s is still refused at the field (%s)', async (_label, id, role, status) => {
+    mockGetPodById.mockResolvedValue(pod(PodType.SPEED_NETWORKING));
+    answer();
+    await expect(createSession(DIRECTOR, { ...base, format: 'speed_networking', config: { matchingTemplateId: id } }, role))
+      .rejects.toMatchObject({ statusCode: status, details: { matchingTemplateId: [expect.any(String)] } });
+    expect(wrote()).toBe(false);
+  });
+
+  it("production's edit form (no format) does not take a template the person may not choose: the event keeps its own", async () => {
+    answer({
+      id: SESSION_ID, podId: POD_ID, status: 'scheduled', hostUserId: DIRECTOR, format: 'speed_networking',
+      config: { numberOfRounds: 5, eventType: 'speed_networking', matchingTemplateId: MATCHING_PRESET_IDS.general },
+    });
+    await expect(updateSession(SESSION_ID, DIRECTOR, { config: { matchingTemplateId: ADMIN_TEMPLATE, numberOfRounds: 4 } }, UserRole.MEMBER))
+      .resolves.toBeDefined();
+    const call = mockQuery.mock.calls.find(([sql]) => /UPDATE sessions SET/.test(sql as string))!;
+    const saved = JSON.parse((call[1] as unknown[]).find((v) => typeof v === 'string' && v.startsWith('{')) as string);
+    expect(saved).toMatchObject({ numberOfRounds: 4, matchingTemplateId: MATCHING_PRESET_IDS.general });
   });
 });

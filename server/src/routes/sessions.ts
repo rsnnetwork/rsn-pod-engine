@@ -70,7 +70,8 @@ export const createSessionSchema = z.object({
     // 26 Oct 2026 — the event forms' own fields: a meeting's length, and the round length in minutes (stored
     // as roundDurationSeconds). Only their shape is checked here: their limits are the shared definition's,
     // checked by the service on every path (old body included), so a refusal reads in the definition's words.
-    durationMinutes: z.number().int().optional(),
+    // Fix round 1: bounded here too (1 to 10,000), so no stored length can overflow a Postgres integer later.
+    durationMinutes: z.number().int().min(1).max(10_000).optional(),
     roundMinutes: z.number().finite().optional(),
     // 30 Oct 2026 — where an in-person event happens. Its limit (300 once trimmed) and whether it is required are
     // the shared definition's, checked by the service; this only keeps a body from carrying a book.
@@ -108,7 +109,8 @@ export const updateSessionSchema = z.object({
     // 26 Oct 2026 — the event forms' own fields: a meeting's length, and the round length in minutes (stored
     // as roundDurationSeconds). Only their shape is checked here: their limits are the shared definition's,
     // checked by the service on every path (old body included), so a refusal reads in the definition's words.
-    durationMinutes: z.number().int().optional(),
+    // Fix round 1: bounded here too (1 to 10,000), so no stored length can overflow a Postgres integer later.
+    durationMinutes: z.number().int().min(1).max(10_000).optional(),
     roundMinutes: z.number().finite().optional(),
     // 30 Oct 2026 — where an in-person event happens. Its limit (300 once trimmed) and whether it is required are
     // the shared definition's, checked by the service; this only keeps a body from carrying a book.

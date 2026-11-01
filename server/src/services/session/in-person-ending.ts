@@ -26,7 +26,7 @@ export async function endFinishedInPersonEvents(): Promise<string[]> {
        SELECT id, scheduled_at,
               scheduled_at + make_interval(mins => CASE
                 WHEN config->>'durationMinutes' ~ '^[0-9]+([.][0-9]+)?$'
-                  THEN LEAST(480, GREATEST(1, CEIL((config->>'durationMinutes')::numeric)::int))
+                  THEN LEAST(480, GREATEST(1, CEIL((config->>'durationMinutes')::numeric)))::int
                 ELSE 60 END) AS ends_at
          FROM sessions
         WHERE event_format = 'physical_event' AND status = 'scheduled' AND scheduled_at IS NOT NULL

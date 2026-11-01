@@ -15,7 +15,7 @@ import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError
 import * as podService from '../pod/pod.service';
 import { activeMemberSql } from '../users/active-member';
 import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql, visibleEventSql } from './session-access';
-import { assertTemplateChoice } from '../matching/matching-template-choice';
+import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
 import { assertVideoRoom } from './video-room';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
@@ -129,8 +129,11 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   const sessionConfig = normaliseConfig(format, input.config);
   if (explicit) assertEventInput(format, sessionConfig);
   else assertFormOnlySettings(format, input.config, sessionConfig);
-  // 30 Oct 2026 — who should meet whom: a preset for anyone, any template for a platform admin.
-  await assertTemplateChoice(sessionConfig.matchingTemplateId, !!isAdmin);
+  // 30 Oct 2026 — who should meet whom: a preset for anyone, any template for a platform admin. A form that sends the
+  // format chose it, so a choice it may not make is refused; a body with no format (production's Duplicate, its old
+  // forms) carries a stored config as it is, so a template that cannot be kept is dropped instead (fix round 1).
+  if (explicit) await assertTemplateChoice(sessionConfig.matchingTemplateId, !!isAdmin);
+  else if (!(await templateKeepable(sessionConfig.matchingTemplateId, !!isAdmin))) delete sessionConfig.matchingTemplateId;
 
   const sessionId = uuid();
 
@@ -230,9 +233,14 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     if (input.format !== undefined) assertEventInput(nextFormat, newConfig);
     else assertFormOnlySettings(nextFormat, input.config, newConfig);
     // A template the event already had stays without a check (one stored before ids were checked included); a new
-    // choice is checked as on create.
+    // choice is checked as on create: refused from a form that sends the format, and from a body with none (production's
+    // edit form) not taken, so the event keeps the template it had (fix round 1).
     if (newConfig.matchingTemplateId !== currentConfig?.matchingTemplateId) {
-      await assertTemplateChoice(newConfig.matchingTemplateId, !!isAdmin);
+      if (input.format !== undefined) await assertTemplateChoice(newConfig.matchingTemplateId, !!isAdmin);
+      else if (!(await templateKeepable(newConfig.matchingTemplateId, !!isAdmin))) {
+        if (currentConfig?.matchingTemplateId === undefined) delete newConfig.matchingTemplateId;
+        else newConfig.matchingTemplateId = currentConfig.matchingTemplateId;
+      }
     }
     setClauses.push(`config = $${paramIdx}`);
     values.push(JSON.stringify(newConfig));
