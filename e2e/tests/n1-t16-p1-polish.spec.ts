@@ -212,8 +212,6 @@ test(`E: a private event's live address refuses an outsider for good, in the ser
   expect(ev.status, JSON.stringify(ev.json)).toBe(201);
   const ctx = await contextFor(stranger, { width: 390, height: 844 });
   const page = await ctx.newPage();
-  const said: string[] = [];
-  page.on('framenavigated', () => {});
   await page.addInitScript(() => {
     const seen: string[] = [];
     (window as unknown as { __seen: string[] }).__seen = seen;
@@ -223,8 +221,9 @@ test(`E: a private event's live address refuses an outsider for good, in the ser
   await expect(page.getByRole('heading', { name: 'This event is not open to you.' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/registered or a pod member|private/i)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Back to events' })).toBeVisible();
-  said.push(...await page.evaluate(() => (window as unknown as { __seen: string[] }).__seen));
-  expect(said.join('\n')).not.toMatch(/Reconnecting|status code/);
+  // Everything the page showed on its way to the refusal: never "Reconnecting", never a raw status.
+  const seen = await page.evaluate(() => (window as unknown as { __seen: string[] }).__seen.join(' | '));
+  expect(seen).not.toMatch(/Reconnecting|status code/);
 });
 
 /** Holds a page's socket.io connections: `release()` lets the held one through; `drop()` closes the live one. */
@@ -278,4 +277,25 @@ test(`F: a pod page shows a change sent before its socket's first connect, and o
   await expect(title, 'the reconnect reads the pod again').toHaveText(again, { timeout: 20_000 });
   expect(gate.connects()).toBeGreaterThanOrEqual(2);
   expect(await notReloaded(page)).toBe(true);
+});
+
+test(`G: an incoming call rings again every few seconds in one tab until it is withdrawn (${engineLabel()})`, async () => {
+  test.setTimeout(90_000);
+  const ctx = await contextFor(member, { width: 1280, height: 900 });
+  await ctx.addInitScript(() => {
+    const w = window as unknown as { __rings: number };
+    w.__rings = 0;
+    window.addEventListener('reason:call-ring', () => { w.__rings += 1; });
+  });
+  const page = await open(ctx, '/pods');
+  await page.waitForTimeout(3_000); // the socket is up and the page has said it is here (presence)
+  const rings = () => page.evaluate(() => (window as unknown as { __rings: number }).__rings);
+  const rung = await api(director, 'POST', `/calls/user/${member.id}`, { kind: 'video', durationMin: 15 });
+  expect(rung.status, JSON.stringify(rung.json)).toBeLessThan(300);
+  await expect.poll(rings, { timeout: 15_000, message: 'the ring repeats while the call rings' }).toBeGreaterThanOrEqual(3);
+  expect((await api(director, 'POST', `/dm/call/requests/${rung.json.data.id}/cancel`)).status).toBeLessThan(300);
+  await page.waitForTimeout(1_500);
+  const after = await rings();
+  await page.waitForTimeout(6_000);
+  expect(await rings(), 'no ring after the call was withdrawn').toBe(after);
 });

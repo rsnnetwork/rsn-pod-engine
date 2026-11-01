@@ -60,7 +60,6 @@ async function member(label: string, role: 'member' | 'super_admin' = 'member'):
   return { ...u, email };
 }
 
-
 async function apiAs(u: TestUser, method: string, p: string, body?: unknown) {
   const res = await fetch(`${SERVER}/api${p}`, {
     method,
