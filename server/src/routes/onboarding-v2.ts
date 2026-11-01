@@ -82,8 +82,11 @@ router.post(
       // The state's linkedin.chosen is read from this stage, so it is written before the screens are told to
       // read the state again. record() never throws.
       await recordStageEvent(userId, 'linkedin_connected', { lookup: out.decision, status: out.linkedin.status });
-      // The address on their profile changed; the lookup tells them again when it ends.
+      // The address on their profile changed; the lookup tells them again when it ends. An admin with their
+      // inspector open sees the address and the stage (admin:users), as with the other onboarding saves.
+      // fanoutAdminEntities logs its own failure and never throws.
       await fanoutUserEntity(userId);
+      void fanoutAdminEntities('users');
       const data: OnboardingV2LinkedinResponse = { ...out.linkedin, linkedinUrl: out.linkedinUrl };
       const response: ApiResponse<OnboardingV2LinkedinResponse> = { success: true, data };
       res.json(response);
@@ -105,6 +108,7 @@ router.post(
       // record() never throws.
       await recordStageEvent(userId, 'linkedin_skipped');
       await fanoutUserEntity(userId);
+      void fanoutAdminEntities('users');
       const response: ApiResponse = { success: true, data: { skipped: true } };
       res.json(response);
     } catch (err) {
@@ -161,7 +165,7 @@ router.post(
       // are told too, as a profile save (PUT /users/me) tells them. An admin
       // with their inspector open sees the answers it saved (admin:users).
       await fanoutProfileChange(userId);
-      fanoutAdminEntities('users').catch(() => {});
+      void fanoutAdminEntities('users');
       const agents = searchesForResponse(searches);
       const data: OnboardingV2ConfirmResponse = {
         changed: result.changed,
