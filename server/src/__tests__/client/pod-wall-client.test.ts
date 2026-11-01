@@ -263,6 +263,13 @@ describe('moderation and posting are separate in the components too', () => {
     expect(comments).toMatch(/Showing the first \$\{[^}]+\} comments\./);
   });
 
+  it('at the cap the boxes close and say why: a new comment would not be shown (P1 item 16)', () => {
+    expect(comments).toMatch(/const full = !!thread\.data\?\.truncated;/);
+    expect(comments).toContain('New comments are closed on this post.');
+    expect(comments.match(/disabled=\{full\}/g)?.length).toBe(2);
+    expect(comments.match(/disabled=\{full \|\| sending \|\| /g)?.length).toBe(2);
+  });
+
   it('the wall tells its page what the viewer may do, so the page can notice a pod status it has not heard yet', () => {
     expect(wall).toMatch(/onViewerChange\?\.\(fromFeed\)/);
     const pod = read('features/pods/PodWall.tsx');
