@@ -102,6 +102,10 @@ describe('the introduction card in the conversation (3.2)', () => {
     'react-router-dom': link,
     'lucide-react': iconStandIns,
     '@/components/brand/SheepAvatar': { __esModule: true, default: () => createElement('i', { 'data-sheep': 'yes' }) },
+    // The meeting card's Add to calendar (T7) reaches the browser's storage when loaded; the introduction card uses none of it.
+    '@/components/calendar/AddToCalendar': { __esModule: true, default: () => null },
+    '@/components/calendar/calendar-links': { meetingEntry: () => null },
+    '@/components/calendar/calendar-files': { conversationMeetingFile: () => null, meetingFile: () => null },
   }).default as (props: Record<string, unknown>) => JSX.Element;
   const meta = (reasonLine: string | null) => ({ type: 'introduction', requesterId: SHRADHA, recipientId: STEFAN, reasonLine });
   const CONTENT = 'Shradha asked to meet Stefan, and Stefan accepted. Why REASON suggested this: A line.';
