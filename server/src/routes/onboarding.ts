@@ -18,7 +18,7 @@ import * as answersRepo from '../services/onboarding/answers.repo';
 import { draftSchema, confirmSchema, tourSchema } from '../services/onboarding/answers.schema';
 import { createAgentsFromAnswers } from '../services/matching/first-agent.service';
 import { notifyMatchesOfNewUser } from '../services/matching/platform-match.service';
-import { fanoutUserEntity } from '../realtime/fanout';
+import { fanoutAdminEntities, fanoutProfileChange, fanoutUserEntity } from '../realtime/fanout';
 import { findLinkedinPhoto, useLinkedinPhoto } from '../services/onboarding/linkedin-photo';
 import { AppError, NotFoundError } from '../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
@@ -275,8 +275,10 @@ router.post(
       }
 
       // The gate is held in the client's auth store, so it also calls
-      // checkSession() — but their other tabs only learn from this.
+      // checkSession() — but their other tabs only learn from this. An admin
+      // with their inspector open sees the answers it saved (admin:users).
       await fanoutUserEntity(userId);
+      fanoutAdminEntities('users').catch(() => {});
       const response: ApiResponse = {
         success: true,
         data: { agents, primaryAgentId: agents[0]?.id ?? null, changed: result.changed },
@@ -465,6 +467,10 @@ router.post(
         : null;
       const titleSource = enrichRepo.sameTitle(fields.jobTitle, cached?.profile?.currentRole) ? 'inferred' : 'stated';
       await enrichRepo.applyEnrichedToProfile(req.user!.userId, fields, titleSource);
+      // The fields it writes are on their card in their pods and on their own other screens, as a profile save
+      // (PUT /users/me) is, and LinkedIn and where they are based are on the admin inspector.
+      fanoutProfileChange(req.user!.userId).catch(() => {});
+      fanoutAdminEntities('users').catch(() => {});
       const response: ApiResponse = { success: true, data: { applied: true } };
       res.json(response);
     } catch (err) {

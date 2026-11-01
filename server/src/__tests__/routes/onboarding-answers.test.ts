@@ -56,9 +56,10 @@ jest.mock('../../services/matching/platform-match.service', () => ({
   __esModule: true,
 }));
 const mockFanout = jest.fn().mockResolvedValue(undefined);
+const mockAdminFanout = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({
   fanoutUserEntity: (...a: unknown[]) => mockFanout(...a),
-  fanoutAdminEntities: jest.fn().mockResolvedValue(undefined),
+  fanoutAdminEntities: (...a: unknown[]) => mockAdminFanout(...a),
   __esModule: true,
 }));
 jest.mock('../../services/onboarding/stage-events.repo', () => ({
@@ -149,6 +150,27 @@ describe('the flow can actually be completed through the router', () => {
     expect(mockCreateAgents).toHaveBeenCalledWith('u-1', ['investors'], 'find_investors');
     expect(mockNotify).toHaveBeenCalledWith('u-1');
     expect(mockFanout).toHaveBeenCalledWith('u-1');
+  });
+
+  // Final sweep F2 (2 Nov 2026): production's client confirms here (origin/main OnboardingFlow.tsx, this exact body,
+  // with nulls where nothing was typed). The admin inspector shows the earlier answers and whether onboarding is done,
+  // so every admin is sent admin:users, as well as the member's own screens their user:<id>.
+  it('production\'s confirm body tells the member\'s other screens and every admin\'s user pages', async () => {
+    const production = {
+      intent: 'find_investors', lookingToMeet: ['investors'], canOffer: ['mentoring_advice'], industries: ['software_ai'],
+      industryOther: null, selfKinds: ['founders'], jobTitle: null, company: null, about: null,
+    };
+    const res = await auth(request(app).post('/onboarding/answers/confirm').send(production));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ agents: [{ id: 'ag-1', label: 'Investors & VCs' }], primaryAgentId: 'ag-1', changed: true });
+    expect(mockFanout).toHaveBeenCalledWith('u-1');
+    expect(mockAdminFanout).toHaveBeenCalledWith('users');
+  });
+
+  it('a refused confirm tells no admin', async () => {
+    const res = await auth(request(app).post('/onboarding/answers/confirm').send({ ...GOOD, intent: 'made_up' }));
+    expect(res.status).toBe(400);
+    expect(mockAdminFanout).not.toHaveBeenCalled();
   });
 
   it('remembers how the wizard was left', async () => {

@@ -142,6 +142,9 @@ router.put(
       // Also ping the user's own room so other tabs / devices update
       // their profile-settings surfaces.
       fanoutUserEntity(req.user!.userId).catch(() => {});
+      // Where they are based and their time zone are on the admin inspector's
+      // onboarding card, and their name on the admin user list.
+      fanoutAdminEntities('users').catch(() => {});
 
       const response: ApiResponse = { success: true, data: user };
       res.json(response);

@@ -64,6 +64,8 @@ jest.mock('../../services/matching/first-agent.service', () => ({
 }));
 jest.mock('../../realtime/fanout', () => ({
   fanoutUserEntity: jest.fn(async () => undefined),
+  fanoutProfileChange: jest.fn(async () => undefined),
+  fanoutAdminEntities: jest.fn(async () => undefined),
   __esModule: true,
 }));
 
@@ -910,6 +912,7 @@ describe('POST /onboarding/profile', () => {
 
 import { createFirstAgents } from '../../services/matching/first-agent.service';
 import * as enrichRepoMock from '../../services/onboarding/enrichment.repo';
+import { fanoutAdminEntities, fanoutProfileChange } from '../../realtime/fanout';
 
 // ─── 13 Aug 2026 (B1): the apply step records where the title came from ─────
 describe('POST /onboarding/enrich/apply provenance', () => {
@@ -951,6 +954,38 @@ describe('POST /onboarding/enrich/apply provenance', () => {
       .send({ jobTitle: 'Founder' });
     const [, , source] = (enrichRepoMock.applyEnrichedToProfile as jest.Mock).mock.calls[0];
     expect(source).toBe('stated');
+  });
+
+  // Final sweep F2 (2 Nov 2026): production's welcome card sends only the LinkedIn address (origin/main
+  // OnboardingWelcomeModal.tsx). The fields written here are on the member's card in their pods, on their own other
+  // screens and on the admin inspector (LinkedIn, where they are based), so all of those are told once it is written.
+  it('production\'s LinkedIn-only body is applied and tells the member\'s screens, their pods and every admin', async () => {
+    (fanoutProfileChange as jest.Mock).mockClear();
+    (fanoutAdminEntities as jest.Mock).mockClear();
+    const res = await request(app)
+      .post('/onboarding/enrich/apply')
+      .set('Authorization', `Bearer ${makeToken('user-f2-apply')}`)
+      .send({ linkedin: 'https://www.linkedin.com/in/ada-lovelace' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { applied: true } });
+    expect(enrichRepoMock.applyEnrichedToProfile).toHaveBeenCalledWith(
+      'user-f2-apply', expect.objectContaining({ linkedin: expect.stringContaining('linkedin.com/in/ada-lovelace') }), 'stated');
+    expect(fanoutProfileChange).toHaveBeenCalledWith('user-f2-apply');
+    expect(fanoutAdminEntities).toHaveBeenCalledWith('users');
+  });
+
+  it('a body it refuses writes nothing and tells nobody', async () => {
+    (fanoutProfileChange as jest.Mock).mockClear();
+    (fanoutAdminEntities as jest.Mock).mockClear();
+    (enrichRepoMock.applyEnrichedToProfile as jest.Mock).mockClear();
+    const res = await request(app)
+      .post('/onboarding/enrich/apply')
+      .set('Authorization', `Bearer ${makeToken('user-f2-refused')}`)
+      .send({ location: 'x'.repeat(201) });
+    expect(res.status).toBe(400);
+    expect(enrichRepoMock.applyEnrichedToProfile).not.toHaveBeenCalled();
+    expect(fanoutProfileChange).not.toHaveBeenCalled();
+    expect(fanoutAdminEntities).not.toHaveBeenCalled();
   });
 
   it('does not look up the cache when no title is being written', async () => {
