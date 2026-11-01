@@ -12,6 +12,9 @@ import { Skeleton } from '@/components/ui/Spinner';
 import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
 import { useOnboardingV2State } from '@/features/onboarding/useOnboardingV2';
 import { cn } from '@/lib/utils';
+import PencilButton from '@/components/picture/PencilButton';
+import PictureEditor from '@/components/picture/PictureEditor';
+import { useMemberPicture } from '@/components/picture/useMemberPicture';
 import ReasonSheep from '../brand/ReasonSheep';
 import { DarkPanel, HeroFrame, NoteBox, Offer } from '../human/ProfileHero';
 import { personFacts } from '../human/profile-text';
@@ -51,6 +54,8 @@ export default function YourProfilePage() {
     meta: { entities: me ? [E.user(me)] : [] },
   });
   const answers = useOnboardingV2State();
+  // The pencil on your photo (30 Oct review, T3a): the editor, on the picture you chose last time.
+  const photo = useMemberPicture('avatar');
 
   if (!card.data) {
     if (!card.isError) return <Loading />;
@@ -70,10 +75,12 @@ export default function YourProfilePage() {
     <div className={PAGE}>
       <OnboardingWelcomeModal />
       <BannerEditor bannerUrl={card.data.bannerUrl} />
+      <PictureEditor {...photo.editor} />
 
       <HeroFrame
         fit="shell"
         photo={card.data.avatarUrl}
+        photoAction={<PencilButton label="Edit photo" onClick={photo.edit} disabled={photo.busy} />}
         who={who}
         kicker="Your profile, as others see it"
         note={<NoteBox title="This is what members see" line="Who you want to meet and what you are hoping to find stay private. Only you see them, below." />}

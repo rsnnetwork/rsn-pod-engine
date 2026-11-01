@@ -11,9 +11,6 @@ import * as path from 'path';
 import { ONBOARDING_V2_MEET, canBring, shortLabelFor, type OnboardingV2Answers, type PersonBrief } from '@rsn/shared';
 import { answerSummary, questionFor } from '../../../../client/src/features/onboarding/flow';
 import {
-  BANNER_HEIGHT, BANNER_INPUT_MAX_BYTES, BANNER_QUALITY, BANNER_TYPES, BANNER_WIDTH, bannerCrop, bannerFileProblem,
-} from '../../../../client/src/features/reason/profile/banner-image';
-import {
   ADD_COMPANY_TO, CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, answerLines, needsLinkedin, privateRows, youCanBring,
 } from '../../../../client/src/features/reason/profile/your-profile-text';
 import { personFacts } from '../../../../client/src/features/reason/human/profile-text';
@@ -40,46 +37,8 @@ const person = (over: Partial<Person> = {}): Person => ({
 });
 
 // ── The banner picture ────────────────────────────────────────────────────────────────────────────
-
-describe('the banner is cropped to 1500 by 500 in the browser, from the middle of the picture', () => {
-  it('is a 1500x500 JPEG at quality 0.85, from a JPG, PNG or WebP', () => {
-    expect([BANNER_WIDTH, BANNER_HEIGHT, BANNER_QUALITY]).toEqual([1500, 500, 0.85]);
-    expect([...BANNER_TYPES]).toEqual(['image/jpeg', 'image/png', 'image/webp']);
-  });
-
-  it('takes the widest 3:1 strip of a tall picture, centred top to bottom', () => {
-    expect(bannerCrop(1200, 1600)).toEqual({ sx: 0, sy: 600, sw: 1200, sh: 400 });
-  });
-
-  it('takes the tallest 3:1 strip of a very wide picture, centred side to side', () => {
-    expect(bannerCrop(4000, 1000)).toEqual({ sx: 500, sy: 0, sw: 3000, sh: 1000 });
-  });
-
-  it('keeps all of a picture that is already 3:1, at any size', () => {
-    expect(bannerCrop(1500, 500)).toEqual({ sx: 0, sy: 0, sw: 1500, sh: 500 });
-    expect(bannerCrop(300, 100)).toEqual({ sx: 0, sy: 0, sw: 300, sh: 100 });
-  });
-
-  it('always cuts a 3:1 strip that lies inside the picture', () => {
-    for (const [w, h] of [[1, 1], [3000, 2000], [2000, 3000], [640, 480], [1920, 1080], [5000, 1], [1, 5000]]) {
-      const c = bannerCrop(w, h);
-      expect(c.sw / c.sh).toBeCloseTo(3, 6);
-      expect(c.sx).toBeGreaterThanOrEqual(0);
-      expect(c.sy).toBeGreaterThanOrEqual(0);
-      expect(c.sx + c.sw).toBeLessThanOrEqual(w + 1e-9);
-      expect(c.sy + c.sh).toBeLessThanOrEqual(h + 1e-9);
-    }
-  });
-
-  it('says what is wrong with a file before anything is read: its type, or a size past 20 MB', () => {
-    expect(BANNER_INPUT_MAX_BYTES).toBe(20 * 1024 * 1024);
-    expect(bannerFileProblem({ type: 'image/png', size: 4_000_000 })).toBeNull();
-    expect(bannerFileProblem({ type: 'image/jpeg', size: BANNER_INPUT_MAX_BYTES })).toBeNull();
-    expect(bannerFileProblem({ type: 'image/gif', size: 10 })).toBe('Choose a JPG, PNG or WebP picture for your banner.');
-    expect(bannerFileProblem({ type: '', size: 10 })).toBe('Choose a JPG, PNG or WebP picture for your banner.');
-    expect(bannerFileProblem({ type: 'image/webp', size: BANNER_INPUT_MAX_BYTES + 1 })).toBe('Choose a picture under 20 MB.');
-  });
-});
+// Since the 30 Oct review (T3a) the banner is placed in the picture editor and cut on the server (2400 by 800 at 0.85,
+// L1): picture-editor.test.ts for the editor, server/src/__tests__/routes/users-banner.test.ts for the cut.
 
 // ── What the page says ────────────────────────────────────────────────────────────────────────────
 
@@ -278,21 +237,26 @@ describe('Your profile: the page', () => {
 });
 
 describe('Your profile: the banner', () => {
-  it('Change banner crops in the browser, then sends PUT /users/me/banner; Remove asks first, then sends DELETE', () => {
-    expect(api()).toMatch(/export const uploadBanner = \(image: string\) => api\.put\('\/users\/me\/banner', \{ image \}\);/);
+  // 30 Oct review (T3a): the pencil replaced "Change banner"; the banner is placed in the picture editor and cut on the server.
+  it('the pencil opens the picture editor, which sends PUT /users/me/banner; Remove asks first, then sends DELETE', () => {
+    expect(api()).toMatch(/export const savePictureRequest = \(kind: PictureKind, body: PictureBody\) => api\.put\(`\/users\/me\/\$\{kind\}`, body\);/);
     expect(api()).toMatch(/export const removeBannerRequest = \(\) => api\.delete\('\/users\/me\/banner'\);/);
-    expect(editor()).toMatch(/uploadBanner\(await cropToBanner\(file\)\)/);
-    expect(editor()).toMatch(/>\s*\{upload\.isPending \? 'Uploading\.\.\.' : 'Change banner'\}\s*</);
+    expect(editor()).toMatch(/const banner = useMemberPicture\('banner'\);/);
+    expect(editor()).toMatch(/<PencilButton label="Edit banner" onClick=\{banner\.edit\} disabled=\{busy\} \/>/);
+    expect(editor()).toMatch(/<PictureEditor \{\.\.\.banner\.editor\} \/>/);
+    expect(editor()).not.toMatch(/Change banner/);
     expect(editor()).toMatch(/title="Remove your banner\?"/);
     expect(editor()).toMatch(/mutationFn: removeBannerRequest/);
-    // The file is checked before it is read, and the same file can be chosen again after a failure.
-    expect(editor()).toMatch(/bannerFileProblem\(file\)/);
-    expect(editor()).toMatch(/input\.value = '';/);
-    expect(editor()).toMatch(/accept="image\/jpeg,image\/png,image\/webp"/);
+    // The file is checked before it is read, and the same file can be chosen again after a failure (in the editor).
+    const pictureEditor = read('components/picture/PictureEditor.tsx');
+    expect(pictureEditor).toMatch(/pictureFileProblem\(file, name\)/);
+    expect(pictureEditor).toMatch(/e\.target\.value = '';/);
+    expect(pictureEditor).toMatch(/accept=\{PICTURE_TYPES\.join\(','\)\}/);
   });
 
   it('after a change it refreshes your card and your profile, and keeps its button busy until they are in', () => {
-    expect(count(editor(), /return qc\.invalidateQueries\(\{ queryKey: reasonKeys\.mine \}\);/g)).toBe(2);
+    expect(count(editor(), /return qc\.invalidateQueries\(\{ queryKey: reasonKeys\.mine \}\);/g)).toBe(1);
+    expect(read('components/picture/useMemberPicture.ts')).toMatch(/await Promise\.all\(\[\s*qc\.invalidateQueries\(\{ queryKey: reasonKeys\.mine \}\)/);
     expect(editor()).toMatch(/networkMode: 'always'/);
     expect(editor()).toMatch(/addToast\(errorMessage\(err, /);
   });
@@ -396,7 +360,7 @@ describe('the old form at /profile/edit', () => {
 
   // Fix round 1: at 360px a long name or e-mail squeezed the photo into a thin oval and could push the card sideways.
   it('the form\'s header keeps the photo round at any width, and a long name or e-mail wraps beside it', () => {
-    expect(form()).toMatch(/<div className="relative group shrink-0">\s*\{user\.avatarUrl \?/);
+    expect(form()).toMatch(/<div className="relative shrink-0">\s*\{user\.avatarUrl \?/);
     expect(form()).toMatch(/<div className="min-w-0 \[overflow-wrap:anywhere\]">\s*<p className="text-lg font-semibold text-\[#1a1a2e\]">\{user\.displayName \|\| 'Set your name'\}<\/p>/);
   });
 

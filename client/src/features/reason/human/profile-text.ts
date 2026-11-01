@@ -244,3 +244,15 @@ export function moveToast(move: Move, name: string): { message: string; type: 's
     case 'unpass': return { message: `${name} can be suggested in For You again.`, type: 'info' };
   }
 }
+
+/**
+ * A photo too small to fill the hero tile without being blown up (30 Oct review, T3a, D7: "pictures look pixelated").
+ * The tile is about 1,000 device pixels each way on a phone, so a 96-pixel Google photo or a 200-pixel LinkedIn one
+ * would be stretched 5 to 10 times. Under 400 pixels on its smaller side, a photo is drawn at its own size in the
+ * middle of the tile instead. 0 means not measured yet (or not loaded): drawn as usual.
+ */
+export const SMALL_PHOTO_SIDE = 400;
+export function isSmallPhoto(naturalWidth: number, naturalHeight: number): boolean {
+  const side = Math.min(naturalWidth, naturalHeight);
+  return side > 0 && side < SMALL_PHOTO_SIDE;
+}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { useAuthStore } from '@/stores/authStore';
@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
-import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Camera, Info, Target, Heart, HelpCircle, Users, MessageSquare, ArrowLeft } from 'lucide-react';
+import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Info, Target, Heart, HelpCircle, Users, MessageSquare, ArrowLeft } from 'lucide-react';
 import api from '@/lib/api';
 import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
 import { Skeleton } from '@/components/ui/Spinner';
@@ -16,6 +16,9 @@ import { useOnboardingV2State } from '@/features/onboarding/useOnboardingV2';
 import { EDIT_ANSWERS_TO, answerLines } from '@/features/reason/profile/your-profile-text';
 import { LINKEDIN_LINK_HELP } from '@/features/auth/linkedin-link';
 import { linkedinBoxValue, linkedinSave } from './linkedin-box';
+import PencilButton from '@/components/picture/PencilButton';
+import PictureEditor from '@/components/picture/PictureEditor';
+import { useMemberPicture } from '@/components/picture/useMemberPicture';
 
 interface ProfileForm {
   displayName: string;
@@ -83,53 +86,6 @@ function FromYourAnswers() {
       )}
     </section>
   );
-}
-
-// 21 Oct 2026: a phone photo of 1.5 to 5 MB, sent as it was, went over the server's cap on avatarUrl. The
-// upload was awaited inside reader.onload, outside the try, so the refusal was never caught, nothing was said
-// and "Uploading..." stayed on screen for good. The photo is now made smaller here first (it is never shown
-// larger than 800x800), and every way the upload can end is caught, said, and puts the button back.
-const PHOTO_MAX_SIDE = 800;
-const PHOTO_QUALITY = 0.85;
-
-function loadImage(file: File): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('This picture could not be read')); };
-    img.src = url;
-  });
-}
-
-/** The photo as a JPEG data URL, scaled down (never up) to fit 800 by 800. */
-async function shrinkPhoto(file: File): Promise<string> {
-  const img = await loadImage(file);
-  const scale = Math.min(1, PHOTO_MAX_SIDE / img.naturalWidth, PHOTO_MAX_SIDE / img.naturalHeight);
-  const width = Math.max(1, Math.round(img.naturalWidth * scale));
-  const height = Math.max(1, Math.round(img.naturalHeight * scale));
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('This picture could not be read');
-  // A JPEG has no transparency: a see-through PNG would turn black without a white ground under it.
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
-  ctx.drawImage(img, 0, 0, width, height);
-  return canvas.toDataURL('image/jpeg', PHOTO_QUALITY);
-}
-
-/** What a failed photo upload says: the server's own sentence when it sent one, plain words otherwise. */
-function photoUploadError(err: unknown): string {
-  const failed = (err ?? {}) as { response?: { data?: { error?: { message?: unknown } } }; request?: unknown };
-  const message = failed.response?.data?.error?.message;
-  // The form check's label is not a sentence, and the only check on a photo is its size.
-  if (message === 'Validation failed') return 'That photo is too large. Please choose a smaller one.';
-  if (typeof message === 'string' && message.trim()) return message;
-  if (failed.response) return 'Could not update your photo. Please try again.';
-  if (failed.request) return 'Could not update your photo. Check your connection and try again.';
-  return 'We could not read that photo. Please choose another one.';
 }
 
 function TagInput({ label, tags, setTags, placeholder, icon: Icon }: {
@@ -208,8 +164,9 @@ export default function ProfilePage() {
   const [interests, setInterests] = useState<string[]>([]);
   const [reasons, setReasons] = useState<string[]>([]);
   const [languages, setLanguages] = useState<string[]>([]);
-  const [avatarUploading, setAvatarUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // The pencil on the photo (30 Oct review, T3a): the same editor as on your profile, which keeps the picture you
+  // chose and where you placed it. It replaced a camera that showed only on hover, so a phone never had it.
+  const photo = useMemberPicture('avatar');
 
   // Your profile's "connect LinkedIn" card links to /profile/edit#linkedin: bring the field into view and put the
   // cursor in it (21 Oct 2026). The page area scrolls, not the window, so the field is scrolled into view itself.
@@ -250,37 +207,6 @@ export default function ProfilePage() {
       setTagsChanged(false);
     }
   }, [user]);
-
-  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const input = e.target;
-    const file = input.files?.[0];
-    // Cleared at once, so the same photo can be chosen again after a failure.
-    input.value = '';
-    if (!file) return;
-
-    // Validate file type and size
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowedTypes.includes(file.type)) {
-      addToast('Please upload a JPG, PNG, or WebP image', 'error');
-      return;
-    }
-    if (file.size > 20 * 1024 * 1024) {
-      addToast('Image must be under 20MB', 'error');
-      return;
-    }
-
-    setAvatarUploading(true);
-    try {
-      const avatarUrl = await shrinkPhoto(file);
-      await api.put('/users/me', { avatarUrl });
-      await checkSession();
-      addToast('Avatar updated!', 'success');
-    } catch (err) {
-      addToast(photoUploadError(err), 'error');
-    } finally {
-      setAvatarUploading(false);
-    }
-  };
 
   const hasChanges = isDirty || tagsChanged;
 
@@ -328,30 +254,19 @@ export default function ProfilePage() {
         <h1 className="text-2xl font-bold text-[#1a1a2e] animate-fade-in">Profile</h1>
       </div>
 
+      <PictureEditor {...photo.editor} />
+
       {/* Profile Header Card */}
       <Card className="animate-fade-in-up">
         <div className="flex items-center gap-4 mb-2">
-          <div className="relative group shrink-0">
+          {/* The photo keeps its round 64px at any width; the pencil on it is always shown (a phone has no hover). */}
+          <div className="relative shrink-0">
             {user.avatarUrl ? (
               <img src={user.avatarUrl} alt={user.displayName || 'Avatar'} className="h-16 w-16 rounded-full object-cover" />
             ) : (
               <Avatar name={user.displayName || user.email} size="xl" />
             )}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={avatarUploading}
-              className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
-            >
-              <Camera className="h-5 w-5 text-white" />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              onChange={handleAvatarUpload}
-              className="hidden"
-            />
+            <PencilButton label="Edit photo" onClick={photo.edit} disabled={photo.busy} className="absolute -bottom-2 -right-3" />
           </div>
           <div className="min-w-0 [overflow-wrap:anywhere]">
             <p className="text-lg font-semibold text-[#1a1a2e]">{user.displayName || 'Set your name'}</p>
@@ -362,10 +277,11 @@ export default function ProfilePage() {
             <div className="flex flex-wrap items-center gap-x-4">
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={photo.edit}
+                disabled={photo.busy}
                 className="inline-flex min-h-[44px] items-center text-xs text-rsn-red hover:text-rsn-red-hover font-medium"
               >
-                {avatarUploading ? 'Uploading...' : 'Change photo'}
+                {photo.busy ? 'Saving...' : 'Change photo'}
               </button>
               <button
                 type="button"

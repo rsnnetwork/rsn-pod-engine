@@ -46,7 +46,7 @@ export function useOnboardingV2State() {
 }
 
 /** Everything that reads the member's onboarding: this flow's state, and the tour's (which reads version 1's). */
-function useRefreshOnboarding() {
+export function useRefreshOnboarding() {
   const qc = useQueryClient();
   return () => Promise.all([
     qc.invalidateQueries({ queryKey: ['onboarding-v2-state'] }),
@@ -91,15 +91,3 @@ export function useConfirm() {
   });
 }
 
-/** PUT /users/me with a new photo, already made small in the browser. */
-export function useUploadPhoto() {
-  const refresh = useRefreshOnboarding();
-  const checkSession = useAuthStore(s => s.checkSession);
-  return useMutation({
-    mutationFn: (dataUrl: string) => api.put('/users/me', { avatarUrl: dataUrl }).then(() => undefined),
-    onSuccess: async () => {
-      await checkSession();
-      await refresh();
-    },
-  });
-}
