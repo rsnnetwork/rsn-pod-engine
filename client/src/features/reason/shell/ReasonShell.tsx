@@ -9,12 +9,9 @@
 // inside <main> instead of dragging the whole window sideways.
 import { useRef } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
-import { E } from '@/realtime/entities';
 import { isAdmin } from '@/lib/utils';
-import { useGroupUnreadTotal } from '@/features/messages/useGroups';
+import { useMessagesUnread } from '@/features/messages/useMessagesUnread';
 import ToastContainer from '@/components/ui/Toast';
 import OnboardingTour from '@/features/onboarding/OnboardingTour';
 import ShellSidebar from './ShellSidebar';
@@ -34,16 +31,9 @@ export default function ReasonShell() {
   // (?tab=, ?q= and ?view= are the same page); it is done before paint so no frame is drawn mid-list.
   useMainScrollMemory(main);
   const user = useAuthStore((s) => s.user);
-  const userId = user?.id as string | undefined;
-  const { data: unread } = useQuery({
-    queryKey: ['dm-unread-count'],
-    queryFn: () => api.get('/dm/unread-count').then((r) => r.data.data.count as number),
-    enabled: !!userId,
-    meta: { entities: userId ? [E.userDms(userId)] : [] },
-  });
-  // The Messages badge: unread one-to-one messages and, since group chats (26 Oct 2026, C12), every group's unread.
-  const groupUnread = useGroupUnreadTotal();
-  const unreadCount = (unread ?? 0) + groupUnread;
+  // The Messages badge: unread one-to-one messages and, since group chats (26 Oct 2026, C12), every group's unread. The
+  // browser tab's "(N) REASON" reads the same number (useMessagesUnread).
+  const unreadCount = useMessagesUnread();
   const inPeople = PEOPLE_TABS.some((t) => pathname === t.to || pathname.startsWith(`${t.to}/`));
   const inAdmin = isAdmin(user?.role) && onAdmin(pathname);
   // The old layout's nudge, kept. For You says the same thing in its own card. Messages

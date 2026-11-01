@@ -139,7 +139,8 @@ describe('speed networking\'s chat is otherwise exactly as it was', () => {
     expect(src).toMatch(/placeholder=\{scope === 'room' \? 'Message your room\.\.\.' : 'Message everyone\.\.\.'\}/);
     expect(src).toMatch(/maxLength=\{500\}/);
     expect(src).toMatch(/socket\.emit\('chat:request_history', \{ sessionId, matchId: currentMatchId \|\| undefined \}\);/);
-    expect(src).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey\) \{\n\s*e\.preventDefault\(\);\n\s*handleSend\(\);/);
+    // 30 Oct 2026 (P22): an Enter that confirms a word in an input method (Japanese, Chinese, Korean) is not a send.
+    expect(src).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !isComposingEnter\(e\.nativeEvent\)\) \{\n\s*e\.preventDefault\(\);\n\s*handleSend\(\);/);
   });
 
   it('the live page and the meeting mount it as before', () => {

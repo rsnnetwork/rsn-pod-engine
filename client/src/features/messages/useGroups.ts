@@ -112,12 +112,12 @@ export function useEventPeople(sessionId: string | null | undefined) {
   });
 }
 
-/** Write in the group: the writer's thread and list are read again at once. */
+/** Write in the group, perhaps answering one of its messages: the writer's thread and list are read again at once. */
 export function useSendGroupMessage(groupId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ content }: { content: string }) =>
-      api.post(`/groups/${encodeURIComponent(groupId)}/messages`, { content })
+    mutationFn: ({ content, replyToId }: { content: string; replyToId?: string | null }) =>
+      api.post(`/groups/${encodeURIComponent(groupId)}/messages`, { content, ...(replyToId ? { replyToId } : {}) })
         .then((r) => r.data.data as { messageId: string; createdAt: string; message: GroupChatMessage }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: groupKeys.messages(groupId) });

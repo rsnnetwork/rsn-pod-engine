@@ -11,7 +11,7 @@ import type { DmGroupLastMessage, DmGroupMember, DmGroupSummary, GroupChatMessag
 import { CONNECTION_LOST, memberSentence } from '../reason/errors';
 import { shouldRetry, statusOf } from '../reason/human/profile-text';
 import { PANEL_TITLE } from '../sessions/post-event-panel';
-import { sameLocalDay } from './message-time';
+import { clusterMessages, type Cluster } from './bubble-look';
 
 // ── The cap, said in the product ──
 export const GROUP_LIMIT = `Group chats hold up to ${GROUP_CHAT_MAX_MEMBERS} people.`;
@@ -248,23 +248,14 @@ export async function untilEarlierPage<T extends EarlierPageAnswer>(
   return answer;
 }
 
-export interface GroupCluster { senderId: string; messages: GroupChatMessage[] }
+export type GroupCluster = Cluster<GroupChatMessage>;
 
-/** Messages one person sent within a minute of each other, on the same day, are drawn together under one name. */
-const CLUSTER_GAP_MS = 60_000;
-
+/**
+ * Messages one person sent within a minute of each other, on the same day, are drawn together under one name: the
+ * one-to-one thread's rule, shared (bubble-look.ts, P18).
+ */
 export function clusterGroupMessages(messages: GroupChatMessage[]): GroupCluster[] {
-  const clusters: GroupCluster[] = [];
-  for (const m of messages) {
-    const last = clusters[clusters.length - 1];
-    const prev = last?.messages[last.messages.length - 1];
-    const joins = !!prev && prev.fromUserId === m.fromUserId
-      && Date.parse(m.createdAt) - Date.parse(prev.createdAt) < CLUSTER_GAP_MS
-      && sameLocalDay(new Date(prev.createdAt), new Date(m.createdAt));
-    if (joins && last) last.messages.push(m);
-    else clusters.push({ senderId: m.fromUserId, messages: [m] });
-  }
-  return clusters;
+  return clusterMessages(messages);
 }
 
 // ── What went wrong ──────────────────────────────────────────────────────────

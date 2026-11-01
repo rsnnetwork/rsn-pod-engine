@@ -48,12 +48,13 @@ describe('Phase 1 — SPA navigation + name-fallback architecture', () => {
       expect(acceptBody).toMatch(/navigate\(destination/);
     });
 
+    // 30 Oct 2026: the bell's handlers moved into useNotificationActions, shared with the notifications page.
     it('NotificationBell handleAcceptInvite does not redirect via window.location.href', () => {
-      const src = readClient('components/ui/NotificationBell.tsx');
-      const handlerStart = src.indexOf('const handleAcceptInvite');
+      const src = readClient('features/notifications/useNotificationActions.ts');
+      const handlerStart = src.indexOf('const acceptInvite');
       expect(handlerStart).toBeGreaterThan(-1);
       // End at the next top-level handler declaration
-      const handlerEnd = src.indexOf('const handleDeclineInvite', handlerStart);
+      const handlerEnd = src.indexOf('const declineInvite', handlerStart);
       expect(handlerEnd).toBeGreaterThan(handlerStart);
       const body = src.slice(handlerStart, handlerEnd);
       expect(body).not.toMatch(/window\.location\.href/);
@@ -61,10 +62,10 @@ describe('Phase 1 — SPA navigation + name-fallback architecture', () => {
     });
 
     it('NotificationBell.handleClick (notification click navigation) uses navigate() not href', () => {
-      const src = readClient('components/ui/NotificationBell.tsx');
-      const handlerStart = src.indexOf('const handleClick = async (n: Notification)');
+      const src = readClient('features/notifications/useNotificationActions.ts');
+      const handlerStart = src.indexOf('const open = async (n: Notification');
       expect(handlerStart).toBeGreaterThan(-1);
-      const handlerEnd = src.indexOf('const formatTime', handlerStart);
+      const handlerEnd = src.indexOf('return { actionLoading', handlerStart);
       expect(handlerEnd).toBeGreaterThan(handlerStart);
       const body = src.slice(handlerStart, handlerEnd);
       expect(body).not.toMatch(/window\.location\.href/);
@@ -72,7 +73,7 @@ describe('Phase 1 — SPA navigation + name-fallback architecture', () => {
     });
 
     it('NotificationBell imports useNavigate from react-router-dom', () => {
-      const src = readClient('components/ui/NotificationBell.tsx');
+      const src = readClient('features/notifications/useNotificationActions.ts');
       expect(src).toMatch(/from\s+['"]react-router-dom['"]/);
       expect(src).toMatch(/useNavigate/);
     });

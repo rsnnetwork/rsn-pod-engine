@@ -21,7 +21,7 @@ export interface SendMessageOptions<V> {
   toastOnError?: boolean;
 }
 
-export function useSendMessage<V extends { content: string }>(
+export function useSendMessage<V extends { content: string; replyToId?: string | null }>(
   conversationId: string | undefined,
   toUserId: string | undefined,
   options: SendMessageOptions<V> = {},
@@ -36,6 +36,8 @@ export function useSendMessage<V extends { content: string }>(
         toUserId,
         content: vars.content,
         attachment,
+        // A quoted reply (30 Oct 2026) names the message it answers; only then does the body carry it.
+        ...(vars.replyToId ? { replyToId: vars.replyToId } : {}),
       });
       return res.data.data as { conversationId: string };
     },

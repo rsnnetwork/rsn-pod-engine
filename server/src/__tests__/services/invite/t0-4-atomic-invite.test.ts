@@ -149,8 +149,9 @@ describe('T0-4 — atomic invite acceptance', () => {
   });
 
   describe('NotificationBell does not double-fire register on success', () => {
+    // 30 Oct 2026: what a press in the bell does moved into useNotificationActions (the notifications page shares it).
     const bellSrc = nodeFs.readFileSync(
-      nodePath.join(__dirname, '../../../../../client/src/components/ui/NotificationBell.tsx'),
+      nodePath.join(__dirname, '../../../../../client/src/features/notifications/useNotificationActions.ts'),
       'utf8',
     );
 

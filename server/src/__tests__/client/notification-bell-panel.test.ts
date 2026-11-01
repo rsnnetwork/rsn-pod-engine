@@ -91,8 +91,11 @@ describe('a meeting request in the bell is drawn from the server, never from the
   });
 
   it('a request that is gone (null), or in a state this build does not know, offers nothing', () => {
-    expect(bellRequestView(row({ requestState: null, pokeStatus: null }))).toEqual({ requestId: REQUEST, canAnswer: false, label: null, destination: LINK });
-    expect(bellRequestView(row({ requestState: { status: 'withdrawn', conversationId: null } }))).toMatchObject({ canAnswer: false, label: null });
+    // A request that is gone (a closed account, a withdrawal) reads "No longer available", not "Declined" and not
+    // nothing (P1 item 11, 26 Oct 2026); the server says so with requestState null, status 'withdrawn' or pokeStatus 'gone'.
+    expect(bellRequestView(row({ requestState: null, pokeStatus: null }))).toEqual({ requestId: REQUEST, canAnswer: false, label: 'No longer available', destination: LINK });
+    expect(bellRequestView(row({ requestState: { status: 'withdrawn', conversationId: null } }))).toMatchObject({ canAnswer: false, label: 'No longer available' });
+    expect(bellRequestView(row({ pokeStatus: 'gone' }))).toMatchObject({ canAnswer: false, label: 'No longer available' });
   });
 
   it('a server that predates requestState is read through pokeStatus, as production\'s bell reads it', () => {
@@ -206,7 +209,12 @@ describe('a double click answers once', () => {
 });
 
 describe('the bell and the request cards, read from source', () => {
+  // 30 Oct 2026: the bell was split. Its rows are NotificationItem (shared with the notifications page), and what a press
+  // does is useNotificationActions; the bell keeps its list and its panel.
   const bell = () => BELL;
+  const clientFile = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../client/src', rel), 'utf8').replace(/\r\n/g, '\n');
+  const item = () => clientFile('features/notifications/NotificationItem.tsx');
+  const actions = () => clientFile('features/notifications/useNotificationActions.ts');
   const requests = () => fs.readFileSync(path.join(__dirname, '../../../../client/src/features/messages/MeetingRequests.tsx'), 'utf8')
     .replace(/\r\n/g, '\n');
   // Both forms of a request are one card since 30 Oct 2026.
@@ -216,7 +224,7 @@ describe('the bell and the request cards, read from source', () => {
     .replace(/\r\n/g, '\n');
 
   it('the bell\'s list is React Query\'s [\'notifications\'], refreshed by the member\'s notifications tag', () => {
-    expect(bell()).toMatch(/const NOTIFICATIONS_KEY = \['notifications'\] as const;/);
+    expect(clientFile('features/notifications/notification-logic.ts')).toMatch(/export const NOTIFICATIONS_KEY = \['notifications'\] as const;/);
     expect(bell()).toMatch(/useQuery\(\{\s*queryKey: NOTIFICATIONS_KEY,/);
     expect(bell()).toMatch(/meta: \{ entities: me \? \[E\.userNotifications\(me\)\] : \[\] \}/);
   });
@@ -229,8 +237,9 @@ describe('the bell and the request cards, read from source', () => {
   });
 
   it('draws each request from bellRequestView, and answers through the shared hook', () => {
-    expect(bell()).toMatch(/bellRequestView\(n\)/);
-    expect(bell()).toMatch(/useRequestAnswer\(view\.requestId, \{/);
+    expect(bell()).toMatch(/<NotificationItem\b/);
+    expect(item()).toMatch(/bellRequestView\(n\)/);
+    expect(item()).toMatch(/useRequestAnswer\(view\.requestId, \{/);
   });
 
   it('the hook keys the mutation by request and reads every answer in flight for it, from any surface', () => {
@@ -245,8 +254,8 @@ describe('the bell and the request cards, read from source', () => {
   });
 
   it('an optimistic mark-read first cancels any bell fetch on its way, so an older answer cannot undo it', () => {
-    expect(bell()).toMatch(/async function patchList\(qc: QueryClient, change: \(n: Notification\) => Notification\) \{\s*await qc\.cancelQueries\(\{ queryKey: NOTIFICATIONS_KEY \}\);\s*qc\.setQueryData</);
-    const calls = bell().match(/\n[^\n]*\bpatchList\(qc,/g) ?? [];
+    expect(actions()).toMatch(/async function patchList\(qc: QueryClient, change: \(n: Notification\) => Notification\) \{\s*await qc\.cancelQueries\(\{ queryKey: NOTIFICATIONS_KEY \}\);[\s\S]*?qc\.setQueryData</);
+    const calls = actions().match(/\n[^\n]*\bpatchList\(qc,/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(4);
     for (const call of calls) expect(call).toMatch(/await patchList\(qc,/);
   });

@@ -48,7 +48,7 @@ export interface BellRequestView {
   requestId: string;
   /** Accept and Decline are offered: the request is still waiting for an answer. */
   canAnswer: boolean;
-  label: 'Accepted' | 'Declined' | null;
+  label: 'Accepted' | 'Declined' | 'No longer available' | null;
   /** Where the row's title goes: the conversation once accepted, else the request itself. */
   destination: string;
 }
@@ -72,6 +72,12 @@ export function bellRequestView(n: {
     return { requestId, canAnswer: false, label: 'Accepted', destination: conversationId ? `/messages/${conversationId}` : destination };
   }
   if (status === 'declined') return { requestId, canAnswer: false, label: 'Declined', destination };
+  // A request that is gone (a closed account, a withdrawal): the server says so with requestState null, status
+  // 'withdrawn', or (from before 25 Oct) pokeStatus 'gone'. Said as such, never "Declined" and never nothing
+  // (P1 item 11, 26 Oct 2026).
+  if (status === null || status === 'withdrawn' || status === 'gone') {
+    return { requestId, canAnswer: false, label: 'No longer available', destination };
+  }
   return { requestId, canAnswer: false, label: null, destination };
 }
 

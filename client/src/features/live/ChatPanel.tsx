@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type RefObject } from 'react';
 import { X, Send, SmilePlus, Smile } from 'lucide-react';
 import { useSessionStore, ChatMessage, useInRoomParticipants } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
@@ -6,14 +6,15 @@ import ProfileLink from '@/components/ui/ProfileLink';
 import { getSocket } from '@/lib/socket';
 import Linkify from '@/components/ui/Linkify';
 import { useChatSend } from './useChatSend';
+import EmojiPicker, { pickInto } from '@/components/chat/EmojiPicker';
+import { isComposingEnter } from '@/components/chat/emoji';
+import { BUBBLE_LINK, OWN_BUBBLE, THEIR_BUBBLE } from '@/features/messages/bubble-look';
 
 const CHAT_EMOJIS = [
   { type: 'heart', emoji: '❤️' },
   { type: 'clap', emoji: '👏' },
   { type: 'thumbs_up', emoji: '👍' },
 ] as const;
-
-const EMOJI_PICKER_LIST = ['😀','😂','😍','🥳','🤔','👍','👏','❤️','🔥','🎉','💯','🙌','😮','🤩','😎','👋','✅','💪','🙏','⭐'];
 
 interface ChatPanelProps {
   sessionId: string;
@@ -105,7 +106,9 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
   }, [clearNotice]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Not while an input method is still choosing a word (Japanese, Chinese, Korean): there Enter picks the word.
+    // Safari sends the Enter that confirms the word with keyCode 229 (P22).
+    if (e.key === 'Enter' && !e.shiftKey && !isComposingEnter(e.nativeEvent)) {
       e.preventDefault();
       handleSend();
     }
@@ -208,7 +211,7 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
 }
 
 function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSend, scope, sending }: {
-  inputRef: any;
+  inputRef: RefObject<HTMLInputElement>;
   input: string;
   setInput: (v: string) => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
@@ -217,19 +220,23 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
   /** A message is on its way: the button waits (the box stays usable, so a phone's keyboard stays up). */
   sending: boolean;
 }) {
+  // The shared picker (30 Oct 2026, L9): open for several emojis, each put where the caret is, until Escape, a tap
+  // outside, this button again, Done or Send.
   const [showEmoji, setShowEmoji] = useState(false);
+  const closeEmoji = useCallback(() => setShowEmoji(false), []);
+  const toggle = useRef<HTMLButtonElement>(null);
+  const send = () => { setShowEmoji(false); handleSend(); };
   return (
     <div className="relative">
-      {showEmoji && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-gray-200 rounded-xl p-2 grid grid-cols-10 gap-1 shadow-lg">
-          {EMOJI_PICKER_LIST.map(e => (
-            <button key={e} onClick={() => { setInput(input + e); setShowEmoji(false); inputRef.current?.focus(); }}
-              className="text-lg hover:bg-gray-100 rounded p-1 transition-colors">{e}</button>
-          ))}
-        </div>
-      )}
+      <EmojiPicker
+        open={showEmoji}
+        onClose={closeEmoji}
+        toggleRef={toggle}
+        onPick={(e) => pickInto(inputRef.current, input, e, setInput)}
+        className="absolute bottom-full left-0 right-0 mb-1"
+      />
       <div className="flex items-center gap-2">
-        <button onClick={() => setShowEmoji(!showEmoji)} aria-label="Add an emoji" className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 transition-colors">
+        <button ref={toggle} onClick={() => setShowEmoji(!showEmoji)} aria-label="Add an emoji" aria-expanded={showEmoji} className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 transition-colors">
           <Smile className="h-4 w-4" />
         </button>
         <input
@@ -237,7 +244,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
+          onKeyDown={(e) => { if (e.key === 'Enter') setShowEmoji(false); handleKeyDown(e); }}
           placeholder={scope === 'room' ? 'Message your room...' : 'Message everyone...'}
           maxLength={500}
           // Phase 6 (1 May spec) — text-base (16px) on mobile kills iOS auto-zoom
@@ -248,7 +255,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
         />
         {/* WS3/S11 — 44px tap target (was p-2 ≈ 32px, below the mobile
             minimum; caught by the mobile event smoke). */}
-        <button onClick={handleSend} disabled={!input.trim() || sending} aria-busy={sending || undefined} aria-label="Send message"
+        <button onClick={send} disabled={!input.trim() || sending} aria-busy={sending || undefined} aria-label="Send message"
           className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
           <Send className="h-4 w-4" />
         </button>
@@ -278,12 +285,14 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
   return (
     <div className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} group/msg`}>
       <div
+        // The same look as Messages (30 Oct 2026, L9): your own gray, others' white with a border; the host's stays amber.
+        data-testid={isOwn ? 'bubble-own' : 'bubble-theirs'}
         className={`max-w-[85%] rounded-2xl px-3.5 py-2 ${
           isOwn
-            ? 'bg-blue-50 text-gray-800'
+            ? OWN_BUBBLE
             : msg.isHost
             ? 'bg-amber-50 border-l-2 border-amber-500 text-gray-800'
-            : 'bg-gray-100 text-gray-800'
+            : THEIR_BUBBLE
         }`}
       >
         {!isOwn && (
@@ -298,7 +307,7 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
             </ProfileLink>
           </div>
         )}
-        <p className="text-sm leading-relaxed break-words text-gray-800"><Linkify text={msg.message} className="break-all text-blue-600 underline hover:text-blue-700" /></p>
+        <p className="text-sm leading-relaxed break-words text-gray-800"><Linkify text={msg.message} className={BUBBLE_LINK} /></p>
         <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} mt-0.5`}>
           <span className="text-[10px] text-gray-400">
             {msg.scope === 'room' && <span className="mr-1">Room</span>}

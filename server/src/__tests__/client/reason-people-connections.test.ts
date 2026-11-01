@@ -157,9 +157,9 @@ describe('the people pages: one profile page, two to a row from 1024px', () => {
 
   it('the conversation header opens the person\'s Human Profile, saying it was found through Messages', () => {
     const src = read('features/messages/MessagesPage.tsx');
-    // T2 (1 Nov 2026): through PersonHeaderLink, which is that same link unless the person is a former member.
-    expect(src).toContain('<PersonHeaderLink to={`/people/${headerContext.otherUserId}?from=Messages`} former={otherIsFormer}>');
-    expect(src).toContain('return <Link to={to} className="min-w-0 flex-1 hover:opacity-80">{children}</Link>;');
+    // 30 Oct 2026 (L7): the picture and the name are one PersonLink (ProfileLink with from="Messages": /people/:id?from=Messages);
+    // T2 (1 Nov 2026): it is plain text when the person is a former member (the conversation's otherIsFormerMember).
+    expect(src).toMatch(/<PersonLink\s+userId=\{headerContext\.otherUserId\}\s+from="Messages"\s+former=\{otherIsFormer\}/);
     expect(src).not.toContain('to={`/profile/${headerContext.otherUserId}`}');
   });
 

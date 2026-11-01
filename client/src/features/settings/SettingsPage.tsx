@@ -10,6 +10,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { Bell, Shield, Eye, CreditCard, Check, Lock, Zap, MessageSquare } from 'lucide-react';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import { messageSoundOn, setMessageSoundOn } from '@/lib/chime';
 
 /**
  * Phase J (1 May 2026 spec) — per-channel toggles for chat notifications.
@@ -77,7 +78,26 @@ function MessageNotificationPrefsCard() {
           </div>
         ))}
       </div>
+      <MessageSoundToggle />
     </Card>
+  );
+}
+
+/**
+ * "Sound for new messages" (30 Oct 2026, L8): a chime when a message comes in. Kept on this device, as volume is, so a
+ * laptop at work can be quiet while a phone is not. On until it is switched off.
+ */
+function MessageSoundToggle() {
+  const [on, setOn] = useState(messageSoundOn);
+  return (
+    <div className="mt-1 border-t border-gray-100">
+      <Toggle
+        enabled={on}
+        onToggle={() => { setMessageSoundOn(!on); setOn(!on); }}
+        label="Sound for new messages"
+        description="A short sound on this device when a message comes in, unless you are reading that conversation, in an event or in a meeting."
+      />
+    </div>
   );
 }
 
