@@ -244,7 +244,9 @@ test('continue with email: the brief\'s words, own words for Q1, a specific wish
     'On REASON, you connect with people you want to meet, who also want to meet you, for a specific reason.',
     "Answer a few quick questions and we'll suggest potential mutuals for you.",
   ]) await expect(page.getByText(line, { exact: true })).toBeVisible();
-  await expect(page.getByRole('button')).toHaveCount(1);
+  // One button for the flow, plus the Sign out every onboarding screen keeps (30 Oct review, L3).
+  await expect(page.getByRole('button').filter({ hasNotText: 'Sign out' })).toHaveCount(1);
+  await expect(button(page, 'Sign out')).toBeVisible();
   await expect(page.locator('body')).not.toContainText(/\bRSN\b/);
   await press(page, "Let's go");
 
