@@ -58,6 +58,7 @@ import AdminModerationPage from '@/features/admin/AdminModerationPage';
 import AdminTemplatesPage from '@/features/admin/AdminTemplatesPage';
 import AdminEmailPage from '@/features/admin/AdminEmailPage';
 import AdminSupportPage from '@/features/admin/AdminSupportPage';
+import AdminFeedbackPage from '@/features/admin/AdminFeedbackPage';
 import SettingsPage from '@/features/settings/SettingsPage';
 import BillingPage from '@/features/billing/BillingPage';
 import SupportPage from '@/features/support/SupportPage';
@@ -262,6 +263,8 @@ export default function App() {
         <Route path="/admin/templates" element={<AdminTemplatesPage />} />
         <Route path="/admin/email" element={<AdminEmailPage />} />
         <Route path="/admin/support" element={<AdminSupportPage />} />
+        {/* Feedback after meetings (30 Oct 2026): every answer, and a CSV of them. */}
+        <Route path="/admin/feedback" element={<AdminFeedbackPage />} />
       </Route>
 
       {/* Protected without layout (full-screen) */}

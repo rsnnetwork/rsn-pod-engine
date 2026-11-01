@@ -17,6 +17,7 @@ import Sheet from '@/features/reason/ui/Sheet';
 import { CONNECTION_LOST } from '@/features/reason/errors';
 import { isGone, personHref } from '@/features/reason/human/profile-text';
 import { ACTION, JoinOrCountdown, PhaseChip } from './MeetingParts';
+import MeetingFeedback from './MeetingFeedback';
 import { useCancelMeeting, useMeeting, useMeetingClock } from './useMeetings';
 import {
   canJoin, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError, meetingLine, meetingTimes, MEETING_GONE,
@@ -73,6 +74,7 @@ function MeetingView({ meeting }: { meeting: Meeting }) {
           </p>
         )}
       </header>
+      <MeetingFeedback meeting={meeting} now={now} />
       <MeetingFacts meeting={meeting} />
       <MeetingActions meeting={meeting} now={now} standing={standing} onCancel={() => setConfirming(true)} />
       {standing && <JoinBar meeting={meeting} now={now} />}

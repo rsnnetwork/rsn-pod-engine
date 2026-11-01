@@ -1,6 +1,7 @@
 // client/src/features/meetings/useMeetings.ts
-// Everything the meetings screens read and write: the lists under Events, the Events count, one meeting, and its
-// cancel (GET /meetings, /meetings/summary, /meetings/:id, POST /meetings/:id/cancel).
+// Everything the meetings screens read and write: the lists under Events, the Events count, one meeting, its cancel,
+// and the viewer's feedback on it (GET /meetings, /meetings/summary, /meetings/:id, POST /meetings/:id/cancel and
+// /meetings/:id/feedback).
 //
 // Each read declares the tags the server sends whenever a meeting is booked, moved, cancelled, attended or reminded
 // (user:<id>:meetings to each of its two people, meeting:<id> with it), and the blocks tag, since a block hides a pair's
@@ -8,7 +9,9 @@
 // opens 5 minutes before the start, so the screens also redraw at that moment (useNow), with no request.
 import { useEffect, useState } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Meeting, MeetingList, MeetingScope, MeetingSummary } from '@rsn/shared';
+import type {
+  Meeting, MeetingFeedbackBody, MeetingList, MeetingScope, MeetingSummary, SavedMeetingFeedback,
+} from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
@@ -30,6 +33,8 @@ const fetchMeetings = (scope: MeetingScope, before: string | null) =>
 const fetchSummary = () => api.get('/meetings/summary').then((r) => r.data.data as MeetingSummary);
 const fetchMeeting = (id: string) => api.get(`/meetings/${encodeURIComponent(id)}`).then((r) => r.data.data as Meeting);
 const cancelMeeting = (id: string) => api.post(`/meetings/${encodeURIComponent(id)}/cancel`).then((r) => r.data.data as Meeting);
+const sendFeedback = (id: string, body: MeetingFeedbackBody) =>
+  api.post(`/meetings/${encodeURIComponent(id)}/feedback`, body).then((r) => r.data.data as SavedMeetingFeedback);
 
 const useMe = () => useAuthStore((s) => s.user?.id as string | undefined);
 
@@ -77,6 +82,20 @@ export function useCancelMeeting(id: string) {
     mutationFn: () => cancelMeeting(id),
     // The server tells both people's screens too; this is the canceller's own, without waiting for the socket.
     onSettled: () => qc.invalidateQueries({ queryKey: meetingKeys.all }),
+  });
+}
+
+/**
+ * Say how a meeting went, or change the answer: the server keeps one per person per meeting. networkMode 'always':
+ * offline, a held request would leave the sheet on "Sending…" and send the answer by itself later.
+ */
+export function useSubmitMeetingFeedback(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    networkMode: 'always',
+    mutationFn: (body: MeetingFeedbackBody) => sendFeedback(id, body),
+    // The server tells the author's screens too (meeting:<id>); this is this tab's own, without waiting for the socket.
+    onSettled: () => qc.invalidateQueries({ queryKey: meetingKeys.detail(id) }),
   });
 }
 
