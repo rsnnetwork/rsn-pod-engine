@@ -2,8 +2,8 @@
 // Everything the REASON pages read and write. Pages import all of it from here.
 import api from '@/lib/api';
 import type {
-  ConnectionList, MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PublicMember,
-  RecentConnection, WorthContinuing,
+  ConnectionList, MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PictureCrop, PictureKind,
+  PictureSource, PublicMember, RecentConnection, WorthContinuing,
 } from '@rsn/shared';
 import type { PokeStatus } from './person';
 
@@ -70,8 +70,12 @@ export const sendMeetRequest = (userId: string, note: string, format: MeetingFor
 export const recordOutcomeRequest = (userId: string, worthContinuing: WorthContinuing, outcomes: OutcomeKey[]) =>
   api.post(`/people/${memberSegment(userId)}/outcome`, { worthContinuing, outcomes });
 
-// Your banner: a data URL the page has already cropped to 1500x500, or none.
-export const uploadBanner = (image: string) => api.put('/users/me/banner', { image });
+// Your photo and banner (30 Oct review, T3a): the picture you chose (a data URL) with where you placed it, or only a
+// new crop to place the kept picture again. The server cuts what everyone sees. The source is what the editor opens on.
+export interface PictureBody { image?: string; crop: PictureCrop }
+export const savePictureRequest = (kind: PictureKind, body: PictureBody) => api.put(`/users/me/${kind}`, body);
+export const fetchPictureSource = (kind: PictureKind) =>
+  api.get<{ data: PictureSource }>(`/users/me/${kind}/source`).then((r) => r.data.data);
 export const removeBannerRequest = () => api.delete('/users/me/banner');
 
 // The old public profile's block calls, with the id as one encoded segment like every call here. A profile you blocked

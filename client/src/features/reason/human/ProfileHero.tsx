@@ -2,13 +2,13 @@
 // The human on the left, the reason on the right: who they are, and why you two might matter to each other.
 // The frame (photo, person, dark panel) is shared: your own profile is drawn by it too (21 Oct 2026), so what you
 // see of yourself looks exactly like what other members see of you.
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { PersonBrief } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import ReasonSheep from '../brand/ReasonSheep';
 import { visibleText } from '../person';
-import { SIGNAL, foundThrough, reasonText, type KnownSource, type PersonFacts } from './profile-text';
+import { SIGNAL, foundThrough, isSmallPhoto, reasonText, type KnownSource, type PersonFacts } from './profile-text';
 
 // The Human Profile fills the window. Your own profile sits beside the app's sidebar (232px from 981px), so its columns
 // follow the width of the page, not of the window: its page is as wide at a 1213px window as the Human Profile's is at
@@ -70,6 +70,8 @@ interface FrameProps {
   kicker: string;
   /** Drawn over the photo, top left. */
   badge?: ReactNode;
+  /** Drawn over the photo, bottom right: the pencil, on your own profile only (30 Oct review, T3a). */
+  photoAction?: ReactNode;
   /** The box under the tags. */
   note: ReactNode;
   /** The dark panel beside the person. */
@@ -78,14 +80,25 @@ interface FrameProps {
   fit?: HeroFit;
 }
 
-export function HeroFrame({ photo, who, kicker, badge, note, panel, fit = 'screen' }: FrameProps) {
+// A photo fills the tile. One under 400 pixels on its smaller side (a 96-pixel Google photo, a 200-pixel LinkedIn one)
+// would be blown up 5 to 10 times, so it is drawn at its own size in the middle of the tile instead (D7, 30 Oct review).
+const FILL = '[&>img]:absolute [&>img]:inset-0 [&>img]:h-full [&>img]:w-full [&>img]:rounded-none';
+const NATIVE = '[&>img]:h-auto [&>img]:w-auto [&>img]:max-w-full [&>img]:max-h-full [&>img]:rounded-[18px]';
+
+export function HeroFrame({ photo, who, kicker, badge, photoAction, note, panel, fit = 'screen' }: FrameProps) {
   const roleLine = [who.role, who.company].filter(Boolean).join(' · ');
+  // Which photo was measured small: a new photo (a new address) is measured again.
+  const [smallSrc, setSmallSrc] = useState<string | null>(null);
+  const small = !!photo && smallSrc === photo;
+  const measure = (img: HTMLImageElement) => setSmallSrc(isSmallPhoto(img.naturalWidth, img.naturalHeight) ? photo : null);
   return (
     <section className={FRAME[fit].grid}>
-      {/* A photo fills the tile. With none, or one that fails to load, Avatar draws round initials in the middle. */}
-      <div className="relative grid h-[43vh] min-h-[260px] place-items-center overflow-hidden rounded-[21px] bg-[#eceae6] shadow-[0_16px_50px_rgba(17,18,22,.08)] md:h-auto md:min-h-[430px] md:rounded-[26px] [&>img]:absolute [&>img]:inset-0 [&>img]:h-full [&>img]:w-full [&>img]:rounded-none">
-        <Avatar src={photo} name={who.name} size="2xl" />
+      {/* A photo fills the tile (a small one sits in the middle at its own size). With none, or one that fails to load,
+          Avatar draws round initials in the middle. */}
+      <div className={cn('relative grid h-[43vh] min-h-[260px] place-items-center overflow-hidden rounded-[21px] bg-[#eceae6] p-4 shadow-[0_16px_50px_rgba(17,18,22,.08)] md:h-auto md:min-h-[430px] md:rounded-[26px]', small ? NATIVE : FILL)}>
+        <Avatar src={photo} name={who.name} size="2xl" onLoad={measure} />
         {badge}
+        {photoAction && <div className="absolute bottom-3 right-3 md:bottom-4 md:right-4">{photoAction}</div>}
       </div>
 
       <section className="flex min-w-0 flex-col rounded-[21px] border border-reason-line bg-white p-[18px] md:rounded-[26px] md:p-7">

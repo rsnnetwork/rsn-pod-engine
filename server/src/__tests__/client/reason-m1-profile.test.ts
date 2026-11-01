@@ -342,8 +342,8 @@ describe('REASON api: a member id is data, never part of the path', () => {
   it('still exports every name the pages import', () => {
     expect(loadApi().exported).toEqual([
       'blockMember', 'errorMessage', 'fetchBlockStatus', 'fetchBrief', 'fetchConnections', 'fetchForYou', 'fetchMyCard',
-      'fetchRecentConnections', 'personName', 'reasonKeys', 'recordOutcomeRequest', 'removeBannerRequest',
-      'sendMeetRequest', 'setPersonResponse', 'stateFromPoke', 'unblockMember', 'uploadBanner',
+      'fetchPictureSource', 'fetchRecentConnections', 'personName', 'reasonKeys', 'recordOutcomeRequest', 'removeBannerRequest',
+      'savePictureRequest', 'sendMeetRequest', 'setPersonResponse', 'stateFromPoke', 'unblockMember',
     ]);
   });
 });

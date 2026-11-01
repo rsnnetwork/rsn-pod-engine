@@ -6,11 +6,13 @@ interface AvatarProps {
   name: string;
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   className?: string;
+  /** The photo has loaded (the hero measures it: a small one is not blown up, 30 Oct review T3a). */
+  onLoad?: (img: HTMLImageElement) => void;
 }
 
 const sizes = { sm: 'h-8 w-8 text-xs', md: 'h-10 w-10 text-sm', lg: 'h-12 w-12 text-base', xl: 'h-16 w-16 text-lg', '2xl': 'h-24 w-24 text-2xl' };
 
-export default function Avatar({ src, name, size = 'md', className }: AvatarProps) {
+export default function Avatar({ src, name, size = 'md', className, onLoad }: AvatarProps) {
   // 4 Sep 2026 (device audit): a member whose photo URL no longer resolves
   // showed the browser's broken-image glyph with the alt text beside it.
   // A failed load falls back to the initials, like a missing photo does.
@@ -27,6 +29,7 @@ export default function Avatar({ src, name, size = 'md', className }: AvatarProp
         src={src}
         alt={name}
         onError={() => setFailedSrc(src)}
+        onLoad={onLoad ? (e) => onLoad(e.currentTarget) : undefined}
         className={cn('rounded-full object-cover', sizes[size], className)}
       />
     );

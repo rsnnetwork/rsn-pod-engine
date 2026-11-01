@@ -1,113 +1,81 @@
 // server/src/__tests__/client/profile-photo-upload.test.ts
-// The photo upload on the profile form (21 Oct 2026). A phone photo of 1.5 to 5 MB left "Uploading..." on
-// screen for good: the upload was awaited inside reader.onload, outside the try, so the server's refusal (the
-// 2,000,000-character cap on avatarUrl) was never caught, no toast said anything and nothing put the button
-// back. The photo is now made smaller in the browser before it is sent, and every way the upload can end
-// says so and puts the button back.
+// The photo upload on the profile form (21 Oct 2026; through the picture editor since the 30 Oct review, T3a).
+// 21 Oct: a phone photo of 1.5 to 5 MB left "Uploading..." on screen for good, because the server's refusal was never
+// caught. 30 Oct: the form's own 800px shrink is gone. The pencil (and "Change photo") open the picture editor; the
+// picture the member chose is sent as it is when the server keeps it as it is, or as a smaller copy made in halving
+// steps with the browser's best smoothing (the one-step shrink made uploads jagged), and the server cuts the 1024
+// square. Every way a save can end is said in the editor, which keeps its Save busy until it has.
 //
-// The page needs a browser to run, so its wiring is read from the source; the words a failure gets are worked
-// out by a pure function, which is cut out of the file and run. The e2e spec presses the button for real.
+// The pages need a browser to run, so their wiring is read from the source. The e2e spec presses everything for real.
 import * as fs from 'fs';
 import * as path from 'path';
-import * as vm from 'vm';
-import * as ts from 'typescript';
 
-const FILE = path.join(__dirname, '../../../../client/src/features/profile/ProfilePage.tsx');
+const CLIENT = path.join(__dirname, '../../../../client/src');
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
-const src = () => fs.readFileSync(FILE, 'utf8').replace(/\r\n/g, '\n');
+const read = (rel: string) => fs.readFileSync(path.join(CLIENT, rel), 'utf8').replace(/\r\n/g, '\n');
+const form = () => read('features/profile/ProfilePage.tsx');
+const prepare = () => read('components/picture/prepare-picture.ts');
+const editor = () => read('components/picture/PictureEditor.tsx');
+const hook = () => read('components/picture/useMemberPicture.ts');
 
-/** The source of one top-level function or arrow in the page, from its first line to its closing brace. */
-function cut(start: string, end: string): string {
-  const s = src();
-  const from = s.indexOf(start);
-  if (from < 0) throw new Error(`ProfilePage.tsx has no "${start}"`);
-  const to = s.indexOf(end, from);
-  if (to < 0) throw new Error(`"${start}" in ProfilePage.tsx does not end with "${end}"`);
-  return s.slice(from, to + end.length);
-}
-const handler = () => cut('const handleAvatarUpload = async', '\n  };\n');
-
-/** photoUploadError, transpiled and run on its own: it must need nothing from the rest of the page. */
-function photoUploadError(err: unknown): string {
-  const fn = cut('function photoUploadError(', '\n}\n');
-  const { outputText } = ts.transpileModule(fn, { compilerOptions: { target: ts.ScriptTarget.ES2019 } });
-  const run = vm.runInNewContext(`(function () { ${outputText}\n return photoUploadError; })()`) as (e: unknown) => string;
-  return run(err);
-}
+describe('profile photo: where it is changed on the form', () => {
+  it('the pencil on the photo and "Change photo" open the same editor; nothing on the form shows only on hover', () => {
+    expect(form()).toMatch(/const photo = useMemberPicture\('avatar'\);/);
+    expect(form()).toMatch(/<PencilButton label="Edit photo" onClick=\{photo\.edit\} disabled=\{photo\.busy\}/);
+    expect(form()).toMatch(/onClick=\{photo\.edit\}\s*disabled=\{photo\.busy\}[\s\S]*\{photo\.busy \? 'Saving\.\.\.' : 'Change photo'\}/);
+    expect(form()).toMatch(/<PictureEditor \{\.\.\.photo\.editor\} \/>/);
+    expect(form()).not.toMatch(/group-hover:opacity-100/);
+    expect(form()).not.toMatch(/shrinkPhoto|PHOTO_MAX_SIDE|handleAvatarUpload/);
+  });
+});
 
 describe('profile photo: what is sent', () => {
-  it('is the photo made at most 800 by 800, as a JPEG at quality 0.85', () => {
-    expect(src()).toMatch(/const PHOTO_MAX_SIDE = 800;/);
-    expect(src()).toMatch(/const PHOTO_QUALITY = 0\.85;/);
-    expect(src()).toMatch(/Math\.min\(1, PHOTO_MAX_SIDE \/ img\.naturalWidth, PHOTO_MAX_SIDE \/ img\.naturalHeight\)/);
-    expect(src()).toMatch(/canvas\.toDataURL\('image\/jpeg', PHOTO_QUALITY\)/);
+  it('the picture as it is when the server keeps it as it is, else a smaller copy that fits 3 MB and 4096 pixels', () => {
+    expect(prepare()).toMatch(/if \(sendsAsItIs\(file, \{ width: img\.naturalWidth, height: img\.naturalHeight \}\)\) return readAsDataUrl\(file\);/);
+    expect(prepare()).toMatch(/for \(const side of \[PICTURE_SEND_MAX_SIDE, 3072, 2048\]\)/);
+    expect(prepare()).toMatch(/if \(bytesIn\(copy\) <= PICTURE_SEND_MAX_BYTES\) return copy;/);
   });
 
-  it('is never the file as it was read: the upload sends the smaller picture', () => {
-    expect(handler()).toMatch(/const avatarUrl = await shrinkPhoto\(file\);\s*await api\.put\('\/users\/me', \{ avatarUrl \}\);/);
-    expect(handler()).not.toMatch(/readAsDataURL|reader\.onload/);
+  it('a smaller copy is shrunk in halving steps with the best smoothing, never in one low-quality step', () => {
+    expect(prepare()).toMatch(/ctx\.imageSmoothingQuality = 'high';/);
+    expect(prepare()).toMatch(/while \(w \/ 2 >= width && h \/ 2 >= height\)/);
   });
 
   it('a transparent PNG turns white, not black, when it becomes a JPEG', () => {
-    expect(cut('async function shrinkPhoto(', '\n}\n')).toMatch(/fillStyle = '#ffffff';\s*ctx\.fillRect\(0, 0, width, height\);\s*ctx\.drawImage\(img, 0, 0, width, height\);/);
+    expect(prepare()).toMatch(/ctx\.fillStyle = '#ffffff';\s*ctx\.fillRect\(0, 0, width, height\);\s*ctx\.drawImage\(source, 0, 0, width, height\);/);
   });
 
-  it('the decoded picture is let go of once it is drawn (the object URL is revoked)', () => {
-    const load = cut('function loadImage(', '\n}\n');
-    expect(load).toMatch(/URL\.createObjectURL\(file\)/);
-    expect((load.match(/URL\.revokeObjectURL\(url\)/g) ?? []).length).toBe(2);
-  });
-});
-
-describe('profile photo: however the upload ends', () => {
-  it('everything that can fail is awaited inside one try, so a refusal is caught', () => {
-    expect(handler()).toMatch(/setAvatarUploading\(true\);\s*try \{\s*const avatarUrl = await shrinkPhoto\(file\);[\s\S]*await api\.put\('\/users\/me'[\s\S]*\} catch \(err\) \{\s*addToast\(photoUploadError\(err\), 'error'\);\s*\} finally \{\s*setAvatarUploading\(false\);\s*\}/);
+  it('the decoded picture is let go of once it is read (the object URL is revoked either way)', () => {
+    const open = prepare().slice(prepare().indexOf('function openPicture('), prepare().indexOf('function canvasOf('));
+    expect(open).toMatch(/URL\.createObjectURL\(file\)/);
+    expect((open.match(/URL\.revokeObjectURL\(url\)/g) ?? []).length).toBe(2);
   });
 
-  it('"Uploading..." is put back in one place only, the finally, so no path can leave it on screen', () => {
-    expect((handler().match(/setAvatarUploading\(false\)/g) ?? []).length).toBe(1);
-    expect(handler()).not.toMatch(/onload = async|onerror = /);
-  });
-
-  it('the same photo can be chosen again after a failure', () => {
-    expect(handler()).toMatch(/input\.value = '';/);
-  });
-
-  it('refuses a wrong type, or a file over 20 MB, before anything is read', () => {
-    expect(handler()).toMatch(/addToast\('Please upload a JPG, PNG, or WebP image', 'error'\);\s*return;/);
-    // 20 MB, as the banner allows: the photo is made smaller before it is sent, so a phone photo of 5 to 20 MB is fine.
-    expect(handler()).toMatch(/file\.size > 20 \* 1024 \* 1024/);
-    expect(handler()).toMatch(/addToast\('Image must be under 20MB', 'error'\);\s*return;/);
-    expect(handler()).not.toMatch(/5 \* 1024 \* 1024|under 5MB/);
+  it('a picture is sent with where it was placed, and a crop alone places the kept picture again', () => {
+    expect(hook()).toMatch(/const image = picture \? await pictureToSend\(picture\) : undefined;/);
+    expect(hook()).toMatch(/return savePictureRequest\(kind, image \? \{ image, crop \} : \{ crop \}\);/);
   });
 });
 
-describe('profile photo: what a failure says', () => {
-  it('the server\'s own sentence, as it sent it', () => {
-    expect(photoUploadError({ response: { status: 429, data: { error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests. Please try again later.' } } } }))
-      .toBe('Too many requests. Please try again later.');
-    expect(photoUploadError({ response: { status: 500, data: { error: { message: 'An unexpected error occurred' } } } }))
-      .toBe('An unexpected error occurred');
+describe('profile photo: however a save ends', () => {
+  it('everything that can fail is awaited inside one try, said in the editor, and Save is given back in the finally only', () => {
+    expect(editor()).toMatch(/setBusy\(true\);\s*setError\(null\);\s*try \{\s*await onSave\([\s\S]*\} catch \(err\) \{[\s\S]*setError\([\s\S]*\} finally \{\s*setBusy\(false\);\s*\}/);
+    expect((editor().match(/setBusy\(false\)/g) ?? []).length).toBe(1);
   });
 
-  it('never the form check\'s label: on a photo "Validation failed" only ever means it is too large', () => {
-    expect(photoUploadError({ response: { status: 400, data: { error: { message: 'Validation failed', details: { avatarUrl: ['String must contain at most 2000000 character(s)'] } } } } }))
-      .toBe('That photo is too large. Please choose a smaller one.');
+  it('a picture the browser cannot read, or one too large, says so in its own words; anything else in the server\'s words', () => {
+    expect(editor()).toMatch(/\[UNREADABLE_PICTURE, PICTURE_TOO_LARGE\]\.includes\(err\.message\)/);
+    expect(editor()).toMatch(/errorMessage\(err, `Could not save your \$\{name\} right now\. Try again in a moment\.`\)/);
+    expect(prepare()).toMatch(/export const UNREADABLE_PICTURE = 'We could not read that picture\. Please choose another one\.';/);
   });
 
-  it('plain words when the server answered without a sentence', () => {
-    for (const data of [{}, { error: {} }, { error: { message: '   ' } }, { error: { message: 42 } }, '<html>502</html>']) {
-      expect(photoUploadError({ response: { status: 502, data } })).toBe('Could not update your photo. Please try again.');
-    }
+  it('the same picture can be chosen again after a failure, and a wrong type or a file over 20 MB is refused before it is read', () => {
+    expect(editor()).toMatch(/e\.target\.value = '';/);
+    expect(editor()).toMatch(/const problem = pictureFileProblem\(file, name\);/);
   });
 
-  it('the connection, when the request got no answer at all', () => {
-    expect(photoUploadError({ isAxiosError: true, code: 'ERR_NETWORK', request: {} }))
-      .toBe('Could not update your photo. Check your connection and try again.');
-  });
-
-  it('that the photo could not be read, when the browser could not open the picture', () => {
-    expect(photoUploadError(new Error('This picture could not be read'))).toBe('We could not read that photo. Please choose another one.');
-    expect(photoUploadError(undefined)).toBe('We could not read that photo. Please choose another one.');
+  it('after a save the header photo is the new one (the session is read again) and the card is refreshed, before the editor closes', () => {
+    expect(hook()).toMatch(/kind === 'avatar' \? checkSession\(\) : undefined/);
+    expect(hook()).toMatch(/\]\);\s*setOpen\(false\);/);
   });
 });

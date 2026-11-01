@@ -6,15 +6,20 @@
 // "Keep this photo": confirm then asks for exactly the photo shown here. It is
 // offered only after it has actually loaded, so nobody is asked to keep an
 // empty square or a link that has expired.
+//
+// 30 Oct review (T3a): "Upload a new one" opens the same picture editor as the profile's pencil once a picture is
+// chosen, so it can be placed and zoomed before it is kept; the server keeps it with where it was placed.
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Check } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
-import { PROFILE, onboardingError } from './flow';
-import { PHOTO_TYPES, shrinkPhoto } from './photo';
-import { useUploadPhoto } from './useOnboardingV2';
+import { PROFILE } from './flow';
+import PictureEditor from '@/components/picture/PictureEditor';
+import { PICTURE_TYPES, pictureFileProblem } from '@/components/picture/picture-file';
+import { useMemberPicture } from '@/components/picture/useMemberPicture';
+import { useRefreshOnboarding } from './useOnboardingV2';
 
 interface Props {
   name: string;
@@ -43,40 +48,32 @@ function useLoaded(src: string | null): boolean {
 
 export default function PhotoField({ name, avatarUrl, linkedinPhotoUrl, keptLinkedinPhoto, onKeepLinkedinPhoto }: Props) {
   const { addToast } = useToastStore();
-  const upload = useUploadPhoto();
+  const refresh = useRefreshOnboarding();
+  // A photo of their own replaces a LinkedIn one they were offered, and the onboarding reads the new photo.
+  const photo = useMemberPicture('avatar', () => { onKeepLinkedinPhoto(null); return refresh(); });
   const fileInput = useRef<HTMLInputElement>(null);
-  const [reading, setReading] = useState(false);
   const offered = avatarUrl ? null : linkedinPhotoUrl;
   const linkedinReady = useLoaded(offered);
 
   const shown: 'own' | 'linkedin' | 'none' = avatarUrl ? 'own' : offered && linkedinReady ? 'linkedin' : 'none';
   const kept = shown === 'own' || (shown === 'linkedin' && keptLinkedinPhoto === offered);
-  const busy = reading || upload.isPending;
+  const busy = photo.busy;
 
-  const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
+  const onFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     // The same file can be chosen again after a failure.
     e.target.value = '';
     if (!file) return;
-    if (!(PHOTO_TYPES as readonly string[]).includes(file.type)) {
+    if (!(PICTURE_TYPES as readonly string[]).includes(file.type)) {
       addToast('Choose a JPG, PNG or WebP photo.', 'error');
       return;
     }
-    setReading(true);
-    try {
-      const data = await shrinkPhoto(file);
-      if (!data) {
-        addToast("We couldn't read that photo. Please choose another one.", 'error');
-        return;
-      }
-      await upload.mutateAsync(data);
-      onKeepLinkedinPhoto(null);
-      addToast('Photo updated.', 'success');
-    } catch (err) {
-      addToast(onboardingError(err, "We couldn't add that photo. Please try again."), 'error');
-    } finally {
-      setReading(false);
+    const problem = pictureFileProblem(file, 'photo');
+    if (problem) {
+      addToast(problem, 'error');
+      return;
     }
+    photo.editFile(file);
   };
 
   const caption = shown === 'linkedin'
@@ -115,18 +112,19 @@ export default function PhotoField({ name, avatarUrl, linkedinPhotoUrl, keptLink
           isLoading={busy}
           className="min-h-[44px] w-full justify-center bg-white"
         >
-          {busy ? 'Uploading…' : shown === 'none' ? 'Upload a photo' : PROFILE.newPhoto}
+          {busy ? 'Saving…' : shown === 'none' ? 'Upload a photo' : PROFILE.newPhoto}
         </Button>
         <input
           ref={fileInput}
           type="file"
-          accept={PHOTO_TYPES.join(',')}
+          accept={PICTURE_TYPES.join(',')}
           className="hidden"
           onChange={onFile}
           aria-hidden
           tabIndex={-1}
         />
       </div>
+      <PictureEditor {...photo.editor} />
     </div>
   );
 }

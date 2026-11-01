@@ -238,12 +238,14 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
     expect(box!.height, `${name} is a 44px target`).toBeGreaterThanOrEqual(44);
   }
 
-  // Change photo, from a file: it is the avatar at once, in the card and in the account. Since 21 Oct 2026 the page
-  // redraws every photo as a JPEG of at most 800x800 before it is sent (a phone photo of 1.5 to 5 MB went over the
-  // server's cap and left "Uploading..." on screen for good), so the PNG chosen here is kept as a JPEG. Since the
-  // 30 Oct review (T3a) the server keeps that data URL as a picture behind the member's own photo address, with the
-  // time of the change as ?v=, instead of as text in the profile.
-  await page.locator('input[type="file"]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: PNG });
+  // Change photo, from a file: it is the avatar at once, in the card and in the account. Since the 30 Oct review (T3a)
+  // "Change photo" (and the pencil on the photo) open the picture editor; saved, the server keeps the picture chosen
+  // with where it was placed and cuts the photo everyone sees as a JPEG, at the member's own photo address with ?v=.
+  await change.click();
+  const editor = page.getByRole('dialog', { name: 'Edit your photo' });
+  await editor.locator('input[type="file"]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: PNG });
+  await expect(editor.getByRole('slider', { name: 'Zoom' })).toBeVisible({ timeout: 20_000 });
+  await editor.getByRole('button', { name: 'Save', exact: true }).click();
   // The success toast is brief; the durable outcomes below are what matter. (The small avatar in the
   // page header is hidden on a phone, so look for the picture that is on screen.)
   await expect(page.locator(`img[src*="/api/users/${member.id}/avatar?v="]:visible`).first()).toBeVisible({ timeout: 20_000 });
