@@ -12,8 +12,8 @@ import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { fetchPictureSource, reasonKeys, savePictureRequest } from '@/features/reason/api';
 import type { PictureEditorProps } from './PictureEditor';
-import { serverCouldNotOpen } from './picture-file';
 import { pictureToSend } from './prepare-picture';
+import { sendPicture } from './send-picture';
 
 const WORDS: Record<PictureKind, { name: string; title: string; aspect: 1 | 3 }> = {
   avatar: { name: 'photo', title: 'Edit your photo', aspect: 1 },
@@ -42,18 +42,8 @@ export function useMemberPicture(kind: PictureKind, onSaved?: () => Promise<unkn
 
   const save = useMutation({
     networkMode: 'always',
-    mutationFn: async ({ picture, crop }: { picture: Blob | null; crop: PictureCrop }) => {
-      if (!picture) return savePictureRequest(kind, { crop });
-      const first = await pictureToSend(picture);
-      try {
-        return await savePictureRequest(kind, { image: first.image, crop });
-      } catch (err) {
-        // The browser could draw it (it is in the frame), but the server could not open the original: send the drawing.
-        if (first.copied || !serverCouldNotOpen(err)) throw err;
-        const copy = await pictureToSend(picture, true);
-        return savePictureRequest(kind, { image: copy.image, crop });
-      }
-    },
+    mutationFn: ({ picture, crop }: { picture: Blob | null; crop: PictureCrop }) =>
+      sendPicture(picture, crop, (body) => savePictureRequest(kind, body), pictureToSend),
     onSuccess: async () => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: reasonKeys.mine }),

@@ -186,11 +186,14 @@ describe('a picture the server cannot open is sent again as the browser draws it
     expect(serverCouldNotOpen(new Error('x'))).toBe(false);
   });
 
+  // T15 review I1: the rule lives once, in send-picture.ts's sendPicture (prepare is pictureToSend), which the
+  // member's hook and the entity's both call; picture-send.test.ts runs it.
   it('the save tries the original, then once a drawn copy, and never a copy of a copy', () => {
-    const hook = read('components/picture/useMemberPicture.ts');
-    expect(hook).toMatch(/const first = await pictureToSend\(picture\);/);
-    expect(hook).toMatch(/if \(first\.copied \|\| !serverCouldNotOpen\(err\)\) throw err;/);
-    expect(hook).toMatch(/const copy = await pictureToSend\(picture, true\);/);
+    const helper = read('components/picture/send-picture.ts');
+    expect(read('components/picture/useMemberPicture.ts')).toMatch(/sendPicture\(picture, crop, \(body\) => savePictureRequest\(kind, body\), pictureToSend\)/);
+    expect(helper).toMatch(/const first = await prepare\(picture\);/);
+    expect(helper).toMatch(/if \(first\.copied \|\| !serverCouldNotOpen\(err\)\) throw err;/);
+    expect(helper).toMatch(/const copy = await prepare\(picture, true\);/);
     expect(read('components/picture/prepare-picture.ts')).toMatch(/export async function pictureToSend\(file: Blob, drawCopy = false\): Promise<\{ image: string; copied: boolean \}>/);
   });
 });

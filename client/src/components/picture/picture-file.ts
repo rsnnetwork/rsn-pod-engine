@@ -13,8 +13,8 @@ export const PICTURE_SEND_MAX_BYTES = 3 * 1024 * 1024;
 export const PICTURE_SEND_MAX_SIDE = 4096;
 
 /** Why a chosen file cannot be opened, in a sentence, or null when it can. `name` is what it is for: photo, banner, logo. */
-export function pictureFileProblem(file: { type: string; size: number }, name: string): string | null {
-  if (!(PICTURE_TYPES as readonly string[]).includes(file.type)) return `Choose a JPG, PNG or WebP picture for your ${name}.`;
+export function pictureFileProblem(file: { type: string; size: number }, name: string, named = `your ${name}`): string | null {
+  if (!(PICTURE_TYPES as readonly string[]).includes(file.type)) return `Choose a JPG, PNG or WebP picture for ${named}.`;
   if (file.size > PICTURE_INPUT_MAX_BYTES) return 'Choose a picture under 20 MB.';
   return null;
 }

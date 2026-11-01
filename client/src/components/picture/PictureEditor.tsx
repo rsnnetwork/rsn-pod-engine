@@ -21,6 +21,8 @@ export interface PictureEditorProps {
   title: string;
   /** What the picture is, in the editor's sentences: "photo", "banner", "logo". */
   name: string;
+  /** How the sentences name it: "your photo" (the default, `your {name}`), or "the logo" for a company's (T15). */
+  subject?: string;
   /** 1 for a photo or a logo, 3 for a banner. */
   aspect: 1 | 3;
   src: string | Blob | null;
@@ -40,7 +42,8 @@ interface Shown { src: string; file: Blob | null }
 const QUIET = 'flex min-h-[44px] items-center justify-center rounded-[11px] border border-reason-line bg-white px-4 text-[14px] font-bold disabled:opacity-60';
 const PRIMARY = 'flex min-h-[44px] items-center justify-center rounded-[11px] bg-reason-red px-5 text-[14px] font-bold text-white disabled:opacity-60';
 
-export default function PictureEditor({ open, title, name, aspect, src, loading, loadError, initialCrop, onSave, onCancel }: PictureEditorProps) {
+export default function PictureEditor({ open, title, name, subject, aspect, src, loading, loadError, initialCrop, onSave, onCancel }: PictureEditorProps) {
+  const named = subject ?? `your ${name}`;
   const [shown, setShown] = useState<Shown | null>(null);
   const [natural, setNatural] = useState<Natural | null>(null);
   const [crop, setCrop] = useState<PictureCrop>(PICTURE_CENTRED);
@@ -80,7 +83,7 @@ export default function PictureEditor({ open, title, name, aspect, src, loading,
     // Cleared at once, so the same picture can be chosen again after a failure.
     e.target.value = '';
     if (!file) return;
-    const problem = pictureFileProblem(file, name);
+    const problem = pictureFileProblem(file, name, named);
     setError(problem);
     if (!problem) show(file, null);
   };
@@ -93,7 +96,7 @@ export default function PictureEditor({ open, title, name, aspect, src, loading,
       await onSave(shown.file, clampPictureCrop(crop, natural.width, natural.height, aspect));
     } catch (err) {
       const own = err instanceof Error && [UNREADABLE_PICTURE, PICTURE_TOO_LARGE].includes(err.message);
-      setError(own ? (err as Error).message : errorMessage(err, `Could not save your ${name} right now. Try again in a moment.`));
+      setError(own ? (err as Error).message : errorMessage(err, `Could not save ${named} right now. Try again in a moment.`));
     } finally {
       setBusy(false);
     }
@@ -128,7 +131,7 @@ export default function PictureEditor({ open, title, name, aspect, src, loading,
               onCrop={setCrop}
               onLoad={onLoaded}
               onError={() => { setError(UNREADABLE_PICTURE); setNatural(null); }}
-              label={`Your ${name}. Drag to place it, or use the arrow keys; plus and minus zoom.`}
+              label={`${named.charAt(0).toUpperCase()}${named.slice(1)}. Drag to place it, or use the arrow keys; plus and minus zoom.`}
               disabled={busy}
             />
           ) : (
@@ -146,7 +149,7 @@ export default function PictureEditor({ open, title, name, aspect, src, loading,
         <button type="button" onClick={() => picker.current?.click()} disabled={busy || loading} className={QUIET}>
           {shown ? 'Choose another picture' : 'Choose a picture'}
         </button>
-        <input ref={picker} type="file" accept={PICTURE_TYPES.join(',')} onChange={onPick} className="hidden" aria-label={`Choose a picture for your ${name}`} />
+        <input ref={picker} type="file" accept={PICTURE_TYPES.join(',')} onChange={onPick} className="hidden" aria-label={`Choose a picture for ${named}`} />
         {(error ?? loadError) && <p role="alert" className="text-[13px] font-semibold text-reason-red">{error ?? loadError}</p>}
       </div>
     </Sheet>

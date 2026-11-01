@@ -172,7 +172,45 @@ export const joinedToast = (name: string, companyUpdated: boolean) => `You joine
  * A join and a role change are the same request; the answer says which it was. "You joined" only for a new link: a
  * member already linked (another tab joined first) had their role changed, and is told that.
  */
-export const membershipToast = (name: string, r: { joined: boolean; companyUpdated: boolean }) =>
-  (r.joined ? joinedToast(name, r.companyUpdated) : `Your role at ${name} is saved.${r.companyUpdated ? COMPANY_FILLED : ''}`);
+export const membershipToast = (
+  name: string,
+  r: { joined: boolean; companyUpdated: boolean; status?: string; pendingChange?: { role: string } | null },
+) => {
+  // 30 Oct review (T15, L23): a claim, or an active member's change, waits for the entity's admins.
+  if (r.status === 'pending') return requestSentToast(name);
+  if (r.pendingChange) return `Your change is sent to ${name}'s admins. Your role stays as it is until they approve it.`;
+  return r.joined ? joinedToast(name, r.companyUpdated) : `Your role at ${name} is saved.${r.companyUpdated ? COMPANY_FILLED : ''}`;
+};
+export const requestSentToast = (name: string) => `Your request is sent to ${name}'s admins. We'll let you know when they approve it.`;
+export const cancelledToast = (name: string) => `Your request to join ${name} is cancelled.`;
+
+// ---- approval, removal and pictures (30 Oct review, T15) ---------------------------------------
+
+/** What a claim still waiting says, on your own lists and profile. */
+export const WAITING_FOR_APPROVAL = 'Waiting for approval';
+export const waitingLine = (name: string) => `Waiting for ${name}'s admins to approve you.`;
+export const DECLINED_LINE = 'Your request was not approved.';
+export const pendingChangeLine = (role: string, title: string | null) => `Asked to change to ${roleLine(role, title)}. Waiting for approval.`;
+
+/** A request on the admins' panel: what they say they are, or the change they ask for. */
+export function requestLine(r: { kind: 'join' | 'change'; role: string; title: string | null; currentRole: string | null; currentTitle: string | null }): string {
+  if (r.kind === 'join' || !r.currentRole) return `Says they are ${roleLine(r.role, r.title)}`;
+  return `Asks to change from ${roleLine(r.currentRole, r.currentTitle)} to ${roleLine(r.role, r.title)}`;
+}
+export const approvedToast = (person: string, name: string) => `${person} is now listed at ${name}.`;
+export const declinedToast = (person: string) => `${person}'s request is declined.`;
+export const removedToast = (person: string, name: string) => `${person} is no longer listed at ${name}.`;
+
+/** The pencil's and the editor's words: "Add logo" with none yet, "Change logo" once there is one. */
+export function pictureWords(kind: 'logo' | 'banner', has: boolean): { edit: string; remove: string } {
+  return { edit: `${has ? 'Change' : 'Add'} ${kind}`, remove: `Remove ${kind}` };
+}
+
+/** "12 members" for a circle; a closed circle the viewer is outside is named only (L22). */
+export function circleCountLine(c: { memberCount: number | null; joinPolicy: 'open' | 'closed' }): string {
+  if (c.memberCount === null) return 'Closed circle';
+  const members = c.memberCount === 1 ? '1 member' : `${c.memberCount} members`;
+  return c.joinPolicy === 'closed' ? `Closed circle · ${members}` : members;
+}
 export const leftToast = (name: string, archived: boolean) =>
   (archived ? `You left ${name}. No one else was linked to it, so it is archived.` : `You left ${name}.`);

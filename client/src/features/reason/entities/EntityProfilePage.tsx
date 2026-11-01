@@ -1,8 +1,10 @@
 // client/src/features/reason/entities/EntityProfilePage.tsx
 // /entities/:entityId, the v4 prototype's Entity Profile: full screen with its own header, like the Human Profile.
 // "This organisation is context. The humans are the opportunity": the entity, then the people around it.
+// 30 Oct review (T15): its banner above the hero, the admins' Requests above its people (?requests=1, a bell's link,
+// opens the page there), and the circles it is linked to below them.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { EntityPage } from '@rsn/shared';
 import { useAuthStore } from '@/stores/authStore';
@@ -15,8 +17,11 @@ import ReasonSheep from '../brand/ReasonSheep';
 import { shouldRetry, statusOf, viewFor } from '../human/profile-text';
 import ConfirmSheet from './ConfirmSheet';
 import EditEntitySheet from './EditEntitySheet';
+import EntityBanner from './EntityBanner';
+import EntityCircles from './EntityCircles';
 import EntityHero from './EntityHero';
 import EntityPeople from './EntityPeople';
+import EntityRequests from './EntityRequests';
 import RelationshipPanel from './RelationshipPanel';
 import { archiveEntity, entityKeys, fetchEntity } from './entity-api';
 import { entityError, isEntityId, loadFailedLine } from './entity-text';
@@ -64,10 +69,14 @@ function EntityProfile({ page, me, onClosing }: ProfileProps) {
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const sending = useRef(false);
   const { entity } = page;
+  const [params] = useSearchParams();
+  const toRequests = params.get('requests') === '1';
 
-  // A page opened from another starts at its top. The app scrolls smoothly (index.css); this one jump must not.
+  // A page opened from another starts at its top (a bell's ?requests=1 scrolls to the Requests instead). The app
+  // scrolls smoothly (index.css); this one jump must not.
+  const startAtTop = useRef(!toRequests);
   useLayoutEffect(() => {
-    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    if (startAtTop.current) window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
   }, []);
 
   const archive = useMutation({
@@ -96,13 +105,16 @@ function EntityProfile({ page, me, onClosing }: ProfileProps) {
 
   return (
     <main className={cn(MAIN, SIDES, 'pb-[calc(40px+env(safe-area-inset-bottom))] pt-3 md:pt-6')}>
+      <EntityBanner page={page} />
       <EntityHero
         page={page}
         relationship={<RelationshipPanel page={page} me={me} onClosing={onClosing} />}
         onEdit={() => setEditing(true)}
         onArchive={() => { setArchiveError(null); setArchiving(true); }}
       />
+      <EntityRequests page={page} focus={toRequests} />
       <EntityPeople page={page} me={me} />
+      <EntityCircles page={page} />
       {editing && page.canEdit && <EditEntitySheet entity={entity} onClose={() => setEditing(false)} />}
       <ConfirmSheet
         open={archiving}
@@ -132,8 +144,9 @@ export default function EntityProfilePage() {
   // moment on the way to the list: the route change is a transition, and this page stays on screen until it commits.
   const [closing, setClosing] = useState(false);
 
-  // The contract's tags for this page: entity:<id> (an edit, an archive, someone joining, leaving or changing role) and
-  // the member's own user:<me>:entities (their own link changing, on this tab or another).
+  // The contract's tags for this page: entity:<id> (an edit, an archive, someone joining, leaving or changing role; T15:
+  // a claim, an answer or a removal, a new logo or banner, a link to a circle) and the member's own
+  // user:<me>:entities (their own link changing, on this tab or another).
   const { data: page, error, fetchStatus, isError, isPending, refetch } = useQuery({
     queryKey: entityKeys.page(entityId),
     queryFn: () => fetchEntity(entityId),

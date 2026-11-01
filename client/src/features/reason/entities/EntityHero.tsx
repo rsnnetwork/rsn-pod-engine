@@ -3,9 +3,15 @@
 // itself (name, type, place, about, website), and your relationship to it. Up to 980px they stack, as the prototype's
 // do, with the dark panel as a band (side by side at 768px they squeezed a long name into four lines); from 981px
 // they share one row.
-import type { ReactNode } from 'react';
+// 30 Oct review (T15, 7.1): the tile shows the logo, and its admins have T3a's pencil at the tile's bottom right
+// ("Add logo" / "Change logo", the editor at 1:1) and "Remove logo" beside Edit and Archive, which asks first.
+import { useState, type ReactNode } from 'react';
 import type { EntityPage } from '@rsn/shared';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import PencilButton from '@/components/picture/PencilButton';
+import PictureEditor from '@/components/picture/PictureEditor';
 import EntityMark from './EntityMark';
+import { useEntityPicture } from './useEntityPicture';
 import { entityMeta, kindLabel, peopleCount, sizeText, websiteLink } from './entity-text';
 import { QUIET_BUTTON } from './look';
 
@@ -29,11 +35,27 @@ export default function EntityHero({ page, relationship, onEdit, onArchive }: Pr
     { label: 'On REASON', value: peopleCount(e.peopleCount) },
   ].filter((f): f is { label: string; value: string } => !!f.value?.trim());
   const site = websiteLink(e.website);
+  const logo = useEntityPicture(e, 'logo', !!e.logoUrl);
+  const [removingLogo, setRemovingLogo] = useState(false);
+  const removeLogo = async () => {
+    try {
+      await logo.remove();
+      setRemovingLogo(false);
+    } catch {
+      // Said in a toast by the hook; the dialog stays open to try again or cancel.
+    }
+  };
 
   return (
     <section className="grid grid-cols-[minmax(0,1fr)] gap-[11px] md:gap-[18px] min-[981px]:grid-cols-[200px_minmax(0,1fr)_290px] min-[1200px]:grid-cols-[230px_minmax(0,1fr)_340px]">
       <div className="grid min-w-0 grid-cols-[74px_minmax(0,1fr)] items-center gap-4 rounded-[21px] bg-[#111216] p-[17px] text-white shadow-[0_16px_50px_rgba(17,18,22,.1)] md:rounded-[26px] min-[981px]:flex min-[981px]:min-h-[360px] min-[981px]:flex-col min-[981px]:items-start min-[981px]:p-6">
-        <EntityMark name={e.name} size="hero" />
+        {/* The pencil sits on the tile's corner, half outside it, so it keeps 44px on the 74px phone tile. */}
+        <span className="relative w-fit">
+          <EntityMark name={e.name} size="hero" logoUrl={e.logoUrl} />
+          {page.canEdit && (
+            <PencilButton label={logo.words.edit} onClick={logo.edit} disabled={logo.busy} className="absolute -bottom-2.5 -right-2.5" />
+          )}
+        </span>
         <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-2.5 md:grid-cols-4 min-[981px]:mt-auto min-[981px]:grid-cols-1 min-[981px]:gap-y-2">
           {facts.map((f) => (
             <div key={f.label} className="min-w-0">
@@ -65,6 +87,9 @@ export default function EntityHero({ page, relationship, onEdit, onArchive }: Pr
             {page.canEdit && (
               <>
                 <button type="button" onClick={onEdit} className={QUIET_BUTTON}>Edit</button>
+                {e.logoUrl && (
+                  <button type="button" onClick={() => setRemovingLogo(true)} disabled={logo.busy} className={QUIET_BUTTON}>{logo.words.remove}</button>
+                )}
                 <button type="button" onClick={onArchive} className={QUIET_BUTTON}>Archive</button>
               </>
             )}
@@ -73,6 +98,22 @@ export default function EntityHero({ page, relationship, onEdit, onArchive }: Pr
       </section>
 
       {relationship}
+      {page.canEdit && (
+        <>
+          <PictureEditor {...logo.editor} />
+          <ConfirmDialog
+            open={removingLogo}
+            title="Remove the logo?"
+            body={`${e.name}'s page and cards show its first letter until you add a logo again.`}
+            confirmLabel="Remove"
+            tone="danger"
+            busy={logo.removing}
+            busyLabel="Removing…"
+            onConfirm={() => void removeLogo()}
+            onCancel={() => setRemovingLogo(false)}
+          />
+        </>
+      )}
     </section>
   );
 }

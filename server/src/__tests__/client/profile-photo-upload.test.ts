@@ -52,8 +52,11 @@ describe('profile photo: what is sent', () => {
   });
 
   it('a picture is sent with where it was placed, and a crop alone places the kept picture again', () => {
-    expect(hook()).toMatch(/if \(!picture\) return savePictureRequest\(kind, \{ crop \}\);/);
-    expect(hook()).toMatch(/return await savePictureRequest\(kind, \{ image: first\.image, crop \}\);/);
+    // T15 review I1: through the one save step, which sends { crop } alone or { image, crop } (picture-send.test.ts).
+    expect(hook()).toMatch(/sendPicture\(picture, crop, \(body\) => savePictureRequest\(kind, body\), pictureToSend\)/);
+    const helper = read('components/picture/send-picture.ts');
+    expect(helper).toMatch(/if \(!picture\) return send\(\{ crop \}\);/);
+    expect(helper).toMatch(/return await send\(\{ image: first\.image, crop \}\);/);
   });
 });
 
@@ -65,13 +68,15 @@ describe('profile photo: however a save ends', () => {
 
   it('a picture the browser cannot read, or one too large, says so in its own words; anything else in the server\'s words', () => {
     expect(editor()).toMatch(/\[UNREADABLE_PICTURE, PICTURE_TOO_LARGE\]\.includes\(err\.message\)/);
-    expect(editor()).toMatch(/errorMessage\(err, `Could not save your \$\{name\} right now\. Try again in a moment\.`\)/);
+    // T15 review M6: the sentence names the picture through `named`, which is still "your {name}" for a member's.
+    expect(editor()).toMatch(/const named = subject \?\? `your \$\{name\}`;/);
+    expect(editor()).toMatch(/errorMessage\(err, `Could not save \$\{named\} right now\. Try again in a moment\.`\)/);
     expect(prepare()).toMatch(/export const UNREADABLE_PICTURE = 'We could not read that picture\. Please choose another one\.';/);
   });
 
   it('the same picture can be chosen again after a failure, and a wrong type or a file over 20 MB is refused before it is read', () => {
     expect(editor()).toMatch(/e\.target\.value = '';/);
-    expect(editor()).toMatch(/const problem = pictureFileProblem\(file, name\);/);
+    expect(editor()).toMatch(/const problem = pictureFileProblem\(file, name, named\);/);
   });
 
   it('after a save the header photo is the new one (the session is read again) and the card is refreshed, before the editor closes', () => {

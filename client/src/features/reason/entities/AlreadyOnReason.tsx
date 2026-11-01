@@ -2,6 +2,8 @@
 // While a member types a new entity's name, the entities already on REASON whose names contain it. Only an exact name
 // is refused by the server (409); this catches the near misses (a typo, "Acme" for "Acme Ltd") before a second copy
 // of the same company is made. It is the list page's own search, so the two share one cache entry per term.
+// 30 Oct review (T15): each one you are not part of says "Ask to join" (its page asks its admins); one whose admins
+// have your claim says "Waiting for approval".
 import { Link } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
@@ -10,7 +12,13 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { shouldRetry } from '../human/profile-text';
 import EntityMark from './EntityMark';
 import { entityKeys, fetchEntities } from './entity-api';
-import { entityMeta, roleLabel, searchTerm } from './entity-text';
+import { WAITING_FOR_APPROVAL, entityMeta, roleLabel, searchTerm } from './entity-text';
+
+/** What a match says about you: your claim waiting, your role, or that you can ask to join it. */
+function you(e: { myRole: string | null; myStatus?: 'active' | 'pending' | null }): string {
+  if (e.myStatus === 'pending') return WAITING_FOR_APPROVAL;
+  return e.myRole ? `You: ${roleLabel(e.myRole)}` : 'Ask to join';
+}
 
 const SHOWN = 3;
 
@@ -42,10 +50,10 @@ export default function AlreadyOnReason({ typedName, onLeave }: { typedName: str
               onClick={onLeave}
               className="grid min-h-[44px] grid-cols-[38px_minmax(0,1fr)] items-center gap-2.5 rounded-[11px] px-1 py-1 hover:bg-white"
             >
-              <EntityMark name={e.name} size="row" />
+              <EntityMark name={e.name} size="row" logoUrl={e.logoUrl} />
               <span className="min-w-0 [overflow-wrap:anywhere]">
                 <b className="block text-[13px]">{e.name}</b>
-                <span className="block text-[11px] text-[#646a77]">{e.myRole ? `${entityMeta(e)} · You: ${roleLabel(e.myRole)}` : entityMeta(e)}</span>
+                <span className="block text-[11px] text-[#646a77]">{entityMeta(e)} · <b className="font-bold text-reason-ink">{you(e)}</b></span>
               </span>
             </Link>
           </li>
