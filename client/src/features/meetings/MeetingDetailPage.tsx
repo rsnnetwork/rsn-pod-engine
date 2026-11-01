@@ -22,7 +22,7 @@ import { ACTION, JoinOrCountdown, PhaseChip } from './MeetingParts';
 import MeetingFeedback from './MeetingFeedback';
 import { useCancelMeeting, useMeeting, useMeetingClock } from './useMeetings';
 import {
-  canJoin, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError, meetingLine, meetingTimes, meetingTitle, MEETING_GONE,
+  canJoin, hasNotStarted, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError, meetingLine, meetingTimes, meetingTitle, MEETING_GONE,
 } from './meeting-words';
 
 const SECONDARY = 'border border-reason-line bg-white text-[#2d3440] hover:bg-[#f5f6f7]';
@@ -59,6 +59,9 @@ function MeetingView({ meeting }: { meeting: Meeting }) {
   const chip = meetingChip(meeting, now);
   // Still to come or under way: it can be joined, added to a calendar, moved or cancelled.
   const standing = meeting.status === 'scheduled' && chip !== 'Ended';
+  // Cancel is for a meeting that has not started (P1 item 1): once it is under way, Leave or End in the call are the
+  // ways out, and a cancel would tell the other person that a meeting they are in was called off.
+  const canCancel = standing && hasNotStarted(meeting, now);
 
   return (
     <>
@@ -78,10 +81,10 @@ function MeetingView({ meeting }: { meeting: Meeting }) {
       </header>
       <MeetingFeedback meeting={meeting} now={now} />
       <MeetingFacts meeting={meeting} />
-      <MeetingActions meeting={meeting} now={now} standing={standing} onCancel={() => setConfirming(true)} />
+      <MeetingActions meeting={meeting} now={now} standing={standing} canCancel={canCancel} onCancel={() => setConfirming(true)} />
       {standing && <JoinBar meeting={meeting} now={now} />}
-      {/* Closed too when the meeting stops standing under it (the other person cancelled, or it ended). */}
-      <CancelSheet open={confirming && standing} meeting={meeting} onClose={() => setConfirming(false)} />
+      {/* Closed too when the meeting stops standing under it (the other person cancelled, or it ended), or starts. */}
+      <CancelSheet open={confirming && canCancel} meeting={meeting} onClose={() => setConfirming(false)} />
     </>
   );
 }
@@ -134,9 +137,9 @@ function MeetingFacts({ meeting }: { meeting: Meeting }) {
   );
 }
 
-interface ActionsProps { meeting: Meeting; now: number; standing: boolean; onCancel: () => void }
+interface ActionsProps { meeting: Meeting; now: number; standing: boolean; canCancel: boolean; onCancel: () => void }
 
-function MeetingActions({ meeting, now, standing: stands, onCancel }: ActionsProps) {
+function MeetingActions({ meeting, now, standing: stands, canCancel, onCancel }: ActionsProps) {
   // An answered call (1 Nov 2026) is under way or over: it has no calendar entry, no time to move and nothing to
   // cancel, so while it stands it offers only Join and the conversation.
   const standing = stands && meeting.source !== 'instant';
@@ -168,7 +171,7 @@ function MeetingActions({ meeting, now, standing: stands, onCancel }: ActionsPro
       <Link to={`/messages/${encodeURIComponent(meeting.conversationId)}`} className={cn(ACTION, SECONDARY)}>
         <MessageCircle aria-hidden="true" className="h-4 w-4" /> Open conversation
       </Link>
-      {standing && (
+      {standing && canCancel && (
         <button type="button" onClick={onCancel} className={cn(ACTION, 'text-reason-red-hover hover:bg-reason-pink min-[721px]:ml-auto')}>
           Cancel meeting
         </button>

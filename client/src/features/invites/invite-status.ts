@@ -134,7 +134,8 @@ export function remindAllSentence({ reminded, total, recentlyReminded }: { remin
       ? { message: 'Everyone was reminded less than an hour ago.', tone: 'info' }
       : { message: 'Nobody is waiting for a reminder.', tone: 'info' };
   }
-  if (reminded === 0) return { message: 'The reminders could not be sent just now. Please try again.', tone: 'error' };
+  // Nothing sent is a warning sentence, never the success colour (P1 item 13, 26 Oct 2026).
+  if (reminded === 0) return { message: 'No reminders were sent. Please try again in a moment.', tone: 'error' };
   if (reminded < total) return { message: `Reminders sent to ${reminded} of ${total} people. Try the rest again in a moment.`, tone: 'info' };
   const also = recent > 0 ? ` ${people(recent)} ${recent === 1 ? 'was' : 'were'} reminded less than an hour ago.` : '';
   return { message: `Reminders sent to ${people(reminded)}.${also}`, tone: 'success' };

@@ -307,7 +307,8 @@ describe('the organisers\' list: reminders and withdrawing, in words', () => {
     expect(remindAllSentence({ reminded: 3, total: 3, recentlyReminded: 0 })).toEqual({ message: 'Reminders sent to 3 people.', tone: 'success' });
     expect(remindAllSentence({ reminded: 2, total: 2, recentlyReminded: 1 })).toEqual({ message: 'Reminders sent to 2 people. 1 person was reminded less than an hour ago.', tone: 'success' });
     expect(remindAllSentence({ reminded: 1, total: 3, recentlyReminded: 0 })).toEqual({ message: 'Reminders sent to 1 of 3 people. Try the rest again in a moment.', tone: 'info' });
-    expect(remindAllSentence({ reminded: 0, total: 2, recentlyReminded: 0 })).toEqual({ message: 'The reminders could not be sent just now. Please try again.', tone: 'error' });
+    // Nothing sent is a warning sentence, never the success colour (P1 item 13, 26 Oct 2026).
+    expect(remindAllSentence({ reminded: 0, total: 2, recentlyReminded: 0 })).toEqual({ message: 'No reminders were sent. Please try again in a moment.', tone: 'error' });
     expect(remindAllSentence({ reminded: 0, total: 0, recentlyReminded: 4 })).toEqual({ message: 'Everyone was reminded less than an hour ago.', tone: 'info' });
     expect(remindAllSentence({ reminded: 0, total: 0, recentlyReminded: 0 })).toEqual({ message: 'Nobody is waiting for a reminder.', tone: 'info' });
   });

@@ -383,7 +383,8 @@ describe('the pod page', () => {
   it('asks for the events only when the server will list them (an active member or an admin), and tells everyone else in words', () => {
     // GET /sessions?podId= answers 403 to anyone else: the section sat on a skeleton through the retries, then said
     // "No events yet." about a pod that has events.
-    expect(page).toMatch(/const mayReadEvents = !!pod\?\.memberRole \|\| user\?\.role === 'admin' \|\| user\?\.role === 'super_admin';/);
+    // Whether the viewer is an admin is asked through the one helper every screen uses (P1 item 16).
+    expect(page).toMatch(/const mayReadEvents = !!pod\?\.memberRole \|\| isAdmin\(user\?\.role\);/);
     expect(page).toMatch(/enabled: !!podId && mayReadEvents,/);
     expect(page).toMatch(/\{!mayReadEvents \|\| eventsRefused \? \(/);
     expect(page).toContain("Members see the pod's events here.");

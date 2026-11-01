@@ -13,7 +13,7 @@ import * as ts from 'typescript';
 import type { Meeting, MeetingSummary } from '@rsn/shared';
 import {
   canJoin, eventsBadge, eventsLinkName, firstLine, isMeetingId, kindLabel, meetingChip, meetingDay, meetingError,
-  meetingLine, meetingTimes, meetingTitle, meetingWhen, nextChangeAt, startsIn, tickDelay, EMPTY_MEETINGS, NO_PAST_MEETINGS,
+  hasNotStarted, meetingLine, meetingTimes, meetingTitle, meetingWhen, nextChangeAt, startsIn, tickDelay, EMPTY_MEETINGS, NO_PAST_MEETINGS,
   NO_CANCELLED_MEETINGS,
 } from '../../../../client/src/features/meetings/meeting-words';
 
@@ -151,6 +151,13 @@ describe('the clock: a meeting\'s screens redraw at the moment it changes, not a
     expect(nextChangeAt([], START)).toBeNull();
     // Once both have ended there is nothing left to wait for.
     expect(nextChangeAt([meeting(), later], Date.parse('2026-10-26T00:00:00Z'))).toBeNull();
+  });
+  it('the start itself is a change: Cancel goes the moment the meeting starts, not at the next tick (P1 item 1)', () => {
+    expect(nextChangeAt([meeting()], START - 3 * MIN)).toBe(START);
+    expect(hasNotStarted(meeting(), START - 1)).toBe(true);
+    expect(hasNotStarted(meeting(), START)).toBe(false);
+    // In the half hour after the end Join is still open (phase 'joinable'), and the meeting has still started.
+    expect(hasNotStarted(meeting(), END + 10 * MIN)).toBe(false);
   });
   it('the timer waits for the sooner of its tick and that change, never for nothing, never past a day', () => {
     const now = START - 60 * MIN;
@@ -416,6 +423,14 @@ describe('the meeting\'s page', () => {
     expect(src).toMatch(/>\s*Open conversation\s*</);
     // 1 Nov 2026 (T7): Add to calendar is the shared menu, with the meeting's own file (t7-add-to-calendar.test.ts).
     expect(src).toContain('file={meetingFile(meeting.id)}');
+  });
+
+  it('Cancel is offered only before the meeting has started: under way, Leave or End are the only ways out (P1 item 1)', () => {
+    const src = detail();
+    expect(src).toMatch(/const canCancel = standing && hasNotStarted\(meeting, now\);/);
+    expect(src).toMatch(/\{standing && canCancel && \(\s*<button type="button" onClick=\{onCancel\}/);
+    expect(src).toMatch(/<CancelSheet open=\{confirming && canCancel\}/);
+    expect(src).not.toMatch(/\{standing && \(\s*<button type="button" onClick=\{onCancel\}/);
   });
 
   it('Cancel asks first, in a sheet portalled to the page: "Cancel this meeting? {name} will be told."', () => {
