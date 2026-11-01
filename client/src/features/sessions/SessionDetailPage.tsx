@@ -449,7 +449,8 @@ export default function SessionDetailPage() {
               <Play className="h-4 w-4 mr-2" /> Enter Live Event
             </Button>
           )}
-          {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). The
+          {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). An
+              in-person event carries its place as where it is (30 Oct 2026, T12). The
               entry links back to this page on this site. */}
           {session.status === 'scheduled' && session.scheduledAt && (
             <AddToCalendar
@@ -458,12 +459,14 @@ export default function SessionDetailPage() {
                 startAt: session.scheduledAt,
                 durationMin: eventDurationMinutes(eventFormat, session.config),
                 pageUrl: `${window.location.origin}/sessions/${session.id}`,
+                place,
               })}
               file={async () => icsFile(eventEntry({
                 title: session.title || 'Event',
                 startAt: session.scheduledAt,
                 durationMin: eventDurationMinutes(eventFormat, session.config),
                 pageUrl: `${window.location.origin}/sessions/${session.id}`,
+                place,
               }), `event-${session.id}`)}
               fileName="reason-event.ics"
               className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 inline-flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"

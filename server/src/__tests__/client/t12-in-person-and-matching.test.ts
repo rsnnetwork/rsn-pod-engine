@@ -136,6 +136,10 @@ describe('the event page and the live page', () => {
     expect(page).toMatch(/\{isRoundsEvent \? 'View recap' : 'Who took part'\}/);
   });
 
+  it("passes the place to T7's calendar entry, for the menu's links and the file alike", () => {
+    expect(page.match(/pageUrl: `\$\{window\.location\.origin\}\/sessions\/\$\{session\.id\}`,\n\s*place,\n/g)).toHaveLength(2);
+  });
+
   it('names the preset on the facts line', () => {
     expect(page).toMatch(/eventFactsLine\(eventFormat, session\.config, presetNameOf\(session\.config, presets\)\)/);
     expect(page).toMatch(/const \{ data: presets \} = useMatchingPresets\(\);/);
