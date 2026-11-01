@@ -36,8 +36,8 @@ async function member(label: string): Promise<{ id: string; email: string }> {
   const id = crypto.randomUUID();
   const email = `e2etest-t4-${label}-${RUN}@rsn-e2e.invalid`;
   await pool.query(
-    `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed, onboarding_status, email_verified, company, job_title, industry, reasons_to_connect)
-     VALUES ($1, $2, $3, 'Tee', 'Four', 'active', 'member', true, true, 'completed', true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[])`,
+    `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed, onboarding_status, onboarding_version, email_verified, company, job_title, industry, reasons_to_connect, location)
+     VALUES ($1, $2, $3, 'Tee', 'Four', 'active', 'member', true, true, 'completed', 2, true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[], 'Copenhagen, Denmark')`,
     [id, email, `Tee Four ${label}`],
   );
   made.push(id);

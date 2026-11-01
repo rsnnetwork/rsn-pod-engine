@@ -44,8 +44,8 @@ test.describe('magic link login survives a second tab + stale tokens (Stefan 7 S
 
     try {
       await pool.query(
-        `INSERT INTO users (id,email,display_name,first_name,last_name,status,role,profile_complete,onboarding_completed,onboarding_status,email_verified,company,job_title,industry,reasons_to_connect)
-         VALUES ($1,$2,'E2E TwoTab','E2E','TwoTab','active','member',true,true,'completed',true,'TestCo','Test Account','Tech',ARRAY['Testing']::text[])`,
+        `INSERT INTO users (id,email,display_name,first_name,last_name,status,role,profile_complete,onboarding_completed,onboarding_status,email_verified,company,job_title,industry,reasons_to_connect,onboarding_version,location)
+         VALUES ($1,$2,'E2E TwoTab','E2E','TwoTab','active','member',true,true,'completed',true,'TestCo','Test Account','Tech',ARRAY['Testing']::text[],2,'Copenhagen, Denmark')`,
         [id, email],
       );
 
