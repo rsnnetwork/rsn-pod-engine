@@ -13,6 +13,7 @@
 //   D. the form at seven widths: no sideways scroll, the place field and the Matching section's controls 44px and
 //      inside the window (Chromium, WebKit, and E2E_DEVICE="iPhone 14" for the phone itself).
 //
+// The event page's Add to calendar menu (T7's) carries the place in its Google and Outlook.com links (step A).
 // The registration and invite emails' "In person, at <place>" and their links carry no browser surface (no email
 // provider locally): server/src/__tests__/services/t12-in-person-emails.test.ts holds them.
 //
@@ -101,10 +102,9 @@ async function createdEventId(page: Page): Promise<string> {
   return id;
 }
 
-/** The invite sheet a new event opens with (?invite=1): closed, so the page is in view. */
-async function closeInviteSheet(page: Page) {
-  const close = page.getByRole('button', { name: /^Close/ }).first();
-  if (await close.isVisible().catch(() => false)) await close.click();
+/** A new event opens with its invite sheet (?invite=1); the event page is opened again without it, so it is in view. */
+async function closeInviteSheet(page: Page, id: string) {
+  await page.goto(`${APP}/sessions/${id}`, { waitUntil: 'domcontentloaded' });
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -156,7 +156,7 @@ test(`A: an in-person event: its place and maps link, no video room, and a membe
   await expect(page.getByTestId('matching-section')).toContainText("Video meetings don't pair people.");
   await page.getByRole('button', { name: 'Schedule Event' }).click();
   const id = await createdEventId(page);
-  await closeInviteSheet(page);
+  await closeInviteSheet(page, id);
 
   await expect(page.getByTestId('event-place')).toContainText(PLACE);
   const maps = page.getByRole('link', { name: /Open in maps/ });
@@ -164,6 +164,15 @@ test(`A: an in-person event: its place and maps link, no video room, and a membe
   await tall(page, maps, 'Open in maps');
   await expect(page.getByText(`In person · 180 min · up to 25 · ${PLACE}`)).toBeVisible();
   await expect(page.getByRole('button', { name: /Go Live|Enter Event|Enter Live Event/ })).toHaveCount(0);
+
+  // The calendar menu's links (T7's AddToCalendar) carry the place as where the event is.
+  await page.getByRole('button', { name: 'Add to calendar' }).click();
+  const menu = page.getByTestId('add-to-calendar-menu');
+  const google = new URL((await menu.getByTestId('calendar-google').getAttribute('href'))!);
+  expect(google.searchParams.get('location')).toBe(PLACE);
+  const outlook = new URL((await menu.getByTestId('calendar-outlook').getAttribute('href'))!);
+  expect(outlook.searchParams.get('location')).toBe(PLACE);
+  await page.keyboard.press('Escape');
 
   // The live address goes back to the event page; the server opens no room for it.
   await page.goto(`${APP}/session/${id}/live`, { waitUntil: 'domcontentloaded' });
@@ -198,7 +207,7 @@ test(`B: speed networking with Founders and investors and the cooldown rule; the
   await page.getByLabel('Title', { exact: true }).fill('Founders night');
   await page.getByRole('button', { name: 'Schedule Event' }).click();
   const id = await createdEventId(page);
-  await closeInviteSheet(page);
+  await closeInviteSheet(page, id);
   await expect(page.getByText(/Speed networking · Founders and investors · 5 rounds × 8 min · up to 500/)).toBeVisible({ timeout: 20_000 });
   const stored = await api(director, 'GET', `/sessions/${id}`);
   expect(stored.json.data.config).toMatchObject({ matchingTemplateId: FOUNDERS, matchingPolicy: 'cooldown', cooldownMonths: 6 });
