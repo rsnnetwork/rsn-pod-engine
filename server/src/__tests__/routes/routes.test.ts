@@ -668,7 +668,9 @@ describe('Session Routes', () => {
       expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
       // T13: an event with no circle reads no circle and carries no circle block (production's shape).
       expect(res.body.data).not.toHaveProperty('circle');
-      expect((dbQuery as jest.Mock).mock.calls.some(([sql]) => /FROM circles/.test(String(sql)))).toBe(false);
+      // T14: the access read's closed-circle check names circles inside its own query (guarded by circle_id IS NOT NULL);
+      // what must not happen is a separate lookup of the event's circle.
+      expect((dbQuery as jest.Mock).mock.calls.some(([sql]) => /FROM circles WHERE/.test(String(sql)))).toBe(false);
       (dbQuery as jest.Mock).mockReset();
     });
 

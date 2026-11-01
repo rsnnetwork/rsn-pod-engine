@@ -120,7 +120,8 @@ describe('the circle page (T13, 1 Nov 2026)', () => {
   function arm(manager: boolean) {
     mockQuery.mockImplementation(async (sql: string) => {
       if (/FROM circles c WHERE c\.id = \$1 AND c\.archived_at IS NULL/.test(sql)) {
-        return { rows: [{ id: 'c1', name: 'Founders', description: null, parent_circle_id: null, member_count: 2, created_at: new Date(), is_member: true }] };
+        // T14: whether the viewer runs it comes in the circle's own read (circleAccessColumns), not a second lookup.
+        return { rows: [{ id: 'c1', name: 'Founders', description: null, parent_circle_id: null, member_count: 2, created_at: new Date(), is_member: true, join_policy: 'open', can_manage: manager }] };
       }
       if (/FROM sessions s/.test(sql)) {
         return { rows: [
@@ -128,7 +129,6 @@ describe('the circle page (T13, 1 Nov 2026)', () => {
           { id: 'e2', title: 'Pod event', scheduled_at: new Date(), pod_id: 'p1', for_circle: false },
         ] };
       }
-      if (/c\.created_by = \$2/.test(sql)) return { rows: manager ? [{ x: 1 }] : [] };
       return { rows: [] };
     });
   }
@@ -147,13 +147,18 @@ describe('the circle page (T13, 1 Nov 2026)', () => {
     expect(detail.canManage).toBe(false);
   });
 
-  it('says canManage for someone who runs the circle, and for an admin without asking the database', async () => {
+  it('says canManage for someone who runs the circle, read in the circle\'s own query (an admin is asked as one)', async () => {
     arm(true);
     expect((await getCircleDetail('c1', 'u1', 'member')).canManage).toBe(true);
+    const read = mockQuery.mock.calls.find(([sql]) => /FROM circles c WHERE c\.id = \$1 AND c\.archived_at IS NULL/.test(String(sql)))!;
+    expect(String(read[0])).toMatch(/\$3::boolean OR c\.created_by = \$2/);
+    expect(read[1]).toEqual(['c1', 'u1', false]);
     mockQuery.mockClear();
     arm(false);
-    expect((await getCircleDetail('c1', 'u1', 'admin')).canManage).toBe(true);
-    expect(mockQuery.mock.calls.some(([sql]) => /c\.created_by = \$2/.test(String(sql)))).toBe(false);
+    await getCircleDetail('c1', 'u1', 'admin');
+    expect(mockQuery.mock.calls.find(([sql]) => /FROM circles c WHERE c\.id = \$1/.test(String(sql)))![1]).toEqual(['c1', 'u1', true]);
+    // One answer to "does this person run it": no separate isCircleManager lookup beside the read.
+    expect(mockQuery.mock.calls.some(([sql]) => /^SELECT 1 FROM circles c/.test(String(sql).trim()))).toBe(false);
   });
 });
 

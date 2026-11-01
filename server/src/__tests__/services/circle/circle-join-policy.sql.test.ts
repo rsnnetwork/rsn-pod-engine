@@ -41,6 +41,7 @@ const TABLES = [
   'users', 'pods', 'pod_members', 'sessions', 'session_participants', 'session_cohosts', 'invites', 'notifications',
   'circles', 'circle_members', 'circle_pods', 'circle_posts', 'circle_post_reactions', 'circle_post_comments', 'circle_comment_likes',
   'dm_conversations', 'direct_messages', 'user_blocks', 'user_pokes', 'encounter_history', 'user_entitlements',
+  'event_join_requests', 'matching_templates',
 ];
 
 const MIGRATION_128 = fs.readFileSync(path.join(__dirname, '../../../db/migrations/128_circle_join_policy.sql'), 'utf8');
@@ -56,6 +57,8 @@ suite('circles: open or closed, asks, invites and a pod from the circle (real Po
   let pods: typeof import('../../../services/pod/pod.service');
   let invites: typeof import('../../../services/invite/invite.service');
   let candidates: typeof import('../../../services/invite/invite-candidates.service');
+  let sessions: typeof import('../../../services/session/session.service');
+  let sessionAccess: typeof import('../../../services/session/session-access');
 
   const run = (sql: string, params: unknown[] = []) => admin.query(sql.split('{s}').join(schema), params);
 
@@ -153,6 +156,8 @@ suite('circles: open or closed, asks, invites and a pod from the circle (real Po
     pods = await import('../../../services/pod/pod.service');
     invites = await import('../../../services/invite/invite.service');
     candidates = await import('../../../services/invite/invite-candidates.service');
+    sessions = await import('../../../services/session/session.service');
+    sessionAccess = await import('../../../services/session/session-access');
   }, 60_000);
 
   afterAll(async () => {
@@ -585,6 +590,97 @@ suite('circles: open or closed, asks, invites and a pod from the circle (real Po
       const searched = await joins.listAttachablePods(c, { userId: platform, role: 'admin' }, { q: hosted.slice(0, 4), page: 1, pageSize: 50 });
       expect(searched.items.map((p) => p.podId)).toContain(hosted);
       await expect(joins.listAttachablePods(c, { userId: other, role: 'member' }, { page: 1, pageSize: 50 })).rejects.toMatchObject({ statusCode: 403 });
+    }, 30_000);
+  });
+  // ── A closed circle's own events (T14 after T13's R10m; L22) ───────────────────────────────────────────────
+
+  describe('an event for a closed circle is hidden from people outside the circle, whatever its own visibility', () => {
+    async function circleEvent(circleId: string, podId: string, host: string, visibility: string): Promise<string> {
+      const id = randomUUID();
+      await run(
+        `INSERT INTO {s}.sessions (id, pod_id, circle_id, visibility, title, status, host_user_id, scheduled_at, config)
+         VALUES ($1, $2, $3, $4, $5, 'scheduled', $6, NOW() + INTERVAL '2 days', '{}'::jsonb)`,
+        [id, podId, circleId, visibility, `Circle evening ${visibility}`, host],
+      );
+      return id;
+    }
+    const sees = (e: string, u: string, role = 'member') => sessionAccess.canViewSession(u, e, role as never);
+    const lists = async (e: string, u: string) => (await sessions.listSessions({ userId: u })).sessions.some((x) => x.id === e);
+    const listedToNobody = async (e: string) => (await sessions.listSessions({})).sessions.some((x) => x.id === e);
+    async function registers(e: string, u: string): Promise<string> {
+      try { await sessions.registerParticipant(e, u, 'member' as never); return 'ok'; } catch (err) { return (err as { code?: string }).code ?? 'THREW'; }
+    }
+
+    async function world(visibility = 'public') {
+      const owner = await person('Owner');
+      const member = await person('Member');
+      const stranger = await person('Stranger');
+      const podMember = await person('Pod Member');
+      const p = await pod(owner, 'private', 'active', [podMember]);
+      const c = await circle(owner, { members: [member], policy: 'closed' });
+      const e = await circleEvent(c, p, owner, visibility);
+      return { owner, member, stranger, podMember, p, c, e };
+    }
+
+    it('a PUBLIC event of a closed circle: a stranger neither sees, lists nor registers; the logged-out list leaves it out', async () => {
+      const w = await world('public');
+      expect(await sees(w.e, w.stranger)).toBe(false);
+      expect(await lists(w.e, w.stranger)).toBe(false);
+      expect(await listedToNobody(w.e)).toBe(false);
+      expect(await registers(w.e, w.stranger)).toBe('EVENT_PRIVATE');
+    }, 30_000);
+
+    it.each(['public_with_approval', 'private'])('a %s event of a closed circle is hidden from a stranger too', async (visibility) => {
+      const w = await world(visibility);
+      expect(await sees(w.e, w.stranger)).toBe(false);
+      expect(await lists(w.e, w.stranger)).toBe(false);
+      expect(await registers(w.e, w.stranger)).toBe('EVENT_PRIVATE');
+    }, 30_000);
+
+    it('the circle\'s members see, list and register; the owner, the pod\'s own members and admins see it', async () => {
+      const w = await world('public');
+      expect(await sees(w.e, w.member)).toBe(true);
+      expect(await lists(w.e, w.member)).toBe(true);
+      expect(await registers(w.e, w.member)).toBe('ok');
+      expect(await sees(w.e, w.owner)).toBe(true);
+      expect(await sees(w.e, w.podMember)).toBe(true);
+      expect(await lists(w.e, w.podMember)).toBe(true);
+      const platform = await person('Platform', 'active', 'admin');
+      expect(await sees(w.e, platform, 'admin')).toBe(true);
+      expect((await circles.getCircleDetail(w.c, w.member, 'member')).upcomingEvents.map((x) => x.id)).toEqual([w.e]);
+      expect((await circles.getCircleDetail(w.c, w.stranger, 'member')).upcomingEvents).toEqual([]);
+    }, 30_000);
+
+    it('someone invited, or already holding a place, keeps it', async () => {
+      const w = await world('public');
+      await run(`INSERT INTO {s}.invites (code, type, inviter_id, session_id, invitee_email, status, max_uses) VALUES ($1, 'session', $2, $3, $4, 'pending', 1)`,
+        [randomUUID().slice(0, 12), w.owner, w.e, await emailOf(w.stranger)]);
+      expect(await sees(w.e, w.stranger)).toBe(true);
+      expect(await registers(w.e, w.stranger)).toBe('ok');
+      expect(await lists(w.e, w.stranger)).toBe(true);
+    }, 30_000);
+
+    it('reopening the circle shows the public event to everyone again; an approved ask lets the asker see it', async () => {
+      const w = await world('public');
+      await joins.requestToJoinCircle(w.c, w.stranger, 'member');
+      expect(await sees(w.e, w.stranger)).toBe(false);
+      await joins.approveJoinRequest(w.c, w.stranger, { userId: w.owner, role: 'member' });
+      expect(await sees(w.e, w.stranger)).toBe(true);
+      const other = await person('Other');
+      expect(await sees(w.e, other)).toBe(false);
+      await circles.updateCircle(w.c, { joinPolicy: 'open' }, { userId: w.owner, role: 'member' });
+      expect(await sees(w.e, other)).toBe(true);
+      expect(await listedToNobody(w.e)).toBe(true);
+    }, 30_000);
+
+    it('T13\'s circle bells and audience read members only: an ask that waits is never rung', async () => {
+      const w = await world('public');
+      const asker = await person('Asker');
+      await joins.requestToJoinCircle(w.c, asker, 'member');
+      const { announceCircleEvent } = await import('../../../services/circle/circle-events.service');
+      await announceCircleEvent({ sessionId: w.e, actorId: w.owner, circle: { id: w.c, name: 'x' }, previousCircleId: null });
+      const rung = (await run(`SELECT user_id FROM {s}.notifications WHERE type = 'event_invite' AND link = $1`, [`/sessions/${w.e}`])).rows.map((r) => r.user_id);
+      expect(rung).toEqual([w.member]);
     }, 30_000);
   });
 });

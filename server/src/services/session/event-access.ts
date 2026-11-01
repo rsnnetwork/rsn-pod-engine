@@ -14,6 +14,9 @@
 //
 // "The event's audience" is one fragment, eventAudienceSql: the pod's active members, and for an event for a whole
 // circle (T13, sessions.circle_id) the circle's active members too. Every rule here follows it.
+// A closed circle (T14, L22, circles.join_policy) hides its events from people outside it, whatever the event's own
+// visibility: outsideClosedCircleSql names them, and every rule below (and the list predicates) leaves them out unless
+// they hold another tie to the event (host, co-host, invitee, a place, the pod's own members). Admins see everything.
 
 import {
   ErrorCodes, UserRole, hasRoleAtLeast, isEventVisibility,
@@ -58,6 +61,37 @@ export function eventAudienceSql(sessionAlias: string, userParam: string): strin
 }
 
 /**
+ * T14 (L22): the person in `userParam` is outside the closed circle that the event aliased `sessionAlias` is for: the
+ * event names a circle (sessions.circle_id) whose join_policy is closed, and they are neither in it (a
+ * circle_members row) nor its creator. Whether they hold another tie to the event is the rules' to add.
+ */
+export function outsideClosedCircleSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  const s = sessionAlias;
+  const u = userParam;
+  return `(${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = ${s}.circle_id AND cc_c.join_policy = 'closed'
+            AND cc_c.created_by <> ${u}
+            AND NOT EXISTS (SELECT 1 FROM circle_members cc_m WHERE cc_m.circle_id = ${s}.circle_id AND cc_m.user_id = ${u})))`;
+}
+
+/**
+ * T14 (L22), for lists: the event is hidden from this person because it is for a closed circle they are outside, and
+ * they hold no other tie to it (its host, a co-host, a place that is not removed, an active member of its pod, an
+ * invitee). The list predicate is ANDed with NOT this, so canSeeEvent and the lists give one answer.
+ */
+export function closedCircleOutsiderSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  const s = sessionAlias;
+  const u = userParam;
+  return `(${outsideClosedCircleSql(s, u)}
+    AND ${s}.host_user_id IS DISTINCT FROM ${u}
+    AND NOT EXISTS (SELECT 1 FROM session_cohosts cc_h WHERE cc_h.session_id = ${s}.id AND cc_h.user_id = ${u})
+    AND NOT EXISTS (SELECT 1 FROM session_participants cc_p WHERE cc_p.session_id = ${s}.id AND cc_p.user_id = ${u} AND cc_p.status <> 'removed')
+    AND NOT EXISTS (SELECT 1 FROM pod_members cc_pm WHERE cc_pm.pod_id = ${s}.pod_id AND cc_pm.user_id = ${u} AND cc_pm.status = 'active')
+    AND NOT ${eventInviteeSql(s, u)})`;
+}
+
+/**
  * Someone invited to the event: an invite to it for their address or accepted by them, accepted or pending and
  * not expired (a withdrawn, declined or expired invite is no invite). T2's D2 rule reads invites the same way.
  */
@@ -92,7 +126,7 @@ export function visibleEventsSql(sessionAlias: string, userParam: string): strin
       OR ${eventAudienceSql(s, u)}
       OR ${eventInviteeSql(s, u)}
     ))
-  )`;
+  ) AND NOT ${closedCircleOutsiderSql(s, u)}`;
 }
 
 /** The events listed when nobody is asking: a public pod's NULL events, and every public or approval event. */
@@ -102,7 +136,7 @@ export function publicEventsSql(sessionAlias: string): string {
   return `(
     (${s}.visibility IS NULL AND ${s}.pod_id IN (SELECT pe_p.id FROM pods pe_p WHERE pe_p.visibility = 'public'))
     OR ${s}.visibility IN ('public', 'public_with_approval')
-  )`;
+  ) AND NOT (${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = ${s}.circle_id AND pc_c.join_policy = 'closed'))`;
 }
 
 // ─── The facts, in one read ──────────────────────────────────────────────────
@@ -122,6 +156,8 @@ export interface EventAccessFacts {
   /** False for a removed, suspended or banned account (and for an account that does not exist). */
   accountActive: boolean;
   myRequest: EventJoinRequestStatus | null;
+  /** T14 (L22): the event is for a closed circle this person is outside (outsideClosedCircleSql). */
+  outsideClosedCircle: boolean;
 }
 
 interface FactsRow {
@@ -136,6 +172,7 @@ interface FactsRow {
   participant_status: string | null;
   account_active: boolean;
   my_request: EventJoinRequestStatus | null;
+  outside_closed_circle: boolean;
 }
 
 type Reader = (text: string, params: unknown[]) => Promise<{ rows: FactsRow[] }>;
@@ -156,7 +193,8 @@ export async function readEventAccessFacts(
             ${eventInviteeSql('s', '$2')} AS is_invited,
             (SELECT sp.status::text FROM session_participants sp WHERE sp.session_id = s.id AND sp.user_id = $2) AS participant_status,
             COALESCE((SELECT ${activeMemberSql('u')} FROM users u WHERE u.id = $2), FALSE) AS account_active,
-            (SELECT r.status FROM event_join_requests r WHERE r.session_id = s.id AND r.user_id = $2) AS my_request
+            (SELECT r.status FROM event_join_requests r WHERE r.session_id = s.id AND r.user_id = $2) AS my_request,
+            ${outsideClosedCircleSql('s', '$2')} AS outside_closed_circle
        FROM sessions s
        LEFT JOIN pods p ON p.id = s.pod_id
       WHERE s.id = $1`,
@@ -176,6 +214,7 @@ export async function readEventAccessFacts(
     participantStatus: row.participant_status,
     accountActive: !!row.account_active,
     myRequest: row.my_request,
+    outsideClosedCircle: !!row.outside_closed_circle,
   };
 }
 
@@ -186,6 +225,15 @@ function isAdminRole(role: string | undefined): boolean {
 }
 
 const holdsPlace = (f: EventAccessFacts) => f.participantStatus !== null && f.participantStatus !== 'removed';
+
+/**
+ * T14 (L22): the event is for a closed circle this person is outside, and nothing else ties them to it (they do not
+ * run it, are not its pod's audience, not invited, hold no place). Such a person is shown and offered nothing, at
+ * every visibility. Admins run every event, so never land here.
+ */
+function hiddenByClosedCircle(f: EventAccessFacts, role: string | undefined, viaInvite = false): boolean {
+  return f.outsideClosedCircle && !runsEvent(f, role) && !f.inAudience && !f.isInvited && !viaInvite && !holdsPlace(f);
+}
 
 /** Host, co-host or admin: always sees and manages the event. */
 export function runsEvent(f: EventAccessFacts, role: string | undefined): boolean {
@@ -201,6 +249,7 @@ export function managesRequests(f: EventAccessFacts, role: string | undefined): 
 export function canSeeEvent(f: EventAccessFacts, role: string | undefined): boolean {
   if (!f.accountActive) return false;
   if (runsEvent(f, role)) return true;
+  if (hiddenByClosedCircle(f, role)) return false;
   if (f.visibility === null) {
     // Today's rule (canViewSession): a place that is not removed, an active pod member, or a public pod.
     return holdsPlace(f) || f.inAudience || f.podVisibility === 'public';
@@ -217,7 +266,7 @@ export function canSeeEvent(f: EventAccessFacts, role: string | undefined): bool
  */
 export function needsApproval(f: EventAccessFacts, role: string | undefined): boolean {
   if (f.visibility !== 'public_with_approval') return false;
-  if (!f.accountActive || runsEvent(f, role)) return false;
+  if (!f.accountActive || runsEvent(f, role) || hiddenByClosedCircle(f, role)) return false;
   return !f.inAudience && !f.isInvited && f.participantStatus === null && f.myRequest !== 'approved';
 }
 
@@ -229,6 +278,7 @@ export const EVENT_PRIVATE_SENTENCE = 'This event is private. It is for its pod\
 export const EVENT_NEEDS_APPROVAL_SENTENCE = 'This event asks the host to approve each place. Request to join from the event page.';
 const ACCOUNT_CLOSED_SENTENCE = 'Your account cannot join events right now.';
 const PRIVATE_POD_SENTENCE = 'You must be a pod member to register for events in a private pod';
+export const CLOSED_CIRCLE_EVENT_SENTENCE = 'This event is for the members of a closed circle. Ask to join the circle to take part.';
 
 /**
  * Whether the person may take a place now (the event's open/closed state, capacity and their own row are
@@ -243,6 +293,9 @@ export function canRegister(
 ): RegisterDecision {
   if (!f.accountActive) return { ok: false, status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: ACCOUNT_CLOSED_SENTENCE };
   if (isAdminRole(role)) return { ok: true, addToPod: false };
+  if (hiddenByClosedCircle(f, role, !!options.viaInvite)) {
+    return { ok: false, status: 403, code: ErrorCodes.EVENT_PRIVATE, message: CLOSED_CIRCLE_EVENT_SENTENCE };
+  }
   const invited = f.isInvited || !!options.viaInvite;
   if (f.visibility === null) {
     // Today's registerParticipant: membership means an active pod member (the host of a private pod who is not
