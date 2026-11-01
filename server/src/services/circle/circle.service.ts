@@ -21,12 +21,17 @@ export const MAX_NESTING_DEPTH = 3;
 
 /**
  * T2 (1 Nov 2026): a circle's member count as members see it, the members list's own rule (an account an admin
- * removed, suspended or banned is neither listed nor counted). `circleRef` is the SQL that names the circle's id.
+ * removed, suspended or banned is neither listed nor counted). `circleAlias` is the query's alias for circles.
  * The stored member_count counter still moves on join and leave; it is no longer what anyone reads.
  */
-const activeCircleMemberCount = (circleRef: string) => `(SELECT count(*)::int FROM circle_members cm_n
+const activeCircleMemberCount = (circleAlias: string) => {
+  if (!/^[a-z_][a-z0-9_]*$/.test(circleAlias)) {
+    throw new AppError(500, ErrorCodes.INTERNAL_ERROR, `Not a table alias: ${JSON.stringify(circleAlias)}`);
+  }
+  return `(SELECT count(*)::int FROM circle_members cm_n
     JOIN users cm_u ON cm_u.id = cm_n.user_id
-   WHERE cm_n.circle_id = ${circleRef} AND ${activeMemberSql('cm_u')})`;
+   WHERE cm_n.circle_id = ${circleAlias}.id AND ${activeMemberSql('cm_u')})`;
+};
 
 export interface CircleSummary {
   id: string;
@@ -215,7 +220,7 @@ export async function listCircles(userId: string): Promise<CircleSummary[]> {
     parent_circle_id: string | null; member_count: number;
     pod_count: string; is_member: boolean; created_at: Date;
   }>(
-    `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c.id')} AS member_count, c.created_at,
+    `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c')} AS member_count, c.created_at,
             (SELECT count(*) FROM circle_pods cp WHERE cp.circle_id = c.id)::text AS pod_count,
             EXISTS(SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $1) AS is_member
      FROM circles c
@@ -248,7 +253,7 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
     parent_circle_id: string | null; member_count: number; created_at: Date;
     is_member: boolean;
   }>(
-    `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c.id')} AS member_count, c.created_at,
+    `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c')} AS member_count, c.created_at,
             EXISTS(SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $2) AS is_member
      FROM circles c WHERE c.id = $1 AND c.archived_at IS NULL`,
     [circleId, userId],
@@ -284,7 +289,7 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
       [circleId, userId, seesEveryEvent],
     ),
     query<{ id: string; name: string; member_count: number }>(
-      `SELECT ch.id, ch.name, ${activeCircleMemberCount('ch.id')} AS member_count FROM circles ch
+      `SELECT ch.id, ch.name, ${activeCircleMemberCount('ch')} AS member_count FROM circles ch
        WHERE ch.parent_circle_id = $1 AND ch.archived_at IS NULL
        ORDER BY member_count DESC`,
       [circleId],

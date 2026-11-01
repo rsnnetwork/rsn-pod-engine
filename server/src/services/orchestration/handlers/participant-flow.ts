@@ -1164,13 +1164,12 @@ export async function handleLeaveSession(
     setPresence(data.sessionId, userId, null);
 
     // H1 fix round 1 — a page the event never let in (no participant row, not the host, a co-host or an admin)
-    // has nothing to leave: no status write, no canonical entry, no plan repair, nobody told. Someone let in over
-    // capacity has no row either; their leaving only refreshes everyone's list. A failed read leaves as before.
+    // has nothing to leave: no status write, no canonical entry, no plan repair, nobody told. A failed read leaves
+    // as before. T2 fix round 1 (1 Nov 2026): a socket that was in the event's room always leaves in full, whatever
+    // the admission read says now (someone let in over capacity, a co-host stood down), so a partner's breakout room
+    // gets its grace and their status is written; only a socket that was never in the room stops here.
     const admission = await eventRoomAdmission(data.sessionId, userId, socket.data?.role).catch(() => null);
-    if (admission === 'refused') {
-      if (wasInRoom) scheduleParticipantListBroadcast(io, data.sessionId);
-      return;
-    }
+    if (admission === 'refused' && !wasInRoom) return;
 
     // Check if leaving user is host
     const session = await sessionService.getSessionById(data.sessionId).catch(() => null);

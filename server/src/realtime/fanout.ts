@@ -317,6 +317,9 @@ export async function fanoutAdminEntities(
 // it is in, and every circle it is in (the circle's page and its member list, through fanoutCircleChange, with the
 // person counted as a changed member so lists that show their circles redraw).
 
+/** The most connections one status change tells live. */
+export const ACCOUNT_AUDIENCE_PEOPLE_MAX = 2000;
+
 /** Who could be looking at an account, read from its memberships. */
 export interface AccountAudience {
   podIds: string[];
@@ -339,8 +342,9 @@ export async function accountAudience(userId: string): Promise<AccountAudience> 
         WHERE sp.user_id = $1 AND sp.status <> 'removed' AND s.status NOT IN ('completed', 'cancelled')`,
       [userId],
     ),
+    // Bounded (CLAUDE.md §7): the newest connections first; anyone past the cap catches up on their next read.
     query<{ person_id: string }>(
-      `WITH ${CONNECTION_SIGNALS_SQL} SELECT person_id FROM people WHERE person_id <> $1`,
+      `WITH ${CONNECTION_SIGNALS_SQL} SELECT person_id FROM people WHERE person_id <> $1 ORDER BY since DESC LIMIT ${ACCOUNT_AUDIENCE_PEOPLE_MAX}`,
       [userId],
     ),
     query<{ group_id: string }>(`SELECT group_id FROM dm_group_members WHERE user_id = $1`, [userId]),

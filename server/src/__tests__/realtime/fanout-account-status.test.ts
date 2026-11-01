@@ -61,6 +61,9 @@ describe('accountAudience', () => {
       podIds: [POD], events: [{ podId: POD, sessionId: EVENT }], people: [FRIEND], groupIds: [GROUP], circleIds: [CIRCLE],
     });
     for (const call of mockQuery.mock.calls) expect(call[1]).toEqual([GONE]);
+    // The connections read is bounded, newest first (review minor 4).
+    const people = mockQuery.mock.calls.map((c) => String(c[0])).find((sql) => /WITH signals AS/.test(sql))!;
+    expect(people).toMatch(/ORDER BY since DESC LIMIT 2000$/);
   });
 });
 

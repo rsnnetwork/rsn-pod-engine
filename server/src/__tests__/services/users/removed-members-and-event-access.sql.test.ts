@@ -380,10 +380,23 @@ suite('removed members vanish, and who sees and joins a pod\'s events (real Post
       }
     }, 30_000);
 
-    it('keeps a non-member who already holds a place out of the live room', async () => {
+    // Fix round 1: D2 gates a NEW place only. A place the event already gave stands on every reconnect (a restart
+    // reconnects every socket), even for someone who has since left the pod.
+    it('lets someone already admitted back in on a reconnect after they left the pod, and their re-registration is answered as before', async () => {
+      const { member, p, e } = await podWithEvent('public_with_approval');
+      await expect(sessions.registerParticipant(e, member, 'member' as never)).resolves.toMatchObject({ status: 'registered' });
+      await run(`UPDATE {s}.pod_members SET status = 'removed' WHERE pod_id = $1 AND user_id = $2`, [p, member]);
+      expect(await access.eventRoomAdmission(e, member, 'member')).toBe('admitted');
+      await expect(sessions.registerParticipant(e, member, 'member' as never)).rejects.toMatchObject({ code: 'SESSION_ALREADY_REGISTERED' });
+      await run(`UPDATE {s}.session_participants SET status = 'left' WHERE session_id = $1 AND user_id = $2`, [e, member]);
+      await expect(sessions.registerParticipant(e, member, 'member' as never)).resolves.toMatchObject({ status: 'registered' });
+    }, 30_000);
+
+    it('a removed place stays removed: the registration says so, not the pod-only sentence', async () => {
       const { stranger, e } = await podWithEvent('public_with_approval');
-      await register(e, stranger);
-      expect(await access.eventRoomAdmission(e, stranger, 'member')).toBe('refused');
+      await register(e, stranger, 'removed');
+      await expect(sessions.registerParticipant(e, stranger, 'member' as never)).rejects.toMatchObject({ code: 'REMOVED_FROM_EVENT' });
+      expect(await access.eventRoomAdmission(e, stranger, 'member')).toBe('removed');
     }, 30_000);
   });
 

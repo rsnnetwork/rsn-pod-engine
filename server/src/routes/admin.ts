@@ -237,9 +237,12 @@ router.post(
       fanoutAdminEntities('users').catch(() => {});
       for (const row of result.rows) {
         fanoutUserEntity(row.id).catch(() => {});
-        // T2 (1 Nov 2026): and the people around each account, so open lists drop or regain them live.
-        fanoutAccountStatusChange(row.id).catch(() => {});
       }
+      // T2 (1 Nov 2026): and the people around each account, so open lists drop or regain them live. One account at a
+      // time, after the answer (up to 100 accounts would otherwise run their reads at once against the pool).
+      void (async () => {
+        for (const row of result.rows) await fanoutAccountStatusChange(row.id).catch(() => {});
+      })();
 
       const response: ApiResponse = { success: true, data: { affected: result.rowCount } };
       return res.json(response);

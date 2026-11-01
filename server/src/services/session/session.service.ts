@@ -389,9 +389,13 @@ export async function registerParticipant(
       } else if (podVisibility === 'public_with_approval' && !isMember && !viaInvite) {
         // T2 (1 Nov 2026), D2: a pod that asks for approval takes into its events only the people it approved (its
         // active members), the host, a co-host and people invited to the event. Anyone else with the id used to be
-        // registered, and so let into the live room.
+        // registered, and so let into the live room. Fix round 1: this gates a NEW place only. Someone who already
+        // holds a row (let in before, then out of the pod; a reconnect after a restart) goes on to the row checks
+        // below as before: already registered, a recoverable leave, or a terminal removal.
         const outsider = await client.query<{ outsider: boolean }>(
-          `SELECT ${approvalPodOutsiderSql('s', '$2')} AS outsider FROM sessions s WHERE s.id = $1`,
+          `SELECT ${approvalPodOutsiderSql('s', '$2')}
+                  AND NOT EXISTS (SELECT 1 FROM session_participants held WHERE held.session_id = s.id AND held.user_id = $2) AS outsider
+             FROM sessions s WHERE s.id = $1`,
           [sessionId, userId],
         );
         if (outsider.rows[0]?.outsider) throw new ForbiddenError(APPROVAL_POD_EVENT_REFUSAL);

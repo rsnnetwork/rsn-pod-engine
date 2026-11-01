@@ -147,22 +147,18 @@ export type EventRoomAdmission = 'admitted' | 'removed' | 'refused';
  * (session_cohosts); a platform admin or super admin, who may act as host; anyone whose participant row
  * is not removed: someone who left and is coming back (left is recoverable), someone reconnecting, a
  * refresh or a second tab, a late joiner the registration has just admitted. A removed row is terminal
- * and wins over every role, as the registration's own REMOVED_FROM_EVENT does. In a pod that asks for approval a
- * row counts only for someone the event takes (approvalPodOutsiderSql, T2). Anyone else, and an event that does
- * not exist, is refused. One read.
+ * and wins over every role, as the registration's own REMOVED_FROM_EVENT does. Anyone else, and an event that
+ * does not exist, is refused. One read.
  */
 export async function eventRoomAdmission(
   sessionId: string,
   userId: string,
   userRole: string | undefined,
 ): Promise<EventRoomAdmission> {
-  const result = await query<{
-    is_host: boolean; is_cohost: boolean; participant_status: string | null; approval_outsider?: boolean | null;
-  }>(
+  const result = await query<{ is_host: boolean; is_cohost: boolean; participant_status: string | null }>(
     `SELECT s.host_user_id = $2 AS is_host,
             EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost,
-            p.status::text AS participant_status,
-            ${approvalPodOutsiderSql('s', '$2')} AS approval_outsider
+            p.status::text AS participant_status
        FROM sessions s
        LEFT JOIN session_participants p ON p.session_id = s.id AND p.user_id = $2
       WHERE s.id = $1`,
@@ -171,10 +167,10 @@ export async function eventRoomAdmission(
   const facts = result.rows[0];
   if (!facts) return 'refused';
   if (facts.participant_status === 'removed') return 'removed';
-  if (facts.is_host || facts.is_cohost || isAdminRole(userRole)) return 'admitted';
-  // T2 (D2): a place in an approval pod's event does not let in someone the pod never approved or the host never
-  // invited (a place taken before the registration refused them).
-  if (facts.participant_status !== null && !facts.approval_outsider) return 'admitted';
+  // T2 fix round 1 (1 Nov 2026): a participant row is a place the event already gave, so it admits on every
+  // reconnect. An approval pod's outsider is kept out where a place is first given (registerParticipant), never
+  // here, so someone already in a live event is not refused after a restart or after leaving the pod mid-event.
+  if (facts.is_host || facts.is_cohost || isAdminRole(userRole) || facts.participant_status !== null) return 'admitted';
   return 'refused';
 }
 
