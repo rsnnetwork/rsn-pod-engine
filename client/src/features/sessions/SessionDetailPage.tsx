@@ -168,6 +168,8 @@ export default function SessionDetailPage() {
   // useEffect fires → re-registers automatically (the visible "flash" of
   // Register-then-back-to-Registered the user reported).
   const explicitlyUnregisteredRef = useRef(false);
+  // T13 fix round 1: the event this page has already tried to register the member for, so it tries once.
+  const autoRegisterTriedRef = useRef<string | null>(null);
 
   // Auto-register: if user landed here and isn't registered, register them immediately.
   // Shows loading state so "Register" button never flashes. Skipped after an
@@ -185,7 +187,10 @@ export default function SessionDetailPage() {
     // T11 (L17): opening the page registers only the event's audience and its invitees. A server before T11 sends
     // no access block, and the page registers as it always did.
     if (access && !access.autoRegister) return;
+    // T13 fix round 1: at most one try per event, whatever answers next (a failure, a refetch of the list).
+    if (autoRegisterTriedRef.current === sessionId) return;
     if (session && user && participants && !isRegistered && !autoRegistering && sessionId) {
+      autoRegisterTriedRef.current = sessionId;
       setAutoRegistering(true);
       api.post(`/sessions/${sessionId}/register`).then(() => {
         qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
@@ -197,7 +202,10 @@ export default function SessionDetailPage() {
       })
         .finally(() => setAutoRegistering(false));
     }
-  }, [session?.id, user?.id, isRegistered]); // eslint-disable-line react-hooks/exhaustive-deps
+    // T13 fix round 1: the participant list and the server's autoRegister are deps too. The event and the list load in
+    // parallel, and when the list came second the effect never ran again, so a circle member (whose list read is a little
+    // slower) was left looking at Register.
+  }, [session?.id, user?.id, isRegistered, !!participants, access?.autoRegister, phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/sessions/${sessionId}`),

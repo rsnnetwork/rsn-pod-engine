@@ -7,8 +7,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  circleForLine, circleGate, circlePrivateSummary, duplicateCircleField, eventCircleLine, membersWord, podsForCircle,
-  possessive, scheduleForCircleHref,
+  CIRCLE_PRIVATE_LEAD, circleForLine, circleGate, circlePrivateLine, circlePrivateRest, duplicateCircleField, eventCircleLine,
+  membersWord, podsForCircle, scheduleForCircleHref,
 } from '../../../../client/src/features/sessions/circle-preset';
 import { circleEntities } from '../../../../client/src/features/circles/circle-logic';
 
@@ -22,10 +22,11 @@ describe('the circle preset (pure)', () => {
     expect(membersWord(0)).toBe('0 members');
   });
 
-  it('the private choice names the circle, with a possessive that reads right after an s', () => {
-    expect(circlePrivateSummary('Founding Circle')).toBe("Only Founding Circle's members and people you invite.");
-    expect(circlePrivateSummary('AI Developers')).toBe("Only AI Developers' members and people you invite.");
-    expect(possessive('Founders ')).toBe("Founders'");
+  // Fix round 1 (review Minor 1): the brief's words, verbatim: "Private: only {circle}'s members and people you invite".
+  it('the private choice for a circle reads the brief\'s sentence word for word', () => {
+    expect(circlePrivateLine('Founding Circle')).toBe("Private: only Founding Circle's members and people you invite");
+    expect(circlePrivateLine('AI Developers')).toBe("Private: only AI Developers's members and people you invite");
+    expect(`${CIRCLE_PRIVATE_LEAD} ${circlePrivateRest('Doctors')}`).toBe(circlePrivateLine('Doctors'));
   });
 
   it('lists the circle\'s pods you run first, then your other pods, each in its own order', () => {
@@ -42,6 +43,9 @@ describe('the circle preset (pure)', () => {
   it('decides the form from the circle: wait, could not open, not yours to schedule, or go', () => {
     expect(circleGate({ isLoading: true })).toBe('loading');
     expect(circleGate({ isLoading: false, circle: undefined })).toBe('missing');
+    expect(circleGate({ isLoading: false, isError: true, notFound: true })).toBe('missing');
+    // Fix round 1 (review Minor 2): a failure that is not "there is no such circle" is a connection problem, not an archive.
+    expect(circleGate({ isLoading: false, isError: true, notFound: false })).toBe('error');
     expect(circleGate({ isLoading: false, circle: { canManage: false } })).toBe('refused');
     expect(circleGate({ isLoading: false, circle: { canManage: true } })).toBe('ok');
     expect(circleGate({ isLoading: false, circle: { canManage: undefined } })).toBe('refused');
@@ -92,6 +96,8 @@ describe('the event form with a circle', () => {
 
   it('says why when the circle cannot be opened or is not theirs to schedule, and keeps "No pod to schedule in yet"', () => {
     expect(form).toContain("We couldn't open that circle");
+    expect(form).toMatch(/gate === 'error'[\s\S]{0,200}We couldn't load that circle[\s\S]{0,200}Check your connection and try again\.[\s\S]{0,200}label: 'Try again', onClick: \(\) => \{ circleQuery\.refetch\(\); \}/);
+    expect(form).toMatch(/notFound: statusOf\(circleQuery\.error\) === 404/);
     expect(form).toMatch(/Only the people who run \$\{[^}]+\} can schedule an event for it\./);
     expect(form).toContain('No pod to schedule in yet');
   });
@@ -105,7 +111,8 @@ describe('the event form with a circle', () => {
     expect(form).toMatch(/chosenVisibility \?\? \(circle \? 'private' : defaultEventVisibility\(pod\?\.visibility\)\)/);
     expect(form).toMatch(/\.\.\.\(circle \? \{ circleId: circle\.id \} : \{\}\)/);
     expect(form).toMatch(/circleName=\{circle\?\.name\}/);
-    expect(access).toMatch(/key === 'private' && circleName \? circlePrivateSummary\(circleName\) : rule\.summary/);
+    expect(access).toMatch(/key === 'private' && circleName \? \(/);
+    expect(access).toMatch(/<span className="font-semibold">\{CIRCLE_PRIVATE_LEAD\}<\/span> \{circlePrivateRest\(circleName\)\}/);
   });
 });
 
@@ -115,6 +122,21 @@ describe('the event page', () => {
   it('says who it is for and links the circle', () => {
     expect(detail).toMatch(/\{session\.circle && \(\s*<Link to=\{`\/circles\/\$\{session\.circle\.id\}`\}[^>]*data-testid="event-circle"[^>]*min-h-\[44px\]/);
     expect(detail).toMatch(/\{eventCircleLine\(session\.circle\.name\)\}/);
+  });
+
+  // Fix round 1 (review Important 2): the page registers its audience and invitees on opening once BOTH the event and
+  // its participant list have loaded, whichever answers last (the effect used to run only on the event's arrival, so a
+  // list that came second left a circle member looking at Register), and it tries at most once per event: a failure,
+  // or a refetch of the list, never makes it try again, so it can never loop.
+  it('registers on opening whichever of the event and the participant list arrives last, and tries at most once', () => {
+    const effect = detail.slice(detail.indexOf('// Auto-register:'), detail.indexOf('const deleteMutation'));
+    expect(effect).toMatch(/\}, \[session\?\.id, user\?\.id, isRegistered, !!participants, access\?\.autoRegister, phase\]\);/);
+    expect(effect).toMatch(/if \(autoRegisterTriedRef\.current === sessionId\) return;/);
+    expect(effect).toMatch(/autoRegisterTriedRef\.current = sessionId;\s*setAutoRegistering\(true\);/);
+    expect(detail).toMatch(/const autoRegisterTriedRef = useRef<string \| null>\(null\);/);
+    // The guards it always had stay: an explicit unregister, an ended event, the server's autoRegister.
+    expect(effect).toMatch(/if \(explicitlyUnregisteredRef\.current\) return;/);
+    expect(effect).toMatch(/if \(access && !access\.autoRegister\) return;/);
   });
 
   it('Duplicate keeps the circle, and a refusal reads in the server\'s words', () => {

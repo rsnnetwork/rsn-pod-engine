@@ -93,7 +93,11 @@ export default function CreateSessionPage() {
     meta: { entities: fromCircleId ? circleEntities(fromCircleId, userId) : [] },
   });
   const circle = circleQuery.data;
-  const gate = fromCircleId ? circleGate({ isLoading: circleQuery.isLoading, circle }) : 'ok';
+  const gate = fromCircleId
+    ? circleGate({
+      isLoading: circleQuery.isLoading, isError: circleQuery.isError, notFound: statusOf(circleQuery.error) === 404, circle,
+    })
+    : 'ok';
   const pod = podQuery.data;
   const back = fromCircleId ? `/circles/${fromCircleId}` : fromPodId ? `/pods/${fromPodId}` : '/sessions';
   const backLabel = fromCircleId ? (circle ? `Back to ${circle.name}` : 'Back to circle')
@@ -102,7 +106,16 @@ export default function CreateSessionPage() {
 
   let body: ReactNode;
   if (gate === 'loading') body = <FormSkeleton />;
-  else if (gate === 'missing') {
+  else if (gate === 'error') {
+    // The connection or the server failed: not a sign the circle is gone, so it says so and offers to try again.
+    body = (
+      <Notice
+        title="We couldn't load that circle"
+        text="Check your connection and try again."
+        action={{ label: 'Try again', onClick: () => { circleQuery.refetch(); } }}
+      />
+    );
+  } else if (gate === 'missing') {
     body = (
       <Notice
         title="We couldn't open that circle"

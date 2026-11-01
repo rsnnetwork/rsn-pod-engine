@@ -15,15 +15,18 @@ export function circleForLine(name: string, memberCount: number): string {
   return `For everyone in ${name} · ${membersWord(memberCount)}`;
 }
 
-/** "Founding Circle's", and "AI Developers'" for a name that ends in s. */
-export function possessive(name: string): string {
-  const trimmed = name.trim();
-  return /s$/i.test(trimmed) ? `${trimmed}'` : `${trimmed}'s`;
+/**
+ * What the Private choice reads for a circle event, the brief's words verbatim (fix round 1):
+ * "Private: only {circle}'s members and people you invite". The card draws the lead in bold, then the rest.
+ */
+export const CIRCLE_PRIVATE_LEAD = 'Private:';
+
+export function circlePrivateRest(name: string): string {
+  return `only ${name.trim()}'s members and people you invite`;
 }
 
-/** What the Private choice means for a circle event (the label above it reads "Private"). */
-export function circlePrivateSummary(name: string): string {
-  return `Only ${possessive(name)} members and people you invite.`;
+export function circlePrivateLine(name: string): string {
+  return `${CIRCLE_PRIVATE_LEAD} ${circlePrivateRest(name)}`;
 }
 
 /** The pod choice: the circle's own pods (that you run) first, then your other pods, each kept in its order. */
@@ -42,16 +45,23 @@ export function eventCircleLine(name: string): string {
   return `For ${name}`;
 }
 
-export type CircleGate = 'loading' | 'missing' | 'refused' | 'ok';
+export type CircleGate = 'loading' | 'missing' | 'error' | 'refused' | 'ok';
 
 /**
- * What the form does with ?circleId=: wait for the circle, say it could not be opened (archived, or not there), say it
- * is not theirs to schedule (only its managers and platform admins may: the server's canManage), or go.
+ * What the form does with ?circleId=: wait for the circle; say it could not be opened (the server has no such circle:
+ * archived, or not there); say it could not be loaded (any other failure: the connection, a server error), with a
+ * retry; say it is not theirs to schedule (only its managers and platform admins may: the server's canManage); or go.
  */
-export function circleGate(q: { isLoading: boolean; circle?: { canManage?: boolean } | null }): CircleGate {
+export function circleGate(q: {
+  isLoading: boolean;
+  isError?: boolean;
+  notFound?: boolean;
+  circle?: { canManage?: boolean } | null;
+}): CircleGate {
   if (q.isLoading) return 'loading';
-  if (!q.circle) return 'missing';
-  return q.circle.canManage ? 'ok' : 'refused';
+  if (q.circle) return q.circle.canManage ? 'ok' : 'refused';
+  if (q.isError && !q.notFound) return 'error';
+  return 'missing';
 }
 
 /** Duplicate keeps the circle the event is for; an event with none sends none, as production's copy does. */
