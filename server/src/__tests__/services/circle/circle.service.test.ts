@@ -62,7 +62,7 @@ describe('nesting integrity', () => {
 describe('membership counters (transactional, never double-counted)', () => {
   function armJoin(insertedRows: number) {
     mockQuery.mockImplementation((sql: string) => {
-      if (/SELECT id FROM circles/.test(sql)) return Promise.resolve({ rows: [{ id: 'c1' }] });
+      if (/SELECT id, join_policy FROM circles/.test(sql)) return Promise.resolve({ rows: [{ id: 'c1', join_policy: 'open' }] });
       if (/INSERT INTO circle_members/.test(sql)) return Promise.resolve({ rowCount: insertedRows, rows: [] });
       if (/DELETE FROM circle_members/.test(sql)) return Promise.resolve({ rowCount: insertedRows, rows: [] });
       return Promise.resolve({ rowCount: 1, rows: [] });
@@ -164,8 +164,8 @@ describe('route authz matrix (source pins)', () => {
     path.join(__dirname, '../../../routes/circles.ts'), 'utf8',
   ).replace(/\r\n/g, '\n'); // CRLF-agnostic (the 15 Jul lesson)
 
-  it('create, update, archive, attach and detach are ALL admin-gated', () => {
-    for (const route of ["router.post('/',", "router.patch('/:id',", "'/:id/archive'", "'/:id/pods'", "'/:id/pods/:podId'"]) {
+  it('create and archive stay admin-gated', () => {
+    for (const route of ["router.post('/',", "'/:id/archive'"]) {
       const i = src.indexOf(route);
       expect(i).toBeGreaterThan(-1);
       const block = src.slice(i, i + 200);
@@ -173,8 +173,22 @@ describe('route authz matrix (source pins)', () => {
     }
   });
 
-  it('join, leave and reads are authenticated but NOT role-gated (open join default)', () => {
-    for (const route of ["'/:id/join'", "'/:id/leave'", "router.get('/',", "router.get('/:id',"]) {
+  // T14 (1 Nov 2026, L22): the people who run a circle edit it, attach and detach pods and remove members; the
+  // asks are answered by them too (circle-join.service.ts asks assertCircleManager itself).
+  it('update, attach and detach ask the manager gate before anything else, and no longer requireRole', () => {
+    for (const route of ["router.patch('/:id',", "router.post('/:id/pods',", "router.delete('/:id/pods/:podId',"]) {
+      const i = src.indexOf(route);
+      expect(i).toBeGreaterThan(-1);
+      const head = src.slice(i, src.indexOf('async (req', i));
+      expect(head).not.toMatch(/requireRole/);
+      const body = src.slice(i, i + 900);
+      expect(body).toMatch(/await assertCircleManager\(req\.params\.id, req\.user!\.userId, req\.user!\.role/);
+      expect(body.indexOf('assertCircleManager')).toBeLessThan(body.indexOf('circleService.'));
+    }
+  });
+
+  it('join, leave, the asks and reads are authenticated but NOT role-gated (the service applies the circle\'s policy)', () => {
+    for (const route of ["'/:id/join'", "'/:id/leave'", "router.get('/',", "router.get('/:id',", "router.post('/:id/request',", "router.delete('/:id/request',"]) {
       const i = src.indexOf(route);
       expect(i).toBeGreaterThan(-1);
       const block = src.slice(i, i + 200);
@@ -214,5 +228,111 @@ describe('creating a circle (1 Nov 2026, L21)', () => {
     });
     await expect(createCircle('admin-1', { name: 'Doctors' })).rejects.toMatchObject({ statusCode: 409 });
     expect(mockQuery.mock.calls.some(c => /INSERT INTO circle_members/.test(c[0] as string))).toBe(false);
+  });
+});
+
+describe('joining a closed circle (T14, 1 Nov 2026)', () => {
+  function armClosed(opts: { member?: boolean; manager?: boolean } = {}) {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/SELECT id, join_policy FROM circles/.test(sql)) return Promise.resolve({ rows: [{ id: 'c1', join_policy: 'closed' }] });
+      if (/SELECT 1 FROM circle_members WHERE circle_id = \$1 AND user_id = \$2/.test(sql)) return Promise.resolve({ rows: opts.member ? [{}] : [] });
+      if (/c.created_by = \$2/.test(sql)) return Promise.resolve({ rows: opts.manager ? [{}] : [] });
+      if (/INSERT INTO circle_members/.test(sql)) return Promise.resolve({ rowCount: 1, rows: [] });
+      return Promise.resolve({ rowCount: 1, rows: [] });
+    });
+  }
+
+  it('someone outside it is told to ask, 403 CIRCLE_CLOSED in words, and nothing is written', async () => {
+    armClosed();
+    await expect(joinCircle('c1', 'u1', { role: 'member' })).rejects.toMatchObject({
+      statusCode: 403, code: 'CIRCLE_CLOSED', message: 'This circle is closed. Ask to join and its owner will let you in.',
+    });
+    expect(mockQuery.mock.calls.some(c => /INSERT INTO circle_members/.test(c[0] as string))).toBe(false);
+  });
+
+  it('someone who runs it joins without asking, and the count moves', async () => {
+    armClosed({ manager: true });
+    await joinCircle('c1', 'u1', { role: 'member' });
+    expect(mockQuery.mock.calls.some(c => /member_count = member_count \+ 1/.test(c[0] as string))).toBe(true);
+  });
+
+  it('an invite is the doorway: it joins without any check, and answers a pending ask as approved', async () => {
+    armClosed();
+    await joinCircle('c1', 'u1', { byInvite: true });
+    expect(mockClientSql.some(s => /INSERT INTO circle_members/.test(s))).toBe(true);
+    expect(mockClientSql.some(s => /UPDATE circle_join_requests SET status = 'approved'/.test(s) && /status = 'pending'/.test(s))).toBe(true);
+  });
+
+  it('an open circle still joins anyone, with no lookup of who runs it (production\'s Join circle)', async () => {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/SELECT id, join_policy FROM circles/.test(sql)) return Promise.resolve({ rows: [{ id: 'c1', join_policy: 'open' }] });
+      return Promise.resolve({ rowCount: 1, rows: [] });
+    });
+    await joinCircle('c1', 'u1');
+    expect(mockQuery.mock.calls.some(c => /created_by = \$2/.test(c[0] as string))).toBe(false);
+    expect(mockQuery.mock.calls.some(c => /member_count = member_count \+ 1/.test(c[0] as string))).toBe(true);
+  });
+});
+
+describe('what a viewer may do with a circle (toCircleAccess)', () => {
+  const { toCircleAccess } = jest.requireActual('../../../services/circle/circle-managers') as typeof import('../../../services/circle/circle-managers');
+  const row = (over: Partial<Parameters<typeof toCircleAccess>[0]>) => ({
+    join_policy: 'open' as const, is_member: false, can_manage: false, my_request: null, request_count: 3, ...over,
+  });
+
+  it('a legacy circle (no policy stored) reads as open', () => {
+    expect(toCircleAccess(row({ join_policy: null }))).toEqual({ joinPolicy: 'open', myStatus: null, canManage: false, canInvite: false, locked: false });
+  });
+
+  it('open: a member may invite; a stranger may not; nothing is locked', () => {
+    expect(toCircleAccess(row({ is_member: true }))).toMatchObject({ myStatus: 'member', canInvite: true, locked: false });
+    expect(toCircleAccess(row({}))).toMatchObject({ canInvite: false, locked: false });
+  });
+
+  it('closed: a member may not invite, a stranger is locked, and their ask reads requested or declined', () => {
+    expect(toCircleAccess(row({ join_policy: 'closed', is_member: true }))).toMatchObject({ canInvite: false, locked: false });
+    expect(toCircleAccess(row({ join_policy: 'closed', my_request: 'pending' }))).toMatchObject({ myStatus: 'requested', locked: true });
+    expect(toCircleAccess(row({ join_policy: 'closed', my_request: 'declined' }))).toMatchObject({ myStatus: 'declined', locked: true });
+    expect(toCircleAccess(row({ join_policy: 'closed', my_request: 'cancelled' })).myStatus).toBeNull();
+  });
+
+  it('the people who run it may always invite, are never locked, and alone see the request count', () => {
+    expect(toCircleAccess(row({ join_policy: 'closed', can_manage: true }))).toEqual({
+      joinPolicy: 'closed', myStatus: null, canManage: true, canInvite: true, locked: false, requestCount: 3,
+    });
+    expect(toCircleAccess(row({ join_policy: 'closed', is_member: true }))).not.toHaveProperty('requestCount');
+  });
+});
+
+describe("a closed circle's page, from outside it (T14)", () => {
+  function armDetail(over: Record<string, unknown>) {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/FROM circles c WHERE c.id = \$1 AND c.archived_at IS NULL/.test(sql)) {
+        return Promise.resolve({ rows: [{
+          id: 'c1', name: 'Doctors', description: null, parent_circle_id: null, member_count: 3, created_at: new Date(),
+          public_pod_count: 2, join_policy: 'closed', is_member: false, can_manage: false, my_request: null, request_count: 1, ...over,
+        }] });
+      }
+      return Promise.resolve({ rows: [{ user_id: 'u9', display_name: 'X', avatar_url: null, role: 'member', joined_at: new Date(), pod_id: 'p1', name: 'P', description: null, id: 's1', title: 'T', scheduled_at: new Date() }] });
+    });
+  }
+
+  it('is locked: no member, pod or event is asked for, its counts still read', async () => {
+    armDetail({});
+    const d = await getCircleDetail('c1', 'stranger', 'member');
+    expect(d).toMatchObject({ locked: true, members: [], pods: [], upcomingEvents: [], memberCount: 3, podCount: 2, joinPolicy: 'closed', canInvite: false });
+    const asked = mockQuery.mock.calls.map(c => String(c[0]));
+    expect(asked.some(s => /FROM circle_members m JOIN users u/.test(s))).toBe(false);
+    expect(asked.some(s => /FROM circle_pods cp JOIN pods p ON p.id = cp.pod_id\s+WHERE cp.circle_id = \$1 AND/.test(s))).toBe(false);
+    expect(asked.some(s => /FROM sessions s/.test(s))).toBe(false);
+  });
+
+  it("for someone in it the page reads in full, and the pods asked for leave out archived and others' private pods", async () => {
+    armDetail({ is_member: true });
+    const d = await getCircleDetail('c1', 'member', 'member');
+    expect(d.locked).toBe(false);
+    expect(d.members).toHaveLength(1);
+    const pods = mockQuery.mock.calls.map(c => String(c[0]).replace(/\s+/g, ' ')).find(s => /SELECT cp.pod_id, p.name, p.description/.test(s))!;
+    expect(pods).toContain("p.status <> 'archived' AND ($3::boolean OR p.visibility <> 'private' OR EXISTS (SELECT 1 FROM pod_members vp_m WHERE vp_m.pod_id = p.id AND vp_m.user_id = $2 AND vp_m.status = 'active'))");
   });
 });

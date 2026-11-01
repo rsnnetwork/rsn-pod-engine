@@ -25,6 +25,7 @@ import { CONNECTION_SIGNALS_SQL, pageBySince } from '../people/connections.servi
 import { escapeLike } from '../user/user-search.service';
 import * as invites from './invite.service';
 import { asBulkEmail } from '../email/email.service';
+import { activeMemberSql } from '../users/active-member';
 
 /** Who is asking, as the route knows them. */
 export interface Asker {
@@ -35,7 +36,10 @@ export interface Asker {
 /** One batch invites at most this many people; the route allows that many ids. */
 export const BATCH_MAX = 50;
 
-/** A pod invite from the picker lasts a week, as the old pod invite modal made it. An event invite ends with the event. */
+/**
+ * A pod invite from the picker lasts a week, as the old pod invite modal made it, and so does a circle invite from
+ * it (T14). An event invite ends with the event.
+ */
 const POD_INVITE_HOURS = 168;
 
 /** Bells (a row and a socket push, no mail provider) go out this many at a time. */
@@ -54,22 +58,33 @@ const MAX_SEARCH_WORDS = 6;
 
 const OUTCOMES: InviteBatchOutcome[] = ['invited', 'already_member', 'already_going', 'already_invited', 'declined', 'not_allowed', 'failed'];
 
-// ─── The target: the pod or event being invited to ────────────────────────────────────────────────
+// ─── The target: the pod, event or circle being invited to ───────────────────────────────────────
 
 type Target =
-  | { kind: 'pod'; id: string; podId: string; sessionId: null }
-  | { kind: 'session'; id: string; podId: string; sessionId: string };
+  | { kind: 'pod'; id: string; podId: string; sessionId: null; circleId: null }
+  | { kind: 'session'; id: string; podId: string; sessionId: string; circleId: null }
+  | { kind: 'circle'; id: string; podId: null; sessionId: null; circleId: string };
+
+type TargetKind = Target['kind'];
 
 /** Who may send an invite here, decided by the very functions createInvite asks. 403 otherwise, 404 when it does not exist. */
-async function resolveTarget(asker: Asker, ids: { podId?: string; sessionId?: string }): Promise<Target> {
+async function resolveTarget(asker: Asker, ids: { podId?: string; sessionId?: string; circleId?: string }): Promise<Target> {
   const isAdmin = invites.isAdminRole(asker.role);
   if (ids.sessionId) {
     const session = await invites.assertMayInviteToSession(ids.sessionId, asker.userId, isAdmin);
-    return { kind: 'session', id: session.id, podId: session.podId, sessionId: session.id };
+    return { kind: 'session', id: session.id, podId: session.podId, sessionId: session.id, circleId: null };
+  }
+  if (ids.circleId) {
+    const circle = await invites.assertMayInviteToCircle(ids.circleId, asker.userId, isAdmin);
+    return { kind: 'circle', id: circle.id, podId: null, sessionId: null, circleId: circle.id };
   }
   const pod = await invites.assertMayInviteToPod(ids.podId as string, asker.userId, isAdmin);
-  return { kind: 'pod', id: pod.id, podId: pod.id, sessionId: null };
+  return { kind: 'pod', id: pod.id, podId: pod.id, sessionId: null, circleId: null };
 }
+
+/** The invite type a target's invites are made with. */
+const inviteTypeOf = (kind: TargetKind): InviteType =>
+  kind === 'pod' ? InviteType.POD : kind === 'circle' ? InviteType.CIRCLE : InviteType.SESSION;
 
 // ─── SQL pieces ───────────────────────────────────────────────────────────────────────────────────
 
@@ -89,13 +104,18 @@ const BLOCKED_EITHER_WAY = (person: string) =>
  * (an address on its own has no id, and then nobody is a member or going). `inviteId` is the invite behind the state:
  * the live one for invited, the declined one for declined. The pieces are fixed text; nothing a member types reaches them.
  */
-function standing(kind: 'pod' | 'session', target: string, person: { id: string; email: string }) {
-  const present = kind === 'pod'
-    ? `WHEN EXISTS (SELECT 1 FROM pod_members pm WHERE pm.pod_id = ${target} AND pm.user_id = ${person.id} AND pm.status = 'active') THEN 'member'`
-    : `WHEN EXISTS (SELECT 1 FROM session_participants sp WHERE sp.session_id = ${target} AND sp.user_id = ${person.id} AND sp.status NOT IN ('removed', 'left')) THEN 'going'`;
-  const mine = kind === 'pod'
-    ? `i.type = 'pod' AND i.pod_id = ${target}`
-    : `i.type = 'session' AND i.session_id = ${target}`;
+function standing(kind: TargetKind, target: string, person: { id: string; email: string }) {
+  const present = {
+    pod: `WHEN EXISTS (SELECT 1 FROM pod_members pm WHERE pm.pod_id = ${target} AND pm.user_id = ${person.id} AND pm.status = 'active') THEN 'member'`,
+    session: `WHEN EXISTS (SELECT 1 FROM session_participants sp WHERE sp.session_id = ${target} AND sp.user_id = ${person.id} AND sp.status NOT IN ('removed', 'left')) THEN 'going'`,
+    // T14: someone with a circle_members row is in the circle (an ask lives in its own table, never here).
+    circle: `WHEN EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = ${target} AND cm.user_id = ${person.id}) THEN 'member'`,
+  }[kind];
+  const mine = {
+    pod: `i.type = 'pod' AND i.pod_id = ${target}`,
+    session: `i.type = 'session' AND i.session_id = ${target}`,
+    circle: `i.type = 'circle' AND i.circle_id = ${target}`,
+  }[kind];
   const declined = 'li.declined_at IS NOT NULL AND (li.accepted_at IS NULL OR li.accepted_at < li.declined_at)';
   return {
     join: `LEFT JOIN LATERAL (
@@ -127,6 +147,7 @@ function searchClause(text: string | undefined, first: number): { sql: string; p
 export interface CandidateParams {
   podId?: string;
   sessionId?: string;
+  circleId?: string;
   source: InviteCandidateSource;
   q?: string;
   /** The `nextBefore` of the page already shown. */
@@ -148,7 +169,7 @@ interface CandidateRow {
 
 // $1 the asker, $2 the cursor or null, $3 how many, $4 one moment only or null, $5 the pod or event being invited
 // to, then the search words. The page of people is cut first; only then is each of them looked up against the target.
-function connectionsSql(kind: 'pod' | 'session', search: string): string {
+function connectionsSql(kind: TargetKind, search: string): string {
   const { join, state, inviteId } = standing(kind, '$5', { id: 'p.user_id', email: 'p.email' });
   return `
   WITH ${CONNECTION_SIGNALS_SQL},
@@ -157,7 +178,7 @@ function connectionsSql(kind: 'pod' | 'session', search: string): string {
       FROM people pe
       JOIN users u ON u.id = pe.person_id
      WHERE u.id <> $1
-       AND u.status = 'active'
+       AND ${activeMemberSql('u')}
        AND NOT ${BLOCKED_EITHER_WAY('u.id')}
        ${search}
        AND ($2::timestamptz IS NULL OR pe.since < $2::timestamptz)
@@ -221,8 +242,8 @@ function toCandidate(row: CandidateRow, source: InviteCandidateSource): InviteCa
  * asker may send an invite here, so the list never shows who belongs to a pod the asker has no business with.
  */
 export async function listInviteCandidates(asker: Asker, params: CandidateParams): Promise<InviteCandidatePage> {
-  if (Boolean(params.podId) === Boolean(params.sessionId)) {
-    throw new ValidationError('Name either a pod or an event to invite to');
+  if ([params.podId, params.sessionId, params.circleId].filter(Boolean).length !== 1) {
+    throw new ValidationError('Name one pod, event or circle to invite to');
   }
   if (params.source === 'pod' && !params.sessionId) {
     throw new ValidationError('The pod list is for inviting to an event');
@@ -257,7 +278,7 @@ export async function listInviteCandidates(asker: Asker, params: CandidateParams
  * whole list. Lower-case addresses come back in a set. Whether the asker may invite here is for the caller to have
  * settled first: the answer tells who declined.
  */
-export async function declinedAddresses(kind: 'pod' | 'session', targetId: string, emails: string[]): Promise<Set<string>> {
+export async function declinedAddresses(kind: TargetKind, targetId: string, emails: string[]): Promise<Set<string>> {
   const wanted = [...new Set(emails.map((email) => email.toLowerCase()))];
   if (wanted.length === 0) return new Set();
   // An address on its own has no member id, so nobody here is "a member" or "going": the state is what their invites say.
@@ -276,8 +297,8 @@ export async function declinedAddresses(kind: 'pod' | 'session', targetId: strin
 // ─── The batch ────────────────────────────────────────────────────────────────────────────────────
 
 export type BatchSummary = InviteBatchResponse & {
-  /** The pod or event the invites went to, so the route can tell the screens that show it, once. */
-  target: { podId: string; sessionId: string | null };
+  /** The pod, event or circle the invites went to, so the route can tell the screens that show it, once. */
+  target: { podId: string | null; sessionId: string | null; circleId: string | null };
   /**
    * The batch's emails, going out after the answer: settles when the last one has been tried. It never rejects (each
    * failure is logged with the person and the invite), so a caller that does not wait for it loses nothing. It is
@@ -527,14 +548,20 @@ export async function createInvitesBatch(
   if (input.allPodMembers && input.type !== 'session') {
     throw new ValidationError('"Everyone in the pod" is for inviting to an event');
   }
-  const targetId = input.type === 'pod' ? input.podId : input.sessionId;
-  if (!targetId) throw new ValidationError(input.type === 'pod' ? 'Choose the pod to invite to' : 'Choose the event to invite to');
+  const targetId = { pod: input.podId, session: input.sessionId, circle: input.circleId }[input.type];
+  if (!targetId) {
+    throw new ValidationError({ pod: 'Choose the pod to invite to', session: 'Choose the event to invite to', circle: 'Choose the circle to invite to' }[input.type]);
+  }
   const named = distinctIds(input.inviteeUserIds);
   if (named.length === 0 && !input.allPodMembers) throw new ValidationError('Choose at least one person to invite');
   if (named.length > BATCH_MAX) throw new ValidationError(`Invite at most ${BATCH_MAX} people at a time`);
 
   const isAdmin = invites.isAdminRole(asker.role);
-  const target = await resolveTarget(asker, input.type === 'pod' ? { podId: targetId } : { sessionId: targetId });
+  const target = await resolveTarget(asker, {
+    podId: input.type === 'pod' ? targetId : undefined,
+    sessionId: input.type === 'session' ? targetId : undefined,
+    circleId: input.type === 'circle' ? targetId : undefined,
+  });
 
   let ids = named;
   let remaining: number | undefined;
@@ -573,8 +600,8 @@ export async function createInvitesBatch(
     // Looked up before anything is written, once for the whole batch: a failure here leaves nothing half done.
     const context = await invites.buildInviteContext(
       asker.userId,
-      target.kind === 'pod' ? InviteType.POD : InviteType.SESSION,
-      { podId: target.kind === 'pod' ? target.podId : null, sessionId: target.sessionId },
+      inviteTypeOf(target.kind),
+      { podId: target.kind === 'pod' ? target.podId : null, sessionId: target.sessionId, circleId: target.circleId },
     );
 
     const made: MadeInvite[] = [];
@@ -587,14 +614,14 @@ export async function createInvitesBatch(
       try {
         const pending: invites.NewInvite = {
           code,
-          type: target.kind === 'pod' ? InviteType.POD : InviteType.SESSION,
+          type: inviteTypeOf(target.kind),
           inviterId: asker.userId,
           inviteeEmail: decision.email,
           podId: target.kind === 'pod' ? target.podId : null,
           sessionId: target.sessionId,
-          circleId: null,
+          circleId: target.circleId,
           maxUses: 1,
-          expiresAt: target.kind === 'pod' ? new Date(Date.now() + POD_INVITE_HOURS * 60 * 60 * 1000) : null,
+          expiresAt: target.kind === 'session' ? null : new Date(Date.now() + POD_INVITE_HOURS * 60 * 60 * 1000),
         };
         let inserted = await invites.insertPendingInvite(pending);
         // A pending invite made before the person was removed is withdrawn and the fresh one made (H2b item 24).
@@ -627,7 +654,9 @@ export async function createInvitesBatch(
 
   logger.info({ askerId: asker.userId, type: input.type, targetId: target.id, counts }, 'Invite batch sent');
 
-  const summary: BatchSummary = { results: ordered, counts, target: { podId: target.podId, sessionId: target.sessionId }, delivery };
+  const summary: BatchSummary = {
+    results: ordered, counts, target: { podId: target.podId, sessionId: target.sessionId, circleId: target.circleId }, delivery,
+  };
   if (remaining !== undefined) summary.remaining = remaining;
   return summary;
 }

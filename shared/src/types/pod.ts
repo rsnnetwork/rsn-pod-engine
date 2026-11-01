@@ -98,6 +98,8 @@ export interface CreatePodInput {
   maxMembers?: number;
   rules?: string;
   allowMemberInvites?: boolean;
+  /** 1 Nov 2026: made from a circle's page, and attached to that circle in the same transaction (its managers only). */
+  circleId?: string;
 }
 
 export interface UpdatePodInput {

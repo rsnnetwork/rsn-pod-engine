@@ -42,14 +42,16 @@ const CANDIDATES_PAGE_MAX = 50;
 const candidatesQuery = z.object({
   podId: lowerUuid.optional(),
   sessionId: lowerUuid.optional(),
+  // T14 (1 Nov 2026): the circle page's Invite opens the same sheet.
+  circleId: lowerUuid.optional(),
   source: z.enum(['connections', 'pod']).default('connections'),
   q: z.string().trim().max(100).optional(),
   before: z.string().datetime({ offset: true }).optional(),
   limit: z.coerce.number().int().min(1).optional()
     .transform((n) => Math.min(n ?? CANDIDATES_PAGE, CANDIDATES_PAGE_MAX)),
 }).superRefine((value, ctx) => {
-  if (Boolean(value.podId) === Boolean(value.sessionId)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['podId'], message: 'Name either podId or sessionId' });
+  if ([value.podId, value.sessionId, value.circleId].filter(Boolean).length !== 1) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['podId'], message: 'Name exactly one of podId, sessionId or circleId' });
   }
   if (value.source === 'pod' && !value.sessionId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['source'], message: 'The pod list is for inviting to an event' });
@@ -59,9 +61,10 @@ type CandidatesQuery = z.infer<typeof candidatesQuery>;
 
 // Up to 50 people in one call. "Everyone in the pod" (events only) may stand in for naming them.
 const batchInviteSchema = z.object({
-  type: z.enum(['pod', 'session']),
+  type: z.enum(['pod', 'session', 'circle']),
   podId: lowerUuid.optional(),
   sessionId: lowerUuid.optional(),
+  circleId: lowerUuid.optional(),
   inviteeUserIds: z.array(lowerUuid).max(inviteCandidates.BATCH_MAX).default([]),
   allPodMembers: z.boolean().optional(),
 }).superRefine((value, ctx) => {
@@ -70,6 +73,9 @@ const batchInviteSchema = z.object({
   }
   if (value.type === 'session' && !value.sessionId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['sessionId'], message: 'Choose the event to invite to' });
+  }
+  if (value.type === 'circle' && !value.circleId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['circleId'], message: 'Choose the circle to invite to' });
   }
   if (value.allPodMembers && value.type !== 'session') {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['allPodMembers'], message: 'Everyone in the pod is for inviting to an event' });
@@ -132,10 +138,12 @@ router.post(
       // the promise never rejects, and says so by logging each failure itself.
       batch.delivery.catch(() => {});
       if (batch.counts.invited > 0) {
-        const { podId, sessionId } = batch.target;
-        if (sessionId) {
+        const { podId, sessionId, circleId } = batch.target;
+        if (circleId) {
+          fanoutCircleChange(circleId, req.user!.userId, [], [E.circleInvites(circleId)]).catch(() => {});
+        } else if (sessionId) {
           fanoutSessionEntities(podId, sessionId, [E.sessionInvites(sessionId)]).catch(() => {});
-        } else {
+        } else if (podId) {
           fanoutPodEntities(podId).catch(() => {});
         }
       }
@@ -234,6 +242,7 @@ router.get(
         {
           podId: asked.podId,
           sessionId: asked.sessionId,
+          circleId: asked.circleId,
           source: asked.source,
           q: asked.q,
           before: asked.before ?? null,
@@ -699,8 +708,11 @@ router.post(
       }
       if (result.registeredFor?.circleId) {
         // 1 Nov 2026: accepting a circle invite joins the circle, so its page, members, count and invites change for
-        // everyone in it, and the accepter's own circles list changes.
-        fanoutCircleChange(result.registeredFor.circleId, req.user!.userId, [req.user!.userId], [E.circleInvites(result.registeredFor.circleId)]).catch(() => {});
+        // everyone in it, and the accepter's own circles list changes. T14: an ask of theirs it answered leaves the
+        // managers' requests list.
+        fanoutCircleChange(result.registeredFor.circleId, req.user!.userId, [req.user!.userId], [
+          E.circleInvites(result.registeredFor.circleId), E.circleRequests(result.registeredFor.circleId),
+        ]).catch(() => {});
       }
       // Cover the accepter even if they're not yet in the active-member
       // SELECT on a slow replica — invite list shrinks and they pick up

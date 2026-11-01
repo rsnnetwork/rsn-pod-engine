@@ -81,9 +81,11 @@ jest.mock('../../services/invite/invite-reminders.service', () => ({
 
 const mockFanoutPod = jest.fn().mockResolvedValue(undefined);
 const mockFanoutSession = jest.fn().mockResolvedValue(undefined);
+const mockFanoutCircle = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({
   fanoutPodEntities: (...args: unknown[]) => mockFanoutPod(...args),
   fanoutSessionEntities: (...args: unknown[]) => mockFanoutSession(...args),
+  fanoutCircleChange: (...args: unknown[]) => mockFanoutCircle(...args),
   __esModule: true,
 }));
 const mockEmitEntities = jest.fn().mockResolvedValue(undefined);
@@ -137,6 +139,7 @@ beforeEach(() => {
   mockCountSent.mockResolvedValue(undefined);
   mockFanoutPod.mockClear();
   mockFanoutSession.mockClear();
+  mockFanoutCircle.mockClear();
   mockEmitEntities.mockClear();
   mockSendInviteEmail.mockReset();
   // The mail service takes every email, until a test says otherwise: the reminders read its answer (fix round 4).
@@ -208,6 +211,10 @@ describe('GET /invites/candidates', () => {
   it.each([
     ['no pod and no event', ''],
     ['both a pod and an event', `podId=${POD}&sessionId=${EVENT}`],
+    ['both a pod and a circle', `podId=${POD}&circleId=${CIRCLE}`],
+    ['a circle and an event', `circleId=${CIRCLE}&sessionId=${EVENT}`],
+    ['the pod list for a circle', `circleId=${CIRCLE}&source=pod`],
+    ['a circle id that is not an id', 'circleId=not-an-id'],
     ['an id that is not an id', 'podId=not-an-id'],
     ['the pod list for a pod', `podId=${POD}&source=pod`],
     ['a source nobody offers', `podId=${POD}&source=everyone`],
@@ -355,7 +362,10 @@ describe('POST /invites/batch', () => {
     ['51 people', { type: 'pod', podId: POD, inviteeUserIds: Array.from({ length: 51 }, (_, i) => PERSON(i + 1)) }],
     ['an id that is not an id', { type: 'pod', podId: POD, inviteeUserIds: ['not-an-id'] }],
     ['an email where an id belongs', { type: 'pod', podId: POD, inviteeUserIds: ['guest@example.com'] }],
-    ['a type nobody offers', { type: 'circle', podId: POD, inviteeUserIds: [PERSON(1)] }],
+    ['a type nobody offers', { type: 'platform', podId: POD, inviteeUserIds: [PERSON(1)] }],
+    ['a circle invite with no circle', { type: 'circle', podId: POD, inviteeUserIds: [PERSON(1)] }],
+    ['a circle id that is not an id', { type: 'circle', circleId: 'x', inviteeUserIds: [PERSON(1)] }],
+    ['"everyone in the pod" for a circle', { type: 'circle', circleId: CIRCLE, inviteeUserIds: [PERSON(1)], allPodMembers: true }],
     ['no type', { podId: POD, inviteeUserIds: [PERSON(1)] }],
     ['a pod invite with no pod', { type: 'pod', inviteeUserIds: [PERSON(1)] }],
     ['an event invite with no event', { type: 'session', inviteeUserIds: [PERSON(1)] }],
@@ -1726,5 +1736,43 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
       // authenticate, then the handler: nothing in between counts requests.
       expect(handlers).toHaveLength(2);
     }
+  });
+});
+
+// ─── T14 (1 Nov 2026): the circle page's Invite opens the same sheet ─────────────────────────────────────────
+describe('the sheet for a circle', () => {
+  it('lists candidates for a circle, the circle passed on in lower case', async () => {
+    mockCandidates.mockResolvedValueOnce({ items: [], nextBefore: null });
+    const res = await request(app).get(`/invites/candidates?circleId=${CIRCLE.toUpperCase()}`).set(auth());
+    expect(res.status).toBe(200);
+    expect(mockCandidates.mock.calls[0][1]).toMatchObject({ circleId: CIRCLE, podId: undefined, sessionId: undefined, source: 'connections' });
+  });
+
+  it('a circle batch is asked of the service as sent, and tells the circle\'s people and its invites once', async () => {
+    mockBatch.mockResolvedValueOnce({
+      results: [{ userId: PERSON(1), outcome: 'invited', inviteId: 'inv-1' }],
+      counts: { invited: 1, already_member: 0, already_going: 0, already_invited: 0, declined: 0, not_allowed: 0, failed: 0 },
+      target: { podId: null, sessionId: null, circleId: CIRCLE },
+      delivery: Promise.resolve(),
+    });
+    const res = await request(app).post('/invites/batch').set(auth('u-circle-owner')).send({ type: 'circle', circleId: CIRCLE, inviteeUserIds: [PERSON(1)] });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      results: [{ userId: PERSON(1), outcome: 'invited', inviteId: 'inv-1' }],
+      counts: { invited: 1, already_member: 0, already_going: 0, already_invited: 0, declined: 0, not_allowed: 0, failed: 0 },
+    });
+    expect(mockBatch).toHaveBeenCalledWith({ userId: 'u-circle-owner', role: 'member' }, { type: 'circle', circleId: CIRCLE, inviteeUserIds: [PERSON(1)] });
+    expect(mockFanoutCircle).toHaveBeenCalledTimes(1);
+    expect(mockFanoutCircle).toHaveBeenCalledWith(CIRCLE, 'u-circle-owner', [], [`circle:${CIRCLE}:invites`]);
+    expect(mockFanoutPod).not.toHaveBeenCalled();
+    expect(mockFanoutSession).not.toHaveBeenCalled();
+  });
+
+  it('a member of a closed circle is refused by the service (403) and no screen is told', async () => {
+    mockBatch.mockRejectedValueOnce(new ForbiddenError('Only the people who run this circle can invite to it.'));
+    const res = await request(app).post('/invites/batch').set(auth('u-circle-member')).send({ type: 'circle', circleId: CIRCLE, inviteeUserIds: [PERSON(1)] });
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toBe('Only the people who run this circle can invite to it.');
+    expect(mockFanoutCircle).not.toHaveBeenCalled();
   });
 });

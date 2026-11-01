@@ -5,6 +5,9 @@
 // member. Every gate is server-side — nothing trusted from the client.
 // 1 Nov 2026: every route is rate limited (circleReadLimiter, circleWriteLimiter, and wallWriteLimiter on the wall's
 // writes) and every change to a circle tells the people it touches through fanoutCircleChange.
+// T14 (1 Nov 2026, L22): the people who run a circle (its creator, owners and moderators, and platform admins;
+// circle-managers.ts) edit it, choose Open or Closed, answer asks to join, remove members and attach pods. Creating
+// and archiving a circle stay a platform admin's. Every change to the asks also tells circle:<id>:requests.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -14,9 +17,12 @@ import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { requireRole } from '../middleware/rbac';
 import { circleReadLimiter, circleWriteLimiter, wallWriteLimiter } from '../middleware/rateLimit';
 import { fanoutCircleChange } from '../realtime/fanout';
+import { E } from '../realtime/entities';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as circleService from '../services/circle/circle.service';
+import * as joinService from '../services/circle/circle-join.service';
 import * as wallService from '../services/circle/circle-wall.service';
+import { assertCircleManager } from '../services/circle/circle-managers';
 
 const router = Router();
 
@@ -27,13 +33,23 @@ const createBodySchema = z.object({
   description: z.string().max(2000).optional().nullable(),
   parentCircleId: z.string().uuid().optional().nullable(),
 });
-const updateBodySchema = createBodySchema.partial();
+const updateBodySchema = createBodySchema.partial().extend({
+  // T14: who can join. Production's client never sends it.
+  joinPolicy: z.enum(['open', 'closed']).optional(),
+});
 const attachBodySchema = z.object({ podId: z.string().uuid() });
+const attachableQuery = z.object({
+  q: z.string().trim().max(100).optional(),
+  page: z.coerce.number().int().min(1).max(1000).default(1),
+  pageSize: z.coerce.number().int().min(1).optional()
+    .transform((n) => Math.min(n ?? joinService.ATTACHABLE_PAGE, joinService.ATTACHABLE_PAGE_MAX)),
+});
+type AttachableQuery = z.infer<typeof attachableQuery>;
 
 // GET /circles — list (any member)
 router.get('/', authenticate, circleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await circleService.listCircles(req.user!.userId);
+    const data = await circleService.listCircles(req.user!.userId, req.user!.role);
     res.json({ success: true, data } satisfies ApiResponse);
   } catch (err) { next(err); }
 });
@@ -65,12 +81,17 @@ router.post('/', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN), 
     } catch (err) { next(err); }
   });
 
-// PATCH /circles/:id — update (admin+)
-router.patch('/:id', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN), validate(updateBodySchema),
+// PATCH /circles/:id — update (the people who run it; T14). Name, description and who can join; moving it under
+// another circle stays a platform admin's (the service says so). Opening a closed circle lets everyone waiting in.
+router.patch('/:id', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle), validate(updateBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await circleService.updateCircle(req.params.id, req.body);
-      void fanoutCircleChange(req.params.id, req.user!.userId);
+      const circle = await assertCircleManager(req.params.id, req.user!.userId, req.user!.role, 'Only the people who run this circle can change it.');
+      const changed = await circleService.updateCircle(req.params.id, req.body, { userId: req.user!.userId, role: req.user!.role });
+      const approved = changed?.approvedUserIds ?? [];
+      void fanoutCircleChange(req.params.id, req.user!.userId, approved,
+        req.body.joinPolicy !== undefined ? [E.circleRequests(req.params.id)] : []);
+      void joinService.ringApproved(req.params.id, req.body.name?.trim() || circle.name, approved);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
@@ -85,30 +106,46 @@ router.post('/:id/archive', authenticate, circleWriteLimiter, requireRole(UserRo
     } catch (err) { next(err); }
   });
 
-// POST /circles/:id/pods — attach a pod (admin+)
-router.post('/:id/pods', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN), validate(attachBodySchema),
+// GET /circles/:id/attachable-pods — the attach picker's list, a page at a time (the people who run it; T14)
+router.get('/:id/attachable-pods', authenticate, circleReadLimiter, uuidInPath('id', PATH_REFUSALS.circle),
+  validate(attachableQuery, 'query'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await circleService.attachPod(req.params.id, req.body.podId, req.user!.userId);
+      // validate() has replaced req.query with the parsed value; Express still types it as raw strings.
+      const asked = req.query as unknown as AttachableQuery;
+      const data = await joinService.listAttachablePods(req.params.id, { userId: req.user!.userId, role: req.user!.role },
+        { q: asked.q, page: asked.page, pageSize: asked.pageSize });
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// POST /circles/:id/pods — attach a pod (the people who run it; T14). A platform admin attaches any pod, anyone
+// else a pod they direct or host.
+router.post('/:id/pods', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle), validate(attachBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await assertCircleManager(req.params.id, req.user!.userId, req.user!.role, 'Only the people who run this circle can attach pods.');
+      await circleService.attachPod(req.params.id, req.body.podId, req.user!.userId, isAdminRole(req.user!.role));
       void fanoutCircleChange(req.params.id, req.user!.userId);
       res.status(201).json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
-// DELETE /circles/:id/pods/:podId — detach (admin+)
-router.delete('/:id/pods/:podId', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN),
+// DELETE /circles/:id/pods/:podId — detach (the people who run it; T14)
+router.delete('/:id/pods/:podId', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await assertCircleManager(req.params.id, req.user!.userId, req.user!.role, 'Only the people who run this circle can detach pods.');
       await circleService.detachPod(req.params.id, req.params.podId);
       void fanoutCircleChange(req.params.id, req.user!.userId);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
-// POST /circles/:id/join — open join (any member)
+// POST /circles/:id/join — any member joins an open circle; a closed one answers 403 CIRCLE_CLOSED (ask instead)
 router.post('/:id/join', authenticate, circleWriteLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await circleService.joinCircle(req.params.id, req.user!.userId);
+    await circleService.joinCircle(req.params.id, req.user!.userId, { role: req.user!.role });
     void fanoutCircleChange(req.params.id, req.user!.userId, [req.user!.userId]);
     res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
   } catch (err) { next(err); }
@@ -122,6 +159,65 @@ router.post('/:id/leave', authenticate, circleWriteLimiter, async (req: Request,
     res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
   } catch (err) { next(err); }
 });
+
+// ── Asking to join, and the answers (T14) ───────────────────────────────────────────────────────────────
+
+const askTags = (circleId: string) => [E.circleRequests(circleId)];
+
+// POST /circles/:id/request — ask to join. An open circle (or someone who runs it) simply joins: { status: 'member' }.
+router.post('/:id/request', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { status } = await joinService.requestToJoinCircle(req.params.id, req.user!.userId, req.user!.role);
+      void fanoutCircleChange(req.params.id, req.user!.userId, [req.user!.userId], askTags(req.params.id));
+      res.json({ success: true, data: { status } } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// DELETE /circles/:id/request — withdraw your own ask (a second press answers the same)
+router.delete('/:id/request', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await joinService.cancelJoinRequest(req.params.id, req.user!.userId);
+      if (data.cancelled) void fanoutCircleChange(req.params.id, req.user!.userId, [req.user!.userId], askTags(req.params.id));
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// GET /circles/:id/requests — the asks waiting (the people who run it)
+router.get('/:id/requests', authenticate, circleReadLimiter, uuidInPath('id', PATH_REFUSALS.circle),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await joinService.listJoinRequests(req.params.id, { userId: req.user!.userId, role: req.user!.role });
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// POST /circles/:id/requests/:userId/approve | decline — answer one ask (the people who run it), once
+for (const verb of ['approve', 'decline'] as const) {
+  router.post(`/:id/requests/:userId/${verb}`, authenticate, circleWriteLimiter,
+    uuidInPath('id', PATH_REFUSALS.circle), uuidInPath('userId', PATH_REFUSALS.member),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const decider = { userId: req.user!.userId, role: req.user!.role };
+        if (verb === 'approve') await joinService.approveJoinRequest(req.params.id, req.params.userId, decider);
+        else await joinService.declineJoinRequest(req.params.id, req.params.userId, decider);
+        void fanoutCircleChange(req.params.id, req.user!.userId, [req.params.userId], askTags(req.params.id));
+        res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+      } catch (err) { next(err); }
+    });
+}
+
+// DELETE /circles/:id/members/:userId — remove a member (the people who run it; never the owner)
+router.delete('/:id/members/:userId', authenticate, circleWriteLimiter,
+  uuidInPath('id', PATH_REFUSALS.circle), uuidInPath('userId', PATH_REFUSALS.member),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await joinService.removeCircleMember(req.params.id, req.params.userId, { userId: req.user!.userId, role: req.user!.role });
+      void fanoutCircleChange(req.params.id, req.user!.userId, [req.params.userId]);
+      res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
 
 // ── Wall (Phase 4) ───────────────────────────────────────────────────────────
 
@@ -148,12 +244,12 @@ const shareSchema = z.object({
   content: z.string().max(2000).optional(),
 });
 
-// GET /circles/:id/posts — the wall feed (any member; keyset cursor)
+// GET /circles/:id/posts — the wall feed (any member; a closed circle's only to the people in it; keyset cursor)
 router.get('/:id/posts', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await wallService.listPosts(req.params.id, req.user!.userId, {
       cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
-    });
+    }, req.user!.role);
     res.json({ success: true, data } satisfies ApiResponse);
   } catch (err) { next(err); }
 });
@@ -170,7 +266,7 @@ router.post('/:id/posts', authenticate, wallWriteLimiter, validate(createPostSch
 // GET /circles/posts/:postId — one post (any member; blocks respected → 404). Backs ?post= deep links.
 router.get('/posts/:postId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await wallService.getPost(req.params.postId, req.user!.userId);
+    const data = await wallService.getPost(req.params.postId, req.user!.userId, req.user!.role);
     if (!data) {
       res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Post not found' } } satisfies ApiResponse);
       return;
@@ -224,7 +320,7 @@ router.post('/posts/:postId/unpin', authenticate, wallWriteLimiter, requireRole(
 // GET /circles/posts/:postId/comments — any member (blocks filtered)
 router.get('/posts/:postId/comments', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = await wallService.listComments(req.params.postId, req.user!.userId);
+    const data = await wallService.listComments(req.params.postId, req.user!.userId, req.user!.role);
     res.json({ success: true, data } satisfies ApiResponse);
   } catch (err) { next(err); }
 });

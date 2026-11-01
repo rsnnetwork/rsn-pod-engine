@@ -99,11 +99,12 @@ describe('circles', () => {
 
   it('the wall keeps a former member\'s posts and comments, as "Former member"', async () => {
     await wall.listPosts(POD, ME);
-    expect(sent()[0]).toContain(`(NOT ${ACTIVE}) AS author_former`);
+    // T14: the feed first asks whether the viewer may read the wall (a closed circle's is for its members).
+    expect(sent().find((s) => /author_former/.test(s))).toContain(`(NOT ${ACTIVE}) AS author_former`);
     mockQuery.mockReset();
     mockQuery.mockResolvedValue({ rows: [{ id: 'c1', author_id: THEM, display_name: 'Gone', avatar_url: 'x', author_former: true, content: 'hi', created_at: new Date() }] });
     const [comment] = await wall.listComments(POD, ME);
-    expect(sent()[0]).toContain(`(NOT ${ACTIVE}) AS author_former`);
+    expect(sent().find((s) => /author_former/.test(s))).toContain(`(NOT ${ACTIVE}) AS author_former`);
     expect(comment).toMatchObject({ authorName: 'Former member', authorAvatarUrl: null, authorClosed: true, content: 'hi' });
   });
 });

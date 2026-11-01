@@ -35,6 +35,12 @@ const MEMBER_COLUMNS = `
 
 // ─── Pod CRUD ───────────────────────────────────────────────────────────────
 
+/**
+ * Make a pod, with its creator as its director. T14 (1 Nov 2026): the pod row and the director row are written in one
+ * transaction (they were two separate queries, so a failure between them left a pod nobody directed), and a pod made
+ * from a circle's page (`input.circleId`) is attached to that circle in the same transaction: an archived or missing
+ * circle is a 404 and nothing is left behind. Who may add a pod to a circle is the route's check, made first.
+ */
 export async function createPod(userId: string, input: CreatePodInput): Promise<Pod> {
   const podId = uuid();
   // 26 Oct 2026 (Claus, 25 Oct: "orchestration should follow the pod type") — an orchestration or
@@ -43,33 +49,46 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
   const podType = input.podType || PodType.SPEED_NETWORKING;
   const typeRule = podTypeRule(podType);
 
-  const result = await query<Pod>(
-    `INSERT INTO pods (id, name, description, pod_type, orchestration_mode, communication_mode, visibility, status, max_members, rules, created_by, allow_member_invites)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10, $11)
-     RETURNING ${POD_COLUMNS}`,
-    [
-      podId,
-      input.name,
-      input.description || null,
-      podType,
-      input.orchestrationMode || typeRule.orchestration.default,
-      input.communicationMode || typeRule.communication,
-      input.visibility || PodVisibility.INVITE_ONLY,
-      input.maxMembers || null,
-      input.rules || null,
-      userId,
-      input.allowMemberInvites ?? false,
-    ]
-  );
+  const pod = await transaction(async (client) => {
+    const result = await client.query<Pod>(
+      `INSERT INTO pods (id, name, description, pod_type, orchestration_mode, communication_mode, visibility, status, max_members, rules, created_by, allow_member_invites)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10, $11)
+       RETURNING ${POD_COLUMNS}`,
+      [
+        podId,
+        input.name,
+        input.description || null,
+        podType,
+        input.orchestrationMode || typeRule.orchestration.default,
+        input.communicationMode || typeRule.communication,
+        input.visibility || PodVisibility.INVITE_ONLY,
+        input.maxMembers || null,
+        input.rules || null,
+        userId,
+        input.allowMemberInvites ?? false,
+      ]
+    );
 
-  // Auto-add creator as director
-  await query(
-    `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'director', 'active')`,
-    [podId, userId]
-  );
+    // Auto-add creator as director
+    await client.query(
+      `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'director', 'active')`,
+      [podId, userId]
+    );
 
-  logger.info({ podId, userId, name: input.name }, 'Pod created');
-  return result.rows[0];
+    if (input.circleId) {
+      const linked = await client.query(
+        `INSERT INTO circle_pods (circle_id, pod_id, added_by)
+         SELECT c.id, $2, $3 FROM circles c WHERE c.id = $1 AND c.archived_at IS NULL
+         ON CONFLICT DO NOTHING`,
+        [input.circleId, podId, userId],
+      );
+      if (!linked.rowCount) throw new NotFoundError('Circle', input.circleId);
+    }
+    return result.rows[0];
+  });
+
+  logger.info({ podId, userId, name: input.name, circleId: input.circleId ?? null }, 'Pod created');
+  return pod;
 }
 
 export async function getPodById(podId: string): Promise<Pod & { memberCount?: number; sessionCount?: number; directorName?: string | null; directorId?: string | null }> {

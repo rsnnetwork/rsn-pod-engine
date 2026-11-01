@@ -111,6 +111,30 @@ export async function assertMayInviteToSession(sessionId: string, userId: string
 }
 
 /**
+ * Who may send invites to a circle (T14, one rule for the single invite, the sheet's list and its batch): a platform
+ * admin; in an open circle anyone in it and the people who run it; in a closed circle only the people who run it,
+ * because an invite lets its person straight in. Returns the circle. 404 for a missing or archived circle.
+ */
+export async function assertMayInviteToCircle(
+  circleId: string,
+  userId: string,
+  isAdmin: boolean,
+): Promise<{ id: string; name: string; joinPolicy: string }> {
+  const circle = await query<{ id: string; name: string; join_policy: string }>(
+    `SELECT id, name, join_policy FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
+  if (circle.rows.length === 0) {
+    throw new NotFoundError('Circle', circleId);
+  }
+  const { id, name, join_policy: joinPolicy } = circle.rows[0];
+  if (!isAdmin && !(await mayInviteToCircle(circleId, userId, undefined))) {
+    throw new AppError(403, 'AUTH_FORBIDDEN', joinPolicy === 'closed'
+      ? 'Only the people who run this circle can invite to it.'
+      : 'Only circle members can invite to a circle');
+  }
+  return { id, name, joinPolicy };
+}
+
+/**
  * How a person runs an event's invites (reads the list, reminds, withdraws anybody's): as an admin, as the event's
  * host, or as a co-host (any session_cohosts row, either role). null when they do not. The same people who may send
  * the event's invites (assertMayInviteToSession), so nobody can send an invite they cannot then manage.
@@ -553,14 +577,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     if (!input.circleId) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Circle invite requires a circle to be selected');
     }
-    const circle = await query<{ id: string }>(
-      `SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [input.circleId]);
-    if (circle.rows.length === 0) {
-      throw new NotFoundError('Circle', input.circleId);
-    }
-    if (!(await mayInviteToCircle(input.circleId, userId, userRole))) {
-      throw new AppError(403, 'AUTH_FORBIDDEN', 'Only circle members can invite to a circle');
-    }
+    await assertMayInviteToCircle(input.circleId, userId, isAdmin);
     if (input.inviteeEmail) {
       const existingMember = await query<{ id: string }>(
         `SELECT u.id FROM users u
@@ -809,7 +826,8 @@ async function applyInviteRegistration(
   // 13 Aug 2026 (C3): a circle invite joins the circle. joinCircle is
   // idempotent (ON CONFLICT DO NOTHING, counter moves only on a real insert).
   if (invite.type === InviteType.CIRCLE && invite.circleId) {
-    await circleService.joinCircle(invite.circleId, userId);
+    // T14: the invite is the doorway, so a closed circle takes them, and a pending ask of theirs is answered.
+    await circleService.joinCircle(invite.circleId, userId, { byInvite: true });
     out.circleId = invite.circleId;
   }
 
@@ -1226,7 +1244,7 @@ export async function listInvitesByUser(userId: string, params: {
 
 // ─── List Received Invites ──────────────────────────────────────────────────
 
-export async function listReceivedInvites(userEmail: string, userId?: string): Promise<(Invite & { podName?: string; sessionTitle?: string; inviterName?: string })[]> {
+export async function listReceivedInvites(userEmail: string, userId?: string): Promise<(Invite & { podName?: string; sessionTitle?: string; circleName?: string; inviterName?: string })[]> {
   const ENRICHED_COLUMNS = `
     i.id, i.code, i.type, i.inviter_id AS "inviterId", i.invitee_email AS "inviteeEmail",
     i.pod_id AS "podId", i.session_id AS "sessionId", i.status, i.max_uses AS "maxUses",
@@ -1234,6 +1252,7 @@ export async function listReceivedInvites(userEmail: string, userId?: string): P
     i.accepted_by_user_id AS "acceptedByUserId", i.accepted_at AS "acceptedAt",
     i.created_at AS "createdAt", i.updated_at AS "updatedAt",
     p.name AS "podName", s.title AS "sessionTitle",
+    i.circle_id AS "circleId", c.name AS "circleName",
     u.display_name AS "inviterName"
   `;
 
@@ -1254,20 +1273,25 @@ export async function listReceivedInvites(userEmail: string, userId?: string): P
            -- mask a new pending invite. A removed/left/declined row is
            -- history and the new invite is legitimately pending.
            AND pm.status NOT IN ('removed', 'left', 'declined')
+       ))
+       AND (i.circle_id IS NULL OR NOT EXISTS (
+         SELECT 1 FROM circle_members cm WHERE cm.circle_id = i.circle_id AND cm.user_id = $2
        ))`
     : '';
   const params = userId
     ? [userEmail.toLowerCase(), userId]
     : [userEmail.toLowerCase()];
 
-  const result = await query<Invite & { podName?: string; sessionTitle?: string; inviterName?: string }>(
+  const result = await query<Invite & { podName?: string; sessionTitle?: string; circleName?: string; inviterName?: string }>(
     `SELECT ${ENRICHED_COLUMNS}
      FROM invites i
      LEFT JOIN pods p ON p.id = i.pod_id
      LEFT JOIN sessions s ON s.id = i.session_id
+     LEFT JOIN circles c ON c.id = i.circle_id
      LEFT JOIN users u ON u.id = i.inviter_id
      WHERE i.invitee_email = $1 AND i.status = 'pending'
        AND (i.expires_at IS NULL OR i.expires_at > NOW())
+       AND (i.circle_id IS NULL OR c.archived_at IS NULL)
        AND (i.session_id IS NULL OR NOT EXISTS (
          SELECT 1 FROM sessions ses WHERE ses.id = i.session_id AND ses.status IN ('completed', 'cancelled')
        ))

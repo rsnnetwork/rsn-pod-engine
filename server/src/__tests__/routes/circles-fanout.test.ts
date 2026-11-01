@@ -29,6 +29,7 @@ jest.mock('../../db', () => ({
   __esModule: true,
 }));
 jest.mock('../../services/circle/circle.service');
+jest.mock('../../services/circle/circle-join.service');
 jest.mock('../../services/circle/circle-wall.service');
 
 const mockIo = { name: 'the socket server' };
@@ -41,6 +42,7 @@ jest.mock('../../realtime/emit', () => ({
 }));
 
 import * as circleService from '../../services/circle/circle.service';
+import * as joinService from '../../services/circle/circle-join.service';
 import * as wallService from '../../services/circle/circle-wall.service';
 import circleRoutes from '../../routes/circles';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
@@ -56,6 +58,7 @@ const ADMIN = 'user-admin';       // made the circle
 const MEMBER = 'user-member';     // in it
 const JOINER = 'user-joiner';     // joins it in the test
 const PLATFORM = 'user-platform'; // a platform admin who is not in it
+const ASKER = '7c2e9a41-3d5b-4e6f-8a1c-9b0d2e4f6a33'; // asks to join (an id: it sits in the path)
 
 /** Who is in the circle, as the fake database holds it; a test changes it to mirror its write. */
 let members: string[];
@@ -66,16 +69,23 @@ beforeEach(() => {
   members = [ADMIN, MEMBER];
   creator = ADMIN;
   mockEmitEntities.mockResolvedValue(undefined);
-  mockQuery.mockImplementation(async (sql: string) => {
+  mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
     if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] }; // authenticate
+    // T14: the manager gate reads the circle, then whether the caller made it or is its owner or a moderator.
+    if (/SELECT id, name, join_policy, created_by FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(text)) {
+      return { rows: [{ id: CIRCLE, name: 'Doctors', join_policy: 'open', created_by: creator }] };
+    }
+    if (/SELECT 1 FROM circles c WHERE c.id = \$1 AND \(c.created_by = \$2/.test(text)) {
+      return { rows: params[1] === creator ? [{ '?column?': 1 }] : [] };
+    }
     if (/SELECT user_id FROM circle_members WHERE circle_id = \$1 UNION SELECT created_by FROM circles WHERE id = \$1/.test(text)) {
       return { rows: [...new Set([...members, creator])].map(user_id => ({ user_id })) };
     }
     return { rows: [] };
   });
   jest.mocked(circleService.createCircle).mockResolvedValue({ id: CIRCLE });
-  jest.mocked(circleService.updateCircle).mockResolvedValue(undefined);
+  jest.mocked(circleService.updateCircle).mockResolvedValue({ approvedUserIds: [] });
   jest.mocked(circleService.archiveCircle).mockResolvedValue(undefined);
   jest.mocked(circleService.attachPod).mockResolvedValue(undefined);
   jest.mocked(circleService.detachPod).mockResolvedValue(undefined);
@@ -83,6 +93,14 @@ beforeEach(() => {
   jest.mocked(circleService.leaveCircle).mockResolvedValue(undefined);
   jest.mocked(circleService.listCircles).mockResolvedValue([]);
   jest.mocked(circleService.getCircleDetail).mockResolvedValue({ id: CIRCLE } as never);
+  jest.mocked(joinService.requestToJoinCircle).mockResolvedValue({ status: 'requested', created: true });
+  jest.mocked(joinService.cancelJoinRequest).mockResolvedValue({ cancelled: true });
+  jest.mocked(joinService.approveJoinRequest).mockResolvedValue(undefined);
+  jest.mocked(joinService.declineJoinRequest).mockResolvedValue(undefined);
+  jest.mocked(joinService.removeCircleMember).mockResolvedValue(undefined);
+  jest.mocked(joinService.ringApproved).mockResolvedValue(undefined);
+  jest.mocked(joinService.listJoinRequests).mockResolvedValue([]);
+  jest.mocked(joinService.listAttachablePods).mockResolvedValue({ items: [], nextPage: null });
 });
 
 const app = express();
@@ -206,13 +224,15 @@ describe('the routes are rate limited', () => {
     expect(at).toBeLessThan(handlers.length - 1);
   };
 
-  it.each([['get', '/'], ['get', '/of-pod/:podId'], ['get', '/:id']])('%s %s carries the read limiter', (method, path) => {
+  it.each([['get', '/'], ['get', '/of-pod/:podId'], ['get', '/:id'], ['get', '/:id/requests'], ['get', '/:id/attachable-pods']])('%s %s carries the read limiter', (method, path) => {
     order(circleReadLimiter, method, path);
   });
 
   it.each([
     ['post', '/'], ['patch', '/:id'], ['post', '/:id/archive'], ['post', '/:id/pods'], ['delete', '/:id/pods/:podId'],
     ['post', '/:id/join'], ['post', '/:id/leave'],
+    ['post', '/:id/request'], ['delete', '/:id/request'], ['post', '/:id/requests/:userId/approve'],
+    ['post', '/:id/requests/:userId/decline'], ['delete', '/:id/members/:userId'],
   ])('%s %s carries the write limiter', (method, path) => {
     order(circleWriteLimiter, method, path);
   });
@@ -258,11 +278,12 @@ describe('production\'s client: the calls its circle screens make are answered a
     }
   });
 
-  it('attach and detach a pod (the admin\'s picker) keep their bodies and answers, and stay admin-only', async () => {
+  it('attach and detach a pod (the admin\'s picker) keep their bodies and answers; a member who does not run it is refused', async () => {
     const attached = await request(app).post(`/circles/${CIRCLE}/pods`).set(as(PLATFORM, 'admin')).send({ podId: POD });
     expect(attached.status).toBe(201);
     expect(attached.body).toEqual({ success: true, data: { ok: true } });
-    expect(circleService.attachPod).toHaveBeenCalledWith(CIRCLE, POD, PLATFORM);
+    // T14: a platform admin attaches any pod (the fourth argument); the people who run it, only pods they run.
+    expect(circleService.attachPod).toHaveBeenCalledWith(CIRCLE, POD, PLATFORM, true);
     const detached = await request(app).delete(`/circles/${CIRCLE}/pods/${POD}`).set(as(PLATFORM, 'admin'));
     expect(detached.body).toEqual({ success: true, data: { ok: true } });
     expect((await request(app).post(`/circles/${CIRCLE}/pods`).set(as(MEMBER)).send({ podId: POD })).status).toBe(403);
@@ -281,5 +302,135 @@ describe('production\'s client: the calls its circle screens make are answered a
     expect(res.status).toBe(200);
     expect(wallService.reactToPost).toHaveBeenCalledWith(POST, MEMBER, 'like');
     expect((await request(app).post(`/circles/posts/${POST}/pin`).set(as(MEMBER))).status).toBe(403);
+  });
+});
+
+// ─── T14 (1 Nov 2026): who can join, the asks, and the people who run a circle ─────────────────────────────────
+describe('a closed circle\'s asks and answers: who hears them, and who may answer', () => {
+  const requests = E.circleRequests(CIRCLE);
+
+  it('builds the requests tag as the client does', async () => {
+    const { E: clientE } = await import('../../../../client/src/realtime/entities');
+    expect(requests).toBe(`circle:${CIRCLE}:requests`);
+    expect(clientE.circleRequests(CIRCLE)).toBe(requests);
+  });
+
+  it('an ask: the circle\'s people and the asker hear the circle, its requests and the asker\'s list; the answer is { status }', async () => {
+    members = [ADMIN, MEMBER];
+    const res = await request(app).post(`/circles/${CIRCLE}/request`).set(as(ASKER));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { status: 'requested' } });
+    expect(joinService.requestToJoinCircle).toHaveBeenCalledWith(CIRCLE, ASKER, 'member');
+    await settle();
+    expect(heard()).toEqual({
+      [ADMIN]: page(ADMIN, E.userCircles(ASKER), requests),
+      [MEMBER]: page(MEMBER, E.userCircles(ASKER), requests),
+      [ASKER]: page(ASKER, requests),
+    });
+  });
+
+  it('withdrawing an ask tells the same people; withdrawing nothing tells no one', async () => {
+    expect((await request(app).delete(`/circles/${CIRCLE}/request`).set(as(ASKER))).body).toEqual({ success: true, data: { cancelled: true } });
+    await settle();
+    expect(Object.keys(heard()).sort()).toEqual([ADMIN, ASKER, MEMBER].sort());
+    mockEmitEntities.mockClear();
+    jest.mocked(joinService.cancelJoinRequest).mockResolvedValueOnce({ cancelled: false });
+    expect((await request(app).delete(`/circles/${CIRCLE}/request`).set(as(ASKER))).status).toBe(200);
+    await settle();
+    expect(emits()).toEqual([]);
+  });
+
+  it.each(['approve', 'decline'] as const)('%s: the service decides who may (here the owner); the asker and the circle hear it', async (verb) => {
+    members = verb === 'approve' ? [ADMIN, MEMBER, ASKER] : [ADMIN, MEMBER];
+    const res = await request(app).post(`/circles/${CIRCLE}/requests/${ASKER}/${verb}`).set(as(ADMIN));
+    expect(res.status).toBe(200);
+    const fn = verb === 'approve' ? joinService.approveJoinRequest : joinService.declineJoinRequest;
+    expect(fn).toHaveBeenCalledWith(CIRCLE, ASKER, { userId: ADMIN, role: 'member' });
+    await settle();
+    expect(heard()[ASKER]).toEqual(page(ASKER, requests));
+    expect(heard()[ADMIN]).toEqual(page(ADMIN, E.userCircles(ASKER), requests));
+  });
+
+  it('a refused answer (the service says 403) tells no one', async () => {
+    const { AppError } = await import('../../middleware/errors');
+    jest.mocked(joinService.approveJoinRequest).mockRejectedValueOnce(new AppError(403, 'AUTH_FORBIDDEN', 'Only the people who run this circle can answer requests.'));
+    const res = await request(app).post(`/circles/${CIRCLE}/requests/${ASKER}/approve`).set(as(MEMBER));
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toBe('Only the people who run this circle can answer requests.');
+    await settle();
+    expect(emits()).toEqual([]);
+  });
+
+  it('a malformed person in the path is a 400 in words, before any service', async () => {
+    const res = await request(app).post(`/circles/${CIRCLE}/requests/not-a-person/approve`).set(as(ADMIN));
+    expect(res.status).toBe(400);
+    expect(joinService.approveJoinRequest).not.toHaveBeenCalled();
+  });
+
+  it('removing a member tells the circle and the person removed', async () => {
+    members = [ADMIN];
+    expect((await request(app).delete(`/circles/${CIRCLE}/members/${ASKER}`).set(as(ADMIN))).status).toBe(200);
+    expect(joinService.removeCircleMember).toHaveBeenCalledWith(CIRCLE, ASKER, { userId: ADMIN, role: 'member' });
+    await settle();
+    expect(heard()).toEqual({ [ADMIN]: page(ADMIN, E.userCircles(ASKER)), [ASKER]: page(ASKER) });
+  });
+
+  it('the owner (not a platform admin) may edit and close the circle; a plain member may not', async () => {
+    const closed = await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ joinPolicy: 'closed' });
+    expect(closed.status).toBe(200);
+    expect(circleService.updateCircle).toHaveBeenCalledWith(CIRCLE, { joinPolicy: 'closed' }, { userId: ADMIN, role: 'member' });
+    await settle();
+    expect(heard()[MEMBER]).toEqual(page(MEMBER, requests));
+    mockEmitEntities.mockClear();
+    const refused = await request(app).patch(`/circles/${CIRCLE}`).set(as(MEMBER)).send({ joinPolicy: 'open' });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.message).toBe('Only the people who run this circle can change it.');
+    expect((await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ joinPolicy: 'secret' })).status).toBe(400);
+  });
+
+  it('reopening lets the waiting people in: each is rung and told, with the requests tag', async () => {
+    jest.mocked(circleService.updateCircle).mockResolvedValueOnce({ approvedUserIds: [ASKER] });
+    members = [ADMIN, MEMBER, ASKER];
+    expect((await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ joinPolicy: 'open' })).status).toBe(200);
+    await settle();
+    expect(joinService.ringApproved).toHaveBeenCalledWith(CIRCLE, 'Doctors', [ASKER]);
+    expect(heard()[ASKER]).toEqual(page(ASKER, requests));
+    expect(heard()[MEMBER]).toEqual(page(MEMBER, E.userCircles(ASKER), requests));
+  });
+
+  it('attach by the owner attaches only pods they run (isAdmin false); a member is refused attach and detach', async () => {
+    expect((await request(app).post(`/circles/${CIRCLE}/pods`).set(as(ADMIN)).send({ podId: POD })).status).toBe(201);
+    expect(circleService.attachPod).toHaveBeenCalledWith(CIRCLE, POD, ADMIN, false);
+    expect((await request(app).post(`/circles/${CIRCLE}/pods`).set(as(MEMBER)).send({ podId: POD })).status).toBe(403);
+    expect((await request(app).delete(`/circles/${CIRCLE}/pods/${POD}`).set(as(MEMBER))).status).toBe(403);
+    expect((await request(app).delete(`/circles/${CIRCLE}/pods/${POD}`).set(as(ADMIN))).status).toBe(200);
+  });
+
+  it('the attach picker pages with pageSize (50 unless asked, never over 100) and passes the search', async () => {
+    await request(app).get(`/circles/${CIRCLE}/attachable-pods`).set(as(ADMIN));
+    expect(joinService.listAttachablePods).toHaveBeenLastCalledWith(CIRCLE, { userId: ADMIN, role: 'member' }, { q: undefined, page: 1, pageSize: 50 });
+    await request(app).get(`/circles/${CIRCLE}/attachable-pods?q=Found&page=2&pageSize=500`).set(as(ADMIN));
+    expect(joinService.listAttachablePods).toHaveBeenLastCalledWith(CIRCLE, { userId: ADMIN, role: 'member' }, { q: 'Found', page: 2, pageSize: 100 });
+  });
+
+  it('the wall\'s reads carry the viewer\'s role, so a closed circle\'s wall is refused at the service', async () => {
+    jest.mocked(wallService.listPosts).mockResolvedValue({ pinned: [], posts: [], nextCursor: null });
+    jest.mocked(wallService.getPost).mockResolvedValue({ id: POST } as never);
+    jest.mocked(wallService.listComments).mockResolvedValue([]);
+    await request(app).get(`/circles/${CIRCLE}/posts`).set(as(MEMBER));
+    expect(wallService.listPosts).toHaveBeenCalledWith(CIRCLE, MEMBER, { cursor: undefined }, 'member');
+    await request(app).get(`/circles/posts/${POST}`).set(as(MEMBER));
+    expect(wallService.getPost).toHaveBeenCalledWith(POST, MEMBER, 'member');
+    await request(app).get(`/circles/posts/${POST}/comments`).set(as(MEMBER));
+    expect(wallService.listComments).toHaveBeenCalledWith(POST, MEMBER, 'member');
+  });
+
+  it('production\'s Join circle on a closed circle gets the 403 in words its toast can show', async () => {
+    const { AppError } = await import('../../middleware/errors');
+    jest.mocked(circleService.joinCircle).mockRejectedValueOnce(new AppError(403, 'CIRCLE_CLOSED', 'This circle is closed. Ask to join and its owner will let you in.'));
+    const res = await request(app).post(`/circles/${CIRCLE}/join`).set(as(ASKER));
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ success: false, error: { code: 'CIRCLE_CLOSED', message: 'This circle is closed. Ask to join and its owner will let you in.' } });
+    expect(circleService.joinCircle).toHaveBeenCalledWith(CIRCLE, ASKER, { role: 'member' });
   });
 });
