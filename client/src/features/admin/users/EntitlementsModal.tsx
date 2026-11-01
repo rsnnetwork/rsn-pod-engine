@@ -1,6 +1,7 @@
 // client/src/features/admin/users/EntitlementsModal.tsx
 // A member's limits (pods they may own, events a month, invites a day, hosting and pod creation), moved out of the
-// Users page unchanged, with a sentence when it cannot be read or saved.
+// Users page. A member with no limits saved yet (the read answers 404) starts from the defaults; any other failed read
+// says so and offers no Save, so a failure can never save the defaults over their real limits.
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import Modal from '@/components/ui/Modal';
@@ -25,12 +26,22 @@ export default function EntitlementsModal({ user, onClose }: { user: AdminUserRo
     meta: { entities: [E.user(user.id), E.adminUsers] },
     retry: false,
   });
+  const noneSaved = (read.error as { response?: { status?: number } } | null)?.response?.status === 404;
   return (
     <Modal open onClose={onClose} title={`Limits for ${nameOf(user)}`}>
-      {read.isPending
-        ? <p className="py-6 text-center text-sm text-gray-500">Reading their limits…</p>
-        // A member with no limits saved yet (or a read that fails) starts from the defaults, as before.
-        : <LimitsForm key={user.id} user={user} initial={read.data ?? DEFAULTS} onClose={onClose} />}
+      {read.isPending ? (
+        <p className="py-6 text-center text-sm text-gray-500">Reading their limits…</p>
+      ) : read.isError && !noneSaved ? (
+        <div className="py-4 text-center">
+          <p className="text-sm text-gray-600">Their limits could not be read just now, so they cannot be changed yet.</p>
+          <div className="mt-3 flex justify-center gap-2">
+            <Button variant="secondary" onClick={onClose}>Close</Button>
+            <Button onClick={() => void read.refetch()}>Try again</Button>
+          </div>
+        </div>
+      ) : (
+        <LimitsForm key={user.id} user={user} initial={read.data ?? DEFAULTS} onClose={onClose} />
+      )}
     </Modal>
   );
 }

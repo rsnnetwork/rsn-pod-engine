@@ -12,7 +12,6 @@ import { useConfirm } from '@/hooks/useConfirm';
 
 // The old profile unblocked at once. A confirmation now asks first, in the same dialog Block uses (T2, 1 Nov 2026: a
 // ConfirmDialog in the page; the page renders `confirmDialog`).
-export const UNBLOCK_QUESTION = 'Unblock this member? They will be able to message you again, and you may be matched together in future events.';
 const UNBLOCK_TITLE = 'Unblock this member?';
 const UNBLOCK_BODY = 'They will be able to message you again, and you may be matched together in future events.';
 

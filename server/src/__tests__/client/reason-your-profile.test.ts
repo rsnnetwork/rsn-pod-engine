@@ -326,7 +326,6 @@ describe('Human Profile: More, with Block and Report this member', () => {
     expect(hook).toMatch(/meta: \{ entities: me \? \[E\.userBlocks\(me\)\] : \[\] \}/);
     expect(hook).toMatch(/blockedByYou: status\.data\?\.hasBlocked === true/);
     // The old profile unblocked at once; now a question comes first, in the dialog Block uses.
-    expect(hook).toMatch(/UNBLOCK_QUESTION = 'Unblock this member\? They will be able to message you again, and you may be matched together in future events\.';/);
     // T2 (1 Nov 2026): the question is a ConfirmDialog in the page, never window.confirm, and the page renders it.
     expect(hook).toMatch(/if \(await ask\(\{ title: UNBLOCK_TITLE, body: UNBLOCK_BODY, confirmLabel: 'Unblock' \}\)\) unblock\.mutate\(\);/);
     expect(`${UNBLOCK_TITLE_TEXT} ${UNBLOCK_BODY_TEXT}`).toBe('Unblock this member? They will be able to message you again, and you may be matched together in future events.');

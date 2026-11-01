@@ -26,7 +26,7 @@ import {
   type InviteTarget,
 } from '../../../../client/src/features/invites/invite-picker';
 import {
-  REMIND_GAP_MS, STATUS_TITLE, WITHDRAW_CONFIRM,
+  REMIND_GAP_MS, STATUS_TITLE, WITHDRAW_BODY, WITHDRAW_TITLE,
   inviteStatusGroups, personLine, remindAllSentence, remindSentence, settleInTurn, statusSummary, tallyReminders,
   type InviteListRow,
 } from '../../../../client/src/features/invites/invite-status';
@@ -323,7 +323,7 @@ describe('the organisers\' list: reminders and withdrawing, in words', () => {
   });
 
   it('withdrawing asks first', () => {
-    expect(WITHDRAW_CONFIRM).toBe('Withdraw this invite? Its link stops working, and you can invite them again afterwards.');
+    expect(`${WITHDRAW_TITLE} ${WITHDRAW_BODY}`).toBe('Withdraw this invite? Its link stops working, and you can invite them again afterwards.');
   });
 });
 

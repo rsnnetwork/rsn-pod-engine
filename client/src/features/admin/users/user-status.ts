@@ -3,8 +3,6 @@
 // accounts twice each: the Active tab sent no status, so it listed every account, and a removed row stayed where it
 // was. Each tab now asks for its own status and says how many it holds, and each action says what it does before and
 // after.
-import type { UserStatusCounts } from '@rsn/shared';
-
 export type AccountStatus = 'active' | 'suspended' | 'deactivated' | 'banned';
 export type StatusAction = 'suspend' | 'ban' | 'remove' | 'activate' | 'delete';
 
@@ -102,8 +100,6 @@ export function roleChoices(isSuperAdmin: boolean): string[] {
 export function roleIsEditable(role: string, isSuperAdmin: boolean): boolean {
   return isSuperAdmin || (role !== 'admin' && role !== 'super_admin');
 }
-
-export const NO_COUNTS: UserStatusCounts = { active: 0, suspended: 0, deactivated: 0, banned: 0 };
 
 /** The sentence a refused or failed press shows: the server's own words, else a plain one. */
 export function failureText(err: unknown): string {

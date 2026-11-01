@@ -53,7 +53,8 @@ export default function AdminUsersPage() {
       return api.get(`/users?${params.toString()}`).then((r) => r.data as { data: AdminUserRowData[]; meta: PaginationMeta });
     },
     enabled: admin,
-    placeholderData: (previous) => previous,
+    // The last page stays while a new search or page loads, but never another tab's rows under this tab's actions.
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[4] === tab ? previous : undefined),
     meta: { entities: [E.adminUsers] },
   });
 

@@ -64,7 +64,7 @@ export default function ConfirmDialog({
         </>
       )}
     >
-      <p data-testid="confirm-dialog" className="mt-1 text-[14px] leading-relaxed text-[#454b55] [overflow-wrap:anywhere]">{body}</p>
+      <p data-testid="confirm-dialog-body" className="mt-1 text-[14px] leading-relaxed text-[#454b55] [overflow-wrap:anywhere]">{body}</p>
     </Sheet>
   );
 }

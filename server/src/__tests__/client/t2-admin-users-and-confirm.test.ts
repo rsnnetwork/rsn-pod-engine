@@ -103,6 +103,17 @@ describe('the admin Users page tabs', () => {
     expect(read('features/admin/users/AdminUserRow.tsx')).toMatch(/\{!choices\.includes\(u\.role\) && <option value=\{u\.role\} disabled>\{roleLabel\}<\/option>\}/);
   });
 
+  it("keeps the last page only while the same tab reloads, never another tab's rows under this tab's actions", () => {
+    expect(read('features/admin/AdminUsersPage.tsx')).toMatch(/placeholderData: \(previous, previousQuery\) => \(previousQuery\?\.queryKey\[4\] === tab \? previous : undefined\)/);
+  });
+
+  it('limits start from the defaults only when none are saved (404); any other failed read offers no Save', () => {
+    const modal = read('features/admin/users/EntitlementsModal.tsx');
+    expect(modal).toMatch(/const noneSaved = [^\n]*response\?\.status === 404;/);
+    expect(modal).toMatch(/read\.isError && !noneSaved \? \(/);
+    expect(modal).toMatch(/Their limits could not be read just now, so they cannot be changed yet\./);
+  });
+
   it('runs every hook before the admin check, so a role change while it is open cannot break it', () => {
     const page = read('features/admin/AdminUsersPage.tsx');
     const check = page.indexOf('if (!admin) {');

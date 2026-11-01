@@ -44,7 +44,6 @@ export const LOAD_FAILED = 'We could not load the invitations just now.';
 /** Withdraw asks first, in the page (T2, 1 Nov 2026: a ConfirmDialog, never window.confirm). */
 export const WITHDRAW_TITLE = 'Withdraw this invite?';
 export const WITHDRAW_BODY = 'Its link stops working, and you can invite them again afterwards.';
-export const WITHDRAW_CONFIRM = `${WITHDRAW_TITLE} ${WITHDRAW_BODY}`;
 export const WITHDRAWN = 'Invite withdrawn. Its link no longer works.';
 export const NOT_WITHDRAWN = 'The invite could not be withdrawn. Please try again.';
 export const NOT_REMINDED = 'The reminder could not be sent. Please try again.';
