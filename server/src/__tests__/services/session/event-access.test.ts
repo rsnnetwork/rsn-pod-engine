@@ -77,6 +77,27 @@ describe('an event with its own visibility', () => {
   });
 });
 
+describe('fix round 1', () => {
+  it('someone approved who then unregistered registers again and is never asked to request again', () => {
+    const approved = f({ visibility: 'public_with_approval', myRequest: 'approved', participantStatus: null });
+    expect(needsApproval(approved, M)).toBe(false);
+    expect(canRegister(approved, M)).toEqual({ ok: true, addToPod: false });
+    expect(summariseEventAccess(approved, M).mode).toBe('register');
+    const pending = f({ visibility: 'public_with_approval', myRequest: 'pending' });
+    expect(canRegister(pending, M)).toMatchObject({ ok: false, code: 'EVENT_NEEDS_APPROVAL' });
+  });
+
+  it('opening a NULL event registers only the pod\'s members, invitees, host and co-hosts (L17 for every event)', () => {
+    expect(summariseEventAccess(f({ podVisibility: 'public' }), M).autoRegister).toBe(false);
+    expect(summariseEventAccess(f({ podVisibility: 'public' }), M).mode).toBe('register');
+    expect(summariseEventAccess(f({ podVisibility: 'public', inAudience: true }), M).autoRegister).toBe(true);
+    expect(summariseEventAccess(f({ podVisibility: 'public_with_approval', isInvited: true }), M).autoRegister).toBe(true);
+    expect(summariseEventAccess(f({ podVisibility: 'private', isHost: true }), M).autoRegister).toBe(true);
+    expect(summariseEventAccess(f({ podVisibility: 'public' }), UserRole.ADMIN).autoRegister).toBe(false);
+    expect(summariseEventAccess(f({ podVisibility: 'public', inAudience: true, accountActive: false }), M).autoRegister).toBe(false);
+  });
+});
+
 describe('a removed, suspended or banned account', () => {
   it('sees nothing and registers for nothing at every visibility', () => {
     for (const vis of [null, 'public', 'public_with_approval', 'private'] as const) {

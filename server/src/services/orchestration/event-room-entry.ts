@@ -6,7 +6,8 @@
 import type { Socket } from 'socket.io';
 import { ErrorCodes } from '@rsn/shared';
 import logger from '../../config/logger';
-import { eventRoomAdmission, type EventRoomAdmission } from '../session/session-access';
+import type { EventRoomAdmission } from '../session/session-access';
+import { canEnterRoom } from '../session/event-access';
 import { sessionRoom } from './state/session-state';
 
 /** A refusal production's live page shows as a toast and a banner: a code and a sentence. */
@@ -43,10 +44,10 @@ export function eventRoomRefusal(eventStatus: string, registrationCode: string |
   return { code: 'JOIN_FAILED', message: 'You could not join this event. Refresh the page to try again.' };
 }
 
-/** eventRoomAdmission, or null when the read fails (logged). */
+/** canEnterRoom (the event-access rule for the live room), or null when the read fails (logged). */
 async function readAdmission(sessionId: string, userId: string, role: string | undefined): Promise<EventRoomAdmission | null> {
   try {
-    return await eventRoomAdmission(sessionId, userId, role);
+    return await canEnterRoom(sessionId, userId, role);
   } catch (err) {
     logger.warn({ err, sessionId, userId }, 'Could not read who the event admits');
     return null;

@@ -23,9 +23,9 @@ import { activeSessions } from '../services/orchestration/state/session-state';
 import { getCanonicalConnectedSet } from '../services/orchestration/state/canonical-state';
 import {
   ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
-  EventVisibility, EVENT_VISIBILITY_KEYS,
+  EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes,
 } from '@rsn/shared';
-import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
+import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
 import config from '../config';
 import logger from '../config/logger';
@@ -36,6 +36,19 @@ import { matchingPresetsLimiter } from '../middleware/rateLimit';
 import { listMatchingPresets } from '../services/matching/matching-template-choice';
 
 const router = Router();
+
+const VIEW_REFUSAL = 'You must be registered or a pod member to view this event.';
+
+/**
+ * The refusal for someone who may not see an event: 403 with today's words, as production's client reads them.
+ * T11 fix round 1: a private event (its own visibility) says so in its code, EVENT_PRIVATE, so the preview can show
+ * "This event is private"; the status and the message stay exactly what production's client already shows.
+ */
+async function refuseView(sessionId: string): Promise<never> {
+  const row = await query<{ visibility: string | null }>(`SELECT visibility FROM sessions WHERE id = $1`, [sessionId]);
+  if (row?.rows?.[0]?.visibility === 'private') throw new AppError(403, ErrorCodes.EVENT_PRIVATE, VIEW_REFUSAL);
+  throw new ForbiddenError(VIEW_REFUSAL);
+}
 
 /** The "you're registered" email with its calendar invite. Best-effort: a failure is logged, never thrown. */
 async function sendRegistrationEmail(sessionId: string, userId: string): Promise<void> {
@@ -206,9 +219,7 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const canView = await canViewSession(req.user!.userId, req.params.id, req.user!.role);
-      if (!canView) {
-        throw new ForbiddenError('You must be registered or a pod member to view this event.');
-      }
+      if (!canView) await refuseView(req.params.id);
 
       const session = await sessionService.getSessionById(req.params.id);
       const participantCount = await sessionService.getParticipantCount(req.params.id);
@@ -247,9 +258,7 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const canView = await canViewSession(req.user!.userId, req.params.id, req.user!.role);
-      if (!canView) {
-        throw new ForbiddenError('You must be registered or a pod member to view this event.');
-      }
+      if (!canView) await refuseView(req.params.id);
 
       const io = req.app.get('io') as SocketServer | null;
       const snapshot = await buildSessionStateSnapshot(req.params.id, io);

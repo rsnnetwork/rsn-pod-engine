@@ -641,6 +641,40 @@ describe('Session Routes', () => {
       expect(res.body.data.id).toBe('5e550000-0000-4000-8000-000000000123');
       (dbQuery as jest.Mock).mockReset();
     });
+
+    // T11 fix round 1: a private event refuses a stranger with today's 403 and words (production's client reads
+    // them) plus the code EVENT_PRIVATE, so the preview can say "This event is private". A NULL event: unchanged.
+    const refusalFor = async (visibility: string | null) => {
+      (dbQuery as jest.Mock).mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM sessions s') && sql.includes('pod_visibility')) {
+          return { rows: [{ host_user_id: 'someone-else', pod_id: 'p1', pod_visibility: 'private', is_cohost: false, visibility, account_closed: false }], rowCount: 1 };
+        }
+        if (sql.includes('event_join_requests')) {
+          return { rows: [{ visibility, pod_id: 'p1', pod_visibility: 'private', is_host: false, is_cohost: false, is_pod_organiser: false,
+            in_audience: false, is_invited: false, participant_status: null, account_active: true, my_request: null }], rowCount: 1 };
+        }
+        if (sql.startsWith('SELECT visibility FROM sessions')) return { rows: [{ visibility }], rowCount: 1 };
+        if (sql.includes('SELECT status FROM users')) return { rows: [{ status: 'active' }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      });
+      const res = await request(app)
+        .get('/sessions/5e550000-0000-4000-8000-000000000123')
+        .set('Authorization', `Bearer ${makeToken()}`);
+      (dbQuery as jest.Mock).mockReset();
+      return res;
+    };
+
+    it('answers a stranger on a private event 403 with the code EVENT_PRIVATE and the words production shows', async () => {
+      const res = await refusalFor('private');
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatchObject({ code: 'EVENT_PRIVATE', message: 'You must be registered or a pod member to view this event.' });
+    });
+
+    it('answers a stranger on a NULL event in a private pod exactly as before', async () => {
+      const res = await refusalFor(null);
+      expect(res.status).toBe(403);
+      expect(res.body.error).toMatchObject({ code: 'AUTH_FORBIDDEN', message: 'You must be registered or a pod member to view this event.' });
+    });
   });
 });
 

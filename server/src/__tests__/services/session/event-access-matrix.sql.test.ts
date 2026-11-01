@@ -269,6 +269,21 @@ suite('event access matrix and requests (real Postgres)', () => {
       await expect(requests.approveRequest(e, stranger, director, UserRole.MEMBER)).rejects.toMatchObject({ code: 'EVENT_REQUEST_ANSWERED' });
     });
 
+    it('fix round 1: someone approved who then unregistered registers again without asking again', async () => {
+      const host = await person('Host');
+      const stranger = await person('Stranger');
+      const p = await pod('public', host, []);
+      const e = await event(p, host, 'public_with_approval');
+      await requests.requestToJoin(e, stranger, UserRole.MEMBER, null);
+      await requests.approveRequest(e, stranger, host, UserRole.MEMBER);
+      await sessions.unregisterParticipant(e, stranger);
+      const facts = (await eventAccess.readEventAccessFacts(e, stranger))!;
+      expect(eventAccess.summariseEventAccess(facts, UserRole.MEMBER)).toMatchObject({ mode: 'register', myRequest: 'approved' });
+      await expect(requests.requestToJoin(e, stranger, UserRole.MEMBER, null)).rejects.toMatchObject({ code: 'EVENT_REQUEST_NOT_NEEDED' });
+      expect(await registerOutcome(e, stranger)).toBe('ok');
+      expect(await access.eventRoomAdmission(e, stranger, UserRole.MEMBER)).toBe('admitted');
+    });
+
     it('a full event leaves the request pending with SESSION_FULL', async () => {
       const host = await person('Host');
       const other = await person('Other');

@@ -202,13 +202,14 @@ export function canSeeEvent(f: EventAccessFacts, role: string | undefined): bool
 
 /**
  * Whether the person must request a place and wait for the host: an approval event, and they are not its
- * audience, not invited, and hold no place yet (someone already let in is never asked again, as T2's D2).
+ * audience, not invited, hold no place yet (someone already let in is never asked again, as T2's D2) and have no
+ * approved request (fix round 1: someone approved who then unregistered registers again, never asks again).
  * Never for a NULL event: an approval pod's NULL event refuses outsiders in words instead (T2's D2).
  */
 export function needsApproval(f: EventAccessFacts, role: string | undefined): boolean {
   if (f.visibility !== 'public_with_approval') return false;
   if (!f.accountActive || runsEvent(f, role)) return false;
-  return !f.inAudience && !f.isInvited && f.participantStatus === null;
+  return !f.inAudience && !f.isInvited && f.participantStatus === null && f.myRequest !== 'approved';
 }
 
 export type RegisterDecision =
@@ -255,7 +256,8 @@ export function canRegister(
   if (f.visibility === 'private') {
     return { ok: false, status: 403, code: ErrorCodes.EVENT_PRIVATE, message: EVENT_PRIVATE_SENTENCE };
   }
-  if (f.visibility === 'public_with_approval' && !options.approvedRequest) {
+  // An approved request stays an approval: someone approved who unregistered registers again (fix round 1).
+  if (f.visibility === 'public_with_approval' && !options.approvedRequest && f.myRequest !== 'approved') {
     return { ok: false, status: 403, code: ErrorCodes.EVENT_NEEDS_APPROVAL, message: EVENT_NEEDS_APPROVAL_SENTENCE };
   }
   return { ok: true, addToPod: false };
@@ -267,10 +269,13 @@ export function eventAccessMode(f: EventAccessFacts, role: string | undefined): 
   return canRegister(f, role).ok ? 'register' : 'private';
 }
 
-/** Whether opening the event page registers the person (L17: only its audience and its invitees). */
-export function autoRegisters(f: EventAccessFacts, role: string | undefined): boolean {
-  if (f.visibility === null) return canRegister(f, role).ok;
-  return f.accountActive && (f.inAudience || f.isInvited || runsEvent(f, role));
+/**
+ * Whether opening the event page registers the person. L17, for every event, NULL included (controller ruling,
+ * fix round 1): only its audience (the pod's active members) and its invitees, and its host and co-hosts, who are
+ * already in. Everyone else who may register presses Register; who MAY register is canRegister's, unchanged.
+ */
+export function autoRegisters(f: EventAccessFacts, _role: string | undefined): boolean {
+  return f.accountActive && (f.inAudience || f.isInvited || f.isHost || f.isCohost);
 }
 
 /**
