@@ -5,6 +5,8 @@
 // a completed event starts one with the people who took part in it; it lives in Messages beside the
 // one-to-one conversations. Text only.
 
+import type { MessageReplyQuote } from './message-reply';
+
 /** The most people a group chat holds, its creator included. Stated in the product: "Group chats hold up to 50 people." */
 export const GROUP_CHAT_MAX_MEMBERS = 50;
 
@@ -83,6 +85,8 @@ export interface GroupChatMessage {
   senderAvatarUrl: string | null;
   content: string;
   createdAt: string;
+  /** The message this one answers, as the reader may see it (30 Oct 2026); null when it answers none. */
+  replyTo?: MessageReplyQuote | null;
 }
 
 /** GET /api/groups/:id/messages: newest first; pass nextCursor back as ?before= for the page older than this one. */
