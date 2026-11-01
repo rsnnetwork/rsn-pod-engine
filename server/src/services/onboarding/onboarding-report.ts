@@ -14,6 +14,7 @@ import {
 } from '@rsn/shared';
 import type { AdminOnboardingAnswers, OnboardingOption } from '@rsn/shared';
 import { isFindV2Key, isMeetV2Key, isOfferV2Key, isSelfV2Key } from './answers-v2.map';
+import { activeMemberSql } from '../users/active-member';
 
 /** The users columns both readings select. */
 export const ANSWER_COLUMNS = `u.onboarding_version, u.location, u.timezone, u.onboarding_intent,
@@ -86,8 +87,7 @@ export async function onboardingReportRows(): Promise<OnboardingCsvRow[]> {
   const r = await query<ReportRow>(
     `SELECT u.display_name, u.email, u.onboarding_status, u.last_onboarded_at, ${ANSWER_COLUMNS}
        FROM users u
-      -- switch to activeMemberSql after T2
-      WHERE u.status = 'active'
+      WHERE ${activeMemberSql('u')}
       ORDER BY lower(COALESCE(u.display_name, u.email)), u.id
       LIMIT $1`,
     [ONBOARDING_CSV_LIMIT],

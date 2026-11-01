@@ -24,7 +24,7 @@ describe('isCountryOnly', () => {
     'Greater Copenhagen Region', 'Copenhagen, Denmark', 'Copenhagen, Capital Region of Denmark, Denmark',
     'Kathmandu', 'Georgia',
     // A city that is its own country, or a city the alias table lists for its country, is where someone lives.
-    'Singapore', 'Hong Kong', 'Dubai', 'Abu Dhabi', 'Monaco',
+    'Singapore', 'Hong Kong', 'Dubai', 'Abu Dhabi', 'Monaco', 'Luxembourg', 'Kuwait', 'Panama',
   ])('"%s" says where they are based', (value) => {
     expect(isCountryOnly(value)).toBe(false);
     expect(isLocationComplete(value)).toBe(true);
@@ -38,11 +38,13 @@ describe('isCountryOnly', () => {
   });
 
   it('every country name, alias and home name the matcher knows counts as only a country', () => {
+    const CITIES = ['singapore', 'hong kong', 'dubai', 'abu dhabi', 'monaco', 'macao', 'macau', 'vatican city',
+      'luxembourg', 'kuwait', 'san marino', 'djibouti', 'panama', 'andorra'];
     const names = [
       ...Object.entries(COUNTRY_ALIASES).flatMap(([canon, aliases]) => [canon, ...aliases]),
       ...Object.entries(COUNTRY_NAMES).flatMap(([canon, others]) => [canon, ...others]),
       ...Object.values(ENDONYMS).flat(),
-    ].filter(n => !['singapore', 'hong kong', 'dubai', 'abu dhabi', 'monaco', 'macao', 'macau', 'vatican city'].includes(fold(n)));
+    ].filter(n => !CITIES.includes(fold(n)));
     const missed = names.filter(n => !isCountryOnly(n) || !isCountryOnly(n.toUpperCase()));
     expect(missed).toEqual([]);
   });
