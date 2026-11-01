@@ -257,16 +257,6 @@ function LiveEventRoom() {
           opens once per tab, so an ended event opened in a new tab asked "What brings you here today?" over the
           end screen's way out. */}
       {!isHost && phase !== 'complete' && <EventCheckInModal />}
-      {/* Toasts: the live event route is NOT inside AppLayout (App.tsx), so the
-          app-wide ToastContainer there never mounts during an event — toasts
-          (e.g. the BG auto-disable notice) fired into the void (Ali, 2026-06-08:
-          "removes BG and doesn't inform user"). Mount one here so event-time
-          toasts are visible. Self-contained, fixed-position; no duplicate
-          because this page bypasses AppLayout. The HOST runs the event and the
-          UI already reflects every action, so confirmation banners are noise
-          that piled up on each click (Ali, 2026-06-09) — hostQuiet shows the
-          host only actionable errors. Participants still see all their toasts. */}
-      <ToastContainer hostQuiet={isHost} />
       {/* Phase 5B (5 May spec) — test-mode banner.
           Shown to ALL participants when the server detects multiple
           accounts sharing the host's email-username root, OR when the
@@ -284,7 +274,19 @@ function LiveEventRoom() {
           The title now asks for 10rem before it shares the line; when the controls leave it less, the bar wraps and
           the title gets its own line above them (it truncates, never vanishes). The controls are one group that
           never shrinks, so the leave button keeps its 44px. The insets keep the bar clear of a notch (viewport-fit=cover). */}
-      <div data-testid="live-top-bar" className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.375rem,env(safe-area-inset-top))] pb-1.5 bg-white border-b border-gray-200">
+      <div data-testid="live-top-bar" className="relative flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.375rem,env(safe-area-inset-top))] pb-1.5 bg-white border-b border-gray-200">
+        {/* Toasts: the live event route is NOT inside AppLayout (App.tsx), so the
+            app-wide ToastContainer there never mounts during an event — toasts
+            (e.g. the BG auto-disable notice) fired into the void (Ali, 2026-06-08:
+            "removes BG and doesn't inform user"). Mount one here so event-time
+            toasts are visible; no duplicate because this page bypasses AppLayout.
+            The HOST runs the event and the UI already reflects every action, so
+            confirmation banners are noise that piled up on each click (Ali,
+            2026-06-09) — hostQuiet shows the host only actionable errors.
+            Participants still see all their toasts.
+            2 Nov 2026: the stack opens just below this bar (its positioned parent), never over it. Fixed to the
+            window's top right, the check-in's "Thanks" toast lay over the whole bar on a phone, the leave button included. */}
+        <ToastContainer hostQuiet={isHost} placement="below-bar" />
         <div className="flex items-center gap-1.5 min-w-0 flex-[1_1_10rem]">
           {/* The pod is named, not linked: a link here left the event without its leave (a full reload of the page).
               The way out is the leave button, which lands on the event page, and that page goes back to the pod. */}

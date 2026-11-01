@@ -11,7 +11,6 @@ const styles = {
   error: { card: 'border-red-600 bg-red-50', icon: 'text-red-700' },
   info: { card: 'border-blue-600 bg-blue-50', icon: 'text-blue-700' },
 };
-
 function ToastCard({ type, message, onDismiss }: { type: 'success' | 'error' | 'info'; message: string; onDismiss: () => void }) {
   const Icon = icons[type];
   return (
@@ -37,9 +36,25 @@ interface Props {
    *  flagged hostSilent. Participants and dashboard surfaces pass false and see
    *  everything as before. */
   hostQuiet?: boolean;
+  /** Where the stack opens. 'viewport' (every page but the live room): fixed to the window's top right.
+   *  'below-bar' (the live room, 2 Nov 2026): just below its positioned parent, the live top bar, so a toast
+   *  never covers the title, the round or Leave Event. On a phone a fixed top-right toast lay over the whole bar. */
+  placement?: 'viewport' | 'below-bar';
 }
 
-export default function ToastContainer({ hostQuiet = false }: Props) {
+// The cards are solid in both placements, so a toast over the room's banner or video never mixes its words with
+// the words under it. 'below-bar' hangs off the live top bar (its positioned parent) and keeps the same z-index.
+const PLACEMENT: Record<NonNullable<Props['placement']>, { className: string; style?: { top: string; right: string } }> = {
+  viewport: {
+    className: 'fixed top-4 right-4 z-[210] left-[max(16px,env(safe-area-inset-left))] sm:left-auto sm:max-w-sm',
+    style: { top: 'max(16px, env(safe-area-inset-top))', right: 'max(16px, env(safe-area-inset-right))' },
+  },
+  'below-bar': {
+    className: 'absolute top-full mt-2 z-[210] left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] sm:left-auto sm:max-w-sm',
+  },
+};
+
+export default function ToastContainer({ hostQuiet = false, placement = 'viewport' }: Props) {
   const { toasts, removeToast } = useToastStore();
   // Internal/admin/system messages ("plan updated", "event plan ready") never
   // banner anyone — they're already reflected in the UI and aren't user-facing
@@ -59,8 +74,8 @@ export default function ToastContainer({ hostQuiet = false }: Props) {
   // makes a reader say only the toast that was added, not the ones already showing.
   return (
     <div
-      className="fixed top-4 right-4 z-[210] left-[max(16px,env(safe-area-inset-left))] sm:left-auto sm:max-w-sm"
-      style={{ top: 'max(16px, env(safe-area-inset-top))', right: 'max(16px, env(safe-area-inset-right))' }}
+      className={PLACEMENT[placement].className}
+      style={PLACEMENT[placement].style}
     >
       <div role="status" aria-live="polite" aria-atomic="false">
         <AnimatePresence>
