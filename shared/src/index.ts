@@ -122,6 +122,8 @@ export * from './events/rules';
 import {
   EVENT_FORMATS as _EVENT_FORMATS, EVENT_FORMAT_KEYS as _EVENT_FORMAT_KEYS, POD_TYPES as _POD_TYPES,
   ORCHESTRATION_MODES as _ORCHESTRATION_MODES,
+  EVENT_ACCESS as _EVENT_ACCESS, EVENT_VISIBILITY_KEYS as _EVENT_VISIBILITY_KEYS,
+  defaultEventVisibility as _defaultEventVisibility, isEventVisibility as _isEventVisibility,
 } from './events/definitions';
 import {
   formatRule as _formatRule, podTypeRule as _podTypeRule, isEventFormat as _isEventFormat, liveKindOf as _liveKindOf,
@@ -136,6 +138,11 @@ export const EVENT_FORMATS = _EVENT_FORMATS;
 export const EVENT_FORMAT_KEYS = _EVENT_FORMAT_KEYS;
 export const POD_TYPES = _POD_TYPES;
 export const ORCHESTRATION_MODES = _ORCHESTRATION_MODES;
+// T11 (1 Nov 2026): who can join an event.
+export const EVENT_ACCESS = _EVENT_ACCESS;
+export const EVENT_VISIBILITY_KEYS = _EVENT_VISIBILITY_KEYS;
+export const defaultEventVisibility = _defaultEventVisibility;
+export const isEventVisibility = _isEventVisibility;
 export const formatRule = _formatRule;
 export const podTypeRule = _podTypeRule;
 export const isEventFormat = _isEventFormat;

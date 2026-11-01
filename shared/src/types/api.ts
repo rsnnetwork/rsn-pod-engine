@@ -84,6 +84,11 @@ export const ErrorCodes = {
   EVENT_ENDED: 'EVENT_ENDED',
   EVENT_FORMAT_NOT_ALLOWED: 'EVENT_FORMAT_NOT_ALLOWED',  // the format is not offered, or the pod's type does not hold it
   NOT_A_ROUNDS_EVENT: 'NOT_A_ROUNDS_EVENT',              // a round, matching or breakout action on an event that has none (a video meeting)
+  EVENT_NEEDS_APPROVAL: 'EVENT_NEEDS_APPROVAL',          // T11: the event asks the host to approve each place
+  EVENT_PRIVATE: 'EVENT_PRIVATE',                        // T11: a private event, for its pod's members and invitees
+  EVENT_REQUEST_NOT_NEEDED: 'EVENT_REQUEST_NOT_NEEDED',  // T11: the person can register directly
+  EVENT_REQUEST_DECLINED: 'EVENT_REQUEST_DECLINED',      // T11: the host declined; the requester cannot reopen it
+  EVENT_REQUEST_ANSWERED: 'EVENT_REQUEST_ANSWERED',      // T11: the request was already approved, declined or withdrawn
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

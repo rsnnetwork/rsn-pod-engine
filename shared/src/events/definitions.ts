@@ -239,3 +239,59 @@ export const POD_TYPES: Record<PodType, PodTypeRule> = {
     sizeHint: null,
   },
 };
+
+// ─── Who can join an event (T11, 1 Nov 2026; L17) ────────────────────────────────────────────────
+//
+// An event's own access, stored in sessions.visibility. NULL (every event made before, and every event
+// production's form makes) follows its pod exactly as before. The server decides seeing, registering and the
+// request flow from this value (server/src/services/session/event-access.ts); the forms and the event page
+// read these words.
+
+export type EventVisibility = 'public' | 'public_with_approval' | 'private';
+
+/** The three in the order the event form offers them (Stefan's order: Public with approval, Public, Private). */
+export const EVENT_VISIBILITY_KEYS: readonly EventVisibility[] = ['public_with_approval', 'public', 'private'] as const;
+
+/** What a person can do on an event page: register, ask the host for a place, or nothing (a private event). */
+export type EventAccessMode = 'register' | 'request' | 'private';
+
+/** Where a person's request to join an event stands. */
+export type EventJoinRequestStatus = 'pending' | 'approved' | 'declined' | 'withdrawn';
+
+export interface EventAccessRule {
+  /** The option's name on the form. */
+  label: string;
+  /** The line under it. */
+  summary: string;
+  /** The small chip on an Events list row. */
+  chip: string;
+}
+
+export const EVENT_ACCESS: Record<EventVisibility, EventAccessRule> = {
+  public_with_approval: {
+    label: 'Public with approval',
+    summary: 'Anyone on REASON can see it and request to join; you approve each person',
+    chip: 'Request to join',
+  },
+  public: {
+    label: 'Public',
+    summary: 'Anyone on REASON can see it and join',
+    chip: 'Open',
+  },
+  private: {
+    label: 'Private',
+    summary: "Only the pod's members and people you invite",
+    chip: 'Private',
+  },
+};
+
+/** What a new event in a pod starts with: the pod's own access, an invite-only pod's events being private. */
+export function defaultEventVisibility(podVisibility: string | null | undefined): EventVisibility {
+  if (podVisibility === 'public') return 'public';
+  if (podVisibility === 'public_with_approval') return 'public_with_approval';
+  return 'private';
+}
+
+export function isEventVisibility(v: unknown): v is EventVisibility {
+  return typeof v === 'string' && (EVENT_VISIBILITY_KEYS as readonly string[]).includes(v);
+}
