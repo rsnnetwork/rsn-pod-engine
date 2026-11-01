@@ -4,6 +4,7 @@ import * as path from 'path';
 import { createTestUser, pool, type TestUser } from '../helpers/auth';
 import { cleanup, gotoRetry, APP, SERVER } from '../helpers/live-ui';
 import { contextOptions, engineLabel, launchBrowser } from '../helpers/engine';
+import { expectReachable } from '../helpers/viewport-fit';
 
 // 30 Oct review, T3b (1.2, 2.1–2.3; L2, L3, L4), headed, on throwaway members cleaned up by id:
 //   - a member who finished only the earlier onboarding signs in and is taken through the new one (not edit mode),
@@ -34,7 +35,7 @@ async function api(u: TestUser, method: string, p: string, body?: unknown) {
     method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${u.accessToken}` },
     body: body ? JSON.stringify(body) : undefined,
   });
-  return { status: res.status, json: await res.json().catch(() => null), text: '' };
+  return { status: res.status, json: await res.json().catch(() => null) };
 }
 
 async function signedIn(u: TestUser, width: number): Promise<Page> {
@@ -133,22 +134,23 @@ for (const width of FLOW_WIDTHS) {
   });
 }
 
-test('a new-onboarding member with no location goes straight to the location field, with no Cancel, then on', async () => {
+for (const stored of [null, 'United Kingdom']) {
+test(`a new-onboarding member with ${stored ? 'only a country' : 'no location'} goes straight to the location field, with no Cancel, then on`, async () => {
   test.setTimeout(180_000);
-  const me = await createTestUser('t3bloc', 'member', 'completed');
+  const me = await createTestUser(stored ? 't3bcountry' : 't3bloc', 'member', 'completed');
   made.push(me.id);
   expect((await api(me, 'POST', '/onboarding/v2/confirm', ANSWERS)).status).toBe(200);
-  await pool.query(`UPDATE users SET location = 'United Kingdom', tour_seen_at = NOW() WHERE id = $1`, [me.id]);
+  await pool.query(`UPDATE users SET location = $2, tour_seen_at = NOW() WHERE id = $1`, [me.id, stored]);
   const page = await signedIn(me, 390);
 
   await gotoRetry(page, `${APP}/connections`);
   await expect.poll(() => pathAndQuery(page), { timeout: 30_000 }).toBe('/onboarding?edit=profile&redirect=%2Fconnections');
   const where = page.getByLabel('Where are you based?', { exact: true });
   await expect(where).toBeFocused({ timeout: 30_000 });
-  await expect(where).toHaveValue('United Kingdom');
-  await expect(page.getByText('Add your city too', { exact: true })).toBeVisible();
+  await expect(where).toHaveValue(stored ?? '');
+  await expect(page.getByText('Add your city too', { exact: true })).toHaveCount(stored ? 1 : 0);
   await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
-  await page.screenshot({ path: `${SHOTS}/${tag()}-location-only.png`, fullPage: true });
+  await page.screenshot({ path: `${SHOTS}/${tag()}-location-only-${stored ? 'country' : 'none'}.png`, fullPage: true });
 
   await where.fill('Manchester, UK');
   await page.getByRole('button', { name: 'Save' }).click();
@@ -156,6 +158,23 @@ test('a new-onboarding member with no location goes straight to the location fie
   await page.waitForTimeout(2000);
   expect(new URL(page.url()).pathname).toBe('/connections');
   expect((await pool.query(`SELECT location FROM users WHERE id = $1`, [me.id])).rows[0].location).toBe('Manchester, UK');
+});
+}
+
+// Review fix 1: a member the gate holds can always sign out, from any onboarding screen, at 360px too.
+test('every onboarding screen has a Sign out that signs the member out and opens the sign-in page', async () => {
+  test.setTimeout(120_000);
+  const me = await earlierMember('t3bsignout');
+  const page = await signedIn(me, 360);
+  await gotoRetry(page, `${APP}/`);
+  await expect(page.getByRole('heading', { name: "Welcome to REASON. We're glad you're here." })).toBeVisible({ timeout: 30_000 });
+  const signOut = page.getByRole('button', { name: 'Sign out', exact: true });
+  await expectReachable(page, signOut, 'Sign out at 360');
+  expect((await signOut.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.screenshot({ path: `${SHOTS}/${tag()}-sign-out-360.png` });
+  await signOut.click();
+  await expect.poll(() => new URL(page.url()).pathname, { timeout: 20_000 }).toBe('/login');
+  expect(await page.evaluate(() => localStorage.getItem('rsn_access'))).toBeNull();
 });
 
 test('the profile form requires where they are based, and the old public profile never prints a missing-field label', async () => {
