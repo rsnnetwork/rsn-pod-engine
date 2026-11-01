@@ -61,3 +61,23 @@ export function afterRoomPath(opts: { conversationId: string; meetingId?: string
   if (opts.hadPartner && opts.meetingId) return `/meetings/${encodeURIComponent(opts.meetingId)}?feedback=1`;
   return `/messages/${opts.conversationId}`;
 }
+
+/**
+ * afterRoomPath, decided as the person leaves (1 Nov 2026, fix round 2). The other person counts as having been in the
+ * room when the room said so earlier (`hadPartner`) or when they are in it as I leave (`partnerHere`: their tile is on
+ * my screen). The meeting is the one the scheduler's read named; when that read gave none (it failed, or had not
+ * answered yet), a scheduled room reads it once more (`readMeetingId`), and a read that fails or finds none goes to
+ * the chat. Nothing is read for a room nobody else came into.
+ */
+export async function afterRoomLeave(opts: {
+  conversationId: string;
+  meetingId?: string | null;
+  hadPartner: boolean;
+  partnerHere: boolean;
+  readMeetingId?: () => Promise<string | null | undefined>;
+}): Promise<string> {
+  const hadPartner = opts.hadPartner || opts.partnerHere;
+  if (!hadPartner) return afterRoomPath({ conversationId: opts.conversationId, hadPartner });
+  const meetingId = opts.meetingId || (opts.readMeetingId ? await opts.readMeetingId().catch(() => null) : null);
+  return afterRoomPath({ conversationId: opts.conversationId, meetingId, hadPartner });
+}
