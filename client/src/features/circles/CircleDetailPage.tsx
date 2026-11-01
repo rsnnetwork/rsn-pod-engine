@@ -7,7 +7,7 @@
 // invite; the people who run it choose who can join, answer the asks (also opened by a bell's ?requests=1), make or
 // attach pods and remove members. A closed circle shows people outside it its name and counts and nothing else.
 // The page follows circle:<id> and the member's own circles (and, for its managers, the asks), so every change shows
-// without a refresh.
+// without a refresh. T15: its Organisations (the entities linked to it), after its pods.
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -24,6 +24,7 @@ import CircleSettingsSheet from './CircleSettingsSheet';
 import CircleRequestsSheet from './CircleRequestsSheet';
 import CirclePodsSection from './CirclePodsSection';
 import CircleMembersSection from './CircleMembersSection';
+import CircleOrganisationsSection from './CircleOrganisationsSection';
 import { LOCKED_COPY, WHO_CAN_JOIN, circleEntities, requestsLabel, type CircleDetail } from './circle-logic';
 
 const HEADER_ACTION = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50';
@@ -148,6 +149,8 @@ export default function CircleDetailPage() {
       )}
 
       {!circle.locked && <CirclePodsSection circle={circle} />}
+
+      {!circle.locked && <CircleOrganisationsSection circle={circle} />}
 
       {!circle.locked && (
         <div className="space-y-2 animate-fade-in-up">

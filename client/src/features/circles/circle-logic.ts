@@ -4,7 +4,7 @@
 // The server says, per circle, who may do what (CircleAccess: joinPolicy, myStatus, canManage, canInvite,
 // requestCount, locked); this turns it into the button, the setting and the sentences. A server from before T14 sends
 // none of those fields: then a circle reads as open, and the member's place comes from isMember, as before.
-import type { CircleAccess, CircleJoinPolicy, CircleMyStatus } from '@rsn/shared';
+import type { CircleAccess, CircleEntityLink, CircleJoinPolicy, CircleMyStatus } from '@rsn/shared';
 import { E } from '../../realtime/entities';
 
 /** What the list and the page read of a circle, the T14 fields optional (an older server sends none). */
@@ -25,6 +25,8 @@ export interface CircleDetail extends CircleSummary {
   pods: Array<{ podId: string; name: string; description: string | null }>;
   upcomingEvents: Array<{ id: string; title: string; scheduledAt: string; podId: string; forCircle?: boolean }>;
   children: Array<{ id: string; name: string; memberCount: number }>;
+  /** T15: the entities linked to it (a server from before T15 sends none). */
+  entities?: CircleEntityLink[];
 }
 
 export const POLICY_LABEL: Record<CircleJoinPolicy, string> = { open: 'Open', closed: 'Closed' };
@@ -36,6 +38,13 @@ export const WHO_CAN_JOIN = 'Who can join';
 export const LOCKED_COPY = 'This circle is closed. Ask to join to see its wall, members and events.';
 export const NO_REQUESTS = 'Nobody is waiting to join.';
 export const ATTACH_EMPTY = 'You have no other pods to attach. Pods you direct or host are listed here.';
+/** T15 (30 Oct review 7.3): the circle's Organisations. */
+export const ORGANISATIONS = 'Organisations';
+export const LINK_ENTITY = 'Link an entity';
+export const ORGANISATIONS_EMPTY = 'No organisations are linked to this circle yet.';
+export const LINK_SEARCH_HINT = 'Type at least 2 letters of its name.';
+export const linkedToast = (entity: string, circle: string) => `${entity} is linked to ${circle}.`;
+export const unlinkedToast = (entity: string, circle: string) => `${entity} is no longer linked to ${circle}.`;
 
 /** The member's place, whatever the server sent: myStatus when it says, else isMember (an older server). */
 export function placeOf(c: Pick<CircleSummary, 'isMember' | 'myStatus'>): CircleMyStatus {
