@@ -113,7 +113,11 @@ export function insetSize(width: number, height: number): { w: number; h: number
   return { w: 240, h: 135 };
 }
 
-/** Of its full size, how much the other person's frame keeps when it moves clear of the inset; below that it stays. */
+/**
+ * The share of its full frame the other person keeps when their frame moves clear of the inset (the picture of you).
+ * When moving clear would leave them less than this, their frame stays full and the inset sits over its corner, made
+ * smaller (down to INSET_MIN) where that lets them keep more. Either way they keep at least 60% (meeting-layout.test.ts).
+ */
 export const CLEAR_OF_INSET_MIN = 0.7;
 
 /** The smallest the picture of yourself gets, either way: still a picture you can see, and a target you can tap. */

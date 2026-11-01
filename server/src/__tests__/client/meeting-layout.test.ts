@@ -48,6 +48,8 @@ const overlap = (a: Box, b: Box) =>
   a.x < b.x + b.w - 0.001 && b.x < a.x + a.w - 0.001 && a.y < b.y + b.h - 0.001 && b.y < a.y + a.h - 0.001;
 
 const area = (b: Box) => b.w * b.h;
+/** The least share of their full frame the other person keeps beside the picture of you (CLEAR_OF_INSET_MIN aims for 70%). */
+const KEPT_AT_LEAST = 0.6;
 
 /** The full-size 16:9 frame a landscape stage holds, the size the other person keeps most of. */
 const fullFrameArea = (width: number, height: number) => {
@@ -392,7 +394,7 @@ describe('the corner picture of yourself never covers the other person, on any s
     // The other person keeps most of their size: at least 60% of the frame they would have alone (70% wherever a
     // 44px picture of you allows it).
     const alone = width < height ? width * height : fullFrameArea(width, height);
-    expect(area(other)).toBeGreaterThanOrEqual(0.6 * alone);
+    expect(area(other)).toBeGreaterThanOrEqual(KEPT_AT_LEAST * alone);
   });
 
   it('your picture shrinks only as far as it has to: where there is room it keeps its full size', () => {
