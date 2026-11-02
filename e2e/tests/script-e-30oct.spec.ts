@@ -588,33 +588,57 @@ test('4.6: a direct video call rings the connection on any screen, both land in 
   });
 });
 
-// FINDING F3 (T19, 2 Nov 2026): a caller with a second tab of REASON open is put out of the call they rang from. The
-// ring reaches every tab of the caller (user:<id>:calls refetches the outgoing call, so "Calling …" shows on every
-// screen), and call:accepted then sends EVERY such tab into /meet: useCallSignals.ts onAccepted only checks that the
-// tab's outgoing call has this requestId, which is true in all of them. Two connections with one identity join the
-// room; LiveKit puts the first out (DUPLICATE_IDENTITY, "client leave request reason: 2"), and that tab's room leaves to
-// the chat. Seen on the preview at 768 and 1024 (Script E 4.6, Ana's thread from 4.3 still open) and reproduced
-// locally with a real LiveKit. Marked as expected to fail, so the walk stays green on what is built and turns red, as a
-// reminder, once it is fixed.
-test('4.6 (finding F3): a caller with a second tab open stays in the call they rang from', async () => {
+// FINDING F3 (T19, 2 Nov 2026; fixed by n1-f3): a caller with a second tab of REASON open was put out of the call they
+// rang from. The ring reaches every tab of the caller (user:<id>:calls reads the outgoing call again, so "Calling …"
+// shows on every screen), and call:accepted sent EVERY such tab into /meet. Two connections with one identity joined
+// the room and LiveKit put one out (DUPLICATE_IDENTITY, "client leave request reason: 2"). Now only the tab that rang
+// enters (the call is marked placedHere where it was rung); every other tab ends its Calling card. Which tab LiveKit
+// kept was timing, so a check on the tab that rang alone could pass on the bug: the other tab is watched from before
+// the ring, and must never reach /meet/, never ask for a room token and never open a room connection.
+test('4.6 (finding F3): a caller with a second tab open stays in the call they rang from, and the other tab never enters it', async () => {
   test.skip(!ROOMS, ROOM_SKIP);
-  test.fail(true, 'F3: every tab of the caller follows call:accepted into the room; reported to the controller, not fixed here');
   test.setTimeout(150_000);
   const pat = await throwaway('Pat');
   const quin = await throwaway('Quin');
   const conv = await connect(pat, quin, `Hello Quin ${RUN}`);
-  const otherTab = (await openAs(browser, pat, `/messages/${conv}`)).page;
+  const other = await openAs(browser, pat, `/messages/${conv}`);
+  const otherTab = other.page;
+  /** Every way the other tab could have gone into the call, as it happened. */
+  const entered: string[] = [];
+  otherTab.on('framenavigated', (f) => {
+    if (f === otherTab.mainFrame() && new URL(f.url()).pathname.startsWith('/meet/')) entered.push(`went to ${f.url()}`);
+  });
+  otherTab.on('request', (r) => {
+    if (new URL(r.url()).pathname.endsWith('/call-token')) entered.push(`asked for a room token (${r.method()} ${new URL(r.url()).pathname})`);
+  });
+  otherTab.on('websocket', (ws) => {
+    if (/\/rtc(\/|\?|$)/.test(ws.url())) entered.push(`opened a room connection (${ws.url().split('?')[0]})`);
+  });
+  await expect(otherTab.getByText(`Hello Quin ${RUN}`).filter({ visible: true }).first(), 'the other tab shows the thread').toBeVisible({ timeout: SLOW });
   const callee = (await openAs(browser, quin, '/connections')).page;
-  const caller = (await openAs(browser, pat, `/people/${quin.id}`)).page;
+  const caller = await openAs(browser, pat, '');
+  await roomLogsAtDebug(caller.ctx);
+  const callerRoom = watchRoom(caller.page, 'Pat (the tab that rang)');
+  await gotoRetry(caller.page, `${APP}/people/${quin.id}`);
   await expect(callee.getByRole('heading').first()).toBeVisible({ timeout: SLOW });
-  await otherTab.waitForTimeout(3_000);
-  await caller.getByTestId('video-call-button').click({ timeout: SLOW });
-  await caller.getByRole('button', { name: 'Send request' }).click();
+
+  await caller.page.getByTestId('video-call-button').click({ timeout: SLOW });
+  await caller.page.getByRole('button', { name: 'Send request' }).click();
+  // The other tab holds the call too (the precondition of F3): its Calling card shows.
+  await expect(otherTab.getByTestId('call-outgoing'), 'the other tab shows the call ringing').toContainText(`Calling ${quin.displayName}…`, { timeout: LIVE });
   await callee.getByTestId('call-incoming').getByRole('button', { name: 'Accept' }).click({ timeout: LIVE });
-  await caller.waitForURL(new RegExp(`/meet/${conv}`), { timeout: LIVE });
-  await expect(caller.locator('.lk-participant-tile'), 'the tab that rang shows both people').toHaveCount(2, { timeout: 45_000 });
-  await caller.waitForTimeout(5_000);
-  await expect(caller, 'and stays in the call').toHaveURL(new RegExp(`/meet/${conv}`));
+
+  await caller.page.waitForURL(new RegExp(`/meet/${conv}`), { timeout: LIVE });
+  await expect(caller.page.locator('.lk-participant-tile'), 'the tab that rang shows both people').toHaveCount(2, { timeout: 45_000 })
+    .catch(async (e: Error) => {
+      await shot(caller.page, 'e-f3-room-pat');
+      throw new Error(`${e.message}\n${await callerRoom.report()}\nthe other tab: ${entered.join('; ') || 'did nothing'}`);
+    });
+  await expect(otherTab.getByTestId('call-outgoing'), 'the other tab ends its Calling card').toHaveCount(0, { timeout: LIVE });
+  await caller.page.waitForTimeout(5_000);
+  await expect(caller.page, 'the tab that rang stays in the call').toHaveURL(new RegExp(`/meet/${conv}`));
+  await expect(caller.page.locator('.lk-participant-tile'), 'and still shows both people').toHaveCount(2);
+  expect(entered, 'the other tab never went into the call').toEqual([]);
   expect(new URL(otherTab.url()).pathname, 'the other tab stays where it was').toBe(`/messages/${conv}`);
 });
 
