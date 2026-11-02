@@ -18,6 +18,8 @@ export const PATH_REFUSALS = {
   circle: "We couldn't find that circle.",
   pod: "We couldn't find that pod.",
   event: "We couldn't find that event.",
+  post: "We couldn't find that post.",
+  comment: "We couldn't find that comment.",
 } as const;
 
 /** Check one part of the path, refusing with `sentence`; the path's other parts are kept as they are. */

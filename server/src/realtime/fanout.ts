@@ -515,9 +515,20 @@ export async function fanoutEntityChange(
 //   user:<changed>:circles            for each member whose link changed, so a list that shows that member's
 //                                     circles redraws for the people who share the circle.
 // The audience is the circle's members, the person who made it (its creator manages it even with no member row),
-// the actor and the changed people. A circle's invites change through `extra` (circle:<id>:invites). Someone
-// outside the circle with its page open is not told, and catches up on focus, as with an entity.
-// The circle's wall keeps its own refresh and is not told.
+// the platform admins (final fix wave X3, 2 Nov 2026: they run every circle, L21, so their open Requests panel and
+// request count follow an ask or an answer; read bounded, CIRCLE_CHANGE_ADMINS_MAX), the actor and the changed people.
+// A circle's invites change through `extra` (circle:<id>:invites). Someone outside the circle with its page open is
+// not told, and catches up on focus, as with an entity. The circle's wall keeps its own refresh and is not told.
+//
+// Final fix wave S1 (2 Nov 2026): circle membership decides who sees, auto-registers for and registers for a circle's
+// events (event-access.ts), so each changed person is also sent, in their own emit only:
+//   user:<changed>:sessions           their own Home and Events lists;
+//   session:<id>                      the page of each of the circle's events that has not ended (at most
+//                                     CIRCLE_CHANGE_EVENTS_MAX, the soonest first; idx_sessions_circle).
+// The emits go in batches of CIRCLE_EVENT_FANOUT_BATCH.
+
+export const CIRCLE_CHANGE_ADMINS_MAX = 200;
+export const CIRCLE_CHANGE_EVENTS_MAX = 50;
 
 export async function fanoutCircleChange(
   circleId: string,
@@ -535,13 +546,52 @@ export async function fanoutCircleChange(
        SELECT created_by FROM circles WHERE id = $1`,
       [circleId],
     );
-    const recipients = new Set([...people.rows.map(r => r.user_id), actorId, ...changedUserIds].filter(Boolean));
+    const admins = await query<{ user_id: string }>(
+      `SELECT u.id AS user_id FROM users u
+        WHERE u.role IN ('admin', 'super_admin') AND ${activeMemberSql('u')}
+        ORDER BY u.id LIMIT $1`,
+      [CIRCLE_CHANGE_ADMINS_MAX],
+    );
+    const upcoming = changedUserIds.length === 0 ? [] : (await query<{ id: string }>(
+      `SELECT id FROM sessions WHERE circle_id = $1 AND status NOT IN ('completed', 'cancelled')
+        ORDER BY scheduled_at NULLS LAST, id LIMIT $2`,
+      [circleId, CIRCLE_CHANGE_EVENTS_MAX],
+    )).rows.map(r => E.session(r.id));
+    const changed = new Set(changedUserIds);
+    const recipients = [...new Set(
+      [...people.rows.map(r => r.user_id), ...admins.rows.map(r => r.user_id), actorId, ...changedUserIds].filter(Boolean),
+    )];
     const told = [E.circle(circleId), E.circleMembers(circleId), ...changedUserIds.map(E.userCircles), ...extra];
-    await Promise.all([...recipients].map(userId =>
-      emitEntities(io, [userId], [...new Set([...told, E.userCircles(userId)])]),
-    ));
+    const tagsFor = (userId: string) => [...new Set([
+      ...told, E.userCircles(userId), ...(changed.has(userId) ? [E.userSessions(userId), ...upcoming] : []),
+    ])];
+    for (let i = 0; i < recipients.length; i += CIRCLE_EVENT_FANOUT_BATCH) {
+      await Promise.all(recipients.slice(i, i + CIRCLE_EVENT_FANOUT_BATCH).map(userId =>
+        emitEntities(io, [userId], tagsFor(userId)),
+      ));
+    }
   } catch (err) {
     logger.warn({ err, circleId }, 'fanoutCircleChange: failed to fan out');
+  }
+}
+
+// ─── Invites withdrawn in bulk (final fix wave S2, 2 Nov 2026) ───────────────
+//
+// Closing a circle withdraws the invites made by people who do not run it. Each inviter's sent list and each invitee's
+// received list changed: every person is sent their own user:<id>:invites, in batches, and no one else's.
+
+export async function fanoutOwnInvites(userIds: string[]): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const people = [...new Set(userIds)];
+    for (let i = 0; i < people.length; i += CIRCLE_EVENT_FANOUT_BATCH) {
+      await Promise.all(people.slice(i, i + CIRCLE_EVENT_FANOUT_BATCH).map(userId =>
+        emitEntities(io, [userId], [E.userInvites(userId)]),
+      ));
+    }
+  } catch (err) {
+    logger.warn({ err }, 'fanoutOwnInvites: failed to fan out');
   }
 }
 

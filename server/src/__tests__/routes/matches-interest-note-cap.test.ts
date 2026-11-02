@@ -51,4 +51,11 @@ describe('POST /matches/platform/:userId/interest: the note cap is the shared on
     expect(res.body.error.details.note).toEqual(['Keep the note to 7 characters or fewer.']);
     expect(mockInterest).not.toHaveBeenCalled();
   });
+
+  // Production's client (origin/main: MatchesPage, PublicProfilePage, SearchPage) posts with no body at all.
+  it("still takes production's own call, with no body, as before", async () => {
+    const res = await request(app).post(`/matches/platform/${TARGET}/interest`).set(auth);
+    expect(res.status).toBe(201);
+    expect(mockInterest).toHaveBeenCalledWith('u-a', TARGET, undefined, { note: undefined, format: undefined });
+  });
 });

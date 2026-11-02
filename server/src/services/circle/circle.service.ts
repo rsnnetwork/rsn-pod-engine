@@ -24,6 +24,8 @@ import { entitiesOfCircle } from './circle-entities.service';
 
 /** What joinCircle answers someone outside a closed circle (30 Oct review, 7.5). */
 export const CIRCLE_CLOSED_JOIN = 'This circle is closed. Ask to join and its owner will let you in.';
+/** An invite whose maker no longer runs the circle, accepted after it closed (final fix wave S2, 2 Nov 2026). */
+export const CIRCLE_CLOSED_INVITE = 'This circle is closed now, so this invite no longer lets you in. Ask to join and its owner will let you in.';
 
 /**
  * T14 (1 Nov 2026): an attached pod is named on a circle's page only when it is not archived and, if private, only to
@@ -156,7 +158,7 @@ export async function updateCircle(
   circleId: string,
   input: { name?: string; description?: string | null; parentCircleId?: string | null; joinPolicy?: CircleJoinPolicy },
   actor?: CircleActor,
-): Promise<{ approvedUserIds: string[] }> {
+): Promise<{ approvedUserIds: string[]; invitesChangedFor?: string[] }> {
   const existing = await query<{ id: string }>(
     `SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (existing.rows.length === 0) throw new NotFoundError('Circle', circleId);
@@ -176,6 +178,9 @@ export async function updateCircle(
   try {
     return await transaction(async (client) => {
       await client.query(`UPDATE circles SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, params);
+      if (input.joinPolicy === 'closed') {
+        return { approvedUserIds: [], invitesChangedFor: await withdrawInvitesOfNonManagers(client, circleId) };
+      }
       if (input.joinPolicy !== 'open') return { approvedUserIds: [] };
       return { approvedUserIds: await admitEveryoneWaiting(client, circleId, actor?.userId ?? null) };
     });
@@ -185,6 +190,31 @@ export async function updateCircle(
     }
     throw err;
   }
+}
+
+/**
+ * Closing a circle (final fix wave S2, 2 Nov 2026; L22): an invite lets its person straight in, and in a closed circle
+ * only the people who run it may make one. So the invites still usable that were made by anyone else (a plain member's
+ * open link from while it was open, a moderator's who has stepped down, a closed account's) are withdrawn, in the
+ * caller's transaction. Invites from its creator, its owners and moderators and platform admins, all with active
+ * accounts, stand. Answers the people whose invite lists changed: each inviter, and each invitee who is a member.
+ */
+async function withdrawInvitesOfNonManagers(client: PoolClient, circleId: string): Promise<string[]> {
+  const r = await client.query<{ inviter_id: string; invitee_id: string | null }>(
+    `UPDATE invites i SET status = 'revoked'
+       FROM circles c
+      WHERE i.circle_id = $1 AND c.id = i.circle_id
+        AND i.status IN ('pending', 'accepted') AND i.use_count < i.max_uses
+        AND NOT EXISTS (
+          SELECT 1 FROM users a
+           WHERE a.id = i.inviter_id AND ${activeMemberSql('a')}
+             AND (a.role IN ('admin', 'super_admin') OR a.id = c.created_by
+                  OR EXISTS (SELECT 1 FROM circle_members m
+                              WHERE m.circle_id = c.id AND m.user_id = a.id AND m.role IN ('owner', 'moderator'))))
+      RETURNING i.inviter_id, (SELECT u.id FROM users u WHERE lower(u.email) = i.invitee_email LIMIT 1) AS invitee_id`,
+    [circleId],
+  );
+  return [...new Set(r.rows.flatMap((row) => [row.inviter_id, row.invitee_id]).filter((id): id is string => !!id))];
 }
 
 /**
@@ -277,23 +307,32 @@ export async function admitToCircle(client: PoolClient, circleId: string, userId
   return added;
 }
 
+/** Whether the person who made an invite still runs the circle: an active account that manages it (L21). */
+async function inviterRunsCircle(circleId: string, inviterId: string): Promise<boolean> {
+  const r = await query<{ role: string }>(`SELECT u.role FROM users u WHERE u.id = $1 AND ${activeMemberSql('u')}`, [inviterId]);
+  if (!r.rows[0]) return false;
+  return isCircleManager(circleId, inviterId, r.rows[0].role);
+}
+
 /**
  * Join a circle. An open circle takes anyone at once (as always). A closed one (T14) takes only the people who run it
- * and anyone arriving with an invite (`byInvite`: the invite is the doorway, and it answers a pending ask); anyone
- * else is told to ask, 403 CIRCLE_CLOSED. Someone already in it is left as they are.
+ * and anyone arriving with an invite from someone who still runs it (`invitedBy`, the invite's maker: the invite is the
+ * doorway, and it answers a pending ask; final fix wave S2, 2 Nov 2026). Anyone else is told to ask, 403 CIRCLE_CLOSED,
+ * and an invite whose maker does not run it says so. Someone already in it is left as they are.
  */
 export async function joinCircle(
   circleId: string,
   userId: string,
-  opts: { role?: string; byInvite?: boolean } = {},
+  opts: { role?: string; invitedBy?: string } = {},
 ): Promise<void> {
   const circle = await query<{ id: string; join_policy: CircleJoinPolicy | null }>(
     `SELECT id, join_policy FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
 
-  if (circle.rows[0].join_policy === 'closed' && !opts.byInvite
-      && !(await isCircleMember(circleId, userId)) && !(await isCircleManager(circleId, userId, opts.role))) {
-    throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_JOIN);
+  if (circle.rows[0].join_policy === 'closed'
+      && !(await isCircleMember(circleId, userId)) && !(await isCircleManager(circleId, userId, opts.role))
+      && !(opts.invitedBy !== undefined && await inviterRunsCircle(circleId, opts.invitedBy))) {
+    throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, opts.invitedBy !== undefined ? CIRCLE_CLOSED_INVITE : CIRCLE_CLOSED_JOIN);
   }
 
   await transaction((client) => admitToCircle(client, circleId, userId));

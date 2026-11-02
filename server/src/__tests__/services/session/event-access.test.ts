@@ -99,6 +99,25 @@ describe('fix round 1', () => {
   });
 });
 
+describe('someone the host removed from the event (final fix wave SM2)', () => {
+  it('is never told that opening the page registers them, whatever their ties (a kick is final)', () => {
+    for (const vis of [null, 'public', 'public_with_approval', 'private'] as const) {
+      for (const tie of [{ inAudience: true }, { isInvited: true }, { inAudience: true, isInvited: true }]) {
+        const removed = f({ visibility: vis, podVisibility: 'public', participantStatus: 'removed', ...tie });
+        expect(summariseEventAccess(removed, M).autoRegister).toBe(false);
+      }
+    }
+    // A pod member who still holds a place is told, as before.
+    expect(summariseEventAccess(f({ podVisibility: 'public', inAudience: true, participantStatus: 'registered' }), M).autoRegister).toBe(true);
+  });
+
+  it("keeps the access block's shape: production's client (origin/main) never reads it, and only a value changed", () => {
+    const removed = f({ podVisibility: 'public', inAudience: true, participantStatus: 'removed' });
+    expect(Object.keys(summariseEventAccess(removed, M)).sort())
+      .toEqual(['autoRegister', 'canManageRequests', 'mode', 'myRequest', 'visibility']);
+  });
+});
+
 describe('a removed, suspended or banned account', () => {
   it('sees nothing and registers for nothing at every visibility', () => {
     for (const vis of [null, 'public', 'public_with_approval', 'private'] as const) {

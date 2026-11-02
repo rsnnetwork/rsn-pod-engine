@@ -237,6 +237,17 @@ describe('the sign-in email carries a 6-digit code', () => {
     expect(sessionsWritten()).toBe(0);
   });
 
+  it('a code that locks is logged by the member id, never by their email address (no PII in the logs)', async () => {
+    const logger = jest.requireMock('../../config/logger').default as { warn: jest.Mock };
+    logger.warn.mockClear();
+    const { code } = await emailed();
+    for (let i = 0; i < 5; i++) await post('/auth/magic-link/code', { email: MEMBER.email, code: wrongCode(code) });
+    const lockLines = logger.warn.mock.calls.filter((c) => String(c[1]).includes('locked'));
+    expect(lockLines).toHaveLength(1);
+    expect(lockLines[0][0]).toEqual(expect.objectContaining({ userId: MEMBER.id }));
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(MEMBER.email);
+  });
+
   it('the right code on the fifth try still signs in (only wrong tries count against it)', async () => {
     const { code } = await emailed();
     for (let i = 0; i < 4; i++) await post('/auth/magic-link/code', { email: MEMBER.email, code: wrongCode(code) });

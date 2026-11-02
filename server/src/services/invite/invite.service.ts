@@ -826,8 +826,9 @@ async function applyInviteRegistration(
   // 13 Aug 2026 (C3): a circle invite joins the circle. joinCircle is
   // idempotent (ON CONFLICT DO NOTHING, counter moves only on a real insert).
   if (invite.type === InviteType.CIRCLE && invite.circleId) {
-    // T14: the invite is the doorway, so a closed circle takes them, and a pending ask of theirs is answered.
-    await circleService.joinCircle(invite.circleId, userId, { byInvite: true });
+    // T14: the invite is the doorway, so a closed circle takes them, and a pending ask of theirs is answered. Since the
+    // final fix wave (S2, 2 Nov 2026) only while its maker still runs the circle; otherwise a closed circle refuses it.
+    await circleService.joinCircle(invite.circleId, userId, { invitedBy: invite.inviterId });
     out.circleId = invite.circleId;
   }
 

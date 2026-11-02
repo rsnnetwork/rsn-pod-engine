@@ -204,6 +204,24 @@ describe('POST /onboarding/v2/linkedin', () => {
     expect(order).toEqual(['recorded', 'told']);
   });
 
+  // Final fix wave X4 (2 Nov 2026): the admin inspector's onboarding card shows the LinkedIn address and the stage
+  // trail, so every admin is told (admin:users), once the stage is recorded, as the other onboarding saves do.
+  it("tells every admin's user pages (admin:users) once the LinkedIn step is recorded, and tells nobody on a refusal", async () => {
+    const order: string[] = [];
+    mockStage.mockImplementation(async () => { order.push('recorded'); });
+    mockAdminFanout.mockImplementation(async () => { order.push('admins told'); });
+    const res = await auth(request(app).post('/onboarding/v2/linkedin').send({ url: 'linkedin.com/in/ana' }));
+    expect(res.status).toBe(200);
+    expect(mockAdminFanout).toHaveBeenCalledTimes(1);
+    expect(mockAdminFanout).toHaveBeenCalledWith('users');
+    expect(order).toEqual(['recorded', 'admins told']);
+
+    mockAdminFanout.mockClear();
+    mockConnect.mockRejectedValue(new ValidationError('Enter your LinkedIn profile link.', { url: ['Enter your LinkedIn profile link.'] }));
+    expect((await auth(request(app).post('/onboarding/v2/linkedin').send({ url: 'https://example.com/ana' }))).status).toBe(400);
+    expect(mockAdminFanout).not.toHaveBeenCalled();
+  });
+
   it('a found profile comes back with its prefill', async () => {
     const prefill = { displayName: 'Ana', photoUrl: null, jobTitle: 'Founder', company: 'Vokt', industry: null, location: null, selfGuesses: ['self_founder_owner'], selfGuess: 'self_founder_owner' };
     mockConnect.mockResolvedValue({ linkedin: { status: 'found', prefill }, linkedinUrl: 'https://www.linkedin.com/in/ana', decision: 'reuse' });
@@ -246,6 +264,19 @@ describe('POST /onboarding/v2/linkedin/skip', () => {
     expect(res.body.data).toEqual({ skipped: true });
     expect(mockStage).toHaveBeenCalledWith('u-1', 'linkedin_skipped');
     expect(mockFanout).toHaveBeenCalledWith('u-1');
+  });
+
+  // Final fix wave X4: the inspector's stage trail shows the skip, so every admin is told, once it is recorded.
+  // Production's client (origin/main) never calls the v2 onboarding routes; any body is taken, as before.
+  it("tells every admin's user pages (admin:users) once the skip is recorded", async () => {
+    const order: string[] = [];
+    mockStage.mockImplementation(async () => { order.push('recorded'); });
+    mockAdminFanout.mockImplementation(async () => { order.push('admins told'); });
+    const res = await auth(request(app).post('/onboarding/v2/linkedin/skip'));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ skipped: true });
+    expect(mockAdminFanout).toHaveBeenCalledWith('users');
+    expect(order).toEqual(['recorded', 'admins told']);
   });
 });
 

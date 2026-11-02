@@ -693,7 +693,9 @@ export async function verifySignInCode(email: string, code: string): Promise<Aut
       `UPDATE magic_links SET used_at = COALESCE(used_at, NOW()), expires_at = LEAST(expires_at, NOW()) WHERE id = $1`,
       [link.id]
     );
-    logger.warn({ email: normalizedEmail }, 'Sign-in code locked after too many wrong tries');
+    // Logged by the member's id (and the link's), never their email address: no PII in the logs.
+    const member = await getUserByEmail(link.email);
+    logger.warn({ userId: member?.id ?? null, magicLinkId: link.id }, 'Sign-in code locked after too many wrong tries');
     throw new AppError(400, ErrorCodes.AUTH_SIGN_IN_LOCKED, 'This code was entered wrongly too many times.');
   }
 

@@ -17,7 +17,7 @@ import { canViewSession } from '../services/session/session-access';
 import { canSeeEvent, readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
 import { readEventCircle } from '../services/circle/circle-events.service';
 import * as eventRequests from '../services/session/event-requests.service';
-import { eventRequestLimiter } from '../middleware/rateLimit';
+import { eventChatReadLimiter, eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
 // 27 May — live main-room presence (heartbeat) to gate the event-plan "not matched" counts.
 import { activeSessions } from '../services/orchestration/state/session-state';
@@ -453,9 +453,12 @@ router.delete(
   },
 );
 
+// The Requests list: any event's can be asked for by id, so it is counted like the event's kept chat, in the same
+// per-member allowance (final fix wave SM4, 2 Nov 2026).
 router.get(
   '/:id/requests',
   authenticate,
+  eventChatReadLimiter,
   uuidInPath('id', PATH_REFUSALS.event),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

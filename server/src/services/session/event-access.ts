@@ -335,8 +335,11 @@ export function eventAccessMode(f: EventAccessFacts, role: string | undefined): 
  * Whether opening the event page registers the person. L17, for every event, NULL included (controller ruling,
  * fix round 1): only its audience (the pod's active members) and its invitees, and its host and co-hosts, who are
  * already in. Everyone else who may register presses Register; who MAY register is canRegister's, unchanged.
+ * Someone the host removed is never told it (final fix wave, 2 Nov): a kick is final, and the page's own register
+ * (registersOnOpening in routes/sessions.ts) already refuses them, so the two say the same.
  */
 export function autoRegisters(f: EventAccessFacts, _role: string | undefined): boolean {
+  if (f.participantStatus === 'removed') return false;
   return f.accountActive && (f.inAudience || f.isInvited || f.isHost || f.isCohost);
 }
 
