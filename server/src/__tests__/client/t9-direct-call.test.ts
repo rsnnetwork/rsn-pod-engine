@@ -126,7 +126,8 @@ describe('the banner and the Calling card', () => {
     expect(banner).toMatch(/> Decline\n/);
     expect(banner).toMatch(/> Accept\n/);
     expect(banner).toContain('top-[calc(16px+env(safe-area-inset-top))]');
-    expect(banner.match(/min-h-\[44px\]/g)).toHaveLength(2);
+    // Accept and Decline, and (final fix wave CM4) the live event's Stay in the event and Leave and answer.
+    expect(banner.match(/min-h-\[44px\]/g)).toHaveLength(4);
     expect(banner).toMatch(/createPortal\([\s\S]*document\.body,\s*\)/);
     expect(banner).toMatch(/useCallStore\(\(s\) => s\.incoming\)/);
   });

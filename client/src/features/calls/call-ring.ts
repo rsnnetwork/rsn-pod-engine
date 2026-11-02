@@ -78,6 +78,16 @@ export function reconcile(current: RingingCall | null, read: RingingCall | null,
 /** The room a call opens: no countdown, it is happening now. */
 export const callRoomPath = (conversationId: string, kind: CallKind) => `/meet/${conversationId}?kind=${kind}`;
 
+/** The live room of an event (/session/:id/live), which answering a call leaves (final fix wave CM4, 2 Nov 2026). */
+export const inLiveEvent = (pathname: string) => /^\/session\/[^/]+\/live\/?$/.test(pathname);
+
+/** What the incoming call banner asks before answering takes the member out of a live event. */
+export const LEAVE_EVENT_FOR_CALL = {
+  question: 'Leave the event to take the call?',
+  leave: 'Leave and answer',
+  stay: 'Stay in the event',
+} as const;
+
 /** "1:59", "0:05". */
 export function countdown(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));
