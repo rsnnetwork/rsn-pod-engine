@@ -96,15 +96,17 @@ describe('Orchestration Service', () => {
     it('should start a session and transition to lobby', async () => {
       mockGetSessionById.mockResolvedValue(mockSession);
       mockUpdateSessionStatus.mockResolvedValue({ ...mockSession, status: SessionStatus.LOBBY_OPEN });
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // UPDATE started_at
 
       await orchestrationService.startSession('session-1', 'host-user');
 
-      expect(mockUpdateSessionStatus).toHaveBeenCalledWith('session-1', SessionStatus.LOBBY_OPEN);
-      expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE sessions SET started_at'),
-        ['session-1']
-      );
+      // 2 Nov 2026 — the status, the lobby room id and started_at go in one update (no window where the
+      // event is open without its lobby room).
+      expect(mockUpdateSessionStatus).toHaveBeenCalledTimes(1);
+      expect(mockUpdateSessionStatus).toHaveBeenCalledWith('session-1', SessionStatus.LOBBY_OPEN, {
+        lobbyRoomId: 'lobby-session-1',
+        startedAt: expect.any(Date),
+      });
+      expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE sessions SET started_at'), expect.anything());
     });
   });
 
