@@ -7,17 +7,19 @@ import { primePreview } from '../helpers/preview-bypass';
 import { expectReachable } from '../helpers/viewport-fit';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Messaging after the 30 Oct 2026 review (items 4.3 to 4.6, L7 to L9), in real browsers, with two throwaway members,
-// Shradha (A) and Ben (B), connected by an accepted request:
+// Messaging after the 30 Oct 2026 review (items 4.3 to 4.6, L7 to L9), in real browsers, with throwaway members,
+// Shradha (A) and Ben (B), connected by an accepted request. Tests 3 to 7 are a second Ben's (B2): A wrote to B2 and B2
+// replied, quoting it, before the run, so no one member makes every test's requests (production allows 240 a minute per
+// member; one Ben through all seven came to about 250 in under a minute, fix wave 3).
 //   1. A writes to B. B's two tabs, For You and A's profile, both read "(1) REASON" without a reload, and a chime is
 //      played once across the two (lib/chime announces each chime it plays). Opening the conversation in a third tab puts
 //      all three back to "REASON", even when that tab's read lands before its socket is up.
 //   2. B replies to A's message: the "Replying to Shradha: …" strip, then the quote in B's bubble, and in A's open thread
 //      live, without a reload. Tapping the quote brings the original into view.
-//   3. The name and the picture in B's thread header, and the picture beside A's messages, open A's profile.
+//   3. The name and the picture in B2's thread header, and the picture beside A's messages, open A's profile.
 //   4. Three emojis picked in one opening of the picker (it stays open), put where the caret is, and sent (from 640px;
 //      the smile is hidden on a phone, whose keyboard has its own emoji panel).
-//   5. /notifications pages past 30 (B has 45 seeded rows plus the message bells): Load more, every row once, under
+//   5. /notifications pages past 30 (B2 has 45 seeded rows plus the message bells): Load more, every row once, under
 //      Today and Earlier; a request from a closed account reads "No longer available" with no Accept or Decline.
 //   6. Own bubbles are gray, theirs white with a border.
 //   7. At 360, 390, 414, 768, 1024, 1280 and 1440: nothing scrolls sideways, the reply strip's cancel is 44px, the
@@ -36,14 +38,18 @@ const LABEL = `${ENGINE}${DEVICE ? `-${process.env.E2E_DEVICE!.replace(/\s+/g, '
 const RUN = Date.now().toString(36);
 const A_NAME = `Shradha T6${RUN}`;
 const B_NAME = `Ben T6${RUN}`;
+const B2_NAME = `Ben Two T6${RUN}`;
 const FIRST = `Shall we meet on Tuesday ${RUN}?`;
 const ANSWER = `Tuesday works for me ${RUN}`;
+/** B2's reply to A's message, sent before the run. */
+const B2_ANSWER = `Tuesday suits me too ${RUN}`;
 const WIDTHS = [360, 390, 414, 768, 1024, 1280, 1440];
 const SEEDED = 45;
 
 let browser: Browser;
-let a: TestUser, b: TestUser, gone: TestUser;
+let a: TestUser, b: TestUser, b2: TestUser, gone: TestUser;
 let conversationId = '';
+let b2ConversationId = '';
 let firstMessageId = '';
 const ctxs: BrowserContext[] = [];
 const pageErrors: string[] = [];
@@ -135,6 +141,7 @@ test.beforeAll(async () => {
   browser = ENGINE === 'webkit' ? await webkit.launch({ headless: HEADLESS }) : await chromium.launch({ headless: HEADLESS });
   a = await member('a', A_NAME);
   b = await member('b', B_NAME);
+  b2 = await member('b2', B2_NAME);
   gone = await member('gone', `Gone T6${RUN}`);
   // Connected: A asks, B accepts, and B has read the opening line.
   const asked = await api(a, 'POST', '/pokes', { recipientId: b.id, message: `Hello Ben ${RUN}` });
@@ -147,27 +154,48 @@ test.beforeAll(async () => {
   conversationId = conv.rows[0].id;
   await api(b, 'POST', `/dm/conversations/${conversationId}/read`);
   await api(a, 'POST', `/dm/conversations/${conversationId}/read`);
-  // 45 older notifications for B, and a request from an account since closed (it can no longer be answered).
+  // B2: connected the same way; A's message, and B2's reply quoting it, are already there.
+  const asked2 = await api(a, 'POST', '/pokes', { recipientId: b2.id, message: `Hello Ben ${RUN}` });
+  expect(asked2.status, JSON.stringify(asked2.json)).toBe(201);
+  const accepted2 = await api(b2, 'POST', `/pokes/${asked2.json.data.id}/accept`);
+  expect(accepted2.status, JSON.stringify(accepted2.json)).toBe(200);
+  const first2 = await api(a, 'POST', '/dm/messages', { toUserId: b2.id, content: FIRST });
+  expect(first2.status, JSON.stringify(first2.json)).toBe(201);
+  const reply2 = await api(b2, 'POST', '/dm/messages', { toUserId: a.id, content: B2_ANSWER, replyToId: first2.json.data.message.id });
+  expect(reply2.status, JSON.stringify(reply2.json)).toBe(201);
+  const conv2 = await pool.query<{ id: string }>(
+    `SELECT id FROM dm_conversations WHERE (user_a_id = $1 AND user_b_id = $2) OR (user_a_id = $2 AND user_b_id = $1)`, [a.id, b2.id],
+  );
+  b2ConversationId = conv2.rows[0].id;
+  await api(b2, 'POST', `/dm/conversations/${b2ConversationId}/read`);
+  await api(a, 'POST', `/dm/conversations/${b2ConversationId}/read`);
+  // 45 older notifications for B2, and a request from an account since closed (it can no longer be answered).
   await pool.query(
     `INSERT INTO notifications (user_id, type, title, body, link, is_read, created_at)
      SELECT $1, 'platform_match', 'Seeded ' || g, 'Someone you may want to meet', '/', g > 3, NOW() - interval '3 days' - (g || ' minutes')::interval
        FROM generate_series(1, ${SEEDED}) g`,
-    [b.id],
+    [b2.id],
   );
   const poke = await pool.query<{ id: string }>(
-    `INSERT INTO user_pokes (sender_id, recipient_id, status, message) VALUES ($1, $2, 'pending', 'Hello') RETURNING id`, [gone.id, b.id],
+    `INSERT INTO user_pokes (sender_id, recipient_id, status, message) VALUES ($1, $2, 'pending', 'Hello') RETURNING id`, [gone.id, b2.id],
   );
   await pool.query(
     `INSERT INTO notifications (user_id, type, title, body, link, created_at) VALUES ($1, 'poke', $2, 'Hello', $3, NOW() - interval '2 hours')`,
-    [b.id, `Gone T6${RUN} asked to meet you`, `/messages?poke=${poke.rows[0].id}`],
+    [b2.id, `Gone T6${RUN} asked to meet you`, `/messages?poke=${poke.rows[0].id}`],
   );
   await pool.query(`UPDATE users SET status = 'deactivated' WHERE id = $1`, [gone.id]);
+});
+
+// Each test closes the tabs it opened (fix wave 3, 2 Nov 2026): a finished test's tabs stayed open to the end and went
+// on reading at every change the later tests made, B's requests counting against production's 240 a minute.
+test.afterEach(async () => {
+  for (const c of ctxs.splice(0)) { try { await c.close(); } catch { /* already closed by the test */ } }
 });
 
 test.afterAll(async () => {
   for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
   try { await browser?.close(); } catch { /* noop */ }
-  await cleanup(pool, { ids: [a?.id, b?.id, gone?.id].filter(Boolean) as string[] });
+  await cleanup(pool, { ids: [a?.id, b?.id, b2?.id, gone?.id].filter(Boolean) as string[] });
   await pool.end().catch(() => {});
   expect(pageErrors, 'page errors').toEqual([]);
 });
@@ -258,7 +286,7 @@ test('2. B replies to A\'s message: the strip, then the quote on both sides, liv
 
 test('3. the name and the picture open the profile', async () => {
   test.setTimeout(90_000);
-  const page = await openIn(await contextFor(b), 'B/names', `/messages/${conversationId}`);
+  const page = await openIn(await contextFor(b2), 'B2/names', `/messages/${b2ConversationId}`);
   await expect(bubble(page, FIRST)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('View profile ›')).toBeVisible();
   await page.getByTestId('thread-partner-name').click();
@@ -274,7 +302,7 @@ test('4. three emojis in one opening of the picker, put where the caret is, and 
   test.setTimeout(90_000);
   const width = DEVICE ? (DEVICE.viewport?.width ?? 390) : 1024;
   test.skip(width < 640, 'The smile is hidden on a phone, whose keyboard has its own emoji panel.');
-  const page = await openIn(await contextFor(b, 1024), 'B/emoji', `/messages/${conversationId}`);
+  const page = await openIn(await contextFor(b2, 1024), 'B2/emoji', `/messages/${b2ConversationId}`);
   await expect(bubble(page, FIRST)).toBeVisible({ timeout: 20_000 });
   const box = page.locator('textarea');
   await box.fill(`Great ${RUN}`);
@@ -292,7 +320,7 @@ test('4. three emojis in one opening of the picker, put where the caret is, and 
 
 test('5. /notifications pages past 30, every row once; a gone request offers nothing', async () => {
   test.setTimeout(120_000);
-  const page = await openIn(await contextFor(b), 'B/notifications', '/notifications');
+  const page = await openIn(await contextFor(b2), 'B2/notifications', '/notifications');
   const rows = page.getByTestId('notification-row');
   await expect(rows.first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
@@ -319,8 +347,8 @@ test('5. /notifications pages past 30, every row once; a gone request offers not
 });
 
 test('6. own bubbles are gray, theirs white with a border', async () => {
-  const page = await openIn(await contextFor(b), 'B/bubbles', `/messages/${conversationId}`);
-  const own = page.getByTestId('bubble-own').filter({ hasText: ANSWER });
+  const page = await openIn(await contextFor(b2), 'B2/bubbles', `/messages/${b2ConversationId}`);
+  const own = page.getByTestId('bubble-own').filter({ hasText: B2_ANSWER });
   const theirs = page.getByTestId('bubble-theirs').filter({ hasText: FIRST });
   await expect(own).toBeVisible({ timeout: 20_000 });
   const look = (el: typeof own) => el.evaluate((n) => {
@@ -335,11 +363,11 @@ test('7. at every width: no sideways scroll, the reply strip and the box clear o
   test.setTimeout(240_000);
   const widths = DEVICE ? [DEVICE.viewport?.width ?? 390] : WIDTHS;
   // One tab, each page opened once and looked at through every width (fix wave 2, 2 Nov 2026): a new tab and two page
-  // loads per width was about 14 full page loads by B in under a minute, past production's 240 requests a minute
+  // loads per width was about 14 full page loads by one member in under a minute, past production's 240 requests a minute
   // (preview rr11). The notifications page is loaded once too: its rows are the seeded ones, already there.
   const heightOf = (width: number) => (width < 768 ? 780 : 900);
-  const ctx = await contextFor(b, widths[0], heightOf(widths[0]));
-  const page = await openIn(ctx, 'B/widths', `/messages/${conversationId}`);
+  const ctx = await contextFor(b2, widths[0], heightOf(widths[0]));
+  const page = await openIn(ctx, 'B2/widths', `/messages/${b2ConversationId}`);
   for (const width of widths) {
     if (!DEVICE) await page.setViewportSize({ width, height: heightOf(width) });
     await expect(bubble(page, FIRST)).toBeVisible({ timeout: 20_000 });
