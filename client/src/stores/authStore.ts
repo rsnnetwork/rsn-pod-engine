@@ -25,6 +25,9 @@ interface AuthState {
   verify: (token: string) => Promise<void>;
   setTokensAndLoad: (accessToken: string, refreshToken: string) => Promise<void>;
   checkSession: () => Promise<void>;
+  /** Try again (the waiting screen's button): ask for the session at once and start the waits again from the first.
+   *  Resolves once that answer is in. Does nothing when no check is waiting. */
+  retrySessionNow: () => Promise<void>;
   refreshAccessToken: () => Promise<void>;
   logout: () => Promise<void>;
   setTokens: (access: string, refresh: string) => void;
@@ -115,6 +118,8 @@ let authEpoch = 0;
 const RETRY_DELAYS_MS = [2000, 5000, 10000, 20000, 30000];
 /** The longest a Retry-After is waited for. */
 const MAX_RETRY_AFTER_MS = 60_000;
+/** Each fixed wait is moved by up to a fifth either way, so a member's tabs do not all ask again at the same moment. */
+const RETRY_JITTER = 0.2;
 
 /** The status of a failed request, or undefined when it never got an answer (network, timeout). */
 function statusOf(err: unknown): number | undefined {
@@ -140,7 +145,7 @@ function isRefreshRefusal(err: unknown): boolean {
   return status === 401 || status === 403;
 }
 
-/** How long to wait before try `attempt + 1`: Retry-After (seconds or a date) when given, else the growing wait. */
+/** How long to wait before try `attempt + 1`: Retry-After (seconds or a date) when given, else the growing wait, jittered. */
 function retryWaitMs(err: unknown, attempt: number, now: number = Date.now()): number {
   const raw = (err as { response?: { headers?: Record<string, unknown> } } | null)?.response?.headers?.['retry-after'];
   if (typeof raw === 'string' && raw.trim() !== '') {
@@ -148,8 +153,39 @@ function retryWaitMs(err: unknown, attempt: number, now: number = Date.now()): n
     const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw) - now;
     if (Number.isFinite(ms)) return Math.min(Math.max(ms, 1000), MAX_RETRY_AFTER_MS);
   }
-  return RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
+  const wait = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
+  return Math.round(wait * (1 - RETRY_JITTER + Math.random() * 2 * RETRY_JITTER));
 }
+
+// Only the newest session check may change the store (429 fix round 1, 2 Nov 2026). Each check takes the next number as
+// it starts; one that finds a newer number after any await exits without a word. A newer check also ends the older one's
+// wait at once, so its timer is not left behind to wake later.
+let checksStarted = 0;
+
+/** The wait the newest check is in, if it is waiting. */
+let pendingWait: { timer: ReturnType<typeof setTimeout>; end: () => void } | null = null;
+
+/** Ends the wait in progress now (a newer check, Try again): its check wakes and, superseded, exits. */
+function endPendingWait(): void {
+  if (!pendingWait) return;
+  const { timer, end } = pendingWait;
+  pendingWait = null;
+  clearTimeout(timer);
+  end();
+}
+
+function waitBeforeAskingAgain(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (pendingWait?.timer === timer) pendingWait = null;
+      resolve();
+    }, ms);
+    pendingWait = { timer, end: resolve };
+  });
+}
+
+/** Set by Try again just before it starts a check: that check calls it once its first answer is in. */
+let whenAnswered: (() => void) | null = null;
 
 // Distinguishes a DEFINITIVE rejection (refresh token truly dead → log out)
 // from a TRANSIENT failure (endpoint unreachable / 5xx → keep the session).
@@ -213,6 +249,17 @@ function getTokenExpiryMs(token: string): number | null {
     // A JWT payload is base64url, which atob cannot read when it holds a "-" or a "_".
     const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
     return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whose session a token holds: the `sub` of its payload. Decoded, not verified (the server does that): it is only compared. */
+function tokenSubject(token: string): string | null {
+  try {
+    // A JWT payload is base64url, which atob cannot read when it holds a "-" or a "_".
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof payload.sub === 'string' ? payload.sub : null;
   } catch {
     return null;
   }
@@ -293,18 +340,38 @@ export const useAuthStore = create<AuthState>((set, get) => {
     },
 
     checkSession: async () => {
+      // The newest check (429 fix round 1): an older one still waiting is ended now, and exits when it wakes.
+      endPendingWait();
+      checksStarted += 1;
+      const generation = checksStarted;
+      const isNewest = () => generation === checksStarted;
+      let tellAnswered = whenAnswered;
+      whenAnswered = null;
       const token = get().accessToken;
       if (!token) {
-        set({ isLoading: false, isAuthenticated: false, user: null, isSessionChecked: true });
+        set({ isLoading: false, isAuthenticated: false, user: null, isSessionChecked: true, sessionRetrying: false });
         return;
       }
+      const member = tokenSubject(token);
       let epochAtStart = authEpoch;
-      // Only a refusal ends the session (fix wave 3, 2 Nov 2026; the failure rules above): the refresh token refused, or
-      // a 401 on a token the server has just issued. An answer that says nothing about the session (a 429 when the member used up
-      // their minute, a 5xx, no connection) is waited out and asked again. With no member in place yet (the boot check,
-      // a sign-in) it is asked until it lands: giving up after three tries (9 Sep 2026) left the store with no member,
-      // and the protected page sent a member whose session was fine to /login. With a member already in place (a check
-      // after a save) it still gives up after three tries, and keeps that member.
+      /** Whose session is in place now. A change of tokens that kept the same member (a refresh: this check's own, the
+       *  401 interceptor's, the proactive one) is still this session (429 fix round 1); no tokens is a sign-out, and
+       *  another member's tokens are a sign-in that took over. */
+      const sessionNow = (): 'this' | 'gone' | 'another' => {
+        const now = get().accessToken;
+        if (!now) return 'gone';
+        if (authEpoch === epochAtStart) return 'this';
+        if (member === null || tokenSubject(now) !== member) return 'another';
+        epochAtStart = authEpoch;
+        return 'this';
+      };
+      // Only a refusal ends the session (fix wave 3, 2 Nov 2026; the failure rules above): the refresh token refused (by
+      // this check's refresh or by the 401 interceptor's), or a 401 on a token the server has just issued. An answer that
+      // says nothing about the session (a 429 when the member used up their minute, a 5xx, no connection) is waited out
+      // and asked again. With no member in place yet (the boot check, a sign-in) it is asked until it lands: giving up
+      // after three tries (9 Sep 2026) left the store with no member, and the protected page sent a member whose session
+      // was fine to /login. With a member already in place (a check after a save) it still gives up after three tries,
+      // and keeps that member.
       let refreshNext = false;
       let refreshed = false;
       let passingFailures = 0;
@@ -317,7 +384,19 @@ export const useAuthStore = create<AuthState>((set, get) => {
           accessToken: null, refreshToken: null, isSessionChecked: true,
         });
       };
+      /** A refusal ends the session, unless another member's session took over while it was on its way. */
+      const refused = (blocked: string | null) => {
+        if (sessionNow() === 'another') stopWaiting();
+        else if (blocked) get().endBlockedSession(blocked);
+        else endSessionHere();
+      };
       for (;;) {
+        // Before anything is sent: a newer check, a sign-out, or another member's sign-in while this one waited, ends it.
+        if (!isNewest()) return;
+        if (sessionNow() !== 'this') {
+          stopWaiting();
+          return;
+        }
         let failure: unknown;
         if (refreshNext) {
           // The token was refused, as an expired one is: refresh it, then read the session again.
@@ -329,65 +408,66 @@ export const useAuthStore = create<AuthState>((set, get) => {
             epochAtStart = authEpoch;
             continue;
           } catch (refreshErr: unknown) {
-            const blockedNow = accountBlockedReason(refreshErr);
-            if (blockedNow && authEpoch === epochAtStart) {
-              get().endBlockedSession(blockedNow);
-              return;
-            }
-            // Only clear auth when the refresh token was DEFINITIVELY rejected
-            // AND no newer session was installed while we were checking (the
-            // boot-vs-verify race). Otherwise keep whatever we have.
-            if (refreshErr instanceof RefreshError && refreshErr.definitive) {
-              if (authEpoch === epochAtStart) endSessionHere();
-              else stopWaiting();
-              return;
-            }
-            failure = refreshErr instanceof RefreshError ? refreshErr.cause : refreshErr;
+            failure = refreshErr;
           }
         } else {
           try {
             const { data } = await api.get('/auth/session', { timeout: 15000 });
+            if (!isNewest()) return;
             set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true, sessionRetrying: false });
             scheduleProactiveRefresh(get().accessToken!);
             return;
           } catch (err: unknown) {
             failure = err;
           }
-          const blocked = accountBlockedReason(failure);
-          if (blocked) {
-            if (authEpoch === epochAtStart) get().endBlockedSession(blocked);
-            else stopWaiting();
-            return;
-          }
-          if (statusOf(failure) === 401) {
-            // A token the server issued a moment ago is refused: the session itself was revoked.
-            if (refreshed) {
-              if (authEpoch === epochAtStart) endSessionHere();
-              else stopWaiting();
-              return;
-            }
-            refreshNext = true;
-            continue;
-          }
-          if (!isPassingFailure(failure)) {
-            // Neither a refusal nor a passing failure (a 404, a 400): keep the cached token and stop the socket layer
-            // waiting; the next check will try again.
-            stopWaiting();
-            return;
-          }
         }
-        // A passing failure, of the session read or of the refresh: wait and ask again, while this is still the session
-        // in place (a sign-in or a sign-out in another tab takes over).
-        const stillThisSession = authEpoch === epochAtStart && !!get().accessToken;
-        if (!stillThisSession || (get().user && passingFailures >= RETRIES_WITH_A_MEMBER)) {
+        if (!isNewest()) return;
+        if (failure instanceof RefreshError) {
+          // A refresh failed: this check's own, or the 401 interceptor's after the session read was refused (429 fix
+          // round 1). Refused (401 or 403, no refresh token, a closed account) ends the session; anything else is the
+          // request behind it, a passing failure.
+          if (failure.definitive) {
+            refused(failure.accountBlocked);
+            return;
+          }
+          failure = failure.cause;
+        } else if (statusOf(failure) === 401) {
+          // A token the server issued a moment ago is refused: the session itself was revoked.
+          if (refreshed) {
+            refused(null);
+            return;
+          }
+          refreshNext = true;
+          continue;
+        }
+        if (!isPassingFailure(failure)) {
+          // Neither a refusal nor a passing failure (a 404, a 400): keep the cached token and stop the socket layer
+          // waiting; the next check will try again.
+          stopWaiting();
+          return;
+        }
+        // A passing failure, of the session read or of a refresh: wait and ask again, while this is still the session
+        // in place (a sign-out or another member's sign-in takes over).
+        if (sessionNow() !== 'this' || (get().user && passingFailures >= RETRIES_WITH_A_MEMBER)) {
           stopWaiting();
           return;
         }
         if (!get().user) set({ sessionRetrying: true });
         const wait = retryWaitMs(failure, passingFailures);
         passingFailures += 1;
-        await new Promise((r) => setTimeout(r, wait));
+        tellAnswered?.();
+        tellAnswered = null;
+        await waitBeforeAskingAgain(wait);
       }
+    },
+
+    retrySessionNow: () => {
+      // Only a check that is waiting is asked again at once; one whose answer is on its way already is asking.
+      if (!pendingWait) return Promise.resolve();
+      return new Promise<void>((answered) => {
+        whenAnswered = answered;
+        void get().checkSession().finally(answered);
+      });
     },
 
     refreshAccessToken: async () => {
