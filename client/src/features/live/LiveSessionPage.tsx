@@ -30,6 +30,7 @@ import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
 import { useConfirm } from '@/hooks/useConfirm';
 import { eventStateChipText } from './event-state-chip';
+import EventRefusedScreen from './EventRefusedScreen';
 
 /** The final screen for a person the host removed: one sentence and the way out. */
 function RemovedFromEvent({ onBack }: { onBack: () => void }) {
@@ -75,6 +76,7 @@ function LiveEventRoom() {
   const broadcasts = useSessionStore(s => s.broadcasts);
   const sessionError = useSessionStore(s => s.error);
   const removedFromEvent = useSessionStore(s => s.removedFromEvent);
+  const refusedFromEvent = useSessionStore(s => s.refusedFromEvent);
   const registrationKnown = useSessionStore(s => s.registrationKnown);
   const connectionStatus = useSessionStore(s => s.connectionStatus);
   const transitionStatus = useSessionStore(s => s.transitionStatus);
@@ -223,6 +225,8 @@ function LiveEventRoom() {
   // call has answered, and a removed person gets a final screen instead: on a reload the top bar used to flash for
   // the moment before the refusal landed. Before the format is read (P1 item 10), so a video meeting waits too.
   if (removedFromEvent) return <RemovedFromEvent onBack={() => navigate('/sessions')} />;
+  // Final fix wave C4: a place refused for good (an approval event, a private one) is final in the same way.
+  if (refusedFromEvent) return <EventRefusedScreen sessionId={sessionId} {...refusedFromEvent} />;
   if (!registrationKnown) return <PageLoader />;
 
   // 26 Oct 2026 (VID-04) — the event's format decides the room, read once from the event itself. Until it is
@@ -273,8 +277,9 @@ function LiveEventRoom() {
           2 Nov 2026: on a 390px phone the chip and the leave button took the whole line and squeezed the title to 0px.
           The title now asks for 10rem before it shares the line; when the controls leave it less, the bar wraps and
           the title gets its own line above them (it truncates, never vanishes). The controls are one group that
-          never shrinks, so the leave button keeps its 44px. The insets keep the bar clear of a notch (viewport-fit=cover). */}
-      <div data-testid="live-top-bar" className="relative flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.375rem,env(safe-area-inset-top))] pb-1.5 bg-white border-b border-gray-200">
+          never shrinks, so the leave button keeps its 44px. The page's root above keeps it clear of a notch and, in landscape,
+          the rounded corners (viewport-fit=cover); the bar adds none of its own, so it clears them once (final fix wave C3). */}
+      <div data-testid="live-top-bar" className="relative flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 pt-1.5 pb-1.5 bg-white border-b border-gray-200">
         {/* Toasts: the live event route is NOT inside AppLayout (App.tsx), so the
             app-wide ToastContainer there never mounts during an event — toasts
             (e.g. the BG auto-disable notice) fired into the void (Ali, 2026-06-08:

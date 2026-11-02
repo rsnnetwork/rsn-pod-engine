@@ -77,7 +77,9 @@ describe('realtime: the circle screens follow the server\'s circle tags', () => 
     expect(circleEntities(C, 'me')).toEqual(['circle:c1', 'circle:c1:members', 'user:me:circles', 'user:me', 'user:me:sessions']);
     expect(circleEntities(C, 'me', true)).toContain('circle:c1:requests');
     const page = read('features/circles/CircleDetailPage.tsx');
-    expect(page).toMatch(/meta: \{ entities: circleEntities\(circleId \?\? '', user\?\.id\) \}/);
+    // Final fix wave CM5 (2 Nov 2026): the people who run it also follow its asks, once the page knows they run it.
+    expect(page).toMatch(/const runsIt = !!qc\.getQueryData<CircleDetail>\(\['circle', circleId\]\)\?\.canManage;/);
+    expect(page).toMatch(/meta: \{ entities: circleEntities\(circleId \?\? '', user\?\.id, runsIt\) \}/);
     expect(read('features/circles/CirclesPage.tsx')).toMatch(/meta: \{ entities: user\?\.id \? \[E\.userCircles\(user\.id\), E\.user\(user\.id\)\] : \[\] \}/);
     expect(read('features/circles/CircleRequestsSheet.tsx')).toMatch(/meta: \{ entities: \[E\.circleRequests\(circleId\), E\.circle\(circleId\)\] \}/);
   });

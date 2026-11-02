@@ -1,11 +1,13 @@
 // Sending a message in a 1:1 conversation (moved out of MessagesPage on 1 Nov 2026, T7, so the chat panel in the
 // call room sends the same way). POST /dm/messages; the server fans the message out to both people, and a refusal
-// (a block, a closed account) comes back as the server's own sentence in an error toast.
+// (a block, a closed account) comes back as the server's own sentence in an error toast; a lost connection says so
+// in words, never "Network Error" (final fix wave CM3, send-failure.ts).
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import type { CloudinaryAudioResult, CloudinaryImageResult } from '@/lib/cloudinary';
+import { sendFailureSentence } from './send-failure';
 
 /** At most one attachment per message, uploaded before the send (Messages only; the call room sends text). */
 export type DmAttachment =
@@ -46,11 +48,10 @@ export function useSendMessage<V extends { content: string; replyToId?: string |
       qc.invalidateQueries({ queryKey: ['dm-conversations'] });
       options.onSent?.(data, vars);
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- axios errors and thrown Errors both land here; the message is read from either
-    onError: (err: any, vars) => {
+    onError: (err: unknown, vars) => {
       options.onFailed?.(err, vars);
       if (options.toastOnError === false) return;
-      addToast(err?.response?.data?.error?.message || err?.message || 'Failed to send message', 'error');
+      addToast(sendFailureSentence(err), 'error');
     },
   });
 }

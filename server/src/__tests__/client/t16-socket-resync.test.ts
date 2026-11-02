@@ -11,13 +11,22 @@
 //     refresh when the window ends;
 //   - a read still on its way is never cancelled, and a read that answered within the last moments is not read again
 //     (a page load's first reads, or the focus refetch of a phone that came back, are not doubled).
+//
+// Final fix wave CX1 (2 Nov 2026; T19's Script E 5b in WebKit): "answered within the last moments" is not "answered
+// after the socket was listening". A read that STARTED before the connect can carry what the server held before a
+// change whose entity:changed went out before this socket was in its rooms, and land after it; the resync then skipped
+// it as just read and the page stayed stale until a reload (CLAUDE.md section 3, the late-joiner race). So a connect
+// now reads again every tagged read that started before it: one still on its way is sent again (or, a first read with
+// no data yet, read again the moment it lands); only a read that STARTED after the connect is left alone. The
+// coalescing window stays.
 
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import { QueryClient } from '@tanstack/query-core';
+import { QueryObserver } from '@tanstack/query-core';
 import {
-  CONNECT_RESYNC_WINDOW_MS, RECENTLY_READ_MS, subscribeEntitySync, type EntitySignals,
+  CONNECT_RESYNC_WINDOW_MS, subscribeEntitySync, type EntitySignals,
 } from '../../../../client/src/realtime/invalidate-entities';
 
 const CLIENT = path.join(__dirname, '../../../../client/src');
@@ -36,9 +45,8 @@ const fakeSocket = () => new EventEmitter() as EventEmitter & EntitySignals;
 const flush = () => new Promise((r) => setImmediate(r));
 
 describe('subscribeEntitySync: a connect refreshes what may have been missed, without storming', () => {
-  it('the window is a few seconds, and "just read" is a couple of seconds', () => {
+  it('the window is a few seconds', () => {
     expect(CONNECT_RESYNC_WINDOW_MS).toBe(5000);
-    expect(RECENTLY_READ_MS).toBe(2000);
   });
 
   it('the socket\'s FIRST connect refreshes every tagged read answered before the last moments (a new tab missed what came before it)', async () => {
@@ -54,33 +62,128 @@ describe('subscribeEntitySync: a connect refreshes what may have been missed, wi
     qc.clear();
   });
 
-  it('a read that answered within the last moments is not read again (no double read on every page load)', async () => {
-    const qc = await cacheWith();
+  // CX1: the exact order of T19's Script E 5b. The page's read starts, the server answers what it holds, the change
+  // happens (its entity:changed goes nowhere: the socket is not in its rooms yet), the old answer lands, and the socket
+  // connects within 2 s of that landing. The read is read again, and the page shows the change.
+  it('a read that started before the connect is read again, even if its (old) answer landed just before it', async () => {
+    const qc = new QueryClient();
     const socket = fakeSocket();
-    subscribeEntitySync(socket, qc, { now: () => Date.now() + 500 });
-    socket.emit('connect');
+    // The cache stamps an answer with the real clock, so the test's clock is the real one, moved by hand.
+    const landing = Date.now();
+    let t = landing - 3000;       // the page's read starts
+    subscribeEntitySync(socket, qc, { now: () => t });
+    let server = 'old time';
+    let calls = 0;
+    let deliver: (v: string) => void = () => {};
+    const observer = new QueryObserver(qc, {
+      queryKey: ['meeting', 'm1'], meta: { entities: ['meeting:m1'] },
+      queryFn: () => { calls += 1; const answer = server; return calls === 1 ? new Promise<string>((r) => { deliver = () => r(answer); }) : Promise.resolve(answer); },
+    });
+    const off = observer.subscribe(() => {});
+    await flush();                // the server answers the first read with what it holds
+    server = 'new time';          // the move happens; its entity:changed is lost
+    deliver('old time');          // the old answer lands, now
     await flush();
-    expect(invalidated(qc, ['pod', 'p1'])).toBe(false);
-    expect(invalidated(qc, ['dm-unread-count'])).toBe(false);
+    expect(qc.getQueryData(['meeting', 'm1'])).toBe('old time');
+    t = landing + 1300;           // the socket connects, 1.3 s after the landing
+    socket.emit('connect');
+    await flush(); await flush();
+    expect(calls).toBe(2);
+    expect(qc.getQueryData(['meeting', 'm1'])).toBe('new time');
+    off();
     qc.clear();
   });
 
-  it('a read still on its way is never cancelled', async () => {
+  // A first read (no data yet) is read again the moment it lands: cancelling it would fail whoever awaits it.
+  it('a read that started before the connect and is still on its way is read again, so the page ends on an answer from after it', async () => {
     const qc = new QueryClient();
-    let release: (v: number) => void = () => {};
-    let calls = 0;
-    const slow = qc.fetchQuery({
-      queryKey: ['slow'], meta: { entities: ['pod:p1'] },
-      queryFn: () => { calls += 1; return new Promise<number>((r) => { release = r; }); },
-    });
     const socket = fakeSocket();
-    subscribeEntitySync(socket, qc, { now: () => Date.now() + 10_000 });
+    let t = 2_000_000;
+    subscribeEntitySync(socket, qc, { now: () => t });
+    let server = 'old';
+    let calls = 0;
+    const pending: Array<(v: string) => void> = [];
+    const observer = new QueryObserver(qc, {
+      queryKey: ['slow'], meta: { entities: ['pod:p1'] },
+      queryFn: () => { calls += 1; const answer = server; return new Promise<string>((r) => { pending.push(() => r(answer)); }); },
+    });
+    const off = observer.subscribe(() => {});
+    await flush();
+    server = 'new';
+    t += 1000;
     socket.emit('connect');
     await flush();
-    release(7);
-    await expect(slow).resolves.toBe(7);
-    expect(calls).toBe(1);
+    expect(calls).toBe(1);        // not cancelled: whoever awaits it still gets an answer
+    pending[0]('');               // the old answer lands
+    await flush(); await flush();
+    expect(calls).toBe(2);        // and is read again at once
+    pending[1]('');
+    await flush(); await flush();
+    expect(qc.getQueryData(['slow'])).toBe('new');
+    off();
     qc.clear();
+  });
+
+  it('a refresh with data that started before the connect and is still on its way is sent again at once', async () => {
+    const qc = new QueryClient();
+    const socket = fakeSocket();
+    let t = 2_500_000;
+    subscribeEntitySync(socket, qc, { now: () => t });
+    let server = 'first';
+    let calls = 0;
+    const pending: Array<() => void> = [];
+    const observer = new QueryObserver(qc, {
+      queryKey: ['refreshing'], meta: { entities: ['pod:p1'] },
+      queryFn: () => {
+        calls += 1;
+        const answer = server;
+        return calls === 1 ? Promise.resolve(answer) : new Promise<string>((r) => { pending.push(() => r(answer)); });
+      },
+    });
+    const off = observer.subscribe(() => {});
+    await flush();
+    void observer.refetch();      // a refresh starts, before the socket connects
+    await flush();
+    server = 'after the change';
+    t += 1000;
+    socket.emit('connect');
+    await flush();
+    expect(calls).toBe(3);        // the refresh was sent again, not waited for
+    for (const answer of pending) answer();
+    await flush(); await flush();
+    expect(qc.getQueryData(['refreshing'])).toBe('after the change');
+    off();
+    qc.clear();
+  });
+
+  it('a read that STARTED after the connect is never cancelled or read again: it is already from after it', async () => {
+    jest.useFakeTimers();
+    try {
+      const qc = new QueryClient();
+      const socket = fakeSocket();
+      let t = 3_000_000;
+      subscribeEntitySync(socket, qc, { now: () => t });
+      socket.emit('connect');               // the first connect, before the read
+      t += 1000;
+      socket.emit('connect');               // a second connect in the window: answered when the window ends
+      t += 500;
+      let release: (v: number) => void = () => {};
+      let calls = 0;
+      const observer = new QueryObserver(qc, {
+        queryKey: ['after'], meta: { entities: ['pod:p1'] },
+        queryFn: () => { calls += 1; return new Promise<number>((r) => { release = r; }); },
+      });
+      const off = observer.subscribe(() => {});
+      t += CONNECT_RESYNC_WINDOW_MS;
+      jest.advanceTimersByTime(CONNECT_RESYNC_WINDOW_MS); // the window's one more resync runs, while the read is on its way
+      expect(calls).toBe(1);
+      release(7);
+      await Promise.resolve();
+      off();
+      qc.clear();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('a burst of five connects refreshes once at once and once more when the window ends, never five times', async () => {
@@ -103,8 +206,8 @@ describe('subscribeEntitySync: a connect refreshes what may have been missed, wi
       // A connect long after the window is answered at once again.
       socket.emit('connect');
       expect(spy).toHaveBeenCalledTimes(3);
-      // Never a cancelling refetch.
-      for (const call of spy.mock.calls) expect(call[1]).toEqual({ cancelRefetch: false });
+      // Each resync re-sends a read on its way only when it started before the connect (the predicate leaves the others).
+      for (const call of spy.mock.calls) expect(call[1]).toEqual({ cancelRefetch: true });
       qc.clear();
     } finally {
       jest.useRealTimers();

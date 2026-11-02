@@ -717,7 +717,8 @@ describe('the scheduler on screen', () => {
 describe('the thread: the card\'s time opens the confirm step for that time, and the panel never swallows the click', () => {
   it('passes the slot through (it used to be () => setSchedulerOpen(true), which threw the slot away)', () => {
     const src = page();
-    expect(src).toMatch(/onPickSlot=\{\(slot\) => openSchedulerOn\(slot\)\}/);
+    // Final fix wave C1: with a former member there is no scheduler to open (fw-thread-calls-former.test.ts).
+    expect(src).toMatch(/onPickSlot=\{otherIsFormer \? undefined : \(slot\) => openSchedulerOn\(slot\)\}/);
     expect(src).not.toMatch(/onPickSlot=\{\(\) => setSchedulerOpen\(true\)\}/);
     expect(src).toMatch(/confirmRequest=\{confirmRequest\}/);
   });
@@ -753,7 +754,8 @@ describe('the thread: the card\'s time opens the confirm step for that time, and
 
   it('a meeting card for a time that no longer stands (moved, or cancelled) says so and offers no Join', () => {
     expect(card()).toMatch(/const replaced = !over && currentMeeting !== undefined && !\(currentMeeting && sameInstant\(currentMeeting\.startAt, meta\.startAt\)\);/);
-    expect(card()).toMatch(/\{!settled && \(/);
+    // Final fix wave C1: and Join follows the thread's call rules (never with a former member).
+    expect(card()).toMatch(/\{!settled && action === 'join' && \(/);
     expect(card()).toMatch(/'This meeting was cancelled\.' : 'This meeting moved to another time\.'/);
     expect(page()).toMatch(/currentMeeting=\{scheduling \? \(scheduling\.confirmed \? \{ startAt: scheduling\.confirmed\.startAt \?\? null \} : null\) : undefined\}/);
   });

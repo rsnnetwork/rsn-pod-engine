@@ -438,6 +438,7 @@ export default function SessionDetailPage() {
               registerLabel={session.status === 'scheduled' ? 'Register' : 'Join Late'}
               onRegister={() => registerMutation.mutate()}
               registering={registerMutation.isPending}
+              circleName={session.circle?.name}
             />
           )}
           {!isHost && isRegistered && sessionStatusPhase(session.status) === 'live' && (

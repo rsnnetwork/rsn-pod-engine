@@ -34,6 +34,8 @@ export interface EditableEvent {
   /** T11: who can join; NULL follows the pod. */
   visibility?: EventVisibility | null;
   config?: Record<string, unknown> | null;
+  /** T13: the circle the event is for, so Who can join's Private card names it (final fix wave CM2). */
+  circle?: { id: string; name: string } | null;
 }
 
 interface Props {
@@ -144,6 +146,7 @@ function EditEventSheet({ onClose, session, podType, podVisibility, podName, isA
           onChange={(next) => { setVisibility(next); setVisibilityChosen(true); }}
           podName={podName}
           podVisibility={podVisibility}
+          circleName={session.circle?.name}
           editing
         />
 

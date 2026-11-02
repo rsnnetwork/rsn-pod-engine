@@ -27,7 +27,8 @@ import { Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
-import { RETRY_DELAYS_MS, REFUSED_SENTENCE, UNREACHABLE_SENTENCE, classifyGuardFailure, refusalOf } from './session-guard-state';
+import { RETRY_DELAYS_MS, UNREACHABLE_SENTENCE, classifyGuardFailure, refusalOf } from './session-guard-state';
+import EventRefusedScreen from './EventRefusedScreen';
 
 type GuardState =
   | { kind: 'checking' }
@@ -127,21 +128,7 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
   }
 
   if (state.kind === 'refused') {
-    return (
-      <div className="min-h-[100dvh] flex items-center justify-center bg-white px-6">
-        <div className="text-center max-w-md">
-          <AlertCircle className="h-10 w-10 text-amber-500 mx-auto mb-4" />
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">{REFUSED_SENTENCE}</h2>
-          <p className="text-sm text-gray-500 mb-6">{state.detail}</p>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            {state.requestOnEventPage && (
-              <Button onClick={() => navigate(`/sessions/${sessionId}`)}>Open the event page</Button>
-            )}
-            <Button variant={state.requestOnEventPage ? 'secondary' : 'primary'} onClick={() => navigate('/sessions')}>Back to events</Button>
-          </div>
-        </div>
-      </div>
-    );
+    return <EventRefusedScreen sessionId={sessionId} detail={state.detail} requestOnEventPage={state.requestOnEventPage} />;
   }
 
   if (state.kind === 'gone') {

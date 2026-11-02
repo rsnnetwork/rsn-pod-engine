@@ -50,7 +50,8 @@ const PLACEMENT: Record<NonNullable<Props['placement']>, { className: string; st
     style: { top: 'max(16px, env(safe-area-inset-top))', right: 'max(16px, env(safe-area-inset-right))' },
   },
   'below-bar': {
-    className: 'absolute top-full mt-2 z-[210] left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] sm:left-auto sm:max-w-sm',
+    // Inside the live room's root, which already keeps clear of the rounded corners: its sides are its own (C3).
+    className: 'absolute top-full mt-2 z-[210] left-4 right-4 sm:left-auto sm:max-w-sm',
   },
 };
 

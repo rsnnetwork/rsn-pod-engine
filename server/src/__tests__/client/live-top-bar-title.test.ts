@@ -68,13 +68,21 @@ describe('the live top bar keeps the title readable', () => {
     return src.slice(src.lastIndexOf('<div', start), src.indexOf('{/* (UX1) Event-state row removed', start));
   };
 
-  it('wraps instead of squeezing the title, and keeps clear of a notch', () => {
+  // Final fix wave C3 (2 Nov 2026): the room's root already pads clear of the notch and the rounded corners
+  // (pt/pl/pr-[env(safe-area-inset-*)]); main's bar, merged inside it, padded again, so on an iPhone the bar sat a
+  // second notch's height below the notch, and in landscape its title and Leave Event moved in twice. The insets are
+  // the root's, once; the bar keeps only its own spacing.
+  it('wraps instead of squeezing the title, and clears the notch once: the root holds the insets, the bar none', () => {
     const bar = topBar();
     const open = bar.slice(0, bar.indexOf('>'));
     expect(open).toMatch(/\bflex-wrap\b/);
-    expect(open).toMatch(/pt-\[max\([^\]]*env\(safe-area-inset-top\)\)\]/);
-    expect(open).toMatch(/pl-\[max\([^\]]*env\(safe-area-inset-left\)\)\]/);
-    expect(open).toMatch(/pr-\[max\([^\]]*env\(safe-area-inset-right\)\)\]/);
+    expect(open).not.toMatch(/safe-area-inset/);
+    expect(open).toMatch(/\bpx-4 pt-1\.5 pb-1\.5\b/);
+    const src = page();
+    const root = src.slice(src.indexOf('<div className="h-[100dvh] bg-white flex flex-col'), src.indexOf('data-testid="live-top-bar"'));
+    const rootOpen = root.slice(0, root.indexOf('>'));
+    expect(rootOpen).toContain('pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]');
+    expect(src.match(/safe-area-inset-top/g)?.length).toBe(1);
   });
 
   it('gives the title at least 10rem of its own before it shares the line, truncating with an ellipsis', () => {
@@ -157,8 +165,10 @@ describe('a toast in the live room opens below the top bar, never over it', () =
     expect(classes).toEqual(expect.arrayContaining(['absolute', 'top-full', 'mt-2', 'z-[210]', 'sm:left-auto', 'sm:max-w-sm']));
     expect(classes).not.toContain('fixed');
     expect(classes).not.toContain('top-4');
-    expect(classes.some((c) => /^left-\[max\(1rem,env\(safe-area-inset-left\)\)\]$/.test(c))).toBe(true);
-    expect(classes.some((c) => /^right-\[max\(1rem,env\(safe-area-inset-right\)\)\]$/.test(c))).toBe(true);
+    // C3: it hangs inside the room's root, which already keeps clear of the rounded corners, so its sides are its own
+    // spacing only (an inset here was the second one).
+    expect(classes).toEqual(expect.arrayContaining(['left-4', 'right-4']));
+    expect(classes.some((c) => /safe-area-inset/.test(c))).toBe(false);
   });
 
   it('draws a solid card in both placements, so the room under it never shows through its words', () => {

@@ -13,6 +13,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
 import MeetingScheduler, { type SchedulerHandle } from './MeetingScheduler';
 import ThreadMeetingBanner from './ThreadMeetingBanner';
+import { messageCallAction } from './thread-call-rules';
 import { confirmable, isMeetingOver, localizeMeetingText } from './scheduler-flow';
 import SystemMessageCard, { type DmMessageKind } from './SystemMessageCard';
 import { CallRequestModal } from './CallRequest';
@@ -1173,7 +1174,7 @@ export default function MessagesPage() {
 
             {/* Confirmed meeting — always pinned so both people see it in the
                 chat, with Join, not buried in the scheduler (Ali, 8 Sep 2026). */}
-            {activeConv && <ThreadMeetingBanner conversationId={activeConv.conversationId} onCallNow={startCall} />}
+            {activeConv && <ThreadMeetingBanner conversationId={activeConv.conversationId} onCallNow={startCall} former={otherIsFormer} canCall={canCall} />}
 
 
             {/* Availability grid — collapsible so the thread stays primary. Gone
@@ -1244,11 +1245,13 @@ export default function MessagesPage() {
                             meta={m.systemMeta}
                             liveSlots={scheduling ? confirmable(scheduling.overlap ?? [], Date.now()) : undefined}
                             meetingConfirmed={!!scheduling?.confirmed}
-                            onOpenScheduler={() => openSchedulerOn(null)}
-                            onPickSlot={(slot) => openSchedulerOn(slot)}
-                            calendar={m.systemMeta?.type === 'meeting_confirmed' && activeId ? { conversationId: activeId, partnerName: headerContext.otherDisplayName || 'your match' } : undefined}
-                            onCallNow={startCall}
+                            onOpenScheduler={otherIsFormer ? undefined : () => openSchedulerOn(null)}
+                            onPickSlot={otherIsFormer ? undefined : (slot) => openSchedulerOn(slot)}
+                            calendar={!otherIsFormer && m.systemMeta?.type === 'meeting_confirmed' && activeId ? { conversationId: activeId, partnerName: headerContext.otherDisplayName || 'your match' } : undefined}
+                            onCallNow={otherIsFormer ? undefined : startCall}
                             callsUnlocked={callsUnlocked}
+                            canCall={canCall}
+                            former={otherIsFormer}
                             meetingOver={confirmedMeetingOver}
                             currentMeeting={scheduling ? (scheduling.confirmed ? { startAt: scheduling.confirmed.startAt ?? null } : null) : undefined}
                             viewerId={myUserId}
@@ -1359,9 +1362,13 @@ export default function MessagesPage() {
                                     // A scheduled meeting still in play → Join; once its window has
                                     // ended → Call now; an instant-call line → Call again/back.
                                     // A CALL action needs what ringing needs: a video call canCall, an
-                                    // audio one calls unlocked (first meeting happened).
+                                    // audio one calls unlocked (first meeting happened). Nothing at all
+                                    // with a former member (final fix wave C1, thread-call-rules.ts).
                                     const scheduledLive = act.scheduled && !confirmedMeetingOver;
-                                    if (!scheduledLive && !(act.kind === 'video' ? canCall : callsUnlocked)) return null;
+                                    const action = messageCallAction({
+                                      scheduled: act.scheduled, scheduledLive, kind: act.kind, canCall, callsUnlocked, former: otherIsFormer,
+                                    });
+                                    if (!action) return null;
                                     const label = scheduledLive
                                       ? 'Join meeting'
                                       : act.scheduled

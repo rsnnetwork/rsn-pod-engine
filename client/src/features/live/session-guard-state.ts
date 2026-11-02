@@ -29,9 +29,21 @@ const SAID_AS_IS = new Set(['EVENT_PRIVATE', 'EVENT_NEEDS_APPROVAL']);
  * the host approves says why, in the server's words, and the latter points to the event page where the request is made.
  * Any other refusal keeps the plain line: never a code, never another raw server text.
  */
-export function refusalOf(err: unknown): { detail: string; requestOnEventPage: boolean } {
+export interface EventRefusal { detail: string; requestOnEventPage: boolean }
+
+export function refusalOf(err: unknown): EventRefusal {
   const error = (err as { response?: { data?: { error?: { code?: string; message?: string } } } } | undefined)?.response?.data?.error;
   const message = error?.message?.trim();
   if (!error?.code || !SAID_AS_IS.has(error.code) || !message) return { detail: REFUSED_DETAIL, requestOnEventPage: false };
   return { detail: message, requestOnEventPage: error.code === 'EVENT_NEEDS_APPROVAL' };
+}
+
+/**
+ * The live page's own register call (final fix wave C4, 2 Nov 2026): an event that asks the host to approve each place,
+ * or a private one, refuses it, and that answer is as final as a removal, so the page draws the refused screen instead
+ * of the room. Null for every other answer (already registered, a removal, which has its own screen, a lost connection).
+ */
+export function registerRefusal(err: unknown): EventRefusal | null {
+  const code = (err as { response?: { data?: { error?: { code?: string } } } } | undefined)?.response?.data?.error?.code;
+  return code && SAID_AS_IS.has(code) ? refusalOf(err) : null;
 }

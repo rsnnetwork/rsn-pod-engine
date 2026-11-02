@@ -1,6 +1,7 @@
 // ─── T17: P2 polish on production's own client (1 Nov 2026) ──────────────────────────────────────────
 //
-// Items 2, 8, 9, 10, 11, 12 and 13 of the 25 Oct polish batch, on production's screens. The decisions
+// Items 2, 8, 9, 10, 11, 12 and 13 of the 25 Oct polish batch, on production's screens. Items 11 (the bell's
+// "No longer available") and 13 (Remind all) are production's own screens; their helpers and pins live on main (CM1). The decisions
 // are pure functions in their own files and are run here; what a component wires together is read
 // from its source, the way the other pins in this folder do.
 
@@ -16,18 +17,9 @@ interface GuardState {
   REFUSED_SENTENCE: string;
   UNREACHABLE_SENTENCE: string;
 }
-interface PokeAnswer {
-  pokeAnswerView: (n: Record<string, unknown>) => { actions: boolean; label: { text: string; tone: 'accepted' | 'quiet' } | null };
-}
-interface RemindAll {
-  remindAllToast: (answer: { reminded: number; total: number; recentlyReminded?: number }) => { message: string; type: 'success' | 'info' | 'error' };
-  remindAllFailure: (serverMessage: string | undefined) => string;
-}
 
 const roomRetry = () => loadClientModule('features/live/room-retry.ts', {}) as unknown as RoomRetry;
 const guard = () => loadClientModule('features/live/session-guard-state.ts', {}) as unknown as GuardState;
-const poke = () => loadClientModule('components/ui/poke-answer.ts', {}) as unknown as PokeAnswer;
-const remind = () => loadClientModule('features/sessions/remind-all-toast.ts', {}) as unknown as RemindAll;
 
 describe('item 8: the speed-networking room retries in a bounded, explicit way', () => {
   it('backs off and gives up after two retries, then goes back to the main room', () => {
@@ -60,11 +52,6 @@ describe('item 8: the speed-networking room retries in a bounded, explicit way',
     expect(effect).not.toMatch(/retryCountRef/);
     const resets = src.match(/retryCountRef\.current = 0/g) ?? [];
     expect(resets.length).toBe(2); // handleRoomConnected and reconnectRoom only
-  });
-
-  it("ends a refused press's server sentence with a full stop", () => {
-    expect(remind().remindAllFailure('Only the host can send reminders'))
-      .toBe('No reminders were sent. Only the host can send reminders.');
   });
 
   // LiveKitRoom reconnects whenever the identity of `onError` changes (its connect effect lists it as a
@@ -108,7 +95,9 @@ describe('item 9: a refused person gets a final sentence from the event guard', 
     const src = readClientSource('features/live/SessionGuard.tsx');
     expect(src).not.toMatch(/err\?\.message/);
     expect(src).toMatch(/kind: 'refused'/);
-    expect(src).toMatch(/REFUSED_SENTENCE/);
+    // Final fix wave C4: the refused screen is EventRefusedScreen, which the live page draws too.
+    expect(src).toMatch(/<EventRefusedScreen /);
+    expect(readClientSource('features/live/EventRefusedScreen.tsx')).toMatch(/REFUSED_SENTENCE/);
   });
 });
 
@@ -134,41 +123,6 @@ describe('item 10: the live shell waits for the registration answer', () => {
   });
 });
 
-describe('item 11: the bell says "No longer available" for a request that is gone', () => {
-  const base = { type: 'poke', link: '/messages?poke=11111111-1111-4111-8111-111111111111' };
-
-  it('reads pokeStatus gone (closed account or block)', () => {
-    expect(poke().pokeAnswerView({ ...base, pokeStatus: 'gone', requestState: null }))
-      .toEqual({ actions: false, label: { text: 'No longer available', tone: 'quiet' } });
-  });
-
-  it('reads a withdrawn request: no row any more, so requestState is null', () => {
-    expect(poke().pokeAnswerView({ ...base, pokeStatus: null, requestState: null }))
-      .toEqual({ actions: false, label: { text: 'No longer available', tone: 'quiet' } });
-    expect(poke().pokeAnswerView({ ...base, pokeStatus: null, requestState: { status: 'withdrawn', conversationId: null } }).label?.text)
-      .toBe('No longer available');
-  });
-
-  it('keeps Accepted and Declined, and the buttons for a request still waiting', () => {
-    expect(poke().pokeAnswerView({ ...base, pokeStatus: 'accepted' }).label).toEqual({ text: 'Accepted', tone: 'accepted' });
-    expect(poke().pokeAnswerView({ ...base, pokeStatus: 'declined' }).label).toEqual({ text: 'Declined', tone: 'quiet' });
-    expect(poke().pokeAnswerView({ ...base, pokeStatus: null, requestState: { status: 'pending', conversationId: null } }))
-      .toEqual({ actions: true, label: null });
-  });
-
-  it('keeps the buttons on a request that just arrived over the socket (no requestState yet)', () => {
-    expect(poke().pokeAnswerView({ ...base })).toEqual({ actions: true, label: null });
-  });
-
-  it('shows nothing for other kinds of notification, or a link that carries no request', () => {
-    expect(poke().pokeAnswerView({ type: 'pod_invite', link: '/invite/abc' })).toEqual({ actions: false, label: null });
-    expect(poke().pokeAnswerView({ type: 'poke', link: '/messages' })).toEqual({ actions: false, label: null });
-  });
-
-  // Production's bell draws pokeAnswerView; the preview's bell has its own request screen (bellRequestView),
-  // so the wiring pin lives on main and the preview's own pin belongs to T16.
-});
-
 describe('item 12: the admin email page labels every seeded template', () => {
   it('has a label and a sentence for the keys seeded by migrations 020, 082 and 117', () => {
     const src = readClientSource('features/admin/AdminEmailPage.tsx');
@@ -186,38 +140,6 @@ describe('item 12: the admin email page labels every seeded template', () => {
   });
 });
 
-describe('item 13: Remind all says what happened', () => {
-  it('says nothing was sent, as a warning and not in the success colour', () => {
-    const { remindAllToast } = remind();
-    expect(remindAllToast({ reminded: 0, total: 0, recentlyReminded: 0 }))
-      .toEqual({ message: 'No reminders were sent. Nobody is waiting for a reminder.', type: 'info' });
-    expect(remindAllToast({ reminded: 0, total: 0, recentlyReminded: 4 }))
-      .toEqual({ message: 'No reminders were sent. Everyone was reminded less than an hour ago.', type: 'info' });
-    expect(remindAllToast({ reminded: 0, total: 7, recentlyReminded: 0 }))
-      .toEqual({ message: 'No reminders were sent. Please try again in a moment.', type: 'error' });
-  });
-
-  it('says how many of how many when the 50-a-press cap leaves more waiting', () => {
-    expect(remind().remindAllToast({ reminded: 50, total: 120, recentlyReminded: 0 }))
-      .toEqual({ message: 'Reminders sent to 50 of 120. Press Remind all again for the rest.', type: 'info' });
-  });
-
-  it('keeps the success colour for a press that reached everyone', () => {
-    expect(remind().remindAllToast({ reminded: 1, total: 1 })).toEqual({ message: 'Reminders sent to 1 pending invite.', type: 'success' });
-    expect(remind().remindAllToast({ reminded: 12, total: 12, recentlyReminded: 0 })).toEqual({ message: 'Reminders sent to 12 pending invites.', type: 'success' });
-  });
-
-  it('adds the server\'s reason to a refused press, or a plain sentence when there is none', () => {
-    const { remindAllFailure } = remind();
-    expect(remindAllFailure('You have sent a lot of reminders this hour. Please try again later.'))
-      .toBe('No reminders were sent. You have sent a lot of reminders this hour. Please try again later.');
-    expect(remindAllFailure(undefined)).toBe('No reminders were sent. Please try again in a moment.');
-  });
-
-  // Production's event page toasts remindAllToast; the preview's event page has its own Invitations card
-  // and its own remind sentence, so the wiring pin lives on main.
-});
-
 describe('item 2: a pod card shrinks and breaks a long unbroken word', () => {
   it('lets the text column shrink and break, and keeps the badges from squeezing it', () => {
     const src = readClientSource('features/pods/PodsPage.tsx');
@@ -228,5 +150,19 @@ describe('item 2: a pod card shrinks and breaks a long unbroken word', () => {
     // The badges drop under the name on a phone instead of squeezing it to a few letters a line.
     expect(card).toMatch(/flex flex-wrap items-center justify-between/);
     expect(card.match(/min-w-0/g)!.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ─── Final fix wave CM1 (2 Nov 2026): no dead copies of production's bell and Remind all helpers ───────────────
+// poke-answer.ts and remind-all-toast.ts came in with the 496d3bc4 merge of main. Production's bell and event page draw
+// them; the preview's bell has its own request screen (bellRequestView) and its event page its own Invitations card,
+// so nothing here imports them. Their pins live on main with the screens that use them.
+describe('the preview keeps no dead copies of production-only helpers', () => {
+  it('poke-answer.ts and remind-all-toast.ts are gone, and nothing asks for them', () => {
+    const fs = jest.requireActual('fs') as typeof import('fs');
+    const path = jest.requireActual('path') as typeof import('path');
+    const client = path.join(__dirname, '../../../../client/src');
+    expect(fs.existsSync(path.join(client, 'components/ui/poke-answer.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(client, 'features/sessions/remind-all-toast.ts'))).toBe(false);
   });
 });

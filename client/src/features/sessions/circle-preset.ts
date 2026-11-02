@@ -29,6 +29,11 @@ export function circlePrivateLine(name: string): string {
   return `${CIRCLE_PRIVATE_LEAD} ${circlePrivateRest(name)}`;
 }
 
+/** The event page's private notice for a circle event (final fix wave CM2, 2 Nov 2026): the circle, not the pod. */
+export function circlePrivateNotice(name: string): string {
+  return `This event is private. It is for ${name.trim()}'s members and the people the host invites.`;
+}
+
 /** The pod choice: the circle's own pods (that you run) first, then your other pods, each kept in its order. */
 export function podsForCircle<T extends { id: string }>(pods: T[], attachedPodIds: string[]): { inCircle: T[]; others: T[] } {
   const attached = new Set(attachedPodIds);

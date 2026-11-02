@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useMemo } from 'react';
+import type { EventRefusal } from '@/features/live/session-guard-state';
 
 interface Participant {
   userId: string;
@@ -261,9 +262,16 @@ interface SessionLiveState {
    * (P2 item 10, 1 Nov 2026). Cleared by a full store reset.
    */
   registrationKnown: boolean;
+  /**
+   * The register call was refused for good (final fix wave C4, 2 Nov 2026): the event asks the host to approve each
+   * place, or is private. Like removedFromEvent it is final: the page draws the refused screen, never the room, and the
+   * phase stays 'complete'. Cleared by a full store reset.
+   */
+  refusedFromEvent: EventRefusal | null;
 
   setPhase: (phase: SessionPhase) => void;
   setRemovedFromEvent: (removed: boolean) => void;
+  setRefusedFromEvent: (refusal: EventRefusal | null) => void;
   setRegistrationKnown: (known: boolean) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setTransitionStatus: (status: TransitionStatus) => void;
@@ -409,6 +417,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   phase: 'lobby',
   removedFromEvent: false,
   registrationKnown: false,
+  refusedFromEvent: null,
   connectionStatus: 'connecting',
   transitionStatus: null,
   sessionStatus: 'scheduled',
@@ -473,8 +482,9 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   // (the recap). A late reconnect/eviction/snapshot that tries to move the user
   // back to 'lobby'/'matched' is ignored, so a kicked user can never be pulled
   // back into the main room. A fresh-invite re-entry resets the store first.
-  setPhase: (phase) => set((s) => (s.removedFromEvent && phase !== 'complete') ? {} : { phase }),
+  setPhase: (phase) => set((s) => ((s.removedFromEvent || s.refusedFromEvent) && phase !== 'complete') ? {} : { phase }),
   setRemovedFromEvent: (removedFromEvent) => set({ removedFromEvent }),
+  setRefusedFromEvent: (refusedFromEvent) => set({ refusedFromEvent }),
   setRegistrationKnown: (registrationKnown) => set({ registrationKnown }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
   setTransitionStatus: (transitionStatus) => set({ transitionStatus }),
@@ -736,7 +746,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     };
   }),
   reset: () => set({
-    phase: 'lobby', removedFromEvent: false, registrationKnown: false, connectionStatus: 'connecting', transitionStatus: null,
+    phase: 'lobby', removedFromEvent: false, registrationKnown: false, refusedFromEvent: null, connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
     participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null, timerWarning: null, roomNotice: null,
     timerSeconds: 0, timerEndsAt: null, clockOffset: 0, hasClockOffset: false, currentRound: 0, broadcasts: [], error: null, tileReactions: {},

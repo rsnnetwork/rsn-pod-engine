@@ -121,8 +121,9 @@ describe('P1 item 9: a refused person\'s live page is final, and says T11\'s ref
   it('the guard keeps the refusal it read, on the first read and on the re-check when the tab comes back', () => {
     const guard = read('features/live/SessionGuard.tsx');
     expect(guard.match(/safeSetState\(\{ kind: 'refused', \.\.\.refusalOf\(err\) \}\)/g)).toHaveLength(2);
-    expect(guard).toMatch(/\{state\.detail\}/);
-    expect(guard).toMatch(/state\.requestOnEventPage && \(/);
+    // Final fix wave C4: the screen itself is EventRefusedScreen, shared with the live page's own refusal.
+    expect(guard).toMatch(/detail=\{state\.detail\} requestOnEventPage=\{state\.requestOnEventPage\}/);
+    expect(read('features/live/EventRefusedScreen.tsx')).toMatch(/\{requestOnEventPage && sessionId && \(/);
   });
 });
 

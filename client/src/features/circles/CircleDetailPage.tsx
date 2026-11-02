@@ -13,7 +13,7 @@
 // member's own events too, so a new circle event shows without a refresh.
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Users, CalendarPlus, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox } from 'lucide-react';
 import Card from '@/components/ui/Card';
@@ -42,12 +42,16 @@ export default function CircleDetailPage() {
   const highlightPostId = searchParams.get('post') || undefined;
   const { user } = useAuthStore();
   const [sheet, setSheet] = useState<'invite' | 'settings' | null>(null);
+  const qc = useQueryClient();
+  // Final fix wave CM5 (2 Nov 2026): the people who run the circle also follow its asks (circle:<id>:requests), so its
+  // Requests (n) count moves with them. Read from the page's own answer once it has one; the tags follow each render.
+  const runsIt = !!qc.getQueryData<CircleDetail>(['circle', circleId])?.canManage;
 
   const { data: circle, isLoading, isError, refetch } = useQuery<CircleDetail>({
     queryKey: ['circle', circleId],
     queryFn: () => api.get(`/circles/${circleId}`).then(r => r.data.data),
     enabled: !!circleId,
-    meta: { entities: circleEntities(circleId ?? '', user?.id) },
+    meta: { entities: circleEntities(circleId ?? '', user?.id, runsIt) },
   });
 
   if (isLoading) return <PageLoader />;
