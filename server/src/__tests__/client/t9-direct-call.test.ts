@@ -36,9 +36,12 @@ describe('the ring is heard app-wide, not only in the open thread', () => {
       expect(signals).toContain(`socket.on('${event}'`);
       expect(signals).toContain(`socket.off('${event}'`);
     }
-    // The answer takes the caller into the room from wherever they are, and only for the call this device rang.
-    expect(signals).toMatch(/if \(store\(\)\.outgoing\?\.requestId !== d\.requestId\) return;[\s\S]*?navigate\(callRoomPath\(d\.conversationId, d\.kind\)\)/);
-    expect(signals).toContain("addToast(`${d.byName} can't take the call right now.`, 'info')");
+    // The answer takes the caller into the room from wherever they are, and only from the tab that rang (F3: the
+    // handlers are in call-signals.ts, run two tabs at a time in f3-one-tab-enters-the-call.test.ts).
+    const handlers = src('features/calls/call-signals.ts');
+    expect(handlers).toMatch(/if \(mine\?\.requestId !== d\.requestId\) return;[\s\S]*?if \(mine\.placedHere\) navigate\(callRoomPath\(d\.conversationId, d\.kind\)\);/);
+    expect(handlers).toContain("toast(`${d.byName} can't take the call right now.`);");
+    expect(signals).toContain("toast: (m) => addToast(m, 'info')");
   });
 
   it('App mounts the call layer once for a signed-in member, above the routes (the shell does not cover /people/:id or /meet/*)', () => {
@@ -143,10 +146,10 @@ describe('the banner and the Calling card', () => {
 });
 
 describe('fix round 1: a withdraw that lost to an answer, and signing out', () => {
-  it('Cancel that the server answers "accepted" (the answer came first) takes the caller into the room', () => {
+  it('Cancel that the server answers "accepted" (the answer came first) takes the caller into the room, from the tab that rang', () => {
     const card = src('features/calls/OutgoingCallCard.tsx');
     expect(card).toMatch(/const outcome = await withdrawCall\(call\.requestId\);/);
-    expect(card).toMatch(/if \(outcome\.status === 'accepted'\) navigate\(callRoomPath\(outcome\.conversationId, outcome\.kind\)\);/);
+    expect(card).toMatch(/if \(outcome\.status === 'accepted' && call\.placedHere\) navigate\(callRoomPath\(outcome\.conversationId, outcome\.kind\)\);/);
     expect(src('features/calls/call-api.ts')).toMatch(/withdrawCall = \(requestId: string\) =>[\s\S]*?r\.data\.data as WithdrawOutcome/);
   });
 
@@ -171,7 +174,7 @@ describe('a ringing call (call-ring.ts)', () => {
   it('a call read from the server names the other person on each side', () => {
     expect(fromLive(live, 'incoming', 5)).toEqual({
       requestId: 'rq-1', conversationId: 'conv-1', partnerId: 'u-a', partnerName: 'Ana', kind: 'video', durationMin: 15,
-      expiresAt: Date.parse('2026-11-01T10:02:00.000Z'), seenAt: 5,
+      expiresAt: Date.parse('2026-11-01T10:02:00.000Z'), seenAt: 5, placedHere: false,
     });
     expect(fromLive(live, 'outgoing', 5).partnerId).toBe('u-b');
   });

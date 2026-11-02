@@ -19,6 +19,13 @@ export interface RingingCall {
   expiresAt: number;
   /** When this device learned of it, so a read that began before it cannot take it away again. */
   seenAt: number;
+  /**
+   * This tab rang it (finding F3, 2 Nov 2026). Every tab of the caller holds the call (the ring's tag reads it again
+   * in each), but only the tab that rang goes into the room when it is answered: two tabs in one room with one identity
+   * and LiveKit puts one of them out. A call read from the server was rung elsewhere unless this tab remembers ringing
+   * it (placed-here.ts); a call ringing me is never placed here.
+   */
+  placedHere: boolean;
 }
 
 /** A call rings for two minutes, then lapses (the server's CALL_REQUEST_TTL_MS). */
@@ -36,7 +43,7 @@ export interface RungRequest {
 }
 
 /** A live request the server read, as this device holds it. `seenAt` is when the read began. */
-export function fromLive(live: LiveCallRequest, side: 'incoming' | 'outgoing', seenAt: number): RingingCall {
+export function fromLive(live: LiveCallRequest, side: 'incoming' | 'outgoing', seenAt: number, placedHere = false): RingingCall {
   return {
     requestId: live.id,
     conversationId: live.conversationId,
@@ -46,10 +53,11 @@ export function fromLive(live: LiveCallRequest, side: 'incoming' | 'outgoing', s
     durationMin: live.durationMin,
     expiresAt: Date.parse(live.expiresAt),
     seenAt,
+    placedHere: side === 'outgoing' && placedHere,
   };
 }
 
-/** The request a ring just made, as the caller's "Calling…" card shows it. */
+/** The request a ring just made, as the caller's "Calling…" card shows it: placed in this tab. */
 export function fromRung(rung: RungRequest, partnerName: string, now: number): RingingCall {
   return {
     requestId: rung.id,
@@ -60,6 +68,7 @@ export function fromRung(rung: RungRequest, partnerName: string, now: number): R
     durationMin: rung.durationMin,
     expiresAt: Date.parse(rung.createdAt) + CALL_RING_MS,
     seenAt: now,
+    placedHere: true,
   };
 }
 

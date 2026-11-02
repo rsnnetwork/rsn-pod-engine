@@ -11,6 +11,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { useCallStore } from '@/stores/callStore';
 import { fetchIncomingCall, fetchOutgoingCall, ringCall, type CallTarget } from './call-api';
 import { fromLive, fromRung, refusalCode, ringRefusal, type CallKind } from './call-ring';
+import { rememberPlacedHere, wasPlacedHere } from './placed-here';
 
 export interface CallRequestModalProps {
   open: boolean;
@@ -35,7 +36,7 @@ export function useCallRequest(target: CallTarget | null, partnerName: string | 
     const same = (c: { conversationId: string; fromUserId: string; toUserId: string } | null) =>
       !!c && (target?.conversationId ? c.conversationId === target.conversationId : c.fromUserId === target?.userId || c.toUserId === target?.userId);
     if (theirs && same(theirs)) { useCallStore.getState().setIncoming(fromLive(theirs, 'incoming', askedAt)); return true; }
-    if (mine && same(mine)) { useCallStore.getState().setOutgoing(fromLive(mine, 'outgoing', askedAt)); return true; }
+    if (mine && same(mine)) { useCallStore.getState().setOutgoing(fromLive(mine, 'outgoing', askedAt, wasPlacedHere(mine.id))); return true; }
     return false;
   };
 
@@ -44,6 +45,8 @@ export function useCallRequest(target: CallTarget | null, partnerName: string | 
     setSending(true);
     try {
       const rung = await ringCall(target, chosen, durationMin);
+      // Rung in this tab: only this tab goes into the room when it is answered (F3), after a refresh of it too.
+      rememberPlacedHere(rung.id);
       useCallStore.getState().setOutgoing(fromRung(rung, partnerName?.trim() || 'Member', Date.now()));
       setKind(null);
     } catch (err) {
