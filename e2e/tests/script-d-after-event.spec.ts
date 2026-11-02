@@ -63,14 +63,41 @@ function connectSocket(u: TestUser): Promise<Socket> {
   });
 }
 
+// Whether the server has let each live page into the event: it sends a page the room's state only once it has admitted it
+// (n1-t13). A message sent before that is refused with "You are not in this event." (chat-handlers.ts:91-94), which a
+// slow phone on the preview met: the page draws its chat box before its join has been answered.
+const admitted = new WeakMap<Page, boolean>();
+
+async function openLive(u: TestUser): Promise<Page> {
+  const { page } = await openAs(browser, u, '');
+  admitted.set(page, false);
+  page.on('websocket', (ws) => {
+    if (!ws.url().includes('/socket.io/')) return;
+    ws.on('framereceived', (f) => {
+      const s = typeof f.payload === 'string' ? f.payload : f.payload.toString();
+      const i = s.indexOf('[');
+      if (!s.startsWith('42') || i < 0) return;
+      try { if (JSON.parse(s.slice(i))[0] === 'session:state') admitted.set(page, true); } catch { /* not an event */ }
+    });
+  });
+  await gotoRetry(page, `${APP}/session/${sessionId}/live`);
+  return page;
+}
+
 async function say(page: Page, words: string): Promise<void> {
+  await expect.poll(() => admitted.get(page), { message: 'the server has let the page into the event', timeout: 60_000 }).toBe(true);
   const openChat = page.getByRole('button', { name: 'Open chat' });
   if (await openChat.isVisible().catch(() => false)) await openChat.click();
   const box = page.getByPlaceholder('Message everyone...');
   await expect(box, 'the chat box is open').toBeEditable({ timeout: 30_000 });
   await box.fill(words);
   await box.press('Enter');
-  await expect(box, 'the server took the message').toHaveValue('', { timeout: 15_000 });
+  await expect(box, 'the server took the message').toHaveValue('', { timeout: 15_000 }).catch(async (e: Error) => {
+    // Say what the page said: a refusal is shown beside the box (useChatSend).
+    const said = await page.getByTestId('chat-send-notice').allInnerTexts().catch(() => [] as string[]);
+    throw new Error(`${e.message}
+The page said: ${said.join(' | ') || '(nothing)'}`);
+  });
 }
 
 const statusOf = async () => (await pool.query<{ status: string }>('SELECT status FROM sessions WHERE id = $1', [sessionId])).rows[0]?.status;
@@ -108,8 +135,8 @@ test('Script D: the chat of an event, its pod\'s wall, a message to everyone and
     await expect.poll(statusOf, { timeout: 30_000, message: 'the event is live' }).toBe('lobby_open');
     joinAsHost(hostSocket, sessionId);
     if (HOST_IDLE_MS) await new Promise((r) => setTimeout(r, HOST_IDLE_MS));
-    saraPage = (await openAs(browser, sara, `/session/${sessionId}/live`)).page;
-    tomPage = (await openAs(browser, tom, `/session/${sessionId}/live`)).page;
+    saraPage = await openLive(sara);
+    tomPage = await openLive(tom);
     for (const p of [saraPage, tomPage]) await acceptConfirmDialogs(p);
     await Promise.all([skipEventCheckIn(saraPage), skipEventCheckIn(tomPage)]);
     await say(saraPage, HELLO);
