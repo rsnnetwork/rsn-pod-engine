@@ -250,6 +250,61 @@ describe('someone who leaves on purpose is announced at once', () => {
     expect(room.listenerCount(RoomEvent.DataReceived)).toBe(1);
     stop();
     expect(room.listenerCount(RoomEvent.DataReceived)).toBe(0);
+    expect(room.listenerCount(RoomEvent.Connected)).toBe(0);
+  });
+});
+
+// Fix wave 2 (2 Nov 2026; preview rr9, meeting-call test 9 failed twice): the person who stays had just come in, and
+// their own room was still CONNECTING (it lists the other person from the join, so the tiles were there) when the other
+// pressed Leave. Bo's log: Ana's ParticipantDisconnected at 49.485, Bo's own room Connected at 50.812, Ana's goodbye
+// delivered at 51.229 once Bo's data channel opened. The leave was ignored because the room was not Connected (a rule
+// for MY reconnects), nothing looked again once it connected, and the goodbye, arriving after the room had taken Ana off
+// its list, had no sender and nobody to fall back on. Fix round 2 had closed the same race on the leaver's side.
+describe('a leave while my own room is still connecting is not lost', () => {
+  /** A room just joined: it lists the people already there (the join's answer) but has not connected yet. */
+  function connectingWith(...people: Person[]) {
+    const w = watched();
+    w.room.state = ConnectionState.Connecting;
+    for (const p of people) w.room.remoteParticipants.set(p.identity, p);
+    return w;
+  }
+  const connects = (room: StubRoom) => { room.state = ConnectionState.Connected; room.emit(RoomEvent.Connected); };
+
+  it('their leave heard while connecting is said once my room has connected and they are still gone (after the grace)', () => {
+    const { room, seen } = connectingWith(stefan);
+    room.leave(stefan);
+    jest.advanceTimersByTime(LEAVE_GRACE_MS * 2);
+    expect(seen).toEqual([]);
+    connects(room);
+    expect(seen).toEqual([]);
+    jest.advanceTimersByTime(LEAVE_GRACE_MS);
+    expect(seen).toEqual([LEFT]);
+  });
+
+  it('their goodbye delivered after the room took them off its list is theirs: said at once, and only once', () => {
+    const { room, seen } = connectingWith(stefan);
+    room.leave(stefan);
+    connects(room);
+    room.emit(RoomEvent.DataReceived, goodbye, undefined, undefined, GOODBYE_TOPIC);
+    expect(seen).toEqual([LEFT]);
+    jest.advanceTimersByTime(LEAVE_GRACE_MS * 3);
+    expect(seen).toEqual([LEFT]);
+  });
+
+  it('back before my room connected: nothing to say', () => {
+    const { room, seen } = connectingWith(stefan);
+    room.leave(stefan);
+    room.remoteParticipants.set(stefan.identity, stefan);
+    connects(room);
+    jest.advanceTimersByTime(LEAVE_GRACE_MS * 3);
+    expect(seen).toEqual([]);
+  });
+
+  it('a room that connects with them in it says nothing', () => {
+    const { room, seen } = connectingWith(stefan);
+    connects(room);
+    jest.advanceTimersByTime(LEAVE_GRACE_MS * 3);
+    expect(seen).toEqual([]);
   });
 });
 
