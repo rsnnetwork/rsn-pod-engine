@@ -380,6 +380,10 @@ test('7. at every width: no sideways scroll, the reply strip and the box clear o
     await expectReachable(page, page.locator('textarea'), `message box ${width}`);
     await expectReachable(page, page.getByRole('button', { name: 'Send message' }), `send ${width}`);
     await shot(page, `thread-reply-${width}`);
+    // Closed again with its own 44px button, so the next width proves the strip opens again (429 fix round 1): left
+    // open, every width after the first would find the previous width's strip and prove nothing.
+    await page.getByRole('button', { name: 'Cancel reply' }).click();
+    await expect(page.getByTestId('reply-strip')).toHaveCount(0);
   }
 
   await page.goto(`${APP}/notifications`);
