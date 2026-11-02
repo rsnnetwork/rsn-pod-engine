@@ -273,8 +273,9 @@ function LiveEventRoom() {
           2 Nov 2026: on a 390px phone the chip and the leave button took the whole line and squeezed the title to 0px.
           The title now asks for 10rem before it shares the line; when the controls leave it less, the bar wraps and
           the title gets its own line above them (it truncates, never vanishes). The controls are one group that
-          never shrinks, so the leave button keeps its 44px. The insets keep the bar clear of a notch (viewport-fit=cover). */}
-      <div data-testid="live-top-bar" className="relative flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.375rem,env(safe-area-inset-top))] pb-1.5 bg-white border-b border-gray-200">
+          never shrinks, so the leave button keeps its 44px. The page's root above keeps it clear of a notch and, in landscape,
+          the rounded corners (viewport-fit=cover); the bar adds none of its own, so it clears them once (final fix wave C3). */}
+      <div data-testid="live-top-bar" className="relative flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 pt-1.5 pb-1.5 bg-white border-b border-gray-200">
         {/* Toasts: the live event route is NOT inside AppLayout (App.tsx), so the
             app-wide ToastContainer there never mounts during an event — toasts
             (e.g. the BG auto-disable notice) fired into the void (Ali, 2026-06-08:
