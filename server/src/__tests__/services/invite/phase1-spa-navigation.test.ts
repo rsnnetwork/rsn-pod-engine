@@ -126,7 +126,8 @@ describe('Phase 1 — SPA navigation + name-fallback architecture', () => {
       // not be a bare `.catch(() => {})`.
       const idx = src.indexOf("/sessions/${sessionId}/register");
       expect(idx).toBeGreaterThan(-1);
-      const block = src.slice(idx, idx + 900);
+      // The whole catch, up to its finally (final fix wave C4 added the refusal branch, so a fixed length fell short).
+      const block = src.slice(idx, src.indexOf('}).finally(', idx));
       expect(block).not.toMatch(/\.catch\(\(\)\s*=>\s*\{\s*\}\)/);
       expect(block).toMatch(/console\.warn|addToast/);
     });
