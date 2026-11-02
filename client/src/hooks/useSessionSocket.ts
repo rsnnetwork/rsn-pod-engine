@@ -3,6 +3,7 @@ import type { EventChatPage } from '@rsn/shared';
 import { connectSocket, getSocket } from '@/lib/socket';
 import { leaveOnUnmount } from '@/features/live/leave-event';
 import { useSessionStore } from '@/stores/sessionStore';
+import { registerRefusal } from '@/features/live/session-guard-state';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { playTimerChime } from '@/lib/chime';
@@ -144,6 +145,15 @@ export default function useSessionSocket(sessionId: string) {
         store.setRemovedFromEvent(true);
         store.setLiveKitToken(null, null);
         store.setError('You have been removed from this event.');
+        store.setPhase('complete');
+        return;
+      }
+      // Final fix wave C4: an event that asks the host to approve each place, or a private one, refused the place.
+      // That is final too: the page draws the refused screen (with the way to the event page), never the room.
+      const refusal = registerRefusal(err);
+      if (refusal) {
+        store.setRefusedFromEvent(refusal);
+        store.setLiveKitToken(null, null);
         store.setPhase('complete');
         return;
       }

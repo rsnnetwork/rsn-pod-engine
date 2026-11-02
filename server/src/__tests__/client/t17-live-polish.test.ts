@@ -108,7 +108,9 @@ describe('item 9: a refused person gets a final sentence from the event guard', 
     const src = readClientSource('features/live/SessionGuard.tsx');
     expect(src).not.toMatch(/err\?\.message/);
     expect(src).toMatch(/kind: 'refused'/);
-    expect(src).toMatch(/REFUSED_SENTENCE/);
+    // Final fix wave C4: the refused screen is EventRefusedScreen, which the live page draws too.
+    expect(src).toMatch(/<EventRefusedScreen /);
+    expect(readClientSource('features/live/EventRefusedScreen.tsx')).toMatch(/REFUSED_SENTENCE/);
   });
 });
 

@@ -30,6 +30,7 @@ import { destroyBgEngine } from '@/lib/bgEngine';
 import Linkify from '@/components/ui/Linkify';
 import { useConfirm } from '@/hooks/useConfirm';
 import { eventStateChipText } from './event-state-chip';
+import EventRefusedScreen from './EventRefusedScreen';
 
 /** The final screen for a person the host removed: one sentence and the way out. */
 function RemovedFromEvent({ onBack }: { onBack: () => void }) {
@@ -75,6 +76,7 @@ function LiveEventRoom() {
   const broadcasts = useSessionStore(s => s.broadcasts);
   const sessionError = useSessionStore(s => s.error);
   const removedFromEvent = useSessionStore(s => s.removedFromEvent);
+  const refusedFromEvent = useSessionStore(s => s.refusedFromEvent);
   const registrationKnown = useSessionStore(s => s.registrationKnown);
   const connectionStatus = useSessionStore(s => s.connectionStatus);
   const transitionStatus = useSessionStore(s => s.transitionStatus);
@@ -223,6 +225,8 @@ function LiveEventRoom() {
   // call has answered, and a removed person gets a final screen instead: on a reload the top bar used to flash for
   // the moment before the refusal landed. Before the format is read (P1 item 10), so a video meeting waits too.
   if (removedFromEvent) return <RemovedFromEvent onBack={() => navigate('/sessions')} />;
+  // Final fix wave C4: a place refused for good (an approval event, a private one) is final in the same way.
+  if (refusedFromEvent) return <EventRefusedScreen sessionId={sessionId} {...refusedFromEvent} />;
   if (!registrationKnown) return <PageLoader />;
 
   // 26 Oct 2026 (VID-04) — the event's format decides the room, read once from the event itself. Until it is
