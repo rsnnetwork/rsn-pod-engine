@@ -19,10 +19,20 @@ import { type ReactNode } from 'react';
  *     flow must complete), and live-event session paths (/session/:id/live).
  */
 export default function ProtectedRoute({ children }: { children?: ReactNode }) {
-  const { user, isLoading } = useAuthStore();
+  const { user, isLoading, sessionRetrying } = useAuthStore();
   const location = useLocation();
 
-  if (isLoading) return <div className="h-screen w-screen bg-white flex items-center justify-center"><PageLoader /></div>;
+  if (isLoading) {
+    return (
+      <div className="h-screen w-screen bg-white flex flex-col items-center justify-center gap-3 px-6 text-center">
+        <PageLoader />
+        {/* Fix wave 3: the session check is waiting out a 429, a 5xx or no connection. The member stays signed in. */}
+        {sessionRetrying && (
+          <p data-testid="session-retrying" role="status" className="text-sm text-gray-500">Connection lost, retrying…</p>
+        )}
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/welcome" state={{ from: location }} replace />;
 
   const status = user.onboardingStatus;
