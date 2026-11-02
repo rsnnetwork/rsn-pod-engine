@@ -29,7 +29,7 @@ import crypto from 'node:crypto';
 import * as fs from 'fs';
 import {
   APP, DEVICE, LOCAL, ROOMS, ROOM_SKIP, RUN, RUN_WIDTH, api, skipStep, bellCount, cleanupRun, connect, createCircle,
-  drag, expectNotReloaded, gotoRetry, halves, launch, made, markNotReloaded, noSidewaysScroll, openAs,
+  drag, expectNotReloaded, gotoRetry, halves, roomLogsAtDebug, watchRoom, closeBrowsers, launch, made, markNotReloaded, noSidewaysScroll, openAs,
   openSignedOut, pictureSize, pinch, pool, scrollClear, seedPod, shot, tall, throwaway, where, type TestUser,
 } from '../helpers/sweep';
 import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
@@ -74,6 +74,12 @@ test.beforeAll(async () => {
   expect((await api(bo, 'POST', `/users/${kit.id}/block`, {})).status).toBeLessThan(300);
   await pool.query(`UPDATE users SET status = 'deactivated' WHERE id = $1`, [rex.id]);
   console.log(`[script-e] ${where()} app=${APP} local=${LOCAL} rooms=${ROOMS}`);
+});
+
+// Each test's browsers are closed when it ends: a later test (the call's room above all) never shares the machine with
+// the pages of the tests before it.
+test.afterEach(async () => {
+  await closeBrowsers();
 });
 
 test.afterAll(async () => {
@@ -521,9 +527,16 @@ test('4.5: the notifications page: today, earlier, Load more, a new bell live, m
 
 test('4.6: a direct video call rings the connection on any screen, both land in one room; a stranger and a removed connection cannot call', async () => {
   test.setTimeout(240_000);
-  const callee = await openAs(browser, bo, '/connections');
+  // Each side's room logs (LiveKit at debug), so a room that never shows its people says why (preview, 2 Nov 2026).
+  const callee = await openAs(browser, bo, '');
+  await roomLogsAtDebug(callee.ctx);
+  const calleeRoom = watchRoom(callee.page, 'Bo');
+  await gotoRetry(callee.page, `${APP}/connections`);
   await expect(callee.page.getByRole('heading').first()).toBeVisible({ timeout: SLOW });
-  const caller = await openAs(browser, ana, `/people/${bo.id}`);
+  const caller = await openAs(browser, ana, '');
+  await roomLogsAtDebug(caller.ctx);
+  const callerRoom = watchRoom(caller.page, 'Ana');
+  await gotoRetry(caller.page, `${APP}/people/${bo.id}`);
 
   await test.step('4.6 Video call → the ring on Bo\'s People page without a reload → Accept → the same room', async () => {
     const call = caller.page.getByTestId('video-call-button');
@@ -547,8 +560,15 @@ test('4.6: a direct video call rings the connection on any screen, both land in 
   await test.step('4.6 Leave ends it for both (a real room)', async () => {
     if (skipStep(!ROOMS, ROOM_SKIP)) return;
     const tiles = (p: Page) => p.locator('.lk-participant-tile');
-    await expect(tiles(caller.page)).toHaveCount(2, { timeout: 45_000 });
-    await expect(tiles(callee.page)).toHaveCount(2, { timeout: 45_000 });
+    const bothInRoom = async () => {
+      await expect(tiles(caller.page), 'Ana sees two people').toHaveCount(2, { timeout: 45_000 });
+      await expect(tiles(callee.page), 'Bo sees two people').toHaveCount(2, { timeout: 45_000 });
+    };
+    await bothInRoom().catch(async (e: Error) => {
+      await shot(caller.page, 'e-4.6-room-ana');
+      await shot(callee.page, 'e-4.6-room-bo');
+      throw new Error(`${e.message}\n${await callerRoom.report()}\n${await calleeRoom.report()}`);
+    });
     await caller.page.getByRole('button', { name: 'Leave call and go back to chat' }).click();
     await caller.page.waitForURL(new RegExp(`/messages/${convAB}`));
     await expect(callee.page.getByTestId('partner-left')).toBeVisible({ timeout: 30_000 });
@@ -566,6 +586,36 @@ test('4.6: a direct video call rings the connection on any screen, both land in 
     await expect(caller.page.getByTestId('video-call-button'), 'no Video call for Rex').toHaveCount(0);
     expect((await api(ana, 'POST', `/calls/user/${rex.id}`, {})).status, 'the server refuses to ring Rex').toBeGreaterThanOrEqual(400);
   });
+});
+
+// FINDING F3 (T19, 2 Nov 2026): a caller with a second tab of REASON open is put out of the call they rang from. The
+// ring reaches every tab of the caller (user:<id>:calls refetches the outgoing call, so "Calling …" shows on every
+// screen), and call:accepted then sends EVERY such tab into /meet: useCallSignals.ts onAccepted only checks that the
+// tab's outgoing call has this requestId, which is true in all of them. Two connections with one identity join the
+// room; LiveKit puts the first out (DUPLICATE_IDENTITY, "client leave request reason: 2"), and that tab's room leaves to
+// the chat. Seen on the preview at 768 and 1024 (Script E 4.6, Ana's thread from 4.3 still open) and reproduced
+// locally with a real LiveKit. Marked as expected to fail, so the walk stays green on what is built and turns red, as a
+// reminder, once it is fixed.
+test('4.6 (finding F3): a caller with a second tab open stays in the call they rang from', async () => {
+  test.skip(!ROOMS, ROOM_SKIP);
+  test.fail(true, 'F3: every tab of the caller follows call:accepted into the room; reported to the controller, not fixed here');
+  test.setTimeout(150_000);
+  const pat = await throwaway('Pat');
+  const quin = await throwaway('Quin');
+  const conv = await connect(pat, quin, `Hello Quin ${RUN}`);
+  const otherTab = (await openAs(browser, pat, `/messages/${conv}`)).page;
+  const callee = (await openAs(browser, quin, '/connections')).page;
+  const caller = (await openAs(browser, pat, `/people/${quin.id}`)).page;
+  await expect(callee.getByRole('heading').first()).toBeVisible({ timeout: SLOW });
+  await otherTab.waitForTimeout(3_000);
+  await caller.getByTestId('video-call-button').click({ timeout: SLOW });
+  await caller.getByRole('button', { name: 'Send request' }).click();
+  await callee.getByTestId('call-incoming').getByRole('button', { name: 'Accept' }).click({ timeout: LIVE });
+  await caller.waitForURL(new RegExp(`/meet/${conv}`), { timeout: LIVE });
+  await expect(caller.locator('.lk-participant-tile'), 'the tab that rang shows both people').toHaveCount(2, { timeout: 45_000 });
+  await caller.waitForTimeout(5_000);
+  await expect(caller, 'and stays in the call').toHaveURL(new RegExp(`/meet/${conv}`));
+  expect(new URL(otherTab.url()).pathname, 'the other tab stays where it was').toBe(`/messages/${conv}`);
 });
 
 // ═══ 5. Meetings ════════════════════════════════════════════════════════════════════════════════════════════════

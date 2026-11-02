@@ -17,7 +17,7 @@
 import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import {
   APP, ROOMS, ROOM_SKIP, RUN, RUN_WIDTH, api, bellCount, cleanupRun, expectNotReloaded, firstName, gotoRetry, launch, made,
-  markNotReloaded, noSidewaysScroll, openAs, pool, shot, skipStep, tall, throwaway, where, type TestUser,
+  markNotReloaded, noSidewaysScroll, openAs, pool, roomLogsAtDebug, shot, skipStep, tall, throwaway, watchRoom, where, type TestUser,
 } from '../helpers/sweep';
 
 const SLOW = 60_000;
@@ -147,13 +147,25 @@ test('Script C: a Reason pod is Freeform, two connections are invited from the l
 
   await test.step('05 both enter the meeting: two tiles, each wholly in the window, laid out for two (a real room)', async () => {
     if (skipStep(!ROOMS, ROOM_SKIP)) return;
-    const dir = (await openAs(browser, dana, `/session/${eventId}/live`)).page;
-    const guest = (await openAs(browser, xavi, `/session/${eventId}/live`)).page;
+    // Each side's room logs (LiveKit at debug), so a room that never lists the other person says why (preview, 2 Nov).
+    const enter = async (u: TestUser, who: string) => {
+      const o = await openAs(browser, u, '');
+      await roomLogsAtDebug(o.ctx);
+      const room = watchRoom(o.page, who);
+      await gotoRetry(o.page, `${APP}/session/${eventId}/live`);
+      return { page: o.page, room };
+    };
+    const { page: dir, room: dirRoom } = await enter(dana, 'Dana');
+    const { page: guest, room: guestRoom } = await enter(xavi, 'Xavi');
+    const reports = async () => `${await dirRoom.report()}\n${await guestRoom.report()}`;
     await dir.getByRole('button', { name: /Start meeting/ }).click({ timeout: SLOW });
     for (const [p, who] of [[dir, 'Dana'], [guest, 'Xavi']] as const) {
       const self = p.locator('[data-testid="meeting-tile"][data-self="true"]');
       const other = p.locator('[data-testid="meeting-tile"]:not([data-self="true"])');
-      await expect(other, `${who}: one other person`).toHaveCount(1, { timeout: 90_000 });
+      await expect(other, `${who}: one other person`).toHaveCount(1, { timeout: 90_000 }).catch(async (e: Error) => {
+        await shot(p, `c-meeting-missing-${who}`);
+        throw new Error(`${e.message}\n${await reports()}`);
+      });
       const vp = p.viewportSize()!;
       for (const [tile, what] of [[self, 'own tile'], [other.first(), 'the other person']] as const) {
         const box = (await tile.boundingBox())!;

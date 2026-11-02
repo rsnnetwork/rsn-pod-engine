@@ -30,7 +30,8 @@ export const DEVICE = DEVICE_NAME ? (devices as Record<string, BrowserContextOpt
 export const WIDTH = Number(process.env.E2E_WIDTH || 1280);
 export const IS_WEBKIT = process.env.E2E_ENGINE === 'webkit';
 /** A real LiveKit room needs the preview or production, and Chromium (Windows WebKit has no WebRTC). */
-export const ROOMS = !LOCAL && !IS_WEBKIT;
+// E2E_ROOMS=1 runs the room steps on a local stack whose API points at a local LiveKit dev server (127.0.0.1:7880).
+export const ROOMS = (!LOCAL || process.env.E2E_ROOMS === '1') && !IS_WEBKIT;
 export const ROOM_SKIP = LOCAL
   ? 'The local API mocks LiveKit, so no room connects: this step runs on the preview (Chromium).'
   : "Playwright's WebKit on Windows has no WebRTC, so it cannot join a LiveKit room: this step runs in Chromium.";
@@ -218,6 +219,34 @@ export async function openSignedOut(browser: Browser): Promise<Page> {
   contexts.push(ctx);
   await primePreview(ctx);
   return ctx.newPage();
+}
+
+/**
+ * What a page's video room said, from now on: its console lines about the room (LiveKit's own logs at debug, as
+ * n1-t9 records them), its page errors and its failed requests. `report()` says it all, with the page's address and the
+ * first words on it, so a room that never shows its people says why in the failure itself.
+ */
+export function watchRoom(page: Page, who: string): { report: () => Promise<string> } {
+  const lines: string[] = [];
+  const at = () => new Date().toISOString().slice(11, 23);
+  const ROOM = /livekit|room|connect|signal|ice|track|token|camera|microphone|permission|disconnect|error/i;
+  page.on('console', (m) => { if (ROOM.test(m.text())) lines.push(`${at()} ${who} console.${m.type()}: ${m.text().slice(0, 220)}`); });
+  page.on('pageerror', (e) => lines.push(`${at()} ${who} pageerror: ${e.message.slice(0, 220)}`));
+  page.on('requestfailed', (r) => lines.push(`${at()} ${who} request failed: ${r.method()} ${r.url().slice(0, 160)} (${r.failure()?.errorText ?? '?'})`));
+  page.on('response', (r) => { if (/call-token|\/token$/.test(r.url()) && r.status() >= 400) lines.push(`${at()} ${who} ${r.status()} ${r.url().slice(0, 160)}`); });
+  return {
+    report: async () => {
+      const text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+      return `${who} is on ${page.url()}; the page reads: "${text}"\n${lines.slice(-60).join('\n') || '(no room lines)'}`;
+    },
+  };
+}
+
+/** Turn LiveKit's own logs up to debug in a context, before its pages load (n1-t9's way), for watchRoom. */
+export async function roomLogsAtDebug(ctx: BrowserContext): Promise<void> {
+  await ctx.addInitScript(() => {
+    for (const name of ['livekit', 'livekit-room', 'livekit-engine', 'livekit-signal', 'livekit-participant']) localStorage.setItem(`loglevel:${name}`, 'DEBUG');
+  });
 }
 
 export async function closeBrowsers(): Promise<void> {
