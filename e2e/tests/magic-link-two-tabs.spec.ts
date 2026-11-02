@@ -37,7 +37,7 @@ test.describe('magic link login survives a second tab + stale tokens (Stefan 7 S
     test.skip(!JWT_SECRET || !DB, 'needs JWT_SECRET + DATABASE_URL (export from Render env / e2e/.jwt_secret)');
     test.setTimeout(180_000);
 
-    const pool = new Pool({ connectionString: DB, ssl: { rejectUnauthorized: false } });
+    const pool = new Pool({ connectionString: DB, ssl: DB!.includes('127.0.0.1') ? false : { rejectUnauthorized: false } });
     const id = crypto.randomUUID();
     const email = `e2etest-2tab-${Date.now()}@example.com`;
     let browser: Browser | null = null;
@@ -94,13 +94,19 @@ test.describe('magic link login survives a second tab + stale tokens (Stefan 7 S
       // Capture the refresh token the server issues at verify.
       let issuedRefresh: string | null = null;
       const refreshStatuses: number[] = [];
+      /** When the short access token below expires (0 until it is made), and the refreshes answered after that. */
+      let shortExpiresAt = 0;
+      const refreshedAfterExpiry: number[] = [];
       const wire = (page: import('@playwright/test').Page) => {
         page.on('response', async (res) => {
           const u = res.url();
           if (u.includes('/api/auth/verify') && res.status() === 200) {
             try { issuedRefresh = (await res.json())?.data?.refreshToken ?? issuedRefresh; } catch { /* noop */ }
           }
-          if (u.includes('/api/auth/refresh')) refreshStatuses.push(res.status());
+          if (u.includes('/api/auth/refresh')) {
+            refreshStatuses.push(res.status());
+            if (shortExpiresAt && Date.now() > shortExpiresAt) refreshedAfterExpiry.push(res.status());
+          }
         });
       };
 
@@ -151,10 +157,25 @@ test.describe('magic link login survives a second tab + stale tokens (Stefan 7 S
       }, shortAccess);
 
       refreshStatuses.length = 0;
+      shortExpiresAt = ((jwt.decode(shortAccess) as jwt.JwtPayload).exp as number) * 1000;
       await tabB.reload({ waitUntil: 'domcontentloaded' });
       await tabB.waitForTimeout(30_000); // ride past the 20s access expiry
+      expect(Date.now(), 'the short access token has expired').toBeGreaterThan(shortExpiresAt);
+
+      // The home page asks the server nothing in those 30 seconds (its first poll is 30 s after it loads), so the
+      // expired token is only met by the next request. Move inside the app as a member does, to a page that reads
+      // something the home page did not: that read is refused 401, the interceptor refreshes, and it is sent again.
+      // (Until 2 Nov the refresh this spec saw came from the idle tab A retrying its own refused boot check with the
+      // stale pair, 19 s before this token expired; a refused refresh now signs that tab out, as it should.)
+      await tabB.evaluate(() => {
+        history.pushState({}, '', '/messages');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await expect.poll(() => refreshedAfterExpiry.includes(200), { timeout: 20_000, message: 'a refresh succeeded (200) after expiry' }).toBe(true);
+      await tabB.waitForTimeout(2_000);
 
       expect(tabB.url(), 'still in the app after access-token expiry').not.toContain('/login');
+      expect(new URL(tabB.url()).pathname, 'still on the page the member moved to').toBe('/messages');
       expect(refreshStatuses.some((s) => s === 200), 'a refresh succeeded (200) after expiry').toBeTruthy();
       expect(refreshStatuses.every((s) => s !== 401), 'no refresh 401 after the fix').toBeTruthy();
     } finally {
