@@ -196,8 +196,10 @@ test('A writes in the call; B\'s Chat button counts it and B reads it live; both
   for (const [page, who] of [[a, 'A'], [b, 'B']] as const) {
     await page.getByRole('button', { name: 'Leave call and go back to chat' }).click();
     await expect(page, `${who} is back in the conversation`).toHaveURL(new RegExp(`/messages/${convId}`));
-    await expect(page.getByText(line), `${who} has A's line in Messages`).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText(answer), `${who} has B's line in Messages`).toBeVisible();
+    const mine = who === 'A' ? 'bubble-own' : 'bubble-theirs';
+    const theirs = who === 'A' ? 'bubble-theirs' : 'bubble-own';
+    await expect(page.getByTestId(mine).getByText(line), `${who} has A's line in Messages`).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId(theirs).getByText(answer), `${who} has B's line in Messages`).toBeVisible();
   }
 });
 
