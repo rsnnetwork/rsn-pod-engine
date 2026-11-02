@@ -2,6 +2,7 @@
 // T11 (1 Nov 2026; L17) — the organisers' Requests (N) card on an event that asks the host to approve each place:
 // one row per person who asked, with Approve and Decline (44px). It follows the server live: every request write
 // tells the organisers' open pages (session:<id>, sent with session:<id>:join-requests).
+// Final fix wave X1 (2 Nov 2026): a decline is final (the person cannot ask again), so Decline asks first, in the page.
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
@@ -10,6 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import { useConfirm } from '@/hooks/useConfirm';
 
 interface RequestRow {
   id: string;
@@ -31,6 +33,8 @@ export const REQUESTS_COPY = {
   decline: 'Decline',
   approved: (name: string) => `${name} has a place now.`,
   declined: (name: string) => `${name} was declined.`,
+  declineTitle: (name: string) => `Decline ${name}?`,
+  declineBody: 'They will not get a place at this event, and they cannot ask again.',
   fallback: 'That did not go through. Please try again.',
 };
 
@@ -49,6 +53,7 @@ export default function EventJoinRequestsCard({ sessionId, focus }: Props) {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const cardRef = useRef<HTMLDivElement>(null);
+  const { ask, confirmDialog } = useConfirm();
 
   const { data, isLoading, isError, refetch } = useQuery<RequestRow[]>({
     queryKey: ['session-join-requests', sessionId],
@@ -73,6 +78,12 @@ export default function EventJoinRequestsCard({ sessionId, focus }: Props) {
     },
     onError: (err) => addToast(serverSentence(err), 'error'),
   });
+
+  const decline = async (row: RequestRow) => {
+    const name = row.firstName || row.displayName;
+    if (!(await ask({ title: REQUESTS_COPY.declineTitle(name), body: REQUESTS_COPY.declineBody, confirmLabel: REQUESTS_COPY.decline, tone: 'danger' }))) return;
+    answer.mutate({ row, verb: 'decline' });
+  };
 
   const rows = data ?? [];
   return (
@@ -117,7 +128,7 @@ export default function EventJoinRequestsCard({ sessionId, focus }: Props) {
                     className="min-h-[44px]"
                     disabled={answer.isPending}
                     isLoading={busy && answer.variables?.verb === 'decline'}
-                    onClick={() => answer.mutate({ row, verb: 'decline' })}
+                    onClick={() => void decline(row)}
                   >
                     {REQUESTS_COPY.decline}
                   </Button>
@@ -127,6 +138,7 @@ export default function EventJoinRequestsCard({ sessionId, focus }: Props) {
           })}
         </ul>
       </Card>
+      {confirmDialog}
     </div>
   );
 }
