@@ -145,6 +145,102 @@ describe('subscribeEntitySync: a connect refreshes what may have been missed, wi
     qc.clear();
   });
 
+  // Fix wave 2, fix round 1 (re-review Important 1): the read can still be ON ITS WAY when the replay arrives. In
+  // query-core 5.90, invalidating a query whose first read is in flight returns that read, and its old answer then
+  // clears the invalidated flag: the replay changed nothing. A matched first read on its way is read again once it lands.
+  it('Script E 5b, first connect: the replay arrives while the old answer is still on its way, and the page still ends fresh', async () => {
+    const qc = new QueryClient();
+    const socket = fakeSocket();
+    let t = Date.now();
+    subscribeEntitySync(socket, qc, { now: () => t });
+    let server = 'old time';
+    let calls = 0;
+    const pending: Array<() => void> = [];
+    const observer = new QueryObserver(qc, {
+      queryKey: ['meeting', 'm1'], meta: { entities: ['meeting:m1'] },
+      queryFn: () => { calls += 1; const answer = server; return new Promise<string>((r) => { pending.push(() => r(answer)); }); },
+    });
+    const off = observer.subscribe(() => {});
+    await flush();                // the read reached the server, which answered from the old time
+    server = 'new time';          // the move; its entity:changed went to a room this socket was not in yet
+    t += 1000;
+    socket.emit('connect');       // first connect: the read is young, so the connect itself reads nothing again
+    socket.emit('entity:changed', { entities: ['meeting:m1'], replayed: true }); // the server's replay, read still on its way
+    await flush();
+    expect(calls).toBe(1);
+    pending[0]();                 // the old answer lands
+    await flush(); await flush();
+    expect(calls).toBe(2);        // and is read again at once
+    pending[1]();
+    await flush(); await flush();
+    expect(qc.getQueryData(['meeting', 'm1'])).toBe('new time');
+    off();
+    qc.clear();
+  });
+
+  it('a live tag that arrives while a first read is on its way reads it again once it lands', async () => {
+    const qc = new QueryClient();
+    const socket = fakeSocket();
+    subscribeEntitySync(socket, qc);
+    let server = 'before';
+    let calls = 0;
+    const pending: Array<() => void> = [];
+    const observer = new QueryObserver(qc, {
+      queryKey: ['pod', 'p9'], meta: { entities: ['pod:p9'] },
+      queryFn: () => { calls += 1; const answer = server; return new Promise<string>((r) => { pending.push(() => r(answer)); }); },
+    });
+    const off = observer.subscribe(() => {});
+    await flush();
+    server = 'after';
+    socket.emit('entity:changed', { entities: ['pod:p9'] });
+    await flush();
+    pending[0]();
+    await flush(); await flush();
+    expect(calls).toBe(2);
+    pending[1]();
+    await flush(); await flush();
+    expect(qc.getQueryData(['pod', 'p9'])).toBe('after');
+    off();
+    qc.clear();
+  });
+
+  // Fix round 1 (re-review Minor 1): on a reconnect the connect re-read has just sent every tagged read; the replay that
+  // follows names some of them again. It is folded into that re-read: nothing is cancelled or sent twice.
+  it('a reconnect sends each read once: the replay right after the connect re-read adds nothing', async () => {
+    const qc = new QueryClient();
+    const socket = fakeSocket();
+    let t = 4_000_000;
+    subscribeEntitySync(socket, qc, { now: () => t });
+    let calls = 0;
+    const observer = new QueryObserver(qc, {
+      queryKey: ['pod', 'p2'], meta: { entities: ['pod:p2'] },
+      // The page's first read answers; every read after it stays on its way, so a second send would show.
+      queryFn: () => { calls += 1; return calls === 1 ? Promise.resolve(1) : new Promise<number>(() => {}); },
+    });
+    const off = observer.subscribe(() => {});
+    await flush();
+    socket.emit('connect');
+    t += CONNECT_RESYNC_WINDOW_MS + 1000;
+    socket.emit('connect');       // a reconnect (a token refresh, a phone back online): every tagged read is sent again
+    await flush();
+    const afterResync = calls;
+    socket.emit('entity:changed', { entities: ['pod:p2'], replayed: true });
+    await flush(); await flush();
+    expect(calls).toBe(afterResync);
+    off();
+    qc.clear();
+  });
+
+  it('a replay heard with no connect seen (the socket was up before this subscription) is read as any change', async () => {
+    const qc = await cacheWith();
+    const socket = fakeSocket();
+    subscribeEntitySync(socket, qc);
+    socket.emit('entity:changed', { entities: ['pod:p1'], replayed: true });
+    await flush();
+    expect(invalidated(qc, ['pod', 'p1'])).toBe(true);
+    qc.clear();
+  });
+
   // A RECONNECT re-reads every tagged read that started before it. A first read (no data yet) still on its way is read
   // again the moment it lands: cancelling it would fail whoever awaits it.
   it('after a reconnect, a read still on its way from before it is read again, so the page ends on an answer from after it', async () => {

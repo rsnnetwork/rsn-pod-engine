@@ -18,6 +18,11 @@
 // that joins the tags its member was sent in the last minute (server realtime/recent-entities.ts), which reads again
 // exactly what changed. So the FIRST connect re-reads only reads that started more than REPLAY_TRUST_MS before it; a
 // reconnect still re-reads every tagged read that started before it (after a gap, everything is read again).
+// Fix round 1 (re-review of fix wave 2): a first read can still be ON ITS WAY when a tag naming it arrives (the replay, or
+// any live change). query-core 5.90 hands such an invalidate the read already on its way, whose old answer then clears
+// the invalidated flag, so the tag changed nothing. A matched first read on its way is read again once it lands. The
+// replay (entity:changed with `replayed: true`) is folded into the connect re-read: it reads again only what that
+// re-read did not just send, so a reconnect sends each read once.
 
 import type { Query, QueryCacheNotifyEvent, QueryClient } from '@tanstack/react-query';
 
@@ -33,6 +38,28 @@ export function invalidateEntities(client: QueryClient, entities: readonly strin
   if (entities.length === 0) return Promise.resolve();
   const set = new Set(entities);
   return client.invalidateQueries({ predicate: (query) => touchesEntities(query, set) });
+}
+
+/** A query whose first read is on its way: it has no data yet, so an invalidate cannot send it again. */
+const firstReadOnItsWay = (query: Query) => query.state.fetchStatus === 'fetching' && query.state.data === undefined;
+
+/** Read this query again once the read on its way has landed (or failed): its answer may be from before the change. */
+function readAgainWhenItLands(client: QueryClient, query: Query): Promise<void> {
+  const hash = query.queryHash;
+  const again = () => client.invalidateQueries({ predicate: (q) => q.queryHash === hash });
+  return (query.promise ?? Promise.resolve()).then(again, again);
+}
+
+/**
+ * A change the server told of (entity:changed): every query that declares one of its tags is read again, and one whose
+ * first read is on its way is read again once that read lands (fix round 1).
+ */
+function readChanged(client: QueryClient, entities: readonly string[]): Promise<void> {
+  if (entities.length === 0) return Promise.resolve();
+  const set = new Set(entities);
+  const onTheirWay = client.getQueryCache().findAll({ predicate: (query) => touchesEntities(query, set) && firstReadOnItsWay(query) });
+  return Promise.all([invalidateEntities(client, entities), ...onTheirWay.map((query) => readAgainWhenItLands(client, query))])
+    .then(() => undefined);
 }
 
 /** True when the query declares any tag at all: it follows the server's changes, so a gap in hearing them matters. */
@@ -74,28 +101,33 @@ function mayHaveMissed(query: Pick<Query, 'meta' | 'queryHash'>, readsFrom: numb
  */
 function resyncAfterConnect(client: QueryClient, readsFrom: number, at: number, starts: ReadStarts): Promise<void> {
   // Chosen once, before anything is sent: the cache asks the predicate again for the refetch that follows the invalidate.
-  const missed = client.getQueryCache().findAll({ predicate: (query) => mayHaveMissed(query, readsFrom, starts) });
-  const firstReads = missed.filter((query) => query.state.fetchStatus === 'fetching' && query.state.data === undefined);
-  const atOnce = new Set(missed.filter((query) => !firstReads.includes(query)).map((query) => query.queryHash));
-  for (const query of missed) starts.set(query.queryHash, at);
-  const later = firstReads.map((query) => {
-    const hash = query.queryHash;
-    const again = () => client.invalidateQueries({ predicate: (q) => q.queryHash === hash });
-    return (query.promise ?? Promise.resolve()).then(again, again);
-  });
+  return readAgain(client, client.getQueryCache().findAll({ predicate: (query) => mayHaveMissed(query, readsFrom, starts) }), at, starts);
+}
+
+/**
+ * Read these queries again, each noted as started at `at`: one with data on its way is sent again (cancelRefetch), a
+ * first read on its way is read again once it lands.
+ */
+function readAgain(client: QueryClient, queries: Query[], at: number, starts: ReadStarts): Promise<void> {
+  const firstReads = queries.filter(firstReadOnItsWay);
+  const atOnce = new Set(queries.filter((query) => !firstReads.includes(query)).map((query) => query.queryHash));
+  for (const query of queries) starts.set(query.queryHash, at);
   return Promise.all([
     client.invalidateQueries({ predicate: (query) => atOnce.has(query.queryHash) }, { cancelRefetch: true }),
-    ...later,
+    ...firstReads.map((query) => readAgainWhenItLands(client, query)),
   ]).then(() => undefined);
 }
 
 /** The two socket events the app's realtime cache follows. The app's socket.io client is one. */
 export interface EntitySignals {
   on(event: 'connect', listener: () => void): unknown;
-  on(event: 'entity:changed', listener: (data: { entities?: string[] }) => void): unknown;
+  on(event: 'entity:changed', listener: (data: EntityChange) => void): unknown;
   off(event: 'connect', listener: () => void): unknown;
-  off(event: 'entity:changed', listener: (data: { entities?: string[] }) => void): unknown;
+  off(event: 'entity:changed', listener: (data: EntityChange) => void): unknown;
 }
+
+/** What entity:changed carries. `replayed`: the server's replay to a socket that has just joined (fix wave 2). */
+export interface EntityChange { entities?: string[]; replayed?: boolean }
 
 /**
  * Keeps the cache in step with the server: entity:changed refreshes the reads its tags name, at once (the server's
@@ -110,8 +142,10 @@ export function subscribeEntitySync(
   client: QueryClient,
   { now = Date.now }: { now?: () => number } = {},
 ): () => void {
-  const onChanged = (data: { entities?: string[] }) => {
-    void invalidateEntities(client, Array.isArray(data?.entities) ? data.entities : []);
+  const onChanged = (data: EntityChange) => {
+    const entities = Array.isArray(data?.entities) ? data.entities : [];
+    if (data?.replayed && connects > 0) { replayed(entities); return; }
+    void readChanged(client, entities);
   };
   const starts: ReadStarts = new Map();
   const heldSince = (query: Query) => query.state.dataUpdatedAt || now();
@@ -130,6 +164,16 @@ export function subscribeEntitySync(
     // Only the first connect leans on the server's replay; after a reconnect everything that started before it is read.
     const readsFrom = connects === 1 ? lastConnect - REPLAY_TRUST_MS : lastConnect;
     void resyncAfterConnect(client, readsFrom, lastResync, starts);
+  };
+  // The replay that follows a connect: what the connect re-read has not just sent. A re-read still waiting for its window
+  // reads everything that started before the connect anyway; otherwise only the named reads that started before it.
+  const replayed = (entities: string[]) => {
+    if (trailing || entities.length === 0) return;
+    const set = new Set(entities);
+    const named = client.getQueryCache().findAll({
+      predicate: (query) => touchesEntities(query, set) && (starts.get(query.queryHash) ?? Number.NEGATIVE_INFINITY) < lastConnect,
+    });
+    void readAgain(client, named, now(), starts);
   };
   const onConnect = () => {
     lastConnect = now();
