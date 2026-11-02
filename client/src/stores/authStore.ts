@@ -18,6 +18,9 @@ interface AuthState {
   /** Why the last session ended when the SERVER refused the account itself
    *  (ACCOUNT_CLOSED, USER_SUSPENDED). The login page says it in words. */
   signOutReason: string | null;
+  /** True while the session check waits out an answer that is no refusal (a 429, a 5xx, no connection) with no member
+   *  in place yet: the protected page says it is retrying instead of sending anyone to sign in. */
+  sessionRetrying: boolean;
 
   login: (email: string, clientUrl?: string, inviteCode?: string, redirect?: string) => Promise<any>;
   verify: (token: string) => Promise<void>;
@@ -127,17 +130,79 @@ function mayPutInPlace(n: number): boolean {
   return true;
 }
 
+// Which failed auth answers end a session, and how long to wait before asking again (fix wave 3, 2 Nov 2026).
+//
+// Only a refusal ends a session: the server saying no to the refresh token (401 or 403). An answer that says nothing
+// about the session (429, the member used up their minute; 408; a 5xx; a request that never reached the server) keeps
+// the member signed in, and the question is asked again after a wait that grows, or as long as Retry-After says when the
+// answer carries one (it is only readable when the server exposes it to the page).
+
+/** The waits between tries, the last one repeated. */
+const RETRY_DELAYS_MS = [2000, 5000, 10000, 20000, 30000];
+/** The longest a Retry-After is waited for. */
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/** The status of a failed request, or undefined when it never got an answer (network, timeout). */
+function statusOf(err: unknown): number | undefined {
+  const status = (err as { response?: { status?: unknown } } | null)?.response?.status;
+  return typeof status === 'number' ? status : undefined;
+}
+
+/** True for a request the page itself called off: nothing failed, so nothing is tried again. */
+function wasCancelled(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'ERR_CANCELED';
+}
+
+/** A failure that says nothing about the session: wait, and ask again. */
+function isPassingFailure(err: unknown): boolean {
+  if (wasCancelled(err)) return false;
+  const status = statusOf(err);
+  return status === undefined || status === 408 || status === 429 || status >= 500;
+}
+
+/** The server refused the refresh token itself. */
+function isRefreshRefusal(err: unknown): boolean {
+  const status = statusOf(err);
+  return status === 401 || status === 403;
+}
+
+/** How long to wait before try `attempt + 1`: Retry-After (seconds or a date) when given, else the growing wait. */
+function retryWaitMs(err: unknown, attempt: number, now: number = Date.now()): number {
+  const raw = (err as { response?: { headers?: Record<string, unknown> } } | null)?.response?.headers?.['retry-after'];
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const seconds = Number(raw);
+    const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw) - now;
+    if (Number.isFinite(ms)) return Math.min(Math.max(ms, 1000), MAX_RETRY_AFTER_MS);
+  }
+  return RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
+}
+
 // Distinguishes a DEFINITIVE rejection (refresh token truly dead → log out)
 // from a TRANSIENT failure (endpoint unreachable / 5xx → keep the session).
 class RefreshError extends Error {
   definitive: boolean;
   /** Set when the account itself was refused, not just the token. */
   accountBlocked: string | null;
-  constructor(message: string, definitive: boolean, accountBlocked: string | null = null) {
+  /** The failed request behind a passing failure: its Retry-After says how long to wait. */
+  cause: unknown;
+  constructor(message: string, definitive: boolean, accountBlocked: string | null = null, cause: unknown = null) {
     super(message);
     this.definitive = definitive;
     this.accountBlocked = accountBlocked;
+    this.cause = cause;
   }
+}
+
+/** How many passing failures a check with a member already in place waits out before it gives up, keeping the member. */
+const RETRIES_WITH_A_MEMBER = 3;
+
+/** A failed refresh request, as a RefreshError: definitive only when the server refused the token (401 or 403). */
+function refreshErrorFrom(err: unknown): RefreshError {
+  const blocked = blockedCodeOf(err);
+  if (blocked) return new RefreshError('Account cannot sign in', true, blocked);
+  if (isRefreshRefusal(err)) return new RefreshError('Refresh token rejected', true);
+  // Rate-limited, 5xx, network or timeout: passing. Do NOT log the user out.
+  return new RefreshError('Refresh endpoint unreachable', false, null, err);
 }
 
 // 23 Sep 2026 (Shradha): a closed account was signed in, refused on the very
@@ -240,6 +305,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
     isLoading: true,
     isSessionChecked: false,
     signOutReason: null,
+    sessionRetrying: false,
 
     login: async (email: string, clientUrl?: string, inviteCode?: string, redirect?: string) => {
       const { data } = await api.post('/auth/magic-link', { email, clientUrl, inviteCode, redirect });
@@ -282,85 +348,103 @@ export const useAuthStore = create<AuthState>((set, get) => {
         set({ isLoading: false, isAuthenticated: false, user: null, isSessionChecked: true });
         return;
       }
-      const epochAtStart = authEpoch;
-      // 9 Sep 2026: a TRANSIENT failure of the boot check (429 rate-limit, 5xx,
-      // network) must not read as "logged out". ProtectedRoute gates on `user`,
-      // so giving up here bounced a real member to /login when the check was
-      // merely rate-limited (a household/office shares one IP). Retry with
-      // backoff — honouring Retry-After — before falling through.
-      const TRANSIENT_DELAYS = [2000, 5000, 10000];
-      for (let attempt = 0; ; attempt++) {
-        try {
-          const read = nextSessionRead();
-          const { data } = await api.get('/auth/session', { timeout: 15000 });
-          if (mayPutInPlace(read)) {
-            // Whose session this is, BEFORE a page can read it: a different member empties the query cache.
-            setCacheOwner(data.data.user.id);
-            set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
-          } else {
-            set({ isAuthenticated: true, isLoading: false, isSessionChecked: true });
+      let epochAtStart = authEpoch;
+      // Only a refusal ends the session (fix wave 3, 2 Nov 2026; the failure rules above): the refresh token refused, or
+      // a 401 on a token the server has just issued. An answer that says nothing about the session (a 429 when the member used up
+      // their minute, a 5xx, no connection) is waited out and asked again. With no member in place yet (the boot check,
+      // a sign-in) it is asked until it lands: giving up after three tries (9 Sep 2026) left the store with no member,
+      // and the protected page sent a member whose session was fine to /login. With a member already in place (a check
+      // after a save) it still gives up after three tries, and keeps that member.
+      let refreshNext = false;
+      let refreshed = false;
+      let passingFailures = 0;
+      const stopWaiting = () => set({ isLoading: false, isSessionChecked: true, sessionRetrying: false });
+      const endSessionHere = () => {
+        clearStoredTokens();
+        clearRefreshTimer();
+        clearCache();
+        set({
+          isLoading: false, isAuthenticated: false, user: null, sessionRetrying: false,
+          accessToken: null, refreshToken: null, isSessionChecked: true,
+        });
+      };
+      for (;;) {
+        let failure: unknown;
+        if (refreshNext) {
+          // The token was refused, as an expired one is: refresh it, then read the session again.
+          try {
+            await get().refreshAccessToken();
+            refreshNext = false;
+            refreshed = true;
+            // Installing the new pair moved the epoch on; it is this check's own session.
+            epochAtStart = authEpoch;
+            continue;
+          } catch (refreshErr: unknown) {
+            const blockedNow = accountBlockedReason(refreshErr);
+            if (blockedNow && authEpoch === epochAtStart) {
+              get().endBlockedSession(blockedNow);
+              return;
+            }
+            // Only clear auth when the refresh token was DEFINITIVELY rejected
+            // AND no newer session was installed while we were checking (the
+            // boot-vs-verify race). Otherwise keep whatever we have.
+            if (refreshErr instanceof RefreshError && refreshErr.definitive) {
+              if (authEpoch === epochAtStart) endSessionHere();
+              else stopWaiting();
+              return;
+            }
+            failure = refreshErr instanceof RefreshError ? refreshErr.cause : refreshErr;
           }
-          scheduleProactiveRefresh(get().accessToken!);
-          return;
-        } catch (err: any) {
-          const blocked = accountBlockedReason(err);
+        } else {
+          try {
+            const read = nextSessionRead();
+            const { data } = await api.get('/auth/session', { timeout: 15000 });
+            if (mayPutInPlace(read)) {
+              // Whose session this is, BEFORE a page can read it: a different member empties the query cache.
+              setCacheOwner(data.data.user.id);
+              set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true, sessionRetrying: false });
+            } else {
+              set({ isAuthenticated: true, isLoading: false, isSessionChecked: true, sessionRetrying: false });
+            }
+            scheduleProactiveRefresh(get().accessToken!);
+            return;
+          } catch (err: unknown) {
+            failure = err;
+          }
+          const blocked = accountBlockedReason(failure);
           if (blocked) {
             if (authEpoch === epochAtStart) get().endBlockedSession(blocked);
-            else set({ isLoading: false, isSessionChecked: true });
+            else stopWaiting();
             return;
           }
-          const status: number | undefined = err?.response?.status;
-          if (status === 401) {
-            // Token might be expired but refreshable — try refreshing before giving up.
-            try {
-              await get().refreshAccessToken();
-              const read = nextSessionRead();
-              const { data } = await api.get('/auth/session', { timeout: 15000 });
-              if (mayPutInPlace(read)) {
-                setCacheOwner(data.data.user.id);
-                set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
-              } else {
-                set({ isAuthenticated: true, isLoading: false, isSessionChecked: true });
-              }
-              scheduleProactiveRefresh(get().accessToken!);
-            } catch (refreshErr: any) {
-              const blockedNow = accountBlockedReason(refreshErr);
-              if (blockedNow && authEpoch === epochAtStart) {
-                get().endBlockedSession(blockedNow);
-                return;
-              }
-              const definitive = refreshErr instanceof RefreshError ? refreshErr.definitive : true;
-              // Only clear auth when the refresh token was DEFINITIVELY rejected
-              // AND no newer session was installed while we were checking (the
-              // boot-vs-verify race). Otherwise keep whatever we have.
-              if (definitive && authEpoch === epochAtStart) {
-                clearStoredTokens();
-                clearRefreshTimer();
-                clearCache();
-                set({
-                  isLoading: false, isAuthenticated: false, user: null,
-                  accessToken: null, refreshToken: null, isSessionChecked: true,
-                });
-              } else {
-                set({ isLoading: false, isSessionChecked: true });
-              }
+          if (statusOf(failure) === 401) {
+            // A token the server issued a moment ago is refused: the session itself was revoked.
+            if (refreshed) {
+              if (authEpoch === epochAtStart) endSessionHere();
+              else stopWaiting();
+              return;
             }
-            return;
-          }
-          const transient = status === 429 || (typeof status === 'number' && status >= 500) || status === undefined;
-          if (transient && attempt < TRANSIENT_DELAYS.length && authEpoch === epochAtStart) {
-            const retryAfter = Number(err?.response?.headers?.['retry-after']);
-            const wait = Number.isFinite(retryAfter) && retryAfter > 0
-              ? Math.min(retryAfter * 1000, 30_000)
-              : TRANSIENT_DELAYS[attempt];
-            await new Promise((r) => setTimeout(r, wait));
+            refreshNext = true;
             continue;
           }
-          // Out of retries, or a non-transient error — keep the cached token
-          // and stop the socket layer waiting; the next check will try again.
-          set({ isLoading: false, isSessionChecked: true });
+          if (!isPassingFailure(failure)) {
+            // Neither a refusal nor a passing failure (a 404, a 400): keep the cached token and stop the socket layer
+            // waiting; the next check will try again.
+            stopWaiting();
+            return;
+          }
+        }
+        // A passing failure, of the session read or of the refresh: wait and ask again, while this is still the session
+        // in place (a sign-in or a sign-out in another tab takes over).
+        const stillThisSession = authEpoch === epochAtStart && !!get().accessToken;
+        if (!stillThisSession || (get().user && passingFailures >= RETRIES_WITH_A_MEMBER)) {
+          stopWaiting();
           return;
         }
+        if (!get().user) set({ sessionRetrying: true });
+        const wait = retryWaitMs(failure, passingFailures);
+        passingFailures += 1;
+        await new Promise((r) => setTimeout(r, wait));
       }
     },
 
@@ -397,23 +481,19 @@ export const useAuthStore = create<AuthState>((set, get) => {
           try {
             const { data } = await api.post('/auth/refresh', { refreshToken: refresh });
             tokens = data.data;
-          } catch (firstErr: any) {
-            const status = firstErr?.response?.status;
-            const blocked = blockedCodeOf(firstErr);
-            if (blocked) throw new RefreshError('Account cannot sign in', true, blocked);
-            if (status === 401) {
-              // Another tab may have rotated the token between our read and the
-              // call. Re-read storage and retry ONCE with whatever is newest.
-              const newest = readStoredTokens()?.refresh;
-              if (newest && newest !== refresh) {
-                const { data } = await api.post('/auth/refresh', { refreshToken: newest });
-                tokens = data.data;
-              } else {
-                throw new RefreshError('Refresh token rejected', true);
-              }
-            } else {
-              // Network / timeout / 5xx — transient. Do NOT log the user out.
-              throw new RefreshError('Refresh endpoint unreachable', false);
+          } catch (firstErr: unknown) {
+            // Another tab may have rotated the token between our read and the
+            // call. Re-read storage and retry ONCE with whatever is newest.
+            const newest = readStoredTokens()?.refresh;
+            if (statusOf(firstErr) !== 401 || blockedCodeOf(firstErr) || !newest || newest === refresh) {
+              throw refreshErrorFrom(firstErr);
+            }
+            try {
+              const { data } = await api.post('/auth/refresh', { refreshToken: newest });
+              tokens = data.data;
+            } catch (secondErr: unknown) {
+              // A rate-limited or failed retry says nothing about the newer token (fix wave 3): it was read as a refusal.
+              throw refreshErrorFrom(secondErr);
             }
           }
 
