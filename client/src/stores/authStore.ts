@@ -414,6 +414,12 @@ export const useAuthStore = create<AuthState>((set, get) => {
           try {
             const { data } = await api.get('/auth/session', { timeout: 15000 });
             if (!isNewest()) return;
+            // An answer for a session that ended while it was on its way (Sign out, another member's sign-in) is not put
+            // in place: it would show the member signed in again with no tokens (429 fix round 2).
+            if (sessionNow() !== 'this') {
+              stopWaiting();
+              return;
+            }
             set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true, sessionRetrying: false });
             scheduleProactiveRefresh(get().accessToken!);
             return;
