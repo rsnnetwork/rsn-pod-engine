@@ -9,7 +9,7 @@ import { useChatSend } from './useChatSend';
 import EmojiPicker, { pickInto } from '@/components/chat/EmojiPicker';
 import { isComposingEnter } from '@/components/chat/emoji';
 import { BUBBLE_LINK, OWN_BUBBLE, THEIR_BUBBLE } from '@/features/messages/bubble-look';
-import { CHAT_JOINING } from './chatSend';
+import { CHAT_JOINING, chatJoinWaitLeft, chatWaitsForRoom } from './chatSend';
 
 const CHAT_EMOJIS = [
   { type: 'heart', emoji: '❤️' },
@@ -59,7 +59,17 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
   const chatDisabled = !alwaysOpen && scope === 'lobby' && !hostPresent && !isHostOrCohost;
   // 2 Nov 2026 — the server takes a message only once it has let this page into the event's room (session:state):
   // until then the box can be typed in, but nothing is sent, so a message is never refused as "not in this event".
-  const joining = !useSessionStore(s => s.inEventRoom);
+  // Fix round 1: the wait ends CHAT_JOIN_WAIT_MS after the join was sent even with no answer (the server skips
+  // session:state when its snapshot fails); a refusal then keeps the words and says "still joining" (chatRefusal).
+  const inEventRoom = useSessionStore(s => s.inEventRoom);
+  const joinSentAt = useSessionStore(s => s.joinSentAt);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (inEventRoom || joinSentAt === null) return;
+    const t = setTimeout(() => setNow(Date.now()), chatJoinWaitLeft(joinSentAt, Date.now()));
+    return () => clearTimeout(t);
+  }, [inEventRoom, joinSentAt]);
+  const joining = chatWaitsForRoom(inEventRoom, joinSentAt, now);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {

@@ -54,6 +54,10 @@ interface SessionLiveState {
   // (session:state), which it does only after letting the socket into the event's room; FALSE again while the socket
   // is away. Until then the server refuses a chat message ("You are not in this event."), so the chat waits for it.
   inEventRoom: boolean;
+  // Fix round 1 (2 Nov 2026) — when the page sent its first session:join since it opened or its socket last went away
+  // (ms), or null before then. Later joins (a tab coming back to the front) do not move it, so the chat waits for
+  // inEventRoom at most CHAT_JOIN_WAIT_MS after it (chatSend.ts chatWaitsForRoom).
+  joinSentAt: number | null;
   // Bug 1 (18 May Stefan) — server-broadcast pin. When non-null, every
   // viewer's lobby renders this userId as the big tile. Hosts/cohosts
   // write to it via host:set_pin; participants read it. Per-viewer local
@@ -282,6 +286,9 @@ interface SessionLiveState {
   setSessionStatus: (status: SessionStatus) => void;
   setHostInLobby: (inLobby: boolean) => void;
   setInEventRoom: (inEventRoom: boolean) => void;
+  setJoinSentAt: (joinSentAt: number | null) => void;
+  /** The page sent a session:join: the first since the last clear starts the chat's wait for the room. */
+  noteJoinSent: () => void;
   setHostUserId: (hostUserId: string | null) => void;
   setTotalRounds: (total: number) => void;
   // Bug 28 (19 May Ali + Stefan) — replace the bonus-round count.
@@ -429,6 +436,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   hostInLobby: false, hostUserId: null,
   sessionStateLoaded: false,
   inEventRoom: false,
+  joinSentAt: null,
   serverPinnedUserId: null,
   tileDemotedUserIds: [],
   hccParticipants: [],
@@ -497,6 +505,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setSessionStatus: (sessionStatus) => set({ sessionStatus }),
   setHostInLobby: (hostInLobby) => set({ hostInLobby }),
   setInEventRoom: (inEventRoom) => set({ inEventRoom }),
+  setJoinSentAt: (joinSentAt) => set({ joinSentAt }),
+  noteJoinSent: () => set((s) => (s.joinSentAt === null ? { joinSentAt: Date.now() } : {})),
   setHostUserId: (hostUserId) => set({ hostUserId }),
   setTotalRounds: (totalRounds) => set({ totalRounds }),
   setBonusRoundsAdded: (bonusRoundsAdded) => set({ bonusRoundsAdded: typeof bonusRoundsAdded === 'number' && bonusRoundsAdded >= 0 ? bonusRoundsAdded : 0 }),
@@ -754,7 +764,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   }),
   reset: () => set({
     phase: 'lobby', removedFromEvent: false, registrationKnown: false, refusedFromEvent: null, connectionStatus: 'connecting', transitionStatus: null,
-    sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, inEventRoom: false, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
+    sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, inEventRoom: false, joinSentAt: null, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
     participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null, timerWarning: null, roomNotice: null,
     timerSeconds: 0, timerEndsAt: null, clockOffset: 0, hasClockOffset: false, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
     isReconnecting: false, reconnectCount: 0, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,

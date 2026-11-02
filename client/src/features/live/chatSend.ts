@@ -23,6 +23,24 @@ export const CHAT_STILL_JOINING = "You're still joining the event. Send your mes
 /** Beside the box while the page waits to be let into the event's room, once something is typed (2 Nov 2026). */
 export const CHAT_JOINING = 'Joining the chat. Your message can go in a moment.';
 
+/**
+ * How long the chat waits for the server to answer the page's join before it lets Send through anyway (fix round 1,
+ * 2 Nov 2026). session:state is the usual sign, but the server skips it when the state snapshot fails, though the
+ * socket is in the room by then; past this wait a refusal is the safety net (chatRefusal's "still joining").
+ */
+export const CHAT_JOIN_WAIT_MS = 5_000;
+
+/** The chat still waits for the room: not let in yet, and the join was sent less than CHAT_JOIN_WAIT_MS ago (or not yet). */
+export function chatWaitsForRoom(inEventRoom: boolean, joinSentAt: number | null, now: number): boolean {
+  if (inEventRoom) return false;
+  return joinSentAt === null || now - joinSentAt < CHAT_JOIN_WAIT_MS;
+}
+
+/** How long is left of the wait for the room, in ms (0 once it is over). */
+export function chatJoinWaitLeft(joinSentAt: number, now: number): number {
+  return Math.max(0, joinSentAt + CHAT_JOIN_WAIT_MS - now);
+}
+
 /** What a refused message says: the server's own words, except the refusal of a page not yet in the event's room. */
 export function chatRefusal(res: { code?: string; message?: string }): string {
   if (res.code === 'NOT_IN_SESSION') return CHAT_STILL_JOINING;
