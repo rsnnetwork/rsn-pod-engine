@@ -19,7 +19,7 @@ import { authenticate } from '../middleware/auth';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { requireRole } from '../middleware/rbac';
 import { circleReadLimiter, circleWriteLimiter, wallWriteLimiter } from '../middleware/rateLimit';
-import { fanoutCircleChange, fanoutEntityChange } from '../realtime/fanout';
+import { fanoutCircleChange, fanoutEntityChange, fanoutOwnInvites } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as circleService from '../services/circle/circle.service';
@@ -93,8 +93,12 @@ router.patch('/:id', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REF
       const circle = await assertCircleManager(req.params.id, req.user!.userId, req.user!.role, 'Only the people who run this circle can change it.');
       const changed = await circleService.updateCircle(req.params.id, req.body, { userId: req.user!.userId, role: req.user!.role });
       const approved = changed?.approvedUserIds ?? [];
-      void fanoutCircleChange(req.params.id, req.user!.userId, approved,
-        req.body.joinPolicy !== undefined ? [E.circleRequests(req.params.id)] : []);
+      // Closing withdraws the invites of people who do not run it (final fix wave S2): the circle's invites and each
+      // inviter's and invitee's own list change.
+      const policyTags = req.body.joinPolicy === undefined ? []
+        : [E.circleRequests(req.params.id), ...(req.body.joinPolicy === 'closed' ? [E.circleInvites(req.params.id)] : [])];
+      void fanoutCircleChange(req.params.id, req.user!.userId, approved, policyTags);
+      if (changed?.invitesChangedFor?.length) void fanoutOwnInvites(changed.invitesChangedFor);
       void joinService.ringApproved(req.params.id, req.body.name?.trim() || circle.name, approved);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }

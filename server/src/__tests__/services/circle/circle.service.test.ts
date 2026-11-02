@@ -261,11 +261,52 @@ describe('joining a closed circle (T14, 1 Nov 2026)', () => {
     expect(mockQuery.mock.calls.some(c => /member_count = member_count \+ 1/.test(c[0] as string))).toBe(true);
   });
 
-  it('an invite is the doorway: it joins without any check, and answers a pending ask as approved', async () => {
-    armClosed();
-    await joinCircle('c1', 'u1', { byInvite: true });
+  // Final fix wave S2 (2 Nov 2026): an invite is the doorway into a closed circle only while the person who made it
+  // still runs the circle (L22: "or an invite from the people who run it"). An open link a plain member made while
+  // the circle was open no longer lets strangers in once it is closed.
+  function armInvite(policy: 'open' | 'closed', inviter: { role?: string; active?: boolean; runs?: boolean }) {
+    mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
+      const text = sql.replace(/\s+/g, ' ');
+      if (/SELECT id, join_policy FROM circles/.test(text)) return Promise.resolve({ rows: [{ id: 'c1', join_policy: policy }] });
+      if (/SELECT 1 FROM circle_members WHERE circle_id = \$1 AND user_id = \$2/.test(text)) return Promise.resolve({ rows: [] });
+      if (/SELECT u\.role FROM users u WHERE u\.id = \$1 AND u\.status = 'active'/.test(text)) {
+        return Promise.resolve({ rows: params[0] === 'inviter' && inviter.active !== false ? [{ role: inviter.role ?? 'member' }] : [] });
+      }
+      if (/c.created_by = \$2/.test(text)) return Promise.resolve({ rows: params[1] === 'inviter' && inviter.runs ? [{}] : [] });
+      return Promise.resolve({ rowCount: 1, rows: [] });
+    });
+  }
+
+  it('an invite from someone who runs it is the doorway: it joins and answers a pending ask as approved', async () => {
+    armInvite('closed', { runs: true });
+    await joinCircle('c1', 'u1', { invitedBy: 'inviter' });
     expect(mockClientSql.some(s => /INSERT INTO circle_members/.test(s))).toBe(true);
     expect(mockClientSql.some(s => /UPDATE circle_join_requests SET status = 'approved'/.test(s) && /status = 'pending'/.test(s))).toBe(true);
+  });
+
+  it('an invite from a platform admin is the doorway too', async () => {
+    armInvite('closed', { role: 'admin' });
+    await joinCircle('c1', 'u1', { invitedBy: 'inviter' });
+    expect(mockClientSql.some(s => /INSERT INTO circle_members/.test(s))).toBe(true);
+  });
+
+  it.each([
+    ['a plain member (an open link made while the circle was open)', { runs: false }],
+    ['a moderator who has stepped down', { runs: false, role: 'member' }],
+    ['someone who ran it whose account is closed', { runs: true, active: false }],
+  ] as const)('an invite from %s no longer lets anyone into the closed circle: 403 in words, nothing written', async (_who, inviter) => {
+    armInvite('closed', inviter);
+    await expect(joinCircle('c1', 'u1', { invitedBy: 'inviter' })).rejects.toMatchObject({
+      statusCode: 403, code: 'CIRCLE_CLOSED',
+      message: 'This circle is closed now, so this invite no longer lets you in. Ask to join and its owner will let you in.',
+    });
+    expect(mockClientSql.some(s => /INSERT INTO circle_members/.test(s))).toBe(false);
+  });
+
+  it("an open circle: a plain member's invite (the open link) still joins anyone, as before", async () => {
+    armInvite('open', { runs: false });
+    await joinCircle('c1', 'u1', { invitedBy: 'inviter' });
+    expect(mockClientSql.some(s => /INSERT INTO circle_members/.test(s))).toBe(true);
   });
 
   it('an open circle still joins anyone, with no lookup of who runs it (production\'s Join circle)', async () => {
@@ -339,5 +380,41 @@ describe("a closed circle's page, from outside it (T14)", () => {
     expect(d.members).toHaveLength(1);
     const pods = mockQuery.mock.calls.map(c => String(c[0]).replace(/\s+/g, ' ')).find(s => /SELECT cp.pod_id, p.name, p.description/.test(s))!;
     expect(pods).toContain("p.status <> 'archived' AND ($3::boolean OR p.visibility <> 'private' OR EXISTS (SELECT 1 FROM pod_members vp_m WHERE vp_m.pod_id = p.id AND vp_m.user_id = $2 AND vp_m.status = 'active'))");
+  });
+});
+
+describe('closing a circle withdraws the invites of people who do not run it (final fix wave S2)', () => {
+  it('in the same transaction as the switch, and answers whose invite lists changed', async () => {
+    mockQuery.mockImplementation((sql: string) => {
+      const text = sql.replace(/\s+/g, ' ');
+      if (/SELECT id FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(text)) return Promise.resolve({ rows: [{ id: 'c1' }] });
+      if (/UPDATE invites i SET status = 'revoked'/.test(text)) {
+        return Promise.resolve({ rows: [{ inviter_id: 'plain', invitee_id: 'bo' }, { inviter_id: 'plain', invitee_id: null }] });
+      }
+      return Promise.resolve({ rowCount: 1, rows: [] });
+    });
+    const { updateCircle } = await import('../../../services/circle/circle.service');
+    const out = await updateCircle('c1', { joinPolicy: 'closed' }, { userId: 'owner', role: 'member' });
+    expect(out).toEqual({ approvedUserIds: [], invitesChangedFor: ['plain', 'bo'] });
+    const revoke = mockClientSql.map(s => s.replace(/\s+/g, ' ')).find(s => /UPDATE invites i SET status = 'revoked'/.test(s));
+    expect(revoke).toBeDefined();
+    // Only links that could still be used, and never the invites of the creator, its owners and moderators, or admins.
+    expect(revoke).toMatch(/i\.status IN \('pending', 'accepted'\) AND i\.use_count < i\.max_uses/);
+    expect(revoke).toMatch(/NOT EXISTS/);
+    expect(revoke).toMatch(/a\.role IN \('admin', 'super_admin'\) OR a\.id = c\.created_by/);
+    expect(revoke).toMatch(/m\.role IN \('owner', 'moderator'\)/);
+    // The switch and the withdrawal are one transaction: both ran on the transaction's client.
+    expect(mockClientSql.some(s => /UPDATE circles SET/.test(s))).toBe(true);
+  });
+
+  it('opening a circle or an edit without a policy withdraws nothing', async () => {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/SELECT id FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(sql)) return Promise.resolve({ rows: [{ id: 'c1' }] });
+      return Promise.resolve({ rowCount: 0, rows: [] });
+    });
+    const { updateCircle } = await import('../../../services/circle/circle.service');
+    await updateCircle('c1', { joinPolicy: 'open' }, { userId: 'owner', role: 'member' });
+    await updateCircle('c1', { name: 'Doctors' }, { userId: 'owner', role: 'member' });
+    expect(mockQuery.mock.calls.some(c => /UPDATE invites/.test(String(c[0])))).toBe(false);
   });
 });

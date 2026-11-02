@@ -575,6 +575,26 @@ export async function fanoutCircleChange(
   }
 }
 
+// ─── Invites withdrawn in bulk (final fix wave S2, 2 Nov 2026) ───────────────
+//
+// Closing a circle withdraws the invites made by people who do not run it. Each inviter's sent list and each invitee's
+// received list changed: every person is sent their own user:<id>:invites, in batches, and no one else's.
+
+export async function fanoutOwnInvites(userIds: string[]): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const people = [...new Set(userIds)];
+    for (let i = 0; i < people.length; i += CIRCLE_EVENT_FANOUT_BATCH) {
+      await Promise.all(people.slice(i, i + CIRCLE_EVENT_FANOUT_BATCH).map(userId =>
+        emitEntities(io, [userId], [E.userInvites(userId)]),
+      ));
+    }
+  } catch (err) {
+    logger.warn({ err }, 'fanoutOwnInvites: failed to fan out');
+  }
+}
+
 // ─── Circle-event fanout (T13, 1 Nov 2026) ──────────────────────────────────
 //
 // An event now names a circle (made for it, or edited to it), or stopped naming it. Everyone in the circle

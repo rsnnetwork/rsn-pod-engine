@@ -430,7 +430,8 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
     expect(closed.status).toBe(200);
     expect(circleService.updateCircle).toHaveBeenCalledWith(CIRCLE, { joinPolicy: 'closed' }, { userId: ADMIN, role: 'member' });
     await settle();
-    expect(heard()[MEMBER]).toEqual(page(MEMBER, requests));
+    // Closing also withdraws the invites of people who do not run it (final fix wave S2): the circle's invites change.
+    expect(heard()[MEMBER]).toEqual(page(MEMBER, requests, E.circleInvites(CIRCLE)));
     mockEmitEntities.mockClear();
     const refused = await request(app).patch(`/circles/${CIRCLE}`).set(as(MEMBER)).send({ joinPolicy: 'open' });
     expect(refused.status).toBe(403);
@@ -663,8 +664,8 @@ describe('a platform admin who runs a circle from outside it is told of its chan
     admins = [PLATFORM, MEMBER];
     expect((await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ joinPolicy: 'closed' })).status).toBe(200);
     await settle();
-    expect(heard()[PLATFORM]).toEqual(page(PLATFORM, requests));
-    expect(heard()[MEMBER]).toEqual(page(MEMBER, requests));
+    expect(heard()[PLATFORM]).toEqual(page(PLATFORM, requests, E.circleInvites(CIRCLE)));
+    expect(heard()[MEMBER]).toEqual(page(MEMBER, requests, E.circleInvites(CIRCLE)));
     expect(emits().filter(([, r]) => r.includes(MEMBER))).toHaveLength(1);
   });
 
@@ -676,5 +677,27 @@ describe('a platform admin who runs a circle from outside it is told of its chan
     expect(read?.[1]).toEqual([200]);
     expect(Object.keys(heard()).filter((u) => u.startsWith('user-admin-'))).toHaveLength(200);
     expect(emits().every(([, recipients]) => recipients.length === 1)).toBe(true);
+  });
+});
+
+// ─── Final fix wave S2 (2 Nov 2026): closing withdraws the invites of people who do not run the circle ──────────
+
+describe('closing a circle: the withdrawn invites are told to their people', () => {
+  it("each inviter and member invitee hears their own invites list, and no one else's", async () => {
+    jest.mocked(circleService.updateCircle).mockResolvedValueOnce({ approvedUserIds: [], invitesChangedFor: [MEMBER, ASKER] });
+    expect((await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ joinPolicy: 'closed' })).status).toBe(200);
+    await settle();
+    const all = heard();
+    expect(all[ASKER]).toEqual([E.userInvites(ASKER)]);
+    expect(all[MEMBER]).toEqual(expect.arrayContaining([E.userInvites(MEMBER)]));
+    expect(all[MEMBER]).not.toContain(E.userInvites(ASKER));
+    expect(all[ADMIN]).not.toContain(E.userInvites(MEMBER));
+  });
+
+  it("production's client: an edit with no policy (the admin's rename) answers { ok: true } and withdraws nothing", async () => {
+    const res = await request(app).patch(`/circles/${CIRCLE}`).set(as(PLATFORM, 'admin')).send({ name: 'Doctors', description: 'x' });
+    expect(res.body).toEqual({ success: true, data: { ok: true } });
+    await settle();
+    expect(Object.values(heard()).flat()).not.toContain(E.circleInvites(CIRCLE));
   });
 });

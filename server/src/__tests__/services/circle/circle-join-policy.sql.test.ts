@@ -418,10 +418,59 @@ suite('circles: open or closed, asks, invites and a pod from the circle (real Po
       const asker = await person('Asker');
       const c = await circle(owner, { policy: 'closed' });
       await joins.requestToJoinCircle(c, asker, 'member');
-      await circles.joinCircle(c, asker, { byInvite: true });
+      await circles.joinCircle(c, asker, { invitedBy: owner });
       expect(await memberRows(c)).toEqual([owner, asker].sort());
       expect(await storedCount(c)).toBe(2);
       expect((await requestRows(c))[0]).toMatchObject({ status: 'approved' });
+    }, 30_000);
+
+    // Final fix wave S2 (2 Nov 2026): the open link a plain member made while the circle was open.
+    it("a plain member's open link: it admits while the circle is open, closing withdraws it, and it admits no one after", async () => {
+      const owner = await person('Owner');
+      const member = await person('Plain Member');
+      const first = await person('First');
+      const later = await person('Later');
+      const c = await circle(owner, { members: [member] });
+      const link = await invites.createInvite(member, { type: 'circle', circleId: c, maxUses: 1000000 } as never, 'member');
+      expect((await invites.acceptInvite(link.code, first, await emailOf(first))).registeredFor).toEqual({ circleId: c });
+      const out = await circles.updateCircle(c, { joinPolicy: 'closed' }, { userId: owner, role: 'member' });
+      expect(out.invitesChangedFor).toEqual([member]);
+      expect((await run(`SELECT status FROM {s}.invites WHERE id = $1`, [link.id])).rows[0].status).toBe('revoked');
+      await expect(invites.acceptInvite(link.code, later, await emailOf(later))).rejects.toMatchObject({ statusCode: expect.any(Number) });
+      expect(await memberRows(c)).toEqual([owner, member, first].sort());
+    }, 30_000);
+
+    it("an invite whose maker no longer runs the closed circle is refused in words, even if it was never withdrawn", async () => {
+      const owner = await person('Owner');
+      const mod = await person('Moderator');
+      const invitee = await person('Invitee');
+      const c = await circle(owner, { policy: 'closed' });
+      await run(`INSERT INTO {s}.circle_members (circle_id, user_id, role) VALUES ($1, $2, 'moderator')`, [c, mod]);
+      const invite = await invites.createInvite(mod, { type: 'circle', circleId: c, inviteeEmail: await emailOf(invitee) } as never, 'member');
+      await run(`UPDATE {s}.circle_members SET role = 'member' WHERE circle_id = $1 AND user_id = $2`, [c, mod]);
+      await expect(invites.acceptInvite(invite.code, invitee, await emailOf(invitee))).rejects.toMatchObject({
+        statusCode: 403, code: 'CIRCLE_CLOSED',
+        message: 'This circle is closed now, so this invite no longer lets you in. Ask to join and its owner will let you in.',
+      });
+      expect(await memberRows(c)).not.toContain(invitee);
+    }, 30_000);
+
+    it("closing keeps the invites of the people who run it (owner, moderator, platform admin), and the owner's open link still admits", async () => {
+      const owner = await person('Owner');
+      const mod = await person('Moderator');
+      const platform = await person('Platform', 'active', 'admin');
+      const guest = await person('Guest');
+      const c = await circle(owner);
+      await run(`INSERT INTO {s}.circle_members (circle_id, user_id, role) VALUES ($1, $2, 'moderator')`, [c, mod]);
+      const links = [];
+      for (const maker of [owner, mod, platform]) {
+        links.push(await invites.createInvite(maker, { type: 'circle', circleId: c, maxUses: 10 } as never, maker === platform ? 'admin' : 'member'));
+      }
+      const out = await circles.updateCircle(c, { joinPolicy: 'closed' }, { userId: owner, role: 'member' });
+      expect(out.invitesChangedFor).toEqual([]);
+      const statuses = (await run(`SELECT status FROM {s}.invites WHERE circle_id = $1`, [c])).rows.map((r) => r.status);
+      expect(statuses).toEqual(['pending', 'pending', 'pending']);
+      expect((await invites.acceptInvite(links[0].code, guest, await emailOf(guest))).registeredFor).toEqual({ circleId: c });
     }, 30_000);
 
     it('the people who run it may remove a member, never the owner; the count follows', async () => {
