@@ -90,11 +90,15 @@ function startTab(script: { session?: Answer[]; refresh?: Answer[] } = {}, opts:
   const refreshAnswers = [...(script.refresh ?? [])];
   const sent: Sent[] = [];
   let issued = 1;
+  // Session reads held on their way (the server has not answered yet) until the test lets them through.
+  let holdingReads = false;
+  const heldReads: Array<() => void> = [];
   const adapter = async (config: { url: string; method: string; headers: Record<string, unknown>; data?: string }) => {
     const auth = typeof config.headers?.Authorization === 'string' ? (config.headers.Authorization as string) : null;
     const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : null;
     const body = config.data ? JSON.parse(config.data) : {};
     sent.push({ method: config.method.toUpperCase(), url: config.url, bearer, refreshToken: body.refreshToken, at: clock.now });
+    if (config.url === '/auth/session' && holdingReads) await new Promise<void>((answer) => heldReads.push(answer));
     let answer: Answer = 200;
     let data: unknown = { data: {} };
     if (config.url === '/auth/session') {
@@ -191,6 +195,9 @@ function startTab(script: { session?: Answer[]; refresh?: Answer[] } = {}, opts:
     pendingWaits: () => [...timers.values()].filter((t) => t.ms <= 120_000).length,
     tokensKept: () => storage.has('rsn_tokens'),
     fireStorage: (key: string, newValue: string | null) => { for (const fn of listeners.storage ?? []) fn({ key, newValue }); },
+    /** From now on, a session read stays on its way until `answerHeldReads`. */
+    holdSessionReads: () => { holdingReads = true; },
+    answerHeldReads: () => { holdingReads = false; for (const answer of heldReads.splice(0)) answer(); },
   };
 }
 
@@ -381,6 +388,29 @@ describe('finding 6: nothing is sent once the session has ended while the check 
     expect(tab.reads().map((r) => r.at)).toEqual([0]);
     expect(tab.state().sessionRetrying).toBe(false);
     expect(tab.state().isLoading).toBe(false);
+  });
+});
+
+describe('fix round 2: an answer that lands after the session ended is not put in place', () => {
+  it('signed out while a read is on its way, the read then answered 200: the member stays signed out', async () => {
+    const tab = startTab({ session: [429] });
+    const checking = tab.state().checkSession();
+    await tab.advance(0); // 429, waiting 2 seconds
+    tab.holdSessionReads();
+    await tab.advance(2000); // the second read is sent, and the server has not answered yet
+    expect(tab.reads().map((r) => r.at)).toEqual([0, 2000]);
+    await tab.state().logout();
+    tab.answerHeldReads(); // 200, for the session that has just ended
+    await tab.advance(0);
+    await checking;
+    expect(tab.state().user).toBeNull();
+    expect(tab.state().isAuthenticated).toBe(false);
+    expect(tab.state().accessToken).toBeNull();
+    expect(tab.state().isLoading).toBe(false);
+    expect(tab.state().sessionRetrying).toBe(false);
+    expect(tab.tokensKept()).toBe(false);
+    await tab.advance(60_000);
+    expect(tab.reads()).toHaveLength(2);
   });
 });
 

@@ -455,6 +455,12 @@ export const useAuthStore = create<AuthState>((set, get) => {
             const read = nextSessionRead();
             const { data } = await api.get('/auth/session', { timeout: 15000 });
             if (!isNewest()) return;
+            // An answer for a session that ended while it was on its way (Sign out, another member's sign-in) is not put
+            // in place: it would show the member signed in again with no tokens (429 fix round 2).
+            if (sessionNow() !== 'this') {
+              stopWaiting();
+              return;
+            }
             if (mayPutInPlace(read)) {
               // Whose session this is, BEFORE a page can read it: a different member empties the query cache.
               setCacheOwner(data.data.user.id);
