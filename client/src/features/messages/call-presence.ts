@@ -11,7 +11,8 @@
 //     still reads as connected), only then says it is reconnecting, and puts them back once it has reconnected;
 //   - their reconnect, or a rejoin from another tab: their old connection's goodbye, then the new one's hello.
 // So a leave waits LEAVE_GRACE_MS. My own reconnect cancels the wait, and once I am back in the room the wait starts
-// again only if they are not there. Anyone coming back in clears the notice.
+// again only if they are not there. Anyone coming back in clears the notice. A leave heard while my own room is still
+// connecting for the first time is decided the same way once it has connected (fix wave 2, 2 Nov 2026).
 //
 // Someone who leaves on purpose says so (1 Nov 2026). The room's own leave reaches the other person through the LiveKit
 // server, which takes a person off the list at once only if their goodbye reached it; otherwise it keeps them until
@@ -164,7 +165,8 @@ export function watchPartner(
   const gone = (p: RemoteParticipant) => {
     partner = { identity: p.identity, name: p.name ?? '' };
     if (announced === p.identity) return;
-    // While my own room is reconnecting, nothing it says about the others is news: Reconnected decides.
+    // While my own room is reconnecting, nothing it says about the others is news: Reconnected decides. While it is
+    // still connecting for the first time (fix wave 2), Connected decides the same way.
     if (room.state !== ConnectionState.Connected) return;
     waitThenSay();
   };
@@ -176,18 +178,23 @@ export function watchPartner(
   };
   // My own connection dropped: a leave heard just now was my room unwinding, not them going.
   const reconnecting = () => stopWaiting();
-  // Back in the room: the list is whole again before the buffered hellos arrive, so it already says who is here.
+  // Back in the room (or in it at last, on the first connect): the list is whole again before the buffered hellos
+  // arrive, so it already says who is here.
   const reconnected = () => {
     if (partner && partner.identity !== announced && !inRoom(partner.identity)) waitThenSay();
   };
   // The one other person the room lists, if it lists exactly one.
   const onlyOther = (): RemoteParticipant | undefined =>
     room.remoteParticipants.size === 1 ? room.remoteParticipants.values().next().value : undefined;
+  // The person the room last listed and who is no longer in it: a goodbye that comes after the room took them off its
+  // list (my data channel opened after their leave, fix wave 2) can only be theirs.
+  const lastGone = (): { identity: string; name: string } | undefined =>
+    (partner && !inRoom(partner.identity) ? partner : undefined);
   // They pressed leave: said at once, with no grace, even while the room still lists them. livekit-client names the
   // sender from the identity the server stamps on the packet; without it, in a 1:1 room it can only be the other one.
   const saidGoodbye = (_payload: Uint8Array, sender?: RemoteParticipant, _kind?: unknown, topic?: string) => {
     if (topic !== GOODBYE_TOPIC) return;
-    const p = sender ?? onlyOther();
+    const p = sender ?? onlyOther() ?? lastGone();
     if (!p) return;
     partner = { identity: p.identity, name: p.name ?? '' };
     announced = p.identity;
@@ -200,6 +207,7 @@ export function watchPartner(
   room.on(RoomEvent.Reconnecting, reconnecting);
   room.on(RoomEvent.SignalReconnecting, reconnecting);
   room.on(RoomEvent.Reconnected, reconnected);
+  room.on(RoomEvent.Connected, reconnected);
   room.on(RoomEvent.DataReceived, saidGoodbye);
   return () => {
     stopWaiting();
@@ -208,6 +216,7 @@ export function watchPartner(
     room.off(RoomEvent.Reconnecting, reconnecting);
     room.off(RoomEvent.SignalReconnecting, reconnecting);
     room.off(RoomEvent.Reconnected, reconnected);
+    room.off(RoomEvent.Connected, reconnected);
     room.off(RoomEvent.DataReceived, saidGoodbye);
   };
 }

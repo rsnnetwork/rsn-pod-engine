@@ -92,7 +92,9 @@ describe('Realtime migration Phase 1 — scaffolding', () => {
       // The predicate lives in realtime/invalidate-entities.ts since 1 Nov 2026, so a tab's own REST read can apply the
       // same rule (t6-read-own-tab.test.ts); the handler hands it every incoming tag.
       const ruleSrc = readClient('realtime/invalidate-entities.ts');
-      expect(ruleSrc).toMatch(/invalidateEntities\(client, Array\.isArray\(data\?\.entities\) \? data\.entities : \[\]\)/);
+      // Fix wave 2, fix round 1: entity:changed reaches invalidateEntities through readChanged.
+      expect(ruleSrc).toMatch(/void readChanged\(client, entities\)/);
+      expect(ruleSrc).toMatch(/invalidateEntities\(client, entities\)/);
       expect(ruleSrc).toMatch(/invalidateQueries\(\{\s*predicate:/);
       expect(ruleSrc).toMatch(/query\.meta[\s\S]{0,80}entities/);
       // Predicate uses Set membership for O(1) lookup against incoming entities.

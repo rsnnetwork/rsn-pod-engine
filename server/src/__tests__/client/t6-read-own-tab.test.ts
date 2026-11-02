@@ -57,7 +57,10 @@ describe('invalidateEntities: the one rule for which reads a tag refreshes', () 
     const src = read('realtime/useEntityChangedHandler.ts');
     const rule = read('realtime/invalidate-entities.ts');
     expect(src).toMatch(/import \{ subscribeEntitySync \} from '\.\/invalidate-entities';/);
-    expect(rule).toMatch(/void invalidateEntities\(client, Array\.isArray\(data\?\.entities\) \? data\.entities : \[\]\);/);
+    // Fix wave 2, fix round 1: through readChanged, which is invalidateEntities plus a re-read of a first read on its way.
+    expect(rule).toMatch(/const entities = Array\.isArray\(data\?\.entities\) \? data\.entities : \[\];/);
+    expect(rule).toMatch(/void readChanged\(client, entities\);/);
+    expect(rule).toMatch(/return Promise\.all\(\[invalidateEntities\(client, entities\), /);
     expect(src).not.toMatch(/predicate:/);
   });
 });

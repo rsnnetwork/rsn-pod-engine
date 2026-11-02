@@ -203,8 +203,11 @@ describe('F1: the session follows the server on every device of the member', () 
     const two = await device('una', server);
     server.session = { ...DONE }; // sent while device 2's socket was down: it never heard user:una
     const socket = new EventEmitter() as EventEmitter & EntitySignals;
-    const stop = subscribeEntitySync(socket, two.qc, { now: () => Date.now() + 10_000 });
-    socket.emit('connect');
+    let t = Date.now();
+    const stop = subscribeEntitySync(socket, two.qc, { now: () => t });
+    socket.emit('connect'); // the device's socket was up (a first connect leans on the server's replay, fix wave 2)
+    t += 10_000;            // then down for a while: the finish was sent meanwhile
+    socket.emit('connect'); // and back: a reconnect re-reads every tagged read, the session included
     // The read waits the (short, in tests) quiet window first, as any burst of tags does.
     await until(() => onboardingDue(two.store.getState().user) === null, 'the gate lets go after the connect');
     expect(onboardingDue(two.store.getState().user)).toBeNull();
