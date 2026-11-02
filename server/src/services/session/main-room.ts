@@ -17,9 +17,17 @@ export function isLiveStatus(status: string | null | undefined): boolean {
   return (LIVE_STATUSES as readonly string[]).includes(status ?? '');
 }
 
-/** The stored lobby room id, else the lobby everyone else is sent to. */
-export function mainRoomOf(sessionId: string, storedLobbyRoomId: string | null | undefined): string {
-  return storedLobbyRoomId || lobbyRoomId(sessionId);
+/**
+ * The main room a REST token names: the stored lobby room id, else the lobby everyone else is sent to. Before Go
+ * Live (scheduled) it stays the isolated `session-<id>`, as before, so a scripted mint cannot sit anyone in the
+ * shared main room ahead of the start.
+ */
+export function tokenMainRoomOf(
+  sessionId: string,
+  session: { status: string; lobbyRoomId?: string | null },
+): string {
+  if (session.lobbyRoomId) return session.lobbyRoomId;
+  return session.status === SessionStatus.SCHEDULED ? `session-${sessionId}` : lobbyRoomId(sessionId);
 }
 
 /**

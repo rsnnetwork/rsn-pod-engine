@@ -2488,7 +2488,17 @@ export async function setHostVisibility(
   return { userId: targetUserId, mode };
 }
 
+/**
+ * REST Go Live (POST /sessions/:id/host/start). Fix round 1 (2 Nov 2026): it runs under the same per-event guard as
+ * the socket start, so a REST start and a socket start pressed together run one start: the second reads the event
+ * already open and is refused, instead of both passing the scheduled check and the later one resetting presence and
+ * broadcasting the status twice.
+ */
 export async function startSession(sessionId: string, hostUserId: string): Promise<void> {
+  return withSessionGuard(sessionId, () => startSessionGuarded(sessionId, hostUserId));
+}
+
+async function startSessionGuarded(sessionId: string, hostUserId: string): Promise<void> {
   const session = await sessionService.getSessionById(sessionId);
   if (session.hostUserId !== hostUserId) {
     throw new ForbiddenError('Only the host can start a session');
@@ -2504,6 +2514,9 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
     ? JSON.parse(session.config as unknown as string)
     : session.config;
 
+  // As the socket start: keep the presence tracked on the waiting screen (and anything the state machine already
+  // holds), so the people already waiting are not made invisible by Go Live.
+  const existing = activeSessions.get(sessionId);
   const activeSession: ActiveSession = {
     sessionId,
     hostUserId: session.hostUserId,
@@ -2516,9 +2529,11 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
     timerEndsAt: null,
     isPaused: false,
     pausedTimeRemaining: null,
-    presenceMap: new Map(),
+    presenceMap: existing?.presenceMap ?? new Map(),
     pendingRoundNumber: null,
-    manuallyLeftRound: new Set(),
+    manuallyLeftRound: existing?.manuallyLeftRound ?? new Set(),
+    participantStates: existing?.participantStates,
+    unsavedRemovals: existing?.unsavedRemovals,
   };
 
   activeSessions.set(sessionId, activeSession);

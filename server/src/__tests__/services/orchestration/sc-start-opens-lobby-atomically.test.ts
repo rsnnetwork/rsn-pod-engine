@@ -14,6 +14,8 @@ type Row = { status: string; lobby_room_id: string | null; started_at: unknown }
 const rows = new Map<string, Row>();
 const invariantBreaks: string[] = [];
 const timeline: string[] = [];
+/** Every UPDATE that sets the status to lobby_open (a Go Live write). */
+const openStatusWrites: string[] = [];
 
 function applyUpdate(sql: string, params: unknown[]) {
   const m = sql.match(/UPDATE sessions SET ([\s\S]+?) WHERE id = \$(\d+)/);
@@ -27,6 +29,7 @@ function applyUpdate(sql: string, params: unknown[]) {
     (row as Record<string, unknown>)[col.trim()] = value;
   }
   timeline.push(`db:${row.status}:${row.lobby_room_id}`);
+  if (/SET status = \$1/.test(sql) && params[0] === 'lobby_open') openStatusWrites.push(id);
   if (row.status === 'lobby_open' && !row.lobby_room_id) invariantBreaks.push(sql);
 }
 
@@ -40,10 +43,16 @@ const gMockQuery = jest.fn(async (sql: string, params: unknown[] = []) => {
   if (/SELECT status FROM sessions WHERE id = \$1/.test(sql)) {
     return { rows: [{ status: rows.get(params[0] as string)?.status }] };
   }
-  if (/FROM sessions WHERE id = \$1/.test(sql)) return { rows: [sessionRow(params[0] as string)] };
+  if (/FROM sessions WHERE id = \$1/.test(sql)) {
+    // The row as it is when the read is sent; with slowReads it arrives later (two starts both read 'scheduled').
+    const snapshot = sessionRow(params[0] as string);
+    if (slowReads) await new Promise((r) => setTimeout(r, 30));
+    return { rows: [snapshot] };
+  }
   return { rows: [] };
 });
 let failNextStatusWrite = false;
+let slowReads = false;
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => (gMockQuery as jest.Mock)(...args),
   transaction: jest.fn(async (cb: (client: unknown) => unknown) => cb({ query: gMockQuery })),
@@ -76,7 +85,7 @@ jest.mock('../../../services/redis/redis.client', () => ({ getRedisClient: () =>
 
 import { SessionStatus } from '@rsn/shared';
 import { activeSessions } from '../../../services/orchestration/state/session-state';
-import { handleHostStart, startSession } from '../../../services/orchestration/handlers/host-actions';
+import { handleHostStart, startSession, setHostActionsIo } from '../../../services/orchestration/handlers/host-actions';
 
 const HOST = 'host-user';
 const formats = new Map<string, string>();
@@ -114,9 +123,12 @@ beforeEach(() => {
   formats.clear();
   invariantBreaks.length = 0;
   timeline.length = 0;
+  openStatusWrites.length = 0;
   emitted.length = 0;
   failNextStatusWrite = false;
+  slowReads = false;
   activeSessions.clear();
+  setHostActionsIo(io);
   mockCreateLobbyRoom.mockReset();
   mockLogger.warn.mockClear();
   mockCreateLobbyRoom.mockImplementation(async (sid: string) => {
@@ -198,5 +210,46 @@ describe('Go Live over REST (POST /sessions/:id/host/start)', () => {
     mockCreateLobbyRoom.mockRejectedValue(new Error('LiveKit Cloud unreachable'));
     await expect(startSession(sid, HOST)).resolves.toBeUndefined();
     expect(rows.get(sid)).toMatchObject({ status: 'lobby_open', lobby_room_id: `lobby-${sid}` });
+  });
+});
+
+// ─── Fix round 1 (review Minor 3): the REST start runs under the same session guard as the socket start ──────────
+// A socket start and a REST start together: one start runs (the other sees the event already open), the presence
+// tracked on the waiting screen is kept, and the status goes out once.
+describe('socket and REST Go Live pressed together', () => {
+  function waitingSession(sid: string) {
+    activeSessions.set(sid, {
+      sessionId: sid, hostUserId: HOST, config: { numberOfRounds: 3 } as any, currentRound: 0,
+      status: SessionStatus.SCHEDULED, timer: null, timerSyncInterval: null, timerEndsAt: null, isPaused: false,
+      pausedTimeRemaining: null, pendingRoundNumber: null, manuallyLeftRound: new Set(),
+      presenceMap: new Map([['guest-1', { lastHeartbeat: new Date(), socketId: 'socket-guest' }]]),
+    });
+  }
+  const statusBroadcasts = (sid: string) =>
+    emitted.filter((e) => e.room === `session:${sid}` && e.event === 'session:status_changed').length;
+  const openWrites = () => openStatusWrites.length;
+
+  it.each([['socket first', true], ['REST first', false]])('%s: one start runs, presence is kept, one broadcast', async (_n, socketFirst) => {
+    const sid = `double-${socketFirst ? 'socket' : 'rest'}`;
+    scheduled(sid);
+    waitingSession(sid);
+    slowReads = true;
+    const socket = hostSocket();
+    const runSocket = () => handleHostStart(io, socket, { sessionId: sid });
+    const runRest = () => startSession(sid, HOST).then(() => 'ok', (e: { message?: string }) => e.message);
+    const [a, b] = socketFirst ? [runSocket(), runRest()] : [runRest(), runSocket()];
+    const results = await Promise.all([a, b]);
+
+    expect(openWrites()).toBe(1);
+    expect(mockCreateLobbyRoom).toHaveBeenCalledTimes(1);
+    expect(statusBroadcasts(sid)).toBe(1);
+    expect(activeSessions.get(sid)!.presenceMap.has('guest-1')).toBe(true);
+    expect(activeSessions.get(sid)!.status).toBe(SessionStatus.LOBBY_OPEN);
+    if (socketFirst) {
+      expect(results[1]).toBe('Session can only start from scheduled state');
+    } else {
+      expect(results[0]).toBe('ok');
+      expect(socket.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'INVALID_STATE' }));
+    }
   });
 });

@@ -119,6 +119,26 @@ describe('generateLiveKitToken: the room a token names when the event has no lob
     expect(roomOf(token)).toBe(LOBBY);
   });
 
+  it('a cancelled event names the lobby too', async () => {
+    db({ status: 'cancelled', lobbyRoomId: null });
+    const { token } = await generateLiveKitToken(SESSION_ID, MEMBER);
+    expect(roomOf(token)).toBe(LOBBY);
+  });
+
+  // Fix round 1 (review Minor 1) — before Go Live nobody is let into the shared main room, exactly as production
+  // does today: a scripted mint while the event is scheduled names the isolated session-<id>.
+  it('before Go Live (scheduled) a token still names the isolated session-<id>, never the shared lobby', async () => {
+    db({ status: 'scheduled', lobbyRoomId: null });
+    const { token } = await generateLiveKitToken(SESSION_ID, MEMBER);
+    expect(roomOf(token)).toBe(`session-${SESSION_ID}`);
+  });
+
+  it('before Go Live, asking for the lobby by name is not granted it either', async () => {
+    db({ status: 'scheduled', lobbyRoomId: null });
+    const { token } = await generateLiveKitToken(SESSION_ID, HOST, LOBBY);
+    expect(roomOf(token)).toBe(`session-${SESSION_ID}`);
+  });
+
   it('once the lobby room id is stored it is used as before', async () => {
     db({ status: 'lobby_open', lobbyRoomId: LOBBY });
     const { token } = await generateLiveKitToken(SESSION_ID, MEMBER);
@@ -176,6 +196,16 @@ describe("production's client: POST /sessions/:id/token with {} (origin/main use
     };
     expect(verified.sub).toBe(MEMBER);
     expect(verified.video).toMatchObject({ room: LOBBY, roomJoin: true });
+  });
+
+  it('before Go Live the same request still answers 200 with a token for the isolated session-<id> (unchanged)', async () => {
+    db({ status: 'scheduled', lobbyRoomId: null });
+    const res = await request(app())
+      .post(`/sessions/${SESSION_ID}/token`)
+      .set('Authorization', `Bearer ${bearer(MEMBER)}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(roomOf(res.body.data.token)).toBe(`session-${SESSION_ID}`);
   });
 
   it("the breakout backup fetch ({ roomId }, origin/main VideoRoom.tsx) still gets the member's active breakout", async () => {

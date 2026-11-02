@@ -17,7 +17,7 @@ import { activeMemberSql } from '../users/active-member';
 import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-access';
 import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
 import { assertVideoRoom } from './video-room';
-import { LIVE_STATUSES, mainRoomOf } from './main-room';
+import { LIVE_STATUSES, tokenMainRoomOf } from './main-room';
 import { canRegister, publicEventsSql, readEventAccessFacts, visibleEventsSql } from './event-access';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 
@@ -1068,8 +1068,9 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
     // their behaviour is unchanged.
     //
     // 2 Nov 2026 — with no lobby room id stored (the Start gap, a REST start) the fallback is the lobby every
-    // other path sends people to, never a room of its own (`session-<id>` stranded the person alone).
-    const lobbyRoomName = mainRoomOf(sessionId, session.lobbyRoomId);
+    // other path sends people to, never a room of its own (`session-<id>` stranded the person alone). Before
+    // Go Live it is still the isolated `session-<id>`, as before.
+    const lobbyRoomName = tokenMainRoomOf(sessionId, session);
     let roomName = lobbyRoomName;
     if (roomId && roomId !== lobbyRoomName) {
       // June-14 (Stefan + Ali live test) — STALE-BREAKOUT HEAL for the REST
