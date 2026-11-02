@@ -67,11 +67,17 @@ const ENTITY_ADMIN = 'user-entity-admin';                       // its admin, no
 /** Who is in the circle, as the fake database holds it; a test changes it to mirror its write. */
 let members: string[];
 let creator: string;
+/** Final fix wave X3: the platform admins (who run every circle); none unless a test says so. */
+let admins: string[];
+/** Final fix wave S1: the circle's events that have not ended (sessions.circle_id); none unless a test says so. */
+let upcoming: string[];
 
 beforeEach(() => {
   jest.clearAllMocks();
   members = [ADMIN, MEMBER];
   creator = ADMIN;
+  admins = [];
+  upcoming = [];
   mockEmitEntities.mockResolvedValue(undefined);
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
@@ -89,6 +95,12 @@ beforeEach(() => {
     }
     if (/SELECT user_id FROM circle_members WHERE circle_id = \$1 UNION SELECT created_by FROM circles WHERE id = \$1/.test(text)) {
       return { rows: [...new Set([...members, creator])].map(user_id => ({ user_id })) };
+    }
+    if (/SELECT u\.id AS user_id FROM users u WHERE u\.role IN \('admin', 'super_admin'\) AND u\.status = 'active' ORDER BY u\.id LIMIT \$1/.test(text)) {
+      return { rows: admins.slice(0, Number(params[0])).map(user_id => ({ user_id })) };
+    }
+    if (/SELECT id FROM sessions WHERE circle_id = \$1 AND status NOT IN \('completed', 'cancelled'\) ORDER BY scheduled_at NULLS LAST, id LIMIT \$2/.test(text)) {
+      return { rows: params[0] === CIRCLE ? upcoming.slice(0, Number(params[1])).map(id => ({ id })) : [] };
     }
     return { rows: [] };
   });
@@ -160,7 +172,8 @@ describe('who hears a circle change', () => {
     const res = await request(app).post('/circles').set(as(ADMIN, 'admin')).send({ name: 'Doctors' });
     expect(res.status).toBe(201);
     await settle();
-    expect(heard()).toEqual({ [ADMIN]: page(ADMIN) });
+    // The creator is the changed person: their own event lists are told too (final fix wave S1).
+    expect(heard()).toEqual({ [ADMIN]: page(ADMIN, E.userSessions(ADMIN)) });
   });
 
   it('a join: everyone in the circle and the joiner hear the circle, their own list and the joiner\'s', async () => {
@@ -170,7 +183,7 @@ describe('who hears a circle change', () => {
     expect(heard()).toEqual({
       [ADMIN]: page(ADMIN, E.userCircles(JOINER)),
       [MEMBER]: page(MEMBER, E.userCircles(JOINER)),
-      [JOINER]: page(JOINER),
+      [JOINER]: page(JOINER, E.userSessions(JOINER)),
     });
     expect(emits().every(([, recipients]) => recipients.length === 1)).toBe(true);
   });
@@ -181,7 +194,7 @@ describe('who hears a circle change', () => {
     await settle();
     expect(heard()).toEqual({
       [ADMIN]: page(ADMIN, E.userCircles(MEMBER)),
-      [MEMBER]: page(MEMBER),
+      [MEMBER]: page(MEMBER, E.userSessions(MEMBER)),
     });
   });
 
@@ -362,7 +375,7 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
     expect(heard()).toEqual({
       [ADMIN]: page(ADMIN, E.userCircles(ASKER), requests),
       [MEMBER]: page(MEMBER, E.userCircles(ASKER), requests),
-      [ASKER]: page(ASKER, requests),
+      [ASKER]: page(ASKER, requests, E.userSessions(ASKER)),
     });
   });
 
@@ -384,7 +397,7 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
     const fn = verb === 'approve' ? joinService.approveJoinRequest : joinService.declineJoinRequest;
     expect(fn).toHaveBeenCalledWith(CIRCLE, ASKER, { userId: ADMIN, role: 'member' });
     await settle();
-    expect(heard()[ASKER]).toEqual(page(ASKER, requests));
+    expect(heard()[ASKER]).toEqual(page(ASKER, requests, E.userSessions(ASKER)));
     expect(heard()[ADMIN]).toEqual(page(ADMIN, E.userCircles(ASKER), requests));
   });
 
@@ -409,7 +422,7 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
     expect((await request(app).delete(`/circles/${CIRCLE}/members/${ASKER}`).set(as(ADMIN))).status).toBe(200);
     expect(joinService.removeCircleMember).toHaveBeenCalledWith(CIRCLE, ASKER, { userId: ADMIN, role: 'member' });
     await settle();
-    expect(heard()).toEqual({ [ADMIN]: page(ADMIN, E.userCircles(ASKER)), [ASKER]: page(ASKER) });
+    expect(heard()).toEqual({ [ADMIN]: page(ADMIN, E.userCircles(ASKER)), [ASKER]: page(ASKER, E.userSessions(ASKER)) });
   });
 
   it('the owner (not a platform admin) may edit and close the circle; a plain member may not', async () => {
@@ -431,7 +444,7 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
     expect((await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ joinPolicy: 'open' })).status).toBe(200);
     await settle();
     expect(joinService.ringApproved).toHaveBeenCalledWith(CIRCLE, 'Doctors', [ASKER]);
-    expect(heard()[ASKER]).toEqual(page(ASKER, requests));
+    expect(heard()[ASKER]).toEqual(page(ASKER, requests, E.userSessions(ASKER)));
     expect(heard()[MEMBER]).toEqual(page(MEMBER, E.userCircles(ASKER), requests));
   });
 
@@ -569,5 +582,99 @@ describe('every circle route checks the ids in its path', () => {
       expect(probe.reached().length).toBeGreaterThan(0);
       expect(probe.reached()[0]).toContain(id);
     });
+  });
+});
+
+// ─── Final fix wave S1 (2 Nov 2026): a membership change tells the person's own event screens ──────────────────
+// Circle membership decides who sees, auto-registers for and registers for a circle's events (event-access.ts), so the
+// person whose membership changed is also sent their own Home and Events lists (user:<id>:sessions) and the page of
+// each of the circle's events that has not ended (session:<id>). Nobody else is told another member's lists.
+
+describe("a membership change tells the changed person's event lists and open event pages", () => {
+  const EV1 = 'e1e1e1e1-0000-4000-8000-000000000001';
+  const EV2 = 'e2e2e2e2-0000-4000-8000-000000000002';
+  const theirEvents = (user: string) => [E.userSessions(user), E.session(EV1), E.session(EV2)];
+
+  it.each([
+    ['an approved ask', () => request(app).post(`/circles/${CIRCLE}/requests/${ASKER}/approve`).set(as(ADMIN)), ASKER, [ADMIN, MEMBER, ASKER]],
+    ['a join', () => request(app).post(`/circles/${CIRCLE}/join`).set(as(ASKER)), ASKER, [ADMIN, MEMBER, ASKER]],
+    ['a leave', () => request(app).post(`/circles/${CIRCLE}/leave`).set(as(MEMBER)), MEMBER, [ADMIN]],
+    ['a removal by a manager', () => request(app).delete(`/circles/${CIRCLE}/members/${ASKER}`).set(as(ADMIN)), ASKER, [ADMIN, MEMBER]],
+  ] as const)('%s: the person hears their own lists and each upcoming circle event; the others hear neither', async (_name, act, changed, after) => {
+    upcoming = [EV1, EV2];
+    members = [...after];
+    expect((await act()).status).toBe(200);
+    await settle();
+    const all = heard();
+    expect(all[changed]).toEqual(expect.arrayContaining(theirEvents(changed)));
+    for (const [who, tags] of Object.entries(all)) {
+      if (who === changed) continue;
+      expect(tags.filter((t) => t.startsWith('session:') || t.endsWith(':sessions'))).toEqual([]);
+    }
+  });
+
+  it('a circle with no upcoming events still tells the person their own lists', async () => {
+    members = [ADMIN, MEMBER, JOINER];
+    expect((await request(app).post(`/circles/${CIRCLE}/join`).set(as(JOINER))).status).toBe(200);
+    await settle();
+    expect(heard()[JOINER]).toEqual(page(JOINER, E.userSessions(JOINER)));
+  });
+
+  it('a change with no changed person (an edit) reads no events and tells nobody about them', async () => {
+    upcoming = [EV1];
+    expect((await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ name: 'Doctors and nurses' })).status).toBe(200);
+    await settle();
+    expect(Object.values(heard()).flat().filter((t) => t.startsWith('session:') || t.endsWith(':sessions'))).toEqual([]);
+    expect(mockQuery.mock.calls.some(([sql]) => /FROM sessions WHERE circle_id/.test(String(sql)))).toBe(false);
+  });
+
+  it('reads at most 50 upcoming events, ended and cancelled ones left out', async () => {
+    upcoming = Array.from({ length: 80 }, (_, i) => `e${String(i).padStart(7, '0')}-0000-4000-8000-000000000000`);
+    members = [ADMIN, MEMBER, JOINER];
+    await request(app).post(`/circles/${CIRCLE}/join`).set(as(JOINER));
+    await settle();
+    const read = mockQuery.mock.calls.find(([sql]) => /FROM sessions WHERE circle_id/.test(String(sql).replace(/\s+/g, ' ')));
+    expect(read?.[1]).toEqual([CIRCLE, 50]);
+    expect(heard()[JOINER].filter((t) => t.startsWith('session:'))).toHaveLength(50);
+  });
+});
+
+// ─── Final fix wave X3 (2 Nov 2026): the platform admins run every circle (L21), so they are told too ────────────
+
+describe('a platform admin who runs a circle from outside it is told of its changes', () => {
+  const requests = E.circleRequests(CIRCLE);
+
+  it("an ask: the platform admin hears the circle, its requests and the asker's list, as its members do", async () => {
+    admins = [PLATFORM];
+    expect((await request(app).post(`/circles/${CIRCLE}/request`).set(as(ASKER))).status).toBe(200);
+    await settle();
+    expect(heard()[PLATFORM]).toEqual(page(PLATFORM, E.userCircles(ASKER), requests));
+  });
+
+  it.each(['approve', 'decline'] as const)("an answer (%s) by the owner reaches the platform admin's Requests panel and count", async (verb) => {
+    admins = [PLATFORM];
+    members = verb === 'approve' ? [ADMIN, MEMBER, ASKER] : [ADMIN, MEMBER];
+    expect((await request(app).post(`/circles/${CIRCLE}/requests/${ASKER}/${verb}`).set(as(ADMIN))).status).toBe(200);
+    await settle();
+    expect(heard()[PLATFORM]).toEqual(page(PLATFORM, E.userCircles(ASKER), requests));
+  });
+
+  it('closing the circle reaches the platform admin; an admin who is also a member is told once', async () => {
+    admins = [PLATFORM, MEMBER];
+    expect((await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ joinPolicy: 'closed' })).status).toBe(200);
+    await settle();
+    expect(heard()[PLATFORM]).toEqual(page(PLATFORM, requests));
+    expect(heard()[MEMBER]).toEqual(page(MEMBER, requests));
+    expect(emits().filter(([, r]) => r.includes(MEMBER))).toHaveLength(1);
+  });
+
+  it('the admins are read bounded (at most 200), and each recipient gets an emit of their own', async () => {
+    admins = Array.from({ length: 250 }, (_, i) => `user-admin-${i}`);
+    expect((await request(app).post(`/circles/${CIRCLE}/request`).set(as(ASKER))).status).toBe(200);
+    await settle();
+    const read = mockQuery.mock.calls.find(([sql]) => /FROM users u WHERE u\.role IN/.test(String(sql).replace(/\s+/g, ' ')));
+    expect(read?.[1]).toEqual([200]);
+    expect(Object.keys(heard()).filter((u) => u.startsWith('user-admin-'))).toHaveLength(200);
+    expect(emits().every(([, recipients]) => recipients.length === 1)).toBe(true);
   });
 });
