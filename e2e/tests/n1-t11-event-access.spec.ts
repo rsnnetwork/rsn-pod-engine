@@ -208,34 +208,41 @@ test('a stranger requests, the host approves live, private is hidden, public reg
       await w.page.getByTestId('event-request-send').click();
       await expect(w.page.getByTestId('event-request-sent')).toBeVisible({ timeout: 15_000 });
       await w.ctx.close();
-      for (const width of process.env.E2E_DEVICE ? [0] : WIDTHS) {
+      // Each page is opened once and looked at through every width (fix wave 2, 2 Nov 2026): reloading it per width was
+      // about 14 full page loads by one member in under a minute, past production's 240 requests a minute (preview rr11).
+      const widths = process.env.E2E_DEVICE ? [0] : WIDTHS;
+      await h.page.goto(`${APP}/sessions/new?podId=${podId}`);
+      await expect(h.page.getByTestId('event-access-field')).toBeVisible({ timeout: 30_000 });
+      for (const width of widths) {
         if (width) await h.page.setViewportSize({ width, height: 900 });
-        await h.page.goto(`${APP}/sessions/new?podId=${podId}`);
         await expect(h.page.getByTestId('event-access-field')).toBeVisible({ timeout: 30_000 });
         await h.page.getByTestId('event-access-field').evaluate((el) => el.scrollIntoView({ block: 'center' }));
         await fits(h.page, '[data-testid="event-access-field"]', `form ${width}`);
         await shot(h.page, `form-${width}`);
-        await h.page.goto(`${APP}/sessions/${approvalId}`);
+      }
+      await h.page.goto(`${APP}/sessions/${approvalId}`);
+      for (const width of widths) {
+        if (width) await h.page.setViewportSize({ width, height: 900 });
         await expect(h.page.getByTestId('event-request-row')).toHaveCount(1, { timeout: 30_000 });
         await h.page.getByTestId('event-requests-card').evaluate((el) => el.scrollIntoView({ block: 'center' }));
         await h.page.waitForTimeout(700);
         await fits(h.page, '[data-testid="event-requests-card"]', `requests ${width}`);
         await shot(h.page, `requests-${width}`);
-        if (width) await s.page.setViewportSize({ width, height: 900 });
       }
-      // The sheet at each width, on a fresh approval event for the stranger.
+      // The sheet at each width, on a fresh approval event for the stranger: opened, measured and closed at each width.
       const another = await api(host, 'POST', '/sessions', {
         podId, title: `Sheet event ${Date.now()}`, scheduledAt: new Date(Date.now() + 2 * 86_400_000).toISOString(),
         format: 'speed_networking', visibility: 'public_with_approval',
       });
-      for (const width of process.env.E2E_DEVICE ? [0] : WIDTHS) {
+      await s.page.goto(`${APP}/sessions/${another.json.data.id}`);
+      for (const width of widths) {
         if (width) await s.page.setViewportSize({ width, height: 900 });
-        await s.page.goto(`${APP}/sessions/${another.json.data.id}`);
         await s.page.getByTestId('event-request-open').click();
         await expect(s.page.getByTestId('event-request-send')).toBeVisible();
         await fits(s.page, '[role="dialog"]', `sheet ${width}`);
         await shot(s.page, `sheet-${width}`);
         await s.page.keyboard.press('Escape');
+        await expect(s.page.getByTestId('event-request-send')).toHaveCount(0);
       }
     } finally {
       await pool.query(`DELETE FROM audit_log WHERE actor_id = $1`, [third.id]).catch(() => {});
