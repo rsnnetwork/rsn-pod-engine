@@ -87,6 +87,7 @@ import {
 import { clearSessionTimers, TimerCallbacks } from './handlers/timer-manager';
 import { markActive, clearActive } from '../presence/presence.service';
 import { endFinishedInPersonEvents, IN_PERSON_ENDING_INTERVAL_MS } from '../session/in-person-ending';
+import { replayRecentEntities } from '../../realtime/recent-entities';
 
 let io: SocketServer;
 
@@ -348,6 +349,14 @@ export function initOrchestration(socketServer: SocketServer): void {
   io.on('connection', (socket: Socket) => {
     const userId = getUserIdFromSocket(socket);
     if (userId) socket.join(`user:${userId}`);
+    // Fix wave 2 (2 Nov 2026): what changed for this member in the last minute, sent before they could have heard it
+    // (a page's first reads start before its socket joins), so the page reads again exactly that.
+    // Guarded: a throw here must never leave the connection without the handlers registered below.
+    try {
+      replayRecentEntities(socket, userId);
+    } catch (err) {
+      logger.warn({ err, userId }, 'Replaying recent entity tags to a new connection failed (non-fatal)');
+    }
 
     // App-level presence (8 Sep 2026): mark active on connect, and refresh it
     // on each foreground ping from the client. Drives the DM online dot and the

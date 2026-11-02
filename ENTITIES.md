@@ -12,6 +12,16 @@ domain-shaped (name a database row / relationship), never UI-shaped.
 single source of truth that both client query authors and server route
 authors reference.
 
+**A socket that joins is told what it may have missed** (fix wave 2,
+2 Nov 2026). `emitEntities()` remembers, for a minute, the tags it sent
+each member (`realtime/recent-entities.ts`), and the connection handler
+sends a socket those tags as soon as it joins `user:<id>`, on the same
+`entity:changed` event, marked `replayed: true` (a client that does not
+know the field just invalidates the tags). A page's first reads start before its socket has
+joined, so a change made in between is read again from this replay; the
+preview client re-reads only reads older than half a minute on its first
+connect, and every tagged read after a reconnect.
+
 ## Entities currently in use
 
 | Entity | Triggers when | Used by (sample queries) |
