@@ -1,6 +1,8 @@
 // The confirmed meeting, pinned at the top of the thread for BOTH people — real local time, duration, audio/video and
 // a Join button — so the meeting is visible in the chat, not buried in the scheduler (Ali, 8 Sep 2026). Shares the
 // scheduling query with the scheduler panel. Since 26 Oct 2026 a meeting has its own page, and the banner opens it.
+// Final fix wave C1 (2 Nov 2026): what it offers is thread-call-rules.ts's, so it shows nothing with a former member,
+// and a video Call now follows the video rule (canCall), as the header's button does.
 
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -9,9 +11,14 @@ import { E } from '@/realtime/entities';
 import api from '@/lib/api';
 import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
 import { schedulingKey, type Scheduling } from './scheduling-types';
+import { meetingBannerAction } from './thread-call-rules';
 
-export default function ThreadMeetingBanner({ conversationId, onCallNow }: {
+export default function ThreadMeetingBanner({ conversationId, onCallNow, former, canCall }: {
   conversationId: string; onCallNow?: (kind: 'audio' | 'video') => void;
+  /** The other person is no longer a member of REASON: nothing to join or call. */
+  former: boolean;
+  /** A video call may ring (the scheduling answer's canCall). */
+  canCall: boolean;
 }) {
   const navigate = useNavigate();
   const { data } = useQuery<Scheduling>({
@@ -25,9 +32,9 @@ export default function ThreadMeetingBanner({ conversationId, onCallNow }: {
   const kind = c.type ?? 'video';
   const callWord = kind === 'audio' ? 'Audio call' : 'Video call';
   const over = isMeetingOver(c.startAt, c.durationMin);
-  // "Call now" after an ended meeting only makes sense once calls are unlocked
-  // (both attended). If it ended without that, they pick a new time instead.
-  const unlocked = !!data?.callsUnlocked;
+  // "Call now" after an ended meeting only when that call may ring; otherwise they pick a new time instead.
+  const action = meetingBannerAction({ over, kind, callsUnlocked: !!data?.callsUnlocked, canCall, former });
+  if (!action) return null;
   const summary = (
     <>
       <CalendarCheck className={`h-4 w-4 shrink-0 ${over ? 'text-gray-400' : 'text-emerald-600'}`} />
@@ -63,7 +70,7 @@ export default function ThreadMeetingBanner({ conversationId, onCallNow }: {
           <div className="flex min-w-0 flex-1 items-center gap-2">{summary}</div>
         )}
         {over ? (
-          unlocked ? (
+          action === 'call' ? (
             <button
               onClick={() => onCallNow?.(kind)}
               className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white hover:opacity-90"
