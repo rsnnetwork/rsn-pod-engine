@@ -70,7 +70,8 @@ describe('the circle page', () => {
   it('follows the member\'s own events too, so a new circle event shows without a refresh', () => {
     expect(circleEntities('c1', 'me')).toEqual(['circle:c1', 'circle:c1:members', 'user:me:circles', 'user:me', 'user:me:sessions']);
     expect(circleEntities('c1', undefined)).toEqual(['circle:c1', 'circle:c1:members']);
-    expect(page).toMatch(/meta: \{ entities: circleEntities\(circleId \?\? '', user\?\.id\) \}/);
+    // Final fix wave CM5: with the managers' asks tag once the page knows the viewer runs the circle.
+    expect(page).toMatch(/meta: \{ entities: circleEntities\(circleId \?\? '', user\?\.id, runsIt\) \}/);
   });
 
   it('lists the circle\'s events and its pods\' (the server decides who sees which), marks the circle\'s own, and says when there are none', () => {
