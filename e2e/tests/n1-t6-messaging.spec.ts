@@ -334,9 +334,14 @@ test('6. own bubbles are gray, theirs white with a border', async () => {
 test('7. at every width: no sideways scroll, the reply strip and the box clear of the bottom bar, the page fits', async () => {
   test.setTimeout(240_000);
   const widths = DEVICE ? [DEVICE.viewport?.width ?? 390] : WIDTHS;
+  // One tab, each page opened once and looked at through every width (fix wave 2, 2 Nov 2026): a new tab and two page
+  // loads per width was about 14 full page loads by B in under a minute, past production's 240 requests a minute
+  // (preview rr11). The notifications page is loaded once too: its rows are the seeded ones, already there.
+  const heightOf = (width: number) => (width < 768 ? 780 : 900);
+  const ctx = await contextFor(b, widths[0], heightOf(widths[0]));
+  const page = await openIn(ctx, 'B/widths', `/messages/${conversationId}`);
   for (const width of widths) {
-    const ctx = await contextFor(b, width, width < 768 ? 780 : 900);
-    const page = await openIn(ctx, `B/${width}`, `/messages/${conversationId}`);
+    if (!DEVICE) await page.setViewportSize({ width, height: heightOf(width) });
     await expect(bubble(page, FIRST)).toBeVisible({ timeout: 20_000 });
     await pressReply(page, FIRST);
     await expect(page.getByTestId('reply-strip')).toBeVisible();
@@ -347,11 +352,14 @@ test('7. at every width: no sideways scroll, the reply strip and the box clear o
     await expectReachable(page, page.locator('textarea'), `message box ${width}`);
     await expectReachable(page, page.getByRole('button', { name: 'Send message' }), `send ${width}`);
     await shot(page, `thread-reply-${width}`);
+  }
 
-    await page.goto(`${APP}/notifications`);
+  await page.goto(`${APP}/notifications`);
+  for (const width of widths) {
+    if (!DEVICE) await page.setViewportSize({ width, height: heightOf(width) });
     await expect(page.getByTestId('notification-row').first()).toBeVisible({ timeout: 20_000 });
     await noSidewaysScroll(page, `notifications ${width}`);
     await shot(page, `notifications-${width}`);
-    await ctx.close();
   }
+  await ctx.close();
 });
