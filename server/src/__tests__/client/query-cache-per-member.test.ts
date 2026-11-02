@@ -143,17 +143,21 @@ describe('the call sites: main.tsx and the auth store', () => {
   });
 
   it('a session that expired for good empties the cache', () => {
-    expect(between(store(), 'if (definitive && authEpoch === epochAtStart) {', '} else {')).toMatch(/clearCache\(\);/);
+    // Fix wave 3: the refused refresh and the revoked session both end the session through endSessionHere.
+    expect(between(store(), 'const endSessionHere = () => {', '};')).toMatch(/clearCache\(\);/);
+    // ...and nowhere else in the check are the tokens dropped, so no way out of it skips the clearing.
+    expect(between(store(), 'checkSession: async () => {', 'rereadSession: async').split('clearStoredTokens();')).toHaveLength(2);
   });
 
   it('a sign-out made in another tab empties this tab\'s cache too', () => {
     expect(between(store(), '// Another tab logged out', 'document.addEventListener')).toMatch(/clearCache\(\);/);
   });
 
-  it('a session loaded for a member says whose it is, BEFORE the page can read it (both places the session is read)', () => {
+  it('a session loaded for a member says whose it is, BEFORE the page can read it (the one place the session is read)', () => {
     const src = store();
+    // Fix wave 3: the read after a refresh is the same read, run again by the check's loop.
     const reads = [...src.matchAll(/set\(\{ user: data\.data\.user,/g)];
-    expect(reads).toHaveLength(2);
+    expect(reads).toHaveLength(1);
     for (const read of reads) {
       expect(src.slice(Math.max(0, read.index! - 80), read.index)).toMatch(/setCacheOwner\(data\.data\.user\.id\);\s*$/);
     }
