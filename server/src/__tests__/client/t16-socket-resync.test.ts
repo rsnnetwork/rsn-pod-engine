@@ -145,6 +145,101 @@ describe('subscribeEntitySync: a connect refreshes what may have been missed, wi
     qc.clear();
   });
 
+  // Fix round 2 (re-review r1 minor 2): the same order with the replay marked as the server marks it, so the fold into
+  // the connect re-read (replayed()) is what reads the landed answer again.
+  it('Script E 5b, marked replay: the fold reads again the answer that landed before the change, once', async () => {
+    const qc = new QueryClient();
+    const socket = fakeSocket();
+    const landing = Date.now();
+    let t = landing - 3000;       // the page's read starts
+    subscribeEntitySync(socket, qc, { now: () => t });
+    let server = 'old time';
+    let calls = 0;
+    let deliver: (v: string) => void = () => {};
+    const observer = new QueryObserver(qc, {
+      queryKey: ['meeting', 'm1'], meta: { entities: ['meeting:m1'] },
+      queryFn: () => { calls += 1; const answer = server; return calls === 1 ? new Promise<string>((r) => { deliver = () => r(answer); }) : Promise.resolve(answer); },
+    });
+    const off = observer.subscribe(() => {});
+    await flush();
+    server = 'new time';
+    deliver('old time');
+    await flush();
+    t = landing + 1300;
+    socket.emit('connect');
+    await flush(); await flush();
+    expect(calls).toBe(1);
+    socket.emit('entity:changed', { entities: ['meeting:m1'], replayed: true });
+    await flush(); await flush();
+    expect(calls).toBe(2);
+    expect(qc.getQueryData(['meeting', 'm1'])).toBe('new time');
+    off();
+    qc.clear();
+  });
+
+  it('a marked replay that arrives while a coalesced connect re-read is waiting is left to that re-read: one read, when the window ends', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+    try {
+      const qc = new QueryClient();
+      const socket = fakeSocket();
+      let t = 6_000_000;
+      subscribeEntitySync(socket, qc, { now: () => t });
+      let calls = 0;
+      const observer = new QueryObserver(qc, {
+        queryKey: ['pod', 'p5'], meta: { entities: ['pod:p5'] },
+        queryFn: () => { calls += 1; return Promise.resolve(calls); },
+      });
+      const off = observer.subscribe(() => {});
+      await flush();
+      t += 1000;
+      socket.emit('connect');     // first connect: the young read is left to the replay
+      t += 1000;
+      socket.emit('connect');     // a reconnect inside the window: its re-read waits for the window to end
+      socket.emit('entity:changed', { entities: ['pod:p5'], replayed: true });
+      await flush(); await flush();
+      expect(calls).toBe(1);      // the replay did not read it now
+      t += CONNECT_RESYNC_WINDOW_MS;
+      jest.advanceTimersByTime(CONNECT_RESYNC_WINDOW_MS);
+      await flush(); await flush();
+      expect(calls).toBe(2);      // the coalesced re-read read it, once
+      off();
+      qc.clear();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  // Fix round 2 (re-review r1 minor 1): several tags heard during one first read stacked re-reads that cancelled each
+  // other (4 requests, 2 thrown away). The re-read after the landing does not cancel one already on its way.
+  it('three tags during one first read give exactly one more read once it lands, and the page ends fresh', async () => {
+    const qc = new QueryClient();
+    const socket = fakeSocket();
+    subscribeEntitySync(socket, qc);
+    let server = 'v1';
+    let calls = 0;
+    const pending: Array<() => void> = [];
+    const observer = new QueryObserver(qc, {
+      queryKey: ['pod', 'p7'], meta: { entities: ['pod:p7'] },
+      queryFn: () => { calls += 1; const n = calls; return new Promise<string>((r) => { pending.push(() => r(n === 1 ? 'v1' : server)); }); },
+    });
+    const off = observer.subscribe(() => {});
+    await flush();
+    server = 'v2';
+    socket.emit('entity:changed', { entities: ['pod:p7'] });
+    socket.emit('entity:changed', { entities: ['pod:p7'] });
+    socket.emit('entity:changed', { entities: ['pod:p7'] });
+    await flush();
+    pending[0]();                 // the first read lands
+    await flush(); await flush();
+    expect(calls).toBe(2);        // one more read, not three cancelling each other
+    pending[1]();
+    await flush(); await flush();
+    expect(calls).toBe(2);
+    expect(qc.getQueryData(['pod', 'p7'])).toBe('v2');
+    off();
+    qc.clear();
+  });
+
   // Fix wave 2, fix round 1 (re-review Important 1): the read can still be ON ITS WAY when the replay arrives. In
   // query-core 5.90, invalidating a query whose first read is in flight returns that read, and its old answer then
   // clears the invalidated flag: the replay changed nothing. A matched first read on its way is read again once it lands.

@@ -43,10 +43,14 @@ export function invalidateEntities(client: QueryClient, entities: readonly strin
 /** A query whose first read is on its way: it has no data yet, so an invalidate cannot send it again. */
 const firstReadOnItsWay = (query: Query) => query.state.fetchStatus === 'fetching' && query.state.data === undefined;
 
-/** Read this query again once the read on its way has landed (or failed): its answer may be from before the change. */
+/**
+ * Read this query again once the read on its way has landed (or failed): its answer may be from before the change.
+ * Several tags heard during one first read each ask for this; the first re-read is from after all of them, so the
+ * others join it instead of cancelling it (fix round 2: three tags were four requests, two thrown away).
+ */
 function readAgainWhenItLands(client: QueryClient, query: Query): Promise<void> {
   const hash = query.queryHash;
-  const again = () => client.invalidateQueries({ predicate: (q) => q.queryHash === hash });
+  const again = () => client.invalidateQueries({ predicate: (q) => q.queryHash === hash }, { cancelRefetch: false });
   return (query.promise ?? Promise.resolve()).then(again, again);
 }
 
