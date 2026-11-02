@@ -6,6 +6,8 @@
 // refresh what GET /dm/call/requests/incoming says is ringing. It goes when the caller withdraws, when it is
 // answered or declined on another device, or when it lapses after 2 minutes. Clear of the notch: the top
 // keeps env(safe-area-inset-top) above it.
+// Final fix wave C2 (2 Nov 2026): z-[205], above every sheet's backdrop (z-[200]) so Accept is reached over an open
+// sheet without closing it, and below the toasts (z-[210]).
 
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -52,7 +54,7 @@ export default function IncomingCallBanner() {
   const kindWord = req.kind === 'audio' ? 'audio' : 'video';
   return createPortal(
     <div
-      className="fixed left-[max(12px,env(safe-area-inset-left))] right-[max(12px,env(safe-area-inset-right))] top-[calc(16px+env(safe-area-inset-top))] z-[100] mx-auto max-w-sm rounded-2xl border border-rsn-red/30 bg-white p-4 shadow-xl animate-fade-in-up"
+      className="fixed left-[max(12px,env(safe-area-inset-left))] right-[max(12px,env(safe-area-inset-right))] top-[calc(16px+env(safe-area-inset-top))] z-[205] mx-auto max-w-sm rounded-2xl border border-rsn-red/30 bg-white p-4 shadow-xl animate-fade-in-up"
       role="dialog"
       aria-label={`${req.partnerName} is calling you: a ${req.durationMin}-minute ${kindWord} call`}
       data-testid="call-incoming"

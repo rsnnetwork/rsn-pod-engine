@@ -3,6 +3,8 @@
 // rang waits for an answer: the call keeps ringing when I leave the profile or the thread I rang from. It sits
 // above the phone's bottom bar and a profile's move bar, and the toasts are at the top, so none of them meet at
 // 360px. Portalled to <body>: a page's animated wrapper keeps a transform that would carry a fixed card with it.
+// Final fix wave C2 (2 Nov 2026): z-[204], above every sheet's backdrop (z-[200]) so Cancel is reached over an open
+// sheet, below the incoming call banner (z-[205]) and the toasts (z-[210]).
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
@@ -41,7 +43,7 @@ export default function OutgoingCallCard() {
       role="status"
       aria-live="polite"
       data-testid="call-outgoing"
-      className="fixed left-[max(12px,env(safe-area-inset-left))] right-[max(12px,env(safe-area-inset-right))] z-[98] mx-auto max-w-sm rounded-2xl border border-gray-200 bg-white p-4 shadow-xl bottom-[calc(92px+env(safe-area-inset-bottom))]"
+      className="fixed left-[max(12px,env(safe-area-inset-left))] right-[max(12px,env(safe-area-inset-right))] z-[204] mx-auto max-w-sm rounded-2xl border border-gray-200 bg-white p-4 shadow-xl bottom-[calc(92px+env(safe-area-inset-bottom))]"
     >
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rsn-red-light text-rsn-red">
