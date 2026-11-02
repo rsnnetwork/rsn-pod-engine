@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { PageLoader } from '@/components/ui/Spinner';
+import SessionRetrying from './SessionRetrying';
 import { type ReactNode } from 'react';
 import { signInPathFor } from '@/features/auth/return-path';
 import { gateTarget, isGateExempt, onboardingDue } from './onboarding-gate';
@@ -17,12 +18,10 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="h-screen w-screen bg-white flex flex-col items-center justify-center gap-3 px-6 text-center">
+      <div className="h-screen w-screen bg-white flex flex-col items-center justify-center gap-3 px-6 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-center">
         <PageLoader />
         {/* Fix wave 3: the session check is waiting out a 429, a 5xx or no connection. The member stays signed in. */}
-        {sessionRetrying && (
-          <p data-testid="session-retrying" role="status" className="text-sm text-gray-500">Connection lost, retrying…</p>
-        )}
+        {sessionRetrying && <SessionRetrying />}
       </div>
     );
   }

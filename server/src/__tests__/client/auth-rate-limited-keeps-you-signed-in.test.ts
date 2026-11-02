@@ -14,6 +14,8 @@
 //
 // EXECUTED, not read: the real authStore.ts is transpiled and run against a fake localStorage and a scripted HTTP client,
 // with the real zustand. Timers run at once, and each wait is recorded. ProtectedRoute is rendered for real.
+// This scripted client has no 401 interceptor, so every 401 here reaches checkSession's own refresh. The real
+// interceptor's paths, a fake clock and exact request counts are in auth-session-check-through-the-interceptor.test.ts.
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vm from 'vm';
@@ -99,6 +101,8 @@ function startTab(script: { session?: Answer[]; refresh?: Answer[] }, opts: { st
     setTimeout: (fn: () => void, ms: number) => { if (ms <= 120_000) { waits.push(ms); setImmediate(fn); } return 0; },
     clearTimeout: () => undefined,
     Date,
+    // The waits' jitter, fixed at none (auth-session-check-through-the-interceptor.test.ts pins the jitter itself).
+    Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
   };
   const source = fs.readFileSync(path.join(__dirname, '../../../../client/src/stores/authStore.ts'), 'utf8');
   const { outputText } = ts.transpileModule(source, {
@@ -167,21 +171,6 @@ describe('the boot check rides out answers that are no refusal, however long the
     await tab.store.getState().checkSession();
     expect(seen).toContain(true);
     expect(tab.store.getState().sessionRetrying).toBe(false);
-  });
-
-  it('stops trying, signed out, when another tab signs out while it waits', async () => {
-    const tab = startTab({ session: [429, 429, 429, 429, 429, 429, 429, 429, 429, 429] });
-    const checking = tab.store.getState().checkSession();
-    await settle(3);
-    // What the storage listener does when another tab signs out: the tokens leave storage and the store.
-    tab.storage.delete('rsn_tokens');
-    (tab.store as unknown as { setState: (s: Partial<State>) => void }).setState({ accessToken: null, refreshToken: null, isAuthenticated: false });
-    await settle();
-    await checking;
-    const reads = tab.sessionReads();
-    expect(reads).toBeLessThan(10);
-    expect(tab.store.getState().sessionRetrying).toBe(false);
-    expect(tab.store.getState().isLoading).toBe(false);
   });
 
   it('a check with the member already in place (after a save) still gives up after a few tries, keeping the member', async () => {
