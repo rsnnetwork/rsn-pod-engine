@@ -14,8 +14,10 @@ jest.mock('../../config/logger', () => ({
 
 import { emitEntities } from '../../realtime/emit';
 import {
-  RECENT_ENTITIES_MAX_PER_USER, RECENT_ENTITIES_MS, clearRecentEntities, recentEntities, replayRecentEntities,
+  RECENT_ENTITIES_MAX_MEMBERS, RECENT_ENTITIES_MAX_PER_USER, RECENT_ENTITIES_MS, clearRecentEntities, recentEntities,
+  rememberEntities, replayRecentEntities,
 } from '../../realtime/recent-entities';
+import logger from '../../config/logger';
 
 function fakeIo() {
   const sent: Array<{ room: string; event: string; payload: unknown }> = [];
@@ -62,6 +64,35 @@ describe('emitEntities remembers what it told each member, for a minute', () => 
     await emitEntities(null, ['u-ana'], ['meeting:m1']);
     expect(recentEntities('u-ana')).toEqual([]);
   });
+
+  // Fix round 1 (re-review Minor 3): the whole memory is bounded, not only each member's share of it.
+  it('keeps at most RECENT_ENTITIES_MAX_MEMBERS members, forgetting the one told longest ago first', () => {
+    for (let i = 0; i < RECENT_ENTITIES_MAX_MEMBERS + 3; i++) rememberEntities([`u-${i}`], ['pod:p1']);
+    expect(recentEntities('u-0')).toEqual([]);
+    expect(recentEntities('u-2')).toEqual([]);
+    expect(recentEntities('u-3')).toEqual(['pod:p1']);
+    expect(recentEntities(`u-${RECENT_ENTITIES_MAX_MEMBERS + 2}`)).toEqual(['pod:p1']);
+    // Telling a member again makes them the newest: they are kept over others told since.
+    rememberEntities(['u-3'], ['pod:p2']);
+    rememberEntities(['u-new'], ['pod:p1']);
+    expect(recentEntities('u-3')).toEqual(['pod:p1', 'pod:p2']);
+    expect(recentEntities('u-4')).toEqual([]);
+  });
+
+  // Fix round 1 (re-review Minor 2): remembering can never cut off the fanout to the rest of the recipients.
+  it('a failure while remembering is logged and every recipient is still told', async () => {
+    const { io, sent } = fakeIo();
+    const mod = jest.requireActual('../../realtime/recent-entities') as { rememberEntities: unknown };
+    const spy = jest.spyOn(mod as { rememberEntities: (...a: unknown[]) => void }, 'rememberEntities')
+      .mockImplementation(() => { throw new Error('boom'); });
+    try {
+      await emitEntities(io, ['u-a', 'u-b', 'u-c'], ['pod:p1']);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sent.map((x) => x.room)).toEqual(['user:u-a', 'user:u-b', 'user:u-c']);
+    expect(jest.mocked(logger.warn)).toHaveBeenCalled();
+  });
 });
 
 describe('a socket that joins is sent what changed for its member in the last minute', () => {
@@ -70,12 +101,12 @@ describe('a socket that joins is sent what changed for its member in the last mi
     return { emitted, socket: { emit: (event: string, payload: unknown) => { emitted.push({ event, payload }); } } };
   };
 
-  it("on the same entity:changed event and payload every client already follows (production's client included)", async () => {
+  it("on the same entity:changed event every client already follows, marked as a replay (production's client reads only entities)", async () => {
     const { io } = fakeIo();
     await emitEntities(io, ['u-max'], ['meeting:m1', 'user:u-max:meetings']);
     const { socket, emitted } = socketFor();
     replayRecentEntities(socket, 'u-max');
-    expect(emitted).toEqual([{ event: 'entity:changed', payload: { entities: ['meeting:m1', 'user:u-max:meetings'] } }]);
+    expect(emitted).toEqual([{ event: 'entity:changed', payload: { entities: ['meeting:m1', 'user:u-max:meetings'], replayed: true } }]);
   });
 
   it('nothing recent, or no member: nothing is sent', () => {
@@ -85,10 +116,11 @@ describe('a socket that joins is sent what changed for its member in the last mi
     expect(emitted).toEqual([]);
   });
 
-  it('the connection handler joins the member room first, then replays (source pin)', () => {
+  it('the connection handler joins the member room first, then replays inside a guard, so a throw never leaves the connection without its handlers (source pin)', () => {
     const fs = jest.requireActual('fs') as typeof import('fs');
     const path = jest.requireActual('path') as typeof import('path');
-    const src = fs.readFileSync(path.join(__dirname, '../../services/orchestration/orchestration.service.ts'), 'utf8');
-    expect(src).toMatch(/if \(userId\) socket\.join\(`user:\$\{userId\}`\);\s*\n\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*replayRecentEntities\(socket, userId\);/);
+    const src = fs.readFileSync(path.join(__dirname, '../../services/orchestration/orchestration.service.ts'), 'utf8').replace(/\r\n/g, '\n');
+    expect(src).toMatch(/if \(userId\) socket\.join\(`user:\$\{userId\}`\);\s*\n(?:\s*\/\/[^\n]*\n)*\s*try \{\s*replayRecentEntities\(socket, userId\);\s*\} catch \(err\) \{\s*logger\.warn\(/);
+    expect(src.indexOf('replayRecentEntities(socket, userId)')).toBeLessThan(src.indexOf("wrapHandler('session:join'"));
   });
 });

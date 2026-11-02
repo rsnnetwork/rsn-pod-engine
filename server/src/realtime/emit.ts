@@ -62,9 +62,14 @@ export async function emitEntities(
   try {
     for (const userId of recipients) {
       io.to(userRoom(userId)).emit('entity:changed', { entities });
-      rememberEntities(userId, entities);
     }
   } catch (err) {
     logger.warn({ err, recipientCount: recipients.size, entities }, 'emitEntities fanout failed (non-fatal)');
+  }
+  // Remembered once the fanout is done, and on its own: a failure here never cuts off a recipient.
+  try {
+    rememberEntities(recipients, entities);
+  } catch (err) {
+    logger.warn({ err, recipientCount: recipients.size }, 'emitEntities could not remember the tags (non-fatal)');
   }
 }
