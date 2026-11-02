@@ -26,7 +26,7 @@ import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 // ─────────────────────────────────────────────────────────────────────────────
 
 dotenvConfig({ path: path.resolve(__dirname, '../../server/.env') });
-const JWT_SECRET = (process.env.JWT_SECRET || process.env.E2E_JWT_SECRET || '').replace(/\r|\n/g, '');
+const JWT_SECRET = (process.env.E2E_JWT_SECRET || process.env.JWT_SECRET || '').replace(/\r|\n/g, '');
 const DB = process.env.DATABASE_URL;
 
 const fp = (t?: string | null) =>
