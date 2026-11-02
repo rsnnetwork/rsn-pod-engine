@@ -1245,11 +1245,13 @@ export default function MessagesPage() {
                             meta={m.systemMeta}
                             liveSlots={scheduling ? confirmable(scheduling.overlap ?? [], Date.now()) : undefined}
                             meetingConfirmed={!!scheduling?.confirmed}
-                            onOpenScheduler={() => openSchedulerOn(null)}
-                            onPickSlot={(slot) => openSchedulerOn(slot)}
-                            calendar={m.systemMeta?.type === 'meeting_confirmed' && activeId ? { conversationId: activeId, partnerName: headerContext.otherDisplayName || 'your match' } : undefined}
-                            onCallNow={startCall}
+                            onOpenScheduler={otherIsFormer ? undefined : () => openSchedulerOn(null)}
+                            onPickSlot={otherIsFormer ? undefined : (slot) => openSchedulerOn(slot)}
+                            calendar={!otherIsFormer && m.systemMeta?.type === 'meeting_confirmed' && activeId ? { conversationId: activeId, partnerName: headerContext.otherDisplayName || 'your match' } : undefined}
+                            onCallNow={otherIsFormer ? undefined : startCall}
                             callsUnlocked={callsUnlocked}
+                            canCall={canCall}
+                            former={otherIsFormer}
                             meetingOver={confirmedMeetingOver}
                             currentMeeting={scheduling ? (scheduling.confirmed ? { startAt: scheduling.confirmed.startAt ?? null } : null) : undefined}
                             viewerId={myUserId}

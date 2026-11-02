@@ -74,3 +74,26 @@ describe('the wiring', () => {
     expect(page).toMatch(/if \(!action\) return null;/);
   });
 });
+
+// Found by the headed check (2 Nov 2026): the thread's "Meeting confirmed" card has its own Join meeting, Call now and
+// Add to calendar, and the scheduling cards their own times and "Add my times". With a former member none is offered.
+describe("the thread's meeting and scheduling cards", () => {
+  it('the thread tells the card the other person is a former member, and hands it no scheduler, call or calendar', () => {
+    const page = read('features/messages/MessagesPage.tsx');
+    const card = page.slice(page.indexOf('<SystemMessageCard'), page.indexOf('/>', page.indexOf('<SystemMessageCard')));
+    expect(card).toMatch(/onOpenScheduler=\{otherIsFormer \? undefined : \(\) => openSchedulerOn\(null\)\}/);
+    expect(card).toMatch(/onPickSlot=\{otherIsFormer \? undefined : \(slot\) => openSchedulerOn\(slot\)\}/);
+    expect(card).toMatch(/calendar=\{!otherIsFormer && m\.systemMeta\?\.type === 'meeting_confirmed'/);
+    expect(card).toMatch(/onCallNow=\{otherIsFormer \? undefined : startCall\}/);
+    expect(card).toMatch(/canCall=\{canCall\}/);
+    expect(card).toMatch(/former=\{otherIsFormer\}/);
+  });
+
+  it('the card offers Join and Call now by the same rules as the banner, and no times to pick with a former member', () => {
+    const src = read('features/messages/SystemMessageCard.tsx');
+    expect(src).toMatch(/const action = meetingBannerAction\(\{ over, kind: meta\.meetingType, callsUnlocked: !!callsUnlocked, canCall: !!canCall, former: !!former \}\);/);
+    expect(src).toMatch(/\{!settled && action === 'join' && \(/);
+    expect(src).toMatch(/\{over && action === 'call' && onCallNow && \(/);
+    expect(src).toMatch(/\{!meetingConfirmed && !former && \(slots\.length > 0 \|\| onOpenScheduler\) && \(/);
+  });
+});

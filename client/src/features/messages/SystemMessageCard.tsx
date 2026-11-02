@@ -7,6 +7,8 @@
 //
 // Drawn the SAME for both people — centred, neutral, no avatar, no "seen", no
 // reactions — because neither of them wrote it.
+// Final fix wave C1 (2 Nov 2026): a meeting card offers Join and Call now by thread-call-rules.ts (a video call follows
+// canCall), and with someone who is no longer a member it offers nothing to join, call, schedule or add to a calendar.
 
 import { CalendarCheck, CalendarClock, Clock, Video, Phone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -16,6 +18,7 @@ import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { meetingEntry } from '@/components/calendar/calendar-links';
 import { conversationMeetingFile, meetingFile } from '@/components/calendar/calendar-files';
 import ReasonLineBox from './ReasonLineBox';
+import { meetingBannerAction } from './thread-call-rules';
 
 export type DmMessageKind = 'user' | 'system';
 
@@ -58,6 +61,10 @@ interface Props {
    *  when calls are unlocked — the first meeting is what unlocks them. */
   onCallNow?: (kind: 'audio' | 'video') => void;
   callsUnlocked?: boolean;
+  /** A video call may ring (the scheduling answer's canCall). */
+  canCall?: boolean;
+  /** The other person is no longer a member of REASON: nothing to join, call or schedule. */
+  former?: boolean;
   /** The thread's current meeting has ended. A card can also be over on its
    *  own terms (an older meeting under a newer one); either makes it over. */
   meetingOver?: boolean;
@@ -86,7 +93,7 @@ const sameInstant = (a: string | null | undefined, b: string | null | undefined)
 
 export default function SystemMessageCard({
   content, meta, liveSlots, onPickSlot, onOpenScheduler, meetingConfirmed, calendar,
-  onCallNow, callsUnlocked, meetingOver, currentMeeting, viewerId, partnerName,
+  onCallNow, callsUnlocked, canCall, former, meetingOver, currentMeeting, viewerId, partnerName,
 }: Props) {
   const navigate = useNavigate();
 
@@ -116,6 +123,7 @@ export default function SystemMessageCard({
     // its Join used to open the room for a time nobody was keeping.
     const replaced = !over && currentMeeting !== undefined && !(currentMeeting && sameInstant(currentMeeting.startAt, meta.startAt));
     const settled = over || replaced;
+    const action = meetingBannerAction({ over, kind: meta.meetingType, callsUnlocked: !!callsUnlocked, canCall: !!canCall, former: !!former });
     return (
       // The deck puts the sheep in message threads, matched pose, on exactly
       // this moment: "MATCHED - match found; meeting confirmed in the chat."
@@ -145,7 +153,7 @@ export default function SystemMessageCard({
           </p>
         )}
         <div className="mt-1.5 flex flex-wrap justify-center gap-2">
-          {!settled && (
+          {!settled && action === 'join' && (
             <button
               type="button"
               onClick={() => navigate(meta.joinPath)}
@@ -154,7 +162,7 @@ export default function SystemMessageCard({
               {meta.meetingType === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join meeting
             </button>
           )}
-          {over && callsUnlocked && onCallNow && (
+          {over && action === 'call' && onCallNow && (
             <button
               type="button"
               onClick={() => onCallNow(meta.meetingType)}
@@ -194,7 +202,7 @@ export default function SystemMessageCard({
     return (
       <Shell tone="proposal" icon={<Clock className="h-4 w-4 text-emerald-600" />}>
         <p className="text-sm text-[#1a1a2e]">You are both free. Pick one to confirm.</p>
-        {!meetingConfirmed && (slots.length > 0 || onOpenScheduler) && (
+        {!meetingConfirmed && !former && (slots.length > 0 || onOpenScheduler) && (
           <div className="mt-1.5 flex flex-wrap justify-center gap-1.5">
             {slots.map(s => (
               <button
