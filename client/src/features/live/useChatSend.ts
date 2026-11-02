@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import { getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
-import { CHAT_ACK_WAIT_MS, CHAT_NOT_SENT, CHAT_NOT_SENT_YET, isOwnEcho, textAfterSent } from './chatSend';
+import { CHAT_ACK_WAIT_MS, CHAT_NOT_SENT_YET, chatRefusal, isOwnEcho, textAfterSent } from './chatSend';
 
 /** One message on its way: the words as typed and as sent, its clientId, and the copies of it the chat already had. */
 interface OnItsWay {
@@ -93,7 +93,7 @@ export function useChatSend(
       setNotice(CHAT_NOT_SENT_YET);
     }, CHAT_ACK_WAIT_MS);
     socket.emit('chat:send', { sessionId, message: text, scope, clientId }, (res) => {
-      settle(m, res.ok ? null : res.message || CHAT_NOT_SENT);
+      settle(m, res.ok ? null : chatRefusal(res));
     });
   }, [input, sessionId, scope, me, settle]);
 

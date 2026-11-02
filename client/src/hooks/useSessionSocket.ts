@@ -212,6 +212,8 @@ export default function useSessionSocket(sessionId: string) {
     });
     socket.on('participant:count', () => { /* count managed via join/leave */ });
     socket.on('session:state', (data: any) => {
+      // Sent only to a socket in the event's room: from now on the server takes this page's chat messages.
+      store.setInEventRoom(true);
       if (data.participants) store.setParticipants(data.participants);
       if (data.sessionStatus) store.setSessionStatus(data.sessionStatus);
       if (data.hostInLobby !== undefined) store.setHostInLobby(data.hostInLobby);
@@ -1405,6 +1407,8 @@ export default function useSessionSocket(sessionId: string) {
     };
 
     const onReconnectAttempt = () => {
+      // Away, the socket is out of the event's room until the server answers its join again (session:state).
+      store.setInEventRoom(false);
       store.setReconnecting(true);
       store.setConnectionStatus('reconnecting');
     };

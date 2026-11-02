@@ -15,6 +15,21 @@ export const CHAT_NOT_SENT_YET = "Your message hasn't gone out yet. Check your c
 export const CHAT_NOT_SENT = "That message couldn't be sent. Try again.";
 
 /**
+ * Said when the server refused a message because this page was not in the event's room yet (its join not answered,
+ * or the connection just back): the person is in the event, so not the server's "You are not in this event." (2 Nov 2026).
+ */
+export const CHAT_STILL_JOINING = "You're still joining the event. Send your message again in a moment.";
+
+/** Beside the box while the page waits to be let into the event's room, once something is typed (2 Nov 2026). */
+export const CHAT_JOINING = 'Joining the chat. Your message can go in a moment.';
+
+/** What a refused message says: the server's own words, except the refusal of a page not yet in the event's room. */
+export function chatRefusal(res: { code?: string; message?: string }): string {
+  if (res.code === 'NOT_IN_SESSION') return CHAT_STILL_JOINING;
+  return res.message || CHAT_NOT_SENT;
+}
+
+/**
  * What the box holds once a message has gone out: nothing, when it still holds just what was sent; what was typed
  * after it, when the person carried on typing; and their words untouched, when they rewrote them meanwhile.
  */

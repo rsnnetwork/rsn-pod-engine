@@ -9,6 +9,7 @@ import { useChatSend } from './useChatSend';
 import EmojiPicker, { pickInto } from '@/components/chat/EmojiPicker';
 import { isComposingEnter } from '@/components/chat/emoji';
 import { BUBBLE_LINK, OWN_BUBBLE, THEIR_BUBBLE } from '@/features/messages/bubble-look';
+import { CHAT_JOINING } from './chatSend';
 
 const CHAT_EMOJIS = [
   { type: 'heart', emoji: '❤️' },
@@ -56,6 +57,9 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
   const hostPresent = hostInLobby || hostInParticipants;
   const isHostOrCohost = user?.id === hostUserId || (!!user?.id && cohosts.has(user.id));
   const chatDisabled = !alwaysOpen && scope === 'lobby' && !hostPresent && !isHostOrCohost;
+  // 2 Nov 2026 — the server takes a message only once it has let this page into the event's room (session:state):
+  // until then the box can be typed in, but nothing is sent, so a message is never refused as "not in this event".
+  const joining = !useSessionStore(s => s.inEventRoom);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -97,9 +101,9 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
   // refused message keeps them and says why, beside the box (useChatSend).
   const { send, sending, notice, clearNotice } = useChatSend(sessionId, scope, input, setInput);
   const handleSend = useCallback(() => {
-    send();
+    if (!joining) send();
     inputRef.current?.focus();
-  }, [send]);
+  }, [send, joining]);
   const typeMessage = useCallback((value: string) => {
     setInput(value);
     clearNotice();
@@ -193,6 +197,9 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
               {notice && (
                 <p role="alert" data-testid="chat-send-notice" className="mb-2 px-1 text-xs text-red-600">{notice}</p>
               )}
+              {joining && input.trim() && !notice && (
+                <p aria-live="polite" data-testid="chat-joining" className="mb-2 px-1 text-xs text-gray-500">{CHAT_JOINING}</p>
+              )}
               <ChatInputWithEmoji
                 inputRef={inputRef}
                 input={input}
@@ -201,6 +208,7 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
                 handleSend={handleSend}
                 scope={scope}
                 sending={sending}
+                joining={joining}
               />
             </>
           )}
@@ -210,7 +218,7 @@ export default function ChatPanel({ sessionId, onClose, alwaysOpen = false, padB
   );
 }
 
-function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSend, scope, sending }: {
+function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSend, scope, sending, joining }: {
   inputRef: RefObject<HTMLInputElement>;
   input: string;
   setInput: (v: string) => void;
@@ -219,6 +227,8 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
   scope: string;
   /** A message is on its way: the button waits (the box stays usable, so a phone's keyboard stays up). */
   sending: boolean;
+  /** The page is not in the event's room yet: Send waits (the box stays usable, so typing is never lost). */
+  joining: boolean;
 }) {
   // The shared picker (30 Oct 2026, L9): open for several emojis, each put where the caret is, until Escape, a tap
   // outside, this button again, Done or Send.
@@ -245,17 +255,18 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') setShowEmoji(false); handleKeyDown(e); }}
-          placeholder={scope === 'room' ? 'Message your room...' : 'Message everyone...'}
+          placeholder={joining ? 'Joining the chat…' : scope === 'room' ? 'Message your room...' : 'Message everyone...'}
           maxLength={500}
           // Phase 6 (1 May spec) — text-base (16px) on mobile kills iOS auto-zoom
           // when the input gains focus. text-sm (14px) on >=sm keeps the desktop
           // density intact. Stefan reported 'Chat needs zooming' on mobile — this
-          // is the root cause.
-          className="flex-1 px-3 py-2 text-base sm:text-sm text-gray-800 bg-gray-50 border border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
+          // is the root cause. min-w-0 (2 Nov 2026): without it the box kept its own width and pushed Send past the
+          // panel's edge (768px, and WebKit at every width).
+          className="min-w-0 flex-1 px-3 py-2 text-base sm:text-sm text-gray-800 bg-gray-50 border border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
         />
         {/* WS3/S11 — 44px tap target (was p-2 ≈ 32px, below the mobile
             minimum; caught by the mobile event smoke). */}
-        <button onClick={send} disabled={!input.trim() || sending} aria-busy={sending || undefined} aria-label="Send message"
+        <button onClick={send} disabled={!input.trim() || sending || joining} aria-busy={sending || undefined} aria-label="Send message"
           className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
           <Send className="h-4 w-4" />
         </button>
