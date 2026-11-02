@@ -10,6 +10,7 @@ import Sheet from '@/features/reason/ui/Sheet';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
+import { circlePrivateNotice } from './circle-preset';
 
 /** The `access` block GET /sessions/:id carries (T11). Absent on a server before T11: the page then offers Register. */
 export interface EventAccess {
@@ -50,9 +51,11 @@ interface Props {
   registerLabel: string;
   onRegister: () => void;
   registering: boolean;
+  /** T13: the circle the event is for, whose members Private means (final fix wave CM2). */
+  circleName?: string;
 }
 
-export default function EventAccessActions({ sessionId, access, registerLabel, onRegister, registering }: Props) {
+export default function EventAccessActions({ sessionId, access, registerLabel, onRegister, registering, circleName }: Props) {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -86,7 +89,7 @@ export default function EventAccessActions({ sessionId, access, registerLabel, o
     return (
       <div data-testid="event-private-notice" className="flex items-start gap-2 px-4 py-3 rounded-xl bg-gray-50 border border-gray-200 text-gray-700 text-sm">
         <Lock className="h-4 w-4 flex-shrink-0 mt-0.5" />
-        <span>{ACCESS_COPY.privateNotice}</span>
+        <span>{circleName ? circlePrivateNotice(circleName) : ACCESS_COPY.privateNotice}</span>
       </div>
     );
   }
