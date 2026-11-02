@@ -27,12 +27,14 @@ export default function OutgoingCallCard() {
 
   // The card goes at once. The server says what the withdraw ended as: when the callee accepted a moment before,
   // the call is on and the caller goes into the room after all (fix round 1). A withdraw that never reached the
-  // server puts the card back while the call still rings, so the caller can try again or be answered.
+  // server puts the card back while the call still rings, so the caller can try again or be answered. Only the tab
+  // that rang goes in (F3): Cancel pressed in another tab, as the answer came, leaves the room to the tab that rang,
+  // which call:accepted has already taken there.
   const cancel = async () => {
     useCallStore.getState().end(call.requestId);
     try {
       const outcome = await withdrawCall(call.requestId);
-      if (outcome.status === 'accepted') navigate(callRoomPath(outcome.conversationId, outcome.kind));
+      if (outcome.status === 'accepted' && call.placedHere) navigate(callRoomPath(outcome.conversationId, outcome.kind));
     } catch {
       if (call.expiresAt > Date.now()) useCallStore.getState().setOutgoing(call);
     }

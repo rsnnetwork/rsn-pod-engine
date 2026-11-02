@@ -10,7 +10,7 @@
 import { create } from 'zustand';
 import type { RingingCall } from '@/features/calls/call-ring';
 
-interface CallState {
+export interface CallState {
   incoming: RingingCall | null;
   outgoing: RingingCall | null;
   setIncoming: (call: RingingCall | null) => void;

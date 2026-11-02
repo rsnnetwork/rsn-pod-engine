@@ -70,7 +70,8 @@ describe('useChatSend: the send waits for the server before the words go', () =>
   const src = read(HOOK);
 
   it('sends with an acknowledgement and a clientId', () => {
-    expect(src).toMatch(/socket\.emit\('chat:send', \{ sessionId, message: text, scope, clientId \}, \(res\) => \{\n\s*settle\(m, res\.ok \? null : res\.message \|\| CHAT_NOT_SENT\);\n\s*\}\);/);
+    // 2 Nov 2026: a refusal says chatRefusal's sentence (the server's words, but "still joining" for a page not yet in).
+    expect(src).toMatch(/socket\.emit\('chat:send', \{ sessionId, message: text, scope, clientId \}, \(res\) => \{\n\s*settle\(m, res\.ok \? null : chatRefusal\(res\)\);\n\s*\}\);/);
   });
 
   it('empties the box only when the message went out, and keeps it on a refusal', () => {
@@ -124,7 +125,8 @@ describe('ChatPanel: the box, the sentence and the button', () => {
   });
 
   it('the send button waits while a message is on its way; the box stays usable (a phone keeps its keyboard)', () => {
-    expect(src).toMatch(/disabled=\{!input\.trim\(\) \|\| sending\} aria-busy=\{sending \|\| undefined\} aria-label="Send message"/);
+    // 2 Nov 2026: and while the page waits to be let into the event's room (chat-waits-for-the-room.test.ts).
+    expect(src).toMatch(/disabled=\{!input\.trim\(\) \|\| sending \|\| joining\} aria-busy=\{sending \|\| undefined\} aria-label="Send message"/);
     const input = src.slice(src.indexOf('<input'), src.indexOf('/>', src.indexOf('<input')));
     expect(input).not.toMatch(/disabled/);
   });
@@ -136,7 +138,7 @@ describe('speed networking\'s chat is otherwise exactly as it was', () => {
   it('the same scope, gate, placeholders, length cap and history fetch', () => {
     expect(src).toMatch(/const scope: 'lobby' \| 'room' = phase === 'matched' \? 'room' : 'lobby';/);
     expect(src).toMatch(/const chatDisabled = !alwaysOpen && scope === 'lobby' && !hostPresent && !isHostOrCohost;/);
-    expect(src).toMatch(/placeholder=\{scope === 'room' \? 'Message your room\.\.\.' : 'Message everyone\.\.\.'\}/);
+    expect(src).toMatch(/placeholder=\{joining \? 'Joining the chat…' : scope === 'room' \? 'Message your room\.\.\.' : 'Message everyone\.\.\.'\}/);
     expect(src).toMatch(/maxLength=\{500\}/);
     expect(src).toMatch(/socket\.emit\('chat:request_history', \{ sessionId, matchId: currentMatchId \|\| undefined \}\);/);
     // 30 Oct 2026 (P22): an Enter that confirms a word in an input method (Japanese, Chinese, Korean) is not a send.

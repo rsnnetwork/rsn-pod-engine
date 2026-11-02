@@ -186,6 +186,7 @@ export default function useSessionSocket(sessionId: string) {
     // Wait for connection before joining session
     const joinSession = () => {
       store.setConnectionStatus('connected');
+      store.noteJoinSent();
       socket.emit('session:join', { sessionId });
       // Canonical-100% (Ship A) — resync on EVERY connect, not just socket.io
       // reconnects: a page refresh creates a FRESH socket, so the 'reconnect'
@@ -212,6 +213,8 @@ export default function useSessionSocket(sessionId: string) {
     });
     socket.on('participant:count', () => { /* count managed via join/leave */ });
     socket.on('session:state', (data: any) => {
+      // Sent only to a socket in the event's room: from now on the server takes this page's chat messages.
+      store.setInEventRoom(true);
       if (data.participants) store.setParticipants(data.participants);
       if (data.sessionStatus) store.setSessionStatus(data.sessionStatus);
       if (data.hostInLobby !== undefined) store.setHostInLobby(data.hostInLobby);
@@ -1396,6 +1399,7 @@ export default function useSessionSocket(sessionId: string) {
       // match:assigned re-emit races or is missed, the resync reply lands this
       // client in the right room with exactly one token.
       socket.emit('session:resync', { sessionId, haveSeq: useSessionStore.getState().snapshotSeq });
+      store.noteJoinSent(); // the join above starts the chat's wait for the room again
       // T0-3 — refetch authoritative state on every reconnect to recover
       // anything we might have missed during the disconnect window.
       fetchSessionStateSnapshot();
@@ -1405,6 +1409,9 @@ export default function useSessionSocket(sessionId: string) {
     };
 
     const onReconnectAttempt = () => {
+      // Away, the socket is out of the event's room until the server answers its join again (session:state).
+      store.setInEventRoom(false);
+      store.setJoinSentAt(null);
       store.setReconnecting(true);
       store.setConnectionStatus('reconnecting');
     };
@@ -1444,6 +1451,7 @@ export default function useSessionSocket(sessionId: string) {
       // reconnect-reset only fires for users with no active match, so an
       // in-breakout user is never flipped to the main room (#B).
       if (!socket.connected) socket.connect();
+      store.noteJoinSent();
       socket.emit('session:join', { sessionId });
       socket.emit('presence:heartbeat', { sessionId });
       // Canonical-100% (Ship A) — a backgrounded device (phone lock, app switch)
