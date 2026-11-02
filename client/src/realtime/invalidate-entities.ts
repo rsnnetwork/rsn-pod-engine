@@ -13,6 +13,11 @@
 // is sent again. A read that started after the connect already reflects everything the socket could have missed, and is
 // left alone, on its way or not. ("Answered in the last 2 s" was skipped before, and left such a page stale until a
 // reload: T19's Script E 5b in WebKit, CLAUDE.md section 3's late-joiner race.)
+// Fix wave 2 (2 Nov 2026): every read of a page load starts before its socket connects, so CX1 read each of them twice
+// (one member's requests in n1-t11 went from 242 to 393, past production's 100 a minute). The server now sends a socket
+// that joins the tags its member was sent in the last minute (server realtime/recent-entities.ts), which reads again
+// exactly what changed. So the FIRST connect re-reads only reads that started more than REPLAY_TRUST_MS before it; a
+// reconnect still re-reads every tagged read that started before it (after a gap, everything is read again).
 
 import type { Query, QueryCacheNotifyEvent, QueryClient } from '@tanstack/react-query';
 
@@ -38,32 +43,38 @@ function isTagged(query: Pick<Query, 'meta'>): boolean {
 
 /** A flapping socket's connects are answered at most once at once and once more per this window. */
 export const CONNECT_RESYNC_WINDOW_MS = 5000;
+/**
+ * How far back the server's replay to a joining socket is trusted on the first connect: half the minute the server
+ * keeps (RECENT_ENTITIES_MS), which leaves room for a slow read and for the two clocks.
+ */
+export const REPLAY_TRUST_MS = 30_000;
 
 /**
- * When each read of the cache last started, by query hash (a queryCache 'fetch' action). A read this subscription never
- * saw start (one from before it) counts as started before any connect.
+ * When each read of the cache last started, by query hash (a queryCache 'fetch' action). A query that holds data it did
+ * not fetch (initialData), or that was in the cache before this subscription, counts from when its data was put there.
  */
 type ReadStarts = Map<string, number>;
 
 /**
- * Whether a connect at `connectedAt` should read this query again: it follows the server's changes, and its latest
- * read started before the socket was listening (so its answer may be from before a change the socket missed).
+ * Whether a connect should read this query again: it follows the server's changes, and its latest read started before
+ * `readsFrom` (the connect itself after a reconnect; REPLAY_TRUST_MS before it on the first connect), so its answer may
+ * be from before a change the socket missed and the server's replay does not cover.
  */
-function mayHaveMissed(query: Pick<Query, 'meta' | 'queryHash'>, connectedAt: number, starts: ReadStarts): boolean {
+function mayHaveMissed(query: Pick<Query, 'meta' | 'queryHash'>, readsFrom: number, starts: ReadStarts): boolean {
   if (!isTagged(query)) return false;
-  return (starts.get(query.queryHash) ?? Number.NEGATIVE_INFINITY) < connectedAt;
+  return (starts.get(query.queryHash) ?? Number.NEGATIVE_INFINITY) < readsFrom;
 }
 
 /**
- * Read again every tagged query whose latest read started before the connect at `connectedAt`: its answer may be from
- * before a change the socket missed. One on its way with data already is sent again (cancelRefetch). A first read still
+ * Read again every tagged query whose latest read started before `readsFrom`: its answer may be from before a change
+ * the socket missed. One on its way with data already is sent again (cancelRefetch). A first read still
  * on its way (no data yet) cannot be re-sent that way, and cancelling it would fail whoever awaits it, so it is read again
  * as soon as it lands. Reads that started after the connect are not touched. Each read sent here is noted as started at
  * `at`.
  */
-function resyncAfterConnect(client: QueryClient, connectedAt: number, at: number, starts: ReadStarts): Promise<void> {
+function resyncAfterConnect(client: QueryClient, readsFrom: number, at: number, starts: ReadStarts): Promise<void> {
   // Chosen once, before anything is sent: the cache asks the predicate again for the refetch that follows the invalidate.
-  const missed = client.getQueryCache().findAll({ predicate: (query) => mayHaveMissed(query, connectedAt, starts) });
+  const missed = client.getQueryCache().findAll({ predicate: (query) => mayHaveMissed(query, readsFrom, starts) });
   const firstReads = missed.filter((query) => query.state.fetchStatus === 'fetching' && query.state.data === undefined);
   const atOnce = new Set(missed.filter((query) => !firstReads.includes(query)).map((query) => query.queryHash));
   for (const query of missed) starts.set(query.queryHash, at);
@@ -87,11 +98,12 @@ export interface EntitySignals {
 }
 
 /**
- * Keeps the cache in step with the server: entity:changed refreshes the reads its tags name, at once; a connect (the
- * first, and each one after a gap) refreshes the tagged reads that started before it (CX1). The first connect in a
- * quiet window is answered at once; any more within the window are answered together, once, when it ends, so a socket
- * reconnecting every second refreshes once per window, not once per connect; that one refresh reads again what started
- * before the latest of those connects. `now` is for tests. Returns the unsubscribe.
+ * Keeps the cache in step with the server: entity:changed refreshes the reads its tags name, at once (the server's
+ * replay to a joining socket comes this way too); a reconnect refreshes the tagged reads that started before it (CX1),
+ * and the first connect only those older than the replay covers (fix wave 2). The first connect in a quiet window is
+ * answered at once; any more within the window are answered together, once, when it ends, so a socket reconnecting
+ * every second refreshes once per window, not once per connect; that one refresh reads again what started before the
+ * latest of those connects. `now` is for tests. Returns the unsubscribe.
  */
 export function subscribeEntitySync(
   socket: EntitySignals,
@@ -102,19 +114,26 @@ export function subscribeEntitySync(
     void invalidateEntities(client, Array.isArray(data?.entities) ? data.entities : []);
   };
   const starts: ReadStarts = new Map();
+  const heldSince = (query: Query) => query.state.dataUpdatedAt || now();
+  for (const query of client.getQueryCache().getAll()) starts.set(query.queryHash, heldSince(query));
   const unwatch = client.getQueryCache().subscribe((event: QueryCacheNotifyEvent) => {
     if (event.type === 'removed') starts.delete(event.query.queryHash);
+    else if (event.type === 'added') starts.set(event.query.queryHash, heldSince(event.query));
     else if (event.type === 'updated' && event.action.type === 'fetch') starts.set(event.query.queryHash, now());
   });
   let lastResync = Number.NEGATIVE_INFINITY;
   let lastConnect = Number.NEGATIVE_INFINITY;
+  let connects = 0;
   let trailing: ReturnType<typeof setTimeout> | null = null;
   const resync = () => {
     lastResync = now();
-    void resyncAfterConnect(client, lastConnect, lastResync, starts);
+    // Only the first connect leans on the server's replay; after a reconnect everything that started before it is read.
+    const readsFrom = connects === 1 ? lastConnect - REPLAY_TRUST_MS : lastConnect;
+    void resyncAfterConnect(client, readsFrom, lastResync, starts);
   };
   const onConnect = () => {
     lastConnect = now();
+    connects += 1;
     if (trailing) return;
     const since = now() - lastResync;
     if (since >= CONNECT_RESYNC_WINDOW_MS) {
