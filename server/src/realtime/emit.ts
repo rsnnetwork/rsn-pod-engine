@@ -19,10 +19,13 @@
 //   identifying what just changed. The client's useEntityChangedHandler
 //   matches incoming entities against each query's meta.entities and
 //   invalidates the matches.
+// - Each recipient's tags are remembered for a minute (recent-entities.ts), so a socket that joins its member's room
+//   just after is sent them too (fix wave 2, 2 Nov 2026).
 
 import type { Server as SocketServer } from 'socket.io';
 import logger from '../config/logger';
 import { userRoom } from '../services/orchestration/state/session-state';
+import { rememberEntities } from './recent-entities';
 
 // ─── Cached io reference ────────────────────────────────────────────────────
 //
@@ -59,6 +62,7 @@ export async function emitEntities(
   try {
     for (const userId of recipients) {
       io.to(userRoom(userId)).emit('entity:changed', { entities });
+      rememberEntities(userId, entities);
     }
   } catch (err) {
     logger.warn({ err, recipientCount: recipients.size, entities }, 'emitEntities fanout failed (non-fatal)');

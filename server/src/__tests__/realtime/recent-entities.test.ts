@@ -1,0 +1,94 @@
+// ─── A socket that joins is told what changed for its member in the last minute (fix wave 2, 2 Nov 2026) ─────────────
+//
+// A page's first reads start before its socket has joined the member's room. A change made in between went out on
+// entity:changed to a room the socket was not in yet, and the page kept what it had read (T19's Script E 5b). The
+// client's fix (CX1) read every tagged query again on the first connect, which roughly doubled every page load
+// (measured: 242 → 393 requests for one member in n1-t11) and pushed busy members past production's 100 a minute.
+// Now emitEntities remembers, for a minute, the tags it sent each member, and a socket that joins is sent those tags at
+// once on the same entity:changed event: the page reads again exactly what changed, and nothing else.
+
+jest.mock('../../config/logger', () => ({
+  default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  __esModule: true,
+}));
+
+import { emitEntities } from '../../realtime/emit';
+import {
+  RECENT_ENTITIES_MAX_PER_USER, RECENT_ENTITIES_MS, clearRecentEntities, recentEntities, replayRecentEntities,
+} from '../../realtime/recent-entities';
+
+function fakeIo() {
+  const sent: Array<{ room: string; event: string; payload: unknown }> = [];
+  const io = { to: (room: string) => ({ emit: (event: string, payload: unknown) => { sent.push({ room, event, payload }); } }) };
+  return { io: io as never, sent };
+}
+
+beforeEach(() => clearRecentEntities());
+
+describe('emitEntities remembers what it told each member, for a minute', () => {
+  it('each recipient keeps the tags they were sent, once each, newest last', async () => {
+    const { io } = fakeIo();
+    await emitEntities(io, ['u-ana', 'u-bo'], ['meeting:m1', 'user:u-ana:meetings']);
+    await emitEntities(io, ['u-ana'], ['meeting:m1', 'dm-conversation:c1']);
+    expect(recentEntities('u-ana')).toEqual(['user:u-ana:meetings', 'meeting:m1', 'dm-conversation:c1']);
+    expect(recentEntities('u-bo')).toEqual(['meeting:m1', 'user:u-ana:meetings']);
+    expect(recentEntities('u-cy')).toEqual([]);
+  });
+
+  it('forgets after RECENT_ENTITIES_MS (a minute)', async () => {
+    jest.useFakeTimers();
+    try {
+      const { io } = fakeIo();
+      await emitEntities(io, ['u-ana'], ['meeting:m1']);
+      expect(RECENT_ENTITIES_MS).toBe(60_000);
+      jest.advanceTimersByTime(RECENT_ENTITIES_MS - 1);
+      expect(recentEntities('u-ana')).toEqual(['meeting:m1']);
+      jest.advanceTimersByTime(2);
+      expect(recentEntities('u-ana')).toEqual([]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps at most RECENT_ENTITIES_MAX_PER_USER sends per member (a runaway member cannot grow it)', async () => {
+    const { io } = fakeIo();
+    for (let i = 0; i < RECENT_ENTITIES_MAX_PER_USER + 50; i++) await emitEntities(io, ['u-ana'], [`pod:p${i}`]);
+    const kept = recentEntities('u-ana');
+    expect(kept).toHaveLength(RECENT_ENTITIES_MAX_PER_USER);
+    expect(kept[kept.length - 1]).toBe(`pod:p${RECENT_ENTITIES_MAX_PER_USER + 49}`);
+  });
+
+  it('a send that reached nobody (no socket server) is not remembered', async () => {
+    await emitEntities(null, ['u-ana'], ['meeting:m1']);
+    expect(recentEntities('u-ana')).toEqual([]);
+  });
+});
+
+describe('a socket that joins is sent what changed for its member in the last minute', () => {
+  const socketFor = () => {
+    const emitted: Array<{ event: string; payload: unknown }> = [];
+    return { emitted, socket: { emit: (event: string, payload: unknown) => { emitted.push({ event, payload }); } } };
+  };
+
+  it("on the same entity:changed event and payload every client already follows (production's client included)", async () => {
+    const { io } = fakeIo();
+    await emitEntities(io, ['u-max'], ['meeting:m1', 'user:u-max:meetings']);
+    const { socket, emitted } = socketFor();
+    replayRecentEntities(socket, 'u-max');
+    expect(emitted).toEqual([{ event: 'entity:changed', payload: { entities: ['meeting:m1', 'user:u-max:meetings'] } }]);
+  });
+
+  it('nothing recent, or no member: nothing is sent', () => {
+    const { socket, emitted } = socketFor();
+    replayRecentEntities(socket, 'u-max');
+    replayRecentEntities(socket, null);
+    expect(emitted).toEqual([]);
+  });
+
+  it('the connection handler joins the member room first, then replays (source pin)', () => {
+    const fs = jest.requireActual('fs') as typeof import('fs');
+    const path = jest.requireActual('path') as typeof import('path');
+    const src = fs.readFileSync(path.join(__dirname, '../../services/orchestration/orchestration.service.ts'), 'utf8');
+    expect(src).toMatch(/if \(userId\) socket\.join\(`user:\$\{userId\}`\);\s*\n\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*replayRecentEntities\(socket, userId\);/);
+  });
+});
