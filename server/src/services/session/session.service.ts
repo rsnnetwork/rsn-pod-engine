@@ -17,6 +17,7 @@ import { activeMemberSql } from '../users/active-member';
 import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-access';
 import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
 import { assertVideoRoom } from './video-room';
+import { LIVE_STATUSES, mainRoomOf } from './main-room';
 import { canRegister, publicEventsSql, readEventAccessFacts, visibleEventsSql } from './event-access';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 
@@ -33,12 +34,6 @@ const SESSION_COLUMNS = `
   circle_id AS "circleId",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
-
-/** The states an event is live in (started, not yet over). */
-const LIVE_STATUSES: SessionStatus[] = [
-  SessionStatus.LOBBY_OPEN, SessionStatus.ROUND_ACTIVE, SessionStatus.ROUND_RATING,
-  SessionStatus.ROUND_TRANSITION, SessionStatus.CLOSING_LOBBY,
-];
 
 // ─── Event format (26 Oct 2026) ─────────────────────────────────────────────
 
@@ -1071,7 +1066,10 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
     // room in their own session (monitoring/producer). Anything else falls back
     // to the caller's own lobby — legit clients always pass an allowed room, so
     // their behaviour is unchanged.
-    const lobbyRoomName = session.lobbyRoomId || `session-${sessionId}`;
+    //
+    // 2 Nov 2026 — with no lobby room id stored (the Start gap, a REST start) the fallback is the lobby every
+    // other path sends people to, never a room of its own (`session-<id>` stranded the person alone).
+    const lobbyRoomName = mainRoomOf(sessionId, session.lobbyRoomId);
     let roomName = lobbyRoomName;
     if (roomId && roomId !== lobbyRoomName) {
       // June-14 (Stefan + Ali live test) — STALE-BREAKOUT HEAL for the REST

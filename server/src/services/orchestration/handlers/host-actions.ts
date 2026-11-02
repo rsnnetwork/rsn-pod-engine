@@ -288,6 +288,26 @@ async function refuseIfAdminTarget(
 
 // ─── Host Start Session ─────────────────────────────────────────────────────
 
+/**
+ * Go Live, for both start paths (2 Nov 2026). The status, the lobby room id and started_at go in ONE update,
+ * before LiveKit is called: the event was open for 0.4 to 0.8 s with no room id while LiveKit Cloud created
+ * the room, and a token taken in that gap named a room nobody else was in. A failed LiveKit call leaves the
+ * event open on the same room name, as before; LiveKit creates the room on the first join.
+ */
+async function openEventLobby(sessionId: string): Promise<void> {
+  const lobbyRoom = videoService.lobbyRoomId(sessionId);
+  await sessionService.updateSessionStatus(sessionId, SessionStatus.LOBBY_OPEN, {
+    lobbyRoomId: lobbyRoom,
+    startedAt: new Date(),
+  });
+  try {
+    await videoService.createLobbyRoom(sessionId);
+    logger.info({ sessionId, lobbyRoom }, 'Lobby LiveKit room created');
+  } catch (lobbyErr) {
+    logger.warn({ err: lobbyErr, sessionId }, 'Failed to create lobby LiveKit room — continuing without video mosaic');
+  }
+}
+
 export async function handleHostStart(
   io: SocketServer,
   socket: Socket,
@@ -306,24 +326,10 @@ export async function handleHostStart(
       return;
     }
 
-    // Transition to lobby
-    await sessionService.updateSessionStatus(data.sessionId, SessionStatus.LOBBY_OPEN);
-    await query('UPDATE sessions SET started_at = NOW() WHERE id = $1', [data.sessionId]);
-
-    // Create LiveKit lobby room for the video mosaic
-    try {
-      const lobbyRoom = await videoService.createLobbyRoom(data.sessionId);
-      await sessionService.updateSessionStatus(data.sessionId, SessionStatus.LOBBY_OPEN, {
-        lobbyRoomId: lobbyRoom.roomId,
-      });
-      logger.info({ sessionId: data.sessionId, lobbyRoom: lobbyRoom.roomId }, 'Lobby LiveKit room created');
-
-      // Ship C — lobby:token retired. The session:status_changed broadcast
-      // below triggers every connected client's session:resync pull, and
-      // handleResync mints their lobby token for the just-created room.
-    } catch (lobbyErr) {
-      logger.warn({ err: lobbyErr, sessionId: data.sessionId }, 'Failed to create lobby LiveKit room — continuing without video mosaic');
-    }
+    // Ship C — lobby:token retired. The session:status_changed broadcast
+    // below triggers every connected client's session:resync pull, and
+    // handleResync mints their lobby token for the room opened here.
+    await openEventLobby(data.sessionId);
 
     const config = typeof session.config === 'string'
       ? JSON.parse(session.config as unknown as string)
@@ -2492,8 +2498,7 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
     throw new ValidationError('Session can only start from scheduled state');
   }
 
-  await sessionService.updateSessionStatus(sessionId, SessionStatus.LOBBY_OPEN);
-  await query('UPDATE sessions SET started_at = NOW() WHERE id = $1', [sessionId]);
+  await openEventLobby(sessionId);
 
   const config = typeof session.config === 'string'
     ? JSON.parse(session.config as unknown as string)

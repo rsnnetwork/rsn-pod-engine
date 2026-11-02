@@ -19,6 +19,7 @@ import logger from '../../../config/logger';
 import { userRoom, activeSessions } from './session-state';
 import { readCanonical, CanonicalSessionState, ParticipantLocation } from './canonical-state';
 import { liveStateAccess } from '../event-room-entry';
+import { liveMainRoomOf } from '../../session/main-room';
 
 export interface StateSnapshotParticipant {
   userId: string;
@@ -108,9 +109,15 @@ async function buildYou(
   if (!mintToken) return you;
   try {
     const sessionService = await import('../../session/session.service');
-    const roomId = p.location.type === 'breakout'
-      ? p.location.roomId
-      : (await sessionService.getSessionById(sessionId))?.lobbyRoomId;
+    // 2 Nov 2026 — the main room is the lobby the REST rail names too, also in the Start gap before the
+    // lobby room id is stored. Outside a live event the main room still mints nothing.
+    let roomId: string | undefined;
+    if (p.location.type === 'breakout') {
+      roomId = p.location.roomId;
+    } else {
+      const session = await sessionService.getSessionById(sessionId);
+      roomId = session ? liveMainRoomOf(sessionId, session) : undefined;
+    }
     if (!roomId) return you;
     const minted = await sessionService.generateLiveKitToken(sessionId, userId, roomId);
     you.token = minted.token;
