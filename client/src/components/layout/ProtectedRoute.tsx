@@ -19,7 +19,10 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   if (isLoading) {
     return (
       <div className="h-screen w-screen bg-white flex flex-col items-center justify-center gap-3 px-6 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-center">
-        <PageLoader />
+        {/* Its own height, not the screen's: the loader, the words and the buttons sit together in the middle. */}
+        <div>
+          <PageLoader />
+        </div>
         {/* Fix wave 3: the session check is waiting out a 429, a 5xx or no connection. The member stays signed in. */}
         {sessionRetrying && <SessionRetrying />}
       </div>
