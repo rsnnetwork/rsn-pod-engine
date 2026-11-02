@@ -59,23 +59,41 @@ function expiredAccessToken(who: TestUser): string {
   return jwt.sign({ ...claims, iat: now - 1020, exp: now - 120 }, JWT_SECRET);
 }
 
-/** Reads the session as `who` until the limiter refuses; returns the seconds until its window ends. */
+/** Reads sent at once while the minute is spent: a quarter of production's 240, so five bursts at most. */
+const BURST = 60;
+
+/** One read of the session as `who`: its status, and the seconds its window has left when the limiter refused it. */
+async function readSession(who: TestUser): Promise<{ status: number; resetIn: number }> {
+  const res = await fetch(`${SERVER}/api/auth/session`, { headers: { Authorization: `Bearer ${who.accessToken}` } });
+  await res.arrayBuffer();
+  return { status: res.status, resetIn: Number(res.headers.get('ratelimit-reset') ?? res.headers.get('retry-after') ?? 60) };
+}
+
+/**
+ * Reads the session as `who` in bursts of parallel reads until the limiter refuses; returns the seconds until its window
+ * ends. In bursts, not one read after another: over production's latency (about 0.2 s a read) 240 reads one at a time
+ * took most of the minute, so the window was nearly over (6 to 12 s left, R10z smoke) before the page even opened.
+ */
 async function spendTheMinute(who: TestUser): Promise<number> {
-  for (let i = 0; i < 2000; i++) {
-    const res = await fetch(`${SERVER}/api/auth/session`, { headers: { Authorization: `Bearer ${who.accessToken}` } });
-    if (res.status === 429) return Number(res.headers.get('ratelimit-reset') ?? res.headers.get('retry-after') ?? 60);
-    expect(res.status).toBe(200);
+  for (let burst = 0; burst * BURST < 2000; burst++) {
+    const answers = await Promise.all(Array.from({ length: BURST }, () => readSession(who)));
+    const refused = answers.filter((a) => a.status === 429);
+    expect(answers.filter((a) => a.status !== 200 && a.status !== 429), 'every read is answered 200 or 429').toEqual([]);
+    if (refused.length) return Math.min(...refused.map((a) => a.resetIn));
   }
   throw new Error('the limiter never answered 429');
 }
 
 /** Spends the minute early in a window, so it stays spent for longer than the hold. Returns when it was spent and for how long. */
 async function spendTheMinuteEarly(who: TestUser): Promise<{ spentAt: number; resetIn: number }> {
+  const started = Date.now();
   let resetIn = await spendTheMinute(who);
   if (resetIn < 45) {
+    // The window had opened earlier: wait for the next one, and spend it as it opens.
     await wait((resetIn + 1) * 1000);
     resetIn = await spendTheMinute(who);
   }
+  console.log(`[n1-fw-429] the minute was spent ${((Date.now() - started) / 1000).toFixed(1)} s after starting, ${resetIn} s of its window left`);
   return { spentAt: Date.now(), resetIn };
 }
 
