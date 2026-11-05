@@ -195,15 +195,22 @@ test.describe.serial('a direct video call with a connection', () => {
     await expect(tiles(pageA)).toHaveCount(2, { timeout: 45_000 });
     await expect(tiles(pageB)).toHaveCount(2, { timeout: 45_000 });
     const pressedAt = new Date().toISOString().slice(11, 23);
+    // 5 Nov 2026 (D56): leaving an answered call the other person was in asks how it went, as a booked meeting does.
+    const call = await pool.query<{ id: string }>("SELECT id FROM meetings WHERE conversation_id = $1 AND source = 'instant'", [conv]);
+    const asked = new RegExp(`/meetings/${call.rows[0].id}\\?feedback=1`);
     await pageA.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-    await pageA.waitForURL(new RegExp(`/messages/${conv}`));
+    await pageA.waitForURL(asked, { timeout: 20_000 });
+    await expect(pageA.getByRole('dialog', { name: 'How did your meeting with Bo Brandt go?' })).toBeVisible({ timeout: 15_000 });
+    await shot(pageA, 'a-asked-how-it-went');
     await expect(pageB.getByTestId('partner-left')).toBeVisible({ timeout: 30_000 }).catch(async (e: Error) => {
       const fromPress = roomLog.filter((l) => l.slice(0, 12) >= pressedAt).slice(0, 120);
       throw new Error(`${e.message}\nB was never told. Pressed at ${pressedAt}; B is on ${pageB.url()} with ${await tiles(pageB).count()} tiles.\n`
         + `What the rooms logged from the press on:\n${fromPress.join('\n') || '(nothing)'}`);
     });
     await pageB.getByTestId('partner-left').getByRole('button', { name: 'Leave' }).click();
-    await pageB.waitForURL(new RegExp(`/messages/${conv}`));
+    await pageB.waitForURL(asked, { timeout: 20_000 });
+    await expect(pageB.getByRole('dialog', { name: 'How did your meeting with Callie Arendt go?' })).toBeVisible({ timeout: 15_000 });
+    await shot(pageB, 'b-asked-how-it-went');
   });
 
   test('the call is listed once under Events → Past, as a video call', async () => {

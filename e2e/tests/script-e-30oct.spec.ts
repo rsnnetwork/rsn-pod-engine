@@ -569,8 +569,14 @@ test('4.6: a direct video call rings the connection on any screen, both land in 
       await shot(callee.page, 'e-4.6-room-bo');
       throw new Error(`${e.message}\n${await callerRoom.report()}\n${await calleeRoom.report()}`);
     });
+    // 5 Nov 2026 (D56): leaving an answered call the other person was in asks how it went, as a booked meeting does.
+    const answered = await pool.query<{ id: string }>(
+      `SELECT id FROM meetings WHERE conversation_id = $1 AND source = 'instant' ORDER BY created_at DESC LIMIT 1`, [convAB]);
     await caller.page.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-    await caller.page.waitForURL(new RegExp(`/messages/${convAB}`));
+    await caller.page.waitForURL(new RegExp(`/meetings/${answered.rows[0].id}\\?feedback=1`), { timeout: LIVE });
+    await expect(caller.page.getByRole('dialog', { name: `How did your meeting with ${bo.displayName} go?` }))
+      .toBeVisible({ timeout: LIVE });
+    await shot(caller.page, 'e-4.6-asked-how-it-went');
     await expect(callee.page.getByTestId('partner-left')).toBeVisible({ timeout: 30_000 });
   });
 

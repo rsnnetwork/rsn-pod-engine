@@ -466,10 +466,16 @@ test('9) one person leaves the room and comes back in; the other stays in it and
       await expect(tiles(anaPage)).toHaveCount(2, { timeout: 45_000 });
       await expect(tiles(boPage)).toHaveCount(2, { timeout: 45_000 });
 
+      // The room is the booked meeting's, inside its window, so each leave after the other was there asks how it
+      // went (5 Nov 2026: the room's token names the meeting, as it does for an answered direct call).
+      const held = await pool.query<{ id: string }>(
+        `SELECT id FROM meetings WHERE conversation_id = $1 AND status = 'scheduled' ORDER BY start_at DESC LIMIT 1`, [convId]);
+      const asked = new RegExp(`/meetings/${held.rows[0].id}\\?feedback=1`);
+
       // Ana leaves. Bo is told who left, and stays: no timer takes him back to the chat.
       const pressedAt = new Date().toISOString().slice(11, 23);
       await anaPage.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-      await expect(anaPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });
+      await expect(anaPage).toHaveURL(asked, { timeout: 15_000 });
       const notice = boPage.getByTestId('partner-left');
       await expect(notice).toContainText('Rejoin Ana left the call', { timeout: 30_000 }).catch(async (e: Error) => {
         const fromPress = log.filter((l) => l.slice(0, 12) >= pressedAt).slice(0, 150);
@@ -489,10 +495,10 @@ test('9) one person leaves the room and comes back in; the other stays in it and
 
       // She leaves once more, with the bottom bar's red hang-up this time; Bo leaves too, from the notice.
       await anaPage.getByRole('button', { name: 'Leave call', exact: true }).click();
-      await expect(anaPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });
+      await expect(anaPage).toHaveURL(asked, { timeout: 15_000 });
       await expect(notice).toBeVisible({ timeout: 30_000 });
       await notice.getByRole('button', { name: 'Leave', exact: true }).click();
-      await expect(boPage).toHaveURL(new RegExp(`/messages/${convId}`), { timeout: 15_000 });
+      await expect(boPage).toHaveURL(asked, { timeout: 15_000 });
       console.log('  ✓ Ana left and came back; Bo stayed in the room until he chose to leave');
     } finally {
       await media.close().catch(() => {});
