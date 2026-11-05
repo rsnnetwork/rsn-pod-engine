@@ -280,10 +280,17 @@ describe('the meeting room', () => {
   // Fix round 2: the leave reads what the room holds as the person leaves (who is in it now, and the meeting afresh
   // when the scheduler's read gave none), instead of trusting only what earlier events and reads left behind.
   it('decides as the person leaves: who is in the room now, and the meeting read afresh when it is not known', () => {
-    expect(room).toMatch(/afterRoomLeave\(\{\s*conversationId: conversationId \?\? '',\s*meetingId: meeting\?\.meetingId,\s*hadPartner: hadPartner\.current,\s*partnerHere: partnerProbe\.current\(\),\s*readMeetingId: isScheduled \? readMeetingId : undefined,\s*\}\)/);
+    expect(room).toMatch(/afterRoomLeave\(\{\s*conversationId: conversationId \?\? '',\s*(?:\/\/[^\n]*\n\s*)?meetingId: meeting\?\.meetingId \|\| conn\?\.meetingId,\s*hadPartner: hadPartner\.current,\s*partnerHere: partnerProbe\.current\(\),\s*readMeetingId: isScheduled \? readMeetingId : undefined,\s*\}\)/);
     expect(room).toMatch(/queryClient\.fetchQuery\(\{ queryKey: schedulingKey\(conversationId \?\? ''\), queryFn: readScheduling, staleTime: 0 \}\)/);
     const seen = read('features/messages/PartnerSeen.tsx');
     expect(seen).toMatch(/probe\.current = \(\) => partnerInRoom\(room\)/);
+  });
+
+  // 5 Nov 2026 (D56): an answered direct call has no scheduler read (no scheduled=1), so the room's own token names the
+  // call's meeting, and leaving after the other person was there asks how it went, as booked meetings do.
+  it('keeps the meeting the room token names, so an answered direct call is asked about too', () => {
+    expect(room).toMatch(/meetingId: typeof data\.data\.meetingId === 'string' \? data\.data\.meetingId : null,/);
+    expect(room).toMatch(/\}, \[navigate, conversationId, meeting\?\.meetingId, conn\?\.meetingId, isScheduled, readMeetingId\]\);/);
   });
 
   // Fix round 3: a press visibly does something at once, while the leave may wait (up to LEAVE_READ_MS) on that read.

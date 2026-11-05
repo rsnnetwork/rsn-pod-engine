@@ -124,6 +124,12 @@ export interface CallToken {
   url: string;
   roomName: string;
   kind: 'audio' | 'video';
+  /**
+   * The meeting this entry counts as attending (standingMeeting): a booked meeting in its window, or the answered
+   * call's own row; null when none stands (calls unlocked, no meeting). Leaving the room asks how this meeting went
+   * (5 Nov 2026: answered direct calls ask too, as Google Meet and WhatsApp do after a call).
+   */
+  meetingId: string | null;
 }
 
 /** A scheduled meeting stands on the conversation and has not ended (its end plus the grace period). */
@@ -277,7 +283,10 @@ export async function getCallToken(
   const issued = await getVideoProvider().issueJoinToken(
     userId, roomName, me?.display_name || 'Member', CALL_TOKEN_TTL_SECONDS,
   );
-  return { token: issued.token, url: config.livekit.host, roomName, kind: kind === 'audio' ? 'audio' : 'video' };
+  return {
+    token: issued.token, url: config.livekit.host, roomName, kind: kind === 'audio' ? 'audio' : 'video',
+    meetingId: standing?.id ?? null,
+  };
 }
 
 // ── Call requests (request → accept) ─────────────────────────────────────────

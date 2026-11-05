@@ -197,7 +197,7 @@ describe('callRoomId', () => {
 describe('getCallToken', () => {
   it('mints a token for the conversation room with the LiveKit host', async () => {
     const t = await getCallToken('conv-1', 'u-a', 'video');
-    expect(t).toEqual({ token: 'tok-123', url: 'wss://lk.example', roomName: 'dm-conv-1', kind: 'video' });
+    expect(t).toEqual({ token: 'tok-123', url: 'wss://lk.example', roomName: 'dm-conv-1', kind: 'video', meetingId: null });
     expect(mockIssue).toHaveBeenCalledWith('u-a', 'dm-conv-1', 'Ana', expect.any(Number));
   });
   it('refuses when the two people have blocked each other', async () => {
@@ -337,7 +337,9 @@ describe('getCallToken', () => {
   it('a locked pair with an answered call standing gets a token, stamps the call\'s row and never the conversation or the unlock', async () => {
     conv.meeting_start_at = null;
     instantRow = { id: 'mtg-instant', source: 'instant' };
-    await expect(getCallToken('conv-1', 'u-b', 'video')).resolves.toMatchObject({ token: 'tok-123', roomName: 'dm-conv-1' });
+    // The token names the call's meeting, so leaving the room asks how it went (5 Nov 2026).
+    await expect(getCallToken('conv-1', 'u-b', 'video'))
+      .resolves.toMatchObject({ token: 'tok-123', roomName: 'dm-conv-1', meetingId: 'mtg-instant' });
     expect(calls(/UPDATE meetings SET joined_b_at/)[0][1]).toEqual(['mtg-instant']);
     expect(mockQuery.mock.calls.some(c => /SET meeting_joined|SET calls_unlocked_at/.test(c[0] as string))).toBe(false);
     expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), ['u-b'], ['user:u-b:meetings', 'meeting:mtg-instant']);

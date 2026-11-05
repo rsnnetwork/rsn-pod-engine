@@ -207,7 +207,8 @@ export default function MeetPage() {
   const isScheduled = params.get('scheduled') === '1';
   const navigate = useNavigate();
   // The token belongs to one room and kind: `room` keeps it from being reused if the page moves to another call.
-  const [conn, setConn] = useState<{ token: string; url: string; room: string } | null>(null);
+  // `meetingId` is the meeting the server counted this entry as attending (a booked one, or an answered call's own).
+  const [conn, setConn] = useState<{ token: string; url: string; room: string; meetingId: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState<number>(Date.now());
   const [forceJoin, setForceJoin] = useState(false);
@@ -264,14 +265,15 @@ export default function MeetPage() {
     void Promise.all([
       afterRoomLeave({
         conversationId: conversationId ?? '',
-        meetingId: meeting?.meetingId,
+        // The scheduler's meeting, else the one the room's token named: an answered direct call asks too (5 Nov 2026).
+        meetingId: meeting?.meetingId || conn?.meetingId,
         hadPartner: hadPartner.current,
         partnerHere: partnerProbe.current(),
         readMeetingId: isScheduled ? readMeetingId : undefined,
       }),
       departRef.current(),
     ]).then(([to]) => navigate(to));
-  }, [navigate, conversationId, meeting?.meetingId, isScheduled, readMeetingId]);
+  }, [navigate, conversationId, meeting?.meetingId, conn?.meetingId, isScheduled, readMeetingId]);
   const live = conn && conn.room === roomKey ? conn : null;
 
   // A scheduled meeting opened early waits on a countdown; one long over says
@@ -291,7 +293,12 @@ export default function MeetPage() {
     (async () => {
       try {
         const { data } = await api.post(`/dm/conversations/${conversationId}/call-token`, { kind });
-        if (!cancelled) setConn({ token: data.data.token, url: data.data.url, room: `${conversationId}:${kind}` });
+        if (!cancelled) {
+          setConn({
+            token: data.data.token, url: data.data.url, room: `${conversationId}:${kind}`,
+            meetingId: typeof data.data.meetingId === 'string' ? data.data.meetingId : null,
+          });
+        }
       } catch (e) {
         if (!cancelled) setError(errorMessage(e, 'Could not start the call. Try again from the chat.'));
       }
