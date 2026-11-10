@@ -651,7 +651,8 @@ async function signInByEmail(email: string): Promise<AuthTokenPair> {
 
 // ─── The 6-digit sign-in code (1 Nov 2026, sign-in-code.ts) ─────────────────
 
-interface SignInCodeRow {
+/** A link that carries a 6-digit code, as spendSignInCode reads it (SIGN_IN_CODE_COLUMNS). */
+export interface SignInCodeRow {
   id: string;
   email: string;
   token_hash: string;
@@ -697,6 +698,18 @@ export async function verifySignInCode(email: string, code: string): Promise<Aut
   );
   const link = found.rows[0];
   if (!link) throw codeWrong();
+  await spendSignInCode(link, code);
+  return signInByEmail(link.email);
+}
+
+/**
+ * Try `code` against one link's code, and spend the link when it is right (1 Nov 2026; extracted 11 Nov 2026 so the
+ * RSN Call link's entry code is held to exactly the same rules). A link that can no longer take a code is refused
+ * first. A try is reserved before the code is compared, in one statement that refuses once five have been made; a wrong
+ * fifth try kills the link and the code together (its expiry is pulled to now); the right code spends the link and
+ * gives back the try it reserved, so only wrong tries count. Throws on every refusal; returns once the link is spent.
+ */
+export async function spendSignInCode(link: SignInCodeRow, code: string): Promise<void> {
   const refusal = signInCodeRefusal(link);
   if (refusal) throw refusal;
 
@@ -733,7 +746,122 @@ export async function verifySignInCode(email: string, code: string): Promise<Aut
     [link.id]
   );
   if (!claimed.rows[0]) throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_USED, 'This code has already been used');
-  return signInByEmail(link.email);
+}
+
+// ─── The RSN Call link's entry code (Part 2 foundation, Task 6, 11 Nov 2026) ─
+
+// An event's link (services/session/call-entry.service.ts) proves an email the same way sign-in does: a magic_links
+// row with a 6-digit code, spent through spendSignInCode, with the sign-in code's 15-minute life and five tries. The
+// row is kept apart from sign-in by its purpose and bound to one event by target_id, so a sign-in code is never an
+// entry code (and the reverse), and an entry code for one event is wrong for every other.
+
+const EVENT_ENTRY_PURPOSE = 'event_entry';
+
+/**
+ * Issue an entry link and code for `email` on `sessionId`: the address's earlier unused entry links for that event are
+ * spent first (only the newest code works), then a new one is stored, its token and code as hashes only. The link
+ * lives as long as a sign-in link (60 minutes); its code 15.
+ */
+export async function issueEventEntryLink(email: string, sessionId: string): Promise<{ token: string; code: string }> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const expiresAt = new Date(Date.now() + config.magicLinkExpiryMinutes * 60 * 1000);
+  const code = newSignInCode();
+  const codeHash = hashSignInCode(tokenHash, code);
+  await query(
+    `UPDATE magic_links SET used_at = NOW()
+      WHERE email = $1 AND purpose = '${EVENT_ENTRY_PURPOSE}' AND target_id = $2 AND used_at IS NULL`,
+    [normalizedEmail, sessionId],
+  );
+  await query(
+    `INSERT INTO magic_links (email, token_hash, expires_at, code_hash, purpose, target_id)
+     VALUES ($1, $2, $3, $4, '${EVENT_ENTRY_PURPOSE}', $5)`,
+    [normalizedEmail, tokenHash, expiresAt, codeHash, sessionId],
+  );
+  return { token, code };
+}
+
+/**
+ * Prove `email` for `sessionId` with the 6-digit entry code: only the newest entry link of that address for that event
+ * is tried, under spendSignInCode's rules. Answers the proved address.
+ */
+export async function verifyEventEntryCode(email: string, sessionId: string, code: string): Promise<string> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const found = await query<SignInCodeRow>(
+    `SELECT ${SIGN_IN_CODE_COLUMNS}
+       FROM magic_links
+      WHERE email = $1 AND purpose = '${EVENT_ENTRY_PURPOSE}' AND target_id = $3 AND code_hash IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    [normalizedEmail, SIGN_IN_CODE_TTL_MINUTES, sessionId],
+  );
+  const link = found.rows[0];
+  if (!link) throw codeWrong();
+  await spendSignInCode(link, code);
+  return link.email;
+}
+
+/**
+ * Prove an address for `sessionId` with the button in the entry email: the token of an entry link for that event, single
+ * use with the same 2-minute scanner grace as a sign-in link (verifyMagicLink), refused once expired (a code locked after
+ * five wrong tries has pulled its expiry to now). Answers the proved address.
+ */
+export async function verifyEventEntryToken(token: string, sessionId: string): Promise<string> {
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const result = await query<{ id: string; email: string; expires_at: Date; used_at: Date | null }>(
+    `SELECT id, email, expires_at, used_at FROM magic_links
+      WHERE token_hash = $1 AND purpose = '${EVENT_ENTRY_PURPOSE}' AND target_id = $2`,
+    [tokenHash, sessionId],
+  );
+  const link = result.rows[0];
+  if (!link) throw new UnauthorizedError('This link is not valid. Ask for a new code.');
+  if (new Date(link.expires_at) < new Date()) {
+    throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_EXPIRED, 'This link has expired. Ask for a new code.');
+  }
+  if (link.used_at) {
+    if (Date.now() - new Date(link.used_at).getTime() > MAGIC_LINK_REUSE_GRACE_MS) {
+      throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_USED, 'This link has already been used. Ask for a new code.');
+    }
+  } else {
+    await query('UPDATE magic_links SET used_at = NOW() WHERE id = $1 AND used_at IS NULL', [link.id]);
+  }
+  return link.email;
+}
+
+/**
+ * The session an entry code (or entry link) gives, for an address it has just proved. An existing account signs in as
+ * it is (its kind unchanged; a closed or suspended one is refused). An address with no account becomes an event guest
+ * of this event (createUser: verified, not onboarded, not visible, named 'Guest' until the details step), race-safe as
+ * signInByEmail: a second verify that lost the insert reads the row the first one made.
+ */
+export async function signInForEventEntry(
+  email: string,
+  sessionId: string,
+): Promise<AuthTokenPair & { accountKind: AccountKind; created: boolean }> {
+  const normalizedEmail = email.toLowerCase().trim();
+  let user = await getUserByEmail(normalizedEmail);
+  assertCanSignIn(user);
+  let created = false;
+  if (!user) {
+    try {
+      user = await createUser({
+        email: normalizedEmail, firstName: '', lastName: '', accountKind: 'event_guest', guestFirstSessionId: sessionId,
+      });
+      created = true;
+    } catch (err: unknown) {
+      const raced = (err as { code?: string })?.code === '23505'
+        || (err instanceof ConflictError && err.code === 'USER_ALREADY_EXISTS');
+      if (!raced) throw err;
+      user = await getUserByEmail(normalizedEmail);
+      if (!user) throw err;
+      assertCanSignIn(user);
+    }
+  }
+  if (!user.emailVerified) await query('UPDATE users SET email_verified = TRUE WHERE id = $1', [user.id]);
+  await updateLastActive(user.id);
+  const kind = await query<{ account_kind: AccountKind }>(`SELECT account_kind FROM users WHERE id = $1`, [user.id]);
+  const tokens = await generateTokenPair(user);
+  return { ...tokens, accountKind: kind.rows[0]?.account_kind ?? 'member', created };
 }
 
 // ─── Token Management ───────────────────────────────────────────────────────

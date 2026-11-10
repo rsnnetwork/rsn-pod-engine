@@ -298,6 +298,14 @@ const cases: EmailCase[] = [
       when: 'Friday 6 November, 18:00 (CET)', link: 'https://app.rsn.network/sessions/s1',
     }),
   },
+  {
+    fn: 'sendCallEntryCodeEmail', label: 'an event entry code', subject: 'Your code for Founders breakfast',
+    underCard: "If you didn't ask for this code, you can safely ignore this email.",
+    says: ['Enter this code to join', '481206', 'It works for 15 minutes', 'Open the event'],
+    run: () => emailService.sendCallEntryCodeEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', code: '481206', link: 'https://app.rsn.network/call/k7m2x9q4ra?entry=abc',
+    }),
+  },
 ];
 
 const count = (haystack: string, pattern: RegExp) => (haystack.match(pattern) ?? []).length;

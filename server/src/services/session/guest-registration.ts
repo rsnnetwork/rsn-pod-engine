@@ -15,6 +15,8 @@
 //      code of its they redeemed, an invite to it (the three restrictedEntitlementSql reads), or a request of theirs
 //      the organisers approved. An event with no mode never widens a guest's reach.
 //
+//   d) (Part 2, Task 6) the event whose RSN Call link the guest is entering by right now (arrivedThroughCallLink).
+//
 // Task 6 extends guestMayRegister (keep its name and its facts-in, boolean-out shape).
 
 import { ErrorCodes, type AdmissionMode } from '@rsn/shared';
@@ -40,6 +42,12 @@ export interface GuestRegistrationFacts {
   admissionEntitled?: boolean;
   /** Part 2, Task 4: the organisers approved the guest's request (or are approving it in this registration). */
   approvedRequest?: boolean;
+  /**
+   * Part 2, Task 6: the guest is entering this event through its own RSN Call link right now (call-entry.service's
+   * enterCall is the only caller that says so, for the event its code resolved to). It lets the guest ask; who gets a
+   * place is still canRegister's, so an invitation-only or approval event holds its own rules.
+   */
+  arrivedThroughCallLink?: boolean;
 }
 
 /** What a guest who may not register here is told. */
@@ -50,6 +58,7 @@ export const GUEST_REGISTRATION_MESSAGE =
 export function guestMayRegister(facts: GuestRegistrationFacts): boolean {
   if (facts.holdsPlace) return true;
   if (facts.guestFirstSessionId !== null && facts.guestFirstSessionId === facts.sessionId) return true;
+  if (facts.arrivedThroughCallLink) return true;
   return !!facts.admissionMode && (!!facts.admissionEntitled || !!facts.approvedRequest);
 }
 
@@ -94,14 +103,18 @@ export async function assertGuestMayRegister(
   run: GuestRegistrationQuery,
   sessionId: string,
   userId: string,
-  options: { approvedRequest?: boolean } = {},
+  options: { approvedRequest?: boolean; arrivedThroughCallLink?: boolean } = {},
 ): Promise<{ isGuest: boolean }> {
   const gate = await readAccountGate(userId);
   if (gate.kind === 'member') return { isGuest: false };
   if (gate.kindUnknown) throw accountKindUnavailable();
   const read = await readGuestRegistrationFacts(run, sessionId, userId);
   // The approve route registers before it marks the request approved, so its say-so arrives as an option.
-  const facts = { ...read, approvedRequest: read.approvedRequest || !!options.approvedRequest };
+  const facts = {
+    ...read,
+    approvedRequest: read.approvedRequest || !!options.approvedRequest,
+    arrivedThroughCallLink: !!options.arrivedThroughCallLink,
+  };
   if (!guestMayRegister(facts)) {
     throw new AppError(403, ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, GUEST_REGISTRATION_MESSAGE);
   }

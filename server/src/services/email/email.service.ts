@@ -1634,6 +1634,50 @@ REASON — Meet people you have a reason to know.`;
   return sendEmail({ to, subject, html, text });
 }
 
+// ─── The RSN Call link's entry code (Part 2 foundation, Task 6, 11 Nov 2026) ────
+// Someone opened an event's link and gave this address. The email carries the 6-digit code to type on the link's
+// page and a button that opens the event's link with a one-time entry token (it signs in that browser). The code
+// works for 15 minutes (sign-in-code.ts), the button for 60. Gated by the admin switch 'event_entry_code' (seeded on
+// by migration 139) in call-entry.service.ts, before anything is stored. Throws when it could not be sent, so the
+// person is told rather than left waiting.
+export interface CallEntryCodeEmailData {
+  eventTitle: string;
+  code: string;
+  link: string;
+}
+
+export async function sendCallEntryCodeEmail(to: string, data: CallEntryCodeEmailData): Promise<void> {
+  const subject = `Your code for ${data.eventTitle}`;
+  const line = `Enter this code to join ${data.eventTitle}: ${data.code}. It works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 20px 0;">
+            Enter this code to join <strong>${escapeHtml(data.eventTitle)}</strong>:
+          </p>
+          <div style="text-align:center;margin:0 0 8px 0;">
+            <p data-entry-code style="display:inline-block;color:#1a1a2e;background:#f4f5f7;border:1px solid #dfe3ea;border-radius:12px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:36px;font-weight:700;letter-spacing:8px;padding:14px 18px 14px 26px;margin:0;">${escapeHtml(data.code)}</p>
+            <p style="color:#64748b;font-size:13px;line-height:1.5;margin:10px 0 0 0;">It works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.</p>
+          </div>
+          <div style="text-align:center;margin:28px 0 8px 0;">
+            <a href="${escapeAttr(data.link)}"
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+              Open the event
+            </a>
+          </div>
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
+          If you didn't ask for this code, you can safely ignore this email.
+        </p>
+      </div>
+    </body></html>`;
+  const text = `${line}\n\nOpen the event: ${data.link}\n\nIf you didn't ask for this code, you can safely ignore this email.`;
+  const result = await sendEmail({ to, subject, html, text });
+  if (!result.sent) throw new Error('Email send failed');
+}
+
 // Every value an email puts into its HTML goes through one of these (21 Oct 2026). Names, event, pod and
 // circle names, messages and notes are typed by people, and the request to join needs no account at all,
 // so anything left as it was typed would let a stranger put their own link or picture into an email sent

@@ -834,3 +834,90 @@ export const admissionRedeemIpLimiter = rateLimit({
   store: buildStore('admission-redeem-ip'),
   handler: admissionRedeemLimited,
 });
+
+// ─── The RSN Call link (Part 2 foundation, Task 6, 11 Nov 2026; Review Focus 4) ──────────────────────────
+// An event's link is opened by people who are not signed in, so the reads and the code requests are keyed by network
+// address. A call code is 50 bits, so guessing one is hopeless already; callLinkMissLimiter caps it anyway by counting
+// only the answers that found no event (404): twenty a network address in ten minutes, then every link answer from that
+// address waits, while the same link keeps working for everyone else. The entry code (6 digits) shares the sign-in
+// code's two buckets (signInCodeLimiter, signInCodeEmailLimiter) on top of its own five tries.
+const callLinkLimited = (message: string) => (_req: Request, res: Response) => {
+  const response: ApiResponse = { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message } };
+  res.status(429).json(response);
+};
+const SLOW_DOWN = 'Slow down a moment, then try again.';
+const ipKey = (req: Request) => `ip:${clientIp(req)}`;
+
+export const callLinkReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  store: buildStore('call-link-read'),
+  handler: callLinkLimited(SLOW_DOWN),
+});
+
+export const CALL_LINK_MISSES_MAX = 20;
+export const callLinkMissLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: CALL_LINK_MISSES_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  // Only a link that leads nowhere counts: every other answer, a refusal included, is "successful" here.
+  requestWasSuccessful: (_req, res) => res.statusCode !== 404,
+  keyGenerator: ipKey,
+  store: buildStore('call-link-miss'),
+  handler: callLinkLimited('Too many links tried. Please wait 10 minutes, then try again.'),
+});
+
+/** Codes emailed: twenty an hour per network address. */
+export const callLinkEmailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  store: buildStore('call-link-email'),
+  handler: callLinkLimited('Too many codes asked for. Please wait an hour, then try again.'),
+});
+
+/** The per-event, per-address bucket for codes emailed: a hash of the address (no email in the store) and the link. */
+export function callLinkEmailTargetKey(req: Request): string {
+  const email = typeof req.body?.email === 'string' ? req.body.email : '';
+  const code = String(req.params?.code ?? '').toLowerCase().replace(/[\s-]/g, '');
+  return `c:${code}:${signInCodeEmailKey(email)}`;
+}
+
+export const callLinkEmailTargetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: callLinkEmailTargetKey,
+  store: buildStore('call-link-email-target'),
+  handler: callLinkLimited('Too many codes asked for this address. Please wait 15 minutes, then try again.'),
+});
+
+/** Reading and entering by the link, signed in: twenty a minute per person. */
+export const callEntryLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-entry'),
+  handler: callLinkLimited(SLOW_DOWN),
+});
+
+/** The organisers' call-link card: reading it and rotating it, thirty a minute per person. */
+export const callLinkManageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-link-manage'),
+  handler: callLinkLimited(SLOW_DOWN),
+});

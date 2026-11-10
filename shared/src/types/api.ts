@@ -118,6 +118,8 @@ export const ErrorCodes = {
   ADMISSION_CODE_INVALID: 'ADMISSION_CODE_INVALID',      // 400; unknown, revoked or for another event (one answer for all three)
   ADMISSION_ENTRY_NOT_FOUND: 'ADMISSION_ENTRY_NOT_FOUND',  // 404; no such allowed email on this event's list
   ADMISSION_CODE_NOT_FOUND: 'ADMISSION_CODE_NOT_FOUND',    // 404; no such admission code on this event (the organisers' revoke)
+  // The RSN Call link (Part 2 Task 6, 11 Nov 2026).
+  EVENT_CANCELLED: 'EVENT_CANCELLED',                    // 409; the event behind a call link was cancelled: it takes nobody
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

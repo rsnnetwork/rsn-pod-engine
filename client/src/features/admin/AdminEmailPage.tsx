@@ -26,6 +26,8 @@ const EMAIL_TYPE_LABELS: Record<string, { label: string; description: string }> 
   event_cancelled:        { label: 'Event Cancelled', description: 'Sent to everyone registered when an event is cancelled' },
   event_reminder:         { label: 'Event Reminder', description: 'Sent to everyone registered before an event starts' },
   event_rescheduled:      { label: 'Event Rescheduled', description: 'Sent to everyone registered when an event moves to a new time' },
+  // Seeded by migration 139 (Part 2 Task 6): the code someone types to enter an event from its link.
+  event_entry_code:       { label: 'Event Entry Code', description: 'Sent when someone asks for a code to join an event from its link' },
 };
 
 export default function AdminEmailPage() {

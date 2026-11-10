@@ -26,6 +26,7 @@ import {
   admittedViaOf, archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, runsEvent, visibleEventsSql,
 } from './event-access';
 import { applyRegistrationGroups } from './event-groups.service';
+import { ensureCallCode } from './call-link.service';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 import { notifyEventRescheduled } from './event-notices';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
@@ -190,6 +191,14 @@ export async function createSession(userId: string, input: CreateSessionInput, u
      ON CONFLICT (session_id, user_id) DO NOTHING`,
     [sessionId, userId]
   );
+
+  // Part 2 Task 6: the event's RSN Call link exists from the start. Best-effort: a failure here never undoes the
+  // event, and the link's first read gives it a code instead (ensureCallCode).
+  try {
+    await ensureCallCode(sessionId);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'createSession: call code not set yet; the first read of the link sets it');
+  }
 
   // The circle's members are rung (no email) and their pages told. A draft rings nobody: publishing it does.
   if (circle && publication === 'published') await announceCircleEvent({ sessionId, actorId: userId, circle });
@@ -474,7 +483,12 @@ export async function registerParticipant(
   // for approval (the approve route), so that event takes them; capacity and their own row still decide.
   // 10 Nov 2026 spec, Part 2 Task 5: `groupKeys` is the person's answer to an event's required group question,
   // written as their own choice in this transaction. An event without groups ignores it.
-  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean; groupKeys?: string[] },
+  // Part 2 Task 6: `arrivedThroughCallLink` says the person is entering through this event's own RSN Call link
+  // (call-entry.service's enterCall, the only caller that sets it): an event guest may then ask for a place here.
+  options?: {
+    personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean; groupKeys?: string[];
+    arrivedThroughCallLink?: boolean;
+  },
 ): Promise<SessionParticipant & { isNewRegistration: boolean }> {
   const invitedAt = options?.personalInviteCreatedAt ?? null;
   const viaInvite = !!options?.viaInvite || !!invitedAt;
@@ -523,7 +537,7 @@ export async function registerParticipant(
     // came in through, or one where they already hold a row), on every way in. Members pass on the cached gate.
     // Part 2, Task 4: an event with an admission mode also lets in a guest it has entitled (guestMayRegister c).
     const { isGuest } = await assertGuestMayRegister((text, params) => client.query(text, params), sessionId, userId,
-      { approvedRequest: !!options?.approvedRequest });
+      { approvedRequest: !!options?.approvedRequest, arrivedThroughCallLink: !!options?.arrivedThroughCallLink });
 
     const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
 

@@ -166,6 +166,23 @@ export const isEventVisibility = _isEventVisibility;
 // Part 2 Task 4 (10 Nov 2026): who gets a place on an event (sessions.admission_mode), a real VALUE the forms list.
 import { ADMISSION_MODES as _ADMISSION_MODES } from './types/session';
 export const ADMISSION_MODES = _ADMISSION_MODES;
+// The RSN Call link (Part 2 foundation, Task 6): the one path constant, the call code's alphabet and its readers, and the
+// name rule of the details step. Real VALUES the server's emails and the client's router read, so each has its own named
+// export, same as OPENINGS above.
+export * from './events/call-link';
+export * from './types/call-link';
+import {
+  CALL_LINK_BASE_PATH as _CALL_LINK_BASE_PATH, CALL_CODE_ALPHABET as _CALL_CODE_ALPHABET,
+  CALL_CODE_LENGTH as _CALL_CODE_LENGTH, CALL_DISPLAY_NAME_MAX as _CALL_DISPLAY_NAME_MAX,
+  callLinkPath as _callLinkPath, normaliseCallCode as _normaliseCallCode, cleanCallDisplayName as _cleanCallDisplayName,
+} from './events/call-link';
+export const CALL_LINK_BASE_PATH = _CALL_LINK_BASE_PATH;
+export const CALL_CODE_ALPHABET = _CALL_CODE_ALPHABET;
+export const CALL_CODE_LENGTH = _CALL_CODE_LENGTH;
+export const CALL_DISPLAY_NAME_MAX = _CALL_DISPLAY_NAME_MAX;
+export const callLinkPath = _callLinkPath;
+export const normaliseCallCode = _normaliseCallCode;
+export const cleanCallDisplayName = _cleanCallDisplayName;
 export const formatRule = _formatRule;
 export const podTypeRule = _podTypeRule;
 export const isEventFormat = _isEventFormat;

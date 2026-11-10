@@ -100,6 +100,7 @@ import eventAuditRoutes from '../../routes/event-audit';
 import eventLifecycleRoutes from '../../routes/event-lifecycle';
 import eventGroupRoutes from '../../routes/event-groups';
 import eventAdmissionRoutes from '../../routes/event-admission';
+import callLinkRoutes, { sessionCallLinkRoutes } from '../../routes/call-links';
 
 // The API exactly as index.ts mounts it, in the same order (the last test below holds the two lists together).
 const MOUNTS: Array<[string, express.Router]> = [
@@ -119,6 +120,8 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/sessions', eventLifecycleRoutes],
   ['/api/sessions', eventGroupRoutes],
   ['/api/sessions', eventAdmissionRoutes],
+  ['/api/sessions', sessionCallLinkRoutes],
+  ['/api/call-links', callLinkRoutes],
   ['/api/join-requests', joinRequestRoutes],
   ['/api/admin', adminRoutes],
   ['/api/admin', adminInspectRoutes],

@@ -59,6 +59,8 @@ export const E = {
   sessionAudit: (sessionId: string) => `session:${sessionId}:audit`,
   /** 10 Nov 2026 spec, Part 2 Task 5: the event's matching groups, round rules and who is in which group. */
   sessionGroups: (sessionId: string) => `session:${sessionId}:groups`,
+  /** Part 2 Task 6 (11 Nov 2026): the event's RSN Call link (its code), for its organisers. */
+  sessionCallLink: (sessionId: string) => `session:${sessionId}:call-link`,
 
   // Match (in-event)
   match: (matchId: string) => `match:${matchId}`,

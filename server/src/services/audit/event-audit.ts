@@ -30,6 +30,7 @@ export const EVENT_AUDIT_ACTIONS = [
   'match.preview_generated', 'match.regenerated', 'match.swapped', 'match.excluded', 'match.moved',
   'match.round_announced', 'match.round_confirmed', 'match.preview_cancelled', 'match.repaired', 'match.override',
   'participant.removed', 'breakout.created',
+  'call_link.rotated',
   'schedule.generated', 'schedule.edited', 'schedule.locked', 'schedule.unlocked', 'schedule.published',
 ] as const;
 

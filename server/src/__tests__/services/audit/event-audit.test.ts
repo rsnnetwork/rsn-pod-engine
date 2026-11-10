@@ -111,9 +111,10 @@ describe('recordEventAudit', () => {
     expect(d).toMatchObject({ before: 'open', after: 'approval', round: 2, scheduleVersion: 3, reason: 'why' });
   });
 
-  it('names the thirty-two actions of the brief and the three added for rows that must read true (35, no repeats)', () => {
-    expect(EVENT_AUDIT_ACTIONS).toHaveLength(35);
-    expect(new Set(EVENT_AUDIT_ACTIONS).size).toBe(35);
+  it('names the thirty-two actions of the brief, the three added for rows that must read true, and the call link rotation (36, no repeats)', () => {
+    expect(EVENT_AUDIT_ACTIONS).toHaveLength(36);
+    expect(new Set(EVENT_AUDIT_ACTIONS).size).toBe(36);
+    expect(EVENT_AUDIT_ACTIONS).toContain('call_link.rotated');
     expect(EVENT_AUDIT_ACTIONS).toEqual(expect.arrayContaining(['participant.removed', 'breakout.created', 'match.round_announced']));
   });
 

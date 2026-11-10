@@ -146,6 +146,9 @@ const cases: Case[] = [
     eventTitle: 'Founders breakfast', previousWhen: 'Thursday 5 November, 18:00 (CET)',
     when: 'Friday 6 November, 18:00 (CET)', link: `${APP}/sessions/s1`,
   }]),
+  email('sendCallEntryCodeEmail', 'an event entry code', ['to', 'data'], ['delivered+ana@resend.dev', {
+    eventTitle: 'Founders breakfast', code: '481206', link: `${APP}/call/k7m2x9q4ra?entry=abc`,
+  }]),
 ];
 
 /** Exports that build no email: the shared card and the admin switch. Anything new must be put in one list or the other. */

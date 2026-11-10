@@ -79,9 +79,12 @@ describe('Self-registration confirmation + calendar (26 May, Stefan)', () => {
       const block = src.slice(i, i + 2800);
       // T11 (1 Nov 2026): the email is one helper, shared with the approval of a request to join.
       expect(block).toMatch(/void sendRegistrationEmail\(req\.params\.id, req\.user!\.userId\)/);
-      const h = src.indexOf('async function sendRegistrationEmail');
+      // 11 Nov 2026 (Part 2 Task 6): the helper moved to its own service, so an entry by the RSN Call link sends the same one.
+      expect(src).toMatch(/import \{ sendRegistrationEmail \} from '\.\.\/services\/session\/registration-email'/);
+      const helperSrc = readServer('services/session/registration-email.ts');
+      const h = helperSrc.indexOf('async function sendRegistrationEmail');
       expect(h).toBeGreaterThan(-1);
-      const helper = src.slice(h, src.indexOf('\n}\n', h));
+      const helper = helperSrc.slice(h, helperSrc.indexOf('\n}\n', h));
       expect(helper).toMatch(/sendSessionRegistrationConfirmationEmail/);
       expect(helper).toMatch(/buildSessionCalendarEvent/);
     });

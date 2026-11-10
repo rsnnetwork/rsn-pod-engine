@@ -30,10 +30,8 @@ import {
 } from '@rsn/shared';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
-import config from '../config';
 import logger from '../config/logger';
-import * as emailService from '../services/email/email.service';
-import { buildSessionCalendarEvent } from '../services/calendar/calendar.service';
+import { sendRegistrationEmail } from '../services/session/registration-email';
 import type { Server as SocketServer } from 'socket.io';
 import { matchingPresetsLimiter } from '../middleware/rateLimit';
 import { listMatchingPresets } from '../services/matching/matching-template-choice';
@@ -83,26 +81,6 @@ async function registersOnOpening(sessionId: string, userId: string, role: strin
   // invite or the event's circle, as nothing else about the event lets them back.
   if (!f || f.participantStatus === 'removed') return false;
   return canSeeEvent(f, role) && (f.inAudience || f.isInvited);
-}
-
-/** The "you're registered" email with its calendar invite. Best-effort: a failure is logged, never thrown. */
-async function sendRegistrationEmail(sessionId: string, userId: string): Promise<void> {
-  try {
-    const u = (await query<{ email: string; display_name: string | null }>(
-      `SELECT email, display_name FROM users WHERE id = $1`,
-      [userId],
-    )).rows[0];
-    if (!u?.email) return;
-    const calendarEvent = await buildSessionCalendarEvent(sessionId);
-    await emailService.sendSessionRegistrationConfirmationEmail(u.email, {
-      recipientName: u.display_name || undefined,
-      sessionTitle: calendarEvent?.title ?? 'your REASON event',
-      sessionUrl: `${config.clientUrl}/sessions/${sessionId}`,
-      calendarEvent,
-    });
-  } catch (err) {
-    logger.warn({ err, sessionId, userId }, 'registration confirmation email failed (non-fatal)');
-  }
 }
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────

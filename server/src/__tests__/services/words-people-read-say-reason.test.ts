@@ -28,6 +28,10 @@ const FILES = [
   'routes/meeting.ts',
   'routes/meetings.ts',
   'routes/sessions.ts',
+  'routes/call-links.ts',
+  'services/session/call-entry.service.ts',
+  'services/session/call-link.service.ts',
+  'services/session/registration-email.ts',
   'routes/join-requests.ts',
   'routes/admin.ts',
 ];
@@ -70,7 +74,7 @@ describe('the files that hold words a person reads', () => {
   });
 
   it('the registration email names the event as "your REASON event" when it has no title', () => {
-    expect(codeLines('routes/sessions.ts').join('\n')).toContain("calendarEvent?.title ?? 'your REASON event'");
+    expect(codeLines('services/session/registration-email.ts').join('\n')).toContain("calendarEvent?.title ?? 'your REASON event'");
   });
 
   it('the check itself can see an RSN in code, and ignores it in a comment', () => {
