@@ -106,7 +106,10 @@ function event(opts: { groups: boolean; blocks?: string[] }) {
 
 const sqls = () => gMockQuery.mock.calls.map(([sql]) => String(sql));
 const updates = () => sqls().filter((s) => /^UPDATE matches SET participant_a_id/.test(s));
-const audits = () => gMockQuery.mock.calls.filter(([sql]) => /INSERT INTO audit_log/.test(String(sql)));
+// The match.override rows (recordEventAudit passes the action as its second parameter); the swap's own
+// match.swapped row (Task 1) is written beside it on every swap.
+const audits = () => gMockQuery.mock.calls.filter(([sql, params]) => /INSERT INTO audit_log/.test(String(sql))
+  && (params as unknown[])[1] === 'match.override');
 const errorOf = (socket: { emit: jest.Mock }) => socket.emit.mock.calls.find(([e]) => e === 'error')?.[1];
 
 beforeEach(() => {
@@ -207,10 +210,11 @@ describe('swap, on an event with groups (founders meet funders in every round)',
     expect(updates()).toHaveLength(2);
     expect(audits()).toHaveLength(1);
     const [sql, params] = audits()[0] as [string, unknown[]];
-    expect(sql).toMatch(/'match\.override', 'session'/);
+    expect(sql).toMatch(/'session'/);
     expect(params[0]).toBe(OWNER);
-    expect(params[1]).toBe(SESSION_ID);
-    const details = JSON.parse(params[2] as string);
+    expect(params[1]).toBe('match.override');
+    expect(params[2]).toBe(SESSION_ID);
+    const details = JSON.parse(params[3] as string);
     // The swap leaves both rooms within one group: Ann with Bob, and Cleo with Dev. Both are recorded.
     expect(details).toEqual({
       automatic: false, scheduleVersion: null, round: 1, before: null, reason: 'Co-founders asked to sit together',
@@ -232,7 +236,7 @@ describe('swap, on an event with groups (founders meet funders in every round)',
     await handleHostSwapMatch(io, socket, { sessionId: SESSION_ID, userA: 'u1', userB: 'f2', override: true });
     expect(errorOf(socket)).toBeUndefined();
     expect(audits()).toHaveLength(1);
-    expect(JSON.parse((audits()[0] as [string, unknown[]])[1][2] as string).reason).toBeNull();
+    expect(JSON.parse((audits()[0] as [string, unknown[]])[1][3] as string).reason).toBeNull();
   });
 });
 

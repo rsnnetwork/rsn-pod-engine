@@ -15,7 +15,7 @@ import {
   checkRoom, ErrorCodes, roundRuleSentence, UserRole, type RoomCheckContext, type RoomProblem,
 } from '@rsn/shared';
 import { query } from '../../db';
-import logger from '../../config/logger';
+import { recordEventAudit } from '../audit/event-audit';
 import { pairKey } from './matching.interface';
 import { loadHardExclusions } from './hard-exclusions';
 import { getEventGroupRules, groupsForParticipants } from '../session/event-groups.service';
@@ -137,9 +137,9 @@ export async function judgeLiveRooms(input: {
 }
 
 /**
- * One `match.override` audit row for rooms written against the round's group rule, in the event audit shape
- * (entity_type 'session'; details { automatic, scheduleVersion, round, subjectUserIds, before, after, reason }).
- * Called after the write succeeded; a failed audit write is logged and never fails the host's live action.
+ * One `match.override` row in the event's audit trail (recordEventAudit, Part 2 Task 1) for rooms written against
+ * the round's group rule. Called after the write succeeded, without a transaction: best-effort by design, so a
+ * failed audit write is logged and never fails the host's live action, and the organisers' history is told at once.
  */
 export async function recordMatchOverride(entry: {
   sessionId: string;
@@ -150,21 +150,15 @@ export async function recordMatchOverride(entry: {
   reason: string | null;
 }): Promise<void> {
   if (entry.overridden.length === 0) return;
-  const details = {
+  await recordEventAudit({
+    sessionId: entry.sessionId,
+    actorId: entry.actorId,
+    action: 'match.override',
     automatic: false,
-    scheduleVersion: null,
     round: entry.round,
     subjectUserIds: [...new Set(entry.overridden.flatMap((o) => o.memberIds))],
     before: null,
     after: { via: entry.via, rooms: entry.overridden },
-    reason: entry.reason,
-  };
-  try {
-    await query(
-      `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details) VALUES ($1, 'match.override', 'session', $2, $3)`,
-      [entry.actorId, entry.sessionId, JSON.stringify(details)],
-    );
-  } catch (err) {
-    logger.warn({ err, sessionId: entry.sessionId }, 'match.override audit write failed (the host action stands)');
-  }
+    ...(entry.reason ? { reason: entry.reason } : {}),
+  });
 }

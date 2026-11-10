@@ -23,6 +23,7 @@ import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { E } from '../../realtime/entities';
 import { isLiveStatus } from './main-room';
 import { canSeeEvent, readEventAccessFacts } from './event-access';
+import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 
 /** Who is acting: the signed-in person and their platform role (the shape of Part 2's `Actor`). */
 export interface GroupsActor {
@@ -125,23 +126,15 @@ export async function fanoutEventGroups(sessionId: string): Promise<void> {
 // ─── The audit row ───────────────────────────────────────────────────────────
 
 /**
- * One audit_log row for a change to the event's groups, written in the caller's transaction, in the shape Part 2's
- * event audit trail reads (entity_type 'session', details { automatic, scheduleVersion, round, subjectUserIds,
- * before, after, reason }). Part 2 Task 1's recordEventAudit writes the same row; this goes through it once both
- * are on main.
+ * One event-audit row for a change to the event's groups, through the event audit trail (Part 2 Task 1), in the
+ * caller's transaction: it throws, so the change and its row stand or fall together. The organisers' history is told
+ * (emitEventAuditChanged) once the transaction has committed, by the caller.
  */
 async function auditGroups(
   client: PoolClient,
   entry: { sessionId: string; actorId: string | null; action: 'group.rules_changed' | 'group.assigned'; subjectUserIds: string[]; before: unknown; after: unknown },
 ): Promise<void> {
-  const details = {
-    automatic: false, scheduleVersion: null, round: null, subjectUserIds: entry.subjectUserIds,
-    before: entry.before, after: entry.after, reason: null,
-  };
-  await client.query(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details) VALUES ($1, $2, 'session', $3, $4)`,
-    [entry.actorId, entry.action, entry.sessionId, JSON.stringify(details)],
-  );
+  await recordEventAudit({ ...entry, automatic: false }, client);
 }
 
 // ─── The organiser saves the rules ───────────────────────────────────────────
@@ -279,6 +272,7 @@ export async function saveEventGroupRules(sessionId: string, actor: GroupsActor,
     return after ?? EMPTY_RULES;
   });
   void fanoutEventGroups(sessionId);
+  void emitEventAuditChanged(sessionId);
   return saved;
 }
 
@@ -378,7 +372,10 @@ export async function setParticipantGroups(
     }
     return assignGroups(tx, sessionId, actor, userId, groupKeys, assignedBy);
   });
-  if (changed) void fanoutEventGroups(sessionId);
+  if (!changed) return;
+  void fanoutEventGroups(sessionId);
+  // Only an organiser's regrouping is audited (group.assigned); a person's own first choice is not.
+  if (assignedBy === 'organiser') void emitEventAuditChanged(sessionId);
 }
 
 /**
