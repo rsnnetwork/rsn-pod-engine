@@ -117,6 +117,9 @@ async function loadCandidatesFor(ownerId: string): Promise<IntentProfile[]> {
           SELECT 1 FROM user_blocks b
            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
               OR (b.blocker_id = u.id AND b.blocked_id = $1))
+        -- 10 Nov 2026: "Already met" (marked outside the platform) keeps the person out of the member's searches.
+        AND NOT EXISTS (
+          SELECT 1 FROM already_met am WHERE am.user_id = $1 AND am.target_user_id = u.id)
         AND NOT EXISTS (
           SELECT 1 FROM user_pokes p
            WHERE p.status = 'declined'
@@ -237,7 +240,9 @@ export async function scoreNewcomerAgainstAgents(
             AND NOT EXISTS (
               SELECT 1 FROM user_blocks b
                WHERE (b.blocker_id = $1 AND b.blocked_id = $2)
-                  OR (b.blocker_id = $2 AND b.blocked_id = $1))`,
+                  OR (b.blocker_id = $2 AND b.blocked_id = $1))
+            AND NOT EXISTS (
+              SELECT 1 FROM already_met am WHERE am.user_id = $1 AND am.target_user_id = $2)`,
         [a.userId, newUserId],
       );
       if (blocked.rows.length === 0) continue;

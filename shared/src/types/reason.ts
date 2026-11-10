@@ -104,6 +104,8 @@ export interface PersonBrief {
     lastMetAt: string | null;
     saved: boolean;
     passed: boolean;
+    /** The viewer marked this person "Already met" (outside the platform). Private to the viewer; changes no state. */
+    alreadyMet: boolean;
     outcomes: Array<{ worthContinuing: WorthContinuing; outcomes: OutcomeKey[]; createdAt: string }>;
   };
   shared: {
@@ -156,6 +158,8 @@ export type EveryoneMember = PublicMember & {
   pokeStatus: 'pending' | 'accepted' | null;
   pokeSentByOwner: boolean | null;
   relationship: RelationshipState;
+  /** The viewer marked this person "Already met" (outside the platform). Private to the viewer. */
+  alreadyMet: boolean;
 };
 
 export interface EveryonePage {

@@ -50,6 +50,7 @@ interface Row {
   connected: boolean | null;
   met: boolean | null;
   declined_by_them: boolean | null;
+  already_met: boolean | null;
 }
 
 // An opaque cursor: base64url of {n, id}. Whatever else arrives is refused, not trusted into SQL.
@@ -87,7 +88,9 @@ const EVERYONE_SQL = `
          pk.status AS poke_status, (pk.sender_id = $1) AS poke_sent_by_owner,
          (pe.person_id IS NOT NULL) AS connected, COALESCE(pe.met, false) AS met,
          EXISTS (SELECT 1 FROM user_pokes d
-                  WHERE d.sender_id = $1 AND d.recipient_id = u.id AND d.status = 'declined') AS declined_by_them
+                  WHERE d.sender_id = $1 AND d.recipient_id = u.id AND d.status = 'declined') AS declined_by_them,
+         EXISTS (SELECT 1 FROM already_met am
+                  WHERE am.user_id = $1 AND am.target_user_id = u.id) AS already_met
     FROM users u
     LEFT JOIN people pe ON pe.person_id = u.id
     LEFT JOIN LATERAL (
@@ -147,6 +150,7 @@ const toRow = (r: Row): EveryoneRow => ({
   pokeStatus: r.poke_status,
   pokeSentByOwner: r.poke_status ? !!r.poke_sent_by_owner : null,
   relationship: relationshipOf(r),
+  alreadyMet: !!r.already_met,
 });
 
 export async function listEveryone(viewerId: string, opts: EveryoneOptions = {}): Promise<EveryonePage> {

@@ -20,6 +20,7 @@ import { loadProfile, scoreFit, MATCH_THRESHOLD, BROWSE_THRESHOLD } from '../mat
 import { getPokeWith } from '../poke/poke.service';
 import { canMessage } from '../dm/dm.service';
 import { getResponse } from './person-response.service';
+import { isAlreadyMet } from './already-met.service';
 import { canVideoCall } from '../dm/call-eligibility';
 
 const MESSAGE_REFUSALS: readonly MessageRefusal[] = ['self', 'blocked', 'not_mutual', 'no_encounter'];
@@ -164,7 +165,9 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
   // holds more than one connection, and the groups above stay at four. Beside it, whether the viewer may ring them
   // for a video call: the call routes' own helper (call-eligibility.ts, one read), never a second reading of the
   // relationship (fix round 1).
-  const [messaging, canCall] = await Promise.all([canMessage(viewerId, targetId), canVideoCall(viewerId, targetId)]);
+  const [messaging, canCall, markedMet] = await Promise.all([
+    canMessage(viewerId, targetId), canVideoCall(viewerId, targetId), isAlreadyMet(viewerId, targetId),
+  ]);
 
   // The brief can be aimed at ANY member by id, so the fit is judged on the public card only:
   // the scorer counts private interests as offers and words its reason from what matched.
@@ -207,6 +210,7 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
       lastMetAt: metAtEvent && e ? e.last_met_at.toISOString() : null,
       saved: response === 'saved',
       passed: response === 'passed',
+      alreadyMet: markedMet,
       outcomes: outcomeRows.rows.map(r => ({
         worthContinuing: r.worth_continuing, outcomes: r.outcome_keys, createdAt: r.created_at.toISOString(),
       })),

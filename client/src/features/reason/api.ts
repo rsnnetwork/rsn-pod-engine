@@ -69,6 +69,10 @@ export const setPersonResponse = (userId: string, response: PersonResponse | nul
     ? api.put(`/people/${memberSegment(userId)}/response`, { response })
     : api.delete(`/people/${memberSegment(userId)}/response`);
 
+// "Already met" (10 Nov 2026): a private marker for someone met outside the platform.
+export const setAlreadyMet = (userId: string, met: boolean) =>
+  met ? api.put(`/people/${memberSegment(userId)}/already-met`) : api.delete(`/people/${memberSegment(userId)}/already-met`);
+
 export const sendMeetRequest = (userId: string, note: string, format: MeetingFormat) =>
   api.post(`/matches/platform/${memberSegment(userId)}/interest`, { note, format });
 

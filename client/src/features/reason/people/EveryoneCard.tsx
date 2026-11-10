@@ -44,6 +44,7 @@ export default function EveryoneCard({ person, onMeet }: Props) {
           <h3 id={headingId} className="text-[16px] font-bold leading-tight [overflow-wrap:anywhere]">
             <Link to={profileUrl} className="hover:underline">{name}</Link>
           </h3>
+          {person.alreadyMet && <p className="mt-0.5 text-[12px] font-bold text-[#555d69]">You marked as met</p>}
           {roleLine && <p className="mt-0.5 text-[12px] text-[#677080] [overflow-wrap:anywhere] min-[721px]:text-[13px]">{roleLine}</p>}
         </div>
         <Link

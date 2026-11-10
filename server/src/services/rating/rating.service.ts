@@ -555,7 +555,9 @@ export async function getUserEncounters(
       s.scheduled_at AS "sessionDate",
       CASE WHEN eh.user_a_id = $1 THEN eh.user_b_id ELSE eh.user_a_id END AS "otherUserId",
       CASE WHEN eh.user_a_id = $1 THEN eh.last_meet_again_a ELSE eh.last_meet_again_b END AS "myMeetAgain",
-      eh.mutual_meet_again AS "mutual"
+      eh.mutual_meet_again AS "mutual",
+      EXISTS (SELECT 1 FROM already_met am
+               WHERE am.user_id = $1 AND am.target_user_id = u.id) AS "markedMet"
     FROM encounter_history eh
     JOIN users u ON u.id = CASE WHEN eh.user_a_id = $1 THEN eh.user_b_id ELSE eh.user_a_id END
     LEFT JOIN sessions s ON s.id = eh.last_session_id
@@ -572,11 +574,37 @@ export async function getUserEncounters(
   sql += ' ORDER BY eh.last_met_at DESC';
 
   const result = await query<any>(sql, [userId]);
-  return result.rows.map(row => ({
+  const encounters = result.rows.map(row => ({
     ...row,
     rating: row.lastQualityScore,
     connectIntent: row.myMeetAgain,
   }));
+  // Mutual Matches is about two people who both said "meet again"; a private marker is never that.
+  if (mutualOnly) return encounters;
+
+  // 10 Nov 2026: people the member marked "Already met" (outside the platform) and who have no encounter row
+  // sit in this list too, labelled "You marked as met". Marking writes no encounter, so they come from
+  // already_met itself, with the same blocked and inactive exclusions.
+  const marked = await query<any>(
+    `SELECT am.id, am.created_at AS "lastMetAt", u.display_name AS "displayName", u.avatar_url AS "avatarUrl",
+            u.company, u.job_title AS "jobTitle", u.id AS "otherUserId"
+       FROM already_met am
+       JOIN users u ON u.id = am.target_user_id
+      WHERE am.user_id = $1
+        AND u.status = 'active'
+        AND NOT EXISTS (SELECT 1 FROM encounter_history eh
+                         WHERE eh.user_a_id = LEAST($1::uuid, u.id) AND eh.user_b_id = GREATEST($1::uuid, u.id))
+        AND NOT EXISTS (SELECT 1 FROM user_blocks b
+                         WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                            OR (b.blocker_id = u.id AND b.blocked_id = $1))
+      ORDER BY am.created_at DESC
+      LIMIT 200`,
+    [userId],
+  );
+  const markedOnly = marked.rows.map(row => ({ ...row, mutual: false, markedMet: true }));
+  return [...encounters, ...markedOnly].sort(
+    (x, y) => new Date(y.lastMetAt).getTime() - new Date(x.lastMetAt).getTime(),
+  );
 }
 
 // ─── Finalize Round Ratings ─────────────────────────────────────────────────

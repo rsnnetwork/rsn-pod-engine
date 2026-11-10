@@ -550,6 +550,17 @@ export function notAlreadyInTouchSql(memberParam: string, otherAlias: string): s
 }
 
 /**
+ * SQL boolean expression (no leading AND): true when the member has NOT marked `otherAlias` as someone they
+ * already met outside the platform (already_met, 10 Nov 2026). One-sided: only the marker's own suggestions and
+ * searches skip the person; the person's own are untouched.
+ */
+export function notMarkedMetSql(memberParam: string, otherAlias: string): string {
+  return `NOT EXISTS (
+           SELECT 1 FROM already_met am
+           WHERE am.user_id = ${memberParam} AND am.target_user_id = ${otherAlias}.id)`;
+}
+
+/**
  * Candidates someone can be matched with: active, onboarded, not blocked, not
  * already in touch (notAlreadyInTouchSql), not turned down, and not passed on.
  * Someone they have ASKED and who has not answered yet stays, carrying where the
@@ -592,6 +603,8 @@ async function loadCandidates(userId: string): Promise<CandidateRow[]> {
        -- 10 Nov 2026 (spec item 5): people the member is already in touch with are not
        -- introduced again. See notAlreadyInTouchSql for the exact rule.
        AND ${notAlreadyInTouchSql('$1', 'u')}
+       -- 10 Nov 2026: someone the member marked "Already met" (outside the platform) is not suggested either.
+       AND ${notMarkedMetSql('$1', 'u')}
        -- 22 Sep 2026: only a DECLINED request hides someone. This used to drop
        -- anyone with a request in either direction at any status, so pressing
        -- "I want to meet" made that person vanish off the page — the member

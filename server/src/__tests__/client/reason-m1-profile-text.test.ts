@@ -22,7 +22,7 @@ const person = (over: Partial<Person> = {}): Person => ({
   expertiseText: null, whatICanHelpWith: null, ...over,
 });
 const relationship = (over: Partial<Relationship> = {}): Relationship => ({
-  state: 'none', pokeId: null, timesMet: 0, lastMetAt: null, saved: false, passed: false, outcomes: [], ...over,
+  state: 'none', pokeId: null, timesMet: 0, lastMetAt: null, saved: false, passed: false, alreadyMet: false, outcomes: [], ...over,
 });
 const noShared = { circles: [], pods: [], upcomingEvents: [] };
 // What axios hands a catch block when the server answered, and when nothing did.

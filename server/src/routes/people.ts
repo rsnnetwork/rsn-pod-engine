@@ -6,6 +6,8 @@
 // GET    /people/:userId/brief
 // PUT    /people/:userId/response  { response: 'saved' | 'passed' }
 // DELETE /people/:userId/response
+// PUT    /people/:userId/already-met   (10 Nov 2026) private "I met them outside REASON" marker
+// DELETE /people/:userId/already-met
 // POST   /people/:userId/outcome   { worthContinuing, outcomes[] }
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -15,6 +17,8 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { peopleReadLimiter, peopleWriteLimiter } from '../middleware/rateLimit';
 import { fanoutUserEntity } from '../realtime/fanout';
+import { recomputeAgentsForUser } from '../services/matching/agent-matching.service';
+import * as alreadyMet from '../services/people/already-met.service';
 import * as responses from '../services/people/person-response.service';
 import * as outcomes from '../services/people/meeting-outcome.service';
 import * as brief from '../services/people/person-brief.service';
@@ -160,6 +164,44 @@ router.delete(
       await responses.clearResponse(req.user!.userId, req.params.userId);
       void fanoutUserEntity(req.user!.userId);
       res.json({ success: true, data: { response: null } } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// "Already met" (10 Nov 2026): private to the member who marks, so only their own tags are emitted. Marking
+// twice, or unmarking someone not marked, changes nothing and still answers 200.
+router.put(
+  '/:userId/already-met',
+  authenticate,
+  peopleWriteLimiter,
+  validate(userParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await alreadyMet.markAlreadyMet(req.user!.userId, req.params.userId);
+      void fanoutUserEntity(req.user!.userId);
+      res.json({ success: true, data: { alreadyMet: true } } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.delete(
+  '/:userId/already-met',
+  authenticate,
+  peopleWriteLimiter,
+  validate(userParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.userId;
+      await alreadyMet.unmarkAlreadyMet(userId, req.params.userId);
+      void fanoutUserEntity(userId);
+      // The member's searches kept no result for this person while they were marked: rescore them (it never
+      // throws), then tell the member's screens again so the person is back without a refresh.
+      void recomputeAgentsForUser(userId).then(() => fanoutUserEntity(userId));
+      res.json({ success: true, data: { alreadyMet: false } } as ApiResponse);
     } catch (err) {
       next(err);
     }

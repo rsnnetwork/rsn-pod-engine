@@ -337,6 +337,7 @@ describe('Rating Service', () => {
   describe('getUserEncounters', () => {
     it('should return all encounters for a user', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'enc-1' }, { id: 'enc-2' }], rowCount: 2 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // the people marked "Already met"
 
       const result = await ratingService.getUserEncounters('user-a');
       expect(result).toHaveLength(2);
@@ -354,6 +355,7 @@ describe('Rating Service', () => {
     // closed, suspended and banned accounts, with a link to their profile.
     it.each([false, true])('leaves out anyone blocked in either direction and every account that is not active (mutual only: %s)', async (mutualOnly) => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // the people marked "Already met" (not asked for Mutual Matches)
 
       await ratingService.getUserEncounters('user-a', mutualOnly);
       const sql = String(mockQuery.mock.calls[0][0]).replace(/\s+/g, ' ');
