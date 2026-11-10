@@ -996,7 +996,23 @@ export async function endRatingWindow(
 // COMPLETE SESSION
 // ═════════════════════════════════════════════════════════════════════════════
 
-export async function completeSession(io: SocketServer, sessionId: string): Promise<void> {
+/**
+ * How an event is being completed. Every caller but one completes it as its natural end, recap email included. The
+ * overdue-event job (10 Nov 2026, F7) closes events nobody ended, long after anyone was in them: it passes
+ * `{ reason: 'overdue', sendRecap: false }`, and everything else (rooms, matches, the sweep, the fan-out) is the same.
+ */
+export interface CompleteSessionOptions {
+  reason?: 'ended' | 'overdue';
+  sendRecap?: boolean;
+}
+
+/** Completes the event. Resolves true when this call ended it, false when it was already over (nothing done). */
+export async function completeSession(
+  io: SocketServer,
+  sessionId: string,
+  options: CompleteSessionOptions = {},
+): Promise<boolean> {
+  const { reason = 'ended', sendRecap = true } = options;
   const activeSession = activeSessions.get(sessionId);
 
   // C2 (Phase 2) — idempotency guard only. completeSession is legitimately
@@ -1005,7 +1021,7 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
   // refuse a re-entrant completion.
   if (activeSession && activeSession.status === SessionStatus.COMPLETED) {
     logger.warn({ sessionId }, 'completeSession: already COMPLETED — skipping (C2)');
-    return;
+    return false;
   }
 
 
@@ -1043,7 +1059,7 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
   if (claimed.rows.length === 0) {
     logger.info({ sessionId }, 'completeSession: this event is already over — nothing to do');
     activeSessions.delete(sessionId);
-    return;
+    return false;
   }
 
   try {
@@ -1184,7 +1200,10 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     // A video meeting has none of those, so it sends no recap email (an attendance recap comes later).
     // The format comes from the claimed row, so an event this server no longer holds is read right too.
     const completedFormat = resolveEventFormat({ format: claimed.rows[0]?.event_format ?? activeSession?.format });
-    if (formatRule(completedFormat).recap === 'ratings') {
+    // 10 Nov 2026 (F7) — an event closed because it was overdue is not a natural end: no recap, weeks late.
+    if (!sendRecap) {
+      logger.info({ sessionId, reason }, 'No recap email: this event was closed, not ended');
+    } else if (formatRule(completedFormat).recap === 'ratings') {
       sendRecapEmails(sessionId).catch(emailErr => {
         logger.error({ err: emailErr, sessionId }, 'Error sending recap emails (non-fatal)');
       });
@@ -1220,6 +1239,7 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     const { clearDashboardCoalesce } = await import('./matching-flow');
     clearDashboardCoalesce(sessionId);
   }
+  return true;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

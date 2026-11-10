@@ -58,7 +58,7 @@ jest.mock('../../../services/orchestration/handlers/round-lifecycle', () => ({
   __esModule: true,
 }));
 
-import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS, OVERDUE_EVENTS_PER_TICK } from '../../../services/session/overdue-events';
+import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS, OVERDUE_EVENTS_PER_TICK, OVERDUE_REPORT_REPEAT_MS } from '../../../services/session/overdue-events';
 
 const NOW = new Date('2026-11-10T18:00:00.000Z');
 const minutesBefore = (m: number) => new Date(NOW.getTime() - m * 60_000);
@@ -91,7 +91,7 @@ beforeEach(() => {
   mockIoAvailable = true;
   candidates = [];
   scheduledClaims = new Set();
-  mockCompleteSession.mockResolvedValue(undefined);
+  mockCompleteSession.mockResolvedValue(true);
   mockFanoutCompleted.mockResolvedValue(undefined);
   mockFanoutAdmin.mockResolvedValue(undefined);
   armDatabase();
@@ -147,11 +147,32 @@ describe('report mode (the default)', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
     expect(mockCompleteSession).not.toHaveBeenCalled();
     expect(mockFanoutCompleted).not.toHaveBeenCalled();
-    expect(mockFanoutAdmin).not.toHaveBeenCalled();
     const [fields, message] = mockInfo.mock.calls[0] as [{ wouldClose: string[]; mode: string }, string];
     expect(fields.wouldClose).toEqual(['live-one', 'never-started']);
     expect(fields.mode).toBe('report');
     expect(message).toMatch(/WOULD close/);
+  });
+
+  it('logs an unchanged list at most every 30 minutes, and a changed list at once', async () => {
+    candidates = [meeting('repeat-a', 'lobby_open', 400), meeting('repeat-b', 'scheduled', 400)];
+    const later = (ms: number) => new Date(NOW.getTime() + ms);
+    await closeOverdueEvents('report', NOW);
+    expect(mockInfo).toHaveBeenCalledTimes(1);
+    // A minute later, the same list (in any order): not logged again.
+    candidates = [candidates[1], candidates[0]];
+    const again = await closeOverdueEvents('report', later(60_000));
+    expect(again.wouldClose.sort()).toEqual(['repeat-a', 'repeat-b']);
+    expect(mockInfo).toHaveBeenCalledTimes(1);
+    // The list changes: logged at once.
+    candidates = [meeting('repeat-a', 'lobby_open', 400)];
+    await closeOverdueEvents('report', later(120_000));
+    expect(mockInfo).toHaveBeenCalledTimes(2);
+    // Unchanged for 30 minutes since that log: logged again.
+    expect(OVERDUE_REPORT_REPEAT_MS).toBe(30 * 60_000);
+    await closeOverdueEvents('report', later(120_000 + OVERDUE_REPORT_REPEAT_MS - 1));
+    expect(mockInfo).toHaveBeenCalledTimes(2);
+    await closeOverdueEvents('report', later(120_000 + OVERDUE_REPORT_REPEAT_MS));
+    expect(mockInfo).toHaveBeenCalledTimes(3);
   });
 
   it('logs nothing when nothing is overdue', async () => {
@@ -182,8 +203,21 @@ describe('end mode', () => {
     // The completion runs its own fan-out and recap; nothing here writes the row a second time.
     expect(mockQuery).toHaveBeenCalledTimes(1);
     expect(mockFanoutCompleted).not.toHaveBeenCalled();
-    expect(mockFanoutAdmin).toHaveBeenCalledTimes(1);
-    expect(mockFanoutAdmin).toHaveBeenCalledWith('sessions');
+    // The admins' list is told by the completion's own fan-out (fanoutSessionCompleted), not here.
+    expect(mockFanoutAdmin).not.toHaveBeenCalled();
+  });
+
+  it('closes a live one with no recap email: the completion is told it is an overdue close', async () => {
+    candidates = [meeting('stuck-since-september', 'round_transition', 70_000)];
+    await closeOverdueEvents('end', NOW);
+    expect(mockCompleteSession).toHaveBeenCalledWith(mockIo, 'stuck-since-september', { reason: 'overdue', sendRecap: false });
+  });
+
+  it('counts only what it closed: a live one someone else already ended is not in closed', async () => {
+    candidates = [meeting('ended-by-host-meanwhile', 'lobby_open', 400), meeting('still-stuck', 'lobby_open', 390)];
+    mockCompleteSession.mockImplementation(async (_io: unknown, id: string) => id !== 'ended-by-host-meanwhile');
+    const result = await closeOverdueEvents('end', NOW);
+    expect(result).toEqual({ wouldClose: ['ended-by-host-meanwhile', 'still-stuck'], closed: ['still-stuck'] });
   });
 
   it('marks a never-started one completed only while still scheduled, with the completed fan-out and no completion run', async () => {
@@ -206,7 +240,6 @@ describe('end mode', () => {
     const result = await closeOverdueEvents('end', NOW);
     expect(result).toEqual({ wouldClose: ['went-live-meanwhile'], closed: [] });
     expect(mockFanoutCompleted).not.toHaveBeenCalled();
-    expect(mockFanoutAdmin).not.toHaveBeenCalled();
   });
 
   it('one that fails is left for the next tick and the rest still close', async () => {
@@ -214,6 +247,7 @@ describe('end mode', () => {
     scheduledClaims.add('fine-scheduled');
     mockCompleteSession.mockImplementation(async (_io: unknown, id: string) => {
       if (id === 'broken') throw new Error('db hiccup');
+      return true;
     });
     const result = await closeOverdueEvents('end', NOW);
     expect(result.wouldClose).toEqual(['broken', 'fine-live', 'fine-scheduled']);

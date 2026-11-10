@@ -4,10 +4,14 @@
 // refused everyone but the host, so Stefan could not end a member's event that was left running. Now:
 //   - the host ends their own event, as before;
 //   - a super admin ends any event, through the same completion the socket End Event runs (under the session guard),
-//     and the admins' event list is told;
+//     whose own fan-out (fanoutSessionCompleted) tells the admins' event list;
 //   - an admin (or a member) who is not the host is refused, at the route and in endSession itself.
 // The role is the caller's platform role from their token, never their attendance: a super admin who is also a
 // participant of the event is still a super admin, and an admin registered for it is still refused.
+//
+// Inside the live room (spec 12/14, fix round 1): the socket End Event (host:end_session, endEvent:true) is accepted
+// from a super admin who is in the room as a participant (their acting-as-host override is false, so verifyHost reads
+// them as a participant). Ending a round still needs host rights; a plain admin and a co-host are unchanged.
 
 import express from 'express';
 import request from 'supertest';
@@ -52,17 +56,12 @@ jest.mock('../../services/rating/rating.service', () => ({
   __esModule: true,
 }));
 
-const mockFanoutAdmin = jest.fn();
-jest.mock('../../realtime/fanout', () => ({
-  ...jest.requireActual('../../realtime/fanout'),
-  fanoutAdminEntities: (...args: unknown[]) => mockFanoutAdmin(...args),
-  __esModule: true,
-}));
+const COHOST = 'ffffffff-0000-4000-8000-000000000006';
 
 import hostRoutes from '../../routes/host';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import * as orchestrationService from '../../services/orchestration/orchestration.service';
-import { injectHostActionDeps, setHostActionsIo } from '../../services/orchestration/handlers/host-actions';
+import { injectHostActionDeps, setHostActionsIo, handleHostEnd } from '../../services/orchestration/handlers/host-actions';
 import { ForbiddenError } from '../../middleware/errors';
 
 const app = express();
@@ -90,7 +89,6 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockQuery.mockResolvedValue({ rows: [] });
   mockComplete.mockResolvedValue(undefined);
-  mockFanoutAdmin.mockResolvedValue(undefined);
   // A member's event, live: its host is HOST.
   mockGetSessionById.mockResolvedValue({ id: EVENT, hostUserId: HOST, status: SessionStatus.ROUND_ACTIVE });
 });
@@ -99,13 +97,12 @@ const end = (userId: string, role: UserRole) =>
   request(app).post(`/sessions/${EVENT}/host/end`).set('x-as', userId).set('x-role', role);
 
 describe('POST /sessions/:id/host/end', () => {
-  it('a super admin ends a member-hosted event: the completion runs once and the admins\' list is told', async () => {
+  it('a super admin ends a member-hosted event: the completion runs once (its own fan-out tells the admins\' list)', async () => {
     const res = await end(SUPER, UserRole.SUPER_ADMIN);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(mockComplete).toHaveBeenCalledTimes(1);
     expect(mockComplete).toHaveBeenCalledWith(fakeIo, EVENT);
-    expect(mockFanoutAdmin).toHaveBeenCalledWith('sessions');
   });
 
   it('the host still ends their own event', async () => {
@@ -118,7 +115,6 @@ describe('POST /sessions/:id/host/end', () => {
     const res = await end(ADMIN, UserRole.ADMIN);
     expect(res.status).toBe(403);
     expect(mockComplete).not.toHaveBeenCalled();
-    expect(mockFanoutAdmin).not.toHaveBeenCalled();
   });
 
   it('a member who is not the host is refused and nothing completes', async () => {
@@ -155,5 +151,68 @@ describe('endSession(sessionId, actor)', () => {
     mockGetSessionById.mockRejectedValueOnce(Object.assign(new Error('Event not found'), { statusCode: 404 }));
     await expect(orchestrationService.endSession(EVENT, { userId: SUPER, role: UserRole.SUPER_ADMIN })).rejects.toThrow('not found');
     expect(mockComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe('End Event from inside the live room (socket host:end_session)', () => {
+  /** Each user's acting-as-host override on this event: false is "in the room as a participant". */
+  const overrides: Record<string, boolean | null> = {};
+
+  beforeEach(() => {
+    for (const k of Object.keys(overrides)) delete overrides[k];
+    mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      const flat = String(sql).replace(/\s+/g, ' ');
+      const userId = params[1] as string;
+      if (flat.includes('SELECT acting_as_host FROM session_participants')) {
+        return { rows: userId in overrides ? [{ acting_as_host: overrides[userId] }] : [] };
+      }
+      if (flat.includes('SELECT host_user_id FROM sessions')) return { rows: [{ host_user_id: HOST }] };
+      if (flat.includes('SELECT pod_id FROM sessions')) return { rows: [{ pod_id: null }] };
+      if (flat.includes('FROM session_cohosts')) return { rows: userId === COHOST ? [{ role: 'cohost' }] : [] };
+      if (flat.includes('SELECT status FROM session_participants')) return { rows: [{ status: 'in_lobby' }] };
+      return { rows: [] };
+    });
+  });
+
+  function socketOf(userId: string, role: UserRole) {
+    const emitted: Array<[string, unknown]> = [];
+    const socket = { data: { userId, role }, emit: (event: string, payload: unknown) => { emitted.push([event, payload]); } };
+    return { socket: socket as unknown as Parameters<typeof handleHostEnd>[1], emitted };
+  }
+
+  it('a super admin in the room as a participant ends the event', async () => {
+    overrides[SUPER] = false;
+    const { socket, emitted } = socketOf(SUPER, UserRole.SUPER_ADMIN);
+    await handleHostEnd(fakeIo, socket, { sessionId: EVENT, endEvent: true });
+    expect(mockComplete).toHaveBeenCalledWith(fakeIo, EVENT);
+    expect(emitted).toEqual([]);
+  });
+
+  it('that super admin still cannot end a round as a participant', async () => {
+    overrides[SUPER] = false;
+    const { socket, emitted } = socketOf(SUPER, UserRole.SUPER_ADMIN);
+    await handleHostEnd(fakeIo, socket, { sessionId: EVENT, endEvent: false });
+    expect(mockComplete).not.toHaveBeenCalled();
+    expect(emitted[0]?.[0]).toBe('error');
+  });
+
+  it('a plain admin in the room is refused, as today', async () => {
+    const { socket, emitted } = socketOf(ADMIN, UserRole.ADMIN);
+    await handleHostEnd(fakeIo, socket, { sessionId: EVENT, endEvent: true });
+    expect(mockComplete).not.toHaveBeenCalled();
+    expect(emitted).toEqual([['error', expect.objectContaining({ code: 'FORBIDDEN' })]]);
+  });
+
+  it('a co-host may not end the event, as today', async () => {
+    const { socket, emitted } = socketOf(COHOST, UserRole.MEMBER);
+    await handleHostEnd(fakeIo, socket, { sessionId: EVENT, endEvent: true });
+    expect(mockComplete).not.toHaveBeenCalled();
+    expect(emitted).toEqual([['error', expect.objectContaining({ code: 'DIRECTOR_ONLY' })]]);
+  });
+
+  it('the host ends it, as today', async () => {
+    const { socket } = socketOf(HOST, UserRole.MEMBER);
+    await handleHostEnd(fakeIo, socket, { sessionId: EVENT, endEvent: true });
+    expect(mockComplete).toHaveBeenCalledWith(fakeIo, EVENT);
   });
 });

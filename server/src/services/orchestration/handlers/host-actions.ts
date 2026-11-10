@@ -301,6 +301,8 @@ async function openEventLobby(sessionId: string): Promise<void> {
     lobbyRoomId: lobbyRoom,
     startedAt: new Date(),
   });
+  // 10 Nov 2026 (F7) — the admins' Admin Events list shows the event live (both start paths come through here).
+  fanoutAdminEntities('sessions').catch(() => {});
   try {
     await videoService.createLobbyRoom(sessionId);
     logger.info({ sessionId, lobbyRoom }, 'Lobby LiveKit room created');
@@ -775,7 +777,14 @@ export async function handleHostEnd(
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
   try {
-    if (!await verifyHost(socket, data.sessionId)) return;
+    // 10 Nov 2026 (F7, spec 12/14) — a super admin who is in the room as a participant (their acting-as-host
+    // override set to false, so verifyHost reads them as a participant) can still END THE EVENT: the platform's
+    // override reads the platform role, never attendance. Only End Event (endEvent:true); every other host control,
+    // and ending a round, still needs verifyHost. Plain admins and co-hosts are unchanged.
+    const superAdminEndsEvent = !!data.endEvent
+      && ((socket.data as { role?: string } | undefined)?.role === UserRole.SUPER_ADMIN)
+      && !!getUserIdFromSocket(socket);
+    if (!superAdminEndsEvent && !await verifyHost(socket, data.sessionId)) return;
 
     const activeSession = activeSessions.get(data.sessionId);
 
@@ -2680,8 +2689,6 @@ export async function endSession(
   }
 
   await withSessionGuard(sessionId, () => completeSession(io, sessionId));
-  // The completion fans out to the event's people; the admins' event list is told here, as it lists every event.
-  await fanoutAdminEntities('sessions');
   logger.info({ sessionId, actorId: actor.userId, byHost: session.hostUserId === actor.userId }, 'Session ended via REST');
 }
 

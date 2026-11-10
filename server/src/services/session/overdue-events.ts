@@ -4,21 +4,22 @@
 // in the host's dashboard, in the members' "live now". Once its start, its length and a grace period have all passed,
 // it is over whoever forgot to end it:
 //   - a live one is completed through the orchestrator's own completion (completeSession, under the session guard),
-//     exactly as End Event completes it: its rooms close, everyone is swept out, the recap goes as it does today;
+//     as End Event completes it: its rooms and matches close, everyone is swept out, every page moves to Ended. It
+//     sends no recap email: an overdue close is not a natural end (controller ruling, 10 Nov 2026);
 //   - one that never started is marked Ended, with the completed fan-out so every page moves it, and no recap email
 //     (nobody met anybody).
 // In-person events are not this job's: they have their own ender (in-person-ending.ts). An event with no date has no
 // end, and a completed or cancelled one is already over.
 //
 // Three modes (config.overdueEventClose): off, report (log the events it would close, write nothing: the default, so
-// production shows its list before it is trusted), end.
+// production shows its list before it is trusted; an unchanged list is logged again at most every 30 minutes), end.
 
 import { SessionStatus } from '@rsn/shared';
 import { query } from '../../db';
 import logger from '../../config/logger';
 import { config } from '../../config';
 import { eventDurationOf } from './event-duration';
-import { fanoutAdminEntities, fanoutSessionCompleted } from '../../realtime/fanout';
+import { fanoutSessionCompleted } from '../../realtime/fanout';
 import { getRealtimeIo } from '../../realtime/emit';
 import { withSessionGuard } from '../orchestration/state/session-state';
 import { completeSession } from '../orchestration/handlers/round-lifecycle';
@@ -41,6 +42,19 @@ const LIVE_STATUSES: readonly string[] = [
 
 export type OverdueEventMode = 'off' | 'report' | 'end';
 
+/** Report mode repeats an unchanged list at most this often (it runs every minute, on every instance). */
+export const OVERDUE_REPORT_REPEAT_MS = 30 * 60 * 1000;
+/** The last list report mode logged, and when: the same list is logged again only after OVERDUE_REPORT_REPEAT_MS. */
+let lastReport: { key: string; at: number } | null = null;
+
+/** Whether report mode should log this list now: it changed, or the last log of it is 30 minutes old. */
+function reportIsDue(wouldClose: string[], now: Date): boolean {
+  const key = [...wouldClose].sort().join(',');
+  if (lastReport && lastReport.key === key && now.getTime() - lastReport.at < OVERDUE_REPORT_REPEAT_MS) return false;
+  lastReport = { key, at: now.getTime() };
+  return true;
+}
+
 interface CandidateRow {
   id: string;
   status: string;
@@ -59,11 +73,15 @@ function overdueOf(rows: CandidateRow[], now: Date, graceMinutes: number): Candi
     .map(({ row }) => row);
 }
 
-/** Completes a live event the way End Event does: the orchestrator's completion, under the session guard. */
-async function completeLiveEvent(sessionId: string): Promise<void> {
+/**
+ * Completes a live event through the orchestrator's completion, under the session guard, as End Event does, but with
+ * no recap email: an overdue close is not a natural end (controller ruling, 10 Nov 2026). Resolves whether this call
+ * ended it (false when someone else already had).
+ */
+async function completeLiveEvent(sessionId: string): Promise<boolean> {
   const io = getRealtimeIo();
   if (!io) throw new Error('Realtime server not ready');
-  await withSessionGuard(sessionId, () => completeSession(io, sessionId));
+  return withSessionGuard(sessionId, () => completeSession(io, sessionId, { reason: 'overdue', sendRecap: false }));
 }
 
 /**
@@ -111,6 +129,7 @@ export async function closeOverdueEvents(
   if (due.length === 0) return { wouldClose, closed: [] };
 
   if (mode === 'report') {
+    if (!reportIsDue(wouldClose, now)) return { wouldClose, closed: [] };
     logger.info({
       mode, graceMinutes, count: due.length, wouldClose,
       events: due.map(row => ({ id: row.id, status: row.status, scheduledAt: row.scheduled_at })),
@@ -122,8 +141,7 @@ export async function closeOverdueEvents(
   for (const row of due) {
     try {
       if (LIVE_STATUSES.includes(row.status)) {
-        await completeLiveEvent(row.id);
-        closed.push(row.id);
+        if (await completeLiveEvent(row.id)) closed.push(row.id);
       } else if (await endNeverStartedEvent(row.id)) {
         closed.push(row.id);
       }
@@ -131,10 +149,6 @@ export async function closeOverdueEvents(
       logger.warn({ err, sessionId: row.id }, 'Overdue events: could not close that one (will retry next tick)');
     }
   }
-  if (closed.length > 0) {
-    // Each completion fans out to the event's people; the admins' event list, which lists every event, is told once.
-    await fanoutAdminEntities('sessions');
-    logger.info({ mode, graceMinutes, count: closed.length, closed }, 'Overdue events closed');
-  }
+  if (closed.length > 0) logger.info({ mode, graceMinutes, count: closed.length, closed }, 'Overdue events closed');
   return { wouldClose, closed };
 }

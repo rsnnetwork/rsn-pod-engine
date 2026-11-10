@@ -32,9 +32,12 @@ jest.mock('../../realtime/emit', () => ({
   __esModule: true,
 }));
 
-import { fanoutSessionCompleted, fanoutSessionChat } from '../../realtime/fanout';
+import { fanoutSessionCompleted, fanoutSessionChat, fanoutSessionListEntities } from '../../realtime/fanout';
 
 const EVENT = '3a7c1f52-5b9e-4f0a-8e0d-2c4b6d8f1a22';
+/** Every admin and super admin on the platform (the Admin Events list's audience). */
+const ADMINS = ['u-admin', 'u-super'];
+const ADMIN_TAG = 'admin:sessions';
 const POD = '8d5e0b64-1c1f-4c3f-9d1e-6a5d0f3b2a11';
 
 type Participant = { id: string; status: string; joined: boolean };
@@ -114,6 +117,7 @@ function armDatabase() {
       return { rows: world.eventExists && params[0] === EVENT ? [{ pod_id: world.podId }] : [] };
     }
     if (world.failAudience) throw new Error('database is down');
+    if (flat.trim() === "SELECT id FROM users WHERE role IN ('admin', 'super_admin')") return { rows: ADMINS.map((id) => ({ id })) };
     return { rows: audience(flat, params).map((user_id) => ({ user_id })) };
   });
 }
@@ -123,12 +127,20 @@ function told(): Map<string, string[]> {
   const byUser = new Map<string, string[]>();
   for (const [io, userIds, entities] of mockEmitEntities.mock.calls as unknown as [unknown, string[], string[]][]) {
     expect(io).toBe(mockIo);
+    if (entities.length === 1 && entities[0] === ADMIN_TAG) continue; // the admins' list: see adminsTold()
     for (const id of userIds) {
       expect(byUser.has(id)).toBe(false); // nobody is told twice
       byUser.set(id, entities);
     }
   }
   return byUser;
+}
+
+/** The admins' list emits: each one's recipients. */
+function adminsTold(): string[][] {
+  return (mockEmitEntities.mock.calls as unknown as [unknown, string[], string[]][])
+    .filter(([, , entities]) => entities.length === 1 && entities[0] === ADMIN_TAG)
+    .map(([, userIds]) => userIds);
 }
 
 beforeEach(() => {
@@ -182,11 +194,30 @@ describe('fanoutSessionCompleted', () => {
     expect(mockEmitEntities).not.toHaveBeenCalled();
   });
 
+  it('also tells every admin, once, so the Admin Events list moves the event to Ended (F7)', async () => {
+    await fanoutSessionCompleted(EVENT);
+    expect(adminsTold()).toEqual([ADMINS]);
+  });
+
+  it('tells no admin about an event that is gone', async () => {
+    world.eventExists = false;
+    await fanoutSessionCompleted(EVENT);
+    expect(adminsTold()).toEqual([]);
+  });
+
   it('a database failure is logged and never thrown into the completion that called it', async () => {
     world.failAudience = true;
     await expect(fanoutSessionCompleted(EVENT)).resolves.toBeUndefined();
     expect(mockEmitEntities).not.toHaveBeenCalled();
     expect(mockWarn).toHaveBeenCalled();
+  });
+});
+
+describe('fanoutSessionListEntities (an event created, edited, cancelled or deleted)', () => {
+  it('tells every admin, once, so the Admin Events list follows (F7)', async () => {
+    await fanoutSessionListEntities(POD, EVENT, ['u-host']);
+    expect(adminsTold()).toEqual([ADMINS]);
+    expect(told().get('u-host')).toEqual(['user:u-host:sessions', 'user:u-host:pods']);
   });
 });
 

@@ -217,9 +217,13 @@ export async function fanoutSessionListEntities(
   if (!io) return;
   try {
     const recipients = new Set(audience ?? await resolveSessionListAudience(podId, sessionId));
-    await Promise.all([...recipients].filter(Boolean).map(userId =>
-      emitEntities(io, [userId], [E.userSessions(userId), E.userPods(userId)]),
-    ));
+    await Promise.all([
+      ...[...recipients].filter(Boolean).map(userId =>
+        emitEntities(io, [userId], [E.userSessions(userId), E.userPods(userId)]),
+      ),
+      // 10 Nov 2026 (F7) — and the admins' Admin Events list, which lists every event.
+      fanoutAdminEntities('sessions'),
+    ]);
   } catch (err) {
     logger.warn({ err, sessionId, podId }, 'fanoutSessionListEntities: failed to fan out');
   }
@@ -235,6 +239,7 @@ export async function fanoutSessionListEntities(
 // sent, in one emit of their own, the event's tags and their own two list tags:
 //   session:<id>, session:<id>:participants, session:<id>:chat, pod:<podId>:sessions,
 //   user:<recipient>:sessions, user:<recipient>:pods.
+// Every admin is also sent admin:sessions (fanoutAdminEntities), for the Admin Events list (10 Nov 2026, F7).
 // Never throws: a failure here is logged and the completion carries on.
 
 export async function fanoutSessionCompleted(sessionId: string): Promise<void> {
@@ -260,9 +265,14 @@ export async function fanoutSessionCompleted(sessionId: string): Promise<void> {
     const shared = [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionChat(sessionId)];
     if (podId) shared.push(E.podSessions(podId));
     const recipients = new Set(people.rows.map((r) => r.user_id).filter(Boolean));
-    await Promise.all([...recipients].map((userId) =>
-      emitEntities(io, [userId], [...shared, E.userSessions(userId), E.userPods(userId)]),
-    ));
+    await Promise.all([
+      ...[...recipients].map((userId) =>
+        emitEntities(io, [userId], [...shared, E.userSessions(userId), E.userPods(userId)]),
+      ),
+      // 10 Nov 2026 (F7) — every completion (End Event, the natural end, the in-person ender, the reapers) also
+      // moves the event on the admins' Admin Events list, which lists every event.
+      fanoutAdminEntities('sessions'),
+    ]);
   } catch (err) {
     logger.warn({ err, sessionId }, 'fanoutSessionCompleted: failed to fan out');
   }

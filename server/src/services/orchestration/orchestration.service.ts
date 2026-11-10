@@ -133,12 +133,12 @@ export function initOrchestration(socketServer: SocketServer): void {
     transitionToRound: (sessionId, roundNumber) => withSessionGuard(sessionId, () => transitionToRound(io, sessionId, roundNumber)),
     endRound: (sessionId, roundNumber) => withSessionGuard(sessionId, () => endRound(io, sessionId, roundNumber)),
     endRatingWindow: (sessionId, roundNumber) => withSessionGuard(sessionId, () => endRatingWindow(io, sessionId, roundNumber)),
-    completeSession: (sessionId) => withSessionGuard(sessionId, () => completeSession(io, sessionId)),
+    completeSession: (sessionId) => withSessionGuard(sessionId, async () => { await completeSession(io, sessionId); }),
   };
 
   injectHostActionDeps({
     transitionToRound: (ioServer, sessionId, roundNumber) => transitionToRound(ioServer, sessionId, roundNumber),
-    completeSession: (ioServer, sessionId) => completeSession(ioServer, sessionId),
+    completeSession: async (ioServer, sessionId) => { await completeSession(ioServer, sessionId); },
     endRound: (ioServer, sessionId, roundNumber) => endRound(ioServer, sessionId, roundNumber),
     // #4 (26 May) — direct (non-guard-wrapped) endRatingWindow for host
     // force-advance from ROUND_RATING. Host handlers already hold the session
