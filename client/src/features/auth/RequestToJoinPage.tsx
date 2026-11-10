@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { ArrowRight, CheckCircle, ArrowLeft } from 'lucide-react';
@@ -22,7 +22,12 @@ export default function RequestToJoinPage() {
   const navigate = useNavigate();
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<RequestForm>();
+  // An event guest's "Become a member" (Part 2, Task 12) arrives with the address they already verified.
+  const [params] = useSearchParams();
+  const knownEmail = (params.get('email') ?? '').trim().slice(0, 255);
+  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<RequestForm>({
+    defaultValues: { fullName: '', email: knownEmail, linkedinUrl: '', reason: '' },
+  });
 
   const onSubmit = async (data: RequestForm) => {
     setSubmitError(null);

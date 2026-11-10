@@ -3,6 +3,9 @@ import api from '@/lib/api';
 import { clearCache, setCacheOwner } from '@/lib/queryClient';
 
 interface AuthState {
+  /** The session's member, as GET /auth/session sends it. Its `accountKind` ('member' | 'event_guest', Part 2) says who
+   *  may see what on the client: an event guest is confined to their event and guest home (features/call/guest-routes),
+   *  and is never sent into onboarding. Read from the session only, never from a refused request. */
   user: any | null;
   accessToken: string | null;
   refreshToken: string | null;

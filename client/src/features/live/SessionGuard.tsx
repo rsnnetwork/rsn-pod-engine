@@ -14,6 +14,10 @@
 //   2b. A 403 is final at once (P2 item 9, 1 Nov 2026): the server has said the
 //      event is not open to this person, so there is nothing to retry and the
 //      page says so in one sentence instead of "Reconnecting…" and a library error.
+//   2c. An event guest (Part 2, Task 12) the event refuses goes back to the
+//      event's RSN Call link, which says why in the event's own words and asks
+//      for what is still missing (an admission code, a name, a group). With no
+//      link known in this browser, the refusal screen offers their events.
 //   3. Re-runs on document visibility change (handles tab-switch where
 //      the session ended elsewhere).
 //
@@ -22,13 +26,15 @@
 // route-mount and backend-init, browser-back to ended event).
 
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { RETRY_DELAYS_MS, UNREACHABLE_SENTENCE, classifyGuardFailure, refusalOf } from './session-guard-state';
 import EventRefusedScreen from './EventRefusedScreen';
+import { useAuthStore } from '@/stores/authStore';
+import { GUEST_HOME_PATH, callPathForEvent, isEventGuest } from '@/features/call/guest-routes';
 
 type GuardState =
   | { kind: 'checking' }
@@ -42,6 +48,11 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const [state, setState] = useState<GuardState>({ kind: 'checking' });
+  const guest = useAuthStore((s) => isEventGuest(s.user));
+  // Sent here by the call page itself: a refusal is then shown, never sent back to it (the two would bounce).
+  const fromCallLink = (useLocation().state as { fromCallLink?: boolean } | null)?.fromCallLink === true;
+  // Where "back" goes: a guest's events, a member's.
+  const eventsPath = guest ? GUEST_HOME_PATH : '/sessions';
   // Phase 7-audit fix — mounted-ref so retry timers + visibility re-checks
   // don't setState on unmounted components (fast back-nav races).
   const mountedRef = useRef(true);
@@ -128,6 +139,8 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
   }
 
   if (state.kind === 'refused') {
+    const callPath = guest && !fromCallLink ? callPathForEvent(sessionId) : null;
+    if (callPath) return <Navigate to={callPath} replace />;
     return <EventRefusedScreen sessionId={sessionId} detail={state.detail} requestOnEventPage={state.requestOnEventPage} />;
   }
 
@@ -140,7 +153,7 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
           <p className="text-sm text-gray-500 mb-6">
             It may have ended or been cancelled. Head back to your dashboard to find another event.
           </p>
-          <Button onClick={() => navigate('/sessions')}>Back to dashboard</Button>
+          <Button onClick={() => navigate(eventsPath)}>Back to dashboard</Button>
         </div>
       </div>
     );
@@ -154,7 +167,7 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
           <h2 className="text-lg font-semibold text-gray-900 mb-2">Couldn't load the event</h2>
           <p className="text-sm text-gray-500 mb-6">{state.message}</p>
           <div className="flex gap-2 justify-center">
-            <Button variant="secondary" onClick={() => navigate('/sessions')}>Back to dashboard</Button>
+            <Button variant="secondary" onClick={() => navigate(eventsPath)}>Back to dashboard</Button>
             <Button onClick={() => { setState({ kind: 'checking' }); checkSession(0); }}>Try again</Button>
           </div>
         </div>

@@ -23,6 +23,7 @@ import { fetchIncomingCall, fetchOutgoingCall } from './call-api';
 import { fromLive, reconcile, type RingingCall } from './call-ring';
 import { callSignalHandlers } from './call-signals';
 import { wasPlacedHere } from './placed-here';
+import { memberIdOf } from '@/features/call/guest-routes';
 
 const callKeys = {
   incoming: (me: string) => ['calls', 'incoming', me] as const,
@@ -31,7 +32,8 @@ const callKeys = {
 
 export function useCallSignals(): void {
   const navigate = useNavigate();
-  const me = useAuthStore((s) => s.user?.id as string | undefined);
+  // A member's calls only: an event guest cannot ring or be rung (Part 2, Task 12), so their browser never asks.
+  const me = useAuthStore((s) => memberIdOf(s.user));
   const addToast = useToastStore((s) => s.addToast);
 
   // The live socket events, for every screen.
