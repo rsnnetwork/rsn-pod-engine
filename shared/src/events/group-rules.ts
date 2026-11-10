@@ -58,6 +58,11 @@ export interface EventGroupsView {
   /** People with a place but no group yet (the people running the event left out). */
   ungrouped?: number;
   capacity?: RoundCapacity[];
+  /**
+   * Each person's group keys, by user id (the people running the event only; people with no group are left out),
+   * so the organiser's participant list can show each person's group (Part 2 Task 11).
+   */
+  members?: Record<string, string[]>;
 }
 
 /** The limits the organiser's form and the server hold an event's groups to (the database checks the same). */

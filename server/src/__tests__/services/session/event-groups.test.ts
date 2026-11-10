@@ -202,6 +202,10 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
     return rows([{ count: String(counted().filter((id) => keysOfUser(id).length === 0).length) }]);
   }
   if (sql === 'SELECT config FROM sessions WHERE id = $1') return rows([{ config: world.session.config }]);
+  // groupsForParticipants: every person's keys, in the event's group order.
+  if (/^SELECT pg.user_id, array_agg\(g.key ORDER BY g.position, g.key\) AS keys FROM event_participant_groups pg/.test(sql)) {
+    return rows([...new Set(world.memberships.map((m) => m.user_id))].map((user_id) => ({ user_id, keys: keysOfUser(user_id) })));
+  }
   throw new Error(`unexpected SQL in the fake database: ${sql}`);
 }
 
@@ -647,6 +651,15 @@ describe('readEventGroups', () => {
     expect(view.capacity).toHaveLength(5);
     expect(view.capacity?.[0]).toMatchObject({ round: 1, maxMeetings: 8, waiting: { founder: 17 }, ungrouped: 0 });
     expect(view.ungrouped).toBe(0);
+    // Part 2 Task 11: each person's groups, for the organiser's participant list.
+    expect(view.members?.f3).toEqual(['founder']);
+    expect(view.members?.v0).toEqual(['funder']);
+    expect(Object.keys(view.members ?? {})).toHaveLength(33);
+  });
+
+  it('a participant never reads anyone\'s groups but their own (Part 2 Task 11)', async () => {
+    const view = await readEventGroups(EVENT, { userId: 'f3', role: UserRole.MEMBER });
+    expect(view.members).toBeUndefined();
   });
 
   it('counts leave the host out, and people with a place but no group are counted as such in every restricted round', async () => {
@@ -713,7 +726,7 @@ describe('a draft (Part 2 Task 2): its groups exist only for the people who run 
 describe('an event without groups reads as none', () => {
   it('everyone gets no groups; an organiser gets no rules, no counts, no capacity', async () => {
     expect(await readEventGroups(EVENT, stranger)).toEqual({ groups: [], question: 'Which group are you in?', allowMultiple: false, mine: [] });
-    expect(await readEventGroups(EVENT, host)).toMatchObject({ groups: [], rules: null, counts: {}, capacity: [] });
+    expect(await readEventGroups(EVENT, host)).toMatchObject({ groups: [], rules: null, counts: {}, capacity: [], members: {} });
   });
 });
 

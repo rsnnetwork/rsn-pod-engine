@@ -444,8 +444,8 @@ async function groupCounts(sessionId: string): Promise<{ counts: Record<string, 
 
 /**
  * The event's groups as a viewer reads them: anyone who can see the event gets the groups, the question and
- * their own groups; the people running it also get the rules, the counts (with how many have no group yet) and
- * each round's capacity. Someone who cannot see the event is told it does not exist, as for an unknown id.
+ * their own groups; the people running it also get the rules, the counts (with how many have no group yet),
+ * each round's capacity and each person's groups (for the participant list's group chips). Someone who cannot see the event is told it does not exist, as for an unknown id.
  */
 export async function readEventGroups(sessionId: string, viewer: GroupsActor): Promise<EventGroupsView> {
   const facts = await readEventAccessFacts(sessionId, viewer.userId);
@@ -460,12 +460,13 @@ export async function readEventGroups(sessionId: string, viewer: GroupsActor): P
   };
   const { allowed } = await canActAsHost(viewer.userId, viewer.role, sessionId);
   if (!allowed) return view;
-  if (!rules) return { ...view, rules: null, counts: {}, ungrouped: 0, capacity: [] };
-  const [{ counts, ungrouped }, event] = await Promise.all([
+  if (!rules) return { ...view, rules: null, counts: {}, ungrouped: 0, capacity: [], members: {} };
+  const [{ counts, ungrouped }, event, members] = await Promise.all([
     groupCounts(sessionId),
     query<{ config: unknown }>(`SELECT config FROM sessions WHERE id = $1`, [sessionId]),
+    groupsForParticipants(sessionId),
   ]);
   const rounds = numberOfRoundsOf(event.rows[0]?.config);
   const capacity = Array.from({ length: rounds }, (_, i) => explainRoundCapacity(rules, i + 1, counts, rounds, ungrouped));
-  return { ...view, rules, counts, ungrouped, capacity };
+  return { ...view, rules, counts, ungrouped, capacity, members: Object.fromEntries(members) };
 }
