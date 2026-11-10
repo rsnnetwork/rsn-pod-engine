@@ -83,7 +83,10 @@ jest.mock('../../services/session/session.service', () => ({ registerParticipant
 import callLinkRoutes from '../../routes/call-links';
 import authRoutes from '../../routes/auth';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
-import { CALL_LINK_MISSES_MAX, signInCodeEmailKey, signInCodeEmailLimiter } from '../../middleware/rateLimit';
+import {
+  CALL_LINK_EMAILS_PER_LINK, CALL_LINK_MISSES_MAX, CALL_LINK_PROXY_MISSES_MAX, callLinkEmailTargetKey, callLinkEmailTargetLimiter,
+  signInCodeEmailKey, signInCodeEmailLimiter,
+} from '../../middleware/rateLimit';
 import { hashSignInCode } from '../../services/identity/sign-in-code';
 import { addEvent, addUser, resetWorld, uuid, world } from '../fixtures/call-link-world';
 
@@ -113,11 +116,15 @@ beforeEach(() => {
   addEvent({ id: EVENT_B, call_code: CODE_B, admission_mode: 'open' });
   mockSendEntryEmail.mockReset().mockResolvedValue(undefined);
   void signInCodeEmailLimiter.resetKey(signInCodeEmailKey(EMAIL));
+  // The per-link-and-address bucket outlives a test too (most tests ask the same link for the same address).
+  for (const code of [CODE_A, CODE_B]) for (const email of [EMAIL, 'member@example.org']) {
+    void callLinkEmailTargetLimiter.resetKey(callLinkEmailTargetKey({ params: { code }, body: { email } } as never));
+  }
 });
 
 async function askCode(code: string, ip: string, email = EMAIL): Promise<string> {
   const res = await request(app).post(`/api/call-links/${code}/email`).set('cf-connecting-ip', ip).send({ email });
-  expect(res.status).toBe(200);
+  if (res.status !== 200) throw new Error(`code request refused: ${res.status} ${res.text}`);
   return (mockSendEntryEmail.mock.calls.at(-1) as [string, { code: string }])[1].code;
 }
 const wrong = (code: string) => String((Number(code) + 1) % 1_000_000).padStart(6, '0');
@@ -252,6 +259,74 @@ describe('admission codes typed while entering', () => {
     const eleventh = await enter();
     expect(eleventh.status).toBe(429);
     expect(eleventh.body.error.message).toMatch(/Too many codes tried/);
+  });
+});
+
+describe('no answer tells whether an address has an account (fix round 1)', () => {
+  it('on an invitation-only event, /email answers a member and an unknown address byte for byte the same', async () => {
+    world.events.find((e) => e.id === EVENT_A)!.admission_mode = 'restricted';
+    world.events.find((e) => e.id === EVENT_A)!.visibility = 'private';
+    const ip = nextIp();
+    const known = await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', ip).send({ email: 'member@example.org' });
+    const unknown = await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', ip).send({ email: EMAIL });
+    expect(known.status).toBe(200);
+    expect(unknown.status).toBe(200);
+    expect(known.text).toBe(unknown.text);
+    expect(JSON.parse(known.text)).toEqual({ success: true, data: { sent: true } });
+  });
+
+  it('a wrong code at /verify is byte for byte the same for a member and an unknown address', async () => {
+    world.events.find((e) => e.id === EVENT_A)!.admission_mode = 'restricted';
+    world.events.find((e) => e.id === EVENT_A)!.visibility = 'private';
+    const ip = nextIp();
+    void signInCodeEmailLimiter.resetKey(signInCodeEmailKey('member@example.org'));
+    const k = await askCode(CODE_A, ip, 'member@example.org');
+    const u = await askCode(CODE_A, ip, EMAIL);
+    const a = await request(app).post(`/api/call-links/${CODE_A}/verify`).set('cf-connecting-ip', ip).send({ email: 'member@example.org', code: wrong(k) });
+    const b = await request(app).post(`/api/call-links/${CODE_A}/verify`).set('cf-connecting-ip', ip).send({ email: EMAIL, code: wrong(u) });
+    expect(a.status).toBe(400);
+    expect(a.text).toBe(b.text);
+    // The right code tells the newcomer, and only them, why they cannot come in, and makes no account.
+    const proved = await request(app).post(`/api/call-links/${CODE_A}/verify`).set('cf-connecting-ip', ip).send({ email: EMAIL, code: u });
+    expect(proved.status).toBe(403);
+    expect(proved.body.error).toMatchObject({ code: 'EVENT_ADMISSION_REQUIRED', details: { admissionCode: true } });
+    expect(proved.body.error.message).toMatch(/^This event is invitation only\./);
+    expect(world.users.some((x) => x.email === EMAIL)).toBe(false);
+  });
+});
+
+describe('buckets a caller cannot step around (fix round 1)', () => {
+  it('a new cf-connecting-ip on every try does not escape the proxy\'s own address bucket', async () => {
+    const realAddress = '203.0.113.77';
+    let last = 0;
+    for (let i = 0; i <= CALL_LINK_PROXY_MISSES_MAX; i++) {
+      const r = await request(app).get(`/api/call-links/${crypto.randomBytes(5).toString('hex')}`)
+        .set('x-forwarded-for', realAddress).set('cf-connecting-ip', `198.51.100.${i % 250}.${i}`);
+      last = r.status;
+      if (i < CALL_LINK_PROXY_MISSES_MAX) expect(r.status).toBe(404);
+    }
+    expect(last).toBe(429);
+    const elsewhere = await request(app).get(`/api/call-links/${CODE_A}`).set('x-forwarded-for', '203.0.113.78').set('cf-connecting-ip', nextIp());
+    expect(elsewhere.status).toBe(200);
+  });
+
+  it('one link takes a capped number of code requests, however many addresses and networks ask', async () => {
+    addEvent({ id: uuid(110), call_code: 'pppppppppp', admission_mode: 'open' });
+    for (let i = 0; i < CALL_LINK_EMAILS_PER_LINK; i++) {
+      const r = await request(app).post('/api/call-links/pppppppppp/email')
+        .set('x-forwarded-for', `192.0.2.${i % 250}`).set('cf-connecting-ip', `10.200.${Math.floor(i / 250)}.${i % 250}`)
+        .send({ email: `cycle-${i}@example.org` });
+      if (r.status !== 200) throw new Error(`at ${i}: ${r.status} ${r.text}`);
+    }
+    const over = await request(app).post('/api/call-links/pppppppppp/email')
+      .set('x-forwarded-for', '192.0.2.251').set('cf-connecting-ip', nextIp()).send({ email: 'one-more@example.org' });
+    expect(over.status).toBe(429);
+  });
+
+  it('the per-link-and-address key reads every spelling of a link as one (o→0, i/l→1, separators)', () => {
+    const key = (code: string) => callLinkEmailTargetKey({ params: { code }, body: { email: EMAIL } } as never);
+    expect(key('K7M2-X9Q4-RA')).toBe(key('k7m2x9q4ra'));
+    expect(key('1o1o1o1o1o')).toBe(key('l0i0101010'));
   });
 });
 

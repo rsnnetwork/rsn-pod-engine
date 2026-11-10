@@ -2,12 +2,16 @@
 //
 // Open the link → give an email → type the 6-digit code sent to it → give only what the event still needs → enter.
 //
-//   sendCallEntryCode   an existing account always gets a code (unless it is closed). A new address gets one only when
-//                       the event may take a new person by email: an open or approval event, a public event with no
-//                       admission mode, an invitation-only event for a listed address, a redeemable admission code or a
-//                       personal invite, any other event for a personal invite. Else 403 in the event's own words.
+//   sendCallEntryCode   every address gets a code by email, and every answer is the same 200 (fix round 1, 11 Nov
+//                       2026: the link never tells anyone whether an address has an RSN account, nor whether it is on
+//                       the event's list). The send leaves the request path, so the timing is the same too.
 //   verifyCallEntry     spends the code (or the email's button) under the sign-in code's rules (spendSignInCode: 15
-//                       minutes, five tries) and signs in: the account as it is, or a new event guest of this event.
+//                       minutes, five tries). Only then, before anything is spent or made, it decides admission for an
+//                       address with no account: open and approval events take it; an invitation-only event a listed
+//                       address, a redeemable admission code or a personal invite; an event with no admission mode a
+//                       public event or a personal invite. Refused, the person hears it in the event's own words (and
+//                       may send the same code again with an admission code); nothing is spent and no account is made.
+//                       Otherwise it signs in: the account as it is, or a new event guest of this event.
 //   readCallEntry       where a signed-in person stands on the event, changing nothing.
 //   enterCall           gives what was missing and takes the place (registerParticipant, the one way a place is given:
 //                       every admission, capacity, removal and guest rule holds), or sends the request an approval event
@@ -33,7 +37,6 @@ import { AppError, ValidationError } from '../../middleware/errors';
 import { fanoutProfileChange, fanoutSessionEntities } from '../../realtime/fanout';
 import { E } from '../../realtime/entities';
 import * as identity from '../identity/identity.service';
-import { assertCanSignIn } from '../identity/account-access';
 import { clientOriginConfig, resolveClientBaseUrl } from '../identity/client-origin';
 import { isEmailTypeEnabled, sendCallEntryCodeEmail } from '../email/email.service';
 import {
@@ -60,6 +63,9 @@ export const CALL_LINK_MEMBERS_SENTENCE =
 const REMOVED_SENTENCE = 'You have been removed from this event by the host';
 const ACCOUNT_CLOSED_SENTENCE = 'Your account cannot join events right now.';
 const CODES_OFF_SENTENCE = 'We cannot send codes for this event just now. Please try again later.';
+/** An address with no account, proved, at an invitation-only event it has no tie to. */
+export const CALL_INVITATION_ONLY_SENTENCE =
+  'This event is invitation only. Enter your admission code, or ask the organiser to invite this email address.';
 
 /** The participant statuses that hold a place (left and no-show come back through a registration). */
 const PLACE_STATUSES: readonly string[] = ['registered', 'checked_in', 'in_lobby', 'in_round'];
@@ -124,9 +130,10 @@ async function admissionCodeRedeemable(sessionId: string, raw: string): Promise<
 }
 
 /**
- * Whether the event takes a new person who arrives by its link (a new address at send time, an event guest at entry),
- * or the refusal: open and approval events do; an invitation-only event only for a listed address, a redeemable
- * admission code or a personal invite; an event with no admission mode only when it is public, or for a personal invite.
+ * Whether the event takes a new person who arrives by its link (an address with no account once it has proved its code,
+ * an event guest at entry), or the refusal: open and approval events do; an invitation-only event only for a listed
+ * address, a redeemable admission code or a personal invite; an event with no admission mode only when it is public, or
+ * for a personal invite. Never asked before the address is proved (no account-existence answer to anyone else).
  */
 async function newcomerRefusal(event: CallEventRow, email: string, admissionCode?: string): Promise<AppError | null> {
   const mode = admissionModeOf(event);
@@ -135,70 +142,68 @@ async function newcomerRefusal(event: CallEventRow, email: string, admissionCode
   if (mode === 'restricted') {
     if (await emailListed(event.id, email)) return null;
     if (admissionCode && await admissionCodeRedeemable(event.id, admissionCode)) return null;
-    return new AppError(403, ErrorCodes.EVENT_ADMISSION_REQUIRED, EVENT_ADMISSION_REQUIRED_SENTENCE);
+    return new AppError(403, ErrorCodes.EVENT_ADMISSION_REQUIRED, CALL_INVITATION_ONLY_SENTENCE, { admissionCode: true });
   }
   if (visibilityOf(event) === 'public') return null;
-  return new AppError(403, ErrorCodes.EVENT_PRIVATE, CALL_LINK_MEMBERS_SENTENCE);
+  return new AppError(403, ErrorCodes.EVENT_PRIVATE, CALL_LINK_MEMBERS_SENTENCE, { admissionCode: false });
 }
 
 // ─── Sending and checking the code ───────────────────────────────────────────
 
 /**
- * Email a 6-digit entry code (and a button that enters by itself) for the event behind `code`. An existing account is
- * refused only when it is closed or suspended; a new address only when the event may not take it (newcomerRefusal),
- * and then no link row is written. In development the code comes back in the answer too (never in production).
+ * Email a 6-digit entry code (and a button that enters by itself) for the event behind `code`, to any address: the answer
+ * is the same `{ sent: true }` for every one, whether or not it has an account, is on the event's list, or is closed.
+ * Only the event decides anything here (unknown 404, over 409, the admin switch 503), and before the address is read.
+ * The send leaves the request path, so a slow or failing provider never tells one address from another (a failure is
+ * logged). In development the code comes back in the answer too (never in production).
  */
 export async function sendCallEntryCode(
   code: string,
   email: string,
-  opts: { admissionCode?: string; clientUrl?: string } = {},
+  opts: { clientUrl?: string } = {},
 ): Promise<{ sent: true; devCode?: string }> {
   const event = await publishedCallEvent(code);
   const closed = closedEventRefusal(lifecycleOfCallEvent(event));
   if (closed) throw closed;
-  const address = email.trim().toLowerCase();
-  const existing = await identity.getUserByEmail(address);
-  assertCanSignIn(existing);
-  if (!existing) {
-    const refusal = await newcomerRefusal(event, address, opts.admissionCode);
-    if (refusal) throw refusal;
-  }
   if (!(await isEmailTypeEnabled('event_entry_code'))) {
     throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, CODES_OFF_SENTENCE);
   }
 
+  const address = email.trim().toLowerCase();
   const { token, code: entryCode } = await identity.issueEventEntryLink(address, event.id);
   const base = resolveClientBaseUrl(opts.clientUrl, clientOriginConfig());
   const link = `${base}${callLinkPath(event.call_code)}?${new URLSearchParams({ entry: token }).toString()}`;
   const message = { eventTitle: event.title, code: entryCode, link };
 
-  if (config.isDev) {
-    if (config.resendApiKey) {
-      await sendCallEntryCodeEmail(address, message).catch((err) =>
-        logger.warn({ err, sessionId: event.id }, 'Entry code email failed in dev mode; returning the code'));
-    }
-    return { sent: true, devCode: entryCode };
-  }
-  await sendCallEntryCodeEmail(address, message);
-  logger.info({ sessionId: event.id, existing: !!existing }, 'Event entry code sent');
-  return { sent: true };
+  if (config.isDev && !config.resendApiKey) return { sent: true, devCode: entryCode };
+  void sendCallEntryCodeEmail(address, message).catch((err) =>
+    logger.warn({ err, sessionId: event.id }, 'Event entry code email failed'));
+  return config.isDev ? { sent: true, devCode: entryCode } : { sent: true };
 }
 
 /**
  * Prove the address with the 6-digit code (or the email's button) for this event, and sign in: an existing account as
  * it is, a new address as an event guest of this event. A code from another event's email, a sign-in code, a spent,
- * expired or locked code: refused as spendSignInCode refuses.
+ * expired or locked code: refused as spendSignInCode refuses, the same for every address. Once the code is proved right,
+ * an address with no account that the event does not take is refused (403 in the event's words, `details.admissionCode`
+ * saying whether an admission code would help) before the code is spent or any account is made; `admissionCode` is then
+ * checked, not spent (enterCall redeems it).
  */
 export async function verifyCallEntry(
   code: string,
-  input: { email: string; code: string } | { token: string },
+  input: ({ email: string; code: string } | { token: string }) & { admissionCode?: string },
 ): Promise<Awaited<ReturnType<typeof identity.signInForEventEntry>>> {
   const event = await publishedCallEvent(code);
   const closed = closedEventRefusal(lifecycleOfCallEvent(event));
   if (closed) throw closed;
+  const admit = async (provedEmail: string) => {
+    if (await identity.getUserByEmail(provedEmail)) return;
+    const refusal = await newcomerRefusal(event, provedEmail, input.admissionCode);
+    if (refusal) throw refusal;
+  };
   const email = 'token' in input
-    ? await identity.verifyEventEntryToken(input.token, event.id)
-    : await identity.verifyEventEntryCode(input.email, event.id, input.code);
+    ? await identity.verifyEventEntryToken(input.token, event.id, admit)
+    : await identity.verifyEventEntryCode(input.email, event.id, input.code, admit);
   return identity.signInForEventEntry(email, event.id);
 }
 
@@ -374,7 +379,9 @@ export async function enterCall(
     }
     let codeGroup: string | null = null;
     let redeemed = false;
-    if (input.admissionCode) {
+    // A single-use code is spent only when it is what lets the person in (fix round 1): an invitation-only event they
+    // hold no other tie to, or an approval event they would otherwise have to ask. Anywhere else it is left unspent.
+    if (input.admissionCode && (before.missing.admissionCode || before.step === 'request')) {
       const r = await redeemAdmissionCode(event.id, userId, input.admissionCode, client);
       codeGroup = r.groupKey;
       redeemed = true;

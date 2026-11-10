@@ -29,6 +29,8 @@ export const CALL_DISPLAY_NAME_MAX = 60;
 /**
  * The name given on the details step, as it is stored, or null when it cannot be one: trimmed, runs of spaces made one,
  * 1 to CALL_DISPLAY_NAME_MAX characters, and no control characters or angle brackets (a name is shown to other people).
+ * Invisible characters that can disguise a name (zero-width marks, the byte-order mark and the bidirectional controls,
+ * isInvisibleInName) are taken out first, so a name cannot pass for someone else's or be made of nothing.
  */
 export function cleanCallDisplayName(raw: string): string | null {
   if (typeof raw !== 'string') return null;
@@ -36,8 +38,9 @@ export function cleanCallDisplayName(raw: string): string | null {
   let space = false;
   for (const ch of raw.trim()) {
     const code = ch.codePointAt(0) ?? 0;
+    if (isInvisibleInName(code)) continue;
     if (code < 0x20 || code === 0x7f || ch === '<' || ch === '>') return null;
-    if (ch === ' ' || ch === ' ') {
+    if (code === 0x20 || code === 0xa0) {
       space = true;
       continue;
     }
@@ -46,6 +49,16 @@ export function cleanCallDisplayName(raw: string): string | null {
     out += ch;
   }
   return out.length >= 1 && [...out].length <= CALL_DISPLAY_NAME_MAX ? out : null;
+}
+
+/**
+ * Zero-width space, non-joiner and joiner, the left-to-right and right-to-left marks (U+200B to U+200F), the embeddings
+ * and overrides (U+202A to U+202E), the word joiner and invisible operators (U+2060 to U+2064), the isolates (U+2066 to
+ * U+2069) and the byte-order mark (U+FEFF).
+ */
+function isInvisibleInName(code: number): boolean {
+  return (code >= 0x200b && code <= 0x200f) || (code >= 0x202a && code <= 0x202e) || (code >= 0x2060 && code <= 0x2064)
+    || (code >= 0x2066 && code <= 0x2069) || code === 0xfeff;
 }
 
 /** The longest text normaliseCallCode reads: a code with a separator between every symbol, and a little more. */

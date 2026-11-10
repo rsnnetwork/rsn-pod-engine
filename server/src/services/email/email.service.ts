@@ -11,6 +11,8 @@ import { query } from '../../db';
 import { isReservedTestAddress, maskAddress } from '../identity/reserved-address';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { SIGN_IN_CODE_TTL_MINUTES } from '../identity/sign-in-code';
+import { ErrorCodes } from '@rsn/shared';
+import { AppError } from '../../middleware/errors';
 
 let resend: Resend | null = null;
 
@@ -1638,8 +1640,8 @@ REASON — Meet people you have a reason to know.`;
 // Someone opened an event's link and gave this address. The email carries the 6-digit code to type on the link's
 // page and a button that opens the event's link with a one-time entry token (it signs in that browser). The code
 // works for 15 minutes (sign-in-code.ts), the button for 60. Gated by the admin switch 'event_entry_code' (seeded on
-// by migration 139) in call-entry.service.ts, before anything is stored. Throws when it could not be sent, so the
-// person is told rather than left waiting.
+// by migration 139) in call-entry.service.ts, before anything is stored. Throws a 503 AppError when it could not be sent;
+// the Call link sends it off the request path (fix round 1), so the failure is logged there.
 export interface CallEntryCodeEmailData {
   eventTitle: string;
   code: string;
@@ -1675,7 +1677,9 @@ export async function sendCallEntryCodeEmail(to: string, data: CallEntryCodeEmai
     </body></html>`;
   const text = `${line}\n\nOpen the event: ${data.link}\n\nIf you didn't ask for this code, you can safely ignore this email.`;
   const result = await sendEmail({ to, subject, html, text });
-  if (!result.sent) throw new Error('Email send failed');
+  if (!result.sent) {
+    throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, "We couldn't send the code just now. Please try again in a moment.");
+  }
 }
 
 // Every value an email puts into its HTML goes through one of these (21 Oct 2026). Names, event, pod and

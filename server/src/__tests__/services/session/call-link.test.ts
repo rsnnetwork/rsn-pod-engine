@@ -128,6 +128,10 @@ describe('the code', () => {
     expect(cleanCallDisplayName('a'.repeat(61))).toBeNull();
     expect(cleanCallDisplayName('<b>Ana</b>')).toBeNull();
     expect(cleanCallDisplayName('Ana\u0000')).toBeNull();
+    // Invisible characters that can disguise a name are taken out, then the name is trimmed (fix round 1).
+    expect(cleanCallDisplayName('​Ana‍ ‮Maria‬﻿ ')).toBe('Ana Maria');
+    expect(cleanCallDisplayName('⁦ Stefan ⁩')).toBe('Stefan');
+    expect(cleanCallDisplayName('​‌‍⁠')).toBeNull();
   });
 });
 

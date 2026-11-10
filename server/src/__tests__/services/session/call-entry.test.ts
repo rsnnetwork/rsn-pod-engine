@@ -100,7 +100,7 @@ import fs from 'fs';
 import path from 'path';
 import { ErrorCodes, UserRole } from '@rsn/shared';
 import {
-  enterCall, listMyCallEvents, readCallEntry, sendCallEntryCode, verifyCallEntry,
+  CALL_INVITATION_ONLY_SENTENCE, enterCall, listMyCallEvents, readCallEntry, sendCallEntryCode, verifyCallEntry,
 } from '../../../services/session/call-entry.service';
 import { getCallLanding } from '../../../services/session/call-link.service';
 import { canRegister, admittedViaOf } from '../../../services/session/event-access';
@@ -126,8 +126,8 @@ async function refusal(p: Promise<unknown>) {
 }
 
 /** Ask for a code the way the link's page does, and return what the email carries. */
-async function emailed(email: string, opts: { admissionCode?: string } = {}) {
-  await sendCallEntryCode(CODE, email, opts);
+async function emailed(email: string) {
+  await sendCallEntryCode(CODE, email);
   const [to, data] = mockSendEntryEmail.mock.calls.at(-1) as [string, { eventTitle: string; code: string; link: string }];
   return { to, ...data, token: new URL(data.link).searchParams.get('entry') ?? '' };
 }
@@ -265,11 +265,12 @@ describe('an existing account', () => {
     expect(world.users.find((u) => u.id === MEMBER)!.display_name).toBe('Ana Member');
   });
 
-  it('a closed account is refused before any link is written', async () => {
+  it('a closed account gets the same answer at /email, and is refused only once its code is proved', async () => {
     addEvent({ id: EVENT, call_code: CODE, admission_mode: 'open' });
     world.users.find((u) => u.id === MEMBER)!.status = 'deactivated';
-    expect(await refusal(sendCallEntryCode(CODE, 'member@example.org'))).toMatchObject({ status: 403, code: ErrorCodes.ACCOUNT_CLOSED });
-    expect(world.links).toEqual([]);
+    expect(await sendCallEntryCode(CODE, 'member@example.org')).toEqual({ sent: true });
+    const { code } = mockSendEntryEmail.mock.calls.at(-1)![1] as { code: string };
+    expect(await refusal(verifyCallEntry(CODE, { email: 'member@example.org', code }))).toMatchObject({ status: 403, code: ErrorCodes.ACCOUNT_CLOSED });
   });
 
   it('an existing account always gets a code, even on an invitation-only event it is not on', async () => {
@@ -284,43 +285,124 @@ describe('an existing account', () => {
   });
 });
 
-describe('who may come in by email', () => {
-  it('invitation only + an address not on its list + no code: 403 in its words, and no link row written', async () => {
-    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
-    expect(await refusal(sendCallEntryCode(CODE, NEW_EMAIL))).toMatchObject({
-      status: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED, message: expect.stringContaining('invited'),
-    });
-    expect(world.links).toEqual([]);
-    expect(mockSendEntryEmail).not.toHaveBeenCalled();
+describe('no answer tells whether an address has an account (fix round 1)', () => {
+  const kinds = [
+    ['invitation only', { admission_mode: 'restricted' as const, visibility: 'private' as const }],
+    ['members only (no admission mode)', { admission_mode: null, visibility: 'private' as const }],
+    ['the pod\'s rules (no visibility)', { admission_mode: null, visibility: null }],
+    ['public with approval, no mode', { admission_mode: null, visibility: 'public_with_approval' as const }],
+    ['open', { admission_mode: 'open' as const, visibility: 'private' as const }],
+  ] as const;
+
+  it.each(kinds)('%s: /email answers a member\'s address and an unknown one identically, and writes the same link', async (_label, over) => {
+    addEvent({ id: EVENT, call_code: CODE, ...over });
+    world.sql = [];
+    const known = await sendCallEntryCode(CODE, 'member@example.org');
+    const unknown = await sendCallEntryCode(CODE, NEW_EMAIL);
+    expect(known).toEqual(unknown);
+    expect(known).toEqual({ sent: true });
+    expect(world.links.map((l) => [l.email, l.purpose, l.target_id])).toEqual([
+      ['member@example.org', 'event_entry', EVENT], [NEW_EMAIL, 'event_entry', EVENT],
+    ]);
+    expect(mockSendEntryEmail.mock.calls.map(([to]) => to)).toEqual(['member@example.org', NEW_EMAIL]);
+    // Nothing about the address is read before the answer: no account lookup, no list, no invite.
+    expect(world.sql.some((s) => /FROM users WHERE email|event_admission_entries|FROM invites/.test(s))).toBe(false);
   });
 
-  it('invitation only: a listed address, a redeemable code (checked, not spent) or a personal invite gets a code', async () => {
+  it.each(kinds)('%s: a wrong code is the same answer for a member\'s address and an unknown one', async (_label, over) => {
+    addEvent({ id: EVENT, call_code: CODE, ...over });
+    const k = await emailed('member@example.org');
+    const u = await emailed(NEW_EMAIL);
+    const wrongOf = (c: string) => String((Number(c) + 1) % 1_000_000).padStart(6, '0');
+    const a = await refusal(verifyCallEntry(CODE, { email: 'member@example.org', code: wrongOf(k.code) }));
+    const b = await refusal(verifyCallEntry(CODE, { email: NEW_EMAIL, code: wrongOf(u.code) }));
+    expect(a).toEqual(b);
+    expect(a).toMatchObject({ status: 400, code: ErrorCodes.AUTH_SIGN_IN_CODE_WRONG });
+  });
+
+  it('with the admin switch off, every address gets the same 503, before anything about it is read or stored', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
+    mockEmailEnabled.mockResolvedValue(false);
+    const a = await refusal(sendCallEntryCode(CODE, 'member@example.org'));
+    const b = await refusal(sendCallEntryCode(CODE, NEW_EMAIL));
+    expect(a).toEqual(b);
+    expect(a).toMatchObject({ status: 503 });
+    expect(mockEmailEnabled).toHaveBeenCalledWith('event_entry_code');
+    expect(world.links).toEqual([]);
+  });
+
+  it('the send is off the request path: a provider that never answers does not hold the answer', async () => {
+    addEvent({ id: EVENT, call_code: CODE });
+    mockSendEntryEmail.mockReturnValue(new Promise(() => {}));
+    expect(await sendCallEntryCode(CODE, NEW_EMAIL)).toEqual({ sent: true });
+  });
+
+  it('a provider failure is logged, never an answer', async () => {
+    addEvent({ id: EVENT, call_code: CODE });
+    mockSendEntryEmail.mockRejectedValue(new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, "We couldn't send the code just now."));
+    expect(await sendCallEntryCode(CODE, NEW_EMAIL)).toEqual({ sent: true });
+  });
+});
+
+describe('who may come in, decided after the code is proved', () => {
+  it('invitation only + an address not on its list + no code: 403 in its words once proved; nothing spent, no account made', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
+    const { code } = await emailed(NEW_EMAIL);
+    let caught: AppError | undefined;
+    try { await verifyCallEntry(CODE, { email: NEW_EMAIL, code }); } catch (e) { caught = e as AppError; }
+    expect(caught).toMatchObject({ statusCode: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED, message: CALL_INVITATION_ONLY_SENTENCE });
+    expect(caught!.details).toEqual({ admissionCode: true });
+    expect(CALL_INVITATION_ONLY_SENTENCE).toMatch(/^This event is invitation only\./);
+    expect(world.users.some((u) => u.email === NEW_EMAIL)).toBe(false);
+    expect(world.links[0]).toMatchObject({ used_at: null, code_attempts: 0 });
+  });
+
+  it('the same code sent again with a redeemable admission code signs the newcomer in (checked, not spent)', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
+    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: null, revoked_at: null, expires_at: null });
+    const { code } = await emailed(NEW_EMAIL);
+    expect(await refusal(verifyCallEntry(CODE, { email: NEW_EMAIL, code, admissionCode: 'ZZZZ-ZZZZ-ZZZZ' }))).toMatchObject({ status: 403 });
+    const ok = await verifyCallEntry(CODE, { email: NEW_EMAIL, code, admissionCode: 'abcd efgh jkmn' });
+    expect(ok).toMatchObject({ created: true, accountKind: 'event_guest' });
+    expect(world.codes[0].redeemed_by).toBeNull();
+  });
+
+  it('invitation only: a listed address or a personal invite comes in; a revoked listing or a shared invite does not', async () => {
     addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
     world.entries.push({ session_id: EVENT, email: 'listed@example.org', group_key: null, revoked_at: null });
-    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: null, revoked_at: null, expires_at: null });
     world.invites.push({ session_id: EVENT, invitee_email: 'invited@example.org', max_uses: 1, status: 'pending', expires_at: null });
-    await emailed('listed@example.org');
-    await emailed('coder@example.org', { admissionCode: 'abcd efgh jkmn' });
-    await emailed('invited@example.org');
-    expect(world.links.map((l) => l.email)).toEqual(['listed@example.org', 'coder@example.org', 'invited@example.org']);
-    expect(world.codes[0].redeemed_by).toBeNull();
-    // A revoked listing, a wrong code, a shared (multi-use) invite: refused.
-    world.entries[0].revoked_at = new Date();
     world.invites.push({ session_id: EVENT, invitee_email: 'shared@example.org', max_uses: 50, status: 'pending', expires_at: null });
-    for (const [email, opts] of [['listed@example.org', {}], ['x@example.org', { admissionCode: 'ZZZZ-ZZZZ-ZZZZ' }], ['shared@example.org', {}]] as const) {
-      expect(await refusal(sendCallEntryCode(CODE, email, opts))).toMatchObject({ status: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED });
+    for (const email of ['listed@example.org', 'invited@example.org']) {
+      const { code } = await emailed(email);
+      expect(await verifyCallEntry(CODE, { email, code })).toMatchObject({ created: true });
+    }
+    world.entries.push({ session_id: EVENT, email: 'revoked@example.org', group_key: null, revoked_at: new Date() });
+    for (const email of ['revoked@example.org', 'shared@example.org']) {
+      const { code } = await emailed(email);
+      expect(await refusal(verifyCallEntry(CODE, { email, code }))).toMatchObject({ status: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED });
     }
   });
 
-  it('an event with no admission mode takes a new address when it is public, or by personal invite; else 403', async () => {
+  it('an event with no admission mode takes a new address when it is public, or by personal invite; else 403 after the code', async () => {
     addEvent({ id: EVENT, call_code: CODE, admission_mode: null, visibility: 'private' });
-    expect(await refusal(sendCallEntryCode(CODE, NEW_EMAIL))).toMatchObject({ status: 403, code: ErrorCodes.EVENT_PRIVATE });
+    const first = await emailed(NEW_EMAIL);
+    expect(await refusal(verifyCallEntry(CODE, { email: NEW_EMAIL, code: first.code }))).toMatchObject({ status: 403, code: ErrorCodes.EVENT_PRIVATE });
     world.invites.push({ session_id: EVENT, invitee_email: NEW_EMAIL, max_uses: 1, status: 'pending', expires_at: null });
-    await emailed(NEW_EMAIL);
+    expect(await verifyCallEntry(CODE, { email: NEW_EMAIL, code: first.code })).toMatchObject({ created: true });
     world.events[0].visibility = 'public';
-    await emailed('someone@example.org');
+    const second = await emailed('someone@example.org');
+    expect(await verifyCallEntry(CODE, { email: 'someone@example.org', code: second.code })).toMatchObject({ created: true });
     world.events[0].visibility = null; // the pod's rules
-    expect(await refusal(sendCallEntryCode(CODE, 'third@example.org'))).toMatchObject({ status: 403, code: ErrorCodes.EVENT_PRIVATE });
+    const third = await emailed('third@example.org');
+    expect(await refusal(verifyCallEntry(CODE, { email: 'third@example.org', code: third.code }))).toMatchObject({ status: 403, code: ErrorCodes.EVENT_PRIVATE });
+  });
+
+  it('the email\'s button is held to the same rule, and is not spent by a refusal', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
+    const { token } = await emailed(NEW_EMAIL);
+    expect(await refusal(verifyCallEntry(CODE, { token }))).toMatchObject({ status: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED });
+    expect(world.links[0].used_at).toBeNull();
+    expect(world.users.some((u) => u.email === NEW_EMAIL)).toBe(false);
   });
 
   it('ended, cancelled, draft and unknown events: 409 in words, or the link\'s one 404', async () => {
@@ -335,13 +417,6 @@ describe('who may come in by email', () => {
     expect(world.links).toEqual([]);
   });
 
-  it('with the admin switch off, no code is stored or sent', async () => {
-    addEvent({ id: EVENT, call_code: CODE });
-    mockEmailEnabled.mockResolvedValue(false);
-    expect(await refusal(sendCallEntryCode(CODE, NEW_EMAIL))).toMatchObject({ status: 503 });
-    expect(mockEmailEnabled).toHaveBeenCalledWith('event_entry_code');
-    expect(world.links).toEqual([]);
-  });
 
   it('asking again spends the older code: only the newest works', async () => {
     addEvent({ id: EVENT, call_code: CODE });
@@ -367,6 +442,13 @@ describe('the email\'s button (the entry token)', () => {
     expect(world.users.filter((u) => u.email === NEW_EMAIL)).toHaveLength(1);
     world.links[0].used_at = new Date(Date.now() - 3 * 60_000);
     expect(await refusal(verifyCallEntry(CODE, { token }))).toMatchObject({ code: ErrorCodes.AUTH_MAGIC_LINK_USED });
+  });
+
+  it('cannot sign anyone in once its code was used (fix round 1)', async () => {
+    addEvent({ id: EVENT, call_code: CODE });
+    const { code, token } = await emailed(NEW_EMAIL);
+    await verifyCallEntry(CODE, { email: NEW_EMAIL, code });
+    expect(await refusal(verifyCallEntry(CODE, { token }))).toMatchObject({ status: 400, code: ErrorCodes.AUTH_MAGIC_LINK_EXPIRED });
   });
 
   it('two verifies of a new address at once make one account (the 23505 race)', async () => {
@@ -410,8 +492,8 @@ describe('invitation only, and groups', () => {
     addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
     world.rules.set(EVENT, FOUNDERS_FUNDERS);
     world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: 'founder', redeemed_by: null, revoked_at: null, expires_at: null });
-    const { code } = await emailed(NEW_EMAIL, { admissionCode: 'ABCD-EFGH-JKMN' });
-    const { accessToken } = await verifyCallEntry(CODE, { email: NEW_EMAIL, code });
+    const { code } = await emailed(NEW_EMAIL);
+    const { accessToken } = await verifyCallEntry(CODE, { email: NEW_EMAIL, code, admissionCode: 'ABCD-EFGH-JKMN' });
     const userId = subjectOf(accessToken);
     expect(await readCallEntry(CODE, userId, UserRole.MEMBER)).toMatchObject({ missing: { displayName: true, group: true, admissionCode: true } });
     const state = await enterCall(CODE, userId, UserRole.MEMBER, { displayName: 'Cody', admissionCode: 'abcd-efgh-jkmn' });
@@ -420,6 +502,19 @@ describe('invitation only, and groups', () => {
     expect(world.memberGroups.get(key(EVENT, userId))).toEqual({ keys: ['founder'], by: 'invitation' });
     expect(world.places.get(key(EVENT, userId))).toEqual({ status: 'registered', admitted_via: 'code' });
     expect(mockFanoutAdmission).toHaveBeenCalledWith(EVENT, { everyone: true, podId: 'pod-1', people: [userId] });
+  });
+
+  it('an admission code is spent only when it is what lets the person in (fix round 1)', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'open' });
+    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: null, revoked_at: null, expires_at: null });
+    expect((await enterCall(CODE, MEMBER, UserRole.MEMBER, { admissionCode: 'ABCD-EFGH-JKMN' })).step).toBe('wait_for_start');
+    expect(mockRedeem).not.toHaveBeenCalled();
+    expect(world.codes[0].redeemed_by).toBeNull();
+    // An invitation-only event a listed member is entitled to: the code is not needed, so not spent either.
+    addEvent({ id: uuid(101), call_code: 'cccccccccc', admission_mode: 'restricted', visibility: 'private' });
+    world.entries.push({ session_id: uuid(101), email: 'member@example.org', group_key: null, revoked_at: null });
+    expect((await enterCall('cccccccccc', MEMBER, UserRole.MEMBER, { admissionCode: 'ABCD-EFGH-JKMN' })).step).toBe('wait_for_start');
+    expect(mockRedeem).not.toHaveBeenCalled();
   });
 
   it('a wrong admission code is refused (400) and gives no place', async () => {

@@ -709,7 +709,11 @@ export async function verifySignInCode(email: string, code: string): Promise<Aut
  * fifth try kills the link and the code together (its expiry is pulled to now); the right code spends the link and
  * gives back the try it reserved, so only wrong tries count. Throws on every refusal; returns once the link is spent.
  */
-export async function spendSignInCode(link: SignInCodeRow, code: string): Promise<void> {
+export async function spendSignInCode(
+  link: SignInCodeRow,
+  code: string,
+  beforeClaim?: () => Promise<void>,
+): Promise<void> {
   const refusal = signInCodeRefusal(link);
   if (refusal) throw refusal;
 
@@ -738,6 +742,18 @@ export async function spendSignInCode(link: SignInCodeRow, code: string): Promis
     const member = await getUserByEmail(link.email);
     logger.warn({ userId: member?.id ?? null, magicLinkId: link.id }, 'Sign-in code locked after too many wrong tries');
     throw new AppError(400, ErrorCodes.AUTH_SIGN_IN_LOCKED, 'This code was entered wrongly too many times.');
+  }
+
+  // The code is right. A caller that still has to decide something about the proved address (the RSN Call link's
+  // admission rule, 11 Nov 2026 fix round) does it now: a refusal gives back the try and leaves the link unspent, so the
+  // same code can be sent again with what was missing (an admission code). Sign-in passes nothing: unchanged.
+  if (beforeClaim) {
+    try {
+      await beforeClaim();
+    } catch (err) {
+      await query(`UPDATE magic_links SET code_attempts = code_attempts - 1 WHERE id = $1 AND used_at IS NULL`, [link.id]);
+      throw err;
+    }
   }
 
   const claimed = await query<{ id: string }>(
@@ -784,9 +800,15 @@ export async function issueEventEntryLink(email: string, sessionId: string): Pro
 
 /**
  * Prove `email` for `sessionId` with the 6-digit entry code: only the newest entry link of that address for that event
- * is tried, under spendSignInCode's rules. Answers the proved address.
+ * is tried, under spendSignInCode's rules. `admit` runs once the code is proved right and before the link is spent: a
+ * refusal there leaves the link unspent and its try given back. Answers the proved address.
  */
-export async function verifyEventEntryCode(email: string, sessionId: string, code: string): Promise<string> {
+export async function verifyEventEntryCode(
+  email: string,
+  sessionId: string,
+  code: string,
+  admit?: (provedEmail: string) => Promise<void>,
+): Promise<string> {
   const normalizedEmail = email.toLowerCase().trim();
   const found = await query<SignInCodeRow>(
     `SELECT ${SIGN_IN_CODE_COLUMNS}
@@ -797,16 +819,23 @@ export async function verifyEventEntryCode(email: string, sessionId: string, cod
   );
   const link = found.rows[0];
   if (!link) throw codeWrong();
-  await spendSignInCode(link, code);
+  await spendSignInCode(link, code, admit ? () => admit(link.email) : undefined);
+  // The email's button dies with its code (fix round 1): a link spent by the code keeps no scanner grace.
+  await query(`UPDATE magic_links SET expires_at = LEAST(expires_at, NOW()) WHERE id = $1`, [link.id]);
   return link.email;
 }
 
 /**
  * Prove an address for `sessionId` with the button in the entry email: the token of an entry link for that event, single
- * use with the same 2-minute scanner grace as a sign-in link (verifyMagicLink), refused once expired (a code locked after
- * five wrong tries has pulled its expiry to now). Answers the proved address.
+ * use with the same 2-minute scanner grace as a sign-in link (verifyMagicLink) when the button itself spent it, refused
+ * once expired (a code locked after five wrong tries, or a right code, has pulled its expiry to now). `admit` runs before
+ * the link is spent. Answers the proved address.
  */
-export async function verifyEventEntryToken(token: string, sessionId: string): Promise<string> {
+export async function verifyEventEntryToken(
+  token: string,
+  sessionId: string,
+  admit?: (provedEmail: string) => Promise<void>,
+): Promise<string> {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const result = await query<{ id: string; email: string; expires_at: Date; used_at: Date | null }>(
     `SELECT id, email, expires_at, used_at FROM magic_links
@@ -815,9 +844,11 @@ export async function verifyEventEntryToken(token: string, sessionId: string): P
   );
   const link = result.rows[0];
   if (!link) throw new UnauthorizedError('This link is not valid. Ask for a new code.');
-  if (new Date(link.expires_at) < new Date()) {
+  if (new Date(link.expires_at).getTime() <= Date.now()) {
     throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_EXPIRED, 'This link has expired. Ask for a new code.');
   }
+  // A refusal (the event does not take this address) leaves the link as it was.
+  if (admit) await admit(link.email);
   if (link.used_at) {
     if (Date.now() - new Date(link.used_at).getTime() > MAGIC_LINK_REUSE_GRACE_MS) {
       throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_USED, 'This link has already been used. Ask for a new code.');

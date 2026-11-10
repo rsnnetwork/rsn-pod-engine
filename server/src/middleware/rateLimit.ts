@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import config from '../config';
 import logger from '../config/logger';
 import { getRedisClient } from '../services/redis/redis.client';
-import { ApiResponse } from '@rsn/shared';
+import { ApiResponse, normaliseCallCode } from '@rsn/shared';
 
 /**
  * June-14 — key the global API limiter by AUTHENTICATED USER, not IP.
@@ -835,18 +835,33 @@ export const admissionRedeemIpLimiter = rateLimit({
   handler: admissionRedeemLimited,
 });
 
-// ─── The RSN Call link (Part 2 foundation, Task 6, 11 Nov 2026; Review Focus 4) ──────────────────────────
-// An event's link is opened by people who are not signed in, so the reads and the code requests are keyed by network
-// address. A call code is 50 bits, so guessing one is hopeless already; callLinkMissLimiter caps it anyway by counting
-// only the answers that found no event (404): twenty a network address in ten minutes, then every link answer from that
-// address waits, while the same link keeps working for everyone else. The entry code (6 digits) shares the sign-in
+/// ─── The RSN Call link (Part 2 foundation, Task 6, 11 Nov 2026; Review Focus 4; fix round 1) ─────────────
+// An event's link is opened by people who are not signed in, so its buckets are keyed by network address, read two ways:
+//   - clientIp (cf-connecting-ip first): the real person behind Cloudflare, so one venue's crowd or one stranger never
+//     fills a bucket for everyone on the same Cloudflare edge. A request that reaches the server without Cloudflare can
+//     set that header itself, so it is never the only bucket;
+//   - proxyIp (req.ip, as Express reads it under the app's `trust proxy` setting): set by the proxy in front of the
+//     server, never by the caller. Its allowance is wider, as many people can share one edge address.
+// A call code is 50 bits, so guessing one is hopeless already; the miss buckets cap it anyway by counting only the answers
+// that found no event (404), and every link answer from that address then waits while the link keeps working for everyone
+// else. Codes emailed are capped per address, per link and address, and per link (so a list of addresses cannot be run
+// through one link fast; the answer is the same for every address anyway). The entry code (6 digits) shares the sign-in
 // code's two buckets (signInCodeLimiter, signInCodeEmailLimiter) on top of its own five tries.
 const callLinkLimited = (message: string) => (_req: Request, res: Response) => {
   const response: ApiResponse = { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message } };
   res.status(429).json(response);
 };
 const SLOW_DOWN = 'Slow down a moment, then try again.';
+const MISSES_SENTENCE = 'Too many links tried. Please wait 10 minutes, then try again.';
+const EMAILS_SENTENCE = 'Too many codes asked for. Please wait a while, then try again.';
 const ipKey = (req: Request) => `ip:${clientIp(req)}`;
+/** The address the proxy in front of the server reports (req.ip under `trust proxy`): not settable by the caller. */
+export const proxyIpKey = (req: Request) => `proxy:${req.ip ?? 'unknown'}`;
+/** The link a request names, in its stored spelling (o→0, i/l→1, separators dropped), so spellings share one bucket. */
+const linkOf = (req: Request) => {
+  const raw = String(req.params?.code ?? '');
+  return normaliseCallCode(raw) ?? raw.toLowerCase().replace(/[\s-]/g, '');
+};
 
 export const callLinkReadLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -858,21 +873,26 @@ export const callLinkReadLimiter = rateLimit({
   handler: callLinkLimited(SLOW_DOWN),
 });
 
-export const CALL_LINK_MISSES_MAX = 20;
-export const callLinkMissLimiter = rateLimit({
+const missOptions = {
   windowMs: 10 * 60 * 1000,
-  max: CALL_LINK_MISSES_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
   // Only a link that leads nowhere counts: every other answer, a refusal included, is "successful" here.
-  requestWasSuccessful: (_req, res) => res.statusCode !== 404,
-  keyGenerator: ipKey,
-  store: buildStore('call-link-miss'),
-  handler: callLinkLimited('Too many links tried. Please wait 10 minutes, then try again.'),
+  requestWasSuccessful: (_req: Request, res: Response) => res.statusCode !== 404,
+  handler: callLinkLimited(MISSES_SENTENCE),
+} as const;
+
+export const CALL_LINK_MISSES_MAX = 20;
+export const CALL_LINK_PROXY_MISSES_MAX = 300;
+export const callLinkMissLimiter = rateLimit({
+  ...missOptions, max: CALL_LINK_MISSES_MAX, keyGenerator: ipKey, store: buildStore('call-link-miss'),
+});
+export const callLinkMissProxyLimiter = rateLimit({
+  ...missOptions, max: CALL_LINK_PROXY_MISSES_MAX, keyGenerator: proxyIpKey, store: buildStore('call-link-miss-proxy'),
 });
 
-/** Codes emailed: twenty an hour per network address. */
+/** Codes emailed: twenty an hour per person's address, three hundred an hour per proxy address. */
 export const callLinkEmailLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 20,
@@ -880,14 +900,22 @@ export const callLinkEmailLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: ipKey,
   store: buildStore('call-link-email'),
-  handler: callLinkLimited('Too many codes asked for. Please wait an hour, then try again.'),
+  handler: callLinkLimited(EMAILS_SENTENCE),
+});
+export const callLinkEmailProxyLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: proxyIpKey,
+  store: buildStore('call-link-email-proxy'),
+  handler: callLinkLimited(EMAILS_SENTENCE),
 });
 
-/** The per-event, per-address bucket for codes emailed: a hash of the address (no email in the store) and the link. */
+/** The per-link, per-address bucket for codes emailed: the link's stored spelling and a hash of the address. */
 export function callLinkEmailTargetKey(req: Request): string {
   const email = typeof req.body?.email === 'string' ? req.body.email : '';
-  const code = String(req.params?.code ?? '').toLowerCase().replace(/[\s-]/g, '');
-  return `c:${code}:${signInCodeEmailKey(email)}`;
+  return `c:${linkOf(req)}:${signInCodeEmailKey(email)}`;
 }
 
 export const callLinkEmailTargetLimiter = rateLimit({
@@ -898,6 +926,18 @@ export const callLinkEmailTargetLimiter = rateLimit({
   keyGenerator: callLinkEmailTargetKey,
   store: buildStore('call-link-email-target'),
   handler: callLinkLimited('Too many codes asked for this address. Please wait 15 minutes, then try again.'),
+});
+
+/** Codes emailed through one link, whoever asks: enough for a full event arriving at once, too few to run a list through. */
+export const CALL_LINK_EMAILS_PER_LINK = 300;
+export const callLinkEmailPerLinkLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: CALL_LINK_EMAILS_PER_LINK,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => `c:${linkOf(req)}`,
+  store: buildStore('call-link-email-link'),
+  handler: callLinkLimited(EMAILS_SENTENCE),
 });
 
 /** Reading and entering by the link, signed in: twenty a minute per person. */

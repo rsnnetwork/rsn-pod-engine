@@ -267,6 +267,16 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     l.used_at = new Date(); l.code_attempts -= 1;
     return rows([{ id: l.id }]);
   }
+  if (sql === 'UPDATE magic_links SET code_attempts = code_attempts - 1 WHERE id = $1 AND used_at IS NULL') {
+    const l = linkById(params[0]);
+    if (l && !l.used_at) l.code_attempts -= 1;
+    return rows([], l && !l.used_at ? 1 : 0);
+  }
+  if (sql === 'UPDATE magic_links SET expires_at = LEAST(expires_at, NOW()) WHERE id = $1') {
+    const l = linkById(params[0]);
+    if (l) l.expires_at = new Date(Math.min(l.expires_at.getTime(), Date.now()));
+    return rows([], l ? 1 : 0);
+  }
   if (sql === "SELECT id, email, expires_at, used_at FROM magic_links WHERE token_hash = $1 AND purpose = 'event_entry' AND target_id = $2") {
     const l = world.links.find((x) => x.token_hash === params[0] && x.purpose === 'event_entry' && x.target_id === params[1]);
     return rows(l ? [{ id: l.id, email: l.email, expires_at: l.expires_at, used_at: l.used_at }] : []);

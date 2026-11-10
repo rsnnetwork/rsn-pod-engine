@@ -13,8 +13,9 @@ import { SERVER, cleanup, idsOf, teardown } from '../helpers/live-ui';
 // a code; the spec writes the keyed hash of a code it chose onto the entry link it just asked for, the way
 // n1-t4-signin-code.spec.ts does for sign-in. It verifies (a new event guest), enters with a name (a place, admitted as
 // open), is refused a member-only part of RSN (GET /api/people/everyone: 403 GUEST_MEMBERSHIP_REQUIRED) and reads its
-// event (GET /api/sessions/:id: 200). An invitation-only event refuses an unlisted address at /email, and writes no
-// link. Everything is deleted by id at the end (the guest found by its exact address, never a pattern).
+// event (GET /api/sessions/:id: 200). An invitation-only event answers an unlisted address at /email exactly as it answers
+// a member's (no answer tells whether an address has an account), and refuses it only after its code is proved, with no
+// account made and nothing spent. Everything is deleted by id at the end (the guest found by its exact address, never a pattern).
 
 const SECRET = (process.env.E2E_JWT_SECRET || process.env.JWT_SECRET || '').replace(/\r|\n/g, '');
 const RUN = Date.now().toString(36);
@@ -161,15 +162,26 @@ test('a fresh address enters an open event by its link as a guest, and an invita
   expect(mine.status).toBe(200);
   expect(mine.json.data).toEqual([expect.objectContaining({ code, step: 'wait_for_start' })]);
 
-  // An invitation-only event refuses an unlisted address at /email, and writes no link for it.
+  // An invitation-only event: /email answers an unlisted address exactly as it answers the host's own address (no
+  // answer tells whether an address has an account); the refusal comes only after the code is proved, and makes no
+  // account and spends nothing.
   const restricted = await call('POST', '/sessions', { token: h.token, body: { podId, title: `P2T6 invitation only ${RUN}`, scheduledAt } });
   expect(restricted.status).toBe(201);
   restrictedEventId = restricted.json.data.id;
   expect((await call('PUT', `/sessions/${restrictedEventId}/admission`, { token: h.token, body: { mode: 'restricted' } })).status).toBe(200);
   const restrictedCode = (await call('GET', `/sessions/${restrictedEventId}/call-link`, { token: h.token })).json.data.code;
-  const refused = await call('POST', `/call-links/${restrictedCode}/email`, { body: { email: refusedEmail } });
+  const unlisted = await call('POST', `/call-links/${restrictedCode}/email`, { body: { email: refusedEmail } });
+  const member = await call('POST', `/call-links/${restrictedCode}/email`, { body: { email: h.email } });
+  expect(unlisted).toEqual({ status: 200, json: { success: true, data: { sent: true } } });
+  expect(member).toEqual(unlisted);
+  const refusedCode = await knownEntryCode(refusedEmail, restrictedEventId);
+  const refused = await call('POST', `/call-links/${restrictedCode}/verify`, { body: { email: refusedEmail, code: refusedCode } });
   expect(refused.status).toBe(403);
-  expect(refused.json.error.code).toBe('EVENT_ADMISSION_REQUIRED');
-  const noLink = await pool.query(`SELECT COUNT(*)::int AS n FROM magic_links WHERE email = $1`, [refusedEmail]);
-  expect(noLink.rows[0].n).toBe(0);
+  expect(refused.json.error).toMatchObject({ code: 'EVENT_ADMISSION_REQUIRED', details: { admissionCode: true } });
+  expect(refused.json.error.message).toMatch(/^This event is invitation only\./);
+  const noAccount = await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE email = $1`, [refusedEmail]);
+  expect(noAccount.rows[0].n).toBe(0);
+  const unspent = await pool.query(`SELECT used_at FROM magic_links WHERE email = $1 AND purpose = 'event_entry' AND target_id = $2`,
+    [refusedEmail, restrictedEventId]);
+  expect(unspent.rows[0].used_at).toBeNull();
 });

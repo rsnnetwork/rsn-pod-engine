@@ -3,8 +3,13 @@
 // Mounted at /api/call-links (anyone holding a link; an event guest reaches all of it: guest-scope.ts):
 //   GET  /me/events          the signed-in person's events by link (their place or their request)       authenticate
 //   GET  /:code              the landing: the event as anyone holding the link sees it                   optionalAuth
-//   POST /:code/email        { email, admissionCode?, clientUrl? }  email a 6-digit entry code
-//   POST /:code/verify       { email, code } | { token }            sign in with it (an account, or a new event guest)
+//   POST /:code/email        { email, clientUrl? }  email a 6-digit entry code; the same 200 for every address (fix round
+//                            1: no answer here tells whether an address has an account). `admissionCode` is still
+//                            accepted and ignored: it belongs to /verify now.
+//   POST /:code/verify       { email, code } | { token }, each with admissionCode?  sign in with it (an account, or a
+//                            new event guest). An address with no account that the event does not take is refused
+//                            here, after its code is proved and before anything is spent or made: 403 in the
+//                            event's words, details.admissionCode true when an admission code would let it in.
 //   GET  /:code/entry        where the signed-in person stands                                           authenticate
 //   POST /:code/enter        { displayName?, groupKeys?, admissionCode? }  give what is missing and enter  authenticate
 //
@@ -13,7 +18,7 @@
 //   POST /sessions/:id/call-link/rotate  a new code; the old link stops working at once
 //
 // A code that leads nowhere (malformed, unknown, a hidden draft, a deleted event) answers one identical 404 on every
-// route here, and every such 404 counts toward callLinkMissLimiter (Review Focus 4).
+// route here, and every such 404 counts toward the two miss buckets (Review Focus 4; rateLimit.ts says why two).
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -22,8 +27,9 @@ import { authenticate, optionalAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import {
-  admissionRedeemIpLimiter, admissionRedeemLimiter, callEntryLimiter, callLinkEmailLimiter, callLinkEmailTargetLimiter,
-  callLinkManageLimiter, callLinkMissLimiter, callLinkReadLimiter, signInCodeEmailLimiter, signInCodeLimiter,
+  admissionRedeemIpLimiter, admissionRedeemLimiter, callEntryLimiter, callLinkEmailLimiter, callLinkEmailPerLinkLimiter,
+  callLinkEmailProxyLimiter, callLinkEmailTargetLimiter, callLinkManageLimiter, callLinkMissLimiter,
+  callLinkMissProxyLimiter, callLinkReadLimiter, signInCodeEmailLimiter, signInCodeLimiter,
 } from '../middleware/rateLimit';
 import * as callLink from '../services/session/call-link.service';
 import * as callEntry from '../services/session/call-entry.service';
@@ -34,22 +40,29 @@ export const sessionCallLinkRoutes = Router();
 const CHECK_INPUT = 'Check what you entered and try again.';
 const ENTRY_CODE_MESSAGE = 'Enter the 6-digit code from the email.';
 
+/** Every link answer counts its misses twice: per person (clientIp) and per proxy address (req.ip). */
+const misses = [callLinkMissLimiter, callLinkMissProxyLimiter];
+
 const viewerOf = (req: Request): { userId: string; role: UserRole } | null =>
   req.user ? { userId: req.user.userId, role: req.user.role as UserRole } : null;
 
 const emailSchema = z.object({
   email: z.string().trim().email('Enter a valid email address.').max(255),
-  admissionCode: z.string().trim().min(1).max(40).optional(),
+  // Accepted and ignored since fix round 1 (an earlier client may send it): the admission code is checked at /verify.
+  admissionCode: z.string().trim().max(40).optional(),
   clientUrl: z.string().url().max(2048).optional(),
 });
+
+const admissionCodeField = z.string().trim().min(1).max(40).optional();
 
 const verifySchema = z.union([
   z.object({
     email: z.string().trim().email('Enter a valid email address.').max(255),
     // People paste the code with a space or a dash in the middle, as on the sign-in page.
     code: z.string().max(32).transform((c) => c.replace(/[\s-]/g, '')).pipe(z.string().regex(/^\d{6}$/, ENTRY_CODE_MESSAGE)),
+    admissionCode: admissionCodeField,
   }).strict(),
-  z.object({ token: z.string().trim().min(1).max(200) }).strict(),
+  z.object({ token: z.string().trim().min(1).max(200), admissionCode: admissionCodeField }).strict(),
 ]);
 
 const enterSchema = z.object({
@@ -109,7 +122,7 @@ router.get('/me/events', authenticate, callEntryLimiter, async (req: Request, re
 
 // ─── The landing ─────────────────────────────────────────────────────────────
 
-router.get('/:code', callLinkMissLimiter, callLinkReadLimiter, optionalAuth,
+router.get('/:code', ...misses, callLinkReadLimiter, optionalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await callLink.getCallLanding(req.params.code, viewerOf(req));
@@ -121,20 +134,20 @@ router.get('/:code', callLinkMissLimiter, callLinkReadLimiter, optionalAuth,
 
 // ─── Identify: the code by email, then the code back ─────────────────────────
 
-router.post('/:code/email', callLinkMissLimiter, callLinkEmailLimiter, validate(emailSchema, 'body', CHECK_INPUT),
-  callLinkEmailTargetLimiter,
+router.post('/:code/email', ...misses, callLinkEmailProxyLimiter, callLinkEmailLimiter,
+  validate(emailSchema, 'body', CHECK_INPUT), callLinkEmailTargetLimiter, callLinkEmailPerLinkLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { email, admissionCode, clientUrl } = req.body as z.infer<typeof emailSchema>;
-      const data = await callEntry.sendCallEntryCode(req.params.code, email, { admissionCode, clientUrl });
+      const { email, clientUrl } = req.body as z.infer<typeof emailSchema>;
+      const data = await callEntry.sendCallEntryCode(req.params.code, email, { clientUrl });
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);
     }
   });
 
-router.post('/:code/verify', callLinkMissLimiter, signInCodeLimiter, validate(verifySchema, 'body', ENTRY_CODE_MESSAGE),
-  entryCodeEmailBucket,
+router.post('/:code/verify', ...misses, signInCodeLimiter, validate(verifySchema, 'body', ENTRY_CODE_MESSAGE),
+  entryCodeEmailBucket, admissionTriesBucket,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await callEntry.verifyCallEntry(req.params.code, req.body as z.infer<typeof verifySchema>);
@@ -146,7 +159,7 @@ router.post('/:code/verify', callLinkMissLimiter, signInCodeLimiter, validate(ve
 
 // ─── Signed in: where they stand, and entering ───────────────────────────────
 
-router.get('/:code/entry', callLinkMissLimiter, authenticate, callEntryLimiter,
+router.get('/:code/entry', ...misses, authenticate, callEntryLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await callEntry.readCallEntry(req.params.code, req.user!.userId, req.user!.role as UserRole);
@@ -156,7 +169,7 @@ router.get('/:code/entry', callLinkMissLimiter, authenticate, callEntryLimiter,
     }
   });
 
-router.post('/:code/enter', callLinkMissLimiter, authenticate, callEntryLimiter, validate(enterSchema, 'body', CHECK_INPUT),
+router.post('/:code/enter', ...misses, authenticate, callEntryLimiter, validate(enterSchema, 'body', CHECK_INPUT),
   admissionTriesBucket,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
