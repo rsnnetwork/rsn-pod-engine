@@ -12,21 +12,24 @@ interface Props {
   board: ScheduleBoard;
   person: BoardPerson;
   busy: boolean;
+  /** Editing is on (the toolbar's Edit): with it off, the marks are not offered. */
+  canEdit: boolean;
   onRun: (op: BoardOp, success: string) => void;
   onClose: () => void;
 }
 
 const ACTION = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-[14px] font-bold disabled:opacity-50';
 
-export default function PersonTimeline({ board, person, busy, onRun, onClose }: Props) {
+export default function PersonTimeline({ board, person, busy, canEdit, onRun, onClose }: Props) {
   const selectId = useId();
   const rounds = board.rounds.filter((r) => !r.beyondLastRound);
-  const lateChoices = rounds.map((r) => r.roundNumber).filter((n) => n >= 2);
+  // Only rounds that have not started can be the one they arrive for (the server refuses the rest).
+  const lateChoices = rounds.filter((r) => r.editable).map((r) => r.roundNumber).filter((n) => n >= 2);
   const [arrives, setArrives] = useState<number>(lateChoices[0] ?? 2);
   const entries = timelineOf(board, person.userId);
   const current = board.people.find((p) => p.userId === person.userId) ?? person;
   const groups = groupLabels(board, current.groupKeys);
-  const editable = rounds.some((r) => r.editable);
+  const editable = canEdit && rounds.some((r) => r.editable);
   const name = current.displayName;
 
   return (

@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import type { BoardOp, BoardOpResult, BoardPerson, BoardRoom, ScheduleBoard } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
@@ -16,9 +16,11 @@ import { useToastStore } from '@/stores/toastStore';
 import { Skeleton } from '@/components/ui/Spinner';
 import { dropIntent, dropRefusal, type DragSource, type DropTarget } from './board-dnd';
 import {
-  BOARD_COPY, NO_FILTER, roundOf, roundTitle, startsAtLabel, type BoardConflict, type BoardFilter,
+  BOARD_COPY, NO_FILTER, personOfOp, roundOf, roundTitle, startsAtLabel,
+  type BoardConflict, type BoardFilter,
 } from './board-model';
 import { useBoard } from './useBoard';
+import { feedbackFor, useMoveFeedback } from './useMoveFeedback';
 import BoardToolbar from './BoardToolbar';
 import BoardFilters, { type BoardView } from './BoardFilters';
 import RoundView from './RoundView';
@@ -67,6 +69,7 @@ export default function MatchingBoardPage() {
   const [timelineFor, setTimelineFor] = useState<string | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [focusRoom, setFocusRoom] = useState<number | null>(null);
+  const feedback = useMoveFeedback(board);
 
   useEffect(() => {
     if (focusRoom === null) return;
@@ -106,28 +109,38 @@ export default function MatchingBoardPage() {
   const r = active?.roundNumber ?? 1;
   const roundRooms = active?.rooms ?? [];
   const canEditRound = editing && !!active?.editable;
-  const lockAction = !active?.editable || roundRooms.length === 0 ? null : roundRooms.some((room) => !room.locked) ? 'lock' : 'unlock';
+  const lockAction = !canEditRound || roundRooms.length === 0 ? null : roundRooms.some((room) => !room.locked) ? 'lock' : 'unlock';
   const findPerson = (id: string | null): BoardPerson | undefined => (id && active
     ? active.rooms.flatMap((room) => room.seats).find((s) => s.userId === id) ?? active.basket.find((p) => p.userId === id)
     : undefined);
   const selectedPerson = findPerson(selected);
   const timelinePerson = timelineFor ? board.people.find((p) => p.userId === timelineFor) ?? findPerson(timelineFor) : undefined;
 
-  const op = (o: BoardOp, success?: string) => void run({ kind: 'op', op: o }, success ? () => success : undefined);
+  /**
+   * One change, with its feedback (fix round 1): once the server answers, focus goes to the person it moved, in their
+   * new seat, and the live region says where they are; a refused change gives focus back to where it started.
+   */
+  const act = async (o: BoardOp, opts: { origin?: string | null; success?: (res: BoardOpResult) => string | null } = {}) => {
+    const origin = opts.origin ?? personOfOp(o);
+    const outcome = await run({ kind: 'op', op: o }, opts.success);
+    feedback.apply(feedbackFor(outcome, o, origin, board, outcome.ok ? opts.success?.(outcome.result) ?? null : null));
+  };
+  const op = (o: BoardOp, success?: string) => void act(o, success ? { success: () => success } : {});
   const onDrop = (target: DropTarget) => {
     const source = dragging;
     setDragging(null);
-    if (!source) return;
+    // One write at a time: a drop made while the last change is on its way is not taken (the board shows it is busy).
+    if (!source || busy) return;
     const intent = dropIntent(source, target);
-    if (intent) op(intent);
+    if (intent) void act(intent, { origin: source.userId });
     else if (dropRefusal(source, target)) addToast(dropRefusal(source, target)!, 'info');
   };
   const onSelect = (person: BoardPerson) => (canEditRound ? setSelected(person.userId) : setTimelineFor(person.userId));
   const toggleRoomLock = (room: BoardRoom) => op(room.locked ? { kind: 'unlock_room', round: r, room: room.roomNumber } : { kind: 'lock_room', round: r, room: room.roomNumber });
-  const redistribute = () => void run({ kind: 'op', op: { kind: 'redistribute', rounds: [r] } }, (res) => {
+  const redistribute = () => void act({ kind: 'redistribute', rounds: [r] }, { success: (res) => {
     const n = seatedCount(res);
     return n === 0 ? 'Nobody else can be seated in this round under its rules.' : `Redistributed: ${n} ${n === 1 ? 'person' : 'people'} placed.`;
-  });
+  } });
   const generate = async () => {
     const planned = board.rounds.some((round) => round.editable && round.rooms.some((room) => !room.locked));
     if (planned && !(await ask({
@@ -158,21 +171,29 @@ export default function MatchingBoardPage() {
           {board.publishedVersion === null
             ? 'A private draft. Attendees see nothing until you publish.'
             : `Version ${board.publishedVersion} is published${board.draftDiffersFromPublished ? '; the draft has changes since' : ''}.`}
-          <span aria-live="polite" className="ml-2 font-semibold text-[#1d6b5c]">{busy ? 'Saving…' : ''}</span>
         </p>
         {error && <p role="status" className="text-[13px] text-amber-800">The board could not refresh just now. It catches up as soon as the connection is back.</p>}
       </div>
 
-      <section className="flex min-w-0 flex-col gap-4 rounded-[20px] bg-[#f1f4f4] p-3 sm:p-5" aria-label="Matching board">
+      <section className="flex min-w-0 flex-col gap-4 rounded-[20px] bg-[#f1f4f4] p-3 sm:p-5" aria-label="Matching board" aria-busy={busy}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <h2 className="text-[17px] font-extrabold uppercase tracking-[0.04em] text-[#12293a] sm:text-[20px]">
               {view === 'round' ? roundTitle(r) : BOARD_COPY.allRoundsTitle}
             </h2>
             {view === 'round' && time && <p className="text-[13px] text-[#5a6670]">Starts about {time}</p>}
+            {busy && (
+              <p data-testid="board-saving" className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-0.5 text-[12px] font-semibold text-[#1d6b5c]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Saving the last change…
+              </p>
+            )}
+            {/* What the last change did, read out politely; a new element each time so the same words are read again. */}
+            <p role="status" aria-live="polite" data-testid="board-announcement" className="mt-1 text-[13px] text-[#3d4a55]">
+              {feedback.announcement.text && <span key={feedback.announcement.n}>{feedback.announcement.text}</span>}
+            </p>
           </div>
           <BoardToolbar
-            canGenerate={board.rounds.some((round) => round.editable)}
+            canGenerate={editing && board.rounds.some((round) => round.editable)}
             editing={editing}
             lockAction={view === 'round' ? lockAction : null}
             busy={busy}
@@ -188,6 +209,9 @@ export default function MatchingBoardPage() {
           groups={board.groupRules?.groups ?? []} filter={filter} onFilter={setFilter}
         />
 
+        {view === 'round' && !active && (
+          <p className="rounded-2xl bg-white px-4 py-6 text-center text-[14px] text-[#5a6670]">This event has no rounds to plan yet.</p>
+        )}
         {view === 'round' && active && (
           <RoundView
             sessionId={sessionId} board={board} round={active} editing={editing} draggable={fine}
@@ -203,14 +227,17 @@ export default function MatchingBoardPage() {
       </section>
 
       {selectedPerson && active && (
-        <MoveSheet board={board} round={active} person={selectedPerson} canEdit={canEditRound}
-          onRun={(o) => op(o)} onShowMeetings={(p) => setTimelineFor(p.userId)} onClose={() => setSelected(null)} />
+        <MoveSheet board={board} round={active} person={selectedPerson} canEdit={canEditRound} busy={busy}
+          onRun={(o) => void act(o, { origin: selectedPerson.userId })} onShowMeetings={(p) => setTimelineFor(p.userId)} onClose={() => setSelected(null)} />
       )}
       {timelinePerson && (
-        <PersonTimeline board={board} person={timelinePerson} busy={busy}
+        <PersonTimeline board={board} person={timelinePerson} busy={busy} canEdit={editing}
           onRun={(o, success) => op(o, success)} onClose={() => setTimelineFor(null)} />
       )}
-      {refusal && <RefusalSheet board={board} refusal={refusal} onChoose={(o) => op(o)} onClose={clearRefusal} />}
+      {refusal && (
+        <RefusalSheet board={board} refusal={refusal} onChoose={(o) => void act(o)}
+          onClose={() => { clearRefusal(); feedback.releaseFocusAfterSheet(board.revision); }} />
+      )}
       <PublishPanel sessionId={sessionId} board={board} open={publishOpen} onClose={() => setPublishOpen(false)} applyReturnedBoard={applyReturnedBoard} />
       {confirmDialog}
     </div>

@@ -13,7 +13,7 @@ import { ErrorCodes, type ScheduleBoard } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { boardErrorOf } from './board-errors';
-import { boardQueryKey } from './useBoard';
+import { boardQueryKey, boardWriteScope } from './useBoard';
 
 export interface PublishItem { round: number; room: number | null; message: string }
 
@@ -120,6 +120,8 @@ export function useScheduleVersions(sessionId: string, open: boolean) {
 export function usePublish(sessionId: string, applyReturnedBoard: (board: ScheduleBoard) => void) {
   const qc = useQueryClient();
   return useMutation({
+    // Behind any board edit still on its way, so it publishes the revision that edit returned.
+    scope: { id: boardWriteScope(sessionId) },
     mutationFn: async (note?: string) => {
       const board = qc.getQueryData<ScheduleBoard>(boardQueryKey(sessionId));
       const res = await api.post(`/sessions/${sessionId}/schedule/publish`, { expectedRevision: board?.revision ?? 0, ...(note ? { note } : {}) });
@@ -133,6 +135,8 @@ export function usePublish(sessionId: string, applyReturnedBoard: (board: Schedu
     onError: (err) => {
       const error = boardErrorOf(err);
       if (error.code === ErrorCodes.SCHEDULE_CHANGED && error.board) applyReturnedBoard(error.board);
+      // Any other refusal (conflicts found at publish time, a 409 without a board) reads the board again.
+      else if (error.status === 409) void qc.invalidateQueries({ queryKey: boardQueryKey(sessionId) });
       void qc.invalidateQueries({ queryKey: previewKey(sessionId) });
     },
   });

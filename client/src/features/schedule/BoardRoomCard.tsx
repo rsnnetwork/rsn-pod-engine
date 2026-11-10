@@ -38,7 +38,8 @@ export default function BoardRoomCard({
   const [over, setOver] = useState(false);
   const full = room.seats.length >= 3;
   const fromHere = !!dragging && room.seats.some((s) => s.userId === dragging.userId);
-  const acceptsMove = !!dragging && canEdit && !room.locked && !full && !fromHere;
+  // Nothing is taken while a change is on its way: writes go one at a time.
+  const acceptsMove = !!dragging && canEdit && !busy && !room.locked && !full && !fromHere;
   const placeholders = Math.max(0, 2 - room.seats.length);
   const badges = verdictBadges(room);
   const moveTarget: DropTarget = { kind: 'seat', round, room: room.roomNumber, occupantId: null };
@@ -110,9 +111,9 @@ export default function BoardRoomCard({
             person={seat}
             groups={groupLabels(board, seat.groupKeys)}
             source={{ round, userId: seat.userId, fromRoom: room.roomNumber }}
-            dropTarget={canEdit && !room.locked && !seat.slotLocked ? { kind: 'seat', round, room: room.roomNumber, occupantId: seat.userId } : null}
+            dropTarget={canEdit && !busy && !room.locked && !seat.slotLocked ? { kind: 'seat', round, room: room.roomNumber, occupantId: seat.userId } : null}
             slotLocked={seat.slotLocked}
-            draggable={draggable && !room.locked && !seat.slotLocked}
+            draggable={draggable && !busy && !room.locked && !seat.slotLocked}
             selected={selectedId === seat.userId}
             picked={seatPicked(seat, filter, false)}
             onSelect={() => onSelect(seat, room.roomNumber)}

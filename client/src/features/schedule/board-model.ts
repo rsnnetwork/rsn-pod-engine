@@ -7,7 +7,7 @@
 
 import {
   checkRoom, roundRuleSentence,
-  type BoardPerson, type BoardPersonStatus, type BoardRoom, type BoardRound, type RoomCheckContext, type RoomVerdict,
+  type BoardOp, type BoardPerson, type BoardPersonStatus, type BoardRoom, type BoardRound, type RoomCheckContext, type RoomVerdict,
   type ScheduleBoard,
 } from '@rsn/shared';
 
@@ -371,4 +371,45 @@ export function timelineLine(entry: TimelineEntry): string {
   if (entry.place.kind === 'away') return 'Marked late or not coming';
   const who = entry.place.partners.length ? `with ${andList(entry.place.partners)}` : 'alone so far';
   return `${roomTitle(entry.place.room)}, ${who}${entry.place.locked ? ' (locked)' : ''}`;
+}
+
+// ─── What a change did, said aloud (fix round 1: the board's live region) ───
+
+/** Where someone is in a round now: "Ann is in Room 03 now." or "Ann is waiting in the basket. 3 people waiting." */
+export function placeLine(board: ScheduleBoard, round: number, userId: string): string {
+  const name = nameIn(peopleOf(board), userId);
+  const r = roundOf(board, round);
+  const room = roomOfPerson(r, userId);
+  if (room) return `${name} is in ${roomTitle(room.roomNumber)} now.`;
+  if (r?.basket.some((p) => p.userId === userId)) return `${name} is waiting in the basket. ${waitingLine(r.basket.length)}.`;
+  return `${name} has no seat in round ${round}.`;
+}
+
+/** The person a change is about, if it is about one. */
+export const personOfOp = (op: BoardOp): string | null => ('userId' in op ? op.userId : null);
+
+/** The sentence for a change the server made, read from the board it answered with; null when the caller says it. */
+export function outcomeSentence(board: ScheduleBoard, op: BoardOp): string | null {
+  switch (op.kind) {
+    case 'move':
+    case 'unassign': return placeLine(board, op.round, op.userId);
+    case 'swap': return `${placeLine(board, op.round, op.userId)} ${placeLine(board, op.round, op.withUserId)}`;
+    case 'lock_room': return `${roomTitle(op.room)} is locked.`;
+    case 'unlock_room': return `${roomTitle(op.room)} is unlocked.`;
+    case 'lock_slot': return `${nameIn(peopleOf(board), op.userId)} keeps this seat.`;
+    case 'unlock_slot': return `${nameIn(peopleOf(board), op.userId)} can move again.`;
+    case 'redistribute': {
+      const rounds = op.rounds === 'all' ? board.rounds : board.rounds.filter((r) => (op.rounds as number[]).includes(r.roundNumber));
+      return rounds.length === 1 ? `Round ${rounds[0].roundNumber}: ${waitingLine(rounds[0].basket.length)}.` : null;
+    }
+    default: return null;
+  }
+}
+
+/** The sentence for a change the server refused (the reason itself is in the error toast or the refusal sheet). */
+export function stayedSentence(board: ScheduleBoard, op: BoardOp): string {
+  const who = personOfOp(op);
+  if (who) return `Nothing changed: ${nameIn(peopleOf(board), who)} stayed where they were.`;
+  if (op.kind === 'lock_room' || op.kind === 'unlock_room') return `Nothing changed in ${roomTitle(op.room)}.`;
+  return 'Nothing changed on the board.';
 }

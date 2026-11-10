@@ -9,9 +9,14 @@
 //
 // A read that was already on its way when a write answered must not put the older board back: the cache keeps the
 // higher revision (keepNewestBoard).
+//
+// Writes go one at a time (fix round 1): every board write of an event shares one mutation scope, so a second edit
+// made while the first is on its way waits for it and is sent with the revision the first one returned, never the
+// older one (which the server would refuse as "the board changed" about the organiser's own edit). A board that
+// comes back with SCHEDULE_CHANGED is applied inside the write, before the next queued write reads its revision.
 
 import { useCallback, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient, type UseMutationOptions } from '@tanstack/react-query';
 import { ErrorCodes, type BoardOp, type BoardOpResult, type BoardRefusal, type ScheduleBoard } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
@@ -27,6 +32,9 @@ export function keepNewestBoard(old: unknown, next: unknown): unknown {
   return a && b && typeof a.revision === 'number' && typeof b.revision === 'number' && a.revision > b.revision ? a : next;
 }
 
+/** The one mutation scope of an event's board writes (publishing included): they run in order, never together. */
+export const boardWriteScope = (sessionId: string) => `schedule-board:${sessionId}`;
+
 export type BoardWrite =
   | { kind: 'op'; op: BoardOp }
   | { kind: 'generate'; rounds: number[] | 'all' };
@@ -41,7 +49,37 @@ export interface PendingRefusal {
   overridable: boolean;
 }
 
+export type RunOutcome =
+  | { ok: true; result: BoardOpResult }
+  | { ok: false; error: BoardError; offered: boolean };
+
 const REFUSED_WITH_CHOICES: ReadonlySet<string> = new Set([ErrorCodes.SCHEDULE_GROUP_RULE, ErrorCodes.SCHEDULE_RULE]);
+
+/** Put the board the server answered with on screen: the only way the board's cache is written by hand. */
+export function applyBoard(qc: QueryClient, sessionId: string, board: ScheduleBoard): void {
+  void qc.cancelQueries({ queryKey: boardQueryKey(sessionId) });
+  qc.setQueryData(boardQueryKey(sessionId), board);
+}
+
+/**
+ * The board write: one scope per event, so writes run one after another and each reads the revision the one before
+ * it returned. A stale write's board (SCHEDULE_CHANGED) is applied here, inside the write, so the next queued write
+ * reads that board's revision.
+ */
+export function boardWriteOptions(qc: QueryClient, sessionId: string): UseMutationOptions<BoardOpResult, unknown, BoardWrite> {
+  return {
+    scope: { id: boardWriteScope(sessionId) },
+    mutationFn: (write: BoardWrite) => {
+      const current = qc.getQueryData<ScheduleBoard>(boardQueryKey(sessionId));
+      return sendWrite(sessionId, current?.revision ?? 0, write);
+    },
+    onSuccess: (result) => applyBoard(qc, sessionId, result.board),
+    onError: (err) => {
+      const error = boardErrorOf(err);
+      if (error.code === ErrorCodes.SCHEDULE_CHANGED && error.board) applyBoard(qc, sessionId, error.board);
+    },
+  };
+}
 
 async function sendWrite(sessionId: string, expectedRevision: number, write: BoardWrite): Promise<BoardOpResult> {
   const res = write.kind === 'generate'
@@ -68,48 +106,38 @@ export function useBoard(sessionId: string) {
     meta: { entities: [E.sessionSchedule(sessionId), E.sessionGroups(sessionId), E.sessionParticipants(sessionId)] },
   });
 
-  /** The server's board, as it answered: the only way the cache is written by hand. */
-  const applyReturnedBoard = useCallback((board: ScheduleBoard) => {
-    void qc.cancelQueries({ queryKey: boardQueryKey(sessionId) });
-    qc.setQueryData(boardQueryKey(sessionId), board);
-  }, [qc, sessionId]);
+  /** The server's board, as it answered (a publish refused as stale hands its board here too). */
+  const applyReturnedBoard = useCallback((board: ScheduleBoard) => applyBoard(qc, sessionId, board), [qc, sessionId]);
 
-  const mutation = useMutation({
-    mutationFn: (write: BoardWrite) => {
-      const current = qc.getQueryData<ScheduleBoard>(boardQueryKey(sessionId));
-      return sendWrite(sessionId, current?.revision ?? 0, write);
-    },
-    onSuccess: (result) => applyReturnedBoard(result.board),
-  });
+  const mutation = useMutation(boardWriteOptions(qc, sessionId));
 
-  /** What the screen does with a refused write: the board now, the alternatives, or the sentence. */
-  const handleRefusal = useCallback((write: BoardWrite, error: BoardError) => {
-    if (error.code === ErrorCodes.SCHEDULE_CHANGED && error.board) {
-      applyReturnedBoard(error.board);
-      addToast(error.message, 'error');
-      return;
-    }
+  /**
+   * What the screen does with a refused write: the server's sentence, or the alternatives. Returns whether a choice of
+   * alternatives was opened (RefusalSheet). A stale write's board is already on screen (the mutation's onError).
+   */
+  const handleRefusal = useCallback((write: BoardWrite, error: BoardError): boolean => {
     if (write.kind === 'op' && REFUSED_WITH_CHOICES.has(error.code) && error.alternatives) {
       const canOverride = qc.getQueryData<ScheduleBoard>(boardQueryKey(sessionId))?.canOverride ?? false;
       setRefusal({
         op: write.op, code: error.code, message: error.message, alternatives: error.alternatives,
         overridable: error.code === ErrorCodes.SCHEDULE_GROUP_RULE && canOverride && write.op.override !== true,
       });
-      return;
+      return true;
     }
     addToast(error.message, 'error');
-  }, [addToast, applyReturnedBoard, qc, sessionId]);
+    return false;
+  }, [addToast, qc, sessionId]);
 
-  /** One write. Resolves with the server's answer, or null when it was refused (the screen has been told why). */
-  const run = useCallback(async (write: BoardWrite, success?: (result: BoardOpResult) => string | null): Promise<BoardOpResult | null> => {
+  /** One write: the server's answer, or the refusal (the screen has been told why; `offered` = alternatives opened). */
+  const run = useCallback(async (write: BoardWrite, success?: (result: BoardOpResult) => string | null): Promise<RunOutcome> => {
     try {
       const result = await mutation.mutateAsync(write);
       const said = success?.(result);
       if (said) addToast(said, 'success');
-      return result;
+      return { ok: true, result };
     } catch (err) {
-      handleRefusal(write, boardErrorOf(err));
-      return null;
+      const error = boardErrorOf(err);
+      return { ok: false, error, offered: handleRefusal(write, error) };
     }
   }, [addToast, handleRefusal, mutation]);
 
@@ -117,7 +145,7 @@ export function useBoard(sessionId: string) {
   const runAll = useCallback(async (ops: BoardOp[], success?: string): Promise<boolean> => {
     setQueueBusy(true);
     try {
-      for (const op of ops) if (!(await run({ kind: 'op', op }))) return false;
+      for (const op of ops) if (!(await run({ kind: 'op', op })).ok) return false;
       if (success) addToast(success, 'success');
       return true;
     } finally {

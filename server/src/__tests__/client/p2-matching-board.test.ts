@@ -136,11 +136,12 @@ describe('useBoard: one live read, and the server\'s board as the only hand-writ
     expect(hook).toContain("api.get(`/sessions/${sessionId}/schedule`)");
   });
 
-  it('no setQueryData anywhere on the board but applyReturnedBoard, which writes the board the server answered', () => {
+  it('no setQueryData anywhere on the board but applyBoard, which writes the board the server answered', () => {
     const uses = scheduleFiles().flatMap((f) => (code(f).match(/setQueryData/g) ?? []).map(() => f));
     expect(uses).toEqual([`${SCHEDULE_DIR}/useBoard.ts`]);
-    expect(hook).toMatch(/const applyReturnedBoard = useCallback\(\(board: ScheduleBoard\) => \{\s*void qc\.cancelQueries\(\{ queryKey: boardQueryKey\(sessionId\) \}\);\s*qc\.setQueryData\(boardQueryKey\(sessionId\), board\);\s*\}/);
-    expect(hook).toContain('onSuccess: (result) => applyReturnedBoard(result.board),');
+    expect(hook).toMatch(/export function applyBoard\(qc: QueryClient, sessionId: string, board: ScheduleBoard\): void \{\s*void qc\.cancelQueries\(\{ queryKey: boardQueryKey\(sessionId\) \}\);\s*qc\.setQueryData\(boardQueryKey\(sessionId\), board\);\s*\}/);
+    expect(hook).toContain('onSuccess: (result) => applyBoard(qc, sessionId, result.board),');
+    expect(hook).toContain('const applyReturnedBoard = useCallback((board: ScheduleBoard) => applyBoard(qc, sessionId, board), [qc, sessionId]);');
   });
 
   it('every write names the revision of the board on screen, on the routes Task 8 serves', () => {
@@ -149,8 +150,10 @@ describe('useBoard: one live read, and the server\'s board as the only hand-writ
     expect(hook).toMatch(/const current = qc\.getQueryData<ScheduleBoard>\(boardQueryKey\(sessionId\)\);\s*return sendWrite\(sessionId, current\?\.revision \?\? 0, write\);/);
   });
 
-  it('a stale write shows the board the server sent back, with the server\'s sentence', () => {
-    expect(hook).toMatch(/if \(error\.code === ErrorCodes\.SCHEDULE_CHANGED && error\.board\) \{\s*applyReturnedBoard\(error\.board\);\s*addToast\(error\.message, 'error'\);/);
+  it('a stale write shows the board the server sent back (inside the write), with the server\'s sentence', () => {
+    expect(hook).toMatch(/onError: \(err\) => \{\s*const error = boardErrorOf\(err\);\s*if \(error\.code === ErrorCodes\.SCHEDULE_CHANGED && error\.board\) applyBoard\(qc, sessionId, error\.board\);/);
+    // Every refusal without a choice of rooms, the stale one included, is toasted with the server's sentence.
+    expect(hook).toMatch(/return true;\s*\}\s*addToast\(error\.message, 'error'\);\s*return false;/);
   });
 
   it('a read that left before a write answered never puts the older board back', () => {
@@ -286,7 +289,7 @@ describe('MoveSheet: select and move, for the phone and the keyboard', () => {
   }).default as (props: Record<string, unknown>) => JSX.Element;
   const board = makeBoard();
   const draw = (who: BoardPerson, roundIndex = 0, canEdit = true) => renderToStaticMarkup(createElement(MoveSheet, {
-    board, round: board.rounds[roundIndex], person: who, canEdit, onRun: () => undefined, onShowMeetings: () => undefined, onClose: () => undefined,
+    board, round: board.rounds[roundIndex], person: who, canEdit, busy: false, onRun: () => undefined, onShowMeetings: () => undefined, onClose: () => undefined,
   }));
 
   it('offers swap, move to a room with a free seat, the basket, lock and the person\'s meetings, every row 44px or more', () => {
@@ -482,5 +485,191 @@ describe('the way in, and the live host', () => {
     expect(socket).toMatch(/DM_REACT_FAILED: \{[^\n]*\},\s*\.\.\.LOCKED_ERRORS,\s*\};/);
     expect(locked).toContain("export const LOCKED_CODES: readonly string[] = ['SCHEDULE_LOCKED', 'MATCH_LOCKED'];");
     expect(code('stores/sessionStore.ts')).toContain('timesMet?: number; locked?: boolean }[];');
+  });
+});
+
+// ─── Fix round 1 (review Important 2): board writes go one at a time ────────
+
+describe('board writes go one at a time, each with the revision the one before returned', () => {
+  type Sent = { url: string; expectedRevision: number };
+  interface QueryClientLike {
+    setQueryData: (k: readonly unknown[], v: unknown) => void;
+    getQueryData: (k: readonly unknown[]) => unknown;
+    getMutationCache: () => { build: (qc: unknown, o: Record<string, unknown>) => { execute: (v: unknown) => Promise<unknown> } };
+  }
+  /** A fake API: each write answers after a beat with the board one revision on, or as the test says. */
+  function harness(answer?: (sent: Sent, n: number) => Promise<unknown>) {
+    const sent: Sent[] = [];
+    const api = {
+      post: async (url: string, body: { expectedRevision: number }) => {
+        const s = { url, expectedRevision: body.expectedRevision };
+        sent.push(s);
+        await new Promise((r) => setTimeout(r, 15));
+        if (answer) return answer(s, sent.length);
+        return { data: { data: { board: { ...makeBoard(), revision: body.expectedRevision + 1 }, changed: [] } } };
+      },
+    };
+    const mod = loadClientModule(`${SCHEDULE_DIR}/useBoard.ts`, {
+      '@/lib/api': { __esModule: true, default: api },
+      '@/stores/toastStore': { useToastStore: () => undefined },
+    }) as {
+      boardWriteOptions: (qc: unknown, id: string) => Record<string, unknown>;
+      boardQueryKey: (id: string) => readonly unknown[];
+      boardWriteScope: (id: string) => string;
+    };
+    // The client's own query library, the one the loaded module uses.
+    const { QueryClient } = require('@tanstack/react-query') as { QueryClient: new () => QueryClientLike };
+    const qc = new QueryClient();
+    qc.setQueryData(mod.boardQueryKey('s-1'), makeBoard());
+    const write = (op: Record<string, unknown>) => qc.getMutationCache().build(qc, mod.boardWriteOptions(qc, 's-1')).execute({ kind: 'op', op });
+    return { sent, qc, mod, write };
+  }
+
+  it('a second edit made while the first is on its way waits, then sends the revision the first returned', async () => {
+    const { sent, qc, mod, write } = harness();
+    const first = write({ kind: 'unassign', round: 1, userId: 'ann' });
+    const second = write({ kind: 'unassign', round: 1, userId: 'bob' });
+    await Promise.all([first, second]);
+    expect(sent.map((s) => s.expectedRevision)).toEqual([4, 5]);
+    expect((qc.getQueryData(mod.boardQueryKey('s-1')) as ScheduleBoard).revision).toBe(6);
+    expect(mod.boardWriteScope('s-1')).toBe('schedule-board:s-1');
+    expect(mod.boardWriteOptions(qc, 's-1').scope).toEqual({ id: 'schedule-board:s-1' });
+  });
+
+  it('a stale write\'s board is on screen before the next queued write reads its revision', async () => {
+    const now = { ...makeBoard(), revision: 9 };
+    const { sent, write } = harness(async (s, n) => {
+      if (n === 1) {
+        throw { response: { status: 409, data: { error: {
+          code: 'SCHEDULE_CHANGED', message: 'The board changed while you were editing. It is up to date now; try again.', details: { board: now },
+        } } } };
+      }
+      return { data: { data: { board: { ...now, revision: s.expectedRevision + 1 }, changed: [] } } };
+    });
+    const first = write({ kind: 'unassign', round: 1, userId: 'ann' }).catch(() => 'refused');
+    const second = write({ kind: 'unassign', round: 1, userId: 'bob' });
+    expect(await first).toBe('refused');
+    await second;
+    expect(sent.map((s) => s.expectedRevision)).toEqual([4, 9]);
+  });
+
+  it('publishing waits behind any edit on its way (the same scope)', () => {
+    expect(code(`${SCHEDULE_DIR}/publish-api.ts`)).toContain('scope: { id: boardWriteScope(sessionId) },');
+  });
+
+  it('while a write is on its way, drops and sheet actions are not taken, and the board says it is saving', () => {
+    const page = code(`${SCHEDULE_DIR}/MatchingBoardPage.tsx`);
+    expect(page).toContain('if (!source || busy) return;');
+    expect(page).toContain('aria-busy={busy}');
+    expect(page).toMatch(/\{busy && \(\s*<p data-testid="board-saving"[^>]*>\s*<Loader2[^>]*\/> Saving the last change…/);
+    expect(code(`${SCHEDULE_DIR}/BoardRoomCard.tsx`)).toContain('const acceptsMove = !!dragging && canEdit && !busy && !room.locked && !full && !fromHere;');
+    expect(code(`${SCHEDULE_DIR}/BoardRoomCard.tsx`)).toContain('dropTarget={canEdit && !busy && !room.locked && !seat.slotLocked ? {');
+    expect(code(`${SCHEDULE_DIR}/BasketTray.tsx`)).toContain('const accepts = !!dragging && canEdit && !busy && !basket.some((p) => p.userId === dragging.userId);');
+    expect(code(`${SCHEDULE_DIR}/RoundView.tsx`)).toContain("${busy ? 'opacity-70' : ''}");
+
+    const MoveSheet = loadClientModule(`${SCHEDULE_DIR}/MoveSheet.tsx`, { 'lucide-react': iconStandIns, '@/features/reason/ui/Sheet': sheetStandIn })
+      .default as (props: Record<string, unknown>) => JSX.Element;
+    const board = makeBoard();
+    const html = renderToStaticMarkup(createElement(MoveSheet, {
+      board, round: board.rounds[0], person: ann, canEdit: true, busy: true, onRun: () => undefined, onShowMeetings: () => undefined, onClose: () => undefined,
+    }));
+    expect(html).toContain('Saving the last change first…');
+    const buttons = Array.from(html.matchAll(/<button([^>]*)>/g), (m) => m[1]);
+    expect(buttons.filter((b) => !/ disabled=""/.test(b))).toEqual([expect.stringContaining('data-testid="move-show-meetings"')]);
+    expect(code(`${SCHEDULE_DIR}/MoveSheet.tsx`)).toContain('const act = (op: BoardOp) => { if (busy) return; onClose(); onRun(op); };');
+  });
+});
+
+// ─── Fix round 1 (review Important 1): focus and the result, for the keyboard and screen readers ───
+
+describe('after a change, focus is on the moved person and the result is said', () => {
+  const { feedbackFor, seatSelector } = loadClientModule(`${SCHEDULE_DIR}/useMoveFeedback.ts`, {}) as {
+    feedbackFor: (outcome: unknown, op: unknown, origin: string | null, before: ScheduleBoard, success?: string | null) => {
+      say: string; focus: { userId: string; revision: number } | null; holdForSheet: string | null;
+    };
+    seatSelector: (id: string) => string;
+  };
+  const before = makeBoard();
+  /** The board after fay moved into room 3 of round 1 (with eve), at revision 5. */
+  const moved = (): ScheduleBoard => {
+    const b = makeBoard();
+    b.revision = 5;
+    b.rounds[0].rooms[2] = room(3, [eve, fay]);
+    b.rounds[0].basket = [];
+    return b;
+  };
+  const answered = (board: ScheduleBoard) => ({ ok: true, result: { board, changed: [] } });
+  const refused = (offered: boolean, board: ScheduleBoard | null = null) => ({
+    ok: false, offered, error: { status: 409, code: offered ? 'SCHEDULE_GROUP_RULE' : 'SCHEDULE_LOCKED', message: 'No.', board, alternatives: null },
+  });
+
+  it('a move: focus on the moved person in the board the server answered with, and where they are now', () => {
+    expect(feedbackFor(answered(moved()), { kind: 'move', round: 1, userId: 'fay', toRoom: 3 }, 'fay', before))
+      .toEqual({ say: 'Fay is in Room 03 now.', focus: { userId: 'fay', revision: 5 }, holdForSheet: null });
+  });
+
+  it('a swap names both places; to the basket says the count, in the brief\'s words', () => {
+    expect(feedbackFor(answered(moved()), { kind: 'swap', round: 1, userId: 'ann', withUserId: 'eve' }, 'ann', before).say)
+      .toBe('Ann is in Room 01 now. Eve is in Room 03 now.');
+    const basket = makeBoard();
+    basket.rounds[0].rooms[0] = room(1, [bob]);
+    basket.rounds[0].basket = [fay, ann];
+    expect(feedbackFor(answered(basket), { kind: 'unassign', round: 1, userId: 'ann' }, 'ann', before).say)
+      .toBe('Ann is waiting in the basket. 2 people waiting.');
+  });
+
+  it('a room lock keeps focus where it is (the lock button) and says so', () => {
+    expect(feedbackFor(answered(before), { kind: 'lock_room', round: 1, room: 1 }, null, before))
+      .toEqual({ say: 'Room 01 is locked.', focus: null, holdForSheet: null });
+  });
+
+  it('a refusal: nothing moved; focus back on the chip the action started from', () => {
+    expect(feedbackFor(refused(false), { kind: 'move', round: 1, userId: 'ann', toRoom: 2 }, 'ann', before))
+      .toEqual({ say: 'Nothing changed: Ann stayed where they were.', focus: { userId: 'ann', revision: 4 }, holdForSheet: null });
+  });
+
+  it('a stale write: focus waits for the board the server sent back', () => {
+    const now = { ...makeBoard(), revision: 9 };
+    expect(feedbackFor(refused(false, now), { kind: 'unassign', round: 1, userId: 'ann' }, 'ann', before).focus).toEqual({ userId: 'ann', revision: 9 });
+  });
+
+  it('a refusal with alternatives: the sheet takes focus, and it returns to the chip when the sheet closes', () => {
+    expect(feedbackFor(refused(true), { kind: 'swap', round: 1, userId: 'ann', withUserId: 'bob' }, 'ann', before))
+      .toEqual({ say: 'Nothing changed: Ann stayed where they were.', focus: null, holdForSheet: 'ann' });
+    expect(code(`${SCHEDULE_DIR}/MatchingBoardPage.tsx`)).toContain('onClose={() => { clearRefusal(); feedback.releaseFocusAfterSheet(board.revision); }}');
+  });
+
+  it('focus is placed only once the answered board is on screen, on the chip itself', () => {
+    expect(seatSelector('ann')).toBe('[data-testid="board-person-ann"]');
+    expect(code(`${SCHEDULE_DIR}/useMoveFeedback.ts`)).toMatch(
+      /if \(!pendingFocus \|\| !board \|\| board\.revision < pendingFocus\.revision\) return;\s*document\.querySelector<HTMLElement>\(seatSelector\(pendingFocus\.userId\)\)\?\.focus\(\);/,
+    );
+  });
+
+  it('drag and sheet alike go through the same feedback, and the board has a polite live region for it', () => {
+    const page = code(`${SCHEDULE_DIR}/MatchingBoardPage.tsx`);
+    expect(page).toContain('feedback.apply(feedbackFor(outcome, o, origin, board, outcome.ok ? opts.success?.(outcome.result) ?? null : null));');
+    expect(page).toContain('if (intent) void act(intent, { origin: source.userId });');
+    expect(page).toContain('onRun={(o) => void act(o, { origin: selectedPerson.userId })}');
+    expect(page).toMatch(/<p role="status" aria-live="polite" data-testid="board-announcement"[^>]*>\s*\{feedback\.announcement\.text && <span key=\{feedback\.announcement\.n\}>\{feedback\.announcement\.text\}<\/span>\}/);
+  });
+});
+
+describe('fix round 1 minors', () => {
+  const page = code(`${SCHEDULE_DIR}/MatchingBoardPage.tsx`);
+  it('with Edit off, nothing on the board changes: Lock, Auto generate and the late marks wait for it', () => {
+    expect(page).toContain('const lockAction = !canEditRound || roundRooms.length === 0 ? null');
+    expect(page).toContain('canGenerate={editing && board.rounds.some((round) => round.editable)}');
+    expect(page).toContain('canEdit={editing}');
+    expect(code(`${SCHEDULE_DIR}/PersonTimeline.tsx`)).toContain('const editable = canEdit && rounds.some((r) => r.editable);');
+  });
+  it('late arrival offers only rounds that have not started', () => {
+    expect(code(`${SCHEDULE_DIR}/PersonTimeline.tsx`)).toContain('const lateChoices = rounds.filter((r) => r.editable).map((r) => r.roundNumber).filter((n) => n >= 2);');
+  });
+  it('a publish refused without a board reads the board again', () => {
+    expect(code(`${SCHEDULE_DIR}/publish-api.ts`)).toContain('else if (error.status === 409) void qc.invalidateQueries({ queryKey: boardQueryKey(sessionId) });');
+  });
+  it('an event with no rounds says so', () => {
+    expect(page).toContain('This event has no rounds to plan yet.');
   });
 });

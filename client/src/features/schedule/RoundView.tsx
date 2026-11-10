@@ -91,7 +91,7 @@ export default function RoundView({
       ) : rooms.length === 0 ? (
         <p className="rounded-2xl bg-white px-4 py-6 text-center text-[14px] text-[#5a6670]">No meetings match the filters.</p>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={`grid gap-3 transition-opacity sm:grid-cols-2 xl:grid-cols-3 ${busy ? 'opacity-70' : ''}`}>
           {rooms.map((room) => (
             <BoardRoomCard
               key={room.roomNumber}

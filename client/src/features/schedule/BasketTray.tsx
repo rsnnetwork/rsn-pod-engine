@@ -34,7 +34,7 @@ export default function BasketTray({
   onSelect, onDragStart, onDragEnd, onDrop, onRedistribute,
 }: Props) {
   const [over, setOver] = useState(false);
-  const accepts = !!dragging && canEdit && !basket.some((p) => p.userId === dragging.userId);
+  const accepts = !!dragging && canEdit && !busy && !basket.some((p) => p.userId === dragging.userId);
   const shown = basket.filter((p) => personMatches(p, { ...filter, conflictsOnly: false, lockedOnly: false }, true));
 
   const dragOver = (e: DragEvent<HTMLElement>) => {
@@ -90,7 +90,7 @@ export default function BasketTray({
               groups={groupLabels(board, p.groupKeys)}
               source={{ round, userId: p.userId, fromRoom: null }}
               dropTarget={null}
-              draggable={draggable}
+              draggable={draggable && !busy}
               selected={selectedId === p.userId}
               picked={seatPicked(p, filter, true)}
               tone="basket"

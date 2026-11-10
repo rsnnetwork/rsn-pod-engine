@@ -302,6 +302,9 @@ test('phone: the same swap and basket through MoveSheet only, 44px rows, never w
     const sheet = await rowsAreTall(/, round 1$/);
     await sheet.getByTestId('move-basket').tap();
     await expect(basketCount(page)).toHaveText(waiting(waitingBefore + 1), { timeout: SLOW });
+    // The result is said in the board's live region, and focus is on the person in their new place (fix round 1).
+    await expect(page.getByTestId('board-announcement')).toContainText(`is waiting in the basket. ${waiting(waitingBefore + 1)}.`);
+    await expect(chip(page, a.founder)).toBeFocused();
     const redistribute = page.getByRole('button', { name: 'Redistribute' });
     await tall(redistribute, 'Redistribute');
     await redistribute.tap();
