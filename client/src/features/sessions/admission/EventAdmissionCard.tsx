@@ -47,7 +47,7 @@ export default function EventAdmissionCard({ sessionId, title }: { sessionId: st
     });
   });
   const clear = async () => {
-    if (!(await ask({ title: ADMISSION_COPY.clearTitle, body: ADMISSION_COPY.clearBody, confirmLabel: ADMISSION_COPY.clear }))) return;
+    if (!(await ask({ title: ADMISSION_COPY.clearTitle, body: ADMISSION_COPY.clearBody, confirmLabel: ADMISSION_COPY.clearConfirm }))) return;
     setMode.mutate(null, {
       onSuccess: () => { addToast(ADMISSION_COPY.cleared, 'success'); reset({}); },
       onError: (err) => addToast(organiserSentence(err, ADMISSION_COPY.fallback), 'error'),

@@ -3,7 +3,7 @@
 // the server and draws nothing for someone it refuses, so `mayRunEvent` (the page's guess at who runs the event) only
 // spares everyone else the requests. Admission and groups change only before the event (the server refuses while it is
 // live or once it is over), so they show only then; groups only for an event with rounds.
-import type { EventGroupsView } from '@rsn/shared';
+import { DEFAULT_SESSION_CONFIG, type EventGroupsView } from '@rsn/shared';
 import { isEventLifecycleChip } from './statusConfig';
 import type { StatusPhase } from './statusConfig';
 import EventLifecycleActions from './lifecycle/EventLifecycleActions';
@@ -36,7 +36,8 @@ export default function OrganiserSettings({ event, phase, mayRunEvent, isRoundsE
   if (!mayRunEvent && !hasActions) return null;
   const title = event.title || 'Event';
   const before = phase === 'pre' && lifecycle !== 'archived';
-  const numberOfRounds = Math.max(1, Number(event.config?.numberOfRounds) || 1);
+  // The rounds the server checks the rules against: the event's own, else the platform default (as event-groups does).
+  const numberOfRounds = Math.max(1, Number(event.config?.numberOfRounds) || DEFAULT_SESSION_CONFIG.numberOfRounds);
 
   return (
     <section aria-label="Event settings" data-testid="organiser-settings" className="grid min-w-0 gap-4">

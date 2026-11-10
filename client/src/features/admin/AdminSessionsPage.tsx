@@ -14,6 +14,9 @@ import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from '@/features/sessions/statusConfig';
 import EndEventButton from '@/features/sessions/EndEventButton';
 import { useConfirm } from '@/hooks/useConfirm';
+import CancelEventDialog from '@/features/sessions/lifecycle/CancelEventDialog';
+import { requestLifecycleStep } from '@/features/sessions/lifecycle/useEventLifecycle';
+import { cancelledSentence } from '@/features/sessions/lifecycle/lifecycle-text';
 
 export default function AdminSessionsPage() {
   const { user } = useAuthStore();
@@ -30,10 +33,19 @@ export default function AdminSessionsPage() {
     meta: { entities: [E.adminSessions] },
   });
 
+  // Part 2 Task 11 fix round 1: one cancel path in the preview client. Cancel asks for an optional reason and goes
+  // through Task 2's cancel step (everyone registered is emailed and notified; audited), as on the event page, never
+  // the legacy DELETE /sessions/:id soft cancel. The dialog says a refusal at its field.
+  const [cancelling, setCancelling] = useState<string | null>(null);
   const cancelMutation = useMutation({
-    mutationFn: (sessionId: string) => api.delete(`/sessions/${sessionId}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-sessions'] }); addToast('Event cancelled', 'success'); },
-    onError: () => addToast('Failed to cancel event', 'error'),
+    networkMode: 'always',
+    mutationFn: ({ sessionId, reason }: { sessionId: string; reason: string }) =>
+      requestLifecycleStep(sessionId, { action: 'cancel', reason }).then((r) => r.data?.data as { notified?: number } | undefined),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['admin-sessions'] });
+      addToast(cancelledSentence(data?.notified ?? 0), 'success');
+      setCancelling(null);
+    },
   });
 
   const hardDeleteMutation = useMutation({
@@ -88,11 +100,13 @@ export default function AdminSessionsPage() {
                 {isSuperAdmin && sessionStatusPhase(session.status) === 'live' && (
                   <EndEventButton sessionId={session.id} className="px-3 text-xs" />
                 )}
-                {session.status !== 'cancelled' && session.status !== 'completed' && (
+                {/* Cancel is the event's own step before it starts (Task 2's rule); a live event is ended instead. */}
+                {sessionStatusPhase(session.status) === 'pre' && (
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={async () => { if (await ask({ title: `Cancel ${session.title || 'this event'}?`, body: 'It is called off for everyone registered.', confirmLabel: 'Cancel event', cancelLabel: 'Keep it', tone: 'danger' })) cancelMutation.mutate(session.id); }}
+                    data-testid="admin-event-cancel"
+                    onClick={() => setCancelling(session.id)}
                   >
                     <XCircle className="h-3.5 w-3.5 mr-1" /> Cancel
                   </Button>
@@ -111,6 +125,12 @@ export default function AdminSessionsPage() {
           </Card>
         ))}
       </div>
+      <CancelEventDialog
+        open={cancelling !== null}
+        busy={cancelMutation.isPending}
+        onClose={() => setCancelling(null)}
+        onConfirm={(reason) => (cancelling ? cancelMutation.mutateAsync({ sessionId: cancelling, reason }) : Promise.resolve())}
+      />
       {confirmDialog}
     </div>
   );

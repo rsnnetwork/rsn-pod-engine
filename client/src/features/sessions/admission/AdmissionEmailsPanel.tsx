@@ -11,7 +11,7 @@ import { formResolver } from '@/lib/form-resolver';
 import { cn } from '@/lib/utils';
 import { organiserSentence } from '../organiser-errors';
 import { FIELD, FieldError, LABEL, PRIMARY_BUTTON, QUIET_BUTTON, fieldBorder } from '../organiser-ui';
-import { ADMISSION_COPY, CSV_MAX_BYTES, addedSentence, splitPastedEmails } from './admission-text';
+import { ADMISSION_COPY, ADMISSION_EMAILS_PER_CALL, CSV_MAX_BYTES, addedSentence, csvHasTooManyRows, splitPastedEmails } from './admission-text';
 import { useAddAdmissionEmails } from './useAdmission';
 import AdmissionEmailList from './AdmissionEmailList';
 
@@ -43,6 +43,10 @@ export default function AdmissionEmailsPanel({ sessionId }: { sessionId: string 
       form.setError('text', { type: 'validate', message: ADMISSION_COPY.noAddresses });
       return;
     }
+    if (emails.length > ADMISSION_EMAILS_PER_CALL) {
+      form.setError('text', { type: 'validate', message: ADMISSION_COPY.tooManyPasted(emails.length) });
+      return;
+    }
     setOutcome(null);
     add.mutate({ emails, source: 'paste' }, {
       onSuccess: (result) => { setOutcome({ tone: 'done', text: addedSentence(result, repeats) }); form.reset({ text: '' }); },
@@ -59,6 +63,10 @@ export default function AdmissionEmailsPanel({ sessionId }: { sessionId: string 
       csv = await readCsv(file);
     } catch (err) {
       setOutcome({ tone: 'problem', text: err instanceof Error ? err.message : ADMISSION_COPY.csvUnreadable });
+      return;
+    }
+    if (csvHasTooManyRows(csv)) {
+      setOutcome({ tone: 'problem', text: ADMISSION_COPY.tooManyRows });
       return;
     }
     add.mutate({ csv, source: 'csv' }, {

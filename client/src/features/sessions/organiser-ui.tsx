@@ -18,10 +18,13 @@ export const DANGER_BUTTON = cn(BUTTON, 'border border-red-200 bg-white text-red
 export const SOLID_DANGER_BUTTON = cn(BUTTON, 'bg-red-600 text-white hover:bg-red-500');
 
 /** A card of the organiser's section: a heading, an optional line under it, an optional control at its right. */
-export function OrganiserCard({ title, hint, action, children, testId }: {
+export function OrganiserCard({ title, hint, action, children, testId, id }: {
   title: string; hint?: ReactNode; action?: ReactNode; children: ReactNode; testId: string;
+  /** An anchor other screens link to (/sessions/:id#groups); the card stops clear of the page's top bar. */
+  id?: string;
 }) {
   return (
+    <div id={id} className="min-w-0 scroll-mt-24">
     <Card data-testid={testId} className="!p-4 sm:!p-6 min-w-0 animate-fade-in-up">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0 flex-1 basis-48">
@@ -32,6 +35,7 @@ export function OrganiserCard({ title, hint, action, children, testId }: {
       </div>
       <div className="mt-4 min-w-0">{children}</div>
     </Card>
+    </div>
   );
 }
 

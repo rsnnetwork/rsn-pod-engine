@@ -2,7 +2,8 @@
 // The event's groups with how many people are in each, its round rules, the fallback, and the capacity notice the
 // server worked out for the people registered now (spec 05: RSN says when groups are uneven). Set up / Edit opens the
 // groups form; Remove groups asks first. Organisers only: anyone else gets no rules back, and the card draws nothing.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Pencil, Trash2, Users } from 'lucide-react';
 import type { EventGroupRules, EventGroupsView } from '@rsn/shared';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -13,6 +14,10 @@ import { FALLBACK_OPTIONS, GROUPS_COPY, ruleLine } from './group-form';
 import { useSaveEventGroups } from './useEventGroups';
 import CapacityNotice from './CapacityNotice';
 import GroupsEditorSheet from './GroupsEditorSheet';
+
+/** The groups card's anchor: /sessions/:id#groups (Task 13's board links to it). */
+export const GROUPS_ANCHOR = 'groups';
+const GROUPS_ANCHOR_HASH = `#${GROUPS_ANCHOR}`;
 
 interface Props {
   sessionId: string;
@@ -27,6 +32,16 @@ export default function EventGroupsCard({ sessionId, numberOfRounds, view }: Pro
   const save = useSaveEventGroups(sessionId);
   const [editing, setEditing] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  // Task 13's board links here (/sessions/:id#groups). The browser's own jump to the hash happens before this card has
+  // loaded, so once its data is in, it scrolls itself into view, once per arrival.
+  const { hash } = useLocation();
+  const scrolledFor = useRef<string | null>(null);
+  const loaded = !!view.data;
+  useEffect(() => {
+    if (hash !== GROUPS_ANCHOR_HASH || !loaded || scrolledFor.current === sessionId) return;
+    scrolledFor.current = sessionId;
+    document.getElementById(GROUPS_ANCHOR)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [hash, loaded, sessionId]);
 
   // Not an organiser (no rules in the answer) or refused: nothing to show.
   if (view.isError && notForThisViewer(view.error)) return null;
@@ -55,6 +70,7 @@ export default function EventGroupsCard({ sessionId, numberOfRounds, view }: Pro
 
   return (
     <OrganiserCard
+      id={GROUPS_ANCHOR}
       testId="event-groups-card"
       title={GROUPS_COPY.title}
       hint={GROUPS_COPY.hint}

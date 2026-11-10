@@ -12,7 +12,8 @@ export const ADMISSION_COPY = {
   saved: 'Admission saved.',
   clear: 'Use the usual rules again',
   clearTitle: 'Use the usual rules again?',
-  clearBody: 'The allowed emails and codes stay, but stop deciding who gets a place.',
+  clearBody: 'This turns the admission mode off. Who gets a place then follows only the event\'s "Who can join" setting, as it stands now. The allowed emails and codes stay on the list but no longer give anyone a place. Everyone who already has a place keeps it.',
+  clearConfirm: 'Turn admission off',
   cleared: 'Admission now follows the usual rules.',
   chooseMode: 'Choose who gets a place.',
   error: 'Admission could not be read just now.',
@@ -27,6 +28,8 @@ export const ADMISSION_COPY = {
   noAddresses: 'No email addresses found. Paste addresses separated by commas or new lines.',
   csvTooBig: 'That file is too big. Split it into files under 256 KB.',
   csvUnreadable: 'That file could not be read. Save it as a CSV and try again.',
+  tooManyPasted: (n: number) => `That is ${n.toLocaleString('en-GB')} addresses. Add at most 2,000 at a time: split the list and add the rest next.`,
+  tooManyRows: 'That file has more than 2,000 rows. Split it into files of at most 2,000 addresses and import each.',
   emailsEmpty: 'No allowed emails yet. Paste addresses or import a CSV.',
   emailsNoMatch: 'No allowed email matches that search.',
   emailsError: 'The allowed emails could not be read just now.',
@@ -50,6 +53,11 @@ export const ADMISSION_COPY = {
   copied: 'Copied',
   copyFailed: 'The codes could not be copied. Download them instead.',
   done: 'I have saved them',
+  closeTitle: 'Put these codes away?',
+  replaceTitle: 'Make new codes?',
+  unsavedBody: 'The codes on screen have not been downloaded or copied, and they can never be shown again. Codes nobody saved can only be revoked.',
+  closeConfirm: 'Put them away',
+  replaceConfirm: 'Make new codes',
   codesEmpty: 'No admission codes yet.',
   codesError: 'The admission codes could not be read just now.',
   revoke: 'Revoke',
@@ -64,6 +72,29 @@ export const ADMISSION_MODE_LABELS: Record<AdmissionMode, string> = {
   approval: 'Approval: you approve each person',
   restricted: 'Invitation only: allowed emails or admission codes',
 };
+
+/** The most addresses the server adds in one call (ADMISSION_EMAILS_MAX): more is refused as a whole, so the page says so first. */
+export const ADMISSION_EMAILS_PER_CALL = 2000;
+
+/**
+ * Whether a CSV has more address rows than one call takes: its non-empty lines, one of them allowed as a header (the
+ * server reads one address per row). Counted with a string scan, never a regular expression over the file.
+ */
+export function csvHasTooManyRows(text: string): boolean {
+  let rows = 0;
+  let filled = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\n') {
+      if (filled) rows++;
+      filled = false;
+    } else if (ch !== '\r' && ch !== ' ' && ch !== '\t' && ch !== ',' && ch !== ';') {
+      filled = true;
+    }
+  }
+  if (filled) rows++;
+  return rows > ADMISSION_EMAILS_PER_CALL + 1;
+}
 
 /** The largest CSV the page reads (the server takes 300 KB at most, with room for the request around it). */
 export const CSV_MAX_BYTES = 256 * 1024;

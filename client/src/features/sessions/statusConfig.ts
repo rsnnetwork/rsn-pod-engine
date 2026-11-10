@@ -128,7 +128,7 @@ const LIFECYCLE_COLORS: Record<EventLifecycleChip, 'default' | 'success' | 'warn
 };
 
 export function isEventLifecycleChip(value: unknown): value is EventLifecycleChip {
-  return typeof value === 'string' && value in LIFECYCLE_LABELS;
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(LIFECYCLE_LABELS, value);
 }
 
 export function lifecycleLabel(lifecycle: EventLifecycleChip): string {

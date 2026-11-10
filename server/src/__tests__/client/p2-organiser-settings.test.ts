@@ -12,7 +12,8 @@ import {
   LIFECYCLE_COPY, cancelledSentence, shownActions, titleMatches,
 } from '../../../../client/src/features/sessions/lifecycle/lifecycle-text';
 import {
-  ADMISSION_COPY, ADMISSION_MODE_LABELS, CSV_MAX_BYTES, addedSentence, codesCsv, codesFileName, codesText, modeUsesLists, splitPastedEmails,
+  ADMISSION_COPY, ADMISSION_EMAILS_PER_CALL, ADMISSION_MODE_LABELS, CSV_MAX_BYTES, addedSentence, codesCsv, codesFileName, codesText,
+  csvHasTooManyRows, modeUsesLists, splitPastedEmails,
 } from '../../../../client/src/features/sessions/admission/admission-text';
 import {
   FALLBACK_OPTIONS, PRESET_OPTIONS, RULE_MODE_OPTIONS, capacityLines, droppedGroupsWithPeople, formIssues, formValuesOf,
@@ -301,7 +302,7 @@ describe('matching groups', () => {
     expect(FALLBACK_OPTIONS.map((o) => o.label)).toEqual(['Leave people unmatched', 'Let them meet their own group']);
     expect(src.rulesEditor).toContain('{GROUPS_COPY.fallbackLegend}');
     expect(read('features/sessions/groups/group-form.ts')).toContain("fallbackLegend: 'When groups are uneven:'");
-    expect(src.groupsCard).toContain('{GROUPS_COPY.title}'.slice(1, -1));
+    expect(src.groupsCard).toMatch(/testId="event-groups-card"\s+title=\{GROUPS_COPY\.title\}/);
     expect(read('features/sessions/groups/group-form.ts')).toContain("title: 'Matching groups'");
   });
 
@@ -457,5 +458,78 @@ describe('phones: 44px buttons and nothing wider than 360px', () => {
         }
       }
     }
+  });
+});
+
+// ─── Fix round 1 (review of 748618c1..f2cf3370) ─────────────────────────────────────────────────────────────────────
+
+describe('fix round 1', () => {
+  const admin = read('features/admin/AdminSessionsPage.tsx');
+  const allClient = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) return e.name.startsWith('__test') ? [] : allClient(full);
+    return /\.tsx?$/.test(e.name) ? [full] : [];
+  });
+
+  it('the groups card is the #groups anchor Task 13\'s board links to, and scrolls itself into view once loaded', () => {
+    expect(src.groupsCard).toContain("export const GROUPS_ANCHOR = 'groups';");
+    expect(src.groupsCard).toMatch(/<OrganiserCard\s+id=\{GROUPS_ANCHOR\}/);
+    expect(src.ui).toMatch(/<div id=\{id\} className="min-w-0 scroll-mt-24">/);
+    // The browser's own jump happens before the card has data, so the card scrolls once it has.
+    expect(src.groupsCard).toMatch(/const \{ hash \} = useLocation\(\);/);
+    expect(src.groupsCard).toMatch(/if \(hash !== GROUPS_ANCHOR_HASH \|\| !loaded \|\| scrolledFor\.current === sessionId\) return;/);
+    expect(src.groupsCard).toMatch(/document\.getElementById\(GROUPS_ANCHOR\)\?\.scrollIntoView\(/);
+    // The hook runs before the card's early returns (the rules of hooks).
+    expect(src.groupsCard.indexOf('useEffect(() => {')).toBeLessThan(src.groupsCard.indexOf('if (view.isError && notForThisViewer'));
+  });
+
+  it('fresh codes nobody downloaded or copied are not thrown away without asking', () => {
+    expect(src.codesPanel).toMatch(/const \[kept, setKept\] = useState\(false\);/);
+    expect(src.codesPanel).toMatch(/if \(!made \|\| kept\) return true;/);
+    // A second batch asks first, and so does "I have saved them".
+    expect(src.codesPanel).toMatch(/const submit = form\.handleSubmit\(async \(\{ count, label \}\) => \{\s*if \(!\(await mayDiscard\('replace'\)\)\) return;/);
+    expect(src.codesPanel).toMatch(/onClick=\{async \(\) => \{ if \(await mayDiscard\('close'\)\) setMade\(null\); \}\}/);
+    // Download and a successful copy count as kept.
+    expect(src.codesPanel).toMatch(/download\(codesCsv\(made\.codes, made\.label\), codesFileName\(title\)\); setKept\(true\);/);
+    expect(src.codesPanel).toMatch(/setCopied\(true\);\s*setKept\(true\);/);
+    expect(src.codesPanel).toMatch(/\{confirmDialog\}/);
+    expect(ADMISSION_COPY.unsavedBody).toMatch(/can never be shown again/);
+  });
+
+  it('one cancel path: the admin events list cancels through Task 2\'s step with a reason, and nothing calls the legacy DELETE', () => {
+    expect(admin).toMatch(/requestLifecycleStep\(sessionId, \{ action: 'cancel', reason \}\)/);
+    expect(admin).toMatch(/<CancelEventDialog/);
+    expect(admin).toMatch(/\{sessionStatusPhase\(session\.status\) === 'pre' && \(/);
+    expect(src.useLifecycle).toMatch(/export function requestLifecycleStep\(sessionId: string, step: LifecycleStep\)/);
+    const legacy = allClient(CLIENT_SRC).filter((f) => /api\.delete\(`\/sessions\/\$\{[\w.?!]+\}`\)/.test(fs.readFileSync(f, 'utf8')));
+    expect(legacy.map((f) => path.relative(CLIENT_SRC, f))).toEqual([]);
+  });
+
+  it('a paste or a CSV over the server\'s 2,000 addresses a call is refused on the page, in words', () => {
+    expect(ADMISSION_EMAILS_PER_CALL).toBe(2000);
+    expect(ADMISSION_COPY.tooManyPasted(2500)).toBe('That is 2,500 addresses. Add at most 2,000 at a time: split the list and add the rest next.');
+    expect(src.emailsPanel).toMatch(/if \(emails\.length > ADMISSION_EMAILS_PER_CALL\) \{\s*form\.setError\('text', \{ type: 'validate', message: ADMISSION_COPY\.tooManyPasted\(emails\.length\) \}\);/);
+    expect(src.emailsPanel).toMatch(/if \(csvHasTooManyRows\(csv\)\) \{\s*setOutcome\(\{ tone: 'problem', text: ADMISSION_COPY\.tooManyRows \}\);/);
+    const rows = (n: number, header = true) => `${header ? 'email\n' : ''}${Array.from({ length: n }, (_, i) => `p${i}@example.com`).join('\r\n')}\n\n , \n`;
+    expect(csvHasTooManyRows(rows(2000))).toBe(false);
+    expect(csvHasTooManyRows(rows(2001, false))).toBe(false);
+    expect(csvHasTooManyRows(rows(2001))).toBe(true);
+    expect(csvHasTooManyRows('')).toBe(false);
+    const fn = read('features/sessions/admission/admission-text.ts');
+    const body = fn.slice(fn.indexOf('export function csvHasTooManyRows'), fn.indexOf('/** The largest CSV'));
+    expect(body).not.toMatch(/\.split\(|\.match\(|\.replace\(|new RegExp/);
+  });
+
+  it('"Use the usual rules again" says plainly what it does', () => {
+    expect(ADMISSION_COPY.clearBody).toBe('This turns the admission mode off. Who gets a place then follows only the event\'s "Who can join" setting, as it stands now. The allowed emails and codes stay on the list but no longer give anyone a place. Everyone who already has a place keeps it.');
+    expect(src.admissionCard).toMatch(/confirmLabel: ADMISSION_COPY\.clearConfirm \}/);
+    expect(ADMISSION_COPY.clearConfirm).toBe('Turn admission off');
+  });
+
+  it('minors: the chip guard ignores prototype names; the groups form uses the server\'s default rounds', () => {
+    expect(isEventLifecycleChip('toString')).toBe(false);
+    expect(isEventLifecycleChip('constructor')).toBe(false);
+    expect(isEventLifecycleChip('archived')).toBe(true);
+    expect(src.settings).toMatch(/Number\(event\.config\?\.numberOfRounds\) \|\| DEFAULT_SESSION_CONFIG\.numberOfRounds/);
   });
 });

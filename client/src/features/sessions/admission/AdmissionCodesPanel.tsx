@@ -9,6 +9,7 @@ import { Check, Copy, Download, Loader2, AlertTriangle } from 'lucide-react';
 import type { GeneratedAdmissionCode } from '@rsn/shared';
 import { formResolver } from '@/lib/form-resolver';
 import { cn } from '@/lib/utils';
+import { useConfirm } from '@/hooks/useConfirm';
 import { useToastStore } from '@/stores/toastStore';
 import { organiserSentence } from '../organiser-errors';
 import { FIELD, FieldError, LABEL, PRIMARY_BUTTON, QUIET_BUTTON, fieldBorder } from '../organiser-ui';
@@ -41,11 +42,23 @@ export default function AdmissionCodesPanel({ sessionId, title }: { sessionId: s
   const labelId = useId();
   const [made, setMade] = useState<{ codes: GeneratedAdmissionCode[]; label: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
+  // Whether the batch on screen has been downloaded or copied: until then, putting it away asks first (fix round 1).
+  const [kept, setKept] = useState(false);
+  const { ask, confirmDialog } = useConfirm();
   const form = useForm<CodesValues>({ defaultValues: { count: 10, label: '' }, resolver: formResolver(codesSchema) });
 
-  const submit = form.handleSubmit(({ count, label }) => {
+  /** True when nothing unsaved is on screen, or the organiser says to let it go. */
+  const mayDiscard = async (question: 'replace' | 'close') => {
+    if (!made || kept) return true;
+    return ask(question === 'replace'
+      ? { title: ADMISSION_COPY.replaceTitle, body: ADMISSION_COPY.unsavedBody, confirmLabel: ADMISSION_COPY.replaceConfirm, tone: 'danger' }
+      : { title: ADMISSION_COPY.closeTitle, body: ADMISSION_COPY.unsavedBody, confirmLabel: ADMISSION_COPY.closeConfirm, tone: 'danger' });
+  };
+
+  const submit = form.handleSubmit(async ({ count, label }) => {
+    if (!(await mayDiscard('replace'))) return;
     generate.mutate({ count, ...(label ? { label } : {}) }, {
-      onSuccess: (codes) => { setMade({ codes, label: label || null }); setCopied(false); },
+      onSuccess: (codes) => { setMade({ codes, label: label || null }); setCopied(false); setKept(false); },
       onError: (err) => form.setError('count', { type: 'server', message: organiserSentence(err, ADMISSION_COPY.fallback) }),
     });
   });
@@ -55,6 +68,7 @@ export default function AdmissionCodesPanel({ sessionId, title }: { sessionId: s
     try {
       await navigator.clipboard.writeText(codesText(made.codes));
       setCopied(true);
+      setKept(true);
     } catch {
       addToast(ADMISSION_COPY.copyFailed, 'error');
     }
@@ -106,19 +120,22 @@ export default function AdmissionCodesPanel({ sessionId, title }: { sessionId: s
             {made.codes.map((c) => <li key={c.id} data-testid="admission-code-plain" className="select-all px-1 py-0.5 tracking-wide">{c.code}</li>)}
           </ul>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => download(codesCsv(made.codes, made.label), codesFileName(title))} className={QUIET_BUTTON}>
+            <button type="button" onClick={() => { download(codesCsv(made.codes, made.label), codesFileName(title)); setKept(true); }} className={QUIET_BUTTON}>
               <Download className="h-4 w-4" aria-hidden="true" /> {ADMISSION_COPY.downloadCsv}
             </button>
             <button type="button" onClick={() => void copyAll()} className={QUIET_BUTTON}>
               {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
               <span aria-live="polite">{copied ? ADMISSION_COPY.copied : ADMISSION_COPY.copyAll}</span>
             </button>
-            <button type="button" onClick={() => setMade(null)} className={PRIMARY_BUTTON}>{ADMISSION_COPY.done}</button>
+            <button type="button" data-testid="admission-codes-done" onClick={async () => { if (await mayDiscard('close')) setMade(null); }} className={PRIMARY_BUTTON}>
+              {ADMISSION_COPY.done}
+            </button>
           </div>
         </div>
       )}
 
       <AdmissionCodeList sessionId={sessionId} />
+      {confirmDialog}
     </section>
   );
 }

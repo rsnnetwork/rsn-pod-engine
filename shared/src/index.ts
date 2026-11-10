@@ -164,7 +164,7 @@ export const EVENT_VISIBILITY_KEYS = _EVENT_VISIBILITY_KEYS;
 export const defaultEventVisibility = _defaultEventVisibility;
 export const isEventVisibility = _isEventVisibility;
 // Part 2 Task 4 (10 Nov 2026): who gets a place on an event (sessions.admission_mode), a real VALUE the forms list.
-import { ADMISSION_MODES as _ADMISSION_MODES } from './types/session';
+import { ADMISSION_MODES as _ADMISSION_MODES, DEFAULT_SESSION_CONFIG as _DEFAULT_SESSION_CONFIG } from './types/session';
 export const ADMISSION_MODES = _ADMISSION_MODES;
 // The RSN Call link (Part 2 foundation, Task 6): the one path constant, the call code's alphabet and its readers, and the
 // name rule of the details step. Real VALUES the server's emails and the client's router read, so each has its own named
@@ -183,6 +183,8 @@ export const CALL_DISPLAY_NAME_MAX = _CALL_DISPLAY_NAME_MAX;
 export const callLinkPath = _callLinkPath;
 export const normaliseCallCode = _normaliseCallCode;
 export const cleanCallDisplayName = _cleanCallDisplayName;
+// Part 2 Task 11: the event defaults, a VALUE the organiser's groups form reads (the rounds the server checks rules against).
+export const DEFAULT_SESSION_CONFIG = _DEFAULT_SESSION_CONFIG;
 export const formatRule = _formatRule;
 export const podTypeRule = _podTypeRule;
 export const isEventFormat = _isEventFormat;

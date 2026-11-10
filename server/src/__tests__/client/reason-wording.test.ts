@@ -15,9 +15,10 @@ import * as ts from 'typescript';
 const SRC = path.join(__dirname, '../../../../client/src');
 const RSN = /\bRSN\b/;
 // The one name the 10 Nov 2026 spec gives in RSN's own words: the "RSN Call link" anyone can open to join an event (its
-// final naming is an open question for Stefan, spec 13). Only that phrase is let through; any other RSN still fails.
-const SPEC_NAMES = ['RSN Call'];
-const withoutSpecNames = (text: string) => SPEC_NAMES.reduce((t, name) => t.split(name).join(''), text);
+// final naming is an open question for Stefan, spec 13). Only that exact phrase, as a whole phrase, is let through (fix
+// round 1): "RSN Call links", "RSN Calls", "RSN Caller" and any other RSN still fail.
+const SPEC_NAME = /\bRSN Call link\b/g;
+const withoutSpecNames = (text: string) => text.replace(SPEC_NAME, '');
 
 // Files excused from the rule while another task rewrote them. The 19 Oct batch has landed, so none is excused now.
 // An entry whose files no longer say RSN fails the test below, so none can outlive its reason and quietly excuse a
@@ -183,8 +184,13 @@ describe('the scan itself: a guard that cannot fail guards nothing', () => {
     expect(scan("const A = () => <p>{'Welcome to RSN'}</p>;")).toEqual(['Welcome to RSN']);
   });
 
-  it('lets through only the spec\'s own "RSN Call" name (Part 2 Task 11), never another RSN beside it', () => {
+  it('lets through only the exact phrase "RSN Call link" (Part 2 Task 11), never another RSN beside it', () => {
     expect(scan("const a = 'RSN Call link';")).toEqual([]);
+    expect(scan("const a = 'Copy your RSN Call link.';")).toEqual([]);
+    expect(scan("const a = 'RSN Call links';")).toEqual(['RSN Call links']);
+    expect(scan("const a = 'RSN Calls';")).toEqual(['RSN Calls']);
+    expect(scan("const a = 'RSN Caller';")).toEqual(['RSN Caller']);
+    expect(scan("const a = 'RSN Call';")).toEqual(['RSN Call']);
     expect(scan("const a = 'Your RSN Call link from RSN';")).toEqual(['Your RSN Call link from RSN']);
     expect(scan("const a = 'RSN calls';")).toEqual(['RSN calls']);
   });

@@ -18,7 +18,8 @@ export interface LifecycleStep {
   confirmTitle?: string;
 }
 
-function request(sessionId: string, step: LifecycleStep) {
+/** Task 2's route for one step: the one way the preview client takes it (the event page and the admin events list). */
+export function requestLifecycleStep(sessionId: string, step: LifecycleStep) {
   const base = `/sessions/${sessionId}`;
   switch (step.action) {
     case 'publish': return api.post(`${base}/publish`);
@@ -49,7 +50,7 @@ export function useEventLifecycle(sessionId: string, opts: { onDone?: (step: Lif
 
   return useMutation({
     networkMode: 'always',
-    mutationFn: (step: LifecycleStep) => request(sessionId, step).then((r) => r.data?.data as { notified?: number } | undefined),
+    mutationFn: (step: LifecycleStep) => requestLifecycleStep(sessionId, step).then((r) => r.data?.data as { notified?: number } | undefined),
     onSuccess: (data, step) => {
       const sentence = doneSentence(step, data);
       if (sentence) addToast(sentence, 'success');
