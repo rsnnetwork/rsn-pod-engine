@@ -51,7 +51,7 @@ const page = { entries: [], nextCursor: null };
 beforeEach(() => {
   jest.clearAllMocks();
   // authenticate() checks the account is still active; the admin path checks the event exists.
-  mockQuery.mockResolvedValue({ rows: [{ status: 'active', id: SESSION }] });
+  mockQuery.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member', id: SESSION }] });
   mockList.mockResolvedValue(page);
 });
 
@@ -84,7 +84,7 @@ describe('GET /sessions/:id/audit', () => {
 
     mockQuery.mockReset();
     // The sign-in check is cached for a minute; only the existence read reaches the database now.
-    mockQuery.mockImplementation(async (sql: string) => ({ rows: /FROM sessions/.test(sql) ? [] : [{ status: 'active' }] }));
+    mockQuery.mockImplementation(async (sql: string) => ({ rows: /FROM sessions/.test(sql) ? [] : [{ status: 'active', account_kind: 'member' }] }));
     const gone = await request(app).get(`/sessions/${SESSION}/audit`).set('Authorization', `Bearer ${token('admin')}`);
     expect(gone.status).toBe(404);
   });

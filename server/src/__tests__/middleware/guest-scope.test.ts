@@ -96,6 +96,7 @@ import groupRoutes from '../../routes/groups';
 import notificationPrefsRoutes from '../../routes/notification-prefs';
 import postEventMessageRoutes from '../../routes/post-event-message';
 import eventChatRoutes from '../../routes/event-chat';
+import eventAuditRoutes from '../../routes/event-audit';
 
 // The API exactly as index.ts mounts it, in the same order (the last test below holds the two lists together).
 const MOUNTS: Array<[string, express.Router]> = [
@@ -111,6 +112,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/sessions', hostRoutes],
   ['/api/sessions', postEventMessageRoutes],
   ['/api/sessions', eventChatRoutes],
+  ['/api/sessions', eventAuditRoutes],
   ['/api/join-requests', joinRequestRoutes],
   ['/api/admin', adminRoutes],
   ['/api/admin', adminInspectRoutes],
@@ -180,6 +182,8 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['get', `/api/sessions/${EVENT}/post-event-message/eligibility`],
   ['delete', `/api/sessions/${EVENT}/chat/${OTHER}`],
   ['get', `/api/sessions/${EVENT}/feedback`],
+  ['get', `/api/sessions/${EVENT}/audit`],
+  ['post', `/api/pokes/${OTHER}/withdraw`],
   ['get', '/api/invites/candidates'],
   ['get', '/api/admin/stats'],
   ['get', '/api/onboarding/status'],
