@@ -790,3 +790,38 @@ describe('fix round 1 minors', () => {
     expect(page).toContain('This event has no rounds to plan yet.');
   });
 });
+
+// ─── Preview smoke, 11 Nov: the basket was below the fold, so a drag from the rooms could not reach it ───
+
+describe('while a seated person is dragged, a basket drop zone is pinned to the foot of the window', () => {
+  const Basket = loadClientModule(`${SCHEDULE_DIR}/BasketTray.tsx`, { 'lucide-react': iconStandIns }).default as (p: Record<string, unknown>) => JSX.Element;
+  const board = makeBoard();
+  const draw = (dragging: unknown, extra: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(Basket, {
+    board, round: 1, basket: board.rounds[0].basket, canEdit: true, draggable: true, filter: NO_FILTER, selectedId: null, dragging,
+    busy: false, onSelect: () => undefined, onDragStart: () => undefined, onDragEnd: () => undefined, onDrop: () => undefined,
+    onRedistribute: () => undefined, ...extra,
+  }));
+
+  it('appears for a seated person on the move, after the basket (it only adds height at the end), sticky at the bottom', () => {
+    const html = draw({ round: 1, userId: 'ann', fromRoom: 1 });
+    expect(html).toContain('data-testid="board-basket-dropzone"');
+    expect(html.indexOf('data-testid="board-basket"')).toBeLessThan(html.indexOf('data-testid="board-basket-dropzone"'));
+    expect(html).toMatch(/data-testid="board-basket-dropzone" class="sticky bottom-\[max\(8px,env\(safe-area-inset-bottom\)\)\] z-20 flex min-h-\[64px\]/);
+    expect(html).toContain('Drop here to move them to the unassigned basket');
+    // The basket keeps its people and its size: nothing the pointer aims at moves when the drag starts.
+    expect(html).toContain('Funders: </span><span class="font-medium">Fay</span>');
+  });
+
+  it('is not there without a drag, for someone already waiting, while a write is on its way, or with editing off', () => {
+    expect(draw(null)).not.toContain('board-basket-dropzone');
+    expect(draw({ round: 1, userId: 'fay', fromRoom: null })).not.toContain('board-basket-dropzone');
+    expect(draw({ round: 1, userId: 'ann', fromRoom: 1 }, { busy: true })).not.toContain('board-basket-dropzone');
+    expect(draw({ round: 1, userId: 'ann', fromRoom: 1 }, { canEdit: false })).not.toContain('board-basket-dropzone');
+  });
+
+  it('takes the drop exactly as the basket does: an unassign for the round', () => {
+    const tray = code(`${SCHEDULE_DIR}/BasketTray.tsx`);
+    expect(tray).toMatch(/data-testid="board-basket-dropzone"\s*onDragOver=\{dragOverWith\(setOverZone\)\}\s*onDragLeave=\{\(\) => setOverZone\(false\)\}\s*onDrop=\{drop\}/);
+    expect(tray).toMatch(/const drop = \(e: DragEvent<HTMLElement>\) => \{\s*if \(!accepts\) return;\s*e\.preventDefault\(\);[\s\S]*?onDrop\(\{ kind: 'basket', round \}\);/);
+  });
+});
