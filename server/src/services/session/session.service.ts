@@ -24,6 +24,7 @@ import { LIVE_STATUSES, tokenMainRoomOf } from './main-room';
 import {
   archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, runsEvent, visibleEventsSql,
 } from './event-access';
+import { applyRegistrationGroups } from './event-groups.service';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 import { notifyEventRescheduled } from './event-notices';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
@@ -470,15 +471,21 @@ export async function registerParticipant(
   // that asks for approval takes them (a shared link records who used it only after the registration).
   // T11 (1 Nov 2026): `approvedRequest` says the host has approved this person's request to join an event that asks
   // for approval (the approve route), so that event takes them; capacity and their own row still decide.
-  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean },
+  // 10 Nov 2026 spec, Part 2 Task 5: `groupKeys` is the person's answer to an event's required group question,
+  // written as their own choice in this transaction. An event without groups ignores it.
+  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean; groupKeys?: string[] },
 ): Promise<SessionParticipant & { isNewRegistration: boolean }> {
   const invitedAt = options?.personalInviteCreatedAt ?? null;
   const viaInvite = !!options?.viaInvite || !!invitedAt;
   const participant = await transaction(async (client) => {
     // Read session without lock — ON CONFLICT handles concurrent inserts safely.
     // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously.
-    const sessionResult = await client.query<Session>(
-      `SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = $1`,
+    // Part 2 Task 5: whether the event has matching groups is read in the same row, so an event without them
+    // (every event before groups existed) makes exactly the reads it always made.
+    const sessionResult = await client.query<Session & { hasEventGroups?: boolean }>(
+      `SELECT ${SESSION_COLUMNS},
+              EXISTS (SELECT 1 FROM event_groups eg WHERE eg.session_id = sessions.id) AS "hasEventGroups"
+         FROM sessions WHERE id = $1`,
       [sessionId]
     );
     if (sessionResult.rows.length === 0) {
@@ -601,6 +608,15 @@ export async function registerParticipant(
     const readmits = existing.rows[0]?.status === 'removed' && liftedByPersonalInvite(existing.rows[0].left_at, invitedAt);
     if (full && !readmits) {
       throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
+    }
+
+    // Part 2 Task 5: an event with matching groups asks which group the person is in before it gives a place (a
+    // place someone already holds, and a removal, are answered below as before). Only such an event reads further.
+    const heldStatus = existing.rows[0]?.status;
+    const givesPlace = !heldStatus
+      || (!['registered', 'checked_in', 'in_lobby', 'in_round'].includes(heldStatus) && (heldStatus !== 'removed' || readmits));
+    if (session.hasEventGroups && givesPlace) {
+      await applyRegistrationGroups(client, sessionId, userId, userRole, options?.groupKeys);
     }
 
     if (existing.rows.length > 0) {

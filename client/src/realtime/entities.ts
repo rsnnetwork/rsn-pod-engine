@@ -57,6 +57,8 @@ export const E = {
   sessionReactions: (sessionId: string) => `session:${sessionId}:reactions`,
   /** Part 2 (10 Nov 2026): who did what to an event, for its organisers. */
   sessionAudit: (sessionId: string) => `session:${sessionId}:audit`,
+  /** 10 Nov 2026 spec, Part 2 Task 5: the event's matching groups, round rules and who is in which group. */
+  sessionGroups: (sessionId: string) => `session:${sessionId}:groups`,
 
   // Match (in-event)
   match: (matchId: string) => `match:${matchId}`,

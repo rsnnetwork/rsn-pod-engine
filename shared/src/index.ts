@@ -248,3 +248,29 @@ export const ENDONYMS = _ENDONYMS;
 export const fold = _fold;
 export const isCountryOnly = _isCountryOnly;
 export const isLocationComplete = _isLocationComplete;
+// Matching groups and round rules, the one room checker and the rounds' estimated starts (10 Nov 2026 spec, Part 2
+// Task 5): VALUES the engine, the matching board and the organiser's screens call, so each has its own statically
+// analysable named export, same as OPENINGS above.
+export * from './events/group-rules';
+export * from './events/room-check';
+export * from './events/round-times';
+import {
+  GROUP_LIMITS as _GROUP_LIMITS, DEFAULT_GROUP_QUESTION as _DEFAULT_GROUP_QUESTION, GROUP_PRESETS as _GROUP_PRESETS,
+  isGroupKey as _isGroupKey, groupPairKey as _groupPairKey, ruleForRound as _ruleForRound,
+  groupsAllowed as _groupsAllowed, validateGroupRules as _validateGroupRules,
+  explainRoundCapacity as _explainRoundCapacity,
+} from './events/group-rules';
+import { checkRoom as _checkRoom, checkRound as _checkRound } from './events/room-check';
+import { estimatedRoundStarts as _estimatedRoundStarts } from './events/round-times';
+export const GROUP_LIMITS = _GROUP_LIMITS;
+export const DEFAULT_GROUP_QUESTION = _DEFAULT_GROUP_QUESTION;
+export const GROUP_PRESETS = _GROUP_PRESETS;
+export const isGroupKey = _isGroupKey;
+export const groupPairKey = _groupPairKey;
+export const ruleForRound = _ruleForRound;
+export const groupsAllowed = _groupsAllowed;
+export const validateGroupRules = _validateGroupRules;
+export const explainRoundCapacity = _explainRoundCapacity;
+export const checkRoom = _checkRoom;
+export const checkRound = _checkRound;
+export const estimatedRoundStarts = _estimatedRoundStarts;

@@ -103,6 +103,10 @@ export const ErrorCodes = {
   EVENT_ALREADY_CANCELLED: 'EVENT_ALREADY_CANCELLED',    // 409; a second cancel sends no second notice
   EVENT_HAS_REGISTRATIONS: 'EVENT_HAS_REGISTRATIONS',    // 409; unpublish refused: people hold places, cancel instead
   EVENT_LIFECYCLE_NOT_ALLOWED: 'EVENT_LIFECYCLE_NOT_ALLOWED',  // 409; that lifecycle step does not apply in the event's state
+  // Matching groups (10 Nov 2026 spec, Part 2 Task 5): an event with groups asks each participant which group they are in.
+  EVENT_GROUP_REQUIRED: 'EVENT_GROUP_REQUIRED',          // 409; the event has groups and this person has none and chose none
+  EVENT_GROUP_UNKNOWN: 'EVENT_GROUP_UNKNOWN',            // 400; a group key the event does not have, or more groups than it allows
+  EVENT_GROUP_ALREADY_CHOSEN: 'EVENT_GROUP_ALREADY_CHOSEN', // 409; a participant's own group is set once; an organiser changes it
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

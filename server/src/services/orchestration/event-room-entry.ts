@@ -43,6 +43,11 @@ export function eventRoomRefusal(eventStatus: string, registrationCode: string |
   if (registrationCode === ErrorCodes.GUEST_MEMBERSHIP_REQUIRED) {
     return { code: ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, message: GUEST_REGISTRATION_MESSAGE };
   }
+  // Part 2 Task 5 (10 Nov 2026 spec): an event with matching groups asks which group someone is in before it gives
+  // a place, and the live page's own registration cannot ask, so it sends them to the event page.
+  if (registrationCode === ErrorCodes.EVENT_GROUP_REQUIRED) {
+    return { code: ErrorCodes.EVENT_GROUP_REQUIRED, message: 'Choose your group for this event first, on the event page.' };
+  }
   if (registrationCode === ErrorCodes.AUTH_FORBIDDEN) {
     return { code: ErrorCodes.AUTH_FORBIDDEN, message: 'This event is only open to its pod\'s members.' };
   }

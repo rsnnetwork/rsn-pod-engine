@@ -18,6 +18,7 @@ import { canSeeEvent, readEventAccessFacts, summariseEventAccess } from '../serv
 import { readEventCircle } from '../services/circle/circle-events.service';
 import { summariseEventLifecycle } from '../services/session/event-lifecycle.service';
 import * as eventRequests from '../services/session/event-requests.service';
+import { fanoutEventGroups } from '../services/session/event-groups.service';
 import { eventChatReadLimiter, eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
 // 27 May — live main-room presence (heartbeat) to gate the event-plan "not matched" counts.
@@ -25,7 +26,7 @@ import { activeSessions } from '../services/orchestration/state/session-state';
 import { getCanonicalConnectedSet } from '../services/orchestration/state/canonical-state';
 import {
   ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
-  EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes,
+  EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes, GROUP_LIMITS, isGroupKey,
 } from '@rsn/shared';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
@@ -554,12 +555,22 @@ router.post(
 
 // ─── POST /sessions/:id/register ────────────────────────────────────────────
 
+// 10 Nov 2026 spec, Part 2 Task 5: an event with matching groups asks which group the person is in; the answer
+// may come with the registration as `groupKeys`. Every other field, and no body at all, reads as before.
+const registerBodySchema = z.object({
+  groupKeys: z.array(z.string().refine(isGroupKey, "That group isn't one of this event's groups.")).max(GROUP_LIMITS.maxGroups).optional(),
+}).passthrough();
+
 router.post(
   '/:id/register',
   authenticate,
+  validate(registerBodySchema.default({})),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const participant = await sessionService.registerParticipant(req.params.id, req.user!.userId, req.user!.role);
+      const { groupKeys } = req.body as z.infer<typeof registerBodySchema>;
+      const participant = await sessionService.registerParticipant(
+        req.params.id, req.user!.userId, req.user!.role, groupKeys ? { groupKeys } : undefined,
+      );
       // Phase May-19 realtime — broadcast so every pod member +
       // registered participant sees the new self-registration without
       // a refresh (badge counts, "Registered" pill on the event card).
@@ -580,6 +591,8 @@ router.post(
           E.sessionParticipants(req.params.id),
         ]).catch(() => {});
       } catch { /* non-fatal */ }
+      // Part 2 Task 5: a group chosen with the registration changes the event's group counts.
+      if (groupKeys?.length) void fanoutEventGroups(req.params.id);
 
       // 26 May (Stefan) — self-registration now sends a "you're registered"
       // confirmation with a calendar invite (.ics) attached, mirroring what

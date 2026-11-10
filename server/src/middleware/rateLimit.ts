@@ -678,7 +678,8 @@ export const postEventMessageLimiter = rateLimit({
 // reads; a page is 50 messages, so 60 a minute is far more than a person scrolling back reads. Taking a
 // message down has a smaller allowance of its own. Keyed per member: the routes sign in first.
 // Since 2 Nov 2026 (final fix wave SM4) the event's Requests list (GET /sessions/:id/requests) shares the read
-// allowance: it too can be asked for by id, and the organisers' card reads it once per change.
+// allowance: it too can be asked for by id, and the organisers' card reads it once per change. So does an event's
+// groups read (GET /sessions/:id/groups, 10 Nov 2026 spec, Part 2 Task 5), for the same reasons.
 export const eventChatReadLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -756,4 +757,17 @@ export const eventRequestLimiter = rateLimit({
     };
     res.status(429).json(response);
   },
+});
+
+// Matching groups (10 Nov 2026 spec, Part 2 Task 5): an organiser saving an event's groups and round rules, or
+// putting a person in a group. Thirty a minute per person is far more than anyone edits by hand, while a runaway
+// client is stopped. The groups read shares eventChatReadLimiter, the per-event read allowance.
+export const groupsWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-groups-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
