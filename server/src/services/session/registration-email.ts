@@ -9,8 +9,11 @@ import logger from '../../config/logger';
 import * as emailService from '../email/email.service';
 import { buildSessionCalendarEvent } from '../calendar/calendar.service';
 
-/** The "you're registered" email with its calendar invite. Best-effort: a failure is logged, never thrown. */
-export async function sendRegistrationEmail(sessionId: string, userId: string): Promise<void> {
+/**
+ * The "you're registered" email with its calendar invite. Best-effort: a failure is logged, never thrown. `baseUrl` is the
+ * site its link opens: the main app unless the caller already resolved an allowed one (the RSN Call link, client-origin.ts).
+ */
+export async function sendRegistrationEmail(sessionId: string, userId: string, baseUrl: string = config.clientUrl): Promise<void> {
   try {
     const u = (await query<{ email: string; display_name: string | null }>(
       `SELECT email, display_name FROM users WHERE id = $1`,
@@ -21,7 +24,7 @@ export async function sendRegistrationEmail(sessionId: string, userId: string): 
     await emailService.sendSessionRegistrationConfirmationEmail(u.email, {
       recipientName: u.display_name || undefined,
       sessionTitle: calendarEvent?.title ?? 'your REASON event',
-      sessionUrl: `${config.clientUrl}/sessions/${sessionId}`,
+      sessionUrl: `${baseUrl}/sessions/${sessionId}`,
       calendarEvent,
     });
   } catch (err) {

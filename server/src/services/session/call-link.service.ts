@@ -16,7 +16,7 @@ import {
   type EventLifecycle, type EventVisibility, type UserRole,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
-import config from '../../config';
+import { clientOriginConfig, firstAllowedClientBaseUrl } from '../identity/client-origin';
 import logger from '../../config/logger';
 import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
@@ -94,14 +94,19 @@ async function requireOrganiser(sessionId: string, actor: Actor): Promise<void> 
   if (!allowed) throw new ForbiddenError('Only the people running this event can manage its link.');
 }
 
-/** The event's link for its organisers: the code, the client path and the full address. */
+/**
+ * The event's link for its organisers: the code, the client path and the full address. The address is on the site they
+ * asked from (the request's Origin) when it is one of ours by sign-in's exact list, else the main app.
+ */
 export async function getCallLinkForOrganiser(
   sessionId: string,
   actor: Actor,
+  opts: { origin?: string } = {},
 ): Promise<{ code: string; path: string; url: string }> {
   await requireOrganiser(sessionId, actor);
   const code = await ensureCallCode(sessionId);
-  return { code, path: callLinkPath(code), url: `${config.clientUrl}${callLinkPath(code)}` };
+  const base = firstAllowedClientBaseUrl([opts.origin], clientOriginConfig());
+  return { code, path: callLinkPath(code), url: `${base}${callLinkPath(code)}` };
 }
 
 /**

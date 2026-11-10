@@ -37,7 +37,7 @@ import { AppError, ValidationError } from '../../middleware/errors';
 import { fanoutProfileChange, fanoutSessionEntities } from '../../realtime/fanout';
 import { E } from '../../realtime/entities';
 import * as identity from '../identity/identity.service';
-import { clientOriginConfig, resolveClientBaseUrl } from '../identity/client-origin';
+import { clientOriginConfig, firstAllowedClientBaseUrl } from '../identity/client-origin';
 import { isEmailTypeEnabled, sendCallEntryCodeEmail } from '../email/email.service';
 import {
   admissionModeOf, callLinkNotFound, ensureCallCode, eventForViewer, findCallEvent,
@@ -169,11 +169,13 @@ async function newcomerRefusal(event: CallEventRow, email: string, admissionCode
  * Only the event decides anything here (unknown 404, over 409, the admin switch 503), and before the address is read.
  * The send leaves the request path, so a slow or failing provider never tells one address from another (a failure is
  * logged). In development the code comes back in the answer too (never in production).
+ * The email's button opens the site the person asked from (the page's `clientUrl`, else the request's Origin), when it
+ * is one of our sites by sign-in's exact list (client-origin.ts): the preview opens the preview. Else the main app.
  */
 export async function sendCallEntryCode(
   code: string,
   email: string,
-  opts: { clientUrl?: string } = {},
+  opts: { clientUrl?: string; origin?: string } = {},
 ): Promise<{ sent: true; devCode?: string }> {
   const event = await publishedCallEvent(code);
   const closed = closedEventRefusal(lifecycleOfCallEvent(event));
@@ -184,7 +186,7 @@ export async function sendCallEntryCode(
 
   const address = email.trim().toLowerCase();
   const { token, code: entryCode } = await identity.issueEventEntryLink(address, event.id);
-  const base = resolveClientBaseUrl(opts.clientUrl, clientOriginConfig());
+  const base = firstAllowedClientBaseUrl([opts.clientUrl, opts.origin], clientOriginConfig());
   const link = `${base}${callLinkPath(event.call_code)}?${new URLSearchParams({ entry: token }).toString()}`;
   const message = { eventTitle: event.title, code: entryCode, link };
 
@@ -360,6 +362,7 @@ export async function enterCall(
   userId: string,
   role: UserRole,
   input: { displayName?: string; groupKeys?: string[]; admissionCode?: string },
+  opts: { origin?: string } = {},
 ): Promise<CallEntryState> {
   const event = await eventForViewer(code, { userId, role });
   const before = await readCallEntryForEvent(event, userId, role);
@@ -443,7 +446,10 @@ export async function enterCall(
     });
     void fanoutSessionEntities(podId, event.id, [E.userSessions(userId), E.sessionParticipants(event.id)]);
     if (groupKeys) void fanoutEventGroups(event.id);
-    if (participant.isNewRegistration) void sendRegistrationEmail(event.id, userId);
+    // The "you're registered" email opens the site they entered from, when it is one of ours (else the main app).
+    if (participant.isNewRegistration) {
+      void sendRegistrationEmail(event.id, userId, firstAllowedClientBaseUrl([opts.origin], clientOriginConfig()));
+    }
   } catch (err) {
     if (!(err instanceof AppError)) throw err;
     if (err.code === ErrorCodes.SESSION_ALREADY_REGISTERED) return readCallEntryForEvent(event, userId, role);

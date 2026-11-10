@@ -342,6 +342,16 @@ describe('one client\'s limits never keep another out of the same link (fix roun
 });
 
 
+describe('the request\'s Origin decides the site the email opens (route wiring)', () => {
+  it('the preview\'s Origin gives a preview link; an unknown Origin gives CLIENT_URL', async () => {
+    const ip = nextIp();
+    await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', ip).set('Origin', 'https://preview.rsn.network').send({ email: EMAIL });
+    expect((mockSendEntryEmail.mock.calls.at(-1) as [string, { link: string }])[1].link.startsWith(`https://preview.rsn.network/call/${CODE_A}?entry=`)).toBe(true);
+    await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', ip).set('Origin', 'https://evil.example').send({ email: EMAIL });
+    expect((mockSendEntryEmail.mock.calls.at(-1) as [string, { link: string }])[1].link.startsWith(`https://app.rsn.network/call/${CODE_A}?entry=`)).toBe(true);
+  });
+});
+
 describe('the shape of what is sent', () => {
   it('a code that is not six digits, or a body with both shapes, is refused before any database read', async () => {
     const ip = nextIp();

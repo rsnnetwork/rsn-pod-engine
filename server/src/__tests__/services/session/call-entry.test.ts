@@ -208,7 +208,7 @@ describe('a new address on an open event', () => {
     expect(world.places.get(key(EVENT, guest.id))).toEqual({ status: 'registered', admitted_via: 'open' });
     expect(mockRegister).toHaveBeenCalledWith(EVENT, guest.id, UserRole.MEMBER, { arrivedThroughCallLink: true });
     expect(mockFanoutSession).toHaveBeenCalledWith('pod-1', EVENT, [`user:${guest.id}:sessions`, `session:${EVENT}:participants`]);
-    expect(mockRegistrationEmail).toHaveBeenCalledWith(EVENT, guest.id);
+    expect(mockRegistrationEmail).toHaveBeenCalledWith(EVENT, guest.id, 'https://app.rsn.network');
     expect(mockFanoutProfile).toHaveBeenCalledWith(guest.id);
   });
 
@@ -344,6 +344,41 @@ describe('no answer tells whether an address has an account (fix round 1)', () =
     addEvent({ id: EVENT, call_code: CODE });
     mockSendEntryEmail.mockRejectedValue(new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, "We couldn't send the code just now."));
     expect(await sendCallEntryCode(CODE, NEW_EMAIL)).toEqual({ sent: true });
+  });
+});
+
+describe('the site the emails open (sign-in\'s exact origin list)', () => {
+  it('a code asked for from the preview: the email\'s button opens the preview', async () => {
+    addEvent({ id: EVENT, call_code: CODE });
+    await sendCallEntryCode(CODE, NEW_EMAIL, { origin: 'https://preview.rsn.network' });
+    const { link } = mockSendEntryEmail.mock.calls.at(-1)![1] as { link: string };
+    expect(link).toMatch(new RegExp(`^https://preview\\.rsn\\.network/call/${CODE}\\?entry=[0-9a-f]{64}$`));
+  });
+
+  it('an origin that is not ours (or none): the button opens the main app (CLIENT_URL)', async () => {
+    addEvent({ id: EVENT, call_code: CODE });
+    for (const origin of [undefined, 'https://evil.example', 'https://x-rsnnetwork.vercel.app', 'https://preview.rsn.network.evil.example', 'null']) {
+      await sendCallEntryCode(CODE, NEW_EMAIL, { origin });
+      const { link } = mockSendEntryEmail.mock.calls.at(-1)![1] as { link: string };
+      expect(link.startsWith(`https://app.rsn.network/call/${CODE}?entry=`)).toBe(true);
+    }
+  });
+
+  it('the page\'s own clientUrl is read first, and an unknown one falls through to the Origin', async () => {
+    addEvent({ id: EVENT, call_code: CODE });
+    await sendCallEntryCode(CODE, NEW_EMAIL, { clientUrl: 'https://evil.example', origin: 'https://preview.rsn.network' });
+    expect((mockSendEntryEmail.mock.calls.at(-1)![1] as { link: string }).link.startsWith('https://preview.rsn.network/call/')).toBe(true);
+    await sendCallEntryCode(CODE, NEW_EMAIL, { clientUrl: 'https://app.rsn.network', origin: 'https://preview.rsn.network' });
+    expect((mockSendEntryEmail.mock.calls.at(-1)![1] as { link: string }).link.startsWith('https://app.rsn.network/call/')).toBe(true);
+  });
+
+  it('the "you\'re registered" email after entering opens the site they entered from, when it is ours', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'open' });
+    addEvent({ id: uuid(101), call_code: 'cccccccccc', admission_mode: 'open' });
+    await enterCall(CODE, MEMBER, UserRole.MEMBER, {}, { origin: 'https://preview.rsn.network' });
+    expect(mockRegistrationEmail).toHaveBeenLastCalledWith(EVENT, MEMBER, 'https://preview.rsn.network');
+    await enterCall('cccccccccc', MEMBER, UserRole.MEMBER, {}, { origin: 'https://evil.example' });
+    expect(mockRegistrationEmail).toHaveBeenLastCalledWith(uuid(101), MEMBER, 'https://app.rsn.network');
   });
 });
 

@@ -59,6 +59,7 @@ import {
   CALL_LINK_NOT_FOUND, ensureCallCode, getCallLanding, getCallLinkForOrganiser, newCallCode, resolveCallCode, rotateCallCode,
 } from '../../../services/session/call-link.service';
 import { addEvent, addUser, resetWorld, uuid, world } from '../../fixtures/call-link-world';
+import { firstAllowedClientBaseUrl } from '../../../services/identity/client-origin';
 
 const CHECK = /^[0-9a-hjkmnp-tv-z]{10}$/; // migration 139's CHECK, verbatim
 const HOST = uuid(1);
@@ -192,7 +193,29 @@ describe('rotateCallCode', () => {
       code: 'k7m2x9q4ra', path: '/call/k7m2x9q4ra', url: 'https://app.rsn.network/call/k7m2x9q4ra',
     });
   });
+
+  it('the address is on the site the organiser asked from when it is ours (the preview), else the main app', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra' });
+    expect((await getCallLinkForOrganiser(EVENT, host, { origin: 'https://preview.rsn.network' })).url)
+      .toBe('https://preview.rsn.network/call/k7m2x9q4ra');
+    for (const origin of ['https://evil.example', 'https://x-rsnnetwork.vercel.app', 'https://api.rsn.network', 'http://localhost:5173', 'nonsense']) {
+      expect((await getCallLinkForOrganiser(EVENT, host, { origin })).url).toBe('https://app.rsn.network/call/k7m2x9q4ra');
+    }
+  });
 });
+
+describe('firstAllowedClientBaseUrl (client-origin.ts)', () => {
+  const cfg = { clientUrl: 'https://app.rsn.network', isDev: false };
+  it('answers the first of the asking addresses that is on sign-in\'s exact list, as its origin, else the main app', () => {
+    expect(firstAllowedClientBaseUrl(['https://preview.rsn.network/call/x?y=1'], cfg)).toBe('https://preview.rsn.network');
+    expect(firstAllowedClientBaseUrl(['https://evil.example', 'https://preview.rsn.network'], cfg)).toBe('https://preview.rsn.network');
+    expect(firstAllowedClientBaseUrl([undefined, null, ''], cfg)).toBe('https://app.rsn.network');
+    expect(firstAllowedClientBaseUrl(['https://preview.rsn.network.evil.example', 'https://x-rsnnetwork.vercel.app'], cfg)).toBe('https://app.rsn.network');
+    expect(firstAllowedClientBaseUrl(['http://localhost:5173'], cfg)).toBe('https://app.rsn.network');
+    expect(firstAllowedClientBaseUrl(['http://localhost:5173'], { ...cfg, isDev: true })).toBe('http://localhost:5173');
+  });
+});
+
 
 describe('resolveCallCode', () => {
   it('null for a malformed, unknown or draft code; the event for a published one', async () => {

@@ -65,3 +65,20 @@ export function resolveClientBaseUrl(requested: string | undefined, cfg: ClientO
   if (!parsed || !isAllowedClientOrigin(parsed, cfg)) return fallback;
   return parsed.origin;
 }
+
+/**
+ * The site an email or a link opens when more than one asking address is known (11 Nov 2026, the RSN Call link: the
+ * page's `clientUrl` and the request's Origin header): the first one that is one of our sites, by the same exact list as
+ * every sign-in link, else the main app. Never loosens the list: an address not on it is skipped, as above.
+ */
+export function firstAllowedClientBaseUrl(
+  requested: ReadonlyArray<string | null | undefined>,
+  cfg: ClientOriginConfig,
+): string {
+  for (const asked of requested) {
+    if (!asked) continue;
+    const parsed = parse(asked);
+    if (parsed && isAllowedClientOrigin(parsed, cfg)) return parsed.origin;
+  }
+  return cfg.clientUrl.replace(/\/$/, '');
+}

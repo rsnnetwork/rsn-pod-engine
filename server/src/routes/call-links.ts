@@ -3,7 +3,8 @@
 // Mounted at /api/call-links (anyone holding a link; an event guest reaches all of it: guest-scope.ts):
 //   GET  /me/events          the signed-in person's events by link (their place or their request)       authenticate
 //   GET  /:code              the landing: the event as anyone holding the link sees it                   optionalAuth
-//   POST /:code/email        { email, clientUrl? }  email a 6-digit entry code; the same 200 for every address (fix round
+//   POST /:code/email        { email, clientUrl? }  email a 6-digit entry code (its button opens clientUrl, else the
+//                            request's Origin, when ours by sign-in's exact list; else CLIENT_URL); the same 200 for every address (fix round
 //                            1: no answer here tells whether an address has an account). `admissionCode` is still
 //                            accepted and ignored: it belongs to /verify now.
 //   POST /:code/verify       { email, code } | { token }, each with admissionCode?  sign in with it (an account, or a
@@ -135,7 +136,7 @@ router.post('/:code/email', callLinkMissLimiter, callLinkEmailLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { email, clientUrl } = req.body as z.infer<typeof emailSchema>;
-      const data = await callEntry.sendCallEntryCode(req.params.code, email, { clientUrl });
+      const data = await callEntry.sendCallEntryCode(req.params.code, email, { clientUrl, origin: req.get('origin') });
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);
@@ -171,6 +172,7 @@ router.post('/:code/enter', callLinkMissLimiter, authenticate, callEntryLimiter,
     try {
       const data = await callEntry.enterCall(
         req.params.code, req.user!.userId, req.user!.role as UserRole, req.body as z.infer<typeof enterSchema>,
+        { origin: req.get('origin') },
       );
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
@@ -186,7 +188,7 @@ const actorOf = (req: Request) => ({ userId: req.user!.userId, role: req.user!.r
 sessionCallLinkRoutes.get('/:id/call-link', authenticate, callLinkManageLimiter, eventId,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await callLink.getCallLinkForOrganiser(req.params.id, actorOf(req));
+      const data = await callLink.getCallLinkForOrganiser(req.params.id, actorOf(req), { origin: req.get('origin') });
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);
@@ -197,7 +199,7 @@ sessionCallLinkRoutes.post('/:id/call-link/rotate', authenticate, callLinkManage
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await callLink.rotateCallCode(req.params.id, actorOf(req));
-      const data = await callLink.getCallLinkForOrganiser(req.params.id, actorOf(req));
+      const data = await callLink.getCallLinkForOrganiser(req.params.id, actorOf(req), { origin: req.get('origin') });
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);
