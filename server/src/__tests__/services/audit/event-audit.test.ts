@@ -234,7 +234,11 @@ describe('each host action records its audit entry, with the host as actor and a
 
   it('the REST start and end record under the event\'s host', () => {
     expect(fnBody(host, 'startSessionGuarded')).toContain("action: 'event.started'");
-    expect(fnBody(host, 'endSession')).toContain("action: 'event.completed'");
+    const end = fnBody(host, 'endSession');
+    expect(end).toContain("action: 'event.completed'");
+    // A super admin may end someone else's event: the trail names who pressed it, never the event's host.
+    expect(end).toContain('actorId: actor.userId');
+    expect(end).not.toContain('actorId: session.hostUserId');
   });
 
   it('an audit call is fire-and-forget: never awaited, so a slow or failed write cannot stall or fail the action', () => {

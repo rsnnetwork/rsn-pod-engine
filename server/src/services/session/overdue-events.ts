@@ -23,6 +23,7 @@ import { fanoutSessionCompleted } from '../../realtime/fanout';
 import { getRealtimeIo } from '../../realtime/emit';
 import { withSessionGuard } from '../orchestration/state/session-state';
 import { completeSession } from '../orchestration/handlers/round-lifecycle';
+import { recordEventAudit } from '../audit/event-audit';
 
 /** How often the server looks for overdue events. */
 export const OVERDUE_EVENT_INTERVAL_MS = 60 * 1000;
@@ -140,10 +141,15 @@ export async function closeOverdueEvents(
   const closed: string[] = [];
   for (const row of due) {
     try {
-      if (LIVE_STATUSES.includes(row.status)) {
-        if (await completeLiveEvent(row.id)) closed.push(row.id);
-      } else if (await endNeverStartedEvent(row.id)) {
+      const wasLive = LIVE_STATUSES.includes(row.status);
+      const ended = wasLive ? await completeLiveEvent(row.id) : await endNeverStartedEvent(row.id);
+      if (ended) {
         closed.push(row.id);
+        // Nobody ended it: the product did, so the trail says so (no actor, automatic). Report mode never reaches here.
+        void recordEventAudit({
+          sessionId: row.id, actorId: null, action: 'event.completed', automatic: true,
+          reason: wasLive ? 'Overdue: still live past its start, length and grace period' : 'Overdue: never started, closed after its start, length and grace period',
+        });
       }
     } catch (err) {
       logger.warn({ err, sessionId: row.id }, 'Overdue events: could not close that one (will retry next tick)');

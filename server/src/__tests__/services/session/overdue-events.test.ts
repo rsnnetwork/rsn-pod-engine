@@ -58,6 +58,13 @@ jest.mock('../../../services/orchestration/handlers/round-lifecycle', () => ({
   __esModule: true,
 }));
 
+// The audit row is the audit module's own database write (tested in services/audit/event-audit.test.ts).
+const mockRecordAudit = jest.fn();
+jest.mock('../../../services/audit/event-audit', () => ({
+  recordEventAudit: (...args: unknown[]) => mockRecordAudit(...args),
+  __esModule: true,
+}));
+
 import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS, OVERDUE_EVENTS_PER_TICK, OVERDUE_REPORT_REPEAT_MS } from '../../../services/session/overdue-events';
 
 const NOW = new Date('2026-11-10T18:00:00.000Z');
@@ -281,5 +288,33 @@ describe('the server runs it every minute in report mode by default', () => {
   it('reads OVERDUE_EVENT_CLOSE (default report) and OVERDUE_EVENT_GRACE_MINUTES (default 120)', () => {
     expect(config).toMatch(/overdueEventClose: \(\['off', 'report', 'end'\] as const\)\s*\.find\(m => m === process\.env\.OVERDUE_EVENT_CLOSE\) \?\? 'report'/);
     expect(config).toContain('process.env.OVERDUE_EVENT_GRACE_MINUTES ?? 120');
+  });
+});
+
+describe('the event audit trail', () => {
+  it('end mode records event.completed for each closed event: automatic, no actor', async () => {
+    candidates = [meeting('live-one', 'round_active', 400), meeting('never-started', 'scheduled', 400)];
+    scheduledClaims = new Set(['never-started']);
+    await closeOverdueEvents('end', NOW);
+    expect(mockRecordAudit.mock.calls.map((c) => c[0])).toEqual([
+      expect.objectContaining({ sessionId: 'live-one', actorId: null, action: 'event.completed', automatic: true, reason: expect.stringContaining('Overdue') }),
+      expect.objectContaining({ sessionId: 'never-started', actorId: null, action: 'event.completed', automatic: true, reason: expect.stringContaining('Overdue') }),
+    ]);
+  });
+
+  it('records nothing for one that someone else already ended, or that failed to close', async () => {
+    candidates = [meeting('already-ended', 'round_active', 400), meeting('fails', 'lobby_open', 401)];
+    mockCompleteSession.mockImplementation(async (_io: unknown, id: string) => {
+      if (id === 'fails') throw new Error('boom');
+      return false;
+    });
+    await closeOverdueEvents('end', NOW);
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it('report mode records nothing', async () => {
+    candidates = [meeting('live-one', 'round_active', 400)];
+    await closeOverdueEvents('report', NOW);
+    expect(mockRecordAudit).not.toHaveBeenCalled();
   });
 });
