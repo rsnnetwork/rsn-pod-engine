@@ -38,7 +38,7 @@ import { isLiveStatus } from '../session/main-room';
 import { FORMER_MEMBER_NAME } from '../users/active-member';
 import {
   ENDED, STALE, andList, buildRound, isEditable, isEnded, loadState, nameOf, prepareWrite, problemMessage, readBoard,
-  requireOrganiser, snapshotOf, withLockedDraft,
+  requireOrganiser, sameSnapshot, snapshotOf, withLockedDraft,
   type BoardState, type Draft, type LockedDraft,
 } from './schedule-board.service';
 
@@ -142,7 +142,8 @@ export async function previewPublish(sessionId: string, actor: Actor): Promise<P
   const { blocking, warnings } = isEnded(state) ? { blocking: [], warnings: [] } : previewItems(state, state.draft);
   return {
     blocking,
-    warnings,
+    // The rooms the live event changed while this draft had its own changes come first: they are what to check.
+    warnings: [...state.liveConflicts, ...warnings],
     impactedUserIds: impactedBetween(state, state.published, snapshotOf(state, state.draft), openRound(state)),
     nextVersion: (state.publishedVersion ?? 0) + 1,
   };
@@ -159,6 +160,8 @@ export interface PublishedVersion {
   live: boolean;
   automatic: boolean;
   actorId: string | null;
+  /** The board's revision after the publish: every publish moves it, so a repeated click is answered SCHEDULE_CHANGED. */
+  revision: number;
 }
 
 /**
@@ -169,7 +172,7 @@ export interface PublishedVersion {
  */
 export async function publishLocked(
   locked: LockedDraft, draft: Draft,
-  by: { actorId: string | null; automatic: boolean; reason: string | null; note: string | null },
+  by: { actorId: string | null; automatic: boolean; reason: string | null; note: string | null; settlesConflicts?: boolean },
 ): Promise<PublishedVersion> {
   const { client, state } = locked;
   const latest = await client.query<{ version: number; snapshot: ScheduleSnapshot | string }>(
@@ -187,9 +190,15 @@ export async function publishLocked(
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
     [state.sessionId, version, by.actorId, by.automatic, by.reason, by.note, impactedUserIds.length, JSON.stringify(snapshot)],
   );
-  await client.query(
-    `UPDATE event_schedules SET published_version = $2, updated_at = NOW() WHERE session_id = $1`,
-    [state.sessionId, version],
+  // The revision moves too: the draft did not change, but a second click made against the same board is then refused
+  // (SCHEDULE_CHANGED) instead of publishing the same rooms again. An organiser's publish settles the live conflicts.
+  const moved = await client.query<{ revision: number }>(
+    `UPDATE event_schedules
+        SET published_version = $2, revision = revision + 1, updated_at = NOW(),
+            live_conflicts = CASE WHEN $3::boolean THEN '[]'::jsonb ELSE live_conflicts END
+      WHERE session_id = $1
+      RETURNING revision`,
+    [state.sessionId, version, by.settlesConflicts === true],
   );
   await recordEventAudit({
     sessionId: state.sessionId,
@@ -204,6 +213,7 @@ export async function publishLocked(
   }, client);
   return {
     version, impactedUserIds, first: !previous, live: isLiveStatus(state.status), automatic: by.automatic, actorId: by.actorId,
+    revision: moved.rows[0]?.revision ?? state.revision + 1,
   };
 }
 
@@ -242,27 +252,32 @@ export async function publishSchedule(
   if (actor) await requireOrganiser(sessionId, actor);
   const automatic = actor === null || opts.automatic === true;
   const prep = await prepareWrite(sessionId, false);
-  const outcome = await withLockedDraft(sessionId, prep, expectedRevision, async (locked) => {
-    if (isEnded(locked.state)) throw new ConflictError(ErrorCodes.EVENT_ENDED, ENDED);
-    if (!automatic) {
-      const { blocking } = previewItems(locked.state, locked.state.draft);
-      if (blocking.length > 0) throw new ConflictError(ErrorCodes.SCHEDULE_HAS_CONFLICTS, CONFLICTS, { blocking });
+  const outcome = await withLockedDraft(sessionId, prep, expectedRevision, async (locked): Promise<PublishedVersion | PublishResult> => {
+    const { state } = locked;
+    if (isEnded(state)) throw new ConflictError(ErrorCodes.EVENT_ENDED, ENDED);
+    // The draft is what is already published: nothing is written, the current version is the answer.
+    if (state.published && state.publishedVersion !== null && sameSnapshot(snapshotOf(state, state.draft), state.published)) {
+      return { version: state.publishedVersion, impactedUserIds: [], revision: state.revision };
     }
-    return publishLocked(locked, locked.state.draft, {
+    const { blocking } = previewItems(state, state.draft);
+    if (blocking.length > 0) throw new ConflictError(ErrorCodes.SCHEDULE_HAS_CONFLICTS, CONFLICTS, { blocking });
+    return publishLocked(locked, state.draft, {
       actorId: actor?.userId ?? null, automatic, reason: opts.reason?.trim() || null, note: opts.note?.trim() || null,
+      settlesConflicts: !automatic,
     });
   });
   if (outcome.stale) {
     throw new ConflictError(ErrorCodes.SCHEDULE_CHANGED, STALE, actor ? { board: await readBoard(sessionId, actor) } : undefined);
   }
   const published = outcome.value;
+  if (!('first' in published)) return published;
   await announcePublished(sessionId, published);
   if (published.live) {
     // Loaded when used: the live service loads this one for its own versions.
     const live = await import('./schedule-live.service');
-    await live.materialiseAfterPublish(sessionId, published.version);
+    await live.materialiseAfterPublish(sessionId);
   }
-  return { version: published.version, impactedUserIds: published.impactedUserIds };
+  return { version: published.version, impactedUserIds: published.impactedUserIds, revision: published.revision };
 }
 
 // ─── Reading versions ────────────────────────────────────────────────────────

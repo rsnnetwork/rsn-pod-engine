@@ -17,6 +17,8 @@
 --   matches.assignment_source how the board seated the room: 'auto' (the engine), 'manual' (an organiser), 'repair'
 --                             (the product, after someone arrived or left). NULL for a row not from the board.
 -- The three columns have constant defaults (FALSE, NULL, NULL), so adding them rewrites no row.
+--   event_schedules.live_conflicts  rooms the live event changed while the draft had its own changes there (the draft
+--                             keeps its own; the board flags them until an organiser publishes). Constant default.
 --
 -- The runner wraps this file in its own transaction: no BEGIN or COMMIT here. Every statement is guarded, so
 -- running the file twice changes nothing.
@@ -61,6 +63,10 @@ DROP TRIGGER IF EXISTS trg_event_schedule_versions_immutable ON event_schedule_v
 CREATE TRIGGER trg_event_schedule_versions_immutable
   BEFORE UPDATE ON event_schedule_versions
   FOR EACH ROW EXECUTE FUNCTION event_schedule_versions_immutable();
+
+-- Rooms the live event changed (a repair, a confirmed round) where the organisers' draft had its own changes: the
+-- draft keeps them and the board shows these until the next publish by an organiser.
+ALTER TABLE event_schedules ADD COLUMN IF NOT EXISTS live_conflicts JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 ALTER TABLE matches ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE matches ADD COLUMN IF NOT EXISTS schedule_version INT NULL;

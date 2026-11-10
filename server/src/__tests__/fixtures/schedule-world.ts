@@ -39,7 +39,7 @@ export interface ScheduleWorld {
   cohosts: string[];
   participants: Array<{ user_id: string; status: string; created_at: number }>;
   users: Map<string, { display_name: string; role: string; status: string }>;
-  schedule: { revision: number; published_version: number | null; generated_at: number | null; updated_by: string | null } | null;
+  schedule: { revision: number; published_version: number | null; generated_at: number | null; updated_by: string | null; live_conflicts?: unknown[] } | null;
   seats: SeatRow[];
   locks: Array<{ round_number: number; room_number: number; locked_by: string | null }>;
   absences: Array<{ user_id: string; kind: string; from_round: number; to_round: number | null; created_by: string | null }>;
@@ -58,6 +58,8 @@ export interface ScheduleWorld {
   organisers: Set<string>;
   sql: string[];
   honourLocks: boolean;
+  /** The "is there a published version?" read fails (a database error), as on a connection drop. */
+  failVersionRead: boolean;
 }
 
 let clock = 0;
@@ -91,6 +93,7 @@ export function freshWorld(): ScheduleWorld {
     organisers: new Set([HOST, COHOST]),
     sql: [],
     honourLocks: true,
+    failVersionRead: false,
   };
 }
 
@@ -208,11 +211,13 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
 
   // The schedule row
   if (sql === 'INSERT INTO event_schedules (session_id) VALUES ($1) ON CONFLICT (session_id) DO NOTHING') {
-    if (!world.schedule) world.schedule = { revision: 0, published_version: null, generated_at: null, updated_by: null };
+    if (!world.schedule) world.schedule = { revision: 0, published_version: null, generated_at: null, updated_by: null, live_conflicts: [] };
     return rows([]);
   }
-  if (/^SELECT revision, published_version FROM event_schedules WHERE session_id = \$1( FOR UPDATE)?$/.test(sql)) {
-    return rows(world.schedule ? [{ revision: world.schedule.revision, published_version: world.schedule.published_version }] : []);
+  if (/^SELECT revision, published_version, live_conflicts FROM event_schedules WHERE session_id = \$1( FOR UPDATE)?$/.test(sql)) {
+    return rows(world.schedule ? [{
+      revision: world.schedule.revision, published_version: world.schedule.published_version, live_conflicts: world.schedule.live_conflicts ?? [],
+    }] : []);
   }
   if (/^UPDATE event_schedules SET revision = revision \+ 1, updated_by = \$2, updated_at = NOW\(\), generated_at = CASE WHEN \$3::boolean THEN NOW\(\) ELSE generated_at END WHERE session_id = \$1 AND revision = \$4 RETURNING revision$/.test(sql)) {
     const sched = world.schedule!;
@@ -327,11 +332,24 @@ function handleLive(sql: string, params: unknown[]): { rows: unknown[]; rowCount
       };
     }));
   }
-  if (sql === 'UPDATE event_schedules SET published_version = $2, updated_at = NOW() WHERE session_id = $1') {
-    world.schedule!.published_version = params[1] as number;
+  if (sql === "UPDATE event_schedules SET published_version = $2, revision = revision + 1, updated_at = NOW(), live_conflicts = CASE WHEN $3::boolean THEN '[]'::jsonb ELSE live_conflicts END WHERE session_id = $1 RETURNING revision") {
+    const sched = world.schedule!;
+    sched.published_version = params[1] as number;
+    sched.revision += 1;
+    if (params[2]) sched.live_conflicts = [];
+    return rows([{ revision: sched.revision }]);
+  }
+  if (sql === 'UPDATE event_schedules SET live_conflicts = live_conflicts || $2::jsonb WHERE session_id = $1') {
+    const sched = world.schedule!;
+    sched.live_conflicts = [...(sched.live_conflicts ?? []), ...JSON.parse(params[1] as string)];
     return rows([]);
   }
+  if (sql === 'SELECT host_user_id FROM sessions WHERE id = $1') return rows([{ host_user_id: s.host_user_id }]);
+  if (sql === 'SELECT id, display_name FROM users WHERE id = ANY($1::uuid[])') {
+    return rows((params[0] as string[]).filter((id) => world.users.has(id)).map((id) => ({ id, display_name: world.users.get(id)!.display_name })));
+  }
   if (sql === 'SELECT published_version FROM event_schedules WHERE session_id = $1') {
+    if (world.failVersionRead) throw new Error('Connection terminated unexpectedly');
     return rows(world.schedule ? [{ published_version: world.schedule.published_version }] : []);
   }
   if (sql === 'SELECT user_id FROM event_schedule_absences WHERE session_id = $1 AND created_by IS NULL') {

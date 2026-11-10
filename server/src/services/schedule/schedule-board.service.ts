@@ -32,7 +32,7 @@ import {
   liveKindOf, roundRuleSentence,
   type BoardOp, type BoardOpResult, type ErrorCode, type BoardPerson, type BoardPersonStatus, type BoardRefusal, type BoardRoom,
   type BoardRound, type BoardSeatSource, type RoomCheckContext, type RoomProblem, type RoomVerdict, type ScheduleBoard,
-  type ScheduleSnapshot,
+  type PublishPreviewItem, type ScheduleSnapshot,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../middleware/errors';
@@ -109,6 +109,8 @@ export interface BoardState {
   publishedVersion: number | null;
   /** The latest published version's rounds, or null before the first publish. */
   published: ScheduleSnapshot | null;
+  /** Rooms the live event changed where the draft had its own changes (shown on the board until the next publish). */
+  liveConflicts: PublishPreviewItem[];
   draft: Draft;
   /** The event's people in registration order, then anyone seated who no longer has a place. */
   people: Map<string, PersonFacts>;
@@ -132,7 +134,8 @@ interface EventRow {
   scheduled_at: string | Date | null;
   event_format: string | null;
 }
-export interface ScheduleRow { revision: number; published_version: number | null }
+/** `live_conflicts`: rooms the live event changed where the draft had its own changes (Part 2 Task 9). */
+export interface ScheduleRow { revision: number; published_version: number | null; live_conflicts?: PublishPreviewItem[] | null }
 
 function configOf(raw: unknown): Record<string, unknown> {
   if (typeof raw === 'string') {
@@ -247,7 +250,7 @@ export async function loadState(sessionId: string, client?: PoolClient, schedule
   const event = await readEvent(read, sessionId);
   assertRoundsEvent(event);
   const row = schedule ?? (await read<ScheduleRow>(
-    `SELECT revision, published_version FROM event_schedules WHERE session_id = $1`, [sessionId],
+    `SELECT revision, published_version, live_conflicts FROM event_schedules WHERE session_id = $1`, [sessionId],
   )).rows[0];
   const draft = await readDraft(read, sessionId);
   const published = row?.published_version ? await readSnapshot(read, sessionId, row.published_version) : null;
@@ -270,6 +273,7 @@ export async function loadState(sessionId: string, client?: PoolClient, schedule
     revision: row?.revision ?? 0,
     publishedVersion: row?.published_version ?? null,
     published,
+    liveConflicts: Array.isArray(row?.live_conflicts) ? row!.live_conflicts! : [],
     draft,
     people,
     hostIds,
@@ -376,7 +380,7 @@ export function pairsOutside(draft: Draft, round: number, which: 'earlier' | 'al
 }
 
 /** How many meetings each person has in the draft's other rounds. */
-function meetingsCounter(draft: Draft, round: number): (userId: string) => number {
+export function meetingsCounter(draft: Draft, round: number): (userId: string) => number {
   const counts = new Map<string, number>();
   for (const [r, rooms] of draft.rounds) {
     if (r === round) continue;
@@ -513,6 +517,7 @@ function buildBoard(state: BoardState, canOverride: boolean): ScheduleBoard {
     people: people.map((id) => personOf(state, draft, id, null)),
     groupRules: state.base.rules,
     canOverride,
+    liveConflicts: state.liveConflicts,
   };
 }
 
@@ -1024,7 +1029,7 @@ export async function withLockedDraft<T>(
   return transaction(async (client): Promise<{ stale: true } | { stale: false; value: T }> => {
     await client.query(`INSERT INTO event_schedules (session_id) VALUES ($1) ON CONFLICT (session_id) DO NOTHING`, [sessionId]);
     const locked = await client.query<ScheduleRow>(
-      `SELECT revision, published_version FROM event_schedules WHERE session_id = $1 FOR UPDATE`, [sessionId],
+      `SELECT revision, published_version, live_conflicts FROM event_schedules WHERE session_id = $1 FOR UPDATE`, [sessionId],
     );
     const schedule = locked.rows[0];
     if (!schedule || (expectedRevision !== null && schedule.revision !== expectedRevision)) return { stale: true };

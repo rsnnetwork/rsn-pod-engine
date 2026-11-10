@@ -45,6 +45,7 @@ describe('migration 141 (schedule versions and match locks)', () => {
     expect(flat(sql)).toContain('ALTER TABLE matches ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE;');
     expect(flat(sql)).toContain('ALTER TABLE matches ADD COLUMN IF NOT EXISTS schedule_version INT NULL;');
     expect(flat(sql)).toContain('ALTER TABLE matches ADD COLUMN IF NOT EXISTS assignment_source TEXT NULL;');
+    expect(flat(sql)).toContain("ALTER TABLE event_schedules ADD COLUMN IF NOT EXISTS live_conflicts JSONB NOT NULL DEFAULT '[]'::jsonb;");
     expect(flat(sql)).toContain("IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'matches_assignment_source_check')");
     expect(flat(sql)).toContain("CHECK (assignment_source IS NULL OR assignment_source IN ('auto', 'manual', 'repair'))");
   });

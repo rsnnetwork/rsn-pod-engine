@@ -67,6 +67,11 @@ async function generated(): Promise<ScheduleBoard> {
 async function settle(): Promise<void> {
   for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
+/** Publish, then the board as it is now (a publish moves the revision). */
+async function publishAndRead(revision: number, opts?: { note?: string }): Promise<ScheduleBoard> {
+  await publishSchedule(EVENT, OWNER, revision, opts);
+  return getBoard(EVENT, OWNER);
+}
 /** Two people in different rooms of a round, neither room's people having met the other in any round. */
 function swappable(board: ScheduleBoard, round: number): [string, string] {
   const rooms = board.rounds[round - 1].rooms;
@@ -141,7 +146,9 @@ describe('versions', () => {
     expect(tags).toEqual(expect.arrayContaining([`session:${EVENT}:schedule`, `session:${EVENT}:published-schedule`]));
     // The draft now equals what was published.
     const after = await getBoard(EVENT, OWNER);
-    expect(after).toMatchObject({ publishedVersion: 1, draftDiffersFromPublished: false, revision: board.revision });
+    // Publishing moved the revision (the draft did not change): a second click on the same board is refused.
+    expect(result.revision).toBe(board.revision + 1);
+    expect(after).toMatchObject({ publishedVersion: 1, draftDiffersFromPublished: false, revision: board.revision + 1 });
     // Every round of the version holds the board's rooms, by number.
     const snapshot = JSON.parse(world.versions[0].snapshot) as ScheduleSnapshot;
     expect(snapshot.rounds.map((r) => r.round)).toEqual([1, 2, 3, 4, 5]);
@@ -153,7 +160,7 @@ describe('versions', () => {
 
   it('an edit published as version 2 rings a bell for exactly the people whose meetings changed', async () => {
     let board = await generated();
-    await publishSchedule(EVENT, OWNER, board.revision);
+    board = await publishAndRead(board.revision);
     const [x, y] = swappable(board, 2);
     const changedPeople = [...new Set([x, y, ...partnersOf(board, 2, x), ...partnersOf(board, 2, y)])].sort();
     board = await op(board, { kind: 'swap', round: 2, userId: x, withUserId: y });
@@ -162,7 +169,7 @@ describe('versions', () => {
 
     const result = await publishSchedule(EVENT, OWNER, board.revision);
 
-    expect(result).toEqual({ version: 2, impactedUserIds: changedPeople });
+    expect(result).toEqual({ version: 2, impactedUserIds: changedPeople, revision: board.revision + 1 });
     expect(changedPeople.length).toBeGreaterThanOrEqual(2);
     expect(changedPeople.length).toBeLessThanOrEqual(4);
     expect(world.notifications.map((n) => n.user_id).sort()).toEqual(changedPeople);
@@ -183,7 +190,7 @@ describe('versions', () => {
 
   it('a participant reads version 2, never a change only in the draft', async () => {
     let board = await generated();
-    await publishSchedule(EVENT, OWNER, board.revision);
+    board = await publishAndRead(board.revision);
     const [x, y] = swappable(board, 2);
     board = await op(board, { kind: 'swap', round: 2, userId: x, withUserId: y });
     await publishSchedule(EVENT, OWNER, board.revision);
@@ -212,10 +219,10 @@ describe('versions', () => {
 
   it('a version never changes: a later draft edit and version 3 leave version 2 as it was written', async () => {
     let board = await generated();
-    await publishSchedule(EVENT, OWNER, board.revision);
+    board = await publishAndRead(board.revision);
     const [x, y] = swappable(board, 2);
     board = await op(board, { kind: 'swap', round: 2, userId: x, withUserId: y });
-    await publishSchedule(EVENT, OWNER, board.revision);
+    board = await publishAndRead(board.revision);
     const v2 = world.versions.find((v) => v.version === 2)!.snapshot;
 
     const [p, q] = swappable(board, 4);
@@ -247,7 +254,7 @@ describe('versions', () => {
 
   it('the organisers list every version: number, when, by whom, why, how many it changed', async () => {
     let board = await generated();
-    await publishSchedule(EVENT, OWNER, board.revision, { note: 'First plan' });
+    board = await publishAndRead(board.revision, { note: 'First plan' });
     const [x, y] = swappable(board, 2);
     board = await op(board, { kind: 'swap', round: 2, userId: x, withUserId: y });
     await publishSchedule(EVENT, OWNER, board.revision);
@@ -269,5 +276,39 @@ describe('versions', () => {
     // Rounds 1 and 2 have started: only meetings in rounds 3 to 5 count, and everyone has one there.
     expect(result.impactedUserIds).toEqual(PEOPLE);
     expect(world.notifications.map((n) => n.user_id).sort()).toEqual(PEOPLE);
+  });
+});
+
+describe('a publish is made once', () => {
+  it('a double click: the second POST with the same revision is refused (SCHEDULE_CHANGED); one version, one audit row', async () => {
+    const board = await generated();
+    const both = await Promise.allSettled([
+      publishSchedule(EVENT, OWNER, board.revision),
+      publishSchedule(EVENT, OWNER, board.revision),
+    ]);
+    const won = both.filter((r) => r.status === 'fulfilled');
+    const lost = both.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect(lost[0].reason).toMatchObject({ statusCode: 409, code: 'SCHEDULE_CHANGED' });
+    expect(world.versions.map((v) => v.version)).toEqual([1]);
+    expect(world.audit.filter((r) => r.action === 'schedule.published')).toHaveLength(1);
+
+    // And one after the other, the same revision again.
+    await expect(publishSchedule(EVENT, OWNER, board.revision)).rejects.toMatchObject({ code: 'SCHEDULE_CHANGED' });
+    expect(world.versions).toHaveLength(1);
+  });
+
+  it('publishing a board that equals the latest version writes nothing and answers that version', async () => {
+    const board = await generated();
+    const first = await publishSchedule(EVENT, OWNER, board.revision);
+    world.notifications.length = 0;
+    const audits = world.audit.length;
+    const again = await publishSchedule(EVENT, OWNER, first.revision);
+    expect(again).toEqual({ version: 1, impactedUserIds: [], revision: first.revision });
+    expect(world.versions).toHaveLength(1);
+    expect(world.audit).toHaveLength(audits);
+    expect(world.notifications).toEqual([]);
+    expect(world.schedule!.revision).toBe(first.revision);
   });
 });

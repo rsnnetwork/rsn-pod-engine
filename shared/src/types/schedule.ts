@@ -66,6 +66,12 @@ export interface ScheduleBoard {
   revision: number;
   publishedVersion: number | null;
   draftDiffersFromPublished: boolean;
+  /**
+   * Rooms the live event changed (someone arrived or left, a round started as the host changed it) where this draft
+   * had its own changes: the draft kept its own, and the organiser decides before publishing again. Cleared by the
+   * next publish (Part 2 Task 9).
+   */
+  liveConflicts: PublishPreviewItem[];
   rounds: BoardRound[];
   people: BoardPerson[];
   groupRules: EventGroupRules | null;
@@ -154,9 +160,12 @@ export interface PublishPreview {
   nextVersion: number;
 }
 
+/** A publish that found the draft equal to the latest version writes nothing and answers that version. */
 export interface PublishResult {
   version: number;
   impactedUserIds: string[];
+  /** The board's revision after the publish (every publish moves it, so a repeated click is answered SCHEDULE_CHANGED). */
+  revision: number;
 }
 
 /** One published version, for the organisers' list. `publishedBy` is null for the product's own (shown "Automatic"). */
