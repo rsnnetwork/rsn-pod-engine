@@ -5,6 +5,7 @@ import { leaveOnUnmount } from '@/features/live/leave-event';
 import { useSessionStore } from '@/stores/sessionStore';
 import { registerRefusal } from '@/features/live/session-guard-state';
 import { useAuthStore } from '@/stores/authStore';
+import { isEventGuest } from '@/features/call/guest-routes';
 import { useToastStore } from '@/stores/toastStore';
 import { playTimerChime } from '@/lib/chime';
 import api from '@/lib/api';
@@ -133,7 +134,9 @@ export default function useSessionSocket(sessionId: string) {
     // swallowed silently. The page's own register UI surfaces user-facing
     // errors via React Query mutations elsewhere; this auto-register is a
     // best-effort warmup, so console.warn is the right level of noise.
-    api.post(`/sessions/${sessionId}/register`).catch(err => {
+    // An event guest's place comes only through the event's RSN Call link (Part 2, Task 12), and the server refuses
+    // them this call (a member-only route), so it is not made for one: the page draws as soon as it would have.
+    (isEventGuest(useAuthStore.getState().user) ? Promise.resolve() : api.post(`/sessions/${sessionId}/register`)).catch(err => {
       const code = err?.response?.data?.error?.code;
       // June-10 — a kicked user reloaded the live page. The server bars
       // re-registration (403 REMOVED_FROM_EVENT). This HTTP reply is the

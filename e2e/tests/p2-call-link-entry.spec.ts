@@ -336,7 +336,7 @@ test(`12/05: an invitation-only event refuses an unlisted address after its code
   const place = await pool.query('SELECT admitted_via FROM session_participants WHERE session_id = $1 AND user_id = $2', [event.id, firstId]);
   expect(place.rows[0]?.admitted_via).toBe('code');
 
-  // A second address with the same code: refused, and not let in by the used code.
+  // A second address with the same code: refused, then told the code is spent (/verify answers 409 ADMISSION_CODE_USED).
   const second = await signedOut();
   await second.goto(`${APP}/call/${event.code}`, { waitUntil: 'domcontentloaded' });
   const secondEmail = `${uuid()}@rsn-e2e.invalid`;
@@ -344,8 +344,7 @@ test(`12/05: an invitation-only event refuses an unlisted address after its code
   await expect(second.getByTestId('call-refusal')).toHaveText(INVITATION_ONLY, { timeout: 30_000 });
   await second.getByLabel('Admission code').fill(admission);
   await second.getByRole('button', { name: 'Continue' }).click();
-  // The server's own sentence when it names the used code at /verify, else the page's.
-  await expect(second.getByText(/This admission code has already been used\.|That admission code didn't let you in\./)).toBeVisible({ timeout: 30_000 });
+  await expect(second.getByText('This admission code has already been used.', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(second.getByTestId('call-waiting')).toHaveCount(0);
   const secondAccount = await pool.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [secondEmail]);
   for (const r of secondAccount.rows) made.users.push(r.id);

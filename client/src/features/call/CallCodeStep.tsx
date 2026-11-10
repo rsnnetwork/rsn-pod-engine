@@ -56,7 +56,8 @@ function AdmissionStep({ proved, carried, verify, onClosed, onDifferentEmail }: 
         setError(ADMISSION_CODE_DID_NOT_WORK);
         return;
       }
-      // The admission code's own answer (used, expired, too many tries), in the server's words beside the field.
+      // The admission code's own answer, in the server's words beside the field: 409 ADMISSION_CODE_USED "This admission
+      // code has already been used.", an expired code, too many tries.
       const forCode = enterFailure(err);
       if (forCode.field === 'admissionCode') {
         setError(forCode.message);
@@ -129,6 +130,14 @@ export default function CallCodeStep({
       const refusal = admissionRefusalOf(err);
       if (refusal) {
         setProved({ code, refusal });
+        return;
+      }
+      // A right code with an admission code given beside the email that someone else already used (409
+      // ADMISSION_CODE_USED, "This admission code has already been used."), or one that has expired: the server's own
+      // sentence, and the field to give another.
+      const forCode = enterFailure(err);
+      if (forCode.field === 'admissionCode') {
+        setProved({ code, refusal: { message: forCode.message, askCode: true } });
         return;
       }
       const said = verifyFailure(err);

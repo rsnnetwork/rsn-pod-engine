@@ -504,6 +504,25 @@ describe('the wiring', () => {
     expect(page).toMatch(/if \(admission\) setAdmissionCode\(admission\);\s*setStarted\(true\);/);
   });
 
+  it('a used admission code at /verify (409 ADMISSION_CODE_USED) says the brief\'s sentence beside the field, on either way in', () => {
+    const used = { response: { status: 409, data: { error: { code: 'ADMISSION_CODE_USED', message: 'This admission code has already been used.' } } } };
+    expect(admissionRefusalOf(used)).toBeNull();
+    expect(enterFailure(used)).toEqual({ field: 'admissionCode', message: 'This admission code has already been used.' });
+    const step = read('features/call/CallCodeStep.tsx');
+    // The code sent with an admission code from the email step: the code step turns to the admission step with the sentence.
+    expect(step).toMatch(/const forCode = enterFailure\(err\);\s*if \(forCode\.field === 'admissionCode'\) \{\s*setProved\(\{ code, refusal: \{ message: forCode\.message, askCode: true \} \}\);\s*return;/);
+    // An admission code typed on the admission step: the sentence beside the field.
+    expect(step).toMatch(/const forCode = enterFailure\(err\);\s*if \(forCode\.field === 'admissionCode'\) \{\s*setError\(forCode\.message\);\s*return;/);
+    expect(read('../../e2e/tests/p2-call-link-entry.spec.ts'))
+      .toContain("second.getByText('This admission code has already been used.', { exact: true })");
+  });
+
+  it('the live page asks no member route for a guest: its own register call is not made for one', () => {
+    const hook = read('hooks/useSessionSocket.ts');
+    expect(hook).toMatch(/\(isEventGuest\(useAuthStore\.getState\(\)\.user\) \? Promise\.resolve\(\) : api\.post\(`\/sessions\/\$\{sessionId\}\/register`\)\)\.catch\(err => \{/);
+    expect(hook).toMatch(/import \{ isEventGuest \} from '@\/features\/call\/guest-routes';/);
+  });
+
   it('after a right code, a refused address stays on the code step and is asked for the admission code', () => {
     const step = read('features/call/CallCodeStep.tsx');
     expect(step).toMatch(/const refusal = admissionRefusalOf\(err\);\s*if \(refusal\) \{\s*setProved\(\{ code, refusal \}\);\s*return;/);
