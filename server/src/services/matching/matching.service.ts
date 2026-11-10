@@ -12,7 +12,7 @@ import { getMatchingEngine, DEFAULT_ENGINE_ID } from './matching.registry';
 import { pairKey } from './matching.interface';
 import { reduceRepeatPairs } from './repeat-reduction';
 import * as sessionService from '../session/session.service';
-import * as blockService from '../block/block.service';
+import { loadHardExclusions } from './hard-exclusions';
 import { normalizeDesignation, pairConfidence, profileCompleteness, withinCooldown } from './intent-signals';
 import { NotFoundError } from '../../middleware/errors';
 import { templateIdOf } from './matching-template-choice';
@@ -354,28 +354,6 @@ function gatePresentRows<T>(
   return gated;
 }
 
-/**
- * P3-2: non-dismissed violation reports between two participants become exclusion
- * pairs ("reporterId:reportedId"), so a member is never re-paired with someone they
- * reported. Dismissed reports (false alarms) are ignored. Best-effort — a failure
- * never blocks matching. pairKey normalises direction, so order doesn't matter.
- */
-async function getViolationPairsForUsers(userIds: string[]): Promise<string[]> {
-  if (userIds.length < 2) return [];
-  try {
-    const r = await query<{ reporter_id: string; reported_user_id: string }>(
-      `SELECT reporter_id, reported_user_id FROM violations
-        WHERE status <> 'dismissed' AND reporter_id IS NOT NULL
-          AND reporter_id = ANY($1::uuid[]) AND reported_user_id = ANY($1::uuid[])`,
-      [userIds],
-    );
-    return r.rows.map((v) => `${v.reporter_id}:${v.reported_user_id}`);
-  } catch (err) {
-    logger.warn({ err }, 'getViolationPairsForUsers failed — matching continues without violation exclusion');
-    return [];
-  }
-}
-
 export async function generateSingleRound(
   sessionId: string,
   roundNumber: number,
@@ -535,27 +513,13 @@ export async function generateSingleRound(
   // options exist, then to a different already-met pairing once they're gone.
 
   // Build hard constraints: inviter-invitee avoidance + user-block exclusions.
-  const inviterInviteeResult = await query<{ inviter_id: string; accepted_by_user_id: string }>(
-    `SELECT inviter_id, accepted_by_user_id FROM invites
-     WHERE session_id = $1 AND accepted_by_user_id IS NOT NULL AND status = 'accepted'`,
-    [sessionId]
-  );
-  const inviterInviteePairs = inviterInviteeResult.rows
-    .filter(r => r.inviter_id && r.accepted_by_user_id)
-    .map(r => `${r.inviter_id}:${r.accepted_by_user_id}`);
-
-  // Phase B (1 May 2026 spec) — user-block exclusions. Blocked pairs (in
-  // either direction) are added as a hard constraint so the matching engine
-  // never pairs them. The same blocks gate DM sends, so this is the single
-  // source of truth for "these two should never interact". P3-2: non-dismissed
-  // violation reports between two participants are folded in here too, so a
-  // reporter is never re-paired with whom they reported (same hard-exclusion
-  // path as blocks — flows into both the engine constraint and the swap guard).
+  // Phase B (1 May 2026 spec) — blocked pairs (in either direction) never meet; the same blocks gate DM sends.
+  // P3-2: non-dismissed violation reports between two participants are folded in with the blocks (same
+  // hard-exclusion path, so they flow into both the engine constraint and the swap guard below). Part 2 Task 5
+  // (10 Nov 2026): loaded by hard-exclusions.ts, the one loader the room checker's context also reads, with the
+  // same reads in the same order and the same failure behaviour as before.
   const participantIds = participantsResult.rows.map(p => p.userId);
-  const blockedPairs = [
-    ...await blockService.getBlockedPairsForUsers(participantIds),
-    ...await getViolationPairsForUsers(participantIds),
-  ];
+  const { inviterInvitee: inviterInviteePairs, blocked: blockedPairs } = await loadHardExclusions(sessionId, participantIds);
 
   const hardConstraints: { type: 'inviter_invitee_block' | 'user_block'; params: { pairs: string[] } }[] = [];
   if (inviterInviteePairs.length > 0) {

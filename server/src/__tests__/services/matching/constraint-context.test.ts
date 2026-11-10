@@ -24,8 +24,8 @@ jest.mock('../../../db', () => ({
     sqlSeen.push(sql);
     if (/FROM session_participants/.test(sql)) return { rows: ['a', 'b', 'c', 'd'].map((user_id) => ({ user_id })) };
     if (/FROM invites/.test(sql)) return { rows: [{ inviter_id: 'b', accepted_by_user_id: 'a' }, { inviter_id: null, accepted_by_user_id: 'c' }] };
-    if (/FROM user_blocks/.test(sql)) return { rows: [{ a: 'd', b: 'c' }] };
-    if (/FROM violations/.test(sql)) return { rows: [{ a: 'a', b: 'd' }] };
+    if (/FROM user_blocks/.test(sql)) return { rows: [{ blocker_id: 'd', blocked_id: 'c' }] };
+    if (/FROM violations/.test(sql)) return { rows: [{ reporter_id: 'a', reported_user_id: 'd' }] };
     if (/FROM matches/.test(sql)) {
       expect(params).toEqual(['ev', 3]);
       return { rows: [{ a: 'a', b: 'c', c: null }, { a: 'b', b: 'd', c: 'c' }] };

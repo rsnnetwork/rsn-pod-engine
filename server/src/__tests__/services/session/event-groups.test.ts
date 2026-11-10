@@ -82,6 +82,12 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
     const status = world.participants.get(params[1] as string);
     return rows(status ? [{ id: 'sp', status, left_at: null }] : []);
   }
+  if (/^UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE/.test(sql)) {
+    const status = world.participants.get(params[1] as string);
+    if (!status || status === 'removed') return rows([]);
+    world.participants.set(params[1] as string, 'registered');
+    return rows([{ id: 'sp', sessionId: params[0], userId: params[1], status: 'registered' }]);
+  }
   if (/^INSERT INTO session_participants/.test(sql)) {
     world.participants.set(params[1] as string, 'registered');
     return rows([{ id: 'sp', sessionId: params[0], userId: params[1], status: 'registered' }]);
@@ -98,6 +104,7 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
   if (/^SELECT from_round, to_round, mode, allowed_pairs FROM event_round_rules/.test(sql)) {
     return rows([...world.rounds].sort((a, b) => a.from_round - b.from_round));
   }
+  if (sql === 'SELECT id FROM sessions WHERE id = $1') return rows(params[0] === EVENT ? [{ id: EVENT }] : []);
   if (sql === 'SELECT status, config FROM sessions WHERE id = $1 FOR UPDATE') {
     return rows([{ status: world.session.status, config: world.session.config }]);
   }
@@ -172,11 +179,18 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
   if (/^SELECT user_id FROM session_participants WHERE session_id = \$1 AND status <> 'removed'$/.test(sql)) {
     return rows([...world.participants].filter(([, s]) => s !== 'removed').map(([user_id]) => ({ user_id })));
   }
-  if (/^SELECT g.key, COUNT\(DISTINCT pg.user_id\) AS count FROM event_groups g/.test(sql)) {
+  // The people the organiser's capacity counts: a live place, the host left out (the fake has no co-hosts).
+  const counted = () => [...world.participants]
+    .filter(([id, st]) => !['removed', 'left', 'no_show'].includes(st) && id !== world.session.host_user_id)
+    .map(([id]) => id);
+  if (/^SELECT g.key, COUNT\(DISTINCT pg.user_id\) AS count FROM event_groups g LEFT JOIN event_participant_groups pg ON pg.group_id = g.id AND pg.user_id IN \(SELECT sp.user_id FROM session_participants sp JOIN sessions s/.test(sql)) {
     return rows(world.groups.map((g) => ({
       key: g.key,
-      count: String(world.memberships.filter((m) => m.group_id === g.id && world.participants.has(m.user_id)).length),
+      count: String(world.memberships.filter((m) => m.group_id === g.id && counted().includes(m.user_id)).length),
     })));
+  }
+  if (/^SELECT COUNT\(\*\) AS count FROM \(SELECT sp.user_id FROM session_participants sp JOIN sessions s/.test(sql)) {
+    return rows([{ count: String(counted().filter((id) => keysOfUser(id).length === 0).length) }]);
   }
   if (sql === 'SELECT config FROM sessions WHERE id = $1') return rows([{ config: world.session.config }]);
   throw new Error(`unexpected SQL in the fake database: ${sql}`);
@@ -304,6 +318,29 @@ describe('saveEventGroupRules', () => {
     });
     expect(world.groups).toEqual([]);
     expect(world.audit).toEqual([]);
+  });
+
+  it('is refused once the event has ended or was cancelled', async () => {
+    for (const status of ['completed', 'cancelled']) {
+      world.session.status = status;
+      expect(await refusal(saveEventGroupRules(EVENT, host, foundersFunders()))).toEqual({
+        status: 409, code: ErrorCodes.EVENT_ENDED, message: "This event has ended, so its groups can't change.",
+      });
+    }
+    expect(world.groups).toEqual([]);
+  });
+
+  it('an unknown event is unknown to everyone, before who is asking is looked at', async () => {
+    expect(await refusal(saveEventGroupRules('99999999-9999-4999-8999-999999999999', stranger, foundersFunders()))).toMatchObject({
+      status: 404, message: "We couldn't find that event.",
+    });
+  });
+
+  it('a malformed custom pair is refused, not quietly repaired', async () => {
+    const r = await refusal(saveEventGroupRules(EVENT, host, foundersFunders({
+      rounds: [{ fromRound: 1, toRound: 2, mode: 'custom', allowedPairs: ['founder|funder|founder'] }],
+    })));
+    expect(r).toMatchObject({ status: 400, message: 'A pair names a group this event does not have.' });
   });
 
   it('is refused to someone who does not run the event', async () => {
@@ -489,6 +526,48 @@ describe('registerParticipant on an event with groups', () => {
     });
   });
 
+  // Fix round 1 (controller ruling): only a person's own first registration is asked to choose; nobody else is
+  // ever stranded. They come in without a group and the organiser places them.
+
+  it('an approved request registers the person without a group, and the organiser can then put them in one', async () => {
+    const p = await registerParticipant(EVENT, 'p1', undefined, { approvedRequest: true });
+    expect(p.isNewRegistration).toBe(true);
+    expect(world.participants.get('p1')).toBe('registered');
+    expect(keysOfUser('p1')).toEqual([]);
+    // No deadlock: the person now holds a place, so the organiser's assignment works.
+    await setParticipantGroups(EVENT, host, 'p1', ['funder'], 'organiser');
+    expect(keysOfUser('p1')).toEqual(['funder']);
+    expect(world.audit[world.audit.length - 1]).toMatchObject({ action: 'group.assigned', actor_id: 'host' });
+  });
+
+  it('an accepted invite registers the person without a group (the invite path, with or without a personal invite time)', async () => {
+    await expect(registerParticipant(EVENT, 'p1', undefined, { viaInvite: true })).resolves.toMatchObject({ isNewRegistration: true });
+    await expect(registerParticipant(EVENT, 'p2', undefined, { personalInviteCreatedAt: new Date(), viaInvite: true }))
+      .resolves.toMatchObject({ isNewRegistration: true });
+    expect(keysOfUser('p1')).toEqual([]);
+    expect(keysOfUser('p2')).toEqual([]);
+  });
+
+  it('an accepted invite that carries a group writes it', async () => {
+    await registerParticipant(EVENT, 'p1', undefined, { viaInvite: true, groupKeys: ['founder'] });
+    expect(keysOfUser('p1')).toEqual(['founder']);
+  });
+
+  it('someone coming back to a place they held (left the live event, never grouped) is let back in, as before', async () => {
+    world.participants.set('p1', 'left');
+    const p = await registerParticipant(EVENT, 'p1', UserRole.MEMBER);
+    expect(p.isNewRegistration).toBe(false);
+    expect(world.participants.get('p1')).toBe('registered');
+    expect(keysOfUser('p1')).toEqual([]);
+  });
+
+  it('a returning person who sends their old choice keeps the group the organiser gave them, without an error', async () => {
+    world.participants.set('p1', 'left');
+    await setParticipantGroups(EVENT, host, 'p1', ['funder'], 'organiser');
+    await expect(registerParticipant(EVENT, 'p1', UserRole.MEMBER, { groupKeys: ['founder'] })).resolves.toMatchObject({ isNewRegistration: false });
+    expect(keysOfUser('p1')).toEqual(['funder']);
+  });
+
   it('the live page\'s own registration says the same in the live room\'s words', () => {
     expect(eventRoomRefusal('lobby_open', ErrorCodes.EVENT_GROUP_REQUIRED)).toEqual({
       code: ErrorCodes.EVENT_GROUP_REQUIRED, message: 'Choose your group for this event first, on the event page.',
@@ -507,7 +586,7 @@ describe('registerParticipant on an event without groups (dark: as before)', () 
   });
 
   it('applyRegistrationGroups answers at once for an event that has lost its groups meanwhile', async () => {
-    await expect(applyRegistrationGroups({ query: async (s: string, p?: unknown[]) => handle(s, p) } as never, EVENT, 'p1', UserRole.MEMBER, undefined))
+    await expect(applyRegistrationGroups({ query: async (s: string, p?: unknown[]) => handle(s, p) } as never, EVENT, 'p1', UserRole.MEMBER, undefined, true))
       .resolves.toBeUndefined();
   });
 });
@@ -542,7 +621,20 @@ describe('readEventGroups', () => {
     expect(view.counts).toEqual({ founder: 25, funder: 8 });
     expect(view.rules?.rounds).toEqual([{ fromRound: 1, toRound: 5, mode: 'cross_group', allowedPairs: [] }]);
     expect(view.capacity).toHaveLength(5);
-    expect(view.capacity?.[0]).toMatchObject({ round: 1, maxMeetings: 8, waiting: { founder: 17 } });
+    expect(view.capacity?.[0]).toMatchObject({ round: 1, maxMeetings: 8, waiting: { founder: 17 }, ungrouped: 0 });
+    expect(view.ungrouped).toBe(0);
+  });
+
+  it('counts leave the host out, and people with a place but no group are counted as such in every restricted round', async () => {
+    world.participants.set('host', 'registered');
+    await setParticipantGroups(EVENT, host, 'host', ['funder'], 'organiser');
+    world.participants.set('late1', 'registered');
+    world.participants.set('late2', 'registered');
+    const view = await readEventGroups(EVENT, host);
+    expect(view.counts).toEqual({ founder: 25, funder: 8 });
+    expect(view.ungrouped).toBe(2);
+    expect(view.capacity?.[0]).toMatchObject({ maxMeetings: 8, waiting: { founder: 17 }, ungrouped: 2 });
+    expect(view.capacity?.[0].sentence).toMatch(/2 people have no group yet, so this round cannot match them until they are put in a group\.$/);
   });
 
   it('someone who cannot see the event is told it does not exist', async () => {

@@ -12,7 +12,7 @@ export interface RoomCheckContext {
   round: number;
   /** The event's groups and round rules, or null for an event with no groups (the inert path). */
   rules: EventGroupRules | null;
-  /** This person's groups in this event (never read from their account). */
+  /** This person's groups in this event (never read from their account). A key not among `rules.groups` reads as no group. */
   groupsOf(userId: string): readonly string[];
   /** These two must never meet: one blocked or reported the other, or one invited the other. */
   hardExcluded(a: string, b: string): boolean;
@@ -63,12 +63,16 @@ export function checkRoom(ctx: RoomCheckContext, memberIds: readonly string[], o
   const restricted = rule !== null && rule.mode !== 'open';
   const sameGroupAllowed = !!opts.fallback && ctx.rules?.fallback === 'same_group_meeting';
   const groupless = new Set<string>();
+  // Only the event's own groups count: a key the rules no longer have (a stale board or screen after a save) is
+  // read as no group, so the checker, the capacity count and the engine treat that person alike.
+  const known = new Set(ctx.rules?.groups.map((g) => g.key) ?? []);
+  const groupsOf = (id: string) => ctx.groupsOf(id).filter((g) => known.has(g));
 
   for (const [a, b] of pairsOf(memberIds)) {
     if (ctx.hardExcluded(a, b)) problems.push({ kind: 'hard_exclusion', userIds: [a, b] });
     if (restricted) {
-      const ga = ctx.groupsOf(a);
-      const gb = ctx.groupsOf(b);
+      const ga = groupsOf(a);
+      const gb = groupsOf(b);
       if (ga.length === 0 || gb.length === 0) {
         if (ga.length === 0) groupless.add(a);
         if (gb.length === 0) groupless.add(b);

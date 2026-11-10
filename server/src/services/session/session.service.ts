@@ -610,13 +610,18 @@ export async function registerParticipant(
       throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
     }
 
-    // Part 2 Task 5: an event with matching groups asks which group the person is in before it gives a place (a
-    // place someone already holds, and a removal, are answered below as before). Only such an event reads further.
+    // Part 2 Task 5: an event with matching groups writes the group a person chose with their registration. It
+    // refuses only a person's own first registration that chose none, because they can choose in the same request
+    // (fix round 1, controller ruling: an attendee is never stranded). An approved request, an invite accepted,
+    // someone coming back to a place they held, and anyone the organiser adds are let in without a group and wait
+    // in the board's basket for the organiser. A place someone already holds, and a removal, are answered below
+    // as before. Only an event with groups reads further.
     const heldStatus = existing.rows[0]?.status;
     const givesPlace = !heldStatus
       || (!['registered', 'checked_in', 'in_lobby', 'in_round'].includes(heldStatus) && (heldStatus !== 'removed' || readmits));
     if (session.hasEventGroups && givesPlace) {
-      await applyRegistrationGroups(client, sessionId, userId, userRole, options?.groupKeys);
+      const ownFirstPlace = !heldStatus && !viaInvite && !options?.approvedRequest;
+      await applyRegistrationGroups(client, sessionId, userId, userRole, options?.groupKeys, ownFirstPlace);
     }
 
     if (existing.rows.length > 0) {

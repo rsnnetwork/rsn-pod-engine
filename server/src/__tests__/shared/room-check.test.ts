@@ -165,3 +165,17 @@ describe('spec 05: a group is never read from a platform role or designation', (
     }
   });
 });
+
+describe('a key the rules do not have reads as no group (fix round 1)', () => {
+  it('a stale key under a restricting rule is no_group, and still nothing under an open round', () => {
+    const ctx = ctxOf({ groupsOf: (id) => (id === 'stale' ? ['mentor'] : groups[id] ?? []) });
+    expect(checkRoom(ctx, ['stale', 'v1']).problems).toEqual([{ kind: 'no_group', userIds: ['stale'] }]);
+    expect(checkRoom({ ...ctx, round: 4 }, ['stale', 'v1']).ok).toBe(true);
+  });
+
+  it('a person with one known and one stale key is judged by the known one', () => {
+    const ctx = ctxOf({ groupsOf: (id) => (id === 'mixed' ? ['mentor', 'founder'] : groups[id] ?? []) });
+    expect(checkRoom(ctx, ['mixed', 'v1']).ok).toBe(true);
+    expect(checkRoom(ctx, ['mixed', 'f1']).problems).toEqual([{ kind: 'group_rule', userIds: ['mixed', 'f1'] }]);
+  });
+});

@@ -166,8 +166,9 @@ function normalised(rules: EventGroupRules): EventGroupRules {
         mode: r.mode,
         allowedPairs: r.mode === 'custom'
           ? [...new Set(r.allowedPairs.map((p) => {
-            const [a, b] = p.split('|');
-            return b === undefined ? p : groupPairKey(a, b);
+            // A malformed pair is kept as sent, so validateGroupRules refuses it instead of it being repaired.
+            const parts = p.split('|');
+            return parts.length === 2 ? groupPairKey(parts[0], parts[1]) : p;
           }))].sort()
           : [],
       })),
@@ -245,6 +246,9 @@ const EMPTY_RULES: EventGroupRules = {
  * them all: the event goes back to matching as it did before. Audited `group.rules_changed` with before and after.
  */
 export async function saveEventGroupRules(sessionId: string, actor: GroupsActor, rules: EventGroupRules): Promise<EventGroupRules> {
+  // An unknown event reads as unknown to everyone (as GET does), before who is asking is looked at.
+  const exists = await query<{ id: string }>(`SELECT id FROM sessions WHERE id = $1`, [sessionId]);
+  if (!exists.rows[0]) throw new NotFoundError('Session', sessionId, NOT_FOUND);
   await requireOrganiser(sessionId, actor);
   const next = normalised(rules);
   const saved = await transaction(async (client) => {
@@ -253,6 +257,9 @@ export async function saveEventGroupRules(sessionId: string, actor: GroupsActor,
     );
     if (!event.rows[0]) throw new NotFoundError('Session', sessionId, NOT_FOUND);
     if (isLiveStatus(event.rows[0].status)) throw new ConflictError(ErrorCodes.SESSION_IN_PROGRESS, LIVE_REFUSAL);
+    if (event.rows[0].status === 'completed' || event.rows[0].status === 'cancelled') {
+      throw new ConflictError(ErrorCodes.EVENT_ENDED, "This event has ended, so its groups can't change.");
+    }
     if (next.groups.length > 0) {
       const issues = validateGroupRules(next, numberOfRoundsOf(event.rows[0].config));
       if (issues.length > 0) {
@@ -375,20 +382,26 @@ export async function setParticipantGroups(
 }
 
 /**
- * Registration's group question, inside registerParticipant's transaction, for an event that has groups. Keys
- * given: written as the person's own choice (an unknown key is a 400). None given: someone who already has a
- * group, or who runs the event, goes on; anyone else is asked to choose first (409 EVENT_GROUP_REQUIRED).
+ * Registration's group question, inside registerParticipant's transaction, for an event that has groups.
+ * Someone who already has a group keeps it (an organiser's choice, or their own earlier one; keys sent again are
+ * checked, then left). Keys given to someone with none: written as their own choice (an unknown key is a 400).
+ * None given: only a person's own first registration (`ownFirstPlace`) is asked to choose first (409
+ * EVENT_GROUP_REQUIRED), unless they run the event; an approved request, an accepted invite, a returning place and
+ * anyone an organiser adds are let in without a group, for the organiser to place (the board's basket).
  */
 export async function applyRegistrationGroups(
   client: PoolClient, sessionId: string, userId: string, userRole: UserRole | undefined, groupKeys: string[] | undefined,
+  ownFirstPlace: boolean,
 ): Promise<void> {
   const rules = await getEventGroupRules(sessionId, client);
   if (!rules) return;
-  if (groupKeys && groupKeys.length > 0) {
-    await assignGroups(client, sessionId, null, userId, groupKeys, 'self');
+  const keys = groupKeys && groupKeys.length > 0 ? checkedKeys(rules, groupKeys) : [];
+  if ((await keysOf(readerOf(client), sessionId, userId)).length > 0) return;
+  if (keys.length > 0) {
+    await assignGroups(client, sessionId, null, userId, keys, 'self');
     return;
   }
-  if ((await keysOf(readerOf(client), sessionId, userId)).length > 0) return;
+  if (!ownFirstPlace) return;
   const { allowed } = await canActAsHost(userId, userRole, sessionId);
   if (allowed) return;
   throw new ConflictError(ErrorCodes.EVENT_GROUP_REQUIRED, 'Choose your group for this event first.');
@@ -396,26 +409,41 @@ export async function applyRegistrationGroups(
 
 // ─── What a screen reads ─────────────────────────────────────────────────────
 
-/** How many people who hold a place are in each group (someone in two groups counts in both). */
-async function groupCounts(sessionId: string): Promise<Record<string, number>> {
-  const result = await query<{ key: string; count: string }>(
-    `SELECT g.key, COUNT(DISTINCT pg.user_id) AS count
-       FROM event_groups g
-       LEFT JOIN event_participant_groups pg ON pg.group_id = g.id
-        AND EXISTS (SELECT 1 FROM session_participants sp
-                     WHERE sp.session_id = g.session_id AND sp.user_id = pg.user_id
-                       AND sp.status NOT IN ('removed', 'left', 'no_show'))
-      WHERE g.session_id = $1
-      GROUP BY g.key`,
-    [sessionId],
-  );
-  return Object.fromEntries(result.rows.map((r) => [r.key, Number(r.count)]));
+/**
+ * Who the organiser's capacity counts: everyone with a place who will be matched (the host and co-hosts run the
+ * event and are left out, as the live host set leaves them out), per group (someone in two groups counts in
+ * both), and how many of them have no group yet.
+ */
+async function groupCounts(sessionId: string): Promise<{ counts: Record<string, number>; ungrouped: number }> {
+  const matched = `SELECT sp.user_id FROM session_participants sp JOIN sessions s ON s.id = sp.session_id
+      WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show')
+        AND sp.user_id IS DISTINCT FROM s.host_user_id
+        AND NOT EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = sp.session_id AND c.user_id = sp.user_id)`;
+  const [byGroup, none] = await Promise.all([
+    query<{ key: string; count: string }>(
+      `SELECT g.key, COUNT(DISTINCT pg.user_id) AS count
+         FROM event_groups g
+         LEFT JOIN event_participant_groups pg ON pg.group_id = g.id AND pg.user_id IN (${matched})
+        WHERE g.session_id = $1
+        GROUP BY g.key`,
+      [sessionId],
+    ),
+    query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM (${matched}) m
+        WHERE NOT EXISTS (SELECT 1 FROM event_participant_groups pg WHERE pg.session_id = $1 AND pg.user_id = m.user_id)`,
+      [sessionId],
+    ),
+  ]);
+  return {
+    counts: Object.fromEntries(byGroup.rows.map((r) => [r.key, Number(r.count)])),
+    ungrouped: Number(none.rows[0]?.count ?? 0),
+  };
 }
 
 /**
  * The event's groups as a viewer reads them: anyone who can see the event gets the groups, the question and
- * their own groups; the people running it also get the rules, the counts and each round's capacity. Someone who
- * cannot see the event is told it does not exist, as for an unknown id.
+ * their own groups; the people running it also get the rules, the counts (with how many have no group yet) and
+ * each round's capacity. Someone who cannot see the event is told it does not exist, as for an unknown id.
  */
 export async function readEventGroups(sessionId: string, viewer: GroupsActor): Promise<EventGroupsView> {
   const facts = await readEventAccessFacts(sessionId, viewer.userId);
@@ -430,12 +458,12 @@ export async function readEventGroups(sessionId: string, viewer: GroupsActor): P
   };
   const { allowed } = await canActAsHost(viewer.userId, viewer.role, sessionId);
   if (!allowed) return view;
-  if (!rules) return { ...view, rules: null, counts: {}, capacity: [] };
-  const [counts, event] = await Promise.all([
+  if (!rules) return { ...view, rules: null, counts: {}, ungrouped: 0, capacity: [] };
+  const [{ counts, ungrouped }, event] = await Promise.all([
     groupCounts(sessionId),
     query<{ config: unknown }>(`SELECT config FROM sessions WHERE id = $1`, [sessionId]),
   ]);
   const rounds = numberOfRoundsOf(event.rows[0]?.config);
-  const capacity = Array.from({ length: rounds }, (_, i) => explainRoundCapacity(rules, i + 1, counts, rounds));
-  return { ...view, rules, counts, capacity };
+  const capacity = Array.from({ length: rounds }, (_, i) => explainRoundCapacity(rules, i + 1, counts, rounds, ungrouped));
+  return { ...view, rules, counts, ungrouped, capacity };
 }

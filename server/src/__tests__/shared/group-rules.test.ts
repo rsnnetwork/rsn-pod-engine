@@ -299,3 +299,35 @@ describe('estimatedRoundStarts (shared/src/events/round-times.ts)', () => {
     expect(estimatedRoundStarts('not a date', { numberOfRounds: 1, roundDurationSeconds: 300, ratingWindowSeconds: 20 })).toEqual([null]);
   });
 });
+
+describe('explainRoundCapacity counts people with no group (fix round 1)', () => {
+  const cross: EventGroupRules = {
+    ...GROUP_PRESETS.founders_funders,
+    rounds: [{ fromRound: 1, toRound: 3, mode: 'cross_group', allowedPairs: [] }],
+  };
+
+  it('a restricting rule cannot place them: all of them are reported, with a sentence', () => {
+    const capacity = explainRoundCapacity(cross, 1, { founder: 10, funder: 10 }, 5, 3);
+    expect(capacity).toMatchObject({ maxMeetings: 10, waiting: {}, ungrouped: 3 });
+    expect(capacity.sentence).toBe('3 people have no group yet, so this round cannot match them until they are put in a group.');
+    expect(explainRoundCapacity(cross, 1, { founder: 10, funder: 10 }, 5, 1).sentence)
+      .toBe('1 person has no group yet, so this round cannot match them until they are put in a group.');
+  });
+
+  it('both sentences when a group waits as well', () => {
+    expect(explainRoundCapacity(cross, 1, { founder: 25, funder: 8 }, 5, 2).sentence).toBe(
+      'In each round at most 8 founder and funder meetings are possible, so 17 founders wait. '
+      + 'Choose: leave them unmatched, or let them meet another founder. '
+      + '2 people have no group yet, so this round cannot match them until they are put in a group.',
+    );
+  });
+
+  it('an open round pairs them with everyone: they count in the meetings and nobody is reported', () => {
+    const capacity = explainRoundCapacity(cross, 4, { founder: 4, funder: 3 }, 5, 3);
+    expect(capacity).toMatchObject({ maxMeetings: 5, waiting: {}, ungrouped: 0, sentence: null });
+  });
+
+  it('without the count it reads as before (no one ungrouped)', () => {
+    expect(explainRoundCapacity(cross, 1, { founder: 10, funder: 10 }, 5).ungrouped).toBe(0);
+  });
+});

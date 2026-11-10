@@ -5,14 +5,16 @@
 // meets only the hard exclusions and the size), each person's groups, the pairs that must never meet, and the
 // pairs that already met in an earlier round of this event.
 //
-// The hard exclusions are the ones generateSingleRound gives the engine (matching.service.ts, "Build hard
-// constraints"): an inviter and the person who accepted their invite to this event, a block in either direction,
-// and a report that was not dismissed. Read once per call; the checker then answers from memory.
+// The hard exclusions come from hard-exclusions.ts, the one loader generateSingleRound also reads: an inviter and
+// the person who accepted their invite to this event, a block in either direction, and a report that was not
+// dismissed (a failed reports read is logged and skipped, as the engine does). Read once per call; the checker
+// then answers from memory.
 
 import type { PoolClient, QueryResultRow } from 'pg';
 import type { RoomCheckContext } from '@rsn/shared';
 import { query } from '../../db';
 import { pairKey } from './matching.interface';
+import { loadHardExclusions } from './hard-exclusions';
 import { getEventGroupRules, groupsForParticipants } from '../session/event-groups.service';
 
 type Reader = <R extends QueryResultRow>(text: string, params: unknown[]) => Promise<{ rows: R[] }>;
@@ -28,31 +30,15 @@ async function eventPeople(read: Reader, sessionId: string): Promise<string[]> {
 }
 
 /**
- * The pairs of this event's people who must never meet, each as pairKey(a, b): an inviter and whoever accepted
- * their invite to this event, a block either way, a report that was not dismissed.
+ * The pairs of this event's people who must never meet, each as pairKey(a, b): exactly the engine's hard
+ * exclusions (loadHardExclusions), with the engine's failure behaviour.
  */
-export async function hardExclusionPairs(sessionId: string, userIds: string[], client?: PoolClient): Promise<Set<string>> {
-  const read = readerOf(client);
-  const pairs = new Set<string>();
-  const invites = await read<{ inviter_id: string | null; accepted_by_user_id: string }>(
-    `SELECT inviter_id, accepted_by_user_id FROM invites
-      WHERE session_id = $1 AND accepted_by_user_id IS NOT NULL AND status = 'accepted'`,
-    [sessionId],
-  );
-  for (const r of invites.rows) if (r.inviter_id) pairs.add(pairKey(r.inviter_id, r.accepted_by_user_id));
-  if (userIds.length < 2) return pairs;
-  const blocks = await read<{ a: string; b: string }>(
-    `SELECT blocker_id AS a, blocked_id AS b FROM user_blocks WHERE blocker_id = ANY($1::uuid[]) AND blocked_id = ANY($1::uuid[])`,
-    [userIds],
-  );
-  const reports = await read<{ a: string; b: string }>(
-    `SELECT reporter_id AS a, reported_user_id AS b FROM violations
-      WHERE status <> 'dismissed' AND reporter_id IS NOT NULL
-        AND reporter_id = ANY($1::uuid[]) AND reported_user_id = ANY($1::uuid[])`,
-    [userIds],
-  );
-  for (const r of [...blocks.rows, ...reports.rows]) pairs.add(pairKey(r.a, r.b));
-  return pairs;
+export async function hardExclusionPairs(sessionId: string, userIds: string[]): Promise<Set<string>> {
+  const { inviterInvitee, blocked } = await loadHardExclusions(sessionId, userIds);
+  return new Set([...inviterInvitee, ...blocked].map((token) => {
+    const [a, b] = token.split(':');
+    return pairKey(a, b);
+  }));
 }
 
 /** Pairs that met in an algorithm round before this one (a manual breakout is not a round), as pairKey(a, b). */
@@ -86,7 +72,7 @@ export async function loadRoomCheckContext(
   const read = readerOf(opts.client);
   const rules = await getEventGroupRules(sessionId, opts.client);
   const people = await eventPeople(read, sessionId);
-  const excluded = await hardExclusionPairs(sessionId, people, opts.client);
+  const excluded = await hardExclusionPairs(sessionId, people);
   const met = await earlierRoundPairs(read, sessionId, round);
   for (const key of opts.earlierPairs ?? []) met.add(key);
   const groups = rules ? await groupsForParticipants(sessionId, opts.client) : new Map<string, string[]>();

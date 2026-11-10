@@ -55,6 +55,8 @@ export interface EventGroupsView {
   mine: string[];
   rules?: EventGroupRules | null;
   counts?: Record<string, number>;
+  /** People with a place but no group yet (the people running the event left out). */
+  ungrouped?: number;
   capacity?: RoundCapacity[];
 }
 
@@ -213,7 +215,12 @@ export interface RoundCapacity {
   waiting: Record<string, number>;
   /** Groups whose people cannot avoid meeting someone twice over the rounds that use this rule. */
   repeatsUnavoidableFor: string[];
-  /** The organiser's sentence when somebody waits, else null. */
+  /**
+   * People with a place but no group yet whom this round cannot place: every one of them under a rule that
+   * restricts who meets (a rule only lets groups meet), none in an open round (everyone pairs there).
+   */
+  ungrouped: number;
+  /** The organiser's sentence when somebody waits (in a group, or for want of one), else null. */
   sentence: string | null;
 }
 
@@ -351,6 +358,12 @@ function capacitySentence(
     + `Choose: leave them unmatched, or let them meet ${own}.`;
 }
 
+/** People with a place but no group: a rule that restricts who meets cannot place them. */
+function ungroupedSentence(n: number): string | null {
+  if (n === 0) return null;
+  return `${n} ${n === 1 ? 'person has' : 'people have'} no group yet, so this round cannot match them until they are put in a group.`;
+}
+
 /**
  * How many meetings this round's rule allows for these group sizes, who waits, which groups must meet someone
  * twice, and the sentence the organiser reads. Open: everyone pairs (an odd one joins a trio). Otherwise a flow on
@@ -360,18 +373,23 @@ function capacitySentence(
  */
 export function explainRoundCapacity(
   rules: EventGroupRules, round: number, groupCounts: Record<string, number>, numberOfRounds: number,
+  /** People with a place but no group yet: they meet anyone in an open round and nobody under a restricting rule. */
+  ungroupedCount = 0,
 ): RoundCapacity {
   const rule = ruleForRound(rules, round);
   const keys = rules.groups.map((g) => g.key);
   const counts = keys.map((key) => Math.max(0, Math.floor(groupCounts[key] ?? 0)));
+  const ungrouped = Math.max(0, Math.floor(ungroupedCount));
   const allowed = (a: string, b: string) => groupsAllowed(rule, [a], [b]);
   const rounds = roundsUsingRule(rules, round, numberOfRounds);
-  const partnerPool = (g: number) => keys.reduce((s, key, h) => s + (allowed(keys[g], key) ? counts[h] - (h === g ? 1 : 0) : 0), 0);
+  const open = rule.mode === 'open';
+  const partnerPool = (g: number) => keys.reduce((s, key, h) => s + (allowed(keys[g], key) ? counts[h] - (h === g ? 1 : 0) : 0), 0)
+    + (open ? ungrouped : 0);
   const repeatsUnavoidableFor = keys.filter((_, g) => counts[g] > 0 && rounds > partnerPool(g));
 
-  if (rule.mode === 'open') {
-    const n = counts.reduce((s, c) => s + c, 0);
-    return { round, maxMeetings: Math.floor(n / 2), waiting: {}, repeatsUnavoidableFor, sentence: null };
+  if (open) {
+    const n = counts.reduce((s, c) => s + c, 0) + ungrouped;
+    return { round, maxMeetings: Math.floor(n / 2), waiting: {}, repeatsUnavoidableFor, ungrouped: 0, sentence: null };
   }
   const { meetings, matched } = matchedPerGroup(keys, counts, allowed);
   const waiting: Record<string, number> = {};
@@ -384,6 +402,8 @@ export function explainRoundCapacity(
     maxMeetings: meetings,
     waiting,
     repeatsUnavoidableFor,
-    sentence: capacitySentence(rules, rule, keys, meetings, waiting),
+    ungrouped,
+    sentence: [capacitySentence(rules, rule, keys, meetings, waiting), ungroupedSentence(ungrouped)]
+      .filter((x): x is string => x !== null).join(' ') || null,
   };
 }
