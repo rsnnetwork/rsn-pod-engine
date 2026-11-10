@@ -26,7 +26,7 @@ describe('user status cache', () => {
   });
 
   it('stores the user status in the cache after a lookup', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'member' }] });
 
     await __test__.isUserActive('user-1');
 
@@ -36,7 +36,7 @@ describe('user status cache', () => {
   });
 
   it('serves subsequent calls from the cache without hitting the DB', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'member' }] });
 
     await __test__.isUserActive('user-2');
     await __test__.isUserActive('user-2');
@@ -47,7 +47,7 @@ describe('user status cache', () => {
   });
 
   it('removes the user from the cache when invalidateUserStatusCache is called', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'member' }] });
     await __test__.isUserActive('user-3');
     expect(__test__.hasCached('user-3')).toBe(true);
 
@@ -58,7 +58,7 @@ describe('user status cache', () => {
 
   it('re-queries the DB on next lookup after invalidation (picks up new status)', async () => {
     // First lookup: user is active
-    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'member' }] });
     const firstActive = await __test__.isUserActive('user-4');
     expect(firstActive).toBe(true);
 
@@ -78,8 +78,8 @@ describe('user status cache', () => {
   });
 
   it('invalidating one user does not affect other cached users', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }] });
-    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'member' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'member' }] });
 
     await __test__.isUserActive('user-a');
     await __test__.isUserActive('user-b');

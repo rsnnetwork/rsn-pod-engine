@@ -37,6 +37,7 @@ export async function searchConnectedUsers(
     `SELECT DISTINCT u.id, u.display_name, u.email, u.company, u.job_title, u.industry, u.avatar_url
      FROM users u
      WHERE u.status = 'active'
+       AND u.account_kind = 'member'
        AND u.id != $1
        AND EXISTS (
          SELECT 1 FROM encounter_history eh

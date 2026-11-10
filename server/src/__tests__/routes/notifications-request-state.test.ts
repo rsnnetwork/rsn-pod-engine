@@ -99,7 +99,7 @@ function stateOf(req: { sender_id: string; recipient_id: string; status: string 
 /** Answers the route's queries; the list query is answered the way its LEFT JOINs would be. */
 function armDatabase(bells: Bell[]) {
   mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
-    if (/SELECT status FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }] });
+    if (/SELECT status, account_kind FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }] });
     if (/FROM notifications n/.test(sql)) {
       const [userId, pattern] = params as string[];
       const linkPattern = new RegExp(pattern);

@@ -399,9 +399,9 @@ export async function sendPoke(
       }
 
       // Recipient existence check (avoid silent FK errors). T2 (1 Nov 2026): an account an admin removed, suspended
-      // or banned cannot be asked either.
+      // or banned cannot be asked either. Part 2, Task 3: nor can an event guest, who is not a member yet.
       const recipientExists = await client.query<{ id: string }>(
-        `SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')}`, [recipientId],
+        `SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')} AND account_kind = 'member'`, [recipientId],
       );
       if (recipientExists.rows.length === 0) {
         throw new NotFoundError('User', undefined, 'That member is no longer available.');

@@ -35,6 +35,14 @@ export enum UserStatus {
   DEACTIVATED = 'deactivated',
 }
 
+/**
+ * What kind of account a users row is (Part 2, D2, 10 Nov 2026). A member is a full RSN account. An event guest is
+ * the lightweight identity someone gets by joining an event from its link: they can take part in that event, but every
+ * member-only part of RSN (people, messages, pods, circles, search) refuses them until they become a member through the
+ * platform join request, whose approval turns the account into a member. Independent of the platform role.
+ */
+export type AccountKind = 'member' | 'event_guest';
+
 export interface User {
   id: string;
   email: string;
@@ -84,6 +92,8 @@ export interface User {
   onboardingStatus?: OnboardingStatus;
   /** 2 once the member has finished the new onboarding; null before (an earlier one, or none). The preview gates on it. */
   onboardingVersion?: number | null;
+  /** 'event_guest' for an attendee who joined from an event link and is not a member yet; 'member' otherwise. */
+  accountKind?: AccountKind;
   lastOnboardedAt?: string | null;
   lastActiveAt: Date | null;
   createdAt: Date;

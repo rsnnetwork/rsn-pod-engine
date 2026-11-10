@@ -136,6 +136,8 @@ io.use(async (socket, next) => {
     socket.data.email = member.email;
     socket.data.role = member.role;
     socket.data.displayName = member.displayName;
+    // 'event_guest' for an attendee who joined from an event link: the dm:* events refuse them (orchestration.service.ts).
+    socket.data.accountKind = member.accountKind;
     next();
   } catch (err) {
     if (err instanceof Error && err.message === 'Account is deactivated') {

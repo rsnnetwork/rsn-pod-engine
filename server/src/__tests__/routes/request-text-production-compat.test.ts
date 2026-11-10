@@ -85,7 +85,7 @@ function armDb() {
   const messages: Array<Record<string, unknown>> = [];
   mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
     const none = { rows: [] as unknown[] };
-    if (/SELECT status FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }] });
+    if (/SELECT status(?:, account_kind)? FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }] });
     if (/WHERE u\.id = \$1/.test(sql)) return Promise.resolve({ rows: PROFILES[params[0] as string] ? [PROFILES[params[0] as string]] : [] });
     if (/SELECT id, first_name, display_name FROM users WHERE id = ANY/.test(sql)) {
       return Promise.resolve({ rows: (params[0] as string[]).map(id => ({ id, ...NAMES[id] })) });

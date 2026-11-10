@@ -27,9 +27,12 @@ const project = (row: Row, list: string) => {
   return out;
 };
 
-/** A stand-in for `query` that holds one row. Returns null for SQL it does not know, so a test can answer that itself. */
+/**
+ * A stand-in for `query` that holds one row. Returns null for SQL it does not know, so a test can answer that itself.
+ * Like a real row, it is a member's unless the test says otherwise (users.account_kind defaults to 'member').
+ */
 export function fakeUserRow(initial: Row) {
-  const row: Row = { ...initial };
+  const row: Row = { account_kind: 'member', ...initial };
   const writes: Array<{ sql: string; params: unknown[] }> = [];
   const handle = (sql: string, params: unknown[] = []): { rows: Row[] } | null => {
     const s = sql.replace(/\s+/g, ' ').trim();

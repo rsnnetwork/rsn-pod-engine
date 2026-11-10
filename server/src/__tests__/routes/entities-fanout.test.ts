@@ -79,7 +79,7 @@ beforeEach(() => {
   mockEmitEntities.mockResolvedValue(undefined);
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
-    if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] }; // authenticate
+    if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] }; // authenticate
     // T15: the live links only (active and pending); a declined or removed person is told only as a changed user.
     if (/SELECT m\.user_id FROM entity_members m WHERE m\.entity_id = \$1 AND m\.status IN \('active', 'pending'\)/.test(text)) {
       return { rows: (people[String(params[0])] ?? []).map(user_id => ({ user_id })) };

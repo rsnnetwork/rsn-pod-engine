@@ -88,7 +88,7 @@ describe('a Google sign-in state is not an access token', () => {
   });
 
   it('is refused even when the user lookup says every member is active', async () => {
-    mockQuery.mockResolvedValue({ rows: [{ status: 'active' }] });
+    mockQuery.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] });
     const res = await callingWith(await aRealState());
     expect(res.status).toBe(401);
     expect(res.body.data).toBeUndefined();
@@ -109,7 +109,7 @@ describe('a Google sign-in state is not an access token', () => {
   });
 
   it('still lets a real access token through', async () => {
-    mockQuery.mockResolvedValue({ rows: [{ status: 'active' }] });
+    mockQuery.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] });
     const access = jwt.sign({ sub: MEMBER, email: 'a@b.co', role: 'member', sessionId: 's-1' }, SECRET, { expiresIn: '15m' });
     const res = await callingWith(access);
     expect(res.status).toBe(200);

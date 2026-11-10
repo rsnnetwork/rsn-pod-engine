@@ -330,7 +330,7 @@ describe('POST /sessions/:sessionId/post-event-message', () => {
     const app = createApp();
 
     mockGetEligibility.mockResolvedValueOnce(eligEnabled);
-    mockDbQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }] });
+    mockDbQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'member' }] });
 
     const res = await request(app)
       .post(`/sessions/${SESSION_ID}/post-event-message`)

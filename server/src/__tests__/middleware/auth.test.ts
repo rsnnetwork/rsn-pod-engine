@@ -17,14 +17,18 @@ jest.mock('../../config/logger', () => ({
 
 // Mock DB query — return active user by default
 jest.mock('../../db', () => ({
-  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }),
+  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }),
 }));
 
-function createRequest(authHeader?: string): Request {
+function createRequest(authHeader?: string, route?: { method: string; baseUrl: string; path: string }): Request {
   return {
     headers: authHeader ? { authorization: authHeader } : {},
+    ...route,
   } as Request;
 }
+
+/** A route an event guest may also call (guest-scope.ts): the account kind does not decide the answer there. */
+const SESSION_SNAPSHOT = { method: 'GET', baseUrl: '/api/auth', path: '/session' };
 
 /** Helper: wait for async middleware to call next */
 function waitForNext(fn: (req: Request, res: Response, next: NextFunction) => void, req: Request): Promise<any[]> {
@@ -195,7 +199,9 @@ describe('optionalAuth middleware', () => {
 // sign-in, so "signed by us" proves nothing about who is calling. An access token names its member
 // (`sub`) and carries neither claim. Every case runs with the user lookup active, and again with it
 // failing open (the database down: isUserActive then says yes to everyone), so it is the claims alone
-// that decide.
+// that decide. The requests ask for the session snapshot, a route open to every kind of account: with the
+// database down the account kind fails closed (Part 2, Task 3; guest-scope.test.ts covers that), and here
+// only the token is under test.
 
 const ACCESS = { sub: 'user-123', email: 'test@example.com', role: 'member', sessionId: 'sess-abc' };
 const GOOGLE_STATE = { inviteCode: 'ABC', origin: 'https://preview.rsn.network', purpose: 'google-oauth-state' };
@@ -220,16 +226,16 @@ describe('only an access token signs a request in', () => {
   const { query: mockQuery } = require('../../db');
   const sign = (claims: Record<string, unknown>) => jwt.sign(claims, 'test-secret-key', { expiresIn: '15m' });
 
-  afterEach(() => { mockQuery.mockResolvedValue({ rows: [{ status: 'active' }] }); });
+  afterEach(() => { mockQuery.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }); });
 
   describe.each([
-    ['the user lookup says the member is active', () => mockQuery.mockResolvedValue({ rows: [{ status: 'active' }] })],
+    ['the user lookup says the member is active', () => mockQuery.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] })],
     ['the user lookup fails open (the database is down)', () => mockQuery.mockRejectedValue(new Error('db down'))],
   ])('when %s', (_when, arm) => {
     beforeEach(() => { arm(); __test__.clearAll(); });
 
     it.each(SHAPES)('authenticate: %s', async (_name, claims, accepted) => {
-      const req = createRequest(`Bearer ${sign(claims)}`);
+      const req = createRequest(`Bearer ${sign(claims)}`, SESSION_SNAPSHOT);
       const nextArgs = await waitForNext(authenticate, req);
       if (accepted) {
         expect(nextArgs[0]).toBeUndefined();

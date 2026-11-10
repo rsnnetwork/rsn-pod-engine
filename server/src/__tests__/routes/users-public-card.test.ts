@@ -25,7 +25,8 @@ jest.mock('../../config/logger', () => ({
   __esModule: true,
 }));
 jest.mock('../../db', () => ({
-  query: jest.fn(),
+  // authenticate() reads the caller's status and account kind; every caller here is an active member.
+  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }),
   transaction: jest.fn(),
   __esModule: true,
 }));

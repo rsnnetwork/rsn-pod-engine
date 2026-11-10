@@ -28,7 +28,7 @@ import {
   sendJoinRequestWelcomeEmail,
   sendJoinRequestDeclineEmail,
 } from '../email/email.service';
-import { reopenClosedAccount, announceReopened } from '../identity/account-access';
+import { reopenClosedAccount, announceReopened, promoteEventGuest, announceGuestPromoted } from '../identity/account-access';
 import { fanoutAdminEntities } from '../../realtime/fanout';
 import { E } from '../../realtime/entities';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
@@ -279,7 +279,11 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
     const approvedAccount = decision === 'approved' && result.rows[0]
       ? await reopenClosedAccount(client, result.rows[0].email)
       : null;
-    return { updated: result, account: approvedAccount };
+    // An event guest with this email becomes a member with the approval, as on the dashboard (Part 2, Task 3).
+    const promotedGuestId = decision === 'approved' && result.rows[0]
+      ? await promoteEventGuest(client, result.rows[0].email)
+      : null;
+    return { updated: result, account: approvedAccount ? { ...approvedAccount, promotedGuestId } : null };
   });
 
   // Mark token used regardless — prevents replay even if the request was
@@ -299,6 +303,11 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
   fanoutAdminEntities('join-requests').catch(() => {});
   if (account?.reopenedUserId) {
     announceReopened(account.reopenedUserId, {
+      actorId: row.target_user_id, joinRequestId: reviewed.id, email: reviewed.email, via: 'email_action',
+    });
+  }
+  if (account?.promotedGuestId) {
+    announceGuestPromoted(account.promotedGuestId, {
       actorId: row.target_user_id, joinRequestId: reviewed.id, email: reviewed.email, via: 'email_action',
     });
   }

@@ -138,7 +138,7 @@ function audienceRows(sql: string, params: unknown[]) {
 
 function armDatabase() {
   mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
-    if (/SELECT status FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+    if (/SELECT status, account_kind FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
     if (/SELECT pod_id FROM sessions WHERE id/.test(sql)) {
       return Promise.resolve({ rows: world.eventRowExists ? [{ pod_id: world.podId }] : [], rowCount: 1 });
     }

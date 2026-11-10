@@ -595,6 +595,8 @@ async function loadCandidates(userId: string): Promise<CandidateRow[]> {
        AND u.status = 'active'
        AND u.onboarding_completed = true
        AND u.profile_visible = true
+       -- Part 2, Task 3: members only; an event guest is never listed.
+       AND u.account_kind = 'member'
        -- 5 Oct 2026: Pass means "not relevant" and hides the person from the
        -- member's own suggestions until it is undone. Only the member's OWN
        -- response counts (pr is joined on the member's id), so being passed on
@@ -810,6 +812,7 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
       `SELECT ${PROFILE_COLUMNS}
        FROM users u
        WHERE u.id <> $1 AND u.status = 'active' AND u.onboarding_completed = true
+         AND u.account_kind = 'member'
          AND NOT EXISTS (
            SELECT 1 FROM user_blocks b
            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)

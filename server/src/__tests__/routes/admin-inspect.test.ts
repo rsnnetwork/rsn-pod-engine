@@ -74,8 +74,8 @@ type Handler = (sql: string, params: any[]) => any;
 function mockQuery(handlers: Handler[], userExists = true) {
   (dbQuery as jest.Mock).mockImplementation((sql: string, params: any[] = []) => {
     // authenticate()'s isUserActive check + our own user-existence checks.
-    if (/SELECT\s+status\s+FROM\s+users/i.test(sql)) {
-      return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+    if (/SELECT\s+status(?:,\s*account_kind)?\s+FROM\s+users/i.test(sql)) {
+      return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
     }
     if (/^SELECT\s+id\s+FROM\s+users\s+WHERE\s+id\s*=\s*\$1/i.test(sql.trim())) {
       return Promise.resolve(userExists ? { rows: [{ id: params[0] }], rowCount: 1 } : { rows: [], rowCount: 0 });
@@ -367,7 +367,7 @@ describe('GET /users/:id/onboarding', () => {
 
   it('propagates an unexpected DB failure as a 500 with no data payload', async () => {
     (dbQuery as jest.Mock).mockImplementation((sql: string, params: any[] = []) => {
-      if (/SELECT\s+status\s+FROM\s+users/i.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+      if (/SELECT\s+status(?:,\s*account_kind)?\s+FROM\s+users/i.test(sql)) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
       if (/^SELECT\s+id\s+FROM\s+users\s+WHERE\s+id\s*=\s*\$1/i.test(sql.trim())) return Promise.resolve({ rows: [{ id: params[0] }], rowCount: 1 });
       if (/LEFT JOIN user_intent_profiles/i.test(sql)) return Promise.reject(new Error('db down'));
       return Promise.resolve({ rows: [], rowCount: 0 });
@@ -487,7 +487,7 @@ describe('GET /conversations/:id/messages', () => {
     // Override: audit insert rejects; messages query (if ever reached) would succeed —
     // proving the failure is what aborts the read, not a coincidental empty result.
     (dbQuery as jest.Mock).mockImplementation((sql: string) => {
-      if (/SELECT\s+status\s+FROM\s+users/i.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+      if (/SELECT\s+status(?:,\s*account_kind)?\s+FROM\s+users/i.test(sql)) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
       if (/FROM\s+dm_conversations\s+WHERE\s+id\s*=\s*\$1/i.test(sql)) return Promise.resolve({ rows: [{ id: CONV_ID }], rowCount: 1 });
       if (/INSERT\s+INTO\s+audit_log/i.test(sql)) return Promise.reject(new Error('db down'));
       if (/FROM\s+direct_messages/i.test(sql)) return Promise.resolve({ rows: [{ id: 'm1', from_user_id: USER_ID, content: 'hi', attachment_url: null, created_at: new Date() }], rowCount: 1 });

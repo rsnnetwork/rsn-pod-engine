@@ -74,7 +74,7 @@ const flush = () => new Promise((r) => setImmediate(r));
 /** The database: the auth middleware's status lookup finds an active member; `extra` answers the rest. */
 function db(extra: (sql: string) => { rows: unknown[] } | undefined = () => undefined) {
   mockQuery.mockImplementation(async (sql: string) => {
-    if (/SELECT status FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active' }] };
+    if (/SELECT status, account_kind FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
     return extra(sql) ?? { rows: [] };
   });
 }

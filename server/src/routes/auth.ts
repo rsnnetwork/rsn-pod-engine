@@ -192,6 +192,10 @@ router.get(
             // 30 Oct review (2.1): 2 once they finished the new onboarding, else null. The preview gates on it;
             // production's client ignores it.
             onboardingVersion: user.onboardingVersion ?? null,
+            // Part 2, Task 3: 'event_guest' for an attendee who joined from an event link and is not a member yet,
+            // 'member' otherwise. The client shows a guest their event and the way to become a member; the server
+            // never trusts it back (authenticate reads the kind from the database).
+            accountKind: user.accountKind,
             // pg returns Date; the shared contract is ISO string or null
             lastOnboardedAt: (user.lastOnboardedAt as any) instanceof Date ? ((user.lastOnboardedAt as any) as Date).toISOString() : (user.lastOnboardedAt ?? null),
             // Matching-profile free-text fields the profile page reads. getUserById

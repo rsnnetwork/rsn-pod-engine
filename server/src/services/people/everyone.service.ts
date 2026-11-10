@@ -106,6 +106,8 @@ const EVERYONE_SQL = `
      AND u.status = 'active'
      AND u.onboarding_completed = true
      AND u.profile_visible = true
+     -- Part 2, Task 3: members only; an event guest is never listed.
+     AND u.account_kind = 'member'
      AND NOT EXISTS (SELECT 1 FROM user_blocks b
                       WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
                          OR (b.blocker_id = u.id AND b.blocked_id = $1))

@@ -8,7 +8,7 @@ import { query } from '../../db';
 import config from '../../config';
 import logger from '../../config/logger';
 import {
-  User, UserRole, CreateUserInput, UpdateUserInput,
+  User, UserRole, CreateUserInput, UpdateUserInput, AccountKind,
   AuthTokenPair, JwtPayload, ErrorCodes, UserStatusCounts,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, UnauthorizedError, AppError } from '../../middleware/errors';
@@ -139,6 +139,7 @@ export async function getUserById(id: string): Promise<User> {
             onboarding_status AS "onboardingStatus",
             onboarding_version AS "onboardingVersion",
             last_onboarded_at AS "lastOnboardedAt",
+            account_kind AS "accountKind",
             last_active_at AS "lastActiveAt",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM users WHERE id = $1`,
@@ -179,20 +180,42 @@ export async function getUserByEmail(email: string): Promise<User | null> {
   return result.rows.length > 0 ? result.rows[0] : null;
 }
 
-export async function createUser(input: CreateUserInput): Promise<User> {
+/** The name a guest goes by before they give one: users.display_name is NOT NULL, and an email is never shown. */
+const GUEST_FALLBACK_NAME = 'Guest';
+
+export async function createUser(
+  input: CreateUserInput & { accountKind?: AccountKind; guestFirstSessionId?: string },
+): Promise<User> {
   const existing = await getUserByEmail(input.email);
   if (existing) {
     throw new ConflictError('USER_ALREADY_EXISTS', 'A user with this email already exists');
   }
 
   const id = uuid();
-  const displayName = input.displayName || `${input.firstName} ${input.lastName}`;
 
-  await query(
-    `INSERT INTO users (id, email, display_name, first_name, last_name, linkedin_url, role, status, email_verified)
-     VALUES ($1, $2, $3, $4, $5, $6, 'member', 'active', FALSE)`,
-    [id, input.email.toLowerCase(), displayName, input.firstName, input.lastName, input.linkedinUrl || null]
-  );
+  if (input.accountKind === 'event_guest') {
+    // An event guest (Part 2, Task 3): someone who joined an event from its link. Their address was proved by the
+    // link's code, so it is verified. They are kept out of every discovery list twice over: not onboarded and not
+    // visible, besides account_kind itself. Becoming a member (an approved join request, promoteEventGuest) makes
+    // them visible and takes them through onboarding.
+    const guestName = input.displayName?.trim()
+      || `${input.firstName ?? ''} ${input.lastName ?? ''}`.trim()
+      || GUEST_FALLBACK_NAME;
+    await query(
+      `INSERT INTO users (id, email, display_name, first_name, last_name, linkedin_url, role, status, email_verified,
+                          account_kind, guest_first_session_id, onboarding_completed, profile_visible)
+       VALUES ($1, $2, $3, $4, $5, $6, 'member', 'active', TRUE, 'event_guest', $7, FALSE, FALSE)`,
+      [id, input.email.toLowerCase(), guestName, input.firstName ?? '', input.lastName ?? '', input.linkedinUrl || null,
+        input.guestFirstSessionId ?? null]
+    );
+  } else {
+    const displayName = input.displayName || `${input.firstName} ${input.lastName}`;
+    await query(
+      `INSERT INTO users (id, email, display_name, first_name, last_name, linkedin_url, role, status, email_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, 'member', 'active', FALSE)`,
+      [id, input.email.toLowerCase(), displayName, input.firstName, input.lastName, input.linkedinUrl || null]
+    );
+  }
 
   // Create default subscription
   await query(

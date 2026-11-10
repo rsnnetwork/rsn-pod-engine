@@ -175,7 +175,7 @@ describe('meeting requests', () => {
     const { readFileSync } = jest.requireActual<typeof import('fs')>('fs');
     const { join } = jest.requireActual<typeof import('path')>('path');
     const source = readFileSync(join(__dirname, '../../../services/poke/poke.service.ts'), 'utf8');
-    expect(source).toContain("`SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')}`");
+    expect(source).toContain("`SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')} AND account_kind = 'member'`");
     expect(source).toContain("'That member is no longer available.'");
   });
 });

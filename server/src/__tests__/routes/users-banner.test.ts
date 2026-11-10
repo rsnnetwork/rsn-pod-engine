@@ -81,7 +81,7 @@ beforeEach(() => {
   mockQuery.mockReset().mockImplementation((sql: string, params: unknown[] = []) => {
     if (/SELECT banner_blob, banner_mime FROM users/.test(sql) && params[0] === OTHER) return Promise.resolve({ rows: [other] });
     if (/UPDATE users SET banner_blob = NULL/.test(sql) && params[0] === OTHER) return Promise.resolve({ rows: [{ id: OTHER }] });
-    if (/SELECT status FROM users/.test(sql) && params[0] === OTHER) return Promise.resolve({ rows: [{ status: 'active' }] });
+    if (/SELECT status, account_kind FROM users/.test(sql) && params[0] === OTHER) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }] });
     return Promise.resolve(db.handle(sql, params) ?? { rows: [] });
   });
 });

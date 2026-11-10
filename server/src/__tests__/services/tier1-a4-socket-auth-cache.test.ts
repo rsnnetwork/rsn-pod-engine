@@ -49,11 +49,13 @@ describe('Tier-1 A4 — shared socket/HTTP user-status cache', () => {
     });
 
     // 7 Oct 2026: the handshake's check moved out of index.ts into this function, where it is tested by
-    // what it does (middleware/socket-auth.test.ts). It still asks isUserActive, the shared cache.
-    it('the handshake check asks isUserActive, the shared cache, before it lets a member in', () => {
+    // what it does (middleware/socket-auth.test.ts). It asks the shared cache: since Part 2, Task 3 through
+    // readAccountGate, the one cached read of status and account kind that isUserActive also answers from.
+    it('the handshake check asks the shared cache (readAccountGate) before it lets a member in', () => {
       const check = src.slice(src.indexOf('export async function authenticateSocketToken'));
-      expect(check).toMatch(/const active = await isUserActive\(payload\.sub\)/);
-      expect(check).not.toMatch(/SELECT status FROM users WHERE id = \$1/);
+      expect(check).toMatch(/const gate = await readAccountGate\(payload\.sub\)/);
+      expect(src).toMatch(/export async function isUserActive[^]*?return \(await readAccountGate\(userId\)\)\.status === 'active'/);
+      expect(check).not.toMatch(/SELECT status, account_kind FROM users WHERE id = \$1/);
     });
   });
 
@@ -70,7 +72,7 @@ describe('Tier-1 A4 — shared socket/HTTP user-status cache', () => {
       const block = src.slice(useStart, useEnd);
       expect(block).toMatch(/await authenticateSocketToken\(token\)/);
       // The old raw query pattern must be gone
-      expect(block).not.toMatch(/SELECT status FROM users WHERE id = \$1/);
+      expect(block).not.toMatch(/SELECT status, account_kind FROM users WHERE id = \$1/);
       // And the handshake verifies nothing itself: the one check is the tested function.
       expect(block).not.toMatch(/jwt\.verify/);
     });

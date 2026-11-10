@@ -54,7 +54,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   rows = [];
   (dbQuery as jest.Mock).mockImplementation((sql: string) => {
-    if (/SELECT\s+status\s+FROM\s+users/i.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+    if (/SELECT\s+status(?:,\s*account_kind)?\s+FROM\s+users/i.test(sql)) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
     if (/u\.find_specific/.test(sql)) return Promise.resolve({ rows, rowCount: rows.length });
     return Promise.resolve({ rows: [], rowCount: 0 });
   });

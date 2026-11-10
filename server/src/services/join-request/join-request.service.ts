@@ -12,7 +12,7 @@ import { ErrorCodes } from '@rsn/shared';
 import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoinRequestDeclineEmail, sendJoinRequestReminderEmail } from '../email/email.service';
 import { applyMatchVerification, normalizeLinkedinUrl } from '../onboarding/enrichment.service';
 import { resolveEnrichProvider, runProvider, resultFromOutcome } from '../onboarding/providers/registry';
-import { reopenClosedAccount, announceReopened } from '../identity/account-access';
+import { reopenClosedAccount, announceReopened, promoteEventGuest, announceGuestPromoted } from '../identity/account-access';
 import { applicantBaseUrl, signInOriginFor } from './applicant-links';
 
 const APPROVAL_LINK_EXPIRY_DAYS = 7;
@@ -259,7 +259,9 @@ export async function reviewJoinRequest(
       return { row: current.rows[0], account: null, claimed: false };
     }
     const approvedAccount = decision === 'approved' ? await reopenClosedAccount(client, result.rows[0].email) : null;
-    return { row: result.rows[0], account: approvedAccount, claimed: true };
+    // An event guest with this email becomes a member with the approval, in the same transaction (Part 2, Task 3).
+    const promotedGuestId = decision === 'approved' ? await promoteEventGuest(client, result.rows[0].email) : null;
+    return { row: result.rows[0], account: approvedAccount ? { ...approvedAccount, promotedGuestId } : null, claimed: true };
   });
 
   const reviewed = mapRow(row);
@@ -274,6 +276,9 @@ export async function reviewJoinRequest(
 
   if (account?.reopenedUserId) {
     announceReopened(account.reopenedUserId, { actorId: reviewedBy, joinRequestId: id, email: reviewed.email, via: 'dashboard' });
+  }
+  if (account?.promotedGuestId) {
+    announceGuestPromoted(account.promotedGuestId, { actorId: reviewedBy, joinRequestId: id, email: reviewed.email, via: 'dashboard' });
   }
 
   // A suspended or banned account stays that way: no "you're in" email or

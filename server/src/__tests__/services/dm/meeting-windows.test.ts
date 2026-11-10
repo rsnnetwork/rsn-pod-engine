@@ -1367,7 +1367,7 @@ describe('acceptPoke intro seeding', () => {
       }
       if (/FROM user_pokes WHERE id/.test(sql)) return Promise.resolve({ rows: [{ ...request }] });
       if (/UPDATE user_pokes/.test(sql)) return Promise.resolve({ rows: [] }); // no request the other way
-      if (/SELECT status FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }] });
+      if (/SELECT status(?:, account_kind)? FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }] });
       if (/INSERT INTO dm_conversations/.test(sql)) return Promise.resolve({ rows: [{ id: 'conv-9' }] });
       if (/SELECT display_name FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ display_name: 'Recv Person' }] });
       if (/INSERT INTO notifications/.test(sql)) return Promise.resolve({ rows: [{ id: 'notif-1', created_at: new Date() }] });

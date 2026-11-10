@@ -90,6 +90,8 @@ export async function searchMembers(
         AND u.status = 'active'
         AND u.onboarding_completed = true
         AND u.profile_visible = true
+        -- Part 2, Task 3: members only; an event guest is never listed.
+        AND u.account_kind = 'member'
         AND (${tokenClauses})
         AND NOT EXISTS (
           SELECT 1 FROM user_blocks b

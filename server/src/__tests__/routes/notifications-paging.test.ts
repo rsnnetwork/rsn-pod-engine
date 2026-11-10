@@ -48,7 +48,7 @@ const stored = (n: number) => Array.from({ length: n }, (_, i) => {
 /** Answers the list query with the stored rows its params ask for (keyset + LIMIT), and the counts. */
 function arm(all: ReturnType<typeof stored>) {
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
-    if (/SELECT status FROM users WHERE id/.test(sql)) return { rows: [{ status: 'active' }] };
+    if (/SELECT status, account_kind FROM users WHERE id/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
     if (/FROM notifications n/.test(sql)) {
       const [, , beforeAt, beforeId, limit] = params as [string, string, string | null, string | null, number];
       const older = all.filter((r) => !beforeAt || r.cursorAt < beforeAt || (r.cursorAt === beforeAt && r.id < (beforeId as string)));

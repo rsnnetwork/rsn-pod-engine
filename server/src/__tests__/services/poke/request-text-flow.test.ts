@@ -93,7 +93,7 @@ function armDb(requests: Row[]) {
       return Promise.resolve({ rows: [{ ...r }] });
     }
     if (/FROM user_pokes WHERE id = \$1/.test(sql)) return Promise.resolve({ rows: requests.filter(r => r.id === params[0]) });
-    if (/SELECT status FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: users[params[0] as string].status }] });
+    if (/SELECT status(?:, account_kind)? FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: users[params[0] as string].status, account_kind: 'member' }] });
     if (/SELECT id, first_name, display_name FROM users WHERE id = ANY/.test(sql)) {
       return Promise.resolve({ rows: (params[0] as string[]).map(id => ({ id, ...users[id] })) });
     }

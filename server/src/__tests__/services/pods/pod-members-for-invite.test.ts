@@ -124,7 +124,7 @@ describe('GET /pods/:id/members/for-invite', () => {
   /** The database: every account is active; EVENT belongs to POD and is hosted by u-host, with u-cohost as a co-host. */
   const world = () => mockDb.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = flatSql(sql);
-    if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+    if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] };
     if (/SELECT host_user_id, pod_id FROM sessions WHERE id = \$1/.test(text)) {
       return { rows: params[0] === EVENT ? [{ host_user_id: 'u-host', pod_id: POD }] : [] };
     }

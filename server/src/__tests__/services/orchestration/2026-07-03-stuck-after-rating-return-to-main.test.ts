@@ -60,7 +60,7 @@ describe('healStrandedBreakoutLocations', () => {
 
   it('leaves a participant in a STILL-ACTIVE breakout untouched', async () => {
     await writeCanonical(doc({ u1: inRoom('r2', 'm-live') }) as any);
-    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }] }); // m-live
+    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'member' }] }); // m-live
 
     const healed = await healStrandedBreakoutLocations('s1');
 

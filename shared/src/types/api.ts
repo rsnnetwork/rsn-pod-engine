@@ -61,6 +61,7 @@ export const ErrorCodes = {
   USER_PROFILE_INCOMPLETE: 'USER_PROFILE_INCOMPLETE',
   USER_SUSPENDED: 'USER_SUSPENDED',
   ACCOUNT_CLOSED: 'ACCOUNT_CLOSED',  // deleted/removed by an admin; approving a new join request reopens it
+  GUEST_MEMBERSHIP_REQUIRED: 'GUEST_MEMBERSHIP_REQUIRED',  // 403; an event guest (users.account_kind = 'event_guest') asked for a member-only part of RSN
 
   // Pod errors
   POD_NOT_FOUND: 'POD_NOT_FOUND',
