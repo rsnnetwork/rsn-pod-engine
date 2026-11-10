@@ -103,6 +103,12 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
   return pod;
 }
 
+/**
+ * Each pod's event count, as the pod lists and pages show it. A draft (Part 2 Task 2, fix round 1) is nobody's but its
+ * organisers', so it is not counted: the count names only events a member could find.
+ */
+const PUBLISHED_EVENT_COUNTS = `SELECT pod_id, COUNT(*) AS cnt FROM sessions WHERE publication = 'published' GROUP BY pod_id`;
+
 export async function getPodById(podId: string): Promise<Pod & { memberCount?: number; sessionCount?: number; directorName?: string | null; directorId?: string | null }> {
   const result = await query<Pod & { memberCount: number; sessionCount: number; directorName: string | null; directorId: string | null }>(
     `SELECT ${POD_COLUMNS},
@@ -112,7 +118,7 @@ export async function getPodById(podId: string): Promise<Pod & { memberCount?: n
             dir.user_id AS "directorId"
      FROM pods
      LEFT JOIN (${ACTIVE_MEMBER_COUNTS}) mc ON mc.pod_id = pods.id
-     LEFT JOIN (SELECT pod_id, COUNT(*) AS cnt FROM sessions GROUP BY pod_id) sc ON sc.pod_id = pods.id
+     LEFT JOIN (${PUBLISHED_EVENT_COUNTS}) sc ON sc.pod_id = pods.id
      LEFT JOIN (
        SELECT pm.pod_id, pm.user_id, u.display_name
        FROM pod_members pm
@@ -247,7 +253,7 @@ export async function listPods(params: {
             ${memberRoleSelect}
      FROM pods p
      LEFT JOIN (${ACTIVE_MEMBER_COUNTS}) mc ON mc.pod_id = p.id
-     LEFT JOIN (SELECT pod_id, COUNT(*) AS cnt FROM sessions GROUP BY pod_id) sc ON sc.pod_id = p.id
+     LEFT JOIN (${PUBLISHED_EVENT_COUNTS}) sc ON sc.pod_id = p.id
      ${memberRoleJoin}
      ${whereClause}
      ORDER BY p.created_at DESC
@@ -703,7 +709,7 @@ export async function reactivatePod(podId: string, userId: string): Promise<Pod>
 
 export async function getSessionCountForPod(podId: string): Promise<number> {
   const result = await query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM sessions WHERE pod_id = $1`,
+    `SELECT COUNT(*) as count FROM sessions WHERE pod_id = $1 AND publication = 'published'`,
     [podId]
   );
   return parseInt(result.rows[0].count, 10);

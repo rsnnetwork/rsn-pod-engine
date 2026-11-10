@@ -136,8 +136,16 @@ function audienceRows(sql: string, params: unknown[]) {
   return ids.map((user_id) => ({ user_id }));
 }
 
+/**
+ * Part 2 Task 2, fix round 1: the audience SQL also carries a draft's organiser arms (its host, co-hosts and admins,
+ * only while it is a draft). Every event here is published, so those arms answer nothing: the fake reads the
+ * statement without them.
+ */
+const withoutDraftArms = (sql: string) => sql.split(/\bUNION\s+SELECT host_user_id FROM sessions WHERE id = \$1 AND publication = 'draft'/)[0];
+
 function armDatabase() {
-  mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
+  mockQuery.mockImplementation((fullSql: string, params: unknown[] = []) => {
+    const sql = withoutDraftArms(fullSql);
     if (/SELECT status, account_kind FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
     if (/SELECT pod_id FROM sessions WHERE id/.test(sql)) {
       return Promise.resolve({ rows: world.eventRowExists ? [{ pod_id: world.podId }] : [], rowCount: 1 });

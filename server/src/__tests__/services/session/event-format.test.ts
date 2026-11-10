@@ -13,7 +13,8 @@
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
-  transaction: jest.fn(),
+  // deleteSession cancels in a transaction (Part 2 Task 2, fix round 1): its statements reach the same mock.
+  transaction: (fn: (client: unknown) => unknown) => fn({ query: (...args: unknown[]) => mockQuery(...args) }),
   __esModule: true,
 }));
 

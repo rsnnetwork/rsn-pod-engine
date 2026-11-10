@@ -47,7 +47,8 @@ import {
   eventListedForSql, archivedEventsSql, visibleEventsSql, publicEventsSql, canSeeEvent, canRegister, type EventAccessFacts,
 } from '../../../services/session/event-access';
 import { canViewSession, eventRoomAdmission } from '../../../services/session/session-access';
-import { listSessions, registerParticipant, hardDeleteSession } from '../../../services/session/session.service';
+import { listSessions, registerParticipant, hardDeleteSession, deleteSession } from '../../../services/session/session.service';
+import { assertMayInviteToSession } from '../../../services/invite/invite.service';
 import sessionRoutes from '../../../routes/sessions';
 import { errorHandler, notFoundHandler } from '../../../middleware/errorHandler';
 
@@ -321,6 +322,7 @@ function armRoute(world: { exists: boolean; publication?: string; viewerIsHost?:
         account_closed: false, publication: world.publication ?? 'published' }] };
     }
     if (sql.startsWith('SELECT visibility, (publication')) return { rows: [{ visibility: null, is_draft: world.publication === 'draft' }] };
+    if (sql.startsWith("SELECT (publication = 'draft') AS is_draft")) return { rows: [{ is_draft: world.publication === 'draft' }] };
     if (sql.includes('session_participants') && sql.includes('LIMIT 1') && sql.startsWith('SELECT status')) {
       return { rows: [{ status: 'registered' }] };
     }
@@ -369,6 +371,118 @@ describe('GET /sessions/:id', () => {
       participantCount: 3,
       access: { visibility: null, mode: 'register', myRequest: null, autoRegister: true, canManageRequests: false },
     });
+  });
+});
+
+describe('GET /sessions/:id/participants and /participant-counts (fix round 1)', () => {
+  it.each(['participants', 'participant-counts'])('/%s: a draft, to a pod member, is the same 404 as an unknown id', async (route) => {
+    armRoute({ exists: true, publication: 'draft' });
+    const draft = await request(app()).get(`/sessions/${EVENT}/${route}`).set('Authorization', `Bearer ${token(MEMBER)}`);
+    armRoute({ exists: false });
+    const unknown = await request(app()).get(`/sessions/${RANDOM}/${route}`).set('Authorization', `Bearer ${token(MEMBER)}`);
+    expect(draft.status).toBe(404);
+    expect(draft.body).toEqual(unknown.body);
+    expect(draft.body.error).toMatchObject({ code: 'SESSION_NOT_FOUND', message: "We couldn't find that event." });
+  });
+
+  it('its host still reads its participants', async () => {
+    armRoute({ exists: true, publication: 'draft' });
+    const res = await request(app()).get(`/sessions/${EVENT}/participants`).set('Authorization', `Bearer ${token(HOST)}`);
+    expect(res.status).toBe(200);
+  });
+
+  it("a published event goes on to the routes' own checks, exactly as before", async () => {
+    armRoute({ exists: true });
+    const list = await request(app()).get(`/sessions/${EVENT}/participants`).set('Authorization', `Bearer ${token(MEMBER)}`);
+    expect(list.status).toBe(200);
+    // Today's refusal for someone who is neither the host nor a pod member, in today's words.
+    const counts = await request(app()).get(`/sessions/${EVENT}/participant-counts`).set('Authorization', `Bearer ${token(MEMBER)}`);
+    expect(counts.status).toBe(403);
+    expect(counts.body.error.message).toBe('You must be the host or a pod member to view participant counts');
+  });
+});
+
+// ── The legacy soft delete (DELETE /sessions/:id) ───────────────────────────
+
+describe('deleteSession records the cancellation as the lifecycle does (fix round 1)', () => {
+  function armDelete(status: string, publication = 'published', cohost = false) {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('"registrationOpensAt"')) return { rows: [{ ...productionRow, ...LIFECYCLE_COLUMNS, status, publication }] };
+      if (sql.startsWith('UPDATE sessions')) return { rows: status === 'cancelled' ? [] : [{ id: EVENT }], rowCount: status === 'cancelled' ? 0 : 1 };
+      if (sql.includes('FROM session_cohosts')) return { rows: cohost ? [{ one: 1 }] : [] };
+      return { rows: [] };
+    });
+  }
+
+  it('stamps cancelled_at and cancelled_by and writes event.cancelled in the same transaction; no bell, no email', async () => {
+    armDelete('scheduled');
+    await deleteSession(EVENT, HOST, UserRole.MEMBER);
+    const update = mockQuery.mock.calls.find(([sql]) => sql.startsWith('UPDATE sessions'))!;
+    expect(flat(update[0])).toBe(
+      "UPDATE sessions SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2, updated_at = NOW() WHERE id = $1 AND status <> 'cancelled' RETURNING id",
+    );
+    expect(update[1]).toEqual([EVENT, HOST]);
+    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: EVENT, actorId: HOST, action: 'event.cancelled', automatic: false,
+      before: { status: 'scheduled' }, after: { status: 'cancelled', via: 'DELETE /sessions/:id' },
+    }), mockClient);
+    expect(mockQuery.mock.calls.some(([sql]) => sql.includes('INSERT INTO notifications'))).toBe(false);
+  });
+
+  it("keeps today's allowance: the host may still turn a completed event into cancelled", async () => {
+    armDelete('completed');
+    await deleteSession(EVENT, HOST, UserRole.MEMBER);
+    expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'event.cancelled', before: { status: 'completed' } }), mockClient);
+  });
+
+  it('an event already cancelled is answered as before (an admin succeeds, the host keeps the 400) and keeps its first record', async () => {
+    armDelete('cancelled');
+    await expect(deleteSession(EVENT, 'admin-1', UserRole.ADMIN)).resolves.toBeUndefined();
+    await expect(deleteSession(EVENT, HOST, UserRole.MEMBER)).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it("a draft, to someone who does not run it, is 404; to a co-host it is today's 403", async () => {
+    armDelete('scheduled', 'draft');
+    await expect(deleteSession(EVENT, MEMBER, UserRole.MEMBER)).rejects.toMatchObject({ statusCode: 404, message: "We couldn't find that event." });
+    armDelete('scheduled', 'draft', true);
+    await expect(deleteSession(EVENT, MEMBER, UserRole.MEMBER)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockQuery.mock.calls.some(([sql]) => sql.startsWith('UPDATE sessions'))).toBe(false);
+  });
+});
+
+// ── Invites to a draft ──────────────────────────────────────────────────────
+
+describe('invites to a draft (fix round 1)', () => {
+  function armInvite(publication: string) {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('"registrationOpensAt"')) return { rows: [{ ...productionRow, ...LIFECYCLE_COLUMNS, publication }] };
+      return { rows: [] };
+    });
+  }
+
+  it('its host is told to publish it first; a stranger is answered 404; a published event is as before', async () => {
+    armInvite('draft');
+    await expect(assertMayInviteToSession(EVENT, HOST, false)).rejects.toMatchObject({
+      statusCode: 409, code: 'EVENT_NOT_PUBLISHED', message: 'Publish the event before inviting people.',
+    });
+    await expect(assertMayInviteToSession(EVENT, 'admin-1', true)).rejects.toMatchObject({ statusCode: 409 });
+    await expect(assertMayInviteToSession(EVENT, MEMBER, false)).rejects.toMatchObject({ statusCode: 404 });
+    armInvite('published');
+    await expect(assertMayInviteToSession(EVENT, HOST, false)).resolves.toMatchObject({ id: EVENT });
+    await expect(assertMayInviteToSession(EVENT, MEMBER, false)).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
+// ── Pod event counts ────────────────────────────────────────────────────────
+
+describe('pod event counts (fix round 1)', () => {
+  it("count published events only, in the pod lists, a pod's page and its session-count", () => {
+    const pods = read('services/pod/pod.service.ts');
+    expect(pods).toContain("const PUBLISHED_EVENT_COUNTS = `SELECT pod_id, COUNT(*) AS cnt FROM sessions WHERE publication = 'published' GROUP BY pod_id`;");
+    expect(pods.match(/LEFT JOIN \(\$\{PUBLISHED_EVENT_COUNTS\}\) sc/g)).toHaveLength(2);
+    expect(pods).not.toContain('FROM sessions GROUP BY pod_id');
+    expect(pods).toContain("`SELECT COUNT(*) as count FROM sessions WHERE pod_id = $1 AND publication = 'published'`");
   });
 });
 

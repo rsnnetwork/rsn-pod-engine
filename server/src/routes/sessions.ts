@@ -59,6 +59,22 @@ async function refuseView(sessionId: string): Promise<never> {
   throw new ForbiddenError(VIEW_REFUSAL);
 }
 
+/**
+ * Part 2 Task 2, fix round 1: a route that answers about an event (its participants, their counts) answers a draft the
+ * person does not run with the 404 an unknown id gets, before its own checks. A published event goes on to the route's
+ * own checks exactly as before (one primary-key read more); an id that names nothing goes on to their own 404.
+ */
+async function refuseHiddenDraft(sessionId: string, userId: string, role: string): Promise<void> {
+  if (hasRoleAtLeast(role as UserRole, UserRole.ADMIN)) return;
+  const row = await query<{ is_draft: boolean | null }>(
+    `SELECT (publication = 'draft') AS is_draft FROM sessions WHERE id = $1`,
+    [sessionId],
+  );
+  if (row?.rows?.[0]?.is_draft !== true) return;
+  if (await canViewSession(userId, sessionId, role)) return;
+  throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+}
+
 /** Whether the event page registers this person on opening it: its audience or an invitee, who may see the event. */
 async function registersOnOpening(sessionId: string, userId: string, role: string | undefined): Promise<boolean> {
   const f = await readEventAccessFacts(sessionId, userId);
@@ -658,6 +674,7 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await refuseHiddenDraft(req.params.id, req.user!.userId, req.user!.role);
       // Access control: only participants, the host, pod members, or admins can view the list
       // Emails are for admins and the event's host / co-hosts only (9 Sep 2026);
       // fellow participants and pod members get the public card.
@@ -699,6 +716,7 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await refuseHiddenDraft(req.params.id, req.user!.userId, req.user!.role);
       // Only host, pod members, or admins
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         const session = await sessionService.getSessionById(req.params.id);

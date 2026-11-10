@@ -1,9 +1,10 @@
 // ─── An event's lifecycle: publish, unpublish, cancel with notice, archive, delete for good (Part 2 Task 2) ──────
 //
-// D1: the lifecycle sits beside sessions.status. Which steps a person may take is the shared rule
-// (allowedLifecycleActions, over eventLifecycleOf); this service holds every step to it, writes the change and its
-// audit row in one transaction, and only then tells every screen (fanoutSessionEntities + fanoutSessionListEntities,
-// which also reaches the admins' Admin Events list) and the organisers' history (emitEventAuditChanged).
+// D1: the lifecycle sits beside sessions.status. Which steps a person may take is the shared rule (eventAllowedActions:
+// allowedLifecycleActions over eventLifecycleOf and archived_at, the one the client reads too); this service holds every
+// step to it, writes the change and its audit row in one transaction, and only then tells every screen
+// (fanoutSessionEntities + fanoutSessionListEntities, which also reaches the admins' Admin Events list; while the event
+// is a draft both reach only its host, co-hosts and admins) and the organisers' history (emitEventAuditChanged).
 //
 // Each step runs under the event's session guard (the one Go Live takes), so a step and a start pressed together run
 // one after the other, and reads the event FOR UPDATE, so two instances never both pass the same check. A draft is
@@ -12,7 +13,7 @@
 // Ending stays the live event's own (End Event, the overdue job). Cancelling is for an event that has not started.
 
 import {
-  ErrorCodes, UserRole, hasRoleAtLeast, eventLifecycleOf, allowedLifecycleActions,
+  ErrorCodes, UserRole, hasRoleAtLeast, eventLifecycleOf, allowedLifecycleActions, eventAllowedActions,
   type EventLifecycle, type EventLifecycleAction, type EventLifecycleInput, type EventLifecycleWho, type EventPublication,
   type Session,
 } from '@rsn/shared';
@@ -61,23 +62,6 @@ export function lifecycleWho(
   };
 }
 
-/**
- * The steps this person may take now. The shared rule, with one thing it cannot see from the state alone: a cancelled
- * event that was archived reads 'cancelled' (D1's order), and since it is put away it offers Unarchive, not Archive.
- */
-export function eventAllowedActions(
-  event: EventLifecycleInput,
-  who: EventLifecycleWho,
-  registeredCount: number,
-  now: Date = new Date(),
-): EventLifecycleAction[] {
-  const lifecycle = eventLifecycleOf(event, now);
-  const actions = allowedLifecycleActions(lifecycle, who, registeredCount);
-  if (event.archivedAt === null || lifecycle === 'archived') return actions;
-  const unarchive = allowedLifecycleActions('archived', who, registeredCount).filter((a) => a === 'unarchive');
-  return [...actions.filter((a) => a !== 'archive'), ...unarchive];
-}
-
 /** The lifecycle fields of a Session as eventLifecycleOf reads them; a row from before migration 135 reads published. */
 export function lifecycleInputOf(session: Pick<Session, 'status'> & Partial<Pick<Session,
   'publication' | 'archivedAt' | 'registrationOpensAt'>>): EventLifecycleInput {
@@ -105,7 +89,8 @@ export function summariseEventLifecycle(
 
 /** Whether this person could take the step in any state: if not, being refused is about who they are, not the event. */
 function mayEverTake(action: EventLifecycleAction, who: EventLifecycleWho): boolean {
-  return ALL_LIFECYCLES.some((lifecycle) => allowedLifecycleActions(lifecycle, who, 0).includes(action));
+  return ALL_LIFECYCLES.some((lifecycle) => [false, true].some((archived) =>
+    allowedLifecycleActions(lifecycle, who, 0, { archived }).includes(action)));
 }
 
 const FORBIDDEN_SENTENCE: Record<EventLifecycleAction, string> = {
@@ -245,10 +230,10 @@ async function takeStep(
 }
 
 /** Tells every screen that shows the event, its lists (members, organisers, admins) and its organisers' history. */
-async function tellEveryone(sessionId: string, podId: string | null): Promise<void> {
+async function tellEveryone(sessionId: string, podId: string | null, listAudience?: string[]): Promise<void> {
   await Promise.all([
     fanoutSessionEntities(podId, sessionId),
-    fanoutSessionListEntities(podId, sessionId),
+    fanoutSessionListEntities(podId, sessionId, listAudience),
     emitEventAuditChanged(sessionId),
   ]);
 }
@@ -275,6 +260,11 @@ export async function publishEvent(sessionId: string, actor: Actor): Promise<voi
 
 /** A published event nobody has registered for goes back to being a draft. Once anyone holds a place: cancel it instead. */
 export async function unpublishEvent(sessionId: string, actor: Actor): Promise<void> {
+  // Who had it in a list, read before the step while it is still published (and outside the step's transaction, which
+  // holds a connection of its own): once it is a draft the fan-outs reach only its organisers, and the rest must still
+  // be told their lists changed. They are sent only their own list tags (no event id), so the draft stays unnamed to
+  // them; its own tags (session:<id>) go to its organisers only. Nothing is told if the step is refused.
+  const listAudience = await listAudienceBeforeUnpublish(sessionId);
   const row = await takeStep(sessionId, actor, 'unpublish', 'event.unpublished', async (client) => {
     const updated = await client.query(
       `UPDATE sessions s SET publication = 'draft', updated_at = NOW()
@@ -285,7 +275,21 @@ export async function unpublishEvent(sessionId: string, actor: Actor): Promise<v
     );
     return (updated.rowCount ?? 0) > 0;
   });
-  await tellEveryone(sessionId, row.pod_id);
+  await tellEveryone(sessionId, row.pod_id, listAudience);
+}
+
+/** Everyone who has the event in a list now, or undefined (the fan-out then reads its own audience) when that fails. */
+async function listAudienceBeforeUnpublish(sessionId: string): Promise<string[] | undefined> {
+  try {
+    const found = await query<{ pod_id: string | null; publication: string }>(
+      `SELECT pod_id, publication FROM sessions WHERE id = $1`, [sessionId]);
+    const event = found.rows[0];
+    if (!event || event.publication !== 'published') return undefined;
+    return await resolveSessionListAudience(event.pod_id, sessionId);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'Unpublish: could not read who has the event in a list (non-fatal)');
+    return undefined;
+  }
 }
 
 interface CancelRecipient {
@@ -321,7 +325,11 @@ export async function cancelEvent(sessionId: string, actor: Actor, reason: strin
   return { notified };
 }
 
-/** The bells (one statement, then each person's live tags) and, in the background, the emails. Never throws. */
+/**
+ * The bells (one statement, then each person's live tags) and, in the background, the emails. Never throws. They go
+ * after the cancel has committed and outside its transaction, so delivery is at most once: a cancel that failed sends
+ * nothing, and a bell insert that fails is logged and not tried again (the event stays cancelled either way).
+ */
 async function noticeOfCancellation(row: LifecycleRow, actor: Actor, reason: string | null): Promise<number> {
   try {
     const recipients = await query<CancelRecipient>(

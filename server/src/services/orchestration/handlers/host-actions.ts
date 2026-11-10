@@ -291,15 +291,15 @@ async function refuseIfAdminTarget(
 
 // ─── Host Start Session ─────────────────────────────────────────────────────
 
+/** Part 2 Task 2: what the host hears on pressing Go Live on a draft. */
+export const EVENT_DRAFT_START_REFUSAL = 'Publish the event before starting it.';
+
 /**
  * Go Live, for both start paths (2 Nov 2026). The status, the lobby room id and started_at go in ONE update,
  * before LiveKit is called: the event was open for 0.4 to 0.8 s with no room id while LiveKit Cloud created
  * the room, and a token taken in that gap named a room nobody else was in. A failed LiveKit call leaves the
  * event open on the same room name, as before; LiveKit creates the room on the first join.
  */
-/** Part 2 Task 2: what the host hears on pressing Go Live on a draft. */
-export const EVENT_DRAFT_START_REFUSAL = 'Publish the event before starting it.';
-
 async function openEventLobby(sessionId: string): Promise<void> {
   const lobbyRoom = videoService.lobbyRoomId(sessionId);
   await sessionService.updateSessionStatus(sessionId, SessionStatus.LOBBY_OPEN, {

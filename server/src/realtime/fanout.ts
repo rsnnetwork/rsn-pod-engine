@@ -38,6 +38,20 @@ const CIRCLE_AUDIENCE_ARM = `
        JOIN users cu ON cu.id = cm.user_id
       WHERE cs.id = $1 AND ${activeMemberSql('cu')}`;
 
+/**
+ * Part 2 Task 2, fix round 1 (D1): while an event is a draft it is nobody's but the people who run it, so its fan-outs
+ * reach only them: the wide arms below (its pod, its circle) are left out, and its host, its co-hosts and the platform
+ * admins are read instead. For a published event the organiser arms are empty and the audience is exactly as before.
+ */
+const EVENT_IS_DRAFT = `EXISTS (SELECT 1 FROM sessions dr WHERE dr.id = $1 AND dr.publication = 'draft')`;
+const DRAFT_ORGANISER_ARMS = `
+     SELECT host_user_id FROM sessions WHERE id = $1 AND publication = 'draft' AND host_user_id IS NOT NULL
+     UNION
+     SELECT user_id FROM session_cohosts WHERE session_id = $1 AND ${EVENT_IS_DRAFT}
+     UNION
+     SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND ${EVENT_IS_DRAFT}`;
+const PUBLISHED_CIRCLE_AUDIENCE_ARM = `${CIRCLE_AUDIENCE_ARM} AND cs.publication <> 'draft'`;
+
 // ─── Pod-scoped fanout ──────────────────────────────────────────────────────
 //
 // Resolves every currently-attached pod member (excluding 'removed' /
@@ -153,7 +167,9 @@ export async function fanoutSessionEntities(
        SELECT user_id FROM pod_members
          WHERE pod_id = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
            AND status NOT IN ('removed', 'declined')
-       UNION${CIRCLE_AUDIENCE_ARM}`,
+           AND NOT ${EVENT_IS_DRAFT}
+       UNION${PUBLISHED_CIRCLE_AUDIENCE_ARM}
+       UNION${DRAFT_ORGANISER_ARMS}`,
       [sessionId, podId],
     );
     const entities: string[] = [E.session(sessionId), E.sessionParticipants(sessionId)];
@@ -177,7 +193,8 @@ export async function fanoutSessionEntities(
 // client is told another member's id.
 //
 // Audience: the event's participants, its pod's members, its host and, for an
-// event for a whole circle, the circle's active members (T13). The host
+// event for a whole circle, the circle's active members (T13); for a draft
+// (Part 2 Task 2) only its participants, host, co-hosts and admins. The host
 // is read on its own because a host who has left their own event, or an admin
 // who runs one in a pod they do not belong to, is in neither of the others.
 
@@ -198,10 +215,12 @@ export async function resolveSessionListAudience(
      SELECT user_id FROM pod_members
        WHERE pod_id = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
          AND status NOT IN ('removed', 'declined')
+         AND NOT ${EVENT_IS_DRAFT}
      UNION
      SELECT host_user_id FROM sessions
        WHERE id = $1 AND host_user_id IS NOT NULL
-     UNION${CIRCLE_AUDIENCE_ARM}`,
+     UNION${PUBLISHED_CIRCLE_AUDIENCE_ARM}
+     UNION${DRAFT_ORGANISER_ARMS}`,
     [sessionId, podId],
   );
   return result.rows.map(r => r.user_id);

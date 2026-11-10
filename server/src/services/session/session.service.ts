@@ -22,11 +22,10 @@ import { assertTemplateChoice, templateKeepable } from '../matching/matching-tem
 import { assertVideoRoom } from './video-room';
 import { LIVE_STATUSES, tokenMainRoomOf } from './main-room';
 import {
-  archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, registrationNotOpenRefusal,
-  runsEvent, visibleEventsSql,
+  archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, runsEvent, visibleEventsSql,
 } from './event-access';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
-import { recordEventAudit } from '../audit/event-audit';
+import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
 
@@ -485,8 +484,12 @@ export async function registerParticipant(
       if (facts.publication === 'draft' && !runsEvent(facts, userRole)) {
         throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
       }
-      const notOpen = registrationNotOpenRefusal(facts, userRole, { viaInvite });
-      if (notOpen && !notOpen.ok) throw new AppError(notOpen.status, notOpen.code as ErrorCode, notOpen.message);
+      // Fix round 1 (review M4): the whole rule, so someone the event would refuse anyway (private, a closed circle, an
+      // approval event, a private pod) hears that refusal, and only someone it would take hears the opening time.
+      if (opensLater) {
+        const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
+        if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
+      }
     }
 
     // Check session is open for registration
@@ -1012,6 +1015,10 @@ export async function deleteSession(sessionId: string, userId: string, userRole?
   // Admin/super_admin can delete any session; otherwise only session host
   const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
   if (!isAdmin && session.hostUserId !== userId) {
+    // Part 2 Task 2, fix round 1: someone who does not run a draft is answered as for an id that names nothing.
+    if (session.publication === 'draft' && !(await isCohostOf(sessionId, userId))) {
+      throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+    }
     throw new ForbiddenError('Only the host of the event can delete it');
   }
 
@@ -1030,9 +1037,34 @@ export async function deleteSession(sessionId: string, userId: string, userRole?
     );
   }
 
-  // Soft-delete: mark as cancelled
-  await query(`UPDATE sessions SET status = 'cancelled', updated_at = NOW() WHERE id = $1`, [sessionId]);
+  // Soft-delete: mark as cancelled. Part 2 Task 2, fix round 1: the same record as the lifecycle's cancel (when and by
+  // whom, and the event.cancelled audit row, in one transaction), so every cancellation reads the same in the trail.
+  // It still sends no notice (controller ruling, 11 Nov 2026: production's client uses this path, and ringing and
+  // emailing the attendees from it is the owner's decision); the notices stay on POST /sessions/:id/cancel. Its other
+  // behaviour is as before, a completed event included. An event already cancelled is answered as before and keeps
+  // its first cancellation's stamp and row.
+  const cancelledNow = await transaction(async (client) => {
+    const updated = await client.query<{ id: string }>(
+      `UPDATE sessions SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2, updated_at = NOW()
+        WHERE id = $1 AND status <> 'cancelled'
+        RETURNING id`,
+      [sessionId, userId],
+    );
+    if (updated.rows.length === 0) return false;
+    await recordEventAudit({
+      sessionId, actorId: userId, action: 'event.cancelled', automatic: false,
+      before: { status: session.status }, after: { status: SessionStatus.CANCELLED, via: 'DELETE /sessions/:id' },
+    }, client);
+    return true;
+  });
+  if (cancelledNow) await emitEventAuditChanged(sessionId);
   logger.info({ sessionId, userId }, 'Session deleted (cancelled)');
+}
+
+/** Whether the person is one of the event's co-hosts (session_cohosts). */
+async function isCohostOf(sessionId: string, userId: string): Promise<boolean> {
+  const found = await query(`SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`, [sessionId, userId]);
+  return found.rows.length > 0;
 }
 
 // ─── Hard Delete Session (super_admin only) ─────────────────────────────────

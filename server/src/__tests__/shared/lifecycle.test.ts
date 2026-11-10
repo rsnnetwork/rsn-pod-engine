@@ -5,9 +5,10 @@
 // registration opens, else registration open. allowedLifecycleActions says who may take which step in which state.
 
 import {
-  eventLifecycleOf, allowedLifecycleActions, EVENT_LIVE_STATUSES, SessionStatus,
+  eventLifecycleOf, allowedLifecycleActions, eventAllowedActions, EVENT_LIVE_STATUSES, SessionStatus,
   type EventLifecycle, type EventLifecycleAction, type EventLifecycleWho, type EventPublication,
 } from '@rsn/shared';
+import { LIVE_STATUSES } from '../../services/session/main-room';
 
 const NOW = new Date('2026-11-10T12:00:00.000Z');
 const LATER = '2026-11-11T12:00:00.000Z';
@@ -100,6 +101,21 @@ describe('allowedLifecycleActions', () => {
     expect(allowedLifecycleActions(lifecycle, who, registered)).toEqual(actions);
   });
 
+  // Fix round 1: a cancelled event that was archived reads 'cancelled' (D1's order); the rule is told it is archived.
+  it.each([
+    ['the owner, cancelled and archived', owner, 'cancelled', true, ['unarchive']],
+    ['the owner, cancelled, not archived', owner, 'cancelled', false, ['archive']],
+    ['a co-host, cancelled and archived', cohost, 'cancelled', true, ['unarchive']],
+    ['a member, cancelled and archived', nobody, 'cancelled', true, []],
+    ['a super admin attendee, cancelled and archived', superAdminAttendee, 'cancelled', true, ['unarchive', 'delete_permanently']],
+    ['the owner, archived (archived implied)', owner, 'archived', false, ['unarchive']],
+    ['the owner, completed, not archived', owner, 'completed', false, ['archive']],
+  ] as Array<[string, EventLifecycleWho, EventLifecycle, boolean, EventLifecycleAction[]]>)(
+    '%s', (_label, who, lifecycle, archived, actions) => {
+      expect(allowedLifecycleActions(lifecycle, who, 0, { archived })).toEqual(actions);
+    },
+  );
+
   it('only a super admin ever deletes for good, and never a live event', () => {
     const lifecycles: EventLifecycle[] = ['draft', 'published', 'registration_open', 'live', 'completed', 'archived', 'cancelled'];
     for (const lifecycle of lifecycles) {
@@ -108,5 +124,38 @@ describe('allowedLifecycleActions', () => {
       }
       expect(allowedLifecycleActions(lifecycle, superAdminAttendee, 0).includes('delete_permanently')).toBe(lifecycle !== 'live');
     }
+  });
+});
+
+describe('eventAllowedActions (the one the server and the client call)', () => {
+  const owner: EventLifecycleWho = { isOwner: true, isCohost: false, isAdmin: false, isSuperAdmin: false };
+  const event = (status: string, archived: boolean, publication: EventPublication = 'published') =>
+    ({ status, publication, archivedAt: archived ? EARLIER : null, registrationOpensAt: null });
+
+  it('reads the lifecycle and archived_at from the event: an archived cancelled event offers Unarchive, never Archive', () => {
+    expect(eventAllowedActions(event('cancelled', true), owner, 0, NOW)).toEqual(['unarchive']);
+    expect(eventAllowedActions(event('cancelled', false), owner, 0, NOW)).toEqual(['archive']);
+    expect(eventAllowedActions(event('completed', true), owner, 0, NOW)).toEqual(['unarchive']);
+    expect(eventAllowedActions(event('completed', false), owner, 0, NOW)).toEqual(['archive']);
+    expect(eventAllowedActions(event('scheduled', false, 'draft'), owner, 0, NOW)).toEqual(['publish', 'cancel']);
+    expect(eventAllowedActions(event('scheduled', false), owner, 2, NOW)).toEqual(['cancel']);
+  });
+
+  it('agrees with allowedLifecycleActions on every state when it is told whether the event is archived', () => {
+    for (const status of ALL_STATUSES) {
+      for (const archived of [false, true]) {
+        for (const publication of ['draft', 'published'] as EventPublication[]) {
+          const e = event(status, archived, publication);
+          expect(eventAllowedActions(e, owner, 0, NOW))
+            .toEqual(allowedLifecycleActions(eventLifecycleOf(e, NOW), owner, 0, { archived }));
+        }
+      }
+    }
+  });
+});
+
+describe('the live statuses are one list', () => {
+  it('the shared EVENT_LIVE_STATUSES equals the server\'s LIVE_STATUSES (main-room.ts)', () => {
+    expect([...EVENT_LIVE_STATUSES].sort()).toEqual([...LIVE_STATUSES].sort());
   });
 });

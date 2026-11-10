@@ -104,8 +104,15 @@ export async function assertMayInviteToSession(sessionId: string, userId: string
       [sessionId, userId]
     );
     if (cohost.rows.length === 0) {
+      // Part 2 Task 2, fix round 1: a draft is answered as an id that names nothing to anyone who does not run it.
+      if (session.publication === 'draft') throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
       throw new AppError(403, 'AUTH_FORBIDDEN', 'Only the event host or a co-host can send event invites');
     }
+  }
+  // Part 2 Task 2, fix round 1: a draft takes no invites (its invitees could not register until it is published, and
+  // the invite would name it to them). Every way an event invite is made, listed for or checked comes through here.
+  if (session.publication === 'draft') {
+    throw new ConflictError(ErrorCodes.EVENT_NOT_PUBLISHED, 'Publish the event before inviting people.');
   }
   return session;
 }

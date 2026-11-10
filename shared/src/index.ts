@@ -189,7 +189,7 @@ import {
   EVENT_PUBLICATIONS as _EVENT_PUBLICATIONS, EVENT_LIVE_STATUSES as _EVENT_LIVE_STATUSES,
   EVENT_CANCEL_REASON_MAX as _EVENT_CANCEL_REASON_MAX, EVENT_LIFECYCLE_ACTIONS as _EVENT_LIFECYCLE_ACTIONS,
   isEventPublication as _isEventPublication, eventLifecycleOf as _eventLifecycleOf,
-  allowedLifecycleActions as _allowedLifecycleActions,
+  allowedLifecycleActions as _allowedLifecycleActions, eventAllowedActions as _eventAllowedActions,
 } from './events/lifecycle';
 export const EVENT_PUBLICATIONS = _EVENT_PUBLICATIONS;
 export const EVENT_LIVE_STATUSES = _EVENT_LIVE_STATUSES;
@@ -198,6 +198,7 @@ export const EVENT_LIFECYCLE_ACTIONS = _EVENT_LIFECYCLE_ACTIONS;
 export const isEventPublication = _isEventPublication;
 export const eventLifecycleOf = _eventLifecycleOf;
 export const allowedLifecycleActions = _allowedLifecycleActions;
+export const eventAllowedActions = _eventAllowedActions;
 export * from './types/meeting';
 // Real VALUES the client uses (the Events meetings and the meeting page redraw their phase as the clock
 // moves), so each needs its own statically analysable named export, same as OPENINGS above.

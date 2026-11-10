@@ -7,7 +7,7 @@
 // needs the event's name and writes the event.deleted snapshot with the deletes. The real SQL is probed against
 // Postgres for the task report; this file holds the behaviour.
 
-import { UserRole } from '@rsn/shared';
+import { UserRole, eventAllowedActions } from '@rsn/shared';
 
 // ── The event, in memory ────────────────────────────────────────────────────
 
@@ -110,6 +110,9 @@ async function poolQuery(sql: string, params: unknown[]): Promise<{ rows: unknow
     });
     return { rows, rowCount: rows.length };
   }
+  if (sql.startsWith('SELECT pod_id, publication FROM sessions')) {
+    return { rows: ev ? [{ pod_id: ev.pod_id, publication: ev.publication }] : [], rowCount: ev ? 1 : 0 };
+  }
   if (sql.startsWith('SELECT display_name FROM users')) {
     return { rows: [{ display_name: people[params[0] as string]?.name ?? null }], rowCount: 1 };
   }
@@ -197,7 +200,7 @@ jest.mock('../../../services/session/session.service', () => ({
 
 import {
   publishEvent, unpublishEvent, cancelEvent, archiveEvent, unarchiveEvent, deleteEventPermanently,
-  eventAllowedActions, summariseEventLifecycle,
+  summariseEventLifecycle,
 } from '../../../services/session/event-lifecycle.service';
 import type { Actor } from '../../../services/roles/actor';
 
@@ -234,9 +237,9 @@ beforeEach(() => {
   mockListAudience.mockResolvedValue(['u-host', 'u-member']);
 });
 
-function expectToldEveryone(): void {
+function expectToldEveryone(listAudience?: string[]): void {
   expect(mockFanoutSession).toHaveBeenCalledWith('pod-1', EVENT_ID);
-  expect(mockFanoutLists).toHaveBeenCalledWith('pod-1', EVENT_ID);
+  expect(mockFanoutLists).toHaveBeenCalledWith('pod-1', EVENT_ID, listAudience);
   expect(mockAuditChanged).toHaveBeenCalledWith(EVENT_ID);
 }
 
@@ -285,7 +288,10 @@ describe('publish and unpublish', () => {
     await unpublishEvent(EVENT_ID, cohost);
     expect(ev!.publication).toBe('draft');
     expect(auditActions()).toEqual(['event.unpublished']);
-    expectToldEveryone();
+    // Fix round 1: the lists that showed it are read while it is still published (afterwards a draft's fan-outs reach
+    // its organisers only) and told with their own list tags; its own tags go through the draft-aware fan-out.
+    expect(mockListAudience).toHaveBeenCalledWith('pod-1', EVENT_ID);
+    expectToldEveryone(['u-host', 'u-member']);
   });
 
   it('once anyone holds a place, unpublishing is refused: cancel instead', async () => {
@@ -448,7 +454,7 @@ describe('archive and unarchive', () => {
     await expect(archiveEvent(EVENT_ID, member)).rejects.toMatchObject({ statusCode: 403 });
   });
 
-  it('eventAllowedActions: a cancelled+archived event offers unarchive, not archive', () => {
+  it('the shared eventAllowedActions (the step check reads it): a cancelled+archived event offers unarchive, not archive', () => {
     const who = { isOwner: true, isCohost: false, isAdmin: false, isSuperAdmin: false };
     expect(eventAllowedActions({ status: 'cancelled', publication: 'published', archivedAt: new Date(), registrationOpensAt: null }, who, 0))
       .toEqual(['unarchive']);

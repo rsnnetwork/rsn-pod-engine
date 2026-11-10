@@ -75,17 +75,24 @@ export interface EventLifecycleWho {
  *   publish             a draft; its organisers (host, co-host, admin, super admin)
  *   unpublish           published or registration open, with nobody registered; its organisers
  *   cancel              draft, published or registration open; its host or an admin (a co-host may not)
- *   archive             completed or cancelled; its host, a co-host or an admin
- *   unarchive           archived; the same
+ *   archive             completed or cancelled, and not archived yet; its host, a co-host or an admin
+ *   unarchive           archived (a cancelled event that was archived included); the same
  *   delete_permanently  any state but live; a super admin only
+ *
+ * `options.archived` (fix round 1): whether the event's archived_at is set. The lifecycle alone cannot say it for a
+ * cancelled event, which reads 'cancelled' archived or not (D1's order), so without it a cancelled event that was put
+ * away would offer Archive again and never Unarchive. Pass it whenever the event is known (eventAllowedActions does);
+ * an 'archived' lifecycle implies it.
  */
 export function allowedLifecycleActions(
   lifecycle: EventLifecycle,
   who: EventLifecycleWho,
   registeredCount: number,
+  options: { archived?: boolean } = {},
 ): EventLifecycleAction[] {
   const organiser = who.isOwner || who.isCohost || who.isAdmin || who.isSuperAdmin;
   const ownerOrAdmin = who.isOwner || who.isAdmin || who.isSuperAdmin;
+  const archived = lifecycle === 'archived' || options.archived === true;
   const actions: EventLifecycleAction[] = [];
   if (lifecycle === 'draft' && organiser) actions.push('publish');
   if ((lifecycle === 'published' || lifecycle === 'registration_open') && organiser && registeredCount === 0) {
@@ -94,8 +101,23 @@ export function allowedLifecycleActions(
   if ((lifecycle === 'draft' || lifecycle === 'published' || lifecycle === 'registration_open') && ownerOrAdmin) {
     actions.push('cancel');
   }
-  if ((lifecycle === 'completed' || lifecycle === 'cancelled') && organiser) actions.push('archive');
-  if (lifecycle === 'archived' && organiser) actions.push('unarchive');
+  if ((lifecycle === 'completed' || lifecycle === 'cancelled') && !archived && organiser) actions.push('archive');
+  if (archived && (lifecycle === 'archived' || lifecycle === 'cancelled') && organiser) actions.push('unarchive');
   if (lifecycle !== 'live' && who.isSuperAdmin) actions.push('delete_permanently');
   return actions;
+}
+
+/**
+ * The steps this person may take on this event now, read from the event itself: its lifecycle (eventLifecycleOf) and
+ * whether it is archived. The one function the server's GET /sessions/:id `allowedActions` and every step's check use,
+ * and the one a client should call.
+ */
+export function eventAllowedActions(
+  event: EventLifecycleInput,
+  who: EventLifecycleWho,
+  registeredCount: number,
+  now: Date = new Date(),
+): EventLifecycleAction[] {
+  const archived = event.archivedAt !== null && event.archivedAt !== undefined;
+  return allowedLifecycleActions(eventLifecycleOf(event, now), who, registeredCount, { archived });
 }
