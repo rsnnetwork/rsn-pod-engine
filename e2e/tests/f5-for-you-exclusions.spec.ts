@@ -7,6 +7,7 @@
 //   B2 has a conversation A deleted on their side (the other side's flag too, in the reverse order) -> not on For You
 //   E  accepted a request from A (accepted, either way)   -> not on For You
 //   D  has a request from A still waiting                  -> still on For You, with the request sent
+//   F  asked A, and the request is still waiting          -> still on For You (the other direction)
 //   C  no contact at all                                   -> on For You
 // Seeded through the database (the rows a real conversation and request leave), read through the real page.
 // Throwaway members only (made-up words, no real member can match them), removed by exact id in afterAll.
@@ -31,7 +32,7 @@ const WORDS = (() => {
 const made: string[] = [];
 let browser: Browser | undefined;
 let ctx: BrowserContext | undefined;
-let a: TestUser, b: TestUser, b2: TestUser, c: TestUser, d: TestUser, e: TestUser;
+let a: TestUser, b: TestUser, b2: TestUser, c: TestUser, d: TestUser, e: TestUser, f: TestUser;
 
 async function makeUser(label: string, first: string): Promise<TestUser> {
   const u = await createTestUser(`f5-${label}`);
@@ -54,11 +55,12 @@ test.describe('F5 For You exclusions', () => {
     c = await makeUser('c', 'Stranger');
     d = await makeUser('d', 'Asked');
     e = await makeUser('e', 'Accepted');
+    f = await makeUser('f', 'Asking');
     // eslint-disable-next-line no-console
     console.log(`[f5] throwaway member ids (if killed, remove exactly these): ${made.join(',')}`);
 
     await pool.query(`UPDATE users SET who_i_want_to_meet = $1 WHERE id = $2`, [WORDS, a.id]);
-    for (const u of [b, b2, c, d, e]) {
+    for (const u of [b, b2, c, d, e, f]) {
       await pool.query(
         `UPDATE users SET expertise_text = $1, who_i_want_to_meet = 'nothing in particular' WHERE id = $2`,
         [WORDS, u.id],
@@ -82,6 +84,7 @@ test.describe('F5 For You exclusions', () => {
       [x3, y3],
     );
     await pool.query(`INSERT INTO user_pokes (sender_id, recipient_id, status) VALUES ($1, $2, 'pending')`, [a.id, d.id]);
+    await pool.query(`INSERT INTO user_pokes (sender_id, recipient_id, status) VALUES ($1, $2, 'pending')`, [f.id, a.id]);
 
     browser = await launchBrowser();
     ctx = await browser.newContext(contextOptions());
@@ -104,9 +107,11 @@ test.describe('F5 For You exclusions', () => {
     await gotoRetry(page, `${APP}/`);
     await expect(cardOf(page, c)).toBeVisible({ timeout: 60_000 });
     await expect(cardOf(page, d)).toBeVisible();
+    await expect(cardOf(page, f)).toBeVisible();
     await expect(cardOf(page, b)).toHaveCount(0);
     await expect(cardOf(page, b2)).toHaveCount(0);
     await expect(cardOf(page, e)).toHaveCount(0);
+    await cardOf(page, c).scrollIntoViewIfNeeded();
     await expectReachable(page, cardOf(page, c), 'the stranger card');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
