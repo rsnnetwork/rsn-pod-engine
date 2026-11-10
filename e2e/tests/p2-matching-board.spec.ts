@@ -28,6 +28,7 @@ import { test, expect, type Browser, type Page } from '@playwright/test';
 import {
   DEVICE, RUN, api, cleanupRun, launch, noSidewaysScroll, openAs, seedPod, shot, tall, throwaway, where, type TestUser,
 } from '../helpers/sweep';
+import { expectReachable } from '../helpers/viewport-fit';
 
 const SLOW = 60_000;
 const TITLE = `${RUN} founders and funders`;
@@ -77,9 +78,9 @@ async function dragToBasket(page: Page, userId: string): Promise<void> {
   await page.mouse.move(s.x + s.width / 2 + 12, s.y + s.height / 2 + 12, { steps: 4 });
   const zone = page.getByTestId('board-basket-dropzone');
   await expect(zone).toBeVisible();
-  const z = (await zone.boundingBox())!;
-  expect(z.y + z.height, 'the basket drop zone is inside the window').toBeLessThanOrEqual(page.viewportSize()!.height);
-  await page.mouse.move(z.x + z.width / 2, z.y + z.height / 2, { steps: 8 });
+  // Inside the window and the topmost thing at its centre: never under the phone-width bottom bar.
+  const z = await expectReachable(page, zone, 'the basket drop zone');
+  await page.mouse.move(z.cx, z.cy, { steps: 8 });
   await page.mouse.up();
   await expect(zone).toBeHidden();
 }

@@ -6,7 +6,7 @@
 // (preview smoke, 11 Nov: a drag from the rooms had to scroll mid-drag to reach it). While someone seated is dragged, a
 // basket drop zone pins itself to the foot of the window (sticky, after the basket: it only adds height at the end
 // of the board, so nothing the pointer is aiming at moves) and goes when the drag ends.
-import { useState, type DragEvent } from 'react';
+import { useEffect, useState, type DragEvent } from 'react';
 import { Loader2, Shuffle } from 'lucide-react';
 import type { BoardPerson, ScheduleBoard } from '@rsn/shared';
 import { cn } from '@/lib/utils';
@@ -43,6 +43,20 @@ export default function BasketTray({
 }: Props) {
   const [over, setOver] = useState(false);
   const [overZone, setOverZone] = useState(false);
+  // A drag that ended anywhere (a drop elsewhere, or Escape, which ends it with dragend on the person and clears
+  // `dragging`) leaves nothing highlighted for the next one.
+  useEffect(() => {
+    if (dragging) return undefined;
+    setOver(false);
+    setOverZone(false);
+    return undefined;
+  }, [dragging]);
+  useEffect(() => {
+    if (!dragging) return undefined;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOver(false); setOverZone(false); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dragging]);
   const accepts = !!dragging && canEdit && !busy && !basket.some((p) => p.userId === dragging.userId);
   const shown = basket.filter((p) => personMatches(p, { ...filter, conflictsOnly: false, lockedOnly: false }, true));
 
@@ -126,7 +140,9 @@ export default function BasketTray({
           onDragLeave={() => setOverZone(false)}
           onDrop={drop}
           className={cn(
-            'sticky bottom-[max(8px,env(safe-area-inset-bottom))] z-20 flex min-h-[64px] items-center justify-center rounded-2xl border-2 border-dashed px-4 text-center text-[14px] font-bold shadow-[0_-10px_30px_rgba(18,41,58,.18)]',
+            // Below 721px the shell's bottom bar (MobileNav, fixed over the foot of <main>) is there: the zone sits above
+            // it by the shell's own bottom padding (ReasonShell, F7). From 721px there is no bar.
+            'sticky bottom-[calc(96px+env(safe-area-inset-bottom))] min-[721px]:bottom-[max(8px,env(safe-area-inset-bottom))] z-20 flex min-h-[64px] items-center justify-center rounded-2xl border-2 border-dashed px-4 text-center text-[14px] font-bold shadow-[0_-10px_30px_rgba(18,41,58,.18)]',
             overZone ? 'border-[#c4532f] bg-[#ffe9df] text-[#a8401f]' : 'border-[#ecc6ad] bg-[#fff6f1] text-[#c4532f]',
           )}
         >

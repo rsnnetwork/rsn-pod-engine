@@ -806,7 +806,9 @@ describe('while a seated person is dragged, a basket drop zone is pinned to the 
     const html = draw({ round: 1, userId: 'ann', fromRoom: 1 });
     expect(html).toContain('data-testid="board-basket-dropzone"');
     expect(html.indexOf('data-testid="board-basket"')).toBeLessThan(html.indexOf('data-testid="board-basket-dropzone"'));
-    expect(html).toMatch(/data-testid="board-basket-dropzone" class="sticky bottom-\[max\(8px,env\(safe-area-inset-bottom\)\)\] z-20 flex min-h-\[64px\]/);
+    // Above the shell's bottom bar below 721px (its own padding expression), at the window's foot from 721px.
+    expect(html).toMatch(/data-testid="board-basket-dropzone" class="sticky bottom-\[calc\(96px\+env\(safe-area-inset-bottom\)\)\] min-\[721px\]:bottom-\[max\(8px,env\(safe-area-inset-bottom\)\)\] z-20 flex min-h-\[64px\]/);
+    expect(readClientSource('features/reason/shell/ReasonShell.tsx')).toContain('pb-[calc(96px+env(safe-area-inset-bottom))]');
     expect(html).toContain('Drop here to move them to the unassigned basket');
     // The basket keeps its people and its size: nothing the pointer aims at moves when the drag starts.
     expect(html).toContain('Funders: </span><span class="font-medium">Fay</span>');
@@ -823,5 +825,14 @@ describe('while a seated person is dragged, a basket drop zone is pinned to the 
     const tray = code(`${SCHEDULE_DIR}/BasketTray.tsx`);
     expect(tray).toMatch(/data-testid="board-basket-dropzone"\s*onDragOver=\{dragOverWith\(setOverZone\)\}\s*onDragLeave=\{\(\) => setOverZone\(false\)\}\s*onDrop=\{drop\}/);
     expect(tray).toMatch(/const drop = \(e: DragEvent<HTMLElement>\) => \{\s*if \(!accepts\) return;\s*e\.preventDefault\(\);[\s\S]*?onDrop\(\{ kind: 'basket', round \}\);/);
+  });
+});
+
+describe('the basket drop zone forgets its highlight when a drag ends', () => {
+  it('on dragend (dragging cleared) and on Escape', () => {
+    const tray = code(`${SCHEDULE_DIR}/BasketTray.tsx`);
+    expect(tray).toMatch(/useEffect\(\(\) => \{\s*if \(dragging\) return undefined;\s*setOver\(false\);\s*setOverZone\(false\);/);
+    expect(tray).toMatch(/if \(e\.key === 'Escape'\) \{ setOver\(false\); setOverZone\(false\); \}/);
+    expect(code(`${SCHEDULE_DIR}/MatchingBoardPage.tsx`)).toContain('onDragEnd={() => setDragging(null)}');
   });
 });
