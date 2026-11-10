@@ -1076,7 +1076,7 @@ export async function getMatchesByRound(sessionId: string, roundNumber: number):
             participant_c_id AS "participantCId",
             departed_user_ids AS "departedUserIds",
             room_id AS "roomId", status, score, reason_tags AS "reasonTags",
-            is_manual AS "isManual",
+            is_manual AS "isManual", locked,
             started_at AS "startedAt", ended_at AS "endedAt", created_at AS "createdAt"
      FROM matches WHERE session_id = $1 AND round_number = $2
      ORDER BY created_at`,

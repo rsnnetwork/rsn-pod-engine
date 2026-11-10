@@ -62,7 +62,9 @@ export interface ServerToClientEvents {
   'host:participant_removed': (data: { userId: string; reason: string }) => void;
   'host:match_preview': (data: {
     roundNumber: number;
-    matches: { participantA: { userId: string; displayName: string }; participantB: { userId: string; displayName: string }; participantC?: { userId: string; displayName: string }; isTrio?: boolean; metBefore?: boolean; timesMet?: number }[];
+    matches: { participantA: { userId: string; displayName: string }; participantB: { userId: string; displayName: string }; participantC?: { userId: string; displayName: string }; isTrio?: boolean; metBefore?: boolean; timesMet?: number;
+      /** Part 2 Task 9: locked on the matching board (swap and exclude refuse it). Always false for an event without a board. */
+      locked: boolean }[];
     byeParticipants: { userId: string; displayName: string }[];
   }) => void;
 
@@ -103,7 +105,9 @@ export interface ServerToClientEvents {
   // compatibility with older server versions on reconnect paths.
   'host:round_dashboard': (data: {
     roundNumber: number;
-    rooms: { matchId: string; roomId: string; status: string; participants: { userId: string; displayName: string; isConnected: boolean }[]; isTrio: boolean }[];
+    rooms: { matchId: string; roomId: string; status: string; participants: { userId: string; displayName: string; isConnected: boolean }[]; isTrio: boolean;
+      /** Part 2 Task 9: locked on the matching board. Always false for an event without a board. */
+      locked: boolean }[];
     byeParticipants: { userId: string; displayName: string }[];
     timerSecondsRemaining: number;
     reassignmentInProgress: boolean;
