@@ -38,6 +38,20 @@ const CIRCLE_AUDIENCE_ARM = `
        JOIN users cu ON cu.id = cm.user_id
       WHERE cs.id = $1 AND ${activeMemberSql('cu')}`;
 
+/**
+ * Part 2 Task 2, fix round 1 (D1): while an event is a draft it is nobody's but the people who run it, so its fan-outs
+ * reach only them: the wide arms below (its pod, its circle) are left out, and its host, its co-hosts and the platform
+ * admins are read instead. For a published event the organiser arms are empty and the audience is exactly as before.
+ */
+const EVENT_IS_DRAFT = `EXISTS (SELECT 1 FROM sessions dr WHERE dr.id = $1 AND dr.publication = 'draft')`;
+const DRAFT_ORGANISER_ARMS = `
+     SELECT host_user_id FROM sessions WHERE id = $1 AND publication = 'draft' AND host_user_id IS NOT NULL
+     UNION
+     SELECT user_id FROM session_cohosts WHERE session_id = $1 AND ${EVENT_IS_DRAFT}
+     UNION
+     SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND ${EVENT_IS_DRAFT}`;
+const PUBLISHED_CIRCLE_AUDIENCE_ARM = `${CIRCLE_AUDIENCE_ARM} AND cs.publication <> 'draft'`;
+
 // ─── Pod-scoped fanout ──────────────────────────────────────────────────────
 //
 // Resolves every currently-attached pod member (excluding 'removed' /
@@ -153,7 +167,9 @@ export async function fanoutSessionEntities(
        SELECT user_id FROM pod_members
          WHERE pod_id = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
            AND status NOT IN ('removed', 'declined')
-       UNION${CIRCLE_AUDIENCE_ARM}`,
+           AND NOT ${EVENT_IS_DRAFT}
+       UNION${PUBLISHED_CIRCLE_AUDIENCE_ARM}
+       UNION${DRAFT_ORGANISER_ARMS}`,
       [sessionId, podId],
     );
     const entities: string[] = [E.session(sessionId), E.sessionParticipants(sessionId)];
@@ -177,7 +193,8 @@ export async function fanoutSessionEntities(
 // client is told another member's id.
 //
 // Audience: the event's participants, its pod's members, its host and, for an
-// event for a whole circle, the circle's active members (T13). The host
+// event for a whole circle, the circle's active members (T13); for a draft
+// (Part 2 Task 2) only its participants, host, co-hosts and admins. The host
 // is read on its own because a host who has left their own event, or an admin
 // who runs one in a pod they do not belong to, is in neither of the others.
 
@@ -198,10 +215,12 @@ export async function resolveSessionListAudience(
      SELECT user_id FROM pod_members
        WHERE pod_id = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
          AND status NOT IN ('removed', 'declined')
+         AND NOT ${EVENT_IS_DRAFT}
      UNION
      SELECT host_user_id FROM sessions
        WHERE id = $1 AND host_user_id IS NOT NULL
-     UNION${CIRCLE_AUDIENCE_ARM}`,
+     UNION${PUBLISHED_CIRCLE_AUDIENCE_ARM}
+     UNION${DRAFT_ORGANISER_ARMS}`,
     [sessionId, podId],
   );
   return result.rows.map(r => r.user_id);
@@ -217,9 +236,13 @@ export async function fanoutSessionListEntities(
   if (!io) return;
   try {
     const recipients = new Set(audience ?? await resolveSessionListAudience(podId, sessionId));
-    await Promise.all([...recipients].filter(Boolean).map(userId =>
-      emitEntities(io, [userId], [E.userSessions(userId), E.userPods(userId)]),
-    ));
+    await Promise.all([
+      ...[...recipients].filter(Boolean).map(userId =>
+        emitEntities(io, [userId], [E.userSessions(userId), E.userPods(userId)]),
+      ),
+      // 10 Nov 2026 (F7) — and the admins' Admin Events list, which lists every event.
+      fanoutAdminEntities('sessions'),
+    ]);
   } catch (err) {
     logger.warn({ err, sessionId, podId }, 'fanoutSessionListEntities: failed to fan out');
   }
@@ -235,6 +258,7 @@ export async function fanoutSessionListEntities(
 // sent, in one emit of their own, the event's tags and their own two list tags:
 //   session:<id>, session:<id>:participants, session:<id>:chat, pod:<podId>:sessions,
 //   user:<recipient>:sessions, user:<recipient>:pods.
+// Every admin is also sent admin:sessions (fanoutAdminEntities), for the Admin Events list (10 Nov 2026, F7).
 // Never throws: a failure here is logged and the completion carries on.
 
 export async function fanoutSessionCompleted(sessionId: string): Promise<void> {
@@ -260,9 +284,14 @@ export async function fanoutSessionCompleted(sessionId: string): Promise<void> {
     const shared = [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionChat(sessionId)];
     if (podId) shared.push(E.podSessions(podId));
     const recipients = new Set(people.rows.map((r) => r.user_id).filter(Boolean));
-    await Promise.all([...recipients].map((userId) =>
-      emitEntities(io, [userId], [...shared, E.userSessions(userId), E.userPods(userId)]),
-    ));
+    await Promise.all([
+      ...[...recipients].map((userId) =>
+        emitEntities(io, [userId], [...shared, E.userSessions(userId), E.userPods(userId)]),
+      ),
+      // 10 Nov 2026 (F7) — every completion (End Event, the natural end, the in-person ender, the reapers) also
+      // moves the event on the admins' Admin Events list, which lists every event.
+      fanoutAdminEntities('sessions'),
+    ]);
   } catch (err) {
     logger.warn({ err, sessionId }, 'fanoutSessionCompleted: failed to fan out');
   }
@@ -292,6 +321,56 @@ export async function fanoutSessionChat(sessionId: string, actorId?: string): Pr
     await emitEntities(io, recipients, [E.sessionChat(sessionId)]);
   } catch (err) {
     logger.warn({ err, sessionId }, 'fanoutSessionChat: failed to fan out');
+  }
+}
+
+// ─── Matching-board draft fanout (10 Nov 2026 spec, Part 2 Task 8) ──────────
+//
+// The organisers' draft of who meets whom changed (a generate, a move, a lock, an absence). The draft is private:
+// it goes to the event's host and co-hosts only, never to a participant, plus whoever made the change (a pod admin
+// or super admin may edit without being either), so their other tabs follow.
+
+export async function fanoutScheduleDraft(sessionId: string, actorId?: string): Promise<void> {
+  try {
+    const io = getRealtimeIo();
+    if (!io) return;
+    const { query } = await import('../db');
+    const organisers = await query<{ user_id: string }>(
+      `SELECT host_user_id AS user_id FROM sessions WHERE id = $1 AND host_user_id IS NOT NULL
+       UNION
+       SELECT user_id FROM session_cohosts WHERE session_id = $1`,
+      [sessionId],
+    );
+    const recipients = [...new Set([...organisers.rows.map((r) => r.user_id), ...(actorId ? [actorId] : [])])];
+    await emitEntities(io, recipients, [E.sessionSchedule(sessionId)]);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'fanoutScheduleDraft: failed to fan out');
+  }
+}
+
+// ─── Published-schedule fanout (10 Nov 2026 spec, Part 2 Task 9) ────────────
+//
+// A new version of the event's schedule was published (by an organiser, or by the product repairing the live event).
+// Unlike the draft, a version is what participants read ("my meetings"): it goes to everyone with a place in the event
+// (not removed), the host, the co-hosts, and whoever published it.
+
+export async function fanoutPublishedSchedule(sessionId: string, actorId?: string | null): Promise<void> {
+  try {
+    const io = getRealtimeIo();
+    if (!io) return;
+    const { query } = await import('../db');
+    const audience = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants WHERE session_id = $1 AND status <> 'removed'
+       UNION
+       SELECT host_user_id AS user_id FROM sessions WHERE id = $1 AND host_user_id IS NOT NULL
+       UNION
+       SELECT user_id FROM session_cohosts WHERE session_id = $1`,
+      [sessionId],
+    );
+    const recipients = [...new Set([...audience.rows.map((r) => r.user_id), ...(actorId ? [actorId] : [])])];
+    await emitEntities(io, recipients, [E.sessionPublishedSchedule(sessionId)]);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'fanoutPublishedSchedule: failed to fan out');
   }
 }
 

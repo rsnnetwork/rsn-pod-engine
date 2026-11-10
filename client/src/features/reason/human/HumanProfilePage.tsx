@@ -27,7 +27,7 @@ import { STATE_LABEL } from './labels';
 import {
   MOVE_RESPONSE, backFallback, isMemberId, knownSource, loadFailedText, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
 } from './profile-text';
-import { blockMember, errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
+import { blockMember, errorMessage, fetchBrief, reasonKeys, setAlreadyMet, setPersonResponse } from '../api';
 import { useConfirm } from '@/hooks/useConfirm';
 
 // The line under "could not load" when the failure itself has nothing more specific to say.
@@ -125,10 +125,13 @@ function Profile({ brief, userId, source, hideBar }: { brief: PersonBrief; userI
   return (
     <>
       <main className={cn(MAIN, SIDES, 'pt-3 md:pt-6', connected ? 'pb-[calc(24px+env(safe-area-inset-bottom))]' : 'pb-[calc(116px+env(safe-area-inset-bottom))]')}>
-        {/* The person's banner, or the default one, across the top of the hero (21 Oct 2026). */}
-        <div className="mb-[11px] md:mb-[18px]">
-          <ProfileBanner src={brief.person.bannerUrl} />
-        </div>
+        {/* The person's banner across the top of the hero (21 Oct 2026). A member with none has no strip at all (Stefan,
+            10 Nov 2026: "if there is no banner, it shouldn't be there"), so the hero starts at the top of the page. */}
+        {brief.person.bannerUrl && (
+          <div className="mb-[11px] md:mb-[18px]">
+            <ProfileBanner src={brief.person.bannerUrl} />
+          </div>
+        )}
         <ProfileHero brief={brief} who={who} source={source} userId={userId} />
         <ProfileDetails brief={brief} who={who} source={source} onRecordOutcome={() => setOutcomeOpen(true)} />
       </main>
@@ -190,6 +193,20 @@ export default function HumanProfilePage() {
   const qc = useQueryClient();
   const name = brief ? personFacts(brief.person).name : 'This member';
   const [reportOpen, setReportOpen] = useState(false);
+  // "Already met" (10 Nov 2026): a private marker for someone met outside the platform. It changes only the member's
+  // own suggestions, so no relationship state moves; the fresh brief carries the flag back.
+  const markMet = useMutation({
+    networkMode: 'always',
+    mutationFn: (met: boolean) => setAlreadyMet(userId, met),
+    onSuccess: (_result, met) => {
+      addToast(met ? `${name} is marked as met, and won't be suggested to you.` : `${name} can be suggested to you again.`, met ? 'success' : 'info');
+      return qc.invalidateQueries({ queryKey: reasonKeys.all });
+    },
+    onError: (err) => addToast(errorMessage(err, 'Could not update that right now.'), 'error'),
+  });
+  const alreadyMet = brief && !['connected', 'met'].includes(brief.relationship.state)
+    ? { marked: brief.relationship.alreadyMet, pending: markMet.isPending, onToggle: () => markMet.mutate(!brief.relationship.alreadyMet) }
+    : undefined;
   const [blockedInReport, setBlockedInReport] = useState(false);
   const leaveBlocked = () => {
     void qc.invalidateQueries({ queryKey: reasonKeys.all });
@@ -233,11 +250,12 @@ export default function HumanProfilePage() {
         </div>
         {view === 'profile' && brief && (
           <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate rounded-full bg-[#f2f3f5] px-2.5 py-1.5 text-[10px] font-extrabold text-[#555d69]">{STATE_LABEL[brief.relationship.state]}</span>
+            <span className="min-w-0 truncate rounded-full bg-[#f2f3f5] px-2.5 py-1.5 text-[10px] font-extrabold text-[#555d69]">{brief.relationship.alreadyMet && brief.relationship.state === 'none' ? 'You marked as met' : STATE_LABEL[brief.relationship.state]}</span>
             <ProfileMoreMenu
               onBlock={onBlock}
               onReport={() => setReportOpen(true)}
               blocking={block.isPending}
+              alreadyMet={alreadyMet}
             />
           </div>
         )}

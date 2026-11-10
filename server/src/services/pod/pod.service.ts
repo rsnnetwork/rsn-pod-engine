@@ -28,6 +28,18 @@ const POD_COLUMNS = `
   created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
+/**
+ * "The account $n is a member's, not an event guest's" (Part 2, Task 3, fix round 1). Pod membership is for members:
+ * every pod_members write in addMember carries it, so no path (a director adding someone, an invite, a join) can put
+ * a guest in a pod.
+ */
+const MEMBER_ACCOUNT_SQL = (userParam: '$2' | '$4') =>
+  `EXISTS (SELECT 1 FROM users acct WHERE acct.id = ${userParam} AND acct.account_kind = 'member')`;
+
+/** What someone adding an event guest to a pod is told. */
+export const GUEST_POD_REFUSAL = 'This person came to an event as a guest and is not a member yet, so they cannot join a pod.';
+const guestCannotJoinPod = () => new ForbiddenError(GUEST_POD_REFUSAL);
+
 const MEMBER_COLUMNS = `
   pod_members.id, pod_id AS "podId", user_id AS "userId", pod_members.role, pod_members.status,
   joined_at AS "joinedAt", left_at AS "leftAt"
@@ -91,6 +103,12 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
   return pod;
 }
 
+/**
+ * Each pod's event count, as the pod lists and pages show it. A draft (Part 2 Task 2, fix round 1) is nobody's but its
+ * organisers', so it is not counted: the count names only events a member could find.
+ */
+const PUBLISHED_EVENT_COUNTS = `SELECT pod_id, COUNT(*) AS cnt FROM sessions WHERE publication = 'published' GROUP BY pod_id`;
+
 export async function getPodById(podId: string): Promise<Pod & { memberCount?: number; sessionCount?: number; directorName?: string | null; directorId?: string | null }> {
   const result = await query<Pod & { memberCount: number; sessionCount: number; directorName: string | null; directorId: string | null }>(
     `SELECT ${POD_COLUMNS},
@@ -100,7 +118,7 @@ export async function getPodById(podId: string): Promise<Pod & { memberCount?: n
             dir.user_id AS "directorId"
      FROM pods
      LEFT JOIN (${ACTIVE_MEMBER_COUNTS}) mc ON mc.pod_id = pods.id
-     LEFT JOIN (SELECT pod_id, COUNT(*) AS cnt FROM sessions GROUP BY pod_id) sc ON sc.pod_id = pods.id
+     LEFT JOIN (${PUBLISHED_EVENT_COUNTS}) sc ON sc.pod_id = pods.id
      LEFT JOIN (
        SELECT pm.pod_id, pm.user_id, u.display_name
        FROM pod_members pm
@@ -235,7 +253,7 @@ export async function listPods(params: {
             ${memberRoleSelect}
      FROM pods p
      LEFT JOIN (${ACTIVE_MEMBER_COUNTS}) mc ON mc.pod_id = p.id
-     LEFT JOIN (SELECT pod_id, COUNT(*) AS cnt FROM sessions GROUP BY pod_id) sc ON sc.pod_id = p.id
+     LEFT JOIN (${PUBLISHED_EVENT_COUNTS}) sc ON sc.pod_id = p.id
      ${memberRoleJoin}
      ${whereClause}
      ORDER BY p.created_at DESC
@@ -293,18 +311,23 @@ export async function addMember(
       const result = await client.query<PodMember>(
         `UPDATE pod_members SET role = $1, status = $2, joined_at = NOW(), left_at = NULL
          WHERE pod_id = $3 AND user_id = $4
+           AND ${MEMBER_ACCOUNT_SQL('$4')}
          RETURNING ${MEMBER_COLUMNS}`,
         [role, status, podId, userId]
       );
+      if (result.rows.length === 0) throw guestCannotJoinPod();
       return result.rows[0];
     }
 
+    // Part 2, Task 3 (fix round 1): only a member's account is written; an event guest gets no pod_members row.
     const result = await client.query<PodMember>(
       `INSERT INTO pod_members (pod_id, user_id, role, status)
-       VALUES ($1, $2, $3, $4)
+       SELECT $1, $2, $3, $4
+        WHERE ${MEMBER_ACCOUNT_SQL('$2')}
        RETURNING ${MEMBER_COLUMNS}`,
       [podId, userId, role, status]
     );
+    if (result.rows.length === 0) throw guestCannotJoinPod();
 
     logger.info({ podId, userId, role }, 'Member added to pod');
     return result.rows[0];
@@ -475,11 +498,17 @@ export async function getMemberStatusCounts(podId: string): Promise<{
 
 // ─── Join / Request to Join ──────────────────────────────────────────────────
 
-export async function joinPod(podId: string, userId: string): Promise<PodMember> {
+export async function joinPod(podId: string, userId: string, actorRole?: UserRole): Promise<PodMember> {
   const pod = await getPodById(podId);
 
   if (pod.status !== PodStatus.ACTIVE) {
     throw new ForbiddenError('This pod is not currently active');
+  }
+
+  // A platform admin joins any open pod, whatever its visibility, as an ordinary member. addMember
+  // reactivates an earlier removed / declined / left / pending row instead of failing on the unique key.
+  if (actorRole && hasRoleAtLeast(actorRole, UserRole.ADMIN)) {
+    return addMember(podId, userId, PodMemberRole.MEMBER);
   }
 
   if (pod.visibility === PodVisibility.PRIVATE || pod.visibility === PodVisibility.INVITE_ONLY) {
@@ -680,7 +709,7 @@ export async function reactivatePod(podId: string, userId: string): Promise<Pod>
 
 export async function getSessionCountForPod(podId: string): Promise<number> {
   const result = await query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM sessions WHERE pod_id = $1`,
+    `SELECT COUNT(*) as count FROM sessions WHERE pod_id = $1 AND publication = 'published'`,
     [podId]
   );
   return parseInt(result.rows[0].count, 10);

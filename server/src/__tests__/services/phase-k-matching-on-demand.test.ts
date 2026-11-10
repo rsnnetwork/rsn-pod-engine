@@ -72,7 +72,8 @@ describe('Phase K — matching on-demand + late-joiner correctness', () => {
       // 23 May (#10) — also gated on the plan not repeating a prior round.
       // 26 May (#A) — and gated off for platform_wide (the pre-plan lacks the
       // cross-event hard-exclusion), via canSurfacePrePlan.
-      expect(fn).toMatch(/canSurfacePrePlan\s*=\s*sameMembers\s*&&\s*!planRepeatsPriorRound\s*&&\s*matchingPolicy\s*!==\s*'platform_wide'/);
+      // Part 2 Task 7 — and on the plan having no room the room checker now refuses (!planBreaksRules).
+      expect(fn).toMatch(/canSurfacePrePlan\s*=\s*sameMembers\s*&&\s*!planRepeatsPriorRound\s*&&\s*!planBreaksRules\s*&&\s*matchingPolicy\s*!==\s*'platform_wide'/);
       // The "no engine re-run" log message marks the fresh-pre-plan branch.
       expect(fn).toMatch(/no\s+engine\s+re-run/i);
       // sendMatchPreview is called in this branch (and the legacy path).

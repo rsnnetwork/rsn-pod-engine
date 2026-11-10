@@ -13,7 +13,7 @@ jest.mock('../../config/logger', () => ({
 }));
 jest.mock('../../db', () => ({
   // authenticate() checks the member is still active before any route runs.
-  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }),
+  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }),
   transaction: jest.fn(),
   __esModule: true,
 }));
@@ -187,7 +187,7 @@ describe('member ids typed in capitals', () => {
   beforeEach(() => { mockSet.mockClear(); mockClear.mockClear(); mockRecord.mockClear(); });
   // Rows are what Postgres returns for any lookup; the one rule it adds is the
   // table's CHECK (user_id <> target_user_id), which ignores letter case.
-  afterEach(() => { dbQuery.mockReset(); dbQuery.mockResolvedValue({ rows: [{ status: 'active' }] }); });
+  afterEach(() => { dbQuery.mockReset(); dbQuery.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }); });
 
   it('reach the service lower-cased on Save, Pass and undo', async () => {
     const put = await request(app).put(`/people/${CAPS}/response`).set(auth).send({ response: 'passed' });
@@ -213,7 +213,7 @@ describe('member ids typed in capitals', () => {
     dbQuery.mockImplementation((sql: string, params: string[] = []) => (
       /INSERT INTO person_responses/.test(sql) && params[0].toLowerCase() === params[1].toLowerCase()
         ? Promise.reject(Object.assign(new Error('new row violates check constraint'), { code: '23514' }))
-        : Promise.resolve({ rows: [{ id: params[0], status: 'active' }] })
+        : Promise.resolve({ rows: [{ id: params[0], status: 'active', account_kind: 'member' }] })
     ));
     const res = await request(app).put(`/people/${OWN.toUpperCase()}/response`)
       .set({ Authorization: `Bearer ${token(OWN)}` }).send({ response: 'saved' });

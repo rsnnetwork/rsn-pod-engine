@@ -65,7 +65,7 @@ beforeEach(() => {
   circleRow = { id: CIRCLE, name: 'Founders', join_policy: 'open', created_by: OWNER };
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
-    if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+    if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] };
     if (/SELECT id, name, join_policy, created_by FROM circles/.test(text)) return { rows: circleRow ? [circleRow] : [] };
     if (/SELECT 1 FROM circles c WHERE c.id = \$1 AND \(c.created_by = \$2/.test(text)) return { rows: params[1] === OWNER ? [{}] : [] };
     return { rows: [] };

@@ -23,8 +23,8 @@ jest.mock('../../config/logger', () => ({
 }));
 jest.mock('../../db', () => ({
   // authenticate() checks the member is still active before any route runs.
-  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }),
-  transaction: jest.fn(async (cb: Function) => cb({ query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }) })),
+  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }),
+  transaction: jest.fn(async (cb: Function) => cb({ query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }) })),
   __esModule: true,
 }));
 

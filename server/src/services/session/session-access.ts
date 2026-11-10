@@ -107,11 +107,13 @@ export async function canViewSession(
     is_cohost: boolean;
     visibility?: string | null;
     account_closed?: boolean;
+    publication?: string | null;
   }>(
     `SELECT s.host_user_id, s.pod_id, p.visibility AS pod_visibility,
             EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost,
             s.visibility,
-            EXISTS (SELECT 1 FROM users ac WHERE ac.id = $2 AND ac.status <> 'active') AS account_closed
+            EXISTS (SELECT 1 FROM users ac WHERE ac.id = $2 AND ac.status <> 'active') AS account_closed,
+            s.publication
      FROM sessions s
      LEFT JOIN pods p ON p.id = s.pod_id
      WHERE s.id = $1`,
@@ -121,6 +123,8 @@ export async function canViewSession(
   const s = sessRes.rows[0];
   // T11 (1 Nov 2026): a removed, suspended or banned account sees no event (sign-in refuses it within a minute too).
   if (s.account_closed === true) return false;
+  // Part 2 Task 2 (D1): a draft is seen by the people who run it only (admins returned above), whatever its visibility.
+  if (s.publication === 'draft') return s.host_user_id === userId || s.is_cohost === true;
 
   // T11 (1 Nov 2026): an event with its own visibility follows the one rule (event-access.ts). A NULL event
   // follows its pod below, exactly as before.
@@ -169,11 +173,19 @@ export async function eventRoomAdmission(
   userId: string,
   userRole: string | undefined,
 ): Promise<EventRoomAdmission> {
-  const result = await query<{ is_host: boolean; is_cohost: boolean; participant_status: string | null; account_closed?: boolean }>(
+  // Part 2 Task 4: an invitation-only event (admission_mode 'restricted') asks for the entitlement on every join. The
+  // fragment lives with the other access rules; a lazy import, as canViewSession's, since event-access imports this file.
+  const { restrictedEntitlementSql } = await import('./event-access');
+  const result = await query<{
+    is_host: boolean; is_cohost: boolean; participant_status: string | null; account_closed?: boolean; publication?: string | null;
+    admission_holds?: boolean;
+  }>(
     `SELECT s.host_user_id = $2 AS is_host,
             EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost,
             p.status::text AS participant_status,
-            EXISTS (SELECT 1 FROM users ac WHERE ac.id = $2 AND ac.status <> 'active') AS account_closed
+            EXISTS (SELECT 1 FROM users ac WHERE ac.id = $2 AND ac.status <> 'active') AS account_closed,
+            s.publication,
+            CASE WHEN s.admission_mode = 'restricted' THEN ${restrictedEntitlementSql('s', '$2')} ELSE TRUE END AS admission_holds
        FROM sessions s
        LEFT JOIN session_participants p ON p.session_id = s.id AND p.user_id = $2
       WHERE s.id = $1`,
@@ -184,10 +196,16 @@ export async function eventRoomAdmission(
   if (facts.participant_status === 'removed') return 'removed';
   // T11 (1 Nov 2026): a removed, suspended or banned account enters no event, whatever row or role it holds.
   if (facts.account_closed === true) return 'refused';
+  // Part 2 Task 2 (D1): a draft's room is for the people who run it only (it cannot go live, but its waiting room opens).
+  if (facts.publication === 'draft') return facts.is_host || facts.is_cohost || isAdminRole(userRole) ? 'admitted' : 'refused';
   // T2 fix round 1 (1 Nov 2026): a participant row is a place the event already gave, so it admits on every
   // reconnect. An approval pod's outsider is kept out where a place is first given (registerParticipant), never
   // here, so someone already in a live event is not refused after a restart or after leaving the pod mid-event.
-  if (facts.is_host || facts.is_cohost || isAdminRole(userRole) || facts.participant_status !== null) return 'admitted';
+  if (facts.is_host || facts.is_cohost || isAdminRole(userRole)) return 'admitted';
+  // Part 2 Task 4 (D3): on an invitation-only event a place admits only while its entitlement holds. An organiser who
+  // takes an email off the list (or revokes a code) keeps its person out of the room; their place stays as it is.
+  if (facts.admission_holds === false) return 'refused';
+  if (facts.participant_status !== null) return 'admitted';
   return 'refused';
 }
 

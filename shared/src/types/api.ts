@@ -61,6 +61,7 @@ export const ErrorCodes = {
   USER_PROFILE_INCOMPLETE: 'USER_PROFILE_INCOMPLETE',
   USER_SUSPENDED: 'USER_SUSPENDED',
   ACCOUNT_CLOSED: 'ACCOUNT_CLOSED',  // deleted/removed by an admin; approving a new join request reopens it
+  GUEST_MEMBERSHIP_REQUIRED: 'GUEST_MEMBERSHIP_REQUIRED',  // 403; an event guest (users.account_kind = 'event_guest') asked for a member-only part of RSN
 
   // Pod errors
   POD_NOT_FOUND: 'POD_NOT_FOUND',
@@ -97,6 +98,35 @@ export const ErrorCodes = {
   EVENT_REQUEST_NOT_NEEDED: 'EVENT_REQUEST_NOT_NEEDED',  // T11: the person can register directly
   EVENT_REQUEST_DECLINED: 'EVENT_REQUEST_DECLINED',      // T11: the host declined; the requester cannot reopen it
   EVENT_REQUEST_ANSWERED: 'EVENT_REQUEST_ANSWERED',      // T11: the request was already approved, declined or withdrawn
+  REGISTRATION_NOT_OPEN: 'REGISTRATION_NOT_OPEN',        // 409; the event's registration opens later (sessions.registration_opens_at)
+  EVENT_NOT_PUBLISHED: 'EVENT_NOT_PUBLISHED',            // 409; a draft cannot go live: publish it first
+  EVENT_ALREADY_CANCELLED: 'EVENT_ALREADY_CANCELLED',    // 409; a second cancel sends no second notice
+  EVENT_HAS_REGISTRATIONS: 'EVENT_HAS_REGISTRATIONS',    // 409; unpublish refused: people hold places, cancel instead
+  EVENT_LIFECYCLE_NOT_ALLOWED: 'EVENT_LIFECYCLE_NOT_ALLOWED',  // 409; that lifecycle step does not apply in the event's state
+  // Matching groups (10 Nov 2026 spec, Part 2 Task 5): an event with groups asks each participant which group they are in.
+  EVENT_GROUP_REQUIRED: 'EVENT_GROUP_REQUIRED',          // 409; the event has groups and this person has none and chose none
+  EVENT_GROUP_UNKNOWN: 'EVENT_GROUP_UNKNOWN',            // 400; a group key the event does not have, or more groups than it allows
+  EVENT_GROUP_ALREADY_CHOSEN: 'EVENT_GROUP_ALREADY_CHOSEN', // 409; a participant's own group is set once; an organiser changes it
+  // A room the host makes or changes live (Part 2 Task 7): the same checker the engine uses refuses it.
+  MATCH_BLOCKED_PAIR: 'MATCH_BLOCKED_PAIR',              // 409; one of the two blocked the other: never overridable
+  MATCH_GROUP_RULE: 'MATCH_GROUP_RULE',                  // 409; the round's group rule does not let them meet (overridable)
+  GROUP_OVERRIDE_FORBIDDEN: 'GROUP_OVERRIDE_FORBIDDEN',  // 403; only the event owner or a super admin overrides a group rule
+  // Part 2 Task 4 (10 Nov 2026): admission per event.
+  EVENT_ADMISSION_REQUIRED: 'EVENT_ADMISSION_REQUIRED',  // 403; an invitation-only event: the person is not on its list and holds no redeemed code
+  ADMISSION_CODE_USED: 'ADMISSION_CODE_USED',            // 409; someone else already redeemed this admission code
+  ADMISSION_CODE_EXPIRED: 'ADMISSION_CODE_EXPIRED',      // 400; the admission code is past its expiry
+  ADMISSION_CODE_INVALID: 'ADMISSION_CODE_INVALID',      // 400; unknown, revoked or for another event (one answer for all three)
+  ADMISSION_ENTRY_NOT_FOUND: 'ADMISSION_ENTRY_NOT_FOUND',  // 404; no such allowed email on this event's list
+  ADMISSION_CODE_NOT_FOUND: 'ADMISSION_CODE_NOT_FOUND',    // 404; no such admission code on this event (the organisers' revoke)
+  // The RSN Call link (Part 2 Task 6, 11 Nov 2026).
+  EVENT_CANCELLED: 'EVENT_CANCELLED',                    // 409; the event behind a call link was cancelled: it takes nobody
+  // The matching board's draft (Part 2 Task 8).
+  SCHEDULE_CHANGED: 'SCHEDULE_CHANGED',                  // 409; the board changed since the organiser's read; details.board is the board now
+  SCHEDULE_LOCKED: 'SCHEDULE_LOCKED',                    // 409; the meeting or seat is locked: unlock it first
+  SCHEDULE_GROUP_RULE: 'SCHEDULE_GROUP_RULE',            // 409; the round's group rule refuses the room (overridable); details.alternatives
+  SCHEDULE_RULE: 'SCHEDULE_RULE',                        // 409; a block, a room over three, or a person who can't be seated; details.alternatives
+  SCHEDULE_ROUND_STARTED: 'SCHEDULE_ROUND_STARTED',      // 409; the round has already started in the live event
+  SCHEDULE_HAS_CONFLICTS: 'SCHEDULE_HAS_CONFLICTS',      // 409; publishing refused until the draft's conflicts are fixed; details.blocking
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',
@@ -143,6 +173,7 @@ export const ErrorCodes = {
   // Validation errors
   VALIDATION_ERROR: 'VALIDATION_ERROR',
   INVALID_INPUT: 'INVALID_INPUT',
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',  // 413; a request body over its route's own limit (an admission import)
 
   // Rate limiting
   RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',

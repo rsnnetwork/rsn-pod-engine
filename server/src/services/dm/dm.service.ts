@@ -28,7 +28,7 @@ import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, EVENT_FORMAT_KEYS, liveKindOf, type MessageReplyQuote } from '@rsn/shared';
 import * as blockService from '../block/block.service';
-import { BroadcastBlockedError } from './broadcast-errors';
+import { BroadcastBlockedError, BroadcastGuestError } from './broadcast-errors';
 import { FORMER_MEMBER_NAME, activeMemberSql } from '../users/active-member';
 import { REPLY_COLUMNS, REPLY_COPY, replyQuoteFromOriginal, replyQuoteOf, type OriginalRow, type ReplyColumns } from './reply-quote';
 
@@ -133,6 +133,9 @@ export interface ConversationSummary {
 /** What someone writing to a removed, suspended or banned account is told (T2). */
 export const FORMER_MEMBER_DM_REFUSAL = 'This person is no longer a member of REASON, so they cannot get messages.';
 
+/** What someone writing to (or as) an event guest is told (Part 2, Task 3): messages are for members. */
+export const EVENT_GUEST_DM_REFUSAL = 'Messages are for members. This person came to an event as a guest and is not a member yet.';
+
 // ─── Internal helpers ──────────────────────────────────────────────────────
 
 function normalizePair(userA: string, userB: string): [string, string] {
@@ -148,6 +151,8 @@ function normalizePair(userA: string, userB: string): [string, string] {
  *   1. self              → {allowed:false, reason:'self'}
  *   2b. former member    → {allowed:false, reason:'former_member'} when the other account is not active (removed,
  *                          suspended or banned; T2, 1 Nov 2026). Nobody, an admin included, writes to it.
+ *   2c. event guest      → {allowed:false, reason:'event_guest'} when either account is an event guest
+ *                          (users.account_kind; Part 2, Task 3). Nobody, an admin included, opens a thread with one.
  *   2. blocked           → {allowed:false, reason:'blocked'}
  *   3. admin override    → {allowed:true} if userA's global role is admin/super_admin
  *                          (role read from DB — never trusted from client)
@@ -175,14 +180,23 @@ export async function canMessage(
   }
 
   // Admin override (step 3) — role must come from the DB, never the client. The same read says whether the other
-  // account is still active (step 1b, T2): false only for an account that exists and is not active.
-  const roleResult = await query<{ role: string; recipient_active?: boolean | null }>(
-    `SELECT role, (SELECT ${activeMemberSql('r')} FROM users r WHERE r.id = $2) AS recipient_active
+  // account is still active (step 1b, T2): false only for an account that exists and is not active. And it says
+  // whether either of the two is an event guest (Part 2, Task 3): messages are for members, so no conversation is
+  // opened with or by a guest, whatever else the pair share (an admin's override, a mutual "meet again" at the event
+  // they were both at, a meeting).
+  const roleResult = await query<{
+    role: string; recipient_active?: boolean | null; sender_kind?: string | null; recipient_kind?: string | null;
+  }>(
+    `SELECT role, (SELECT r.account_kind FROM users r WHERE r.id = $2) AS recipient_kind, account_kind AS sender_kind,
+            (SELECT ${activeMemberSql('r')} FROM users r WHERE r.id = $2) AS recipient_active
        FROM users WHERE id = $1 LIMIT 1`,
     [userA, userB],
   );
   if (roleResult.rows[0]?.recipient_active === false) {
     return { allowed: false, reason: 'former_member' };
+  }
+  if (roleResult.rows[0]?.sender_kind === 'event_guest' || roleResult.rows[0]?.recipient_kind === 'event_guest') {
+    return { allowed: false, reason: 'event_guest' };
   }
   const fromRole = roleResult.rows[0]?.role;
   if (fromRole === 'admin' || fromRole === 'super_admin') {
@@ -329,6 +343,7 @@ export async function sendMessage(
   if (!auth.allowed) {
     const message =
       auth.reason === 'former_member' ? FORMER_MEMBER_DM_REFUSAL
+      : auth.reason === 'event_guest' ? EVENT_GUEST_DM_REFUSAL
       : auth.reason === 'blocked'     ? 'You can no longer message this user'
       : auth.reason === 'not_mutual'  ? "You can message once you both say 'meet again'"
       : auth.reason === 'no_encounter' ? "You can't DM someone you haven't met yet"
@@ -494,7 +509,8 @@ export async function insertDirectMessageOn(
  * Send a DM as part of an authorized broadcast. Skips the "have you met" gate of
  * canMessage() because the caller (post-event-message job creation) has already
  * authorized the sender for this audience, but never skips a block: a block, in
- * either direction, is the one thing a person says to stop hearing from someone.
+ * either direction, is the one thing a person says to stop hearing from someone. Nor does it ever write to an event
+ * guest (BroadcastGuestError).
  * Still validates content length. Returns the same shape as sendMessage so the
  * caller can broadcast via broadcastDmMessage().
  */
@@ -516,6 +532,9 @@ export async function sendBroadcastMessage(
   if (await blockService.areBlocked(fromUserId, toUserId)) {
     throw new BroadcastBlockedError();
   }
+  // Part 2, Task 3 (fix round 1): a broadcast never opens a thread with an event guest, as no message does.
+  const recipient = await query<{ account_kind: string }>(`SELECT account_kind FROM users WHERE id = $1`, [toUserId]);
+  if (recipient.rows[0]?.account_kind !== 'member') throw new BroadcastGuestError();
   return insertDirectMessage(fromUserId, toUserId, trimmed, null);
 }
 

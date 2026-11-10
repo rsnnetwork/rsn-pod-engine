@@ -216,7 +216,8 @@ async function whoTookPart(db: Db, sessionId: string, among?: string[]): Promise
       WHERE sp.session_id = $1
         AND sp.joined_at IS NOT NULL
         AND sp.status <> 'removed'
-        AND u.status = 'active'${narrowed ? `
+        AND u.status = 'active'
+        AND u.account_kind = 'member'${narrowed ? `
         AND sp.user_id = ANY($2::uuid[])` : ''}
       ORDER BY sp.joined_at ASC, sp.user_id ASC`,
     narrowed ? [sessionId, among] : [sessionId],
@@ -381,9 +382,14 @@ export async function createCustomGroup(
       throw new ForbiddenError(GROUP_COPY.blocked);
     }
     const [a, b] = creatorId < memberId ? [creatorId, memberId] : [memberId, creatorId];
+    // Only a member can be put in a group (Part 2, Task 3, fix round 1): an event guest the creator met reads as
+    // someone they cannot add.
     const enc = await query<{ id: string }>(
-      `SELECT id FROM encounter_history WHERE user_a_id = $1 AND user_b_id = $2 LIMIT 1`,
-      [a, b],
+      `SELECT e.id FROM encounter_history e
+        WHERE e.user_a_id = $1 AND e.user_b_id = $2
+          AND EXISTS (SELECT 1 FROM users u WHERE u.id = $3 AND u.account_kind = 'member')
+        LIMIT 1`,
+      [a, b, memberId],
     );
     if (enc.rows.length === 0) throw new ForbiddenError(GROUP_COPY.notMet);
   }
@@ -548,7 +554,8 @@ export async function ensurePodGroup(podId: string): Promise<DmGroup> {
        SELECT $1, pm.user_id,
               CASE WHEN pm.role IN ('director', 'host') THEN 'admin' ELSE 'member' END
        FROM pod_members pm
-       WHERE pm.pod_id = $2 AND pm.status = 'active'
+       JOIN users u ON u.id = pm.user_id
+       WHERE pm.pod_id = $2 AND pm.status = 'active' AND u.account_kind = 'member'
        ON CONFLICT (group_id, user_id) DO NOTHING`,
       [g.id, podId],
     );
@@ -569,7 +576,8 @@ export async function syncPodMember(
   if (action === 'add') {
     await query(
       `INSERT INTO dm_group_members (group_id, user_id, role)
-       VALUES ($1, $2, 'member')
+       SELECT $1, $2, 'member'
+        WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.account_kind = 'member')
        ON CONFLICT (group_id, user_id) DO NOTHING`,
       [group.id, userId],
     );
@@ -656,6 +664,7 @@ export async function sendGroupMessage(
         WHERE m.group_id = $1
           AND m.user_id <> $2
           AND u.status = 'active'
+          AND u.account_kind = 'member'
           AND u.notification_prefs -> 'group_bell' IS DISTINCT FROM 'false'::jsonb
           AND ${notBlockedBetween('m.user_id', '$2')}
           AND NOT EXISTS (
@@ -895,6 +904,7 @@ export async function eventGroupCandidates(viewer: { userId: string; role: UserR
         AND sp.joined_at IS NOT NULL
         AND sp.status <> 'removed'
         AND u.status = 'active'
+        AND u.account_kind = 'member'
         AND u.id <> $2
         AND ${notBlockedBetween('u.id', '$2')}
       ORDER BY sp.joined_at ASC, u.id ASC`,

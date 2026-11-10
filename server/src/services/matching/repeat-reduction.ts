@@ -33,9 +33,11 @@ export function reduceRepeatPairs(
   pairs: SwappablePair[],
   excludedPairs: Set<string>,
   hardExcluded: Set<string>,
+  /** Part 2 Task 7 — on an event with groups, whether the round's rule lets two people meet (absent: anyone may). */
+  mayMeet?: (a: string, b: string) => boolean,
 ): void {
   const isRepeat = (a: string, b: string) => excludedPairs.has(pairKey(a, b));
-  const blocked = (a: string, b: string) => hardExcluded.has(pairKey(a, b));
+  const blocked = (a: string, b: string) => hardExcluded.has(pairKey(a, b)) || (mayMeet ? !mayMeet(a, b) : false);
 
   // Only two-person pairs participate; trios are left intact.
   const twoIdx = pairs

@@ -16,9 +16,11 @@ interface Props {
   onReport: () => void;
   /** A block is on its way: Block cannot be pressed again until it has an answer. */
   blocking: boolean;
+  /** "Already met" (10 Nov 2026): the person is marked, and whether a mark or an undo is on its way. */
+  alreadyMet?: { marked: boolean; pending: boolean; onToggle: () => void };
 }
 
-export default function ProfileMoreMenu({ onBlock, onReport, blocking }: Props) {
+export default function ProfileMoreMenu({ onBlock, onReport, blocking, alreadyMet }: Props) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -57,6 +59,15 @@ export default function ProfileMoreMenu({ onBlock, onReport, blocking }: Props) 
       </button>
       {open && (
         <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[220px] rounded-2xl border border-reason-line bg-white p-1.5 shadow-[0_14px_40px_rgba(16,18,24,.12)]">
+          {alreadyMet && (
+            <button
+              type="button"
+              onClick={choose(alreadyMet.onToggle)}
+              disabled={alreadyMet.pending}
+             
+              className={cn(ITEM, 'font-bold disabled:cursor-default disabled:opacity-60')}
+            >{alreadyMet.marked ? 'Marked as met · Undo' : 'Already met'}</button>
+          )}
           <button
             type="button"
             onClick={choose(onBlock)}

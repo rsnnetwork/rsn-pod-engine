@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import config from '../config';
 import logger from '../config/logger';
 import { getRedisClient } from '../services/redis/redis.client';
-import { ApiResponse } from '@rsn/shared';
+import { ApiResponse, normaliseCallCode } from '@rsn/shared';
 
 /**
  * June-14 — key the global API limiter by AUTHENTICATED USER, not IP.
@@ -488,6 +488,20 @@ export const meetingCancelLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have cancelled a lot of meetings this hour. Try again later.' } },
 });
 
+// Withdrawing a meeting request (10 Nov 2026). A withdrawn request may be sent again, and every send rings the other
+// person's bell and may email them, so withdraw-and-ask-again is held to 20 withdrawals an hour per member. Only a
+// withdrawal that happened counts: a refusal (not theirs, already answered) changed nothing.
+export const requestWithdrawLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('request-withdraw'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have withdrawn a lot of requests this hour. Try again later.' } },
+});
+
 // Ringing someone for a call (1 Nov 2026, L12). Each ring is a bell, a banner on every screen the other person
 // has open and a line in the thread, so a member rings at most 10 calls in 10 minutes, whether from a profile
 // (POST /calls/user/:userId) or a thread (POST /dm/conversations/:id/call/request): one limiter, one bucket.
@@ -664,7 +678,8 @@ export const postEventMessageLimiter = rateLimit({
 // reads; a page is 50 messages, so 60 a minute is far more than a person scrolling back reads. Taking a
 // message down has a smaller allowance of its own. Keyed per member: the routes sign in first.
 // Since 2 Nov 2026 (final fix wave SM4) the event's Requests list (GET /sessions/:id/requests) shares the read
-// allowance: it too can be asked for by id, and the organisers' card reads it once per change.
+// allowance: it too can be asked for by id, and the organisers' card reads it once per change. So does an event's
+// groups read (GET /sessions/:id/groups, 10 Nov 2026 spec, Part 2 Task 5), for the same reasons.
 export const eventChatReadLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -672,6 +687,31 @@ export const eventChatReadLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
   store: buildStore('event-chat-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// An event's audit trail (Part 2, 10 Nov 2026): organisers read a page of 50 rows; 60 a minute per member is far more than
+// anyone scrolls it. Keyed per member: the route signs in first.
+export const eventAuditReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-audit-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// An event's lifecycle steps (Part 2, Task 2): publish, unpublish, cancel, archive, unarchive, delete for good. An organiser
+// takes a handful in a sitting; 20 a minute per member leaves room for a busy one and none for a loop. Keyed per member:
+// the routes sign in first.
+export const lifecycleWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-lifecycle-write'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
@@ -717,4 +757,198 @@ export const eventRequestLimiter = rateLimit({
     };
     res.status(429).json(response);
   },
+});
+
+// Matching groups (10 Nov 2026 spec, Part 2 Task 5): an organiser saving an event's groups and round rules, or
+// putting a person in a group. Thirty a minute per person is far more than anyone edits by hand, while a runaway
+// client is stopped. The groups read shares eventChatReadLimiter, the per-event read allowance.
+export const groupsWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-groups-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// ─── Admission per event (Part 2, Task 4, 10 Nov 2026) ───────────────────────
+// The organisers' admission screens: reads like the event's other organiser lists, and every change (mode, an import
+// of allowed emails, a revoke, a batch of codes) in a smaller allowance of its own. Keyed per member: they sign in first.
+export const admissionReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('admission-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const admissionWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('admission-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// Redeeming an admission code (Review Focus 4: brute force). A code is 60 bits, so guessing is hopeless already; these
+// cap it anyway. Only a refused try counts (skipSuccessfulRequests): ten wrong tries an hour per person per event, and
+// thirty an hour per network address across every person and event behind it, so one script cannot spread its guesses
+// over many accounts. The refusal reads the same for both.
+const ADMISSION_REDEEM_WINDOW_MS = 60 * 60 * 1000;
+const admissionRedeemLimited = (_req: Request, res: Response) => {
+  const response: ApiResponse = {
+    success: false,
+    error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many codes tried. Please wait an hour, then try again.' },
+  };
+  res.status(429).json(response);
+};
+
+/** The per-person, per-event bucket: the verified sign-in (or the address, unsigned) and the event in the path. */
+export function admissionRedeemKey(req: Request): string {
+  return `${userOrIpKey(req)}:e:${String(req.params?.id ?? '').toLowerCase()}`;
+}
+
+export const admissionRedeemLimiter = rateLimit({
+  windowMs: ADMISSION_REDEEM_WINDOW_MS,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: admissionRedeemKey,
+  store: buildStore('admission-redeem'),
+  handler: admissionRedeemLimited,
+});
+
+export const admissionRedeemIpLimiter = rateLimit({
+  windowMs: ADMISSION_REDEEM_WINDOW_MS,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req: Request) => `ip:${clientIp(req)}`,
+  store: buildStore('admission-redeem-ip'),
+  handler: admissionRedeemLimited,
+});
+
+//// ─── The RSN Call link (Part 2 foundation, Task 6, 11 Nov 2026; Review Focus 4; fix round 2) ─────────────
+// An event's link is opened by people who are not signed in, so its per-client buckets are keyed by network address the
+// one way every signed-out limiter here is (clientIp, 7 Sep 2026: the real person behind Cloudflare, never the shared
+// edge address), and nothing on the link is keyed on a value many real people share, so nobody can fill a bucket to
+// keep others out of an event. What stops guessing is per target: the entry code's five tries and the per-address
+// buckets (the sign-in code's signInCodeEmailLimiter, and five code emails per link and address here); a call code is
+// 50 bits, and callLinkMissLimiter counts only the answers that found no event (404). Every address asking for a code gets
+// the same answer, so running a list of addresses through a link tells nothing.
+const callLinkLimited = (message: string) => (_req: Request, res: Response) => {
+  const response: ApiResponse = { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message } };
+  res.status(429).json(response);
+};
+const SLOW_DOWN = 'Slow down a moment, then try again.';
+const ipKey = (req: Request) => `ip:${clientIp(req)}`;
+/** The link a request names, in its stored spelling (o→0, i/l→1, separators dropped), so spellings share one bucket. */
+const linkOf = (req: Request) => {
+  const raw = String(req.params?.code ?? '');
+  return normaliseCallCode(raw) ?? raw.toLowerCase().replace(/[\s-]/g, '');
+};
+
+export const callLinkReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  store: buildStore('call-link-read'),
+  handler: callLinkLimited(SLOW_DOWN),
+});
+
+export const CALL_LINK_MISSES_MAX = 20;
+export const callLinkMissLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: CALL_LINK_MISSES_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  // Only a link that leads nowhere counts: every other answer, a refusal included, is "successful" here.
+  requestWasSuccessful: (_req: Request, res: Response) => res.statusCode !== 404,
+  keyGenerator: ipKey,
+  store: buildStore('call-link-miss'),
+  handler: callLinkLimited('Too many links tried. Please wait 10 minutes, then try again.'),
+});
+
+/** Codes emailed: twenty an hour per network address. */
+export const CALL_LINK_EMAILS_PER_CLIENT = 20;
+export const callLinkEmailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: CALL_LINK_EMAILS_PER_CLIENT,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  store: buildStore('call-link-email'),
+  handler: callLinkLimited('Too many codes asked for. Please wait an hour, then try again.'),
+});
+
+/** The per-link, per-address bucket for codes emailed: the link's stored spelling and a hash of the address. */
+export function callLinkEmailTargetKey(req: Request): string {
+  const email = typeof req.body?.email === 'string' ? req.body.email : '';
+  return `c:${linkOf(req)}:${signInCodeEmailKey(email)}`;
+}
+
+export const callLinkEmailTargetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: callLinkEmailTargetKey,
+  store: buildStore('call-link-email-target'),
+  handler: callLinkLimited('Too many codes asked for this address. Please wait 15 minutes, then try again.'),
+});
+
+/** Reading and entering by the link, signed in: twenty a minute per person. */
+export const callEntryLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-entry'),
+  handler: callLinkLimited(SLOW_DOWN),
+});
+
+/** The organisers' call-link card: reading it and rotating it, thirty a minute per person. */
+export const callLinkManageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('call-link-manage'),
+  handler: callLinkLimited(SLOW_DOWN),
+});
+
+// The matching board (10 Nov 2026 spec, Part 2 Task 8): an organiser dragging people around a board writes once per
+// drop and reads the board back after every change made by anyone running the event. 120 a minute per person, each
+// way, lets a quick organiser work without a pause while a runaway client is stopped. Keyed per member: the routes
+// sign in first.
+export const scheduleReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('schedule-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const scheduleWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('schedule-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });

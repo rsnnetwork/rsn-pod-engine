@@ -7,7 +7,7 @@ import logger from '../../config/logger';
 import {
   Invite, InviteStatus, InviteType, CreateInviteInput, Session, ErrorCodes,
 } from '@rsn/shared';
-import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
+import { NotFoundError, ConflictError, AppError, ForbiddenError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
 import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
@@ -104,8 +104,15 @@ export async function assertMayInviteToSession(sessionId: string, userId: string
       [sessionId, userId]
     );
     if (cohost.rows.length === 0) {
+      // Part 2 Task 2, fix round 1: a draft is answered as an id that names nothing to anyone who does not run it.
+      if (session.publication === 'draft') throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
       throw new AppError(403, 'AUTH_FORBIDDEN', 'Only the event host or a co-host can send event invites');
     }
+  }
+  // Part 2 Task 2, fix round 1: a draft takes no invites (its invitees could not register until it is published, and
+  // the invite would name it to them). Every way an event invite is made, listed for or checked comes through here.
+  if (session.publication === 'draft') {
+    throw new ConflictError(ErrorCodes.EVENT_NOT_PUBLISHED, 'Publish the event before inviting people.');
   }
   return session;
 }
@@ -653,7 +660,10 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     podId: input.podId || null,
     sessionId: input.sessionId || null,
     circleId: input.circleId || null,
-    maxUses: input.maxUses || 2,
+    // Part 2 Task 4 fix round 2: an invite that names an address is for that one person, so it is single-use unless
+    // the caller asks otherwise (an invitation-only event counts only a single-use personal invite). Every screen
+    // already sends 1; an open link keeps the old default.
+    maxUses: input.maxUses || (input.inviteeEmail ? 1 : 2),
     expiresAt,
   };
   let inserted = await insertPendingInvite(pending);
@@ -848,7 +858,7 @@ async function applyInviteRegistration(
       `SELECT pod_id AS "podId" FROM sessions WHERE id = $1`,
       [invite.sessionId],
     );
-    const podId = sessionRow.rows[0]?.podId;
+    let podId: string | undefined = sessionRow.rows[0]?.podId;
     // T11 (1 Nov 2026), D4: an event with its own visibility takes its invitee without making them a member of its
     // pod (an invite to one event is not an invite to the pod). A NULL event adds them to the pod first, as before.
     const visibilityRow = await query<{ visibility: string | null }>(
@@ -868,9 +878,14 @@ async function applyInviteRegistration(
         // false for every ConflictError until 26 Oct 2026; a re-invited, still-pod-member kicked user hit
         // POD_MEMBER_EXISTS here, blocking the re-admit below.)
         const code = (err as { code?: string } | undefined)?.code;
-        if (code !== ErrorCodes.POD_MEMBER_EXISTS && code !== ErrorCodes.POD_FULL) throw err;
+        // Part 2, Task 4: an event guest never joins a pod (addMember refuses them, Task 3). Their invite is still read
+        // by registerParticipant below, which decides whether it lets the guest in (guestMayRegister), so the pod step
+        // is skipped for them instead of failing the whole accept.
+        const guestRefused = err instanceof ForbiddenError && err.message === podService.GUEST_POD_REFUSAL;
+        if (code !== ErrorCodes.POD_MEMBER_EXISTS && code !== ErrorCodes.POD_FULL && !guestRefused) throw err;
+        if (guestRefused) podId = undefined;
       }
-      out.podId = podId;
+      if (podId) out.podId = podId;
     }
 
     // #4B (June-10 debrief) — a fresh PERSONAL invite (targeted email) is the

@@ -22,7 +22,7 @@ const WIDEN_BELOW = 3;
 
 /**
  * Candidates the owner has a live introduction with (asked, or been asked by,
- * not declined). replaceMatches keeps these rows whatever the score, so their
+ * pending or accepted; a withdrawn request is none). replaceMatches keeps these rows whatever the score, so their
  * stored reason must be refreshed here or it goes stale: on 3 Sep 2026 Stefan
  * stopped being a "developer" in the data and his card on Ali's Developers
  * agent kept saying he was one, because he no longer scored and the upsert
@@ -36,7 +36,7 @@ async function stickyCandidateIds(ownerId: string, candidateIds: string[], agent
     // actually asked them through, and appear here only if they still score-match.
     `SELECT DISTINCT CASE WHEN p.sender_id = $1 THEN p.recipient_id ELSE p.sender_id END AS id
        FROM user_pokes p
-      WHERE p.status <> 'declined'
+      WHERE p.status IN ('pending', 'accepted')
         AND p.agent_id = $2
         AND (p.sender_id = $1 OR p.recipient_id = $1)`,
     [ownerId, agentId],
@@ -94,6 +94,8 @@ async function loadCandidatesFor(ownerId: string): Promise<IntentProfile[]> {
       WHERE u.id <> $1
         AND u.status = 'active'
         AND u.onboarding_completed = true
+        -- Part 2, Task 3: members only; an event guest is never listed.
+        AND u.account_kind = 'member'
         -- "Already met" hides people you have genuinely met, at an event or
         -- otherwise. It must NOT hide someone you reached: accepting an
         -- introduction writes an encounter row (times_met = 0), so a person
@@ -110,13 +112,16 @@ async function loadCandidatesFor(ownerId: string): Promise<IntentProfile[]> {
              WHERE e.user_a_id = LEAST($1, u.id) AND e.user_b_id = GREATEST($1, u.id))
           OR EXISTS (
             SELECT 1 FROM user_pokes ip
-             WHERE ip.status <> 'declined'
+             WHERE ip.status IN ('pending', 'accepted')
                AND ((ip.sender_id = $1 AND ip.recipient_id = u.id)
                  OR (ip.sender_id = u.id AND ip.recipient_id = $1))))
         AND NOT EXISTS (
           SELECT 1 FROM user_blocks b
            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
               OR (b.blocker_id = u.id AND b.blocked_id = $1))
+        -- 10 Nov 2026: "Already met" (marked outside the platform) keeps the person out of the member's searches.
+        AND NOT EXISTS (
+          SELECT 1 FROM already_met am WHERE am.user_id = $1 AND am.target_user_id = u.id)
         AND NOT EXISTS (
           SELECT 1 FROM user_pokes p
            WHERE p.status = 'declined'
@@ -199,6 +204,32 @@ export async function recomputeAgentsForUser(userId: string): Promise<void> {
   }
 }
 
+// One rescore per member at a time (11 Nov 2026). A request that arrives while one is running does not start a second:
+// it marks the running one to go round once more when it ends, so any number of requests in a burst cost at most two runs.
+const rescoreRuns = new Map<string, { again: boolean; done: Promise<void> }>();
+
+/** recomputeAgentsForUser, coalesced per member: see rescoreRuns. Resolves when the run that covers this call has finished. */
+export function rescoreAgentsCoalesced(userId: string): Promise<void> {
+  const running = rescoreRuns.get(userId);
+  if (running) {
+    running.again = true;
+    return running.done;
+  }
+  const run = { again: false, done: Promise.resolve() };
+  rescoreRuns.set(userId, run);
+  run.done = (async () => {
+    try {
+      do {
+        run.again = false;
+        await recomputeAgentsForUser(userId);
+      } while (run.again);
+    } finally {
+      rescoreRuns.delete(userId);
+    }
+  })();
+  return run.done;
+}
+
 /**
  * A new member finished onboarding, so every OTHER member's active agents may
  * now have a new candidate. Rather than re-scoring the whole network, score the
@@ -237,7 +268,9 @@ export async function scoreNewcomerAgainstAgents(
             AND NOT EXISTS (
               SELECT 1 FROM user_blocks b
                WHERE (b.blocker_id = $1 AND b.blocked_id = $2)
-                  OR (b.blocker_id = $2 AND b.blocked_id = $1))`,
+                  OR (b.blocker_id = $2 AND b.blocked_id = $1))
+            AND NOT EXISTS (
+              SELECT 1 FROM already_met am WHERE am.user_id = $1 AND am.target_user_id = $2)`,
         [a.userId, newUserId],
       );
       if (blocked.rows.length === 0) continue;

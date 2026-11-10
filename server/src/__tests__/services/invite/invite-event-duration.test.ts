@@ -89,7 +89,7 @@ const eventInviteRow = () => ({
 /** A database that answers by what the SQL asks for. */
 function world(eventRow: Record<string, unknown>) {
   mockQuery.mockImplementation(async (sql: string) => {
-    if (/SELECT status FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active' }] };
+    if (/SELECT status, account_kind FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
     if (/FROM invites WHERE id = \$1/.test(sql)) return { rows: [remindedInvite] };
     if (/SELECT role FROM pod_members WHERE pod_id = \$1/.test(sql)) return { rows: [{ role: 'director' }] };
     if (/SELECT name FROM pods WHERE id = \$1/.test(sql)) return { rows: [{ name: 'Reason circle' }] };

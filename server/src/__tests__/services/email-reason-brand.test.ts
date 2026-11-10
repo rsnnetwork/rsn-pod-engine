@@ -273,6 +273,39 @@ const cases: EmailCase[] = [
       joinUrl: 'https://app.rsn.network/meet/c1?scheduled=1&kind=video', eventsUrl: 'https://app.rsn.network/sessions',
     }),
   },
+  // Part 2 Task 2: an event cancelled before it started.
+  {
+    fn: 'sendEventCancelledEmail', label: 'a cancelled event', subject: 'Cancelled: Founders breakfast',
+    brandLine: MEET,
+    run: () => emailService.sendEventCancelledEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', hostName: 'Bo', when: 'Thursday 5 November, 18:00 (CET)',
+      reason: 'The venue closed.', link: 'https://app.rsn.network/sessions/s1',
+    }),
+  },
+  // Part 2 Task 10: the reminder before an event, and the notice that its time moved.
+  {
+    fn: 'sendEventReminderEmail', label: 'an event reminder', subject: 'Reminder: Founders breakfast starts tomorrow at 18:00',
+    brandLine: MEET,
+    run: () => emailService.sendEventReminderEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', when: 'tomorrow at 18:00', link: 'https://app.rsn.network/sessions/s1',
+    }),
+  },
+  {
+    fn: 'sendEventRescheduledEmail', label: 'an event moved to a new time', subject: 'New time: Founders breakfast',
+    brandLine: MEET,
+    run: () => emailService.sendEventRescheduledEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', previousWhen: 'Thursday 5 November, 18:00 (CET)',
+      when: 'Friday 6 November, 18:00 (CET)', link: 'https://app.rsn.network/sessions/s1',
+    }),
+  },
+  {
+    fn: 'sendCallEntryCodeEmail', label: 'an event entry code', subject: 'Your code for Founders breakfast',
+    underCard: "If you didn't ask for this code, you can safely ignore this email.",
+    says: ['Enter this code to join', '481206', 'It works for 15 minutes', 'Open the event'],
+    run: () => emailService.sendCallEntryCodeEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', code: '481206', link: 'https://app.rsn.network/call/k7m2x9q4ra?entry=abc',
+    }),
+  },
 ];
 
 const count = (haystack: string, pattern: RegExp) => (haystack.match(pattern) ?? []).length;

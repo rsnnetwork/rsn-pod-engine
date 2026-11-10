@@ -2,7 +2,7 @@
 // Everything the REASON pages read and write. Pages import all of it from here.
 import api from '@/lib/api';
 import type {
-  ConnectionList, MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PictureCrop, PictureKind,
+  ConnectionList, EveryonePage, MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PictureCrop, PictureKind,
   PictureSource, PublicMember, RecentConnection, WorthContinuing,
 } from '@rsn/shared';
 import type { PokeStatus } from './person';
@@ -44,6 +44,7 @@ export const reasonKeys = {
   myCard: ['reason', 'mine', 'card'] as const,
   blockStatus: (userId: string) => ['reason', 'block-status', userId] as const,
   connections: ['reason', 'connections'] as const,
+  everyone: (q: string) => ['reason', 'everyone', q] as const,
 };
 
 // A member id is one encoded segment of an address. A route parameter arrives decoded, so a crafted
@@ -59,10 +60,18 @@ export const fetchMyCard = () => api.get('/people/me/card').then((r) => r.data.d
 export const fetchConnections = (before: string | null) =>
   api.get('/people/connections', { params: before ? { before } : {} }).then((r) => r.data.data as ConnectionList);
 
+// One page of Everyone, A to Z; `cursor` is the page already shown's nextCursor (none for the first page).
+export const fetchEveryone = (q: string, cursor: string | null) =>
+  api.get('/people/everyone', { params: { ...(q ? { q } : {}), ...(cursor ? { cursor } : {}) } }).then((r) => r.data.data as EveryonePage);
+
 export const setPersonResponse = (userId: string, response: PersonResponse | null) =>
   response
     ? api.put(`/people/${memberSegment(userId)}/response`, { response })
     : api.delete(`/people/${memberSegment(userId)}/response`);
+
+// "Already met" (10 Nov 2026): a private marker for someone met outside the platform.
+export const setAlreadyMet = (userId: string, met: boolean) =>
+  met ? api.put(`/people/${memberSegment(userId)}/already-met`) : api.delete(`/people/${memberSegment(userId)}/already-met`);
 
 export const sendMeetRequest = (userId: string, note: string, format: MeetingFormat) =>
   api.post(`/matches/platform/${memberSegment(userId)}/interest`, { note, format });

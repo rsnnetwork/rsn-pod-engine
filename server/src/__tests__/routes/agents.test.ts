@@ -34,6 +34,8 @@ jest.mock('../../config', () => ({
   __esModule: true,
   default: { jwtSecret: 'test-secret', nodeEnv: 'test' },
 }));
+// authenticate() reads the caller's status and account kind; every caller here is an active member.
+jest.mock('../../db', () => ({ query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }), transaction: jest.fn(), __esModule: true }));
 
 import agentRoutes from '../../routes/agents';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';

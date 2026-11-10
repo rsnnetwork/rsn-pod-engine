@@ -16,7 +16,7 @@ jest.mock('../../config/logger', () => ({
   default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
   __esModule: true,
 }));
-jest.mock('../../db', () => ({ query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }) }));
+jest.mock('../../db', () => ({ query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }) }));
 // A real state is built below, with the real helper, which pulls these two in.
 jest.mock('../../services/onboarding/avatar.service', () => ({ captureAvatar: jest.fn(), __esModule: true }));
 jest.mock('../../services/onboarding/stage-events.repo', () => ({ record: jest.fn().mockResolvedValue(undefined), __esModule: true }));
@@ -50,14 +50,14 @@ const REFUSED: Array<[string, string]> = [
 ];
 
 beforeEach(() => {
-  mockQuery.mockReset().mockResolvedValue({ rows: [{ status: 'active' }] });
+  mockQuery.mockReset().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] });
   __test__.clearAll();
 });
 
 describe('authenticateSocketToken: who it lets in', () => {
   it('lets a real access token in, as the member it names', async () => {
     await expect(authenticateSocketToken(sign(ACCESS))).resolves.toEqual({
-      userId: MEMBER, email: 'test@example.com', role: 'member', displayName: 'Test Member',
+      userId: MEMBER, email: 'test@example.com', role: 'member', displayName: 'Test Member', accountKind: 'member',
     });
   });
 
@@ -69,7 +69,7 @@ describe('authenticateSocketToken: who it lets in', () => {
   it('lets in an access token tagged type access, and one that carries only its member (as before)', async () => {
     await expect(authenticateSocketToken(sign({ ...ACCESS, type: 'access' }))).resolves.toMatchObject({ userId: MEMBER });
     await expect(authenticateSocketToken(sign({ sub: 'user-456' }))).resolves.toEqual({
-      userId: 'user-456', email: undefined, role: undefined, displayName: undefined,
+      userId: 'user-456', email: undefined, role: undefined, displayName: undefined, accountKind: 'member',
     });
   });
 
@@ -80,7 +80,7 @@ describe('authenticateSocketToken: who it lets in', () => {
 });
 
 describe.each([
-  ['the user lookup says the member is active', () => mockQuery.mockResolvedValue({ rows: [{ status: 'active' }] })],
+  ['the user lookup says the member is active', () => mockQuery.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] })],
   ['the user lookup fails open (the database is down)', () => mockQuery.mockRejectedValue(new Error('db down'))],
 ])('authenticateSocketToken: who it refuses, when %s', (_when, arm) => {
   beforeEach(() => { arm(); });
@@ -113,7 +113,7 @@ describe('authenticateSocketToken: the user-status cache is shared with the HTTP
     await authenticateSocketToken(sign(ACCESS));
     await isUserActive(MEMBER); // what authenticate asks
     expect(mockQuery).toHaveBeenCalledTimes(1);
-    expect(mockQuery).toHaveBeenCalledWith('SELECT status FROM users WHERE id = $1', [MEMBER]);
+    expect(mockQuery).toHaveBeenCalledWith('SELECT status, account_kind FROM users WHERE id = $1', [MEMBER]);
   });
 
   it('looks the member up again once their cached answer is dropped', async () => {

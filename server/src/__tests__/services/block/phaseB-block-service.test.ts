@@ -130,13 +130,18 @@ describe('Phase B — user block infrastructure', () => {
 
   describe('matching.service queries blocks and adds them to hardConstraints', () => {
     const src = readServer('services/matching/matching.service.ts');
+    // Part 2 Task 5 (10 Nov 2026): the reads moved to hard-exclusions.ts, the one loader the engine and the
+    // room checker's context share; generateSingleRound calls it.
+    const loader = readServer('services/matching/hard-exclusions.ts');
 
-    it('imports the block service', () => {
-      expect(src).toMatch(/from\s+['"]\.\.\/block\/block\.service['"]/);
+    it('imports the block service (in the shared loader)', () => {
+      expect(loader).toMatch(/from\s+['"]\.\.\/block\/block\.service['"]/);
+      expect(src).toMatch(/from\s+['"]\.\/hard-exclusions['"]/);
     });
 
-    it('calls blockService.getBlockedPairsForUsers in generateSingleRound', () => {
-      expect(src).toMatch(/blockService\.getBlockedPairsForUsers\(/);
+    it('calls blockService.getBlockedPairsForUsers for generateSingleRound', () => {
+      expect(loader).toMatch(/blockService\.getBlockedPairsForUsers\(/);
+      expect(src).toMatch(/await loadHardExclusions\(sessionId, participantIds\)/);
     });
 
     it('pushes a user_block constraint when there are any blocked pairs', () => {

@@ -83,7 +83,7 @@ beforeEach(() => {
   mockEmitEntities.mockResolvedValue(undefined);
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
-    if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] }; // authenticate
+    if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] }; // authenticate
     if (/SELECT user_id FROM dm_group_members WHERE group_id = \$1/.test(text)) {
       return { rows: params[0] === GROUP ? members.map((user_id) => ({ user_id })) : [] };
     }

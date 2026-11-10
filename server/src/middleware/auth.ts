@@ -2,10 +2,11 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import config from '../config';
-import { UnauthorizedError } from './errors';
-import { JwtPayload, UserRole } from '@rsn/shared';
+import { AppError, UnauthorizedError } from './errors';
+import { AccountKind, JwtPayload, UserRole } from '@rsn/shared';
 import { query } from '../db';
 import logger from '../config/logger';
+import { accountKindUnavailable, guestMembershipRequired, isGuestAllowed } from './guest-scope';
 
 // Extend Express Request to include authenticated user
 declare global {
@@ -21,14 +22,81 @@ declare global {
   }
 }
 
-// ── User status cache ──
+// ── Account gate cache ──
 // At 200+ concurrent users, we don't want a DB query per request.
-// Cache active status for 60s — deactivation takes effect within 1 minute.
-const statusCache = new Map<string, { status: string; cachedAt: number }>();
+// Cache each account's status and kind for 60s — deactivation takes effect within 1 minute.
+// The kind (Part 2, Task 3) rides the same row read and the same cache entry, so the guest
+// check adds no database round trip.
+const statusCache = new Map<string, { status: string; kind: AccountKind; cachedAt: number }>();
 const STATUS_CACHE_TTL_MS = 60_000;
 
+/** What `authenticate` and the socket handshake know about an account: its status and its kind. */
+export interface AccountGate {
+  status: string;
+  kind: AccountKind;
+  /**
+   * Set when the kind could not be read from the database (an error with nothing cached, or a value that is neither
+   * kind). `kind` is then 'event_guest', so nothing member-only opens, but the account is NOT known to be a guest:
+   * callers answer 503 SERVICE_UNAVAILABLE (try again), never GUEST_MEMBERSHIP_REQUIRED.
+   */
+  kindUnknown?: true;
+}
+
+/** Whether the database said the account is a member or a guest, or something else (impossible under the CHECK). */
+function confirmedKind(value: unknown): AccountKind | null {
+  return value === 'member' || value === 'event_guest' ? value : null;
+}
+
 /**
- * Check whether a user is active, with a 60-second in-process cache.
+ * An account's status and kind (users.status, users.account_kind) in one SELECT, with a 60-second in-process cache
+ * shared by the HTTP and WebSocket layers (Tier-1 A4: the socket handshake used to hit the DB on every connect,
+ * saturating the pool during lobby-surge reconnects).
+ *
+ * On a database error the status fails open, as it always has (a deactivated member keeps working through an
+ * outage rather than every member being locked out), but the kind fails CLOSED: the cached kind when there is one,
+ * otherwise 'event_guest' marked kindUnknown. A guest is never let into member surfaces by an outage; a member hit by
+ * the same outage with nothing cached gets a retryable 503 on member-only routes (fix round 1), never told they are a
+ * guest. No row at all reads as inactive (401), as before.
+ *
+ * The cache is per process: on another instance a promotion or a deactivation shows within the same 60 s.
+ */
+export async function readAccountGate(userId: string): Promise<AccountGate> {
+  const cached = statusCache.get(userId);
+  if (cached && Date.now() - cached.cachedAt < STATUS_CACHE_TTL_MS) {
+    return { status: cached.status, kind: cached.kind };
+  }
+
+  try {
+    const result = await query<{ status: string; account_kind: string }>(
+      'SELECT status, account_kind FROM users WHERE id = $1',
+      [userId]
+    );
+    const row = result.rows[0];
+    const kind = row ? confirmedKind(row.account_kind) : 'event_guest';
+    const status = row?.status || 'inactive';
+    if (kind === null) return { status, kind: 'event_guest', kindUnknown: true }; // not cached: read again next time
+    const gate: AccountGate = { status, kind };
+    // Prevent unbounded cache growth — evict oldest entries if cache exceeds 5000
+    if (statusCache.size > 5000) {
+      const firstKey = statusCache.keys().next().value;
+      if (firstKey) statusCache.delete(firstKey);
+    }
+    statusCache.set(userId, { ...gate, cachedAt: Date.now() });
+    return gate;
+  } catch (err) {
+    logger.warn({ err, userId }, 'Failed to read the account gate — allowing an active status, keeping the kind closed');
+    if (cached) return { status: 'active', kind: cached.kind };
+    return { status: 'active', kind: 'event_guest', kindUnknown: true };
+  }
+}
+
+/** Drop an account's cached status and kind, so the next request reads them fresh (promotion, deactivation). */
+export function forgetAccountGate(userId: string): void {
+  statusCache.delete(userId);
+}
+
+/**
+ * Check whether a user is active, through the account gate's 60-second cache. Fails open on a database error.
  *
  * Exported for reuse by the Socket.IO auth middleware (Tier-1 A4) so both
  * the HTTP and WebSocket layers share the same cache — previously the
@@ -36,28 +104,7 @@ const STATUS_CACHE_TTL_MS = 60_000;
  * lobby-surge reconnects (200 users reconnecting in ~5 s after a deploy).
  */
 export async function isUserActive(userId: string): Promise<boolean> {
-  const cached = statusCache.get(userId);
-  if (cached && Date.now() - cached.cachedAt < STATUS_CACHE_TTL_MS) {
-    return cached.status === 'active';
-  }
-
-  try {
-    const result = await query<{ status: string }>(
-      'SELECT status FROM users WHERE id = $1',
-      [userId]
-    );
-    const status = result.rows[0]?.status || 'inactive';
-    // Prevent unbounded cache growth — evict oldest entries if cache exceeds 5000
-    if (statusCache.size > 5000) {
-      const firstKey = statusCache.keys().next().value;
-      if (firstKey) statusCache.delete(firstKey);
-    }
-    statusCache.set(userId, { status, cachedAt: Date.now() });
-    return status === 'active';
-  } catch (err) {
-    logger.warn({ err, userId }, 'Failed to check user status — allowing request');
-    return true; // Fail open on DB errors to avoid blocking all users
-  }
+  return (await readAccountGate(userId)).status === 'active';
 }
 
 /**
@@ -86,6 +133,8 @@ export interface SocketMember {
   email: string;
   role: string;
   displayName: string;
+  /** From the database through the account gate, never from the token: an event guest's socket may not use dm:*. */
+  accountKind: AccountKind;
 }
 
 /**
@@ -112,8 +161,8 @@ export async function authenticateSocketToken(token: string): Promise<SocketMemb
   // fresh DB SELECT on every handshake — during a lobby surge (200 users
   // reconnecting after a deploy) the pool would saturate and legitimate
   // sockets would see "Invalid token" errors that were actually timeouts.
-  const active = await isUserActive(payload.sub);
-  if (!active) {
+  const gate = await readAccountGate(payload.sub);
+  if (gate.status !== 'active') {
     throw new Error('Account is deactivated');
   }
 
@@ -122,12 +171,17 @@ export async function authenticateSocketToken(token: string): Promise<SocketMemb
     email: payload.email,
     role: payload.role,
     displayName: payload.displayName || payload.email,
+    accountKind: gate.kind,
   };
 }
 
 /**
  * Extracts and verifies JWT from Authorization header.
  * Sets req.user on success. Blocks deactivated users.
+ *
+ * An event guest (users.account_kind = 'event_guest', read through the account gate, never from the token) is let
+ * through only on the routes guest-scope.ts lists, matched on the path Express routed the request by
+ * (req.baseUrl + req.path); anything else is 403 GUEST_MEMBERSHIP_REQUIRED.
  */
 export function authenticate(req: Request, _res: Response, next: NextFunction): void {
   (async () => {
@@ -144,9 +198,15 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
       }
 
       // Check user is still active (cached, <1ms for repeat calls)
-      const active = await isUserActive(payload.sub);
-      if (!active) {
+      const gate = await readAccountGate(payload.sub);
+      if (gate.status !== 'active') {
         throw new UnauthorizedError('Account is deactivated');
+      }
+
+      // Member-only parts of RSN are closed to an event guest (default deny, guest-scope.ts).
+      if (gate.kind !== 'member' && !isGuestAllowed(req.method ?? '', `${req.baseUrl ?? ''}${req.path ?? ''}`)) {
+        // Only a row that reads 'event_guest' is told it is a guest; an unreadable kind is a retryable outage.
+        throw gate.kindUnknown ? accountKindUnavailable() : guestMembershipRequired();
       }
 
       req.user = {
@@ -159,6 +219,12 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
       next();
     } catch (err: any) {
       if (err instanceof UnauthorizedError || err?.statusCode === 401) {
+        next(err);
+        return;
+      }
+
+      // The guest refusal (403 GUEST_MEMBERSHIP_REQUIRED) goes out as it is, never as a 401 the client would refresh on.
+      if (err instanceof AppError) {
         next(err);
         return;
       }
@@ -210,10 +276,10 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
 }
 
 /**
- * Invalidate cached status for a user (call on deactivation/reactivation).
+ * Invalidate cached status for a user (call on deactivation/reactivation). The same as forgetAccountGate.
  */
 export function invalidateUserStatusCache(userId: string): void {
-  statusCache.delete(userId);
+  forgetAccountGate(userId);
 }
 
 // ── Test-only helpers ──
@@ -222,7 +288,7 @@ export const __test__ = {
   hasCached(userId: string): boolean {
     return statusCache.has(userId);
   },
-  getCached(userId: string): { status: string; cachedAt: number } | undefined {
+  getCached(userId: string): { status: string; kind: AccountKind; cachedAt: number } | undefined {
     return statusCache.get(userId);
   },
   clearAll(): void {

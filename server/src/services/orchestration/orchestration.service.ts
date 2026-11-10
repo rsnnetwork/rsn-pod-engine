@@ -69,6 +69,7 @@ import {
 // Handlers — Chat
 import { handleChatSend, handleChatReact, handleReactionSend, handleChatRequestHistory } from './handlers/chat-handlers';
 import { handleDmSend, handleDmRead, handleDmReact, handleDmUnreact } from './handlers/dm-handlers';
+import { runMemberDmEvent } from './handlers/guest-socket-guard';
 // Phase 2E (5 May spec) — global state reconciler.
 import { startGlobalReconciler } from './state/participant-state-machine';
 import { startLiveKitSweep } from './state/livekit-sweep';
@@ -133,12 +134,12 @@ export function initOrchestration(socketServer: SocketServer): void {
     transitionToRound: (sessionId, roundNumber) => withSessionGuard(sessionId, () => transitionToRound(io, sessionId, roundNumber)),
     endRound: (sessionId, roundNumber) => withSessionGuard(sessionId, () => endRound(io, sessionId, roundNumber)),
     endRatingWindow: (sessionId, roundNumber) => withSessionGuard(sessionId, () => endRatingWindow(io, sessionId, roundNumber)),
-    completeSession: (sessionId) => withSessionGuard(sessionId, () => completeSession(io, sessionId)),
+    completeSession: (sessionId) => withSessionGuard(sessionId, async () => { await completeSession(io, sessionId); }),
   };
 
   injectHostActionDeps({
     transitionToRound: (ioServer, sessionId, roundNumber) => transitionToRound(ioServer, sessionId, roundNumber),
-    completeSession: (ioServer, sessionId) => completeSession(ioServer, sessionId),
+    completeSession: async (ioServer, sessionId) => { await completeSession(ioServer, sessionId); },
     endRound: (ioServer, sessionId, roundNumber) => endRound(ioServer, sessionId, roundNumber),
     // #4 (26 May) — direct (non-guard-wrapped) endRatingWindow for host
     // force-advance from ROUND_RATING. Host handlers already hold the session
@@ -474,21 +475,22 @@ export function initOrchestration(socketServer: SocketServer): void {
 
     // ── DM Events (Phase D, 1 May 2026 spec) — platform-level person-to-
     // person messaging. Independent of any session/round/event.
+    // Members only (Part 2, Task 3): an event guest's socket is refused and nothing runs (guest-socket-guard.ts).
     socket.on('dm:send', async (data) => {
-      try { await handleDmSend(io, socket, data); }
+      try { await runMemberDmEvent(io, socket, data, handleDmSend); }
       catch (err) { logger.error({ err, userId }, 'DM send error'); }
     });
     socket.on('dm:read', async (data) => {
-      try { await handleDmRead(io, socket, data); }
+      try { await runMemberDmEvent(io, socket, data, handleDmRead); }
       catch (err) { logger.error({ err, userId }, 'DM read error'); }
     });
     // Phase E (3 May 2026) — emoji reactions on DM messages.
     socket.on('dm:react', async (data) => {
-      try { await handleDmReact(io, socket, data); }
+      try { await runMemberDmEvent(io, socket, data, handleDmReact); }
       catch (err) { logger.error({ err, userId }, 'DM react error'); }
     });
     socket.on('dm:unreact', async (data) => {
-      try { await handleDmUnreact(io, socket, data); }
+      try { await runMemberDmEvent(io, socket, data, handleDmUnreact); }
       catch (err) { logger.error({ err, userId }, 'DM unreact error'); }
     });
 

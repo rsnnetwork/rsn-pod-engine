@@ -16,7 +16,9 @@ import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
 import { canSeeEvent, readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
 import { readEventCircle } from '../services/circle/circle-events.service';
+import { summariseEventLifecycle } from '../services/session/event-lifecycle.service';
 import * as eventRequests from '../services/session/event-requests.service';
+import { fanoutEventGroups } from '../services/session/event-groups.service';
 import { eventChatReadLimiter, eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
 // 27 May — live main-room presence (heartbeat) to gate the event-plan "not matched" counts.
@@ -24,14 +26,12 @@ import { activeSessions } from '../services/orchestration/state/session-state';
 import { getCanonicalConnectedSet } from '../services/orchestration/state/canonical-state';
 import {
   ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
-  EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes,
+  EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes, GROUP_LIMITS, isGroupKey,
 } from '@rsn/shared';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
-import config from '../config';
 import logger from '../config/logger';
-import * as emailService from '../services/email/email.service';
-import { buildSessionCalendarEvent } from '../services/calendar/calendar.service';
+import { sendRegistrationEmail } from '../services/session/registration-email';
 import type { Server as SocketServer } from 'socket.io';
 import { matchingPresetsLimiter } from '../middleware/rateLimit';
 import { listMatchingPresets } from '../services/matching/matching-template-choice';
@@ -44,11 +44,34 @@ const VIEW_REFUSAL = 'You must be registered or a pod member to view this event.
  * The refusal for someone who may not see an event: 403 with today's words, as production's client reads them.
  * T11 fix round 1: a private event (its own visibility) says so in its code, EVENT_PRIVATE, so the preview can show
  * "This event is private"; the status and the message stay exactly what production's client already shows.
+ * Part 2 Task 2 (D1): an id that names no event, and a draft the person does not run, answer the same 404, so nobody
+ * can tell a draft from a wrong id.
  */
 async function refuseView(sessionId: string): Promise<never> {
-  const row = await query<{ visibility: string | null }>(`SELECT visibility FROM sessions WHERE id = $1`, [sessionId]);
-  if (row?.rows?.[0]?.visibility === 'private') throw new AppError(403, ErrorCodes.EVENT_PRIVATE, VIEW_REFUSAL);
+  const row = await query<{ visibility: string | null; is_draft: boolean | null }>(
+    `SELECT visibility, (publication = 'draft') AS is_draft FROM sessions WHERE id = $1`,
+    [sessionId],
+  );
+  const event = row?.rows?.[0];
+  if (!event || event.is_draft === true) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+  if (event.visibility === 'private') throw new AppError(403, ErrorCodes.EVENT_PRIVATE, VIEW_REFUSAL);
   throw new ForbiddenError(VIEW_REFUSAL);
+}
+
+/**
+ * Part 2 Task 2, fix round 1: a route that answers about an event (its participants, their counts) answers a draft the
+ * person does not run with the 404 an unknown id gets, before its own checks. A published event goes on to the route's
+ * own checks exactly as before (one primary-key read more); an id that names nothing goes on to their own 404.
+ */
+async function refuseHiddenDraft(sessionId: string, userId: string, role: string): Promise<void> {
+  if (hasRoleAtLeast(role as UserRole, UserRole.ADMIN)) return;
+  const row = await query<{ is_draft: boolean | null }>(
+    `SELECT (publication = 'draft') AS is_draft FROM sessions WHERE id = $1`,
+    [sessionId],
+  );
+  if (row?.rows?.[0]?.is_draft !== true) return;
+  if (await canViewSession(userId, sessionId, role)) return;
+  throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
 }
 
 /** Whether the event page registers this person on opening it: its audience or an invitee, who may see the event. */
@@ -58,26 +81,6 @@ async function registersOnOpening(sessionId: string, userId: string, role: strin
   // invite or the event's circle, as nothing else about the event lets them back.
   if (!f || f.participantStatus === 'removed') return false;
   return canSeeEvent(f, role) && (f.inAudience || f.isInvited);
-}
-
-/** The "you're registered" email with its calendar invite. Best-effort: a failure is logged, never thrown. */
-async function sendRegistrationEmail(sessionId: string, userId: string): Promise<void> {
-  try {
-    const u = (await query<{ email: string; display_name: string | null }>(
-      `SELECT email, display_name FROM users WHERE id = $1`,
-      [userId],
-    )).rows[0];
-    if (!u?.email) return;
-    const calendarEvent = await buildSessionCalendarEvent(sessionId);
-    await emailService.sendSessionRegistrationConfirmationEmail(u.email, {
-      recipientName: u.display_name || undefined,
-      sessionTitle: calendarEvent?.title ?? 'your REASON event',
-      sessionUrl: `${config.clientUrl}/sessions/${sessionId}`,
-      calendarEvent,
-    });
-  } catch (err) {
-    logger.warn({ err, sessionId, userId }, 'registration confirmation email failed (non-fatal)');
-  }
 }
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
@@ -97,6 +100,10 @@ export const createSessionSchema = z.object({
   visibility: eventVisibilitySchema.optional(),
   // T13 (1 Nov 2026) — an event for a whole circle. Optional: production's form sends none, and nothing changes.
   circleId: z.string().uuid().optional(),
+  // Part 2 Task 2 — a draft, seen only by the people who run it until it is published, and when registration opens.
+  // Optional: production's form sends neither, and the event is published at once, as today.
+  publication: z.enum(['draft', 'published']).optional(),
+  registrationOpensAt: z.string().datetime().nullable().optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -243,10 +250,15 @@ router.get(
       const access = facts ? summariseEventAccess(facts, req.user!.role) : undefined;
       // T13 (1 Nov 2026) — additive: the circle the event is for, so its page says "For <circle>" with a link.
       const circle = await readEventCircle(session?.circleId);
+      // Part 2 Task 2 — additive: where the event stands (draft … cancelled) and the steps this viewer may take.
+      const { lifecycle, allowedActions } = summariseEventLifecycle(session, facts, req.user!.role);
 
       const response: ApiResponse = {
         success: true,
-        data: { ...session, participantCount, ...(access ? { access } : {}), ...(circle ? { circle } : {}) },
+        data: {
+          ...session, participantCount, ...(access ? { access } : {}), ...(circle ? { circle } : {}),
+          lifecycle, allowedActions,
+        },
       };
       res.json(response);
     } catch (err) {
@@ -362,7 +374,7 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { podId, status, page, pageSize } = req.query as Record<string, string>;
+      const { podId, status, page, pageSize, archived } = req.query as Record<string, string>;
 
       // Non-admin users: if podId specified, verify membership; otherwise show all sessions
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN) && podId) {
@@ -377,6 +389,11 @@ router.get(
         podId,
         userId: podId ? undefined : req.user!.userId,
         isAdmin: isAdmin && !podId,
+        // Part 2 Task 2: who is asking, so a pod's list leaves out other people's drafts; `archived=1` lists the archived
+        // events they ran or held a place in instead.
+        viewerId: req.user!.userId,
+        viewerIsAdmin: isAdmin,
+        archived: archived === '1' || archived === 'true',
         status: status as SessionStatus | undefined,
         page: page ? parseInt(page) : undefined,
         pageSize: pageSize ? parseInt(pageSize) : undefined,
@@ -516,12 +533,22 @@ router.post(
 
 // ─── POST /sessions/:id/register ────────────────────────────────────────────
 
+// 10 Nov 2026 spec, Part 2 Task 5: an event with matching groups asks which group the person is in; the answer
+// may come with the registration as `groupKeys`. Every other field, and no body at all, reads as before.
+const registerBodySchema = z.object({
+  groupKeys: z.array(z.string().refine(isGroupKey, "That group isn't one of this event's groups.")).max(GROUP_LIMITS.maxGroups).optional(),
+}).passthrough();
+
 router.post(
   '/:id/register',
   authenticate,
+  validate(registerBodySchema.default({})),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const participant = await sessionService.registerParticipant(req.params.id, req.user!.userId, req.user!.role);
+      const { groupKeys } = req.body as z.infer<typeof registerBodySchema>;
+      const participant = await sessionService.registerParticipant(
+        req.params.id, req.user!.userId, req.user!.role, groupKeys ? { groupKeys } : undefined,
+      );
       // Phase May-19 realtime — broadcast so every pod member +
       // registered participant sees the new self-registration without
       // a refresh (badge counts, "Registered" pill on the event card).
@@ -542,6 +569,8 @@ router.post(
           E.sessionParticipants(req.params.id),
         ]).catch(() => {});
       } catch { /* non-fatal */ }
+      // Part 2 Task 5: a group chosen with the registration changes the event's group counts.
+      if (groupKeys?.length) void fanoutEventGroups(req.params.id);
 
       // 26 May (Stefan) — self-registration now sends a "you're registered"
       // confirmation with a calendar invite (.ics) attached, mirroring what
@@ -636,6 +665,7 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await refuseHiddenDraft(req.params.id, req.user!.userId, req.user!.role);
       // Access control: only participants, the host, pod members, or admins can view the list
       // Emails are for admins and the event's host / co-hosts only (9 Sep 2026);
       // fellow participants and pod members get the public card.
@@ -677,6 +707,7 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await refuseHiddenDraft(req.params.id, req.user!.userId, req.user!.role);
       // Only host, pod members, or admins
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         const session = await sessionService.getSessionById(req.params.id);
@@ -748,7 +779,8 @@ router.delete(
         );
         return undefined;
       });
-      await sessionService.hardDeleteSession(req.params.id);
+      // Part 2 Task 2: the trail keeps what the event was (event.deleted), written with the deletes.
+      await sessionService.hardDeleteSession(req.params.id, { actorId: req.user!.userId });
       fanoutSessionListEntities(podIdForNotify, req.params.id, listAudience).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Event permanently deleted' } };
       return res.json(response);

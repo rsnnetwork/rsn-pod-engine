@@ -13,7 +13,6 @@ import {
 import {
   PICTURE_INPUT_MAX_BYTES, PICTURE_SEND_MAX_BYTES, PICTURE_SEND_MAX_SIDE, pictureFileProblem, sendsAsItIs, serverCouldNotOpen,
 } from '../../../../client/src/components/picture/picture-file';
-import { isSmallPhoto } from '../../../../client/src/features/reason/human/profile-text';
 
 const CLIENT = path.join(__dirname, '../../../../client/src');
 const read = (rel: string) => fs.readFileSync(path.join(CLIENT, rel), 'utf8');
@@ -105,22 +104,8 @@ describe('the picture a member chooses', () => {
   });
 });
 
-describe('no upscaling on the profile (D7): a photo under 400 pixels is drawn at its own size', () => {
-  it('measures the smaller side', () => {
-    expect(isSmallPhoto(96, 96)).toBe(true);
-    expect(isSmallPhoto(200, 200)).toBe(true);
-    expect(isSmallPhoto(1024, 399)).toBe(true);
-    expect(isSmallPhoto(400, 400)).toBe(false);
-    expect(isSmallPhoto(512, 512)).toBe(false);
-    expect(isSmallPhoto(0, 0)).toBe(false);
-  });
-
-  it('the hero fills the tile with a large photo, and centres a small one at its own size', () => {
-    const hero = read('features/reason/human/ProfileHero.tsx');
-    expect(hero).toMatch(/isSmallPhoto\(img\.naturalWidth, img\.naturalHeight\)/);
-    expect(hero).toMatch(/\[&>img\]:h-auto \[&>img\]:w-auto \[&>img\]:max-w-full/);
-  });
-});
+// The hero photo is a 144px circle now (10 Nov 2026), so a small photo is never blown up and needs no special case:
+// the 400px rule (isSmallPhoto) went with the large tile it was written for.
 
 describe('the editor and the pencil, as built', () => {
   it('the pencil is a 44px round button named for what it edits', () => {

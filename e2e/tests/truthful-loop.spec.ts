@@ -175,8 +175,8 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
 
   // ── (2) "I want to meet" -> B's bell shows the poke notification ─────────
   await meetBtn.click();
-  await expect(investorCard.getByText(/Introduction requested/i)).toBeVisible({ timeout: 15_000 });
-  console.log('  ✓ (2) headed: "I want to meet" -> Introduction requested.');
+  await expect(investorCard.getByText(/Request sent/i)).toBeVisible({ timeout: 15_000 });
+  console.log('  ✓ (2) headed: "I want to meet" -> Request sent.');
 
   const bInbox = await apiAs(investor, 'GET', '/notifications');
   expect(bInbox.status).toBe(200);

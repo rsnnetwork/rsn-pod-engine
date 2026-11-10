@@ -153,6 +153,13 @@ const mockSession = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // authenticate() reads the caller's status and account kind: an active member. Any other query reads nothing,
+  // as an unmocked query always has here.
+  (dbQuery as jest.Mock).mockImplementation((sql: string) => (
+    String(sql).includes('SELECT status, account_kind FROM users')
+      ? Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 })
+      : undefined
+  ));
   (podService.getMemberRole as jest.Mock).mockResolvedValue('director');
   (ratingService.isMatchParticipant as jest.Mock).mockResolvedValue(true);
 });
@@ -684,7 +691,7 @@ describe('Session Routes', () => {
         if (/SELECT id, name FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(sql)) {
           return { rows: [{ id: circleId, name: 'Founding Circle' }], rowCount: 1 };
         }
-        if (sql.includes('SELECT status FROM users')) return { rows: [{ status: 'active' }], rowCount: 1 };
+        if (sql.includes('SELECT status, account_kind FROM users')) return { rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 };
         if (sql.includes('event_join_requests')) return { rows: [], rowCount: 0 };
         return undefined;
       });
@@ -710,8 +717,8 @@ describe('Session Routes', () => {
           return { rows: [{ visibility, pod_id: 'p1', pod_visibility: 'private', is_host: false, is_cohost: false, is_pod_organiser: false,
             in_audience: false, is_invited: false, participant_status: null, account_active: true, my_request: null }], rowCount: 1 };
         }
-        if (sql.startsWith('SELECT visibility FROM sessions')) return { rows: [{ visibility }], rowCount: 1 };
-        if (sql.includes('SELECT status FROM users')) return { rows: [{ status: 'active' }], rowCount: 1 };
+        if (sql.startsWith('SELECT visibility')) return { rows: [{ visibility, is_draft: false }], rowCount: 1 };
+        if (sql.includes('SELECT status, account_kind FROM users')) return { rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       });
       const res = await request(app)
@@ -999,7 +1006,8 @@ describe('Session Routes - Extended', () => {
       const facts = (over: Partial<eventAccess.EventAccessFacts>): eventAccess.EventAccessFacts => ({
         visibility: 'private', podId: 'p1', podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
         inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
-        outsideClosedCircle: false, ...over,
+        outsideClosedCircle: false, publication: 'published', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
+        admissionMode: null, entitled: false, entitledVia: null, ...over,
       });
       let readFacts: jest.SpyInstance;
       const arm = (world: { podMember?: boolean; facts?: Partial<eventAccess.EventAccessFacts> }) => {
@@ -1010,7 +1018,7 @@ describe('Session Routes - Extended', () => {
           { id: 'sp-1', userId: 'someone-else', status: 'registered', email: 'host@example.com' },
         ]);
         (dbQuery as jest.Mock).mockImplementation(async (sql: string) =>
-          (sql.includes('SELECT status FROM users') ? { rows: [{ status: 'active' }], rowCount: 1 } : { rows: [], rowCount: 0 }));
+          (sql.includes('SELECT status, account_kind FROM users') ? { rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 } : { rows: [], rowCount: 0 }));
         readFacts = jest.spyOn(eventAccess, 'readEventAccessFacts').mockResolvedValue(facts(world.facts ?? {}));
       };
       const read = () => request(app).get(`/sessions/${SESSION}/participants`).set('Authorization', `Bearer ${makeToken()}`);

@@ -18,6 +18,7 @@ import {
   EVENT_PRIVATE_SENTENCE, canSeeEvent, managesRequests, needsApproval, readEventAccessFacts, type EventAccessFacts,
 } from './event-access';
 import { registerParticipant } from './session.service';
+import { recordEventAudit } from '../audit/event-audit';
 
 export interface EventJoinRequest {
   id: string;
@@ -114,15 +115,21 @@ async function eventTitleAndName(sessionId: string, userId: string): Promise<{ t
 /**
  * Ask for a place. Only when the event needs approval for this person. Asking again while pending changes
  * nothing; a withdrawn request is asked again; a declined one stays declined.
+ *
+ * Part 2 Task 6: `arrivedThroughCallLink` (call-entry.service's enterCall, the only caller that says so) is someone
+ * holding the event's own RSN Call link. A private event with an admission mode is unlisted, not closed (D3: link
+ * only), so the link is how they see it: the page-visibility check is the link's, and needsApproval still decides.
  */
 export async function requestToJoin(
   sessionId: string,
   userId: string,
   role: UserRole | undefined,
   message: string | null,
+  options: { arrivedThroughCallLink?: boolean } = {},
 ): Promise<EventJoinRequest> {
   const facts = await factsOrNotFound(sessionId, userId);
-  if (!canSeeEvent(facts, role)) throw new AppError(403, ErrorCodes.EVENT_PRIVATE, EVENT_PRIVATE_SENTENCE);
+  const seesIt = canSeeEvent(facts, role) || (!!options.arrivedThroughCallLink && facts.admissionMode !== null && facts.accountActive);
+  if (!seesIt) throw new AppError(403, ErrorCodes.EVENT_PRIVATE, EVENT_PRIVATE_SENTENCE);
   if (facts.myRequest === 'declined') {
     throw new ConflictError(ErrorCodes.EVENT_REQUEST_DECLINED, 'The host has declined your request for this event.');
   }
@@ -249,6 +256,9 @@ export async function approveRequest(
     return { request: approved.rows[0], isNewRegistration: participant.isNewRegistration };
   });
 
+  void recordEventAudit({
+    sessionId, actorId: approverId, action: 'admission.request_approved', automatic: false, subjectUserIds: [requesterId],
+  });
   const { title } = await eventTitleAndName(sessionId, requesterId);
   await ring([requesterId], 'approval', {
     title: 'Your request was approved',
@@ -273,6 +283,9 @@ export async function declineRequest(
     [sessionId, requesterId, approverId],
   );
   if (!result.rows[0]) throw new ConflictError(ErrorCodes.EVENT_REQUEST_ANSWERED, 'That request has already been answered.');
+  void recordEventAudit({
+    sessionId, actorId: approverId, action: 'admission.request_declined', automatic: false, subjectUserIds: [requesterId],
+  });
   fanoutJoinRequests(sessionId, requesterId).catch(() => {});
   return result.rows[0];
 }

@@ -8,7 +8,7 @@ import { query } from '../../db';
 import config from '../../config';
 import logger from '../../config/logger';
 import {
-  User, UserRole, CreateUserInput, UpdateUserInput,
+  User, UserRole, CreateUserInput, UpdateUserInput, AccountKind,
   AuthTokenPair, JwtPayload, ErrorCodes, UserStatusCounts,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, UnauthorizedError, AppError } from '../../middleware/errors';
@@ -120,7 +120,8 @@ export async function getUserById(id: string): Promise<User> {
             avatar_url AS "avatarUrl",
             CASE WHEN banner_blob IS NOT NULL THEN banner_updated_at END AS "bannerUpdatedAt",
             bio, company, job_title AS "jobTitle", industry, location,
-            linkedin_url AS "linkedinUrl", interests, reasons_to_connect AS "reasonsToConnect",
+            linkedin_url AS "linkedinUrl", website_url AS "websiteUrl", instagram_url AS "instagramUrl",
+            x_url AS "xUrl", facebook_url AS "facebookUrl", interests, reasons_to_connect AS "reasonsToConnect",
             languages, timezone, phone,
             expertise_text AS "expertiseText", what_i_care_about AS "whatICareAbout",
             what_i_can_help_with AS "whatICanHelpWith", who_i_want_to_meet AS "whoIWantToMeet",
@@ -138,6 +139,7 @@ export async function getUserById(id: string): Promise<User> {
             onboarding_status AS "onboardingStatus",
             onboarding_version AS "onboardingVersion",
             last_onboarded_at AS "lastOnboardedAt",
+            account_kind AS "accountKind",
             last_active_at AS "lastActiveAt",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM users WHERE id = $1`,
@@ -178,20 +180,42 @@ export async function getUserByEmail(email: string): Promise<User | null> {
   return result.rows.length > 0 ? result.rows[0] : null;
 }
 
-export async function createUser(input: CreateUserInput): Promise<User> {
+/** The name a guest goes by before they give one: users.display_name is NOT NULL, and an email is never shown. */
+const GUEST_FALLBACK_NAME = 'Guest';
+
+export async function createUser(
+  input: CreateUserInput & { accountKind?: AccountKind; guestFirstSessionId?: string },
+): Promise<User> {
   const existing = await getUserByEmail(input.email);
   if (existing) {
     throw new ConflictError('USER_ALREADY_EXISTS', 'A user with this email already exists');
   }
 
   const id = uuid();
-  const displayName = input.displayName || `${input.firstName} ${input.lastName}`;
 
-  await query(
-    `INSERT INTO users (id, email, display_name, first_name, last_name, linkedin_url, role, status, email_verified)
-     VALUES ($1, $2, $3, $4, $5, $6, 'member', 'active', FALSE)`,
-    [id, input.email.toLowerCase(), displayName, input.firstName, input.lastName, input.linkedinUrl || null]
-  );
+  if (input.accountKind === 'event_guest') {
+    // An event guest (Part 2, Task 3): someone who joined an event from its link. Their address was proved by the
+    // link's code, so it is verified. They are kept out of every discovery list twice over: not onboarded and not
+    // visible, besides account_kind itself. Becoming a member (an approved join request, promoteEventGuest) makes
+    // them visible and takes them through onboarding.
+    const guestName = input.displayName?.trim()
+      || `${input.firstName ?? ''} ${input.lastName ?? ''}`.trim()
+      || GUEST_FALLBACK_NAME;
+    await query(
+      `INSERT INTO users (id, email, display_name, first_name, last_name, linkedin_url, role, status, email_verified,
+                          account_kind, guest_first_session_id, onboarding_completed, profile_visible)
+       VALUES ($1, $2, $3, $4, $5, $6, 'member', 'active', TRUE, 'event_guest', $7, FALSE, FALSE)`,
+      [id, input.email.toLowerCase(), guestName, input.firstName ?? '', input.lastName ?? '', input.linkedinUrl || null,
+        input.guestFirstSessionId ?? null]
+    );
+  } else {
+    const displayName = input.displayName || `${input.firstName} ${input.lastName}`;
+    await query(
+      `INSERT INTO users (id, email, display_name, first_name, last_name, linkedin_url, role, status, email_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, 'member', 'active', FALSE)`,
+      [id, input.email.toLowerCase(), displayName, input.firstName, input.lastName, input.linkedinUrl || null]
+    );
+  }
 
   // Create default subscription
   await query(
@@ -237,6 +261,10 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
     industry: 'industry',
     location: 'location',
     linkedinUrl: 'linkedin_url',
+    websiteUrl: 'website_url',
+    instagramUrl: 'instagram_url',
+    xUrl: 'x_url',
+    facebookUrl: 'facebook_url',
     interests: 'interests',
     reasonsToConnect: 'reasons_to_connect',
     languages: 'languages',
@@ -623,7 +651,8 @@ async function signInByEmail(email: string): Promise<AuthTokenPair> {
 
 // ─── The 6-digit sign-in code (1 Nov 2026, sign-in-code.ts) ─────────────────
 
-interface SignInCodeRow {
+/** A link that carries a 6-digit code, as spendSignInCode reads it (SIGN_IN_CODE_COLUMNS). */
+export interface SignInCodeRow {
   id: string;
   email: string;
   token_hash: string;
@@ -669,6 +698,22 @@ export async function verifySignInCode(email: string, code: string): Promise<Aut
   );
   const link = found.rows[0];
   if (!link) throw codeWrong();
+  await spendSignInCode(link, code);
+  return signInByEmail(link.email);
+}
+
+/**
+ * Try `code` against one link's code, and spend the link when it is right (1 Nov 2026; extracted 11 Nov 2026 so the
+ * RSN Call link's entry code is held to exactly the same rules). A link that can no longer take a code is refused
+ * first. A try is reserved before the code is compared, in one statement that refuses once five have been made; a wrong
+ * fifth try kills the link and the code together (its expiry is pulled to now); the right code spends the link and
+ * gives back the try it reserved, so only wrong tries count. Throws on every refusal; returns once the link is spent.
+ */
+export async function spendSignInCode(
+  link: SignInCodeRow,
+  code: string,
+  beforeClaim?: () => Promise<void>,
+): Promise<void> {
   const refusal = signInCodeRefusal(link);
   if (refusal) throw refusal;
 
@@ -699,13 +744,155 @@ export async function verifySignInCode(email: string, code: string): Promise<Aut
     throw new AppError(400, ErrorCodes.AUTH_SIGN_IN_LOCKED, 'This code was entered wrongly too many times.');
   }
 
+  // The code is right. A caller that still has to decide something about the proved address (the RSN Call link's
+  // admission rule, 11 Nov 2026 fix round) does it now: a refusal gives back the try and leaves the link unspent, so the
+  // same code can be sent again with what was missing (an admission code). Sign-in passes nothing: unchanged.
+  if (beforeClaim) {
+    try {
+      await beforeClaim();
+    } catch (err) {
+      await query(`UPDATE magic_links SET code_attempts = code_attempts - 1 WHERE id = $1 AND used_at IS NULL`, [link.id]);
+      throw err;
+    }
+  }
+
   const claimed = await query<{ id: string }>(
     `UPDATE magic_links SET used_at = NOW(), code_attempts = code_attempts - 1
       WHERE id = $1 AND used_at IS NULL RETURNING id`,
     [link.id]
   );
   if (!claimed.rows[0]) throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_USED, 'This code has already been used');
-  return signInByEmail(link.email);
+}
+
+// ─── The RSN Call link's entry code (Part 2 foundation, Task 6, 11 Nov 2026) ─
+
+// An event's link (services/session/call-entry.service.ts) proves an email the same way sign-in does: a magic_links
+// row with a 6-digit code, spent through spendSignInCode, with the sign-in code's 15-minute life and five tries. The
+// row is kept apart from sign-in by its purpose and bound to one event by target_id, so a sign-in code is never an
+// entry code (and the reverse), and an entry code for one event is wrong for every other.
+
+const EVENT_ENTRY_PURPOSE = 'event_entry';
+
+/**
+ * Issue an entry link and code for `email` on `sessionId`: the address's earlier unused entry links for that event are
+ * spent and expired first (only the newest code works, and an older email's button keeps no scanner grace), then a new one is stored, its token and code as hashes only. The link
+ * lives as long as a sign-in link (60 minutes); its code 15.
+ */
+export async function issueEventEntryLink(email: string, sessionId: string): Promise<{ token: string; code: string }> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const expiresAt = new Date(Date.now() + config.magicLinkExpiryMinutes * 60 * 1000);
+  const code = newSignInCode();
+  const codeHash = hashSignInCode(tokenHash, code);
+  await query(
+    `UPDATE magic_links SET used_at = NOW(), expires_at = LEAST(expires_at, NOW())
+      WHERE email = $1 AND purpose = '${EVENT_ENTRY_PURPOSE}' AND target_id = $2 AND used_at IS NULL`,
+    [normalizedEmail, sessionId],
+  );
+  await query(
+    `INSERT INTO magic_links (email, token_hash, expires_at, code_hash, purpose, target_id)
+     VALUES ($1, $2, $3, $4, '${EVENT_ENTRY_PURPOSE}', $5)`,
+    [normalizedEmail, tokenHash, expiresAt, codeHash, sessionId],
+  );
+  return { token, code };
+}
+
+/**
+ * Prove `email` for `sessionId` with the 6-digit entry code: only the newest entry link of that address for that event
+ * is tried, under spendSignInCode's rules. `admit` runs once the code is proved right and before the link is spent: a
+ * refusal there leaves the link unspent and its try given back. Answers the proved address.
+ */
+export async function verifyEventEntryCode(
+  email: string,
+  sessionId: string,
+  code: string,
+  admit?: (provedEmail: string) => Promise<void>,
+): Promise<string> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const found = await query<SignInCodeRow>(
+    `SELECT ${SIGN_IN_CODE_COLUMNS}
+       FROM magic_links
+      WHERE email = $1 AND purpose = '${EVENT_ENTRY_PURPOSE}' AND target_id = $3 AND code_hash IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    [normalizedEmail, SIGN_IN_CODE_TTL_MINUTES, sessionId],
+  );
+  const link = found.rows[0];
+  if (!link) throw codeWrong();
+  await spendSignInCode(link, code, admit ? () => admit(link.email) : undefined);
+  // The email's button dies with its code (fix round 1): a link spent by the code keeps no scanner grace.
+  await query(`UPDATE magic_links SET expires_at = LEAST(expires_at, NOW()) WHERE id = $1`, [link.id]);
+  return link.email;
+}
+
+/**
+ * Prove an address for `sessionId` with the button in the entry email: the token of an entry link for that event, single
+ * use with the same 2-minute scanner grace as a sign-in link (verifyMagicLink) when the button itself spent it, refused
+ * once expired (a code locked after five wrong tries, or a right code, has pulled its expiry to now). `admit` runs before
+ * the link is spent. Answers the proved address.
+ */
+export async function verifyEventEntryToken(
+  token: string,
+  sessionId: string,
+  admit?: (provedEmail: string) => Promise<void>,
+): Promise<string> {
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const result = await query<{ id: string; email: string; expires_at: Date; used_at: Date | null }>(
+    `SELECT id, email, expires_at, used_at FROM magic_links
+      WHERE token_hash = $1 AND purpose = '${EVENT_ENTRY_PURPOSE}' AND target_id = $2`,
+    [tokenHash, sessionId],
+  );
+  const link = result.rows[0];
+  if (!link) throw new UnauthorizedError('This link is not valid. Ask for a new code.');
+  if (new Date(link.expires_at).getTime() <= Date.now()) {
+    throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_EXPIRED, 'This link has expired. Ask for a new code.');
+  }
+  // A refusal (the event does not take this address) leaves the link as it was.
+  if (admit) await admit(link.email);
+  if (link.used_at) {
+    if (Date.now() - new Date(link.used_at).getTime() > MAGIC_LINK_REUSE_GRACE_MS) {
+      throw new AppError(400, ErrorCodes.AUTH_MAGIC_LINK_USED, 'This link has already been used. Ask for a new code.');
+    }
+  } else {
+    await query('UPDATE magic_links SET used_at = NOW() WHERE id = $1 AND used_at IS NULL', [link.id]);
+  }
+  return link.email;
+}
+
+/**
+ * The session an entry code (or entry link) gives, for an address it has just proved. An existing account signs in as
+ * it is (its kind unchanged; a closed or suspended one is refused). An address with no account becomes an event guest
+ * of this event (createUser: verified, not onboarded, not visible, named 'Guest' until the details step), race-safe as
+ * signInByEmail: a second verify that lost the insert reads the row the first one made.
+ */
+export async function signInForEventEntry(
+  email: string,
+  sessionId: string,
+): Promise<AuthTokenPair & { accountKind: AccountKind; created: boolean }> {
+  const normalizedEmail = email.toLowerCase().trim();
+  let user = await getUserByEmail(normalizedEmail);
+  assertCanSignIn(user);
+  let created = false;
+  if (!user) {
+    try {
+      user = await createUser({
+        email: normalizedEmail, firstName: '', lastName: '', accountKind: 'event_guest', guestFirstSessionId: sessionId,
+      });
+      created = true;
+    } catch (err: unknown) {
+      const raced = (err as { code?: string })?.code === '23505'
+        || (err instanceof ConflictError && err.code === 'USER_ALREADY_EXISTS');
+      if (!raced) throw err;
+      user = await getUserByEmail(normalizedEmail);
+      if (!user) throw err;
+      assertCanSignIn(user);
+    }
+  }
+  if (!user.emailVerified) await query('UPDATE users SET email_verified = TRUE WHERE id = $1', [user.id]);
+  await updateLastActive(user.id);
+  const kind = await query<{ account_kind: AccountKind }>(`SELECT account_kind FROM users WHERE id = $1`, [user.id]);
+  const tokens = await generateTokenPair(user);
+  return { ...tokens, accountKind: kind.rows[0]?.account_kind ?? 'member', created };
 }
 
 // ─── Token Management ───────────────────────────────────────────────────────
@@ -808,9 +995,6 @@ export async function findOrCreateGoogleUser(
   if (!user) {
     // New user — require approved join request or valid invite code
     let inviteId: string | null = null;
-    let invUseCount = 0;
-    let invMaxUses = 0;
-    let invStatus = '';
     let inviterId: string | null = null;
     let hasValidInvite = false;
 
@@ -829,9 +1013,6 @@ export async function findOrCreateGoogleUser(
         throw new AppError(400, ErrorCodes.INVALID_INVITE, 'This invite code is no longer valid');
       }
       inviteId = inv.id;
-      invUseCount = inv.use_count;
-      invMaxUses = inv.max_uses;
-      invStatus = inv.status;
       inviterId = inv.inviter_id;
       hasValidInvite = true;
     }
@@ -888,52 +1069,19 @@ export async function findOrCreateGoogleUser(
     await query(`INSERT INTO user_subscriptions (user_id, plan, status) VALUES ($1, 'free', 'active')`, [id]);
     await query(`INSERT INTO user_entitlements (user_id) VALUES ($1)`, [id]);
 
-    // Mark invite as used (only if one was provided)
-    if (inviteId) {
-      const newCount = invUseCount + 1;
-      const newStatus = newCount >= invMaxUses ? 'accepted' : invStatus;
-      await query(
-        `UPDATE invites SET use_count = $1, status = $2, accepted_by_user_id = $3, accepted_at = NOW() WHERE id = $4`,
-        [newCount, newStatus, id, inviteId]
-      );
-
-      // Apply invite membership effects — same logic as invite.service.ts acceptInvite()
-      // Without this, Google OAuth users are created but NOT added to the pod/session.
-      const inviteDetail = await query<{ type: string; pod_id: string | null; session_id: string | null }>(
-        `SELECT type, pod_id, session_id FROM invites WHERE id = $1`,
-        [inviteId]
-      );
-      const inv = inviteDetail.rows[0];
-      if (inv) {
-        if (inv.type === 'pod' && inv.pod_id) {
-          await query(
-            `INSERT INTO pod_members (pod_id, user_id, role) VALUES ($1, $2, 'member')
-             ON CONFLICT (pod_id, user_id) DO NOTHING`,
-            [inv.pod_id, id]
-          );
-        }
-        if (inv.type === 'session' && inv.session_id) {
-          // Add to pod first (required for private pod sessions)
-          const sessionPod = await query<{ pod_id: string }>(
-            `SELECT pod_id FROM sessions WHERE id = $1`, [inv.session_id]
-          );
-          if (sessionPod.rows[0]?.pod_id) {
-            await query(
-              `INSERT INTO pod_members (pod_id, user_id, role) VALUES ($1, $2, 'member')
-               ON CONFLICT (pod_id, user_id) DO NOTHING`,
-              [sessionPod.rows[0].pod_id, id]
-            );
-          }
-          // Register as session participant
-          await query(
-            `INSERT INTO session_participants (session_id, user_id, status)
-             VALUES ($1, $2, 'registered')
-             ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL`,
-            [inv.session_id, id]
-          );
-        }
-        logger.info({ userId: id, inviteType: inv.type, podId: inv.pod_id, sessionId: inv.session_id },
-          'Google OAuth: invite membership effects applied');
+    // Accept the invite exactly as the invite page does (acceptInvite): bound to this Google address when the invite
+    // names one (IDENTITY_MISMATCH otherwise), its pod or event through the same gates as every other way in
+    // (pod.service addMember, registerParticipant with viaInvite: an invitation-only event admits only a personal
+    // invite), and the accepter recorded only if nobody accepted first. Part 2 Task 4 fix round 1: this path used to
+    // write the accepter over any earlier one and insert the event place directly, past every rule. A refusal never
+    // stops the sign-in: the account exists, and the invite page the verify link leads to says what happened.
+    if (inviteId && inviteCode) {
+      try {
+        const { acceptInvite } = await import('../invite/invite.service');
+        const accepted = await acceptInvite(inviteCode, id, normalizedEmail);
+        logger.info({ userId: id, registeredFor: accepted.registeredFor }, 'Google OAuth: invite accepted');
+      } catch (err) {
+        logger.warn({ err, userId: id }, 'Google OAuth: the invite was not applied at sign-up');
       }
     }
 

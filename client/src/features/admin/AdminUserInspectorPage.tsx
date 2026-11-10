@@ -632,7 +632,7 @@ function ReportsTab({ data, isLoading, isError, targetUserId }: { data: any; isL
                 <div key={p.id} className="flex items-center justify-between gap-2 text-sm border-b border-gray-100 pb-2 last:border-0">
                   <span className="truncate">{p.otherUser?.displayName || 'Unknown'}</span>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant={p.status === 'accepted' ? 'success' : p.status === 'declined' ? 'danger' : 'default'}>{p.status}</Badge>
+                    <Badge variant={p.status === 'accepted' ? 'success' : p.status === 'declined' ? 'danger' : 'default'}>{p.status === 'cancelled' ? 'withdrawn' : p.status}</Badge>
                     <span className="text-xs text-gray-400">{timeAgo(p.createdAt)}</span>
                   </div>
                 </div>
@@ -651,7 +651,7 @@ function ReportsTab({ data, isLoading, isError, targetUserId }: { data: any; isL
                 <div key={p.id} className="flex items-center justify-between gap-2 text-sm border-b border-gray-100 pb-2 last:border-0">
                   <span className="truncate">{p.otherUser?.displayName || 'Unknown'}</span>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant={p.status === 'accepted' ? 'success' : p.status === 'declined' ? 'danger' : 'default'}>{p.status}</Badge>
+                    <Badge variant={p.status === 'accepted' ? 'success' : p.status === 'declined' ? 'danger' : 'default'}>{p.status === 'cancelled' ? 'withdrawn' : p.status}</Badge>
                     <span className="text-xs text-gray-400">{timeAgo(p.createdAt)}</span>
                   </div>
                 </div>

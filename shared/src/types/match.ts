@@ -1,5 +1,7 @@
 // ─── Match Domain Types ──────────────────────────────────────────────────────
 
+import type { EventGroupRules, RoundCapacity } from '../events/group-rules';
+
 export enum MatchStatus {
   SCHEDULED = 'scheduled',
   ACTIVE = 'active',
@@ -158,6 +160,17 @@ export interface MatchingConfig {
   numberOfRounds: number;
   avoidDuplicates: boolean;
   globalOptimize: boolean;
+  /**
+   * Part 2 Task 7 (10 Nov 2026) — an event's matching groups and per-round rules, as hard constraints: a pair the
+   * round's rule does not allow is never made. Absent for an event without groups, which then matches exactly as
+   * before groups existed. `groupsByUser` holds each person's group keys in this event (never their account's).
+   */
+  groupRules?: MatchingGroupRules;
+}
+
+export interface MatchingGroupRules {
+  rules: EventGroupRules;
+  groupsByUser: Record<string, string[]>;
 }
 
 export interface MatchingWeights {
@@ -239,6 +252,9 @@ export interface RoundAssignment {
   // service-level annotation on the returned round.
   fallbackLevel?: number;         // 0 = strict/all-fresh; 1-4 = ladder relaxed
   usedRepeats?: boolean;          // true when the round had to reuse an excluded (already-met) pair
+  // Part 2 Task 7 — on an event with groups, how many meetings this round's rule allows for the people in it and
+  // who waits (the organiser's sentence is also in `warnings`). Absent for an event without groups.
+  groupShortfall?: RoundCapacity;
 }
 
 export interface MatchPair {

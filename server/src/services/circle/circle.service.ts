@@ -227,6 +227,7 @@ async function admitEveryoneWaiting(client: PoolClient, circleId: string, decide
     `UPDATE circle_join_requests r SET status = 'approved', decided_by = $2, decided_at = NOW()
        FROM users u
       WHERE r.circle_id = $1 AND r.status = 'pending' AND u.id = r.user_id AND ${activeMemberSql('u')}
+        AND u.account_kind = 'member'
       RETURNING r.user_id`,
     [circleId, deciderId],
   );
@@ -289,9 +290,12 @@ export async function detachPod(circleId: string, podId: string): Promise<void> 
  * and only when a row was actually inserted, so a double-join can't double-count. True when they were added.
  */
 export async function admitToCircle(client: PoolClient, circleId: string, userId: string, deciderId: string | null = null): Promise<boolean> {
+  // Part 2 Task 6: an event guest (users.account_kind = 'event_guest') never becomes a circle member, whatever path
+  // brought them here (a join, an invite, an approval): circles are for members. The row is simply not written.
   const ins = await client.query(
     `INSERT INTO circle_members (circle_id, user_id)
-     VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+     SELECT $1, u.id FROM users u WHERE u.id = $2 AND u.account_kind = 'member'
+     ON CONFLICT DO NOTHING`,
     [circleId, userId],
   );
   const added = !!ins.rowCount && ins.rowCount > 0;

@@ -124,6 +124,17 @@ function participant(sessionId: unknown, userId: unknown): Row | undefined {
 
 function answer(sql: string, params: unknown[]): Answer {
   const [a, b] = params;
+  // The account gate (authenticate, the handshake, and registerParticipant's guest check, Part 2 Task 3): every
+  // account here is an active member unless the test made it an event guest.
+  if (sql === 'SELECT status, account_kind FROM users WHERE id = $1') {
+    const u = world.users.get(a as string);
+    return { rows: [{ status: 'active', account_kind: u?.account_kind ?? 'member' }] };
+  }
+  // A guest's registration facts (guest-registration.ts): the event they came in through, and whether they hold a row.
+  if (sql.startsWith('SELECT u.guest_first_session_id, EXISTS (SELECT 1 FROM session_participants sp')) {
+    const u = world.users.get(b as string);
+    return { rows: u ? [{ guest_first_session_id: u.guest_first_session_id ?? null, holds_place: !!participant(a, b) }] : [] };
+  }
   if (sql === 'SELECT display_name FROM users WHERE id = $1') {
     const u = world.users.get(a as string);
     return { rows: u ? [{ display_name: u.display_name }] : [] };
@@ -400,6 +411,90 @@ beforeEach(() => {
 afterEach(() => {
   jest.clearAllTimers();
   activeSessions.clear();
+});
+
+// ── An event guest (Part 2, Task 3, fix round 1) ─────────────────────────────────────────────────
+//
+// guest-scope refuses a guest's POST /sessions/:id/register, but the live join registers through
+// registerParticipant itself. A guest takes a place only in the event they came in through, or one where they
+// already hold a row (guestMayRegister), and never becomes a pod member.
+
+const GUEST_REFUSAL = {
+  code: 'GUEST_MEMBERSHIP_REQUIRED',
+  message: 'This event is for members. As a guest you can take part in the event you were invited to.',
+};
+
+/** An event guest who came in through `firstSessionId` (or none). */
+function guest(name: string, firstSessionId: string | null = null): string {
+  const id = person(name);
+  Object.assign(world.users.get(id)!, { account_kind: 'event_guest', guest_first_session_id: firstSessionId });
+  return id;
+}
+
+describe('an event guest joining live (socket session:join)', () => {
+  it('is refused at an unrelated public event: no place, no pod membership, not in the room', async () => {
+    const ev = event({ visibility: 'public' });
+    const g = guest('Gia');
+    const s = connect(g);
+    await join(s, ev.sessionId);
+
+    expectRefused(s, ev.sessionId, GUEST_REFUSAL);
+    expect(world.participants.some((p) => p.user_id === g)).toBe(false);
+    expect(world.podMembers.some((m) => m.user_id === g)).toBe(false);
+  });
+
+  it('a member at the same public event is registered and made a pod member, as before', async () => {
+    const ev = event({ visibility: 'public' });
+    const m = person('Mia');
+    const s = connect(m);
+    await join(s, ev.sessionId);
+
+    expectAdmitted(s, ev.sessionId);
+    expect(statusOf(ev.sessionId, m)).not.toBeNull();
+    expect(world.podMembers.some((r) => r.user_id === m && r.pod_id === ev.podId && r.status === 'active')).toBe(true);
+  });
+
+  it('takes part in the event they came in through (in a public pod) without becoming a pod member', async () => {
+    const ev = event({ visibility: 'public' });
+    const g = guest('Gia', ev.sessionId);
+    const s = connect(g);
+    await join(s, ev.sessionId);
+
+    expectAdmitted(s, ev.sessionId);
+    expect(statusOf(ev.sessionId, g)).not.toBeNull();
+    expect(world.podMembers.some((m) => m.user_id === g)).toBe(false);
+  });
+
+  it('comes back to an event where they already hold a place (a refresh, a reconnect)', async () => {
+    const ev = event({ visibility: 'public' });
+    const g = guest('Gia');
+    register(ev.sessionId, g);
+    const s = connect(g);
+    await join(s, ev.sessionId);
+
+    expectAdmitted(s, ev.sessionId);
+    expect(world.podMembers.some((m) => m.user_id === g)).toBe(false);
+  });
+
+  it('their own event does not open another one: a second public event refuses them', async () => {
+    const first = event({ visibility: 'public' });
+    const other = event({ visibility: 'public' });
+    const g = guest('Gia', first.sessionId);
+    const s = connect(g);
+    await join(s, other.sessionId);
+
+    expectRefused(s, other.sessionId, GUEST_REFUSAL);
+    expect(world.participants.some((p) => p.user_id === g)).toBe(false);
+  });
+
+  it('the REST registration refuses them the same way', async () => {
+    const ev = event({ visibility: 'public' });
+    const g = guest('Gia');
+    await expect(sessionService.registerParticipant(ev.sessionId, g, undefined)).rejects.toMatchObject({
+      statusCode: 403, code: 'GUEST_MEMBERSHIP_REQUIRED',
+    });
+    expect(world.participants.some((p) => p.user_id === g)).toBe(false);
+  });
 });
 
 // ── Refused ──────────────────────────────────────────────────────────────────

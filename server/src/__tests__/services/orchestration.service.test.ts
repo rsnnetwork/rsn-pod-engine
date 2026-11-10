@@ -1,7 +1,7 @@
 // ─── Orchestration Service Tests ─────────────────────────────────────────────
 // Tests for REST API helper functions and session state management.
 
-import { SessionStatus, DEFAULT_SESSION_CONFIG } from '@rsn/shared';
+import { SessionStatus, DEFAULT_SESSION_CONFIG, UserRole } from '@rsn/shared';
 
 const mockQuery = jest.fn();
 const mockTransaction = jest.fn();
@@ -147,7 +147,7 @@ describe('Orchestration Service', () => {
     it('should throw ForbiddenError when user is not the host', async () => {
       mockGetSessionById.mockResolvedValue(mockSession);
 
-      await expect(orchestrationService.endSession('session-1', 'not-host'))
+      await expect(orchestrationService.endSession('session-1', { userId: 'not-host', role: UserRole.MEMBER }))
         .rejects.toThrow('Only the host');
     });
   });

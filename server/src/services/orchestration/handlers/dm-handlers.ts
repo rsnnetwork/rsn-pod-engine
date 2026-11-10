@@ -164,12 +164,16 @@ async function ringDmBell(
           ? '🎤 Voice message'
           : 'New message';
     const notifLink = `/messages/${conversationId}`;
+    // Only a member's bell carries a message (Part 2, Task 3, fix round 1): an event guest reads their bell, and no
+    // message excerpt may reach them there.
     const notifResult = await query<{ id: string; created_at: Date }>(
       `INSERT INTO notifications (id, user_id, type, title, body, link)
-       VALUES ($1, $2, 'direct_message', $3, $4, $5)
+       SELECT $1, $2, 'direct_message', $3, $4, $5
+        WHERE EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.account_kind = 'member')
        RETURNING id, created_at`,
       [uuid(), toUserId, notifTitle, notifBody, notifLink],
     );
+    if (!notifResult.rows[0]) return;
     io.to(userRoom(toUserId)).emit('notification:new', {
       id: notifResult.rows[0].id,
       type: 'direct_message',

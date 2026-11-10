@@ -13,6 +13,7 @@ import { assertCircleManager } from '../services/circle/circle-managers';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { canViewPod } from '../services/pods/pod-access';
+import { eventListedForSql } from '../services/session/event-access';
 import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
@@ -299,25 +300,28 @@ router.get(
 
       const liveStatuses = `('lobby_open','round_active','round_rating','round_transition','closing_lobby')`;
       // Live first; if none, look for imminent scheduled within next 60 min.
+      // Part 2 Task 2 (D1): never someone else's draft, never an archived event (eventListedForSql).
       const liveResult = await query<{ id: string; title: string; status: string }>(
-        `SELECT id, title, status FROM sessions
-         WHERE pod_id = $1 AND status IN ${liveStatuses}
-         ORDER BY started_at DESC NULLS LAST
+        `SELECT s.id, s.title, s.status FROM sessions s
+         WHERE s.pod_id = $1 AND s.status IN ${liveStatuses}
+           AND ${eventListedForSql('s', '$2')}
+         ORDER BY s.started_at DESC NULLS LAST
          LIMIT 1`,
-        [req.params.id],
+        [req.params.id, req.user!.userId],
       );
 
       let session = liveResult.rows[0] || null;
       if (!session) {
         const upcoming = await query<{ id: string; title: string; status: string; scheduled_at: string }>(
-          `SELECT id, title, status, scheduled_at FROM sessions
-           WHERE pod_id = $1 AND status = 'scheduled'
-             AND scheduled_at IS NOT NULL
-             AND scheduled_at <= NOW() + INTERVAL '60 minutes'
-             AND scheduled_at > NOW() - INTERVAL '5 minutes'
-           ORDER BY scheduled_at ASC
+          `SELECT s.id, s.title, s.status, s.scheduled_at FROM sessions s
+           WHERE s.pod_id = $1 AND s.status = 'scheduled'
+             AND s.scheduled_at IS NOT NULL
+             AND s.scheduled_at <= NOW() + INTERVAL '60 minutes'
+             AND s.scheduled_at > NOW() - INTERVAL '5 minutes'
+             AND ${eventListedForSql('s', '$2')}
+           ORDER BY s.scheduled_at ASC
            LIMIT 1`,
-          [req.params.id],
+          [req.params.id, req.user!.userId],
         );
         if (upcoming.rows.length > 0) session = upcoming.rows[0];
       }
@@ -436,7 +440,7 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const member = await podService.joinPod(req.params.id, req.user!.userId);
+      const member = await podService.joinPod(req.params.id, req.user!.userId, req.user!.role);
       // Bug 19 — broadcast: someone joined (could be direct join for
       // public pods, or pending for invite-only). Every member's UI
       // sees the count update, and the joiner's My Pods list flips.

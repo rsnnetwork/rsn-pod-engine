@@ -89,7 +89,10 @@ test('a member can find someone they have never met, by name, title and company'
   // Thin card: what the page needs and nothing else.
   const r = await find(seeker, 'Quartermaine');
   const card = (r.json.data as any[]).find(x => x.userId === stranger.id);
-  expect(Object.keys(card).sort()).toEqual(['avatarUrl', 'company', 'displayName', 'jobTitle', 'location', 'userId']);
+  // 10 Nov 2026 (F4): plus where a meeting request between the two stands (the searcher's own relationship).
+  expect(Object.keys(card).sort()).toEqual(
+    ['avatarUrl', 'company', 'declinedByThem', 'displayName', 'jobTitle', 'location', 'pokeSentByOwner', 'pokeStatus', 'userId']);
+  expect(card).toMatchObject({ pokeStatus: null, pokeSentByOwner: null, declinedByThem: false });
   console.log('  ✓ found by name, title and company; thin card only.');
 });
 
@@ -161,7 +164,9 @@ test('the page finds a stranger, offers a way to meet, leaks nothing, and fits a
 
   // The action is real: it sends the meeting request that already existed.
   await meet.click();
-  await expect(card.getByRole('button', { name: /Meeting request sent/i })).toBeVisible({ timeout: 20_000 });
+  // 10 Nov 2026 (F4): the card says "Request sent", from the server, with "Withdraw request" beside it.
+  await expect(card.getByTestId(`search-request-sent-${stranger.id}`)).toHaveText(/Request sent/i, { timeout: 20_000 });
+  await expect(card.getByRole('button', { name: /Withdraw request/i })).toBeVisible();
   const poke = await pool.query(
     `SELECT id FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [seeker.id, stranger.id]);
   expect(poke.rows.length, 'a meeting request row exists').toBeGreaterThan(0);

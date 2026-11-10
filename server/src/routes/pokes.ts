@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { requestWithdrawLimiter } from '../middleware/rateLimit';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import * as pokeService from '../services/poke/poke.service';
 import { REQUEST_MESSAGE_MAX } from '../services/poke/request-message';
@@ -102,6 +103,25 @@ router.post(
       // Tags only: the sender is still never TOLD of a decline (no bell, no email).
       tellBothAboutAnswer(result.senderId, req.user!.userId);
       const response: ApiResponse = { success: true, data: result };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /pokes/:id/withdraw — withdraw a request I sent (sender only, while it is pending; 10 Nov 2026).
+// Withdrawing twice, or a request already answered, is the service's 409 MEETING_REQUEST_ALREADY_ANSWERED,
+// whose details.status says where it stands. The service tells both members' screens and bells.
+router.post(
+  '/:id/withdraw',
+  authenticate,
+  requestWithdrawLimiter,
+  validate(requestParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await pokeService.withdrawPoke(req.params.id, req.user!.userId);
+      const response: ApiResponse = { success: true, data: { id: req.params.id, status: 'cancelled' } };
       res.json(response);
     } catch (err) {
       next(err);

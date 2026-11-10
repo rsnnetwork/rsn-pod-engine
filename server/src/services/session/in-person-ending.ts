@@ -4,12 +4,14 @@
 // "Upcoming" for ever, because the abandoned-event reaper looks at live events only. Once its start plus its length
 // (at most 480 minutes) has passed it is completed: it moves to Ended on every page that shows it (the same
 // fan-out as any completed event), with no LiveKit room to close and no recap email.
+// A draft (Part 2 Task 2) is never ended: it was never announced, so it waits for its organisers.
 
 import { SessionStatus } from '@rsn/shared';
 import { query } from '../../db';
 import logger from '../../config/logger';
 import { updateSessionStatus } from './session.service';
 import { fanoutSessionCompleted } from '../../realtime/fanout';
+import { recordEventAudit } from '../audit/event-audit';
 
 /** How often the server looks for in-person events that are over. */
 export const IN_PERSON_ENDING_INTERVAL_MS = 60 * 1000;
@@ -30,6 +32,7 @@ export async function endFinishedInPersonEvents(): Promise<string[]> {
                 ELSE 60 END) AS ends_at
          FROM sessions
         WHERE event_format = 'physical_event' AND status = 'scheduled' AND scheduled_at IS NOT NULL
+          AND publication = 'published' AND archived_at IS NULL
      ) due
      WHERE ends_at <= NOW()
      ORDER BY ends_at
@@ -42,6 +45,10 @@ export async function endFinishedInPersonEvents(): Promise<string[]> {
         startedAt: new Date(row.scheduled_at), endedAt: new Date(row.ends_at),
       });
       await fanoutSessionCompleted(row.id);
+      void recordEventAudit({
+        sessionId: row.id, actorId: null, action: 'event.completed', automatic: true,
+        reason: 'An in-person event ends at its scheduled end time',
+      });
       ended.push(row.id);
     } catch (err) {
       logger.warn({ err, sessionId: row.id }, 'In-person ending: could not end that one (will retry next tick)');

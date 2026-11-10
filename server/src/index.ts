@@ -40,6 +40,8 @@ import { processAutoReminders } from './services/join-request/join-request.servi
 import { pruneExpiredAuthTokens } from './services/maintenance/token-cleanup';
 import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
 import { processMeetingReminders } from './services/meetings/meeting-reminder.worker';
+import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS } from './services/session/overdue-events';
+import { processEventReminders, EVENT_REMINDER_INTERVAL_MS } from './services/session/event-reminder.worker';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -74,6 +76,12 @@ import notificationPrefsRoutes from './routes/notification-prefs';
 import { webhooksRouter } from './routes/webhooks';
 import postEventMessageRoutes from './routes/post-event-message';
 import eventChatRoutes from './routes/event-chat';
+import eventAuditRoutes from './routes/event-audit';
+import eventLifecycleRoutes from './routes/event-lifecycle';
+import eventGroupRoutes from './routes/event-groups';
+import eventAdmissionRoutes from './routes/event-admission';
+import callLinkRoutes, { sessionCallLinkRoutes } from './routes/call-links';
+import scheduleRoutes from './routes/schedule';
 
 // Services
 import { initOrchestration } from './services/orchestration/orchestration.service';
@@ -134,6 +142,8 @@ io.use(async (socket, next) => {
     socket.data.email = member.email;
     socket.data.role = member.role;
     socket.data.displayName = member.displayName;
+    // 'event_guest' for an attendee who joined from an event link: the dm:* events refuse them (orchestration.service.ts).
+    socket.data.accountKind = member.accountKind;
     next();
   } catch (err) {
     if (err instanceof Error && err.message === 'Account is deactivated') {
@@ -343,6 +353,13 @@ app.use('/api/ratings', ratingRoutes);
 app.use('/api/sessions', hostRoutes); // Host controls under /api/sessions/:id/host/*
 app.use('/api/sessions', postEventMessageRoutes); // Post-event broadcast message endpoints
 app.use('/api/sessions', eventChatRoutes); // An event's chat, kept as it was sent: /api/sessions/:id/chat
+app.use('/api/sessions', eventAuditRoutes); // An event's audit trail for its organisers: /api/sessions/:id/audit
+app.use('/api/sessions', eventLifecycleRoutes); // Publish, unpublish, cancel, archive, delete for good: /api/sessions/:id/<step>
+app.use('/api/sessions', eventGroupRoutes); // An event's matching groups and round rules: /api/sessions/:id/groups
+app.use('/api/sessions', eventAdmissionRoutes); // Who gets a place: /api/sessions/:id/admission/* (Part 2 Task 4)
+app.use('/api/sessions', sessionCallLinkRoutes); // An event's RSN Call link for its organisers: /api/sessions/:id/call-link
+app.use('/api/call-links', callLinkRoutes); // The RSN Call link itself: open, verify by code, enter (Part 2 Task 6)
+app.use('/api/sessions', scheduleRoutes); // The organisers' matching board draft: /api/sessions/:id/schedule
 app.use('/api/join-requests', joinRequestRoutes);
 app.use('/api/admin', adminRoutes);
 // Task E2 — admin per-user inspection API (onboarding, conversations, interactions).
@@ -426,6 +443,28 @@ async function start(): Promise<void> {
       processMeetingReminders().catch(err =>
         logger.error({ err }, 'Meeting reminder cycle failed'));
     }, MEETING_REMINDER_INTERVAL);
+
+    // Event reminders, 24 hours and 1 hour before (Part 2 Task 10): dark until EVENT_COMMS is report or on. Each
+    // reminder is claimed in the database, so several instances running it tell a person once.
+    if (config.eventComms !== 'off') {
+      setInterval(() => {
+        processEventReminders().catch(err =>
+          logger.error({ err }, 'Event reminder cycle failed'));
+      }, EVENT_REMINDER_INTERVAL_MS);
+      logger.info({ mode: config.eventComms }, 'Event reminders started');
+    }
+
+    // Overdue events close themselves (10 Nov 2026, F7): every minute, a live or never-started event whose start,
+    // length and grace have passed is completed (end mode) or listed in the log (report mode, the default). Each
+    // close is claimed in the database, so several instances running it close an event once.
+    if (config.overdueEventClose !== 'off') {
+      setInterval(() => {
+        closeOverdueEvents(config.overdueEventClose).catch(err =>
+          logger.error({ err }, 'Overdue-event close cycle failed'));
+      }, OVERDUE_EVENT_INTERVAL_MS);
+      logger.info({ mode: config.overdueEventClose, graceMinutes: config.overdueEventGraceMinutes },
+        'Overdue-event closing started');
+    }
 
     // Start auto-reminder engine for join requests (runs every 6 hours)
     const SIX_HOURS = 6 * 60 * 60 * 1000;

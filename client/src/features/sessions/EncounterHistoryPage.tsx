@@ -103,6 +103,7 @@ export default function EncounterHistoryPage() {
                       <span className="text-sm">{e.rating}</span>
                     </div>
                   )}
+                  {e.markedMet && <Badge variant="default">You marked as met</Badge>}
                   {e.mutual && <Badge variant="brand">Mutual</Badge>}
                   {e.connectIntent && <Badge variant="success">Wants to connect</Badge>}
                   {/* Message button: visible for mutual pairs or admins (server gate is authoritative) */}

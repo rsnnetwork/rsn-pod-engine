@@ -24,7 +24,7 @@ jest.mock('../../../services/session/session.service', () => ({
 // ─── Existing task-6 export check ────────────────────────────────────────────
 
 import * as dm from '../../../services/dm/dm.service';
-import { BroadcastBlockedError } from '../../../services/dm/broadcast-errors';
+import { BroadcastBlockedError, BroadcastGuestError } from '../../../services/dm/broadcast-errors';
 import { AppError } from '../../../middleware/errors';
 
 describe('sendBroadcastMessage', () => {
@@ -98,6 +98,7 @@ describe('sendBroadcastMessage and blocks', () => {
 
   it('still sends to someone who blocked nobody, with no "have you met" check', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] }); // areBlocked: no block
+    mockQuery.mockResolvedValueOnce({ rows: [{ account_kind: 'member' }] }); // the recipient is a member
     const sent: string[] = [];
     fakeInsert(sent);
 
@@ -105,8 +106,23 @@ describe('sendBroadcastMessage and blocks', () => {
 
     expect(result.conversationId).toBe('conv-1');
     expect(sent).toEqual(['Thanks all']);
-    // The block lookup is the only query: no encounter_history, no thread count, no role lookup.
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    // The block lookup and the recipient's kind are the only queries: no encounter_history, no thread count, no role.
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(String(mockQuery.mock.calls[1][0])).toBe('SELECT account_kind FROM users WHERE id = $1');
+  });
+
+  it('never writes to an event guest (Part 2, Task 3): a BroadcastGuestError, no thread, no message', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // areBlocked: no block
+    mockQuery.mockResolvedValueOnce({ rows: [{ account_kind: 'event_guest' }] });
+    const sent: string[] = [];
+    fakeInsert(sent);
+
+    const refusal = await dm.sendBroadcastMessage('organiser', 'guest', 'Thanks all').catch((err: unknown) => err);
+
+    expect(refusal).toBeInstanceOf(BroadcastGuestError);
+    expect(refusal).toMatchObject({ statusCode: 403 });
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
   });
 
   it('still rejects a message to yourself and an empty message before it looks anything up', async () => {
@@ -157,6 +173,23 @@ describe('assembleRecipients', () => {
     mockTransaction.mockReset();
   });
 
+  it('leaves out an event guest (Part 2, Task 3): no thread and no email for them', async () => {
+    mockGetSessionParticipants.mockResolvedValueOnce([
+      makeParticipant(USER_STAYED, { roundsCompleted: 2, leftAt: null }),
+      makeParticipant('user-guest', { roundsCompleted: 2, leftAt: null }),
+    ]);
+    mockQuery.mockResolvedValueOnce({ rows: [{ host_user_id: HOST_ID, ended_at: sessionEndedAt, updated_at: new Date(), has_matches: true }] });
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { id: USER_STAYED, role: 'member', account_kind: 'member', first_name: 'Stayed' },
+        { id: 'user-guest', role: 'member', account_kind: 'event_guest', first_name: 'Gia' },
+      ],
+    });
+    const { assembleRecipients } = await import('../../../services/post-event-message/post-event-message.service');
+    expect((await assembleRecipients(SESSION_ID)).map((r) => r.userId)).toEqual([USER_STAYED]);
+    expect(String(mockQuery.mock.calls[1][0])).toContain('account_kind');
+  });
+
   it('excludes the host and admin/super_admin users; classifies remaining into correct buckets', async () => {
     // getSessionParticipants: host + admin + super_admin + 2 real participants
     mockGetSessionParticipants.mockResolvedValueOnce([
@@ -180,11 +213,11 @@ describe('assembleRecipients', () => {
     // users-roles query
     mockQuery.mockResolvedValueOnce({
       rows: [
-        { id: HOST_ID,       role: 'member',      first_name: 'Host' },
-        { id: ADMIN_ID,      role: 'admin',        first_name: 'Admin' },
-        { id: SUPER_ADMIN_ID, role: 'super_admin', first_name: 'SuperAdmin' },
-        { id: USER_STAYED,   role: 'member',       first_name: 'Stayed' },
-        { id: USER_NO_SHOW,  role: 'member',       first_name: 'NoShow' },
+        { id: HOST_ID,       role: 'member',      account_kind: 'member', first_name: 'Host' },
+        { id: ADMIN_ID,      role: 'admin',        account_kind: 'member', first_name: 'Admin' },
+        { id: SUPER_ADMIN_ID, role: 'super_admin', account_kind: 'member', first_name: 'SuperAdmin' },
+        { id: USER_STAYED,   role: 'member',       account_kind: 'member', first_name: 'Stayed' },
+        { id: USER_NO_SHOW,  role: 'member',       account_kind: 'member', first_name: 'NoShow' },
       ],
     });
 
@@ -220,7 +253,7 @@ describe('assembleRecipients', () => {
         rows: [{ host_user_id: HOST_ID, ended_at: sessionEndedAt, updated_at: new Date(), has_matches: hasMatches }],
       });
       mockQuery.mockResolvedValueOnce({
-        rows: ['p-in', 'p-early', 'p-out'].map((id) => ({ id, role: 'member', first_name: id })),
+        rows: ['p-in', 'p-early', 'p-out'].map((id) => ({ id, role: 'member', account_kind: 'member', first_name: id })),
       });
       const { assembleRecipients } = await import('../../../services/post-event-message/post-event-message.service');
       return Object.fromEntries((await assembleRecipients(SESSION_ID)).map((r) => [r.userId, r.bucket]));
@@ -275,9 +308,9 @@ describe('previewJob', () => {
 
     mockQuery.mockResolvedValueOnce({
       rows: [
-        { id: 'p1', role: 'member', first_name: 'P1' },
-        { id: 'p2', role: 'member', first_name: 'P2' },
-        { id: 'p3', role: 'member', first_name: 'P3' },
+        { id: 'p1', role: 'member', account_kind: 'member', first_name: 'P1' },
+        { id: 'p2', role: 'member', account_kind: 'member', first_name: 'P2' },
+        { id: 'p3', role: 'member', account_kind: 'member', first_name: 'P3' },
       ],
     });
 
@@ -326,7 +359,7 @@ describe('createJob', () => {
       }],
     });
     mockQuery.mockResolvedValueOnce({
-      rows: [{ id: 'p1', role: 'member', first_name: 'P1' }],
+      rows: [{ id: 'p1', role: 'member', account_kind: 'member', first_name: 'P1' }],
     });
 
     // already-sent query: nobody already sent
@@ -363,8 +396,8 @@ describe('createJob', () => {
     });
     mockQuery.mockResolvedValueOnce({
       rows: [
-        { id: ALREADY_SENT_ID, role: 'member', first_name: 'AlreadySent' },
-        { id: NEW_USER_ID,     role: 'member', first_name: 'New' },
+        { id: ALREADY_SENT_ID, role: 'member', account_kind: 'member', first_name: 'AlreadySent' },
+        { id: NEW_USER_ID,     role: 'member', account_kind: 'member', first_name: 'New' },
       ],
     });
 
@@ -488,6 +521,7 @@ const SERVICE = '../../../services/post-event-message/post-event-message.service
 
 interface PersonRow {
   user_id: string;
+  account_kind?: string;
   account_status?: string;
   blocked?: boolean;
 }
@@ -503,7 +537,7 @@ const JOINED = new Date('2026-10-25T11:00:00Z');
 
 function participant(user_id: string, over: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
-    user_id, account_status: 'active', blocked: false,
+    user_id, account_kind: 'member', account_status: 'active', blocked: false,
     status: 'left', joined_at: JOINED, left_at: ENDED, rounds_completed: 0,
     ...over,
   };
@@ -573,7 +607,7 @@ describe('assembleRecipientsV2: who a message from this sender would reach', () 
     planWorld({
       host: 'claus',
       participants: [participant('p1')],
-      hostPerson: { user_id: 'claus', account_status: 'active', blocked: false },
+      hostPerson: { user_id: 'claus', account_kind: 'member', account_status: 'active', blocked: false },
     });
     const { assembleRecipientsV2 } = await import(SERVICE);
 
@@ -615,6 +649,17 @@ describe('assembleRecipientsV2: who a message from this sender would reach', () 
     expect(plan.find((r: { userId: string }) => r.userId === 'fine')).toMatchObject({ skip: null });
   });
 
+  it('an event guest is planned but skipped (Part 2, Task 3): no thread and no email for them', async () => {
+    planWorld({ host: 'claus', participants: [participant('guest', { account_kind: 'event_guest' }), participant('mia')] });
+    const { assembleRecipientsV2, countAudience } = await import(SERVICE);
+    const planned = await assembleRecipientsV2('s1', 'claus');
+    expect(planned.find((r: { userId: string }) => r.userId === 'guest')).toMatchObject({ skip: 'event_guest' });
+    expect(planned.find((r: { userId: string }) => r.userId === 'mia')).toMatchObject({ skip: null });
+    planWorld({ host: 'claus', participants: [participant('guest', { account_kind: 'event_guest' }), participant('mia')] });
+    const audience = await countAudience('s1', 'claus');
+    expect(audience.tookPart + audience.registeredNoShow).toBe(1);
+  });
+
   it.each(['deactivated', 'suspended', 'banned'])('a %s account is planned but skipped', async (account_status) => {
     planWorld({ host: 'claus', participants: [participant('gone', { account_status })] });
     const { assembleRecipientsV2 } = await import(SERVICE);
@@ -628,7 +673,7 @@ describe('assembleRecipientsV2: who a message from this sender would reach', () 
   });
 
   it('a blocked or closed HOST is skipped too, when someone else sends', async () => {
-    planWorld({ host: 'claus', participants: [], hostPerson: { user_id: 'claus', account_status: 'deactivated' } });
+    planWorld({ host: 'claus', participants: [], hostPerson: { user_id: 'claus', account_kind: 'member', account_status: 'deactivated' } });
     const { assembleRecipientsV2 } = await import(SERVICE);
     expect((await assembleRecipientsV2('s1', 'stefan'))[0]).toMatchObject({ userId: 'claus', skip: 'inactive' });
   });
@@ -709,7 +754,7 @@ describe('countAudience', () => {
   });
 
   it('counts the host for anyone but the host', async () => {
-    planWorld({ host: 'claus', participants: [], hostPerson: { user_id: 'claus', account_status: 'active' } });
+    planWorld({ host: 'claus', participants: [], hostPerson: { user_id: 'claus', account_kind: 'member', account_status: 'active' } });
     const { countAudience } = await import(SERVICE);
     expect(await countAudience('s1', 'stefan')).toEqual({ tookPart: 1, registeredNoShow: 0 });
     expect(await countAudience('s1', 'claus')).toEqual({ tookPart: 0, registeredNoShow: 0 });
@@ -928,7 +973,7 @@ describe('createJob (version 1) is untouched', () => {
     mockGetSessionParticipants.mockReset();
     mockGetSessionParticipants.mockResolvedValueOnce([makeParticipant('p1'), makeParticipant('p2')]);
     mockQuery.mockResolvedValueOnce({ rows: [{ host_user_id: 'h', ended_at: ENDED, updated_at: ENDED, has_matches: true }] });
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'p1', role: 'member', first_name: 'P1' }, { id: 'p2', role: 'member', first_name: 'P2' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'p1', role: 'member', account_kind: 'member', first_name: 'P1' }, { id: 'p2', role: 'member', account_kind: 'member', first_name: 'P2' }] });
     mockQuery.mockResolvedValueOnce({ rows: [{ user_id: 'p2' }] }); // p2 was already sent to
 
     const statements: Array<{ sql: string; params?: unknown[] }> = [];

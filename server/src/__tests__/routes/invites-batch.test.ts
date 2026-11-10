@@ -122,7 +122,7 @@ const PERSON =(n: number) => `b0000000-0000-4000-8000-${String(n).padStart(12, '
 beforeEach(() => {
   mockDb.mockReset();
   // authenticate() checks the member is still active before any route runs.
-  mockDb.mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
+  mockDb.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
   mockCandidates.mockReset();
   mockBatch.mockReset();
   mockDeclined.mockReset();
@@ -278,7 +278,7 @@ describe('GET /invites/candidates', () => {
       status: InviteStatus.PENDING, maxUses: 1, useCount: 0, expiresAt: null,
     });
     mockDb.mockImplementation(async (sql: string) =>
-      /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ displayName: 'Host', name: 'Pod', description: null }] });
+      /SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [{ displayName: 'Host', name: 'Pod', description: null }] });
     const res = await request(app).get('/invites/ABC123XYZ').set(auth());
     expect(res.status).toBe(200);
     expect(inviteService.getInviteByCode).toHaveBeenCalledWith('ABC123XYZ');
@@ -533,7 +533,7 @@ describe('the calls production\'s client makes, unchanged', () => {
     it('sends the invites it can', async () => {
       (inviteService.createInvite as jest.Mock).mockResolvedValue({ id: 'i' });
       mockDb.mockImplementation(async (sql: string) =>
-        /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ pod_id: EVENT_POD }] });
+        /SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [{ pod_id: EVENT_POD }] });
       const res = await bulk();
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual({ sent: 5, skipped: 0, errors: 0 });
@@ -548,7 +548,7 @@ describe('the calls production\'s client makes, unchanged', () => {
         .mockResolvedValueOnce({ id: 'i' })
         .mockRejectedValueOnce(new AppError(403, 'AUTH_FORBIDDEN', 'no'));
       mockDb.mockImplementation(async (sql: string) =>
-        /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ pod_id: EVENT_POD }] });
+        /SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [{ pod_id: EVENT_POD }] });
       const res = await bulk();
       expect(res.body.data).toEqual({ sent: 1, skipped: 3, errors: 1 });
     });
@@ -562,7 +562,7 @@ describe('the calls production\'s client makes, unchanged', () => {
         .mockRejectedValueOnce(new AppError(409, 'INVITE_NOT_PERMITTED', "This person can't be invited."))
         .mockResolvedValue({ id: 'i' });
       mockDb.mockImplementation(async (sql: string) =>
-        /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ pod_id: EVENT_POD }] });
+        /SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [{ pod_id: EVENT_POD }] });
       const res = await bulk();
       expect(res.body.data).toEqual({ sent: 3, skipped: 2, errors: 0 });
       expect(Object.keys(res.body.data).sort()).toEqual(['errors', 'sent', 'skipped']);
@@ -571,7 +571,7 @@ describe('the calls production\'s client makes, unchanged', () => {
     it('tells the event\'s screens once if anything went out', async () => {
       (inviteService.createInvite as jest.Mock).mockResolvedValue({ id: 'i' });
       mockDb.mockImplementation(async (sql: string) =>
-        /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ pod_id: EVENT_POD }] });
+        /SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [{ pod_id: EVENT_POD }] });
       await bulk();
       expect(mockFanoutSession).toHaveBeenCalledTimes(1);
       expect(mockFanoutSession).toHaveBeenCalledWith(EVENT_POD, EVENT, [`session:${EVENT}:invites`]);
@@ -582,7 +582,7 @@ describe('the calls production\'s client makes, unchanged', () => {
     // skipped count and nothing else in the answer changes. The single Invite per member is unchanged.
     describe('someone who declined this event is not invited again', () => {
       const quiet = () => mockDb.mockImplementation(async (sql: string) =>
-        /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ pod_id: EVENT_POD }] });
+        /SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [{ pod_id: EVENT_POD }] });
 
       it('is counted as skipped, no invite is made for them, and the others still go', async () => {
         mockDeclined.mockResolvedValue(new Set(['b@example.com', 'd@example.com']));
@@ -688,7 +688,7 @@ describe('the calls production\'s client makes, unchanged', () => {
 describe('declining and withdrawing tell the invite list of the event too', () => {
   it('a decline of an event invite tells the event\'s invites tag, so an organiser sees "declined" without a refresh', async () => {
     mockDb.mockImplementation(async (sql: string) =>
-      /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ email: 'guest@example.com' }] });
+      /SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [{ email: 'guest@example.com' }] });
     (inviteService.declineInvite as jest.Mock).mockResolvedValue({ podId: null, sessionId: EVENT });
     const res = await request(app).post('/invites/CODE123/decline').set(auth('u-guest'));
     expect(res.status).toBe(200);
@@ -697,7 +697,7 @@ describe('declining and withdrawing tell the invite list of the event too', () =
 
   it('a decline of a pod invite tells the pod, whose fan-out already carries its invites tag', async () => {
     mockDb.mockImplementation(async (sql: string) =>
-      /SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [{ email: 'guest@example.com' }] });
+      /SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [{ email: 'guest@example.com' }] });
     (inviteService.declineInvite as jest.Mock).mockResolvedValue({ podId: POD, sessionId: null });
     await request(app).post('/invites/CODE123/decline').set(auth('u-guest'));
     expect(mockFanoutPod).toHaveBeenCalledWith(POD);
@@ -718,7 +718,7 @@ describe('GET /invites/session/:sessionId: who may read the list of an event\'s 
   });
   const listAs = (sub: string, role: string, relation: 'host' | 'cohost' | null, rows: unknown[] = [row({})], eventExists = true) => {
     mockDb.mockImplementation(async (sql: string) => {
-      if (/SELECT status FROM users/.test(sql)) return { rows: [{ status: 'active' }] };
+      if (/SELECT status, account_kind FROM users/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
       if (/SELECT host_user_id FROM sessions/.test(sql)) return { rows: eventExists ? [{ host_user_id: 'u-host' }] : [] };
       return { rows: [] };
     });
@@ -818,7 +818,7 @@ describe('POST /invites/:id/remind', () => {
   });
   const given = (row: Record<string, unknown> | null) => {
     mockDb.mockImplementation(async (sql: string) => {
-      if (/SELECT status FROM users/.test(sql)) return { rows: [{ status: 'active' }] };
+      if (/SELECT status, account_kind FROM users/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
       if (/FROM invites WHERE id = \$1/.test(sql)) return { rows: row ? [row] : [] };
       if (/display_name AS "displayName"/.test(sql)) return { rows: [{ displayName: 'Organiser' }] };
       if (/SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions/.test(sql)) {
@@ -1051,7 +1051,7 @@ describe('POST /invites/remind-all/:sessionId', () => {
     pendingSql = '';
     mockDb.mockImplementation(async (sql: string) => {
       const text = sql.replace(/\s+/g, ' ').trim();
-      if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+      if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] };
       if (/FROM sessions WHERE id = \$1/.test(text) && /host_user_id, title/.test(text)) {
         return { rows: opts.eventExists === false ? [] : [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: null, config: {}, event_format: 'video_meeting' }] };
       }
@@ -1234,7 +1234,7 @@ describe('GET /invites/:code: the address on the invite', () => {
   };
   const given = (over: Record<string, unknown> = {}) => {
     mockDb.mockImplementation(async (sql: string) => {
-      if (/SELECT status FROM users/.test(sql)) return { rows: [{ status: 'active' }] };
+      if (/SELECT status, account_kind FROM users/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
       if (/display_name AS "displayName"/.test(sql)) return { rows: [{ displayName: 'Casey Cohost' }] };
       if (/FROM sessions WHERE id = \$1/.test(sql)) return { rows: [{ title: 'Kickoff', scheduledAt: '2026-11-01T12:00:00.000Z', description: 'About it', status: 'scheduled' }] };
       return { rows: [] };
@@ -1304,7 +1304,7 @@ describe('GET /invites/:code: the address on the invite', () => {
 
 describe('POST /invites/:code/mark-accepted', () => {
   const mark = inviteService.markInviteAccepted as jest.Mock;
-  const quiet = () => mockDb.mockImplementation(async (sql: string) => (/SELECT status FROM users/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [] }));
+  const quiet = () => mockDb.mockImplementation(async (sql: string) => (/SELECT status, account_kind FROM users/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [] }));
 
   it('needs someone signed in, and asks the service nothing otherwise', async () => {
     const res = await request(app).post('/invites/CODE/mark-accepted');
@@ -1378,7 +1378,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
   const world = (invite: Record<string, unknown> = row()) => {
     mockDb.mockImplementation(async (sql: string) => {
       const text = sql.replace(/\s+/g, ' ').trim();
-      if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+      if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] };
       if (/FROM invites WHERE id = \$1/.test(text)) return { rows: [invite] };
       if (/^SELECT host_user_id, title/.test(text)) return { rows: [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: null, config: {}, event_format: 'video_meeting' }] };
       if (/^SELECT title, scheduled_at, host_user_id/.test(text)) return { rows: [{ title: 'Kickoff', scheduled_at: null, host_user_id: 'u-host', config: {}, event_format: 'video_meeting' }] };
@@ -1482,7 +1482,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
     it('a database failure while the email is being built gives the claim back too, and nothing is sent or counted', async () => {
       mockDb.mockImplementation(async (sql: string) => {
         const text = sql.replace(/\s+/g, ' ').trim();
-        if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+        if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] };
         if (/FROM invites WHERE id = \$1/.test(text)) return { rows: [row()] };
         if (/display_name AS "displayName"/.test(text)) throw new Error('database hiccup');
         return { rows: [] };
@@ -1587,7 +1587,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
       const many = Array.from({ length: 120 }, (_, i) => ({ id: `inv-${i}`, invitee_email: `p${i}@example.com`, code: `C${i}`, inviter_id: 'u-host' }));
       mockDb.mockImplementation(async (sql: string) => {
         const text = sql.replace(/\s+/g, ' ').trim();
-        if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+        if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] };
         if (/^SELECT host_user_id, title/.test(text)) return { rows: [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: null, config: {}, event_format: 'video_meeting' }] };
         if (/FROM invites WHERE session_id = \$1/.test(text)) return { rows: many };
         if (/SELECT id, display_name FROM users WHERE id = ANY/.test(text)) return { rows: [{ id: 'u-host', display_name: 'Organiser' }] };
@@ -1674,7 +1674,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
             failed = true;
             throw new Error('database hiccup');
           }
-          if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] };
+          if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] };
           if (/^SELECT host_user_id, title/.test(text)) {
             return { rows: [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: '2026-11-01T12:00:00.000Z', config: { durationMinutes: 60 }, event_format: 'video_meeting' }] };
           }
@@ -1706,7 +1706,7 @@ describe('reminders: an invite once an hour, a member 300 emails an hour', () =>
 
     it('nobody to remind touches nothing: 0 of 0, the ledger is not asked', async () => {
       mockDb.mockImplementation(async (sql: string) => {
-        if (/SELECT status FROM users/.test(sql)) return { rows: [{ status: 'active' }] };
+        if (/SELECT status, account_kind FROM users/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
         if (/^\s*SELECT host_user_id, title/.test(sql.replace(/\s+/g, ' ').trim())) return { rows: [{ host_user_id: 'u-host', title: 'Kickoff', scheduled_at: null, config: {}, event_format: 'video_meeting' }] };
         return { rows: [] };
       });

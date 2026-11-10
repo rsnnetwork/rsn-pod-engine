@@ -99,3 +99,20 @@ services:
       #   value: "report"
       # - key: ABANDONED_EVENT_AFTER_HOURS
       #   value: "4"
+
+      # Closes overdue events: live or never started, once their start, length
+      # and OVERDUE_EVENT_GRACE_MINUTES (default 120) have passed. Unset, it
+      # defaults to "report" (logs the events it would close, writes nothing);
+      # "off" stops it. End mode is on as of 10 Nov 2026, set after the
+      # report-mode log on production was read (it listed exactly the two
+      # stuck September events). Mirrors the Render dashboard.
+      - key: OVERDUE_EVENT_CLOSE
+        value: "end"
+      # - key: OVERDUE_EVENT_GRACE_MINUTES
+      #   value: "120"
+
+      # Event reminders (24 hours and 1 hour before) and time-change notices.
+      # Defaults to "off" when unset. "report" logs who would be told and sends
+      # nothing; "on" bells and emails members. Read the report before "on".
+      # - key: EVENT_COMMS
+      #   value: "report"

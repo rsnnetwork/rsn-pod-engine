@@ -23,8 +23,10 @@ describe('Super-admin host policy (Stefan 9 Jun)', () => {
   });
 
   it('server: getAllHostIds folds in super_admin session participants', () => {
-    const fnStart = hostActions.indexOf('export async function getAllHostIds');
-    const fn = hostActions.slice(fnStart, hostActions.indexOf('\nexport ', fnStart + 1));
+    // Moved to services/session/host-set.ts (10 Nov 2026, Part 2 Task 8); host-actions re-exports it.
+    const hostSet = serverSrc('services/session/host-set.ts');
+    const fnStart = hostSet.indexOf('export async function getAllHostIds');
+    const fn = hostSet.slice(fnStart, hostSet.indexOf('\nexport ', fnStart + 1));
     expect(fn).toMatch(/u\.role\s*=\s*'super_admin'/);
     expect(fn).toMatch(/JOIN\s+users\s+u\s+ON\s+u\.id\s*=\s*sp\.user_id/i);
     expect(fn).toMatch(/superAdminResult\.rows\.map/);

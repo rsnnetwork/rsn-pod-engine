@@ -14,7 +14,7 @@ jest.mock('../../config', () => ({
 }));
 jest.mock('../../config/logger', () => ({ default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() }, __esModule: true }));
 jest.mock('../../db', () => ({
-  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }),
+  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }),
   transaction: jest.fn(),
   __esModule: true,
 }));

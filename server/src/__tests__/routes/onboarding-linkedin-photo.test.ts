@@ -20,8 +20,8 @@ jest.mock('../../config/logger', () => ({
   __esModule: true,
 }));
 jest.mock('../../db', () => ({
-  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }),
-  transaction: jest.fn(async (cb: Function) => cb({ query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }) })),
+  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }),
+  transaction: jest.fn(async (cb: Function) => cb({ query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }) })),
   __esModule: true,
 }));
 const mockFind = jest.fn();

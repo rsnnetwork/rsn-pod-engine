@@ -73,7 +73,7 @@ const PRESET_ROWS = [
 beforeEach(() => {
   mockQuery.mockReset();
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
-    if (/SELECT status FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active' }] };
+    if (/SELECT status, account_kind FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
     if (/FROM matching_templates WHERE is_preset = TRUE/.test(sql)) return { rows: PRESET_ROWS };
     if (/FROM matching_templates WHERE id::text = \$1 AND is_preset = TRUE/.test(sql)) {
       return { rows: Object.values(MATCHING_PRESET_IDS).includes(params[0] as never) ? [{ '?column?': 1 }] : [] };
@@ -164,7 +164,7 @@ describe('the admin template list and delete', () => {
 describe('a removed account cannot register for an in-person event (Review Focus 3)', () => {
   it('is turned away before the registration is tried', async () => {
     mockQuery.mockImplementation(async (sql: string) => {
-      if (/SELECT status FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'deactivated' }] };
+      if (/SELECT status, account_kind FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'deactivated' }] };
       return { rows: [], rowCount: 0 };
     });
     const res = await request(app()).post(`/sessions/${SESSION_ID}/register`).set('Authorization', `Bearer ${token('member', 'user-removed')}`);

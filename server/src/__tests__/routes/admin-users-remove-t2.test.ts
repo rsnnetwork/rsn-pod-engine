@@ -86,7 +86,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   // The sign-in check reads the caller's own status: every caller here is active.
   mockQuery.mockImplementation(async (sql: string) => (
-    sql === 'SELECT status FROM users WHERE id = $1' ? { rows: [{ status: 'active' }] } : { rows: [], rowCount: 0 }
+    sql === 'SELECT status, account_kind FROM users WHERE id = $1' ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [], rowCount: 0 }
   ));
   (identityService.getUsers as jest.Mock).mockResolvedValue({ users: [person('active')], total: 1, statusCounts: COUNTS });
 });
@@ -157,7 +157,7 @@ describe('DELETE /users/:id (production\'s Delete Forever)', () => {
 describe('POST /admin/users/bulk-action (production\'s bulk bar)', () => {
   it('a bulk status change reaches everyone around each account', async () => {
     mockQuery.mockImplementation(async (sql: string) => (
-      sql === 'SELECT status FROM users WHERE id = $1' ? { rows: [{ status: 'active' }] }
+      sql === 'SELECT status, account_kind FROM users WHERE id = $1' ? { rows: [{ status: 'active', account_kind: 'member' }] }
         : /UPDATE users SET status/.test(sql) ? { rows: [{ id: GONE }, { id: 'u-two' }], rowCount: 2 } : { rows: [], rowCount: 0 }
     ));
     const res = await request(app).post('/admin/users/bulk-action').set('Authorization', ADMIN)

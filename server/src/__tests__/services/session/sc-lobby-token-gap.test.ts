@@ -54,7 +54,7 @@ type SessionRow = { status: string; lobbyRoomId: string | null };
 /** The database: one event in `row`'s state, MEMBER a participant, and `breakoutActive` deciding the match read. */
 function db(row: SessionRow, opts: { breakoutActive?: boolean; memberOfBreakout?: boolean } = {}) {
   mockQuery.mockImplementation(async (sql: string) => {
-    if (/SELECT status FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active' }] };
+    if (/SELECT status, account_kind FROM users WHERE id = \$1/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
     if (/FROM sessions WHERE id = \$1/.test(sql)) {
       return {
         rows: [{

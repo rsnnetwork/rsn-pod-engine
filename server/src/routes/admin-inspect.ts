@@ -16,7 +16,7 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { query } from '../db';
 import { NotFoundError } from '../middleware/errors';
-import { ApiResponse, UserRole } from '@rsn/shared';
+import { ApiResponse, UserRole, type MeetingRequestStatus } from '@rsn/shared';
 import * as stageEventsRepo from '../services/onboarding/stage-events.repo';
 import * as blockService from '../services/block/block.service';
 import { REQUEST_MESSAGE_MAX } from '../services/poke/request-message';
@@ -248,7 +248,7 @@ interface PokeRow {
   id: string;
   other_id: string;
   other_display_name: string | null;
-  status: 'pending' | 'accepted' | 'declined';
+  status: MeetingRequestStatus;
   message: string | null;
   reason_line: string | null;
   created_at: Date;

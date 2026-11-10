@@ -11,6 +11,8 @@ import { query } from '../../db';
 import { isReservedTestAddress, maskAddress } from '../identity/reserved-address';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { SIGN_IN_CODE_TTL_MINUTES } from '../identity/sign-in-code';
+import { ErrorCodes } from '@rsn/shared';
+import { AppError } from '../../middleware/errors';
 
 let resend: Resend | null = null;
 
@@ -1508,6 +1510,176 @@ export async function sendMeetingReminderEmail(
     return;
   }
   logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-reminder email skipped');
+}
+
+// ─── Event-cancelled email (Part 2 foundation, Task 2) ──────────────────────
+// Sent by event-lifecycle.service.ts to each person who held a place (and each co-host) when an event is cancelled,
+// only while their notify_email is on and the admin switch for 'event_cancelled' is on (email_config, seeded on by
+// migration 135). This only renders and sends; `when` is already in the recipient's own zone.
+export interface EventCancelledEmailData {
+  eventTitle: string;
+  /** Who cancelled it, as the email names them. */
+  hostName: string;
+  /** The event's planned start, in the recipient's own zone and named ("Tuesday 17 November, 14:00 (CET)"). */
+  when: string;
+  /** The organiser's own words, when they gave any. */
+  reason: string | null;
+  /** The event's page. */
+  link: string;
+}
+
+export async function sendEventCancelledEmail(to: string, data: EventCancelledEmailData): Promise<SendEmailResult> {
+  const subject = `Cancelled: ${data.eventTitle}`;
+  const line = `${data.hostName} cancelled ${data.eventTitle}, planned for ${data.when}.`;
+  const reasonHtml = data.reason
+    ? `<div style="background:#f8f9fa;border-left:3px solid #9ca3af;border-radius:6px;padding:12px 16px;margin:0 0 20px 0;">
+            <p style="color:#374151;font-size:15px;line-height:1.5;margin:0;white-space:pre-line;">${escapeHtml(data.reason)}</p>
+          </div>`
+    : '';
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Event cancelled</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>${escapeHtml(data.hostName)}</strong> cancelled <strong>${escapeHtml(data.eventTitle)}</strong>, planned for ${escapeHtml(data.when)}.
+          </p>
+          ${reasonHtml}
+          <div style="text-align:center;margin:8px 0;">
+            <a href="${escapeAttr(data.link)}" style="color:#DE322E;font-size:14px;font-weight:600;">See the event</a>
+          </div>
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+  const text = `${line}\n\n${data.reason ? `${data.reason}\n\n` : ''}See the event: ${data.link}\n\nREASON — Meet people you have a reason to know.`;
+  return sendEmail({ to, subject, html, text });
+}
+
+// ─── Event reminder and time-change emails (Part 2 foundation, Task 10) ─────
+// Sent by the event reminder worker (24 hours and 1 hour before) and by notifyEventRescheduled (event-notices.ts), only
+// while the person's notify_email is on and the admin switch for 'event_reminder' / 'event_rescheduled' is on
+// (email_config, seeded on by migration 135), and only while EVENT_COMMS is 'on'. These only render and send; every
+// time is already written for the recipient ("in 1 hour", "tomorrow at 18:00", or a full day and zone).
+export interface EventReminderEmailData {
+  eventTitle: string;
+  /** How soon it starts, as the recipient reads it ("in 1 hour", "tomorrow at 18:00"). */
+  when: string;
+  /** The event's page. */
+  link: string;
+}
+
+export async function sendEventReminderEmail(to: string, data: EventReminderEmailData): Promise<SendEmailResult> {
+  const subject = `Reminder: ${data.eventTitle} starts ${data.when}`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Event reminder</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 20px 0;">
+            <strong>${escapeHtml(data.eventTitle)}</strong> starts ${escapeHtml(data.when)}.
+          </p>
+          <div style="text-align:center;margin:20px 0 8px 0;">
+            <a href="${escapeAttr(data.link)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Open the event</a>
+          </div>
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+  const text = `${data.eventTitle} starts ${data.when}.
+
+Open the event: ${data.link}
+
+REASON — Meet people you have a reason to know.`;
+  return sendEmail({ to, subject, html, text });
+}
+
+export interface EventRescheduledEmailData {
+  eventTitle: string;
+  /** Where it was, in the recipient's own zone and named ("Tuesday 17 November, 14:00 (CET)"). */
+  previousWhen: string;
+  /** Where it is now, written the same way. */
+  when: string;
+  /** The event's page. */
+  link: string;
+}
+
+export async function sendEventRescheduledEmail(to: string, data: EventRescheduledEmailData): Promise<SendEmailResult> {
+  const subject = `New time: ${data.eventTitle}`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">New time</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>${escapeHtml(data.eventTitle)}</strong> has moved.
+          </p>
+          <div style="background:#f0fdf4;border-left:3px solid #16a34a;border-radius:6px;padding:12px 16px;margin:0 0 12px 0;">
+            <p style="color:#166534;font-size:15px;line-height:1.5;margin:0;"><strong>Now: ${escapeHtml(data.when)}</strong></p>
+          </div>
+          <p style="color:#6b7280;font-size:14px;line-height:1.5;margin:0 0 20px 0;">It was ${escapeHtml(data.previousWhen)}.</p>
+          <div style="text-align:center;margin:20px 0 8px 0;">
+            <a href="${escapeAttr(data.link)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Open the event</a>
+          </div>
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+  const text = `${data.eventTitle} has moved.
+
+Now: ${data.when}
+It was ${data.previousWhen}.
+
+Open the event: ${data.link}
+
+REASON — Meet people you have a reason to know.`;
+  return sendEmail({ to, subject, html, text });
+}
+
+// ─── The RSN Call link's entry code (Part 2 foundation, Task 6, 11 Nov 2026) ────
+// Someone opened an event's link and gave this address. The email carries the 6-digit code to type on the link's
+// page and a button that opens the event's link with a one-time entry token (it signs in that browser). The code
+// works for 15 minutes (sign-in-code.ts), the button for 60. Gated by the admin switch 'event_entry_code' (seeded on
+// by migration 139) in call-entry.service.ts, before anything is stored. Throws a 503 AppError when it could not be sent;
+// the Call link sends it off the request path (fix round 1), so the failure is logged there.
+export interface CallEntryCodeEmailData {
+  eventTitle: string;
+  code: string;
+  link: string;
+}
+
+export async function sendCallEntryCodeEmail(to: string, data: CallEntryCodeEmailData): Promise<void> {
+  const subject = `Your code for ${data.eventTitle}`;
+  const line = `Enter this code to join ${data.eventTitle}: ${data.code}. It works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 20px 0;">
+            Enter this code to join <strong>${escapeHtml(data.eventTitle)}</strong>:
+          </p>
+          <div style="text-align:center;margin:0 0 8px 0;">
+            <p data-entry-code style="display:inline-block;color:#1a1a2e;background:#f4f5f7;border:1px solid #dfe3ea;border-radius:12px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:36px;font-weight:700;letter-spacing:8px;padding:14px 18px 14px 26px;margin:0;">${escapeHtml(data.code)}</p>
+            <p style="color:#64748b;font-size:13px;line-height:1.5;margin:10px 0 0 0;">It works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.</p>
+          </div>
+          <div style="text-align:center;margin:28px 0 8px 0;">
+            <a href="${escapeAttr(data.link)}"
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+              Open the event
+            </a>
+          </div>
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
+          If you didn't ask for this code, you can safely ignore this email.
+        </p>
+      </div>
+    </body></html>`;
+  const text = `${line}\n\nOpen the event: ${data.link}\n\nIf you didn't ask for this code, you can safely ignore this email.`;
+  const result = await sendEmail({ to, subject, html, text });
+  if (!result.sent) {
+    throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, "We couldn't send the code just now. Please try again in a moment.");
+  }
 }
 
 // Every value an email puts into its HTML goes through one of these (21 Oct 2026). Names, event, pod and

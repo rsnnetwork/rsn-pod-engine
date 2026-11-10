@@ -7,7 +7,7 @@ import { gotoRetry, cleanup, wait, APP, SERVER } from '../helpers/live-ui';
 // Stefan's flow end-to-end on prod:
 //   founder (wants investors) opens Matches → sees the investor with a readable
 //   reason → "I want to meet" → investor is notified, accepts → chat unlocked
-//   (conversation exists) → the pair stays on the page, badged Connected.
+//   (conversation exists) → the pair leaves For You (10 Nov 2026) and the chat is in Messages.
 //   (Until 22 Sep the pair DISAPPEARED here, which is how pressing the button
 //   came to look like it had done nothing.)
 //   A user nobody fits (the baker) gets the NO-MATCH screen with the three
@@ -80,7 +80,7 @@ test.afterAll(async () => {
   await cleanup(pool, { ids });
 });
 
-test('standing match loop: suggest → I want to meet → accept → chat unlocked → still there, badged', async () => {
+test('standing match loop: suggest → I want to meet → accept → chat unlocked → the pair leaves For You, the chat is in Messages', async () => {
   test.setTimeout(240_000);
 
   // (1) The founder's standing match check finds the investor, with a reason.
@@ -122,8 +122,8 @@ test('standing match loop: suggest → I want to meet → accept → chat unlock
   // (4) The founder clicks the real button ON OUR INVESTOR'S CARD — the
   // introduction goes out to our test user, nobody else.
   await investorCard.getByRole('button', { name: /I want to meet/i }).click();
-  await expect(investorCard.getByText(/Introduction requested/i)).toBeVisible({ timeout: 15_000 });
-  console.log('  ✓ headed: "I want to meet" → Introduction requested.');
+  await expect(investorCard.getByText(/Request sent/i)).toBeVisible({ timeout: 15_000 });
+  console.log('  ✓ headed: "I want to meet" → Request sent.');
 
   // (5) The investor received it (poke rails) with the intro as the message,
   //     plus a bell notification.
@@ -150,14 +150,16 @@ test('standing match loop: suggest → I want to meet → accept → chat unlock
   expect(conv.rows.length, 'mutual yes must open a conversation').toBe(1);
   console.log('  ✓ investor accepted → conversation exists (chat unlocked).');
 
-  // (7) The pair is still on the page, now reading Connected rather than
-  // offering a button (22 Sep 2026). Dropping them was how "I want to meet"
-  // came to look like it had done nothing: the person you had just acted on
-  // disappeared, and a reload gave back no sign of it at all. They are only
-  // hidden by a decline.
+  // (7) 10 Nov 2026 (spec item 5): once they are connected the pair leaves For You. A request still waiting stays
+  // badged (step 4); an accepted one, like any conversation, is no longer an introduction to make. The
+  // connection lives in the messages: the founder's inbox lists the investor.
   const f2 = await apiAs(founder, 'GET', '/matches/platform');
-  const still = (f2.json.data.matches as any[]).find(m => m.userId === investor.id);
-  expect(still, 'the person they connected with is still on the page').toBeTruthy();
-  expect(still.pokeStatus, 'and the card can say they are connected').toBe('accepted');
-  console.log('  ✓ the pair stays, badged Connected — the loop closes without anyone vanishing.');
+  const gone = (f2.json.data.matches as any[]).find(m => m.userId === investor.id);
+  expect(gone, 'the person they connected with is no longer suggested on For You').toBeUndefined();
+  const inboxF = await apiAs(founder, 'GET', '/dm/conversations');
+  expect(inboxF.status).toBe(200);
+  const thread = (inboxF.json.data as any[]).find(c => c.otherUserId === investor.id);
+  expect(thread, 'and the connection is reachable in the founder messages').toBeTruthy();
+  expect(thread.conversationId).toBe(accept.json.data.conversationId);
+  console.log('  ✓ the connected pair leaves For You and the connection is in Messages.');
 });

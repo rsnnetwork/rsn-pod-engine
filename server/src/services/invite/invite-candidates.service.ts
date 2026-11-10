@@ -179,6 +179,7 @@ function connectionsSql(kind: TargetKind, search: string): string {
       JOIN users u ON u.id = pe.person_id
      WHERE u.id <> $1
        AND ${activeMemberSql('u')}
+       AND u.account_kind = 'member'
        AND NOT ${BLOCKED_EITHER_WAY('u.id')}
        ${search}
        AND ($2::timestamptz IS NULL OR pe.since < $2::timestamptz)
@@ -205,6 +206,7 @@ function podMembersSql(search: string): string {
      WHERE pm.pod_id = $6 AND pm.status = 'active'
        AND u.id <> $1
        AND u.status = 'active'
+       AND u.account_kind = 'member'
        AND NOT ${BLOCKED_EITHER_WAY('u.id')}
        ${search}
        AND ($2::timestamptz IS NULL OR date_trunc('milliseconds', pm.joined_at) < $2::timestamptz)
@@ -392,6 +394,7 @@ async function availablePodMembers(
            WHERE pm.pod_id = $2 AND pm.status = 'active'
              AND u.id <> $1
              AND u.status = 'active'
+             AND u.account_kind = 'member'
              AND NOT ${BLOCKED_EITHER_WAY('u.id')}
              AND NOT (u.id = ANY($3::uuid[]))
         ) p

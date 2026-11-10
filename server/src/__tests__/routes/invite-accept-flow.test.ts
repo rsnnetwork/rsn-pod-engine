@@ -117,7 +117,7 @@ describe('Invite accept flow — no auto-registration on view', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     // Default auth middleware DB check — user exists and is active
-    (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
+    (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
   });
 
   afterAll(() => {
@@ -133,8 +133,8 @@ describe('Invite accept flow — no auto-registration on view', () => {
       if (/INSERT INTO session_participants/i.test(sql)) {
         throw new Error('TEST FAIL: GET /invites/:code must not INSERT into session_participants');
       }
-      if (/SELECT status FROM users WHERE id/i.test(sql)) {
-        return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+      if (/SELECT status, account_kind FROM users WHERE id/i.test(sql)) {
+        return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
       }
       if (/SELECT display_name/i.test(sql)) {
         return Promise.resolve({ rows: [{ displayName: 'Inviter' }], rowCount: 1 });

@@ -107,7 +107,8 @@ describe('Phase M — acting-as-host toggle (item 1)', () => {
   });
 
   describe('Server — getAllHostIds (acting-as-host removed 23 May Stefan + Ali)', () => {
-    const src = readServer('services/orchestration/handlers/host-actions.ts');
+    // Moved to services/session/host-set.ts (10 Nov 2026, Part 2 Task 8); host-actions re-exports it.
+    const src = readServer('services/session/host-set.ts');
     const fnStart = src.indexOf('export async function getAllHostIds');
     const fnEnd = src.indexOf('\nexport ', fnStart + 1);
     const fn = src.slice(fnStart, fnEnd > -1 ? fnEnd : src.length);

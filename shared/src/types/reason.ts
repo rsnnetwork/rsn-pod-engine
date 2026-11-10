@@ -18,6 +18,11 @@ export type WorthContinuing = (typeof WORTH_CONTINUING)[number];
 
 export type MeetingFormat = 'video_20' | 'coffee' | 'message_first';
 export type MatchStrength = 'strong' | 'close';
+/**
+ * Where a meeting request (user_pokes.status) stands. 'cancelled' is a request its sender withdrew (migration 132):
+ * it reads as no request at all, never as a "no", so the sender may ask again.
+ */
+export type MeetingRequestStatus = 'pending' | 'accepted' | 'declined' | 'cancelled';
 export type RelationshipState = 'none' | 'requested' | 'incoming' | 'declined' | 'connected' | 'met';
 export type PrimaryAction = 'meet' | 'requested' | 'respond' | 'declined' | 'continue';
 
@@ -99,6 +104,8 @@ export interface PersonBrief {
     lastMetAt: string | null;
     saved: boolean;
     passed: boolean;
+    /** The viewer marked this person "Already met" (outside the platform). Private to the viewer; changes no state. */
+    alreadyMet: boolean;
     outcomes: Array<{ worthContinuing: WorthContinuing; outcomes: OutcomeKey[]; createdAt: string }>;
   };
   shared: {
@@ -144,6 +151,21 @@ export interface PersonConnection {
   how: ConnectionHow;
   /** The latest date of anything between the two (a request accepted, a conversation started, a meeting), ISO. */
   since: string;
+}
+
+/** One person on the Everyone list: the public card, and where a meeting request and the relationship stand. */
+export type EveryoneMember = PublicMember & {
+  pokeStatus: 'pending' | 'accepted' | null;
+  pokeSentByOwner: boolean | null;
+  relationship: RelationshipState;
+  /** The viewer marked this person "Already met" (outside the platform). Private to the viewer. */
+  alreadyMet: boolean;
+};
+
+export interface EveryonePage {
+  people: EveryoneMember[];
+  /** Ask again with ?cursor= this for the next people; null when there are no more. */
+  nextCursor: string | null;
 }
 
 export interface ConnectionList {

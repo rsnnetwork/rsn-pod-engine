@@ -222,7 +222,9 @@ describe('Phase 6 — Spec §14 acceptance gate', () => {
   describe('§14.9 — no blocked users are ever matched', () => {
     it('matching.service.ts loads block-pairs into hardConstraints', () => {
       const src = readServer('services/matching/matching.service.ts');
-      expect(src).toMatch(/blockService\.getBlockedPairsForUsers/);
+      // Part 2 Task 5: the reads live in hard-exclusions.ts, the one loader generateSingleRound calls.
+      expect(readServer('services/matching/hard-exclusions.ts')).toMatch(/blockService\.getBlockedPairsForUsers/);
+      expect(src).toMatch(/loadHardExclusions\(sessionId, participantIds\)/);
       expect(src).toMatch(/user_block/);
     });
 

@@ -7,6 +7,7 @@
 import {
   MatchingInput, MatchingOutput, MatchingConfig, MatchingParticipant,
   RoundAssignment, MatchPair, EncounterHistoryEntry, HardConstraint,
+  groupsAllowed, ruleForRound,
 } from '@rsn/shared';
 import { IMatchingEngine, pairKey } from './matching.interface';
 import {
@@ -165,6 +166,9 @@ export class MatchingEngineV1 implements IMatchingEngine {
   ): RoundAssignment {
     const n = participants.length;
     const regenerate = options?.regenerate === true;
+    // Part 2 Task 7 — on an event with groups, a pair this round's rule does not allow is never made (null: no
+    // groups, every pair is open to the rule, exactly as before).
+    const mayMeet = groupGate(config, roundNumber);
 
     // Build scored candidate matrix
     const candidates: Array<{
@@ -181,6 +185,9 @@ export class MatchingEngineV1 implements IMatchingEngine {
 
         // Skip if already paired in this session or hard-excluded
         if (usedPairs.has(key) || hardExclusions.has(key)) {
+          continue;
+        }
+        if (mayMeet && !mayMeet(participants[i].userId, participants[j].userId)) {
           continue;
         }
 
@@ -338,15 +345,23 @@ export class MatchingEngineV1 implements IMatchingEngine {
     const warnings: string[] = [];
 
     if (stillUnmatched.length === 1 && pairs.length > 0) {
-      // Exactly one leftover — add to the best-fit existing pair to form a trio
+      // Exactly one leftover — add to the best-fit existing pair to form a trio.
+      // 10 Nov 2026 (Part 2 Task 7) — only a pair neither of whom the leftover is kept from (a block, a report, an
+      // invite: the hard exclusions). Before, the best-scoring pair was taken whoever was in it, so two people who
+      // blocked each other could share a trio. With no such pair the leftover waits this round (a bye).
       const leftover = stillUnmatched[0];
-      let bestPairIdx = pairs.length - 1;
+      let bestPairIdx = -1;
       let bestTrioScore = -1;
 
       for (let pi = 0; pi < pairs.length; pi++) {
         const aIdx = participants.findIndex(p => p.userId === pairs[pi].participantAId);
         const bIdx = participants.findIndex(p => p.userId === pairs[pi].participantBId);
         if (aIdx < 0 || bIdx < 0) continue;
+        if (hardExclusions.has(pairKey(leftover.userId, pairs[pi].participantAId))
+          || hardExclusions.has(pairKey(leftover.userId, pairs[pi].participantBId))) continue;
+        // With groups, the leftover must be allowed to meet both of them under this round's rule.
+        if (mayMeet && (!mayMeet(leftover.userId, pairs[pi].participantAId)
+          || !mayMeet(leftover.userId, pairs[pi].participantBId))) continue;
 
         const scoreA = this.computePairScore(participants[leftover.idx], participants[aIdx], config.weights, encounterMap).score;
         const scoreB = this.computePairScore(participants[leftover.idx], participants[bIdx], config.weights, encounterMap).score;
@@ -358,13 +373,20 @@ export class MatchingEngineV1 implements IMatchingEngine {
         }
       }
 
-      pairs[bestPairIdx] = {
-        ...pairs[bestPairIdx],
-        participantCId: leftover.userId,
-        reasonTags: [...pairs[bestPairIdx].reasonTags, 'trio'],
-        // Trio creation is the spec's odd-count handling, not a fallback.
-        matchReason: pairs[bestPairIdx].matchReason || 'trio',
-      };
+      if (bestPairIdx >= 0) {
+        pairs[bestPairIdx] = {
+          ...pairs[bestPairIdx],
+          participantCId: leftover.userId,
+          reasonTags: [...pairs[bestPairIdx].reasonTags, 'trio'],
+          // Trio creation is the spec's odd-count handling, not a fallback.
+          matchReason: pairs[bestPairIdx].matchReason || 'trio',
+        };
+      } else {
+        byeParticipants.push(leftover.userId);
+        byeParticipant = leftover.userId;
+        logger.info({ roundNumber, leftover: leftover.userId },
+          'Odd person out is kept apart from someone in every pair — bye this round');
+      }
     } else if (stillUnmatched.length > 1) {
       // Multiple unmatched — all unique pairs exhausted, everyone gets bye
       for (const u of stillUnmatched) {
@@ -804,6 +826,21 @@ export class MatchingEngineV1 implements IMatchingEngine {
     const setB = new Set(b.map((s) => s.toLowerCase()));
     return a.filter((item) => setB.has(item.toLowerCase())).length;
   }
+}
+
+/**
+ * Part 2 Task 7 — whether two people may meet under this round's group rule, or null when the event has no groups.
+ * Only the event's own group keys count (a key the rules no longer have reads as no group), as the room checker
+ * (shared/src/events/room-check.ts) reads them, so the engine never makes a room the checker would refuse.
+ */
+export function groupGate(config: MatchingConfig, roundNumber: number): ((a: string, b: string) => boolean) | null {
+  if (!config.groupRules) return null;
+  const { rules, groupsByUser } = config.groupRules;
+  const rule = ruleForRound(rules, roundNumber);
+  if (rule.mode === 'open') return null;
+  const known = new Set(rules.groups.map((g) => g.key));
+  const groupsOf = (id: string) => (groupsByUser[id] ?? []).filter((g) => known.has(g));
+  return (a, b) => groupsAllowed(rule, groupsOf(a), groupsOf(b));
 }
 
 // Export singleton instance

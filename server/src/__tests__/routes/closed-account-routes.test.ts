@@ -48,7 +48,7 @@ function answer(sql: string) {
   if (/FROM magic_links WHERE token_hash/.test(sql)) {
     return { rows: [{ id: 'ml-1', email: closedUser.email, expires_at: new Date(Date.now() + 3_600_000), used_at: null }] };
   }
-  if (/SELECT status FROM users WHERE id/.test(sql)) return { rows: [{ status: 'active' }] }; // the admin's own request
+  if (/SELECT status, account_kind FROM users WHERE id/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] }; // the admin's own request
   if (/FROM refresh_tokens WHERE token_hash/.test(sql)) return { rows: [{ id: 'rt-1', revoked_at: null }] };
   if (/FROM users WHERE (email|id) =/.test(sql)) return { rows: [closedUser] };
   return { rows: [], rowCount: 1 };

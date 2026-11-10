@@ -97,7 +97,7 @@ beforeEach(() => {
   mockEmitEntities.mockResolvedValue(undefined);
   mockDb.mockImplementation(async (sql: string) => {
     const text = String(sql).replace(/\s+/g, ' ');
-    if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] }; // authenticate
+    if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] }; // authenticate
     if (/SELECT email FROM users WHERE id = \$1/.test(text)) return { rows: [{ email: 'guest@example.com' }] };
     if (/FROM circle_members WHERE circle_id = \$1 UNION SELECT created_by FROM circles/.test(text)) {
       return { rows: [...new Set([...members, ADMIN])].map(user_id => ({ user_id })) };

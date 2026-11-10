@@ -38,6 +38,7 @@ import { reportProgress, resolveProgressAudience } from './send-progress';
 import { skipReasonFor, type RecipientSkipReason } from './skip-rule';
 import { CLAIM_SQL, PICK_SQL, PROBE_SQL, STALE_AFTER_MINUTES } from './job-queue-sql';
 import { sendBroadcastMessage } from '../dm/dm.service';
+import { BroadcastGuestError } from '../dm/broadcast-errors';
 import { BroadcastBlockedError } from '../dm/broadcast-errors';
 import { broadcastDmMessage } from '../orchestration/handlers/dm-handlers';
 import type { PostEventMessageBucket } from '@rsn/shared';
@@ -68,6 +69,8 @@ interface RecipientRow {
   first_name: string | null;
   /** users.status of the recipient right now: only 'active' accounts are messaged. */
   account_status: string;
+  /** users.account_kind, as of this read: an event guest is skipped (Part 2, Task 3). */
+  account_kind: string;
   /** Whether either person has blocked the other, as of this read. */
   blocked: boolean;
 }
@@ -195,7 +198,7 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
       // Blocks and account status are read here, in the same query, as of this moment: a person who
       // blocked the sender or closed their account since the job was made is skipped, not messaged.
       const batchResult = await query<RecipientRow>(
-        `SELECT r.id, r.user_id, r.bucket, u.first_name, u.status AS account_status,
+        `SELECT r.id, r.user_id, r.bucket, u.first_name, u.status AS account_status, u.account_kind,
                 EXISTS (SELECT 1 FROM user_blocks b
                          WHERE (b.blocker_id = $2 AND b.blocked_id = r.user_id)
                             OR (b.blocker_id = r.user_id AND b.blocked_id = $2)) AS blocked
@@ -251,6 +254,11 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
             // A block landed after this batch was read. Nothing was written, so this is a skip like any
             // other block, not a failure that would end the job "with errors".
             await markSkipped(jobId, row.id, 'blocked');
+            continue;
+          }
+          if (err instanceof BroadcastGuestError) {
+            // The recipient is an event guest (Part 2, Task 3): nothing was written, they are skipped.
+            await markSkipped(jobId, row.id, 'event_guest');
             continue;
           }
           const errMsg = err instanceof Error ? err.message : String(err);

@@ -2,6 +2,7 @@
 // Handles session CRUD, participant registration, and session state management.
 
 import { v4 as uuid } from 'uuid';
+import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
@@ -10,16 +11,25 @@ import {
   UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType, PodStatus,
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
   liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS, type SessionCircle,
+  type EventPublication,
+  type AdmittedVia,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import { activeMemberSql } from '../users/active-member';
+import { assertGuestMayRegister } from './guest-registration';
 import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-access';
 import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
 import { assertVideoRoom } from './video-room';
 import { LIVE_STATUSES, tokenMainRoomOf } from './main-room';
-import { canRegister, publicEventsSql, readEventAccessFacts, visibleEventsSql } from './event-access';
+import {
+  admittedViaOf, archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, runsEvent, visibleEventsSql,
+} from './event-access';
+import { applyRegistrationGroups } from './event-groups.service';
+import { ensureCallCode } from './call-link.service';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
+import { notifyEventRescheduled } from './event-notices';
+import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
 
@@ -32,6 +42,12 @@ const SESSION_COLUMNS = `
   event_format AS "format",
   visibility,
   circle_id AS "circleId",
+  publication,
+  published_at AS "publishedAt",
+  registration_opens_at AS "registrationOpensAt",
+  archived_at AS "archivedAt",
+  cancelled_at AS "cancelledAt",
+  cancel_reason AS "cancelReason",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
@@ -141,10 +157,16 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   const visibility = input.visibility ?? (circle ? 'private' : null);
 
   const sessionId = uuid();
+  // Part 2 Task 2 (D1): a draft is seen only by the people who run it until it is published. Production's form sends
+  // neither field: the event is published at once, as today, and registration opens with it.
+  const publication: EventPublication = input.publication ?? 'published';
+  const registrationOpensAt = input.registrationOpensAt ?? null;
 
   const result = await query<Session>(
-    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility, circle_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility, circle_id,
+                           publication, published_at, registration_opens_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+             $11, CASE WHEN $11::text = 'published' THEN NOW() END, $12)
      RETURNING ${SESSION_COLUMNS}`,
     [
       sessionId,
@@ -158,6 +180,8 @@ export async function createSession(userId: string, input: CreateSessionInput, u
       // T11 (1 Nov 2026): who can join. Production's form sends none: NULL, the event follows its pod as before.
       visibility,
       circle?.id ?? null,
+      publication,
+      registrationOpensAt,
     ]
   );
 
@@ -168,8 +192,16 @@ export async function createSession(userId: string, input: CreateSessionInput, u
     [sessionId, userId]
   );
 
-  // The circle's members are rung (no email) and their pages told.
-  if (circle) await announceCircleEvent({ sessionId, actorId: userId, circle });
+  // Part 2 Task 6: the event's RSN Call link exists from the start. Best-effort: a failure here never undoes the
+  // event, and the link's first read gives it a code instead (ensureCallCode).
+  try {
+    await ensureCallCode(sessionId);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'createSession: call code not set yet; the first read of the link sets it');
+  }
+
+  // The circle's members are rung (no email) and their pages told. A draft rings nobody: publishing it does.
+  if (circle && publication === 'published') await announceCircleEvent({ sessionId, actorId: userId, circle });
 
   logger.info({ sessionId, podId: input.podId, userId, circleId: circle?.id }, 'Session created');
   return result.rows[0];
@@ -300,7 +332,22 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     values
   );
 
-  if (circleChanges) await announceCircleEvent({ sessionId, actorId: userId, circle: namedCircle, previousCircleId });
+  // A draft's circle is told nothing yet (Part 2 Task 2): publishing it rings the circle it names then.
+  if (circleChanges && session.publication !== 'draft') {
+    await announceCircleEvent({ sessionId, actorId: userId, circle: namedCircle, previousCircleId });
+  }
+
+  // Part 2 Task 10: a published event whose start moved tells the people who hold a place, except whoever moved it.
+  // A draft has told nobody, so it moves quietly. Dark until EVENT_COMMS is 'on' (the notice checks), and never the
+  // reason this edit waits or fails: it sends in the background and logs what it cannot send.
+  // An event given its first time (no previous start) is not a move: nobody is told "it was ..."; the reminders cover it.
+  // session.publication comes from SESSION_COLUMNS in getSessionById above, so a draft never gets here.
+  const movedTo = result.rows[0].scheduledAt;
+  const movedFrom = session.scheduledAt;
+  if (session.publication === 'published' && input.scheduledAt && movedFrom && movedTo
+    && new Date(movedTo).getTime() !== new Date(movedFrom).getTime()) {
+    void notifyEventRescheduled(sessionId, new Date(movedFrom), new Date(movedTo), userId);
+  }
 
   return result.rows[0];
 }
@@ -312,10 +359,20 @@ export async function listSessions(params: {
   status?: SessionStatus;
   page?: number;
   pageSize?: number;
+  /** Part 2 Task 2: who is asking. The route always passes it; a pod's list is then held to the lifecycle rule below. */
+  viewerId?: string;
+  /** Part 2 Task 2: the viewer is a platform admin, who sees every event, drafts included, in every list. */
+  viewerIsAdmin?: boolean;
+  /**
+   * Part 2 Task 2: the archived events instead of the default list. A member gets the ones they ran or held a place
+   * in; an admin gets every archived event.
+   */
+  archived?: boolean;
 }): Promise<{ sessions: Session[]; total: number }> {
   const page = params.page || 1;
   const pageSize = Math.min(params.pageSize || 20, 100);
   const offset = (page - 1) * pageSize;
+  const archived = params.archived === true;
 
   let whereClause = 'WHERE 1=1';
   const values: unknown[] = [];
@@ -325,18 +382,31 @@ export async function listSessions(params: {
     whereClause += ` AND s.pod_id = $${paramIdx}`;
     values.push(params.podId);
     paramIdx++;
+    // Part 2 Task 2 (D1): a member reading a pod's events sees no one else's draft and no archived event (unless they
+    // asked for the archived ones they took part in). An admin's pod list is today's, archived filter aside.
+    if (params.viewerId && !params.viewerIsAdmin) {
+      whereClause += ` AND ${archived ? archivedEventsSql('s', `$${paramIdx}`) : eventListedForSql('s', `$${paramIdx}`)}`;
+      values.push(params.viewerId);
+      paramIdx++;
+    } else if (archived) {
+      whereClause += ' AND s.archived_at IS NOT NULL';
+    }
   } else if (params.isAdmin) {
-    // Admins see all sessions across all pods
+    // Admins see all sessions across all pods (Part 2 Task 2: drafts and archived ones too, or only the archived ones)
+    if (archived) whereClause += ' AND s.archived_at IS NOT NULL';
   } else if (params.userId) {
     // T2 (1 Nov 2026), D1: the events this member may open, and only those (canViewSession's rule). An
     // invite-only pod's events were listed to everyone, who were then refused on open. T11: an event with its own
     // visibility follows it (a private one is listed only to its audience, invitees and participants); NULL as T2.
-    whereClause += ` AND ${visibleEventsSql('s', `$${paramIdx}`)}`;
+    // Part 2 Task 2: visibleEventsSql leaves out other people's drafts and every archived event; the archived list is
+    // the archived events they ran or held a place in.
+    whereClause += ` AND ${archived ? archivedEventsSql('s', `$${paramIdx}`) : visibleEventsSql('s', `$${paramIdx}`)}`;
     values.push(params.userId);
     paramIdx++;
   } else {
-    // Nobody asking: only public pods' events (D1: an invite-only pod's events open to nobody outside it)
-    whereClause += ` AND ${publicEventsSql('s')}`;
+    // Nobody asking: only public pods' events (D1: an invite-only pod's events open to nobody outside it). Nobody
+    // asking has taken part in nothing, so has no archived list.
+    whereClause += archived ? ' AND FALSE' : ` AND ${publicEventsSql('s')}`;
   }
 
   if (params.status) {
@@ -360,6 +430,8 @@ export async function listSessions(params: {
             s.event_format AS "format",
             s.visibility,
             s.circle_id AS "circleId",
+            s.publication, s.registration_opens_at AS "registrationOpensAt",
+            s.archived_at AS "archivedAt", s.cancelled_at AS "cancelledAt",
             p.name AS "podName",
             u.display_name AS "hostDisplayName"
      FROM sessions s
@@ -409,15 +481,26 @@ export async function registerParticipant(
   // that asks for approval takes them (a shared link records who used it only after the registration).
   // T11 (1 Nov 2026): `approvedRequest` says the host has approved this person's request to join an event that asks
   // for approval (the approve route), so that event takes them; capacity and their own row still decide.
-  options?: { personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean },
+  // 10 Nov 2026 spec, Part 2 Task 5: `groupKeys` is the person's answer to an event's required group question,
+  // written as their own choice in this transaction. An event without groups ignores it.
+  // Part 2 Task 6: `arrivedThroughCallLink` says the person is entering through this event's own RSN Call link
+  // (call-entry.service's enterCall, the only caller that sets it): an event guest may then ask for a place here.
+  options?: {
+    personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean; groupKeys?: string[];
+    arrivedThroughCallLink?: boolean;
+  },
 ): Promise<SessionParticipant & { isNewRegistration: boolean }> {
   const invitedAt = options?.personalInviteCreatedAt ?? null;
   const viaInvite = !!options?.viaInvite || !!invitedAt;
   const participant = await transaction(async (client) => {
     // Read session without lock — ON CONFLICT handles concurrent inserts safely.
     // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously.
-    const sessionResult = await client.query<Session>(
-      `SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = $1`,
+    // Part 2 Task 5: whether the event has matching groups is read in the same row, so an event without them
+    // (every event before groups existed) makes exactly the reads it always made.
+    const sessionResult = await client.query<Session & { hasEventGroups?: boolean }>(
+      `SELECT ${SESSION_COLUMNS},
+              EXISTS (SELECT 1 FROM event_groups eg WHERE eg.session_id = sessions.id) AS "hasEventGroups"
+         FROM sessions WHERE id = $1`,
       [sessionId]
     );
     if (sessionResult.rows.length === 0) {
@@ -425,21 +508,50 @@ export async function registerParticipant(
     }
     const session = sessionResult.rows[0];
 
+    // Part 2 Task 2 (D1): a draft takes nobody but the people who run it, and answers everyone else exactly as an id
+    // that does not exist. An event whose registration opens later holds back everyone it would take, at any
+    // visibility, until then. A published event with no opening time (every existing one) reads nothing more here.
+    const opensLater = !!session.registrationOpensAt && new Date(session.registrationOpensAt).getTime() > Date.now()
+      && session.status !== SessionStatus.COMPLETED && session.status !== SessionStatus.CANCELLED;
+    if (session.publication === 'draft' || opensLater) {
+      const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
+      if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+      if (facts.publication === 'draft' && !runsEvent(facts, userRole)) {
+        throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+      }
+      // Fix round 1 (review M4): the whole rule, so someone the event would refuse anyway (private, a closed circle, an
+      // approval event, a private pod) hears that refusal, and only someone it would take hears the opening time.
+      if (opensLater) {
+        const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
+        if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
+      }
+    }
+
     // Check session is open for registration
     const closedStatuses: SessionStatus[] = [SessionStatus.COMPLETED, SessionStatus.CANCELLED];
     if (closedStatuses.includes(session.status)) {
       throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'This event is no longer accepting participants');
     }
 
+    // Part 2, Task 3 (fix round 1): an event guest takes a place only where guestMayRegister allows (the event they
+    // came in through, or one where they already hold a row), on every way in. Members pass on the cached gate.
+    // Part 2, Task 4: an event with an admission mode also lets in a guest it has entitled (guestMayRegister c).
+    const { isGuest } = await assertGuestMayRegister((text, params) => client.query(text, params), sessionId, userId,
+      { approvedRequest: !!options?.approvedRequest, arrivedThroughCallLink: !!options?.arrivedThroughCallLink });
+
     const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
 
     // T11 (1 Nov 2026): an event with its own visibility follows the one rule (event-access.ts) and never adds
     // anyone to its pod. A NULL event follows its pod's rules below, exactly as before.
+    // Part 2 Task 4: an admission mode (never on an event without a visibility: sessions_admission_needs_visibility) is
+    // part of the same rule; what gave the place is recorded below.
+    let admittedVia: AdmittedVia | null = null;
     if (session.visibility) {
       const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
       if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
       const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
       if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
+      admittedVia = admittedViaOf(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
     }
 
     // Enforce pod visibility rules for session access (admin/super_admin bypass)
@@ -456,14 +568,17 @@ export async function registerParticipant(
       const isMember = memberResult.rows.length > 0;
 
       if (podVisibility === 'public' && !isMember) {
-        // Auto-add to pod when registering for a session in a public pod
-        try {
-          await client.query(
-            `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
-             ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
-            [session.podId, userId]
-          );
-        } catch { /* ignore if already member */ }
+        // Auto-add to pod when registering for a session in a public pod. Never an event guest (Part 2, Task 3):
+        // they take the event's place only, and never become a pod member.
+        if (!isGuest) {
+          try {
+            await client.query(
+              `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+               ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
+              [session.podId, userId]
+            );
+          } catch { /* ignore if already member */ }
+        }
       } else if ((podVisibility === 'invite_only' || podVisibility === 'private') && !isMember) {
         // For private/invite-only pods, only allow if user has a valid (accepted) invite
         // User must go through acceptInvite() first which adds them to pod + marks invite
@@ -514,6 +629,20 @@ export async function registerParticipant(
     const readmits = existing.rows[0]?.status === 'removed' && liftedByPersonalInvite(existing.rows[0].left_at, invitedAt);
     if (full && !readmits) {
       throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
+    }
+
+    // Part 2 Task 5: an event with matching groups writes the group a person chose with their registration. It
+    // refuses only a person's own first registration that chose none, because they can choose in the same request
+    // (fix round 1, controller ruling: an attendee is never stranded). An approved request, an invite accepted,
+    // someone coming back to a place they held, and anyone the organiser adds are let in without a group and wait
+    // in the board's basket for the organiser. A place someone already holds, and a removal, are answered below
+    // as before. Only an event with groups reads further.
+    const heldStatus = existing.rows[0]?.status;
+    const givesPlace = !heldStatus
+      || (!['registered', 'checked_in', 'in_lobby', 'in_round'].includes(heldStatus) && (heldStatus !== 'removed' || readmits));
+    if (session.hasEventGroups && givesPlace) {
+      const ownFirstPlace = !heldStatus && !viaInvite && !options?.approvedRequest;
+      await applyRegistrationGroups(client, sessionId, userId, userRole, options?.groupKeys, ownFirstPlace);
     }
 
     if (existing.rows.length > 0) {
@@ -592,6 +721,15 @@ export async function registerParticipant(
       participant = { ...existingRow.rows[0], isNewRegistration: false };
     } else {
       participant = { ...insertResult.rows[0], isNewRegistration: true };
+    }
+
+    // Part 2 Task 4: what gave this place on an event with an admission mode. The first answer is kept (a later
+    // re-register after leaving keeps how they first came in). An event with no mode writes nothing, as before.
+    if (admittedVia) {
+      await client.query(
+        `UPDATE session_participants SET admitted_via = $3 WHERE session_id = $1 AND user_id = $2 AND admitted_via IS NULL`,
+        [sessionId, userId, admittedVia],
+      );
     }
 
     // Sync invite status: if user had a pending invite for this session, mark it accepted
@@ -941,6 +1079,10 @@ export async function deleteSession(sessionId: string, userId: string, userRole?
   // Admin/super_admin can delete any session; otherwise only session host
   const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
   if (!isAdmin && session.hostUserId !== userId) {
+    // Part 2 Task 2, fix round 1: someone who does not run a draft is answered as for an id that names nothing.
+    if (session.publication === 'draft' && !(await isCohostOf(sessionId, userId))) {
+      throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+    }
     throw new ForbiddenError('Only the host of the event can delete it');
   }
 
@@ -959,17 +1101,72 @@ export async function deleteSession(sessionId: string, userId: string, userRole?
     );
   }
 
-  // Soft-delete: mark as cancelled
-  await query(`UPDATE sessions SET status = 'cancelled', updated_at = NOW() WHERE id = $1`, [sessionId]);
+  // Soft-delete: mark as cancelled. Part 2 Task 2, fix round 1: the same record as the lifecycle's cancel (when and by
+  // whom, and the event.cancelled audit row, in one transaction), so every cancellation reads the same in the trail.
+  // It still sends no notice (controller ruling, 11 Nov 2026: production's client uses this path, and ringing and
+  // emailing the attendees from it is the owner's decision); the notices stay on POST /sessions/:id/cancel. Its other
+  // behaviour is as before, a completed event included. An event already cancelled is answered as before and keeps
+  // its first cancellation's stamp and row.
+  const cancelledNow = await transaction(async (client) => {
+    const updated = await client.query<{ id: string }>(
+      `UPDATE sessions SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2, updated_at = NOW()
+        WHERE id = $1 AND status <> 'cancelled'
+        RETURNING id`,
+      [sessionId, userId],
+    );
+    if (updated.rows.length === 0) return false;
+    await recordEventAudit({
+      sessionId, actorId: userId, action: 'event.cancelled', automatic: false,
+      before: { status: session.status }, after: { status: SessionStatus.CANCELLED, via: 'DELETE /sessions/:id' },
+    }, client);
+    return true;
+  });
+  if (cancelledNow) await emitEventAuditChanged(sessionId);
   logger.info({ sessionId, userId }, 'Session deleted (cancelled)');
+}
+
+/** Whether the person is one of the event's co-hosts (session_cohosts). */
+async function isCohostOf(sessionId: string, userId: string): Promise<boolean> {
+  const found = await query(`SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`, [sessionId, userId]);
+  return found.rows.length > 0;
 }
 
 // ─── Hard Delete Session (super_admin only) ─────────────────────────────────
 
-export async function hardDeleteSession(sessionId: string): Promise<void> {
+/** What the audit trail keeps of an event deleted for good (Part 2 Task 2): enough to say what it was and who was in it. */
+export interface DeletedEventSnapshot {
+  title: string;
+  scheduledAt: string | null;
+  hostUserId: string | null;
+  podId: string | null;
+  participantUserIds: string[];
+  status: string;
+}
+
+/**
+ * Deletes the event and everything that hangs off it, in one transaction. `audit` (Part 2 Task 2): the person deleting
+ * it; an `event.deleted` row with the event's snapshot is written in the same transaction, so the trail outlives the
+ * event (audit_log has no foreign key on the event) and a delete that fails leaves no row saying it happened.
+ * `refuseWhileLive`: the lifecycle's delete, read under the same row lock, refuses an event that has gone live.
+ */
+export async function hardDeleteSession(
+  sessionId: string,
+  audit?: { actorId: string; refuseWhileLive?: boolean },
+): Promise<void> {
   await getSessionById(sessionId); // Verify exists
 
   await transaction(async (client) => {
+    if (audit) {
+      const snapshot = await readDeletedEventSnapshot(client, sessionId);
+      if (!snapshot) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+      if (audit.refuseWhileLive && LIVE_STATUSES.includes(snapshot.status as SessionStatus)) {
+        throw new ConflictError(ErrorCodes.SESSION_IN_PROGRESS, 'This event is live. End it from the live event first, then delete it.');
+      }
+      await recordEventAudit({
+        sessionId, actorId: audit.actorId, action: 'event.deleted', automatic: false,
+        subjectUserIds: snapshot.participantUserIds, before: snapshot,
+      }, client);
+    }
     await client.query(`DELETE FROM ratings WHERE match_id IN (SELECT id FROM matches WHERE session_id = $1)`, [sessionId]);
     await client.query(`DELETE FROM matches WHERE session_id = $1`, [sessionId]);
     await client.query(`DELETE FROM session_participants WHERE session_id = $1`, [sessionId]);
@@ -978,6 +1175,34 @@ export async function hardDeleteSession(sessionId: string): Promise<void> {
   });
 
   logger.info({ sessionId }, 'Session permanently deleted by admin');
+}
+
+/** The event as the audit trail keeps it once it is gone, read under a row lock in the deleting transaction. */
+async function readDeletedEventSnapshot(
+  client: PoolClient,
+  sessionId: string,
+): Promise<DeletedEventSnapshot | null> {
+  const found = await client.query<{
+    title: string; scheduled_at: Date | null; host_user_id: string | null; pod_id: string | null; status: string;
+    participant_user_ids: string[] | null;
+  }>(
+    `SELECT s.title, s.scheduled_at, s.host_user_id, s.pod_id, s.status::text AS status,
+            ARRAY(SELECT sp.user_id FROM session_participants sp WHERE sp.session_id = s.id ORDER BY sp.created_at) AS participant_user_ids
+       FROM sessions s
+      WHERE s.id = $1
+      FOR UPDATE OF s`,
+    [sessionId],
+  );
+  const row = found.rows[0];
+  if (!row) return null;
+  return {
+    title: row.title,
+    scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
+    hostUserId: row.host_user_id,
+    podId: row.pod_id,
+    participantUserIds: row.participant_user_ids ?? [],
+    status: row.status,
+  };
 }
 
 /**

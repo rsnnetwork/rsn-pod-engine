@@ -56,22 +56,53 @@ test.beforeAll(async () => {
     numberOfRounds: 1, roundDurationSeconds: 120, ratingWindowSeconds: 20,
   });
   sessionId = sess.id;
+  console.log(`throwaway ids (if killed, remove exactly these): users ${[host.id, ...P.map(p => p.id)].join(', ')}, pod ${podId}, session ${sessionId}`);
   await Promise.all(P.map(u => registerForSession(u, sessionId)));
   browser = await chromium.launch({ headless: false, args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--start-maximized'] });
 });
 
+// The server is still finishing the live event for a moment after the spec ends, and writes rows that reference the
+// session as participants leave. A delete that loses that race is retried, never swallowed: swallowing it left the
+// users delete to fail on pods_created_by_fkey and the throwaway accounts, pod and event live in production.
+async function deleteWithRetry(label: string, sql: string, params: unknown[]): Promise<void> {
+  const tries = 5;
+  for (let i = 1; ; i++) {
+    try { await pool.query(sql, params); return; }
+    catch (e) {
+      if (i === tries) throw new Error(`${label} still failing after ${tries} tries: ${(e as Error).message}`);
+      await wait(2000);
+    }
+  }
+}
+
 test.afterAll(async () => {
   try { hostSock?.close(); } catch {}
   try { await browser?.close(); } catch {}
-  const ids = [host?.id, ...P.map(p => p.id)].filter(Boolean);
-  if (sessionId) { await pool.query(`DELETE FROM invites WHERE session_id = $1`, [sessionId]).catch(() => {}); await pool.query(`DELETE FROM sessions WHERE id = $1`, [sessionId]).catch(() => {}); }
-  if (podId) { await pool.query(`DELETE FROM pod_members WHERE pod_id = $1`, [podId]).catch(() => {}); await pool.query(`DELETE FROM pods WHERE id = $1`, [podId]).catch(() => {}); }
-  if (ids.length) {
-    await pool.query(`DELETE FROM encounter_history WHERE user_a_id = ANY($1) OR user_b_id = ANY($1)`, [ids]).catch(() => {});
-    await pool.query(`DELETE FROM audit_log WHERE actor_id = ANY($1)`, [ids]).catch(() => {});
-    await pool.query(`DELETE FROM refresh_tokens WHERE user_id = ANY($1)`, [ids]).catch(() => {});
-    const del = await pool.query(`DELETE FROM users WHERE id = ANY($1) RETURNING id`, [ids]);
-    console.log(`Cleanup: ${del.rows.length} users, session ${sessionId}, pod ${podId}`);
+  const ids = [host?.id, ...P.map(p => p.id)].filter((x): x is string => !!x);
+  const remove = `remove exactly these: users ${ids.join(', ') || '-'}, pod ${podId || '-'}, session ${sessionId || '-'}`;
+  try {
+    // FK-safe order: the event's rows, then the event, then the pod's rows, then the pod, then the users' rows, then the users.
+    if (sessionId) {
+      await deleteWithRetry('delete session', `DELETE FROM invites WHERE session_id = $1`, [sessionId]);
+      await deleteWithRetry('delete session', `DELETE FROM encounter_history WHERE last_session_id = $1`, [sessionId]);
+      await deleteWithRetry('delete session', `DELETE FROM sessions WHERE id = $1`, [sessionId]);
+    }
+    if (podId) {
+      await deleteWithRetry('delete pod', `DELETE FROM pod_members WHERE pod_id = $1`, [podId]);
+      await deleteWithRetry('delete pod', `DELETE FROM pods WHERE id = $1`, [podId]);
+    }
+    if (ids.length) {
+      await deleteWithRetry('delete user rows', `DELETE FROM encounter_history WHERE user_a_id = ANY($1) OR user_b_id = ANY($1)`, [ids]);
+      await deleteWithRetry('delete user rows', `DELETE FROM audit_log WHERE actor_id = ANY($1)`, [ids]);
+      await deleteWithRetry('delete user rows', `DELETE FROM refresh_tokens WHERE user_id = ANY($1)`, [ids]);
+      await deleteWithRetry('delete user rows', `DELETE FROM notifications WHERE user_id = ANY($1)`, [ids]);
+      const del = await pool.query(`DELETE FROM users WHERE id = ANY($1) RETURNING id`, [ids]);
+      console.log(`Cleanup: ${del.rows.length} users, session ${sessionId}, pod ${podId}`);
+      if (del.rows.length < ids.length) throw new Error(`${ids.length - del.rows.length} throwaway user(s) survived`);
+    }
+  } catch (e) {
+    console.error(`CLEANUP FAILED (${(e as Error).message}) - ${remove}`);
+    throw e;
   }
 });
 

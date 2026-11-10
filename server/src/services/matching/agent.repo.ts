@@ -69,6 +69,9 @@ function mapAgent(r: AgentRow): MatchingAgent {
  * card read "1 potential match" while the agent it summarised held two people —
  * exactly the confusion Ali hit on 6 Aug.
  *
+ * An introduction counts while it is pending or accepted (10 Nov 2026): a withdrawn one (cancelled) is as if it
+ * had never been sent, and a declined one is not on the agent at all (listMatches).
+ *
  * `negate` picks which side of the introduction test the count lands on. Both
  * ignore deactivated members, which listMatches has always filtered — counting
  * them was how the dashboard and the agent screen came to disagree — and, since
@@ -84,7 +87,7 @@ const countExpr = (agent: string, negate: boolean) => `
     WHERE m.agent_id = ${agent}.id
       AND ${negate ? 'NOT EXISTS' : 'EXISTS'} (
         SELECT 1 FROM user_pokes p
-         WHERE p.status <> 'declined'
+         WHERE p.status IN ('pending', 'accepted')
            -- 22 Sep 2026: "already asked" is PER PERSON, reversing the 7 Sep
            -- rule. Per-agent could not be told the truth: only ONE pending
            -- request may exist per pair (migration 047), so a second search
@@ -223,7 +226,7 @@ export async function replaceMatches(agentId: string, matches: AgentMatchInput[]
         AND NOT EXISTS (
           SELECT 1 FROM user_pokes p, matching_agents a
            WHERE a.id = $1
-             AND p.status <> 'declined'
+             AND p.status IN ('pending', 'accepted')
              -- 8 Sep 2026 (Ali): stickiness is PER-AGENT too. Only someone asked
              -- THROUGH this agent stays pinned to it; a person asked via another
              -- agent is kept here only if they still score-match (via the fresh
@@ -313,6 +316,8 @@ export async function listMatches(agentId: string, limit = 25): Promise<StoredAg
             -- calling them fresh was offering a button that could not work.
             WHERE ((pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
                OR (pk.sender_id = m.candidate_user_id AND pk.recipient_id = a.user_id))
+              -- 10 Nov 2026: a withdrawn request is as if it had never been sent, so the person is fresh again.
+              AND pk.status IN ('pending', 'accepted', 'declined')
             ORDER BY pk.created_at DESC
             LIMIT 1
          ) p ON TRUE

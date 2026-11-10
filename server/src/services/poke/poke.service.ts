@@ -11,9 +11,9 @@ import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import config from '../../config';
-import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
+import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
-import type { MeetingFormat, MeetingRequestText } from '@rsn/shared';
+import type { MeetingFormat, MeetingRequestStatus, MeetingRequestText } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import * as emailService from '../email/email.service';
 import * as prefsService from '../notification-prefs/notification-prefs.service';
@@ -108,7 +108,7 @@ export interface UserPoke extends MeetingRequestText {
   id: string;
   senderId: string;
   recipientId: string;
-  status: 'pending' | 'accepted' | 'declined';
+  status: MeetingRequestStatus;
   /** The note and REASON's line run together, as clients before 30 Oct 2026 read them (combinedRequestMessage). */
   message: string | null;
   respondedAt: Date | null;
@@ -237,6 +237,11 @@ async function claimRequest(
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, `Only the person this meeting request was sent to can ${verb} it.`);
   }
   if (row.status === answer) return { won: false, row };
+  // 10 Nov 2026: the sender withdrew it (withdrawPoke). Nothing is left to answer, and it is no answer of this
+  // member's, so it is said as what happened. details.status tells a client it from the two answers.
+  if (row.status === 'cancelled') {
+    throw new ConflictError(ErrorCodes.MEETING_REQUEST_ALREADY_ANSWERED, 'They withdrew this meeting request.', { status: row.status });
+  }
   // An accepted request connected the two, whoever's accept it was: this member's own, or a match
   // that closed it (the other person accepted this member's request, or asked them back). "You
   // already accepted this request." was untrue in that second case; this is true in both.
@@ -394,9 +399,9 @@ export async function sendPoke(
       }
 
       // Recipient existence check (avoid silent FK errors). T2 (1 Nov 2026): an account an admin removed, suspended
-      // or banned cannot be asked either.
+      // or banned cannot be asked either. Part 2, Task 3: nor can an event guest, who is not a member yet.
       const recipientExists = await client.query<{ id: string }>(
-        `SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')}`, [recipientId],
+        `SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')} AND account_kind = 'member'`, [recipientId],
       );
       if (recipientExists.rows.length === 0) {
         throw new NotFoundError('User', undefined, 'That member is no longer available.');
@@ -814,6 +819,77 @@ export async function declinePoke(pokeId: string, userId: string): Promise<UserP
   return toUserPoke(row);
 }
 
+/** What the sender is told when the request they try to withdraw is no longer waiting, by where it stands. */
+const NOT_WITHDRAWABLE: Record<Exclude<MeetingRequestStatus, 'pending'>, string> = {
+  cancelled: 'You already withdrew this request.',
+  accepted: "They already accepted your request, so you're connected.",
+  declined: 'They already answered this request.',
+};
+
+/**
+ * Withdraw a meeting request (10 Nov 2026, Stefan: "if I have ALREADY asked them, why is that not shown?"; every
+ * place that offers "I want to meet" now shows "Request sent", with "Withdraw request" beside it). Only the sender,
+ * and only while it is still pending. A claim like an answer's (claimRequest): under the pair's lock, the UPDATE
+ * matches only a pending request this member sent, so a withdraw racing an accept or a decline changes the row once,
+ * and the loser is told where it stands. Withdrawing twice is a 409, as answering the other way is.
+ *
+ * The request becomes 'cancelled', which every reader treats as no request at all (not a "no"): the sender may ask
+ * again (047's unique index covers pending rows only), and the person is back to "I want to meet" everywhere. The
+ * recipient's bell row for it is deleted while it is unread, so their unread count drops; a row they already read
+ * stays and draws "No longer available" (notification-list.service). Nobody is notified: the recipient's screens
+ * just stop offering a request that is gone, through the same tags a sent request rings.
+ */
+export async function withdrawPoke(pokeId: string, senderId: string): Promise<void> {
+  const recipientId = await transaction(async (client) => {
+    const pair = await client.query<{ recipient_id: string }>(
+      `SELECT recipient_id FROM user_pokes WHERE id = $1 AND sender_id = $2`,
+      [pokeId, senderId],
+    );
+    if (pair.rows[0]) await lockPair(client, senderId, pair.rows[0].recipient_id);
+
+    const claimed = await client.query<{ id: string; recipient_id: string }>(
+      `UPDATE user_pokes SET status = 'cancelled', cancelled_at = NOW()
+        WHERE id = $1 AND sender_id = $2 AND status = 'pending'
+        RETURNING id, recipient_id`,
+      [pokeId, senderId],
+    );
+    const row = claimed.rows[0];
+    if (row) {
+      // Found by the link sendPoke wrote, from the request's own id as stored (the path's may be in capitals).
+      await client.query(
+        `DELETE FROM notifications
+          WHERE user_id = $1 AND type = 'poke' AND link = $2 AND is_read = FALSE`,
+        [row.recipient_id, requestBellLink(row.id)],
+      );
+      return row.recipient_id;
+    }
+
+    const current = await client.query<{ sender_id: string; status: MeetingRequestStatus }>(
+      `SELECT sender_id, status FROM user_pokes WHERE id = $1`,
+      [pokeId],
+    );
+    const found = current.rows[0];
+    if (!found) throw new NotFoundError('Poke', undefined, "We couldn't find that meeting request.");
+    if (found.sender_id !== senderId) {
+      throw new ForbiddenError('Only the person who sent this meeting request can withdraw it.');
+    }
+    const status = found.status === 'pending' ? 'cancelled' : found.status;
+    throw new ConflictError(ErrorCodes.MEETING_REQUEST_ALREADY_ANSWERED, NOT_WITHDRAWABLE[status], { status });
+  });
+  logger.info({ pokeId, senderId, recipientId }, 'Meeting request withdrawn');
+
+  // The tags a sent request rings, for both members, and the recipient's bell: its row is gone or now says so.
+  try {
+    const { io } = await import('../../index');
+    const { emitEntities } = await import('../../realtime/emit');
+    const { E } = await import('../../realtime/entities');
+    await Promise.all([senderId, recipientId].map((id) =>
+      emitEntities(io, [id], [E.user(id), E.userInvites(id), E.userNotifications(id)])));
+  } catch (err) {
+    logger.warn({ err, pokeId }, 'Withdrawn request entity fanout failed (non-fatal)');
+  }
+}
+
 /**
  * List pending pokes I've received. Includes sender display info so the
  * inbox UI can render each one with avatar + name.
@@ -858,7 +934,8 @@ export async function listReceivedPokes(userId: string): Promise<PokeWithSender[
 
 export interface PokeWith extends MeetingRequestText {
   id: string;
-  status: 'pending' | 'accepted' | 'declined';
+  /** Never 'cancelled': getPokeWith skips a withdrawn request, as if it had never been sent. */
+  status: Exclude<MeetingRequestStatus, 'cancelled'>;
   /** True when the caller sent it, false when they received it. */
   sentByMe: boolean;
 }
@@ -866,8 +943,9 @@ export interface PokeWith extends MeetingRequestText {
 /** The SQL that names a request's recipient for requestText: their first name, else their display name. */
 const RECIPIENT_NAME_SQL = `(SELECT COALESCE(NULLIF(TRIM(r.first_name), ''), r.display_name) FROM users r WHERE r.id = p.recipient_id)`;
 
-/** Where a request stands, plus the thread if it turned into one. */
-export interface PokeState extends PokeWith {
+/** Where a request stands, plus the thread if it turned into one. One request by id can be a withdrawn one. */
+export interface PokeState extends Omit<PokeWith, 'status'> {
+  status: MeetingRequestStatus;
   otherUserId: string;
   /** Set once accepted, so a link to an answered request can go somewhere. */
   conversationId: string | null;
@@ -915,6 +993,9 @@ export async function getPokeState(pokeId: string, userId: string): Promise<Poke
  * direction. The profile showed a dead "Message — meet first" button to
  * someone who had ALREADY been asked (or who had asked YOU), which reads as a
  * wall when the way through is right there. The page needs the state to say so.
+ *
+ * A withdrawn request (10 Nov 2026) is skipped: it is as if it had never been sent, so the newest request still
+ * standing is the answer, or none.
  */
 export async function getPokeWith(userId: string, otherId: string): Promise<PokeWith | null> {
   const r = await query<{
@@ -923,8 +1004,9 @@ export async function getPokeWith(userId: string, otherId: string): Promise<Poke
   }>(
     `SELECT p.id, p.status, p.sender_id, p.message, p.reason_line, ${RECIPIENT_NAME_SQL} AS recipient_name
        FROM user_pokes p
-      WHERE (p.sender_id = $1 AND p.recipient_id = $2)
-         OR (p.sender_id = $2 AND p.recipient_id = $1)
+      WHERE ((p.sender_id = $1 AND p.recipient_id = $2)
+          OR (p.sender_id = $2 AND p.recipient_id = $1))
+        AND p.status IN ('pending', 'accepted', 'declined')
       ORDER BY p.created_at DESC
       LIMIT 1`,
     [userId, otherId],

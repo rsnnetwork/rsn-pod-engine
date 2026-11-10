@@ -12,3 +12,14 @@ export class BroadcastBlockedError extends AppError {
     super(403, ErrorCodes.AUTH_FORBIDDEN, 'You can no longer message this user');
   }
 }
+
+/**
+ * A broadcast would have reached an event guest (Part 2, Task 3, fix round 1): messages are for members, so nothing
+ * was written and no email goes out. Its own class for the same reason as BroadcastBlockedError: the post-event
+ * worker skips the person instead of recording a failure.
+ */
+export class BroadcastGuestError extends AppError {
+  constructor() {
+    super(403, ErrorCodes.AUTH_FORBIDDEN, 'Messages are for members. This person came to an event as a guest and is not a member yet.');
+  }
+}

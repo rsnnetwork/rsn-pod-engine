@@ -81,7 +81,7 @@ beforeEach(() => {
   mockEmitEntities.mockResolvedValue(undefined);
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
-    if (/SELECT status FROM users/.test(text)) return { rows: [{ status: 'active' }] }; // authenticate
+    if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] }; // authenticate
     // T14: the manager gate reads the circle, then whether the caller made it or is its owner or a moderator.
     if (/SELECT id, name, join_policy, created_by FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(text)) {
       return { rows: [{ id: CIRCLE, name: 'Doctors', join_policy: 'open', created_by: creator }] };

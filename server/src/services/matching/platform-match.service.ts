@@ -510,11 +510,65 @@ type CandidateRow = IntentProfile & {
 };
 
 /**
+ * SQL boolean expression (no leading AND): true when the member and `otherAlias` are NOT
+ * already in touch, so For You has no reason to introduce them. 10 Nov 2026, spec item 5.
+ * The member is already in touch with someone when any of these holds:
+ *  - a direct-message conversation exists for the pair, whichever side deleted it
+ *    (dm_conversations stores the pair with user_a_id < user_b_id);
+ *  - a request between them, in either direction, was ACCEPTED;
+ *  - they have an encounter (met in an event or accepted a request) and no request
+ *    between them is still PENDING.
+ * A PENDING request, in either direction, keeps the person on the page: the card is
+ * badged "Request sent" or shows the request, so the member sees something happened
+ * (the 22 Sep 2026 rule). Accepting writes an encounter row and ends the pending state,
+ * so an accepted person leaves the page; before this the encounter check was
+ * overridden by any non-declined request, which kept accepted people on it.
+ * Declined requests and blocks are separate rules in loadCandidates.
+ */
+export function notAlreadyInTouchSql(memberParam: string, otherAlias: string): string {
+  return `(
+         NOT EXISTS (
+           SELECT 1 FROM dm_conversations dmc
+           WHERE dmc.user_a_id = LEAST(${memberParam}, ${otherAlias}.id)
+             AND dmc.user_b_id = GREATEST(${memberParam}, ${otherAlias}.id))
+         AND NOT EXISTS (
+           SELECT 1 FROM user_pokes ap
+           WHERE ap.status = 'accepted'
+             AND ((ap.sender_id = ${memberParam} AND ap.recipient_id = ${otherAlias}.id)
+               OR (ap.sender_id = ${otherAlias}.id AND ap.recipient_id = ${memberParam})))
+         AND (
+           NOT EXISTS (
+             SELECT 1 FROM encounter_history e
+             WHERE e.user_a_id = LEAST(${memberParam}, ${otherAlias}.id)
+               AND e.user_b_id = GREATEST(${memberParam}, ${otherAlias}.id))
+           OR EXISTS (
+             SELECT 1 FROM user_pokes pp
+             WHERE pp.status = 'pending'
+               AND ((pp.sender_id = ${memberParam} AND pp.recipient_id = ${otherAlias}.id)
+                 OR (pp.sender_id = ${otherAlias}.id AND pp.recipient_id = ${memberParam}))))
+       )`;
+}
+
+/**
+ * SQL boolean expression (no leading AND): true when the member has NOT marked `otherAlias` as someone they
+ * already met outside the platform (already_met, 10 Nov 2026). One-sided: only the marker's own suggestions and
+ * searches skip the person; the person's own are untouched.
+ */
+export function notMarkedMetSql(memberParam: string, otherAlias: string): string {
+  return `NOT EXISTS (
+           SELECT 1 FROM already_met am
+           WHERE am.user_id = ${memberParam} AND am.target_user_id = ${otherAlias}.id)`;
+}
+
+/**
  * Candidates someone can be matched with: active, onboarded, not blocked, not
- * already met, not turned down, and not passed on. Someone they have ASKED
- * stays, carrying where the request got to, so the card can say so instead of
- * the person quietly disappearing (22 Sep 2026). Someone they SAVED stays too,
- * carrying that, so the card can show it (5 Oct 2026).
+ * already in touch (notAlreadyInTouchSql), not turned down, and not passed on.
+ * Someone they have ASKED and who has not answered yet stays, carrying where the
+ * request got to, so the card can say so instead of the person quietly
+ * disappearing (22 Sep 2026). Someone they SAVED stays too, carrying that, so the
+ * card can show it (5 Oct 2026).
+ * The card shows the newest request still standing, pending or accepted (10 Nov 2026): a withdrawn one
+ * (cancelled) is as if it had never been sent, so the person is back to "I want to meet".
  */
 async function loadCandidates(userId: string): Promise<CandidateRow[]> {
   const r = await query<CandidateRow>(
@@ -527,7 +581,7 @@ async function loadCandidates(userId: string): Promise<CandidateRow[]> {
      LEFT JOIN LATERAL (
        SELECT p2.status, p2.sender_id
          FROM user_pokes p2
-        WHERE p2.status <> 'declined'
+        WHERE p2.status IN ('pending', 'accepted')
           AND ((p2.sender_id = $1 AND p2.recipient_id = u.id)
             OR (p2.sender_id = u.id AND p2.recipient_id = $1))
         ORDER BY p2.created_at DESC
@@ -541,24 +595,18 @@ async function loadCandidates(userId: string): Promise<CandidateRow[]> {
        AND u.status = 'active'
        AND u.onboarding_completed = true
        AND u.profile_visible = true
+       -- Part 2, Task 3: members only; an event guest is never listed.
+       AND u.account_kind = 'member'
        -- 5 Oct 2026: Pass means "not relevant" and hides the person from the
        -- member's own suggestions until it is undone. Only the member's OWN
        -- response counts (pr is joined on the member's id), so being passed on
        -- by someone never hides that someone from you. Save keeps the person.
        AND (pr.response IS NULL OR pr.response <> 'passed')
-       -- "Already met" hides people you have genuinely met. Accepting a request
-       -- also writes an encounter row, so without the override below an
-       -- accepted person would disappear the moment they said yes — the same
-       -- trap the searches hit on 8 Sep.
-       AND (
-         NOT EXISTS (
-           SELECT 1 FROM encounter_history e
-           WHERE e.user_a_id = LEAST($1, u.id) AND e.user_b_id = GREATEST($1, u.id))
-         OR EXISTS (
-           SELECT 1 FROM user_pokes ip
-           WHERE ip.status <> 'declined'
-             AND ((ip.sender_id = $1 AND ip.recipient_id = u.id)
-               OR (ip.sender_id = u.id AND ip.recipient_id = $1))))
+       -- 10 Nov 2026 (spec item 5): people the member is already in touch with are not
+       -- introduced again. See notAlreadyInTouchSql for the exact rule.
+       AND ${notAlreadyInTouchSql('$1', 'u')}
+       -- 10 Nov 2026: someone the member marked "Already met" (outside the platform) is not suggested either.
+       AND ${notMarkedMetSql('$1', 'u')}
        -- 22 Sep 2026: only a DECLINED request hides someone. This used to drop
        -- anyone with a request in either direction at any status, so pressing
        -- "I want to meet" made that person vanish off the page — the member
@@ -764,6 +812,7 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
       `SELECT ${PROFILE_COLUMNS}
        FROM users u
        WHERE u.id <> $1 AND u.status = 'active' AND u.onboarding_completed = true
+         AND u.account_kind = 'member'
          AND NOT EXISTS (
            SELECT 1 FROM user_blocks b
            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)

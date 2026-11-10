@@ -149,7 +149,7 @@ const app = createApp();
 beforeEach(() => {
   jest.clearAllMocks();
   // authenticate's status check + any stray db call default to an active user.
-  (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
+  (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
   (intentRepo.markInProgress as jest.Mock).mockResolvedValue(false);
   // Default: no on-file profile data (the pre-existing not_found mapping for
   // none/not_found/failed). Tests that want the Claus-rule partial branch
@@ -1321,8 +1321,8 @@ describe('POST /onboarding/admin/refresh-enrichment', () => {
   describe('E3: fires runEnrichment for the target user and returns 202', () => {
     function mockUsersRow(row: { linkedin_url: string | null; display_name: string | null } | null) {
       (dbQuery as jest.Mock).mockImplementation((sql: string) => {
-        if (/SELECT\s+status\s+FROM\s+users/i.test(sql)) {
-          return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+        if (/SELECT\s+status(?:,\s*account_kind)?\s+FROM\s+users/i.test(sql)) {
+          return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 });
         }
         if (/SELECT\s+linkedin_url,\s*display_name\s+FROM\s+users\s+WHERE\s+id\s*=\s*\$1/i.test(sql.trim())) {
           return Promise.resolve(row ? { rows: [row], rowCount: 1 } : { rows: [], rowCount: 0 });

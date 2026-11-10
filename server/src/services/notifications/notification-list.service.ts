@@ -14,7 +14,8 @@
 // The request is found through the id its link carries (/messages?poke=<id>, REQUEST_BELL_LINK_PATTERN): a link that
 // does not hold a whole UUID matches nothing and reads null, and only a request sent to the bell's owner counts.
 // A request still pending that can no longer be answered is 'gone' (26 Oct 2026), by listReceivedPokes' own rule: its
-// sender's account is not active, or a block stands between the two, whoever made it.
+// sender's account is not active, or a block stands between the two, whoever made it. So is one its sender withdrew
+// (status 'cancelled', 10 Nov 2026).
 //
 // Rows carry no actor id (025: a title, a body and a link), so nothing here can say who a row is about; a request or an
 // invite from someone removed or blocked is answered by its state ('gone', revoked), which offers nothing to press.
@@ -108,6 +109,9 @@ export async function listNotifications(
             i.pod_id AS "podId",
             i.session_id AS "sessionId",
             CASE
+              -- 10 Nov 2026: a request its sender withdrew. Its bell row is deleted while unread (withdrawPoke); one
+              -- already read stays, and must not offer Accept and Decline on a request that is no longer there.
+              WHEN p.status = 'cancelled' THEN 'gone'
               WHEN p.status = 'pending' AND (
                 ps.status IS DISTINCT FROM 'active'
                 OR EXISTS (

@@ -792,6 +792,7 @@ describe('getPersonBrief: one profile open takes at most four database connectio
     ['events', /FROM session_participants x/],
     ['path', /FROM encounter_history e1/],
     ['entities', /FROM entity_members m/],
+    ['alreadyMet', /FROM already_met/],
   ];
 
   // Every read the brief makes goes through one of these stand-ins. Each is wrapped to count the reads
@@ -829,9 +830,10 @@ describe('getPersonBrief: one profile open takes at most four database connectio
     await getPersonBrief(VIEWER, TARGET);
     // The block check and the member lookup, then the twelve reads (the person's entities joined them on
     // 21 Oct 2026), then whether the viewer may message them (30 Oct 2026): one dropped to stay under the
-    // limit shows here.
-    expect(seen.started).toHaveLength(15);
+    // limit shows here. "Already met" (10 Nov 2026) is read beside it, in the same last group.
+    expect(seen.started).toHaveLength(16);
     expect(seen.started[14]).toBe('canMessage');
+    expect(seen.started[15]).toBe('alreadyMet');
     expect(seen.started).not.toContain('unknown query');
     expect(seen.peak).toBeLessThanOrEqual(4);
     expect(seen.peak).toBeGreaterThan(1); // in groups, not one after another

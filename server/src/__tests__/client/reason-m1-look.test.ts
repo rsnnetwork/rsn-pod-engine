@@ -983,6 +983,7 @@ describe('The short tour hands the member to For You when it is finished or skip
 describe('The hero links to the member\'s LinkedIn, on the Human Profile and on Your profile', () => {
   const text = require('../../../../client/src/features/reason/human/profile-text');
   const frameOf = () => loadModule('src/features/reason/human/ProfileHero.tsx', {
+    'lucide-react': new Proxy({}, { get: (_t, name) => (name === '__esModule' ? true : () => null) }),
     '@/components/ui/Avatar': { __esModule: true, default: () => null },
     '@/features/calls/ProfileCallButton': { __esModule: true, default: () => null },
     '@/lib/utils': joinClasses,
@@ -994,7 +995,7 @@ describe('The hero links to the member\'s LinkedIn, on the Human Profile and on 
   const person = (over: Record<string, unknown>) => ({
     id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null,
     bannerUrl: null, bio: 'Backs founders.', company: 'Northwind', jobTitle: 'Partner', industry: null, location: null,
-    linkedinUrl: null, languages: [], professionalRole: [], expertiseText: null, whatICanHelpWith: null, ...over,
+    linkedinUrl: null, websiteUrl: null, instagramUrl: null, xUrl: null, facebookUrl: null, languages: [], professionalRole: [], expertiseText: null, whatICanHelpWith: null, ...over,
   });
   const draw = (over: Record<string, unknown>) => renderToStaticMarkup(createElement(frameOf() as never, {
     photo: null, who: text.personFacts(person(over)), kicker: 'The human', note: null, panel: null,
@@ -1009,9 +1010,8 @@ describe('The hero links to the member\'s LinkedIn, on the Human Profile and on 
     expect(link).toContain('target="_blank"');
     expect(link).toContain('rel="noopener noreferrer"');
     expect(link).toMatch(/class="[^"]*\bmin-h-\[44px\][^"]*"/);
-    // "LinkedIn ↗" on screen; a screen reader hears that it opens a new tab, and not the arrow.
-    expect(link.replace(/<[^>]*>/g, '')).toBe('LinkedIn ↗ (opens in a new tab)');
-    expect(link).toContain('<span aria-hidden="true">↗</span>');
+    // An icon and "LinkedIn" on screen (10 Nov 2026: one row of icon buttons with the new links); a screen reader hears that it opens a new tab.
+    expect(link.replace(/<[^>]*>/g, '')).toBe('LinkedIn (opens in a new tab)');
     expect(link).toContain('<span class="sr-only"> (opens in a new tab)</span>');
     const at = { role: html.indexOf('Partner · Northwind'), link: html.indexOf('<a '), bio: html.indexOf('Backs founders.') };
     expect(at.role).toBeGreaterThan(-1);

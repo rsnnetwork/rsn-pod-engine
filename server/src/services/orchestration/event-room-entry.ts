@@ -7,8 +7,9 @@ import type { Socket } from 'socket.io';
 import { ErrorCodes } from '@rsn/shared';
 import logger from '../../config/logger';
 import type { EventRoomAdmission } from '../session/session-access';
-import { canEnterRoom } from '../session/event-access';
+import { EVENT_ADMISSION_REQUIRED_SENTENCE, canEnterRoom } from '../session/event-access';
 import { sessionRoom } from './state/session-state';
+import { GUEST_REGISTRATION_MESSAGE } from '../session/guest-registration';
 
 /** A refusal production's live page shows as a toast and a banner: a code and a sentence. */
 export interface EventRoomRefusal { code: string; message: string }
@@ -35,8 +36,21 @@ export function eventRoomRefusal(eventStatus: string, registrationCode: string |
   if (registrationCode === ErrorCodes.EVENT_NEEDS_APPROVAL) {
     return { code: ErrorCodes.EVENT_NEEDS_APPROVAL, message: 'This event asks the host to approve each place. Request to join from the event page.' };
   }
+  // Part 2 Task 4: an invitation-only event this person holds no entitlement to (never invited, or taken off its list).
+  if (registrationCode === ErrorCodes.EVENT_ADMISSION_REQUIRED) {
+    return { code: ErrorCodes.EVENT_ADMISSION_REQUIRED, message: EVENT_ADMISSION_REQUIRED_SENTENCE };
+  }
   if (registrationCode === ErrorCodes.EVENT_PRIVATE) {
     return { code: ErrorCodes.EVENT_PRIVATE, message: "This event is private. It is for its pod's members and the people the host invites." };
+  }
+  // Part 2, Task 3 (fix round 1): an event guest takes part only in the event they were invited to.
+  if (registrationCode === ErrorCodes.GUEST_MEMBERSHIP_REQUIRED) {
+    return { code: ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, message: GUEST_REGISTRATION_MESSAGE };
+  }
+  // Part 2 Task 5 (10 Nov 2026 spec): an event with matching groups asks which group someone is in before it gives
+  // a place, and the live page's own registration cannot ask, so it sends them to the event page.
+  if (registrationCode === ErrorCodes.EVENT_GROUP_REQUIRED) {
+    return { code: ErrorCodes.EVENT_GROUP_REQUIRED, message: 'Choose your group for this event first, on the event page.' };
   }
   if (registrationCode === ErrorCodes.AUTH_FORBIDDEN) {
     return { code: ErrorCodes.AUTH_FORBIDDEN, message: 'This event is only open to its pod\'s members.' };

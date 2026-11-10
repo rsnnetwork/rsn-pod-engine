@@ -76,13 +76,14 @@ interface RecipientFixture {
   user_id: string;
   bucket: string;
   first_name: string;
+  account_kind?: string;
   account_status?: string;
   blocked?: boolean;
 }
 
 /** A recipient as the batch query returns them: an active account nobody has blocked, unless said otherwise. */
 function recipient(over: Partial<RecipientFixture> & Pick<RecipientFixture, 'id' | 'user_id'>): RecipientFixture {
-  return { bucket: 'stayed', first_name: over.user_id, account_status: 'active', blocked: false, ...over };
+  return { bucket: 'stayed', first_name: over.user_id, account_status: 'active', account_kind: 'member', blocked: false, ...over };
 }
 
 /**
@@ -529,6 +530,24 @@ describe('processPendingJobs', () => {
 
       expect(mockSendBroadcastMessage).not.toHaveBeenCalled();
       expect(skippedWrites()[0].params).toEqual(['inactive', 'r1']);
+    });
+
+    it('an event guest is skipped (Part 2, Task 3): no thread, no message, no email', async () => {
+      world([recipient({ id: 'r1', user_id: 'fine' }), recipient({ id: 'r2', user_id: 'guest', account_kind: 'event_guest' })]);
+      const { processPendingJobs } = await import('../../../services/post-event-message/post-event-message.worker');
+      await processPendingJobs(fakeIo);
+
+      expect(mockSendBroadcastMessage.mock.calls.map((c: unknown[]) => c[1])).toEqual(['fine']);
+      expect(mockBroadcastDmMessage).toHaveBeenCalledTimes(1);
+      expect(skippedWrites()[0].params).toEqual(['event_guest', 'r2']);
+      expect(callsMatching("status='failed'")).toHaveLength(0);
+    });
+
+    it('the batch read carries the account kind of each recipient', async () => {
+      world([recipient({ id: 'r1', user_id: 'fine' })]);
+      const { processPendingJobs } = await import('../../../services/post-event-message/post-event-message.worker');
+      await processPendingJobs(fakeIo);
+      expect(callsMatching('JOIN users u ON u.id = r.user_id')[0].sql).toMatch(/u\.account_kind/);
     });
 
     it('a recipient whose account status is unknown is not messaged either (fail closed)', async () => {

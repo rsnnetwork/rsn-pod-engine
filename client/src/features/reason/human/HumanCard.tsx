@@ -12,6 +12,7 @@ import { useId, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { primaryActionFor, type RelationshipState } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
+import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 import { cn } from '@/lib/utils';
 import { personName, visibleText } from '../person';
 import { BUSY } from './busy';
@@ -162,6 +163,8 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
         >
           {person.saved ? 'Saved' : 'Save'}
         </button>
+        {/* 10 Nov 2026: a request the member sent can be taken back, here, on its own row under the three. */}
+        {action === 'requested' && <WithdrawRequestButton userId={person.userId} className="col-span-full" />}
       </div>
     </article>
   );

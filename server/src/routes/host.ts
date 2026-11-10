@@ -113,7 +113,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       if (!await verifyHostOrSuperAdmin(req, next)) return;
-      await orchestrationService.endSession(req.params.id, req.user!.userId);
+      await orchestrationService.endSession(req.params.id, { userId: req.user!.userId, role: req.user!.role });
       res.json({ success: true, data: { message: 'Session ended' } });
     } catch (err) {
       next(err);

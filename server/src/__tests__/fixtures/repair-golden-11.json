@@ -1,0 +1,1025 @@
+{
+  "from": "a4b2cd7c",
+  "cases": {
+    "inertFrom2LateJoiner": {
+      "result": {
+        "regeneratedRounds": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "errors": []
+      },
+      "deletedFrom": [
+        {
+          "round": 2,
+          "statuses": "scheduled"
+        },
+        {
+          "round": 2,
+          "statuses": "'scheduled','cancelled'"
+        },
+        {
+          "round": 3,
+          "statuses": "'scheduled','cancelled'"
+        },
+        {
+          "round": 4,
+          "statuses": "'scheduled','cancelled'"
+        },
+        {
+          "round": 5,
+          "statuses": "'scheduled','cancelled'"
+        }
+      ],
+      "rows": [
+        {
+          "round": 2,
+          "a": "p05",
+          "b": "p09",
+          "c": null,
+          "score": 0.7049,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.7049
+        },
+        {
+          "round": 2,
+          "a": "p01",
+          "b": "p02",
+          "c": null,
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 2,
+          "a": "p03",
+          "b": "p07",
+          "c": "p11",
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer",
+            "trio"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 2,
+          "a": "p04",
+          "b": "p10",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_reasons:2",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:sales+teacher"
+          ],
+          "matchReason": "shared_reasons:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 2,
+          "a": "p06",
+          "b": "p08",
+          "c": null,
+          "score": 0.5083,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:investor+marketing",
+            "avoid_conflict"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.5083
+        },
+        {
+          "round": 3,
+          "a": "p05",
+          "b": "p09",
+          "c": null,
+          "score": 0.7049,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.7049
+        },
+        {
+          "round": 3,
+          "a": "p01",
+          "b": "p02",
+          "c": null,
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 3,
+          "a": "p03",
+          "b": "p07",
+          "c": "p11",
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer",
+            "trio"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 3,
+          "a": "p04",
+          "b": "p10",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_reasons:2",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:sales+teacher"
+          ],
+          "matchReason": "shared_reasons:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 3,
+          "a": "p06",
+          "b": "p08",
+          "c": null,
+          "score": 0.5083,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:investor+marketing",
+            "avoid_conflict"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.5083
+        },
+        {
+          "round": 4,
+          "a": "p05",
+          "b": "p09",
+          "c": null,
+          "score": 0.7049,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.7049
+        },
+        {
+          "round": 4,
+          "a": "p01",
+          "b": "p02",
+          "c": null,
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 4,
+          "a": "p03",
+          "b": "p07",
+          "c": "p11",
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer",
+            "trio"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 4,
+          "a": "p04",
+          "b": "p10",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_reasons:2",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:sales+teacher"
+          ],
+          "matchReason": "shared_reasons:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 4,
+          "a": "p06",
+          "b": "p08",
+          "c": null,
+          "score": 0.5083,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:investor+marketing",
+            "avoid_conflict"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.5083
+        },
+        {
+          "round": 5,
+          "a": "p05",
+          "b": "p09",
+          "c": null,
+          "score": 0.7049,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.7049
+        },
+        {
+          "round": 5,
+          "a": "p01",
+          "b": "p02",
+          "c": null,
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 5,
+          "a": "p03",
+          "b": "p07",
+          "c": "p11",
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer",
+            "trio"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 5,
+          "a": "p04",
+          "b": "p10",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_reasons:2",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:sales+teacher"
+          ],
+          "matchReason": "shared_reasons:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 5,
+          "a": "p06",
+          "b": "p08",
+          "c": null,
+          "score": 0.5083,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:investor+marketing",
+            "avoid_conflict"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.5083
+        }
+      ]
+    },
+    "blockingFrom3Left": {
+      "result": {
+        "regeneratedRounds": [
+          3,
+          4,
+          5
+        ],
+        "errors": []
+      },
+      "deletedFrom": [
+        {
+          "round": 3,
+          "statuses": "scheduled"
+        },
+        {
+          "round": 3,
+          "statuses": "'scheduled','cancelled'"
+        },
+        {
+          "round": 4,
+          "statuses": "'scheduled','cancelled'"
+        },
+        {
+          "round": 5,
+          "statuses": "'scheduled','cancelled'"
+        }
+      ],
+      "rows": [
+        {
+          "round": 3,
+          "a": "p01",
+          "b": "p02",
+          "c": "p09",
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor",
+            "trio"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 3,
+          "a": "p03",
+          "b": "p07",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 3,
+          "a": "p04",
+          "b": "p10",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_reasons:2",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:sales+teacher"
+          ],
+          "matchReason": "shared_reasons:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 3,
+          "a": "p06",
+          "b": "p08",
+          "c": null,
+          "score": 0.5083,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:investor+marketing",
+            "avoid_conflict"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.5083
+        },
+        {
+          "round": 3,
+          "a": "p05",
+          "b": "p11",
+          "c": null,
+          "score": 0.4816,
+          "reasonTags": [
+            "premium_present",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:cto+founder"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.4816
+        },
+        {
+          "round": 4,
+          "a": "p01",
+          "b": "p02",
+          "c": "p09",
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor",
+            "trio"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 4,
+          "a": "p03",
+          "b": "p07",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 4,
+          "a": "p04",
+          "b": "p10",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_reasons:2",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:sales+teacher"
+          ],
+          "matchReason": "shared_reasons:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 4,
+          "a": "p06",
+          "b": "p08",
+          "c": null,
+          "score": 0.5083,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:investor+marketing",
+            "avoid_conflict"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.5083
+        },
+        {
+          "round": 4,
+          "a": "p05",
+          "b": "p11",
+          "c": null,
+          "score": 0.4816,
+          "reasonTags": [
+            "premium_present",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:cto+founder"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.4816
+        },
+        {
+          "round": 5,
+          "a": "p01",
+          "b": "p02",
+          "c": "p09",
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor",
+            "trio"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 5,
+          "a": "p03",
+          "b": "p07",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 5,
+          "a": "p04",
+          "b": "p10",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_reasons:2",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:sales+teacher"
+          ],
+          "matchReason": "shared_reasons:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 5,
+          "a": "p06",
+          "b": "p08",
+          "c": null,
+          "score": 0.5083,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:investor+marketing",
+            "avoid_conflict"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.5083
+        },
+        {
+          "round": 5,
+          "a": "p05",
+          "b": "p11",
+          "c": null,
+          "score": 0.4816,
+          "reasonTags": [
+            "premium_present",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:cto+founder"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.4816
+        }
+      ]
+    },
+    "inertFrom4HostPresentGate": {
+      "result": {
+        "regeneratedRounds": [
+          4,
+          5
+        ],
+        "errors": []
+      },
+      "deletedFrom": [
+        {
+          "round": 4,
+          "statuses": "scheduled"
+        },
+        {
+          "round": 4,
+          "statuses": "'scheduled','cancelled'"
+        },
+        {
+          "round": 5,
+          "statuses": "'scheduled','cancelled'"
+        }
+      ],
+      "rows": [
+        {
+          "round": 4,
+          "a": "p05",
+          "b": "p09",
+          "c": null,
+          "score": 0.7049,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.7049
+        },
+        {
+          "round": 4,
+          "a": "p01",
+          "b": "p02",
+          "c": "p06",
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor",
+            "trio"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 4,
+          "a": "p03",
+          "b": "p07",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 4,
+          "a": "p04",
+          "b": "p08",
+          "c": null,
+          "score": 0.576,
+          "reasonTags": [
+            "shared_interests:2",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:marketing+sales"
+          ],
+          "matchReason": "shared_interests:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.576
+        },
+        {
+          "round": 5,
+          "a": "p05",
+          "b": "p09",
+          "c": null,
+          "score": 0.7049,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.7049
+        },
+        {
+          "round": 5,
+          "a": "p01",
+          "b": "p02",
+          "c": "p06",
+          "score": 0.6751,
+          "reasonTags": [
+            "premium_present",
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "mutual_intent",
+            "designation:founder+investor",
+            "trio"
+          ],
+          "matchReason": "premium_present",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": true,
+          "templateId": null,
+          "confidence": 0.6751
+        },
+        {
+          "round": 5,
+          "a": "p03",
+          "b": "p07",
+          "c": null,
+          "score": 0.6,
+          "reasonTags": [
+            "shared_interests:1",
+            "shared_reasons:1",
+            "industry_diverse",
+            "language_match",
+            "first_meeting",
+            "designation:ceo+engineer"
+          ],
+          "matchReason": "shared_interests:1",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.6
+        },
+        {
+          "round": 5,
+          "a": "p04",
+          "b": "p08",
+          "c": null,
+          "score": 0.576,
+          "reasonTags": [
+            "shared_interests:2",
+            "shared_reasons:1",
+            "industry_diverse",
+            "first_meeting",
+            "designation:marketing+sales"
+          ],
+          "matchReason": "shared_interests:2",
+          "fallbackUsed": false,
+          "repeatInEvent": false,
+          "premiumInfluenced": false,
+          "templateId": null,
+          "confidence": 0.576
+        }
+      ]
+    }
+  }
+}

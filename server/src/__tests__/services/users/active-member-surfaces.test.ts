@@ -11,6 +11,11 @@ jest.mock('../../../db', () => ({
   transaction: async (cb: (client: unknown) => unknown) => cb({ query: (...args: unknown[]) => mockClientQuery(...args) }),
   __esModule: true,
 }));
+// Every person registered here is a member: the event-guest check (guest-registration.ts) has its own tests.
+jest.mock('../../../services/session/guest-registration', () => ({
+  ...jest.requireActual('../../../services/session/guest-registration'),
+  assertGuestMayRegister: jest.fn(async () => ({ isGuest: false })),
+}));
 jest.mock('../../../config/logger', () => ({
   __esModule: true,
   default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
@@ -175,7 +180,7 @@ describe('meeting requests', () => {
     const { readFileSync } = jest.requireActual<typeof import('fs')>('fs');
     const { join } = jest.requireActual<typeof import('path')>('path');
     const source = readFileSync(join(__dirname, '../../../services/poke/poke.service.ts'), 'utf8');
-    expect(source).toContain("`SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')}`");
+    expect(source).toContain("`SELECT id FROM users WHERE id = $1 AND ${activeMemberSql('users')} AND account_kind = 'member'`");
     expect(source).toContain("'That member is no longer available.'");
   });
 });

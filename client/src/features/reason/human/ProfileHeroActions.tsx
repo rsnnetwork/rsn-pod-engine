@@ -28,7 +28,7 @@ export default function ProfileHeroActions({ brief, userId, call }: { brief: Per
   return (
     <>
       {closed}
-      <div className="mt-3 flex flex-wrap gap-2" data-testid="profile-hero-actions">
+      <div className="mt-3 flex flex-wrap justify-center gap-2" data-testid="profile-hero-actions">
         {message && (
           <Link
             to={`/messages/new/${userId}`}

@@ -104,6 +104,16 @@ export const primaryActionFor = _primaryActionFor;
 import { LINKEDIN_PROFILE_HELP as _LINKEDIN_PROFILE_HELP, linkedinProfileUrl as _linkedinProfileUrl } from './linkedin/profile-url';
 export const LINKEDIN_PROFILE_HELP = _LINKEDIN_PROFILE_HELP;
 export const linkedinProfileUrl = _linkedinProfileUrl;
+// The profile links beside LinkedIn (10 Nov 2026): VALUES the form and the server both run, so each has its own named export.
+import {
+  PROFILE_LINK_HELP as _PROFILE_LINK_HELP, PROFILE_LINK_MAX as _PROFILE_LINK_MAX,
+  normaliseProfileUrl as _normaliseProfileUrl, parseProfileUrl as _parseProfileUrl,
+} from './profile/links';
+export type { ProfileLinkKind, ProfileLinkResult } from './profile/links';
+export const PROFILE_LINK_HELP = _PROFILE_LINK_HELP;
+export const PROFILE_LINK_MAX = _PROFILE_LINK_MAX;
+export const normaliseProfileUrl = _normaliseProfileUrl;
+export const parseProfileUrl = _parseProfileUrl;
 export * from './types/entity';
 // Real VALUES the client renders (the Entities pages), so each needs its own statically analysable
 // named export, same as OPENINGS above.
@@ -153,6 +163,26 @@ export const EVENT_ACCESS = _EVENT_ACCESS;
 export const EVENT_VISIBILITY_KEYS = _EVENT_VISIBILITY_KEYS;
 export const defaultEventVisibility = _defaultEventVisibility;
 export const isEventVisibility = _isEventVisibility;
+// Part 2 Task 4 (10 Nov 2026): who gets a place on an event (sessions.admission_mode), a real VALUE the forms list.
+import { ADMISSION_MODES as _ADMISSION_MODES } from './types/session';
+export const ADMISSION_MODES = _ADMISSION_MODES;
+// The RSN Call link (Part 2 foundation, Task 6): the one path constant, the call code's alphabet and its readers, and the
+// name rule of the details step. Real VALUES the server's emails and the client's router read, so each has its own named
+// export, same as OPENINGS above.
+export * from './events/call-link';
+export * from './types/call-link';
+import {
+  CALL_LINK_BASE_PATH as _CALL_LINK_BASE_PATH, CALL_CODE_ALPHABET as _CALL_CODE_ALPHABET,
+  CALL_CODE_LENGTH as _CALL_CODE_LENGTH, CALL_DISPLAY_NAME_MAX as _CALL_DISPLAY_NAME_MAX,
+  callLinkPath as _callLinkPath, normaliseCallCode as _normaliseCallCode, cleanCallDisplayName as _cleanCallDisplayName,
+} from './events/call-link';
+export const CALL_LINK_BASE_PATH = _CALL_LINK_BASE_PATH;
+export const CALL_CODE_ALPHABET = _CALL_CODE_ALPHABET;
+export const CALL_CODE_LENGTH = _CALL_CODE_LENGTH;
+export const CALL_DISPLAY_NAME_MAX = _CALL_DISPLAY_NAME_MAX;
+export const callLinkPath = _callLinkPath;
+export const normaliseCallCode = _normaliseCallCode;
+export const cleanCallDisplayName = _cleanCallDisplayName;
 export const formatRule = _formatRule;
 export const podTypeRule = _podTypeRule;
 export const isEventFormat = _isEventFormat;
@@ -171,6 +201,24 @@ export const applyTypeChange = _applyTypeChange;
 export const applyFormatChange = _applyFormatChange;
 export const resolveEventFormat = _resolveEventFormat;
 export const formatRefusal = _formatRefusal;
+// An event's lifecycle (Part 2 foundation, Task 2): draft, published, registration open, live, completed, archived,
+// cancelled, worked out beside sessions.status (D1). Real VALUES the client renders and calls, so each has its own named
+// export, same as OPENINGS above.
+export * from './events/lifecycle';
+import {
+  EVENT_PUBLICATIONS as _EVENT_PUBLICATIONS, EVENT_LIVE_STATUSES as _EVENT_LIVE_STATUSES,
+  EVENT_CANCEL_REASON_MAX as _EVENT_CANCEL_REASON_MAX, EVENT_LIFECYCLE_ACTIONS as _EVENT_LIFECYCLE_ACTIONS,
+  isEventPublication as _isEventPublication, eventLifecycleOf as _eventLifecycleOf,
+  allowedLifecycleActions as _allowedLifecycleActions, eventAllowedActions as _eventAllowedActions,
+} from './events/lifecycle';
+export const EVENT_PUBLICATIONS = _EVENT_PUBLICATIONS;
+export const EVENT_LIVE_STATUSES = _EVENT_LIVE_STATUSES;
+export const EVENT_CANCEL_REASON_MAX = _EVENT_CANCEL_REASON_MAX;
+export const EVENT_LIFECYCLE_ACTIONS = _EVENT_LIFECYCLE_ACTIONS;
+export const isEventPublication = _isEventPublication;
+export const eventLifecycleOf = _eventLifecycleOf;
+export const allowedLifecycleActions = _allowedLifecycleActions;
+export const eventAllowedActions = _eventAllowedActions;
 export * from './types/meeting';
 // Real VALUES the client uses (the Events meetings and the meeting page redraw their phase as the clock
 // moves), so each needs its own statically analysable named export, same as OPENINGS above.
@@ -220,3 +268,35 @@ export const ENDONYMS = _ENDONYMS;
 export const fold = _fold;
 export const isCountryOnly = _isCountryOnly;
 export const isLocationComplete = _isLocationComplete;
+// Matching groups and round rules, the one room checker and the rounds' estimated starts (10 Nov 2026 spec, Part 2
+// Task 5): VALUES the engine, the matching board and the organiser's screens call, so each has its own statically
+// analysable named export, same as OPENINGS above.
+export * from './events/group-rules';
+export * from './events/room-check';
+export * from './events/round-times';
+import {
+  GROUP_LIMITS as _GROUP_LIMITS, DEFAULT_GROUP_QUESTION as _DEFAULT_GROUP_QUESTION, GROUP_PRESETS as _GROUP_PRESETS,
+  isGroupKey as _isGroupKey, groupPairKey as _groupPairKey, ruleForRound as _ruleForRound,
+  groupsAllowed as _groupsAllowed, validateGroupRules as _validateGroupRules,
+  explainRoundCapacity as _explainRoundCapacity, roundRuleSentence as _roundRuleSentence,
+} from './events/group-rules';
+import { checkRoom as _checkRoom, checkRound as _checkRound } from './events/room-check';
+import { estimatedRoundStarts as _estimatedRoundStarts } from './events/round-times';
+export const GROUP_LIMITS = _GROUP_LIMITS;
+export const DEFAULT_GROUP_QUESTION = _DEFAULT_GROUP_QUESTION;
+export const GROUP_PRESETS = _GROUP_PRESETS;
+export const isGroupKey = _isGroupKey;
+export const groupPairKey = _groupPairKey;
+export const ruleForRound = _ruleForRound;
+export const groupsAllowed = _groupsAllowed;
+export const validateGroupRules = _validateGroupRules;
+export const explainRoundCapacity = _explainRoundCapacity;
+export const roundRuleSentence = _roundRuleSentence;
+export const checkRoom = _checkRoom;
+export const checkRound = _checkRound;
+export const estimatedRoundStarts = _estimatedRoundStarts;
+// The matching board's draft (10 Nov 2026 spec, Part 2 Task 8): its types, and the one VALUE the board's screen
+// reads (the alternative that leaves a person in the basket), exported by name as OPENINGS above.
+export * from './types/schedule';
+import { BOARD_BASKET_ROOM as _BOARD_BASKET_ROOM } from './types/schedule';
+export const BOARD_BASKET_ROOM = _BOARD_BASKET_ROOM;

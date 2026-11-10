@@ -162,8 +162,8 @@ function armAccept(
     if (/FROM user_pokes WHERE id/.test(sql)) {
       return Promise.resolve({ rows: [{ ...request }] });
     }
-    if (/SELECT status FROM users WHERE id/.test(sql)) {
-      return Promise.resolve({ rows: [{ status: 'active' }] });
+    if (/SELECT status(?:, account_kind)? FROM users WHERE id/.test(sql)) {
+      return Promise.resolve({ rows: [{ status: 'active', account_kind: 'member' }] });
     }
     if (/INSERT INTO dm_conversations/.test(sql)) {
       return Promise.resolve({ rows: [{ id: 'conv-9' }] });
@@ -1087,7 +1087,7 @@ function armWorld(world: World) {
       remember(() => { world.requests.splice(world.requests.indexOf(r), 1); });
       return Promise.resolve({ rows: [{ ...r }] });
     }
-    if (/SELECT status FROM users WHERE id/.test(sql)) {
+    if (/SELECT status(?:, account_kind)? FROM users WHERE id/.test(sql)) {
       return Promise.resolve({ rows: [{ status: world.status[params[0] as string] ?? 'active' }] });
     }
     // Who has met: written by an accept (ON CONFLICT DO NOTHING), read by a send.

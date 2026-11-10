@@ -19,7 +19,8 @@ import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors
 import { ErrorCodes } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 
-export type CallRefusal = 'self' | 'not_found' | 'caller_inactive' | 'former_member' | 'blocked' | 'not_connected';
+export type CallRefusal =
+  'self' | 'not_found' | 'caller_inactive' | 'former_member' | 'event_guest' | 'blocked' | 'not_connected';
 
 /** What a refused call says, in a member's words. */
 export const CALL_REFUSALS: Record<CallRefusal, string> = {
@@ -27,6 +28,7 @@ export const CALL_REFUSALS: Record<CallRefusal, string> = {
   not_found: "We couldn't find that member.",
   caller_inactive: "Your account can't make calls right now.",
   former_member: 'This person is no longer a member of REASON, so they cannot be called.',
+  event_guest: 'Calls are for members. This person came to an event as a guest and is not a member yet.',
   blocked: 'You cannot call this member.',
   not_connected: 'You can call the people you are connected with. Send a meeting request first.',
 };
@@ -53,6 +55,7 @@ export const MUTUAL_CONNECTION_SQL = `
 const ELIGIBILITY_SQL = `
   SELECT (SELECT ${activeMemberSql('me')} AS me_active FROM users me WHERE me.id = $1) AS my_active,
          ${activeMemberSql('t')} AS they_active,
+         ((SELECT me.account_kind FROM users me WHERE me.id = $1) = 'event_guest' OR t.account_kind = 'event_guest') AS a_guest,
          t.display_name AS their_name,
          EXISTS (SELECT 1 FROM user_blocks b
                   WHERE (b.blocker_id = $1 AND b.blocked_id = $2) OR (b.blocker_id = $2 AND b.blocked_id = $1)) AS blocked,
@@ -63,6 +66,8 @@ const ELIGIBILITY_SQL = `
 interface Row {
   my_active: boolean | null;
   they_active: boolean;
+  /** Either of the two is an event guest (Part 2, Task 3): calls are for members. */
+  a_guest?: boolean | null;
   their_name: string | null;
   blocked: boolean;
   connected: boolean;
@@ -80,6 +85,7 @@ export async function callEligibility(callerId: string, calleeId: string): Promi
   if (r.blocked) return { allowed: false, reason: 'blocked', name };
   if (!r.my_active) return { allowed: false, reason: 'caller_inactive', name };
   if (!r.they_active) return { allowed: false, reason: 'former_member', name };
+  if (r.a_guest) return { allowed: false, reason: 'event_guest', name };
   if (!r.connected) return { allowed: false, reason: 'not_connected', name };
   return { allowed: true, name };
 }

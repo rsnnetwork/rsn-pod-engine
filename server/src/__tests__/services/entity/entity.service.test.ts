@@ -594,7 +594,7 @@ describe('archiveEntity', () => {
 });
 
 describe('a person\'s entities', () => {
-  const STATUS = /SELECT status FROM users WHERE id = \$1/;
+  const STATUS = /SELECT status(?:, account_kind)? FROM users WHERE id = \$1/;
   const THEIRS = /FROM entity_members m JOIN entities e ON e\.id = m\.entity_id/;
   const theirs = [{ id: ENTITY, name: 'Acme Ltd', kind: 'company', role: 'founder', title: 'CEO' }];
   const rows = theirs.map((e) => ({ ...e, status: 'active', has_logo: false, has_banner: false, pictures_updated_at: null }));

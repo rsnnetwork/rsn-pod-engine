@@ -51,10 +51,22 @@ export const E = {
   sessionInvites: (sessionId: string) => `session:${sessionId}:invites`,
   /** T11 (1 Nov 2026): requests to join an event that asks the host to approve each place. */
   sessionJoinRequests: (sessionId: string) => `session:${sessionId}:join-requests`,
+  /** Part 2 Task 4 (10 Nov 2026): the event's admission mode, allowed emails and codes (its organisers). */
+  sessionAdmission: (sessionId: string) => `session:${sessionId}:admission`,
   sessionMatches: (sessionId: string) => `session:${sessionId}:matches`,
   sessionPlan: (sessionId: string) => `session:${sessionId}:plan`,
   sessionChat: (sessionId: string) => `session:${sessionId}:chat`,
   sessionReactions: (sessionId: string) => `session:${sessionId}:reactions`,
+  /** Part 2 (10 Nov 2026): who did what to an event, for its organisers. */
+  sessionAudit: (sessionId: string) => `session:${sessionId}:audit`,
+  /** 10 Nov 2026 spec, Part 2 Task 5: the event's matching groups, round rules and who is in which group. */
+  sessionGroups: (sessionId: string) => `session:${sessionId}:groups`,
+  /** Part 2 Task 6 (11 Nov 2026): the event's RSN Call link (its code), for its organisers. */
+  sessionCallLink: (sessionId: string) => `session:${sessionId}:call-link`,
+  /** 10 Nov 2026 spec, Part 2 Task 8: the organisers' private matching-board draft (seats, locks, absences). */
+  sessionSchedule: (sessionId: string) => `session:${sessionId}:schedule`,
+  /** 10 Nov 2026 spec, Part 2 Task 9: the event's published schedule (a new version), for its participants and organisers. */
+  sessionPublishedSchedule: (sessionId: string) => `session:${sessionId}:published-schedule`,
 
   // Match (in-event)
   match: (matchId: string) => `match:${matchId}`,

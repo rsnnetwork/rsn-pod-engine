@@ -10,24 +10,32 @@ import { skipReasonFor } from '../../../services/post-event-message/skip-rule';
 
 describe('skipReasonFor', () => {
   it('someone with an active account whom nobody has blocked is messaged', () => {
-    expect(skipReasonFor({ account_status: 'active', blocked: false })).toBeNull();
+    expect(skipReasonFor({ account_kind: 'member', account_status: 'active', blocked: false })).toBeNull();
   });
 
   it('a block in either direction is skipped as blocked', () => {
-    expect(skipReasonFor({ account_status: 'active', blocked: true })).toBe('blocked');
+    expect(skipReasonFor({ account_kind: 'member', account_status: 'active', blocked: true })).toBe('blocked');
   });
 
   it.each(['deactivated', 'suspended', 'banned'])('a %s account is skipped as inactive', (account_status) => {
-    expect(skipReasonFor({ account_status, blocked: false })).toBe('inactive');
+    expect(skipReasonFor({ account_kind: 'member', account_status, blocked: false })).toBe('inactive');
   });
 
   it('a closed account that is also blocked is skipped as closed: there is no one to message', () => {
-    expect(skipReasonFor({ account_status: 'deactivated', blocked: true })).toBe('inactive');
+    expect(skipReasonFor({ account_kind: 'member', account_status: 'deactivated', blocked: true })).toBe('inactive');
+  });
+
+  it('an event guest is not messaged (Part 2, Task 3): no thread, no email', () => {
+    expect(skipReasonFor({ account_kind: 'event_guest', account_status: 'active', blocked: false })).toBe('event_guest');
+  });
+
+  it('an account whose kind is unknown is not messaged (fail closed)', () => {
+    expect(skipReasonFor({ account_kind: undefined as unknown as string, account_status: 'active', blocked: false })).toBe('event_guest');
   });
 
   it('an account whose status is unknown is not messaged (fail closed)', () => {
-    expect(skipReasonFor({ account_status: undefined as unknown as string, blocked: false })).toBe('inactive');
-    expect(skipReasonFor({ account_status: '', blocked: false })).toBe('inactive');
+    expect(skipReasonFor({ account_kind: 'member', account_status: undefined as unknown as string, blocked: false })).toBe('inactive');
+    expect(skipReasonFor({ account_kind: 'member', account_status: '', blocked: false })).toBe('inactive');
   });
 });
 

@@ -17,7 +17,7 @@ import type { PoolClient } from 'pg';
 import { ErrorCode, ErrorCodes } from '@rsn/shared';
 import logger from '../../config/logger';
 import { AppError } from '../../middleware/errors';
-import { invalidateUserStatusCache } from '../../middleware/auth';
+import { forgetAccountGate, invalidateUserStatusCache } from '../../middleware/auth';
 import { recordAudit } from '../../middleware/audit';
 import { fanoutAdminEntities, fanoutUserEntity } from '../../realtime/fanout';
 
@@ -76,6 +76,44 @@ export async function reopenClosedAccount(client: PoolClient, email: string): Pr
     [email],
   );
   return { reopenedUserId: null, blockedStatus: blocked.rows[0]?.status ?? null };
+}
+
+/**
+ * Approving a join request makes an event guest with that email a member (Part 2, Task 3, D2). Run inside the
+ * approval's transaction, after reopenClosedAccount, so the kind changes with the approval or not at all. The row
+ * becomes visible like any member's; onboarding stays incomplete, so the existing onboarding gate takes them through
+ * it before they appear in any list. A suspended or banned guest is left as it is, as approval leaves any such
+ * account. Returns the promoted account's id, or null when the email has no active guest account.
+ *
+ * After the transaction commits the caller runs forgetAccountGate(id) and fanoutUserEntity(id)
+ * (announceGuestPromoted), so the next request is let into member surfaces and their screens refresh.
+ */
+export async function promoteEventGuest(client: PoolClient, email: string): Promise<string | null> {
+  const promoted = await client.query<{ id: string }>(
+    `UPDATE users SET account_kind = 'member', profile_visible = TRUE, updated_at = NOW()
+      WHERE LOWER(email) = LOWER($1) AND account_kind = 'event_guest' AND status = 'active'
+      RETURNING id`,
+    [email],
+  );
+  return promoted.rows[0]?.id ?? null;
+}
+
+/** After the approval that promoted a guest commits: drop the cached kind, tell their screens, and leave a record. */
+export function announceGuestPromoted(
+  userId: string,
+  context: { actorId: string | null; joinRequestId: string; email: string; via: 'dashboard' | 'email_action' },
+): void {
+  forgetAccountGate(userId);
+  fanoutUserEntity(userId).catch(() => {});
+  fanoutAdminEntities('users').catch(() => {});
+  recordAudit({
+    actorId: context.actorId,
+    action: 'user.guest_promoted_by_approval',
+    entityType: 'user',
+    entityId: userId,
+    details: { joinRequestId: context.joinRequestId, email: context.email, via: context.via },
+  }).catch(() => {});
+  logger.info({ userId, ...context }, 'Event guest became a member by join-request approval');
 }
 
 /** After the approval commits: drop the cached 'closed', tell every screen, and leave a record. */

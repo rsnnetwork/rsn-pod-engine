@@ -86,7 +86,7 @@ function snapshot() {
 beforeEach(() => {
   mockQuery.mockReset();
   mockQuery.mockImplementation(async (sql: string) => (
-    /SELECT status FROM users WHERE id = \$1/.test(sql) ? { rows: [{ status: 'active' }] } : { rows: [] }
+    /SELECT status, account_kind FROM users WHERE id = \$1/.test(sql) ? { rows: [{ status: 'active', account_kind: 'member' }] } : { rows: [] }
   ));
   mockSnapshot.mockReset();
   mockSnapshot.mockResolvedValue(snapshot());

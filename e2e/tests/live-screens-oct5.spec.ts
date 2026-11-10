@@ -1023,7 +1023,7 @@ test('4. Matches: an open page changes on its own when a request is sent from an
   // Both open pages change, with no reload and no touch.
   const viewerState = viewerPage.getByTestId(`match-state-${person.id}`);
   const personState = personPage.getByTestId(`match-state-${viewer.id}`);
-  await expect(viewerState, 'the viewer\'s card now says the request went out').toContainText('Introduction requested', { timeout: 15_000 });
+  await expect(viewerState, 'the viewer\'s card now says the request went out').toContainText('Request sent', { timeout: 15_000 });
   await expect(personState, 'the person\'s card now says they were asked').toContainText('They asked to meet you', { timeout: 15_000 });
   await expect(viewerCard.getByRole('button', { name: /I want to meet/i }), 'the viewer\'s button is gone').toHaveCount(0);
   await expect(personCard.getByRole('button', { name: /I want to meet/i }), 'the person\'s button is gone').toHaveCount(0);
@@ -1033,7 +1033,7 @@ test('4. Matches: an open page changes on its own when a request is sent from an
   }
   const row = (await pool.query<{ status: string }>(`SELECT status FROM user_pokes WHERE id = $1`, [pokeId])).rows[0];
   expect(row.status).toBe('pending');
-  console.log('  ✓ request sent through the API: both open pages changed on their own ("Introduction requested" / "They asked to meet you"), and each asked for its matches again.');
+  console.log('  ✓ request sent through the API: both open pages changed on their own ("Request sent" / "They asked to meet you"), and each asked for its matches again.');
 
   // The person says yes through the API. Both pages say Connected.
   const answeredAt = Date.now();

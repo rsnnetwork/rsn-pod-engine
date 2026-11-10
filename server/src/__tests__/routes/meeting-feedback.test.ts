@@ -85,7 +85,7 @@ const row = (extra: Partial<AdminFeedbackRow> = {}): AdminFeedbackRow => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockDbQuery.mockResolvedValue({ rows: [{ status: 'active' }] });
+  mockDbQuery.mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] });
   mockSubmit.mockResolvedValue(saved());
   mockAnnounce.mockResolvedValue(undefined);
   mockList.mockResolvedValue({ items: [row()], nextCursor: null });

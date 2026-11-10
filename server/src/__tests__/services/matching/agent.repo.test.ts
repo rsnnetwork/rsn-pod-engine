@@ -214,7 +214,8 @@ describe('a rescore never evicts someone you already asked', () => {
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toMatch(/DELETE FROM agent_matches am/);
     expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes p/);
-    expect(sql).toMatch(/p\.status <> 'declined'/);
+    // 10 Nov 2026: pending or accepted; a withdrawn request (cancelled) pins nobody.
+    expect(sql).toMatch(/p\.status IN \('pending', 'accepted'\)/);
     // STICKINESS stays per-agent, and is the only thing that still is (22 Sep
     // 2026). State and counts became per-person because you cannot ask the same
     // person twice; where a person SITS is a different question — someone found
@@ -251,8 +252,9 @@ describe('an agent card accounts for everyone inside it', () => {
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes p/);
     expect(sql).toMatch(/AND EXISTS \(\s*SELECT 1 FROM user_pokes p/);
-    // A decline hides the person entirely, so it counts on neither side.
-    expect((sql.match(/p\.status <> 'declined'/g) ?? []).length).toBe(2);
+    // The same live-introduction test on both sides: pending or accepted. A withdrawn request (cancelled, 10 Nov
+    // 2026) is no introduction, so that person is outstanding again.
+    expect((sql.match(/p\.status IN \('pending', 'accepted'\)/g) ?? []).length).toBe(2);
     // 22 Sep 2026 — neither side is scoped to one search's pokes any more, so
     // "already asked" means the same thing on every search a person appears on.
     expect((sql.match(/p\.agent_id = a\.id/g) ?? []).length).toBe(0);

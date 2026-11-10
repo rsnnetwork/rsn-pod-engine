@@ -11,9 +11,9 @@ import logger from '../../../config/logger';
 import { query, transaction } from '../../../db';
 import {
   SessionStatus, ParticipantStatus,
-  MatchStatus, UserRole,
+  MatchStatus, UserRole, ErrorCodes,
   resolveDisplayName, placeholderName,
-  resolveEventFormat, liveKindOf,
+  resolveEventFormat, liveKindOf, checkRoom,
 } from '@rsn/shared';
 import {
   ActiveSession, activeSessions, withSessionGuard, withMatchGenerationLock,
@@ -21,17 +21,23 @@ import {
   emitRatingWindowOnce, activeFormat, refuseIfFormatLacks, refuseIfNoVideoRoom,
 } from '../state/session-state';
 import { assertVideoRoom } from '../../session/video-room';
+// Part 2 (10 Nov 2026) - host actions are attributed in the event's audit trail.
+import { recordEventAudit } from '../../audit/event-audit';
 import { startSegmentTimer, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
 // WS2 (27 May remaining work) — shared survivor flow for early room ends.
 import { endRoomEarlyForSurvivors } from './room-end-early';
 import * as sessionService from '../../session/session.service';
 import * as videoService from '../../video/video.service';
-import { ForbiddenError, ValidationError } from '../../../middleware/errors';
+import { ConflictError, ForbiddenError, ValidationError } from '../../../middleware/errors';
 import * as matchingService from '../../matching/matching.service';
 // Phase 2B (5 May spec) — single chokepoint for presenceMap mutations.
 import { setPresence } from '../state/participant-state-machine';
 import { getCanonicalConnectedSet } from '../state/canonical-state';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
+// Part 2 Task 7 — rooms a host makes by hand meet the engine's one room checker (blocks always; group rules).
+import { judgeLiveRooms, loadLiveRoomContext, recordMatchOverride } from '../../matching/live-room-guard';
+// Part 2 Task 9 — an event with a published schedule starts from its latest version, not the engine's plan.
+import { hasPublishedSchedule, materialisePublished } from '../../schedule/schedule-live.service';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. Every legacy
 // in-handler broadcast (roster:changed, host:transferred, host:event_plan_*,
 // pin:changed, tile:size_changed, host:visibility_changed,
@@ -40,6 +46,7 @@ import { validateMatchAssignment } from '../../matching/match-validator.service'
 //   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
 import { emitEntities } from '../../../realtime/emit';
 import { E } from '../../../realtime/entities';
+import { fanoutAdminEntities } from '../../../realtime/fanout';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // Functions from round-lifecycle.ts that don't exist yet.
@@ -154,39 +161,10 @@ async function emitSessionRoomEntities(
 // HOST HELPERS
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * Get all user IDs that should be excluded from matching: the event
- * director + any formally-assigned co-hosts.
- *
- * 23 May (Stefan + Ali) — the acting-as-host opt-in/opt-out picker is
- * removed. No participant can self-select host any more, so an admin or
- * super-admin who merely opens someone else's event is now an ordinary,
- * matchable participant. This is the root fix for "admin shows in the
- * room but the engine never matches them" — they were landing in this
- * host set via the old picker (acting_as_host = TRUE).
- */
-export async function getAllHostIds(sessionId: string, hostUserId: string): Promise<string[]> {
-  const cohostResult = await query<{ user_id: string }>(
-    `SELECT user_id FROM session_cohosts WHERE session_id = $1`,
-    [sessionId]
-  );
-  // Stefan's rule (9 Jun) — a super_admin (only Stefan now) ALWAYS acts as host
-  // on every event, even without a cohost row, so they belong in the host set
-  // wherever they appear: excluded from matching and counted as a host. Scoped
-  // to THIS session's participants so it never pulls in super_admins who aren't
-  // actually here.
-  const superAdminResult = await query<{ user_id: string }>(
-    `SELECT sp.user_id FROM session_participants sp
-       JOIN users u ON u.id = sp.user_id
-      WHERE sp.session_id = $1 AND u.role = 'super_admin'`,
-    [sessionId]
-  );
-  return Array.from(new Set<string>([
-    hostUserId,
-    ...cohostResult.rows.map(r => r.user_id),
-    ...superAdminResult.rows.map(r => r.user_id),
-  ]));
-}
+// The host set (director, co-hosts, super admins here) lives in services/session/host-set.ts so the schedule
+// services can read it without importing this module (the require cycle matching.service.ts describes).
+import { getAllHostIds } from '../../session/host-set';
+export { getAllHostIds };
 
 // ─── Verify Host ────────────────────────────────────────────────────────────
 
@@ -288,6 +266,9 @@ async function refuseIfAdminTarget(
 
 // ─── Host Start Session ─────────────────────────────────────────────────────
 
+/** Part 2 Task 2: what the host hears on pressing Go Live on a draft. */
+export const EVENT_DRAFT_START_REFUSAL = 'Publish the event before starting it.';
+
 /**
  * Go Live, for both start paths (2 Nov 2026). The status, the lobby room id and started_at go in ONE update,
  * before LiveKit is called: the event was open for 0.4 to 0.8 s with no room id while LiveKit Cloud created
@@ -300,6 +281,8 @@ async function openEventLobby(sessionId: string): Promise<void> {
     lobbyRoomId: lobbyRoom,
     startedAt: new Date(),
   });
+  // 10 Nov 2026 (F7) — the admins' Admin Events list shows the event live (both start paths come through here).
+  fanoutAdminEntities('sessions').catch(() => {});
   try {
     await videoService.createLobbyRoom(sessionId);
     logger.info({ sessionId, lobbyRoom }, 'Lobby LiveKit room created');
@@ -318,6 +301,11 @@ export async function handleHostStart(
     if (!await verifyHost(socket, data.sessionId)) return;
 
     const session = await sessionService.getSessionById(data.sessionId);
+    // Part 2 Task 2 (D1) — a draft was never announced: nobody but its organisers knows of it, so it cannot go live.
+    if (session.publication === 'draft') {
+      socket.emit('error', { code: ErrorCodes.EVENT_NOT_PUBLISHED, message: EVENT_DRAFT_START_REFUSAL });
+      return;
+    }
     // 30 Oct 2026 — an in-person event happens at a place: Go Live opens no room for it.
     if (refuseIfNoVideoRoom(socket, data.sessionId, resolveEventFormat(session))) return;
 
@@ -408,6 +396,11 @@ export async function handleHostStart(
     // director ends it: nothing to plan, no scheduled match rows, no host:event_plan_generated.
     if (liveKindOf(activeFormat(activeSession)) === 'rounds') {
       try {
+        // Part 2 Task 9 (Key decision D4) — an event whose organisers published a schedule starts from its latest
+        // version (materialisePublished, below): its rooms are written into the live matches (checked against today's
+        // blocks and groups), and anyone not here, or here and not seated, is repaired in. Every other event is
+        // planned by the engine as before. The same host:event_plan_generated follows either way.
+        //
         // Phase 7A.2 (7 May spec) — exclude host + cohosts from the pre-plan
         // so they don't end up paired as regular participants in any round.
         const planExcludeIds = await getAllHostIds(data.sessionId, session.hostUserId);
@@ -424,12 +417,14 @@ export async function handleHostStart(
           ? (await getCanonicalConnectedSet(data.sessionId))
             ?? new Set(activeSessionForPlan.presenceMap.keys())
           : undefined;
-        const planOutput = await matchingService.generateSessionSchedule(
-          data.sessionId,
-          undefined,
-          planExcludeIds,
-          presentForPlan,
-        );
+        const planOutput = await hasPublishedSchedule(data.sessionId)
+          ? await materialisePublished(data.sessionId, { presentUserIds: presentForPlan, hostIds: planExcludeIds })
+          : await matchingService.generateSessionSchedule(
+            data.sessionId,
+            undefined,
+            planExcludeIds,
+            presentForPlan,
+          );
         const totalPairs = planOutput.rounds.reduce((sum, r) => sum + r.pairs.length, 0);
         logger.info(
           { sessionId: data.sessionId, rounds: planOutput.rounds.length, totalPairs, durationMs: planOutput.durationMs },
@@ -456,6 +451,9 @@ export async function handleHostStart(
       }
     }
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'event.started', automatic: false,
+    });
     // Host-controlled lobby: no auto-timer. Host must click "Start Round" manually.
     logger.info({ sessionId: data.sessionId }, 'Session started → LOBBY_OPEN (host-controlled)');
   } catch (err: any) {
@@ -774,7 +772,14 @@ export async function handleHostEnd(
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
   try {
-    if (!await verifyHost(socket, data.sessionId)) return;
+    // 10 Nov 2026 (F7, spec 12/14) — a super admin who is in the room as a participant (their acting-as-host
+    // override set to false, so verifyHost reads them as a participant) can still END THE EVENT: the platform's
+    // override reads the platform role, never attendance. Only End Event (endEvent:true); every other host control,
+    // and ending a round, still needs verifyHost. Plain admins and co-hosts are unchanged.
+    const superAdminEndsEvent = !!data.endEvent
+      && ((socket.data as { role?: string } | undefined)?.role === UserRole.SUPER_ADMIN)
+      && !!getUserIdFromSocket(socket);
+    if (!superAdminEndsEvent && !await verifyHost(socket, data.sessionId)) return;
 
     const activeSession = activeSessions.get(data.sessionId);
 
@@ -829,6 +834,11 @@ export async function handleHostEnd(
       // End the current round — endRound() schedules the rating window timer
       // which in turn calls endRatingWindow() → multi-round transition logic
       await _endRound(io, data.sessionId, activeSession.currentRound);
+      if (data.endEvent) {
+        void recordEventAudit({
+          sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'event.completed', automatic: false, reason: 'Ended during a round; the event completes after its rating window',
+        });
+      }
       logger.info({ sessionId: data.sessionId }, 'Host ended active round — rating window started, normal flow continues');
       return;
     }
@@ -853,6 +863,11 @@ export async function handleHostEnd(
         '#4 — host ended during rating: closing rating window');
       // Direct (non-guard-wrapped) call — we already hold the session guard.
       await _endRatingWindow(io, data.sessionId, activeSession.currentRound);
+      if (data.endEvent) {
+        void recordEventAudit({
+          sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'event.completed', automatic: false, reason: 'Ended during a rating window',
+        });
+      }
       return;
     }
 
@@ -882,6 +897,9 @@ export async function handleHostEnd(
     }
 
     await _completeSession(io, data.sessionId);
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'event.completed', automatic: false,
+    });
     logger.info({ sessionId: data.sessionId }, 'Session ended by host');
   } catch (err: any) {
     socket.emit('error', { code: 'END_FAILED', message: err.message });
@@ -1123,6 +1141,9 @@ export async function handleHostRemoveParticipant(
     // saw stale state until the next 5s dashboard tick.
     if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'participant.removed', automatic: false, subjectUserIds: [data.userId], reason: `Removed from the event: ${String(data.reason ?? '').slice(0, 300)}`,
+    });
     logger.info({ sessionId: data.sessionId, removedUserId: data.userId }, 'Participant removed by host');
   } catch (err: any) {
     socket.emit('error', { code: 'REMOVE_FAILED', message: err.message });
@@ -1168,9 +1189,16 @@ export async function handleHostReassign(
       }
     }
 
-    // Try to pair the target participant with an isolated one
+    // Try to pair the target participant with an isolated one.
+    // Part 2 Task 7 — the first one the room checker accepts with them: never someone either blocked, and on an
+    // event with groups only someone this round's rule lets them meet (with no such person, nobody is paired).
     const targetId = data.participantId;
-    const partner = isolatedParticipants.find(id => id !== targetId);
+    const candidates = isolatedParticipants.filter(id => id !== targetId);
+    let partner: string | undefined;
+    if (candidates.length > 0) {
+      const roomCtx = await loadLiveRoomContext(data.sessionId, activeSession.currentRound, [targetId, ...candidates]);
+      partner = candidates.find(id => checkRoom(roomCtx, [targetId, id], { fallback: true }).ok);
+    }
 
     // Phase R1 (20 May 2026) — belt-and-braces. Neither the host nor any
     // cohort may end up in a reassign INSERT. The host UI shouldn't allow
@@ -1725,7 +1753,7 @@ export async function handleHostRemoveFromRoom(
 export async function handleHostMoveToRoom(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string; userId: string; targetMatchId: string }
+  data: { sessionId: string; userId: string; targetMatchId: string; override?: boolean; reason?: string }
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
   try {
@@ -1775,6 +1803,20 @@ export async function handleHostMoveToRoom(
 
     const targetMatch = targetMatchResult.rows[0];
     const targetParticipants = [targetMatch.participant_a_id, targetMatch.participant_b_id];
+
+    // Part 2 Task 7 — the room the move makes, held to the room checker before anything is created: never two
+    // people one of whom blocked the other; on an event with groups, only what this round's rule allows unless the
+    // owner overrides.
+    const actorId = getUserIdFromSocket(socket);
+    if (!actorId) return;
+    const guard = await judgeLiveRooms({
+      sessionId, round: activeSession.currentRound, actorId, request: data,
+      rooms: [[...targetParticipants, userId].filter((id): id is string => !!id)],
+    });
+    if (!guard.ok) {
+      socket.emit('error', { code: guard.code, message: guard.message });
+      return;
+    }
 
     // Phase 7A.4 (7 May spec) — atomic move-to-room.
     // Pre-fix: end-current + end-target + insert-new were independent
@@ -1836,6 +1878,10 @@ export async function handleHostMoveToRoom(
       if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
       return;
     }
+
+    await recordMatchOverride({
+      sessionId, actorId, round: activeSession.currentRound, via: 'move_to_room', overridden: guard.overridden, reason: guard.reason,
+    });
 
     // Ship A regression fix — retire both old matches' canonical locations
     // (moved users get a new placement via setRoomAssignment below; the
@@ -1913,6 +1959,10 @@ export async function handleHostMoveToRoom(
     // leaves zero active matches in the round, auto-end so we don't lock up.
     maybeAutoEndEmptyRound(sessionId);
 
+    void recordEventAudit({
+      sessionId, actorId: getUserIdFromSocket(socket), action: 'match.moved', automatic: false,
+      round: activeSession.currentRound, subjectUserIds: [userId], after: { targetMatchId, newMatchId },
+    });
     logger.info({ sessionId, userId, targetMatchId, newMatchId },
       'Host moved participant to another room');
   } catch (err: any) {
@@ -2503,6 +2553,8 @@ async function startSessionGuarded(sessionId: string, hostUserId: string): Promi
   if (session.hostUserId !== hostUserId) {
     throw new ForbiddenError('Only the host can start a session');
   }
+  // Part 2 Task 2 (D1) — as the socket start: a draft cannot go live.
+  if (session.publication === 'draft') throw new ConflictError(ErrorCodes.EVENT_NOT_PUBLISHED, EVENT_DRAFT_START_REFUSAL);
   assertVideoRoom(resolveEventFormat(session));
   if (session.status !== SessionStatus.SCHEDULED) {
     throw new ValidationError('Session can only start from scheduled state');
@@ -2564,6 +2616,7 @@ async function startSessionGuarded(sessionId: string, hostUserId: string): Promi
   }
 
   // Host-controlled lobby: no auto-timer. Host must click "Start Round" manually.
+  void recordEventAudit({ sessionId, actorId: session.hostUserId, action: 'event.started', automatic: false });
   logger.info({ sessionId }, 'Session started via REST → LOBBY_OPEN (host-controlled)');
 }
 
@@ -2657,18 +2710,30 @@ export async function resumeSession(sessionId: string, hostUserId: string): Prom
   logger.info({ sessionId, resumeSecondsRemaining }, 'Session resumed via REST');
 }
 
-export async function endSession(sessionId: string, hostUserId: string): Promise<void> {
+/**
+ * Ends the event for everyone (POST /sessions/:id/host/end). Its host may, and so may a super admin on any event
+ * (10 Nov 2026, spec 10/07: the platform's emergency override, as the socket End Event already allows). The role is
+ * the caller's platform role, never anything read from attendance. Completion is the same one the socket End Event
+ * runs, under the same session guard, so rooms close and the completed fan-out reaches every page.
+ */
+export async function endSession(
+  sessionId: string,
+  actor: { userId: string; role: UserRole },
+): Promise<void> {
   const session = await sessionService.getSessionById(sessionId);
-  if (session.hostUserId !== hostUserId) {
-    throw new ForbiddenError('Only the host can end a session');
+  if (session.hostUserId !== actor.userId && actor.role !== UserRole.SUPER_ADMIN) {
+    throw new ForbiddenError('Only the host can end this event');
   }
 
-  if (!_completeSession || !_io) {
+  const completeSession = _completeSession;
+  const io = _io;
+  if (!completeSession || !io) {
     throw new ValidationError('Session completion not available — server not fully initialised');
   }
 
-  await _completeSession(_io, sessionId);
-  logger.info({ sessionId }, 'Session ended via REST');
+  await withSessionGuard(sessionId, () => completeSession(io, sessionId));
+  void recordEventAudit({ sessionId, actorId: actor.userId, action: 'event.completed', automatic: false });
+  logger.info({ sessionId, actorId: actor.userId, byHost: session.hostUserId === actor.userId }, 'Session ended via REST');
 }
 
 export async function broadcastMessage(
@@ -2796,7 +2861,7 @@ export function ensureManualDashboardInterval(_io: SocketServer, sessionId: stri
 export async function handleHostCreateBreakout(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string; participantIds: string[]; durationSeconds?: number }
+  data: { sessionId: string; participantIds: string[]; durationSeconds?: number; override?: boolean; reason?: string }
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
     try {
@@ -2838,6 +2903,19 @@ export async function handleHostCreateBreakout(
           });
           return;
         }
+      }
+
+      // Part 2 Task 7 — the breakout room held to the room checker before anything is created: never two people
+      // one of whom blocked the other; on an event with groups, only what this round's rule allows unless the
+      // owner overrides.
+      const actorId = getUserIdFromSocket(socket);
+      if (!actorId) return;
+      const guard = await judgeLiveRooms({
+        sessionId, round: activeSession.currentRound, actorId, request: data, rooms: [participantIds],
+      });
+      if (!guard.ok) {
+        socket.emit('error', { code: guard.code, message: guard.message });
+        return;
       }
 
       // Phase 4A (5 May spec) — atomic create-breakout flow.
@@ -2924,6 +3002,10 @@ export async function handleHostCreateBreakout(
         if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
         return;
       }
+
+      await recordMatchOverride({
+        sessionId, actorId, round: activeSession.currentRound, via: 'breakout', overridden: guard.overridden, reason: guard.reason,
+      });
 
       // Ship A regression fix — clear canonical locations of the retired
       // matches (abandoned partners return to main; moved users are re-placed
@@ -3103,6 +3185,10 @@ export async function handleHostCreateBreakout(
       // an explicit emit — e.g. future code paths or race conditions).
       ensureManualDashboardInterval(io, sessionId);
 
+      void recordEventAudit({
+        sessionId, actorId: getUserIdFromSocket(socket), action: 'breakout.created', automatic: false,
+        round: activeSession.currentRound, subjectUserIds: participantIds, reason: 'Host created a breakout room',
+      });
       logger.info({ sessionId, matchId, participantIds, roomSlug, durationSeconds: duration }, 'Host created breakout room');
     } catch (err: any) {
       logger.error({ err }, 'Error in handleHostCreateBreakout');

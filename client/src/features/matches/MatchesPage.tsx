@@ -22,6 +22,7 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
+import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 
 interface PlatformMatch {
   userId: string;
@@ -49,7 +50,6 @@ export default function MatchesPage() {
   const [params, setParams] = useSearchParams();
   const browse = params.get('view') === 'all';
   const setBrowse = (all: boolean) => setParams(all ? { view: 'all' } : {}, { replace: true });
-  const [requested, setRequested] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState<string | null>(null);
   const { addToast } = useToastStore();
   const navigate = useNavigate();
@@ -70,13 +70,14 @@ export default function MatchesPage() {
   });
 
   const expressInterest = async (m: PlatformMatch) => {
-    if (sending || requested.has(m.userId)) return;
+    if (sending) return;
     setSending(m.userId);
     try {
       await api.post(`/matches/platform/${m.userId}/interest`);
-      setRequested(prev => new Set(prev).add(m.userId));
       addToast(`${m.displayName || 'They'} will be notified — if they say yes too, a chat opens.`, 'success');
-      queryClient.invalidateQueries({ queryKey: ['platformMatches'] });
+      // Awaited, so "Sending…" holds until the card says "Request sent" (10 Nov 2026: the server's state is the only
+      // one; a set kept in this page went on saying "sent" after the request was withdrawn).
+      await queryClient.invalidateQueries({ queryKey: ['platformMatches'] });
     } catch (err: any) {
       const msg = err?.response?.data?.error?.message;
       addToast(msg || 'Could not send that right now — try again in a moment.', 'error');
@@ -145,14 +146,18 @@ export default function MatchesPage() {
                     from the list entirely — press the button and they vanish.
                     The server now keeps them and says where the request got to,
                     so this survives a reload. */}
-                {requested.has(m.userId) || m.pokeStatus ? (
+                {m.pokeStatus === 'pending' && m.pokeSentByOwner ? (
+                  // 10 Nov 2026: the member's own request, still waiting, with the way to take it back beside it.
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <span className="flex items-center gap-1.5 text-sm text-emerald-600 font-medium min-h-[44px]" data-testid={`match-state-${m.userId}`}>
+                      <Check className="h-4 w-4" /> Request sent
+                    </span>
+                    <WithdrawRequestButton userId={m.userId} />
+                  </div>
+                ) : m.pokeStatus ? (
                   <span className="flex items-center gap-1.5 text-sm text-emerald-600 font-medium min-h-[44px] sm:min-h-0" data-testid={`match-state-${m.userId}`}>
                     <Check className="h-4 w-4" />
-                    {m.pokeStatus === 'accepted'
-                      ? 'Connected'
-                      : m.pokeStatus === 'pending' && m.pokeSentByOwner === false
-                        ? 'They asked to meet you'
-                        : 'Introduction requested'}
+                    {m.pokeStatus === 'accepted' ? 'Connected' : 'They asked to meet you'}
                   </span>
                 ) : (
                   <Button

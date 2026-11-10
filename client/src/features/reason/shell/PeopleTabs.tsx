@@ -1,7 +1,7 @@
 // The member's own connections come first (client feedback, 19 Oct: "On the People page, show the user's own
-// connections first"). Until People is rebuilt (next milestone), the four existing people pages follow under
+// connections first"). Until People is rebuilt (next milestone), the existing people pages follow under
 // the same row of tabs, so none of them is lost from the new navigation. On a phone the row scrolls sideways
-// (the current tab is brought into view); from 721px the five tabs wrap instead, so a tablet shows them all.
+// (the current tab is brought into view); from 721px the six tabs wrap instead, so a tablet shows them all.
 import { useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -10,6 +10,7 @@ import useRevealActive from './useRevealActive';
 export const PEOPLE_TABS = [
   { to: '/connections', label: 'Your connections' },
   { to: '/search', label: 'Find people' },
+  { to: '/people/everyone', label: 'Everyone' },
   { to: '/agents', label: 'Your searches' },
   { to: '/matches', label: 'Everyone who fits' },
   { to: '/encounters', label: 'People you have met' },

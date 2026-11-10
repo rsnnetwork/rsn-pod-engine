@@ -189,6 +189,8 @@ describe('Invite Service', () => {
       const insert = mockQuery.mock.calls.find((c: unknown[]) => /INSERT INTO invites/.test(c[0] as string));
       expect(insert).toBeTruthy();
       expect(insert![1]).toContain('guest@example.com');
+      // Part 2 Task 4 fix round 2: an invite that names an address defaults to single use (max_uses, 7th parameter).
+      expect(insert![1][6]).toBe(1);
     });
 
     it('rejects an inviteeUserId that is not a member', async () => {
@@ -265,6 +267,7 @@ describe('Invite Service', () => {
       const insert = mockQuery.mock.calls.find(c => String(c[0]).includes('INSERT INTO invites'));
       expect(insert).toBeDefined(); // a real row was written
       expect(insert![1][2]).toBe('user-member'); // inviter_id is the member — origin stays traceable
+      expect(insert![1][6]).toBe(1); // addressed, so single use by default (Part 2 Task 4 fix round 2)
     });
 
     it('a member still cannot platform-invite someone who is already registered', async () => {
