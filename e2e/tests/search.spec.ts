@@ -91,8 +91,8 @@ test('a member can find someone they have never met, by name, title and company'
   const card = (r.json.data as any[]).find(x => x.userId === stranger.id);
   // 10 Nov 2026 (F4): plus where a meeting request between the two stands (the searcher's own relationship).
   expect(Object.keys(card).sort()).toEqual(
-    ['avatarUrl', 'company', 'displayName', 'jobTitle', 'location', 'pokeSentByOwner', 'pokeStatus', 'userId']);
-  expect(card).toMatchObject({ pokeStatus: null, pokeSentByOwner: null });
+    ['avatarUrl', 'company', 'declinedByThem', 'displayName', 'jobTitle', 'location', 'pokeSentByOwner', 'pokeStatus', 'userId']);
+  expect(card).toMatchObject({ pokeStatus: null, pokeSentByOwner: null, declinedByThem: false });
   console.log('  ✓ found by name, title and company; thin card only.');
 });
 

@@ -21,11 +21,17 @@ export interface SearchResult {
   /**
    * Where a meeting request between the searcher and this member stands, either way (10 Nov 2026, Stefan: "if I
    * have ALREADY asked them, why is that not shown?"): the newest one pending or accepted, as For You reads it. A
-   * withdrawn request is as if it had never been sent, and a declined one is not drawn here (asking again says so).
+   * withdrawn request is as if it had never been sent.
    */
   pokeStatus: 'pending' | 'accepted' | null;
   /** True when the searcher sent it, false when this member did; null when there is none. */
   pokeSentByOwner: boolean | null;
+  /**
+   * This member declined a request the searcher sent them (Everyone's declined_by_them, the Human Profile's rule).
+   * sendPoke refuses to ask them again, so the card reads "Request declined" unless a live request or a connection
+   * outranks it. A decline the searcher gave is not this: the one who declined can still ask.
+   */
+  declinedByThem: boolean;
 }
 
 const MAX_LIMIT = 50;
@@ -67,7 +73,9 @@ export async function searchMembers(
             u.avatar_url AS "avatarUrl", u.job_title AS "jobTitle",
             u.company, u.location,
             pk.status AS "pokeStatus",
-            CASE WHEN pk.sender_id IS NULL THEN NULL ELSE pk.sender_id = $1 END AS "pokeSentByOwner"
+            CASE WHEN pk.sender_id IS NULL THEN NULL ELSE pk.sender_id = $1 END AS "pokeSentByOwner",
+            EXISTS (SELECT 1 FROM user_pokes d
+                     WHERE d.sender_id = $1 AND d.recipient_id = u.id AND d.status = 'declined') AS "declinedByThem"
        FROM users u
        LEFT JOIN LATERAL (
          SELECT p.status, p.sender_id

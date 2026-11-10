@@ -16,10 +16,12 @@ let browser: Browser;
 let seeker: TestUser;   // asks, withdraws, asks again
 let target: TestUser;   // is asked; watches their request list live
 let other: TestUser;    // asks the seeker: an incoming request keeps "I want to meet" on Find people
+let decliner: TestUser; // declines the seeker: Find people then reads "Request declined" (fix round 1)
 const ctxs: BrowserContext[] = [];
 const RUN = Date.now().toString(36);
 const TARGET_NAME = `Wilhelmina Fourquest ${RUN}`;
 const OTHER_NAME = `Wilhelmina Otherway ${RUN}`;
+const DECLINER_NAME = `Wilhelmina Saysno ${RUN}`;
 
 async function apiAs(u: TestUser, method: string, path: string, body?: unknown) {
   const res = await fetch(`${SERVER}/api${path}`, {
@@ -76,6 +78,8 @@ test.beforeAll(async () => {
   seeker = await createTestUser('f4seeker');
   target = await createTestUser('f4target');
   other = await createTestUser('f4other');
+  decliner = await createTestUser('f4decliner');
+  await pool.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [decliner.id, DECLINER_NAME]);
   await pool.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [target.id, TARGET_NAME]);
   await pool.query(`UPDATE users SET display_name = $2 WHERE id = $1`, [other.id, OTHER_NAME]);
   browser = await chromium.launch({ headless: false });
@@ -84,7 +88,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) await c.close().catch(() => {});
   try { await browser?.close(); } catch {}
-  await cleanup(pool, { ids: [seeker?.id, target?.id, other?.id].filter(Boolean) });
+  await cleanup(pool, { ids: [seeker?.id, target?.id, other?.id, decliner?.id].filter(Boolean) });
   const swept = await cleanupByPrefix(pool, 'e2etest-f4');
   if (swept) console.log(`  swept ${swept} leftover f4* account(s)`);
 });
@@ -188,4 +192,29 @@ test('the profile bar offers Withdraw beside "Request sent", inside a 360px phon
   const statuses = (await requestsBetween(seeker, target)).map(r => r.status);
   expect(statuses.filter(s => s === 'pending'), 'nothing left waiting').toHaveLength(0);
   console.log('  ✓ profile bar: Request sent + Withdraw fit 360px; withdrawing brings Meet back.');
+});
+
+test('Find people: a request they declined reads "Request declined", inert; the one who declined can still ask', async () => {
+  test.setTimeout(150_000);
+  const sent = await apiAs(seeker, 'POST', '/pokes', { recipientId: decliner.id });
+  expect(sent.status).toBe(201);
+  const declined = await apiAs(decliner, 'POST', `/pokes/${sent.json.data.id}/decline`);
+  expect(declined.status).toBe(200);
+
+  expect(await searchCard(seeker, 'Saysno', decliner.id), 'the sender reads the decline')
+    .toMatchObject({ pokeStatus: null, declinedByThem: true });
+  expect(await searchCard(decliner, 'f4seeker', seeker.id), 'the one who declined reads nothing')
+    .toMatchObject({ pokeStatus: null, declinedByThem: false });
+
+  const page = await openAs(seeker, '/search');
+  const card = await searchFor(page, 'Saysno', decliner.id);
+  const state = page.getByTestId(`search-request-declined-${decliner.id}`);
+  await expect(state).toHaveText(/Request declined/i, { timeout: 30_000 });
+  await fitsViewport(page, state, 'Request declined at 360px');
+  await expect(card.getByRole('button', { name: /I want to meet/i }), 'no button that can only be refused').toHaveCount(0);
+
+  const theirs = await openAs(decliner, '/search');
+  const back = await searchFor(theirs, 'f4seeker', seeker.id);
+  await expect(back.getByRole('button', { name: /I want to meet/i }), 'the decliner can still ask').toBeVisible({ timeout: 30_000 });
+  console.log('  ✓ declined: sender sees an inert "Request declined" at 360px; the decliner still sees "I want to meet".');
 });

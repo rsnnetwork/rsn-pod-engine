@@ -34,10 +34,18 @@ interface Result {
   pokeStatus?: 'pending' | 'accepted' | null;
   /** True when the member searching sent it; false when this person did. */
   pokeSentByOwner?: boolean | null;
+  /** This person declined a request the member sent them, so asking again is refused (Everyone's rule). */
+  declinedByThem?: boolean;
 }
 
 /** The searcher's own request to this person, still waiting: "Request sent", with Withdraw beside it. */
 const askedByMe = (r: Result) => r.pokeStatus === 'pending' && r.pokeSentByOwner === true;
+/**
+ * "Request declined", inert, for the member whose request this person declined. A live request either way or a
+ * connection outranks an old decline (the Everyone list's and the Human Profile's precedence); the member who did the
+ * declining sees no state and can still ask.
+ */
+const declinedForMe = (r: Result) => r.declinedByThem === true && !r.pokeStatus;
 
 const MIN_QUERY = 2;
 
@@ -173,6 +181,14 @@ export default function SearchPage() {
               >
                 Message
               </Link>
+            ) : declinedForMe(r) ? (
+              // Inert, as the profile bar draws it: asking again would only be refused.
+              <span
+                className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-xl bg-gray-100 px-2 text-center text-sm font-medium text-gray-500"
+                data-testid={`search-request-declined-${r.userId}`}
+              >
+                Request declined
+              </span>
             ) : (
               // An incoming request (they asked the member) keeps "I want to meet": pressing it is the match.
               <Button

@@ -1033,7 +1033,7 @@ test('4. Matches: an open page changes on its own when a request is sent from an
   }
   const row = (await pool.query<{ status: string }>(`SELECT status FROM user_pokes WHERE id = $1`, [pokeId])).rows[0];
   expect(row.status).toBe('pending');
-  console.log('  ✓ request sent through the API: both open pages changed on their own ("Introduction requested" / "They asked to meet you"), and each asked for its matches again.');
+  console.log('  ✓ request sent through the API: both open pages changed on their own ("Request sent" / "They asked to meet you"), and each asked for its matches again.');
 
   // The person says yes through the API. Both pages say Connected.
   const answeredAt = Date.now();

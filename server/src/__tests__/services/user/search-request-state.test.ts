@@ -41,6 +41,9 @@ function armWith(people: string[], requests: Req[]) {
           userId: id, displayName: id, avatarUrl: null, jobTitle: null, company: null, location: null,
           pokeStatus: newest?.status ?? null,
           pokeSentByOwner: newest ? newest.sender === viewer : null,
+          // The SQL's EXISTS: a declined request the searcher sent this person, at any time.
+          declinedByThem: /d\.sender_id = \$1 AND d\.recipient_id = u\.id AND d\.status = 'declined'/.test(sql)
+            && requests.some(r => r.sender === viewer && r.recipient === id && r.status === 'declined'),
         };
       }),
     });
@@ -112,7 +115,54 @@ describe('Find people carries where a meeting request stands', () => {
 
   it('nobody asked anybody: null and null', async () => {
     armWith(['ann'], []);
-    expect((await byId()).ann).toMatchObject({ pokeStatus: null, pokeSentByOwner: null });
+    expect((await byId()).ann).toMatchObject({ pokeStatus: null, pokeSentByOwner: null, declinedByThem: false });
+  });
+});
+
+// Controller ruling, fix round 1 (spec 09/04: consistent declined states on Find People). sendPoke refuses to ask
+// someone who declined the member's earlier request, so the card must say "Request declined" rather than offer a
+// button that can only fail. The rule and precedence are the Everyone list's (F3, commit f45f0dec).
+describe('Find people carries a declined request, Everyone\'s way', () => {
+  it('reads the decline from requests the searcher SENT that this member declined, at any time', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await searchMembers(ME, 'ann', 20);
+    const sql = flat(String(mockQuery.mock.calls[0][0]));
+    expect(sql).toContain(
+      "EXISTS (SELECT 1 FROM user_pokes d WHERE d.sender_id = $1 AND d.recipient_id = u.id AND d.status = 'declined') AS \"declinedByThem\"");
+  });
+
+  it('my request they declined: declinedByThem, and no live request', async () => {
+    armWith(['ann'], [{ sender: ME, recipient: 'ann', status: 'declined', at: 1 }]);
+    expect((await byId()).ann).toMatchObject({ pokeStatus: null, pokeSentByOwner: null, declinedByThem: true });
+  });
+
+  it('their request I declined: nothing, so I can still ask (the one who declined is never refused)', async () => {
+    armWith(['ann'], [{ sender: 'ann', recipient: ME, status: 'declined', at: 1 }]);
+    expect((await byId()).ann).toMatchObject({ pokeStatus: null, declinedByThem: false });
+  });
+
+  it('a live request outranks an old decline: they asked me after declining me (pressing is the match)', async () => {
+    armWith(['ann'], [
+      { sender: ME, recipient: 'ann', status: 'declined', at: 1 },
+      { sender: 'ann', recipient: ME, status: 'pending', at: 2 },
+    ]);
+    expect((await byId()).ann).toMatchObject({ pokeStatus: 'pending', pokeSentByOwner: false, declinedByThem: true });
+  });
+
+  it('a connection outranks an old decline: they declined once, later I accepted their request', async () => {
+    armWith(['ann'], [
+      { sender: ME, recipient: 'ann', status: 'declined', at: 1 },
+      { sender: 'ann', recipient: ME, status: 'accepted', at: 2 },
+    ]);
+    expect((await byId()).ann).toMatchObject({ pokeStatus: 'accepted', declinedByThem: true });
+  });
+
+  it('the card picks the state with that precedence: sent, connected, then declined, else the button', () => {
+    const fs = jest.requireActual<typeof import('fs')>('fs');
+    const path = jest.requireActual<typeof import('path')>('path');
+    const page = flat(fs.readFileSync(path.join(__dirname, '../../../../../client/src/features/search/SearchPage.tsx'), 'utf8'));
+    expect(page).toContain("const declinedForMe = (r: Result) => r.declinedByThem === true && !r.pokeStatus;");
+    expect(page).toMatch(/askedByMe\(r\) \? \(.*\) : r\.pokeStatus === 'accepted' \? \(.*\) : declinedForMe\(r\) \? \(.*Request declined.*\) : \(.*I want to meet/);
   });
 
   it('still never returns the searcher, and keeps the thin card (no email)', async () => {
