@@ -183,7 +183,10 @@ test('invitation only: the list and the codes decide who registers and who enter
   const refusal = await joinAndListen(after, eventId);
   expect(refusal).toEqual({ code: 'EVENT_ADMISSION_REQUIRED', message: INVITED_GUESTS });
   const kept = await pool.query(`SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`, [eventId, l.id]);
-  expect(kept.rows[0].status).toBe('registered');
+  // The place is kept, never removed: the row is there, and reads 'registered', or 'disconnected' because this member
+  // joined live above and that socket was closed.
+  expect(kept.rows, 'their participant row is kept').toHaveLength(1);
+  expect(['registered', 'disconnected']).toContain(kept.rows[0].status);
 
   // Every change was audited.
   const audit = await pool.query(
