@@ -36,6 +36,8 @@ import { getCanonicalConnectedSet } from '../state/canonical-state';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
 // Part 2 Task 7 — rooms a host makes by hand meet the engine's one room checker (blocks always; group rules).
 import { judgeLiveRooms, loadLiveRoomContext, recordMatchOverride } from '../../matching/live-room-guard';
+// Part 2 Task 9 — an event with a published schedule starts from its latest version, not the engine's plan.
+import { hasPublishedSchedule, materialisePublished } from '../../schedule/schedule-live.service';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. Every legacy
 // in-handler broadcast (roster:changed, host:transferred, host:event_plan_*,
 // pin:changed, tile:size_changed, host:visibility_changed,
@@ -394,6 +396,11 @@ export async function handleHostStart(
     // director ends it: nothing to plan, no scheduled match rows, no host:event_plan_generated.
     if (liveKindOf(activeFormat(activeSession)) === 'rounds') {
       try {
+        // Part 2 Task 9 (Key decision D4) — an event whose organisers published a schedule starts from its latest
+        // version (materialisePublished, below): its rooms are written into the live matches (checked against today's
+        // blocks and groups), and anyone not here, or here and not seated, is repaired in. Every other event is
+        // planned by the engine as before. The same host:event_plan_generated follows either way.
+        //
         // Phase 7A.2 (7 May spec) — exclude host + cohosts from the pre-plan
         // so they don't end up paired as regular participants in any round.
         const planExcludeIds = await getAllHostIds(data.sessionId, session.hostUserId);
@@ -410,12 +417,14 @@ export async function handleHostStart(
           ? (await getCanonicalConnectedSet(data.sessionId))
             ?? new Set(activeSessionForPlan.presenceMap.keys())
           : undefined;
-        const planOutput = await matchingService.generateSessionSchedule(
-          data.sessionId,
-          undefined,
-          planExcludeIds,
-          presentForPlan,
-        );
+        const planOutput = await hasPublishedSchedule(data.sessionId)
+          ? await materialisePublished(data.sessionId, { presentUserIds: presentForPlan, hostIds: planExcludeIds })
+          : await matchingService.generateSessionSchedule(
+            data.sessionId,
+            undefined,
+            planExcludeIds,
+            presentForPlan,
+          );
         const totalPairs = planOutput.rounds.reduce((sum, r) => sum + r.pairs.length, 0);
         logger.info(
           { sessionId: data.sessionId, rounds: planOutput.rounds.length, totalPairs, durationMs: planOutput.durationMs },

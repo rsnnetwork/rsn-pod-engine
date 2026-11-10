@@ -1375,11 +1375,23 @@ export async function repairFutureRounds(
     return { regeneratedRounds: [], errors: [] };
   }
 
+  // Part 2 Task 9 (10 Nov 2026, Key decision D4) — an event with a published schedule repairs through the matching
+  // board instead: the draft is edited (locked meetings kept), an automatic version is published, and only the rooms
+  // that changed are rewritten. Loaded when used: the schedule services load this module (the board drives the engine).
+  const scheduleLive = await import('../schedule/schedule-live.service');
+  if (await scheduleLive.hasPublishedSchedule(sessionId)) {
+    const { getAllHostIds } = await import('../session/host-set');
+    return scheduleLive.repairPublishedFromLive(
+      sessionId, fromRoundNumber, reason, await getAllHostIds(sessionId, session.hostUserId), presentUserIds,
+    );
+  }
+
   // Wipe all 'scheduled' matches for fromRound and beyond. Active/completed
-  // rounds are immutable per spec §9 and are NOT touched.
+  // rounds are immutable per spec §9 and are NOT touched. Part 2 Task 9 — nor is a
+  // meeting locked on the matching board (none exists without a published schedule).
   await query(
     `DELETE FROM matches
-       WHERE session_id = $1 AND round_number >= $2 AND status = 'scheduled'`,
+       WHERE session_id = $1 AND round_number >= $2 AND status = 'scheduled' AND locked = FALSE`,
     [sessionId, fromRoundNumber],
   );
 
@@ -1478,10 +1490,12 @@ async function persistMatches(
   await transaction(async (client) => {
     for (const round of rounds) {
       // Delete any existing scheduled matches for this round before inserting new ones
-      // (handles rematch/regeneration — cancelled/scheduled rows still hold unique constraint)
+      // (handles rematch/regeneration — cancelled/scheduled rows still hold unique constraint).
+      // Part 2 Task 9 — a meeting locked on the matching board stays: Re-match leaves its people
+      // out of the engine and keeps their room (no row is locked without a published schedule).
       await client.query(
         `DELETE FROM matches
-         WHERE session_id = $1 AND round_number = $2 AND status IN ('scheduled', 'cancelled')`,
+         WHERE session_id = $1 AND round_number = $2 AND status IN ('scheduled', 'cancelled') AND locked = FALSE`,
         [sessionId, round.roundNumber]
       );
 

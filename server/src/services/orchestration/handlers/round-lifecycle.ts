@@ -18,6 +18,8 @@ import { canTransitionSession } from '../state/session-fsm';
 import { startSegmentTimer, clearSessionTimers, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
 import * as sessionService from '../../session/session.service';
 import * as matchingService from '../../matching/matching.service';
+// Part 2 Task 9 — planned rooms written from a published schedule are checked once more as their round starts.
+import { refuseBrokenScheduledRooms } from '../../schedule/schedule-live.service';
 import * as ratingService from '../../rating/rating.service';
 import * as videoService from '../../video/video.service';
 // Phase 2C (5 May spec) — chokepoint for status writes.
@@ -265,6 +267,16 @@ export async function transitionToRound(
     // startable rows: 'cancelled' forensic rows (cancel-preview) must never be
     // resurrected to 'active'; 'active' is kept so a retry after a partial
     // failure re-enters cleanly.
+    //
+    // Part 2 Task 9 — Start Round, Confirm and the transition timer all start here: a planned room written from a
+    // published schedule that the one room checker now refuses (a block, a report or a regroup made since) is
+    // cancelled and its people wait this round. Rooms the engine made live are not read, so an event without a
+    // published schedule starts exactly as before. Never stops the round from starting.
+    try {
+      await refuseBrokenScheduledRooms(sessionId, roundNumber);
+    } catch (err) {
+      logger.warn({ err, sessionId, roundNumber }, 'Checking the published rooms before the round failed (non-fatal)');
+    }
     let matches = (await matchingService.getMatchesByRound(sessionId, roundNumber))
       .filter(m => m.status === 'scheduled' || m.status === 'active');
     if (matches.length === 0) {

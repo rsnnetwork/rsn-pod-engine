@@ -126,6 +126,7 @@ export const ErrorCodes = {
   SCHEDULE_GROUP_RULE: 'SCHEDULE_GROUP_RULE',            // 409; the round's group rule refuses the room (overridable); details.alternatives
   SCHEDULE_RULE: 'SCHEDULE_RULE',                        // 409; a block, a room over three, or a person who can't be seated; details.alternatives
   SCHEDULE_ROUND_STARTED: 'SCHEDULE_ROUND_STARTED',      // 409; the round has already started in the live event
+  SCHEDULE_HAS_CONFLICTS: 'SCHEDULE_HAS_CONFLICTS',      // 409; publishing refused until the draft's conflicts are fixed; details.blocking
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

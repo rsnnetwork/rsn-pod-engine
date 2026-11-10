@@ -89,7 +89,8 @@ export function eventTimeInZone(at: Date, timeZone?: string | null): string {
 export const eventPagePath = (sessionId: string): string => `/sessions/${sessionId}`;
 export const eventPageUrl = (sessionId: string): string => `${config.clientUrl}${eventPagePath(sessionId)}`;
 
-export type EventBellType = 'event_reminder' | 'event_rescheduled';
+/** `event_schedule_changed` (Part 2 Task 9): someone's meetings changed in a newly published schedule version. */
+export type EventBellType = 'event_reminder' | 'event_rescheduled' | 'event_schedule_changed';
 
 export interface EventBell {
   userId: string;

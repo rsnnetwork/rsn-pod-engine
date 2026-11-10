@@ -111,3 +111,78 @@ export interface BoardRefusal {
 
 /** The `room` of the alternative that leaves the person in the basket. */
 export const BOARD_BASKET_ROOM = 0;
+
+// ─── Published versions (10 Nov 2026 spec, Part 2 Task 9; sections 06, 07) ───────────────────────────────
+//
+// Publishing freezes the draft into a numbered version nobody edits again. The live event follows the latest one:
+// at Start its rounds are written into the live matches, and every later version (an organiser's, or the product's
+// own after someone arrives or leaves) rewrites only the rooms that changed, in rounds not yet started.
+
+/** One room of a published round. `locked`: locked on the board; `override`: seated against the round's group rule by someone allowed to. */
+export interface ScheduleSnapshotRoom {
+  room: number;
+  userIds: string[];
+  locked: boolean;
+  override: boolean;
+  fallback: boolean;
+  /** How the room was seated: 'manual' when an organiser placed anyone in it, else 'repair' when the product did, else 'auto'. */
+  source: BoardSeatSource;
+}
+
+/** A published version's rounds, as they were published. */
+export interface ScheduleSnapshot {
+  rounds: Array<{ round: number; rooms: ScheduleSnapshotRoom[] }>;
+}
+
+/** Something about the draft the organiser reads before publishing. `room` is null when it is about a whole round. */
+export interface PublishPreviewItem {
+  round: number;
+  room: number | null;
+  message: string;
+}
+
+/**
+ * What publishing the draft now would do. `blocking`: what has to be fixed first (two seats for one person, two
+ * people kept apart, a group rule broken without an override, someone no longer in the event, a room over three).
+ * `warnings`: what publishing keeps (people meeting again, a gap in a meeting, people waiting, a round's capacity).
+ * `impactedUserIds`: the people whose meetings would change in rounds not yet started.
+ */
+export interface PublishPreview {
+  blocking: PublishPreviewItem[];
+  warnings: PublishPreviewItem[];
+  impactedUserIds: string[];
+  nextVersion: number;
+}
+
+export interface PublishResult {
+  version: number;
+  impactedUserIds: string[];
+}
+
+/** One published version, for the organisers' list. `publishedBy` is null for the product's own (shown "Automatic"). */
+export interface ScheduleVersionSummary {
+  version: number;
+  publishedAt: string;
+  publishedBy: { userId: string; displayName: string } | null;
+  automatic: boolean;
+  reason: string | null;
+  note: string | null;
+  impactedCount: number;
+}
+
+/** One partner in a participant's published meeting. */
+export interface MySchedulePartner {
+  displayName: string;
+  avatarUrl: string | null;
+  groupLabels: string[];
+}
+
+/**
+ * A participant's own meetings in the latest published version (never the draft). `room` is null in a round they
+ * have no meeting in.
+ */
+export interface MySchedule {
+  version: number;
+  publishedAt: string;
+  rounds: Array<{ round: number; startsAt: string | null; room: number | null; partners: MySchedulePartner[] }>;
+}

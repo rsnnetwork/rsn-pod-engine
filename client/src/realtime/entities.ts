@@ -65,6 +65,8 @@ export const E = {
   sessionCallLink: (sessionId: string) => `session:${sessionId}:call-link`,
   /** 10 Nov 2026 spec, Part 2 Task 8: the organisers' private matching-board draft (seats, locks, absences). */
   sessionSchedule: (sessionId: string) => `session:${sessionId}:schedule`,
+  /** 10 Nov 2026 spec, Part 2 Task 9: the event's published schedule (a new version), for its participants and organisers. */
+  sessionPublishedSchedule: (sessionId: string) => `session:${sessionId}:published-schedule`,
 
   // Match (in-event)
   match: (matchId: string) => `match:${matchId}`,

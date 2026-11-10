@@ -3,18 +3,29 @@
 // GET  /sessions/:id/schedule            ScheduleBoard: rounds, rooms, seats, baskets, verdicts, the revision
 // POST /sessions/:id/schedule/generate   { expectedRevision, rounds: number[] | 'all' } → BoardOpResult
 // POST /sessions/:id/schedule/ops        { expectedRevision, op: BoardOp } → BoardOpResult
+// GET  /sessions/:id/schedule/publish-preview   PublishPreview: what blocks publishing, what it keeps, who it changes
+// POST /sessions/:id/schedule/publish   { expectedRevision, note? } → PublishResult (Part 2 Task 9)
+// GET  /sessions/:id/schedule/versions  ScheduleVersionSummary[]: the published versions, latest first
+// GET  /sessions/:id/schedule/mine      MySchedule | null: the signed-in participant's own published meetings
 //
 // Mounted at /api/sessions beside the event routes. Organisers only (canActAsHost, checked by the service, which
 // also refuses a write made against an older board with 409 SCHEDULE_CHANGED and the board now, audits every
-// change, and tells the host and co-hosts on session:<id>:schedule). Nothing here is read by the live event.
+// change, and tells the host and co-hosts on session:<id>:schedule), except /mine, which anyone with a place in the
+// event reads (an event guest too: it is on the guest allowlist). The live event reads only published versions
+// (schedule-live.service.ts); a publish while live rewrites the changed rooms of the rounds not yet started.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import type { ApiResponse, BoardOp, BoardOpResult, ScheduleBoard } from '@rsn/shared';
+import type {
+  ApiResponse, BoardOp, BoardOpResult, MySchedule, PublishPreview, PublishResult, ScheduleBoard, ScheduleVersionSummary,
+} from '@rsn/shared';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { scheduleReadLimiter, scheduleWriteLimiter } from '../middleware/rateLimit';
 import { applyBoardOp, generateBoard, getBoard } from '../services/schedule/schedule-board.service';
+import {
+  getMySchedule, listScheduleVersions, previewPublish, publishSchedule,
+} from '../services/schedule/schedule-publish.service';
 
 const router = Router();
 
@@ -50,6 +61,7 @@ export const boardOpSchema = z.discriminatedUnion('kind', [
 
 const generateBody = z.object({ expectedRevision, rounds });
 const opsBody = z.object({ expectedRevision, op: boardOpSchema });
+const publishBody = z.object({ expectedRevision, note: z.string().trim().max(500).optional() });
 
 const actorOf = (req: Request) => ({ userId: req.user!.userId, role: req.user!.role });
 
@@ -81,6 +93,49 @@ router.post('/:id/schedule/ops', authenticate, scheduleWriteLimiter, validate(ev
       const body = req.body as z.infer<typeof opsBody>;
       const data = await applyBoardOp(req.params.id, actorOf(req), body.expectedRevision, body.op as BoardOp);
       res.json({ success: true, data } satisfies ApiResponse<BoardOpResult>);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+router.get('/:id/schedule/publish-preview', authenticate, scheduleReadLimiter, validate(eventParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await previewPublish(req.params.id, actorOf(req));
+      res.json({ success: true, data } satisfies ApiResponse<PublishPreview>);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+// Refused with 409 SCHEDULE_HAS_CONFLICTS (details.blocking) while anything blocks, 409 SCHEDULE_CHANGED (details.board)
+// when the board changed since the organiser's read. The service tells every screen and rings the impacted.
+router.post('/:id/schedule/publish', authenticate, scheduleWriteLimiter, validate(eventParams, 'params'), validate(publishBody),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const body = req.body as z.infer<typeof publishBody>;
+      const data = await publishSchedule(req.params.id, actorOf(req), body.expectedRevision, { note: body.note });
+      res.json({ success: true, data } satisfies ApiResponse<PublishResult>);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+router.get('/:id/schedule/versions', authenticate, scheduleReadLimiter, validate(eventParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await listScheduleVersions(req.params.id, actorOf(req));
+      res.json({ success: true, data } satisfies ApiResponse<ScheduleVersionSummary[]>);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+router.get('/:id/schedule/mine', authenticate, scheduleReadLimiter, validate(eventParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await getMySchedule(req.params.id, req.user!.userId);
+      res.json({ success: true, data } satisfies ApiResponse<MySchedule | null>);
     } catch (err) {
       next(err);
     }

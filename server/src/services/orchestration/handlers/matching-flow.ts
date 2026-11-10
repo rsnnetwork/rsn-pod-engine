@@ -43,6 +43,11 @@ import { E } from '../../../realtime/entities';
 import { emitStateSnapshot } from '../state/state-snapshot';
 // Part 2 (10 Nov 2026) - each host action on the matching board is attributed in the event's audit trail.
 import { recordEventAudit } from '../../audit/event-audit';
+// Part 2 Task 9 — an event with a published schedule: its locked meetings survive Re-match, swap and exclude refuse
+// them, a stale planned round is repaired through the board, and a confirmed round is written back to the board.
+import {
+  anyMatchLocked, hasPublishedSchedule, lockedPeopleInRound, LOCKED_MATCH_MESSAGE, repairAffectedRounds, syncRoundIntoSchedule,
+} from '../../schedule/schedule-live.service';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // transitionToRound lives in round-lifecycle.ts.
@@ -445,7 +450,25 @@ export async function handleHostGenerateMatches(
       const planBreaksRules = existingPlanned
         .filter(m => m.status === 'scheduled')
         .some(m => !checkRoom(roomCtx, [m.participantAId, m.participantBId, m.participantCId].filter((id): id is string => !!id), { fallback: true }).ok);
-      const canSurfacePrePlan = sameMembers && !planRepeatsPriorRound && !planBreaksRules && matchingPolicy !== 'platform_wide';
+
+      // Part 2 Task 9 (Key decision D4) — on an event with a published schedule this round IS the published one: it
+      // is never wiped. When the people in the room differ from it, or a room now breaks a rule, the board repairs
+      // it (locked meetings kept, an automatic version published, only the affected rooms rewritten); then the
+      // round is shown as the preview (the branch below). Only a round left with no meeting falls through to the engine.
+      const onBoard = await hasPublishedSchedule(data.sessionId);
+      let boardRoundReady = false;
+      if (onBoard) {
+        if (!sameMembers || planBreaksRules) {
+          await repairAffectedRounds(data.sessionId, nextRound, {
+            departed: [...plannedIds].filter(id => !eligibleIds.has(id)),
+            arrived: [...eligibleIds].filter(id => !plannedIds.has(id)),
+          }, 'host_request');
+        }
+        boardRoundReady = (await matchingService.getMatchesByRound(data.sessionId, nextRound)).some(m => m.status === 'scheduled');
+      }
+      // Without a published schedule: the first line, exactly as before (onBoard is false, boardRoundReady false).
+      const canSurfacePrePlan = sameMembers && !planRepeatsPriorRound && !planBreaksRules && matchingPolicy !== 'platform_wide' && !onBoard
+        || boardRoundReady;
 
       if (canSurfacePrePlan) {
         logger.info(
@@ -616,7 +639,9 @@ export async function handleHostConfirmRound(
   if (!await verifyHost(socket, data.sessionId)) return;
   // 26 Oct 2026 — matching exists only in a rounds event; a video meeting refuses it.
   if (refuseIfFormatLacks(socket, data.sessionId, 'rounds')) return;
-  return withMatchGenerationLock(data.sessionId, () =>
+  // Part 2 Task 9 — the round that started, for writing it back into a published schedule once the locks are free.
+  const confirmed: { round: number | null } = { round: null };
+  await withMatchGenerationLock(data.sessionId, () =>
     withSessionGuard(data.sessionId, async () => {
   try {
     // Re-verify after the lock wait — privileges may have changed (TOCTOU).
@@ -657,6 +682,7 @@ export async function handleHostConfirmRound(
       void recordEventAudit({
         sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.round_confirmed', automatic: false, round: roundNumber,
       });
+      confirmed.round = roundNumber;
     } else {
       socket.emit('error', { code: 'CONFIRM_ROUND_FAILED', message: 'Round did not start — try Match People again.' });
     }
@@ -665,6 +691,17 @@ export async function handleHostConfirmRound(
     socket.emit('error', { code: 'CONFIRM_ROUND_FAILED', message: err.message });
   }
     }));
+  // Part 2 Task 9 — on an event with a published schedule, the round as it started (after any live swap, exclude or
+  // Re-match) is written back into the board and published as a manual version, so the board and the live event
+  // agree. In the background, after the round has started; nothing happens for an event without a version.
+  const actorId = getUserIdFromSocket(socket);
+  if (confirmed.round !== null && actorId) {
+    const round = confirmed.round;
+    void (async () => {
+      if (!(await hasPublishedSchedule(data.sessionId))) return;
+      await withMatchGenerationLock(data.sessionId, () => syncRoundIntoSchedule(data.sessionId, round, actorId));
+    })().catch((err: unknown) => logger.warn({ err, sessionId: data.sessionId, round }, 'Writing the started round back to the schedule failed (non-fatal)'));
+  }
 }
 
 // ─── Host Swap Match (swap two participants between matches in preview) ────
@@ -698,6 +735,11 @@ export async function handleHostSwapMatch(
 
     if (!matchA || !matchB || matchA.id === matchB.id) {
       socket.emit('error', { code: 'SWAP_FAILED', message: 'Cannot swap — participants must be in different matches' });
+      return;
+    }
+    // Part 2 Task 9 — a meeting locked on the matching board keeps its people.
+    if (await anyMatchLocked([matchA.id, matchB.id])) {
+      socket.emit('error', { code: 'SCHEDULE_LOCKED', message: LOCKED_MATCH_MESSAGE });
       return;
     }
 
@@ -802,6 +844,11 @@ export async function handleHostExcludeFromRound(
     const userMatch = matches.find(m =>
       m.participantAId === data.userId || m.participantBId === data.userId || m.participantCId === data.userId
     );
+    // Part 2 Task 9 — a meeting locked on the matching board keeps its people.
+    if (userMatch && await anyMatchLocked([userMatch.id])) {
+      socket.emit('error', { code: 'SCHEDULE_LOCKED', message: LOCKED_MATCH_MESSAGE });
+      return;
+    }
 
     // Part 2 Task 7 — taking someone out of a trio leaves a room of two, held to the room checker like any room a
     // host makes (taking someone out of a pair leaves no room: the partner waits).
@@ -944,14 +991,18 @@ export async function handleHostRegenerateMatches(
     // 3fc21cbb round 4 duplicate-pair bug on 5 May 2026). pendingRoundNumber
     // only exists during the preview phase, so this round is by definition
     // pre-start; nothing live is being clobbered.
+    //
+    // Part 2 Task 9 — except a meeting locked on the matching board: it stays in the preview, and its people are
+    // left out of the engine like the hosts. No row is locked on an event without a published schedule.
+    const lockedPeople = await lockedPeopleInRound(data.sessionId, roundNumber);
     await query(
-      `DELETE FROM matches WHERE session_id = $1 AND round_number = $2`,
+      `DELETE FROM matches WHERE session_id = $1 AND round_number = $2 AND locked = FALSE`,
       [data.sessionId, roundNumber]
     );
 
     // Re-generate (exclude host + co-hosts from matching). 27 May — also gate on
     // the live present-in-main set so re-match never pulls in an absent participant.
-    const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
+    const allHostIds = [...await getAllHostIds(data.sessionId, activeSession.hostUserId), ...lockedPeople];
     const presentUserIds = await getPresentUserIds(io, data.sessionId, activeSession);
 
     // 23 May (#5b, refined per Ali) — Re-match must ALWAYS rotate to a DIFFERENT
@@ -964,7 +1015,7 @@ export async function handleHostRegenerateMatches(
     // arrangement repeated a prior round. On round 1 that gate counted the
     // PRE-PLANNED future rounds (2, 3) as history, so the only alternatives
     // looked like "repeats" and Re-match did nothing until a swap shifted state.
-    await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
+    await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2 AND locked = FALSE`, [data.sessionId, roundNumber]);
     await matchingService.generateSingleRound(
       data.sessionId, roundNumber, allHostIds,
       { regenerate: true, excludePairKeys: beforePairKeys }, presentUserIds,
@@ -978,7 +1029,7 @@ export async function handleHostRegenerateMatches(
     const noOtherArrangement = beforePairKeys.length > 0 &&
       (afterArrangement === beforeArrangement || afterMatches.length < beforeMatches.length);
     if (noOtherArrangement) {
-      await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
+      await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2 AND locked = FALSE`, [data.sessionId, roundNumber]);
       await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: false }, presentUserIds);
     }
 

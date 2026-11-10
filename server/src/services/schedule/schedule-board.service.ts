@@ -2,8 +2,11 @@
 //
 // An event's organisers plan who meets whom, round by round, on a private draft (migration 140): generate it with
 // the engine, move, swap and unassign people, lock a meeting or a seat, seat the basket again, and mark someone
-// late or not coming. Publishing the draft as a version, and the live event following it, are Task 9: nothing in
-// the live event reads these tables, so an event takes today's path until a version is published.
+// late or not coming. Publishing the draft as a version, and the live event following it, are Task 9
+// (schedule-publish.service.ts, schedule-live.service.ts): the live event reads only published versions, never this
+// draft, so an event takes today's path until a version is published. The draft kernel those two services share
+// (the state under the schedule row's lock, the in-memory draft, seating a basket, writing what changed) is exported
+// from here so there is one implementation of every rule below.
 //
 // Rules every write keeps (Key decision D4):
 //   - One transaction. The event's `event_schedules` row is locked (SELECT ... FOR UPDATE) and its `revision`
@@ -29,6 +32,7 @@ import {
   liveKindOf, roundRuleSentence,
   type BoardOp, type BoardOpResult, type ErrorCode, type BoardPerson, type BoardPersonStatus, type BoardRefusal, type BoardRoom,
   type BoardRound, type BoardSeatSource, type RoomCheckContext, type RoomProblem, type RoomVerdict, type ScheduleBoard,
+  type ScheduleSnapshot,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../middleware/errors';
@@ -52,8 +56,8 @@ import { redistributeRound, type WaitingReason } from './redistribute';
 const NOT_FOUND = "We couldn't find that event.";
 const ORGANISERS_ONLY = 'Only the people running this event can plan its meetings.';
 const NO_ROUNDS = 'This event has no rounds, so there are no meetings to plan.';
-const ENDED = "This event has ended, so its meetings can't change.";
-const STALE = 'The board changed while you were editing. It is up to date now; try again.';
+export const ENDED = "This event has ended, so its meetings can't change.";
+export const STALE = 'The board changed while you were editing. It is up to date now; try again.';
 const LOCKED = 'This meeting is locked. Unlock it first.';
 const ROUND_STARTED = 'This round has already started.';
 const NOT_A_ROUND = "That round isn't part of this event.";
@@ -65,7 +69,7 @@ const DEFAULT_ROUNDS = 5;
 
 // ─── The draft in memory ─────────────────────────────────────────────────────
 
-interface Seat {
+export interface Seat {
   userId: string;
   slotLocked: boolean;
   source: BoardSeatSource;
@@ -73,16 +77,20 @@ interface Seat {
   fallback: boolean;
 }
 /** Room number → its seats, in seat order. */
-type Rooms = Map<number, Seat[]>;
-interface Absence { kind: 'late' | 'no_show'; fromRound: number; toRound: number | null }
-interface Draft {
+export type Rooms = Map<number, Seat[]>;
+/**
+ * Someone marked late (absent until a round) or not coming (absent from a round on). `automatic`: the product set it
+ * during the live event because the person was not there (stored with no `created_by`), not an organiser.
+ */
+export interface Absence { kind: 'late' | 'no_show'; fromRound: number; toRound: number | null; automatic: boolean }
+export interface Draft {
   rounds: Map<number, Rooms>;
   /** `${round}:${room}` of each locked meeting. */
   locks: Set<string>;
   absences: Map<string, Absence>;
 }
 
-interface PersonFacts {
+export interface PersonFacts {
   userId: string;
   displayName: string;
   avatarUrl: string | null;
@@ -90,7 +98,7 @@ interface PersonFacts {
   participantStatus: string | null;
 }
 
-interface BoardState {
+export interface BoardState {
   sessionId: string;
   hostUserId: string;
   status: string;
@@ -99,6 +107,8 @@ interface BoardState {
   roundStarts: Array<string | null>;
   revision: number;
   publishedVersion: number | null;
+  /** The latest published version's rounds, or null before the first publish. */
+  published: ScheduleSnapshot | null;
   draft: Draft;
   /** The event's people in registration order, then anyone seated who no longer has a place. */
   people: Map<string, PersonFacts>;
@@ -106,10 +116,10 @@ interface BoardState {
   base: EventCheckBase;
 }
 
-const lockKey = (round: number, room: number) => `${round}:${room}`;
+export const lockKey = (round: number, room: number) => `${round}:${room}`;
 
-type Reader = <R extends QueryResultRow>(text: string, params: unknown[]) => Promise<{ rows: R[] }>;
-const readerOf = (client?: PoolClient): Reader =>
+export type Reader = <R extends QueryResultRow>(text: string, params: unknown[]) => Promise<{ rows: R[] }>;
+export const readerOf = (client?: PoolClient): Reader =>
   client ? (text, params) => client.query(text, params) : (text, params) => query(text, params);
 
 // ─── Reading ─────────────────────────────────────────────────────────────────
@@ -122,7 +132,7 @@ interface EventRow {
   scheduled_at: string | Date | null;
   event_format: string | null;
 }
-interface ScheduleRow { revision: number; published_version: number | null }
+export interface ScheduleRow { revision: number; published_version: number | null }
 
 function configOf(raw: unknown): Record<string, unknown> {
   if (typeof raw === 'string') {
@@ -147,7 +157,7 @@ function assertRoundsEvent(event: EventRow): void {
 }
 
 /** An unknown event reads as unknown to everyone (before who is asking is looked at); then organisers only. */
-async function requireOrganiser(sessionId: string, actor: Actor): Promise<void> {
+export async function requireOrganiser(sessionId: string, actor: Actor): Promise<void> {
   const exists = await query<{ id: string }>(`SELECT id FROM sessions WHERE id = $1`, [sessionId]);
   if (!exists.rows[0]) throw new NotFoundError('Session', sessionId, NOT_FOUND);
   const { allowed } = await canActAsHost(actor.userId, actor.role, sessionId);
@@ -165,8 +175,10 @@ async function readDraft(read: Reader, sessionId: string): Promise<Draft> {
   const locks = await read<{ round_number: number; room_number: number }>(
     `SELECT round_number, room_number FROM event_schedule_room_locks WHERE session_id = $1`, [sessionId],
   );
-  const absences = await read<{ user_id: string; kind: 'late' | 'no_show'; from_round: number; to_round: number | null }>(
-    `SELECT user_id, kind, from_round, to_round FROM event_schedule_absences WHERE session_id = $1`, [sessionId],
+  const absences = await read<{ user_id: string; kind: 'late' | 'no_show'; from_round: number; to_round: number | null; automatic: boolean }>(
+    `SELECT user_id, kind, from_round, to_round, (created_by IS NULL) AS automatic
+       FROM event_schedule_absences WHERE session_id = $1`,
+    [sessionId],
   );
   const rounds = new Map<number, Rooms>();
   for (const s of seats.rows) {
@@ -179,7 +191,9 @@ async function readDraft(read: Reader, sessionId: string): Promise<Draft> {
   return {
     rounds,
     locks: new Set(locks.rows.map((l) => lockKey(l.round_number, l.room_number))),
-    absences: new Map(absences.rows.map((a) => [a.user_id, { kind: a.kind, fromRound: a.from_round, toRound: a.to_round }])),
+    absences: new Map(absences.rows.map((a) => [a.user_id, {
+      kind: a.kind, fromRound: a.from_round, toRound: a.to_round, automatic: a.automatic === true,
+    }])),
   };
 }
 
@@ -212,13 +226,23 @@ async function readPeople(read: Reader, sessionId: string, seated: string[]): Pr
   return people;
 }
 
+/** A published version's rounds (immutable once written), or null when there is no such version. */
+export async function readSnapshot(read: Reader, sessionId: string, version: number): Promise<ScheduleSnapshot | null> {
+  const result = await read<{ snapshot: ScheduleSnapshot | string }>(
+    `SELECT snapshot FROM event_schedule_versions WHERE session_id = $1 AND version = $2`, [sessionId, version],
+  );
+  const raw = result.rows[0]?.snapshot;
+  if (!raw) return null;
+  return typeof raw === 'string' ? JSON.parse(raw) as ScheduleSnapshot : raw;
+}
+
 const seatedIds = (draft: Draft) => [...new Set([...draft.rounds.values()].flatMap((rooms) => [...rooms.values()].flat().map((s) => s.userId)))];
 
 /**
  * Everything the board is worked out from. With a client, inside the caller's transaction; a write passes what it
  * read from the pool before taking the lock (prepareWrite), so nothing here reads the pool then.
  */
-async function loadState(sessionId: string, client?: PoolClient, schedule?: ScheduleRow, prep?: WritePrep): Promise<BoardState> {
+export async function loadState(sessionId: string, client?: PoolClient, schedule?: ScheduleRow, prep?: WritePrep): Promise<BoardState> {
   const read = readerOf(client);
   const event = await readEvent(read, sessionId);
   assertRoundsEvent(event);
@@ -226,6 +250,7 @@ async function loadState(sessionId: string, client?: PoolClient, schedule?: Sche
     `SELECT revision, published_version FROM event_schedules WHERE session_id = $1`, [sessionId],
   )).rows[0];
   const draft = await readDraft(read, sessionId);
+  const published = row?.published_version ? await readSnapshot(read, sessionId, row.published_version) : null;
   const people = await readPeople(read, sessionId, seatedIds(draft));
   const hostIds = prep?.hostIds ?? new Set(await getAllHostIds(sessionId, event.host_user_id));
   const base = await loadEventCheckBase(sessionId, { client, known: prep?.known });
@@ -244,6 +269,7 @@ async function loadState(sessionId: string, client?: PoolClient, schedule?: Sche
     }),
     revision: row?.revision ?? 0,
     publishedVersion: row?.published_version ?? null,
+    published,
     draft,
     people,
     hostIds,
@@ -253,25 +279,25 @@ async function loadState(sessionId: string, client?: PoolClient, schedule?: Sche
 
 // ─── Who is where ────────────────────────────────────────────────────────────
 
-const PRESENT = new Set(['checked_in', 'in_lobby', 'in_round']);
+export const PRESENT = new Set(['checked_in', 'in_lobby', 'in_round']);
 /** Left the live event, or did not come: still listed, never seated automatically (spec 07, absences and vacancies). */
-const GONE = new Set(['left', 'no_show']);
+export const GONE = new Set(['left', 'no_show']);
 
-const isEnded = (state: BoardState) => state.status === 'completed' || state.status === 'cancelled';
+export const isEnded = (state: BoardState) => state.status === 'completed' || state.status === 'cancelled';
 
 /** Started rounds of a live event, every round of an ended one, and rounds the event no longer has are not edited. */
-function isEditable(state: BoardState, round: number): boolean {
+export function isEditable(state: BoardState, round: number): boolean {
   if (isEnded(state) || round > state.numberOfRounds) return false;
   return !(isLiveStatus(state.status) && round <= state.currentRound);
 }
 
 /** Someone to match: a place that is not removed, and not one of the people running the event. */
-function inEvent(state: BoardState, userId: string): boolean {
+export function inEvent(state: BoardState, userId: string): boolean {
   const status = state.people.get(userId)?.participantStatus;
   return !!status && status !== 'removed' && !state.hostIds.has(userId);
 }
 
-function absentIn(draft: Draft, userId: string, round: number): boolean {
+export function absentIn(draft: Draft, userId: string, round: number): boolean {
   const a = draft.absences.get(userId);
   return !!a && a.fromRound <= round && (a.toRound === null || round <= a.toRound);
 }
@@ -280,13 +306,13 @@ function absentIn(draft: Draft, userId: string, round: number): boolean {
 const eligibleIn = (state: BoardState, draft: Draft, userId: string, round: number) =>
   inEvent(state, userId) && !absentIn(draft, userId, round);
 
-const isGone = (state: BoardState, userId: string) => GONE.has(state.people.get(userId)?.participantStatus ?? '');
+export const isGone = (state: BoardState, userId: string) => GONE.has(state.people.get(userId)?.participantStatus ?? '');
 
 /**
  * Seated by generate, redistribute and the engine: one of the round's people who has not left and did not fail to
  * come. A seated person who is not (gone, absent, removed, now running the event) leaves a vacancy that is flagged.
  */
-const autoSeatable = (state: BoardState, draft: Draft, userId: string, round: number) =>
+export const autoSeatable = (state: BoardState, draft: Draft, userId: string, round: number) =>
   eligibleIn(state, draft, userId, round) && !isGone(state, userId);
 
 /** The person's standing, in a round (seats and baskets) or for the whole event (`round` null). */
@@ -311,23 +337,23 @@ function personOf(state: BoardState, draft: Draft, userId: string, round: number
   };
 }
 
-const nameOf = (state: BoardState, userId: string) => state.people.get(userId)?.displayName ?? FORMER_MEMBER_NAME;
+export const nameOf = (state: BoardState, userId: string) => state.people.get(userId)?.displayName ?? FORMER_MEMBER_NAME;
 
-function andList(items: string[]): string {
+export function andList(items: string[]): string {
   return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
 /** Every round the board shows: the event's rounds, and any round beyond them that still holds seats or locks. */
-function roundNumbers(state: BoardState, draft: Draft): number[] {
+export function roundNumbers(state: BoardState, draft: Draft): number[] {
   let last = state.numberOfRounds;
   for (const r of draft.rounds.keys()) last = Math.max(last, r);
   for (const key of draft.locks) last = Math.max(last, Number(key.split(':')[0]));
   return Array.from({ length: last }, (_, i) => i + 1);
 }
 
-const roomsOf = (draft: Draft, round: number): Rooms => draft.rounds.get(round) ?? new Map<number, Seat[]>();
+export const roomsOf = (draft: Draft, round: number): Rooms => draft.rounds.get(round) ?? new Map<number, Seat[]>();
 
-function seatOf(draft: Draft, round: number, userId: string): { room: number; seat: Seat } | null {
+export function seatOf(draft: Draft, round: number, userId: string): { room: number; seat: Seat } | null {
   for (const [room, seats] of roomsOf(draft, round)) {
     const seat = seats.find((s) => s.userId === userId);
     if (seat) return { room, seat };
@@ -340,7 +366,7 @@ function addRoomPairs(into: Set<string>, members: string[]): void {
 }
 
 /** Pairs the draft makes meet in rounds other than `round` (`earlier`: only before it). */
-function pairsOutside(draft: Draft, round: number, which: 'earlier' | 'all'): Set<string> {
+export function pairsOutside(draft: Draft, round: number, which: 'earlier' | 'all'): Set<string> {
   const pairs = new Set<string>();
   for (const [r, rooms] of draft.rounds) {
     if (r === round || (which === 'earlier' && r > round)) continue;
@@ -378,7 +404,7 @@ function capacityOf(state: BoardState, round: number, eligible: string[]): Board
   return explainRoundCapacity(rules, round, counts, Math.max(state.numberOfRounds, round), ungrouped);
 }
 
-function buildRound(state: BoardState, draft: Draft, round: number): BoardRound {
+export function buildRound(state: BoardState, draft: Draft, round: number): BoardRound {
   const rooms = roomsOf(draft, round);
   const lockedNumbers = [...draft.locks].filter((k) => Number(k.split(':')[0]) === round).map((k) => Number(k.split(':')[1]));
   const numbers = [...new Set([...rooms.keys(), ...lockedNumbers])].sort((a, b) => a - b);
@@ -422,6 +448,56 @@ function hasContent(draft: Draft): boolean {
   return draft.rounds.size > 0 || draft.locks.size > 0 || draft.absences.size > 0;
 }
 
+/** How a room was seated, for the live matches: by an organiser if anyone in it was, else by a repair, else by the engine. */
+function roomSource(seats: Seat[]): BoardSeatSource {
+  if (seats.some((s) => s.source === 'manual')) return 'manual';
+  return seats.some((s) => s.source === 'repair') ? 'repair' : 'auto';
+}
+
+/**
+ * The draft as a version freezes it: every round of the event (a round the event no longer has is not published),
+ * each room by number with its people in id order, and whether it is locked on the board, seated against the group
+ * rule by someone allowed to (override), or a same-group fallback. A locked room keeps its number even when empty.
+ */
+export function snapshotOf(state: BoardState, draft: Draft): ScheduleSnapshot {
+  return {
+    rounds: Array.from({ length: state.numberOfRounds }, (_, i) => i + 1).map((round) => {
+      const rooms = roomsOf(draft, round);
+      const lockedNumbers = [...draft.locks].filter((k) => Number(k.split(':')[0]) === round).map((k) => Number(k.split(':')[1]));
+      const numbers = [...new Set([...rooms.keys(), ...lockedNumbers])].sort((a, b) => a - b);
+      return {
+        round,
+        rooms: numbers.map((room) => {
+          const seats = rooms.get(room) ?? [];
+          return {
+            room,
+            userIds: seats.map((s) => s.userId).sort(),
+            locked: draft.locks.has(lockKey(round, room)),
+            override: seats.some((s) => s.override),
+            fallback: seats.some((s) => s.fallback),
+            source: roomSource(seats),
+          };
+        }),
+      };
+    }),
+  };
+}
+
+/** Whether two versions hold the same rooms in every round: numbers, people, locks and flags. */
+export function sameSnapshot(a: ScheduleSnapshot, b: ScheduleSnapshot): boolean {
+  const canonical = (x: ScheduleSnapshot) => JSON.stringify(x.rounds
+    .filter((r) => r.rooms.length > 0)
+    .map((r) => ({
+      round: r.round,
+      rooms: [...r.rooms].sort((p, q) => p.room - q.room).map((room) => ({
+        room: room.room, userIds: [...room.userIds].sort(), locked: room.locked, override: room.override, fallback: room.fallback,
+        source: room.source,
+      })),
+    }))
+    .sort((p, q) => p.round - q.round));
+  return canonical(a) === canonical(b);
+}
+
 function buildBoard(state: BoardState, canOverride: boolean): ScheduleBoard {
   const draft = state.draft;
   const seated = new Set(seatedIds(draft));
@@ -430,9 +506,9 @@ function buildBoard(state: BoardState, canOverride: boolean): ScheduleBoard {
     sessionId: state.sessionId,
     revision: state.revision,
     publishedVersion: state.publishedVersion,
-    // Nothing is published before Task 9: until then a draft differs from "nothing published" once it holds
-    // anything. Task 9 compares the draft with the published version's rooms.
-    draftDiffersFromPublished: state.publishedVersion === null ? hasContent(draft) : true,
+    // Before the first publish a draft differs from "nothing published" once it holds anything; after it, the draft's
+    // rounds are compared with the latest version's, room by room (an absence alone changes no room, so no version).
+    draftDiffersFromPublished: state.published === null ? hasContent(draft) : !sameSnapshot(snapshotOf(state, draft), state.published),
     rounds: roundNumbers(state, draft).map((r) => buildRound(state, draft, r)),
     people: people.map((id) => personOf(state, draft, id, null)),
     groupRules: state.base.rules,
@@ -446,18 +522,18 @@ export async function getBoard(sessionId: string, actor: Actor): Promise<Schedul
   return readBoard(sessionId, actor);
 }
 
-async function readBoard(sessionId: string, actor: Actor): Promise<ScheduleBoard> {
+export async function readBoard(sessionId: string, actor: Actor): Promise<ScheduleBoard> {
   const [state, canOverride] = await Promise.all([loadState(sessionId), mayOverrideGroupRules(sessionId, actor.userId)]);
   return buildBoard(state, canOverride);
 }
 
 // ─── Refusals ────────────────────────────────────────────────────────────────
 
-const GROUP_PROBLEMS = new Set<RoomProblem['kind']>(['group_rule', 'no_group']);
+export const GROUP_PROBLEMS = new Set<RoomProblem['kind']>(['group_rule', 'no_group']);
 const hasWarning = (v: RoomVerdict, kind: string, id: string) => v.warnings.some((w) => w.kind === kind && w.userIds.includes(id));
 
 /** The organiser's sentence for a refused room, naming the person being placed first. */
-function problemMessage(state: BoardState, round: number, problem: RoomProblem, mover: string): string {
+export function problemMessage(state: BoardState, round: number, problem: RoomProblem, mover: string): string {
   const ids = problem.userIds.includes(mover) ? [mover, ...problem.userIds.filter((id) => id !== mover)] : problem.userIds;
   const names = ids.map((id) => nameOf(state, id));
   const rule = state.base.rules ? roundRuleSentence(state.base.rules, round) : '';
@@ -539,7 +615,7 @@ function requireUnlocked(draft: Draft, round: number, at: { room: number; seat: 
   }
 }
 
-function cloneDraft(draft: Draft): Draft {
+export function cloneDraft(draft: Draft): Draft {
   return {
     rounds: new Map([...draft.rounds].map(([r, rooms]) => [r, new Map([...rooms].map(([room, seats]) => [room, seats.map((s) => ({ ...s }))]))])),
     locks: new Set(draft.locks),
@@ -547,13 +623,13 @@ function cloneDraft(draft: Draft): Draft {
   };
 }
 
-function setRooms(draft: Draft, round: number, rooms: Rooms): void {
+export function setRooms(draft: Draft, round: number, rooms: Rooms): void {
   for (const [room, seats] of rooms) if (seats.length === 0) rooms.delete(room);
   if (rooms.size === 0) draft.rounds.delete(round);
   else draft.rounds.set(round, rooms);
 }
 
-function removeSeat(draft: Draft, round: number, userId: string): void {
+export function removeSeat(draft: Draft, round: number, userId: string): void {
   const rooms = roomsOf(draft, round);
   for (const [room, seats] of rooms) rooms.set(room, seats.filter((s) => s.userId !== userId));
   setRooms(draft, round, rooms);
@@ -565,7 +641,7 @@ const manualSeat = (userId: string, check: PlacementCheck): Seat => ({
 
 // ─── Seating a basket (generate, redistribute, absences) ─────────────────────
 
-interface SeatingNeeds {
+export interface SeatingNeeds {
   generator: () => Promise<BoardRoundGenerator>;
 }
 
@@ -610,7 +686,7 @@ async function seatBasket(
 }
 
 /** Seat the basket of each round again without clearing anything (12/08). */
-async function redistribute(state: BoardState, draft: Draft, rounds: number[], needs: SeatingNeeds): Promise<number> {
+export async function redistribute(state: BoardState, draft: Draft, rounds: number[], needs: SeatingNeeds): Promise<number> {
   let waiting = 0;
   for (const round of rounds) {
     const seated = await seatBasket(state, draft, round, roomsOf(draft, round), pairsOutside(draft, round, 'all'), needs);
@@ -678,18 +754,10 @@ async function vacate(state: BoardState, draft: Draft, userId: string, needs: Se
 
 // ─── The edits ───────────────────────────────────────────────────────────────
 
-interface Decision {
-  action: EventAuditAction;
-  round: number | null;
-  generated: boolean;
-  reason?: string;
-  after: Record<string, unknown>;
-}
-
 async function applyOp(
   state: BoardState, draft: Draft, op: BoardOp, canOverride: boolean, needs: SeatingNeeds,
-): Promise<Decision> {
-  const edited = (round: number | null, after: Record<string, unknown> = {}): Decision => ({
+): Promise<DraftDecision> {
+  const edited = (round: number | null, after: Record<string, unknown> = {}): DraftDecision => ({
     action: 'schedule.edited', round, generated: false, reason: op.reason, after: { op: op.kind, ...after },
   });
   switch (op.kind) {
@@ -774,14 +842,14 @@ async function applyOp(
       if (!Number.isInteger(op.fromRound) || op.fromRound < 2 || op.fromRound > state.numberOfRounds) {
         throw new ValidationError("Choose the round they'll arrive for, from round 2 on.");
       }
-      draft.absences.set(op.userId, { kind: 'late', fromRound: 1, toRound: op.fromRound - 1 });
+      draft.absences.set(op.userId, { kind: 'late', fromRound: 1, toRound: op.fromRound - 1, automatic: false });
       await vacate(state, draft, op.userId, needs);
       return edited(null, { userId: op.userId, arrivesForRound: op.fromRound });
     }
     case 'mark_no_show': {
       if (!inEvent(state, op.userId)) throw new ConflictError(ErrorCodes.SCHEDULE_RULE, `${nameOf(state, op.userId)} isn't taking part in this event's meetings.`);
       const fromRound = isLiveStatus(state.status) ? state.currentRound + 1 : 1;
-      draft.absences.set(op.userId, { kind: 'no_show', fromRound, toRound: null });
+      draft.absences.set(op.userId, { kind: 'no_show', fromRound, toRound: null, automatic: false });
       await vacate(state, draft, op.userId, needs);
       return edited(null, { userId: op.userId, absentFromRound: fromRound });
     }
@@ -809,7 +877,7 @@ function signaturesOf(rooms: Rooms | undefined): Map<string, string> {
 }
 
 /** Per round, the people whose seat changed (moved, came, went, or a flag on it changed). */
-function changedSeats(before: Draft, after: Draft): Array<{ round: number; userIds: string[] }> {
+export function changedSeats(before: Draft, after: Draft): Array<{ round: number; userIds: string[] }> {
   const rounds = [...new Set([...before.rounds.keys(), ...after.rounds.keys()])].sort((a, b) => a - b);
   const changed: Array<{ round: number; userIds: string[] }> = [];
   for (const round of rounds) {
@@ -821,10 +889,15 @@ function changedSeats(before: Draft, after: Draft): Array<{ round: number; userI
   return changed;
 }
 
-const sameAbsence = (a?: Absence, b?: Absence) => !!a && !!b && a.kind === b.kind && a.fromRound === b.fromRound && a.toRound === b.toRound;
+const sameAbsence = (a?: Absence, b?: Absence) => !!a && !!b && a.kind === b.kind && a.fromRound === b.fromRound
+  && a.toRound === b.toRound && a.automatic === b.automatic;
 
-/** Writes what changed between the two drafts: whole rounds rewritten, locks and absences one by one. */
-async function persist(client: PoolClient, sessionId: string, actorId: string, before: Draft, after: Draft, rounds: number[]): Promise<void> {
+/**
+ * Writes what changed between the two drafts: whole rounds rewritten, locks and absences one by one. `actorId` null is
+ * the product itself (a live repair): its locks name nobody, and an absence it sets is stored with no `created_by`,
+ * which is how it is read back as automatic. An organiser's absence is stored with their id.
+ */
+async function persist(client: PoolClient, sessionId: string, actorId: string | null, before: Draft, after: Draft, rounds: number[]): Promise<void> {
   if (rounds.length > 0) {
     await client.query(
       `DELETE FROM event_schedule_assignments WHERE session_id = $1 AND round_number = ANY($2::int[])`,
@@ -874,7 +947,7 @@ async function persist(client: PoolClient, sessionId: string, actorId: string, b
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (session_id, user_id) DO UPDATE
          SET kind = EXCLUDED.kind, from_round = EXCLUDED.from_round, to_round = EXCLUDED.to_round, created_by = EXCLUDED.created_by`,
-      [sessionId, userId, a.kind, a.fromRound, a.toRound, actorId],
+      [sessionId, userId, a.kind, a.fromRound, a.toRound, a.automatic ? null : actorId],
     );
   }
   for (const userId of before.absences.keys()) {
@@ -883,16 +956,12 @@ async function persist(client: PoolClient, sessionId: string, actorId: string, b
   }
 }
 
-function draftsEqual(a: Draft, b: Draft): boolean {
+export function draftsEqual(a: Draft, b: Draft): boolean {
   if (changedSeats(a, b).length > 0) return false;
   if (a.locks.size !== b.locks.size || [...a.locks].some((k) => !b.locks.has(k))) return false;
   if (a.absences.size !== b.absences.size) return false;
   return [...a.absences].every(([id, x]) => sameAbsence(x, b.absences.get(id)));
 }
-
-type WriteOutcome =
-  | { stale: true }
-  | { stale: false; changed: Array<{ round: number; userIds: string[] }>; wrote: boolean };
 
 /**
  * What a write reads from the pool, read BEFORE it takes the event's schedule row: the host set, the hard exclusions
@@ -903,13 +972,13 @@ type WriteOutcome =
  * between is not in the prepared exclusions, so the base reads them again (a pool read under the lock only on that
  * race), and is not in the engine's rows, so this write leaves them waiting in the basket rather than pair them.
  */
-interface WritePrep {
+export interface WritePrep {
   hostIds: Set<string>;
   known: KnownExclusions;
   generator: BoardRoundGenerator | null;
 }
 
-async function prepareWrite(sessionId: string, withEngine: boolean): Promise<WritePrep> {
+export async function prepareWrite(sessionId: string, withEngine: boolean): Promise<WritePrep> {
   const read = readerOf();
   const event = await readEvent(read, sessionId);
   assertRoundsEvent(event);
@@ -922,8 +991,95 @@ async function prepareWrite(sessionId: string, withEngine: boolean): Promise<Wri
   return { hostIds, known: { people: new Set(placed), pairs }, generator };
 }
 
+/** The engine for a write, prepared before the lock; the fallback (prepared under the lock) is never expected to run. */
+export function seatingNeeds(state: BoardState, prep: WritePrep): SeatingNeeds {
+  let generator = prep.generator;
+  return {
+    generator: async () => {
+      generator ??= await prepareBoardRoundGenerator(state.sessionId, [...state.people.keys()].filter((id) => inEvent(state, id) && !isGone(state, id)));
+      return generator;
+    },
+  };
+}
+
 /** The revision moved under a held row lock: impossible with FOR UPDATE, refused (and rolled back) all the same. */
 class RevisionMoved extends Error {}
+
+/** The event's draft as one transaction holds it: the schedule row is locked until the transaction ends. */
+export interface LockedDraft {
+  client: PoolClient;
+  state: BoardState;
+  schedule: ScheduleRow;
+}
+
+/**
+ * Run `body` in one transaction holding the event's schedule row (created on first use), with the board's state read
+ * on that transaction after the lock. `expectedRevision` is the revision the organiser's screen showed: an older one
+ * answers `stale` and nothing is written. Null is the product's own write (a live repair, a confirmed round written
+ * back): it takes the draft as it is now.
+ */
+export async function withLockedDraft<T>(
+  sessionId: string, prep: WritePrep, expectedRevision: number | null, body: (locked: LockedDraft) => Promise<T>,
+): Promise<{ stale: true } | { stale: false; value: T }> {
+  return transaction(async (client): Promise<{ stale: true } | { stale: false; value: T }> => {
+    await client.query(`INSERT INTO event_schedules (session_id) VALUES ($1) ON CONFLICT (session_id) DO NOTHING`, [sessionId]);
+    const locked = await client.query<ScheduleRow>(
+      `SELECT revision, published_version FROM event_schedules WHERE session_id = $1 FOR UPDATE`, [sessionId],
+    );
+    const schedule = locked.rows[0];
+    if (!schedule || (expectedRevision !== null && schedule.revision !== expectedRevision)) return { stale: true };
+    const state = await loadState(sessionId, client, schedule, prep);
+    return { stale: false, value: await body({ client, state, schedule }) };
+  }).catch((err: unknown): { stale: true } => {
+    if (err instanceof RevisionMoved) return { stale: true };
+    throw err;
+  });
+}
+
+/** What one write did, for its audit row. `actorId` null with `automatic`: the product itself. */
+export interface DraftDecision {
+  action: EventAuditAction;
+  round: number | null;
+  generated: boolean;
+  reason?: string;
+  after: Record<string, unknown>;
+}
+
+/**
+ * Write `after` over the locked draft: what changed, the revision bumped (only on the revision that was read), one
+ * audit row, all in the caller's transaction. Null when nothing changed and the write was not a generate.
+ */
+export async function commitDraft(
+  locked: LockedDraft, after: Draft, decision: DraftDecision, by: { actorId: string | null; automatic: boolean },
+): Promise<{ changed: Array<{ round: number; userIds: string[] }>; revision: number } | null> {
+  const { client, state, schedule } = locked;
+  if (draftsEqual(state.draft, after) && !decision.generated) return null;
+  const changed = changedSeats(state.draft, after);
+  await persist(client, state.sessionId, by.actorId, state.draft, after, changed.map((c) => c.round));
+  const bumped = await client.query<{ revision: number }>(
+    `UPDATE event_schedules
+        SET revision = revision + 1, updated_by = $2, updated_at = NOW(),
+            generated_at = CASE WHEN $3::boolean THEN NOW() ELSE generated_at END
+      WHERE session_id = $1 AND revision = $4
+      RETURNING revision`,
+    [state.sessionId, by.actorId, decision.generated, schedule.revision],
+  );
+  if (bumped.rows.length !== 1) throw new RevisionMoved();
+  await recordEventAudit({
+    sessionId: state.sessionId,
+    actorId: by.actorId,
+    action: decision.action,
+    automatic: by.automatic,
+    round: decision.round,
+    subjectUserIds: [...new Set(changed.flatMap((c) => c.userIds))],
+    before: { revision: state.revision },
+    after: { ...decision.after, revision: bumped.rows[0].revision, changed },
+    ...(decision.reason && { reason: decision.reason }),
+  }, client);
+  return { changed, revision: bumped.rows[0].revision };
+}
+
+type WriteOutcome = { changed: Array<{ round: number; userIds: string[] }>; wrote: boolean };
 
 /**
  * One board write: lock the event's schedule row, compare the revision, change the draft in memory, write what
@@ -931,67 +1087,27 @@ class RevisionMoved extends Error {}
  */
 async function writeBoard(
   sessionId: string, actor: Actor, expectedRevision: number, withEngine: boolean,
-  decide: (state: BoardState, draft: Draft, canOverride: boolean, needs: SeatingNeeds) => Promise<Decision>,
+  decide: (state: BoardState, draft: Draft, canOverride: boolean, needs: SeatingNeeds) => Promise<DraftDecision>,
 ): Promise<BoardOpResult> {
   await requireOrganiser(sessionId, actor);
   const canOverride = await mayOverrideGroupRules(sessionId, actor.userId);
   const prep = await prepareWrite(sessionId, withEngine);
-  const outcome = await transaction(async (client): Promise<WriteOutcome> => {
-    await client.query(`INSERT INTO event_schedules (session_id) VALUES ($1) ON CONFLICT (session_id) DO NOTHING`, [sessionId]);
-    const locked = await client.query<ScheduleRow>(
-      `SELECT revision, published_version FROM event_schedules WHERE session_id = $1 FOR UPDATE`, [sessionId],
-    );
-    const schedule = locked.rows[0];
-    if (!schedule || schedule.revision !== expectedRevision) return { stale: true };
-    const state = await loadState(sessionId, client, schedule, prep);
-    if (isEnded(state)) throw new ConflictError(ErrorCodes.EVENT_ENDED, ENDED);
-    const draft = cloneDraft(state.draft);
-    let generator = prep.generator;
-    const needs: SeatingNeeds = {
-      // Prepared before the lock for every write that seats automatically; this fallback is never expected to run.
-      generator: async () => {
-        generator ??= await prepareBoardRoundGenerator(sessionId, [...state.people.keys()].filter((id) => inEvent(state, id) && !isGone(state, id)));
-        return generator;
-      },
-    };
-    const decision = await decide(state, draft, canOverride, needs);
-    if (draftsEqual(state.draft, draft) && !decision.generated) return { stale: false, changed: [], wrote: false };
-    const changed = changedSeats(state.draft, draft);
-    await persist(client, sessionId, actor.userId, state.draft, draft, changed.map((c) => c.round));
-    const bumped = await client.query<{ revision: number }>(
-      `UPDATE event_schedules
-          SET revision = revision + 1, updated_by = $2, updated_at = NOW(),
-              generated_at = CASE WHEN $3::boolean THEN NOW() ELSE generated_at END
-        WHERE session_id = $1 AND revision = $4
-        RETURNING revision`,
-      [sessionId, actor.userId, decision.generated, schedule.revision],
-    );
-    if (bumped.rows.length !== 1) throw new RevisionMoved();
-    await recordEventAudit({
-      sessionId,
-      actorId: actor.userId,
-      action: decision.action,
-      automatic: false,
-      round: decision.round,
-      subjectUserIds: [...new Set(changed.flatMap((c) => c.userIds))],
-      before: { revision: state.revision },
-      after: { ...decision.after, revision: bumped.rows[0].revision, changed },
-      ...(decision.reason && { reason: decision.reason }),
-    }, client);
-    return { stale: false, changed, wrote: true };
-  }).catch((err: unknown): WriteOutcome => {
-    if (err instanceof RevisionMoved) return { stale: true };
-    throw err;
+  const outcome = await withLockedDraft(sessionId, prep, expectedRevision, async (locked): Promise<WriteOutcome> => {
+    if (isEnded(locked.state)) throw new ConflictError(ErrorCodes.EVENT_ENDED, ENDED);
+    const draft = cloneDraft(locked.state.draft);
+    const decision = await decide(locked.state, draft, canOverride, seatingNeeds(locked.state, prep));
+    const done = await commitDraft(locked, draft, decision, { actorId: actor.userId, automatic: false });
+    return done ? { changed: done.changed, wrote: true } : { changed: [], wrote: false };
   });
   if (outcome.stale) {
     const board = await readBoard(sessionId, actor);
     throw new ConflictError(ErrorCodes.SCHEDULE_CHANGED, STALE, { board });
   }
-  if (outcome.wrote) {
+  if (outcome.value.wrote) {
     void fanoutScheduleDraft(sessionId, actor.userId);
     void emitEventAuditChanged(sessionId);
   }
-  return { board: await readBoard(sessionId, actor), changed: outcome.changed };
+  return { board: await readBoard(sessionId, actor), changed: outcome.value.changed };
 }
 
 /**

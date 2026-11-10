@@ -348,6 +348,32 @@ export async function fanoutScheduleDraft(sessionId: string, actorId?: string): 
   }
 }
 
+// ─── Published-schedule fanout (10 Nov 2026 spec, Part 2 Task 9) ────────────
+//
+// A new version of the event's schedule was published (by an organiser, or by the product repairing the live event).
+// Unlike the draft, a version is what participants read ("my meetings"): it goes to everyone with a place in the event
+// (not removed), the host, the co-hosts, and whoever published it.
+
+export async function fanoutPublishedSchedule(sessionId: string, actorId?: string | null): Promise<void> {
+  try {
+    const io = getRealtimeIo();
+    if (!io) return;
+    const { query } = await import('../db');
+    const audience = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants WHERE session_id = $1 AND status <> 'removed'
+       UNION
+       SELECT host_user_id AS user_id FROM sessions WHERE id = $1 AND host_user_id IS NOT NULL
+       UNION
+       SELECT user_id FROM session_cohosts WHERE session_id = $1`,
+      [sessionId],
+    );
+    const recipients = [...new Set([...audience.rows.map((r) => r.user_id), ...(actorId ? [actorId] : [])])];
+    await emitEntities(io, recipients, [E.sessionPublishedSchedule(sessionId)]);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'fanoutPublishedSchedule: failed to fan out');
+  }
+}
+
 // ─── Admin-list fanout ──────────────────────────────────────────────────────
 //
 // Targets every admin / super_admin user's room. `scope` plugs into the
