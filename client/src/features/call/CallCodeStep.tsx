@@ -12,7 +12,7 @@ import SignInCodeEntry from '@/features/auth/SignInCodeEntry';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import {
-  ADMISSION_CODE_DID_NOT_WORK, CALL_WORDS, admissionRefusalOf, emailFailure, enterFailure, verifyFailure,
+  ADMISSION_CODE_DID_NOT_WORK, CALL_WORDS, admissionCodeFailure, admissionRefusalOf, emailFailure, verifyFailure,
   type AdmissionRefusal, type EntryFailure,
 } from './call-entry';
 
@@ -58,9 +58,9 @@ function AdmissionStep({ proved, carried, verify, onClosed, onDifferentEmail }: 
       }
       // The admission code's own answer, in the server's words beside the field: 409 ADMISSION_CODE_USED "This admission
       // code has already been used.", an expired code, too many tries.
-      const forCode = enterFailure(err);
-      if (forCode.field === 'admissionCode') {
-        setError(forCode.message);
+      const usedCode = admissionCodeFailure(err);
+      if (usedCode) {
+        setError(usedCode);
         return;
       }
       const said = verifyFailure(err);
@@ -135,9 +135,10 @@ export default function CallCodeStep({
       // A right code with an admission code given beside the email that someone else already used (409
       // ADMISSION_CODE_USED, "This admission code has already been used."), or one that has expired: the server's own
       // sentence, and the field to give another.
-      const forCode = enterFailure(err);
-      if (forCode.field === 'admissionCode') {
-        setProved({ code, refusal: { message: forCode.message, askCode: true } });
+      // Anything else (a wrong code, a lock, a 429) stays on the boxes in the code's own words: the email is not proved.
+      const usedCode = admissionCodeFailure(err);
+      if (usedCode) {
+        setProved({ code, refusal: { message: usedCode, askCode: true } });
         return;
       }
       const said = verifyFailure(err);

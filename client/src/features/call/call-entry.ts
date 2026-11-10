@@ -282,6 +282,17 @@ export function admissionRefusalOf(err: unknown): AdmissionRefusal | null {
   return { message: serverSentence(err) ?? fallback, askCode };
 }
 
+/**
+ * The admission code's own refusal from /verify (409 ADMISSION_CODE_USED "This admission code has already been used.",
+ * an expired or unknown code), in the server's words; null for anything else. Only an ADMISSION_CODE_* answer counts:
+ * a 429 or a wrong 6-digit code says nothing about the admission code, and the email is not proved by it.
+ */
+export function admissionCodeFailure(err: unknown): string | null {
+  const code = failureCode(err);
+  if (!code || !code.startsWith('ADMISSION_CODE_')) return null;
+  return serverSentence(err) ?? 'That admission code is not right.';
+}
+
 /** Said when an admission code sent with the proved address still did not let it in. */
 export const ADMISSION_CODE_DID_NOT_WORK = "That admission code didn't let you in. Check it, or ask the organiser.";
 

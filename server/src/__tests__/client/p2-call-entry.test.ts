@@ -20,7 +20,7 @@ import {
   GUEST_HOME_PATH, callPathForEvent, guestAllowedPath, isEventGuest, memberIdOf, rememberCallLink,
 } from '../../../../client/src/features/call/guest-routes';
 import {
-  ADMISSION_CODE_DID_NOT_WORK, CALL_API, CALL_WORDS, PROGRESS_STEPS, admissionRefusalOf, asksSentence, callScreenOf,
+  ADMISSION_CODE_DID_NOT_WORK, CALL_API, CALL_WORDS, PROGRESS_STEPS, admissionCodeFailure, admissionRefusalOf, asksSentence, callScreenOf,
   detailsFieldsFor, durationLabel, emailFailure, enterFailure, progressIndexOf, refusalSentence, startsPhrase,
   tokenFailureMessage, verifyFailure, youreInSentence,
 } from '../../../../client/src/features/call/call-entry';
@@ -507,14 +507,34 @@ describe('the wiring', () => {
   it('a used admission code at /verify (409 ADMISSION_CODE_USED) says the brief\'s sentence beside the field, on either way in', () => {
     const used = { response: { status: 409, data: { error: { code: 'ADMISSION_CODE_USED', message: 'This admission code has already been used.' } } } };
     expect(admissionRefusalOf(used)).toBeNull();
-    expect(enterFailure(used)).toEqual({ field: 'admissionCode', message: 'This admission code has already been used.' });
+    expect(admissionCodeFailure(used)).toBe('This admission code has already been used.');
     const step = read('features/call/CallCodeStep.tsx');
     // The code sent with an admission code from the email step: the code step turns to the admission step with the sentence.
-    expect(step).toMatch(/const forCode = enterFailure\(err\);\s*if \(forCode\.field === 'admissionCode'\) \{\s*setProved\(\{ code, refusal: \{ message: forCode\.message, askCode: true \} \}\);\s*return;/);
+    expect(step).toMatch(/const usedCode = admissionCodeFailure\(err\);\s*if \(usedCode\) \{\s*setProved\(\{ code, refusal: \{ message: usedCode, askCode: true \} \}\);\s*return;/);
     // An admission code typed on the admission step: the sentence beside the field.
-    expect(step).toMatch(/const forCode = enterFailure\(err\);\s*if \(forCode\.field === 'admissionCode'\) \{\s*setError\(forCode\.message\);\s*return;/);
+    expect(step).toMatch(/const usedCode = admissionCodeFailure\(err\);\s*if \(usedCode\) \{\s*setError\(usedCode\);\s*return;/);
+    // Never through enterFailure, which puts every 429 beside the admission code.
+    expect(step).not.toMatch(/enterFailure/);
     expect(read('../../e2e/tests/p2-call-link-entry.spec.ts'))
       .toContain("second.getByText('This admission code has already been used.', { exact: true })");
+  });
+
+  it('a 429 or a wrong 6-digit code at /verify stays on the code boxes: only an admission code\'s own answer turns the step', () => {
+    const fail = (status: number, code: string, message = 'x', details?: object) => ({ response: { status, data: { error: { code, message, details } } } });
+    for (const err of [
+      fail(429, 'RATE_LIMIT_EXCEEDED', 'Too many codes tried. Please wait 15 minutes, then try again.'),
+      fail(429, 'RATE_LIMITED'),
+      fail(400, 'AUTH_SIGN_IN_CODE_WRONG', 'x', { attemptsLeft: 2 }),
+      fail(400, 'AUTH_SIGN_IN_LOCKED'),
+      fail(400, 'AUTH_SIGN_IN_CODE_EXPIRED'),
+    ]) {
+      expect(admissionCodeFailure(err)).toBeNull();
+      expect(admissionRefusalOf(err)).toBeNull();
+      expect(verifyFailure(err).field).toBe('code');
+    }
+    expect(verifyFailure(fail(429, 'RATE_LIMIT_EXCEEDED')).message).toBe('Too many codes tried. Please wait 15 minutes, then try again.');
+    expect(admissionCodeFailure(fail(400, 'ADMISSION_CODE_EXPIRED', 'This admission code has expired.'))).toBe('This admission code has expired.');
+    expect(admissionCodeFailure(fail(400, 'ADMISSION_CODE_INVALID', ''))).toBe('That admission code is not right.');
   });
 
   it('the live page asks no member route for a guest: its own register call is not made for one', () => {
