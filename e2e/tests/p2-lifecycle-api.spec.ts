@@ -49,9 +49,13 @@ test.beforeAll(async () => {
   host = await throwaway('Host');
   member = await throwaway('Member');
   superAdmin = await throwaway('Super', 'super_admin');
-  // A private pod the host directs and the member belongs to: the member sees its published events, as today.
+  // A private, ACTIVE speed-networking pod the host directs and the member belongs to (an active member). Production
+  // schedules events only in an active pod (POD_NOT_ACTIVE otherwise; a pod row's default status is not active), and
+  // only its directors and hosts may create one. As an active member of a private pod, the member sees its published
+  // events in their Events list (the NULL-visibility rule) and registers without an invite.
   const pod = await pool.query<{ id: string }>(
-    `INSERT INTO pods (name, created_by, visibility) VALUES ($1, $2, 'private') RETURNING id`, [`${RUN} pod`, host.id]);
+    `INSERT INTO pods (name, created_by, visibility, status, pod_type) VALUES ($1, $2, 'private', 'active', 'speed_networking') RETURNING id`,
+    [`${RUN} pod`, host.id]);
   podId = pod.rows[0].id;
   await pool.query(
     `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'director', 'active'), ($1, $3, 'member', 'active')`,
@@ -65,9 +69,10 @@ test.afterAll(async () => {
 test('a draft is the host\'s alone until published; cancel tells the member; archive puts it away; delete needs its name', async () => {
   test.setTimeout(120_000);
 
-  // A draft, made through the API.
+  // A draft, made through the API. A year out, so it heads the Events list (newest first, 100 a page) whatever else
+  // production lists to the member, and no job (overdue, in-person ender) ever looks at it during the run.
   const created = await apiRequest(host!, 'POST', '/sessions', {
-    podId, title: TITLE, description: 'E2E lifecycle', scheduledAt: new Date(Date.now() + 3 * 86_400_000).toISOString(),
+    podId, title: TITLE, description: 'E2E lifecycle', scheduledAt: new Date(Date.now() + 365 * 86_400_000).toISOString(),
     publication: 'draft',
     config: { eventType: 'speed_networking', numberOfRounds: 3, maxParticipants: 50 },
   });
