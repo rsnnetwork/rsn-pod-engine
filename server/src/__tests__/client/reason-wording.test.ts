@@ -14,6 +14,10 @@ import * as ts from 'typescript';
 
 const SRC = path.join(__dirname, '../../../../client/src');
 const RSN = /\bRSN\b/;
+// The one name the 10 Nov 2026 spec gives in RSN's own words: the "RSN Call link" anyone can open to join an event (its
+// final naming is an open question for Stefan, spec 13). Only that phrase is let through; any other RSN still fails.
+const SPEC_NAMES = ['RSN Call'];
+const withoutSpecNames = (text: string) => SPEC_NAMES.reduce((t, name) => t.split(name).join(''), text);
 
 // Files excused from the rule while another task rewrote them. The 19 Oct batch has landed, so none is excused now.
 // An entry whose files no longer say RSN fails the test below, so none can outlive its reason and quietly excuse a
@@ -29,7 +33,7 @@ function rsnInReadableText(file: string, source: string): string[] {
     // A string (a plain one, a JSX attribute's, one inside a type), each part of a template, and the text between JSX tags.
     const text = ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node)
       || ts.isTemplateMiddle(node) || ts.isTemplateTail(node) || ts.isJsxText(node) ? node.text : undefined;
-    if (text !== undefined && RSN.test(text)) {
+    if (text !== undefined && RSN.test(withoutSpecNames(text))) {
       found.push(`line ${tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1}: ${text.trim().replace(/\s+/g, ' ').slice(0, 70)}`);
     }
     ts.forEachChild(node, visit);
@@ -177,6 +181,12 @@ describe('the scan itself: a guard that cannot fail guards nothing', () => {
     expect(scan('const a = `${x} RSN ${y}`;')).toEqual(['RSN']);
     expect(scan("const A = () => <p title={cond ? 'RSN' : 'other'} />;")).toEqual(['RSN']);
     expect(scan("const A = () => <p>{'Welcome to RSN'}</p>;")).toEqual(['Welcome to RSN']);
+  });
+
+  it('lets through only the spec\'s own "RSN Call" name (Part 2 Task 11), never another RSN beside it', () => {
+    expect(scan("const a = 'RSN Call link';")).toEqual([]);
+    expect(scan("const a = 'Your RSN Call link from RSN';")).toEqual(['Your RSN Call link from RSN']);
+    expect(scan("const a = 'RSN calls';")).toEqual(['RSN calls']);
   });
 
   it('reports the line it is on', () => {

@@ -130,7 +130,7 @@ describe('the event page', () => {
   // list that came second left a circle member looking at Register), and it tries at most once per event: a failure,
   // or a refetch of the list, never makes it try again, so it can never loop.
   it('registers on opening whichever of the event and the participant list arrives last, and tries at most once', () => {
-    const effect = detail.slice(detail.indexOf('// Auto-register:'), detail.indexOf('const deleteMutation'));
+    const effect = detail.slice(detail.indexOf('// Auto-register:'), detail.indexOf('const openEdit'));
     expect(effect).toMatch(/\}, \[session\?\.id, user\?\.id, isRegistered, !!participants, access\?\.autoRegister, phase\]\);/);
     expect(effect).toMatch(/if \(autoRegisterTriedRef\.current === sessionId\) return;/);
     expect(effect).toMatch(/autoRegisterTriedRef\.current = sessionId;\s*setAutoRegistering\(true\);/);

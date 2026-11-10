@@ -590,7 +590,8 @@ describe('the pod page and the event page open the sheet and show the list', () 
 
   it('the event page opens the sheet with ?invite=1, for its host, co-hosts and admins, while the event can still take people', () => {
     expect(event).toMatch(/searchParams\.get\('invite'\) === '1'/);
-    expect(event).toMatch(/const mayInvite = \(isHost \|\| isAdmin \|\| viewerIsCohost\) && \(phase === 'pre' \|\| phase === 'live'\);/);
+    // Part 2 Task 11: a draft takes no invites (the server refuses them), so it offers none.
+    expect(event).toMatch(/const mayInvite = \(isHost \|\| isAdmin \|\| viewerIsCohost\) && \(phase === 'pre' \|\| phase === 'live'\) && !isDraft;/);
     expect(event).toMatch(/<InvitePickerSheet\b[\s\S]{0,400}open=\{pickerOpen\}/);
     expect(event).toMatch(/linkCap=\{session\.config\?\.maxParticipants\}/);
   });

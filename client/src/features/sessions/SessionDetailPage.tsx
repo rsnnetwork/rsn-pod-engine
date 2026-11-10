@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio, CircleDashed } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio, CircleDashed } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -16,7 +16,7 @@ import { eventEntry, icsFile } from '@/components/calendar/calendar-links';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
-import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
+import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase, isEventLifecycleChip, lifecycleColor, lifecycleLabel } from './statusConfig';
 import MessageParticipantsPanel from './MessageParticipantsPanel';
 import StartGroupChatCard from './StartGroupChatCard';
 import EventChatHistory from './EventChatHistory';
@@ -32,6 +32,10 @@ import EventJoinRequestsCard from './EventJoinRequestsCard';
 import EndEventButton from './EndEventButton';
 import { duplicateCircleField, eventCircleLine } from './circle-preset';
 import { circleErrorSentence } from '@/features/circles/useCircleActions';
+import OrganiserSettings from './OrganiserSettings';
+import EventHistoryPanel from './history/EventHistoryPanel';
+import { useEventGroups } from './groups/useEventGroups';
+import ParticipantGroupControl from './groups/ParticipantGroupControl';
 
 /** The icon over each figure under an event's title. */
 const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
@@ -119,8 +123,10 @@ export default function SessionDetailPage() {
   // renders only while the event can still happen / is happening.
   const sessionOver = session?.status === 'completed' || session?.status === 'cancelled';
   const canManageCohosts = !sessionOver && (isHost || user?.role === 'super_admin' || viewerIsCohost);
+  // Part 2 Task 11: a draft is seen only by the people running it; it takes no invites, no Go Live, no calendar entry.
+  const isDraft = session?.lifecycle === 'draft';
   // Who may invite (the server's rule: the host, a co-host, an admin), while the event can still take people.
-  const mayInvite = (isHost || isAdmin || viewerIsCohost) && (phase === 'pre' || phase === 'live');
+  const mayInvite = (isHost || isAdmin || viewerIsCohost) && (phase === 'pre' || phase === 'live') && !isDraft;
   const pickerOpen = inviteOpen || (askedToInvite && mayInvite);
   const closePicker = () => {
     setInviteOpen(false);
@@ -154,6 +160,13 @@ export default function SessionDetailPage() {
     enabled: !!sessionId && (isHost || isAdmin),
     meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
+  // The people who may run the event: its host and co-hosts, the pod's director or host, admins. The server has the
+  // last word (each organiser card hides itself for anyone it refuses); this only spares everyone else the requests.
+  const mayRunEvent = isHost || viewerIsCohost || isAdmin || pod?.memberRole === 'director' || pod?.memberRole === 'host';
+  const roundsEvent = !!session && liveKindOf(resolveEventFormat(session)) === 'rounds';
+  // Part 2 Task 11: the event's matching groups, read once for the groups card and the participant list's group chips.
+  const groupsView = useEventGroups(sessionId ?? '', !!sessionId && mayRunEvent && roundsEvent);
+
   // The server's "All" counts pending invites as well. They are listed on the Invitations card now, not below.
   const participantTotal: number | undefined = participantCounts
     ? participantCounts.total - (participantCounts.pendingInvites ?? 0)
@@ -209,15 +222,6 @@ export default function SessionDetailPage() {
     // parallel, and when the list came second the effect never ran again, so a circle member (whose list read is a little
     // slower) was left looking at Register.
   }, [session?.id, user?.id, isRegistered, !!participants, access?.autoRegister, phase]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const deleteMutation = useMutation({
-    mutationFn: () => api.delete(`/sessions/${sessionId}`),
-    onSuccess: () => {
-      addToast('Event deleted', 'success');
-      navigate('/sessions');
-    },
-    onError: () => addToast('Failed to delete event', 'error'),
-  });
 
   const openEdit = () => setEditOpen(true);
 
@@ -331,9 +335,9 @@ export default function SessionDetailPage() {
   const hasRoom = liveKindOf(eventFormat) !== 'none';
   const place = eventPlace(eventFormat, session.config);
   const facts = eventFacts(eventFormat, session.config);
-  // The people who may run the event: its host and co-hosts, the pod's director or host, admins. The server has the
-  // last word (the panel hides itself for anyone else); this only spares everyone else a loading card.
-  const mayRunEvent = isHost || viewerIsCohost || isAdmin || pod?.memberRole === 'director' || pod?.memberRole === 'host';
+  const groupsData = groupsView.data;
+  // The people who run the event are not matched, so they have no group to change.
+  const isCohostOrHost = (p: { userId: string; isCohost?: boolean }) => !!p.isCohost || p.userId === session.hostUserId;
   const showAfterEventTools = phase === 'done' && mayRunEvent;
   // A video meeting has no rounds to recap: its recap is who took part, further down this page.
   const openRecap = () => {
@@ -362,9 +366,9 @@ export default function SessionDetailPage() {
 
       {/* Session Info */}
       <Card className="animate-fade-in-up">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#1a1a2e]">{session.title || 'Event'}</h1>
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold text-[#1a1a2e] [overflow-wrap:anywhere]">{session.title || 'Event'}</h1>
             {session.description && <p className="text-gray-500 mt-1 text-sm">{session.description}</p>}
             {/* T13: an event for a whole circle says so, and links the circle. */}
             {session.circle && (
@@ -383,7 +387,12 @@ export default function SessionDetailPage() {
               </span>
             </p>
           </div>
-          <Badge variant={statusVariant}>{sessionStatusLabel(session.status)}</Badge>
+          {/* Part 2 Task 11: the people running the event read where it stands (Draft … Cancelled); members as before. */}
+          {mayRunEvent && isEventLifecycleChip(session.lifecycle) ? (
+            <Badge variant={lifecycleColor(session.lifecycle)} className="shrink-0">{lifecycleLabel(session.lifecycle)}</Badge>
+          ) : (
+            <Badge variant={statusVariant} className="shrink-0">{sessionStatusLabel(session.status)}</Badge>
+          )}
         </div>
         {/* The place spans the card, under the title and the status, so a long address has room on a phone. */}
         {place && <EventPlace place={place} over={phase === 'done'} />}
@@ -468,7 +477,7 @@ export default function SessionDetailPage() {
               live -> Enter Live Event
               done -> View Recap
            */}
-          {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'pre' && (
+          {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'pre' && !isDraft && (
             <Button
               variant="primary"
               onClick={() => navigate(`/session/${sessionId}/live`)}
@@ -490,7 +499,7 @@ export default function SessionDetailPage() {
           {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). An
               in-person event carries its place as where it is (30 Oct 2026, T12). The
               entry links back to this page on this site. */}
-          {session.status === 'scheduled' && session.scheduledAt && (
+          {session.status === 'scheduled' && session.scheduledAt && !isDraft && (
             <AddToCalendar
               entry={eventEntry({
                 title: session.title || 'Event',
@@ -553,25 +562,25 @@ export default function SessionDetailPage() {
                       <Pencil className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
                     </button>
                   )}
-                  {sessionStatusPhase(session.status) !== 'live' && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (await ask({ title: 'Delete this event?', body: 'This cannot be undone.', confirmLabel: 'Delete event', tone: 'danger' })) deleteMutation.mutate();
-                      }}
-                      disabled={deleteMutation.isPending}
-                      className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-red-200 bg-white hover:bg-red-50 flex items-center justify-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-60"
-                      title="Delete event"
-                    >
-                      <Trash2 className="h-4 w-4" /> <span className="hidden sm:inline">Delete</span>
-                    </button>
-                  )}
+                  {/* Part 2 Task 11: no legacy Delete here. Cancel event (with a notice to everyone registered), Archive and
+                      Delete permanently are in the Event status card below, as the server's allowedActions say. */}
                 </>
               )}
             </div>
           )}
         </div>
       </div>
+
+      {/* Part 2 Task 11: the organiser's settings: status and lifecycle steps, the call link, admission, groups. */}
+      {sessionId && (
+        <OrganiserSettings
+          event={{ ...session, id: sessionId }}
+          phase={phase}
+          mayRunEvent={mayRunEvent}
+          isRoundsEvent={isRoundsEvent}
+          groups={groupsView}
+        />
+      )}
 
       {/* After the event, for the people who run it: message everyone who took part, or start a group chat with them. */}
       {showAfterEventTools && sessionId && (
@@ -686,7 +695,7 @@ export default function SessionDetailPage() {
                 : p.status || 'Member';
               return (
                 <Card key={p.userId || p.id} className="!p-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                     <Link to={personHref(p.userId || p.id, 'Events')} className="flex min-h-[44px] items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
                       <Avatar src={p.avatarUrl} name={p.displayName || p.email || 'User'} size="sm" />
                       <div className="min-w-0">
@@ -696,7 +705,19 @@ export default function SessionDetailPage() {
                     </Link>
                     {/* S16 — pre-event co-host management on the event page.
                         Same semantics as the live drawer's shield toggle. */}
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="ml-auto flex items-center gap-2 shrink-0">
+                      {/* Part 2 Task 11: the person's matching group, and Change group before the event (organisers). */}
+                      {sessionId && groupsData && groupsData.groups.length > 0 && groupsData.members && p.userId && (
+                        <ParticipantGroupControl
+                          sessionId={sessionId}
+                          userId={p.userId}
+                          name={p.displayName || 'This person'}
+                          groups={groupsData.groups}
+                          mine={groupsData.members[p.userId] ?? []}
+                          allowMultiple={groupsData.allowMultiple}
+                          canChange={phase === 'pre' && !isCohostOrHost(p)}
+                        />
+                      )}
                       {p.isCohost && (
                         <Badge variant="info" className="text-xs flex items-center gap-1">
                           <ShieldCheck className="h-3 w-3" /> Co-Host
@@ -723,6 +744,9 @@ export default function SessionDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Part 2 Task 11: who did what to this event, for the people running it (the server refuses anyone else). */}
+      {mayRunEvent && sessionId && <EventHistoryPanel sessionId={sessionId} />}
 
       {/* Invite people: the invite sheet (the event's pod, your connections, by email, a link) */}
       {sessionId && (

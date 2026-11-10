@@ -57,6 +57,9 @@ const CREATE_COPY = {
   notFound: 'This pod could not be found. It may have been archived.',
 };
 
+/** Part 2 Task 11: what Save as draft says once the draft is kept. */
+const DRAFT_SAVED = 'Draft saved. Only the people running it can see it until you publish it.';
+
 const canSchedule = (pod: PodRow, isAdmin: boolean) => isAdmin || pod.memberRole === 'director' || pod.memberRole === 'host';
 const toEventPod = (pod: PodRow | null): EventPod | null =>
   (pod ? { id: pod.id, name: pod.name, podType: pod.podType, orchestrationMode: pod.orchestrationMode } : null);
@@ -282,20 +285,22 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
 
   const create = useMutation({
     networkMode: 'always',
-    mutationFn: (body: NewEventBody & { visibility: EventVisibility; circleId?: string }) => api.post('/sessions', body),
-    onSuccess: (res) => {
-      addToast('Event scheduled!', 'success');
+    mutationFn: (body: NewEventBody & { visibility: EventVisibility; circleId?: string; publication?: 'draft' }) => api.post('/sessions', body),
+    onSuccess: (res, body) => {
+      // Part 2 Task 11: a draft is the organisers' alone until published, so it opens without the invite sheet.
+      const draft = body.publication === 'draft';
+      addToast(draft ? DRAFT_SAVED : 'Event scheduled!', 'success');
       const id = res.data?.data?.id;
-      if (!id) {
-        navigate('/sessions');
-        return;
-      }
+      if (!id) return navigate('/sessions');
+      if (draft) return navigate(`/sessions/${id}`);
       navigate(`/sessions/${id}?invite=1`);
     },
     onError: ev.refused,
     onSettled: ev.settled,
   });
   const submit = ev.onSubmit((values) => create.mutate({ ...eventBody(values, { isAdmin }), visibility, ...(circle ? { circleId: circle.id } : {}) }));
+  // Part 2 Task 11: the same body kept as a draft; Schedule Event sends no publication, exactly as before.
+  const saveDraft = ev.onSubmit((values) => create.mutate({ ...eventBody(values, { isAdmin }), visibility, ...(circle ? { circleId: circle.id } : {}), publication: 'draft' }));
   const typeLabel = pod ? POD_TYPES[pod.podType]?.label : undefined;
 
   return (
@@ -411,7 +416,10 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
         <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 rounded-2xl border border-gray-200 bg-white/95 px-4 py-2.5 shadow-lg backdrop-blur">
           <FormSummary className="basis-full sm:basis-auto sm:flex-1" summary={ev.summary} message={ev.formError} onGoTo={ev.goTo} />
           <Button variant="ghost" type="button" onClick={() => navigate(back)}>Cancel</Button>
-          <Button type="submit" isLoading={create.isPending} className="btn-glow">Schedule Event</Button>
+          <Button variant="outline" type="button" data-testid="save-as-draft" onClick={(e) => void saveDraft(e)} disabled={create.isPending} isLoading={create.isPending && create.variables?.publication === 'draft'}>
+            Save as draft
+          </Button>
+          <Button type="submit" isLoading={create.isPending && create.variables?.publication !== 'draft'} disabled={create.isPending} className="btn-glow">Schedule Event</Button>
         </div>
       </div>
     </form>
