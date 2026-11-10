@@ -122,8 +122,8 @@ test('standing match loop: suggest → I want to meet → accept → chat unlock
   // (4) The founder clicks the real button ON OUR INVESTOR'S CARD — the
   // introduction goes out to our test user, nobody else.
   await investorCard.getByRole('button', { name: /I want to meet/i }).click();
-  await expect(investorCard.getByText(/Introduction requested/i)).toBeVisible({ timeout: 15_000 });
-  console.log('  ✓ headed: "I want to meet" → Introduction requested.');
+  await expect(investorCard.getByText(/Request sent/i)).toBeVisible({ timeout: 15_000 });
+  console.log('  ✓ headed: "I want to meet" → Request sent.');
 
   // (5) The investor received it (poke rails) with the intro as the message,
   //     plus a bell notification.

@@ -556,6 +556,8 @@ export function notAlreadyInTouchSql(memberParam: string, otherAlias: string): s
  * request got to, so the card can say so instead of the person quietly
  * disappearing (22 Sep 2026). Someone they SAVED stays too, carrying that, so the
  * card can show it (5 Oct 2026).
+ * The card shows the newest request still standing, pending or accepted (10 Nov 2026): a withdrawn one
+ * (cancelled) is as if it had never been sent, so the person is back to "I want to meet".
  */
 async function loadCandidates(userId: string): Promise<CandidateRow[]> {
   const r = await query<CandidateRow>(
@@ -568,7 +570,7 @@ async function loadCandidates(userId: string): Promise<CandidateRow[]> {
      LEFT JOIN LATERAL (
        SELECT p2.status, p2.sender_id
          FROM user_pokes p2
-        WHERE p2.status <> 'declined'
+        WHERE p2.status IN ('pending', 'accepted')
           AND ((p2.sender_id = $1 AND p2.recipient_id = u.id)
             OR (p2.sender_id = u.id AND p2.recipient_id = $1))
         ORDER BY p2.created_at DESC

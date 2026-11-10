@@ -488,6 +488,20 @@ export const meetingCancelLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have cancelled a lot of meetings this hour. Try again later.' } },
 });
 
+// Withdrawing a meeting request (10 Nov 2026). A withdrawn request may be sent again, and every send rings the other
+// person's bell and may email them, so withdraw-and-ask-again is held to 20 withdrawals an hour per member. Only a
+// withdrawal that happened counts: a refusal (not theirs, already answered) changed nothing.
+export const requestWithdrawLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('request-withdraw'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have withdrawn a lot of requests this hour. Try again later.' } },
+});
+
 // Ringing someone for a call (1 Nov 2026, L12). Each ring is a bell, a banner on every screen the other person
 // has open and a line in the thread, so a member rings at most 10 calls in 10 minutes, whether from a profile
 // (POST /calls/user/:userId) or a thread (POST /dm/conversations/:id/call/request): one limiter, one bucket.

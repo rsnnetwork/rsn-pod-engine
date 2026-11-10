@@ -11,12 +11,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Search as SearchIcon } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
+import { useAuthStore } from '@/stores/authStore';
+import { E } from '@/realtime/entities';
+import { errorMessage } from '@/features/reason/errors';
+import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 import api from '@/lib/api';
 
 interface Result {
@@ -26,7 +30,14 @@ interface Result {
   jobTitle: string | null;
   company: string | null;
   location: string | null;
+  /** Where a meeting request between the two stands (10 Nov 2026), from the server, so it survives a reload. */
+  pokeStatus?: 'pending' | 'accepted' | null;
+  /** True when the member searching sent it; false when this person did. */
+  pokeSentByOwner?: boolean | null;
 }
+
+/** The searcher's own request to this person, still waiting: "Request sent", with Withdraw beside it. */
+const askedByMe = (r: Result) => r.pokeStatus === 'pending' && r.pokeSentByOwner === true;
 
 const MIN_QUERY = 2;
 
@@ -66,24 +77,32 @@ export default function SearchPage() {
     written.current = term;
     writeAddress.current(term ? { q: term } : {}, { replace: true });
   }, [term]);
-  const [asked, setAsked] = useState<Set<string>>(new Set());
   const { addToast } = useToastStore();
+  const qc = useQueryClient();
+  const me = useAuthStore((s) => s.user?.id as string | undefined);
 
-  // realtime: skip — a search is a point-in-time query typed by the member, not a live view
+  // 10 Nov 2026: each result carries where a meeting request between the two stands, so "Request sent" is the
+  // server's word and survives a reload (it used to live only in this page's memory). A request sent, answered or
+  // withdrawn anywhere tells both members' user and invites tags, so the results follow without a refresh.
   const { data: results, isFetching } = useQuery({
     queryKey: ['user-find', term],
     queryFn: () => api.get(`/users/find?q=${encodeURIComponent(term)}`).then((r) => r.data.data as Result[]),
     enabled: term.length >= MIN_QUERY,
     staleTime: 30_000,
+    meta: { entities: me ? [E.user(me), E.userInvites(me)] : [] },
   });
 
   const meet = useMutation({
-    mutationFn: (userId: string) => api.post(`/matches/platform/${userId}/interest`),
-    onSuccess: (_d, userId) => {
-      setAsked((prev) => new Set(prev).add(userId));
+    mutationFn: (userId: string) => api.post(`/matches/platform/${encodeURIComponent(userId)}/interest`),
+    onSuccess: () => {
       addToast('Meeting request sent', 'success');
+      // Returned, so the button stays busy until the results say "Request sent".
+      return qc.invalidateQueries({ queryKey: ['user-find'] });
     },
-    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Could not send that', 'error'),
+    onError: (err) => {
+      addToast(errorMessage(err, 'Could not send that request. Try again.'), 'error');
+      return qc.invalidateQueries({ queryKey: ['user-find'] });
+    },
   });
 
   const active = term.length >= MIN_QUERY;
@@ -137,13 +156,33 @@ export default function SearchPage() {
                 {r.location && <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{r.location}</p>}
               </div>
             </div>
-            <Button
-              onClick={() => meet.mutate(r.userId)}
-              disabled={asked.has(r.userId) || meet.isPending}
-              className="mt-3 min-h-[44px] w-full justify-center"
-            >
-              {asked.has(r.userId) ? 'Meeting request sent' : 'I want to meet'}
-            </Button>
+            {askedByMe(r) ? (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <span
+                  className="flex min-h-[44px] items-center justify-center rounded-xl bg-gray-100 px-2 text-center text-sm font-medium text-gray-600"
+                  data-testid={`search-request-sent-${r.userId}`}
+                >
+                  Request sent
+                </span>
+                <WithdrawRequestButton userId={r.userId} />
+              </div>
+            ) : r.pokeStatus === 'accepted' ? (
+              <Link
+                to={`/messages/new/${r.userId}`}
+                className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-gray-300 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50"
+              >
+                Message
+              </Link>
+            ) : (
+              // An incoming request (they asked the member) keeps "I want to meet": pressing it is the match.
+              <Button
+                onClick={() => meet.mutate(r.userId)}
+                disabled={meet.isPending}
+                className="mt-3 min-h-[44px] w-full justify-center"
+              >
+                {meet.isPending && meet.variables === r.userId ? 'Sending…' : 'I want to meet'}
+              </Button>
+            )}
           </Card>
         ))}
       </div>

@@ -21,7 +21,8 @@ import MeetingRequestCard, { type PendingRequest } from './MeetingRequestCard';
 
 /** Where one request stands, from GET /pokes/:id (either person in it may ask). */
 interface PokeState {
-  status: 'pending' | 'accepted' | 'declined';
+  /** 'cancelled' is a request its sender withdrew (10 Nov 2026). */
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled';
   conversationId: string | null;
   otherUserId: string;
   /** True when this member sent the request rather than received it. */
@@ -49,6 +50,9 @@ function noticeFor(state: PokeState | null | undefined, failed: boolean): Notice
     return { text: state.sentByMe ? 'They turned your meeting request down.' : 'You turned this meeting request down.' };
   }
   if (state?.status === 'accepted') return { text: 'This meeting request has already been answered.' };
+  if (state?.status === 'cancelled') {
+    return { text: state.sentByMe ? 'You withdrew this meeting request.' : 'They withdrew this meeting request.' };
+  }
   if (failed) return { text: 'We could not load this meeting request.', retry: true };
   if (state?.status === 'pending') {
     // A member who SENT it will never find it among the ones they received.

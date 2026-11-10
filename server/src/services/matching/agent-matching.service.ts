@@ -22,7 +22,7 @@ const WIDEN_BELOW = 3;
 
 /**
  * Candidates the owner has a live introduction with (asked, or been asked by,
- * not declined). replaceMatches keeps these rows whatever the score, so their
+ * pending or accepted; a withdrawn request is none). replaceMatches keeps these rows whatever the score, so their
  * stored reason must be refreshed here or it goes stale: on 3 Sep 2026 Stefan
  * stopped being a "developer" in the data and his card on Ali's Developers
  * agent kept saying he was one, because he no longer scored and the upsert
@@ -36,7 +36,7 @@ async function stickyCandidateIds(ownerId: string, candidateIds: string[], agent
     // actually asked them through, and appear here only if they still score-match.
     `SELECT DISTINCT CASE WHEN p.sender_id = $1 THEN p.recipient_id ELSE p.sender_id END AS id
        FROM user_pokes p
-      WHERE p.status <> 'declined'
+      WHERE p.status IN ('pending', 'accepted')
         AND p.agent_id = $2
         AND (p.sender_id = $1 OR p.recipient_id = $1)`,
     [ownerId, agentId],
@@ -110,7 +110,7 @@ async function loadCandidatesFor(ownerId: string): Promise<IntentProfile[]> {
              WHERE e.user_a_id = LEAST($1, u.id) AND e.user_b_id = GREATEST($1, u.id))
           OR EXISTS (
             SELECT 1 FROM user_pokes ip
-             WHERE ip.status <> 'declined'
+             WHERE ip.status IN ('pending', 'accepted')
                AND ((ip.sender_id = $1 AND ip.recipient_id = u.id)
                  OR (ip.sender_id = u.id AND ip.recipient_id = $1))))
         AND NOT EXISTS (

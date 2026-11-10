@@ -16,6 +16,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { hasEarlierAppPage } from './profile-back';
 import { useConfirm } from '@/hooks/useConfirm';
+import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 
 // 13 Aug 2026 (D1): Stefan — "the profile card needs a major visual upgrade,
 // the greatest thing on the platform", and "About was cut off / too narrow".
@@ -262,9 +263,13 @@ export default function PublicProfilePage() {
                     <div className="flex flex-col items-center gap-1 sm:items-start">
                       {meetingRequest?.status === 'pending' && meetingRequest.sentByMe ? (
                         <>
-                          <Button size="sm" variant="ghost" disabled className="min-h-[44px] text-xs" data-testid="meet-state">
-                            <Send className="mr-1.5 h-3.5 w-3.5" /> Meeting request sent
-                          </Button>
+                          <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+                            <Button size="sm" variant="ghost" disabled className="min-h-[44px] text-xs" data-testid="meet-state">
+                              <Send className="mr-1.5 h-3.5 w-3.5" /> Meeting request sent
+                            </Button>
+                            {/* 10 Nov 2026: the request can be taken back; asking again is always open. */}
+                            <WithdrawRequestButton userId={userId as string} requestId={meetingRequest.id} className="text-xs" />
+                          </div>
                           <span className="text-[11px] text-gray-400">You can message once they accept</span>
                         </>
                       ) : meetingRequest?.status === 'pending' ? (

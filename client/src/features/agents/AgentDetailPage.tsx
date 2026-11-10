@@ -13,6 +13,7 @@ import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
+import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 import api from '@/lib/api';
 import type { Agent } from './AgentsPage';
 
@@ -33,7 +34,7 @@ interface AgentMatch {
 function introState(m: AgentMatch): string | null {
   if (!m.pokeStatus) return null;
   if (m.pokeStatus === 'accepted') return 'Connected';
-  return m.pokeSentByOwner ? 'Invite sent' : 'They asked to meet you';
+  return m.pokeSentByOwner ? 'Request sent' : 'They asked to meet you';
 }
 
 function roleLine(m: AgentMatch): string {
@@ -54,7 +55,6 @@ export default function AgentDetailPage() {
   const addToast = useToastStore(s => s.addToast);
   const [editing, setEditing] = useState(false);
   const [wantText, setWantText] = useState('');
-  const [requested, setRequested] = useState<Set<string>>(new Set());
 
   // realtime: skip — background scoring emits no per-agent event; this polls instead
   const { data, isLoading } = useQuery({
@@ -77,11 +77,14 @@ export default function AgentDetailPage() {
 
   const interestMutation = useMutation({
     mutationFn: (userId: string) => api.post(`/agents/${id}/interest`, { userId }),
-    onSuccess: (_d, userId) => {
-      setRequested(prev => new Set(prev).add(userId));
-      addToast('Introduction requested', 'success');
-      qc.invalidateQueries({ queryKey: ['agent', id] });
-      qc.invalidateQueries({ queryKey: ['agents'], exact: false });
+    // Returned, so the button stays busy until the refetched card says "Request sent" (10 Nov 2026: the server's
+    // state is the only one; a set kept in this page went on saying "sent" after the request was withdrawn).
+    onSuccess: () => {
+      addToast('Meeting request sent', 'success');
+      return Promise.all([
+        qc.invalidateQueries({ queryKey: ['agent', id] }),
+        qc.invalidateQueries({ queryKey: ['agents'], exact: false }),
+      ]);
     },
     onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Could not send that', 'error'),
   });
@@ -96,14 +99,12 @@ export default function AgentDetailPage() {
   }
 
   const { agent, matches } = data;
-  // `requested` covers the moment between clicking and the next refetch, so a
-  // card never jumps back to an un-asked state for a few seconds.
-  const asked = (m: AgentMatch) => Boolean(m.pokeStatus) || requested.has(m.candidateUserId);
+  const asked = (m: AgentMatch) => Boolean(m.pokeStatus);
   const outstanding = matches.filter(m => !asked(m));
   const inProgress = matches.filter(asked);
 
   const renderMatch = (m: AgentMatch) => {
-    const state = introState(m) ?? (requested.has(m.candidateUserId) ? 'Invite sent' : null);
+    const state = introState(m);
     return (
       <Card key={m.candidateUserId} className="!p-4" data-testid={`agent-match-${m.candidateUserId}`}>
         <div className="flex items-start gap-3">
@@ -135,10 +136,14 @@ export default function AgentDetailPage() {
           >
             Open conversation
           </Link>
+        ) : state && m.pokeSentByOwner ? (
+          // 10 Nov 2026: the member's own request, still waiting, can be taken back.
+          <div className="mt-3 flex flex-col items-stretch gap-1">
+            <WithdrawRequestButton userId={m.candidateUserId} className="w-full" />
+            <p className="text-center text-xs text-gray-400">Waiting for them to reply</p>
+          </div>
         ) : state ? (
-          <p className="mt-3 text-center text-xs text-gray-400">
-            {m.pokeSentByOwner === false ? 'Waiting on you in Messages' : 'Waiting for them to reply'}
-          </p>
+          <p className="mt-3 text-center text-xs text-gray-400">Waiting on you in Messages</p>
         ) : (
           <Button
             onClick={() => interestMutation.mutate(m.candidateUserId)}

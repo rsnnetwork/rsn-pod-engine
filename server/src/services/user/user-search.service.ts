@@ -18,6 +18,14 @@ export interface SearchResult {
   jobTitle: string | null;
   company: string | null;
   location: string | null;
+  /**
+   * Where a meeting request between the searcher and this member stands, either way (10 Nov 2026, Stefan: "if I
+   * have ALREADY asked them, why is that not shown?"): the newest one pending or accepted, as For You reads it. A
+   * withdrawn request is as if it had never been sent, and a declined one is not drawn here (asking again says so).
+   */
+  pokeStatus: 'pending' | 'accepted' | null;
+  /** True when the searcher sent it, false when this member did; null when there is none. */
+  pokeSentByOwner: boolean | null;
 }
 
 const MAX_LIMIT = 50;
@@ -57,8 +65,19 @@ export async function searchMembers(
   const r = await query<SearchResult>(
     `SELECT u.id AS "userId", u.display_name AS "displayName",
             u.avatar_url AS "avatarUrl", u.job_title AS "jobTitle",
-            u.company, u.location
+            u.company, u.location,
+            pk.status AS "pokeStatus",
+            CASE WHEN pk.sender_id IS NULL THEN NULL ELSE pk.sender_id = $1 END AS "pokeSentByOwner"
        FROM users u
+       LEFT JOIN LATERAL (
+         SELECT p.status, p.sender_id
+           FROM user_pokes p
+          WHERE p.status IN ('pending', 'accepted')
+            AND ((p.sender_id = $1 AND p.recipient_id = u.id)
+              OR (p.sender_id = u.id AND p.recipient_id = $1))
+          ORDER BY p.created_at DESC
+          LIMIT 1
+       ) pk ON TRUE
       WHERE u.id <> $1
         AND u.status = 'active'
         AND u.onboarding_completed = true

@@ -18,6 +18,11 @@ export type WorthContinuing = (typeof WORTH_CONTINUING)[number];
 
 export type MeetingFormat = 'video_20' | 'coffee' | 'message_first';
 export type MatchStrength = 'strong' | 'close';
+/**
+ * Where a meeting request (user_pokes.status) stands. 'cancelled' is a request its sender withdrew (migration 132):
+ * it reads as no request at all, never as a "no", so the sender may ask again.
+ */
+export type MeetingRequestStatus = 'pending' | 'accepted' | 'declined' | 'cancelled';
 export type RelationshipState = 'none' | 'requested' | 'incoming' | 'declined' | 'connected' | 'met';
 export type PrimaryAction = 'meet' | 'requested' | 'respond' | 'declined' | 'continue';
 

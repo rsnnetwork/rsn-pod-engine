@@ -1023,7 +1023,7 @@ test('4. Matches: an open page changes on its own when a request is sent from an
   // Both open pages change, with no reload and no touch.
   const viewerState = viewerPage.getByTestId(`match-state-${person.id}`);
   const personState = personPage.getByTestId(`match-state-${viewer.id}`);
-  await expect(viewerState, 'the viewer\'s card now says the request went out').toContainText('Introduction requested', { timeout: 15_000 });
+  await expect(viewerState, 'the viewer\'s card now says the request went out').toContainText('Request sent', { timeout: 15_000 });
   await expect(personState, 'the person\'s card now says they were asked').toContainText('They asked to meet you', { timeout: 15_000 });
   await expect(viewerCard.getByRole('button', { name: /I want to meet/i }), 'the viewer\'s button is gone').toHaveCount(0);
   await expect(personCard.getByRole('button', { name: /I want to meet/i }), 'the person\'s button is gone').toHaveCount(0);

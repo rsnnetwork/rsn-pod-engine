@@ -316,7 +316,7 @@ test('asking someone to meet keeps them on the agent, badged, and drops the coun
 
   // Still on the agent, now with its state — not deleted.
   await expect(card).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId(`agent-match-state-${stayDev.id}`)).toHaveText(/Invite sent/i, { timeout: 20_000 });
+  await expect(page.getByTestId(`agent-match-state-${stayDev.id}`)).toHaveText(/Request sent/i, { timeout: 20_000 });
   await expect(card.getByRole('button', { name: 'I want to meet' })).toHaveCount(0);
   await expect(page.getByText('Already asked')).toBeVisible();
 

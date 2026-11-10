@@ -242,7 +242,8 @@ describe('accepting an introduction does not evict you from the agent', () => {
     expect(sql).toMatch(/encounter_history/);
     // The encounter exclusion must be escapable by a live introduction.
     expect(sql).toMatch(/OR EXISTS \(\s*SELECT 1 FROM user_pokes ip/);
-    expect(sql).toMatch(/ip\.status <> 'declined'/);
+    // 10 Nov 2026: pending or accepted; a withdrawn request (cancelled) is no introduction at all.
+    expect(sql).toMatch(/ip\.status IN \('pending', 'accepted'\)/);
   });
 
   it('still hides someone genuinely met with no introduction between them', async () => {

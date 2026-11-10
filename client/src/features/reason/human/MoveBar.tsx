@@ -12,6 +12,7 @@ import { primaryActionFor, type PersonBrief } from '@rsn/shared';
 import { cn } from '@/lib/utils';
 import { useToastStore } from '@/stores/toastStore';
 import { useRequestAnswer } from '@/features/messages/useRequestAnswer';
+import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 import { BUSY } from './busy';
 import { NEXT_MOVE, PRIMARY_LABEL, STATE_LABEL } from './labels';
 
@@ -56,6 +57,7 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
   const action = primaryActionFor(r.state);
   const inert = action === 'requested' || action === 'declined';
   const answering = r.state === 'incoming' && !!r.pokeId;
+  const requested = r.state === 'requested';
   // While a press is on its way the buttons say so (aria-disabled), show the busy look and ignore presses.
   // They are not `disabled`: a disabled button drops the keyboard focus that is on it. The same goes for Request
   // sent and Request declined: the Meet sheet gives focus back to the button that opened it, and by then that
@@ -94,8 +96,12 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
           >
             <span aria-hidden="true">{r.saved ? '★' : '☆'}</span>{r.saved ? 'Saved' : 'Save'}
           </button>
-          {/* While a request from them waits, Decline is the answer to it, so Remove steps aside. */}
-          {!answering && (
+          {/* While a request from them waits, Decline is the answer to it, so Remove steps aside. While the member's own
+              request waits (10 Nov 2026), Withdraw takes its place: taking the request back comes before taking the
+              person off For You, and four buttons do not fit a phone's bar. "Withdraw" on a phone, "Withdraw
+              request" from 768px. */}
+          {requested && <WithdrawRequestButton userId={brief.person.id} shortLabel className="min-h-[48px]" />}
+          {!answering && !requested && (
             <button
               type="button"
               onClick={press(onToggleRemove)}

@@ -140,8 +140,9 @@ describe('Human Profile: Save and Remove (Pass until 30 Oct 2026)', () => {
     expect(bar()).toMatch(/import \{ useRequestAnswer \} from '@\/features\/messages\/useRequestAnswer';/);
     expect(bar()).toMatch(/const answering = r\.state === 'incoming' && !!r\.pokeId;/);
     expect(bar()).toMatch(/\{answering \? <IncomingAnswer pokeId=\{r\.pokeId as string\} \/> : \(/);
-    // Decline is the request's answer there, so Remove steps aside.
-    expect(bar()).toMatch(/\{!answering && \(/);
+    // Decline is the request's answer there, so Remove steps aside (and, since 10 Nov 2026, for Withdraw too while
+    // the member's own request waits).
+    expect(bar()).toMatch(/\{!answering && !requested && \(/);
   });
   it('the bar is not drawn once the two are connected or have met, and the page drops the room it kept for it', () => {
     expect(page()).toMatch(/const connected = r\.state === 'connected' \|\| r\.state === 'met';/);
