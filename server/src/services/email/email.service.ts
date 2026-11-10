@@ -1554,6 +1554,86 @@ export async function sendEventCancelledEmail(to: string, data: EventCancelledEm
   return sendEmail({ to, subject, html, text });
 }
 
+// ─── Event reminder and time-change emails (Part 2 foundation, Task 10) ─────
+// Sent by the event reminder worker (24 hours and 1 hour before) and by notifyEventRescheduled (event-notices.ts), only
+// while the person's notify_email is on and the admin switch for 'event_reminder' / 'event_rescheduled' is on
+// (email_config, seeded on by migration 135), and only while EVENT_COMMS is 'on'. These only render and send; every
+// time is already written for the recipient ("in 1 hour", "tomorrow at 18:00", or a full day and zone).
+export interface EventReminderEmailData {
+  eventTitle: string;
+  /** How soon it starts, as the recipient reads it ("in 1 hour", "tomorrow at 18:00"). */
+  when: string;
+  /** The event's page. */
+  link: string;
+}
+
+export async function sendEventReminderEmail(to: string, data: EventReminderEmailData): Promise<SendEmailResult> {
+  const subject = `Reminder: ${data.eventTitle} starts ${data.when}`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Event reminder</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 20px 0;">
+            <strong>${escapeHtml(data.eventTitle)}</strong> starts ${escapeHtml(data.when)}.
+          </p>
+          <div style="text-align:center;margin:20px 0 8px 0;">
+            <a href="${escapeAttr(data.link)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Open the event</a>
+          </div>
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+  const text = `${data.eventTitle} starts ${data.when}.
+
+Open the event: ${data.link}
+
+REASON — Meet people you have a reason to know.`;
+  return sendEmail({ to, subject, html, text });
+}
+
+export interface EventRescheduledEmailData {
+  eventTitle: string;
+  /** Where it was, in the recipient's own zone and named ("Tuesday 17 November, 14:00 (CET)"). */
+  previousWhen: string;
+  /** Where it is now, written the same way. */
+  when: string;
+  /** The event's page. */
+  link: string;
+}
+
+export async function sendEventRescheduledEmail(to: string, data: EventRescheduledEmailData): Promise<SendEmailResult> {
+  const subject = `New time: ${data.eventTitle}`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">New time</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>${escapeHtml(data.eventTitle)}</strong> has moved.
+          </p>
+          <div style="background:#f0fdf4;border-left:3px solid #16a34a;border-radius:6px;padding:12px 16px;margin:0 0 12px 0;">
+            <p style="color:#166534;font-size:15px;line-height:1.5;margin:0;"><strong>Now: ${escapeHtml(data.when)}</strong></p>
+          </div>
+          <p style="color:#6b7280;font-size:14px;line-height:1.5;margin:0 0 20px 0;">It was ${escapeHtml(data.previousWhen)}.</p>
+          <div style="text-align:center;margin:20px 0 8px 0;">
+            <a href="${escapeAttr(data.link)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Open the event</a>
+          </div>
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+  const text = `${data.eventTitle} has moved.
+
+Now: ${data.when}
+It was ${data.previousWhen}.
+
+Open the event: ${data.link}
+
+REASON — Meet people you have a reason to know.`;
+  return sendEmail({ to, subject, html, text });
+}
+
 // Every value an email puts into its HTML goes through one of these (21 Oct 2026). Names, event, pod and
 // circle names, messages and notes are typed by people, and the request to join needs no account at all,
 // so anything left as it was typed would let a stranger put their own link or picture into an email sent

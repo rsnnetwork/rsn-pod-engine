@@ -282,6 +282,22 @@ const cases: EmailCase[] = [
       reason: 'The venue closed.', link: 'https://app.rsn.network/sessions/s1',
     }),
   },
+  // Part 2 Task 10: the reminder before an event, and the notice that its time moved.
+  {
+    fn: 'sendEventReminderEmail', label: 'an event reminder', subject: 'Reminder: Founders breakfast starts tomorrow at 18:00',
+    brandLine: MEET,
+    run: () => emailService.sendEventReminderEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', when: 'tomorrow at 18:00', link: 'https://app.rsn.network/sessions/s1',
+    }),
+  },
+  {
+    fn: 'sendEventRescheduledEmail', label: 'an event moved to a new time', subject: 'New time: Founders breakfast',
+    brandLine: MEET,
+    run: () => emailService.sendEventRescheduledEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', previousWhen: 'Thursday 5 November, 18:00 (CET)',
+      when: 'Friday 6 November, 18:00 (CET)', link: 'https://app.rsn.network/sessions/s1',
+    }),
+  },
 ];
 
 const count = (haystack: string, pattern: RegExp) => (haystack.match(pattern) ?? []).length;

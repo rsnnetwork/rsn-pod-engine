@@ -41,6 +41,7 @@ import { pruneExpiredAuthTokens } from './services/maintenance/token-cleanup';
 import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
 import { processMeetingReminders } from './services/meetings/meeting-reminder.worker';
 import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS } from './services/session/overdue-events';
+import { processEventReminders, EVENT_REMINDER_INTERVAL_MS } from './services/session/event-reminder.worker';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -433,6 +434,16 @@ async function start(): Promise<void> {
       processMeetingReminders().catch(err =>
         logger.error({ err }, 'Meeting reminder cycle failed'));
     }, MEETING_REMINDER_INTERVAL);
+
+    // Event reminders, 24 hours and 1 hour before (Part 2 Task 10): dark until EVENT_COMMS is report or on. Each
+    // reminder is claimed in the database, so several instances running it tell a person once.
+    if (config.eventComms !== 'off') {
+      setInterval(() => {
+        processEventReminders().catch(err =>
+          logger.error({ err }, 'Event reminder cycle failed'));
+      }, EVENT_REMINDER_INTERVAL_MS);
+      logger.info({ mode: config.eventComms }, 'Event reminders started');
+    }
 
     // Overdue events close themselves (10 Nov 2026, F7): every minute, a live or never-started event whose start,
     // length and grace have passed is completed (end mode) or listed in the log (report mode, the default). Each

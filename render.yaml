@@ -110,3 +110,9 @@ services:
         value: "end"
       # - key: OVERDUE_EVENT_GRACE_MINUTES
       #   value: "120"
+
+      # Event reminders (24 hours and 1 hour before) and time-change notices.
+      # Defaults to "off" when unset. "report" logs who would be told and sends
+      # nothing; "on" bells and emails members. Read the report before "on".
+      # - key: EVENT_COMMS
+      #   value: "report"

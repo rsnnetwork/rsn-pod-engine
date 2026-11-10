@@ -25,6 +25,7 @@ import {
   archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, runsEvent, visibleEventsSql,
 } from './event-access';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
+import { notifyEventRescheduled } from './event-notices';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
@@ -323,6 +324,14 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   // A draft's circle is told nothing yet (Part 2 Task 2): publishing it rings the circle it names then.
   if (circleChanges && session.publication !== 'draft') {
     await announceCircleEvent({ sessionId, actorId: userId, circle: namedCircle, previousCircleId });
+  }
+
+  // Part 2 Task 10: a published event whose start moved tells the people who hold a place, except whoever moved it.
+  // A draft has told nobody, so it moves quietly. Dark until EVENT_COMMS is 'on' (the notice checks), and never the
+  // reason this edit waits or fails: it sends in the background and logs what it cannot send.
+  const movedTo = result.rows[0].scheduledAt;
+  if (session.publication === 'published' && input.scheduledAt && movedTo && new Date(movedTo).getTime() !== new Date(session.scheduledAt).getTime()) {
+    void notifyEventRescheduled(sessionId, new Date(session.scheduledAt), new Date(movedTo), userId);
   }
 
   return result.rows[0];

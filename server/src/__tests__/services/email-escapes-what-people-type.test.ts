@@ -139,6 +139,13 @@ const cases: Case[] = [
     eventTitle: 'Founders breakfast', hostName: 'Bo', when: 'Thursday 5 November, 18:00 (CET)',
     reason: 'The venue closed.', link: `${APP}/sessions/s1`,
   }]),
+  email('sendEventReminderEmail', 'an event reminder', ['to', 'data'], ['delivered+ana@resend.dev', {
+    eventTitle: 'Founders breakfast', when: 'tomorrow at 18:00', link: `${APP}/sessions/s1`,
+  }]),
+  email('sendEventRescheduledEmail', 'an event moved to a new time', ['to', 'data'], ['delivered+ana@resend.dev', {
+    eventTitle: 'Founders breakfast', previousWhen: 'Thursday 5 November, 18:00 (CET)',
+    when: 'Friday 6 November, 18:00 (CET)', link: `${APP}/sessions/s1`,
+  }]),
 ];
 
 /** Exports that build no email: the shared card and the admin switch. Anything new must be put in one list or the other. */

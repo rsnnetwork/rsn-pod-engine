@@ -117,6 +117,13 @@ export const config = {
   //   end    — close them
   overdueEventClose: (['off', 'report', 'end'] as const)
     .find(m => m === process.env.OVERDUE_EVENT_CLOSE) ?? 'report',
+  // Event reminders and time-change notices (Part 2 foundation, Task 10): a bell and an email 24 hours and 1 hour
+  // before an event, and when its time is moved. Dark until switched on, because turning it on emails members:
+  //   off    — nothing is selected or sent (default)
+  //   report — log who WOULD be told, write and send nothing
+  //   on     — send
+  eventComms: (['off', 'report', 'on'] as const)
+    .find(m => m === process.env.EVENT_COMMS) ?? 'off',
   // Minutes after an event's planned end before it counts as overdue. A bad value reads as the default.
   overdueEventGraceMinutes: (() => {
     const minutes = Number(process.env.OVERDUE_EVENT_GRACE_MINUTES ?? 120);
