@@ -148,6 +148,11 @@ interface MovedRecipient {
  * holds a place (not removed, left or no-show), the host and the co-hosts, but not the organiser who moved it. Only
  * while config.eventComms is 'on'; a time that did not change tells nobody. Never throws. A move, like a
  * cancellation, is not a reminder: it ignores the "event reminders" preference.
+ *
+ * A move that lands inside the 24 hour window also gets a reminder for the new time (a new key) on the next tick, so
+ * a person can have both a "moved" bell and a "starts tomorrow at ..." bell. That is kept on purpose: the notice says
+ * what changed and is the only one that reaches people with reminders off or registered less than 30 minutes ago, and
+ * the reminder says when. Suppressing one for the other would silently leave those people uninformed.
  */
 export async function notifyEventRescheduled(
   sessionId: string, previousAt: Date, nextAt: Date, actorId: string,

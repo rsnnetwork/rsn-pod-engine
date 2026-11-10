@@ -13,7 +13,10 @@
 //
 // Once, on every instance, across restarts: the claim is one INSERT ... ON CONFLICT DO NOTHING RETURNING into
 // event_reminder_sends, whose key is (event, person, kind, planned start). Whoever's insert lands owns the reminder.
-// A send that fails after the claim is not retried (better than reminding twice). An event that is moved has a new
+// A send that fails after the claim is not retried (better than reminding twice). The claim and the bell are two
+// statements on purpose: the contract is at most once, so a crash between them loses that one bell and never doubles
+// it (a rolled-back claim would be retried by the next tick, and a bell with no claim could be rung twice). The
+// reminder emails are sent from the claim's result, so they follow the same rule; a failed bell or email is logged. An event that is moved has a new
 // planned start, so a new key: it is reminded again at its new time. "Now" is the database's clock unless a caller
 // passes one (this machine's clock may be skewed; the database's is the one every other time is held to).
 
@@ -21,6 +24,7 @@ import config from '../../config';
 import logger from '../../config/logger';
 import { query } from '../../db';
 import * as emailService from '../email/email.service';
+import { activeMemberSql } from '../users/active-member';
 import { eventPagePath, eventPageUrl, isRemindable, relativeEventWhen, ringEventBells, type EventFacts } from './event-notices';
 
 /** How often the server looks for reminders due. */
@@ -81,7 +85,7 @@ export const DUE_EVENTS_SQL = `
 export const OWED_SQL = `
   SELECT u.id AS user_id, u.email, u.timezone, u.notify_email
     FROM users u
-   WHERE u.status = 'active' AND u.notify_event_reminders = TRUE
+   WHERE ${activeMemberSql('u')} AND u.notify_event_reminders = TRUE
      AND (u.id IN (SELECT sp.user_id FROM session_participants sp
                     WHERE sp.session_id = $1::uuid AND sp.status NOT IN ('removed', 'left', 'no_show')
                       AND sp.created_at <= $4::timestamptz - make_interval(mins => $5::int))

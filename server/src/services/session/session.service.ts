@@ -329,9 +329,13 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   // Part 2 Task 10: a published event whose start moved tells the people who hold a place, except whoever moved it.
   // A draft has told nobody, so it moves quietly. Dark until EVENT_COMMS is 'on' (the notice checks), and never the
   // reason this edit waits or fails: it sends in the background and logs what it cannot send.
+  // An event given its first time (no previous start) is not a move: nobody is told "it was ..."; the reminders cover it.
+  // session.publication comes from SESSION_COLUMNS in getSessionById above, so a draft never gets here.
   const movedTo = result.rows[0].scheduledAt;
-  if (session.publication === 'published' && input.scheduledAt && movedTo && new Date(movedTo).getTime() !== new Date(session.scheduledAt).getTime()) {
-    void notifyEventRescheduled(sessionId, new Date(session.scheduledAt), new Date(movedTo), userId);
+  const movedFrom = session.scheduledAt;
+  if (session.publication === 'published' && input.scheduledAt && movedFrom && movedTo
+    && new Date(movedTo).getTime() !== new Date(movedFrom).getTime()) {
+    void notifyEventRescheduled(sessionId, new Date(movedFrom), new Date(movedTo), userId);
   }
 
   return result.rows[0];

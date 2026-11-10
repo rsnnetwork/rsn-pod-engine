@@ -5,6 +5,8 @@
 -- person is reminded once. scheduled_for is the event's start at the time of the claim, so an event that is moved has
 -- a new key and its people are reminded again at the new time. `emailed` is set once the email has gone out.
 -- The bells (event_reminder, event_rescheduled) and the email_config switches were added by migration 135.
+-- DEPENDS ON 135: the partial index below names sessions.publication and sessions.archived_at (added by 135), and the
+-- worker's bell INSERT needs 135's notifications_type_check. Ship 135 before or with this file, never after it.
 
 CREATE TABLE IF NOT EXISTS event_reminder_sends (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

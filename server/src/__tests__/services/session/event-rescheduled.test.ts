@@ -232,6 +232,32 @@ describe('updateSession calls it only when the start moved on a published event'
     expect(mockSendMoved).not.toHaveBeenCalled();
   });
 
+  it('an event given its first time is not a move: nobody is told "it was ..."', async () => {
+    arm({ scheduledAt: null });
+    const updated = await updateSession(SESSION_ID, ACTOR, { scheduledAt: NEW.toISOString() }, UserRole.MEMBER);
+    await settle();
+    expect(updated.scheduledAt).toEqual(NEW);
+    expect(bellsRung()).toHaveLength(0);
+    expect(mockSendMoved).not.toHaveBeenCalled();
+    expect(mockSendMoved.mock.calls.flat().join(' ')).not.toMatch(/1970/);
+  });
+
+  it('the row read before the update carries publication, so a draft is known to be one', async () => {
+    arm();
+    await updateSession(SESSION_ID, ACTOR, { title: 'Renamed' }, UserRole.MEMBER);
+    const read = mockQuery.mock.calls.find(([sql]) => /FROM sessions WHERE id = \$1/.test(String(sql)));
+    expect(read).toBeDefined();
+    expect(String(read![0])).toMatch(/publication,/);
+  });
+
+  it('a row that does not say it is published (no publication) never triggers a notice', async () => {
+    arm({ publication: undefined });
+    await updateSession(SESSION_ID, ACTOR, { scheduledAt: NEW.toISOString() }, UserRole.MEMBER);
+    await settle();
+    expect(bellsRung()).toHaveLength(0);
+    expect(mockSendMoved).not.toHaveBeenCalled();
+  });
+
   it('a failing notice does not fail the edit', async () => {
     mockEmailEnabled.mockRejectedValue(new Error('config table down'));
     const updated = await updateSession(SESSION_ID, ACTOR, { scheduledAt: NEW.toISOString() }, UserRole.MEMBER);
