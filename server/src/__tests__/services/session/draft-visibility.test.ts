@@ -178,6 +178,7 @@ const facts = (over: Partial<EventAccessFacts> = {}): EventAccessFacts => ({
   visibility: null, podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
   inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
   publication: 'draft', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
+  admissionMode: null, entitled: false, entitledVia: null,
   ...over,
 });
 
@@ -369,7 +370,8 @@ describe('GET /sessions/:id', () => {
     expect(before).toEqual({
       ...productionRow,
       participantCount: 3,
-      access: { visibility: null, mode: 'register', myRequest: null, autoRegister: true, canManageRequests: false },
+      // Part 2 Task 4 adds `admission` (additive): an event with no mode and no visibility follows its pod's rules.
+      access: { visibility: null, mode: 'register', myRequest: null, autoRegister: true, canManageRequests: false, admission: 'pod_rules' },
     });
   });
 });

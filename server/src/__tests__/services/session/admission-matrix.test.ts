@@ -37,6 +37,7 @@ const base: EventAccessFacts = {
   visibility: null, podId: 'p', podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
   outsideClosedCircle: false, admissionMode: null, entitled: false, entitledVia: null,
+  publication: 'published', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
 };
 
 type Viewer = 'organiser' | 'admin' | 'member' | 'invitee' | 'listed' | 'codeHolder' | 'stranger' | 'removed';
@@ -542,5 +543,15 @@ describe('someone an event with a mode has entitled can open its page (fix round
     const sql = visibleEventsSql('s', '$2');
     expect(sql).not.toContain('event_admission_entries');
     expect(sql).not.toContain('event_admission_codes');
+  });
+});
+
+describe('a draft stays invisible to the people it has entitled (Part 2 Task 2 over Task 4)', () => {
+  it('a listed email, a code holder or a personal invitee sees no draft; its runners still do', () => {
+    for (const v of ['listed', 'codeHolder', 'invitee'] as const) {
+      const draft = { ...viewer(v, 'private', 'restricted').f, publication: 'draft' as const };
+      expect({ v, sees: canSeeEvent(draft, M) }).toEqual({ v, sees: false });
+    }
+    expect(canSeeEvent({ ...viewer('organiser', 'private', 'restricted').f, publication: 'draft' as const }, M)).toBe(true);
   });
 });

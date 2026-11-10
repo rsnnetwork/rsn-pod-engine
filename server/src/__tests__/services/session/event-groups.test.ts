@@ -673,7 +673,7 @@ describe('a draft (Part 2 Task 2): its groups exist only for the people who run 
     visibility: 'public', podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
     inAudience: true, isInvited: true, participantStatus: null, accountActive: true, myRequest: null,
     outsideClosedCircle: false, publication: 'draft', archived: false, registrationOpensAt: null, viewerTimezone: null,
-    isPodAdmin: false, placesHeld: 0, ...overrides,
+    isPodAdmin: false, placesHeld: 0, admissionMode: null, entitled: false, entitledVia: null, ...overrides,
   });
   const NOT_FOUND = { status: 404, message: "We couldn't find that event." };
 

@@ -510,7 +510,7 @@ describe('summariseEventLifecycle', () => {
     visibility: null, podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
     inAudience: true, isInvited: false, participantStatus: 'registered', accountActive: true, myRequest: null,
     outsideClosedCircle: false, publication: 'published' as const, archived: false, registrationOpensAt: null,
-    viewerTimezone: null, isPodAdmin: false, placesHeld: 3,
+    viewerTimezone: null, isPodAdmin: false, placesHeld: 3, admissionMode: null, entitled: false, entitledVia: null,
   };
 
   it('a production-shaped event (no lifecycle columns read) is open for registration, and a member may do nothing', () => {
