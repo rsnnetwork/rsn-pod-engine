@@ -475,11 +475,17 @@ export async function getMemberStatusCounts(podId: string): Promise<{
 
 // ─── Join / Request to Join ──────────────────────────────────────────────────
 
-export async function joinPod(podId: string, userId: string): Promise<PodMember> {
+export async function joinPod(podId: string, userId: string, actorRole?: UserRole): Promise<PodMember> {
   const pod = await getPodById(podId);
 
   if (pod.status !== PodStatus.ACTIVE) {
     throw new ForbiddenError('This pod is not currently active');
+  }
+
+  // A platform admin joins any open pod, whatever its visibility, as an ordinary member. addMember
+  // reactivates an earlier removed / declined / left / pending row instead of failing on the unique key.
+  if (actorRole && hasRoleAtLeast(actorRole, UserRole.ADMIN)) {
+    return addMember(podId, userId, PodMemberRole.MEMBER);
   }
 
   if (pod.visibility === PodVisibility.PRIVATE || pod.visibility === PodVisibility.INVITE_ONLY) {

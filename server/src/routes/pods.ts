@@ -436,7 +436,7 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const member = await podService.joinPod(req.params.id, req.user!.userId);
+      const member = await podService.joinPod(req.params.id, req.user!.userId, req.user!.role);
       // Bug 19 — broadcast: someone joined (could be direct join for
       // public pods, or pending for invite-only). Every member's UI
       // sees the count update, and the joiner's My Pods list flips.

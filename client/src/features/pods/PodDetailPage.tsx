@@ -269,12 +269,16 @@ export default function PodDetailPage() {
 
   const myMembership     = membersList.find((m: any) => m.userId === user?.id);
   const isAdminUser      = isAdmin(user?.role);
-  const isMember         = myMembership?.status === 'active' || !!pod.memberRole || isAdminUser;
-  // An active member of the pod. The server names a member role only for an active member.
-  const isActiveMember   = myMembership?.status === 'active' || !!pod.memberRole;
-  const isPending        = myMembership?.status === 'pending_approval';
-  const isDirector       = myMembership?.role === 'director' || pod.memberRole === 'director' || isAdminUser;
-  const isDirectorOrHost = isDirector || myMembership?.role === 'host' || pod.memberRole === 'host';
+  // F6 (10 Nov 2026): membership is an active pod_members row and nothing else. A platform admin who is not in the
+  // pod manages it (canManage) and can join it; being an admin never makes anyone a member.
+  const isMember         = myMembership?.status === 'active' || !!pod.memberRole;
+  const isActiveMember   = isMember;
+  // An admin who is not in the pod still opens its wall to read and moderate; posting waits for isActiveMember.
+  const canOpenWall      = isMember || isAdminUser;
+  const isPending        = myMembership?.status === 'pending_approval' && !isAdminUser;
+  const isPodDirector     = myMembership?.role === 'director' || pod.memberRole === 'director';
+  const canManage        = isPodDirector || isAdminUser;
+  const canManageOrHost = canManage || myMembership?.role === 'host' || pod.memberRole === 'host';
 
   const vis    = VISIBILITY_CONFIG[pod.visibility] || VISIBILITY_CONFIG.public;
   const VisIcon = vis.icon;
@@ -349,9 +353,9 @@ export default function PodDetailPage() {
       </Card>
 
       {/* Actions */}
-      {!isMember && !isPending && pod.status === 'active' ? (
+      {!isMember && !isPending && pod.status === 'active' && (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
-          {pod.visibility === 'public' ? (
+          {pod.visibility === 'public' || isAdminUser ? (
             <>
               <Button onClick={() => joinMutation.mutate()} isLoading={joinMutation.isPending} className="btn-glow">
                 <UserPlus className="h-4 w-4 mr-2" /> Join Pod
@@ -381,7 +385,8 @@ export default function PodDetailPage() {
             </>
           )}
         </div>
-      ) : isPending ? (
+      )}
+      {isPending ? (
         <div className="flex items-center gap-3 animate-fade-in-up stagger-1">
           <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm">
             <Clock className="h-4 w-4" /> Join request pending — waiting for director approval
@@ -389,36 +394,36 @@ export default function PodDetailPage() {
         </div>
       ) : pod.status === 'archived' ? (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
-          {isDirector && (
+          {canManage && (
             <Button onClick={() => reactivateMutation.mutate()} isLoading={reactivateMutation.isPending} className="btn-glow">
               Reactivate Pod
             </Button>
           )}
           <p className="text-sm text-gray-400 self-center">This pod is archived. Events and data are preserved.</p>
         </div>
-      ) : pod.status !== 'archived' && (
+      ) : pod.status !== 'archived' && (isMember || canManage) && (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
-          {isDirectorOrHost && (
+          {canManageOrHost && (
             <Button onClick={() => navigate(`/sessions/new?podId=${podId}`)} className="btn-glow">
               <Calendar className="h-4 w-4 mr-2" /> Schedule Event
             </Button>
           )}
-          {(isDirectorOrHost || (isMember && pod?.allowMemberInvites)) && (
+          {(canManageOrHost || (isMember && pod?.allowMemberInvites)) && (
             <Button variant="secondary" onClick={() => setInviteOpen(true)}>
               <Mail className="h-4 w-4 mr-2" /> Invite members
             </Button>
           )}
-          {isDirector && (
+          {canManage && (
             <Button variant="secondary" onClick={openEdit}>
               <Pencil className="h-4 w-4 mr-2" /> Edit Pod
             </Button>
           )}
-          {isDirector && (
+          {canManage && (
             <Button variant="secondary" onClick={() => setDuplicateOpen(true)}>
               <CopyPlus className="h-4 w-4 mr-2" /> Duplicate Pod
             </Button>
           )}
-          {isDirector && (
+          {canManage && (
             <Button
               variant="danger"
               onClick={async () => {
@@ -431,7 +436,7 @@ export default function PodDetailPage() {
               <Trash2 className="h-4 w-4 mr-2" /> Archive Pod
             </Button>
           )}
-          {myMembership && !isDirector && (
+          {isMember && !isPodDirector && (
             <Button variant="danger" onClick={() => leaveMutation.mutate()} isLoading={leaveMutation.isPending}>
               <LogOut className="h-4 w-4 mr-2" /> Leave Pod
             </Button>
@@ -519,7 +524,7 @@ export default function PodDetailPage() {
       </nav>
 
       {/* ── Pending Join Requests ───────────────────────────────────────── */}
-      {isDirectorOrHost && pendingMembers.length > 0 && (
+      {canManageOrHost && pendingMembers.length > 0 && (
         <div className="animate-fade-in-up stagger-2">
           <h2 className="text-lg font-semibold text-amber-400 mb-3 flex items-center gap-2">
             <Clock className="h-5 w-5" /> Pending Requests ({pendingMembers.length})
@@ -551,7 +556,7 @@ export default function PodDetailPage() {
       )}
 
       {/* ── Declined / No Response (director only) ──────────────────────── */}
-      {isDirector && (declinedMembers.length > 0 || noResponseMembers.length > 0) && (
+      {canManage && (declinedMembers.length > 0 || noResponseMembers.length > 0) && (
         <div className="animate-fade-in-up stagger-2">
           <h2 className="text-base font-semibold text-gray-400 mb-2 flex items-center gap-2">
             <XCircle className="h-4 w-4" /> Other Invite Outcomes
@@ -596,7 +601,7 @@ export default function PodDetailPage() {
             <PodWall
               podId={podId}
               podStatus={pod.status}
-              isMember={isMember}
+              isMember={canOpenWall}
               isActiveMember={isActiveMember}
               highlightPostId={highlightPostId}
             />
@@ -611,7 +616,7 @@ export default function PodDetailPage() {
                archived: a draft or suspended pod can be invited to (the button above shows; the server refuses only an
                archived pod), so its organisers see the card too. Above the members, so a director sees it without
                scrolling past the whole list (P1 item 33). ─────── */}
-          {isDirectorOrHost && pod.status !== 'archived' && podId && (
+          {canManageOrHost && pod.status !== 'archived' && podId && (
             <InviteStatusList
               target={{ type: 'pod', podId }}
               present={activeMembers.map((m: { userId: string }) => m.userId)}
@@ -627,7 +632,7 @@ export default function PodDetailPage() {
             </h2>
 
             {/* Status summary tabs (director/host only) */}
-            {isDirectorOrHost && podMemberCounts && (
+            {canManageOrHost && podMemberCounts && (
               <div className="flex flex-wrap gap-2 mb-3">
                 {[
                   { key: null, label: 'All', count: memberTotal, color: 'bg-gray-100 text-gray-700 border-gray-200' },
@@ -674,7 +679,7 @@ export default function PodDetailPage() {
                       />
                     </Link>
                     <div className="ml-auto flex items-center gap-2 shrink-0">
-                      {isDirector && m.userId !== user?.id && m.role !== 'director' && (
+                      {canManage && m.userId !== user?.id && m.role !== 'director' && (
                         <button
                           onClick={() => changeRoleMutation.mutate({
                             userId: m.userId,
@@ -686,7 +691,7 @@ export default function PodDetailPage() {
                           {m.role === 'host' ? 'Demote' : 'Make Host'}
                         </button>
                       )}
-                      {isDirector && m.userId !== user?.id && (
+                      {canManage && m.userId !== user?.id && (
                         <button
                           onClick={() => removeMemberMutation.mutate(m.userId)}
                           className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all"
@@ -702,7 +707,7 @@ export default function PodDetailPage() {
               ))}
               {activeMembers.length === 0 && (
                 <Card><p className="text-gray-400 text-sm text-center py-4">
-                  {isMember ? 'No members yet' : 'To access pod details, please join the pod.'}
+                  {canOpenWall ? 'No members yet' : 'To access pod details, please join the pod.'}
                 </p></Card>
               )}
             </div>

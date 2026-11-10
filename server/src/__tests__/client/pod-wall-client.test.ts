@@ -420,7 +420,7 @@ describe('the pod page', () => {
   it('gives the wall the pod\'s status and whether the viewer is a member, which the 403 and the read-only sentences need', () => {
     expect(page).toMatch(/<PodWall\b[^>]*podId=\{podId\}/);
     expect(page).toMatch(/<PodWall\b[^>]*podStatus=\{pod\.status\}/);
-    expect(page).toMatch(/<PodWall\b[^>]*isMember=\{isMember\}/);
+    expect(page).toMatch(/<PodWall\b[^>]*isMember=\{canOpenWall\}/);
     expect(page).toMatch(/<PodWall\b[^>]*isActiveMember=\{/);
   });
 
