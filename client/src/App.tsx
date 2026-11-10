@@ -72,6 +72,10 @@ import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
 import OnboardingFlow from '@/features/onboarding/OnboardingFlow';
 import ToastContainer from '@/components/ui/Toast';
 import CallLayer from '@/features/calls/CallLayer';
+import { CALL_LINK_BASE_PATH } from '@rsn/shared';
+import CallLinkPage from '@/features/call/CallLinkPage';
+import GuestHome from '@/features/call/GuestHome';
+import { GUEST_HOME_PATH } from '@/features/call/guest-routes';
 
 export default function App() {
   const { checkSession } = useAuthStore();
@@ -223,6 +227,9 @@ export default function App() {
       <Route path="/request-to-join" element={<RequestToJoinPage />} />
       <Route path="/auth/verify" element={<VerifyPage />} />
       <Route path="/invite/:code" element={<InviteAcceptPage />} />
+      {/* An event's RSN Call link (Part 2, Task 12): anyone holding it, signed in or not, and never platform
+          onboarding on the way in. The path is the shared constant's (Stefan still has to confirm the naming). */}
+      <Route path={`${CALL_LINK_BASE_PATH}/:code`} element={<CallLinkPage />} />
       {/* Admin email-action page — token IS the auth, no session required. */}
       <Route path="/admin/jr/:token" element={<AdminJoinRequestActionPage />} />
 
@@ -267,6 +274,8 @@ export default function App() {
         <Route path="/messages/:conversationId" element={<MessagesPage />} />
         <Route path="/invites" element={<InvitesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        {/* The events someone joined from a link: an event guest's home (ReasonShell gives a guest the guest frame). */}
+        <Route path={GUEST_HOME_PATH} element={<GuestHome />} />
         {/* Every notification in one list (30 Oct 2026); the bell's foot links here. */}
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/billing" element={<BillingPage />} />

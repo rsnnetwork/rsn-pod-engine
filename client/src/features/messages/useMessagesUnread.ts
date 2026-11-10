@@ -6,10 +6,12 @@ import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
+import { memberIdOf } from '@/features/call/guest-routes';
 import { useGroupUnreadTotal } from './useGroups';
 
 export function useMessagesUnread(): number {
-  const userId = useAuthStore((s) => s.user?.id as string | undefined);
+  // A member's id only: an event guest has no messages (Part 2, Task 12), so the badge and the tab title read none.
+  const userId = useAuthStore((s) => memberIdOf(s.user));
   const { data: unread } = useQuery({
     queryKey: ['dm-unread-count'],
     queryFn: () => api.get('/dm/unread-count').then((r) => r.data.data.count as number),

@@ -21,8 +21,20 @@ import PeopleTabs, { PEOPLE_TABS } from './PeopleTabs';
 import AdminTabs from './AdminTabs';
 import useMainScrollMemory from './useMainScrollMemory';
 import { NAV_BY_KEY, onAdmin } from './nav';
+import GuestShell from '@/features/call/GuestShell';
+import { isEventGuest } from '@/features/call/guest-routes';
 
+/**
+ * The signed-in frame. An event guest (Part 2, Task 12) gets the guest frame instead: no member navigation, no Messages
+ * badge, no tour, so their browser never asks for a member-only read. Two components, so neither's hooks depend on the
+ * kind (a guest made a member mid-visit swaps frames cleanly).
+ */
 export default function ReasonShell() {
+  const guest = useAuthStore((s) => isEventGuest(s.user));
+  return guest ? <GuestShell /> : <MemberShell />;
+}
+
+function MemberShell() {
   const { pathname } = useLocation();
   const main = useRef<HTMLElement>(null);
   // <main> is the scroll area, so it is what keeps its place when the page inside it changes: opening For You after

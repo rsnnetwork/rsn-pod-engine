@@ -14,6 +14,7 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { invalidateEntities } from '@/realtime/invalidate-entities';
 import { useAuthStore } from '@/stores/authStore';
+import { memberIdOf } from '@/features/call/guest-routes';
 import { groupReadRetry, groupReadRetryDelay, groupUnreadTotal } from './group-chat-text';
 
 export const groupKeys = {
@@ -33,7 +34,8 @@ export const isGroupId = (id: string | undefined): id is string => !!id && UUID.
 /** What starting a group answers (POST /groups/from-event/:sessionId). */
 export interface StartedGroup { id: string; name: string; sessionId: string | null; memberCount: number }
 
-const useMe = () => useAuthStore((s) => s.user?.id as string | undefined);
+// A member's id only: an event guest has no group chats (Part 2, Task 12), so no group read is made for one.
+const useMe = () => useAuthStore((s) => memberIdOf(s.user));
 
 const fetchGroups = () => api.get('/groups').then((r) => r.data.data as DmGroupSummary[]);
 const fetchGroup = (groupId: string) => api.get(`/groups/${encodeURIComponent(groupId)}`).then((r) => r.data.data as DmGroupDetail);
