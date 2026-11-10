@@ -44,13 +44,17 @@ test.beforeAll(async () => {
   browser = await launchBrowser();
   superAdmin = await throwaway('Super', 'super_admin');
   host = await throwaway('Host');
-  // The member's pod, which they direct, and an event in it that they take live.
+  // The member's pod, which they direct, and an event in it that they take live. The pod is made active, as the
+  // other specs make theirs (n1-t11): only an active pod takes a new event (POD_NOT_ACTIVE otherwise), and a member
+  // may schedule in it only as its director or host.
   const pod = await pool.query<{ id: string }>(
-    `INSERT INTO pods (name, created_by, visibility) VALUES ($1, $2, 'private') RETURNING id`, [`${RUN} pod`, host.id]);
+    `INSERT INTO pods (name, created_by, visibility, status, pod_type) VALUES ($1, $2, 'private', 'active', 'speed_networking') RETURNING id`,
+    [`${RUN} pod`, host.id]);
   podId = pod.rows[0].id;
   await pool.query(`INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'director', 'active')`, [podId, host.id]);
   const event = await createSession(host, podId, `${RUN} event`, new Date(Date.now() + 60_000));
   eventId = event.id;
+  // Go Live over REST (POST /sessions/:id/host/start): the event's host, from scheduled, no socket needed.
   await apiRequest(host, 'POST', `/sessions/${eventId}/host/start`);
   const live = await pool.query<{ status: string }>(`SELECT status FROM sessions WHERE id = $1`, [eventId]);
   expect(live.rows[0].status).toBe('lobby_open');
