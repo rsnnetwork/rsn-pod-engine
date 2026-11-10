@@ -60,6 +60,8 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
   const now = new Date();
   const live = (c: CodeRow) => c.session_id === params[0] && c.code_hash === params[1];
   if (flat.startsWith('SELECT status, account_kind FROM users')) return { rows: [{ status: 'active', account_kind: 'member' }] };
+  // The audit trail's tag goes to the host and co-hosts (emitEventAuditChanged).
+  if (flat.startsWith('SELECT host_user_id AS user_id FROM sessions')) return { rows: [{ user_id: 'host-1' }] };
   if (flat.includes('FROM sessions s LEFT JOIN pods p')) {
     return { rows: params[0] === EVENT ? [{ pod_id: 'pod-1', status: 'scheduled', visibility: 'private', admission_mode: 'restricted', pod_visibility: 'private' }] : [] };
   }

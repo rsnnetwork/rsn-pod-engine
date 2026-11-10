@@ -2,7 +2,8 @@
 //
 // Every row of D3 (visibility × admission_mode) for every viewer (organiser, admin, pod member, invitee, listed email,
 // code holder, stranger, removed participant): the register decision (canRegister) and the live-room decision
-// (eventRoomAdmission, given a place). Then the dark-on-production proof: with admission_mode NULL, every rule answers
+// (eventRoomAdmission, given a place); an event guest's eligibility (Task 3's guestMayRegister, which admission widens).
+// Then the dark-on-production proof: with admission_mode NULL, every rule answers
 // exactly what it answered before this task, for every combination of facts. The oracle below is the rules as they
 // stood on production main (082d8c68), copied verbatim, so a later edit to the live rules cannot move both sides.
 // The SQL behind `entitled` and `admission_holds` runs for real in the task's probe (see the report).
@@ -13,6 +14,8 @@ jest.mock('../../../config/logger', () => ({
   default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
   __esModule: true,
 }));
+const mockGate = jest.fn();
+jest.mock('../../../middleware/auth', () => ({ readAccountGate: (...a: unknown[]) => mockGate(...a), __esModule: true }));
 
 import { ErrorCodes, UserRole, hasRoleAtLeast, type AdmissionMode, type EventVisibility } from '@rsn/shared';
 import {
@@ -22,6 +25,9 @@ import {
 } from '../../../services/session/event-access';
 import { eventRoomAdmission } from '../../../services/session/session-access';
 import { eventRoomRefusal } from '../../../services/orchestration/event-room-entry';
+import {
+  assertGuestMayRegister, guestMayRegister, readGuestRegistrationFacts, type GuestRegistrationFacts,
+} from '../../../services/session/guest-registration';
 
 const M = UserRole.MEMBER;
 const EVENT = '0c1d2e3f-4a5b-4c6d-8e7f-8a9b0c1d2e3f';
@@ -381,5 +387,77 @@ describe('admission_mode NULL: every rule answers as it did before this task (ex
         }
       }
     }
+  });
+});
+
+// ─── An event guest's reach, widened only by admission (Task 3's guestMayRegister, extended here) ────────────────
+
+describe('guestMayRegister: an event with an admission mode lets in a guest it has entitled', () => {
+  const EV2 = '5e5e5e5e-5e5e-4e5e-8e5e-5e5e5e5e5e5e';
+  const facts = (over: Partial<GuestRegistrationFacts>): GuestRegistrationFacts =>
+    ({ sessionId: EVENT, guestFirstSessionId: EV2, holdsPlace: false, ...over });
+
+  it('Task 3 rules stand: a held place, or the event the guest came in through', () => {
+    expect(guestMayRegister(facts({ holdsPlace: true }))).toBe(true);
+    expect(guestMayRegister(facts({ guestFirstSessionId: EVENT }))).toBe(true);
+    expect(guestMayRegister(facts({}))).toBe(false);
+    expect(guestMayRegister(facts({ guestFirstSessionId: null }))).toBe(false);
+  });
+
+  it('an allowed email, a redeemed code, an invite or an approved request counts, only on an event with a mode', () => {
+    for (const mode of ['open', 'approval', 'restricted'] as const) {
+      expect(guestMayRegister(facts({ admissionMode: mode, admissionEntitled: true }))).toBe(true);
+      expect(guestMayRegister(facts({ admissionMode: mode, approvedRequest: true }))).toBe(true);
+      // A mode alone (open included) is not an entitlement: the link entry (Task 6) gives a guest its own.
+      expect(guestMayRegister(facts({ admissionMode: mode }))).toBe(false);
+    }
+    expect(guestMayRegister(facts({ admissionMode: null, admissionEntitled: true }))).toBe(false);
+    expect(guestMayRegister(facts({ admissionMode: null, approvedRequest: true }))).toBe(false);
+  });
+
+  it('reads the mode, the entitlement and an approved request in its one read, guarded by the mode', async () => {
+    const run = jest.fn(async () => ({ rows: [{ guest_first_session_id: null, holds_place: false, admission_mode: 'restricted', admission_entitled: true, approved_request: false }] }));
+    expect(await readGuestRegistrationFacts(run, EVENT, ME)).toEqual({
+      sessionId: EVENT, guestFirstSessionId: null, holdsPlace: false, admissionMode: 'restricted', admissionEntitled: true, approvedRequest: false,
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    const sql = String((run.mock.calls[0] as unknown[])[0]).replace(/\s+/g, ' ');
+    expect(sql).toContain(`(s.admission_mode IS NOT NULL AND ${restrictedEntitlementSql('s', '$2').replace(/\s+/g, ' ')}) AS admission_entitled`);
+    expect(sql).toContain("gr.status = 'approved'");
+    expect(sql).toContain('LEFT JOIN sessions s ON s.id = $1');
+    // A row from an event with no mode reads as none, whatever else it says.
+    const plain = jest.fn(async () => ({ rows: [{ guest_first_session_id: null, holds_place: false, admission_mode: null, admission_entitled: false, approved_request: false }] }));
+    expect(await readGuestRegistrationFacts(plain, EVENT, ME)).toMatchObject({ admissionMode: null, admissionEntitled: false });
+  });
+
+  it('the approve route\'s say-so counts before the request is marked approved', async () => {
+    mockGate.mockResolvedValue({ status: 'active', kind: 'event_guest' });
+    const run = jest.fn(async () => ({ rows: [{ guest_first_session_id: null, holds_place: false, admission_mode: 'approval', admission_entitled: false, approved_request: false }] }));
+    await expect(assertGuestMayRegister(run, EVENT, ME)).rejects.toMatchObject({ statusCode: 403, code: 'GUEST_MEMBERSHIP_REQUIRED' });
+    await expect(assertGuestMayRegister(run, EVENT, ME, { approvedRequest: true })).resolves.toEqual({ isGuest: true });
+    mockGate.mockResolvedValue({ status: 'active', kind: 'member' });
+    await expect(assertGuestMayRegister(run, EVENT, ME)).resolves.toEqual({ isGuest: false });
+  });
+});
+
+describe('no admission path makes anyone a circle or pod member (a guest above all)', () => {
+  it('the admission service, its routes, the CSV reader, the guest rule and registerParticipant never write a membership', () => {
+    const fs = jest.requireActual('fs') as typeof import('fs');
+    const path = jest.requireActual('path') as typeof import('path');
+    const read = (rel: string) => fs.readFileSync(path.join(__dirname, '../../..', rel), 'utf8');
+    for (const rel of [
+      'services/session/event-admission.service.ts', 'routes/event-admission.ts', 'services/session/admission-csv.ts',
+      'services/session/guest-registration.ts',
+    ]) {
+      const src = read(rel).split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n');
+      expect({ rel, writes: /INSERT INTO (circle_members|pod_members)|UPDATE (circle_members|pod_members)|joinCircle|addMember/.test(src) })
+        .toEqual({ rel, writes: false });
+    }
+    // registerParticipant's only membership write is the public pod's auto-add, which Task 3 skips for a guest.
+    const service = read('services/session/session.service.ts');
+    const body = service.slice(service.indexOf('export async function registerParticipant('), service.indexOf('export async function unregisterParticipant('));
+    expect(body).not.toMatch(/circle_members|joinCircle/);
+    expect(body.match(/INSERT INTO pod_members/g)).toHaveLength(1);
+    expect(body).toMatch(/if \(!isGuest\) \{\s*try \{\s*await client\.query\(\s*`INSERT INTO pod_members/);
   });
 });

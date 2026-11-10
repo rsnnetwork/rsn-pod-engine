@@ -12,7 +12,8 @@
 //   A code is redeemed by one person, in one guarded UPDATE; the same person redeeming again (a new device) is told
 //   it worked, anyone else is refused.
 //
-// Every write records an audit row (admission.*) and tells the organisers (session:<id>:admission).
+// Every write records an audit row (admission.*, recordEventAudit inside the write's own transaction) and tells the organisers
+// (session:<id>:admission, and session:<id>:audit once committed).
 
 import crypto from 'crypto';
 import type { PoolClient } from 'pg';
@@ -30,6 +31,7 @@ import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { fanoutSessionEntities, fanoutSessionListEntities } from '../../realtime/fanout';
 import { resolveEventOrganiserIds } from '../post-event-message/event-organisers';
 import { canActAsHost } from '../roles/effective-role.service';
+import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 import { LIVE_STATUSES } from './main-room';
 import { normaliseAdmissionEmail, parseAdmissionCsv } from './admission-csv';
 
@@ -56,44 +58,6 @@ export const ADMISSION_CODE_INVALID_SENTENCE = 'That admission code is not right
 const ORGANISERS_ONLY = 'Only the people running this event can change who gets in.';
 const EVENT_NOT_FOUND = "We couldn't find that event.";
 
-// ─── The audit row ───────────────────────────────────────────────────────────
-// The same row Part 2 Task 1's recordEventAudit writes (audit_log, entity_type 'session', the same details shape), so
-// the event's audit trail reads these as its own. When Task 1 is on this branch the controller swaps this helper for
-// recordEventAudit; every call site already passes its EventAuditEntry fields.
-
-type AdmissionAuditAction =
-  | 'admission.mode_changed' | 'admission.emails_added' | 'admission.email_revoked'
-  | 'admission.codes_generated' | 'admission.code_revoked' | 'admission.code_redeemed';
-
-interface AdmissionAuditEntry {
-  sessionId: string;
-  actorId: string | null;
-  action: AdmissionAuditAction;
-  automatic: boolean;
-  subjectUserIds?: string[];
-  before?: unknown;
-  after?: unknown;
-  reason?: string;
-}
-
-/** Part of the caller's transaction: an admission change and its audit row stand or fall together. */
-export async function recordAdmissionAudit(entry: AdmissionAuditEntry, client: PoolClient): Promise<void> {
-  const details = {
-    automatic: entry.automatic,
-    scheduleVersion: null,
-    round: null,
-    subjectUserIds: entry.subjectUserIds ?? [],
-    before: entry.before ?? null,
-    after: entry.after ?? null,
-    reason: entry.reason ?? null,
-  };
-  await client.query(
-    `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details)
-     VALUES ($1, $2, 'session', $3, $4::jsonb)`,
-    [entry.actorId, entry.action, entry.sessionId, JSON.stringify(details)],
-  );
-}
-
 // ─── Telling people ──────────────────────────────────────────────────────────
 
 /**
@@ -109,6 +73,8 @@ export async function fanoutAdmissionChanged(
   try {
     const organisers = await resolveEventOrganiserIds(sessionId);
     await emitEntities(io, organisers, [E.sessionAdmission(sessionId), E.session(sessionId)]);
+    // Every admission write recorded an audit row in its transaction (recordEventAudit with a client never tells).
+    await emitEventAuditChanged(sessionId);
     if (opts.everyone) await fanoutSessionEntities(opts.podId ?? null, sessionId, [E.sessionAdmission(sessionId)]);
     for (const userId of new Set(opts.people ?? [])) {
       await emitEntities(io, [userId], [E.session(sessionId), E.userSessions(userId)]);
@@ -196,7 +162,7 @@ export async function setAdmissionMode(sessionId: string, actor: Actor, mode: Ad
       `UPDATE sessions SET admission_mode = $2, visibility = COALESCE(visibility, $3::text) WHERE id = $1`,
       [sessionId, mode, visibility],
     );
-    await recordAdmissionAudit({
+    await recordEventAudit({
       sessionId, actorId: actor.userId, action: 'admission.mode_changed', automatic: false,
       before: { mode: event.admission_mode ?? null, visibility: event.visibility },
       after: { mode, visibility: event.visibility ?? visibility },
@@ -264,7 +230,7 @@ export async function addAdmissionEmails(
       restored: restored.rows.length,
       alreadyListed: wanted.length - added.rows.length - restored.rows.length,
     };
-    await recordAdmissionAudit({
+    await recordEventAudit({
       sessionId, actorId: actor.userId, action: 'admission.emails_added', automatic: false,
       after: { ...result, source: input.source, groupKey },
     }, client);
@@ -294,7 +260,7 @@ export async function revokeAdmissionEmail(sessionId: string, actor: Actor, entr
       return null;
     }
     const subjects = await usersWithEmails([row.email], client);
-    await recordAdmissionAudit({
+    await recordEventAudit({
       sessionId, actorId: actor.userId, action: 'admission.email_revoked', automatic: false,
       subjectUserIds: subjects, before: { entryId },
     }, client);
@@ -415,7 +381,7 @@ export async function generateAdmissionCodes(
       for (const row of inserted.rows) made.push({ id: row.id, code: formatAdmissionCode(plain.get(row.code_hash)!) });
     }
     if (made.length < input.count) throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Admission codes could not be made. Please try again.');
-    await recordAdmissionAudit({
+    await recordEventAudit({
       sessionId, actorId: actor.userId, action: 'admission.codes_generated', automatic: false,
       after: { count: made.length, label, groupKey, expiresAt: expiresAt?.toISOString() ?? null },
     }, client);
@@ -470,7 +436,7 @@ export async function revokeAdmissionCode(sessionId: string, actor: Actor, codeI
       return null;
     }
     const subjects = row.redeemed_by ? [row.redeemed_by] : [];
-    await recordAdmissionAudit({
+    await recordEventAudit({
       sessionId, actorId: actor.userId, action: 'admission.code_revoked', automatic: false,
       subjectUserIds: subjects, before: { codeId },
     }, client);
@@ -505,7 +471,7 @@ export async function redeemAdmissionCode(
       [sessionId, codeHash, userId],
     );
     if (claimed.rows[0]) {
-      await recordAdmissionAudit({
+      await recordEventAudit({
         sessionId, actorId: userId, action: 'admission.code_redeemed', automatic: false,
         subjectUserIds: [userId], after: { codeId: claimed.rows[0].id },
       }, c);

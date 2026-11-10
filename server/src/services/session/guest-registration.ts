@@ -11,12 +11,17 @@
 // approved request. A guest never becomes a pod member through a registration (registerParticipant skips the public
 // pod's auto-add for them, and pod.service addMember refuses them).
 //
-// Task 4/6 extend guestMayRegister (keep its name and its facts-in, boolean-out shape).
+//   c) (Part 2, Task 4) an event with an admission mode that has entitled them: their address on its allowed list, a
+//      code of its they redeemed, an invite to it (the three restrictedEntitlementSql reads), or a request of theirs
+//      the organisers approved. An event with no mode never widens a guest's reach.
+//
+// Task 6 extends guestMayRegister (keep its name and its facts-in, boolean-out shape).
 
-import { ErrorCodes } from '@rsn/shared';
+import { ErrorCodes, type AdmissionMode } from '@rsn/shared';
 import { readAccountGate } from '../../middleware/auth';
 import { AppError } from '../../middleware/errors';
 import { accountKindUnavailable } from '../../middleware/guest-scope';
+import { restrictedEntitlementSql } from './event-access';
 
 /** Runs one statement: the transaction's client, or the pool. */
 export type GuestRegistrationQuery = (text: string, params: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
@@ -29,6 +34,12 @@ export interface GuestRegistrationFacts {
   guestFirstSessionId: string | null;
   /** Whether the guest already holds a session_participants row for this event, whatever its status. */
   holdsPlace: boolean;
+  /** Part 2, Task 4: sessions.admission_mode (absent or null: the event has none, and nothing below counts). */
+  admissionMode?: AdmissionMode | null;
+  /** Part 2, Task 4: an allowed email, a redeemed code or an invite for this event (restrictedEntitlementSql). */
+  admissionEntitled?: boolean;
+  /** Part 2, Task 4: the organisers approved the guest's request (or are approving it in this registration). */
+  approvedRequest?: boolean;
 }
 
 /** What a guest who may not register here is told. */
@@ -38,7 +49,8 @@ export const GUEST_REGISTRATION_MESSAGE =
 /** Whether an event guest may take, or take back, a place in this event. */
 export function guestMayRegister(facts: GuestRegistrationFacts): boolean {
   if (facts.holdsPlace) return true;
-  return facts.guestFirstSessionId !== null && facts.guestFirstSessionId === facts.sessionId;
+  if (facts.guestFirstSessionId !== null && facts.guestFirstSessionId === facts.sessionId) return true;
+  return !!facts.admissionMode && (!!facts.admissionEntitled || !!facts.approvedRequest);
 }
 
 /** The facts for guestMayRegister, in one read. */
@@ -49,16 +61,26 @@ export async function readGuestRegistrationFacts(
 ): Promise<GuestRegistrationFacts> {
   const r = await run(
     `SELECT u.guest_first_session_id,
-            EXISTS (SELECT 1 FROM session_participants sp WHERE sp.session_id = $1 AND sp.user_id = $2) AS holds_place
+            EXISTS (SELECT 1 FROM session_participants sp WHERE sp.session_id = $1 AND sp.user_id = $2) AS holds_place,
+            s.admission_mode,
+            (s.admission_mode IS NOT NULL AND ${restrictedEntitlementSql('s', '$2')}) AS admission_entitled,
+            (s.admission_mode IS NOT NULL AND EXISTS (
+              SELECT 1 FROM event_join_requests gr WHERE gr.session_id = s.id AND gr.user_id = $2 AND gr.status = 'approved'
+            )) AS approved_request
        FROM users u
+       LEFT JOIN sessions s ON s.id = $1
       WHERE u.id = $2`,
     [sessionId, userId],
   );
   const row = r.rows[0];
+  const mode = row?.admission_mode;
   return {
     sessionId,
     guestFirstSessionId: (row?.guest_first_session_id as string | null | undefined) ?? null,
     holdsPlace: row?.holds_place === true,
+    admissionMode: mode === 'open' || mode === 'approval' || mode === 'restricted' ? mode : null,
+    admissionEntitled: row?.admission_entitled === true,
+    approvedRequest: row?.approved_request === true,
   };
 }
 
@@ -72,11 +94,14 @@ export async function assertGuestMayRegister(
   run: GuestRegistrationQuery,
   sessionId: string,
   userId: string,
+  options: { approvedRequest?: boolean } = {},
 ): Promise<{ isGuest: boolean }> {
   const gate = await readAccountGate(userId);
   if (gate.kind === 'member') return { isGuest: false };
   if (gate.kindUnknown) throw accountKindUnavailable();
-  const facts = await readGuestRegistrationFacts(run, sessionId, userId);
+  const read = await readGuestRegistrationFacts(run, sessionId, userId);
+  // The approve route registers before it marks the request approved, so its say-so arrives as an option.
+  const facts = { ...read, approvedRequest: read.approvedRequest || !!options.approvedRequest };
   if (!guestMayRegister(facts)) {
     throw new AppError(403, ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, GUEST_REGISTRATION_MESSAGE);
   }

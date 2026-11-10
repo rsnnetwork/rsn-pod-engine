@@ -521,7 +521,9 @@ export async function registerParticipant(
 
     // Part 2, Task 3 (fix round 1): an event guest takes a place only where guestMayRegister allows (the event they
     // came in through, or one where they already hold a row), on every way in. Members pass on the cached gate.
-    const { isGuest } = await assertGuestMayRegister((text, params) => client.query(text, params), sessionId, userId);
+    // Part 2, Task 4: an event with an admission mode also lets in a guest it has entitled (guestMayRegister c).
+    const { isGuest } = await assertGuestMayRegister((text, params) => client.query(text, params), sessionId, userId,
+      { approvedRequest: !!options?.approvedRequest });
 
     const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
 

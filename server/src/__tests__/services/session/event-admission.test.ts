@@ -59,6 +59,8 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
   const flat = sql.replace(/\s+/g, ' ').trim();
   allSql.push(flat);
   if (flat.startsWith('SELECT status, account_kind FROM users')) return { rows: [{ status: 'active', account_kind: 'member' }] };
+  // The audit trail's tag goes to the host and co-hosts (emitEventAuditChanged).
+  if (flat.startsWith('SELECT host_user_id AS user_id FROM sessions')) return { rows: [{ user_id: 'host-1' }] };
   if (flat.includes('FROM sessions s LEFT JOIN pods p ON p.id = s.pod_id WHERE s.id = $1')) {
     return { rows: params[0] === EVENT ? [{ pod_id: 'pod-1', ...event }] : [] };
   }

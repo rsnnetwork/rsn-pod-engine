@@ -7,7 +7,7 @@ import logger from '../../config/logger';
 import {
   Invite, InviteStatus, InviteType, CreateInviteInput, Session, ErrorCodes,
 } from '@rsn/shared';
-import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
+import { NotFoundError, ConflictError, AppError, ForbiddenError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
 import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
@@ -855,7 +855,7 @@ async function applyInviteRegistration(
       `SELECT pod_id AS "podId" FROM sessions WHERE id = $1`,
       [invite.sessionId],
     );
-    const podId = sessionRow.rows[0]?.podId;
+    let podId: string | undefined = sessionRow.rows[0]?.podId;
     // T11 (1 Nov 2026), D4: an event with its own visibility takes its invitee without making them a member of its
     // pod (an invite to one event is not an invite to the pod). A NULL event adds them to the pod first, as before.
     const visibilityRow = await query<{ visibility: string | null }>(
@@ -875,9 +875,14 @@ async function applyInviteRegistration(
         // false for every ConflictError until 26 Oct 2026; a re-invited, still-pod-member kicked user hit
         // POD_MEMBER_EXISTS here, blocking the re-admit below.)
         const code = (err as { code?: string } | undefined)?.code;
-        if (code !== ErrorCodes.POD_MEMBER_EXISTS && code !== ErrorCodes.POD_FULL) throw err;
+        // Part 2, Task 4: an event guest never joins a pod (addMember refuses them, Task 3). Their invite is still read
+        // by registerParticipant below, which decides whether it lets the guest in (guestMayRegister), so the pod step
+        // is skipped for them instead of failing the whole accept.
+        const guestRefused = err instanceof ForbiddenError && err.message === podService.GUEST_POD_REFUSAL;
+        if (code !== ErrorCodes.POD_MEMBER_EXISTS && code !== ErrorCodes.POD_FULL && !guestRefused) throw err;
+        if (guestRefused) podId = undefined;
       }
-      out.podId = podId;
+      if (podId) out.podId = podId;
     }
 
     // #4B (June-10 debrief) — a fresh PERSONAL invite (targeted email) is the
