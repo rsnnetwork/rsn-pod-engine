@@ -1152,7 +1152,7 @@ export async function handleHostRemoveParticipant(
     if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
 
     void recordEventAudit({
-      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.excluded', automatic: false, subjectUserIds: [data.userId], reason: `Removed from the event: ${String(data.reason ?? '').slice(0, 300)}`,
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'participant.removed', automatic: false, subjectUserIds: [data.userId], reason: `Removed from the event: ${String(data.reason ?? '').slice(0, 300)}`,
     });
     logger.info({ sessionId: data.sessionId, removedUserId: data.userId }, 'Participant removed by host');
   } catch (err: any) {
@@ -3152,7 +3152,7 @@ export async function handleHostCreateBreakout(
       ensureManualDashboardInterval(io, sessionId);
 
       void recordEventAudit({
-        sessionId, actorId: getUserIdFromSocket(socket), action: 'match.override', automatic: false,
+        sessionId, actorId: getUserIdFromSocket(socket), action: 'breakout.created', automatic: false,
         round: activeSession.currentRound, subjectUserIds: participantIds, reason: 'Host created a breakout room',
       });
       logger.info({ sessionId, matchId, participantIds, roomSlug, durationSeconds: duration }, 'Host created breakout room');

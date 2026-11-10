@@ -28,7 +28,8 @@ export const EVENT_AUDIT_ACTIONS = [
   'admission.code_revoked', 'admission.code_redeemed',
   'group.rules_changed', 'group.assigned',
   'match.preview_generated', 'match.regenerated', 'match.swapped', 'match.excluded', 'match.moved',
-  'match.round_confirmed', 'match.preview_cancelled', 'match.repaired', 'match.override',
+  'match.round_announced', 'match.round_confirmed', 'match.preview_cancelled', 'match.repaired', 'match.override',
+  'participant.removed', 'breakout.created',
   'schedule.generated', 'schedule.edited', 'schedule.locked', 'schedule.unlocked', 'schedule.published',
 ] as const;
 
@@ -125,14 +126,19 @@ export async function emitEventAuditChanged(sessionId: string): Promise<void> {
 const INSERT_SQL = `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details)
                     VALUES ($1, $2, 'session', $3, $4::jsonb)`;
 
+function insertParams(entry: EventAuditEntry): unknown[] {
+  return [entry.actorId, entry.action, entry.sessionId, JSON.stringify(buildAuditDetails(entry))];
+}
+
 export async function recordEventAudit(entry: EventAuditEntry, client?: PoolClient): Promise<void> {
-  const params = [entry.actorId, entry.action, entry.sessionId, JSON.stringify(buildAuditDetails(entry))];
   if (client) {
-    await client.query(INSERT_SQL, params);
+    await client.query(INSERT_SQL, insertParams(entry));
     return;
   }
   try {
-    await query(INSERT_SQL, params);
+    // Building the details is inside the try too: a payload that cannot be stringified (circular, BigInt) is logged,
+    // never a rejection nobody awaits at a `void recordEventAudit(...)` call site.
+    await query(INSERT_SQL, insertParams(entry));
   } catch (err) {
     logger.error({ err, sessionId: entry.sessionId, action: entry.action }, 'Failed to record event audit entry');
     return;

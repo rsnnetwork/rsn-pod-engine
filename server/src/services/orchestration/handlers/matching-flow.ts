@@ -1071,7 +1071,7 @@ export async function handleHostConfirmMatches(
     });
 
     void recordEventAudit({
-      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.round_confirmed', automatic: false, round: activeSession.pendingRoundNumber, after: { stage: 'matches_announced', matchCount: matches.length },
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.round_announced', automatic: false, round: activeSession.pendingRoundNumber, after: { matchCount: matches.length },
     });
     logger.info({ sessionId: data.sessionId, matchCount: matches.length }, 'Host confirmed matches — visual sent to participants');
   } catch (err: any) {

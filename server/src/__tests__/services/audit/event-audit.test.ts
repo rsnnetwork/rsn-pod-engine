@@ -80,6 +80,15 @@ describe('recordEventAudit', () => {
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
+  it('never rejects for a payload that cannot be stringified (circular, BigInt): it logs', async () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(recordEventAudit({ sessionId: SESSION, actorId: HOST, action: 'schedule.edited', automatic: false, after: circular })).resolves.toBeUndefined();
+    await expect(recordEventAudit({ sessionId: SESSION, actorId: HOST, action: 'schedule.edited', automatic: false, after: { n: BigInt(1) } })).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledTimes(2);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
   it('stores a 40 KB `after` as { truncated: true }', async () => {
     mockQuery.mockResolvedValue({ rows: [] });
     await recordEventAudit({
@@ -102,9 +111,16 @@ describe('recordEventAudit', () => {
     expect(d).toMatchObject({ before: 'open', after: 'approval', round: 2, scheduleVersion: 3, reason: 'why' });
   });
 
-  it('names exactly the thirty-two actions of the brief', () => {
-    expect(EVENT_AUDIT_ACTIONS).toHaveLength(32);
-    expect(new Set(EVENT_AUDIT_ACTIONS).size).toBe(32);
+  it('names the thirty-two actions of the brief and the three added for rows that must read true (35, no repeats)', () => {
+    expect(EVENT_AUDIT_ACTIONS).toHaveLength(35);
+    expect(new Set(EVENT_AUDIT_ACTIONS).size).toBe(35);
+    expect(EVENT_AUDIT_ACTIONS).toEqual(expect.arrayContaining(['participant.removed', 'breakout.created', 'match.round_announced']));
+  });
+
+  it('the announce and the real start of a round are different actions, so the history never shows two identical rows', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'services/orchestration/handlers/matching-flow.ts'), 'utf8');
+    expect(src.match(/action: 'match.round_confirmed'/g)).toHaveLength(1);
+    expect(src.match(/action: 'match.round_announced'/g)).toHaveLength(1);
   });
 });
 
@@ -209,13 +225,13 @@ describe('each host action records its audit entry, with the host as actor and a
     ['handleHostExcludeFromRound', () => matching, 'handleHostExcludeFromRound', 'match.excluded'],
     ['handleHostRegenerateMatches', () => matching, 'handleHostRegenerateMatches', 'match.regenerated'],
     ['handleHostCancelPreview', () => matching, 'handleHostCancelPreview', 'match.preview_cancelled'],
-    ['handleHostConfirmMatches', () => matching, 'handleHostConfirmMatches', 'match.round_confirmed'],
+    ['handleHostConfirmMatches', () => matching, 'handleHostConfirmMatches', 'match.round_announced'],
     ['handleHostStart', () => host, 'handleHostStart', 'event.started'],
     ['handleHostEnd', () => host, 'handleHostEnd', 'event.completed'],
-    ['handleHostRemoveParticipant', () => host, 'handleHostRemoveParticipant', 'match.excluded'],
+    ['handleHostRemoveParticipant', () => host, 'handleHostRemoveParticipant', 'participant.removed'],
     ['handleHostMoveToRoom', () => host, 'handleHostMoveToRoom', 'match.moved'],
-    ['handleHostCreateBreakout', () => host, 'handleHostCreateBreakout', 'match.override'],
-    ['handleHostCreateBreakoutBulk', () => bulk, 'handleHostCreateBreakoutBulk', 'match.override'],
+    ['handleHostCreateBreakout', () => host, 'handleHostCreateBreakout', 'breakout.created'],
+    ['handleHostCreateBreakoutBulk', () => bulk, 'handleHostCreateBreakoutBulk', 'breakout.created'],
     ['handleHostAddToRoom', () => bulk, 'handleHostAddToRoom', 'match.moved'],
   ];
 

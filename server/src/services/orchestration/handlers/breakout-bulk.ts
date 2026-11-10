@@ -477,7 +477,7 @@ export async function handleHostCreateBreakoutBulk(
 
     if (createdMatchIds.length > 0) {
       void recordEventAudit({
-        sessionId, actorId: getUserIdFromSocket(socket), action: 'match.override', automatic: false,
+        sessionId, actorId: getUserIdFromSocket(socket), action: 'breakout.created', automatic: false,
         round: activeSession.currentRound, subjectUserIds: rooms.flatMap((r) => r.participantIds ?? []),
         reason: `Host created ${createdMatchIds.length} breakout room${createdMatchIds.length === 1 ? '' : 's'}`,
       });
