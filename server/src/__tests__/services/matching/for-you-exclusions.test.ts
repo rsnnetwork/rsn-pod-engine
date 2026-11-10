@@ -74,3 +74,42 @@ describe('For You candidate query', () => {
     expect(candidateSql).not.toMatch(/ip\.status <> 'declined'/);
   });
 });
+
+describe('notAlreadyInTouchSql is well formed', () => {
+  // A stray parenthesis here reached production-shaped data as "syntax error at or near )"
+  // while every text assertion still passed, so the shape is checked directly.
+  const depthOk = (sql: string): boolean => {
+    let depth = 0;
+    for (const ch of sql) {
+      if (ch === '(') depth += 1;
+      if (ch === ')') depth -= 1;
+      if (depth < 0) return false;
+    }
+    return depth === 0;
+  };
+
+  it.each([['$1', 'u'], ['$3', 'x']])('has balanced parentheses for %s / %s', (param, alias) => {
+    expect(depthOk(notAlreadyInTouchSql(param, alias))).toBe(true);
+  });
+
+  it('is one parenthesised group, so it can follow AND without changing precedence', () => {
+    const sql = notAlreadyInTouchSql('$1', 'u').trim();
+    let depth = 0;
+    for (let i = 0; i < sql.length; i += 1) {
+      if (sql[i] === '(') depth += 1;
+      if (sql[i] === ')') depth -= 1;
+      if (depth === 0) expect(i).toBe(sql.length - 1);
+    }
+  });
+
+  it('the whole candidate query has balanced parentheses', async () => {
+    mockQuery.mockReset();
+    mockQuery.mockImplementation(async (sql: string) => (
+      /FROM users u WHERE u\.id = \$1/.test(sql)
+        ? { rows: [{ id: 'u-me', displayName: 'Me', onboardingCompleted: true }] }
+        : { rows: [] }));
+    await getPlatformMatches('u-me');
+    const candidateSql = mockQuery.mock.calls.map(c => c[0] as string).find(s => /u\.id <> \$1/.test(s))!;
+    expect(depthOk(candidateSql)).toBe(true);
+  });
+});

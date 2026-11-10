@@ -545,7 +545,7 @@ export function notAlreadyInTouchSql(memberParam: string, otherAlias: string): s
              SELECT 1 FROM user_pokes pp
              WHERE pp.status = 'pending'
                AND ((pp.sender_id = ${memberParam} AND pp.recipient_id = ${otherAlias}.id)
-                 OR (pp.sender_id = ${otherAlias}.id AND pp.recipient_id = ${memberParam})))))
+                 OR (pp.sender_id = ${otherAlias}.id AND pp.recipient_id = ${memberParam}))))
        )`;
 }
 
