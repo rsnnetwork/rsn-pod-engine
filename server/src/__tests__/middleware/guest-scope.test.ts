@@ -101,6 +101,7 @@ import eventLifecycleRoutes from '../../routes/event-lifecycle';
 import eventGroupRoutes from '../../routes/event-groups';
 import eventAdmissionRoutes from '../../routes/event-admission';
 import callLinkRoutes, { sessionCallLinkRoutes } from '../../routes/call-links';
+import scheduleRoutes from '../../routes/schedule';
 
 // The API exactly as index.ts mounts it, in the same order (the last test below holds the two lists together).
 const MOUNTS: Array<[string, express.Router]> = [
@@ -122,6 +123,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/sessions', eventAdmissionRoutes],
   ['/api/sessions', sessionCallLinkRoutes],
   ['/api/call-links', callLinkRoutes],
+  ['/api/sessions', scheduleRoutes],
   ['/api/join-requests', joinRequestRoutes],
   ['/api/admin', adminRoutes],
   ['/api/admin', adminInspectRoutes],
@@ -199,6 +201,10 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['post', `/api/sessions/${EVENT}/archive`],
   ['delete', `/api/sessions/${EVENT}/archive`],
   ['post', `/api/sessions/${EVENT}/delete-permanently`],
+  // Part 2 Task 8: the matching board is its organisers' private draft (members only).
+  ['get', `/api/sessions/${EVENT}/schedule`],
+  ['post', `/api/sessions/${EVENT}/schedule/generate`],
+  ['post', `/api/sessions/${EVENT}/schedule/ops`],
   ['post', `/api/pokes/${OTHER}/withdraw`],
   ['get', `/api/sessions/${EVENT}/admission`],
   ['post', `/api/sessions/${EVENT}/admission/redeem`],
