@@ -7,13 +7,14 @@
 import { Server as SocketServer, Socket } from 'socket.io';
 import { ErrorCodes } from '@rsn/shared';
 import { readAccountGate } from '../../../middleware/auth';
-import { GUEST_MEMBERSHIP_MESSAGE } from '../../../middleware/guest-scope';
+import { ACCOUNT_KIND_UNAVAILABLE_MESSAGE, GUEST_MEMBERSHIP_MESSAGE } from '../../../middleware/guest-scope';
 
 /**
  * Whether this socket belongs to an event guest; if so the refusal has been sent to it. The kind was read from the
  * database at the handshake (socket.data.accountKind). A socket not marked 'member' asks the account gate again
  * (cached for 60 s), so a guest promoted to member since, or a member whose handshake met a database error, is let
- * through without reconnecting. Anything but a member reading is refused.
+ * through without reconnecting. Anything but a member reading is refused: as a guest only when the database says
+ * 'event_guest', otherwise (the kind could not be read) with SERVICE_UNAVAILABLE, to try again.
  */
 export async function refuseGuestSocket(socket: Socket): Promise<boolean> {
   if (socket.data.accountKind === 'member') return false;
@@ -22,7 +23,9 @@ export async function refuseGuestSocket(socket: Socket): Promise<boolean> {
     socket.data.accountKind = 'member';
     return false;
   }
-  socket.emit('error', { code: ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, message: GUEST_MEMBERSHIP_MESSAGE });
+  socket.emit('error', gate.kindUnknown
+    ? { code: ErrorCodes.SERVICE_UNAVAILABLE, message: ACCOUNT_KIND_UNAVAILABLE_MESSAGE }
+    : { code: ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, message: GUEST_MEMBERSHIP_MESSAGE });
   return true;
 }
 

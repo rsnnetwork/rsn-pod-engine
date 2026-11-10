@@ -59,6 +59,9 @@ export const GUEST_ROUTES: ReadonlyArray<{ method: GuestRouteMethod; pattern: Re
   { method: 'GET', pattern: exact(`/api/sessions/${ID}/groups`) },
   // Rating the people they met at it.
   { method: '*', pattern: below('/api/ratings') },
+  // Reporting someone at their event (fix round 1). Only the report itself: the moderation routes
+  // (/api/reports/open, /:id/resolve, …) stay closed.
+  { method: 'POST', pattern: exact('/api/reports') },
 ];
 
 /**
@@ -73,4 +76,16 @@ export function isGuestAllowed(method: string, fullPath: string): boolean {
 /** The refusal a guest gets on a member-only route: 403 GUEST_MEMBERSHIP_REQUIRED. */
 export function guestMembershipRequired(): AppError {
   return new AppError(403, ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, GUEST_MEMBERSHIP_MESSAGE);
+}
+
+/** The words for a request refused because the account's kind could not be read just now. */
+export const ACCOUNT_KIND_UNAVAILABLE_MESSAGE = 'We could not reach RSN just now. Please try again in a moment.';
+
+/**
+ * The answer when the account's kind could not be read (a database error with nothing cached): 503
+ * SERVICE_UNAVAILABLE, which the client treats as any passing failure (a query retries). Never the guest code: the
+ * account is not known to be a guest.
+ */
+export function accountKindUnavailable(): AppError {
+  return new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, ACCOUNT_KIND_UNAVAILABLE_MESSAGE);
 }

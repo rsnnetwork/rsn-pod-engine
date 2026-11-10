@@ -28,7 +28,7 @@ import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, EVENT_FORMAT_KEYS, liveKindOf, type MessageReplyQuote } from '@rsn/shared';
 import * as blockService from '../block/block.service';
-import { BroadcastBlockedError } from './broadcast-errors';
+import { BroadcastBlockedError, BroadcastGuestError } from './broadcast-errors';
 import { FORMER_MEMBER_NAME, activeMemberSql } from '../users/active-member';
 import { REPLY_COLUMNS, REPLY_COPY, replyQuoteFromOriginal, replyQuoteOf, type OriginalRow, type ReplyColumns } from './reply-quote';
 
@@ -509,7 +509,8 @@ export async function insertDirectMessageOn(
  * Send a DM as part of an authorized broadcast. Skips the "have you met" gate of
  * canMessage() because the caller (post-event-message job creation) has already
  * authorized the sender for this audience, but never skips a block: a block, in
- * either direction, is the one thing a person says to stop hearing from someone.
+ * either direction, is the one thing a person says to stop hearing from someone. Nor does it ever write to an event
+ * guest (BroadcastGuestError).
  * Still validates content length. Returns the same shape as sendMessage so the
  * caller can broadcast via broadcastDmMessage().
  */
@@ -531,6 +532,9 @@ export async function sendBroadcastMessage(
   if (await blockService.areBlocked(fromUserId, toUserId)) {
     throw new BroadcastBlockedError();
   }
+  // Part 2, Task 3 (fix round 1): a broadcast never opens a thread with an event guest, as no message does.
+  const recipient = await query<{ account_kind: string }>(`SELECT account_kind FROM users WHERE id = $1`, [toUserId]);
+  if (recipient.rows[0]?.account_kind !== 'member') throw new BroadcastGuestError();
   return insertDirectMessage(fromUserId, toUserId, trimmed, null);
 }
 

@@ -100,14 +100,14 @@ export async function assembleRecipients(sessionId: string): Promise<Array<{
 
   // 3. Fetch roles for all participant user IDs
   const participantUserIds = participants.map((p) => p.userId);
-  const usersResult = await query<{ id: string; role: string; first_name: string }>(
-    `SELECT id, role, first_name FROM users WHERE id = ANY($1)`,
+  const usersResult = await query<{ id: string; role: string; first_name: string; account_kind: string }>(
+    `SELECT id, role, first_name, account_kind FROM users WHERE id = ANY($1)`,
     [participantUserIds],
   );
 
-  const roleMap = new Map<string, { role: string; firstName: string }>();
+  const roleMap = new Map<string, { role: string; firstName: string; accountKind: string }>();
   for (const u of usersResult.rows) {
-    roleMap.set(u.id, { role: u.role, firstName: u.first_name ?? '' });
+    roleMap.set(u.id, { role: u.role, firstName: u.first_name ?? '', accountKind: u.account_kind });
   }
 
   // 4. Filter out host + internal-role accounts; classify remainder
@@ -120,6 +120,8 @@ export async function assembleRecipients(sessionId: string): Promise<Array<{
     if (excluded.has(p.userId)) continue;
     const userInfo = roleMap.get(p.userId);
     if (userInfo && internalRoles.has(userInfo.role)) continue;
+    // An event guest is not messaged (Part 2, Task 3, fix round 1): no thread and no email.
+    if (userInfo?.accountKind !== 'member') continue;
 
     const bucket = classifyParticipant(
       {
@@ -236,6 +238,7 @@ export interface PlannedRecipient {
 interface PersonRow {
   user_id: string;
   account_status: string;
+  account_kind: string;
   blocked: boolean;
 }
 
@@ -262,7 +265,7 @@ export async function assembleRecipientsV2(
 
   const participants = await query<ParticipantPersonRow>(
     `SELECT sp.user_id, sp.joined_at, sp.left_at, sp.rounds_completed,
-            u.status AS account_status,
+            u.status AS account_status, u.account_kind,
             EXISTS (SELECT 1 FROM user_blocks b
                      WHERE (b.blocker_id = $2 AND b.blocked_id = sp.user_id)
                         OR (b.blocker_id = sp.user_id AND b.blocked_id = $2)) AS blocked
@@ -299,7 +302,7 @@ export async function assembleRecipientsV2(
   // even if the host has no participant row of their own.
   if (hostUserId && hostUserId !== senderId && !planned.some((r) => r.userId === hostUserId)) {
     const host = await query<PersonRow>(
-      `SELECT u.id AS user_id, u.status AS account_status,
+      `SELECT u.id AS user_id, u.status AS account_status, u.account_kind,
               EXISTS (SELECT 1 FROM user_blocks b
                        WHERE (b.blocker_id = $2 AND b.blocked_id = u.id)
                           OR (b.blocker_id = u.id AND b.blocked_id = $2)) AS blocked

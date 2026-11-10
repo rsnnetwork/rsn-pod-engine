@@ -214,6 +214,7 @@ const GUEST_OPEN: Array<[Verb, string]> = [
   ['post', '/api/ratings'],
   ['get', '/api/ratings/unrated'],
   ['get', `/api/ratings/match/${OTHER}`],
+  ['post', '/api/reports'],
 ];
 
 beforeEach(() => {
@@ -291,13 +292,22 @@ describe('the kind comes from the database, through the 60-second cache', () => 
     expect(reads).toHaveLength(1);
   });
 
-  it('a database outage with nothing cached refuses member-only routes (the kind fails closed) and keeps the status open', async () => {
+  it('a database outage with nothing cached answers member-only routes with a retryable 503, never the guest code', async () => {
     databaseDown = true;
-    await expect(readAccountGate(MEMBER)).resolves.toEqual({ status: 'active', kind: 'event_guest' });
-    expect((await call('get', '/api/people/everyone', GUEST)).body.error.code).toBe(GUEST_CODE);
-    expect((await call('get', '/api/people/everyone', MEMBER)).body.error.code).toBe(GUEST_CODE);
-    // A route open to everyone still answers (fail-open status): the outage costs a member one member-only request.
-    expect((await call('get', '/api/users/me', MEMBER)).body?.error?.code).not.toBe(GUEST_CODE);
+    await expect(readAccountGate(MEMBER)).resolves.toEqual({ status: 'active', kind: 'event_guest', kindUnknown: true });
+    for (const who of [GUEST, MEMBER]) {
+      const res = await call('get', '/api/people/everyone', who);
+      expect(res.status).toBe(503);
+      expect(res.body.error).toEqual({ code: 'SERVICE_UNAVAILABLE', message: 'We could not reach RSN just now. Please try again in a moment.' });
+    }
+    // Nothing member-only ran for either (the kind still fails closed).
+    expect(mockQuery.mock.calls.every(([sql]) => String(sql) === 'SELECT status, account_kind FROM users WHERE id = $1')).toBe(true);
+    // A route open to everyone still answers (fail-open status).
+    const me = await call('get', '/api/users/me', MEMBER);
+    expect([me.status, me.body?.error?.code]).not.toContain(503);
+    // Once the database answers, the member is let in at once: an unknown kind is never cached.
+    databaseDown = false;
+    expect((await call('get', '/api/people/everyone', MEMBER)).body?.error?.code).toBeUndefined();
   });
 
   it('a database outage keeps the cached kind: a member stays a member, a guest stays a guest', async () => {
@@ -313,9 +323,10 @@ describe('the kind comes from the database, through the 60-second cache', () => 
     await expect(readAccountGate(GUEST)).resolves.toEqual({ status: 'active', kind: 'event_guest' });
   });
 
-  it('a row with no kind it knows is a guest; a deactivated guest is refused as any closed account is (401)', async () => {
+  it('a row with no kind it knows opens nothing and is not told it is a guest (503); a deactivated guest is 401', async () => {
     accounts.set(OTHER, { status: 'active', account_kind: 'something_new' });
-    await expect(readAccountGate(OTHER)).resolves.toEqual({ status: 'active', kind: 'event_guest' });
+    await expect(readAccountGate(OTHER)).resolves.toEqual({ status: 'active', kind: 'event_guest', kindUnknown: true });
+    expect((await call('get', '/api/people/everyone', OTHER)).status).toBe(503);
     accounts.set(GUEST, { status: 'deactivated', account_kind: 'event_guest' });
     expect((await call('get', '/api/users/me', GUEST)).status).toBe(401);
   });
@@ -363,6 +374,12 @@ describe('isGuestAllowed matches the routed path whole', () => {
     ['GET', '', false],
     ['', `/api/sessions/${EVENT}`, false],
     ['HEAD', `/api/sessions/${EVENT}`, false],
+    ['POST', '/api/reports', true],
+    ['POST', '/api/reports/', true],
+    ['GET', '/api/reports', false],
+    ['GET', '/api/reports/open', false],
+    ['POST', `/api/reports/${OTHER}/resolve`, false],
+    ['POST', `/api/reports/${OTHER}/dismiss`, false],
   ] as Array<[string, string, boolean]>)('%s %s → %s', (method, path, allowed) => {
     expect(isGuestAllowed(method, path)).toBe(allowed);
   });
@@ -435,6 +452,17 @@ describe('dm:* from a guest socket answers GUEST_MEMBERSHIP_REQUIRED and does no
     await runMemberDmEvent(asIo, asSocket(socket), { conversationId: OTHER }, handler);
     expect(handler).toHaveBeenCalledTimes(1);
     expect(socket.data.accountKind).toBe('member');
+  });
+
+  it('a socket whose kind cannot be read (the database down, nothing cached) is told to try again, not that it is a guest', async () => {
+    databaseDown = true;
+    const handler = jest.fn().mockResolvedValue(undefined);
+    const socket = socketOf(MEMBER);
+    await runMemberDmEvent(asIo, asSocket(socket), { conversationId: OTHER }, handler);
+    expect(handler).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('error', {
+      code: 'SERVICE_UNAVAILABLE', message: 'We could not reach RSN just now. Please try again in a moment.',
+    });
   });
 
   it('a socket with no kind recorded is asked about, never assumed a member', async () => {

@@ -11,6 +11,11 @@ jest.mock('../../../db', () => ({
   transaction: async (cb: (client: unknown) => unknown) => cb({ query: (...args: unknown[]) => mockClientQuery(...args) }),
   __esModule: true,
 }));
+// Every person registered here is a member: the event-guest check (guest-registration.ts) has its own tests.
+jest.mock('../../../services/session/guest-registration', () => ({
+  ...jest.requireActual('../../../services/session/guest-registration'),
+  assertGuestMayRegister: jest.fn(async () => ({ isGuest: false })),
+}));
 jest.mock('../../../config/logger', () => ({
   __esModule: true,
   default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },

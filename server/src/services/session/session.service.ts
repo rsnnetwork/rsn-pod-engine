@@ -14,6 +14,7 @@ import {
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import { activeMemberSql } from '../users/active-member';
+import { assertGuestMayRegister } from './guest-registration';
 import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-access';
 import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
 import { assertVideoRoom } from './video-room';
@@ -431,6 +432,10 @@ export async function registerParticipant(
       throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'This event is no longer accepting participants');
     }
 
+    // Part 2, Task 3 (fix round 1): an event guest takes a place only where guestMayRegister allows (the event they
+    // came in through, or one where they already hold a row), on every way in. Members pass on the cached gate.
+    const { isGuest } = await assertGuestMayRegister((text, params) => client.query(text, params), sessionId, userId);
+
     const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
 
     // T11 (1 Nov 2026): an event with its own visibility follows the one rule (event-access.ts) and never adds
@@ -456,14 +461,17 @@ export async function registerParticipant(
       const isMember = memberResult.rows.length > 0;
 
       if (podVisibility === 'public' && !isMember) {
-        // Auto-add to pod when registering for a session in a public pod
-        try {
-          await client.query(
-            `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
-             ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
-            [session.podId, userId]
-          );
-        } catch { /* ignore if already member */ }
+        // Auto-add to pod when registering for a session in a public pod. Never an event guest (Part 2, Task 3):
+        // they take the event's place only, and never become a pod member.
+        if (!isGuest) {
+          try {
+            await client.query(
+              `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+               ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
+              [session.podId, userId]
+            );
+          } catch { /* ignore if already member */ }
+        }
       } else if ((podVisibility === 'invite_only' || podVisibility === 'private') && !isMember) {
         // For private/invite-only pods, only allow if user has a valid (accepted) invite
         // User must go through acceptInvite() first which adds them to pod + marks invite

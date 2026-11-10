@@ -116,7 +116,7 @@ const MEMBERS = /FROM dm_group_members m JOIN users u ON u\.id = m\.user_id WHER
 const READ_MARK = /UPDATE dm_group_members SET last_read_at = NOW\(\)/;
 const GROUP_EXISTS = /SELECT id FROM dm_groups WHERE id = \$1$/;
 const NAMES = /SELECT id, display_name, status FROM users WHERE id = ANY\(\$1::uuid\[\]\)/;
-const CANDIDATES = /FROM session_participants sp JOIN users u ON u\.id = sp\.user_id WHERE sp\.session_id = \$1 AND sp\.joined_at IS NOT NULL AND sp\.status <> 'removed' AND u\.status = 'active' AND u\.id <> \$2/;
+const CANDIDATES = /FROM session_participants sp JOIN users u ON u\.id = sp\.user_id WHERE sp\.session_id = \$1 AND sp\.joined_at IS NOT NULL AND sp\.status <> 'removed' AND u\.status = 'active' AND u\.account_kind = 'member' AND u\.id <> \$2/;
 
 const NOW = new Date('2026-10-26T10:00:00.000Z');
 

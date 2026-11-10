@@ -279,3 +279,57 @@ describe('messages and calls are for members', () => {
       "((SELECT me.account_kind FROM users me WHERE me.id = $1) = 'event_guest' OR t.account_kind = 'event_guest') AS a_guest");
   });
 });
+
+// ─── Pods are for members (fix round 1) ──────────────────────────────────────────────────────────────────
+
+import { addMember, GUEST_POD_REFUSAL } from '../../../services/pod/pod.service';
+
+describe('no pod_members row is ever written for an event guest', () => {
+  const POD = { id: 'pod-1', maxMembers: null };
+  /** The pod read, then whether they were ever in it, then the write (which a guest's account makes match nothing). */
+  const podWorld = (existing: Array<{ id: string; status: string }>) => mockClientQuery.mockImplementation((sql: string) => {
+    if (/FROM pods WHERE id = \$1 FOR UPDATE/.test(sql)) return Promise.resolve({ rows: [POD], rowCount: 1 });
+    if (/SELECT id, status FROM pod_members/.test(sql)) return Promise.resolve({ rows: existing, rowCount: existing.length });
+    return Promise.resolve({ rows: [], rowCount: 0 }); // the guarded write matches no row for a guest
+  });
+
+  it('a new membership: the INSERT carries the member check, and a guest is refused in words', async () => {
+    podWorld([]);
+    await expect(addMember('pod-1', GUEST_ID)).rejects.toMatchObject({ statusCode: 403, message: GUEST_POD_REFUSAL });
+    const insert = mockClientQuery.mock.calls.find(([sql]) => /INSERT INTO pod_members/.test(String(sql)))!;
+    expect(flat(insert[0])).toContain("SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM users acct WHERE acct.id = $2 AND acct.account_kind = 'member')");
+  });
+
+  it('a membership brought back: the UPDATE carries the member check too', async () => {
+    podWorld([{ id: 'pm-1', status: 'left' }]);
+    await expect(addMember('pod-1', GUEST_ID)).rejects.toMatchObject({ statusCode: 403, message: GUEST_POD_REFUSAL });
+    const update = mockClientQuery.mock.calls.find(([sql]) => /UPDATE pod_members SET role/.test(String(sql)))!;
+    expect(flat(update[0])).toContain("AND EXISTS (SELECT 1 FROM users acct WHERE acct.id = $4 AND acct.account_kind = 'member')");
+  });
+
+  it('a member is added as before', async () => {
+    mockClientQuery.mockImplementation((sql: string) => {
+      if (/FROM pods WHERE id = \$1 FOR UPDATE/.test(sql)) return Promise.resolve({ rows: [POD], rowCount: 1 });
+      if (/INSERT INTO pod_members/.test(sql)) return Promise.resolve({ rows: [{ id: 'pm-2', userId: 'm' }], rowCount: 1 });
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    await expect(addMember('pod-1', 'm')).resolves.toMatchObject({ id: 'pm-2' });
+  });
+});
+
+// ─── Where a guest may take a place (guestMayRegister, which Task 4/6 extend) ───────────────────────────
+
+import { guestMayRegister } from '../../../services/session/guest-registration';
+
+describe('guestMayRegister', () => {
+  const S = '0e000000-0000-4000-8000-000000000001';
+  const T = '0e000000-0000-4000-8000-000000000002';
+  it.each([
+    ['the event they came in through', { sessionId: S, guestFirstSessionId: S, holdsPlace: false }, true],
+    ['an event where they already hold a row', { sessionId: T, guestFirstSessionId: S, holdsPlace: true }, true],
+    ['any other event', { sessionId: T, guestFirstSessionId: S, holdsPlace: false }, false],
+    ['any event, once the one they came in through is deleted', { sessionId: T, guestFirstSessionId: null, holdsPlace: false }, false],
+  ])('%s → %s', (_name, facts, allowed) => {
+    expect(guestMayRegister(facts)).toBe(allowed);
+  });
+});

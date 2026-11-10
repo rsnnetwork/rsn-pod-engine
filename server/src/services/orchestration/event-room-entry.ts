@@ -9,6 +9,7 @@ import logger from '../../config/logger';
 import type { EventRoomAdmission } from '../session/session-access';
 import { canEnterRoom } from '../session/event-access';
 import { sessionRoom } from './state/session-state';
+import { GUEST_REGISTRATION_MESSAGE } from '../session/guest-registration';
 
 /** A refusal production's live page shows as a toast and a banner: a code and a sentence. */
 export interface EventRoomRefusal { code: string; message: string }
@@ -37,6 +38,10 @@ export function eventRoomRefusal(eventStatus: string, registrationCode: string |
   }
   if (registrationCode === ErrorCodes.EVENT_PRIVATE) {
     return { code: ErrorCodes.EVENT_PRIVATE, message: "This event is private. It is for its pod's members and the people the host invites." };
+  }
+  // Part 2, Task 3 (fix round 1): an event guest takes part only in the event they were invited to.
+  if (registrationCode === ErrorCodes.GUEST_MEMBERSHIP_REQUIRED) {
+    return { code: ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, message: GUEST_REGISTRATION_MESSAGE };
   }
   if (registrationCode === ErrorCodes.AUTH_FORBIDDEN) {
     return { code: ErrorCodes.AUTH_FORBIDDEN, message: 'This event is only open to its pod\'s members.' };

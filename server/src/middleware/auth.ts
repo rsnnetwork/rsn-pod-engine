@@ -6,7 +6,7 @@ import { AppError, UnauthorizedError } from './errors';
 import { AccountKind, JwtPayload, UserRole } from '@rsn/shared';
 import { query } from '../db';
 import logger from '../config/logger';
-import { guestMembershipRequired, isGuestAllowed } from './guest-scope';
+import { accountKindUnavailable, guestMembershipRequired, isGuestAllowed } from './guest-scope';
 
 // Extend Express Request to include authenticated user
 declare global {
@@ -34,14 +34,17 @@ const STATUS_CACHE_TTL_MS = 60_000;
 export interface AccountGate {
   status: string;
   kind: AccountKind;
+  /**
+   * Set when the kind could not be read from the database (an error with nothing cached, or a value that is neither
+   * kind). `kind` is then 'event_guest', so nothing member-only opens, but the account is NOT known to be a guest:
+   * callers answer 503 SERVICE_UNAVAILABLE (try again), never GUEST_MEMBERSHIP_REQUIRED.
+   */
+  kindUnknown?: true;
 }
 
-/**
- * The stored kind, read so that only the literal 'member' is a member. The column is NOT NULL and CHECKed to the two
- * kinds; anything else (no row, a value we do not know) is treated as a guest, the side that opens nothing.
- */
-function accountKindOf(value: unknown): AccountKind {
-  return value === 'member' ? 'member' : 'event_guest';
+/** Whether the database said the account is a member or a guest, or something else (impossible under the CHECK). */
+function confirmedKind(value: unknown): AccountKind | null {
+  return value === 'member' || value === 'event_guest' ? value : null;
 }
 
 /**
@@ -51,8 +54,11 @@ function accountKindOf(value: unknown): AccountKind {
  *
  * On a database error the status fails open, as it always has (a deactivated member keeps working through an
  * outage rather than every member being locked out), but the kind fails CLOSED: the cached kind when there is one,
- * otherwise 'event_guest'. A guest is never let into member surfaces by an outage; a member hit by the same outage
- * with nothing cached is refused one member-only request and retries.
+ * otherwise 'event_guest' marked kindUnknown. A guest is never let into member surfaces by an outage; a member hit by
+ * the same outage with nothing cached gets a retryable 503 on member-only routes (fix round 1), never told they are a
+ * guest. No row at all reads as inactive (401), as before.
+ *
+ * The cache is per process: on another instance a promotion or a deactivation shows within the same 60 s.
  */
 export async function readAccountGate(userId: string): Promise<AccountGate> {
   const cached = statusCache.get(userId);
@@ -66,7 +72,10 @@ export async function readAccountGate(userId: string): Promise<AccountGate> {
       [userId]
     );
     const row = result.rows[0];
-    const gate: AccountGate = { status: row?.status || 'inactive', kind: accountKindOf(row?.account_kind) };
+    const kind = row ? confirmedKind(row.account_kind) : 'event_guest';
+    const status = row?.status || 'inactive';
+    if (kind === null) return { status, kind: 'event_guest', kindUnknown: true }; // not cached: read again next time
+    const gate: AccountGate = { status, kind };
     // Prevent unbounded cache growth — evict oldest entries if cache exceeds 5000
     if (statusCache.size > 5000) {
       const firstKey = statusCache.keys().next().value;
@@ -76,7 +85,8 @@ export async function readAccountGate(userId: string): Promise<AccountGate> {
     return gate;
   } catch (err) {
     logger.warn({ err, userId }, 'Failed to read the account gate — allowing an active status, keeping the kind closed');
-    return { status: 'active', kind: cached?.kind ?? 'event_guest' };
+    if (cached) return { status: 'active', kind: cached.kind };
+    return { status: 'active', kind: 'event_guest', kindUnknown: true };
   }
 }
 
@@ -195,7 +205,8 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
 
       // Member-only parts of RSN are closed to an event guest (default deny, guest-scope.ts).
       if (gate.kind !== 'member' && !isGuestAllowed(req.method ?? '', `${req.baseUrl ?? ''}${req.path ?? ''}`)) {
-        throw guestMembershipRequired();
+        // Only a row that reads 'event_guest' is told it is a guest; an unreadable kind is a retryable outage.
+        throw gate.kindUnknown ? accountKindUnavailable() : guestMembershipRequired();
       }
 
       req.user = {

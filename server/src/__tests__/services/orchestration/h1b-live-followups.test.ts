@@ -181,6 +181,17 @@ function inviteRow(i: Row): Row {
 
 function answer(sql: string, params: unknown[]): Answer {
   const [a, b] = params;
+  // The account gate (authenticate, the handshake, and registerParticipant's guest check, Part 2 Task 3): every
+  // account here is an active member unless the test made it an event guest.
+  if (sql === 'SELECT status, account_kind FROM users WHERE id = $1') {
+    const u = world.users.get(a as string);
+    return { rows: [{ status: 'active', account_kind: u?.account_kind ?? 'member' }] };
+  }
+  // A guest's registration facts (guest-registration.ts): the event they came in through, and whether they hold a row.
+  if (sql.startsWith('SELECT u.guest_first_session_id, EXISTS (SELECT 1 FROM session_participants sp')) {
+    const u = world.users.get(b as string);
+    return { rows: u ? [{ guest_first_session_id: u.guest_first_session_id ?? null, holds_place: !!participant(a, b) }] : [] };
+  }
   if (sql === 'SELECT display_name FROM users WHERE id = $1') {
     const u = world.users.get(a as string);
     return { rows: u ? [{ display_name: u.display_name }] : [] };
