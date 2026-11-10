@@ -335,10 +335,9 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     const x = world.entries.find((y) => y.session_id === params[0] && y.email === params[1] && !y.revoked_at && y.group_key);
     return rows(x ? [{ group_key: x.group_key }] : []);
   }
-  if (sql.startsWith('SELECT 1 FROM event_admission_codes WHERE session_id = $1 AND code_hash = $2 AND redeemed_at IS NULL')) {
-    const c = world.codes.find((y) => y.session_id === params[0] && y.code_hash === params[1]);
-    const ok = !!c && !c.redeemed_by && !c.revoked_at && (!c.expires_at || c.expires_at.getTime() > Date.now());
-    return rows(ok ? [{}] : []);
+  if (sql.startsWith('SELECT redeemed_at IS NOT NULL AS used, (expires_at IS NULL OR expires_at > NOW()) AS live FROM event_admission_codes WHERE session_id = $1 AND code_hash = $2 AND revoked_at IS NULL')) {
+    const c = world.codes.find((y) => y.session_id === params[0] && y.code_hash === params[1] && !y.revoked_at);
+    return rows(c ? [{ used: !!c.redeemed_by, live: !c.expires_at || c.expires_at.getTime() > Date.now() }] : []);
   }
   if (sql === 'SELECT 1 FROM event_participant_groups WHERE session_id = $1 AND user_id = $2 LIMIT 1') {
     return rows(world.memberGroups.has(key(String(params[0]), String(params[1]))) ? [{}] : []);

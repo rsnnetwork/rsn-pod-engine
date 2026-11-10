@@ -84,6 +84,7 @@ jest.mock('../../../services/session/event-admission.service', () => {
   const actual = jest.requireActual('../../../services/session/event-admission.service');
   return {
     normaliseAdmissionCode: actual.normaliseAdmissionCode,
+    ADMISSION_CODE_USED_SENTENCE: actual.ADMISSION_CODE_USED_SENTENCE,
     hashAdmissionCode: actual.hashAdmissionCode,
     redeemAdmissionCode: (...a: unknown[]) => mockRedeem(...a),
     fanoutAdmissionChanged: (...a: unknown[]) => mockFanoutAdmission(...a),
@@ -158,8 +159,10 @@ beforeEach(() => {
   mockRedeem.mockReset().mockImplementation((sessionId: string, userId: string, raw: string) => {
     const hash = hashAdmissionCode(sessionId, normaliseAdmissionCode(raw) ?? '');
     const c = world.codes.find((x) => x.session_id === sessionId && x.code_hash === hash && !x.revoked_at);
-    if (!c || (c.redeemed_by && c.redeemed_by !== userId)) {
-      return Promise.reject(new AppError(400, ErrorCodes.ADMISSION_CODE_INVALID, 'That admission code is not right.'));
+    // As the real redeemAdmissionCode answers (Task 4): someone else's code 409 USED, anything unknown 400 INVALID.
+    if (!c) return Promise.reject(new AppError(400, ErrorCodes.ADMISSION_CODE_INVALID, 'That admission code is not right.'));
+    if (c.redeemed_by && c.redeemed_by !== userId) {
+      return Promise.reject(new AppError(409, ErrorCodes.ADMISSION_CODE_USED, 'This admission code has already been used.'));
     }
     c.redeemed_by = userId;
     return Promise.resolve({ codeId: 'code-1', groupKey: c.group_key });
@@ -365,6 +368,57 @@ describe('who may come in, decided after the code is proved', () => {
     const ok = await verifyCallEntry(CODE, { email: NEW_EMAIL, code, admissionCode: 'abcd efgh jkmn' });
     expect(ok).toMatchObject({ created: true, accountKind: 'event_guest' });
     expect(world.codes[0].redeemed_by).toBeNull();
+  });
+
+  it('a valid 6-digit code with an admission code someone already used: 409 in its own words; nothing spent, no account', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
+    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: MEMBER, revoked_at: null, expires_at: null });
+    const { code } = await emailed(NEW_EMAIL);
+    expect(await refusal(verifyCallEntry(CODE, { email: NEW_EMAIL, code, admissionCode: 'abcd-efgh-jkmn' }))).toEqual({
+      status: 409, code: ErrorCodes.ADMISSION_CODE_USED, message: 'This admission code has already been used.',
+    });
+    expect(world.users.some((u) => u.email === NEW_EMAIL)).toBe(false);
+    expect(world.links[0]).toMatchObject({ used_at: null, code_attempts: 0 });
+    // The email's button with the same spent admission code answers the same.
+    const { token } = await emailed(NEW_EMAIL);
+    expect(await refusal(verifyCallEntry(CODE, { token, admissionCode: 'ABCD-EFGH-JKMN' }))).toMatchObject({ status: 409, code: ErrorCodes.ADMISSION_CODE_USED });
+  });
+
+  it('an unknown, revoked or expired admission code keeps the event\'s own refusal, exactly as before', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
+    const hash = (raw: string) => hashAdmissionCode(EVENT, normaliseAdmissionCode(raw)!);
+    world.codes.push({ session_id: EVENT, code_hash: hash('RRRR-RRRR-RRRR'), group_key: null, redeemed_by: MEMBER, revoked_at: new Date(), expires_at: null });
+    world.codes.push({ session_id: EVENT, code_hash: hash('EEEE-EEEE-EEEE'), group_key: null, redeemed_by: null, revoked_at: null, expires_at: new Date(Date.now() - 60_000) });
+    const generic = { status: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED, message: CALL_INVITATION_ONLY_SENTENCE };
+    for (const admissionCode of ['ZZZZ-ZZZZ-ZZZZ', 'RRRR-RRRR-RRRR', 'EEEE-EEEE-EEEE', 'not a code']) {
+      const { code } = await emailed(NEW_EMAIL);
+      expect(await refusal(verifyCallEntry(CODE, { email: NEW_EMAIL, code, admissionCode }))).toEqual(generic);
+    }
+  });
+
+  it('before the 6-digit code is proved, a spent admission code changes nothing: known and unknown addresses get the same answer', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
+    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: HOST, revoked_at: null, expires_at: null });
+    world.sql = [];
+    expect(await sendCallEntryCode(CODE, 'member@example.org')).toEqual(await sendCallEntryCode(CODE, NEW_EMAIL));
+    const k = mockSendEntryEmail.mock.calls[0][1] as { code: string };
+    const u = mockSendEntryEmail.mock.calls[1][1] as { code: string };
+    const wrongOf = (c: string) => String((Number(c) + 1) % 1_000_000).padStart(6, '0');
+    const a = await refusal(verifyCallEntry(CODE, { email: 'member@example.org', code: wrongOf(k.code), admissionCode: 'ABCD-EFGH-JKMN' }));
+    const b = await refusal(verifyCallEntry(CODE, { email: NEW_EMAIL, code: wrongOf(u.code), admissionCode: 'ABCD-EFGH-JKMN' }));
+    expect(a).toEqual(b);
+    expect(a).toMatchObject({ status: 400, code: ErrorCodes.AUTH_SIGN_IN_CODE_WRONG });
+    // The admission code was never looked at.
+    expect(world.sql.some((s) => /FROM event_admission_codes/.test(s))).toBe(false);
+  });
+
+  it('/enter: an admission code someone else already used is 409 in its own words, and gives no place', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'restricted', visibility: 'private' });
+    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: HOST, revoked_at: null, expires_at: null });
+    expect(await refusal(enterCall(CODE, MEMBER, UserRole.MEMBER, { admissionCode: 'ABCD-EFGH-JKMN' }))).toEqual({
+      status: 409, code: ErrorCodes.ADMISSION_CODE_USED, message: 'This admission code has already been used.',
+    });
+    expect(world.places.has(key(EVENT, MEMBER))).toBe(false);
   });
 
   it('invitation only: a listed address or a personal invite comes in; a revoked listing or a shared invite does not', async () => {

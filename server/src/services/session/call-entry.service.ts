@@ -48,7 +48,7 @@ import {
   type EventAccessFacts,
 } from './event-access';
 import {
-  fanoutAdmissionChanged, hashAdmissionCode, normaliseAdmissionCode, redeemAdmissionCode,
+  ADMISSION_CODE_USED_SENTENCE, fanoutAdmissionChanged, hashAdmissionCode, normaliseAdmissionCode, redeemAdmissionCode,
 } from './event-admission.service';
 import { fanoutEventGroups, getEventGroupRules, setParticipantGroups } from './event-groups.service';
 import { requestToJoin } from './event-requests.service';
@@ -116,17 +116,24 @@ async function emailListed(sessionId: string, email: string): Promise<boolean> {
   return r.rows.length > 0;
 }
 
-/** An admission code of the event that could still be redeemed (checked, not spent). */
-async function admissionCodeRedeemable(sessionId: string, raw: string): Promise<boolean> {
+/**
+ * Where an admission code of the event stands (checked, not spent): `redeemable` (unclaimed, not revoked, not past its
+ * expiry), `used` (one of the event's codes that someone already redeemed, not revoked), or `invalid` for everything else
+ * (a typo, another event's code, a revoked or an expired one), which all read the same.
+ */
+async function admissionCodeStanding(sessionId: string, raw: string): Promise<'redeemable' | 'used' | 'invalid'> {
   const normalised = normaliseAdmissionCode(raw);
-  if (!normalised) return false;
-  const r = await query(
-    `SELECT 1 FROM event_admission_codes
-      WHERE session_id = $1 AND code_hash = $2
-        AND redeemed_at IS NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())`,
+  if (!normalised) return 'invalid';
+  const r = await query<{ used: boolean; live: boolean }>(
+    `SELECT redeemed_at IS NOT NULL AS used, (expires_at IS NULL OR expires_at > NOW()) AS live
+       FROM event_admission_codes
+      WHERE session_id = $1 AND code_hash = $2 AND revoked_at IS NULL`,
     [sessionId, hashAdmissionCode(sessionId, normalised)],
   );
-  return r.rows.length > 0;
+  const code = r.rows[0];
+  if (!code) return 'invalid';
+  if (code.used) return 'used';
+  return code.live ? 'redeemable' : 'invalid';
 }
 
 /**
@@ -141,7 +148,13 @@ async function newcomerRefusal(event: CallEventRow, email: string, admissionCode
   if (await personallyInvited(event.id, email)) return null;
   if (mode === 'restricted') {
     if (await emailListed(event.id, email)) return null;
-    if (admissionCode && await admissionCodeRedeemable(event.id, admissionCode)) return null;
+    if (admissionCode) {
+      const standing = await admissionCodeStanding(event.id, admissionCode);
+      if (standing === 'redeemable') return null;
+      // Asked only after the address is proved, so naming a spent code tells nothing about who has an account. A wrong,
+      // unknown or expired code keeps the event's own refusal below.
+      if (standing === 'used') return new AppError(409, ErrorCodes.ADMISSION_CODE_USED, ADMISSION_CODE_USED_SENTENCE);
+    }
     return new AppError(403, ErrorCodes.EVENT_ADMISSION_REQUIRED, CALL_INVITATION_ONLY_SENTENCE, { admissionCode: true });
   }
   if (visibilityOf(event) === 'public') return null;

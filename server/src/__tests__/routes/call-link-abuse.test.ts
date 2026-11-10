@@ -74,6 +74,7 @@ jest.mock('../../services/session/event-admission.service', () => {
   const { AppError } = jest.requireActual('../../middleware/errors');
   return {
     normaliseAdmissionCode: actual.normaliseAdmissionCode,
+    ADMISSION_CODE_USED_SENTENCE: actual.ADMISSION_CODE_USED_SENTENCE,
     hashAdmissionCode: actual.hashAdmissionCode,
     redeemAdmissionCode: () => Promise.reject(new AppError(400, 'ADMISSION_CODE_INVALID', 'That admission code is not right.')),
     fanoutAdmissionChanged: jest.fn(),
