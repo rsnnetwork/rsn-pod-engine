@@ -10,6 +10,7 @@ import { query } from '../../db';
 import logger from '../../config/logger';
 import { updateSessionStatus } from './session.service';
 import { fanoutSessionCompleted } from '../../realtime/fanout';
+import { recordEventAudit } from '../audit/event-audit';
 
 /** How often the server looks for in-person events that are over. */
 export const IN_PERSON_ENDING_INTERVAL_MS = 60 * 1000;
@@ -42,6 +43,10 @@ export async function endFinishedInPersonEvents(): Promise<string[]> {
         startedAt: new Date(row.scheduled_at), endedAt: new Date(row.ends_at),
       });
       await fanoutSessionCompleted(row.id);
+      void recordEventAudit({
+        sessionId: row.id, actorId: null, action: 'event.completed', automatic: true,
+        reason: 'An in-person event ends at its scheduled end time',
+      });
       ended.push(row.id);
     } catch (err) {
       logger.warn({ err, sessionId: row.id }, 'In-person ending: could not end that one (will retry next tick)');

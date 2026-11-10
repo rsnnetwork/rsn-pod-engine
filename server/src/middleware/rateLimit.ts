@@ -689,6 +689,18 @@ export const eventChatReadLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// An event's audit trail (Part 2, 10 Nov 2026): organisers read a page of 50 rows; 60 a minute per member is far more than
+// anyone scrolls it. Keyed per member: the route signs in first.
+export const eventAuditReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-audit-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 export const eventChatWriteLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,

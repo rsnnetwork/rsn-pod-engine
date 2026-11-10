@@ -16,6 +16,7 @@ import * as blockService from '../block/block.service';
 import { normalizeDesignation, pairConfidence, profileCompleteness, withinCooldown } from './intent-signals';
 import { NotFoundError } from '../../middleware/errors';
 import { templateIdOf } from './matching-template-choice';
+import { recordEventAudit } from '../audit/event-audit';
 
 // ─── Default Weights ────────────────────────────────────────────────────────
 
@@ -1168,6 +1169,13 @@ export async function repairFutureRounds(
     { sessionId, fromRoundNumber, totalRounds, regeneratedRounds: regeneratedRounds.length, errors: errors.length, reason },
     'Phase 2.5D — future rounds repaired',
   );
+
+  if (regeneratedRounds.length > 0 || errors.length > 0) {
+    void recordEventAudit({
+      sessionId, actorId: null, action: 'match.repaired', automatic: true, round: fromRoundNumber, reason,
+      after: { regeneratedRounds, failedRounds: errors.map((e) => e.roundNumber) },
+    });
+  }
 
   return { regeneratedRounds, errors };
 }

@@ -53,6 +53,8 @@ export const E = {
   sessionPlan: (sessionId: string) => `session:${sessionId}:plan`,
   sessionChat: (sessionId: string) => `session:${sessionId}:chat`,
   sessionReactions: (sessionId: string) => `session:${sessionId}:reactions`,
+  /** Part 2 (10 Nov 2026): who did what to an event, for its organisers. */
+  sessionAudit: (sessionId: string) => `session:${sessionId}:audit`,
 
   // Match (in-event)
   match: (matchId: string) => `match:${matchId}`,

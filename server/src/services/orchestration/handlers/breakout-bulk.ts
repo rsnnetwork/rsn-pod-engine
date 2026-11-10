@@ -25,7 +25,7 @@ import logger from '../../../config/logger';
 import { query, transaction } from '../../../db';
 import { ParticipantStatus } from '@rsn/shared';
 import {
-  activeSessions, withSessionGuard, userRoom, emitRatingWindowOnce, refuseIfFormatLacks,
+  activeSessions, withSessionGuard, userRoom, emitRatingWindowOnce, refuseIfFormatLacks, getUserIdFromSocket,
 } from '../state/session-state';
 import {
   roomTimers, roomSyncIntervals, RoomTimerState, verifyHost, clearRoomTimers,
@@ -34,6 +34,8 @@ import {
 import * as sessionService from '../../session/session.service';
 import * as videoService from '../../video/video.service';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
+// Part 2 (10 Nov 2026) - manual rooms are attributed in the event's audit trail.
+import { recordEventAudit } from '../../audit/event-audit';
 
 // ─── Host dashboard refresh — injected lazily to avoid circular imports ───
 let _emitHostDashboard: ((sessionId: string) => Promise<void>) | null = null;
@@ -473,6 +475,13 @@ export async function handleHostCreateBreakoutBulk(
       }
     }
 
+    if (createdMatchIds.length > 0) {
+      void recordEventAudit({
+        sessionId, actorId: getUserIdFromSocket(socket), action: 'match.override', automatic: false,
+        round: activeSession.currentRound, subjectUserIds: rooms.flatMap((r) => r.participantIds ?? []),
+        reason: `Host created ${createdMatchIds.length} breakout room${createdMatchIds.length === 1 ? '' : 's'}`,
+      });
+    }
     logger.info(
       { sessionId, roomCount: rooms.length, createdMatchIds, sharedDurationSeconds, timerVisibility },
       'Host created bulk breakout rooms',
@@ -802,6 +811,10 @@ export async function handleHostAddToRoom(
 
     if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
 
+    void recordEventAudit({
+      sessionId, actorId: getUserIdFromSocket(socket), action: 'match.moved', automatic: false,
+      round: activeSession.currentRound, subjectUserIds: [userId], after: { matchId },
+    });
     logger.info({ sessionId, matchId, userId, members: members.length + 1 }, 'S25 — participant added to manual room');
   });
 }

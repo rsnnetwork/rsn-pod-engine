@@ -22,6 +22,7 @@ import { SessionStatus, resolveDisplayName, placeholderName } from '@rsn/shared'
 import {
   ActiveSession, activeSessions, withMatchGenerationLock, withSessionGuard,
   sessionRoom, userRoom, persistSessionState, refuseIfFormatLacks,
+  getUserIdFromSocket,
 } from '../state/session-state';
 import { verifyHost, getAllHostIds } from './host-actions';
 import * as matchingService from '../../matching/matching.service';
@@ -38,6 +39,8 @@ import { emitEntities } from '../../../realtime/emit';
 import { E } from '../../../realtime/entities';
 // Phase 5 — flag-gated versioned snapshot co-emit.
 import { emitStateSnapshot } from '../state/state-snapshot';
+// Part 2 (10 Nov 2026) - each host action on the matching board is attributed in the event's audit trail.
+import { recordEventAudit } from '../../audit/event-audit';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // transitionToRound lives in round-lifecycle.ts.
@@ -445,6 +448,9 @@ export async function handleHostGenerateMatches(
         );
         activeSession.pendingRoundNumber = nextRound;
         await sendMatchPreview(io, socket, data.sessionId, nextRound, activeSession.hostUserId);
+        void recordEventAudit({
+          sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.preview_generated', automatic: false, round: nextRound,
+        });
         // 27 May — re-sync the rest of the plan to the LIVE present roster so
         // the Event Plan strip mirrors the presence-gated engine, not the
         // roster the pre-plan was built for (non-fatal, replans scheduled only).
@@ -557,6 +563,9 @@ export async function handleHostGenerateMatches(
 
       // Send preview to host only (includes trio support + encounter history)
       await sendMatchPreview(io, socket, data.sessionId, nextRound, activeSession.hostUserId);
+      void recordEventAudit({
+        sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.preview_generated', automatic: false, round: nextRound,
+      });
       // 27 May — re-sync the remaining scheduled rounds to the LIVE present
       // roster so the Event Plan strip mirrors the presence-gated engine.
       await replanRoundsAfterPreviewEdit(io, data.sessionId, nextRound);
@@ -634,6 +643,9 @@ export async function handleHostConfirmRound(
     if (started) {
       activeSession.pendingRoundNumber = null;
       persistSessionState(data.sessionId, activeSession);
+      void recordEventAudit({
+        sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.round_confirmed', automatic: false, round: roundNumber,
+      });
     } else {
       socket.emit('error', { code: 'CONFIRM_ROUND_FAILED', message: 'Round did not start — try Match People again.' });
     }
@@ -729,6 +741,9 @@ export async function handleHostSwapMatch(
     // #14 — re-plan later rounds around the swapped round so the strip stays live.
     await replanRoundsAfterPreviewEdit(io, data.sessionId, roundNumber);
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.swapped', automatic: false, round: roundNumber, subjectUserIds: [data.userA, data.userB],
+    });
     logger.info({ sessionId: data.sessionId, userA: data.userA, userB: data.userB }, 'Host swapped match participants');
   } catch (err: any) {
     socket.emit('error', { code: 'SWAP_FAILED', message: err.message });
@@ -822,6 +837,9 @@ export async function handleHostExcludeFromRound(
     // #14 — re-plan later rounds around the edited round so the strip stays live.
     await replanRoundsAfterPreviewEdit(io, data.sessionId, roundNumber);
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.excluded', automatic: false, round: roundNumber, subjectUserIds: [data.userId],
+    });
     logger.info({ sessionId: data.sessionId, excludedUser: data.userId }, 'Host excluded participant from round');
   } catch (err: any) {
     socket.emit('error', { code: 'EXCLUDE_FAILED', message: err.message });
@@ -962,6 +980,9 @@ export async function handleHostRegenerateMatches(
       });
     }
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.regenerated', automatic: false, round: roundNumber,
+    });
     logger.info({ sessionId: data.sessionId, roundNumber }, 'Host regenerated matches');
   } catch (err: any) {
     socket.emit('error', { code: 'REGENERATE_FAILED', message: err.message });
@@ -1013,6 +1034,9 @@ export async function handleHostCancelPreview(
       sessionId: data.sessionId,
     });
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.preview_cancelled', automatic: false, round: roundNumber ?? null,
+    });
     logger.info({ sessionId: data.sessionId }, 'Host cancelled match preview');
   } catch (err: any) {
     logger.error({ err }, 'Error cancelling preview');
@@ -1046,6 +1070,9 @@ export async function handleHostConfirmMatches(
       roundNumber: activeSession.pendingRoundNumber,
     });
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.round_confirmed', automatic: false, round: activeSession.pendingRoundNumber, after: { stage: 'matches_announced', matchCount: matches.length },
+    });
     logger.info({ sessionId: data.sessionId, matchCount: matches.length }, 'Host confirmed matches — visual sent to participants');
   } catch (err: any) {
     logger.error({ err }, 'Error in handleHostConfirmMatches');

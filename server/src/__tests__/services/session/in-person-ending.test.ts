@@ -30,6 +30,13 @@ jest.mock('../../../realtime/fanout', () => ({
   __esModule: true,
 }));
 
+// The audit row for the ending is the audit module's own database write; its test is services/audit/event-audit.test.ts.
+const mockRecordAudit = jest.fn();
+jest.mock('../../../services/audit/event-audit', () => ({
+  recordEventAudit: (...args: unknown[]) => mockRecordAudit(...args),
+  __esModule: true,
+}));
+
 import { SessionStatus } from '@rsn/shared';
 import { endFinishedInPersonEvents, IN_PERSON_ENDING_INTERVAL_MS } from '../../../services/session/in-person-ending';
 
@@ -38,6 +45,7 @@ const END = new Date('2026-11-20T22:00:00.000Z');
 
 beforeEach(() => {
   mockQuery.mockReset();
+  mockRecordAudit.mockReset();
   mockUpdateSessionStatus.mockReset();
   mockUpdateSessionStatus.mockResolvedValue({});
   mockFanoutCompleted.mockReset();
@@ -70,6 +78,11 @@ describe('endFinishedInPersonEvents', () => {
     expect(mockFanoutCompleted.mock.calls).toEqual([['dinner'], ['walk']]);
     // Nothing else is written: no participants swept, no matches, no recap.
     expect(mockQuery).toHaveBeenCalledTimes(1);
+    // Each ending is attributed to nobody: the product ended it.
+    expect(mockRecordAudit.mock.calls.map((c) => c[0])).toEqual([
+      expect.objectContaining({ sessionId: 'dinner', actorId: null, action: 'event.completed', automatic: true }),
+      expect.objectContaining({ sessionId: 'walk', actorId: null, action: 'event.completed', automatic: true }),
+    ]);
   });
 
   it('one that fails is left for the next tick and the rest still end', async () => {

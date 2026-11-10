@@ -21,6 +21,8 @@ import {
   emitRatingWindowOnce, activeFormat, refuseIfFormatLacks, refuseIfNoVideoRoom,
 } from '../state/session-state';
 import { assertVideoRoom } from '../../session/video-room';
+// Part 2 (10 Nov 2026) - host actions are attributed in the event's audit trail.
+import { recordEventAudit } from '../../audit/event-audit';
 import { startSegmentTimer, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
 // WS2 (27 May remaining work) — shared survivor flow for early room ends.
 import { endRoomEarlyForSurvivors } from './room-end-early';
@@ -459,6 +461,9 @@ export async function handleHostStart(
       }
     }
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'event.started', automatic: false,
+    });
     // Host-controlled lobby: no auto-timer. Host must click "Start Round" manually.
     logger.info({ sessionId: data.sessionId }, 'Session started → LOBBY_OPEN (host-controlled)');
   } catch (err: any) {
@@ -839,6 +844,11 @@ export async function handleHostEnd(
       // End the current round — endRound() schedules the rating window timer
       // which in turn calls endRatingWindow() → multi-round transition logic
       await _endRound(io, data.sessionId, activeSession.currentRound);
+      if (data.endEvent) {
+        void recordEventAudit({
+          sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'event.completed', automatic: false, reason: 'Ended during a round; the event completes after its rating window',
+        });
+      }
       logger.info({ sessionId: data.sessionId }, 'Host ended active round — rating window started, normal flow continues');
       return;
     }
@@ -863,6 +873,11 @@ export async function handleHostEnd(
         '#4 — host ended during rating: closing rating window');
       // Direct (non-guard-wrapped) call — we already hold the session guard.
       await _endRatingWindow(io, data.sessionId, activeSession.currentRound);
+      if (data.endEvent) {
+        void recordEventAudit({
+          sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'event.completed', automatic: false, reason: 'Ended during a rating window',
+        });
+      }
       return;
     }
 
@@ -892,6 +907,9 @@ export async function handleHostEnd(
     }
 
     await _completeSession(io, data.sessionId);
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'event.completed', automatic: false,
+    });
     logger.info({ sessionId: data.sessionId }, 'Session ended by host');
   } catch (err: any) {
     socket.emit('error', { code: 'END_FAILED', message: err.message });
@@ -1133,6 +1151,9 @@ export async function handleHostRemoveParticipant(
     // saw stale state until the next 5s dashboard tick.
     if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
 
+    void recordEventAudit({
+      sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'match.excluded', automatic: false, subjectUserIds: [data.userId], reason: `Removed from the event: ${String(data.reason ?? '').slice(0, 300)}`,
+    });
     logger.info({ sessionId: data.sessionId, removedUserId: data.userId }, 'Participant removed by host');
   } catch (err: any) {
     socket.emit('error', { code: 'REMOVE_FAILED', message: err.message });
@@ -1923,6 +1944,10 @@ export async function handleHostMoveToRoom(
     // leaves zero active matches in the round, auto-end so we don't lock up.
     maybeAutoEndEmptyRound(sessionId);
 
+    void recordEventAudit({
+      sessionId, actorId: getUserIdFromSocket(socket), action: 'match.moved', automatic: false,
+      round: activeSession.currentRound, subjectUserIds: [userId], after: { targetMatchId, newMatchId },
+    });
     logger.info({ sessionId, userId, targetMatchId, newMatchId },
       'Host moved participant to another room');
   } catch (err: any) {
@@ -2574,6 +2599,7 @@ async function startSessionGuarded(sessionId: string, hostUserId: string): Promi
   }
 
   // Host-controlled lobby: no auto-timer. Host must click "Start Round" manually.
+  void recordEventAudit({ sessionId, actorId: session.hostUserId, action: 'event.started', automatic: false });
   logger.info({ sessionId }, 'Session started via REST → LOBBY_OPEN (host-controlled)');
 }
 
@@ -2689,6 +2715,7 @@ export async function endSession(
   }
 
   await withSessionGuard(sessionId, () => completeSession(io, sessionId));
+  void recordEventAudit({ sessionId, actorId: actor.userId, action: 'event.completed', automatic: false });
   logger.info({ sessionId, actorId: actor.userId, byHost: session.hostUserId === actor.userId }, 'Session ended via REST');
 }
 
@@ -3124,6 +3151,10 @@ export async function handleHostCreateBreakout(
       // an explicit emit — e.g. future code paths or race conditions).
       ensureManualDashboardInterval(io, sessionId);
 
+      void recordEventAudit({
+        sessionId, actorId: getUserIdFromSocket(socket), action: 'match.override', automatic: false,
+        round: activeSession.currentRound, subjectUserIds: participantIds, reason: 'Host created a breakout room',
+      });
       logger.info({ sessionId, matchId, participantIds, roomSlug, durationSeconds: duration }, 'Host created breakout room');
     } catch (err: any) {
       logger.error({ err }, 'Error in handleHostCreateBreakout');

@@ -18,6 +18,7 @@ import {
   EVENT_PRIVATE_SENTENCE, canSeeEvent, managesRequests, needsApproval, readEventAccessFacts, type EventAccessFacts,
 } from './event-access';
 import { registerParticipant } from './session.service';
+import { recordEventAudit } from '../audit/event-audit';
 
 export interface EventJoinRequest {
   id: string;
@@ -249,6 +250,9 @@ export async function approveRequest(
     return { request: approved.rows[0], isNewRegistration: participant.isNewRegistration };
   });
 
+  void recordEventAudit({
+    sessionId, actorId: approverId, action: 'admission.request_approved', automatic: false, subjectUserIds: [requesterId],
+  });
   const { title } = await eventTitleAndName(sessionId, requesterId);
   await ring([requesterId], 'approval', {
     title: 'Your request was approved',
@@ -273,6 +277,9 @@ export async function declineRequest(
     [sessionId, requesterId, approverId],
   );
   if (!result.rows[0]) throw new ConflictError(ErrorCodes.EVENT_REQUEST_ANSWERED, 'That request has already been answered.');
+  void recordEventAudit({
+    sessionId, actorId: approverId, action: 'admission.request_declined', automatic: false, subjectUserIds: [requesterId],
+  });
   fanoutJoinRequests(sessionId, requesterId).catch(() => {});
   return result.rows[0];
 }
