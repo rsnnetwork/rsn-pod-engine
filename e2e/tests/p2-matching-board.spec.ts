@@ -28,6 +28,7 @@ import { test, expect, type Browser, type Page } from '@playwright/test';
 import {
   DEVICE, RUN, api, cleanupRun, launch, noSidewaysScroll, openAs, seedPod, shot, tall, throwaway, where, type TestUser,
 } from '../helpers/sweep';
+import { expectReachable } from '../helpers/viewport-fit';
 
 const SLOW = 60_000;
 const TITLE = `${RUN} founders and funders`;
@@ -61,6 +62,28 @@ const chip = (page: Page, userId: string) => page.getByTestId(`board-person-${us
 const basketCount = (page: Page) => page.getByTestId('board-basket-count');
 const waiting = (n: number) => `${n} ${n === 1 ? 'person' : 'people'} waiting`;
 const roomLabel = (n: number) => `Room ${String(n).padStart(2, '0')}`;
+
+/**
+ * Drag a seated person into the basket as an organiser does on a board taller than the window: the basket is below the
+ * fold, so the drag starts on the person, the basket's drop zone pins itself to the foot of the window, and the person
+ * is dropped there. (A dragTo the basket itself scrolled the board mid-drag and the drag never started: preview smoke,
+ * 11 Nov.)
+ */
+async function dragToBasket(page: Page, userId: string): Promise<void> {
+  const source = chip(page, userId);
+  await source.scrollIntoViewIfNeeded();
+  const s = (await source.boundingBox())!;
+  await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(s.x + s.width / 2 + 12, s.y + s.height / 2 + 12, { steps: 4 });
+  const zone = page.getByTestId('board-basket-dropzone');
+  await expect(zone).toBeVisible();
+  // Inside the window and the topmost thing at its centre: never under the phone-width bottom bar.
+  const z = await expectReachable(page, zone, 'the basket drop zone');
+  await page.mouse.move(z.cx, z.cy, { steps: 8 });
+  await page.mouse.up();
+  await expect(zone).toBeHidden();
+}
 
 async function openRound(page: Page, n: number): Promise<void> {
   await page.getByRole('button', { name: `Round ${n}`, exact: true }).click();
@@ -176,7 +199,7 @@ test('desktop: generate, swap by drag, basket and redistribute, lock and regener
     const a = founderPairIn(r1, [locked.room]);
     lateFunder = a.funder;
     const waitingBefore = r1.basket.length;
-    await chip(page, a.founder).dragTo(page.getByTestId('board-basket'));
+    await dragToBasket(page, a.founder);
     await expect(basketCount(page)).toHaveText(waiting(waitingBefore + 1), { timeout: SLOW });
     await page.getByRole('button', { name: 'Redistribute' }).click();
     await expect(basketCount(page)).toHaveText(waiting(waitingBefore), { timeout: SLOW });
@@ -240,7 +263,7 @@ test('desktop: generate, swap by drag, basket and redistribute, lock and regener
 
     const r1 = roundOf(await board(), 1);
     const someone = founderPairIn(r1, [locked.room]).founder;
-    await chip(page, someone).dragTo(page.getByTestId('board-basket'));
+    await dragToBasket(page, someone);
     await expect(page.getByText(STALE)).toBeVisible({ timeout: SLOW });
     // The board the server sent back is on screen: the meeting the second tab unlocked reads unlocked here too.
     await expect(page.getByRole('button', { name: `Lock ${roomLabel(locked.room)}` })).toBeVisible();
