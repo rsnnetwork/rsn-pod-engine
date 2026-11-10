@@ -30,8 +30,10 @@ export async function markAlreadyMet(userId: string, targetId: string): Promise<
   );
 }
 
-export async function unmarkAlreadyMet(userId: string, targetId: string): Promise<void> {
-  await query(`DELETE FROM already_met WHERE user_id = $1 AND target_user_id = $2`, [userId, targetId]);
+/** Whether a mark was really removed: unmarking someone who was not marked changes nothing. */
+export async function unmarkAlreadyMet(userId: string, targetId: string): Promise<boolean> {
+  const r = await query(`DELETE FROM already_met WHERE user_id = $1 AND target_user_id = $2`, [userId, targetId]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 export async function isAlreadyMet(userId: string, targetId: string): Promise<boolean> {

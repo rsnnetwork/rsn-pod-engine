@@ -100,7 +100,7 @@ test.describe('F1 Already met', () => {
     await expect(page.getByText('is marked as met')).toBeVisible();
     await expect(page.getByText('You marked as met').first()).toBeVisible();
     await more.click();
-    await expect(page.getByRole('button', { name: 'Marked as met. Undo' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Marked as met · Undo' })).toBeVisible();
     await page.keyboard.press('Escape');
     // Still a stranger as far as the platform goes: the bar still offers a meeting request.
     await expect(page.getByRole('button', { name: 'Meet' })).toBeVisible();
@@ -129,7 +129,7 @@ test.describe('F1 Already met', () => {
     // 4. Undo brings B back.
     await gotoRetry(page, `${APP}/people/${b.id}`);
     await page.getByRole('button', { name: 'More' }).click();
-    await page.getByRole('button', { name: 'Marked as met. Undo' }).click();
+    await page.getByRole('button', { name: 'Marked as met · Undo' }).click();
     await expect(page.getByText('can be suggested to you again')).toBeVisible();
     await gotoRetry(page, `${APP}/`);
     await expect(cardOf(page, b)).toBeVisible({ timeout: 60_000 });

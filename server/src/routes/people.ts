@@ -17,7 +17,7 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { peopleReadLimiter, peopleWriteLimiter } from '../middleware/rateLimit';
 import { fanoutUserEntity } from '../realtime/fanout';
-import { recomputeAgentsForUser } from '../services/matching/agent-matching.service';
+import { rescoreAgentsCoalesced } from '../services/matching/agent-matching.service';
 import * as alreadyMet from '../services/people/already-met.service';
 import * as responses from '../services/people/person-response.service';
 import * as outcomes from '../services/people/meeting-outcome.service';
@@ -196,11 +196,11 @@ router.delete(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.userId;
-      await alreadyMet.unmarkAlreadyMet(userId, req.params.userId);
+      const removed = await alreadyMet.unmarkAlreadyMet(userId, req.params.userId);
       void fanoutUserEntity(userId);
-      // The member's searches kept no result for this person while they were marked: rescore them (it never
-      // throws), then tell the member's screens again so the person is back without a refresh.
-      void recomputeAgentsForUser(userId).then(() => fanoutUserEntity(userId));
+      // The member's searches kept no result for this person while they were marked: rescore them (coalesced, and
+      // only when a mark was really removed), then tell the member's screens again so the person is back without a refresh.
+      if (removed) void rescoreAgentsCoalesced(userId).then(() => fanoutUserEntity(userId));
       res.json({ success: true, data: { alreadyMet: false } } as ApiResponse);
     } catch (err) {
       next(err);

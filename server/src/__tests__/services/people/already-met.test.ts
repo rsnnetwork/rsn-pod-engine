@@ -41,6 +41,11 @@ describe('marking someone as already met', () => {
     expect(del[1]).toEqual(['u-a', 'u-b']);
   });
 
+  it('unmarking someone who was not marked reports that nothing was removed', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    expect(await unmarkAlreadyMet('u-a', 'u-b')).toBe(false);
+  });
+
   it('refuses yourself and an unknown member, and writes nothing for either', async () => {
     await expect(markAlreadyMet('u-a', 'u-a')).rejects.toMatchObject({ statusCode: 400 });
     expect(mockQuery).not.toHaveBeenCalled();
@@ -49,7 +54,8 @@ describe('marking someone as already met', () => {
   });
 
   it('unmarking deletes this member\'s mark on this person only, and reads back', async () => {
-    await unmarkAlreadyMet('u-a', 'u-b');
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    expect(await unmarkAlreadyMet('u-a', 'u-b')).toBe(true);
     expect(flat(mockQuery.mock.calls[0][0])).toMatch(/DELETE FROM already_met WHERE user_id = \$1 AND target_user_id = \$2/);
     expect(mockQuery.mock.calls[0][1]).toEqual(['u-a', 'u-b']);
     mockQuery.mockResolvedValueOnce({ rows: [{ marked: true }] });
@@ -140,7 +146,7 @@ describe('the route and the migration', () => {
     }
     // Unmarking restores the member's searches, which a mark emptied of this person.
     const del = s.slice(s.indexOf("router.delete(\n  '/:userId/already-met'"));
-    expect(del).toContain('recomputeAgentsForUser(userId)');
+    expect(del).toContain('if (removed) void rescoreAgentsCoalesced(userId)');
   });
 
   it('migration 134 makes the table the brief names, without transaction control', () => {

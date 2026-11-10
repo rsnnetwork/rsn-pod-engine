@@ -64,7 +64,7 @@ export default function ProfileMoreMenu({ onBlock, onReport, blocking, alreadyMe
               type="button"
               onClick={choose(alreadyMet.onToggle)}
               disabled={alreadyMet.pending}
-              aria-label={alreadyMet.marked ? 'Marked as met. Undo' : 'Already met'}
+             
               className={cn(ITEM, 'font-bold disabled:cursor-default disabled:opacity-60')}
             >{alreadyMet.marked ? 'Marked as met · Undo' : 'Already met'}</button>
           )}

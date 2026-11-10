@@ -202,6 +202,32 @@ export async function recomputeAgentsForUser(userId: string): Promise<void> {
   }
 }
 
+// One rescore per member at a time (11 Nov 2026). A request that arrives while one is running does not start a second:
+// it marks the running one to go round once more when it ends, so any number of requests in a burst cost at most two runs.
+const rescoreRuns = new Map<string, { again: boolean; done: Promise<void> }>();
+
+/** recomputeAgentsForUser, coalesced per member: see rescoreRuns. Resolves when the run that covers this call has finished. */
+export function rescoreAgentsCoalesced(userId: string): Promise<void> {
+  const running = rescoreRuns.get(userId);
+  if (running) {
+    running.again = true;
+    return running.done;
+  }
+  const run = { again: false, done: Promise.resolve() };
+  rescoreRuns.set(userId, run);
+  run.done = (async () => {
+    try {
+      do {
+        run.again = false;
+        await recomputeAgentsForUser(userId);
+      } while (run.again);
+    } finally {
+      rescoreRuns.delete(userId);
+    }
+  })();
+  return run.done;
+}
+
 /**
  * A new member finished onboarding, so every OTHER member's active agents may
  * now have a new candidate. Rather than re-scoring the whole network, score the
