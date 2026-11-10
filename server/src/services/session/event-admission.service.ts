@@ -93,6 +93,20 @@ async function usersWithEmails(emails: string[], client?: PoolClient): Promise<s
   return result.rows.map((r) => r.id);
 }
 
+/**
+ * Of the members with this address, the ones holding a place in this event (not removed, not left): the only people an
+ * admission audit row may name, as listAdmissionEntries names only them (fix round 2). An address on its own never says
+ * whether it belongs to an RSN account.
+ */
+async function placeHoldersWithEmail(sessionId: string, email: string, client: PoolClient): Promise<string[]> {
+  const result = await client.query<{ id: string }>(
+    `SELECT u.id FROM users u JOIN session_participants sp ON sp.user_id = u.id
+      WHERE lower(u.email) = $2 AND sp.session_id = $1 AND sp.status NOT IN ('removed', 'left')`,
+    [sessionId, email],
+  );
+  return result.rows.map((r) => r.id);
+}
+
 // ─── Who may change it ───────────────────────────────────────────────────────
 
 interface EventRow {
@@ -259,12 +273,14 @@ export async function revokeAdmissionEmail(sessionId: string, actor: Actor, entr
       if (exists.rows.length === 0) throw new AppError(404, ErrorCodes.ADMISSION_ENTRY_NOT_FOUND, "We couldn't find that address on the list.");
       return null;
     }
-    const subjects = await usersWithEmails([row.email], client);
+    // The audit row names the address and, only if they hold a place here, its person (fix round 2: the organisers'
+    // audit view must not say which addresses belong to RSN accounts). The screens to tell are every account with the
+    // address: each is sent its own tag, which tells nobody else anything.
     await recordEventAudit({
       sessionId, actorId: actor.userId, action: 'admission.email_revoked', automatic: false,
-      subjectUserIds: subjects, before: { entryId },
+      subjectUserIds: await placeHoldersWithEmail(sessionId, row.email, client), before: { entryId, email: row.email },
     }, client);
-    return subjects;
+    return usersWithEmails([row.email], client);
   });
   if (people) await fanoutAdmissionChanged(sessionId, { everyone: true, podId: event.pod_id, people });
 }

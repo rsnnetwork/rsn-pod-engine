@@ -52,6 +52,7 @@ interface Entry { id: string; session_id: string; email: string; group_key: stri
 const entries: Entry[] = [];
 const users = new Map<string, string>([['ana@x.io', 'user-ana'], ['bo@x.io', 'user-bo']]);
 const audit: Array<{ action: string; details: Record<string, unknown> }> = [];
+const placeHolders = new Set<string>(['user-ana']);
 const allSql: string[] = [];
 let seq = 0;
 
@@ -91,6 +92,11 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
   }
   if (flat.startsWith('SELECT id FROM users WHERE lower(email) = ANY')) {
     return { rows: (params[0] as string[]).filter((e) => users.has(e)).map((e) => ({ id: users.get(e) })) };
+  }
+  // Fix round 2: the members with an address who hold a place in the event (only user-ana holds one here).
+  if (flat.startsWith('SELECT u.id FROM users u JOIN session_participants sp ON sp.user_id = u.id')) {
+    const holder = users.get(params[1] as string);
+    return { rows: holder && placeHolders.has(holder) ? [{ id: holder }] : [] };
   }
   if (flat.startsWith('UPDATE event_admission_entries SET revoked_at = NOW()')) {
     const e = entries.find((r) => r.id === params[0] && r.session_id === params[1] && !r.revoked_at);
@@ -254,18 +260,41 @@ describe('addAdmissionEmails', () => {
 });
 
 describe('revokeAdmissionEmail and the list', () => {
-  it('revokes once (audited with its person, who is told), a second revoke changes nothing, an unknown entry is 404', async () => {
+  it('revokes once (audited with its person, who holds a place, and told), a second revoke changes nothing, an unknown entry is 404', async () => {
     await addAdmissionEmails(EVENT, HOST, { emails: ['ana@x.io'], source: 'organiser' });
     const ana = entries[0];
     audit.length = 0;
     mockEmit.mockClear();
     await revokeAdmissionEmail(EVENT, HOST, ana.id);
     expect(ana.revoked_at).not.toBeNull();
-    expect(audit).toEqual([{ action: 'admission.email_revoked', details: expect.objectContaining({ subjectUserIds: ['user-ana'] }) }]);
+    expect(audit).toEqual([{ action: 'admission.email_revoked', details: expect.objectContaining({
+      subjectUserIds: ['user-ana'], before: { entryId: ana.id, email: 'ana@x.io' },
+    }) }]);
     expect(mockEmit).toHaveBeenCalledWith(expect.anything(), ['user-ana'], [`session:${EVENT}`, 'user:user-ana:sessions']);
     await revokeAdmissionEmail(EVENT, HOST, ana.id);
     expect(audit).toHaveLength(1);
     await expect(revokeAdmissionEmail(EVENT, HOST, 'entry-x')).rejects.toMatchObject({ statusCode: 404, code: 'ADMISSION_ENTRY_NOT_FOUND' });
+  });
+
+  it('fix round 2: revoking the address of an account with no place here names nobody in the audit row', async () => {
+    // bo@x.io belongs to an RSN account (user-bo) that holds no place in the event: the row says the address only, so
+    // an organiser's audit view never tells them which addresses are accounts. user-bo's own screens are still told.
+    await addAdmissionEmails(EVENT, HOST, { emails: ['bo@x.io', 'nobody@x.io'], source: 'paste' });
+    audit.length = 0;
+    mockEmit.mockClear();
+    await revokeAdmissionEmail(EVENT, HOST, entries.find((e) => e.email === 'bo@x.io')!.id);
+    await revokeAdmissionEmail(EVENT, HOST, entries.find((e) => e.email === 'nobody@x.io')!.id);
+    expect(audit.map((a) => a.details.subjectUserIds)).toEqual([[], []]);
+    expect(audit.map((a) => (a.details.before as { email: string }).email)).toEqual(['bo@x.io', 'nobody@x.io']);
+    expect(JSON.stringify(audit)).not.toContain('user-bo');
+    expect(mockEmit).toHaveBeenCalledWith(expect.anything(), ['user-bo'], [`session:${EVENT}`, 'user:user-bo:sessions']);
+  });
+
+  it('fix round 2: adding addresses audits counts only, never an account', async () => {
+    audit.length = 0;
+    await addAdmissionEmails(EVENT, HOST, { emails: ['ana@x.io', 'bo@x.io'], source: 'paste' });
+    expect(audit[0].details.subjectUserIds).toEqual([]);
+    expect(JSON.stringify(audit)).not.toMatch(/user-ana|user-bo/);
   });
 
   it('lists by address with status, searches, and pages by cursor', async () => {
@@ -417,6 +446,21 @@ describe('registerParticipant and admitted_via', () => {
       const sql = await register(visibility, null, { in_audience: true });
       expect(sql.some((s) => s.text.includes('admitted_via'))).toBe(false);
       expect(sql.some((s) => s.text.startsWith('INSERT INTO session_participants'))).toBe(true);
+    }
+  });
+});
+
+describe('fix round 2: no admission audit row names an account from an address', () => {
+  it('every recordEventAudit call names only the actor, a redeemer, or place holders, never usersWithEmails', () => {
+    const fs = jest.requireActual('fs') as typeof import('fs');
+    const path = jest.requireActual('path') as typeof import('path');
+    const src = fs.readFileSync(path.join(__dirname, '../../../services/session/event-admission.service.ts'), 'utf8');
+    const calls = src.split('recordEventAudit({').slice(1).map((rest) => rest.slice(0, rest.indexOf('}, ')));
+    expect(calls).toHaveLength(6);
+    for (const call of calls) {
+      expect(call).not.toContain('usersWithEmails');
+      const subjects = call.match(/subjectUserIds: ([^,\n]+)/)?.[1] ?? 'none';
+      expect(['none', 'await placeHoldersWithEmail(sessionId', 'subjects', '[userId]']).toContain(subjects.trim());
     }
   });
 });

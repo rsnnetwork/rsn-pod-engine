@@ -660,7 +660,10 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     podId: input.podId || null,
     sessionId: input.sessionId || null,
     circleId: input.circleId || null,
-    maxUses: input.maxUses || 2,
+    // Part 2 Task 4 fix round 2: an invite that names an address is for that one person, so it is single-use unless
+    // the caller asks otherwise (an invitation-only event counts only a single-use personal invite). Every screen
+    // already sends 1; an open link keeps the old default.
+    maxUses: input.maxUses || (input.inviteeEmail ? 1 : 2),
     expiresAt,
   };
   let inserted = await insertPendingInvite(pending);
