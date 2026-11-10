@@ -210,7 +210,9 @@ describe('the RSN Call link', () => {
   it('matches Task 6\'s organiser route on main: { code, path, url } from the shared path, and rotate tells the organisers', () => {
     const service = fs.readFileSync(path.join(__dirname, '../../services/session/call-link.service.ts'), 'utf8');
     expect(service).toMatch(/Promise<\{ code: string; path: string; url: string \}>/);
-    expect(service).toMatch(/return \{ code, path: callLinkPath\(code\), url: `\$\{config\.clientUrl\}\$\{callLinkPath\(code\)\}` \};/);
+    // The path is the shared callLinkPath; the url's site is the server's choice (fa78a182: the asking site when it is
+    // one of ours), and the card never shows it anyway (it shows this site's origin and the same path).
+    expect(service).toMatch(/return \{ code, path: callLinkPath\(code\), url: `\$\{\w+\}\$\{callLinkPath\(code\)\}` \};/);
     expect(service).toMatch(/emitEntities\(io, organisers, \[E\.sessionCallLink\(sessionId\), E\.session\(sessionId\)\]\)/);
     const routes = fs.readFileSync(path.join(__dirname, '../../routes/call-links.ts'), 'utf8');
     expect(routes).toMatch(/sessionCallLinkRoutes\.get\('\/:id\/call-link'/);
