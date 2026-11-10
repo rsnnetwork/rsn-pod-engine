@@ -143,7 +143,7 @@ interface SessionLiveState {
   breakoutTimerHidden: boolean;
   matchPreview: {
     roundNumber: number;
-    matches: { participantA: { userId: string; displayName: string }; participantB: { userId: string; displayName: string }; participantC?: { userId: string; displayName: string }; isTrio?: boolean; metBefore?: boolean; timesMet?: number }[];
+    matches: { participantA: { userId: string; displayName: string }; participantB: { userId: string; displayName: string }; participantC?: { userId: string; displayName: string }; isTrio?: boolean; metBefore?: boolean; timesMet?: number; locked?: boolean }[];
     byeParticipants: { userId: string; displayName: string }[];
     warnings?: string[];
     // 26 May (#9-UI) — true when the engine had to reuse already-met pairs.
@@ -161,6 +161,8 @@ interface SessionLiveState {
       participants: { userId: string; displayName: string; isConnected: boolean }[];
       isTrio: boolean;
       isManual?: boolean;
+      // Part 2 Tasks 9 and 13: a meeting locked on the matching board (regenerate and repairs keep it).
+      locked?: boolean;
       // Bug 18 (April 19) — per-manual-room timer. null for algorithm
       // rooms (they share the session-level round timer).
       roomEndsAt?: string | null;

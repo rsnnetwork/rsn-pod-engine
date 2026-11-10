@@ -3,6 +3,7 @@ import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { Clock, Wifi, WifiOff, UserMinus, Radio, AlertTriangle, ArrowRightLeft, UserPlus } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useConfirm } from '@/hooks/useConfirm';
+import { LOCKED_LABEL, LOCKED_MEETING } from '@/features/schedule/locked-meeting';
 
 interface Props { sessionId: string; }
 
@@ -261,6 +262,12 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                     Room {idx + 1}
                     {room.isTrio && <span className="ml-1 text-blue-500">(Trio)</span>}
                     {room.isManual && <span className="ml-1 text-purple-500">(Manual)</span>}
+                    {/* Part 2 Tasks 9 and 13: a meeting locked on the matching board. */}
+                    {room.locked && (
+                      <span data-testid="room-locked" title={LOCKED_MEETING} className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold normal-case text-emerald-700">
+                        {LOCKED_LABEL}
+                      </span>
+                    )}
                   </span>
                   <div className="flex items-center gap-1.5">
                     {/* Bug 18 — inline per-room timer when manual durations vary

@@ -38,6 +38,7 @@ import LiveSessionPage from '@/features/live/LiveSessionPage';
 import SessionGuard from '@/features/live/SessionGuard';
 import HostDashboardPage from '@/features/host/HostDashboardPage';
 import RecapPage from '@/features/sessions/RecapPage';
+import MatchingBoardPage from '@/features/schedule/MatchingBoardPage';
 import MeetingDetailPage from '@/features/meetings/MeetingDetailPage';
 import MessagesPage from '@/features/messages/MessagesPage';
 import MeetPage from '@/features/messages/MeetPage';
@@ -242,6 +243,8 @@ export default function App() {
         <Route path="/sessions/new" element={<CreateSessionPage />} />
         <Route path="/sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
+        {/* The organisers' matching board of a rounds event (10 Nov 2026 spec, Part 2 Task 13). */}
+        <Route path="/sessions/:sessionId/board" element={<MatchingBoardPage />} />
         {/* A meeting two members agreed (26 Oct 2026), under Events. */}
         <Route path="/meetings/:meetingId" element={<MeetingDetailPage />} />
         <Route path="/encounters" element={<EncounterHistoryPage />} />
