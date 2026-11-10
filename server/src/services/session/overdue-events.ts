@@ -9,7 +9,9 @@
 //   - one that never started is marked Ended, with the completed fan-out so every page moves it, and no recap email
 //     (nobody met anybody).
 // In-person events are not this job's: they have their own ender (in-person-ending.ts). An event with no date has no
-// end, and a completed or cancelled one is already over.
+// end, and a completed or cancelled one is already over (and stays as it is). A draft (Part 2 Task 2) was never
+// announced, so nobody is waiting on it: it stays a draft for its organisers to publish, move or delete. An archived
+// event is over by definition and is never touched.
 //
 // Three modes (config.overdueEventClose): off, report (log the events it would close, write nothing: the default, so
 // production shows its list before it is trusted; an unchanged list is logged again at most every 30 minutes), end.
@@ -92,7 +94,7 @@ async function completeLiveEvent(sessionId: string): Promise<boolean> {
 async function endNeverStartedEvent(sessionId: string): Promise<boolean> {
   const claimed = await query<{ id: string }>(
     `UPDATE sessions SET status = 'completed', ended_at = NOW(), lobby_room_id = NULL
-      WHERE id = $1 AND status = 'scheduled'
+      WHERE id = $1 AND status = 'scheduled' AND publication = 'published' AND archived_at IS NULL
       RETURNING id`,
     [sessionId],
   );
@@ -120,6 +122,7 @@ export async function closeOverdueEvents(
       WHERE status IN ('scheduled', 'lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby')
         AND scheduled_at IS NOT NULL
         AND event_format IS DISTINCT FROM 'physical_event'
+        AND publication = 'published' AND archived_at IS NULL
         AND scheduled_at <= $1::timestamptz - make_interval(mins => $2::int)
       ORDER BY scheduled_at
       LIMIT ${CANDIDATES_PER_TICK}`,

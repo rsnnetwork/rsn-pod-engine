@@ -22,6 +22,7 @@ import { canMessage } from '../dm/dm.service';
 import { getResponse } from './person-response.service';
 import { isAlreadyMet } from './already-met.service';
 import { canVideoCall } from '../dm/call-eligibility';
+import { eventListedForSql } from '../session/event-access';
 
 const MESSAGE_REFUSALS: readonly MessageRefusal[] = ['self', 'blocked', 'not_mutual', 'no_encounter'];
 const refusalOf = (reason: string | undefined): MessageRefusal | null =>
@@ -155,6 +156,7 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
         WHERE x.user_id = $1 AND y.user_id = $2
           AND x.status NOT IN ('removed', 'left', 'no_show') AND y.status NOT IN ('removed', 'left', 'no_show')
           AND s.status = 'scheduled' AND s.scheduled_at > NOW()
+          AND ${eventListedForSql('s', '$1')}
         ORDER BY s.scheduled_at ASC LIMIT 3`,
       [viewerId, targetId]),
     findPath(viewerId, targetId),

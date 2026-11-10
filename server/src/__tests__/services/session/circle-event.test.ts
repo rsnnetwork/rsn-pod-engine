@@ -93,8 +93,10 @@ describe('production\'s create body (no circleId)', () => {
     arm();
     await createSession(DIRECTOR, base, UserRole.MEMBER);
     const insert = call(/INSERT INTO sessions/)!;
-    expect(insert[0]).toMatch(/visibility, circle_id\)/);
-    expect(insert[1].slice(8)).toEqual([null, null]);
+    expect(insert[0]).toMatch(/visibility, circle_id,/);
+    expect(insert[1].slice(8, 10)).toEqual([null, null]);
+    // Part 2 Task 2: production's body sends no lifecycle fields, so the event is published at once, as today.
+    expect(insert[1].slice(10)).toEqual(['published', null]);
     expect(sqlSent().some((sql) => /circles|circle_members|INSERT INTO notifications/.test(sql))).toBe(false);
   });
 });
@@ -124,10 +126,10 @@ describe('a circle event on create', () => {
   it('a manager\'s event names the circle and is private unless a visibility is sent', async () => {
     arm({ circle: CIRCLE, manager: true });
     await createSession(DIRECTOR, { ...base, circleId: CIRCLE_ID }, UserRole.MEMBER);
-    expect(call(/INSERT INTO sessions/)![1].slice(8)).toEqual(['private', CIRCLE_ID]);
+    expect(call(/INSERT INTO sessions/)![1].slice(8, 10)).toEqual(['private', CIRCLE_ID]);
     mockQuery.mockClear();
     await createSession(DIRECTOR, { ...base, circleId: CIRCLE_ID, visibility: 'public' }, UserRole.MEMBER);
-    expect(call(/INSERT INTO sessions/)![1].slice(8)).toEqual(['public', CIRCLE_ID]);
+    expect(call(/INSERT INTO sessions/)![1].slice(8, 10)).toEqual(['public', CIRCLE_ID]);
   });
 
   it('rings active members but the creator in one INSERT … SELECT of event_invite, pushes the bell, and sends no email', async () => {
@@ -152,7 +154,7 @@ describe('a circle event on create', () => {
   it('a platform admin needs no manager row', async () => {
     arm({ circle: CIRCLE, manager: false });
     await createSession(DIRECTOR, { ...base, circleId: CIRCLE_ID }, UserRole.ADMIN);
-    expect(call(/INSERT INTO sessions/)![1].slice(8)).toEqual(['private', CIRCLE_ID]);
+    expect(call(/INSERT INTO sessions/)![1].slice(8, 10)).toEqual(['private', CIRCLE_ID]);
   });
 });
 
@@ -207,6 +209,7 @@ describe('the audience fragment', () => {
     const facts: EventAccessFacts = {
       visibility: 'private', podId: POD_ID, podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
       inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
+      publication: 'published', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
     };
     expect(canSeeEvent(facts, UserRole.MEMBER)).toBe(true);
     expect(canRegister(facts, UserRole.MEMBER)).toEqual({ ok: true, addToPod: false });

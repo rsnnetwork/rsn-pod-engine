@@ -273,6 +273,15 @@ const cases: EmailCase[] = [
       joinUrl: 'https://app.rsn.network/meet/c1?scheduled=1&kind=video', eventsUrl: 'https://app.rsn.network/sessions',
     }),
   },
+  // Part 2 Task 2: an event cancelled before it started.
+  {
+    fn: 'sendEventCancelledEmail', label: 'a cancelled event', subject: 'Cancelled: Founders breakfast',
+    brandLine: MEET,
+    run: () => emailService.sendEventCancelledEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', hostName: 'Bo', when: 'Thursday 5 November, 18:00 (CET)',
+      reason: 'The venue closed.', link: 'https://app.rsn.network/sessions/s1',
+    }),
+  },
 ];
 
 const count = (haystack: string, pattern: RegExp) => (haystack.match(pattern) ?? []).length;

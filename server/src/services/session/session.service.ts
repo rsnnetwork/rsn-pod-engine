@@ -2,6 +2,7 @@
 // Handles session CRUD, participant registration, and session state management.
 
 import { v4 as uuid } from 'uuid';
+import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
@@ -10,6 +11,7 @@ import {
   UserRole, hasRoleAtLeast, ErrorCode, ErrorCodes, EventFormat, PodType, PodStatus,
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
   liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS, type SessionCircle,
+  type EventPublication,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
@@ -19,8 +21,12 @@ import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-ac
 import { assertTemplateChoice, templateKeepable } from '../matching/matching-template-choice';
 import { assertVideoRoom } from './video-room';
 import { LIVE_STATUSES, tokenMainRoomOf } from './main-room';
-import { canRegister, publicEventsSql, readEventAccessFacts, visibleEventsSql } from './event-access';
+import {
+  archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, registrationNotOpenRefusal,
+  runsEvent, visibleEventsSql,
+} from './event-access';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
+import { recordEventAudit } from '../audit/event-audit';
 
 // ─── Column helpers ─────────────────────────────────────────────────────────
 
@@ -33,6 +39,12 @@ const SESSION_COLUMNS = `
   event_format AS "format",
   visibility,
   circle_id AS "circleId",
+  publication,
+  published_at AS "publishedAt",
+  registration_opens_at AS "registrationOpensAt",
+  archived_at AS "archivedAt",
+  cancelled_at AS "cancelledAt",
+  cancel_reason AS "cancelReason",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
@@ -142,10 +154,16 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   const visibility = input.visibility ?? (circle ? 'private' : null);
 
   const sessionId = uuid();
+  // Part 2 Task 2 (D1): a draft is seen only by the people who run it until it is published. Production's form sends
+  // neither field: the event is published at once, as today, and registration opens with it.
+  const publication: EventPublication = input.publication ?? 'published';
+  const registrationOpensAt = input.registrationOpensAt ?? null;
 
   const result = await query<Session>(
-    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility, circle_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility, circle_id,
+                           publication, published_at, registration_opens_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+             $11, CASE WHEN $11::text = 'published' THEN NOW() END, $12)
      RETURNING ${SESSION_COLUMNS}`,
     [
       sessionId,
@@ -159,6 +177,8 @@ export async function createSession(userId: string, input: CreateSessionInput, u
       // T11 (1 Nov 2026): who can join. Production's form sends none: NULL, the event follows its pod as before.
       visibility,
       circle?.id ?? null,
+      publication,
+      registrationOpensAt,
     ]
   );
 
@@ -169,8 +189,8 @@ export async function createSession(userId: string, input: CreateSessionInput, u
     [sessionId, userId]
   );
 
-  // The circle's members are rung (no email) and their pages told.
-  if (circle) await announceCircleEvent({ sessionId, actorId: userId, circle });
+  // The circle's members are rung (no email) and their pages told. A draft rings nobody: publishing it does.
+  if (circle && publication === 'published') await announceCircleEvent({ sessionId, actorId: userId, circle });
 
   logger.info({ sessionId, podId: input.podId, userId, circleId: circle?.id }, 'Session created');
   return result.rows[0];
@@ -301,7 +321,10 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     values
   );
 
-  if (circleChanges) await announceCircleEvent({ sessionId, actorId: userId, circle: namedCircle, previousCircleId });
+  // A draft's circle is told nothing yet (Part 2 Task 2): publishing it rings the circle it names then.
+  if (circleChanges && session.publication !== 'draft') {
+    await announceCircleEvent({ sessionId, actorId: userId, circle: namedCircle, previousCircleId });
+  }
 
   return result.rows[0];
 }
@@ -313,10 +336,20 @@ export async function listSessions(params: {
   status?: SessionStatus;
   page?: number;
   pageSize?: number;
+  /** Part 2 Task 2: who is asking. The route always passes it; a pod's list is then held to the lifecycle rule below. */
+  viewerId?: string;
+  /** Part 2 Task 2: the viewer is a platform admin, who sees every event, drafts included, in every list. */
+  viewerIsAdmin?: boolean;
+  /**
+   * Part 2 Task 2: the archived events instead of the default list. A member gets the ones they ran or held a place
+   * in; an admin gets every archived event.
+   */
+  archived?: boolean;
 }): Promise<{ sessions: Session[]; total: number }> {
   const page = params.page || 1;
   const pageSize = Math.min(params.pageSize || 20, 100);
   const offset = (page - 1) * pageSize;
+  const archived = params.archived === true;
 
   let whereClause = 'WHERE 1=1';
   const values: unknown[] = [];
@@ -326,18 +359,31 @@ export async function listSessions(params: {
     whereClause += ` AND s.pod_id = $${paramIdx}`;
     values.push(params.podId);
     paramIdx++;
+    // Part 2 Task 2 (D1): a member reading a pod's events sees no one else's draft and no archived event (unless they
+    // asked for the archived ones they took part in). An admin's pod list is today's, archived filter aside.
+    if (params.viewerId && !params.viewerIsAdmin) {
+      whereClause += ` AND ${archived ? archivedEventsSql('s', `$${paramIdx}`) : eventListedForSql('s', `$${paramIdx}`)}`;
+      values.push(params.viewerId);
+      paramIdx++;
+    } else if (archived) {
+      whereClause += ' AND s.archived_at IS NOT NULL';
+    }
   } else if (params.isAdmin) {
-    // Admins see all sessions across all pods
+    // Admins see all sessions across all pods (Part 2 Task 2: drafts and archived ones too, or only the archived ones)
+    if (archived) whereClause += ' AND s.archived_at IS NOT NULL';
   } else if (params.userId) {
     // T2 (1 Nov 2026), D1: the events this member may open, and only those (canViewSession's rule). An
     // invite-only pod's events were listed to everyone, who were then refused on open. T11: an event with its own
     // visibility follows it (a private one is listed only to its audience, invitees and participants); NULL as T2.
-    whereClause += ` AND ${visibleEventsSql('s', `$${paramIdx}`)}`;
+    // Part 2 Task 2: visibleEventsSql leaves out other people's drafts and every archived event; the archived list is
+    // the archived events they ran or held a place in.
+    whereClause += ` AND ${archived ? archivedEventsSql('s', `$${paramIdx}`) : visibleEventsSql('s', `$${paramIdx}`)}`;
     values.push(params.userId);
     paramIdx++;
   } else {
-    // Nobody asking: only public pods' events (D1: an invite-only pod's events open to nobody outside it)
-    whereClause += ` AND ${publicEventsSql('s')}`;
+    // Nobody asking: only public pods' events (D1: an invite-only pod's events open to nobody outside it). Nobody
+    // asking has taken part in nothing, so has no archived list.
+    whereClause += archived ? ' AND FALSE' : ` AND ${publicEventsSql('s')}`;
   }
 
   if (params.status) {
@@ -361,6 +407,8 @@ export async function listSessions(params: {
             s.event_format AS "format",
             s.visibility,
             s.circle_id AS "circleId",
+            s.publication, s.registration_opens_at AS "registrationOpensAt",
+            s.archived_at AS "archivedAt", s.cancelled_at AS "cancelledAt",
             p.name AS "podName",
             u.display_name AS "hostDisplayName"
      FROM sessions s
@@ -425,6 +473,21 @@ export async function registerParticipant(
       throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
     }
     const session = sessionResult.rows[0];
+
+    // Part 2 Task 2 (D1): a draft takes nobody but the people who run it, and answers everyone else exactly as an id
+    // that does not exist. An event whose registration opens later holds back everyone it would take, at any
+    // visibility, until then. A published event with no opening time (every existing one) reads nothing more here.
+    const opensLater = !!session.registrationOpensAt && new Date(session.registrationOpensAt).getTime() > Date.now()
+      && session.status !== SessionStatus.COMPLETED && session.status !== SessionStatus.CANCELLED;
+    if (session.publication === 'draft' || opensLater) {
+      const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
+      if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+      if (facts.publication === 'draft' && !runsEvent(facts, userRole)) {
+        throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+      }
+      const notOpen = registrationNotOpenRefusal(facts, userRole, { viaInvite });
+      if (notOpen && !notOpen.ok) throw new AppError(notOpen.status, notOpen.code as ErrorCode, notOpen.message);
+    }
 
     // Check session is open for registration
     const closedStatuses: SessionStatus[] = [SessionStatus.COMPLETED, SessionStatus.CANCELLED];
@@ -974,10 +1037,40 @@ export async function deleteSession(sessionId: string, userId: string, userRole?
 
 // ─── Hard Delete Session (super_admin only) ─────────────────────────────────
 
-export async function hardDeleteSession(sessionId: string): Promise<void> {
+/** What the audit trail keeps of an event deleted for good (Part 2 Task 2): enough to say what it was and who was in it. */
+export interface DeletedEventSnapshot {
+  title: string;
+  scheduledAt: string | null;
+  hostUserId: string | null;
+  podId: string | null;
+  participantUserIds: string[];
+  status: string;
+}
+
+/**
+ * Deletes the event and everything that hangs off it, in one transaction. `audit` (Part 2 Task 2): the person deleting
+ * it; an `event.deleted` row with the event's snapshot is written in the same transaction, so the trail outlives the
+ * event (audit_log has no foreign key on the event) and a delete that fails leaves no row saying it happened.
+ * `refuseWhileLive`: the lifecycle's delete, read under the same row lock, refuses an event that has gone live.
+ */
+export async function hardDeleteSession(
+  sessionId: string,
+  audit?: { actorId: string; refuseWhileLive?: boolean },
+): Promise<void> {
   await getSessionById(sessionId); // Verify exists
 
   await transaction(async (client) => {
+    if (audit) {
+      const snapshot = await readDeletedEventSnapshot(client, sessionId);
+      if (!snapshot) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+      if (audit.refuseWhileLive && LIVE_STATUSES.includes(snapshot.status as SessionStatus)) {
+        throw new ConflictError(ErrorCodes.SESSION_IN_PROGRESS, 'This event is live. End it from the live event first, then delete it.');
+      }
+      await recordEventAudit({
+        sessionId, actorId: audit.actorId, action: 'event.deleted', automatic: false,
+        subjectUserIds: snapshot.participantUserIds, before: snapshot,
+      }, client);
+    }
     await client.query(`DELETE FROM ratings WHERE match_id IN (SELECT id FROM matches WHERE session_id = $1)`, [sessionId]);
     await client.query(`DELETE FROM matches WHERE session_id = $1`, [sessionId]);
     await client.query(`DELETE FROM session_participants WHERE session_id = $1`, [sessionId]);
@@ -986,6 +1079,34 @@ export async function hardDeleteSession(sessionId: string): Promise<void> {
   });
 
   logger.info({ sessionId }, 'Session permanently deleted by admin');
+}
+
+/** The event as the audit trail keeps it once it is gone, read under a row lock in the deleting transaction. */
+async function readDeletedEventSnapshot(
+  client: PoolClient,
+  sessionId: string,
+): Promise<DeletedEventSnapshot | null> {
+  const found = await client.query<{
+    title: string; scheduled_at: Date | null; host_user_id: string | null; pod_id: string | null; status: string;
+    participant_user_ids: string[] | null;
+  }>(
+    `SELECT s.title, s.scheduled_at, s.host_user_id, s.pod_id, s.status::text AS status,
+            ARRAY(SELECT sp.user_id FROM session_participants sp WHERE sp.session_id = s.id ORDER BY sp.created_at) AS participant_user_ids
+       FROM sessions s
+      WHERE s.id = $1
+      FOR UPDATE OF s`,
+    [sessionId],
+  );
+  const row = found.rows[0];
+  if (!row) return null;
+  return {
+    title: row.title,
+    scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
+    hostUserId: row.host_user_id,
+    podId: row.pod_id,
+    participantUserIds: row.participant_user_ids ?? [],
+    status: row.status,
+  };
 }
 
 /**

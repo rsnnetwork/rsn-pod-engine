@@ -67,6 +67,13 @@ describe('endFinishedInPersonEvents', () => {
     expect(mockUpdateSessionStatus).not.toHaveBeenCalled();
   });
 
+  it('never ends a draft or an archived event (Part 2 Task 2): a draft was never announced', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await endFinishedInPersonEvents();
+    const sql = (mockQuery.mock.calls[0][0] as string).replace(/\s+/g, ' ');
+    expect(sql).toContain("AND publication = 'published' AND archived_at IS NULL");
+  });
+
   it('completes each one, stamped with its own start and end, and tells every page that shows it', async () => {
     mockQuery.mockResolvedValue({ rows: [
       { id: 'dinner', scheduled_at: START, ends_at: END },

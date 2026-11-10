@@ -1,6 +1,7 @@
 // ─── Session Domain Types ────────────────────────────────────────────────────
 
 import type { EventFormat, EventVisibility } from '../events/definitions';
+import type { EventPublication } from '../events/lifecycle';
 
 export enum SessionStatus {
   SCHEDULED = 'scheduled',
@@ -172,6 +173,17 @@ export interface Session {
   visibility?: EventVisibility | null;
   /** T13 (1 Nov 2026) — the circle the event is for (sessions.circle_id); its members are the event's audience too. NULL: none. */
   circleId?: string | null;
+  /** Part 2 Task 2 — 'draft' (seen only by the people who run it) or 'published' (every existing event). */
+  publication?: EventPublication;
+  /** When it was first published; null for a draft and for events made before drafts existed. */
+  publishedAt?: Date | null;
+  /** Registration opens at this time; null: as soon as it is published. */
+  registrationOpensAt?: Date | null;
+  /** Put away after it ended or was cancelled: out of the default lists. */
+  archivedAt?: Date | null;
+  /** When it was cancelled, and the organiser's reason, if they gave one. */
+  cancelledAt?: Date | null;
+  cancelReason?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -214,6 +226,10 @@ export interface CreateSessionInput {
    * the pod; with no visibility it is private (the circle). Production's form omits it: no circle, as before.
    */
   circleId?: string;
+  /** Part 2 Task 2 — 'draft' keeps it to the people who run it until it is published. Omitted: published, as today. */
+  publication?: EventPublication;
+  /** Part 2 Task 2 — registration opens at this ISO time; omitted or null: as soon as it is published. */
+  registrationOpensAt?: string | null;
   config?: SessionConfigInput;
 }
 

@@ -135,6 +135,10 @@ const cases: Case[] = [
     partnerName: 'Bo', startAt: STARTS, durationMin: 30, kind: 'audio', recipientTimezone: 'Europe/Berlin', minutesToGo: 10,
     joinUrl: `${APP}/meet/c1?scheduled=1&kind=audio`, eventsUrl: `${APP}/sessions`,
   }]),
+  email('sendEventCancelledEmail', 'a cancelled event', ['to', 'data'], ['delivered+ana@resend.dev', {
+    eventTitle: 'Founders breakfast', hostName: 'Bo', when: 'Thursday 5 November, 18:00 (CET)',
+    reason: 'The venue closed.', link: `${APP}/sessions/s1`,
+  }]),
 ];
 
 /** Exports that build no email: the shared card and the admin switch. Anything new must be put in one list or the other. */

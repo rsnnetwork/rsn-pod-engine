@@ -717,7 +717,7 @@ describe('Session Routes', () => {
           return { rows: [{ visibility, pod_id: 'p1', pod_visibility: 'private', is_host: false, is_cohost: false, is_pod_organiser: false,
             in_audience: false, is_invited: false, participant_status: null, account_active: true, my_request: null }], rowCount: 1 };
         }
-        if (sql.startsWith('SELECT visibility FROM sessions')) return { rows: [{ visibility }], rowCount: 1 };
+        if (sql.startsWith('SELECT visibility')) return { rows: [{ visibility, is_draft: false }], rowCount: 1 };
         if (sql.includes('SELECT status, account_kind FROM users')) return { rows: [{ status: 'active', account_kind: 'member' }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       });
@@ -1006,7 +1006,7 @@ describe('Session Routes - Extended', () => {
       const facts = (over: Partial<eventAccess.EventAccessFacts>): eventAccess.EventAccessFacts => ({
         visibility: 'private', podId: 'p1', podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
         inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
-        outsideClosedCircle: false, ...over,
+        outsideClosedCircle: false, publication: 'published', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0, ...over,
       });
       let readFacts: jest.SpyInstance;
       const arm = (world: { podMember?: boolean; facts?: Partial<eventAccess.EventAccessFacts> }) => {

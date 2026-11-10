@@ -701,6 +701,19 @@ export const eventAuditReadLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// An event's lifecycle steps (Part 2, Task 2): publish, unpublish, cancel, archive, unarchive, delete for good. An organiser
+// takes a handful in a sitting; 20 a minute per member leaves room for a busy one and none for a loop. Keyed per member:
+// the routes sign in first.
+export const lifecycleWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-lifecycle-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 export const eventChatWriteLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,

@@ -181,6 +181,23 @@ export const applyTypeChange = _applyTypeChange;
 export const applyFormatChange = _applyFormatChange;
 export const resolveEventFormat = _resolveEventFormat;
 export const formatRefusal = _formatRefusal;
+// An event's lifecycle (Part 2 foundation, Task 2): draft, published, registration open, live, completed, archived,
+// cancelled, worked out beside sessions.status (D1). Real VALUES the client renders and calls, so each has its own named
+// export, same as OPENINGS above.
+export * from './events/lifecycle';
+import {
+  EVENT_PUBLICATIONS as _EVENT_PUBLICATIONS, EVENT_LIVE_STATUSES as _EVENT_LIVE_STATUSES,
+  EVENT_CANCEL_REASON_MAX as _EVENT_CANCEL_REASON_MAX, EVENT_LIFECYCLE_ACTIONS as _EVENT_LIFECYCLE_ACTIONS,
+  isEventPublication as _isEventPublication, eventLifecycleOf as _eventLifecycleOf,
+  allowedLifecycleActions as _allowedLifecycleActions,
+} from './events/lifecycle';
+export const EVENT_PUBLICATIONS = _EVENT_PUBLICATIONS;
+export const EVENT_LIVE_STATUSES = _EVENT_LIVE_STATUSES;
+export const EVENT_CANCEL_REASON_MAX = _EVENT_CANCEL_REASON_MAX;
+export const EVENT_LIFECYCLE_ACTIONS = _EVENT_LIFECYCLE_ACTIONS;
+export const isEventPublication = _isEventPublication;
+export const eventLifecycleOf = _eventLifecycleOf;
+export const allowedLifecycleActions = _allowedLifecycleActions;
 export * from './types/meeting';
 // Real VALUES the client uses (the Events meetings and the meeting page redraw their phase as the clock
 // moves), so each needs its own statically analysable named export, same as OPENINGS above.

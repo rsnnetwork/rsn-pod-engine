@@ -22,6 +22,10 @@ const EMAIL_TYPE_LABELS: Record<string, { label: string; description: string }> 
   poke_request:           { label: 'Meeting Request', description: 'Sent when a member asks someone to meet' },
   poke_accepted:          { label: 'Meeting Request Accepted', description: 'Sent when a member accepts a request to meet' },
   meeting_reminder:       { label: 'Meeting Reminder', description: 'Sent before a 1:1 meeting starts' },
+  // Seeded by migration 135 (Part 2, 10 Nov 2026): the event emails.
+  event_cancelled:        { label: 'Event Cancelled', description: 'Sent to everyone registered when an event is cancelled' },
+  event_reminder:         { label: 'Event Reminder', description: 'Sent to everyone registered before an event starts' },
+  event_rescheduled:      { label: 'Event Rescheduled', description: 'Sent to everyone registered when an event moves to a new time' },
 };
 
 export default function AdminEmailPage() {

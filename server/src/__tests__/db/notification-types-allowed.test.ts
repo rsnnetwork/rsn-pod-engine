@@ -4,13 +4,24 @@
 // that type fail; the insert sits in a best-effort catch, so nothing shows except a warning in the log. That is how
 // circle invites went without a bell from migration 090 on, until 118 added the type. This test reads every
 // notification insert in server/src and fails when a type it writes is not in the latest definition of the list
-// (118's), so the next type to be added without a migration fails here, before it ships.
+// (the highest-numbered migration that restates it: 135 since Part 2 Task 2), so the next type to be added without a
+// migration fails here, before it ships.
 
 import * as fs from 'fs';
 import * as path from 'path';
 
 const SRC = path.join(__dirname, '../..');
-const MIGRATION_118 = path.join(SRC, 'db/migrations/118_notification_types_circles.sql');
+const MIGRATIONS = path.join(SRC, 'db/migrations');
+
+/** The highest-numbered migration that restates notifications_type_check: the definition the database holds. */
+function latestAllowlistMigration(): string {
+  const restating = fs.readdirSync(MIGRATIONS)
+    .filter((file) => /^\d{3}_.+\.sql$/.test(file))
+    .filter((file) => /ADD CONSTRAINT notifications_type_check/.test(
+      fs.readFileSync(path.join(MIGRATIONS, file), 'utf8').replace(/--[^\n]*/g, '')))
+    .sort();
+  return path.join(MIGRATIONS, restating[restating.length - 1]);
+}
 
 function sourceFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -125,9 +136,9 @@ export function insertedTypes(file: string): { types: string[]; unreadable: stri
 }
 
 function allowedByMigration(): string[] {
-  const sql = fs.readFileSync(MIGRATION_118, 'utf8').replace(/--[^\n]*/g, '').replace(/\s+/g, ' ');
+  const sql = fs.readFileSync(latestAllowlistMigration(), 'utf8').replace(/--[^\n]*/g, '').replace(/\s+/g, ' ');
   const check = sql.match(/ADD CONSTRAINT notifications_type_check CHECK \(\s*type\s+IN\s*\(([^)]*)\)\s*\)/i);
-  if (!check) throw new Error('118 has no notifications_type_check CHECK');
+  if (!check) throw new Error('the latest allowlist migration has no notifications_type_check CHECK');
   return [...check[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
 }
 
@@ -151,7 +162,18 @@ describe('every notification type the server inserts is allowed by notifications
     expect(new Set(scanned.flatMap((s) => s.types)).size).toBeGreaterThanOrEqual(18);
   });
 
-  it('allows every type found: none is missing from the list migration 118 restates', () => {
+  it("reads the latest definition of the list: 135, which restates 118's list and adds the four event bells", () => {
+    expect(path.basename(latestAllowlistMigration())).toBe('135_event_lifecycle.sql');
+    expect(allowed).toEqual(expect.arrayContaining([
+      'circle_invite', 'event_cancelled', 'event_reminder', 'event_rescheduled', 'event_schedule_changed',
+    ]));
+  });
+
+  it('knows event_cancelled is inserted (an event cancelled with notice), and that it is allowed', () => {
+    expect(scanned.find((s) => s.file === 'services/session/event-lifecycle.service.ts')?.types).toEqual(['event_cancelled']);
+  });
+
+  it('allows every type found: none is missing from the latest list', () => {
     const missing = scanned.flatMap((s) => s.types.filter((t) => !allowed.includes(t)).map((t) => `${s.file} inserts '${t}'`));
     expect(missing).toEqual([]);
   });

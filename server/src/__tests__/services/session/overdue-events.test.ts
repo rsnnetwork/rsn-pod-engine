@@ -118,6 +118,30 @@ describe('which events it looks at', () => {
     expect(params).toEqual([NOW, 120]);
   });
 
+  // Part 2 Task 2 (D1): a draft was never announced, so nobody waits on it and it is not closed; an archived event is
+  // over by definition. Both are left out where the candidates are read, and again where a never-started one is claimed.
+  it('never reads a draft or an archived event', async () => {
+    await closeOverdueEvents('report', NOW);
+    const flat = String(mockQuery.mock.calls[0][0]).replace(/\s+/g, ' ');
+    expect(flat).toContain("AND publication = 'published' AND archived_at IS NULL");
+  });
+
+  it('never claims a draft or an archived event, even one read before it became a draft', async () => {
+    candidates = [meeting('never-started', 'scheduled', 400)];
+    scheduledClaims.add('never-started');
+    await closeOverdueEvents('end', NOW);
+    const update = mockQuery.mock.calls.find(c => String(c[0]).trim().startsWith('UPDATE')) as [string, unknown[]];
+    expect(update[0].replace(/\s+/g, ' '))
+      .toContain("WHERE id = $1 AND status = 'scheduled' AND publication = 'published' AND archived_at IS NULL");
+  });
+
+  it('a cancelled event stays cancelled: neither the read nor the claim can match one', async () => {
+    await closeOverdueEvents('report', NOW);
+    const flat = String(mockQuery.mock.calls[0][0]).replace(/\s+/g, ' ');
+    expect(flat).not.toMatch(/'cancelled'/);
+    expect(flat).toContain("status IN ('scheduled', 'lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby')");
+  });
+
   it('closes only those whose start + length + grace has passed, by each event\'s own length', async () => {
     candidates = [
       meeting('meeting-overdue', 'lobby_open', 181),              // 60 + 120 = 180 minutes: past

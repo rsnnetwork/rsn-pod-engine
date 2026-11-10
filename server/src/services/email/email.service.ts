@@ -1510,6 +1510,50 @@ export async function sendMeetingReminderEmail(
   logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-reminder email skipped');
 }
 
+// ─── Event-cancelled email (Part 2 foundation, Task 2) ──────────────────────
+// Sent by event-lifecycle.service.ts to each person who held a place (and each co-host) when an event is cancelled,
+// only while their notify_email is on and the admin switch for 'event_cancelled' is on (email_config, seeded on by
+// migration 135). This only renders and sends; `when` is already in the recipient's own zone.
+export interface EventCancelledEmailData {
+  eventTitle: string;
+  /** Who cancelled it, as the email names them. */
+  hostName: string;
+  /** The event's planned start, in the recipient's own zone and named ("Tuesday 17 November, 14:00 (CET)"). */
+  when: string;
+  /** The organiser's own words, when they gave any. */
+  reason: string | null;
+  /** The event's page. */
+  link: string;
+}
+
+export async function sendEventCancelledEmail(to: string, data: EventCancelledEmailData): Promise<SendEmailResult> {
+  const subject = `Cancelled: ${data.eventTitle}`;
+  const line = `${data.hostName} cancelled ${data.eventTitle}, planned for ${data.when}.`;
+  const reasonHtml = data.reason
+    ? `<div style="background:#f8f9fa;border-left:3px solid #9ca3af;border-radius:6px;padding:12px 16px;margin:0 0 20px 0;">
+            <p style="color:#374151;font-size:15px;line-height:1.5;margin:0;white-space:pre-line;">${escapeHtml(data.reason)}</p>
+          </div>`
+    : '';
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Event cancelled</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>${escapeHtml(data.hostName)}</strong> cancelled <strong>${escapeHtml(data.eventTitle)}</strong>, planned for ${escapeHtml(data.when)}.
+          </p>
+          ${reasonHtml}
+          <div style="text-align:center;margin:8px 0;">
+            <a href="${escapeAttr(data.link)}" style="color:#DE322E;font-size:14px;font-weight:600;">See the event</a>
+          </div>
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+  const text = `${line}\n\n${data.reason ? `${data.reason}\n\n` : ''}See the event: ${data.link}\n\nREASON — Meet people you have a reason to know.`;
+  return sendEmail({ to, subject, html, text });
+}
+
 // Every value an email puts into its HTML goes through one of these (21 Oct 2026). Names, event, pod and
 // circle names, messages and notes are typed by people, and the request to join needs no account at all,
 // so anything left as it was typed would let a stranger put their own link or picture into an email sent

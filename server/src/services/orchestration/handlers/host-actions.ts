@@ -11,7 +11,7 @@ import logger from '../../../config/logger';
 import { query, transaction } from '../../../db';
 import {
   SessionStatus, ParticipantStatus,
-  MatchStatus, UserRole,
+  MatchStatus, UserRole, ErrorCodes,
   resolveDisplayName, placeholderName,
   resolveEventFormat, liveKindOf,
 } from '@rsn/shared';
@@ -28,7 +28,7 @@ import { startSegmentTimer, getTimerCallbackForState, TimerCallbacks } from './t
 import { endRoomEarlyForSurvivors } from './room-end-early';
 import * as sessionService from '../../session/session.service';
 import * as videoService from '../../video/video.service';
-import { ForbiddenError, ValidationError } from '../../../middleware/errors';
+import { ConflictError, ForbiddenError, ValidationError } from '../../../middleware/errors';
 import * as matchingService from '../../matching/matching.service';
 // Phase 2B (5 May spec) — single chokepoint for presenceMap mutations.
 import { setPresence } from '../state/participant-state-machine';
@@ -297,6 +297,9 @@ async function refuseIfAdminTarget(
  * the room, and a token taken in that gap named a room nobody else was in. A failed LiveKit call leaves the
  * event open on the same room name, as before; LiveKit creates the room on the first join.
  */
+/** Part 2 Task 2: what the host hears on pressing Go Live on a draft. */
+export const EVENT_DRAFT_START_REFUSAL = 'Publish the event before starting it.';
+
 async function openEventLobby(sessionId: string): Promise<void> {
   const lobbyRoom = videoService.lobbyRoomId(sessionId);
   await sessionService.updateSessionStatus(sessionId, SessionStatus.LOBBY_OPEN, {
@@ -323,6 +326,11 @@ export async function handleHostStart(
     if (!await verifyHost(socket, data.sessionId)) return;
 
     const session = await sessionService.getSessionById(data.sessionId);
+    // Part 2 Task 2 (D1) — a draft was never announced: nobody but its organisers knows of it, so it cannot go live.
+    if (session.publication === 'draft') {
+      socket.emit('error', { code: ErrorCodes.EVENT_NOT_PUBLISHED, message: EVENT_DRAFT_START_REFUSAL });
+      return;
+    }
     // 30 Oct 2026 — an in-person event happens at a place: Go Live opens no room for it.
     if (refuseIfNoVideoRoom(socket, data.sessionId, resolveEventFormat(session))) return;
 
@@ -2538,6 +2546,8 @@ async function startSessionGuarded(sessionId: string, hostUserId: string): Promi
   if (session.hostUserId !== hostUserId) {
     throw new ForbiddenError('Only the host can start a session');
   }
+  // Part 2 Task 2 (D1) — as the socket start: a draft cannot go live.
+  if (session.publication === 'draft') throw new ConflictError(ErrorCodes.EVENT_NOT_PUBLISHED, EVENT_DRAFT_START_REFUSAL);
   assertVideoRoom(resolveEventFormat(session));
   if (session.status !== SessionStatus.SCHEDULED) {
     throw new ValidationError('Session can only start from scheduled state');

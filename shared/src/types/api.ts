@@ -98,6 +98,11 @@ export const ErrorCodes = {
   EVENT_REQUEST_NOT_NEEDED: 'EVENT_REQUEST_NOT_NEEDED',  // T11: the person can register directly
   EVENT_REQUEST_DECLINED: 'EVENT_REQUEST_DECLINED',      // T11: the host declined; the requester cannot reopen it
   EVENT_REQUEST_ANSWERED: 'EVENT_REQUEST_ANSWERED',      // T11: the request was already approved, declined or withdrawn
+  REGISTRATION_NOT_OPEN: 'REGISTRATION_NOT_OPEN',        // 409; the event's registration opens later (sessions.registration_opens_at)
+  EVENT_NOT_PUBLISHED: 'EVENT_NOT_PUBLISHED',            // 409; a draft cannot go live: publish it first
+  EVENT_ALREADY_CANCELLED: 'EVENT_ALREADY_CANCELLED',    // 409; a second cancel sends no second notice
+  EVENT_HAS_REGISTRATIONS: 'EVENT_HAS_REGISTRATIONS',    // 409; unpublish refused: people hold places, cancel instead
+  EVENT_LIFECYCLE_NOT_ALLOWED: 'EVENT_LIFECYCLE_NOT_ALLOWED',  // 409; that lifecycle step does not apply in the event's state
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

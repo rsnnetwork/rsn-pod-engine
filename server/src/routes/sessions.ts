@@ -16,6 +16,7 @@ import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
 import { canSeeEvent, readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
 import { readEventCircle } from '../services/circle/circle-events.service';
+import { summariseEventLifecycle } from '../services/session/event-lifecycle.service';
 import * as eventRequests from '../services/session/event-requests.service';
 import { eventChatReadLimiter, eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
@@ -44,10 +45,17 @@ const VIEW_REFUSAL = 'You must be registered or a pod member to view this event.
  * The refusal for someone who may not see an event: 403 with today's words, as production's client reads them.
  * T11 fix round 1: a private event (its own visibility) says so in its code, EVENT_PRIVATE, so the preview can show
  * "This event is private"; the status and the message stay exactly what production's client already shows.
+ * Part 2 Task 2 (D1): an id that names no event, and a draft the person does not run, answer the same 404, so nobody
+ * can tell a draft from a wrong id.
  */
 async function refuseView(sessionId: string): Promise<never> {
-  const row = await query<{ visibility: string | null }>(`SELECT visibility FROM sessions WHERE id = $1`, [sessionId]);
-  if (row?.rows?.[0]?.visibility === 'private') throw new AppError(403, ErrorCodes.EVENT_PRIVATE, VIEW_REFUSAL);
+  const row = await query<{ visibility: string | null; is_draft: boolean | null }>(
+    `SELECT visibility, (publication = 'draft') AS is_draft FROM sessions WHERE id = $1`,
+    [sessionId],
+  );
+  const event = row?.rows?.[0];
+  if (!event || event.is_draft === true) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+  if (event.visibility === 'private') throw new AppError(403, ErrorCodes.EVENT_PRIVATE, VIEW_REFUSAL);
   throw new ForbiddenError(VIEW_REFUSAL);
 }
 
@@ -97,6 +105,10 @@ export const createSessionSchema = z.object({
   visibility: eventVisibilitySchema.optional(),
   // T13 (1 Nov 2026) — an event for a whole circle. Optional: production's form sends none, and nothing changes.
   circleId: z.string().uuid().optional(),
+  // Part 2 Task 2 — a draft, seen only by the people who run it until it is published, and when registration opens.
+  // Optional: production's form sends neither, and the event is published at once, as today.
+  publication: z.enum(['draft', 'published']).optional(),
+  registrationOpensAt: z.string().datetime().nullable().optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -243,10 +255,15 @@ router.get(
       const access = facts ? summariseEventAccess(facts, req.user!.role) : undefined;
       // T13 (1 Nov 2026) — additive: the circle the event is for, so its page says "For <circle>" with a link.
       const circle = await readEventCircle(session?.circleId);
+      // Part 2 Task 2 — additive: where the event stands (draft … cancelled) and the steps this viewer may take.
+      const { lifecycle, allowedActions } = summariseEventLifecycle(session, facts, req.user!.role);
 
       const response: ApiResponse = {
         success: true,
-        data: { ...session, participantCount, ...(access ? { access } : {}), ...(circle ? { circle } : {}) },
+        data: {
+          ...session, participantCount, ...(access ? { access } : {}), ...(circle ? { circle } : {}),
+          lifecycle, allowedActions,
+        },
       };
       res.json(response);
     } catch (err) {
@@ -362,7 +379,7 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { podId, status, page, pageSize } = req.query as Record<string, string>;
+      const { podId, status, page, pageSize, archived } = req.query as Record<string, string>;
 
       // Non-admin users: if podId specified, verify membership; otherwise show all sessions
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN) && podId) {
@@ -377,6 +394,11 @@ router.get(
         podId,
         userId: podId ? undefined : req.user!.userId,
         isAdmin: isAdmin && !podId,
+        // Part 2 Task 2: who is asking, so a pod's list leaves out other people's drafts; `archived=1` lists the archived
+        // events they ran or held a place in instead.
+        viewerId: req.user!.userId,
+        viewerIsAdmin: isAdmin,
+        archived: archived === '1' || archived === 'true',
         status: status as SessionStatus | undefined,
         page: page ? parseInt(page) : undefined,
         pageSize: pageSize ? parseInt(pageSize) : undefined,
@@ -748,7 +770,8 @@ router.delete(
         );
         return undefined;
       });
-      await sessionService.hardDeleteSession(req.params.id);
+      // Part 2 Task 2: the trail keeps what the event was (event.deleted), written with the deletes.
+      await sessionService.hardDeleteSession(req.params.id, { actorId: req.user!.userId });
       fanoutSessionListEntities(podIdForNotify, req.params.id, listAudience).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Event permanently deleted' } };
       return res.json(response);

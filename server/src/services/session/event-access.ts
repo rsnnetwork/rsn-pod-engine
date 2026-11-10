@@ -20,11 +20,12 @@
 
 import {
   ErrorCodes, UserRole, hasRoleAtLeast, isEventVisibility,
-  type EventAccessMode, type EventJoinRequestStatus, type EventVisibility,
+  type EventAccessMode, type EventJoinRequestStatus, type EventPublication, type EventVisibility,
 } from '@rsn/shared';
 import { query } from '../../db';
 import { AppError } from '../../middleware/errors';
 import { activeMemberSql } from '../users/active-member';
+import { meetingTime } from '../meetings/meeting-time';
 import { eventRoomAdmission, visibleEventSql, APPROVAL_POD_EVENT_REFUSAL, type EventRoomAdmission } from './session-access';
 
 export { defaultEventVisibility } from '@rsn/shared';
@@ -40,6 +41,60 @@ function checked(sessionAlias: string, userParam: string): void {
 }
 
 // ─── SQL fragments ───────────────────────────────────────────────────────────
+
+/**
+ * Part 2 Task 2 (D1): the event aliased `sessionAlias` belongs in the default lists of the person in `viewerParam`:
+ * it is not archived, and it is published or they run it (its host or a co-host). A draft is nobody else's to see;
+ * an archived event is listed only when asked for (archivedEventsSql). Admins see every event and are left to the
+ * caller. Every member-facing list ANDs this in (visibleEventsSql and publicEventsSql already carry it).
+ */
+export function eventListedForSql(sessionAlias: string, viewerParam: string): string {
+  checked(sessionAlias, viewerParam);
+  const s = sessionAlias;
+  const u = viewerParam;
+  return `(${s}.archived_at IS NULL AND (${s}.publication = 'published'
+    OR ${s}.host_user_id = ${u}
+    OR EXISTS (SELECT 1 FROM session_cohosts el_c WHERE el_c.session_id = ${s}.id AND el_c.user_id = ${u})))`;
+}
+
+/**
+ * Part 2 Task 2: the person in `userParam` is an admin of the pod the event aliased `sessionAlias` lives in: its creator
+ * or one of its active directors (the pod admin of canActAsHost). A boolean SQL expression.
+ */
+export function podAdminSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  const s = sessionAlias;
+  const u = userParam;
+  return `EXISTS (SELECT 1 FROM pods pa WHERE pa.id = ${s}.pod_id AND (pa.created_by = ${u} OR EXISTS (
+            SELECT 1 FROM pod_members pam WHERE pam.pod_id = pa.id AND pam.user_id = ${u}
+               AND pam.role = 'director' AND pam.status = 'active')))`;
+}
+
+/**
+ * Part 2 Task 2: how many places the event aliased `sessionAlias` has given to anyone but its host and co-hosts (a
+ * participant row that is not removed). An integer SQL expression: unpublishing is refused once it is above 0.
+ */
+export function placesHeldSql(sessionAlias: string): string {
+  checked(sessionAlias, '$1');
+  const s = sessionAlias;
+  return `(SELECT COUNT(*)::int FROM session_participants ph
+            WHERE ph.session_id = ${s}.id AND ph.status <> 'removed' AND ph.user_id IS DISTINCT FROM ${s}.host_user_id
+              AND NOT EXISTS (SELECT 1 FROM session_cohosts phc WHERE phc.session_id = ${s}.id AND phc.user_id = ph.user_id))`;
+}
+
+/**
+ * Part 2 Task 2: the archived events the person in `viewerParam` may list on asking for them (Events, "archived"): the
+ * ones they ran (host or co-host) or held a place in (a participant row that is not removed). Admins are left to the
+ * caller.
+ */
+export function archivedEventsSql(sessionAlias: string, viewerParam: string): string {
+  checked(sessionAlias, viewerParam);
+  const s = sessionAlias;
+  const u = viewerParam;
+  return `(${s}.archived_at IS NOT NULL AND (${s}.host_user_id = ${u}
+    OR EXISTS (SELECT 1 FROM session_cohosts ae_c WHERE ae_c.session_id = ${s}.id AND ae_c.user_id = ${u})
+    OR EXISTS (SELECT 1 FROM session_participants ae_p WHERE ae_p.session_id = ${s}.id AND ae_p.user_id = ${u} AND ae_p.status <> 'removed')))`;
+}
 
 /**
  * The event's audience: the people it is for, who see a private event and never wait for approval. The pod's
@@ -126,17 +181,22 @@ export function visibleEventsSql(sessionAlias: string, userParam: string): strin
       OR ${eventAudienceSql(s, u)}
       OR ${eventInviteeSql(s, u)}
     ))
-  ) AND NOT ${closedCircleOutsiderSql(s, u)}`;
+  ) AND NOT ${closedCircleOutsiderSql(s, u)}
+  AND ${eventListedForSql(s, u)}`;
 }
 
-/** The events listed when nobody is asking: a public pod's NULL events, and every public or approval event. */
+/**
+ * The events listed when nobody is asking: a public pod's NULL events, and every public or approval event. Never a
+ * draft and never an archived event (Part 2 Task 2): nobody is asking, so nobody runs them.
+ */
 export function publicEventsSql(sessionAlias: string): string {
   checked(sessionAlias, '$1');
   const s = sessionAlias;
   return `(
     (${s}.visibility IS NULL AND ${s}.pod_id IN (SELECT pe_p.id FROM pods pe_p WHERE pe_p.visibility = 'public'))
     OR ${s}.visibility IN ('public', 'public_with_approval')
-  ) AND NOT (${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = ${s}.circle_id AND pc_c.join_policy = 'closed'))`;
+  ) AND NOT (${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = ${s}.circle_id AND pc_c.join_policy = 'closed'))
+  AND ${s}.archived_at IS NULL AND ${s}.publication = 'published'`;
 }
 
 // ─── The facts, in one read ──────────────────────────────────────────────────
@@ -158,6 +218,18 @@ export interface EventAccessFacts {
   myRequest: EventJoinRequestStatus | null;
   /** T14 (L22): the event is for a closed circle this person is outside (outsideClosedCircleSql). */
   outsideClosedCircle: boolean;
+  /** Part 2 Task 2 (D1): a draft is seen only by the people who run it. */
+  publication: EventPublication;
+  /** Part 2 Task 2: it has been archived (out of the default lists; its page stays as it was). */
+  archived: boolean;
+  /** Part 2 Task 2: registration opens then (null: as soon as it is published). */
+  registrationOpensAt: Date | null;
+  /** The person's own time zone (users.timezone), so "Registration opens ..." reads in their hours; null reads UTC. */
+  viewerTimezone: string | null;
+  /** The person is an admin of the event's pod: its creator or an active director (canActAsHost's pod admin). */
+  isPodAdmin: boolean;
+  /** Places held by anyone but the event's host and co-hosts (a participant row that is not removed). */
+  placesHeld: number;
 }
 
 interface FactsRow {
@@ -173,6 +245,12 @@ interface FactsRow {
   account_active: boolean;
   my_request: EventJoinRequestStatus | null;
   outside_closed_circle: boolean;
+  publication?: string | null;
+  archived?: boolean | null;
+  registration_opens_at?: Date | string | null;
+  viewer_timezone?: string | null;
+  is_pod_admin?: boolean | null;
+  places_held?: number | string | null;
 }
 
 type Reader = (text: string, params: unknown[]) => Promise<{ rows: FactsRow[] }>;
@@ -194,7 +272,11 @@ export async function readEventAccessFacts(
             (SELECT sp.status::text FROM session_participants sp WHERE sp.session_id = s.id AND sp.user_id = $2) AS participant_status,
             COALESCE((SELECT ${activeMemberSql('u')} FROM users u WHERE u.id = $2), FALSE) AS account_active,
             (SELECT r.status FROM event_join_requests r WHERE r.session_id = s.id AND r.user_id = $2) AS my_request,
-            ${outsideClosedCircleSql('s', '$2')} AS outside_closed_circle
+            ${outsideClosedCircleSql('s', '$2')} AS outside_closed_circle,
+            s.publication, (s.archived_at IS NOT NULL) AS archived, s.registration_opens_at,
+            (SELECT tz.timezone FROM users tz WHERE tz.id = $2) AS viewer_timezone,
+            ${podAdminSql('s', '$2')} AS is_pod_admin,
+            ${placesHeldSql('s')} AS places_held
        FROM sessions s
        LEFT JOIN pods p ON p.id = s.pod_id
       WHERE s.id = $1`,
@@ -215,6 +297,13 @@ export async function readEventAccessFacts(
     accountActive: !!row.account_active,
     myRequest: row.my_request,
     outsideClosedCircle: !!row.outside_closed_circle,
+    // A row without these (a test's, or one read before migration 135) reads as today's event: published.
+    publication: row.publication === 'draft' ? 'draft' : 'published',
+    archived: !!row.archived,
+    registrationOpensAt: row.registration_opens_at ? new Date(row.registration_opens_at) : null,
+    viewerTimezone: row.viewer_timezone ?? null,
+    isPodAdmin: !!row.is_pod_admin,
+    placesHeld: Number(row.places_held ?? 0) || 0,
   };
 }
 
@@ -245,10 +334,11 @@ export function managesRequests(f: EventAccessFacts, role: string | undefined): 
   return runsEvent(f, role) || f.isPodOrganiser;
 }
 
-/** Whether the person may see the event (its page, and the lists). */
+/** Whether the person may see the event (its page, and the lists). A draft only to the people who run it (D1). */
 export function canSeeEvent(f: EventAccessFacts, role: string | undefined): boolean {
   if (!f.accountActive) return false;
   if (runsEvent(f, role)) return true;
+  if (f.publication === 'draft') return false;
   if (hiddenByClosedCircle(f, role)) return false;
   if (f.visibility === null) {
     // Today's rule (canViewSession): a place that is not removed, an active pod member, or a public pod.
@@ -272,7 +362,7 @@ export function needsApproval(f: EventAccessFacts, role: string | undefined): bo
 
 export type RegisterDecision =
   | { ok: true; addToPod: boolean }
-  | { ok: false; status: 403; code: string; message: string };
+  | { ok: false; status: 403 | 409; code: string; message: string };
 
 export const EVENT_PRIVATE_SENTENCE = 'This event is private. It is for its pod\'s members and the people the host invites.';
 export const EVENT_NEEDS_APPROVAL_SENTENCE = 'This event asks the host to approve each place. Request to join from the event page.';
@@ -281,15 +371,46 @@ const PRIVATE_POD_SENTENCE = 'You must be a pod member to register for events in
 export const CLOSED_CIRCLE_EVENT_SENTENCE = 'This event is for the members of a closed circle. Ask to join the circle to take part.';
 
 /**
+ * Part 2 Task 2: the refusal for someone who would take a place before the event's registration opens, or null. The
+ * people who run it are never held back, nor is anyone the host invited (an invite is the host's say-so). The time
+ * reads in the person's own zone and names it.
+ */
+export function registrationNotOpenRefusal(
+  f: EventAccessFacts,
+  role: string | undefined,
+  options: { viaInvite?: boolean } = {},
+  now: Date = new Date(),
+): RegisterDecision | null {
+  if (!f.registrationOpensAt || f.registrationOpensAt.getTime() <= now.getTime()) return null;
+  if (runsEvent(f, role) || f.isInvited || options.viaInvite) return null;
+  const t = meetingTime(f.registrationOpensAt, f.viewerTimezone);
+  return {
+    ok: false, status: 409, code: ErrorCodes.REGISTRATION_NOT_OPEN,
+    message: `Registration for this event opens ${t.long} (${t.zone}).`,
+  };
+}
+
+/**
  * Whether the person may take a place now (the event's open/closed state, capacity and their own row are
  * registerParticipant's, after this). `viaInvite`: the invite-accept path. `approvedRequest`: the host approved
  * their request. A NULL event answers today's rules (registerParticipant runs them in SQL; the matrix test holds
- * the two to the same answers).
+ * the two to the same answers). Someone who may take a place is still held back until registration opens (Part 2
+ * Task 2, registrationNotOpenRefusal).
  */
 export function canRegister(
   f: EventAccessFacts,
   role: string | undefined,
   options: { viaInvite?: boolean; approvedRequest?: boolean } = {},
+): RegisterDecision {
+  const decision = registerDecisionIgnoringOpening(f, role, options);
+  if (!decision.ok) return decision;
+  return registrationNotOpenRefusal(f, role, options) ?? decision;
+}
+
+function registerDecisionIgnoringOpening(
+  f: EventAccessFacts,
+  role: string | undefined,
+  options: { viaInvite?: boolean; approvedRequest?: boolean },
 ): RegisterDecision {
   if (!f.accountActive) return { ok: false, status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: ACCOUNT_CLOSED_SENTENCE };
   if (isAdminRole(role)) return { ok: true, addToPod: false };
@@ -325,10 +446,13 @@ export function canRegister(
   return { ok: true, addToPod: false };
 }
 
-/** What the event page offers the person: Register, Request to join, or the private notice. */
+/**
+ * What the event page offers the person: Register, Request to join, or the private notice. Someone who may register
+ * once registration opens is offered Register (the register answers when it opens until then).
+ */
 export function eventAccessMode(f: EventAccessFacts, role: string | undefined): EventAccessMode {
   if (needsApproval(f, role)) return 'request';
-  return canRegister(f, role).ok ? 'register' : 'private';
+  return registerDecisionIgnoringOpening(f, role, {}).ok ? 'register' : 'private';
 }
 
 /**
