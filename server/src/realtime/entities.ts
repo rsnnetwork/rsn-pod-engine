@@ -49,6 +49,8 @@ export const E = {
   sessionInvites: (sessionId: string) => `session:${sessionId}:invites`,
   /** T11 (1 Nov 2026): requests to join an event that asks the host to approve each place. */
   sessionJoinRequests: (sessionId: string) => `session:${sessionId}:join-requests`,
+  /** Part 2 Task 4 (10 Nov 2026): the event's admission mode, allowed emails and codes (its organisers). */
+  sessionAdmission: (sessionId: string) => `session:${sessionId}:admission`,
   sessionMatches: (sessionId: string) => `session:${sessionId}:matches`,
   sessionPlan: (sessionId: string) => `session:${sessionId}:plan`,
   sessionChat: (sessionId: string) => `session:${sessionId}:chat`,

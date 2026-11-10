@@ -12,6 +12,7 @@ import {
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
   liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS, type SessionCircle,
   type EventPublication,
+  type AdmittedVia,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
@@ -22,7 +23,7 @@ import { assertTemplateChoice, templateKeepable } from '../matching/matching-tem
 import { assertVideoRoom } from './video-room';
 import { LIVE_STATUSES, tokenMainRoomOf } from './main-room';
 import {
-  archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, runsEvent, visibleEventsSql,
+  admittedViaOf, archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, runsEvent, visibleEventsSql,
 } from './event-access';
 import { applyRegistrationGroups } from './event-groups.service';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
@@ -526,11 +527,15 @@ export async function registerParticipant(
 
     // T11 (1 Nov 2026): an event with its own visibility follows the one rule (event-access.ts) and never adds
     // anyone to its pod. A NULL event follows its pod's rules below, exactly as before.
+    // Part 2 Task 4: an admission mode (never on an event without a visibility: sessions_admission_needs_visibility) is
+    // part of the same rule; what gave the place is recorded below.
+    let admittedVia: AdmittedVia | null = null;
     if (session.visibility) {
       const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
       if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
       const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
       if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
+      admittedVia = admittedViaOf(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
     }
 
     // Enforce pod visibility rules for session access (admin/super_admin bypass)
@@ -700,6 +705,15 @@ export async function registerParticipant(
       participant = { ...existingRow.rows[0], isNewRegistration: false };
     } else {
       participant = { ...insertResult.rows[0], isNewRegistration: true };
+    }
+
+    // Part 2 Task 4: what gave this place on an event with an admission mode. The first answer is kept (a later
+    // re-register after leaving keeps how they first came in). An event with no mode writes nothing, as before.
+    if (admittedVia) {
+      await client.query(
+        `UPDATE session_participants SET admitted_via = $3 WHERE session_id = $1 AND user_id = $2 AND admitted_via IS NULL`,
+        [sessionId, userId, admittedVia],
+      );
     }
 
     // Sync invite status: if user had a pending invite for this session, mark it accepted

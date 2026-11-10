@@ -19,7 +19,8 @@
 // they hold another tie to the event (host, co-host, invitee, a place, the pod's own members). Admins see everything.
 
 import {
-  ErrorCodes, UserRole, hasRoleAtLeast, isEventVisibility,
+  ADMISSION_MODES, ErrorCodes, UserRole, hasRoleAtLeast, isEventVisibility,
+  type AdmissionMode, type AdmittedVia, type EffectiveAdmission,
   type EventAccessMode, type EventJoinRequestStatus, type EventPublication, type EventVisibility,
 } from '@rsn/shared';
 import { query } from '../../db';
@@ -162,6 +163,40 @@ export function eventInviteeSql(sessionAlias: string, userParam: string): string
   )`;
 }
 
+// ─── Admission per event (Part 2, Task 4, 10 Nov 2026; D3) ───────────────────
+// sessions.admission_mode decides who gets a place, beside who sees the event (visibility). NULL keeps every rule in
+// this file exactly as it was. An entitlement is a tie the organisers gave this one person: an allowed email that is
+// not revoked, a code they redeemed that is not revoked, or an invite (eventInviteeSql).
+
+/** The person's address is on the event's allowed list, and not revoked. */
+export function admissionListedSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  return `EXISTS (
+    SELECT 1 FROM event_admission_entries ad_e JOIN users ad_u ON ad_u.id = ${userParam}
+     WHERE ad_e.session_id = ${sessionAlias}.id AND ad_e.email = lower(btrim(ad_u.email)) AND ad_e.revoked_at IS NULL
+  )`;
+}
+
+/** The person redeemed one of the event's admission codes, and the organisers have not revoked it. */
+export function admissionCodeHeldSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  return `EXISTS (
+    SELECT 1 FROM event_admission_codes ad_c
+     WHERE ad_c.session_id = ${sessionAlias}.id AND ad_c.redeemed_by = ${userParam} AND ad_c.revoked_at IS NULL
+  )`;
+}
+
+/**
+ * The person holds an entitlement to the event: an allowed email, a redeemed code, or an invite. What an
+ * invitation-only event admits (besides the people who run it), at registration and on every live-room join.
+ */
+export function restrictedEntitlementSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  return `(${admissionListedSql(sessionAlias, userParam)}
+    OR ${admissionCodeHeldSql(sessionAlias, userParam)}
+    OR ${eventInviteeSql(sessionAlias, userParam)})`;
+}
+
 /**
  * The list predicate: "the person in `userParam` may see the event aliased `sessionAlias`" (Events list, For
  * You's next event, a circle page). A NULL event keeps T2's legacy predicate verbatim; an explicit one follows
@@ -230,6 +265,12 @@ export interface EventAccessFacts {
   isPodAdmin: boolean;
   /** Places held by anyone but the event's host and co-hosts (a participant row that is not removed). */
   placesHeld: number;
+  /** Part 2 Task 4: sessions.admission_mode; null keeps every rule as it was. */
+  admissionMode: AdmissionMode | null;
+  /** Part 2 Task 4: an allowed email, a redeemed code or an invite (restrictedEntitlementSql). */
+  entitled: boolean;
+  /** Which of the three, in that order; null when not entitled. */
+  entitledVia: 'allow_list' | 'code' | 'invite' | null;
 }
 
 interface FactsRow {
@@ -251,6 +292,9 @@ interface FactsRow {
   viewer_timezone?: string | null;
   is_pod_admin?: boolean | null;
   places_held?: number | string | null;
+  admission_mode?: string | null;
+  admission_listed?: boolean | null;
+  admission_code_held?: boolean | null;
 }
 
 type Reader = (text: string, params: unknown[]) => Promise<{ rows: FactsRow[] }>;
@@ -276,7 +320,10 @@ export async function readEventAccessFacts(
             s.publication, (s.archived_at IS NOT NULL) AS archived, s.registration_opens_at,
             (SELECT tz.timezone FROM users tz WHERE tz.id = $2) AS viewer_timezone,
             ${podAdminSql('s', '$2')} AS is_pod_admin,
-            ${placesHeldSql('s')} AS places_held
+            ${placesHeldSql('s')} AS places_held,
+            s.admission_mode,
+            (s.admission_mode IS NOT NULL AND ${admissionListedSql('s', '$2')}) AS admission_listed,
+            (s.admission_mode IS NOT NULL AND ${admissionCodeHeldSql('s', '$2')}) AS admission_code_held
        FROM sessions s
        LEFT JOIN pods p ON p.id = s.pod_id
       WHERE s.id = $1`,
@@ -284,6 +331,9 @@ export async function readEventAccessFacts(
   );
   const row = result.rows[0];
   if (!row) return null;
+  const admissionMode = isAdmissionMode(row.admission_mode) ? row.admission_mode : null;
+  const entitledVia = !admissionMode ? null
+    : row.admission_listed ? 'allow_list' : row.admission_code_held ? 'code' : row.is_invited ? 'invite' : null;
   return {
     visibility: isEventVisibility(row.visibility) ? row.visibility : null,
     podId: row.pod_id,
@@ -304,7 +354,14 @@ export async function readEventAccessFacts(
     viewerTimezone: row.viewer_timezone ?? null,
     isPodAdmin: !!row.is_pod_admin,
     placesHeld: Number(row.places_held ?? 0) || 0,
+    admissionMode,
+    entitled: entitledVia !== null,
+    entitledVia,
   };
+}
+
+function isAdmissionMode(value: unknown): value is AdmissionMode {
+  return typeof value === 'string' && (ADMISSION_MODES as readonly string[]).includes(value);
 }
 
 // ─── The rules ───────────────────────────────────────────────────────────────
@@ -355,6 +412,7 @@ export function canSeeEvent(f: EventAccessFacts, role: string | undefined): bool
  * Never for a NULL event: an approval pod's NULL event refuses outsiders in words instead (T2's D2).
  */
 export function needsApproval(f: EventAccessFacts, role: string | undefined): boolean {
+  if (f.admissionMode) return admissionNeedsApproval(f, role);
   if (f.visibility !== 'public_with_approval') return false;
   if (!f.accountActive || runsEvent(f, role) || hiddenByClosedCircle(f, role)) return false;
   return !f.inAudience && !f.isInvited && f.participantStatus === null && f.myRequest !== 'approved';
@@ -369,6 +427,8 @@ export const EVENT_NEEDS_APPROVAL_SENTENCE = 'This event asks the host to approv
 const ACCOUNT_CLOSED_SENTENCE = 'Your account cannot join events right now.';
 const PRIVATE_POD_SENTENCE = 'You must be a pod member to register for events in a private pod';
 export const CLOSED_CIRCLE_EVENT_SENTENCE = 'This event is for the members of a closed circle. Ask to join the circle to take part.';
+export const EVENT_ADMISSION_REQUIRED_SENTENCE =
+  'This event is for invited guests. Enter the email you were invited with, or an admission code.';
 
 /**
  * Part 2 Task 2: the refusal for someone who would take a place before the event's registration opens, or null. The
@@ -418,6 +478,7 @@ function registerDecisionIgnoringOpening(
     return { ok: false, status: 403, code: ErrorCodes.EVENT_PRIVATE, message: CLOSED_CIRCLE_EVENT_SENTENCE };
   }
   const invited = f.isInvited || !!options.viaInvite;
+  if (f.admissionMode) return admissionDecision(f, role, invited, !!options.approvedRequest);
   if (f.visibility === null) {
     // Today's registerParticipant: membership means an active pod member (the host of a private pod who is not
     // a member is refused, as before).
@@ -464,6 +525,9 @@ export function eventAccessMode(f: EventAccessFacts, role: string | undefined): 
  */
 export function autoRegisters(f: EventAccessFacts, _role: string | undefined): boolean {
   if (f.participantStatus === 'removed') return false;
+  // Part 2 Task 4: an invitation-only event registers on opening only the people it was given to (and its runners);
+  // its pod's audience is not admitted by membership alone.
+  if (f.admissionMode === 'restricted') return f.accountActive && (f.entitled || f.isHost || f.isCohost);
   return f.accountActive && (f.inAudience || f.isInvited || f.isHost || f.isCohost);
 }
 
@@ -490,6 +554,8 @@ export interface EventAccessSummary {
   autoRegister: boolean;
   /** They see and answer the event's requests. */
   canManageRequests: boolean;
+  /** Part 2 Task 4: what decides a place (effectiveAdmission). */
+  admission: EffectiveAdmission;
 }
 
 export function summariseEventAccess(f: EventAccessFacts, role: string | undefined): EventAccessSummary {
@@ -499,5 +565,62 @@ export function summariseEventAccess(f: EventAccessFacts, role: string | undefin
     myRequest: f.myRequest,
     autoRegister: autoRegisters(f, role),
     canManageRequests: f.visibility !== null && managesRequests(f, role),
+    admission: effectiveAdmission(f),
   };
+}
+
+// ─── Admission per event: the rules (Part 2, Task 4, 10 Nov 2026; D3) ────────
+
+/** What decides a place: the event's own mode, else T11's member rules (its own visibility), else its pod's. */
+export function effectiveAdmission(f: EventAccessFacts): EffectiveAdmission {
+  if (f.admissionMode) return f.admissionMode;
+  return f.visibility === null ? 'pod_rules' : 'members_only';
+}
+
+/**
+ * canRegister for an event with an admission mode, after the account, admin and closed-circle checks. A removed row
+ * goes on to registerParticipant's own check, which keeps it removed (a kick is final in every mode).
+ *   open        any active account.
+ *   approval    the people who run it, its audience, invitees, entitled people, someone already holding a place, an
+ *               approved request; everyone else requests (EVENT_NEEDS_APPROVAL).
+ *   restricted  the people who run it and entitled people (an invite counts); nobody by pod or circle membership, nor
+ *               by a place already held (the live room re-checks the same rule).
+ */
+function admissionDecision(f: EventAccessFacts, role: string | undefined, invited: boolean, approvedRequest: boolean): RegisterDecision {
+  const ok: RegisterDecision = { ok: true, addToPod: false };
+  if (f.participantStatus === 'removed' || runsEvent(f, role)) return ok;
+  if (f.admissionMode === 'open') return ok;
+  if (f.admissionMode === 'approval') {
+    const direct = f.inAudience || invited || f.entitled || holdsPlace(f) || approvedRequest || f.myRequest === 'approved';
+    return direct ? ok : { ok: false, status: 403, code: ErrorCodes.EVENT_NEEDS_APPROVAL, message: EVENT_NEEDS_APPROVAL_SENTENCE };
+  }
+  if (f.entitled || invited) return ok;
+  return { ok: false, status: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED, message: EVENT_ADMISSION_REQUIRED_SENTENCE };
+}
+
+/** needsApproval for an event with an admission mode: only `approval`, and only for someone with no direct tie. */
+function admissionNeedsApproval(f: EventAccessFacts, role: string | undefined): boolean {
+  if (f.admissionMode !== 'approval') return false;
+  if (!f.accountActive || runsEvent(f, role) || hiddenByClosedCircle(f, role)) return false;
+  return !f.inAudience && !f.isInvited && !f.entitled && f.participantStatus === null && f.myRequest !== 'approved';
+}
+
+/**
+ * What gave the place canRegister has just allowed, for session_participants.admitted_via; null on an event with no
+ * admission mode (nothing is recorded there, as before). The strongest tie wins: running the event, an invite, the
+ * allowed list, a code, the audience, an approval, the open door.
+ */
+export function admittedViaOf(
+  f: EventAccessFacts,
+  role: string | undefined,
+  options: { viaInvite?: boolean; approvedRequest?: boolean } = {},
+): AdmittedVia | null {
+  if (!f.admissionMode) return null;
+  if (runsEvent(f, role)) return 'admin';
+  if (f.isInvited || options.viaInvite) return 'invite';
+  if (f.entitledVia === 'allow_list') return 'allow_list';
+  if (f.entitledVia === 'code') return 'code';
+  if (f.inAudience && f.admissionMode !== 'restricted') return 'audience';
+  if (options.approvedRequest || f.myRequest === 'approved') return 'approval';
+  return f.admissionMode === 'open' ? 'open' : null;
 }

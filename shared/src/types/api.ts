@@ -111,6 +111,13 @@ export const ErrorCodes = {
   MATCH_BLOCKED_PAIR: 'MATCH_BLOCKED_PAIR',              // 409; one of the two blocked the other: never overridable
   MATCH_GROUP_RULE: 'MATCH_GROUP_RULE',                  // 409; the round's group rule does not let them meet (overridable)
   GROUP_OVERRIDE_FORBIDDEN: 'GROUP_OVERRIDE_FORBIDDEN',  // 403; only the event owner or a super admin overrides a group rule
+  // Part 2 Task 4 (10 Nov 2026): admission per event.
+  EVENT_ADMISSION_REQUIRED: 'EVENT_ADMISSION_REQUIRED',  // 403; an invitation-only event: the person is not on its list and holds no redeemed code
+  ADMISSION_CODE_USED: 'ADMISSION_CODE_USED',            // 409; someone else already redeemed this admission code
+  ADMISSION_CODE_EXPIRED: 'ADMISSION_CODE_EXPIRED',      // 400; the admission code is past its expiry
+  ADMISSION_CODE_INVALID: 'ADMISSION_CODE_INVALID',      // 400; unknown, revoked or for another event (one answer for all three)
+  ADMISSION_ENTRY_NOT_FOUND: 'ADMISSION_ENTRY_NOT_FOUND',  // 404; no such allowed email on this event's list
+  ADMISSION_CODE_NOT_FOUND: 'ADMISSION_CODE_NOT_FOUND',    // 404; no such admission code on this event (the organisers' revoke)
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',
@@ -157,6 +164,7 @@ export const ErrorCodes = {
   // Validation errors
   VALIDATION_ERROR: 'VALIDATION_ERROR',
   INVALID_INPUT: 'INVALID_INPUT',
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',  // 413; a request body over its route's own limit (an admission import)
 
   // Rate limiting
   RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',

@@ -163,6 +163,9 @@ export const EVENT_ACCESS = _EVENT_ACCESS;
 export const EVENT_VISIBILITY_KEYS = _EVENT_VISIBILITY_KEYS;
 export const defaultEventVisibility = _defaultEventVisibility;
 export const isEventVisibility = _isEventVisibility;
+// Part 2 Task 4 (10 Nov 2026): who gets a place on an event (sessions.admission_mode), a real VALUE the forms list.
+import { ADMISSION_MODES as _ADMISSION_MODES } from './types/session';
+export const ADMISSION_MODES = _ADMISSION_MODES;
 export const formatRule = _formatRule;
 export const podTypeRule = _podTypeRule;
 export const isEventFormat = _isEventFormat;

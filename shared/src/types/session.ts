@@ -276,3 +276,64 @@ export interface HostReassignment {
   newPartnerId: string | null;
   reason: string;
 }
+
+// ─── Admission per event (Part 2, Task 4, 10 Nov 2026) ──────────────────────
+//
+// Who gets a place, beside who sees the event (sessions.visibility). NULL (every event made before) keeps today's rules
+// exactly. The server decides from it (server/src/services/session/event-access.ts); the link alone never grants a
+// place on an event that is not open.
+
+/** sessions.admission_mode: open (any active account), approval (outsiders request), restricted ("Invitation only"). */
+export type AdmissionMode = 'open' | 'approval' | 'restricted';
+
+/** The three, in the order an organiser's form offers them. */
+export const ADMISSION_MODES: readonly AdmissionMode[] = ['open', 'approval', 'restricted'] as const;
+
+/**
+ * What decides a place on an event today: its own admission mode, or, with none, the T11 rules for members
+ * (`members_only`, an event with its own visibility) or its pod's rules (`pod_rules`, an event with neither).
+ */
+export type EffectiveAdmission = AdmissionMode | 'members_only' | 'pod_rules';
+
+/** session_participants.admitted_via: what gave a place on an event with an admission mode (NULL: given before one). */
+export type AdmittedVia = 'open' | 'approval' | 'invite' | 'allow_list' | 'code' | 'audience' | 'admin';
+
+/** GET /sessions/:id/admission (the event's organisers). */
+export interface EventAdmissionOverview {
+  mode: AdmissionMode | null;
+  effective: EffectiveAdmission;
+  counts: { listed: number; registered: number; codesUnused: number; codesUsed: number };
+}
+
+/** One allowed email as the organisers' list shows it. `registered`: the address belongs to someone holding a place. */
+export interface AdmissionEntryRow {
+  id: string;
+  email: string;
+  groupKey: string | null;
+  status: 'listed' | 'registered' | 'revoked';
+  displayName: string | null;
+}
+
+/** POST /sessions/:id/admission/emails. `invalid` holds at most 50 examples. */
+export interface AddAdmissionEmailsResult {
+  added: number;
+  alreadyListed: number;
+  restored: number;
+  invalid: string[];
+}
+
+/** One admission code as the organisers' list shows it: never the code itself, only its last four symbols. */
+export interface AdmissionCodeRow {
+  id: string;
+  last4: string;
+  label: string | null;
+  groupKey: string | null;
+  status: 'unused' | 'used' | 'revoked' | 'expired';
+  redeemedBy: { id: string; displayName: string } | null;
+}
+
+/** A code as generated: the only time its plaintext is ever sent (`XXXX-XXXX-XXXX`). */
+export interface GeneratedAdmissionCode {
+  id: string;
+  code: string;
+}

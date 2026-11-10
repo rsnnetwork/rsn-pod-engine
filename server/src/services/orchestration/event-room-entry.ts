@@ -7,7 +7,7 @@ import type { Socket } from 'socket.io';
 import { ErrorCodes } from '@rsn/shared';
 import logger from '../../config/logger';
 import type { EventRoomAdmission } from '../session/session-access';
-import { canEnterRoom } from '../session/event-access';
+import { EVENT_ADMISSION_REQUIRED_SENTENCE, canEnterRoom } from '../session/event-access';
 import { sessionRoom } from './state/session-state';
 import { GUEST_REGISTRATION_MESSAGE } from '../session/guest-registration';
 
@@ -35,6 +35,10 @@ export function eventRoomRefusal(eventStatus: string, registrationCode: string |
   // T11 (1 Nov 2026): an event with its own visibility refuses in its own words.
   if (registrationCode === ErrorCodes.EVENT_NEEDS_APPROVAL) {
     return { code: ErrorCodes.EVENT_NEEDS_APPROVAL, message: 'This event asks the host to approve each place. Request to join from the event page.' };
+  }
+  // Part 2 Task 4: an invitation-only event this person holds no entitlement to (never invited, or taken off its list).
+  if (registrationCode === ErrorCodes.EVENT_ADMISSION_REQUIRED) {
+    return { code: ErrorCodes.EVENT_ADMISSION_REQUIRED, message: EVENT_ADMISSION_REQUIRED_SENTENCE };
   }
   if (registrationCode === ErrorCodes.EVENT_PRIVATE) {
     return { code: ErrorCodes.EVENT_PRIVATE, message: "This event is private. It is for its pod's members and the people the host invites." };

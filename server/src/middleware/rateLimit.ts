@@ -771,3 +771,66 @@ export const groupsWriteLimiter = rateLimit({
   store: buildStore('event-groups-write'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
+
+// ─── Admission per event (Part 2, Task 4, 10 Nov 2026) ───────────────────────
+// The organisers' admission screens: reads like the event's other organiser lists, and every change (mode, an import
+// of allowed emails, a revoke, a batch of codes) in a smaller allowance of its own. Keyed per member: they sign in first.
+export const admissionReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('admission-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const admissionWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('admission-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// Redeeming an admission code (Review Focus 4: brute force). A code is 60 bits, so guessing is hopeless already; these
+// cap it anyway. Only a refused try counts (skipSuccessfulRequests): ten wrong tries an hour per person per event, and
+// thirty an hour per network address across every person and event behind it, so one script cannot spread its guesses
+// over many accounts. The refusal reads the same for both.
+const ADMISSION_REDEEM_WINDOW_MS = 60 * 60 * 1000;
+const admissionRedeemLimited = (_req: Request, res: Response) => {
+  const response: ApiResponse = {
+    success: false,
+    error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many codes tried. Please wait an hour, then try again.' },
+  };
+  res.status(429).json(response);
+};
+
+/** The per-person, per-event bucket: the verified sign-in (or the address, unsigned) and the event in the path. */
+export function admissionRedeemKey(req: Request): string {
+  return `${userOrIpKey(req)}:e:${String(req.params?.id ?? '').toLowerCase()}`;
+}
+
+export const admissionRedeemLimiter = rateLimit({
+  windowMs: ADMISSION_REDEEM_WINDOW_MS,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: admissionRedeemKey,
+  store: buildStore('admission-redeem'),
+  handler: admissionRedeemLimited,
+});
+
+export const admissionRedeemIpLimiter = rateLimit({
+  windowMs: ADMISSION_REDEEM_WINDOW_MS,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req: Request) => `ip:${clientIp(req)}`,
+  store: buildStore('admission-redeem-ip'),
+  handler: admissionRedeemLimited,
+});
