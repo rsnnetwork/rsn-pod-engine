@@ -1,6 +1,7 @@
 // ─── People (REASON milestone 1, 29 Sep 2026) ────────────────────────────────
 // GET    /people/connections        ?limit=30&before=<ISO>  (21 Oct 2026)
 // GET    /people/connections/recent
+// GET    /people/everyone           ?q&cursor&limit  (10 Nov 2026) every member you may meet, A to Z
 // GET    /people/me/card            (21 Oct 2026) your own public card, exactly what others see
 // GET    /people/:userId/brief
 // PUT    /people/:userId/response  { response: 'saved' | 'passed' }
@@ -18,6 +19,7 @@ import * as responses from '../services/people/person-response.service';
 import * as outcomes from '../services/people/meeting-outcome.service';
 import * as brief from '../services/people/person-brief.service';
 import * as connections from '../services/people/connections.service';
+import * as everyone from '../services/people/everyone.service';
 import { announceFeedbackToAdmins } from '../services/meetings/meeting-feedback.service';
 
 const router = Router();
@@ -60,6 +62,30 @@ router.get(
       // validate() has replaced req.query with the parsed value; Express still types it as raw strings.
       const { limit, before }: ConnectionsQuery = req.query as unknown as ConnectionsQuery;
       const data = await connections.listConnections(req.user!.userId, { limit, before: before ?? null });
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const everyoneQuery = z.object({
+  q: z.string().trim().max(everyone.EVERYONE_SEARCH_MAX).optional(),
+  cursor: z.string().min(1).max(600).optional(),
+  limit: z.coerce.number().int().min(1).optional()
+    .transform((n) => Math.min(n ?? everyone.EVERYONE_PAGE, everyone.EVERYONE_PAGE_MAX)),
+});
+type EveryoneQuery = z.infer<typeof everyoneQuery>;
+
+router.get(
+  '/everyone',
+  authenticate,
+  peopleReadLimiter,
+  validate(everyoneQuery, 'query'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { q, cursor, limit }: EveryoneQuery = req.query as unknown as EveryoneQuery;
+      const data = await everyone.listEveryone(req.user!.userId, { q, cursor, limit });
       res.json({ success: true, data } as ApiResponse);
     } catch (err) {
       next(err);

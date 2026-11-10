@@ -46,6 +46,7 @@ import MatchesPage from '@/features/matches/MatchesPage';
 import AgentsPage from '@/features/agents/AgentsPage';
 import SearchPage from '@/features/search/SearchPage';
 import ConnectionsPage from '@/features/reason/people/ConnectionsPage';
+import EveryonePage from '@/features/reason/people/EveryonePage';
 import AgentDetailPage from '@/features/agents/AgentDetailPage';
 import CirclesPage from '@/features/circles/CirclesPage';
 import CircleDetailPage from '@/features/circles/CircleDetailPage';
@@ -250,6 +251,7 @@ export default function App() {
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/connections" element={<ConnectionsPage />} />
+        <Route path="/people/everyone" element={<EveryonePage />} />
         <Route path="/agents/:id" element={<AgentDetailPage />} />
         <Route path="/circles" element={<CirclesPage />} />
         <Route path="/circles/:circleId" element={<CircleDetailPage />} />

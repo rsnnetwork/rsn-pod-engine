@@ -87,6 +87,7 @@ describe('REASON shell (milestone 1)', () => {
     expect(order).toEqual([
       ['/connections', 'Your connections'],
       ['/search', 'Find people'],
+      ['/people/everyone', 'Everyone'],
       ['/agents', 'Your searches'],
       ['/matches', 'Everyone who fits'],
       ['/encounters', 'People you have met'],
@@ -370,7 +371,7 @@ describe('REASON shell: People opens Your connections', () => {
     expect(loadNav().MAIN_NAV.find((i) => i.key === 'people')?.to).toBe('/connections');
   });
 
-  it('People is the current entry on all five tabs, a page under them and a Human Profile, and on nothing else', () => {
+  it('People is the current entry on all six tabs, a page under them and a Human Profile, and on nothing else', () => {
     const people = loadNav().MAIN_NAV.find((i) => i.key === 'people')!;
     for (const url of ['/connections', '/search', '/agents', '/agents/a1', '/matches', '/encounters', '/people/u1']) {
       expect({ url, current: people.match(url) }).toEqual({ url, current: true });
@@ -380,7 +381,7 @@ describe('REASON shell: People opens Your connections', () => {
     }
     // Every People tab is an address the People entry is current on.
     const tabs = [...read('features/reason/shell/PeopleTabs.tsx').matchAll(/\{ to: '([^']+)'/g)].map((m) => m[1]);
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(6);
     for (const to of tabs) expect({ to, current: people.match(to) }).toEqual({ to, current: true });
   });
 
@@ -391,7 +392,7 @@ describe('REASON shell: People opens Your connections', () => {
     expect(shellRoutes).toContain('<Route path="/connections" element={<ConnectionsPage />} />');
   });
 
-  it('on a tablet and up the five tabs wrap instead of running off the side; on a phone the row scrolls', () => {
+  it('on a tablet and up the six tabs wrap instead of running off the side; on a phone the row scrolls', () => {
     const tabs = read('features/reason/shell/PeopleTabs.tsx');
     expect(tabs).toMatch(/aria-label="People" className="[^"]*\boverflow-x-auto\b[^"]*\bmin-\[721px\]:flex-wrap\b/);
   });

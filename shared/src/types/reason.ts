@@ -146,6 +146,19 @@ export interface PersonConnection {
   since: string;
 }
 
+/** One person on the Everyone list: the public card, and where a meeting request and the relationship stand. */
+export type EveryoneMember = PublicMember & {
+  pokeStatus: 'pending' | 'accepted' | null;
+  pokeSentByOwner: boolean | null;
+  relationship: RelationshipState;
+};
+
+export interface EveryonePage {
+  people: EveryoneMember[];
+  /** Ask again with ?cursor= this for the next people; null when there are no more. */
+  nextCursor: string | null;
+}
+
 export interface ConnectionList {
   items: PersonConnection[];
   /** Ask again with ?before= this for the next people; null when there are no more. */
