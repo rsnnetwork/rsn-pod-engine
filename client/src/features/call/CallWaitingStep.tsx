@@ -3,14 +3,14 @@
 // starts (the server's session:<id> tag). The same place says "Waiting for the organiser to approve you" for a request.
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, Hourglass, Users } from 'lucide-react';
-import type { CallLanding } from '@rsn/shared';
+import type { CallLanding, MySchedule } from '@rsn/shared';
 import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { eventEntry, icsFile } from '@/components/calendar/calendar-links';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { CALL_WORDS, youreInSentence } from './call-entry';
 import { GUEST_HOME_PATH } from './guest-routes';
-import { useMySchedule, type MySchedule } from './useCallLink';
+import { useMySchedule } from './useCallLink';
 
 interface Props {
   landing: CallLanding;

@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { CallEntryState, CallEntryVerification, CallEventSummary, CallLanding } from '@rsn/shared';
+import type { CallEntryState, CallEntryVerification, CallEventSummary, CallLanding, MySchedule } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
@@ -116,24 +116,7 @@ export function useMyCallEvents() {
   });
 }
 
-/**
- * A person's own meetings in an event, once its organisers have published a schedule (Part 2, Task 9's
- * GET /sessions/:id/schedule/mine; its type is written here until that task's shared type lands).
- */
-export interface MySchedule {
-  version: number;
-  publishedAt: string;
-  rounds: Array<{
-    round: number;
-    startsAt: string | null;
-    room: number | null;
-    partners: Array<{ displayName: string; avatarUrl: string | null; groupLabels: string[] }>;
-  }>;
-}
-
-/** Task 9's tag for an event's published schedule (`session:<id>:published-schedule`). */
-const publishedScheduleTag = (sessionId: string) => `session:${sessionId}:published-schedule`;
-
+/** A person's own meetings in an event, once its organisers have published a schedule (GET /sessions/:id/schedule/mine). */
 export function useMySchedule(sessionId: string | null) {
   const { userId } = useSignedInId();
   return useQuery({
@@ -143,8 +126,8 @@ export function useMySchedule(sessionId: string | null) {
         const { data } = await api.get(CALL_API.mySchedule(sessionId!));
         return (data.data ?? null) as MySchedule | null;
       } catch (err) {
-        // No published schedule to show: none yet (404), or a server without schedules. The waiting screen then simply
-        // has no "Your meetings" block; anything else is a real failure and is thrown.
+        // Before the first publish the answer is null. A 404 (an event this read cannot find) shows nothing either: the
+        // waiting screen then simply has no "Your meetings" block. Anything else is a real failure and is thrown.
         const status = (err as { response?: { status?: number } } | null)?.response?.status;
         if (status === 404) return null;
         throw err;
@@ -152,6 +135,6 @@ export function useMySchedule(sessionId: string | null) {
     },
     enabled: !!sessionId && !!userId,
     retry: false,
-    meta: { entities: sessionId ? [publishedScheduleTag(sessionId), E.sessionMatches(sessionId), E.session(sessionId)] : [] },
+    meta: { entities: sessionId ? [E.sessionPublishedSchedule(sessionId), E.sessionMatches(sessionId), E.session(sessionId)] : [] },
   });
 }
