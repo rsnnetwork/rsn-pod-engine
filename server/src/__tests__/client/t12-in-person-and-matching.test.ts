@@ -123,7 +123,8 @@ describe('the event page and the live page', () => {
 
   it('an in-person event has no Go Live, Enter Event or Enter Live Event', () => {
     expect(page).toMatch(/const hasRoom = liveKindOf\(eventFormat\) !== 'none';/);
-    expect(page).toMatch(/\{hasRoom && \(isRegistered \|\| isHost\) && sessionStatusPhase\(session\.status\) === 'pre' && \(/);
+    // Part 2 Task 11: and not for a draft, which cannot start until it is published.
+    expect(page).toMatch(/\{hasRoom && \(isRegistered \|\| isHost\) && sessionStatusPhase\(session\.status\) === 'pre' && !isDraft && \(/);
     expect(page).toMatch(/\{hasRoom && \(isRegistered \|\| isHost\) && sessionStatusPhase\(session\.status\) === 'live' && \(/);
   });
 
