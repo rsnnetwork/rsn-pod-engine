@@ -50,6 +50,10 @@ export interface User {
   industry: string | null;
   location: string | null;
   linkedinUrl: string | null;
+  websiteUrl: string | null;
+  instagramUrl: string | null;
+  xUrl: string | null;
+  facebookUrl: string | null;
   interests: string[];
   reasonsToConnect: string[];
   languages: string[];
@@ -107,6 +111,11 @@ export interface PublicMember {
   industry: string | null;
   location: string | null;
   linkedinUrl: string | null;
+  /** Their website, Instagram, X and Facebook: each an address in the stored form (shared/src/profile/links.ts), or null. */
+  websiteUrl: string | null;
+  instagramUrl: string | null;
+  xUrl: string | null;
+  facebookUrl: string | null;
   languages: string[];
   professionalRole: string[];
   expertiseText: string | null;
@@ -132,6 +141,10 @@ export interface UpdateUserInput {
   industry?: string | null;
   location?: string | null;
   linkedinUrl?: string | null;
+  websiteUrl?: string | null;
+  instagramUrl?: string | null;
+  xUrl?: string | null;
+  facebookUrl?: string | null;
   interests?: string[];
   reasonsToConnect?: string[];
   languages?: string[];

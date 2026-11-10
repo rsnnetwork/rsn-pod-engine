@@ -26,7 +26,7 @@ import {
 } from '../realtime/fanout';
 import { NotFoundError } from '../middleware/errors';
 import { query } from '../db';
-import { ApiResponse, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { ApiResponse, UserRole, hasRoleAtLeast, PROFILE_LINK_HELP, PROFILE_LINK_MAX, parseProfileUrl, type ProfileLinkKind } from '@rsn/shared';
 import * as bannerService from '../services/user/banner.service';
 import { getPictureSource, savePicture } from '../services/user/picture.service';
 import { pictureBodySchema, type PictureBody } from './picture-body';
@@ -35,6 +35,18 @@ import { avatarWriteLimiter, bannerReadLimiter, bannerWriteLimiter, pictureSourc
 const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
+
+// A link beside LinkedIn (10 Nov 2026): what is typed is checked and stored in the form shared/src/profile/links.ts
+// makes (https, the platform's own host); blank clears it; anything else is refused with a sentence for the field.
+const profileLink = (kind: ProfileLinkKind) => z.string().max(PROFILE_LINK_MAX).nullable().optional().transform((value, ctx) => {
+  if (value === undefined) return undefined;
+  const result = parseProfileUrl(kind, value);
+  if (!result.ok) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: PROFILE_LINK_HELP[kind] });
+    return z.NEVER;
+  }
+  return result.url;
+});
 
 const updateUserSchema = z.object({
   displayName: z.string().max(100).optional(),
@@ -47,6 +59,10 @@ const updateUserSchema = z.object({
   industry: z.string().max(100).nullable().optional(),
   location: z.string().max(200).nullable().optional(),
   linkedinUrl: z.string().max(500).nullable().optional(),
+  websiteUrl: profileLink('website'),
+  instagramUrl: profileLink('instagram'),
+  xUrl: profileLink('x'),
+  facebookUrl: profileLink('facebook'),
   interests: z.array(z.string().max(50)).max(20).optional(),
   reasonsToConnect: z.array(z.string().max(100)).max(10).optional(),
   languages: z.array(z.string().max(30)).max(10).optional(),

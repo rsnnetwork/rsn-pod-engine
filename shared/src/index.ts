@@ -104,6 +104,16 @@ export const primaryActionFor = _primaryActionFor;
 import { LINKEDIN_PROFILE_HELP as _LINKEDIN_PROFILE_HELP, linkedinProfileUrl as _linkedinProfileUrl } from './linkedin/profile-url';
 export const LINKEDIN_PROFILE_HELP = _LINKEDIN_PROFILE_HELP;
 export const linkedinProfileUrl = _linkedinProfileUrl;
+// The profile links beside LinkedIn (10 Nov 2026): VALUES the form and the server both run, so each has its own named export.
+import {
+  PROFILE_LINK_HELP as _PROFILE_LINK_HELP, PROFILE_LINK_MAX as _PROFILE_LINK_MAX,
+  normaliseProfileUrl as _normaliseProfileUrl, parseProfileUrl as _parseProfileUrl,
+} from './profile/links';
+export type { ProfileLinkKind, ProfileLinkResult } from './profile/links';
+export const PROFILE_LINK_HELP = _PROFILE_LINK_HELP;
+export const PROFILE_LINK_MAX = _PROFILE_LINK_MAX;
+export const normaliseProfileUrl = _normaliseProfileUrl;
+export const parseProfileUrl = _parseProfileUrl;
 export * from './types/entity';
 // Real VALUES the client renders (the Entities pages), so each needs its own statically analysable
 // named export, same as OPENINGS above.
