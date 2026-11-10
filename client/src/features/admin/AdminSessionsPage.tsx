@@ -11,7 +11,8 @@ import { useAuthStore } from '@/stores/authStore';
 import { isAdmin, formatDateTime } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
-import { sessionStatusLabel, sessionStatusColor } from '@/features/sessions/statusConfig';
+import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from '@/features/sessions/statusConfig';
+import EndEventButton from '@/features/sessions/EndEventButton';
 import { useConfirm } from '@/hooks/useConfirm';
 
 export default function AdminSessionsPage() {
@@ -71,18 +72,22 @@ export default function AdminSessionsPage() {
             <p className="text-gray-500">No events found</p>
           </Card>
         ) : data.map((session: any) => (
-          <Card key={session.id}>
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
+          <Card key={session.id} data-testid={`admin-event-${session.id}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-semibold text-gray-800 hover:text-rsn-red cursor-pointer" onClick={() => navigate(`/sessions/${session.id}`)}>{session.title}</h3>
+                  <h3 className="font-semibold text-gray-800 hover:text-rsn-red cursor-pointer [overflow-wrap:anywhere]" onClick={() => navigate(`/sessions/${session.id}`)}>{session.title}</h3>
                   <Badge variant={sessionStatusColor(session.status)}>{sessionStatusLabel(session.status)}</Badge>
                 </div>
                 <p className="text-xs text-gray-400 mt-1">
                   Scheduled: {formatDateTime(session.scheduledAt)} · Participants: {session.participantCount || '—'}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* A super admin ends any live event (10 Nov 2026, F7), as on the event's own page. */}
+                {isSuperAdmin && sessionStatusPhase(session.status) === 'live' && (
+                  <EndEventButton sessionId={session.id} className="px-3 text-xs" />
+                )}
                 {session.status !== 'cancelled' && session.status !== 'completed' && (
                   <Button
                     size="sm"

@@ -29,6 +29,7 @@ import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
 import EventAccessActions, { ACCESS_COPY, type EventAccess } from './EventAccessActions';
 import EventJoinRequestsCard from './EventJoinRequestsCard';
+import EndEventButton from './EndEventButton';
 import { duplicateCircleField, eventCircleLine } from './circle-preset';
 import { circleErrorSentence } from '@/features/circles/useCircleActions';
 
@@ -102,6 +103,8 @@ export default function SessionDetailPage() {
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
   // Where the event is in its life: before, live, done (completed) or cancelled.
   const phase = sessionStatusPhase(session?.status);
+  // A super admin may end any live event (10 Nov 2026, F7): the platform role decides, never attendance.
+  const mayEndForEveryone = user?.role === 'super_admin' && phase === 'live';
   // The preset the facts line names (30 Oct 2026): "Speed networking · Founders and investors · …".
   const { data: presets } = useMatchingPresets();
 
@@ -518,6 +521,7 @@ export default function SessionDetailPage() {
               Co-hosts send invites too (26 Oct 2026), so they get the invite button and nothing else here. */}
           {(isHost || isAdmin || mayInvite) && sessionStatusPhase(session.status) !== 'cancelled' && (
             <div className="ml-auto flex items-center gap-2 flex-wrap">
+              {mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}
               {mayInvite && (
                 // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
                 <button
