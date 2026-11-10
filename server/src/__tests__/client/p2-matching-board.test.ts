@@ -16,7 +16,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { BoardPerson, BoardRoom, BoardRound, BoardSeat, EventGroupRules, RoomVerdict, ScheduleBoard } from '@rsn/shared';
+import type {
+  BoardPerson, BoardRoom, BoardRound, BoardSeat, EventGroupRules, PublishResult, RoomVerdict, ScheduleBoard, ScheduleVersionSummary,
+} from '@rsn/shared';
 import { iconStandIns, loadClientModule, readClientSource } from './load-client-module';
 import { DROP_SAME_ROUND, decodeDrag, dropIntent, dropRefusal, encodeDrag } from '../../../../client/src/features/schedule/board-dnd';
 import {
@@ -24,6 +26,7 @@ import {
   rowMatches, swapHint, timelineLine, timelineOf, waitingLine,
 } from '../../../../client/src/features/schedule/board-model';
 import { E as clientE } from '../../../../client/src/realtime/entities';
+import { E as serverE } from '../../realtime/entities';
 
 const SCHEDULE_DIR = 'features/schedule';
 const CLIENT = path.join(__dirname, '../../../../client/src');
@@ -56,7 +59,7 @@ const round = (roundNumber: number, rooms: BoardRoom[], basket: BoardPerson[], e
 
 function makeBoard(): ScheduleBoard {
   return {
-    sessionId: 's-1', revision: 4, publishedVersion: null, draftDiffersFromPublished: true, groupRules: RULES, canOverride: true,
+    sessionId: 's-1', revision: 4, publishedVersion: null, draftDiffersFromPublished: true, liveConflicts: [], groupRules: RULES, canOverride: true,
     people: [ann, bob, cat, dan, eve, fay],
     rounds: [
       round(1, [
@@ -416,30 +419,44 @@ describe('the all-rounds overview scrolls sideways inside its own frame, and not
 });
 
 describe('every read of the board\'s screens is live', () => {
-  it('the publish preview follows the draft; the versions list follows the published schedule too', () => {
+  it('the publish preview follows the draft; the versions list follows the published schedule too (Task 9\'s tag)', () => {
     const publish = code(`${SCHEDULE_DIR}/publish-api.ts`);
     expect(publish).toContain('meta: { entities: [E.sessionSchedule(sessionId), E.sessionGroups(sessionId), E.sessionParticipants(sessionId)] }');
-    expect(publish).toContain('meta: { entities: [E.sessionSchedule(sessionId), publishedScheduleTag(sessionId)] }');
+    expect(publish).toContain('meta: { entities: [E.sessionSchedule(sessionId), E.sessionPublishedSchedule(sessionId)] }');
+    expect(clientE.sessionPublishedSchedule('s-1')).toBe(serverE.sessionPublishedSchedule('s-1'));
+    expect(clientE.sessionPublishedSchedule('s-1')).toBe('session:s-1:published-schedule');
     expect(code(`${SCHEDULE_DIR}/MatchingBoardPage.tsx`)).toContain('meta: { entities: [E.session(sessionId)] }');
   });
 });
 
-describe('Publish: the preview, "Publish version {n}", the versions (Task 9\'s routes, in one module)', () => {
+describe('Publish: the preview, "Publish version {n}", the versions, on Task 9\'s real routes and shapes', () => {
+  const serverRoutes = fs.readFileSync(path.join(__dirname, '../../routes/schedule.ts'), 'utf8');
   const mod = loadClientModule(`${SCHEDULE_DIR}/publish-api.ts`, {
     '@/lib/api': { __esModule: true, default: {} },
     '@/stores/toastStore': { useToastStore: () => undefined },
   }) as {
-    publishCopy: { publishVersion: (n: number) => string; published: (n: number) => string; impacted: (n: number) => string };
-    readVersion: (raw: Record<string, unknown>) => unknown;
-    publishedScheduleTag: (id: string) => string;
+    publishCopy: {
+      publishVersion: (n: number) => string; published: (n: number) => string; impacted: (n: number) => string;
+      unchanged: (n: number) => string; matches: (n: number) => string;
+    };
+    reasonWords: (reason: string | null) => string | null;
+    versionLine: (v: ScheduleVersionSummary, when: string | null) => string;
+    wasUnchanged: (result: PublishResult, sentRevision: number) => boolean;
+    hasSomethingToPublish: (board: ScheduleBoard) => boolean;
   };
 
-  it('follows the route shapes of the plan', () => {
+  it('calls the routes the server serves, with the body its schema takes, and reads the shared types', () => {
     const publish = code(`${SCHEDULE_DIR}/publish-api.ts`);
+    expect(serverRoutes).toContain("router.get('/:id/schedule/publish-preview'");
+    expect(serverRoutes).toContain("router.post('/:id/schedule/publish'");
+    expect(serverRoutes).toContain("router.get('/:id/schedule/versions'");
+    expect(serverRoutes).toContain("const publishBody = z.object({ expectedRevision, note: z.string().trim().max(500).optional() });");
     expect(publish).toContain("api.get(`/sessions/${sessionId}/schedule/publish-preview`)");
-    expect(publish).toContain("api.post(`/sessions/${sessionId}/schedule/publish`, { expectedRevision: board?.revision ?? 0, ...(note ? { note } : {}) })");
+    expect(publish).toContain("api.post(`/sessions/${sessionId}/schedule/publish`, { expectedRevision: sentRevision, ...(note ? { note } : {}) })");
     expect(publish).toContain("api.get(`/sessions/${sessionId}/schedule/versions`)");
-    expect(mod.publishedScheduleTag('s-1')).toBe('session:s-1:published-schedule');
+    // No local copy of a server shape: the preview, the result and the versions are the shared types.
+    expect(publish).toMatch(/type PublishPreview, type PublishResult, type ScheduleBoard, type ScheduleVersionSummary,\s*\} from '@rsn\/shared';/);
+    expect(publish).not.toMatch(/export interface (PublishPreview|PublishResult|ScheduleVersionSummary)\b/);
   });
 
   it('says "Publish version {n}", then "Version {n} published", and how many are told', () => {
@@ -447,16 +464,111 @@ describe('Publish: the preview, "Publish version {n}", the versions (Task 9\'s r
     expect(mod.publishCopy.published(2)).toBe('Version 2 published');
     expect(mod.publishCopy.impacted(1)).toBe('1 person is told their meetings changed.');
     const panel = code(`${SCHEDULE_DIR}/PublishPanel.tsx`);
-    // Blocking first, then warnings; the button waits while anything blocks.
+    // Blocking first, then warnings; the button waits while anything blocks or there is nothing to publish.
     expect(panel.indexOf('data.blocking.length > 0 && (')).toBeLessThan(panel.indexOf('data.warnings.length > 0 && ('));
+    expect(panel).toContain('const blocked = !data || data.blocking.length > 0 || !somethingToPublish;');
     expect(panel).toContain('disabled={blocked || publish.isPending}');
   });
 
-  it('a version row never shows a raw code', () => {
-    expect(mod.readVersion({ version: 3, automatic: true, reason: 'late_joiner', impactedUserIds: ['a', 'b'] }))
-      .toMatchObject({ version: 3, automatic: true, reason: 'Someone arrived late', impactedCount: 2 });
-    expect(mod.readVersion({ version: 4, reason: 'some_new_code' })).toMatchObject({ reason: null });
-    expect(mod.readVersion({ nope: 1 })).toBeNull();
+  it('a publish of a draft equal to the latest version wrote nothing (the revision did not move) and says so', () => {
+    expect(mod.wasUnchanged({ version: 3, impactedUserIds: [], revision: 12 }, 12)).toBe(true);
+    expect(mod.wasUnchanged({ version: 4, impactedUserIds: ['a'], revision: 13 }, 12)).toBe(false);
+    expect(mod.publishCopy.unchanged(3)).toBe('Nothing changed since version 3, so nothing new was published.');
+    expect(code(`${SCHEDULE_DIR}/PublishPanel.tsx`)).toContain(
+      'const said = wasUnchanged(result, sentRevision) ? publishCopy.unchanged(result.version) : publishCopy.published(result.version);',
+    );
+    // Publish is offered while the draft differs, before the first version, or while live conflicts wait to be settled.
+    const board = makeBoard();
+    expect(mod.hasSomethingToPublish({ ...board, publishedVersion: null, draftDiffersFromPublished: false })).toBe(true);
+    expect(mod.hasSomethingToPublish({ ...board, publishedVersion: 2, draftDiffersFromPublished: false })).toBe(false);
+    expect(mod.hasSomethingToPublish({ ...board, publishedVersion: 2, draftDiffersFromPublished: true })).toBe(true);
+    expect(mod.hasSomethingToPublish({
+      ...board, publishedVersion: 2, draftDiffersFromPublished: false, liveConflicts: [{ round: 3, room: null, message: 'x' }],
+    })).toBe(true);
+    expect(mod.publishCopy.matches(2)).toBe('The board matches version 2. Change something on it to publish again.');
+  });
+
+  it('a version row: who ("Automatic" for the product\'s own), why in words for every reason the server records, the note', () => {
+    const v: ScheduleVersionSummary = {
+      version: 3, publishedAt: '2026-11-11T10:00:00.000Z', publishedBy: null, automatic: true, reason: 'late_joiner', note: null, impactedCount: 2,
+    };
+    expect(mod.versionLine(v, 'Wed 10:00 AM')).toBe('Wed 10:00 AM · Automatic · Someone arrived late · 2 people told');
+    expect(mod.versionLine({ ...v, automatic: false, publishedBy: { userId: 'u', displayName: 'Hana' }, reason: null, note: 'Final', impactedCount: 1 }, null))
+      .toBe('by Hana · Final · 1 person told');
+    const live = fs.readFileSync(path.join(__dirname, '../../services/schedule/schedule-live.service.ts'), 'utf8');
+    const reasons = [...(live.match(/export type RepairReason = ([^;]+);/)?.[1].matchAll(/'([a-z_]+)'/g) ?? [])].map((m) => m[1]);
+    expect(reasons.length).toBeGreaterThan(0);
+    for (const reason of [...reasons, 'live_edit']) expect({ reason, words: mod.reasonWords(reason) }).toEqual({ reason, words: expect.any(String) });
+    expect(live).toContain("reason: 'live_edit'");
+    expect(mod.reasonWords('some_new_code')).toBeNull();
+  });
+
+  it('publishing waits behind an edit on its way, and the next edit waits for the board the publish moved', async () => {
+    let serverRevision = 4;
+    const sent: Array<{ url: string; expectedRevision: number }> = [];
+    const api = {
+      // A read takes a moment, as over the network: the next edit must wait for it, not race it.
+      get: async () => {
+        const revision = serverRevision;
+        await new Promise((r) => setTimeout(r, 25));
+        return { data: { data: { ...makeBoard(), revision } } };
+      },
+      post: async (url: string, body: { expectedRevision: number }) => {
+        sent.push({ url, expectedRevision: body.expectedRevision });
+        await new Promise((r) => setTimeout(r, 10));
+        if (body.expectedRevision !== serverRevision) {
+          throw { response: { status: 409, data: { error: { code: 'SCHEDULE_CHANGED', message: 'stale', details: { board: { ...makeBoard(), revision: serverRevision } } } } } };
+        }
+        serverRevision += 1;
+        if (url.endsWith('/publish')) return { data: { data: { version: 1, impactedUserIds: [], revision: serverRevision } } };
+        return { data: { data: { board: { ...makeBoard(), revision: serverRevision }, changed: [] } } };
+      },
+    };
+    const stand = { '@/lib/api': { __esModule: true, default: api }, '@/stores/toastStore': { useToastStore: () => undefined } };
+    const board = loadClientModule(`${SCHEDULE_DIR}/useBoard.ts`, stand) as {
+      boardWriteOptions: (qc: unknown, id: string) => Record<string, unknown>; boardQueryKey: (id: string) => readonly unknown[];
+    };
+    const publish = loadClientModule(`${SCHEDULE_DIR}/publish-api.ts`, stand) as {
+      publishOptions: (qc: unknown, id: string, apply: (b: ScheduleBoard) => void) => Record<string, unknown>;
+    };
+    interface Cache { build: (qc: unknown, o: Record<string, unknown>) => { execute: (v: unknown) => Promise<unknown> } }
+    const rq = require('@tanstack/react-query') as {
+      QueryClient: new () => { getMutationCache: () => Cache; setQueryData: (k: readonly unknown[], v: unknown) => void };
+      QueryObserver: new (qc: unknown, o: Record<string, unknown>) => { subscribe: (fn: () => void) => () => void };
+    };
+    const qc = new rq.QueryClient();
+    qc.setQueryData(board.boardQueryKey('s-1'), makeBoard());
+    // The board on screen: an active read, as the page holds one, so a publish's invalidation reads it again.
+    const stop = new rq.QueryObserver(qc, { queryKey: board.boardQueryKey('s-1'), queryFn: () => api.get().then((r) => r.data.data), staleTime: Infinity })
+      .subscribe(() => undefined);
+    const run = (o: Record<string, unknown>, v: unknown) => qc.getMutationCache().build(qc, o).execute(v);
+    const edit = run(board.boardWriteOptions(qc, 's-1'), { kind: 'op', op: { kind: 'unassign', round: 1, userId: 'ann' } });
+    const published = run(publish.publishOptions(qc, 's-1', () => undefined), undefined);
+    const after = run(board.boardWriteOptions(qc, 's-1'), { kind: 'op', op: { kind: 'unassign', round: 1, userId: 'bob' } });
+    await Promise.all([edit, published, after]);
+    stop();
+    expect(sent).toEqual([
+      { url: '/sessions/s-1/schedule/ops', expectedRevision: 4 },
+      { url: '/sessions/s-1/schedule/publish', expectedRevision: 5 },
+      { url: '/sessions/s-1/schedule/ops', expectedRevision: 6 },
+    ]);
+  });
+});
+
+describe('rounds the live event changed while the draft had its own changes (board.liveConflicts)', () => {
+  it('are shown above the board in the server\'s words, each with a way to its round, and resolved by publishing', () => {
+    const Notice = loadClientModule(`${SCHEDULE_DIR}/LiveConflictsNotice.tsx`, { 'lucide-react': iconStandIns }).default as (p: Record<string, unknown>) => JSX.Element;
+    const message = 'The live event changed round 3 (Ann) while this board had its own changes there. The board kept its own: check round 3 before publishing.';
+    const html = renderToStaticMarkup(createElement(Notice, { conflicts: [{ round: 3, room: null, message }], onShow: () => undefined, onPublish: () => undefined }));
+    expect(html).toContain('The live event changed rounds you have edited');
+    expect(html).toContain(message);
+    expect(html).toContain('Round 3: </span>');
+    expect(html).toContain('Review and publish');
+    expect(buttonClasses(html).filter((c) => !tallEnough(c))).toEqual([]);
+    expect(renderToStaticMarkup(createElement(Notice, { conflicts: [], onShow: () => undefined, onPublish: () => undefined }))).toBe('');
+    const page = code(`${SCHEDULE_DIR}/MatchingBoardPage.tsx`);
+    expect(page).toContain('<LiveConflictsNotice conflicts={board.liveConflicts} onShow={showConflict} onPublish={() => setPublishOpen(true)} />');
+    expect(code(`${SCHEDULE_DIR}/PublishPanel.tsx`)).toContain('{board.liveConflicts.length > 0 && (');
   });
 });
 
@@ -483,7 +595,12 @@ describe('the way in, and the live host', () => {
     const socket = code('hooks/useSessionSocket.ts');
     expect(socket).toContain("const LOCKED_ERRORS = Object.fromEntries(LOCKED_CODES.map((c) => [c, { msg: LOCKED_MEETING, severity: 'error' as const }]));");
     expect(socket).toMatch(/DM_REACT_FAILED: \{[^\n]*\},\s*\.\.\.LOCKED_ERRORS,\s*\};/);
-    expect(locked).toContain("export const LOCKED_CODES: readonly string[] = ['SCHEDULE_LOCKED', 'MATCH_LOCKED'];");
+    expect(locked).toContain("export const LOCKED_CODES: readonly string[] = ['SCHEDULE_LOCKED'];");
+    // The code and the sentence are the server's own: the live swap and exclude refuse a locked meeting with them.
+    const flow = fs.readFileSync(path.join(__dirname, '../../services/orchestration/handlers/matching-flow.ts'), 'utf8');
+    expect(flow.match(/socket\.emit\('error', \{ code: 'SCHEDULE_LOCKED', message: LOCKED_MATCH_MESSAGE \}\);/g)).toHaveLength(2);
+    expect(fs.readFileSync(path.join(__dirname, '../../services/schedule/schedule-live.service.ts'), 'utf8'))
+      .toContain("const LOCKED_MATCH = 'This meeting is locked on the matching board.';");
     expect(code('stores/sessionStore.ts')).toContain('timesMet?: number; locked?: boolean }[];');
   });
 });
@@ -667,7 +784,7 @@ describe('fix round 1 minors', () => {
     expect(code(`${SCHEDULE_DIR}/PersonTimeline.tsx`)).toContain('const lateChoices = rounds.filter((r) => r.editable).map((r) => r.roundNumber).filter((n) => n >= 2);');
   });
   it('a publish refused without a board reads the board again', () => {
-    expect(code(`${SCHEDULE_DIR}/publish-api.ts`)).toContain('else if (error.status === 409) void qc.invalidateQueries({ queryKey: boardQueryKey(sessionId) });');
+    expect(code(`${SCHEDULE_DIR}/publish-api.ts`)).toContain('else if (error.status === 409) await qc.invalidateQueries({ queryKey: boardQueryKey(sessionId) });');
   });
   it('an event with no rounds says so', () => {
     expect(page).toContain('This event has no rounds to plan yet.');

@@ -3,14 +3,16 @@
 // will be told their meetings changed; "Publish version {n}" freezes the board; the versions list keeps every one.
 import { useState } from 'react';
 import { CheckCircle2, CircleAlert, AlertTriangle, Loader2 } from 'lucide-react';
-import type { ScheduleBoard } from '@rsn/shared';
+import type { PublishPreviewItem, ScheduleBoard } from '@rsn/shared';
 import Sheet from '@/features/reason/ui/Sheet';
 import { Skeleton } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import { cn } from '@/lib/utils';
 import { boardErrorOf } from './board-errors';
 import { roomTitle, startsAtLabel } from './board-model';
-import { publishCopy, usePublish, usePublishPreview, useScheduleVersions, type PublishItem } from './publish-api';
+import {
+  hasSomethingToPublish, publishCopy, usePublish, usePublishPreview, useScheduleVersions, versionLine, wasUnchanged,
+} from './publish-api';
 
 interface Props {
   sessionId: string;
@@ -20,7 +22,7 @@ interface Props {
   applyReturnedBoard: (board: ScheduleBoard) => void;
 }
 
-function Items({ items, tone }: { items: PublishItem[]; tone: 'problem' | 'warning' }) {
+function Items({ items, tone }: { items: PublishPreviewItem[]; tone: 'problem' | 'warning' }) {
   return (
     <ul className="mt-1.5 flex flex-col gap-1.5">
       {items.map((item, i) => (
@@ -43,15 +45,21 @@ export default function PublishPanel({ sessionId, board, open, onClose, applyRet
   const versions = useScheduleVersions(sessionId, open);
   const publish = usePublish(sessionId, applyReturnedBoard);
   const [note, setNote] = useState('');
-  const [published, setPublished] = useState<number | null>(null);
+  const [done, setDone] = useState<string | null>(null);
   const data = preview.data;
-  const blocked = !data || data.blocking.length > 0;
+  const somethingToPublish = hasSomethingToPublish(board);
+  const blocked = !data || data.blocking.length > 0 || !somethingToPublish;
+
+  // A reopened panel starts from the board as it is, not from the last publish's outcome.
+  const close = () => { setDone(null); onClose(); };
 
   const submit = () => publish.mutate(note.trim() || undefined, {
-    onSuccess: (result) => {
-      setPublished(result.version);
+    onSuccess: ({ result, sentRevision }) => {
+      // A draft equal to the latest version writes nothing (and settles live conflicts): it is said so, not as a new version.
+      const said = wasUnchanged(result, sentRevision) ? publishCopy.unchanged(result.version) : publishCopy.published(result.version);
+      setDone(said);
       setNote('');
-      addToast(publishCopy.published(result.version), 'success');
+      addToast(said, 'success');
     },
     onError: (err) => addToast(boardErrorOf(err).message, 'error'),
   });
@@ -61,12 +69,21 @@ export default function PublishPanel({ sessionId, board, open, onClose, applyRet
     : `Version ${board.publishedVersion} is published.${board.draftDiffersFromPublished ? ' The board has changed since.' : ' The board matches it.'}`;
 
   return (
-    <Sheet open={open} onClose={onClose} title={publishCopy.title}>
+    <Sheet open={open} onClose={close} title={publishCopy.title}>
       <p className="text-[14px] text-[#5a6670]">{status}</p>
-      {published !== null && (
-        <p data-testid="publish-done" className="mt-3 flex items-center gap-2 rounded-xl bg-[#e3f1ee] px-3 py-2 text-[14px] font-semibold text-[#1d6b5c]">
-          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {publishCopy.published(published)}
+      {done !== null && (
+        <p data-testid="publish-done" role="status" className="mt-3 flex items-center gap-2 rounded-xl bg-[#e3f1ee] px-3 py-2 text-[14px] font-semibold text-[#1d6b5c]">
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {done}
         </p>
+      )}
+      {board.liveConflicts.length > 0 && (
+        <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-[14px] text-red-800">
+          The live event changed {board.liveConflicts.length === 1 ? 'a room' : `${board.liveConflicts.length} rooms`} where your draft has its own seating.
+          Publishing makes your draft the plan and settles {board.liveConflicts.length === 1 ? 'it' : 'them'}.
+        </p>
+      )}
+      {!somethingToPublish && board.publishedVersion !== null && done === null && (
+        <p data-testid="publish-nothing" className="mt-3 text-[14px] text-[#3d4a55]">{publishCopy.matches(board.publishedVersion)}</p>
       )}
 
       <div className="mt-4" data-testid="publish-preview">
@@ -126,12 +143,7 @@ export default function PublishPanel({ sessionId, board, open, onClose, applyRet
             {versions.data.map((v) => (
               <li key={v.version} className="text-[14px] text-[#3d4a55] [overflow-wrap:anywhere]">
                 <span className="font-semibold text-[#12293a]">Version {v.version}</span>
-                {[
-                  startsAtLabel(v.publishedAt),
-                  v.automatic ? publishCopy.automatic : v.publishedByName && `by ${v.publishedByName}`,
-                  v.reason,
-                  v.impactedCount !== null ? `${v.impactedCount} ${v.impactedCount === 1 ? 'person' : 'people'} told` : null,
-                ].filter(Boolean).map((part) => ` · ${part}`).join('')}
+                {` · ${versionLine(v, startsAtLabel(v.publishedAt))}`}
               </li>
             ))}
           </ol>

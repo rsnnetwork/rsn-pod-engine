@@ -29,6 +29,7 @@ import MoveSheet from './MoveSheet';
 import RefusalSheet from './RefusalSheet';
 import PersonTimeline from './PersonTimeline';
 import PublishPanel from './PublishPanel';
+import LiveConflictsNotice from './LiveConflictsNotice';
 
 const BACK = 'inline-flex min-h-[44px] items-center gap-2 text-[14px] text-[#5a6670] hover:text-[#12293a]';
 
@@ -174,6 +175,8 @@ export default function MatchingBoardPage() {
         </p>
         {error && <p role="status" className="text-[13px] text-amber-800">The board could not refresh just now. It catches up as soon as the connection is back.</p>}
       </div>
+
+      <LiveConflictsNotice conflicts={board.liveConflicts} onShow={showConflict} onPublish={() => setPublishOpen(true)} />
 
       <section className="flex min-w-0 flex-col gap-4 rounded-[20px] bg-[#f1f4f4] p-3 sm:p-5" aria-label="Matching board" aria-busy={busy}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
