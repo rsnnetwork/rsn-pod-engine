@@ -1,7 +1,8 @@
 // ─── "RSN Call link": the event's one shareable link, for its organisers (Part 2 Task 11; spec 02, 04) ──────────────
 // Anyone with the link reaches the event's entry (who gets a place is still the event's admission). Copy link puts it
 // on the clipboard; Make a new link asks first, because the old link stops working at once. The link is read through
-// call-link.ts; until the server has the call-link routes the card draws nothing.
+// call-link.ts (Task 6's organiser routes); for anyone the server refuses (403) or an event it cannot find (404) the
+// card draws nothing.
 import { useState } from 'react';
 import { Check, Copy, Link2, RefreshCw } from 'lucide-react';
 import { useConfirm } from '@/hooks/useConfirm';

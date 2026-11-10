@@ -84,7 +84,8 @@ describe('every new query follows the tags the brief names', () => {
     const [history] = queriesIn(src.history);
     expect(history).toMatch(/meta: \{ entities: \[E\.sessionAudit\(sessionId\)\] \}/);
     const [link] = queriesIn(src.callLink);
-    expect(link).toMatch(/meta: \{ entities: \[E\.session\(sessionId\)\] \}/);
+    // Task 6's rotate tells the organisers session:<id>:call-link and session:<id> (fanoutCallLink); the card follows both.
+    expect(link).toMatch(/meta: \{ entities: \[E\.session\(sessionId\), E\.sessionCallLink\(sessionId\)\] \}/);
   });
 
   it('no other file of the section reads the server without a tag', () => {
@@ -193,11 +194,28 @@ describe('the event page', () => {
 });
 
 describe('the RSN Call link', () => {
-  it('reads Task 6\'s organiser routes through one module, and draws nothing until they answer', () => {
+  it('reads Task 6\'s organiser routes through one module, and draws nothing for anyone they refuse', () => {
     expect(src.callLink).toMatch(/api\.get\(`\/sessions\/\$\{sessionId\}\/call-link`\)/);
     expect(src.callLink).toMatch(/api\.post\(`\/sessions\/\$\{sessionId\}\/call-link\/rotate`\)/);
     expect(src.callLinkCard).toMatch(/if \(link\.isError && notForThisViewer\(link\.error\)\) return null;/);
     expect(src.callLinkCard).not.toMatch(/api\./);
+    // The path is the shared callLinkPath (CALL_LINK_BASE_PATH); the server's url is used only when it ends in it.
+    expect(src.callLink).toMatch(/import \{ callLinkPath \} from '@rsn\/shared';/);
+    expect(src.callLink).toMatch(/const path = callLinkPath\(link\.code\);\s*return link\.url && link\.url\.endsWith\(path\) \? link\.url : `\$\{origin\}\$\{path\}`;/);
+  });
+
+  it('matches Task 6\'s organiser route on main: { code, path, url } from the shared path, and rotate tells the organisers', () => {
+    const service = fs.readFileSync(path.join(__dirname, '../../services/session/call-link.service.ts'), 'utf8');
+    expect(service).toMatch(/Promise<\{ code: string; path: string; url: string \}>/);
+    expect(service).toMatch(/return \{ code, path: callLinkPath\(code\), url: `\$\{config\.clientUrl\}\$\{callLinkPath\(code\)\}` \};/);
+    expect(service).toMatch(/emitEntities\(io, organisers, \[E\.sessionCallLink\(sessionId\), E\.session\(sessionId\)\]\)/);
+    const routes = fs.readFileSync(path.join(__dirname, '../../routes/call-links.ts'), 'utf8');
+    expect(routes).toMatch(/sessionCallLinkRoutes\.get\('\/:id\/call-link'/);
+    expect(routes).toMatch(/sessionCallLinkRoutes\.post\('\/:id\/call-link\/rotate'/);
+    expect(historySentence({
+      id: '1', at: '', actor: { id: 'h', displayName: 'Ana' }, automatic: false, action: 'call_link.rotated',
+      round: null, scheduleVersion: null, subjects: [], reason: null,
+    })).toBe('Ana made a new RSN Call link');
   });
 
   it('says "RSN Call link", Copy link, and asks before Make a new link', () => {

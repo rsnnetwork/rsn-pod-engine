@@ -64,6 +64,7 @@ const ACTIONS: Record<string, string> = {
   'schedule.locked': 'locked a room',
   'schedule.unlocked': 'unlocked a room',
   'schedule.published': 'published the schedule',
+  'call_link.rotated': 'made a new RSN Call link',
 };
 
 /** "Ana Lee published the event"; REASON for what the product did by itself. */
