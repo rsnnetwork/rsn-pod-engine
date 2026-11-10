@@ -18,8 +18,9 @@ jest.mock('../../config/logger', () => ({
   __esModule: true,
 }));
 jest.mock('../../db', () => ({
-  // authenticate() checks the member is still active before any route runs.
-  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }),
+  // authenticate() checks the member is still active, and (Part 2 Task 3) is a member and not an event guest,
+  // before any route runs.
+  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active', account_kind: 'member' }] }),
   transaction: jest.fn(),
   __esModule: true,
 }));

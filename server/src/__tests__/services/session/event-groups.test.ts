@@ -67,6 +67,15 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
   if (world.failOn?.test(sql)) throw new Error('the database refused');
   if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql)) return rows([]);
 
+  // Part 2 Task 3: the account gate (status and kind) and an event guest's registration facts. An id starting
+  // 'guest' is an event guest who came in through another event; everyone else is a member.
+  if (sql === 'SELECT status, account_kind FROM users WHERE id = $1') {
+    return rows([{ status: 'active', account_kind: String(params[0]).startsWith('guest') ? 'event_guest' : 'member' }]);
+  }
+  if (/^SELECT u.guest_first_session_id, EXISTS \(SELECT 1 FROM session_participants sp/.test(sql)) {
+    return rows([{ guest_first_session_id: 'another-event', holds_place: world.participants.has(params[1] as string) }]);
+  }
+
   // registerParticipant
   if (/AS "hasEventGroups" FROM sessions WHERE id = \$1$/.test(sql)) {
     const s = world.session;
@@ -572,6 +581,19 @@ describe('registerParticipant on an event with groups', () => {
     expect(eventRoomRefusal('lobby_open', ErrorCodes.EVENT_GROUP_REQUIRED)).toEqual({
       code: ErrorCodes.EVENT_GROUP_REQUIRED, message: 'Choose your group for this event first, on the event page.',
     });
+  });
+});
+
+describe('registerParticipant: the guest check comes before the group question (Part 2 Task 3 then Task 5)', () => {
+  it('an event guest from another event is refused as a guest, not asked for a group, and gets no place', async () => {
+    await saveEventGroupRules(EVENT, host, foundersFunders());
+    world.sql = [];
+    expect(await refusal(registerParticipant(EVENT, 'guest-1', UserRole.MEMBER, { groupKeys: ['founder'] }))).toMatchObject({
+      status: 403, code: ErrorCodes.GUEST_MEMBERSHIP_REQUIRED,
+    });
+    expect(world.participants.has('guest-1')).toBe(false);
+    expect(keysOfUser('guest-1')).toEqual([]);
+    expect(world.sql.some((s) => /event_participant_groups/.test(s))).toBe(false);
   });
 });
 
