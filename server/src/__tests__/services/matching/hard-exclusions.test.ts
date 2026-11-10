@@ -89,6 +89,8 @@ describe('the room checker reads the same pairs, the same way', () => {
     for (const file of ['matching.service.ts', 'constraint-context.ts']) {
       expect(read(file)).not.toMatch(/FROM invites|FROM user_blocks|FROM violations|getBlockedPairsForUsers/);
     }
-    expect(read('matching.service.ts')).toMatch(/const \{ inviterInvitee: inviterInviteePairs, blocked: blockedPairs \} = await loadHardExclusions\(sessionId, participantIds\);/);
+    // Both the live round and (Part 2 Task 7) the plan made at Start read the loader.
+    expect(read('matching.service.ts')).toMatch(/const exclusions = await loadHardExclusions\(sessionId, participantIds\);/);
+    expect(read('matching.service.ts')).toMatch(/const exclusions = await loadHardExclusions\(sessionId, userIds\);/);
   });
 });

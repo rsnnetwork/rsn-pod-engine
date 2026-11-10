@@ -338,15 +338,20 @@ export class MatchingEngineV1 implements IMatchingEngine {
     const warnings: string[] = [];
 
     if (stillUnmatched.length === 1 && pairs.length > 0) {
-      // Exactly one leftover — add to the best-fit existing pair to form a trio
+      // Exactly one leftover — add to the best-fit existing pair to form a trio.
+      // 10 Nov 2026 (Part 2 Task 7) — only a pair neither of whom the leftover is kept from (a block, a report, an
+      // invite: the hard exclusions). Before, the best-scoring pair was taken whoever was in it, so two people who
+      // blocked each other could share a trio. With no such pair the leftover waits this round (a bye).
       const leftover = stillUnmatched[0];
-      let bestPairIdx = pairs.length - 1;
+      let bestPairIdx = -1;
       let bestTrioScore = -1;
 
       for (let pi = 0; pi < pairs.length; pi++) {
         const aIdx = participants.findIndex(p => p.userId === pairs[pi].participantAId);
         const bIdx = participants.findIndex(p => p.userId === pairs[pi].participantBId);
         if (aIdx < 0 || bIdx < 0) continue;
+        if (hardExclusions.has(pairKey(leftover.userId, pairs[pi].participantAId))
+          || hardExclusions.has(pairKey(leftover.userId, pairs[pi].participantBId))) continue;
 
         const scoreA = this.computePairScore(participants[leftover.idx], participants[aIdx], config.weights, encounterMap).score;
         const scoreB = this.computePairScore(participants[leftover.idx], participants[bIdx], config.weights, encounterMap).score;
@@ -358,13 +363,20 @@ export class MatchingEngineV1 implements IMatchingEngine {
         }
       }
 
-      pairs[bestPairIdx] = {
-        ...pairs[bestPairIdx],
-        participantCId: leftover.userId,
-        reasonTags: [...pairs[bestPairIdx].reasonTags, 'trio'],
-        // Trio creation is the spec's odd-count handling, not a fallback.
-        matchReason: pairs[bestPairIdx].matchReason || 'trio',
-      };
+      if (bestPairIdx >= 0) {
+        pairs[bestPairIdx] = {
+          ...pairs[bestPairIdx],
+          participantCId: leftover.userId,
+          reasonTags: [...pairs[bestPairIdx].reasonTags, 'trio'],
+          // Trio creation is the spec's odd-count handling, not a fallback.
+          matchReason: pairs[bestPairIdx].matchReason || 'trio',
+        };
+      } else {
+        byeParticipants.push(leftover.userId);
+        byeParticipant = leftover.userId;
+        logger.info({ roundNumber, leftover: leftover.userId },
+          'Odd person out is kept apart from someone in every pair — bye this round');
+      }
     } else if (stillUnmatched.length > 1) {
       // Multiple unmatched — all unique pairs exhausted, everyone gets bye
       for (const u of stillUnmatched) {

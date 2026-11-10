@@ -6,13 +6,13 @@ import logger from '../../config/logger';
 import {
   MatchingInput, MatchingOutput, MatchingConfig, MatchingWeights,
   MatchingParticipant, EncounterHistoryEntry, RoundAssignment,
-  MatchStatus, Match,
+  MatchStatus, Match, HardConstraint,
 } from '@rsn/shared';
 import { getMatchingEngine, DEFAULT_ENGINE_ID } from './matching.registry';
 import { pairKey } from './matching.interface';
 import { reduceRepeatPairs } from './repeat-reduction';
 import * as sessionService from '../session/session.service';
-import { loadHardExclusions } from './hard-exclusions';
+import { loadHardExclusions, type HardExclusions } from './hard-exclusions';
 import { normalizeDesignation, pairConfidence, profileCompleteness, withinCooldown } from './intent-signals';
 import { NotFoundError } from '../../middleware/errors';
 import { templateIdOf } from './matching-template-choice';
@@ -235,10 +235,16 @@ export async function generateSessionSchedule(
   // Get any pre-existing round assignments
   const existingRounds = await getExistingRounds(sessionId);
 
+  // 10 Nov 2026 (Part 2 Task 7) — the plan made at Start keeps apart the same people every later round does: a
+  // block either way, a report not dismissed, an inviter and the person they invited. It loaded none of them
+  // before, so the plan could seat two people who blocked each other together (and handleHostGenerateMatches
+  // shows that plan as the round's preview). Same loader, same reads, same failure behaviour as generateSingleRound.
+  const exclusions = await loadHardExclusions(sessionId, userIds);
+
   // Build matching config
   const config: MatchingConfig = {
     weights: customConfig?.weights || (await templateWeightsFor(session, sessionConfig)).weights,
-    hardConstraints: customConfig?.hardConstraints || [],
+    hardConstraints: [...(customConfig?.hardConstraints ?? []), ...hardConstraintsOf(exclusions)],
     numberOfRounds: customConfig?.numberOfRounds || sessionConfig.numberOfRounds || 5,
     avoidDuplicates: customConfig?.avoidDuplicates ?? true,
     globalOptimize: customConfig?.globalOptimize ?? true,
@@ -322,6 +328,21 @@ async function templateWeightsFor(
     }
   }
   return { weights, templateId: effectiveTemplateId };
+}
+
+/**
+ * The engine's hard constraints for the pairs that must never meet: the inviter and invitee pairs, then the blocks
+ * and reports, each only when there is one (the order and shape generateSingleRound has always passed).
+ */
+function hardConstraintsOf(exclusions: HardExclusions): HardConstraint[] {
+  const constraints: HardConstraint[] = [];
+  if (exclusions.inviterInvitee.length > 0) {
+    constraints.push({ type: 'inviter_invitee_block', params: { pairs: exclusions.inviterInvitee } });
+  }
+  if (exclusions.blocked.length > 0) {
+    constraints.push({ type: 'user_block', params: { pairs: exclusions.blocked } });
+  }
+  return constraints;
 }
 
 // ─── Generate Single Round ──────────────────────────────────────────────────
@@ -519,15 +540,9 @@ export async function generateSingleRound(
   // (10 Nov 2026): loaded by hard-exclusions.ts, the one loader the room checker's context also reads, with the
   // same reads in the same order and the same failure behaviour as before.
   const participantIds = participantsResult.rows.map(p => p.userId);
-  const { inviterInvitee: inviterInviteePairs, blocked: blockedPairs } = await loadHardExclusions(sessionId, participantIds);
-
-  const hardConstraints: { type: 'inviter_invitee_block' | 'user_block'; params: { pairs: string[] } }[] = [];
-  if (inviterInviteePairs.length > 0) {
-    hardConstraints.push({ type: 'inviter_invitee_block', params: { pairs: inviterInviteePairs } });
-  }
-  if (blockedPairs.length > 0) {
-    hardConstraints.push({ type: 'user_block', params: { pairs: blockedPairs } });
-  }
+  const exclusions = await loadHardExclusions(sessionId, participantIds);
+  const { inviterInvitee: inviterInviteePairs, blocked: blockedPairs } = exclusions;
+  const hardConstraints = hardConstraintsOf(exclusions);
 
   const { weights, templateId: effectiveTemplateId } = await templateWeightsFor(session, sessionConfig);
 
