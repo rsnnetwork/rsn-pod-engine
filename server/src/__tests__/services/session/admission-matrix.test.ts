@@ -20,8 +20,8 @@ jest.mock('../../../middleware/auth', () => ({ readAccountGate: (...a: unknown[]
 import { ErrorCodes, UserRole, hasRoleAtLeast, type AdmissionMode, type EventVisibility } from '@rsn/shared';
 import {
   EVENT_ADMISSION_REQUIRED_SENTENCE, admittedViaOf, autoRegisters, canRegister, canSeeEvent, effectiveAdmission,
-  eventAccessMode, needsApproval, readEventAccessFacts, restrictedEntitlementSql, summariseEventAccess,
-  type EventAccessFacts,
+  eventAccessMode, needsApproval, personalInviteSql, readEventAccessFacts, restrictedEntitlementSql, summariseEventAccess,
+  visibleEventsSql, type EventAccessFacts,
 } from '../../../services/session/event-access';
 import { eventRoomAdmission } from '../../../services/session/session-access';
 import { eventRoomRefusal } from '../../../services/orchestration/event-room-entry';
@@ -168,11 +168,14 @@ describe('D3: every visibility × admission mode × viewer', () => {
     expect(flat).not.toContain(EVENT);
   });
 
-  it('the entitlement is an unrevoked allowed email, an unrevoked redeemed code, or an invite, and refuses anything else', () => {
+  it('the entitlement is an unrevoked allowed email, an unrevoked redeemed code, or a personal invite, and refuses anything else', () => {
     const sql = restrictedEntitlementSql('s', '$2').replace(/\s+/g, ' ');
-    expect(sql).toContain('ad_e.session_id = s.id AND ad_e.email = lower(btrim(ad_u.email)) AND ad_e.revoked_at IS NULL');
+    expect(sql).toContain('ad_e.session_id = s.id AND ad_e.email = lower(btrim(ad_u.email)) AND ad_e.revoked_at IS NULL AND ad_u.email_verified = TRUE');
     expect(sql).toContain('ad_c.session_id = s.id AND ad_c.redeemed_by = $2 AND ad_c.revoked_at IS NULL');
-    expect(sql).toContain('FROM invites ei_i');
+    expect(sql).toContain(personalInviteSql('s', '$2').replace(/\s+/g, ' '));
+    // Fix round 1: never T11's invitee rule, whose accepted_by_user_id arm lets a shared link's first accepter in.
+    expect(sql).not.toContain('FROM invites ei_i');
+    expect(sql).not.toContain('accepted_by_user_id');
     expect(() => restrictedEntitlementSql('s; DROP TABLE x', '$2')).toThrow();
     expect(() => restrictedEntitlementSql('s', "'x'")).toThrow();
   });
@@ -244,7 +247,9 @@ describe('admittedViaOf: what gave the place (session_participants.admitted_via)
     expect(admittedViaOf(viewer('organiser', 'public', 'restricted').f, M)).toBe('admin');
     expect(admittedViaOf(viewer('stranger', 'public', 'restricted').f, UserRole.SUPER_ADMIN)).toBe('admin');
     expect(admittedViaOf(viewer('invitee', 'public', 'restricted').f, M)).toBe('invite');
-    expect(admittedViaOf(viewer('stranger', 'public', 'restricted').f, M, { viaInvite: true })).toBe('invite');
+    // A shared link's say-so (viaInvite with no personal invite) gives no place on an invitation-only event.
+    expect(admittedViaOf(viewer('stranger', 'public', 'restricted').f, M, { viaInvite: true })).toBeNull();
+    expect(admittedViaOf(viewer('stranger', 'public', 'approval').f, M, { viaInvite: true })).toBe('invite');
     expect(admittedViaOf(viewer('listed', 'public', 'restricted').f, M)).toBe('allow_list');
     expect(admittedViaOf(viewer('codeHolder', 'public', 'restricted').f, M)).toBe('code');
     expect(admittedViaOf(viewer('member', 'public', 'approval').f, M)).toBe('audience');
@@ -273,7 +278,9 @@ describe('readEventAccessFacts reads the mode and the entitlement', () => {
     expect(await read({ admission_mode: 'restricted', admission_listed: true, admission_code_held: true }))
       .toMatchObject({ admissionMode: 'restricted', entitled: true, entitledVia: 'allow_list' });
     expect(await read({ admission_mode: 'approval', admission_code_held: true })).toMatchObject({ entitled: true, entitledVia: 'code' });
-    expect(await read({ admission_mode: 'open', is_invited: true })).toMatchObject({ entitled: true, entitledVia: 'invite' });
+    expect(await read({ admission_mode: 'open', admission_personal_invite: true, is_invited: true })).toMatchObject({ entitled: true, entitledVia: 'invite' });
+    // T11's invitee flag alone (a shared link's first accepter) is no entitlement.
+    expect(await read({ admission_mode: 'restricted', is_invited: true })).toMatchObject({ entitled: false, entitledVia: null, isInvited: true });
     expect(await read({ admission_mode: 'restricted' })).toMatchObject({ entitled: false, entitledVia: null });
     expect(await read({ admission_mode: 'something else' })).toMatchObject({ admissionMode: null });
   });
@@ -286,6 +293,7 @@ describe('readEventAccessFacts reads the mode and the entitlement', () => {
     expect(sql).toContain('s.admission_mode,');
     expect(sql).toContain('(s.admission_mode IS NOT NULL AND EXISTS ( SELECT 1 FROM event_admission_entries ad_e');
     expect(sql).toContain('(s.admission_mode IS NOT NULL AND EXISTS ( SELECT 1 FROM event_admission_codes ad_c');
+    expect(sql).toContain('(s.admission_mode IS NOT NULL AND EXISTS ( SELECT 1 FROM invites ad_i');
   });
 });
 
@@ -329,6 +337,14 @@ namespace Before {
     if (f.participantStatus === 'removed') return false;
     return f.accountActive && (f.inAudience || f.isInvited || f.isHost || f.isCohost);
   }
+  export function canSeeEvent(f: F, role: string | undefined): boolean {
+    if (!f.accountActive) return false;
+    if (runsEvent(f, role)) return true;
+    if (hidden(f, role)) return false;
+    if (f.visibility === null) return holdsPlace(f) || f.inAudience || f.podVisibility === 'public';
+    if (f.visibility === 'public' || f.visibility === 'public_with_approval') return true;
+    return f.inAudience || f.isInvited || holdsPlace(f);
+  }
 }
 
 describe('admission_mode NULL: every rule answers as it did before this task (exhaustive)', () => {
@@ -354,7 +370,7 @@ describe('admission_mode NULL: every rule answers as it did before this task (ex
     return d.ok ? (d.addToPod ? 'ok+pod' : 'ok') : d.code;
   };
 
-  it(`canRegister, needsApproval and autoRegisters agree with production main on all ${'combinations'}`, () => {
+  it(`canRegister, needsApproval, autoRegisters and canSeeEvent agree with production main on all ${'combinations'}`, () => {
     let checked = 0;
     for (const f of combos) {
       for (const role of [M, UserRole.HOST, UserRole.ADMIN, UserRole.SUPER_ADMIN, undefined] as Array<string | undefined>) {
@@ -366,6 +382,7 @@ describe('admission_mode NULL: every rule answers as it did before this task (ex
         }
         if (needsApproval(f, role) !== Before.needsApproval(f, role)) throw new Error(`needsApproval moved for ${JSON.stringify({ f, role })}`);
         if (autoRegisters(f, role) !== Before.autoRegisters(f)) throw new Error(`autoRegisters moved for ${JSON.stringify({ f, role })}`);
+        if (canSeeEvent(f, role) !== Before.canSeeEvent(f, role)) throw new Error(`canSeeEvent moved for ${JSON.stringify({ f, role })}`);
         expect(admittedViaOf(f, role)).toBeNull();
       }
     }
@@ -459,5 +476,71 @@ describe('no admission path makes anyone a circle or pod member (a guest above a
     expect(body).not.toMatch(/circle_members|joinCircle/);
     expect(body.match(/INSERT INTO pod_members/g)).toHaveLength(1);
     expect(body).toMatch(/if \(!isGuest\) \{\s*try \{\s*await client\.query\(\s*`INSERT INTO pod_members/);
+  });
+});
+
+// ─── Fix round 1 (spec 04: "the link alone does not grant permission") ────────────────────────────────────────
+
+describe('a shared invite link never admits to an invitation-only event', () => {
+  // A shared or multi-use link: T11's invitee flag holds for its first accepter (accepted_by_user_id), the invite
+  // accept passes viaInvite, but there is no personal invite, so no entitlement.
+  const sharedLinkAccepter = (visibility: EventVisibility, mode: AdmissionMode): EventAccessFacts =>
+    ({ ...base, visibility, admissionMode: mode, isInvited: true, entitled: false, entitledVia: null });
+
+  it('the first accepter of a shared link on a restricted event is refused, at registration and in the room', async () => {
+    for (const visibility of ['public', 'public_with_approval', 'private'] as const) {
+      const f = sharedLinkAccepter(visibility, 'restricted');
+      expect(canRegister(f, M, { viaInvite: true })).toEqual({
+        ok: false, status: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED, message: EVENT_ADMISSION_REQUIRED_SENTENCE,
+      });
+      expect(canRegister(f, M)).toMatchObject({ ok: false, code: ErrorCodes.EVENT_ADMISSION_REQUIRED });
+      expect(autoRegisters(f, M)).toBe(false);
+      expect(admittedViaOf(f, M, { viaInvite: true })).toBeNull();
+    }
+    // A place taken before the fix (or by any other way) does not let them into the room: no entitlement holds.
+    mockQuery.mockResolvedValueOnce({ rows: [{ is_host: false, is_cohost: false, participant_status: 'registered', account_closed: false, admission_holds: false }] });
+    expect(await eventRoomAdmission(EVENT, ME, M)).toBe('refused');
+  });
+
+  it('a personal invite (it names their verified address, single use) is an entitlement and admits', () => {
+    const personal: EventAccessFacts = { ...base, visibility: 'private', admissionMode: 'restricted', isInvited: true, entitled: true, entitledVia: 'invite' };
+    expect(canRegister(personal, M, { viaInvite: true })).toEqual({ ok: true, addToPod: false });
+    expect(admittedViaOf(personal, M, { viaInvite: true })).toBe('invite');
+  });
+
+  it('approval mode is unchanged: any invite registers directly, a shared link included', () => {
+    expect(canRegister(sharedLinkAccepter('public', 'approval'), M, { viaInvite: true })).toEqual({ ok: true, addToPod: false });
+    expect(needsApproval(sharedLinkAccepter('public', 'approval'), M)).toBe(false);
+  });
+
+  it('the personal invite fragment: an address equal to the verified email, single use, standing; never accepted_by', () => {
+    const sql = personalInviteSql('s', '$2').replace(/\s+/g, ' ');
+    expect(sql).toContain('ad_i.session_id = s.id');
+    expect(sql).toContain('ad_i.invitee_email IS NOT NULL AND lower(btrim(ad_i.invitee_email)) = lower(btrim(ad_iu.email))');
+    expect(sql).toContain('ad_iu.email_verified = TRUE');
+    expect(sql).toContain('ad_i.max_uses <= 1');
+    expect(sql).toContain("(ad_i.status = 'accepted' OR (ad_i.status = 'pending' AND (ad_i.expires_at IS NULL OR ad_i.expires_at > NOW())))");
+    expect(sql).not.toContain('accepted_by_user_id');
+    expect(() => personalInviteSql('s; DROP', '$2')).toThrow();
+  });
+});
+
+describe('someone an event with a mode has entitled can open its page (fix round 1, spec gap)', () => {
+  it('a listed or code-holding outsider sees a private event with a mode; nobody else\'s view changes', () => {
+    for (const mode of ['open', 'approval', 'restricted'] as const) {
+      expect(canSeeEvent(viewer('listed', 'private', mode).f, M)).toBe(true);
+      expect(canSeeEvent(viewer('codeHolder', 'private', mode).f, M)).toBe(true);
+      expect(canSeeEvent(viewer('stranger', 'private', mode).f, M)).toBe(false);
+    }
+    // No mode: the flag is never read (and readEventAccessFacts never sets it).
+    expect(canSeeEvent({ ...base, visibility: 'private', entitled: true, entitledVia: 'allow_list' }, M)).toBe(false);
+    // A closed account sees nothing, entitled or not.
+    expect(canSeeEvent({ ...viewer('listed', 'private', 'restricted').f, accountActive: false }, M)).toBe(false);
+  });
+
+  it('the lists are unchanged: an entitlement does not list a private event', () => {
+    const sql = visibleEventsSql('s', '$2');
+    expect(sql).not.toContain('event_admission_entries');
+    expect(sql).not.toContain('event_admission_codes');
   });
 });

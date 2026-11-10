@@ -836,9 +836,6 @@ export async function findOrCreateGoogleUser(
   if (!user) {
     // New user — require approved join request or valid invite code
     let inviteId: string | null = null;
-    let invUseCount = 0;
-    let invMaxUses = 0;
-    let invStatus = '';
     let inviterId: string | null = null;
     let hasValidInvite = false;
 
@@ -857,9 +854,6 @@ export async function findOrCreateGoogleUser(
         throw new AppError(400, ErrorCodes.INVALID_INVITE, 'This invite code is no longer valid');
       }
       inviteId = inv.id;
-      invUseCount = inv.use_count;
-      invMaxUses = inv.max_uses;
-      invStatus = inv.status;
       inviterId = inv.inviter_id;
       hasValidInvite = true;
     }
@@ -916,52 +910,19 @@ export async function findOrCreateGoogleUser(
     await query(`INSERT INTO user_subscriptions (user_id, plan, status) VALUES ($1, 'free', 'active')`, [id]);
     await query(`INSERT INTO user_entitlements (user_id) VALUES ($1)`, [id]);
 
-    // Mark invite as used (only if one was provided)
-    if (inviteId) {
-      const newCount = invUseCount + 1;
-      const newStatus = newCount >= invMaxUses ? 'accepted' : invStatus;
-      await query(
-        `UPDATE invites SET use_count = $1, status = $2, accepted_by_user_id = $3, accepted_at = NOW() WHERE id = $4`,
-        [newCount, newStatus, id, inviteId]
-      );
-
-      // Apply invite membership effects — same logic as invite.service.ts acceptInvite()
-      // Without this, Google OAuth users are created but NOT added to the pod/session.
-      const inviteDetail = await query<{ type: string; pod_id: string | null; session_id: string | null }>(
-        `SELECT type, pod_id, session_id FROM invites WHERE id = $1`,
-        [inviteId]
-      );
-      const inv = inviteDetail.rows[0];
-      if (inv) {
-        if (inv.type === 'pod' && inv.pod_id) {
-          await query(
-            `INSERT INTO pod_members (pod_id, user_id, role) VALUES ($1, $2, 'member')
-             ON CONFLICT (pod_id, user_id) DO NOTHING`,
-            [inv.pod_id, id]
-          );
-        }
-        if (inv.type === 'session' && inv.session_id) {
-          // Add to pod first (required for private pod sessions)
-          const sessionPod = await query<{ pod_id: string }>(
-            `SELECT pod_id FROM sessions WHERE id = $1`, [inv.session_id]
-          );
-          if (sessionPod.rows[0]?.pod_id) {
-            await query(
-              `INSERT INTO pod_members (pod_id, user_id, role) VALUES ($1, $2, 'member')
-               ON CONFLICT (pod_id, user_id) DO NOTHING`,
-              [sessionPod.rows[0].pod_id, id]
-            );
-          }
-          // Register as session participant
-          await query(
-            `INSERT INTO session_participants (session_id, user_id, status)
-             VALUES ($1, $2, 'registered')
-             ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL`,
-            [inv.session_id, id]
-          );
-        }
-        logger.info({ userId: id, inviteType: inv.type, podId: inv.pod_id, sessionId: inv.session_id },
-          'Google OAuth: invite membership effects applied');
+    // Accept the invite exactly as the invite page does (acceptInvite): bound to this Google address when the invite
+    // names one (IDENTITY_MISMATCH otherwise), its pod or event through the same gates as every other way in
+    // (pod.service addMember, registerParticipant with viaInvite: an invitation-only event admits only a personal
+    // invite), and the accepter recorded only if nobody accepted first. Part 2 Task 4 fix round 1: this path used to
+    // write the accepter over any earlier one and insert the event place directly, past every rule. A refusal never
+    // stops the sign-in: the account exists, and the invite page the verify link leads to says what happened.
+    if (inviteId && inviteCode) {
+      try {
+        const { acceptInvite } = await import('../invite/invite.service');
+        const accepted = await acceptInvite(inviteCode, id, normalizedEmail);
+        logger.info({ userId: id, registeredFor: accepted.registeredFor }, 'Google OAuth: invite accepted');
+      } catch (err) {
+        logger.warn({ err, userId: id }, 'Google OAuth: the invite was not applied at sign-up');
       }
     }
 

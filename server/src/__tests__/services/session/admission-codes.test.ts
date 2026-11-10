@@ -50,6 +50,7 @@ interface CodeRow {
 const codes: CodeRow[] = [];
 const audit: Array<{ action: string; details: string; params: unknown[] }> = [];
 const allSql: Array<{ sql: string; params: unknown[] }> = [];
+const removedPeople = new Set<string>();
 let seq = 0;
 const EVENT = '0c1d2e3f-4a5b-4c6d-8e7f-8a9b0c1d2e3f';
 const OTHER_EVENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
@@ -80,6 +81,9 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
       rows.push({ id: row.id, code_hash: h });
     });
     return { rows };
+  }
+  if (flat.startsWith('SELECT status::text AS status FROM session_participants')) {
+    return { rows: removedPeople.has(params[1] as string) ? [{ status: 'removed' }] : [] };
   }
   if (flat.startsWith('UPDATE event_admission_codes SET redeemed_by')) {
     const c = codes.find((r) => live(r) && !r.redeemed_at && !r.revoked_at && (!r.expires_at || r.expires_at > now));
@@ -238,6 +242,18 @@ describe('redeeming a code', () => {
     // A code made for one event is not a code of another (nor of an event that does not exist, or a draft).
     const other = await oneCode();
     await expect(redeemAdmissionCode(OTHER_EVENT, 'ana', other.code)).rejects.toMatchObject(invalid);
+  });
+
+  it('someone the organisers removed cannot use up a code (fix round 1)', async () => {
+    const code = await oneCode();
+    removedPeople.add('kicked');
+    try {
+      await expect(redeemAdmissionCode(EVENT, 'kicked', code.code)).rejects.toMatchObject({ statusCode: 403, code: 'REMOVED_FROM_EVENT' });
+      expect(codes[0].redeemed_by).toBeNull();
+      expect(await redeemAdmissionCode(EVENT, 'ana', code.code)).toMatchObject({ codeId: code.id });
+    } finally {
+      removedPeople.delete('kicked');
+    }
   });
 
   it('two people redeeming the same code at once: exactly one wins, the other is told it was used', async () => {

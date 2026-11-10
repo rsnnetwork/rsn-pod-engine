@@ -166,14 +166,34 @@ export function eventInviteeSql(sessionAlias: string, userParam: string): string
 // ─── Admission per event (Part 2, Task 4, 10 Nov 2026; D3) ───────────────────
 // sessions.admission_mode decides who gets a place, beside who sees the event (visibility). NULL keeps every rule in
 // this file exactly as it was. An entitlement is a tie the organisers gave this one person: an allowed email that is
-// not revoked, a code they redeemed that is not revoked, or an invite (eventInviteeSql).
+// not revoked, a code they redeemed that is not revoked, or a personal invite (personalInviteSql). Fix round 1 (spec 04,
+// "the link alone does not grant permission"): a shared or multi-use invite link is never an entitlement, and both
+// address arms compare the account's verified email.
 
-/** The person's address is on the event's allowed list, and not revoked. */
+/** The person's verified address is on the event's allowed list, and not revoked. */
 export function admissionListedSql(sessionAlias: string, userParam: string): string {
   checked(sessionAlias, userParam);
   return `EXISTS (
     SELECT 1 FROM event_admission_entries ad_e JOIN users ad_u ON ad_u.id = ${userParam}
      WHERE ad_e.session_id = ${sessionAlias}.id AND ad_e.email = lower(btrim(ad_u.email)) AND ad_e.revoked_at IS NULL
+       AND ad_u.email_verified = TRUE
+  )`;
+}
+
+/**
+ * A personal invite to the event for this account: it names an address, that address is the account's verified email
+ * (compared as the allowed list compares), it is single-use, and it stands (accepted, or pending and not expired). A
+ * shared or multi-use invite link (no address, or max_uses above 1) never is one, whoever accepted it first.
+ */
+export function personalInviteSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  return `EXISTS (
+    SELECT 1 FROM invites ad_i JOIN users ad_iu ON ad_iu.id = ${userParam}
+     WHERE ad_i.session_id = ${sessionAlias}.id
+       AND ad_i.invitee_email IS NOT NULL AND lower(btrim(ad_i.invitee_email)) = lower(btrim(ad_iu.email))
+       AND ad_iu.email_verified = TRUE
+       AND ad_i.max_uses <= 1
+       AND (ad_i.status = 'accepted' OR (ad_i.status = 'pending' AND (ad_i.expires_at IS NULL OR ad_i.expires_at > NOW())))
   )`;
 }
 
@@ -187,14 +207,14 @@ export function admissionCodeHeldSql(sessionAlias: string, userParam: string): s
 }
 
 /**
- * The person holds an entitlement to the event: an allowed email, a redeemed code, or an invite. What an
+ * The person holds an entitlement to the event: an allowed email, a redeemed code, or a personal invite. What an
  * invitation-only event admits (besides the people who run it), at registration and on every live-room join.
  */
 export function restrictedEntitlementSql(sessionAlias: string, userParam: string): string {
   checked(sessionAlias, userParam);
   return `(${admissionListedSql(sessionAlias, userParam)}
     OR ${admissionCodeHeldSql(sessionAlias, userParam)}
-    OR ${eventInviteeSql(sessionAlias, userParam)})`;
+    OR ${personalInviteSql(sessionAlias, userParam)})`;
 }
 
 /**
@@ -267,7 +287,7 @@ export interface EventAccessFacts {
   placesHeld: number;
   /** Part 2 Task 4: sessions.admission_mode; null keeps every rule as it was. */
   admissionMode: AdmissionMode | null;
-  /** Part 2 Task 4: an allowed email, a redeemed code or an invite (restrictedEntitlementSql). */
+  /** Part 2 Task 4: an allowed email, a redeemed code or a personal invite (restrictedEntitlementSql). */
   entitled: boolean;
   /** Which of the three, in that order; null when not entitled. */
   entitledVia: 'allow_list' | 'code' | 'invite' | null;
@@ -295,6 +315,7 @@ interface FactsRow {
   admission_mode?: string | null;
   admission_listed?: boolean | null;
   admission_code_held?: boolean | null;
+  admission_personal_invite?: boolean | null;
 }
 
 type Reader = (text: string, params: unknown[]) => Promise<{ rows: FactsRow[] }>;
@@ -323,7 +344,8 @@ export async function readEventAccessFacts(
             ${placesHeldSql('s')} AS places_held,
             s.admission_mode,
             (s.admission_mode IS NOT NULL AND ${admissionListedSql('s', '$2')}) AS admission_listed,
-            (s.admission_mode IS NOT NULL AND ${admissionCodeHeldSql('s', '$2')}) AS admission_code_held
+            (s.admission_mode IS NOT NULL AND ${admissionCodeHeldSql('s', '$2')}) AS admission_code_held,
+            (s.admission_mode IS NOT NULL AND ${personalInviteSql('s', '$2')}) AS admission_personal_invite
        FROM sessions s
        LEFT JOIN pods p ON p.id = s.pod_id
       WHERE s.id = $1`,
@@ -333,7 +355,7 @@ export async function readEventAccessFacts(
   if (!row) return null;
   const admissionMode = isAdmissionMode(row.admission_mode) ? row.admission_mode : null;
   const entitledVia = !admissionMode ? null
-    : row.admission_listed ? 'allow_list' : row.admission_code_held ? 'code' : row.is_invited ? 'invite' : null;
+    : row.admission_listed ? 'allow_list' : row.admission_code_held ? 'code' : row.admission_personal_invite ? 'invite' : null;
   return {
     visibility: isEventVisibility(row.visibility) ? row.visibility : null,
     podId: row.pod_id,
@@ -402,7 +424,10 @@ export function canSeeEvent(f: EventAccessFacts, role: string | undefined): bool
     return holdsPlace(f) || f.inAudience || f.podVisibility === 'public';
   }
   if (f.visibility === 'public' || f.visibility === 'public_with_approval') return true;
-  return f.inAudience || f.isInvited || holdsPlace(f);
+  // Part 2 Task 4 fix round 1: someone an event with an admission mode has entitled (an allowed email, a redeemed code,
+  // a personal invite) opens its page, or a private invitation-only event could never be registered for. Lists are
+  // unchanged: such an event stays unlisted to them.
+  return f.inAudience || f.isInvited || holdsPlace(f) || (f.admissionMode !== null && f.entitled);
 }
 
 /**
@@ -583,8 +608,9 @@ export function effectiveAdmission(f: EventAccessFacts): EffectiveAdmission {
  *   open        any active account.
  *   approval    the people who run it, its audience, invitees, entitled people, someone already holding a place, an
  *               approved request; everyone else requests (EVENT_NEEDS_APPROVAL).
- *   restricted  the people who run it and entitled people (an invite counts); nobody by pod or circle membership, nor
- *               by a place already held (the live room re-checks the same rule).
+ *   restricted  the people who run it and entitled people (a personal invite counts, a shared invite link never:
+ *               fix round 1, spec 04); nobody by pod or circle membership, nor by a place already held (the live room
+ *               re-checks the same rule).
  */
 function admissionDecision(f: EventAccessFacts, role: string | undefined, invited: boolean, approvedRequest: boolean): RegisterDecision {
   const ok: RegisterDecision = { ok: true, addToPod: false };
@@ -594,7 +620,7 @@ function admissionDecision(f: EventAccessFacts, role: string | undefined, invite
     const direct = f.inAudience || invited || f.entitled || holdsPlace(f) || approvedRequest || f.myRequest === 'approved';
     return direct ? ok : { ok: false, status: 403, code: ErrorCodes.EVENT_NEEDS_APPROVAL, message: EVENT_NEEDS_APPROVAL_SENTENCE };
   }
-  if (f.entitled || invited) return ok;
+  if (f.entitled) return ok;
   return { ok: false, status: 403, code: ErrorCodes.EVENT_ADMISSION_REQUIRED, message: EVENT_ADMISSION_REQUIRED_SENTENCE };
 }
 
@@ -617,10 +643,12 @@ export function admittedViaOf(
 ): AdmittedVia | null {
   if (!f.admissionMode) return null;
   if (runsEvent(f, role)) return 'admin';
+  // An invitation-only event admitted them by their entitlement alone (canRegister), so that is what gave the place.
+  if (f.admissionMode === 'restricted') return f.entitledVia;
   if (f.isInvited || options.viaInvite) return 'invite';
   if (f.entitledVia === 'allow_list') return 'allow_list';
   if (f.entitledVia === 'code') return 'code';
-  if (f.inAudience && f.admissionMode !== 'restricted') return 'audience';
+  if (f.inAudience) return 'audience';
   if (options.approvedRequest || f.myRequest === 'approved') return 'approval';
   return f.admissionMode === 'open' ? 'open' : null;
 }

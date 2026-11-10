@@ -18,7 +18,7 @@
 import crypto from 'crypto';
 import type { PoolClient } from 'pg';
 import {
-  ErrorCodes, defaultEventVisibility,
+  ErrorCodes, defaultEventVisibility, type ErrorCode,
   type AddAdmissionEmailsResult, type AdmissionCodeRow, type AdmissionEntryRow, type AdmissionMode,
   type EventAdmissionOverview, type GeneratedAdmissionCode, type UserRole,
 } from '@rsn/shared';
@@ -269,7 +269,12 @@ export async function revokeAdmissionEmail(sessionId: string, actor: Actor, entr
   if (people) await fanoutAdmissionChanged(sessionId, { everyone: true, podId: event.pod_id, people });
 }
 
-/** The organisers' list of allowed emails, by address, a page at a time; `q` keeps addresses that contain it. */
+/**
+ * The organisers' list of allowed emails, by address, a page at a time; `q` keeps addresses that contain it. A name is
+ * shown only for an address whose person holds a place in this event (the organisers already see them among its
+ * participants); every other row is its address alone, so the list never tells an organiser whether an address
+ * belongs to an RSN account (fix round 1).
+ */
 export async function listAdmissionEntries(
   sessionId: string,
   actor: Actor,
@@ -282,11 +287,14 @@ export async function listAdmissionEntries(
     id: string; email: string; group_key: string | null; revoked: boolean; registered: boolean; display_name: string | null;
   }>(
     `SELECT e.id, e.email, e.group_key, e.revoked_at IS NOT NULL AS revoked,
-            EXISTS (SELECT 1 FROM users ru JOIN session_participants sp ON sp.user_id = ru.id
-                     WHERE lower(ru.email) = e.email AND sp.session_id = e.session_id
-                       AND sp.status NOT IN ('removed', 'left')) AS registered,
-            (SELECT du.display_name FROM users du WHERE lower(du.email) = e.email LIMIT 1) AS display_name
+            COALESCE(placed.held, FALSE) AS registered, placed.display_name
        FROM event_admission_entries e
+       LEFT JOIN LATERAL (
+         SELECT TRUE AS held, ru.display_name
+           FROM users ru JOIN session_participants sp ON sp.user_id = ru.id
+          WHERE lower(ru.email) = e.email AND sp.session_id = e.session_id AND sp.status NOT IN ('removed', 'left')
+          LIMIT 1
+       ) placed ON TRUE
       WHERE e.session_id = $1
         AND ($2::text IS NULL OR position($2::text in e.email) > 0)
         AND ($3::text IS NULL OR e.email > $3::text)
@@ -301,7 +309,7 @@ export async function listAdmissionEntries(
       email: r.email,
       groupKey: r.group_key,
       status: r.revoked ? 'revoked' : r.registered ? 'registered' : 'listed',
-      displayName: r.display_name,
+      displayName: r.registered ? r.display_name : null,
     })),
     nextCursor: result.rows.length > limit ? page[page.length - 1].email : null,
   };
@@ -463,6 +471,15 @@ export async function redeemAdmissionCode(
   if (!normalised) throw new AppError(400, ErrorCodes.ADMISSION_CODE_INVALID, ADMISSION_CODE_INVALID_SENTENCE);
   const codeHash = hashAdmissionCode(sessionId, normalised);
   const run = async (c: PoolClient) => {
+    // Fix round 1 (review minor): someone the organisers removed can never register again, so their redemption would
+    // only use up a code someone else could have had. Refused before the claim, in the removal's own words.
+    const held = await c.query<{ status: string }>(
+      `SELECT status::text AS status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId],
+    );
+    if (held.rows[0]?.status === 'removed') {
+      throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, 'You have been removed from this event by the host');
+    }
     const claimed = await c.query<{ id: string; group_key: string | null }>(
       `UPDATE event_admission_codes SET redeemed_by = $3, redeemed_at = NOW()
         WHERE session_id = $1 AND code_hash = $2

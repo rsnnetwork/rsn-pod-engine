@@ -273,6 +273,9 @@ describe('revokeAdmissionEmail and the list', () => {
     await revokeAdmissionEmail(EVENT, HOST, entries.find((e) => e.email === 'cy@x.io')!.id);
     const first = await listAdmissionEntries(EVENT, HOST, { limit: 2 });
     expect(first.entries.map((e) => [e.email, e.status])).toEqual([['ana@x.io', 'registered'], ['bo@x.io', 'listed']]);
+    // Fix round 1: a name only for someone holding a place. bo@x.io is an RSN account with no place: address alone,
+    // so the list never says which addresses belong to accounts.
+    expect(first.entries.map((e) => e.displayName)).toEqual(['Someone', null]);
     expect(first.nextCursor).toBe('bo@x.io');
     const second = await listAdmissionEntries(EVENT, HOST, { limit: 2, cursor: first.nextCursor! });
     expect(second).toEqual({ entries: [expect.objectContaining({ email: 'cy@x.io', status: 'revoked', displayName: null })], nextCursor: null });
@@ -390,7 +393,8 @@ describe('registerParticipant and admitted_via', () => {
     const via = async (mode: string, facts: Record<string, unknown>, options = {}) =>
       (await register('public', mode, facts, options)).find((s) => s.text.includes('SET admitted_via'))?.params[2];
     expect(await via('restricted', { admission_code_held: true })).toBe('code');
-    expect(await via('restricted', { is_invited: true })).toBe('invite');
+    expect(await via('restricted', { admission_personal_invite: true, is_invited: true })).toBe('invite');
+    expect(await via('approval', { is_invited: true })).toBe('invite');
     expect(await via('approval', {}, { approvedRequest: true })).toBe('approval');
     expect(await via('open', {})).toBe('open');
   });
