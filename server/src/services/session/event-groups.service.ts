@@ -141,7 +141,12 @@ async function auditGroups(
 
 async function requireOrganiser(sessionId: string, actor: GroupsActor): Promise<void> {
   const { allowed } = await canActAsHost(actor.userId, actor.role, sessionId);
-  if (!allowed) throw new ForbiddenError(ORGANISERS_ONLY);
+  if (allowed) return;
+  // Part 2 Task 2: an event this person cannot see (a draft, to anyone who does not run it) answers exactly as an id
+  // that does not exist, never "only organisers", so its groups routes never tell that it is there.
+  const facts = await readEventAccessFacts(sessionId, actor.userId);
+  if (!facts || !canSeeEvent(facts, actor.role)) throw new NotFoundError('Session', sessionId, NOT_FOUND);
+  throw new ForbiddenError(ORGANISERS_ONLY);
 }
 
 /** Labels and the question trimmed, pairs in their one form without repeats, ranges in round order. */

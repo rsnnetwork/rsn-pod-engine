@@ -236,14 +236,15 @@ jest.mock('../../../services/post-event-message/event-organisers', () => ({
   resolveEventOrganiserIds: jest.fn(async () => ['host']),
 }));
 
-const mockFacts = { canSee: true };
+// draftFacts: the real visibility rule (Task 2's canSeeEvent) is asked about this event as a draft instead of the stand-in.
+const mockFacts: { canSee: boolean; draftFacts: Record<string, unknown> | null } = { canSee: true, draftFacts: null };
 jest.mock('../../../services/session/event-access', () => {
   const actual = jest.requireActual('../../../services/session/event-access');
   return {
     __esModule: true,
     ...actual,
     readEventAccessFacts: jest.fn(async () => ({})),
-    canSeeEvent: jest.fn(() => mockFacts.canSee),
+    canSeeEvent: jest.fn((f: never, role: string | undefined) => (mockFacts.draftFacts ? actual.canSeeEvent(f, role) : mockFacts.canSee)),
   };
 });
 
@@ -283,6 +284,7 @@ beforeEach(() => {
   world = freshWorld();
   nextId = 0;
   mockFacts.canSee = true;
+  mockFacts.draftFacts = null;
   mockEmit.mockClear();
 });
 
@@ -662,6 +664,49 @@ describe('readEventGroups', () => {
   it('someone who cannot see the event is told it does not exist', async () => {
     mockFacts.canSee = false;
     expect(await refusal(readEventGroups(EVENT, stranger))).toMatchObject({ status: 404, message: "We couldn't find that event." });
+  });
+});
+
+describe('a draft (Part 2 Task 2): its groups exist only for the people who run it', () => {
+  /** The facts of a published-later draft for someone who does not run it: a pod member, invited, holding no place. */
+  const draft = (overrides: Record<string, unknown> = {}) => ({
+    visibility: 'public', podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
+    inAudience: true, isInvited: true, participantStatus: null, accountActive: true, myRequest: null,
+    outsideClosedCircle: false, publication: 'draft', archived: false, registrationOpensAt: null, viewerTimezone: null,
+    isPodAdmin: false, placesHeld: 0, ...overrides,
+  });
+  const NOT_FOUND = { status: 404, message: "We couldn't find that event." };
+
+  beforeEach(async () => {
+    await saveEventGroupRules(EVENT, host, foundersFunders());
+    mockFacts.draftFacts = draft();
+    const { readEventAccessFacts } = jest.requireMock('../../../services/session/event-access');
+    (readEventAccessFacts as jest.Mock).mockImplementation(async () => mockFacts.draftFacts);
+  });
+
+  afterEach(() => {
+    const { readEventAccessFacts } = jest.requireMock('../../../services/session/event-access');
+    (readEventAccessFacts as jest.Mock).mockImplementation(async () => ({}));
+  });
+
+  it('reading its groups: anyone who does not run it is told it does not exist, even a pod member it invited', async () => {
+    expect(await refusal(readEventGroups(EVENT, stranger))).toMatchObject(NOT_FOUND);
+  });
+
+  it('changing its groups or someone\'s group: not "only organisers", but that it does not exist', async () => {
+    expect(await refusal(saveEventGroupRules(EVENT, stranger, foundersFunders()))).toMatchObject(NOT_FOUND);
+    expect(await refusal(setParticipantGroups(EVENT, stranger, 'p1', ['funder'], 'organiser'))).toMatchObject(NOT_FOUND);
+  });
+
+  it('its host reads and changes them', async () => {
+    mockFacts.draftFacts = draft({ isHost: true });
+    expect((await readEventGroups(EVENT, host)).groups.map((g) => g.key)).toEqual(['founder', 'funder']);
+    await expect(saveEventGroupRules(EVENT, host, foundersFunders())).resolves.toBeDefined();
+  });
+
+  it('once published, someone who may see it but does not run it gets the usual "only organisers"', async () => {
+    mockFacts.draftFacts = draft({ publication: 'published' });
+    expect(await refusal(saveEventGroupRules(EVENT, stranger, foundersFunders()))).toMatchObject({ status: 403 });
   });
 });
 
