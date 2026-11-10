@@ -118,12 +118,27 @@ async function playedRoundPairs(read: Reader, sessionId: string): Promise<Map<nu
   return byRound;
 }
 
-/** The board's base: the same reads loadRoomCheckContext makes, once for every round. */
-export async function loadEventCheckBase(sessionId: string, opts: { client?: PoolClient } = {}): Promise<EventCheckBase> {
+/** Hard exclusions read earlier for a set of people (pairKeys), so a caller can avoid a pool read mid-transaction. */
+export interface KnownExclusions {
+  people: ReadonlySet<string>;
+  pairs: Set<string>;
+}
+
+/**
+ * The board's base: the same reads loadRoomCheckContext makes, once for every round. With a client, everything but
+ * the hard exclusions is read in the caller's transaction; the exclusions (read through the engine's loader, on the
+ * pool) are taken from `known` when it covers every one of the event's people now, else read again.
+ */
+export async function loadEventCheckBase(
+  sessionId: string, opts: { client?: PoolClient; known?: KnownExclusions } = {},
+): Promise<EventCheckBase> {
   const read = readerOf(opts.client);
   const rules = await getEventGroupRules(sessionId, opts.client);
   const people = await eventPeople(read, sessionId);
-  const excluded = await hardExclusionPairs(sessionId, people);
+  const known = opts.known;
+  const excluded = known && people.every((id) => known.people.has(id))
+    ? known.pairs
+    : await hardExclusionPairs(sessionId, people);
   const playedPairs = await playedRoundPairs(read, sessionId);
   const groups = rules ? await groupsForParticipants(sessionId, opts.client) : new Map<string, string[]>();
   return { rules, groups, excluded, playedPairs };

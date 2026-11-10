@@ -183,3 +183,91 @@ describe('locks across regeneration (12/09)', () => {
     expect(world.audit.filter((r) => r.action === 'schedule.unlocked')).toHaveLength(1);
   });
 });
+
+// Controller ruling (fix round 1): Review Focus 3 and spec 07 ("Allow no show and late arrival status. Refill
+// vacancies") outrank the brief's "status is not removed". Someone who left or did not come stays listed (labelled),
+// is never seated automatically, leaves a flagged vacancy in a locked meeting, and may be seated by hand.
+describe('people who left or did not come', () => {
+  const setStatus = (id: string, status: string) => { world.participants.find((p) => p.user_id === id)!.status = status; };
+  const seatedIn = (board: ScheduleBoard, round: number) => board.rounds[round - 1].rooms.flatMap((r) => r.seats.map((s) => s.userId));
+
+  it('a locked meeting that loses someone who left is flagged and not refilled; they stay seated and listed', async () => {
+    let board = await generateAll(await getBoard(EVENT, OWNER));
+    const room = roomOf(board, 1, 'a')!;
+    const leaver = room.seats.find((s) => s.userId !== 'a')!.userId;
+    board = await op(board, { kind: 'lock_room', round: 1, room: room.roomNumber });
+    setStatus(leaver, 'left');
+    addPerson('newcomer');
+    board = await op(await getBoard(EVENT, OWNER), { kind: 'redistribute', rounds: 'all' });
+    board = await generateAll(board);
+    const kept = roomOf(board, 1, 'a')!;
+    expect(kept.roomNumber).toBe(room.roomNumber);
+    expect(kept.seats.map((s) => s.userId)).toEqual(room.seats.map((s) => s.userId));
+    expect(kept.seats.find((s) => s.userId === leaver)!.status).toBe('left');
+    expect(kept.verdict.warnings).toContainEqual({ kind: 'vacancy', userIds: [leaver] });
+    expect(board.people.find((p) => p.userId === leaver)!.status).toBe('left');
+    expect(roomOf(board, 1, 'newcomer')?.roomNumber).not.toBe(room.roomNumber);
+  });
+
+  it('people who left or did not come stay in every basket, labelled, and generate and redistribute never seat them', async () => {
+    let board = await generateAll(await getBoard(EVENT, OWNER));
+    setStatus('b', 'left');
+    setStatus('c', 'no_show');
+    board = await generateAll(await getBoard(EVENT, OWNER));
+    for (const round of board.rounds) {
+      expect(seatedIn(board, round.roundNumber)).not.toContain('b');
+      expect(seatedIn(board, round.roundNumber)).not.toContain('c');
+      expect(round.basket.filter((p) => p.userId === 'b' || p.userId === 'c').map((p) => [p.userId, p.status]))
+        .toEqual([['b', 'left'], ['c', 'no_show']]);
+      // The four still coming are all seated, and the capacity counts only them.
+      expect(seatedIn(board, round.roundNumber).sort()).toEqual(['a', 'd', 'e', 'f']);
+    }
+    board = await op(board, { kind: 'redistribute', rounds: 'all' });
+    expect(board.rounds.every((r) => !seatedIn(board, r.roundNumber).includes('b') && !seatedIn(board, r.roundNumber).includes('c'))).toBe(true);
+    expect(world.participants.find((p) => p.user_id === 'b')!.status).toBe('left');
+  });
+
+  it('an organiser may seat someone who left by hand (a late arrival back), and the room checker still applies', async () => {
+    let board = await generateAll(await getBoard(EVENT, OWNER));
+    setStatus('b', 'left');
+    board = await generateAll(await getBoard(EVENT, OWNER));
+    const lone = board.rounds[0].rooms[0];
+    const partner = lone.seats[0].userId;
+    const out = lone.seats[lone.seats.length - 1].userId;
+    const remaining = lone.seats.map((s) => s.userId).filter((id) => id !== out);
+    board = await op(board, { kind: 'unassign', round: 1, userId: out });
+    world.blocks.push(['b', partner]);
+    await expect(applyBoardOp(EVENT, OWNER, board.revision, { kind: 'move', round: 1, userId: 'b', toRoom: lone.roomNumber }))
+      .rejects.toMatchObject({ statusCode: 409, code: 'SCHEDULE_RULE' });
+    world.blocks.length = 0;
+    board = await op(board, { kind: 'move', round: 1, userId: 'b', toRoom: lone.roomNumber });
+    const room = roomOf(board, 1, 'b')!;
+    expect(room.seats.map((s) => s.userId)).toEqual([...remaining, 'b']);
+    expect(room.seats.find((s) => s.userId === 'b')).toMatchObject({ status: 'left', source: 'manual' });
+    expect(board.rounds[0].basket.map((p) => p.userId)).not.toContain('b');
+    // Back in the live event, they are simply present and the gap is gone.
+    setStatus('b', 'in_lobby');
+    const back = roomOf(await getBoard(EVENT, OWNER), 1, 'b')!;
+    expect(back.verdict.warnings.some((w) => w.kind === 'vacancy')).toBe(false);
+  });
+
+  it('a locked meeting emptied by deleted accounts keeps its number: generate never gives it to a new room', async () => {
+    let board = await generateAll(await getBoard(EVENT, OWNER));
+    const room = board.rounds[0].rooms[0];
+    board = await op(board, { kind: 'lock_room', round: 1, room: room.roomNumber });
+    // Both accounts are deleted for good: their seats go with them (ON DELETE CASCADE), the lock row stays.
+    const gone = room.seats.map((s) => s.userId);
+    world.seats = world.seats.filter((s) => !gone.includes(s.user_id));
+    world.participants = world.participants.filter((p) => !gone.includes(p.user_id));
+    for (const id of gone) world.users.delete(id);
+    addPerson('n1');
+    addPerson('n2');
+    board = await generateAll(await getBoard(EVENT, OWNER));
+    const locked = board.rounds[0].rooms.find((r) => r.roomNumber === room.roomNumber)!;
+    expect(locked).toMatchObject({ locked: true, seats: [] });
+    expect(locked.verdict.warnings.map((w) => w.kind)).toContain('vacancy');
+    expect(board.rounds[0].rooms.filter((r) => r.roomNumber === room.roomNumber)).toHaveLength(1);
+    expect(board.rounds[0].basket).toEqual([]);
+    expect(world.seats.filter((s) => s.round_number === 1 && s.room_number === room.roomNumber)).toEqual([]);
+  });
+});

@@ -10,12 +10,14 @@ import type { EventGroupRules, RoundCapacity } from '../events/group-rules';
 
 /**
  * Where a person stands for the board.
- * - `registered`: holds a place. `present`: in the live event now. `left`: left the live event.
+ * - `registered`: holds a place. `present`: in the live event now. `left`: left the live event. `no_show`: did not
+ *   come. People who left or did not come stay listed (in the basket when they have no seat) but are never seated
+ *   automatically; an organiser may seat them by hand (a late arrival back).
  * - `absent`: the organiser marked them late or not coming for this round (on `people`: for any round).
  * - `not_in_event`: still seated here but no longer someone to match (removed from the event, or now one of the
  *   people running it). Their seat stays until an organiser moves them; it is never dropped silently.
  */
-export type BoardPersonStatus = 'registered' | 'present' | 'left' | 'absent' | 'not_in_event';
+export type BoardPersonStatus = 'registered' | 'present' | 'left' | 'no_show' | 'absent' | 'not_in_event';
 
 export interface BoardPerson {
   userId: string;

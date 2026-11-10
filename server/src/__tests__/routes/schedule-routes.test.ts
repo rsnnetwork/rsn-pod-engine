@@ -134,3 +134,34 @@ describe('the matching board routes', () => {
     }
   });
 });
+
+describe('a write made against an older board', () => {
+  it('answers 409 SCHEDULE_CHANGED with the board as it is now in error.details.board (what the board screen reloads from)', async () => {
+    const { ConflictError } = jest.requireActual('../../middleware/errors');
+    const current = { sessionId: EVENT, revision: 9, rounds: [{ roundNumber: 1, rooms: [], basket: [] }] };
+    mockApply.mockRejectedValueOnce(new ConflictError(
+      'SCHEDULE_CHANGED', 'The board changed while you were editing. It is up to date now; try again.', { board: current },
+    ));
+    const res = await request(app).post(`/sessions/${EVENT}/schedule/ops`).set(as('host-1'))
+      .send({ expectedRevision: 8, op: { kind: 'unassign', round: 1, userId: PERSON } });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'SCHEDULE_CHANGED',
+        message: 'The board changed while you were editing. It is up to date now; try again.',
+        details: { board: current },
+      },
+    });
+  });
+
+  it('a group-rule refusal carries its alternatives the same way', async () => {
+    const { ConflictError } = jest.requireActual('../../middleware/errors');
+    const alternatives = [{ room: 3, note: 'Room 3, with Una' }, { room: 0, note: 'Leave them in the basket' }];
+    mockApply.mockRejectedValueOnce(new ConflictError('SCHEDULE_GROUP_RULE', "Flo and Fay can't meet in this round: x", { alternatives }));
+    const res = await request(app).post(`/sessions/${EVENT}/schedule/ops`).set(as('host-1'))
+      .send({ expectedRevision: 8, op: { kind: 'move', round: 1, userId: PERSON, toRoom: 2 } });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatchObject({ code: 'SCHEDULE_GROUP_RULE', details: { alternatives } });
+  });
+});

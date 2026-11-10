@@ -120,6 +120,20 @@ describe('two organisers on one board', () => {
     expect(String(failed[0].reason)).toMatch(/duplicate key value violates unique constraint/);
   });
 
+  it('without the row lock, writes to different rounds are still caught: the revision bump is conditional', async () => {
+    const board = await generated();
+    world.honourLocks = false;
+    const results = await Promise.allSettled([
+      applyBoardOp(EVENT, OWNER, board.revision, { kind: 'unassign', round: 1, userId: 'a' }),
+      applyBoardOp(EVENT, CO, board.revision, { kind: 'unassign', round: 2, userId: 'b' }),
+    ]);
+    const stale = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(stale).toHaveLength(1);
+    expect(stale[0].reason).toMatchObject({ statusCode: 409, code: 'SCHEDULE_CHANGED' });
+    // (What the refused write had already written is rolled back by Postgres. This stand-in rolls back by snapshot,
+    // which without the lock would also undo the other write, so the stored rows are not asserted here.)
+  });
+
   it('a stale generate is refused too, and a write against an older revision never lands', async () => {
     const board = await generated();
     await applyBoardOp(EVENT, OWNER, board.revision, { kind: 'unassign', round: 2, userId: 'a' });

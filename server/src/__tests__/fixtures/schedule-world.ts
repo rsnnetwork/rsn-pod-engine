@@ -175,8 +175,9 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
   if (/^SELECT revision, published_version FROM event_schedules WHERE session_id = \$1( FOR UPDATE)?$/.test(sql)) {
     return rows(world.schedule ? [{ revision: world.schedule.revision, published_version: world.schedule.published_version }] : []);
   }
-  if (/^UPDATE event_schedules SET revision = revision \+ 1, updated_by = \$2, updated_at = NOW\(\), generated_at = CASE WHEN \$3::boolean THEN NOW\(\) ELSE generated_at END WHERE session_id = \$1 RETURNING revision$/.test(sql)) {
+  if (/^UPDATE event_schedules SET revision = revision \+ 1, updated_by = \$2, updated_at = NOW\(\), generated_at = CASE WHEN \$3::boolean THEN NOW\(\) ELSE generated_at END WHERE session_id = \$1 AND revision = \$4 RETURNING revision$/.test(sql)) {
     const sched = world.schedule!;
+    if (sched.revision !== params[3]) return rows([]);
     sched.revision += 1;
     sched.updated_by = params[1] as string;
     if (params[2]) sched.generated_at = tick();

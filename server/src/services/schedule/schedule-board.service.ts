@@ -37,7 +37,9 @@ import type { Actor } from '../roles/actor';
 import { getAllHostIds } from '../session/host-set';
 import { isLiveStatus } from '../session/main-room';
 import { FORMER_MEMBER_NAME } from '../users/active-member';
-import { loadEventCheckBase, roomCheckContextFor, type EventCheckBase } from '../matching/constraint-context';
+import {
+  hardExclusionPairs, loadEventCheckBase, roomCheckContextFor, type EventCheckBase, type KnownExclusions,
+} from '../matching/constraint-context';
 import { pairKey } from '../matching/matching.interface';
 import { prepareBoardRoundGenerator, type BoardRoundGenerator } from '../matching/matching.service';
 import { mayOverrideGroupRules, OVERRIDE_FORBIDDEN_MESSAGE } from '../matching/live-room-guard';
@@ -152,21 +154,20 @@ async function requireOrganiser(sessionId: string, actor: Actor): Promise<void> 
   if (!allowed) throw new ForbiddenError(ORGANISERS_ONLY);
 }
 
+/** One read after another: on a transaction's client, overlapping queries are deprecated in pg (removed in pg 9). */
 async function readDraft(read: Reader, sessionId: string): Promise<Draft> {
-  const [seats, locks, absences] = await Promise.all([
-    read<{ round_number: number; room_number: number; user_id: string; slot_locked: boolean; source: BoardSeatSource; override: boolean; fallback: boolean }>(
-      `SELECT round_number, room_number, user_id, slot_locked, source, override, fallback
-         FROM event_schedule_assignments WHERE session_id = $1
-        ORDER BY round_number, room_number, created_at, user_id`,
-      [sessionId],
-    ),
-    read<{ round_number: number; room_number: number }>(
-      `SELECT round_number, room_number FROM event_schedule_room_locks WHERE session_id = $1`, [sessionId],
-    ),
-    read<{ user_id: string; kind: 'late' | 'no_show'; from_round: number; to_round: number | null }>(
-      `SELECT user_id, kind, from_round, to_round FROM event_schedule_absences WHERE session_id = $1`, [sessionId],
-    ),
-  ]);
+  const seats = await read<{ round_number: number; room_number: number; user_id: string; slot_locked: boolean; source: BoardSeatSource; override: boolean; fallback: boolean }>(
+    `SELECT round_number, room_number, user_id, slot_locked, source, override, fallback
+       FROM event_schedule_assignments WHERE session_id = $1
+      ORDER BY round_number, room_number, created_at, user_id`,
+    [sessionId],
+  );
+  const locks = await read<{ round_number: number; room_number: number }>(
+    `SELECT round_number, room_number FROM event_schedule_room_locks WHERE session_id = $1`, [sessionId],
+  );
+  const absences = await read<{ user_id: string; kind: 'late' | 'no_show'; from_round: number; to_round: number | null }>(
+    `SELECT user_id, kind, from_round, to_round FROM event_schedule_absences WHERE session_id = $1`, [sessionId],
+  );
   const rounds = new Map<number, Rooms>();
   for (const s of seats.rows) {
     const rooms = rounds.get(s.round_number) ?? new Map<number, Seat[]>();
@@ -213,8 +214,11 @@ async function readPeople(read: Reader, sessionId: string, seated: string[]): Pr
 
 const seatedIds = (draft: Draft) => [...new Set([...draft.rounds.values()].flatMap((rooms) => [...rooms.values()].flat().map((s) => s.userId)))];
 
-/** Everything the board is worked out from. With a client, inside the caller's transaction. */
-async function loadState(sessionId: string, client?: PoolClient, schedule?: ScheduleRow): Promise<BoardState> {
+/**
+ * Everything the board is worked out from. With a client, inside the caller's transaction; a write passes what it
+ * read from the pool before taking the lock (prepareWrite), so nothing here reads the pool then.
+ */
+async function loadState(sessionId: string, client?: PoolClient, schedule?: ScheduleRow, prep?: WritePrep): Promise<BoardState> {
   const read = readerOf(client);
   const event = await readEvent(read, sessionId);
   assertRoundsEvent(event);
@@ -223,8 +227,8 @@ async function loadState(sessionId: string, client?: PoolClient, schedule?: Sche
   )).rows[0];
   const draft = await readDraft(read, sessionId);
   const people = await readPeople(read, sessionId, seatedIds(draft));
-  const hostIds = new Set(await getAllHostIds(sessionId, event.host_user_id));
-  const base = await loadEventCheckBase(sessionId, { client });
+  const hostIds = prep?.hostIds ?? new Set(await getAllHostIds(sessionId, event.host_user_id));
+  const base = await loadEventCheckBase(sessionId, { client, known: prep?.known });
   const config = configOf(event.config);
   const numberOfRounds = Math.max(1, Math.floor(Number(config.numberOfRounds) || DEFAULT_ROUNDS));
   return {
@@ -250,6 +254,7 @@ async function loadState(sessionId: string, client?: PoolClient, schedule?: Sche
 // ─── Who is where ────────────────────────────────────────────────────────────
 
 const PRESENT = new Set(['checked_in', 'in_lobby', 'in_round']);
+/** Left the live event, or did not come: still listed, never seated automatically (spec 07, absences and vacancies). */
 const GONE = new Set(['left', 'no_show']);
 
 const isEnded = (state: BoardState) => state.status === 'completed' || state.status === 'cancelled';
@@ -271,8 +276,18 @@ function absentIn(draft: Draft, userId: string, round: number): boolean {
   return !!a && a.fromRound <= round && (a.toRound === null || round <= a.toRound);
 }
 
+/** In the round's people: listed in its basket when they have no seat, and an organiser may seat them by hand. */
 const eligibleIn = (state: BoardState, draft: Draft, userId: string, round: number) =>
   inEvent(state, userId) && !absentIn(draft, userId, round);
+
+const isGone = (state: BoardState, userId: string) => GONE.has(state.people.get(userId)?.participantStatus ?? '');
+
+/**
+ * Seated by generate, redistribute and the engine: one of the round's people who has not left and did not fail to
+ * come. A seated person who is not (gone, absent, removed, now running the event) leaves a vacancy that is flagged.
+ */
+const autoSeatable = (state: BoardState, draft: Draft, userId: string, round: number) =>
+  eligibleIn(state, draft, userId, round) && !isGone(state, userId);
 
 /** The person's standing, in a round (seats and baskets) or for the whole event (`round` null). */
 function statusOf(state: BoardState, draft: Draft, userId: string, round: number | null): BoardPersonStatus {
@@ -280,7 +295,8 @@ function statusOf(state: BoardState, draft: Draft, userId: string, round: number
   if (round === null ? draft.absences.has(userId) : absentIn(draft, userId, round)) return 'absent';
   const status = state.people.get(userId)?.participantStatus ?? '';
   if (PRESENT.has(status)) return 'present';
-  if (GONE.has(status)) return 'left';
+  if (status === 'left') return 'left';
+  if (status === 'no_show') return 'no_show';
   return 'registered';
 }
 
@@ -374,8 +390,9 @@ function buildRound(state: BoardState, draft: Draft, round: number): BoardRound 
   const boardRooms: BoardRoom[] = numbers.map((roomNumber) => {
     const seats = rooms.get(roomNumber) ?? [];
     const verdict = verdicts.get(roomNumber)!;
-    // Someone seated who is not to be matched this round (absent, removed, now running the event) leaves a gap.
-    const gone = seats.map((s) => s.userId).filter((id) => !eligibleIn(state, draft, id, round));
+    // Someone seated who is not to be matched this round (left, did not come, absent, removed, now running the event)
+    // leaves a gap. Seated by hand after leaving, they stay seated and the gap is still shown.
+    const gone = seats.map((s) => s.userId).filter((id) => !autoSeatable(state, draft, id, round));
     if (gone.length > 0) verdict.warnings.push({ kind: 'vacancy', userIds: gone });
     return {
       roomNumber,
@@ -388,13 +405,14 @@ function buildRound(state: BoardState, draft: Draft, round: number): BoardRound 
   });
   const seated = new Set([...rooms.values()].flat().map((s) => s.userId));
   const eligible = [...state.people.keys()].filter((id) => eligibleIn(state, draft, id, round));
+  const seatable = eligible.filter((id) => !isGone(state, id));
   return {
     roundNumber: round,
     startsAt: state.roundStarts[round - 1] ?? null,
     editable: isEditable(state, round),
     rooms: boardRooms,
     basket: eligible.filter((id) => !seated.has(id)).map((id) => personOf(state, draft, id, round)),
-    capacity: round > state.numberOfRounds ? null : capacityOf(state, round, eligible),
+    capacity: round > state.numberOfRounds ? null : capacityOf(state, round, seatable),
     collisions,
     ...(round > state.numberOfRounds && { beyondLastRound: true }),
   };
@@ -554,18 +572,25 @@ interface SeatingNeeds {
 /**
  * Seat round `round`'s basket into `kept` (its locked meetings and seats, or everything when nothing is cleared).
  * `avoid` are the pairs other rounds already make meet. Rooms whose only people are not to be matched this round
- * are left alone, as locked ones are, so nobody is seated with someone who is not coming.
+ * (gone, absent, removed) are left alone, as locked ones are, so nobody is seated with someone who is not coming.
+ * Only people who may be seated automatically are taken from the basket: someone who left or did not come stays
+ * listed there for an organiser to seat by hand. A locked room keeps its number even when it is empty (its people's
+ * accounts were deleted), so no new room ever takes a locked number.
  */
 async function seatBasket(
   state: BoardState, draft: Draft, round: number, kept: Rooms, avoid: Set<string>, needs: SeatingNeeds,
 ): Promise<{ rooms: Rooms; waiting: Array<{ userId: string; reason: WaitingReason }> }> {
   const seated = new Map([...kept].map(([room, seats]) => [room, seats.map((s) => s.userId)]));
-  const lockedRooms = new Set([...kept.keys()].filter((room) =>
+  for (const key of draft.locks) {
+    const [r, room] = key.split(':').map(Number);
+    if (r === round && !seated.has(room)) seated.set(room, []);
+  }
+  const lockedRooms = new Set([...seated.keys()].filter((room) =>
     draft.locks.has(lockKey(round, room))
-    || kept.get(room)!.every((s) => !eligibleIn(state, draft, s.userId, round))));
+    || seated.get(room)!.every((id) => !autoSeatable(state, draft, id, round))));
   const lockedSlots = new Set([...kept.values()].flat().filter((s) => s.slotLocked).map((s) => s.userId));
   const taken = new Set([...seated.values()].flat());
-  const basket = [...state.people.keys()].filter((id) => eligibleIn(state, draft, id, round) && !taken.has(id));
+  const basket = [...state.people.keys()].filter((id) => autoSeatable(state, draft, id, round) && !taken.has(id));
   const ctx = roomCheckContextFor(state.base, round, avoid);
   const generate = basket.length >= 2 ? await needs.generator() : null;
   const result = redistributeRound({
@@ -870,15 +895,47 @@ type WriteOutcome =
   | { stale: false; changed: Array<{ round: number; userIds: string[] }>; wrote: boolean };
 
 /**
+ * What a write reads from the pool, read BEFORE it takes the event's schedule row: the host set, the hard exclusions
+ * (the engine's loader reads on the pool) and, for a write that seats people automatically, the engine's inputs
+ * (about a second on production). A write holding the row lock and a pool client therefore never waits for a second
+ * client, so a burst of board writes cannot starve the pool. Everything about the board itself (the event's state,
+ * people, groups, the draft) is read again on the transaction's client after the lock. Someone who registers in
+ * between is not in the prepared exclusions, so the base reads them again (a pool read under the lock only on that
+ * race), and is not in the engine's rows, so this write leaves them waiting in the basket rather than pair them.
+ */
+interface WritePrep {
+  hostIds: Set<string>;
+  known: KnownExclusions;
+  generator: BoardRoundGenerator | null;
+}
+
+async function prepareWrite(sessionId: string, withEngine: boolean): Promise<WritePrep> {
+  const read = readerOf();
+  const event = await readEvent(read, sessionId);
+  assertRoundsEvent(event);
+  const hostIds = new Set(await getAllHostIds(sessionId, event.host_user_id));
+  const people = await readPeople(read, sessionId, []);
+  const placed = [...people.values()].filter((p) => p.participantStatus !== 'removed').map((p) => p.userId);
+  const pairs = await hardExclusionPairs(sessionId, placed);
+  const seatable = placed.filter((id) => !hostIds.has(id) && !GONE.has(people.get(id)?.participantStatus ?? ''));
+  const generator = withEngine ? await prepareBoardRoundGenerator(sessionId, seatable) : null;
+  return { hostIds, known: { people: new Set(placed), pairs }, generator };
+}
+
+/** The revision moved under a held row lock: impossible with FOR UPDATE, refused (and rolled back) all the same. */
+class RevisionMoved extends Error {}
+
+/**
  * One board write: lock the event's schedule row, compare the revision, change the draft in memory, write what
  * changed, bump the revision and audit in the same transaction; then tell the organisers and answer with the board.
  */
 async function writeBoard(
-  sessionId: string, actor: Actor, expectedRevision: number,
+  sessionId: string, actor: Actor, expectedRevision: number, withEngine: boolean,
   decide: (state: BoardState, draft: Draft, canOverride: boolean, needs: SeatingNeeds) => Promise<Decision>,
 ): Promise<BoardOpResult> {
   await requireOrganiser(sessionId, actor);
   const canOverride = await mayOverrideGroupRules(sessionId, actor.userId);
+  const prep = await prepareWrite(sessionId, withEngine);
   const outcome = await transaction(async (client): Promise<WriteOutcome> => {
     await client.query(`INSERT INTO event_schedules (session_id) VALUES ($1) ON CONFLICT (session_id) DO NOTHING`, [sessionId]);
     const locked = await client.query<ScheduleRow>(
@@ -886,13 +943,14 @@ async function writeBoard(
     );
     const schedule = locked.rows[0];
     if (!schedule || schedule.revision !== expectedRevision) return { stale: true };
-    const state = await loadState(sessionId, client, schedule);
+    const state = await loadState(sessionId, client, schedule, prep);
     if (isEnded(state)) throw new ConflictError(ErrorCodes.EVENT_ENDED, ENDED);
     const draft = cloneDraft(state.draft);
-    let generator: BoardRoundGenerator | null = null;
+    let generator = prep.generator;
     const needs: SeatingNeeds = {
+      // Prepared before the lock for every write that seats automatically; this fallback is never expected to run.
       generator: async () => {
-        generator ??= await prepareBoardRoundGenerator(sessionId, [...state.people.keys()].filter((id) => inEvent(state, id)));
+        generator ??= await prepareBoardRoundGenerator(sessionId, [...state.people.keys()].filter((id) => inEvent(state, id) && !isGone(state, id)));
         return generator;
       },
     };
@@ -904,10 +962,11 @@ async function writeBoard(
       `UPDATE event_schedules
           SET revision = revision + 1, updated_by = $2, updated_at = NOW(),
               generated_at = CASE WHEN $3::boolean THEN NOW() ELSE generated_at END
-        WHERE session_id = $1
+        WHERE session_id = $1 AND revision = $4
         RETURNING revision`,
-      [sessionId, actor.userId, decision.generated],
+      [sessionId, actor.userId, decision.generated, schedule.revision],
     );
+    if (bumped.rows.length !== 1) throw new RevisionMoved();
     await recordEventAudit({
       sessionId,
       actorId: actor.userId,
@@ -916,10 +975,13 @@ async function writeBoard(
       round: decision.round,
       subjectUserIds: [...new Set(changed.flatMap((c) => c.userIds))],
       before: { revision: state.revision },
-      after: { ...decision.after, revision: bumped.rows[0]?.revision ?? state.revision + 1, changed },
+      after: { ...decision.after, revision: bumped.rows[0].revision, changed },
       ...(decision.reason && { reason: decision.reason }),
     }, client);
     return { stale: false, changed, wrote: true };
+  }).catch((err: unknown): WriteOutcome => {
+    if (err instanceof RevisionMoved) return { stale: true };
+    throw err;
   });
   if (outcome.stale) {
     const board = await readBoard(sessionId, actor);
@@ -939,7 +1001,7 @@ async function writeBoard(
 export async function generateBoard(
   sessionId: string, actor: Actor, expectedRevision: number, rounds: number[] | 'all',
 ): Promise<BoardOpResult> {
-  return writeBoard(sessionId, actor, expectedRevision, async (state, draft, _canOverride, needs) => {
+  return writeBoard(sessionId, actor, expectedRevision, true, async (state, draft, _canOverride, needs) => {
     const { scope, waiting } = await generate(state, draft, rounds, needs);
     return { action: 'schedule.generated', round: scope.length === 1 ? scope[0] : null, generated: true, after: { rounds: scope, waiting } };
   });
@@ -947,6 +1009,7 @@ export async function generateBoard(
 
 /** One edit to the board: move, swap, unassign, lock or unlock, redistribute, or mark someone late or not coming. */
 export async function applyBoardOp(sessionId: string, actor: Actor, expectedRevision: number, op: BoardOp): Promise<BoardOpResult> {
-  return writeBoard(sessionId, actor, expectedRevision, (state, draft, canOverride, needs) =>
+  const seatsAutomatically = op.kind === 'redistribute' || op.kind === 'mark_late' || op.kind === 'mark_no_show';
+  return writeBoard(sessionId, actor, expectedRevision, seatsAutomatically, (state, draft, canOverride, needs) =>
     applyOp(state, draft, op, canOverride, needs));
 }
