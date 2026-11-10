@@ -438,7 +438,7 @@ describe('approval, removal, and the guest\'s reach', () => {
     expect((await readCallEntry(CODE, userId, UserRole.MEMBER)).missing.displayName).toBe(true);
     const asked = await enterCall(CODE, userId, UserRole.MEMBER, { displayName: 'Rae' });
     expect(asked).toMatchObject({ step: 'pending_approval', sessionId: EVENT });
-    expect(mockRequestToJoin).toHaveBeenCalledWith(EVENT, userId, UserRole.MEMBER, null);
+    expect(mockRequestToJoin).toHaveBeenCalledWith(EVENT, userId, UserRole.MEMBER, null, { arrivedThroughCallLink: true });
     expect(mockRegister).not.toHaveBeenCalled();
     expect(await enterCall(CODE, userId, UserRole.MEMBER, {})).toEqual(asked);
     // The organiser approves (approveRequest registers them with approvedRequest).

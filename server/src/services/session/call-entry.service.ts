@@ -402,7 +402,7 @@ export async function enterCall(
 
   const now = await readCallEntryForEvent(event, userId, role);
   if (now.step === 'request') {
-    await requestToJoin(event.id, userId, role, null);
+    await requestToJoin(event.id, userId, role, null, { arrivedThroughCallLink: true });
     return readCallEntryForEvent(event, userId, role);
   }
   // The person's own group goes in with the place (registerParticipant writes it in the same transaction).
