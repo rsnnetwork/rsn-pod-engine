@@ -19,7 +19,8 @@ jest.mock('../../config/logger', () => ({
   __esModule: true,
 }));
 jest.mock('../../db', () => ({
-  query: jest.fn(async () => ({ rows: [{ status: 'active' }] })),
+  // authenticate's account read (status and, since Part 2 Task 3, the account kind): a member's.
+  query: jest.fn(async () => ({ rows: [{ status: 'active', account_kind: 'member' }] })),
   transaction: jest.fn(),
   __esModule: true,
 }));

@@ -255,6 +255,8 @@ describe('canViewSession and the live room on a draft', () => {
 describe('registerParticipant on a draft', () => {
   function armRegistration(publication: string, viewer: { isHost: boolean }) {
     mockQuery.mockImplementation(async (sql: string) => {
+      // The account gate (Part 2 Task 3): a member's account.
+      if (sql.includes('SELECT status, account_kind FROM users')) return { rows: [{ status: 'active', account_kind: 'member' }] };
       if (sql.includes('FROM sessions WHERE id = $1') && sql.includes('"registrationOpensAt"')) {
         return { rows: [{ id: EVENT, podId: 'pod-1', status: 'scheduled', publication, registrationOpensAt: null, visibility: null, hostUserId: HOST, config: {} }] };
       }
@@ -313,9 +315,7 @@ const LIFECYCLE_COLUMNS = {
 
 function armRoute(world: { exists: boolean; publication?: string; viewerIsHost?: boolean }) {
   mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
-    if (sql.includes('SELECT status FROM users') || sql.includes('FROM users WHERE id = $1') && sql.includes('status')) {
-      return { rows: [{ status: 'active' }] };
-    }
+    if (sql.includes('SELECT status, account_kind FROM users')) return { rows: [{ status: 'active', account_kind: 'member' }] };
     if (!world.exists) return { rows: [] };
     if (sql.includes('pod_visibility') && sql.includes('account_closed') && !sql.includes('event_join_requests')) {
       return { rows: [{ host_user_id: HOST, pod_id: 'pod-1', pod_visibility: 'public', is_cohost: false, visibility: null,

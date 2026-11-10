@@ -97,6 +97,7 @@ import notificationPrefsRoutes from '../../routes/notification-prefs';
 import postEventMessageRoutes from '../../routes/post-event-message';
 import eventChatRoutes from '../../routes/event-chat';
 import eventAuditRoutes from '../../routes/event-audit';
+import eventLifecycleRoutes from '../../routes/event-lifecycle';
 
 // The API exactly as index.ts mounts it, in the same order (the last test below holds the two lists together).
 const MOUNTS: Array<[string, express.Router]> = [
@@ -113,6 +114,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/sessions', postEventMessageRoutes],
   ['/api/sessions', eventChatRoutes],
   ['/api/sessions', eventAuditRoutes],
+  ['/api/sessions', eventLifecycleRoutes],
   ['/api/join-requests', joinRequestRoutes],
   ['/api/admin', adminRoutes],
   ['/api/admin', adminInspectRoutes],
@@ -183,6 +185,13 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['delete', `/api/sessions/${EVENT}/chat/${OTHER}`],
   ['get', `/api/sessions/${EVENT}/feedback`],
   ['get', `/api/sessions/${EVENT}/audit`],
+  // Part 2 Task 2: an event's lifecycle steps are its organisers' (members only).
+  ['post', `/api/sessions/${EVENT}/publish`],
+  ['post', `/api/sessions/${EVENT}/unpublish`],
+  ['post', `/api/sessions/${EVENT}/cancel`],
+  ['post', `/api/sessions/${EVENT}/archive`],
+  ['delete', `/api/sessions/${EVENT}/archive`],
+  ['post', `/api/sessions/${EVENT}/delete-permanently`],
   ['post', `/api/pokes/${OTHER}/withdraw`],
   ['get', '/api/invites/candidates'],
   ['get', '/api/admin/stats'],
