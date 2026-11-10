@@ -749,7 +749,7 @@ describe('spec 05, the critical distinction', () => {
   });
 
   it('and is kept out of matching as before: the host set (getAllHostIds) reads no group', () => {
-    const src = serverSrc('services/orchestration/handlers/host-actions.ts');
+    const src = serverSrc('services/session/host-set.ts');
     const start = src.indexOf('export async function getAllHostIds');
     const body = src.slice(start, src.indexOf('\n}\n', start));
     expect(body).toMatch(/u\.role = 'super_admin'/);
