@@ -52,13 +52,16 @@ export function cleanCallDisplayName(raw: string): string | null {
 }
 
 /**
- * Zero-width space, non-joiner and joiner, the left-to-right and right-to-left marks (U+200B to U+200F), the embeddings
- * and overrides (U+202A to U+202E), the word joiner and invisible operators (U+2060 to U+2064), the isolates (U+2066 to
- * U+2069) and the byte-order mark (U+FEFF).
+ * Zero-width space, non-joiner and joiner, the left-to-right and right-to-left marks (U+200B to U+200F), the line and
+ * paragraph separators (U+2028, U+2029), the embeddings and overrides (U+202A to U+202E), the word joiner and invisible
+ * operators (U+2060 to U+2064), the isolates (U+2066 to U+2069), the Arabic letter mark (U+061C), the Hangul fillers that
+ * draw as blank (U+115F, U+1160, U+3164, U+FFA0) and the byte-order mark (U+FEFF).
  */
+const INVISIBLE_SINGLES: ReadonlySet<number> = new Set([0x061c, 0x115f, 0x1160, 0x3164, 0xffa0, 0xfeff]);
+
 function isInvisibleInName(code: number): boolean {
-  return (code >= 0x200b && code <= 0x200f) || (code >= 0x202a && code <= 0x202e) || (code >= 0x2060 && code <= 0x2064)
-    || (code >= 0x2066 && code <= 0x2069) || code === 0xfeff;
+  return (code >= 0x200b && code <= 0x200f) || (code >= 0x2028 && code <= 0x202e) || (code >= 0x2060 && code <= 0x2064)
+    || (code >= 0x2066 && code <= 0x2069) || INVISIBLE_SINGLES.has(code);
 }
 
 /** The longest text normaliseCallCode reads: a code with a separator between every symbol, and a little more. */

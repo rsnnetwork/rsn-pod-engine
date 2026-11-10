@@ -775,7 +775,7 @@ const EVENT_ENTRY_PURPOSE = 'event_entry';
 
 /**
  * Issue an entry link and code for `email` on `sessionId`: the address's earlier unused entry links for that event are
- * spent first (only the newest code works), then a new one is stored, its token and code as hashes only. The link
+ * spent and expired first (only the newest code works, and an older email's button keeps no scanner grace), then a new one is stored, its token and code as hashes only. The link
  * lives as long as a sign-in link (60 minutes); its code 15.
  */
 export async function issueEventEntryLink(email: string, sessionId: string): Promise<{ token: string; code: string }> {
@@ -786,7 +786,7 @@ export async function issueEventEntryLink(email: string, sessionId: string): Pro
   const code = newSignInCode();
   const codeHash = hashSignInCode(tokenHash, code);
   await query(
-    `UPDATE magic_links SET used_at = NOW()
+    `UPDATE magic_links SET used_at = NOW(), expires_at = LEAST(expires_at, NOW())
       WHERE email = $1 AND purpose = '${EVENT_ENTRY_PURPOSE}' AND target_id = $2 AND used_at IS NULL`,
     [normalizedEmail, sessionId],
   );

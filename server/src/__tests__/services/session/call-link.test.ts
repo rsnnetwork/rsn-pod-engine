@@ -128,10 +128,15 @@ describe('the code', () => {
     expect(cleanCallDisplayName('a'.repeat(61))).toBeNull();
     expect(cleanCallDisplayName('<b>Ana</b>')).toBeNull();
     expect(cleanCallDisplayName('Ana\u0000')).toBeNull();
-    // Invisible characters that can disguise a name are taken out, then the name is trimmed (fix round 1).
-    expect(cleanCallDisplayName('​Ana‍ ‮Maria‬﻿ ')).toBe('Ana Maria');
-    expect(cleanCallDisplayName('⁦ Stefan ⁩')).toBe('Stefan');
-    expect(cleanCallDisplayName('​‌‍⁠')).toBeNull();
+    // Invisible characters that can disguise a name are taken out, then the name is trimmed (fix rounds 1 and 2).
+    const cp = (...codes: number[]) => String.fromCodePoint(...codes);
+    expect(cleanCallDisplayName(`${cp(0x200b)}Ana${cp(0x200d)} ${cp(0x202e)}Maria${cp(0x202c, 0xfeff)} `)).toBe('Ana Maria');
+    expect(cleanCallDisplayName(`${cp(0x2066)} Stefan ${cp(0x2069)}`)).toBe('Stefan');
+    expect(cleanCallDisplayName(cp(0x200b, 0x200c, 0x200d, 0x2060))).toBeNull();
+    // The Arabic letter mark, the line and paragraph separators and the Hangul fillers that draw as blank.
+    expect(cleanCallDisplayName(`Ana${cp(0x061c)} ${cp(0x2028)}Bo${cp(0x2029)}`)).toBe('Ana Bo');
+    expect(cleanCallDisplayName(cp(0x3164, 0x115f, 0x1160, 0xffa0))).toBeNull();
+    expect(cleanCallDisplayName(`${cp(0x3164)}Stefan`)).toBe('Stefan');
   });
 });
 

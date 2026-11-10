@@ -223,8 +223,12 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
 
   // ── magic_links ──
   const linkById = (id: unknown) => world.links.find((l) => l.id === id);
-  if (sql.startsWith("UPDATE magic_links SET used_at = NOW() WHERE email = $1 AND purpose = 'event_entry' AND target_id = $2 AND used_at IS NULL")) {
-    for (const l of world.links) if (l.email === params[0] && l.purpose === 'event_entry' && l.target_id === params[1] && !l.used_at) l.used_at = new Date();
+  if (sql.startsWith("UPDATE magic_links SET used_at = NOW(), expires_at = LEAST(expires_at, NOW()) WHERE email = $1 AND purpose = 'event_entry' AND target_id = $2 AND used_at IS NULL")) {
+    for (const l of world.links) {
+      if (l.email === params[0] && l.purpose === 'event_entry' && l.target_id === params[1] && !l.used_at) {
+        l.used_at = new Date(); l.expires_at = new Date(Math.min(l.expires_at.getTime(), Date.now()));
+      }
+    }
     return rows([], 1);
   }
   if (sql.startsWith("INSERT INTO magic_links (email, token_hash, expires_at, code_hash, purpose, target_id) VALUES ($1, $2, $3, $4, 'event_entry', $5)")) {

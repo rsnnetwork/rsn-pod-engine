@@ -362,6 +362,16 @@ export async function enterCall(
 
   const person = await readPerson(userId);
   if (!person) throw callLinkNotFound();
+  // Fix round 2 (D3: on an approval event, code holders come in directly). A single-use admission code is spent only
+  // when it is what lets the person in, and only at the call that gives the place (their name is known by then):
+  //   - an invitation-only event they hold no other tie to (missing.admissionCode), or
+  //   - an event that would otherwise put them in the approval queue (needsApproval), whichever step shows it (details
+  //     for a newcomer still giving a name, request for someone who has one).
+  // Anywhere else it is left unspent.
+  const facts = await readEventAccessFacts(event.id, userId);
+  const wouldRequest = !!facts && needsApproval(facts, role);
+  const nameKnown = !before.missing.displayName || !!name;
+  const spendCode = !!input.admissionCode && nameKnown && (before.missing.admissionCode || wouldRequest);
   const rules = await getEventGroupRules(event.id);
   const eventGroupKeys = new Set(rules?.groups.map((g) => g.key) ?? []);
 
@@ -379,10 +389,8 @@ export async function enterCall(
     }
     let codeGroup: string | null = null;
     let redeemed = false;
-    // A single-use code is spent only when it is what lets the person in (fix round 1): an invitation-only event they
-    // hold no other tie to, or an approval event they would otherwise have to ask. Anywhere else it is left unspent.
-    if (input.admissionCode && (before.missing.admissionCode || before.step === 'request')) {
-      const r = await redeemAdmissionCode(event.id, userId, input.admissionCode, client);
+    if (spendCode) {
+      const r = await redeemAdmissionCode(event.id, userId, input.admissionCode!, client);
       codeGroup = r.groupKey;
       redeemed = true;
     }

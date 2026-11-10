@@ -18,7 +18,7 @@
 //   POST /sessions/:id/call-link/rotate  a new code; the old link stops working at once
 //
 // A code that leads nowhere (malformed, unknown, a hidden draft, a deleted event) answers one identical 404 on every
-// route here, and every such 404 counts toward the two miss buckets (Review Focus 4; rateLimit.ts says why two).
+// route here, and every such 404 counts toward callLinkMissLimiter (Review Focus 4; rateLimit.ts says how it is keyed).
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -27,9 +27,8 @@ import { authenticate, optionalAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import {
-  admissionRedeemIpLimiter, admissionRedeemLimiter, callEntryLimiter, callLinkEmailLimiter, callLinkEmailPerLinkLimiter,
-  callLinkEmailProxyLimiter, callLinkEmailTargetLimiter, callLinkManageLimiter, callLinkMissLimiter,
-  callLinkMissProxyLimiter, callLinkReadLimiter, signInCodeEmailLimiter, signInCodeLimiter,
+  admissionRedeemIpLimiter, admissionRedeemLimiter, callEntryLimiter, callLinkEmailLimiter, callLinkEmailTargetLimiter,
+  callLinkManageLimiter, callLinkMissLimiter, callLinkReadLimiter, signInCodeEmailLimiter, signInCodeLimiter,
 } from '../middleware/rateLimit';
 import * as callLink from '../services/session/call-link.service';
 import * as callEntry from '../services/session/call-entry.service';
@@ -39,9 +38,6 @@ export const sessionCallLinkRoutes = Router();
 
 const CHECK_INPUT = 'Check what you entered and try again.';
 const ENTRY_CODE_MESSAGE = 'Enter the 6-digit code from the email.';
-
-/** Every link answer counts its misses twice: per person (clientIp) and per proxy address (req.ip). */
-const misses = [callLinkMissLimiter, callLinkMissProxyLimiter];
 
 const viewerOf = (req: Request): { userId: string; role: UserRole } | null =>
   req.user ? { userId: req.user.userId, role: req.user.role as UserRole } : null;
@@ -122,7 +118,7 @@ router.get('/me/events', authenticate, callEntryLimiter, async (req: Request, re
 
 // ─── The landing ─────────────────────────────────────────────────────────────
 
-router.get('/:code', ...misses, callLinkReadLimiter, optionalAuth,
+router.get('/:code', callLinkMissLimiter, callLinkReadLimiter, optionalAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await callLink.getCallLanding(req.params.code, viewerOf(req));
@@ -134,8 +130,8 @@ router.get('/:code', ...misses, callLinkReadLimiter, optionalAuth,
 
 // ─── Identify: the code by email, then the code back ─────────────────────────
 
-router.post('/:code/email', ...misses, callLinkEmailProxyLimiter, callLinkEmailLimiter,
-  validate(emailSchema, 'body', CHECK_INPUT), callLinkEmailTargetLimiter, callLinkEmailPerLinkLimiter,
+router.post('/:code/email', callLinkMissLimiter, callLinkEmailLimiter,
+  validate(emailSchema, 'body', CHECK_INPUT), callLinkEmailTargetLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { email, clientUrl } = req.body as z.infer<typeof emailSchema>;
@@ -146,7 +142,7 @@ router.post('/:code/email', ...misses, callLinkEmailProxyLimiter, callLinkEmailL
     }
   });
 
-router.post('/:code/verify', ...misses, signInCodeLimiter, validate(verifySchema, 'body', ENTRY_CODE_MESSAGE),
+router.post('/:code/verify', callLinkMissLimiter, signInCodeLimiter, validate(verifySchema, 'body', ENTRY_CODE_MESSAGE),
   entryCodeEmailBucket, admissionTriesBucket,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -159,7 +155,7 @@ router.post('/:code/verify', ...misses, signInCodeLimiter, validate(verifySchema
 
 // ─── Signed in: where they stand, and entering ───────────────────────────────
 
-router.get('/:code/entry', ...misses, authenticate, callEntryLimiter,
+router.get('/:code/entry', callLinkMissLimiter, authenticate, callEntryLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await callEntry.readCallEntry(req.params.code, req.user!.userId, req.user!.role as UserRole);
@@ -169,7 +165,7 @@ router.get('/:code/entry', ...misses, authenticate, callEntryLimiter,
     }
   });
 
-router.post('/:code/enter', ...misses, authenticate, callEntryLimiter, validate(enterSchema, 'body', CHECK_INPUT),
+router.post('/:code/enter', callLinkMissLimiter, authenticate, callEntryLimiter, validate(enterSchema, 'body', CHECK_INPUT),
   admissionTriesBucket,
   async (req: Request, res: Response, next: NextFunction) => {
     try {

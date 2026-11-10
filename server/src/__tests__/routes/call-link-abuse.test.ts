@@ -14,6 +14,8 @@
 import express from 'express';
 import request from 'supertest';
 import crypto from 'crypto';
+import nodeFs from 'fs';
+import nodePath from 'path';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = 'test-jwt-secret';
@@ -84,7 +86,7 @@ import callLinkRoutes from '../../routes/call-links';
 import authRoutes from '../../routes/auth';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import {
-  CALL_LINK_EMAILS_PER_LINK, CALL_LINK_MISSES_MAX, CALL_LINK_PROXY_MISSES_MAX, callLinkEmailTargetKey, callLinkEmailTargetLimiter,
+  CALL_LINK_EMAILS_PER_CLIENT, CALL_LINK_MISSES_MAX, callLinkEmailTargetKey, callLinkEmailTargetLimiter,
   signInCodeEmailKey, signInCodeEmailLimiter,
 } from '../../middleware/rateLimit';
 import { hashSignInCode } from '../../services/identity/sign-in-code';
@@ -295,32 +297,32 @@ describe('no answer tells whether an address has an account (fix round 1)', () =
   });
 });
 
-describe('buckets a caller cannot step around (fix round 1)', () => {
-  it('a new cf-connecting-ip on every try does not escape the proxy\'s own address bucket', async () => {
-    const realAddress = '203.0.113.77';
-    let last = 0;
-    for (let i = 0; i <= CALL_LINK_PROXY_MISSES_MAX; i++) {
-      const r = await request(app).get(`/api/call-links/${crypto.randomBytes(5).toString('hex')}`)
-        .set('x-forwarded-for', realAddress).set('cf-connecting-ip', `198.51.100.${i % 250}.${i}`);
-      last = r.status;
-      if (i < CALL_LINK_PROXY_MISSES_MAX) expect(r.status).toBe(404);
+describe('one client\'s limits never keep another out of the same link (fix round 2)', () => {
+  it('a client that spends its own code-request allowance on a link leaves the link open to everyone else', async () => {
+    const busy = nextIp();
+    for (let i = 0; i < CALL_LINK_EMAILS_PER_CLIENT; i++) {
+      const r = await request(app).post(`/api/call-links/${CODE_B}/email`).set('cf-connecting-ip', busy).send({ email: `cycle-${i}@example.org` });
+      expect(r.status).toBe(200);
     }
-    expect(last).toBe(429);
-    const elsewhere = await request(app).get(`/api/call-links/${CODE_A}`).set('x-forwarded-for', '203.0.113.78').set('cf-connecting-ip', nextIp());
-    expect(elsewhere.status).toBe(200);
+    const spent = await request(app).post(`/api/call-links/${CODE_B}/email`).set('cf-connecting-ip', busy).send({ email: 'one-more@example.org' });
+    expect(spent.status).toBe(429);
+    const other = nextIp();
+    const landing = await request(app).get(`/api/call-links/${CODE_B}`).set('cf-connecting-ip', other);
+    expect(landing.status).toBe(200);
+    const asked = await request(app).post(`/api/call-links/${CODE_B}/email`).set('cf-connecting-ip', other).send({ email: 'someone-else@example.org' });
+    expect(asked.status).toBe(200);
+    expect(asked.body).toEqual({ success: true, data: { sent: true } });
   });
 
-  it('one link takes a capped number of code requests, however many addresses and networks ask', async () => {
-    addEvent({ id: uuid(110), call_code: 'pppppppppp', admission_mode: 'open' });
-    for (let i = 0; i < CALL_LINK_EMAILS_PER_LINK; i++) {
-      const r = await request(app).post('/api/call-links/pppppppppp/email')
-        .set('x-forwarded-for', `192.0.2.${i % 250}`).set('cf-connecting-ip', `10.200.${Math.floor(i / 250)}.${i % 250}`)
-        .send({ email: `cycle-${i}@example.org` });
-      if (r.status !== 200) throw new Error(`at ${i}: ${r.status} ${r.text}`);
+  it('a client that spends its own miss allowance leaves every link open to everyone else', async () => {
+    const guesser = nextIp();
+    for (let i = 0; i < CALL_LINK_MISSES_MAX; i++) {
+      await request(app).get(`/api/call-links/${crypto.randomBytes(5).toString('hex')}`).set('cf-connecting-ip', guesser);
     }
-    const over = await request(app).post('/api/call-links/pppppppppp/email')
-      .set('x-forwarded-for', '192.0.2.251').set('cf-connecting-ip', nextIp()).send({ email: 'one-more@example.org' });
-    expect(over.status).toBe(429);
+    expect((await request(app).get(`/api/call-links/${CODE_B}`).set('cf-connecting-ip', guesser)).status).toBe(429);
+    const other = nextIp();
+    expect((await request(app).get(`/api/call-links/${CODE_B}`).set('cf-connecting-ip', other)).status).toBe(200);
+    expect((await request(app).post(`/api/call-links/${CODE_B}/email`).set('cf-connecting-ip', other).send({ email: EMAIL })).status).toBe(200);
   });
 
   it('the per-link-and-address key reads every spelling of a link as one (o→0, i/l→1, separators)', () => {
@@ -328,7 +330,16 @@ describe('buckets a caller cannot step around (fix round 1)', () => {
     expect(key('K7M2-X9Q4-RA')).toBe(key('k7m2x9q4ra'));
     expect(key('1o1o1o1o1o')).toBe(key('l0i0101010'));
   });
+
+  it('nothing on the link is keyed on a value many real people share (no proxy or per-link-only bucket)', () => {
+    const src = nodeFs.readFileSync(nodePath.join(__dirname, '../../middleware/rateLimit.ts'), 'utf8');
+    const block = src.slice(src.indexOf('// ─── The RSN Call link'), src.indexOf('/** Reading and entering by the link'));
+    expect(block).not.toMatch(/req\.ip/);
+    const keys = [...block.matchAll(/keyGenerator: ([^,\n]+)/g)].map((m) => m[1].trim());
+    expect(keys.sort()).toEqual(['callLinkEmailTargetKey', 'ipKey', 'ipKey', 'ipKey']);
+  });
 });
+
 
 describe('the shape of what is sent', () => {
   it('a code that is not six digits, or a body with both shapes, is refused before any database read', async () => {

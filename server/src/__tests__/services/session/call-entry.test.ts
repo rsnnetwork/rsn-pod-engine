@@ -542,6 +542,50 @@ describe('approval, removal, and the guest\'s reach', () => {
     expect(await readCallEntry(CODE, userId, UserRole.MEMBER)).toMatchObject({ step: 'wait_for_start', sessionId: EVENT });
   });
 
+  it('an approval event takes a new guest who gives a name and an admission code directly: no request (D3, fix round 2)', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'private' });
+    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: null, revoked_at: null, expires_at: null });
+    const { userId } = await signIn(NEW_EMAIL);
+    expect(await readCallEntry(CODE, userId, UserRole.MEMBER)).toMatchObject({ step: 'details', missing: { displayName: true } });
+    const state = await enterCall(CODE, userId, UserRole.MEMBER, { displayName: 'Cody', admissionCode: 'abcd-efgh-jkmn' });
+    expect(state).toMatchObject({ step: 'wait_for_start', sessionId: EVENT });
+    expect(mockRedeem).toHaveBeenCalledWith(EVENT, userId, 'abcd-efgh-jkmn', expect.anything());
+    expect(mockRequestToJoin).not.toHaveBeenCalled();
+    expect(world.places.get(key(EVENT, userId))).toEqual({ status: 'registered', admitted_via: 'code' });
+  });
+
+  it('an approval event takes an existing member who gives an admission code directly: no request (fix round 2)', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'private' });
+    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: null, revoked_at: null, expires_at: null });
+    expect(await readCallEntry(CODE, MEMBER, UserRole.MEMBER)).toMatchObject({ step: 'request' });
+    const state = await enterCall(CODE, MEMBER, UserRole.MEMBER, { admissionCode: 'ABCD-EFGH-JKMN' });
+    expect(state).toMatchObject({ step: 'wait_for_start', sessionId: EVENT });
+    expect(mockRequestToJoin).not.toHaveBeenCalled();
+    expect(world.places.get(key(EVENT, MEMBER))).toEqual({ status: 'registered', admitted_via: 'code' });
+  });
+
+  it('an admission code given before the name is not spent yet; the call that gives the place spends it (fix round 2)', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'private' });
+    world.codes.push({ session_id: EVENT, code_hash: hashAdmissionCode(EVENT, normaliseAdmissionCode('ABCD-EFGH-JKMN')!), group_key: null, redeemed_by: null, revoked_at: null, expires_at: null });
+    const { userId } = await signIn(NEW_EMAIL);
+    expect(await enterCall(CODE, userId, UserRole.MEMBER, { admissionCode: 'ABCD-EFGH-JKMN' })).toMatchObject({ step: 'details', missing: { displayName: true } });
+    expect(mockRedeem).not.toHaveBeenCalled();
+    expect(mockRequestToJoin).not.toHaveBeenCalled();
+    expect(world.codes[0].redeemed_by).toBeNull();
+    expect((await enterCall(CODE, userId, UserRole.MEMBER, { displayName: 'Cody', admissionCode: 'ABCD-EFGH-JKMN' })).step).toBe('wait_for_start');
+    expect(world.places.get(key(EVENT, userId))).toEqual({ status: 'registered', admitted_via: 'code' });
+  });
+
+  it('on an approval event a wrong admission code is refused (400): no request is sent and no place is given', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'private' });
+    const { userId } = await signIn(NEW_EMAIL);
+    expect(await refusal(enterCall(CODE, userId, UserRole.MEMBER, { displayName: 'Cody', admissionCode: 'ZZZZ-ZZZZ-ZZZZ' }))).toMatchObject({
+      status: 400, code: ErrorCodes.ADMISSION_CODE_INVALID,
+    });
+    expect(mockRequestToJoin).not.toHaveBeenCalled();
+    expect(world.places.has(key(EVENT, userId))).toBe(false);
+  });
+
   it('a declined request reads declined and enters nothing', async () => {
     addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'public_with_approval' });
     world.requests.set(key(EVENT, MEMBER), 'declined');
