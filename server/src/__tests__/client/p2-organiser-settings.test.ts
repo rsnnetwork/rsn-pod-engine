@@ -199,9 +199,12 @@ describe('the RSN Call link', () => {
     expect(src.callLink).toMatch(/api\.post\(`\/sessions\/\$\{sessionId\}\/call-link\/rotate`\)/);
     expect(src.callLinkCard).toMatch(/if \(link\.isError && notForThisViewer\(link\.error\)\) return null;/);
     expect(src.callLinkCard).not.toMatch(/api\./);
-    // The path is the shared callLinkPath (CALL_LINK_BASE_PATH); the server's url is used only when it ends in it.
+    // Controller ruling (11 Nov): always this site's origin and the shared callLinkPath (CALL_LINK_BASE_PATH), never the
+    // server's url (built from CLIENT_URL, production's app, which has no call-link page until this client ships there).
     expect(src.callLink).toMatch(/import \{ callLinkPath \} from '@rsn\/shared';/);
-    expect(src.callLink).toMatch(/const path = callLinkPath\(link\.code\);\s*return link\.url && link\.url\.endsWith\(path\) \? link\.url : `\$\{origin\}\$\{path\}`;/);
+    expect(src.callLink).toMatch(/return `\$\{origin\}\$\{callLinkPath\(link\.code\)\}`;/);
+    expect(src.callLink).not.toMatch(/link\.url/);
+    expect(src.callLinkCard).toMatch(/callLinkAddress\(link\.data, window\.location\.origin\)/);
   });
 
   it('matches Task 6\'s organiser route on main: { code, path, url } from the shared path, and rotate tells the organisers', () => {

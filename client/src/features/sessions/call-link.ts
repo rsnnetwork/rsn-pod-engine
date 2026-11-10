@@ -3,8 +3,8 @@
 //   GET  /api/sessions/:id/call-link         → { code, path, url } (the code is made on first read)
 //   POST /api/sessions/:id/call-link/rotate  → the same shape with a new code; the old link stops working at once
 // Rotating tells the organisers' screens session:<id>:call-link and session:<id> (call-link.service.ts fanoutCallLink),
-// so every organiser's card follows. The link shown is the server's `url` (its own site's address); the path is always
-// the shared callLinkPath(code), which reads CALL_LINK_BASE_PATH, the one place the path is named.
+// so every organiser's card follows. The link shown and copied is this site's origin and the shared callLinkPath(code)
+// (CALL_LINK_BASE_PATH, the one place the path is named); the server's `url` is not shown (see callLinkAddress).
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { callLinkPath } from '@rsn/shared';
 import api from '@/lib/api';
@@ -20,12 +20,12 @@ export interface CallLink {
 export const callLinkKey = (sessionId: string) => ['session-call-link', sessionId] as const;
 
 /**
- * The address to share: the server's own `url` when it ends in this code's path (the server builds it from the same
- * constant), else this site's origin and callLinkPath(code).
+ * The address to show and copy: always this site's origin and callLinkPath(code). The server's `url` is built from its
+ * CLIENT_URL (production's app), which has no call-link page until this client ships there; from this site the link
+ * opens the site it was copied on, and once shipped the origin is production's anyway (controller ruling, 11 Nov 2026).
  */
-export function callLinkAddress(link: CallLink, origin: string): string {
-  const path = callLinkPath(link.code);
-  return link.url && link.url.endsWith(path) ? link.url : `${origin}${path}`;
+export function callLinkAddress(link: Pick<CallLink, 'code'>, origin: string): string {
+  return `${origin}${callLinkPath(link.code)}`;
 }
 
 export function useCallLink(sessionId: string, enabled: boolean) {
