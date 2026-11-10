@@ -101,10 +101,12 @@ services:
       #   value: "4"
 
       # Closes overdue events: live or never started, once their start, length
-      # and OVERDUE_EVENT_GRACE_MINUTES (default 120) have passed. Defaults to
-      # "report" when unset: it logs the events it would close and writes
-      # nothing. Read that log before setting "end"; "off" stops it.
-      # - key: OVERDUE_EVENT_CLOSE
-      #   value: "report"
+      # and OVERDUE_EVENT_GRACE_MINUTES (default 120) have passed. Unset, it
+      # defaults to "report" (logs the events it would close, writes nothing);
+      # "off" stops it. End mode is on as of 10 Nov 2026, set after the
+      # report-mode log on production was read (it listed exactly the two
+      # stuck September events). Mirrors the Render dashboard.
+      - key: OVERDUE_EVENT_CLOSE
+        value: "end"
       # - key: OVERDUE_EVENT_GRACE_MINUTES
       #   value: "120"
