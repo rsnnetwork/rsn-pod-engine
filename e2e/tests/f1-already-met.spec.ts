@@ -111,7 +111,9 @@ test.describe('F1 Already met', () => {
     await expect(cardOf(page, b)).toHaveCount(0);
 
     // 2. Still listed on Everyone, labelled.
+    // Everyone is A to Z, 30 a page, so B is found by searching the run's unique name, not by paging.
     await gotoRetry(page, `${APP}/people/everyone`);
+    await page.getByLabel('Search everyone').fill(`F1${run}`);
     const row = cardOf(page, b);
     await expect(row).toBeVisible({ timeout: 60_000 });
     await expect(row.getByText('You marked as met')).toBeVisible();
