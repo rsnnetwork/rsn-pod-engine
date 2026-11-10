@@ -4,6 +4,7 @@
 // opens the picture editor on the picture you chose last time, where you placed it; the server cuts the 2400 by 800
 // banner from it and tells your other screens. Remove asks first.
 import { useState } from 'react';
+import { ImagePlus } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToastStore } from '@/stores/toastStore';
 import PencilButton from '@/components/picture/PencilButton';
@@ -37,14 +38,25 @@ export default function BannerEditor({ bannerUrl }: { bannerUrl: string | null }
 
   return (
     <>
-      <ProfileBanner src={bannerUrl}>
-        <div className="absolute bottom-2 right-2 flex items-center gap-2 md:bottom-3 md:right-3">
-          {bannerUrl && (
+      {bannerUrl ? (
+        // The controls sit at the top: the photo is centred over the banner's lower edge, so the bottom corners are not free.
+        <ProfileBanner src={bannerUrl}>
+          <div className="absolute right-2 top-2 flex items-center gap-2 md:right-3 md:top-3">
             <button type="button" onClick={() => setConfirming(true)} disabled={busy} className={ON_BANNER}>Remove</button>
-          )}
-          <PencilButton label="Edit banner" onClick={banner.edit} disabled={busy} />
-        </div>
-      </ProfileBanner>
+            <PencilButton label="Edit banner" onClick={banner.edit} disabled={busy} />
+          </div>
+        </ProfileBanner>
+      ) : (
+        // With no banner there is no strip, only this slim way to add one (Stefan, 10 Nov 2026).
+        <button
+          type="button"
+          onClick={banner.edit}
+          disabled={busy}
+          className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-[14px] border border-dashed border-[#c9ccd2] bg-white px-4 text-[14px] font-bold text-reason-muted hover:bg-reason-soft disabled:cursor-default disabled:opacity-70"
+        >
+          <ImagePlus className="h-4 w-4" aria-hidden="true" /> Add a cover image
+        </button>
+      )}
       <PictureEditor {...banner.editor} />
       <Sheet
         open={confirming}

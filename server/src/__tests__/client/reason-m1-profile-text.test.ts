@@ -18,7 +18,7 @@ type Relationship = PersonBrief['relationship'];
 
 const person = (over: Partial<Person> = {}): Person => ({
   id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null, bannerUrl: null, bio: null,
-  company: null, jobTitle: null, industry: null, location: null, linkedinUrl: null, languages: [], professionalRole: [],
+  company: null, jobTitle: null, industry: null, location: null, linkedinUrl: null, websiteUrl: null, instagramUrl: null, xUrl: null, facebookUrl: null, languages: [], professionalRole: [],
   expertiseText: null, whatICanHelpWith: null, ...over,
 });
 const relationship = (over: Partial<Relationship> = {}): Relationship => ({
@@ -254,7 +254,7 @@ describe('personFacts: who the page is about', () => {
       industry: 'Fintech', professionalRole: ['Investor', ' Advisor ', '  ', ''],
     }))).toEqual({
       name: 'Nora None', first: 'Nora', role: 'Investor, Advisor', company: 'Northwind Capital', bio: 'Backs founders.',
-      tags: ['Fintech', 'Investor', 'Advisor'], linkedin: null,
+      tags: ['Fintech', 'Investor', 'Advisor'], linkedin: null, links: [],
     });
   });
 

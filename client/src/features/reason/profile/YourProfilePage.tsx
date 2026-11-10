@@ -36,7 +36,6 @@ function Loading() {
   return (
     <div className={PAGE} aria-busy="true">
       <span className="sr-only" role="status">Loading your profile</span>
-      <Skeleton className="aspect-[3/1] max-h-[260px] w-full rounded-[21px] md:rounded-[26px]" />
       <Skeleton className="h-[40vh] rounded-[21px] border border-reason-line bg-white" />
     </div>
   );
@@ -79,13 +78,14 @@ export default function YourProfilePage() {
 
       <HeroFrame
         fit="shell"
+        hasBanner={!!card.data.bannerUrl}
         photo={card.data.avatarUrl}
         photoAction={<PencilButton label="Edit photo" onClick={photo.edit} disabled={photo.busy} />}
         who={who}
         kicker="Your profile, as others see it"
         note={<NoteBox title="This is what members see" line="Who you want to meet and what you are hoping to find stay private. Only you see them, below." />}
         panel={(
-          <DarkPanel fit="shell" kicker="What you can bring" title={bring ? 'Members read what you can bring.' : 'Say what you can bring.'}>
+          <DarkPanel kicker="What you can bring" title={bring ? 'Members read what you can bring.' : 'Say what you can bring.'}>
             <p className="mt-3.5 text-[14px] leading-relaxed text-[#d4d6da] [overflow-wrap:anywhere]">
               {bring
                 ? 'On your profile it sits next to the reason REASON gives each member for meeting you.'

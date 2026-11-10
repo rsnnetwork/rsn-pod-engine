@@ -1,8 +1,9 @@
 // client/src/features/reason/human/ProfileHero.tsx
-// The human on the left, the reason on the right: who they are, and why you two might matter to each other.
+// The human and the reason: who they are (photo, name and links centred in one card), and why you two might matter to each other.
 // The frame (photo, person, dark panel) is shared: your own profile is drawn by it too (21 Oct 2026), so what you
 // see of yourself looks exactly like what other members see of you.
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { Facebook, Globe, Instagram, Linkedin, Twitter, type LucideIcon } from 'lucide-react';
 import type { PersonBrief } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
@@ -10,26 +11,16 @@ import ReasonSheep from '../brand/ReasonSheep';
 import { visibleText } from '../person';
 import ProfileCallButton from '@/features/calls/ProfileCallButton';
 import ProfileHeroActions from './ProfileHeroActions';
-import { SIGNAL, foundThrough, isSmallPhoto, reasonText, type KnownSource, type PersonFacts } from './profile-text';
+import { SIGNAL, foundThrough, reasonText, type KnownSource, type PersonFacts, type ProfileLinkItem } from './profile-text';
 
-// The Human Profile fills the window. Your own profile sits beside the app's sidebar (232px from 981px), so its columns
-// follow the width of the page, not of the window: its page is as wide at a 1213px window as the Human Profile's is at
-// 981px, and at 1432px as at 1200px. With the window's breakpoints the name had 160px at 1024 and broke mid-word.
+// The person card (photo, name, links) and the dark panel. The photo sits centred at the top of the card at every width
+// (Stefan, 10 Nov 2026), so there is no side column: below 981px the card and the panel stack, from there they share the
+// width. The Human Profile fills the window; your own profile sits beside the app's sidebar (232px from 981px), so its
+// columns follow the width of the page, not of the window.
 export type HeroFit = 'screen' | 'shell';
-const FRAME: Record<HeroFit, { grid: string; name: string; panel: string }> = {
-  screen: {
-    // From 981px the three columns share the width. The side columns are slimmer, and the name smaller, until
-    // 1200px, so a name in the middle column is not cut mid-word ("Northwin" / "d" at 1024px with the full-size
-    // columns, and "Papadopoulos" at 981px with a 52px name).
-    grid: 'grid grid-cols-[minmax(0,1fr)] gap-[11px] md:grid-cols-[260px_minmax(0,1fr)] md:gap-[18px] min-[981px]:grid-cols-[250px_minmax(0,1fr)_290px] min-[1200px]:grid-cols-[320px_minmax(0,1fr)_330px]',
-    name: 'min-[981px]:max-[1199px]:text-[44px]',
-    panel: 'min-[981px]:col-span-1',
-  },
-  shell: {
-    grid: 'grid grid-cols-[minmax(0,1fr)] gap-[11px] md:grid-cols-[260px_minmax(0,1fr)] md:gap-[18px] min-[1213px]:grid-cols-[250px_minmax(0,1fr)_290px] min-[1432px]:grid-cols-[320px_minmax(0,1fr)_330px]',
-    name: 'min-[1213px]:max-[1431px]:text-[44px]',
-    panel: 'min-[1213px]:col-span-1',
-  },
+const GRID: Record<HeroFit, string> = {
+  screen: 'grid grid-cols-[minmax(0,1fr)] gap-[11px] md:gap-[18px] min-[981px]:grid-cols-[minmax(0,1fr)_330px] min-[1200px]:grid-cols-[minmax(0,1fr)_380px]',
+  shell: 'grid grid-cols-[minmax(0,1fr)] gap-[11px] md:gap-[18px] min-[1213px]:grid-cols-[minmax(0,1fr)_330px] min-[1432px]:grid-cols-[minmax(0,1fr)_380px]',
 };
 
 export function Offer({ label, text }: { label: string; text: string }) {
@@ -44,7 +35,7 @@ export function Offer({ label, text }: { label: string; text: string }) {
 /** The box at the foot of the person's card: the sheep, a title and a line. */
 export function NoteBox({ title, line }: { title: string; line: string }) {
   return (
-    <div className="flex items-start gap-3 rounded-[18px] border border-reason-line bg-white p-3.5">
+    <div className="flex items-start gap-3 rounded-[18px] border border-reason-line bg-white p-3.5 text-left">
       <ReasonSheep pose="curious" className="h-12 w-12 shrink-0" />
       <div className="min-w-0 [overflow-wrap:anywhere]">
         <b className="block text-[12px]">{title}</b>
@@ -55,13 +46,35 @@ export function NoteBox({ title, line }: { title: string; line: string }) {
 }
 
 /** The dark panel beside the person: a label, a heading, and what goes under it. */
-export function DarkPanel({ kicker, title, children, fit = 'screen' }: { kicker: string; title: string; children: ReactNode; fit?: HeroFit }) {
+export function DarkPanel({ kicker, title, children }: { kicker: string; title: string; children: ReactNode }) {
   return (
-    <aside className={cn('flex min-w-0 flex-col rounded-[21px] bg-[#111216] p-[18px] text-white shadow-[0_16px_48px_rgba(17,18,22,.12)] md:col-span-2 md:rounded-[26px] md:p-[26px]', FRAME[fit].panel)}>
+    <aside className="flex min-w-0 flex-col rounded-[21px] bg-[#111216] p-[18px] text-white shadow-[0_16px_48px_rgba(17,18,22,.12)] md:rounded-[26px] md:p-[26px]">
       <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#b8bbc1] md:text-[11px]">{kicker}</p>
       <h2 className="mt-3 text-[26px] font-bold leading-[1.04] tracking-[-0.045em] [overflow-wrap:anywhere] md:text-[29px]">{title}</h2>
       {children}
     </aside>
+  );
+}
+
+const LINK_ICON: Record<ProfileLinkItem['kind'], LucideIcon> = {
+  linkedin: Linkedin, website: Globe, instagram: Instagram, x: Twitter, facebook: Facebook,
+};
+const LINK_BUTTON = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-full border border-reason-line bg-white px-3.5 text-[14px] font-bold scroll-mt-[calc(90px+env(safe-area-inset-top))] scroll-mb-[calc(100px+env(safe-area-inset-bottom))] hover:bg-reason-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-reason-red';
+
+/** LinkedIn, Website, Instagram, X and Facebook, only those the member gave: each an icon and its name, opening in a new tab. */
+function ProfileLinks({ links }: { links: ProfileLinkItem[] }) {
+  if (links.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap justify-center gap-2" data-testid="profile-links">
+      {links.map(({ kind, label, href }) => {
+        const Icon = LINK_ICON[kind];
+        return (
+          <a key={kind} href={href} target="_blank" rel="noopener noreferrer" className={cn(LINK_BUTTON, kind === 'linkedin' && 'text-[#0a66c2]')}>
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />{label}<span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        );
+      })}
+    </div>
   );
 }
 
@@ -70,10 +83,12 @@ interface FrameProps {
   who: PersonFacts;
   /** The small label above the name. */
   kicker: string;
-  /** Drawn over the photo, top left. */
+  /** Drawn under the role line, centred: the match strength. */
   badge?: ReactNode;
-  /** Drawn over the photo, bottom right: the pencil, on your own profile only (30 Oct review, T3a). */
+  /** Drawn on the photo's lower right: the pencil, on your own profile only (30 Oct review, T3a). */
   photoAction?: ReactNode;
+  /** True when a banner is drawn above the hero: the photo then overlaps its lower edge. */
+  hasBanner?: boolean;
   /** The box under the tags. */
   note: ReactNode;
   /** The dark panel beside the person. */
@@ -84,47 +99,30 @@ interface FrameProps {
   fit?: HeroFit;
 }
 
-// A photo fills the tile. One under 400 pixels on its smaller side (a 96-pixel Google photo, a 200-pixel LinkedIn one)
-// would be blown up 5 to 10 times, so it is drawn at its own size in the middle of the tile instead (D7, 30 Oct review).
-const FILL = '[&>img]:absolute [&>img]:inset-0 [&>img]:h-full [&>img]:w-full [&>img]:rounded-none';
-const NATIVE = '[&>img]:h-auto [&>img]:w-auto [&>img]:max-w-full [&>img]:max-h-full [&>img]:rounded-[18px]';
+// With a banner above, the photo is pulled up by the card's own padding, the gap between banner and card, and half the
+// photo, so the circle straddles the banner's lower edge. Without one it simply sits at the top of the card.
+const OVERLAP = '-mt-[85px] md:-mt-[118px]';
 
-export function HeroFrame({ photo, who, kicker, badge, photoAction, note, panel, actions, fit = 'screen' }: FrameProps) {
+export function HeroFrame({ photo, who, kicker, badge, photoAction, hasBanner = false, note, panel, actions, fit = 'screen' }: FrameProps) {
   const roleLine = [who.role, who.company].filter(Boolean).join(' · ');
-  // Which photo was measured small: a new photo (a new address) is measured again.
-  const [smallSrc, setSmallSrc] = useState<string | null>(null);
-  const small = !!photo && smallSrc === photo;
-  const measure = (img: HTMLImageElement) => setSmallSrc(isSmallPhoto(img.naturalWidth, img.naturalHeight) ? photo : null);
   return (
-    <section className={FRAME[fit].grid}>
-      {/* A photo fills the tile (a small one sits in the middle at its own size). With none, or one that fails to load,
-          Avatar draws round initials in the middle. */}
-      <div className={cn('relative grid h-[43vh] min-h-[260px] place-items-center overflow-hidden rounded-[21px] bg-[#eceae6] p-4 shadow-[0_16px_50px_rgba(17,18,22,.08)] md:h-auto md:min-h-[430px] md:rounded-[26px]', small ? NATIVE : FILL)}>
-        <Avatar src={photo} name={who.name} size="2xl" onLoad={measure} />
-        {badge}
-        {photoAction && <div className="absolute bottom-3 right-3 md:bottom-4 md:right-4">{photoAction}</div>}
-      </div>
-
-      <section className="flex min-w-0 flex-col rounded-[21px] border border-reason-line bg-white p-[18px] md:rounded-[26px] md:p-7">
-        <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#646a77] md:text-[11px]">{kicker}</p>
-        <h1 className={cn('mt-2 text-[40px] font-extrabold leading-[.94] tracking-[-0.055em] [overflow-wrap:anywhere] md:text-[52px]', FRAME[fit].name)}>{who.name}</h1>
+    <section className={GRID[fit]}>
+      <section className="flex min-w-0 flex-col items-center rounded-[21px] border border-reason-line bg-white p-[18px] text-center md:rounded-[26px] md:p-7">
+        {/* Round, centred, at every width. With none, or one that fails to load, Avatar draws initials in the same circle. */}
+        <div className={cn('relative shrink-0 rounded-full', hasBanner && OVERLAP)} data-testid="profile-photo">
+          <Avatar src={photo} name={who.name} size="2xl" className="h-28 w-28 text-4xl ring-4 ring-white shadow-[0_10px_30px_rgba(17,18,22,.12)] md:h-36 md:w-36 md:text-5xl" />
+          {photoAction && <div className="absolute -bottom-1 -right-3">{photoAction}</div>}
+        </div>
+        <p className="mt-4 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#646a77] md:text-[11px]">{kicker}</p>
+        <h1 className="mt-2 text-[40px] font-extrabold leading-[.94] tracking-[-0.055em] [overflow-wrap:anywhere] md:text-[52px]">{who.name}</h1>
         {roleLine && <p className="mt-3 text-[15px] text-reason-muted [overflow-wrap:anywhere]">{roleLine}</p>}
-        {/* Final review, 21 Oct 2026: nobody could see anyone's LinkedIn. Only ever an https address on LinkedIn. */}
-        {who.linkedin && (
-          <a
-            href={who.linkedin}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="-ml-1 mt-1 inline-flex min-h-[44px] w-fit items-center gap-1 rounded-lg px-1 text-[14px] font-bold text-[#0a66c2] scroll-mt-[calc(90px+env(safe-area-inset-top))] scroll-mb-[calc(100px+env(safe-area-inset-bottom))] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a66c2]"
-          >
-            LinkedIn <span aria-hidden="true">↗</span><span className="sr-only"> (opens in a new tab)</span>
-          </a>
-        )}
+        {badge}
+        <ProfileLinks links={who.links} />
         {actions}
         {who.bio && <p className="mt-[17px] max-w-[620px] text-[18px] leading-[1.38] tracking-[-0.024em] [overflow-wrap:anywhere] md:mt-6 md:text-[21px]">{who.bio}</p>}
-        <div className="mt-auto flex flex-col gap-4 pt-4 md:pt-6">
+        <div className="mt-auto flex w-full flex-col gap-4 pt-4 md:pt-6">
           {who.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap justify-center gap-1.5">
               {who.tags.map((t, i) => (
                 <span key={`${i}-${t}`} className="max-w-full rounded-full bg-[#f3f4f6] px-2 py-1.5 text-[10px] text-[#646a77] [overflow-wrap:anywhere]">{t}</span>
               ))}
@@ -150,10 +148,11 @@ export default function ProfileHero({ brief, who, source, userId }: Props) {
     <HeroFrame
       photo={brief.person.avatarUrl}
       who={who}
+      hasBanner={!!brief.person.bannerUrl}
       kicker="The human"
       actions={<ProfileHeroActions brief={brief} userId={userId} call={brief.canCall && <ProfileCallButton brief={brief} userId={userId} name={who.name} />} />}
       badge={brief.match && (
-        <span className="absolute left-[18px] top-[18px] flex items-center gap-[7px] rounded-full bg-white px-3 py-2 text-[11px] font-extrabold shadow-[0_8px_24px_rgba(0,0,0,.08)]">
+        <span className="mt-3 flex items-center gap-[7px] rounded-full bg-white px-3 py-2 text-[11px] font-extrabold shadow-[0_8px_24px_rgba(0,0,0,.08)]">
           <i aria-hidden="true" className="h-[7px] w-[7px] rounded-full bg-reason-red" />{SIGNAL[brief.match.strength]}
         </span>
       )}

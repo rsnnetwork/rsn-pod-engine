@@ -119,9 +119,11 @@ async function stripedPicture(page: Page, width: number, height: number): Promis
 }
 
 const bannerOf = (page: Page) => page.getByTestId('profile-banner');
-/** The banner's pencil, the editor it opens, and the picture chosen in it; saved, the editor closes. */
+/** With no banner there is no strip, only "Add a cover image" (10 Nov 2026); with one, its pencil. Either opens the editor; saved, it closes. */
 async function chooseBanner(page: Page, picture: Buffer) {
-  await bannerOf(page).getByRole('button', { name: 'Edit banner' }).click();
+  const add = page.getByRole('button', { name: 'Add a cover image' });
+  if (await add.count()) await add.click();
+  else await bannerOf(page).getByRole('button', { name: 'Edit banner' }).click();
   const editor = page.getByRole('dialog', { name: 'Edit your banner' });
   await editor.locator('input[type="file"]').setInputFiles({ name: 'banner.jpg', mimeType: 'image/jpeg', buffer: picture });
   await expect(editor.getByRole('slider', { name: 'Zoom' })).toBeVisible({ timeout: 30_000 });
@@ -193,8 +195,9 @@ test(`the banner: changed on your profile, seen there and on your Human Profile 
   const me = await signedIn(owner, { width: 1280, height: 900 });
   await gotoRetry(me.page, `${APP}/profile`);
   await expect(me.page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible({ timeout: SLOW });
-  await expect(bannerOf(me.page)).toBeVisible();
-  await expect(bannerOf(me.page).locator('img')).toHaveCount(0);
+  // No banner yet: no empty strip, only the slim way to add one.
+  await expect(bannerOf(me.page)).toHaveCount(0);
+  await expect(me.page.getByRole('button', { name: 'Add a cover image' })).toBeVisible();
 
   // The pencil: a tall picture, placed as it opens (its middle), is cut to its middle 3:1 band at its own 1200x400.
   await chooseBanner(me.page, await stripedPicture(me.page, 1200, 1600));

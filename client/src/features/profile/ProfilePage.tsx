@@ -16,6 +16,7 @@ import { useOnboardingV2State } from '@/features/onboarding/useOnboardingV2';
 import { EDIT_ANSWERS_TO, answerLines } from '@/features/reason/profile/your-profile-text';
 import { LINKEDIN_LINK_HELP } from '@/features/auth/linkedin-link';
 import { linkedinBoxValue, linkedinSave } from './linkedin-box';
+import { SOCIAL_FIELDS, socialSave, type SocialField } from './social-links-box';
 import PencilButton from '@/components/picture/PencilButton';
 import PictureEditor from '@/components/picture/PictureEditor';
 import { useMemberPicture } from '@/components/picture/useMemberPicture';
@@ -32,6 +33,10 @@ interface ProfileForm {
   industry: string;
   location: string;
   linkedinUrl: string;
+  websiteUrl: string;
+  instagramUrl: string;
+  xUrl: string;
+  facebookUrl: string;
   timezone: string;
   phone: string;
   expertiseText: string;
@@ -197,6 +202,10 @@ export default function ProfilePage() {
         industry: user.industry || '',
         location: user.location || '',
         linkedinUrl: linkedinBoxValue(user.linkedinUrl),
+        websiteUrl: user.websiteUrl || '',
+        instagramUrl: user.instagramUrl || '',
+        xUrl: user.xUrl || '',
+        facebookUrl: user.facebookUrl || '',
         timezone: user.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || '',
         phone: (user as any).phone || '',
         expertiseText: (user as any).expertiseText || '',
@@ -220,16 +229,31 @@ export default function ProfilePage() {
     // LinkedIn is checked and sent only when the member changed the box (linkedin-box.ts): then the request form's
     // clean-up makes it https://www.linkedin.com/in/<name>, an emptied box sends '', and anything else is said under the
     // field. An address they did not touch never blocks a save and is never rewritten.
-    const { linkedinUrl: typedLinkedin, ...fields } = data;
+    const { linkedinUrl: typedLinkedin, websiteUrl, instagramUrl, xUrl, facebookUrl, ...fields } = data;
     const linkedin = linkedinSave(typedLinkedin, !!dirtyFields.linkedinUrl);
     if (linkedin.kind === 'refuse') {
       setError('linkedinUrl', { message: LINKEDIN_LINK_HELP }, { shouldFocus: true });
       return;
     }
+    // The four links under it (10 Nov 2026) follow the same rule: checked and sent only when the member changed the box,
+    // a wrong one said under its own field, an emptied one clearing the link.
+    const typedSocial: Record<SocialField, string> = { websiteUrl, instagramUrl, xUrl, facebookUrl };
+    const socialBody: Partial<Record<SocialField, string | null>> = {};
+    let firstRefused = true;
+    for (const spec of SOCIAL_FIELDS) {
+      const save = socialSave(spec, typedSocial[spec.field], !!dirtyFields[spec.field]);
+      if (save.kind === 'send') socialBody[spec.field] = save.url;
+      if (save.kind === 'refuse') {
+        setError(spec.field, { message: save.message }, { shouldFocus: firstRefused });
+        firstRefused = false;
+      }
+    }
+    if (!firstRefused) return;
     try {
       await api.put('/users/me', {
         ...fields,
         ...(linkedin.kind === 'send' ? { linkedinUrl: linkedin.url } : {}),
+        ...socialBody,
         interests,
         reasonsToConnect: reasons,
         languages,
@@ -399,6 +423,23 @@ export default function ProfilePage() {
                 <p id="linkedin-error" role="alert" className="mt-1 text-xs text-red-700">{errors.linkedinUrl.message}</p>
               )}
             </div>
+          </div>
+          {/* Website, Instagram, X and Facebook (10 Nov 2026): shown under the name on your profile beside LinkedIn. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+            {SOCIAL_FIELDS.map((spec) => (
+              <Input
+                key={spec.field}
+                label={spec.label}
+                type="text"
+                inputMode="url"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder={spec.placeholder}
+                error={errors[spec.field]?.message}
+                {...register(spec.field)}
+              />
+            ))}
           </div>
         </Card>
 

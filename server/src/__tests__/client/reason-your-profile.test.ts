@@ -34,7 +34,7 @@ const count = (src: string, re: RegExp) => src.match(re)?.length ?? 0;
 type Person = PersonBrief['person'];
 const person = (over: Partial<Person> = {}): Person => ({
   id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null,
-  bannerUrl: null, bio: null, company: null, jobTitle: null, industry: null, location: null, linkedinUrl: null, languages: [],
+  bannerUrl: null, bio: null, company: null, jobTitle: null, industry: null, location: null, linkedinUrl: null, websiteUrl: null, instagramUrl: null, xUrl: null, facebookUrl: null, languages: [],
   professionalRole: [], expertiseText: null, whatICanHelpWith: null, ...over,
 });
 
@@ -182,11 +182,10 @@ describe('Your profile: the page', () => {
     for (const src of [page(), editor()]) expect(src).not.toMatch(/setQueryData|refetchInterval|setInterval/);
   });
 
-  it('opens its columns by the width of the page beside the sidebar, so the name is never cut mid-word at 1024 or 1280', () => {
+  it('opens its two columns by the width of the page beside the sidebar, so the panel never squeezes the card at 1024 or 1280', () => {
     const hero = read('features/reason/human/ProfileHero.tsx');
-    expect(hero).toMatch(/shell: \{\s*grid: '[^']*md:grid-cols-\[260px_minmax\(0,1fr\)\] md:gap-\[18px\] min-\[1213px\]:grid-cols-\[250px_minmax\(0,1fr\)_290px\] min-\[1432px\]:grid-cols-\[320px_minmax\(0,1fr\)_330px\]',\s*name: 'min-\[1213px\]:max-\[1431px\]:text-\[44px\]',\s*panel: 'min-\[1213px\]:col-span-1',/);
+    expect(hero).toMatch(/shell: 'grid grid-cols-\[minmax\(0,1fr\)\][^']* min-\[1213px\]:grid-cols-\[minmax\(0,1fr\)_330px\] min-\[1432px\]:grid-cols-\[minmax\(0,1fr\)_380px\]',/);
     expect(page()).toMatch(/<HeroFrame\s+fit="shell"/);
-    expect(page()).toMatch(/<DarkPanel fit="shell"/);
   });
 
   it('has the same look as the Human Profile hero: it is drawn by the same frame', () => {
@@ -454,9 +453,9 @@ describe('the old form at /profile/edit', () => {
     const submit = form().slice(form().indexOf('const onSubmit = async'), form().indexOf('if (!user) return null;'));
     expect(form()).toMatch(/linkedinUrl: linkedinBoxValue\(user\.linkedinUrl\),/);
     expect(form()).toMatch(/formState: \{ isSubmitting, isDirty, errors, dirtyFields \}/);
-    expect(submit).toMatch(/const \{ linkedinUrl: typedLinkedin, \.\.\.fields \} = data;/);
+    expect(submit).toMatch(/const \{ linkedinUrl: typedLinkedin, websiteUrl, instagramUrl, xUrl, facebookUrl, \.\.\.fields \} = data;/);
     expect(submit).toMatch(/const linkedin = linkedinSave\(typedLinkedin, !!dirtyFields\.linkedinUrl\);/);
-    expect(submit).toMatch(/api\.put\('\/users\/me', \{\s*\.\.\.fields,\s*\.\.\.\(linkedin\.kind === 'send' \? \{ linkedinUrl: linkedin\.url \} : \{\}\),/);
+    expect(submit).toMatch(/api\.put\('\/users\/me', \{\s*\.\.\.fields,\s*\.\.\.\(linkedin\.kind === 'send' \? \{ linkedinUrl: linkedin\.url \} : \{\}\),\s*\.\.\.socialBody,/);
     expect(submit).not.toMatch(/\.\.\.data\b/);
   });
 

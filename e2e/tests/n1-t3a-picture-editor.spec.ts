@@ -234,10 +234,13 @@ for (const width of WIDTHS) {
     await expect(page.getByRole('heading', { level: 1, name: `Pia Picture banner${width}` })).toBeVisible({ timeout: SLOW });
     const banner = page.getByTestId('profile-banner');
     const pencil = banner.getByRole('button', { name: 'Edit banner' });
-    await expectReachable(page, pencil, `${at}: the banner's pencil`);
-    expect((await pencil.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    // No banner yet: no empty strip, only the slim "Add a cover image" button (10 Nov 2026); the pencil is on the banner once there is one.
+    await expect(banner).toHaveCount(0);
+    const add = page.getByRole('button', { name: 'Add a cover image' });
+    await expectReachable(page, add, `${at}: the add-a-cover-image button`);
+    expect((await add.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 
-    await pencil.click();
+    await add.click();
     const sheet = page.getByRole('dialog', { name: 'Edit your banner' });
     await expect(sheet.getByText('No banner yet. Choose a picture to place it.')).toBeVisible({ timeout: 30_000 });
     await sheet.locator('input[type="file"]').setInputFiles({ name: 'wide.jpg', mimeType: 'image/jpeg', buffer: await halves(page, 3000, 1500) });

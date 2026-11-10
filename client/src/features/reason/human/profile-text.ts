@@ -1,7 +1,7 @@
 // client/src/features/reason/human/profile-text.ts
 // What the Human Profile says, and the small rules behind it. Pure on purpose (no React, axios, store or
 // router), so a test can run it: server/src/__tests__/client/reason-m1-profile-text.test.ts.
-import { OUTCOME_LABELS, type MatchStrength, type PersonBrief, type PersonResponse } from '@rsn/shared';
+import { OUTCOME_LABELS, parseProfileUrl, type MatchStrength, type PersonBrief, type PersonResponse, type ProfileLinkKind } from '@rsn/shared';
 import { CONNECTION_LOST, errorMessage } from '../errors';
 import { personName, visibleText } from '../person';
 import { STATE_LABEL } from './labels';
@@ -119,6 +119,36 @@ export interface PersonFacts {
   tags: string[];
   /** Their LinkedIn, for the hero to link to: only ever an https address on LinkedIn. */
   linkedin: string | null;
+  /** Every link the hero shows, in its order: LinkedIn, Website, Instagram, X, Facebook, only those given. */
+  links: ProfileLinkItem[];
+}
+
+/** One button in the hero's links row. */
+export interface ProfileLinkItem {
+  kind: 'linkedin' | ProfileLinkKind;
+  label: string;
+  href: string;
+}
+
+const LINK_LABEL: Record<ProfileLinkKind, string> = { website: 'Website', instagram: 'Instagram', x: 'X', facebook: 'Facebook' };
+
+/**
+ * The links under a name (10 Nov 2026): LinkedIn as before, then the website and the social profiles. A stored address is
+ * read again by the same rule that stored it, so a row written some other way (an import, an old edit) that is not an
+ * http(s) address on the right site is no button at all.
+ */
+export function profileLinks(p: PersonBrief['person']): ProfileLinkItem[] {
+  const links: ProfileLinkItem[] = [];
+  const linkedin = linkedinLink(p.linkedinUrl);
+  if (linkedin) links.push({ kind: 'linkedin', label: 'LinkedIn', href: linkedin });
+  const others: Array<[ProfileLinkKind, string | null | undefined]> = [
+    ['website', p.websiteUrl], ['instagram', p.instagramUrl], ['x', p.xUrl], ['facebook', p.facebookUrl],
+  ];
+  for (const [kind, stored] of others) {
+    const result = parseProfileUrl(kind, stored);
+    if (result.ok && result.url) links.push({ kind, label: LINK_LABEL[kind], href: result.url });
+  }
+  return links;
 }
 
 /**
@@ -151,6 +181,7 @@ export function personFacts(p: PersonBrief['person']): PersonFacts {
     // The location is on the public card, and your own profile shows it (21 Oct 2026), so everyone else's does too.
     tags: [visibleText(p.industry), visibleText(p.location), ...roles].filter((t): t is string => t !== null).slice(0, 4),
     linkedin: linkedinLink(p.linkedinUrl),
+    links: profileLinks(p),
   };
 }
 
@@ -243,16 +274,4 @@ export function moveToast(move: Move, name: string): { message: string; type: 's
     case 'pass': return { message: `${name} is removed from your For You. You can undo this here.`, type: 'info' };
     case 'unpass': return { message: `${name} can be suggested in For You again.`, type: 'info' };
   }
-}
-
-/**
- * A photo too small to fill the hero tile without being blown up (30 Oct review, T3a, D7: "pictures look pixelated").
- * The tile is about 1,000 device pixels each way on a phone, so a 96-pixel Google photo or a 200-pixel LinkedIn one
- * would be stretched 5 to 10 times. Under 400 pixels on its smaller side, a photo is drawn at its own size in the
- * middle of the tile instead. 0 means not measured yet (or not loaded): drawn as usual.
- */
-export const SMALL_PHOTO_SIDE = 400;
-export function isSmallPhoto(naturalWidth: number, naturalHeight: number): boolean {
-  const side = Math.min(naturalWidth, naturalHeight);
-  return side > 0 && side < SMALL_PHOTO_SIDE;
 }

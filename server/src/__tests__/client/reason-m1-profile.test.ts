@@ -178,12 +178,12 @@ describe('Human Profile: a section with nothing to show says so, or leaves its b
     expect(details()).toMatch(/\{whyNow\.length > 0 \? <Timeline items=\{whyNow\} \/> : <p className=\{BODY\}>Nothing time-bound yet\.<\/p>\}/);
     expect(count(details(), /Nothing time-bound yet\./g)).toBe(1);
   });
-  it('the strength badge on the photo is drawn only when the brief has a match', () => {
+  it('the strength badge under the role line is drawn only when the brief has a match', () => {
     expect(hero()).toMatch(/\{brief\.match && \(\s*<span[^>]*>[\s\S]*?\{SIGNAL\[brief\.match\.strength\]\}\s*<\/span>\s*\)\}/);
     expect(count(hero(), /SIGNAL\[/g)).toBe(1);
   });
   it('the strength badge is font-extrabold: Inter is loaded up to 800, and font-black (900) is a weight the page never loads', () => {
-    expect(hero()).toMatch(/<span className="absolute left-\[18px\] top-\[18px\][^"]*\btext-\[11px\] font-extrabold\b[^"]*">/);
+    expect(hero()).toMatch(/<span className="mt-3 flex items-center gap-\[7px\][^"]*\btext-\[11px\] font-extrabold\b[^"]*">/);
     expect(hero()).not.toMatch(/font-black/);
   });
 });
@@ -227,18 +227,14 @@ describe('Human Profile: faults found by looking at it', () => {
   it('a profile opened from another one starts at its top, with an instant jump (the app scrolls smoothly)', () => {
     expect(page()).toMatch(/useLayoutEffect\(\(\) => \{\s*window\.scrollTo\(\{ top: 0, left: 0, behavior: 'instant' \}\);\s*\}, \[\]\)/);
   });
-  it('the three columns are slimmer from 981px to 1199px and the name smaller, so no name is cut mid-word at 1024px', () => {
-    expect(hero()).toMatch(/min-\[981px\]:grid-cols-\[250px_minmax\(0,1fr\)_290px\] min-\[1200px\]:grid-cols-\[320px_minmax\(0,1fr\)_330px\]/);
-    expect(hero()).not.toMatch(/min-\[981px\]:grid-cols-\[320px/);
-    // The name's size for each fit lives in the frame's table (21 Oct 2026: your own profile is drawn by it too).
-    expect(hero()).toMatch(/name: 'min-\[981px\]:max-\[1199px\]:text-\[44px\]'/);
-    expect(hero()).toMatch(/<h1 className=\{cn\('[^']*md:text-\[52px\]', FRAME\[fit\]\.name\)\}>/);
+  it('the card takes the width the side photo column used to share: the name has the whole card, so no name is cut mid-word at 1024px', () => {
+    expect(hero()).toMatch(/min-\[981px\]:grid-cols-\[minmax\(0,1fr\)_330px\] min-\[1200px\]:grid-cols-\[minmax\(0,1fr\)_380px\]/);
+    expect(hero()).toMatch(/<h1 className="[^"]*md:text-\[52px\]">/);
     // The Human Profile is drawn with the window's breakpoints, as it always was.
     expect(hero()).toMatch(/export function HeroFrame\(\{[^}]*fit = 'screen' \}: FrameProps\)/);
     expect(hero()).not.toMatch(/<HeroFrame[^>]*fit=/);
   });
-  it('a failed photo and no photo look alike: the photo covers the tile, initials sit round in the middle', () => {
-    expect(hero()).toMatch(/\[&>img\]:absolute \[&>img\]:inset-0 \[&>img\]:h-full \[&>img\]:w-full \[&>img\]:rounded-none/);
+  it('a failed photo and no photo look alike: Avatar draws round initials in the same circle', () => {
     expect(count(hero(), /<Avatar\b/g)).toBe(1);
   });
   it('a link or button in the page keeps clear of the header and the bar when the keyboard focuses it', () => {

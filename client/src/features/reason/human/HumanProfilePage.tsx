@@ -125,10 +125,13 @@ function Profile({ brief, userId, source, hideBar }: { brief: PersonBrief; userI
   return (
     <>
       <main className={cn(MAIN, SIDES, 'pt-3 md:pt-6', connected ? 'pb-[calc(24px+env(safe-area-inset-bottom))]' : 'pb-[calc(116px+env(safe-area-inset-bottom))]')}>
-        {/* The person's banner, or the default one, across the top of the hero (21 Oct 2026). */}
-        <div className="mb-[11px] md:mb-[18px]">
-          <ProfileBanner src={brief.person.bannerUrl} />
-        </div>
+        {/* The person's banner across the top of the hero (21 Oct 2026). A member with none has no strip at all (Stefan,
+            10 Nov 2026: "if there is no banner, it shouldn't be there"), so the hero starts at the top of the page. */}
+        {brief.person.bannerUrl && (
+          <div className="mb-[11px] md:mb-[18px]">
+            <ProfileBanner src={brief.person.bannerUrl} />
+          </div>
+        )}
         <ProfileHero brief={brief} who={who} source={source} userId={userId} />
         <ProfileDetails brief={brief} who={who} source={source} onRecordOutcome={() => setOutcomeOpen(true)} />
       </main>
