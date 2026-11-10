@@ -11,7 +11,7 @@
 
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, APP } from '../helpers/live-ui';
+import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, contextOptions } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
@@ -51,6 +51,14 @@ const signedIn = async (br: Browser, u: TestUser): Promise<BrowserContext> => {
   await primePreview(ctx);
   return ctx;
 };
+async function apiAs(u: TestUser, path: string) {
+  const res = await fetch(`${SERVER}/api${path}`, { headers: { Authorization: `Bearer ${u.accessToken}` } });
+  return { status: res.status, json: await res.json().catch(() => null) };
+}
+// For You shows only a member's top fits, so "the other member sees no change" is proved on the whole ordered list the
+// server returns for them, never on whether one particular person ranks on the page.
+const forYouIds = async (u: TestUser): Promise<string[]> =>
+  ((await apiAs(u, '/matches/platform')).json?.data?.matches ?? []).map((m: { userId: string }) => m.userId);
 const cardOf = (page: Page, u: TestUser) => page.locator(`[data-person-id="${u.id}"]`);
 
 test.describe.configure({ mode: 'serial' });
@@ -83,6 +91,7 @@ test.describe('F1 Already met', () => {
 
   test('marking B hides B from A, keeps B on Everyone and in B\'s own view, and Undo brings B back', async () => {
     const page = await ctxA!.newPage();
+    const bListBefore = await forYouIds(b);
     await gotoRetry(page, `${APP}/`);
     await expect(cardOf(page, b)).toBeVisible({ timeout: 60_000 });
     await expect(cardOf(page, c)).toBeVisible();
@@ -109,6 +118,7 @@ test.describe('F1 Already met', () => {
     await gotoRetry(page, `${APP}/`);
     await expect(cardOf(page, c)).toBeVisible({ timeout: 60_000 });
     await expect(cardOf(page, b)).toHaveCount(0);
+    expect(await forYouIds(a)).not.toContain(b.id);
 
     // 2. Still listed on Everyone, labelled.
     // Everyone is A to Z, 30 a page, so B is found by searching the run's unique name, not by paging.
@@ -121,9 +131,13 @@ test.describe('F1 Already met', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     // 3. One-sided and private: B still sees A, and nothing about the mark.
+    expect(await forYouIds(b)).toEqual(bListBefore);
+    const briefOfA = await apiAs(b, `/people/${a.id}/brief`);
+    expect(briefOfA.status).toBe(200);
+    expect(briefOfA.json.data.relationship.alreadyMet).toBe(false);
+    expect(briefOfA.json.data.relationship.state).toBe('none');
     const pageB = await ctxB!.newPage();
-    await gotoRetry(pageB, `${APP}/`);
-    await expect(cardOf(pageB, a)).toBeVisible({ timeout: 60_000 });
+    await gotoRetry(pageB, `${APP}/people/${a.id}`);
     await expect(pageB.getByText('You marked as met')).toHaveCount(0);
     const rows = await pool.query(`SELECT 1 FROM encounter_history WHERE (user_a_id = $1 AND user_b_id = $2) OR (user_a_id = $2 AND user_b_id = $1)`, [a.id, b.id]);
     expect(rows.rowCount).toBe(0);
@@ -133,6 +147,8 @@ test.describe('F1 Already met', () => {
     await page.getByRole('button', { name: 'More' }).click();
     await page.getByRole('button', { name: 'Marked as met · Undo' }).click();
     await expect(page.getByText('can be suggested to you again')).toBeVisible();
+    // B scores as strongly as C (both offer A's made-up words), so B is back in A's list, and on the page.
+    await expect.poll(async () => (await forYouIds(a)).includes(b.id), { timeout: 30_000 }).toBe(true);
     await gotoRetry(page, `${APP}/`);
     await expect(cardOf(page, b)).toBeVisible({ timeout: 60_000 });
   });
