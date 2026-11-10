@@ -49,10 +49,14 @@ interface Row {
   poke_sent_by_owner: boolean | null;
   connected: boolean | null;
   met: boolean | null;
+  declined_by_them: boolean | null;
 }
 
 // An opaque cursor: base64url of {n, id}. Whatever else arrives is refused, not trusted into SQL.
-const cursorShape = z.object({ n: z.string().max(400), id: z.string().uuid() }).strict();
+// A NUL character is not valid text in Postgres: it would come back as a 500, so it is refused here as a 400.
+const noNul = (s: string) => !s.includes('\u0000');
+const cursorShape = z.object({ n: z.string().max(400).refine(noNul), id: z.string().uuid() }).strict();
+export const searchWord = z.string().trim().max(EVERYONE_SEARCH_MAX).refine(noNul, 'Search words cannot hold that character.');
 
 export function encodeCursor(sortName: string, id: string): string {
   return Buffer.from(JSON.stringify({ n: sortName, id }), 'utf8').toString('base64url');
@@ -81,7 +85,9 @@ const EVERYONE_SQL = `
          u.professional_role, u.expertise_text, u.what_i_can_help_with,
          lower(COALESCE(u.display_name, '')) AS sort_name,
          pk.status AS poke_status, (pk.sender_id = $1) AS poke_sent_by_owner,
-         (pe.person_id IS NOT NULL) AS connected, COALESCE(pe.met, false) AS met
+         (pe.person_id IS NOT NULL) AS connected, COALESCE(pe.met, false) AS met,
+         EXISTS (SELECT 1 FROM user_pokes d
+                  WHERE d.sender_id = $1 AND d.recipient_id = u.id AND d.status = 'declined') AS declined_by_them
     FROM users u
     LEFT JOIN people pe ON pe.person_id = u.id
     LEFT JOIN LATERAL (
@@ -114,7 +120,9 @@ function relationshipOf(r: Row): RelationshipState {
   if (r.met) return 'met';
   if (r.connected || r.poke_status === 'accepted') return 'connected';
   if (r.poke_status === 'pending') return r.poke_sent_by_owner ? 'requested' : 'incoming';
-  return 'none';
+  // sendPoke refuses a second request to someone who declined the first, so the sender reads it as declined (the
+  // Human Profile's rule). The one who declined can still ask later, and reads none.
+  return r.declined_by_them ? 'declined' : 'none';
 }
 
 const toRow = (r: Row): EveryoneRow => ({
@@ -144,6 +152,7 @@ const toRow = (r: Row): EveryoneRow => ({
 export async function listEveryone(viewerId: string, opts: EveryoneOptions = {}): Promise<EveryonePage> {
   const limit = Math.min(Math.max(Math.trunc(opts.limit ?? EVERYONE_PAGE), 1), EVERYONE_PAGE_MAX);
   const word = opts.q?.trim().slice(0, EVERYONE_SEARCH_MAX);
+  if (word && !noNul(word)) throw new ValidationError('Search words cannot hold that character.');
   const cursor = opts.cursor ? decodeCursor(opts.cursor) : null;
   const r = await query<Row>(EVERYONE_SQL, [
     viewerId, word ? likePattern(word) : null, cursor?.n ?? null, cursor?.id ?? null, limit + 1,

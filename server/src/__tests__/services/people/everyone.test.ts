@@ -1,11 +1,14 @@
 // Everyone (10 Nov 2026): the browsable list of members. The database stand-in answers what Postgres would; the SQL
 // is read for the rules it must hold (the real statement is run read-only against production before shipping).
+import { readFileSync } from 'fs';
+import { join } from 'path';
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), transaction: jest.fn(), __esModule: true }));
 
 import {
   listEveryone, likePattern, encodeCursor, decodeCursor, EVERYONE_PAGE, EVERYONE_PAGE_MAX,
 } from '../../../services/people/everyone.service';
+import { searchWord } from '../../../services/people/everyone.service';
 import { PRIVATE_MEMBER_KEYS } from '../../../services/user/public-card';
 
 const VIEWER = 'a0000000-0000-4000-8000-000000000001';
@@ -146,5 +149,56 @@ describe('listEveryone: what each row says', () => {
     expect(people[0].professionalRole).toEqual(['Founder']);
     for (const key of Object.keys(people[0])) expect(PRIVATE_MEMBER_KEYS.has(key)).toBe(false);
     expect(sqlOf()).not.toMatch(/u\.email|who_i_want|my_intent|u\.phone/);
+  });
+});
+
+describe('listEveryone: a NUL character is a 400, never a database error', () => {
+  const NUL = String.fromCharCode(0);
+
+  it('a cursor whose name holds one is refused before any SQL', async () => {
+    const forged = Buffer.from(JSON.stringify({ n: `a${NUL}b`, id: id(1) })).toString('base64url');
+    await expect(listEveryone(VIEWER, { cursor: forged })).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('a search word that holds one is refused by the route schema and by the service', async () => {
+    expect(searchWord.safeParse(`a${NUL}b`).success).toBe(false);
+    expect(searchWord.safeParse('Acme').success).toBe(true);
+    await expect(listEveryone(VIEWER, { q: `a${NUL}b` })).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('the route refuses a cursor that holds one too', () => {
+    const route = readFileSync(join(__dirname, '../../../routes/people.ts'), 'utf8');
+    expect(route).toContain("cursor: z.string().min(1).max(600).refine((c) => !c.includes('\\u0000')).optional()");
+    expect(route).toContain('q: everyone.searchWord.optional()');
+  });
+});
+
+describe('listEveryone: a declined request', () => {
+  it('reads declined to its sender, and still none to the one who declined it', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row(1, { declined_by_them: true }), row(2, { declined_by_them: false })] });
+    const { people } = await listEveryone(VIEWER);
+    expect(people.map((p) => p.relationship)).toEqual(['declined', 'none']);
+    expect(sqlOf()).toMatch(/d\.sender_id = \$1 AND d\.recipient_id = u\.id AND d\.status = 'declined'/);
+  });
+
+  it('a live request or a connection outranks an old decline', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [
+      row(1, { declined_by_them: true, poke_status: 'pending', poke_sent_by_owner: true }),
+      row(2, { declined_by_them: true, connected: true }),
+    ] });
+    const { people } = await listEveryone(VIEWER);
+    expect(people.map((p) => p.relationship)).toEqual(['requested', 'connected']);
+  });
+});
+
+describe('the supporting index', () => {
+  it('migration 143 matches the ORDER BY expression and the WHERE of the list', () => {
+    const sql = readFileSync(join(__dirname, '../../../db/migrations/143_everyone_name_index.sql'), 'utf8')
+      .split(/\r?\n/).filter((l) => !l.startsWith('--')).join(' ');
+    expect(sql).toMatch(/CREATE INDEX IF NOT EXISTS idx_users_everyone_name\s+ON users \(\(lower\(COALESCE\(display_name, ''\)\)\), id\)/);
+    expect(sql).toMatch(/WHERE status = 'active' AND onboarding_completed = true AND profile_visible = true;/);
+    expect(sql).not.toMatch(/CONCURRENTLY|^\s*(BEGIN|COMMIT)/im);
   });
 });

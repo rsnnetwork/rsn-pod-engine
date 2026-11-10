@@ -70,8 +70,8 @@ router.get(
 );
 
 const everyoneQuery = z.object({
-  q: z.string().trim().max(everyone.EVERYONE_SEARCH_MAX).optional(),
-  cursor: z.string().min(1).max(600).optional(),
+  q: everyone.searchWord.optional(),
+  cursor: z.string().min(1).max(600).refine((c) => !c.includes('\u0000')).optional(),
   limit: z.coerce.number().int().min(1).optional()
     .transform((n) => Math.min(n ?? everyone.EVERYONE_PAGE, everyone.EVERYONE_PAGE_MAX)),
 });
