@@ -126,8 +126,9 @@ for (const size of SIZES) {
     const row = them.page.getByTestId('profile-links');
     const links = row.getByRole('link');
     await expect(links).toHaveCount(5);
-    const names = await links.allInnerTexts();
-    expect(names.map((n) => n.trim())).toEqual(['LinkedIn', 'Website', 'Instagram', 'X', 'Facebook']);
+    // Each link's accessible name is its label plus the screen-reader-only "(opens in a new tab)"; innerText would carry both.
+    const names = ['LinkedIn', 'Website', 'Instagram', 'X', 'Facebook'];
+    for (let i = 0; i < names.length; i += 1) await expect(links.nth(i)).toHaveAccessibleName(`${names[i]} (opens in a new tab)`);
     const expected = ['https://www.linkedin.com/in/lena-links', LINKS.website, LINKS.instagram, LINKS.x, LINKS.facebook];
     for (let i = 0; i < 5; i += 1) {
       const link = links.nth(i);

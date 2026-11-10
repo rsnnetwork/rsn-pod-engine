@@ -31,7 +31,7 @@ import { gotoRetry, cleanup, APP } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
-import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
+import { confirmInPage } from '../helpers/confirm-dialog';
 
 const ENGINE = engineLabel();
 // A preview's API can take up to a minute to wake.
@@ -119,6 +119,7 @@ async function stripedPicture(page: Page, width: number, height: number): Promis
 }
 
 const bannerOf = (page: Page) => page.getByTestId('profile-banner');
+const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 /** With no banner there is no strip, only "Add a cover image" (10 Nov 2026); with one, its pencil. Either opens the editor; saved, it closes. */
 async function chooseBanner(page: Page, picture: Buffer) {
   const add = page.getByRole('button', { name: 'Add a cover image' });
@@ -350,7 +351,8 @@ test(`your profile is the way others see it, with what only you see apart, and e
     await expect(link, `${who}: the LinkedIn link`).toHaveAttribute('href', clean);
     await expect(link).toHaveAttribute('target', '_blank');
     await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
-    await expect(link).toHaveText('LinkedIn ↗ (opens in a new tab)');
+    // 10 Nov 2026: LinkedIn is one icon button in the links row beside Website, Instagram, X and Facebook, with no arrow.
+    await expect(link).toHaveText('LinkedIn (opens in a new tab)');
     await link.scrollIntoViewIfNeeded();
     await expect.poll(async () => Math.round((await link.boundingBox())!.height), { message: `${who}: the link is a 44px target` }).toBeGreaterThanOrEqual(44);
     await expectReachable(p, link, `${who}: the LinkedIn link`);
@@ -441,18 +443,20 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   await expect(page.getByRole('region', { name: 'Your move' })).toBeVisible();
 
   // Block asks first, with the old profile's words. Dismissed, nothing happens.
-  const question = `Block ${OWNER.name}? They won't be able to message you and you won't be matched together in future events.`;
-  page.once('dialog', (d) => { expect(d.message()).toBe(question); void d.dismiss(); });
-  await acceptConfirmDialogs(page);
+  // The question is drawn in the page (T2, 1 Nov 2026), so it is answered here with its own buttons: arming
+  // acceptConfirmDialogs would confirm the first question too, and the block would happen before the spec dismisses it.
   await more.click();
   await page.getByRole('button', { name: 'Block', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: `Block ${OWNER.name}?` })).toBeVisible();
+  await expect(page.getByTestId('confirm-dialog-body')).toHaveText("They won't be able to message you, and you won't be matched together in future events.");
+  await page.getByTestId('confirm-dialog-cancel').click();
+  await expect(page.getByTestId('confirm-dialog-body')).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible();
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(0);
   // Accepted: blocked, said, and the page leaves the profile (opened directly, so back is For You).
-  page.once('dialog', (d) => void d.accept());
-  await acceptConfirmDialogs(page);
   await more.click();
   await page.getByRole('button', { name: 'Block', exact: true }).click();
+  await confirmInPage(page);
   await expect(page.getByText(`${OWNER.name} is blocked. They can no longer message you, and you won't be matched together.`)).toBeVisible({ timeout: 30_000 });
   await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(1);
@@ -466,16 +470,16 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   await expectReachable(page, unblock, 'Unblock');
   expect((await unblock.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   // Unblock asks first. Dismissed, nothing changes.
-  const unblockQuestion = 'Unblock this member? They will be able to message you again, and you may be matched together in future events.';
-  page.once('dialog', (d) => { expect(d.message()).toBe(unblockQuestion); void d.dismiss(); });
-  await acceptConfirmDialogs(page);
   await unblock.click();
+  await expect(page.getByRole('dialog', { name: 'Unblock this member?' })).toBeVisible();
+  await expect(page.getByTestId('confirm-dialog-body')).toHaveText('They will be able to message you again, and you may be matched together in future events.');
+  await page.getByTestId('confirm-dialog-cancel').click();
+  await expect(page.getByTestId('confirm-dialog-body')).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 1, name: 'You blocked this member.' })).toBeVisible();
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(1);
   // Accepted: unblocked, said, and the profile is back on the same page, with no refresh.
-  page.once('dialog', (d) => void d.accept());
-  await acceptConfirmDialogs(page);
   await unblock.click();
+  await confirmInPage(page);
   await expect(page.getByText('Unblocked.', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('button', { name: 'More' })).toBeVisible();
@@ -534,12 +538,26 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     expect(await brokenWords(own.page.getByRole('heading', { level: 1 })), `your name at ${at}`).toEqual([]);
     // Scrolled to first, as the links below are: the photo's pencil sits at the bottom right of a tile at least 430px
     // tall under the banner, so on a short window (1024x768) it is under the fold at the page's top (fix round 2).
-    for (const pencil of ['Edit banner', 'Edit photo']) {
+    // With no banner there is no strip, only "Add a cover image" (10 Nov 2026), and the photo's pencil.
+    await expect(bannerOf(own.page)).toHaveCount(0);
+    for (const pencil of ['Add a cover image', 'Edit photo']) {
       const button = own.page.getByRole('button', { name: pencil });
       await button.scrollIntoViewIfNeeded();
       expect((await button.boundingBox())!.height, `${pencil} at ${at}`).toBeGreaterThanOrEqual(44);
       await expectReachable(own.page, button, `${pencil} at ${at}`);
     }
+    // With a banner (a 1x1 picture stored straight in the row), its Remove and pencil sit at its top, clear of the centred photo.
+    await pool.query(`UPDATE users SET banner_blob = decode($2, 'base64'), banner_mime = 'image/png', banner_updated_at = NOW() WHERE id = $1`, [owner.id, TINY_PNG]);
+    await own.page.reload();
+    await expect(bannerOf(own.page)).toBeVisible({ timeout: SLOW });
+    for (const name of ['Edit banner', 'Remove', 'Edit photo']) {
+      const button = own.page.getByRole('button', { name, exact: true });
+      await button.scrollIntoViewIfNeeded();
+      expect((await button.boundingBox())!.height, `${name} at ${at}`).toBeGreaterThanOrEqual(44);
+      await expectReachable(own.page, button, `${name} with a banner at ${at}`);
+    }
+    await noSidewaysScroll(own.page, `your profile with a banner at ${at}`);
+    await pool.query(`UPDATE users SET banner_blob = NULL, banner_mime = NULL, banner_updated_at = NULL WHERE id = $1`, [owner.id]);
     for (const label of ['Edit profile', 'Edit answers', 'Add your company', 'Add LinkedIn']) {
       const link = own.page.getByRole('link', { name: label });
       await link.scrollIntoViewIfNeeded();
