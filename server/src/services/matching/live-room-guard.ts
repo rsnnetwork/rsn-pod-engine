@@ -86,7 +86,7 @@ async function groupProblemMessage(ctx: RoomCheckContext, problem: RoomProblem):
 }
 
 /** The event's owner or a super admin, read from the database (never from the token). */
-async function mayOverrideGroupRules(sessionId: string, actorId: string): Promise<boolean> {
+export async function mayOverrideGroupRules(sessionId: string, actorId: string): Promise<boolean> {
   const result = await query<{ host_user_id: string | null; role: string | null }>(
     `SELECT s.host_user_id, (SELECT u.role FROM users u WHERE u.id = $2) AS role FROM sessions s WHERE s.id = $1`,
     [sessionId, actorId],

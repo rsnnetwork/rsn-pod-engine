@@ -11,7 +11,7 @@
 // then answers from memory.
 
 import type { PoolClient, QueryResultRow } from 'pg';
-import type { RoomCheckContext } from '@rsn/shared';
+import type { EventGroupRules, RoomCheckContext } from '@rsn/shared';
 import { query } from '../../db';
 import { pairKey } from './matching.interface';
 import { loadHardExclusions } from './hard-exclusions';
@@ -81,6 +81,66 @@ export async function loadRoomCheckContext(
     rules,
     groupsOf: (userId) => groups.get(userId) ?? [],
     hardExcluded: (a, b) => excluded.has(pairKey(a, b)),
+    metBefore: (a, b) => met.has(pairKey(a, b)),
+    maxRoomSize: 3,
+  };
+}
+
+// ─── The matching board: one read for every round (Part 2 Task 8) ──────────────────────────────────────────
+
+/** What the checker needs about an event for all its rounds, read once (the board checks every round at a time). */
+export interface EventCheckBase {
+  rules: EventGroupRules | null;
+  groups: Map<string, string[]>;
+  /** Hard exclusions among the event's people, as pairKey(a, b). */
+  excluded: Set<string>;
+  /** Pairs that met in each played algorithm round of the live event (a manual breakout is not a round). */
+  playedPairs: Map<number, Set<string>>;
+}
+
+/** Every played algorithm round's pairs (the pair, and the three of a trio), by round. */
+async function playedRoundPairs(read: Reader, sessionId: string): Promise<Map<number, Set<string>>> {
+  const result = await read<{ round_number: number; a: string; b: string; c: string | null }>(
+    `SELECT round_number, participant_a_id AS a, participant_b_id AS b, participant_c_id AS c FROM matches
+      WHERE session_id = $1 AND status IN ('completed', 'active') AND is_manual = FALSE`,
+    [sessionId],
+  );
+  const byRound = new Map<number, Set<string>>();
+  for (const m of result.rows) {
+    const pairs = byRound.get(m.round_number) ?? new Set<string>();
+    pairs.add(pairKey(m.a, m.b));
+    if (m.c) {
+      pairs.add(pairKey(m.a, m.c));
+      pairs.add(pairKey(m.b, m.c));
+    }
+    byRound.set(m.round_number, pairs);
+  }
+  return byRound;
+}
+
+/** The board's base: the same reads loadRoomCheckContext makes, once for every round. */
+export async function loadEventCheckBase(sessionId: string, opts: { client?: PoolClient } = {}): Promise<EventCheckBase> {
+  const read = readerOf(opts.client);
+  const rules = await getEventGroupRules(sessionId, opts.client);
+  const people = await eventPeople(read, sessionId);
+  const excluded = await hardExclusionPairs(sessionId, people);
+  const playedPairs = await playedRoundPairs(read, sessionId);
+  const groups = rules ? await groupsForParticipants(sessionId, opts.client) : new Map<string, string[]>();
+  return { rules, groups, excluded, playedPairs };
+}
+
+/**
+ * The checker's context for one round from the board's base: met before = played in an earlier live round, or in
+ * `earlierPairs` (the board's own other rounds, as pairKey(a, b)).
+ */
+export function roomCheckContextFor(base: EventCheckBase, round: number, earlierPairs: ReadonlySet<string>): RoomCheckContext {
+  const met = new Set(earlierPairs);
+  for (const [r, pairs] of base.playedPairs) if (r < round) for (const key of pairs) met.add(key);
+  return {
+    round,
+    rules: base.rules,
+    groupsOf: (userId) => base.groups.get(userId) ?? [],
+    hardExcluded: (a, b) => base.excluded.has(pairKey(a, b)),
     metBefore: (a, b) => met.has(pairKey(a, b)),
     maxRoomSize: 3,
   };

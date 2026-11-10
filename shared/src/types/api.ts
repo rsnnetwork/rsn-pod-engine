@@ -120,6 +120,12 @@ export const ErrorCodes = {
   ADMISSION_CODE_NOT_FOUND: 'ADMISSION_CODE_NOT_FOUND',    // 404; no such admission code on this event (the organisers' revoke)
   // The RSN Call link (Part 2 Task 6, 11 Nov 2026).
   EVENT_CANCELLED: 'EVENT_CANCELLED',                    // 409; the event behind a call link was cancelled: it takes nobody
+  // The matching board's draft (Part 2 Task 8).
+  SCHEDULE_CHANGED: 'SCHEDULE_CHANGED',                  // 409; the board changed since the organiser's read; details.board is the board now
+  SCHEDULE_LOCKED: 'SCHEDULE_LOCKED',                    // 409; the meeting or seat is locked: unlock it first
+  SCHEDULE_GROUP_RULE: 'SCHEDULE_GROUP_RULE',            // 409; the round's group rule refuses the room (overridable); details.alternatives
+  SCHEDULE_RULE: 'SCHEDULE_RULE',                        // 409; a block, a room over three, or a person who can't be seated; details.alternatives
+  SCHEDULE_ROUND_STARTED: 'SCHEDULE_ROUND_STARTED',      // 409; the round has already started in the live event
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

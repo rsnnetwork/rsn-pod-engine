@@ -295,3 +295,8 @@ export const roundRuleSentence = _roundRuleSentence;
 export const checkRoom = _checkRoom;
 export const checkRound = _checkRound;
 export const estimatedRoundStarts = _estimatedRoundStarts;
+// The matching board's draft (10 Nov 2026 spec, Part 2 Task 8): its types, and the one VALUE the board's screen
+// reads (the alternative that leaves a person in the basket), exported by name as OPENINGS above.
+export * from './types/schedule';
+import { BOARD_BASKET_ROOM as _BOARD_BASKET_ROOM } from './types/schedule';
+export const BOARD_BASKET_ROOM = _BOARD_BASKET_ROOM;

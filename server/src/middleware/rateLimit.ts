@@ -928,3 +928,27 @@ export const callLinkManageLimiter = rateLimit({
   store: buildStore('call-link-manage'),
   handler: callLinkLimited(SLOW_DOWN),
 });
+
+// The matching board (10 Nov 2026 spec, Part 2 Task 8): an organiser dragging people around a board writes once per
+// drop and reads the board back after every change made by anyone running the event. 120 a minute per person, each
+// way, lets a quick organiser work without a pause while a runaway client is stopped. Keyed per member: the routes
+// sign in first.
+export const scheduleReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('schedule-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const scheduleWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('schedule-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});

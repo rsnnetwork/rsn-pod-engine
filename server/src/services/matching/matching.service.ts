@@ -536,6 +536,80 @@ function hardConstraintsOf(exclusions: HardExclusions): HardConstraint[] {
   return constraints;
 }
 
+// ─── The matching board's engine (Part 2 Task 8) ────────────────────────────
+
+/** Pairs a round for the board: `people` (who to seat), `avoid` (pairKeys already planned or met in the event). */
+export type BoardRoundGenerator = (people: string[], round: number, avoid: ReadonlySet<string>) => RoundAssignment;
+
+/**
+ * The engine as the matching board drives it, prepared once for an event: the same people rows, premium requests,
+ * intent signals, matching policy, hard exclusions, group rules and template weights the plan made at Start reads,
+ * then one round at a time through generateGroupedRound (an event without groups takes the engine's own round).
+ * `avoid` is kept apart first; when that seats fewer people than the round can (the rule's capacity, or an even
+ * count), the round is made again with repeats allowed and marked `usedRepeats`. Hard exclusions and group rules
+ * are never relaxed. Reads only; writes nothing.
+ */
+export async function prepareBoardRoundGenerator(sessionId: string, userIds: string[]): Promise<BoardRoundGenerator> {
+  const session = await sessionService.getSessionById(sessionId);
+  const sessionConfig = typeof session.config === 'string'
+    ? JSON.parse(session.config as unknown as string)
+    : session.config;
+  const rows = userIds.length === 0 ? [] : (await query<MatchingParticipant>(
+    `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
+            u.industry, u.company, u.languages, u.timezone,
+            '{}'::jsonb AS attributes,
+            COALESCE(u.is_premium, FALSE) AS "isPremium"
+       FROM users u
+      WHERE u.id = ANY($1::uuid[])`,
+    [userIds],
+  )).rows;
+  const requests = await loadMatchRequestsForEvent(sessionId, rows.map((p) => p.userId));
+  for (const p of rows) p.requestedUserIds = requests.get(p.userId) || [];
+  await attachIntentSignals(rows, sessionId);
+
+  const matchingPolicy = resolveMatchingPolicy(sessionConfig);
+  const encounterHistory = await getEncounterHistoryForUsers(rows.map((p) => p.userId), { sessionId, matchingPolicy });
+  // Meetings in earlier events that the policy forbids repeating, as generateSingleRound keeps them apart.
+  const earlierEvents = new Set<string>();
+  for (const e of encounterHistory) {
+    if (matchingPolicy === 'platform_wide'
+      || (matchingPolicy === 'cooldown' && withinCooldown(e.lastMetAt, Number(sessionConfig?.cooldownMonths) || 12))) {
+      earlierEvents.add(pairKey(e.userAId, e.userBId));
+    }
+  }
+  const exclusions = await loadHardExclusions(sessionId, rows.map((p) => p.userId));
+  const groupRules = await loadGroupRules(sessionId);
+  const { weights } = await templateWeightsFor(session, sessionConfig);
+  const config: MatchingConfig = {
+    weights,
+    hardConstraints: hardConstraintsOf(exclusions),
+    numberOfRounds: sessionConfig.numberOfRounds || 5,
+    avoidDuplicates: true,
+    globalOptimize: false,
+    ...(groupRules && { groupRules }),
+  };
+  const engine = getMatchingEngine(sessionConfig.matchingAlgorithmId || DEFAULT_ENGINE_ID);
+  const byId = new Map(rows.map((p) => [p.userId, p]));
+  const seatedBy = (round: RoundAssignment) => round.pairs.reduce((n, p) => n + roomMembers(p).length, 0);
+
+  return (people, round, avoid) => {
+    const participants = people.map((id) => byId.get(id)).filter((p): p is MatchingParticipant => !!p);
+    const evenCount = participants.length - (participants.length % 2);
+    const target = groupRules
+      ? groupedPlacementTarget(groupRules, participants, round, config.numberOfRounds, evenCount)
+      : evenCount;
+    const withinEvent = matchingPolicy === 'none' ? [] : [...avoid];
+    const strict = generateGroupedRound({
+      participants, config, excludedPairs: new Set([...withinEvent, ...earlierEvents]), encounterHistory, round, engine,
+    });
+    if (seatedBy(strict) >= target || withinEvent.length === 0) return strict;
+    const relaxed = generateGroupedRound({
+      participants, config, excludedPairs: new Set(earlierEvents), encounterHistory, round, engine,
+    });
+    return seatedBy(relaxed) > seatedBy(strict) ? { ...relaxed, usedRepeats: true } : strict;
+  };
+}
+
 // ─── Generate Single Round ──────────────────────────────────────────────────
 
 /**

@@ -324,6 +324,30 @@ export async function fanoutSessionChat(sessionId: string, actorId?: string): Pr
   }
 }
 
+// ─── Matching-board draft fanout (10 Nov 2026 spec, Part 2 Task 8) ──────────
+//
+// The organisers' draft of who meets whom changed (a generate, a move, a lock, an absence). The draft is private:
+// it goes to the event's host and co-hosts only, never to a participant, plus whoever made the change (a pod admin
+// or super admin may edit without being either), so their other tabs follow.
+
+export async function fanoutScheduleDraft(sessionId: string, actorId?: string): Promise<void> {
+  try {
+    const io = getRealtimeIo();
+    if (!io) return;
+    const { query } = await import('../db');
+    const organisers = await query<{ user_id: string }>(
+      `SELECT host_user_id AS user_id FROM sessions WHERE id = $1 AND host_user_id IS NOT NULL
+       UNION
+       SELECT user_id FROM session_cohosts WHERE session_id = $1`,
+      [sessionId],
+    );
+    const recipients = [...new Set([...organisers.rows.map((r) => r.user_id), ...(actorId ? [actorId] : [])])];
+    await emitEntities(io, recipients, [E.sessionSchedule(sessionId)]);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'fanoutScheduleDraft: failed to fan out');
+  }
+}
+
 // ─── Admin-list fanout ──────────────────────────────────────────────────────
 //
 // Targets every admin / super_admin user's room. `scope` plugs into the
