@@ -278,8 +278,13 @@ test(`12/02: a founders/funders event asks the group as tiles; the chosen group 
   await shot(page, 'call-waiting');
 
   const guestId = await guestOf(email);
-  const chosen = await pool.query('SELECT group_key FROM event_participant_groups WHERE session_id = $1 AND user_id = $2', [event.id, guestId]);
-  expect(chosen.rows.map((r) => r.group_key)).toEqual(['funder']);
+  // A person's group is a row naming the event's group by id (migration 138); its key is the group's own.
+  const chosen = await pool.query<{ key: string }>(
+    `SELECT g.key FROM event_participant_groups pg JOIN event_groups g ON g.id = pg.group_id
+      WHERE pg.session_id = $1 AND pg.user_id = $2`,
+    [event.id, guestId],
+  );
+  expect(chosen.rows.map((r) => r.key)).toEqual(['funder']);
   // The organiser's view of the event's groups counts them.
   const organiser = await api(host, 'GET', `/sessions/${event.id}/groups`);
   expect(organiser.status, organiser.text).toBe(200);
