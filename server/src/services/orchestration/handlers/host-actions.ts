@@ -40,6 +40,7 @@ import { validateMatchAssignment } from '../../matching/match-validator.service'
 //   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
 import { emitEntities } from '../../../realtime/emit';
 import { E } from '../../../realtime/entities';
+import { fanoutAdminEntities } from '../../../realtime/fanout';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // Functions from round-lifecycle.ts that don't exist yet.
@@ -2657,18 +2658,31 @@ export async function resumeSession(sessionId: string, hostUserId: string): Prom
   logger.info({ sessionId, resumeSecondsRemaining }, 'Session resumed via REST');
 }
 
-export async function endSession(sessionId: string, hostUserId: string): Promise<void> {
+/**
+ * Ends the event for everyone (POST /sessions/:id/host/end). Its host may, and so may a super admin on any event
+ * (10 Nov 2026, spec 10/07: the platform's emergency override, as the socket End Event already allows). The role is
+ * the caller's platform role, never anything read from attendance. Completion is the same one the socket End Event
+ * runs, under the same session guard, so rooms close and the completed fan-out reaches every page.
+ */
+export async function endSession(
+  sessionId: string,
+  actor: { userId: string; role: UserRole },
+): Promise<void> {
   const session = await sessionService.getSessionById(sessionId);
-  if (session.hostUserId !== hostUserId) {
-    throw new ForbiddenError('Only the host can end a session');
+  if (session.hostUserId !== actor.userId && actor.role !== UserRole.SUPER_ADMIN) {
+    throw new ForbiddenError('Only the host can end this event');
   }
 
-  if (!_completeSession || !_io) {
+  const completeSession = _completeSession;
+  const io = _io;
+  if (!completeSession || !io) {
     throw new ValidationError('Session completion not available — server not fully initialised');
   }
 
-  await _completeSession(_io, sessionId);
-  logger.info({ sessionId }, 'Session ended via REST');
+  await withSessionGuard(sessionId, () => completeSession(io, sessionId));
+  // The completion fans out to the event's people; the admins' event list is told here, as it lists every event.
+  await fanoutAdminEntities('sessions');
+  logger.info({ sessionId, actorId: actor.userId, byHost: session.hostUserId === actor.userId }, 'Session ended via REST');
 }
 
 export async function broadcastMessage(

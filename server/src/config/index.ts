@@ -109,6 +109,20 @@ export const config = {
   // exactly the two known-stuck events on production and nothing else.
   abandonedEventAfterHours: Number(process.env.ABANDONED_EVENT_AFTER_HOURS ?? 4),
 
+  // An event whose start, length and a grace period have all passed is over, whoever forgot to end it (10 Nov 2026,
+  // spec 12/14): live ones are completed as End Event does, never-started ones are marked Ended. Same three settings
+  // as the reaper above, but it starts in report mode, so production logs what it would close before it is trusted:
+  //   off    — nothing runs
+  //   report — log which events it WOULD close, and close none (default)
+  //   end    — close them
+  overdueEventClose: (['off', 'report', 'end'] as const)
+    .find(m => m === process.env.OVERDUE_EVENT_CLOSE) ?? 'report',
+  // Minutes after an event's planned end before it counts as overdue. A bad value reads as the default.
+  overdueEventGraceMinutes: (() => {
+    const minutes = Number(process.env.OVERDUE_EVENT_GRACE_MINUTES ?? 120);
+    return Number.isFinite(minutes) && minutes >= 0 ? minutes : 120;
+  })(),
+
   // Computed
   isDev: (process.env.NODE_ENV || 'development') === 'development',
   isProd: process.env.NODE_ENV === 'production',

@@ -99,3 +99,12 @@ services:
       #   value: "report"
       # - key: ABANDONED_EVENT_AFTER_HOURS
       #   value: "4"
+
+      # Closes overdue events: live or never started, once their start, length
+      # and OVERDUE_EVENT_GRACE_MINUTES (default 120) have passed. Defaults to
+      # "report" when unset: it logs the events it would close and writes
+      # nothing. Read that log before setting "end"; "off" stops it.
+      # - key: OVERDUE_EVENT_CLOSE
+      #   value: "report"
+      # - key: OVERDUE_EVENT_GRACE_MINUTES
+      #   value: "120"

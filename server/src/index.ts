@@ -40,6 +40,7 @@ import { processAutoReminders } from './services/join-request/join-request.servi
 import { pruneExpiredAuthTokens } from './services/maintenance/token-cleanup';
 import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
 import { processMeetingReminders } from './services/meetings/meeting-reminder.worker';
+import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS } from './services/session/overdue-events';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -426,6 +427,18 @@ async function start(): Promise<void> {
       processMeetingReminders().catch(err =>
         logger.error({ err }, 'Meeting reminder cycle failed'));
     }, MEETING_REMINDER_INTERVAL);
+
+    // Overdue events close themselves (10 Nov 2026, F7): every minute, a live or never-started event whose start,
+    // length and grace have passed is completed (end mode) or listed in the log (report mode, the default). Each
+    // close is claimed in the database, so several instances running it close an event once.
+    if (config.overdueEventClose !== 'off') {
+      setInterval(() => {
+        closeOverdueEvents(config.overdueEventClose).catch(err =>
+          logger.error({ err }, 'Overdue-event close cycle failed'));
+      }, OVERDUE_EVENT_INTERVAL_MS);
+      logger.info({ mode: config.overdueEventClose, graceMinutes: config.overdueEventGraceMinutes },
+        'Overdue-event closing started');
+    }
 
     // Start auto-reminder engine for join requests (runs every 6 hours)
     const SIX_HOURS = 6 * 60 * 60 * 1000;
