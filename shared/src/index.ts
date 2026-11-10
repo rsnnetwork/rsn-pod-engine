@@ -258,7 +258,7 @@ import {
   GROUP_LIMITS as _GROUP_LIMITS, DEFAULT_GROUP_QUESTION as _DEFAULT_GROUP_QUESTION, GROUP_PRESETS as _GROUP_PRESETS,
   isGroupKey as _isGroupKey, groupPairKey as _groupPairKey, ruleForRound as _ruleForRound,
   groupsAllowed as _groupsAllowed, validateGroupRules as _validateGroupRules,
-  explainRoundCapacity as _explainRoundCapacity,
+  explainRoundCapacity as _explainRoundCapacity, roundRuleSentence as _roundRuleSentence,
 } from './events/group-rules';
 import { checkRoom as _checkRoom, checkRound as _checkRound } from './events/room-check';
 import { estimatedRoundStarts as _estimatedRoundStarts } from './events/round-times';
@@ -271,6 +271,7 @@ export const ruleForRound = _ruleForRound;
 export const groupsAllowed = _groupsAllowed;
 export const validateGroupRules = _validateGroupRules;
 export const explainRoundCapacity = _explainRoundCapacity;
+export const roundRuleSentence = _roundRuleSentence;
 export const checkRoom = _checkRoom;
 export const checkRound = _checkRound;
 export const estimatedRoundStarts = _estimatedRoundStarts;

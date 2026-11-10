@@ -407,3 +407,21 @@ export function explainRoundCapacity(
       .filter((x): x is string => x !== null).join(' ') || null,
   };
 }
+
+// ─── The round's rule, said to the organiser ────────────────────────────────
+
+/**
+ * What a round's rule allows, as the end of the organiser's sentence when a room breaks it ("Ann and Bob can't meet
+ * in this round: everyone meets someone from another group."). Labels are the organiser's own group names.
+ */
+export function roundRuleSentence(rules: EventGroupRules, round: number): string {
+  const rule = ruleForRound(rules, round);
+  if (rule.mode === 'open') return 'anyone may meet anyone.';
+  if (rule.mode === 'cross_group') return 'everyone meets someone from another group.';
+  const labelOf = (key: string) => rules.groups.find((g) => g.key === key)?.label.trim() ?? key;
+  const pairs = rule.allowedPairs.map((p) => {
+    const [a, b] = p.split('|');
+    return a === b ? `${labelOf(a)} with each other` : `${labelOf(a)} with ${labelOf(b)}`;
+  });
+  return `only ${andList(pairs)} may meet.`;
+}

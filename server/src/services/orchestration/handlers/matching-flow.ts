@@ -18,7 +18,7 @@
 import { Server as SocketServer, Socket } from 'socket.io';
 import logger from '../../../config/logger';
 import { query } from '../../../db';
-import { SessionStatus, resolveDisplayName, placeholderName } from '@rsn/shared';
+import { SessionStatus, resolveDisplayName, placeholderName, checkRoom } from '@rsn/shared';
 import {
   ActiveSession, activeSessions, withMatchGenerationLock, withSessionGuard,
   sessionRoom, userRoom, persistSessionState, refuseIfFormatLacks,
@@ -28,6 +28,8 @@ import { verifyHost, getAllHostIds } from './host-actions';
 import * as matchingService from '../../matching/matching.service';
 import { pairKey } from '../../matching/matching.interface';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
+// Part 2 Task 7 — rooms a host makes by hand meet the engine's one room checker (blocks always; group rules).
+import { judgeLiveRooms, loadLiveRoomContext, recordMatchOverride } from '../../matching/live-room-guard';
 // 23 May — match-time presence reconcile routes status resets through the chokepoint.
 import { transitionParticipant, ParticipantState } from '../state/participant-state-machine';
 // Phase 7C.1 (7 May spec) — backing data for the Host Control Center drawer.
@@ -435,7 +437,15 @@ export async function handleHostGenerateMatches(
       // click. (within_event/none load no cross-event history, so the pre-plan
       // is already correct for them — keep their instant-surface path.)
       const matchingPolicy = matchingService.resolveMatchingPolicy(activeSession.config);
-      const canSurfacePrePlan = sameMembers && !planRepeatsPriorRound && matchingPolicy !== 'platform_wide';
+
+      // Part 2 Task 7 — nor a plan with a room the room checker would now refuse: someone blocked someone after the
+      // plan was made, or, on an event with groups, the organiser moved someone to another group. The engine then
+      // makes the round again under today's blocks and groups.
+      const roomCtx = await loadLiveRoomContext(data.sessionId, nextRound, [...plannedIds]);
+      const planBreaksRules = existingPlanned
+        .filter(m => m.status === 'scheduled')
+        .some(m => !checkRoom(roomCtx, [m.participantAId, m.participantBId, m.participantCId].filter((id): id is string => !!id), { fallback: true }).ok);
+      const canSurfacePrePlan = sameMembers && !planRepeatsPriorRound && !planBreaksRules && matchingPolicy !== 'platform_wide';
 
       if (canSurfacePrePlan) {
         logger.info(
@@ -470,6 +480,7 @@ export async function handleHostGenerateMatches(
           plannedCount: plannedIds.size,
           eligibleCount: eligibleIds.size,
           planRepeatsPriorRound,
+          planBreaksRules,
         },
         'Phase K / #10 — pre-plan stale (eligibility shift or now-repeating after an earlier-round edit), invalidating and regenerating',
       );
@@ -661,7 +672,7 @@ export async function handleHostConfirmRound(
 export async function handleHostSwapMatch(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string; userA: string; userB: string }
+  data: { sessionId: string; userA: string; userB: string; override?: boolean; reason?: string }
 ): Promise<void> {
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
@@ -730,10 +741,26 @@ export async function handleHostSwapMatch(
       }
     }
 
+    // Part 2 Task 7 — the two rooms the swap makes, held to the room checker: never two people one of whom blocked
+    // the other; on an event with groups, only what this round's rule allows unless the owner overrides.
+    const actorId = getUserIdFromSocket(socket);
+    if (!actorId) return;
+    const guard = await judgeLiveRooms({
+      sessionId: data.sessionId, round: roundNumber, actorId, request: data,
+      rooms: [newA, newB].map((r) => [r.a, r.b, r.c].filter((id): id is string => !!id)),
+    });
+    if (!guard.ok) {
+      socket.emit('error', { code: guard.code, message: guard.message });
+      return;
+    }
+
     await query('UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3, is_override = NOT COALESCE(is_manual, FALSE) WHERE id = $4',
       [newA.a, newA.b, newA.c, matchA.id]);
     await query('UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3, is_override = NOT COALESCE(is_manual, FALSE) WHERE id = $4',
       [newB.a, newB.b, newB.c, matchB.id]);
+    await recordMatchOverride({
+      sessionId: data.sessionId, actorId, round: roundNumber, via: 'swap', overridden: guard.overridden, reason: guard.reason,
+    });
 
     // Re-send updated preview (pass hostUserId so host is excluded from bye list)
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
@@ -755,7 +782,7 @@ export async function handleHostSwapMatch(
 export async function handleHostExcludeFromRound(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string; userId: string }
+  data: { sessionId: string; userId: string; override?: boolean; reason?: string }
 ): Promise<void> {
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
@@ -775,6 +802,21 @@ export async function handleHostExcludeFromRound(
     const userMatch = matches.find(m =>
       m.participantAId === data.userId || m.participantBId === data.userId || m.participantCId === data.userId
     );
+
+    // Part 2 Task 7 — taking someone out of a trio leaves a room of two, held to the room checker like any room a
+    // host makes (taking someone out of a pair leaves no room: the partner waits).
+    const actorId = getUserIdFromSocket(socket);
+    if (!actorId) return;
+    const remainingRoom = userMatch?.participantCId
+      ? [userMatch.participantAId, userMatch.participantBId, userMatch.participantCId].filter((id) => id !== data.userId)
+      : [];
+    const guard = await judgeLiveRooms({
+      sessionId: data.sessionId, round: roundNumber, actorId, request: data, rooms: [remainingRoom],
+    });
+    if (!guard.ok) {
+      socket.emit('error', { code: guard.code, message: guard.message });
+      return;
+    }
 
     if (userMatch) {
       if (userMatch.participantCId === data.userId) {
@@ -830,6 +872,9 @@ export async function handleHostExcludeFromRound(
         await query('DELETE FROM matches WHERE id = $1', [userMatch.id]);
       }
     }
+    await recordMatchOverride({
+      sessionId: data.sessionId, actorId, round: roundNumber, via: 'exclude', overridden: guard.overridden, reason: guard.reason,
+    });
 
     // Re-send updated preview (pass hostUserId so host is excluded from bye list)
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);

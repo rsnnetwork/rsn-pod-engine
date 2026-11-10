@@ -13,7 +13,7 @@ import {
   SessionStatus, ParticipantStatus,
   MatchStatus, UserRole, ErrorCodes,
   resolveDisplayName, placeholderName,
-  resolveEventFormat, liveKindOf,
+  resolveEventFormat, liveKindOf, checkRoom,
 } from '@rsn/shared';
 import {
   ActiveSession, activeSessions, withSessionGuard, withMatchGenerationLock,
@@ -34,6 +34,8 @@ import * as matchingService from '../../matching/matching.service';
 import { setPresence } from '../state/participant-state-machine';
 import { getCanonicalConnectedSet } from '../state/canonical-state';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
+// Part 2 Task 7 — rooms a host makes by hand meet the engine's one room checker (blocks always; group rules).
+import { judgeLiveRooms, loadLiveRoomContext, recordMatchOverride } from '../../matching/live-room-guard';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. Every legacy
 // in-handler broadcast (roster:changed, host:transferred, host:event_plan_*,
 // pin:changed, tile:size_changed, host:visibility_changed,
@@ -1207,9 +1209,16 @@ export async function handleHostReassign(
       }
     }
 
-    // Try to pair the target participant with an isolated one
+    // Try to pair the target participant with an isolated one.
+    // Part 2 Task 7 — the first one the room checker accepts with them: never someone either blocked, and on an
+    // event with groups only someone this round's rule lets them meet (with no such person, nobody is paired).
     const targetId = data.participantId;
-    const partner = isolatedParticipants.find(id => id !== targetId);
+    const candidates = isolatedParticipants.filter(id => id !== targetId);
+    let partner: string | undefined;
+    if (candidates.length > 0) {
+      const roomCtx = await loadLiveRoomContext(data.sessionId, activeSession.currentRound, [targetId, ...candidates]);
+      partner = candidates.find(id => checkRoom(roomCtx, [targetId, id], { fallback: true }).ok);
+    }
 
     // Phase R1 (20 May 2026) — belt-and-braces. Neither the host nor any
     // cohort may end up in a reassign INSERT. The host UI shouldn't allow
@@ -1764,7 +1773,7 @@ export async function handleHostRemoveFromRoom(
 export async function handleHostMoveToRoom(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string; userId: string; targetMatchId: string }
+  data: { sessionId: string; userId: string; targetMatchId: string; override?: boolean; reason?: string }
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
   try {
@@ -1814,6 +1823,20 @@ export async function handleHostMoveToRoom(
 
     const targetMatch = targetMatchResult.rows[0];
     const targetParticipants = [targetMatch.participant_a_id, targetMatch.participant_b_id];
+
+    // Part 2 Task 7 — the room the move makes, held to the room checker before anything is created: never two
+    // people one of whom blocked the other; on an event with groups, only what this round's rule allows unless the
+    // owner overrides.
+    const actorId = getUserIdFromSocket(socket);
+    if (!actorId) return;
+    const guard = await judgeLiveRooms({
+      sessionId, round: activeSession.currentRound, actorId, request: data,
+      rooms: [[...targetParticipants, userId].filter((id): id is string => !!id)],
+    });
+    if (!guard.ok) {
+      socket.emit('error', { code: guard.code, message: guard.message });
+      return;
+    }
 
     // Phase 7A.4 (7 May spec) — atomic move-to-room.
     // Pre-fix: end-current + end-target + insert-new were independent
@@ -1875,6 +1898,10 @@ export async function handleHostMoveToRoom(
       if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
       return;
     }
+
+    await recordMatchOverride({
+      sessionId, actorId, round: activeSession.currentRound, via: 'move_to_room', overridden: guard.overridden, reason: guard.reason,
+    });
 
     // Ship A regression fix — retire both old matches' canonical locations
     // (moved users get a new placement via setRoomAssignment below; the
@@ -2854,7 +2881,7 @@ export function ensureManualDashboardInterval(_io: SocketServer, sessionId: stri
 export async function handleHostCreateBreakout(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string; participantIds: string[]; durationSeconds?: number }
+  data: { sessionId: string; participantIds: string[]; durationSeconds?: number; override?: boolean; reason?: string }
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
     try {
@@ -2896,6 +2923,19 @@ export async function handleHostCreateBreakout(
           });
           return;
         }
+      }
+
+      // Part 2 Task 7 — the breakout room held to the room checker before anything is created: never two people
+      // one of whom blocked the other; on an event with groups, only what this round's rule allows unless the
+      // owner overrides.
+      const actorId = getUserIdFromSocket(socket);
+      if (!actorId) return;
+      const guard = await judgeLiveRooms({
+        sessionId, round: activeSession.currentRound, actorId, request: data, rooms: [participantIds],
+      });
+      if (!guard.ok) {
+        socket.emit('error', { code: guard.code, message: guard.message });
+        return;
       }
 
       // Phase 4A (5 May spec) — atomic create-breakout flow.
@@ -2982,6 +3022,10 @@ export async function handleHostCreateBreakout(
         if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
         return;
       }
+
+      await recordMatchOverride({
+        sessionId, actorId, round: activeSession.currentRound, via: 'breakout', overridden: guard.overridden, reason: guard.reason,
+      });
 
       // Ship A regression fix — clear canonical locations of the retired
       // matches (abandoned partners return to main; moved users are re-placed

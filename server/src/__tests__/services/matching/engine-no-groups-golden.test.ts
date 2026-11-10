@@ -8,9 +8,12 @@
 //   2. the plan made at Start (generateSessionSchedule) keeps the same people apart as every later round does.
 // Where a fix changes an output, the test shows that everything the fix does not touch is still the same.
 //
-// To re-record (only ever from the untouched engine): RECORD_ENGINE_GOLDEN=1 npx jest engine-no-groups-golden
+// To re-record (only ever from the untouched engine): RECORD_ENGINE_GOLDEN=1 RECORD_ENGINE_GOLDEN_FROM=<commit>
+// npx jest engine-no-groups-golden, then copy the file it names (in the OS temp folder) over the fixture. Tests
+// never write inside the repo.
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 const mockQuery = jest.fn();
@@ -246,7 +249,9 @@ beforeEach(() => {
     const service: NonNullable<Fixture['recorded']>['service'] = {};
     for (const [name, world] of Object.entries(fixture.serviceWorlds)) service[name] = await serviceOutputs(world);
     fixture.recorded = { from: process.env.RECORD_ENGINE_GOLDEN_FROM ?? 'unknown', engine: await engineOutputs(), service };
-    fs.writeFileSync(FIXTURE_PATH, `${JSON.stringify(fixture, null, 2)}\n`);
+    const recordedPath = path.join(os.tmpdir(), 'engine-golden-11.json');
+    fs.writeFileSync(recordedPath, `${JSON.stringify(fixture, null, 2)}\n`);
+    process.stderr.write(`engine golden recorded to ${recordedPath}\n`);
   });
 });
 

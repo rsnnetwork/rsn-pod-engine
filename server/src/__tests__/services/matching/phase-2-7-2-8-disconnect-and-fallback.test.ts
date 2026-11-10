@@ -141,7 +141,10 @@ describe('Phase 2.8 — Fallback ladder (Spec §10)', () => {
   });
 
   it('iteration stops at first level that produces complete matching', () => {
-    expect(src).toMatch(/if\s*\(\s*matchedIds\.size\s*>=\s*eligibleEvenCount\s*\)\s*break/);
+    // Part 2 Task 7: the target is eligibleEvenCount for an event without groups, and the most the round's group
+    // rule can seat for an event with them (the ladder relaxes repeats, never a group rule).
+    expect(src).toMatch(/if\s*\(\s*matchedIds\.size\s*>=\s*placementTarget\s*\)\s*break/);
+    expect(src).toMatch(/const placementTarget = groupRules\s*\?[\s\S]{0,200}:\s*eligibleEvenCount;/);
   });
 
   it('pairs are tagged with the fallback level via match_reason', () => {

@@ -23,7 +23,8 @@ describe('26 May live-test-3 fixes', () => {
     const src = readServer('services/orchestration/handlers/matching-flow.ts');
     it('gates pre-plan surfacing on matchingPolicy !== platform_wide', () => {
       expect(src).toMatch(/resolveMatchingPolicy\(activeSession\.config\)/);
-      expect(src).toMatch(/canSurfacePrePlan\s*=\s*sameMembers && !planRepeatsPriorRound && matchingPolicy !== 'platform_wide'/);
+      // Part 2 Task 7 adds !planBreaksRules (a plan the room checker now refuses is made again).
+      expect(src).toMatch(/canSurfacePrePlan\s*=\s*sameMembers && !planRepeatsPriorRound && !planBreaksRules && matchingPolicy !== 'platform_wide'/);
       expect(src).toMatch(/if \(canSurfacePrePlan\)/);
     });
   });

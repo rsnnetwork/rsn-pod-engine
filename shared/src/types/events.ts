@@ -2,6 +2,15 @@
 
 import type { ChatSendAck } from './event-chat';
 
+/**
+ * Part 2 Task 7 — a host's request to make a room the event's group rule for this round does not allow. Honoured
+ * for the event owner (sessions.host_user_id) and super admins only, always audited; never for a block.
+ */
+export interface GroupRuleOverride {
+  override?: boolean;
+  reason?: string;
+}
+
 // Server -> Client events
 export interface ServerToClientEvents {
   // Session lifecycle
@@ -300,11 +309,13 @@ export interface ClientToServerEvents {
   'host:reassign': (data: { sessionId: string; participantId: string }) => void;
   'host:generate_matches': (data: { sessionId: string }) => void;
   'host:confirm_round': (data: { sessionId: string }) => void;
-  'host:swap_match': (data: { sessionId: string; userA: string; userB: string }) => void;
-  'host:exclude_participant': (data: { sessionId: string; userId: string }) => void;
+  // Part 2 Task 7 — on an event with groups, `override` (with an optional `reason`) asks to break the round's group
+  // rule for the room this makes; only the event owner or a super admin may, and it is audited. A block never yields.
+  'host:swap_match': (data: { sessionId: string; userA: string; userB: string } & GroupRuleOverride) => void;
+  'host:exclude_participant': (data: { sessionId: string; userId: string } & GroupRuleOverride) => void;
   'host:regenerate_matches': (data: { sessionId: string }) => void;
   'host:cancel_preview': (data: { sessionId: string }) => void;
-  'host:move_to_room': (data: { sessionId: string; userId: string; targetMatchId: string }) => void;
+  'host:move_to_room': (data: { sessionId: string; userId: string; targetMatchId: string } & GroupRuleOverride) => void;
   'host:mute_participant': (data: { sessionId: string; targetUserId: string; muted: boolean }) => void;
   'host:mute_all': (data: { sessionId: string; muted: boolean }) => void;
   'host:remove_from_room': (data: { sessionId: string; matchId: string; userId: string }) => void;
@@ -349,7 +360,7 @@ export interface ClientToServerEvents {
 
   // S25 — grow an active manual room (host/co-host adds a main-room
   // participant; hard cap 3 members).
-  'host:add_to_room': (data: { sessionId: string; userId: string; matchId: string }) => void;
+  'host:add_to_room': (data: { sessionId: string; userId: string; matchId: string } & GroupRuleOverride) => void;
 
   // DM (Phase D of chat-fix-and-dm-system, 1 May 2026)
   'dm:send': (data: { toUserId: string; content: string }) => void;

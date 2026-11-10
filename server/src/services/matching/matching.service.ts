@@ -6,10 +6,13 @@ import logger from '../../config/logger';
 import {
   MatchingInput, MatchingOutput, MatchingConfig, MatchingWeights,
   MatchingParticipant, EncounterHistoryEntry, RoundAssignment,
-  MatchStatus, Match, HardConstraint,
+  MatchStatus, Match, HardConstraint, MatchPair, MatchingGroupRules, EventGroupRules,
+  explainRoundCapacity, groupPairKey, groupsAllowed, ruleForRound,
 } from '@rsn/shared';
 import { getMatchingEngine, DEFAULT_ENGINE_ID } from './matching.registry';
-import { pairKey } from './matching.interface';
+import { IMatchingEngine, pairKey } from './matching.interface';
+import { groupGate } from './matching.engine';
+import { getEventGroupRules, groupsForParticipants } from '../session/event-groups.service';
 import { reduceRepeatPairs } from './repeat-reduction';
 import * as sessionService from '../session/session.service';
 import { loadHardExclusions, type HardExclusions } from './hard-exclusions';
@@ -240,6 +243,8 @@ export async function generateSessionSchedule(
   // before, so the plan could seat two people who blocked each other together (and handleHostGenerateMatches
   // shows that plan as the round's preview). Same loader, same reads, same failure behaviour as generateSingleRound.
   const exclusions = await loadHardExclusions(sessionId, userIds);
+  // Part 2 Task 7 — the event's groups and round rules; none for an event without groups (config unchanged).
+  const groupRules = await loadGroupRules(sessionId);
 
   // Build matching config
   const config: MatchingConfig = {
@@ -248,6 +253,7 @@ export async function generateSessionSchedule(
     numberOfRounds: customConfig?.numberOfRounds || sessionConfig.numberOfRounds || 5,
     avoidDuplicates: customConfig?.avoidDuplicates ?? true,
     globalOptimize: customConfig?.globalOptimize ?? true,
+    ...(groupRules && { groupRules }),
   };
 
   const input: MatchingInput = {
@@ -264,8 +270,9 @@ export async function generateSessionSchedule(
   // their engine self-registers in matching.registry.ts.
   const engine = getMatchingEngine(sessionConfig.matchingAlgorithmId || DEFAULT_ENGINE_ID);
 
-  // Generate schedule
-  const output = await engine.generateSchedule(input);
+  // Generate schedule. An event with groups plans round by round through generateGroupedRound, so each round
+  // gets the organiser's fallback and its capacity sentence; an event without groups takes the engine's own path.
+  const output = groupRules ? planGroupedSchedule(engine, input) : await engine.generateSchedule(input);
 
   // Persist matches to database
   await persistMatches(sessionId, output.rounds, templateIdOf(sessionConfig));
@@ -328,6 +335,190 @@ async function templateWeightsFor(
     }
   }
   return { weights, templateId: effectiveTemplateId };
+}
+
+// ─── Matching groups (Part 2 Task 7, 10 Nov 2026 spec sections 05 and 07) ────────────────────────────────
+//
+// An event's groups and per-round rules are hard constraints: the engine never makes a pair the round's rule does
+// not allow (matching.engine.ts groupGate), the L0-L4 ladder relaxes repeats only, never a group rule, and the
+// people a rule leaves without a partner either wait or, when the organiser chose it, meet their own group. An
+// event without groups loads no rules (one read of event_groups) and every path below is skipped.
+
+const SAME_GROUP_FALLBACK = 'same_group_fallback';
+
+/** The event's groups and each person's group keys, or undefined for an event without groups. */
+async function loadGroupRules(sessionId: string): Promise<MatchingGroupRules | undefined> {
+  const rules = await getEventGroupRules(sessionId);
+  if (!rules) return undefined;
+  const groups = await groupsForParticipants(sessionId);
+  return { rules, groupsByUser: Object.fromEntries(groups) };
+}
+
+/** Each group's size among these people (someone in two groups counts in each) and how many have no group. */
+function groupCounts(group: MatchingGroupRules, participants: MatchingParticipant[]): { counts: Record<string, number>; ungrouped: number } {
+  const known = new Set(group.rules.groups.map((g) => g.key));
+  const counts: Record<string, number> = {};
+  let ungrouped = 0;
+  for (const p of participants) {
+    const keys = (group.groupsByUser[p.userId] ?? []).filter((k) => known.has(k));
+    if (keys.length === 0) ungrouped++;
+    for (const k of keys) counts[k] = (counts[k] ?? 0) + 1;
+  }
+  return { counts, ungrouped };
+}
+
+/**
+ * The rule the organiser's same-group fallback meets people under: whatever the round's rule allows, and two people
+ * of the same group. Someone with no group still meets nobody (the room checker says the same).
+ */
+function fallbackRules(rules: EventGroupRules, round: number): EventGroupRules {
+  const rule = ruleForRound(rules, round);
+  const keys = rules.groups.map((g) => g.key);
+  const allowed = new Set<string>();
+  for (const a of keys) {
+    for (const b of keys) if (a === b || groupsAllowed(rule, [a], [b])) allowed.add(groupPairKey(a, b));
+  }
+  return { ...rules, rounds: [{ fromRound: round, toRound: round, mode: 'custom', allowedPairs: [...allowed].sort() }] };
+}
+
+/** Whether two people may sit together this round: the rule allows it, or the organiser's fallback does. */
+function groupedMayMeet(group: MatchingGroupRules, config: MatchingConfig, round: number): ((a: string, b: string) => boolean) | undefined {
+  const gate = groupGate(config, round);
+  if (!gate) return undefined;
+  if (group.rules.fallback !== 'same_group_meeting') return gate;
+  const fallbackGate = groupGate({ ...config, groupRules: { ...group, rules: fallbackRules(group.rules, round) } }, round);
+  return (a, b) => gate(a, b) || (fallbackGate ? fallbackGate(a, b) : true);
+}
+
+function roomMembers(p: { participantAId: string; participantBId: string; participantCId?: string | null }): string[] {
+  return [p.participantAId, p.participantBId, p.participantCId].filter((x): x is string => !!x);
+}
+
+/** Marks the pairs only the organiser's fallback lets meet (and unmarks any a repeat swap made rule-abiding). */
+function tagFallbackPairs(pairs: MatchPair[], gate: ((a: string, b: string) => boolean) | null): void {
+  if (!gate) return;
+  for (const [i, p] of pairs.entries()) {
+    const m = roomMembers(p);
+    const breaksRule = m.some((a, x) => m.slice(x + 1).some((b) => !gate(a, b)));
+    const tagged = p.reasonTags.includes(SAME_GROUP_FALLBACK);
+    if (breaksRule && !tagged) {
+      pairs[i] = { ...p, reasonTags: [...p.reasonTags, SAME_GROUP_FALLBACK], matchReason: SAME_GROUP_FALLBACK };
+    } else if (!breaksRule && tagged) {
+      const reasonTags = p.reasonTags.filter((t) => t !== SAME_GROUP_FALLBACK);
+      pairs[i] = { ...p, reasonTags, matchReason: reasonTags[0] || 'best_available' };
+    }
+  }
+}
+
+/**
+ * How many people a round of an event with groups can seat: everyone (an even count) in an open round; otherwise
+ * the meetings the rule allows, plus, under the same-group fallback, those left waiting paired among their own
+ * group. The fallback ladder stops there instead of relaxing repeats for people no repeat could seat.
+ */
+function groupedPlacementTarget(
+  group: MatchingGroupRules, participants: MatchingParticipant[], round: number, numberOfRounds: number, eligibleEvenCount: number,
+): number {
+  if (ruleForRound(group.rules, round).mode === 'open') return eligibleEvenCount;
+  const { counts, ungrouped } = groupCounts(group, participants);
+  const capacity = explainRoundCapacity(group.rules, round, counts, Math.max(numberOfRounds || 0, round), ungrouped);
+  const fallbackSeats = group.rules.fallback === 'same_group_meeting'
+    ? Object.values(capacity.waiting).reduce((s, w) => s + w - (w % 2), 0)
+    : 0;
+  return Math.min(eligibleEvenCount, 2 * capacity.maxMeetings + fallbackSeats);
+}
+
+/**
+ * One round of an event with groups. Phase 1: the engine under the round's rule. Then, when people are left waiting
+ * and the organiser chose 'same_group_meeting', phase 2 pairs them among themselves under the fallback rule (hard
+ * exclusions and no-repeat still apply), each such pair tagged 'same_group_fallback'; a single person left over
+ * joins a pair only as the engine's trio rule allows, else waits. 'groupShortfall' says how many meetings the
+ * rule allows for the people in the round and who waits; its sentence goes into 'warnings'. Without groups in
+ * the config this is exactly the engine's generateRound.
+ */
+export function generateGroupedRound(input: {
+  participants: MatchingParticipant[];
+  config: MatchingConfig;
+  excludedPairs: Set<string>;
+  encounterHistory: EncounterHistoryEntry[];
+  round: number;
+  regenerate?: boolean;
+  engine?: IMatchingEngine;
+}): RoundAssignment {
+  const { participants, config, excludedPairs, encounterHistory, round } = input;
+  const engine = input.engine ?? getMatchingEngine(DEFAULT_ENGINE_ID);
+  const options = { regenerate: input.regenerate === true };
+  const first = engine.generateRound(participants, config, excludedPairs, encounterHistory, round, options);
+  const group = config.groupRules;
+  if (!group) return first;
+
+  const pairs = [...first.pairs];
+  const placed = new Set(pairs.flatMap(roomMembers));
+  let waiting = participants.filter((p) => !placed.has(p.userId));
+  const gate = groupGate(config, round);
+  if (gate && group.rules.fallback === 'same_group_meeting' && waiting.length >= 2) {
+    const fallbackConfig: MatchingConfig = { ...config, groupRules: { ...group, rules: fallbackRules(group.rules, round) } };
+    const second = engine.generateRound(waiting, fallbackConfig, excludedPairs, encounterHistory, round, options);
+    pairs.push(...second.pairs);
+    tagFallbackPairs(pairs, gate);
+    const seated = new Set(pairs.flatMap(roomMembers));
+    waiting = participants.filter((p) => !seated.has(p.userId));
+  }
+
+  const { counts, ungrouped } = groupCounts(group, participants);
+  const groupShortfall = explainRoundCapacity(group.rules, round, counts, Math.max(config.numberOfRounds || 0, round), ungrouped);
+  const warnings = [...(first.warnings ?? [])];
+  if (groupShortfall.sentence) warnings.push(groupShortfall.sentence);
+  const byes = waiting.map((p) => p.userId);
+  return {
+    ...first,
+    pairs,
+    byeParticipant: byes[0] ?? null,
+    byeParticipants: byes,
+    ...(warnings.length > 0 && { warnings }),
+    groupShortfall,
+  };
+}
+
+/** Every pair key a room makes meet: the pair, and the three of a trio. */
+function addRoomPairs(used: Set<string>, p: { participantAId: string; participantBId: string; participantCId?: string | null }): void {
+  const m = roomMembers(p);
+  for (let i = 0; i < m.length; i++) for (let j = i + 1; j < m.length; j++) used.add(pairKey(m[i], m[j]));
+}
+
+/**
+ * The plan made at Start for an event with groups: every round through generateGroupedRound, each avoiding every
+ * pair (and every trio's three pairs) already planned or held, in the shape the engine's generateSchedule returns.
+ */
+function planGroupedSchedule(engine: IMatchingEngine, input: MatchingInput): MatchingOutput {
+  const startTime = Date.now();
+  engine.validateInput(input);
+  const used = new Set<string>();
+  for (const r of input.previousRounds) for (const p of r.pairs) addRoomPairs(used, p);
+  const rounds: RoundAssignment[] = [];
+  for (let r = 1; r <= input.config.numberOfRounds; r++) {
+    const round = generateGroupedRound({
+      participants: input.participants, config: input.config, excludedPairs: used,
+      encounterHistory: input.encounterHistory, round: r, engine,
+    });
+    for (const p of round.pairs) addRoomPairs(used, p);
+    rounds.push(round);
+  }
+  const scores = rounds.flatMap((r) => r.pairs.map((p) => p.score));
+  const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+  const min = scores.length > 0 ? Math.min(...scores) : 0;
+  return {
+    sessionId: input.sessionId,
+    rounds,
+    generatedAt: new Date(),
+    durationMs: Date.now() - startTime,
+    metadata: {
+      participantCount: input.participants.length,
+      roundCount: rounds.length,
+      avgScore: Math.round(avg * 10000) / 10000,
+      minScore: Math.round(min * 10000) / 10000,
+      duplicatesAvoided: used.size,
+    },
+  };
 }
 
 /**
@@ -544,6 +735,10 @@ export async function generateSingleRound(
   const { inviterInvitee: inviterInviteePairs, blocked: blockedPairs } = exclusions;
   const hardConstraints = hardConstraintsOf(exclusions);
 
+  // Part 2 Task 7 — the event's groups and round rules: hard constraints the ladder below never relaxes. None for
+  // an event without groups, whose config and every engine call stay exactly as before.
+  const groupRules = await loadGroupRules(sessionId);
+
   const { weights, templateId: effectiveTemplateId } = await templateWeightsFor(session, sessionConfig);
 
   const config: MatchingConfig = {
@@ -552,6 +747,7 @@ export async function generateSingleRound(
     numberOfRounds: sessionConfig.numberOfRounds,
     avoidDuplicates: true,
     globalOptimize: false,
+    ...(groupRules && { groupRules }),
   };
 
   // Matching Engine 1.0 spec, Section 7 — hydrate per-participant premium
@@ -590,6 +786,11 @@ export async function generateSingleRound(
   // (every eligible participant placed in a pair or trio). Each pair
   // records the level it landed at via match_reason for audit trail.
   const eligibleEvenCount = participantsResult.rows.length - (participantsResult.rows.length % 2);
+  // With groups, "complete" is as many people as the round's rule can seat (and the organiser's fallback): relaxing
+  // repeats cannot seat the people a group rule leaves waiting, so it must not be tried for them.
+  const placementTarget = groupRules
+    ? groupedPlacementTarget(groupRules, participantsResult.rows, roundNumber, config.numberOfRounds, eligibleEvenCount)
+    : eligibleEvenCount;
   const sortedExcludedKeys = Array.from(excludedPairs).sort();
   const halfExcludedPairs = new Set(sortedExcludedKeys.slice(Math.floor(sortedExcludedKeys.length / 2)));
 
@@ -616,14 +817,19 @@ export async function generateSingleRound(
       },
     };
 
-    round = engine.generateRound(
-      participantsResult.rows,
-      levelConfig,
-      levelExcluded,
-      encounterHistory,
-      roundNumber,
-      { regenerate: options?.regenerate === true },
-    );
+    round = groupRules
+      ? generateGroupedRound({
+        participants: participantsResult.rows, config: levelConfig, excludedPairs: levelExcluded, encounterHistory,
+        round: roundNumber, regenerate: options?.regenerate === true, engine,
+      })
+      : engine.generateRound(
+        participantsResult.rows,
+        levelConfig,
+        levelExcluded,
+        encounterHistory,
+        roundNumber,
+        { regenerate: options?.regenerate === true },
+      );
 
     const matchedIds = new Set<string>();
     for (const p of round.pairs) {
@@ -635,7 +841,7 @@ export async function generateSingleRound(
 
     // Complete: every eligible participant (rounded down to even) is placed.
     // Above-even-count leftover gets handled by the engine's trio path.
-    if (matchedIds.size >= eligibleEvenCount) break;
+    if (matchedIds.size >= placementTarget) break;
 
     if (level === 4) {
       logger.warn(
@@ -669,7 +875,10 @@ export async function generateSingleRound(
     if (options?.excludePairKeys?.length) {
       for (const k of options.excludePairKeys) neverPair.add(k);
     }
-    reduceRepeatPairs(round.pairs, excludedPairs, neverPair);
+    // With groups, a swap may only make pairs the round's rule (or the organiser's fallback) allows.
+    const groupMayMeet = groupRules ? groupedMayMeet(groupRules, config, roundNumber) : undefined;
+    reduceRepeatPairs(round.pairs, excludedPairs, neverPair, groupMayMeet);
+    if (groupRules) tagFallbackPairs(round.pairs, groupGate(config, roundNumber));
   }
 
   // Tag pairs with the level they landed at for audit (Spec §13).
@@ -684,6 +893,8 @@ export async function generateSingleRound(
       pair.fallbackUsed = true;
       const isRepeat = excludedPairs.has(pairKey(pair.participantAId, pair.participantBId));
       pair.repeatInEvent = isRepeat;
+      // A pair seated by the organiser's same-group fallback keeps saying so.
+      if (pair.reasonTags.includes(SAME_GROUP_FALLBACK)) continue;
       pair.matchReason = reasonByLevel[landedAtLevel] || pair.matchReason || 'fallback';
     }
     logger.info(

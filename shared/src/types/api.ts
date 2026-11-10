@@ -107,6 +107,10 @@ export const ErrorCodes = {
   EVENT_GROUP_REQUIRED: 'EVENT_GROUP_REQUIRED',          // 409; the event has groups and this person has none and chose none
   EVENT_GROUP_UNKNOWN: 'EVENT_GROUP_UNKNOWN',            // 400; a group key the event does not have, or more groups than it allows
   EVENT_GROUP_ALREADY_CHOSEN: 'EVENT_GROUP_ALREADY_CHOSEN', // 409; a participant's own group is set once; an organiser changes it
+  // A room the host makes or changes live (Part 2 Task 7): the same checker the engine uses refuses it.
+  MATCH_BLOCKED_PAIR: 'MATCH_BLOCKED_PAIR',              // 409; one of the two blocked the other: never overridable
+  MATCH_GROUP_RULE: 'MATCH_GROUP_RULE',                  // 409; the round's group rule does not let them meet (overridable)
+  GROUP_OVERRIDE_FORBIDDEN: 'GROUP_OVERRIDE_FORBIDDEN',  // 403; only the event owner or a super admin overrides a group rule
 
   // Pod lifecycle
   POD_ARCHIVED: 'POD_ARCHIVED',

@@ -331,3 +331,20 @@ describe('explainRoundCapacity counts people with no group (fix round 1)', () =>
     expect(explainRoundCapacity(cross, 1, { founder: 10, funder: 10 }, 5).ungrouped).toBe(0);
   });
 });
+
+describe('roundRuleSentence (Part 2 Task 7): what a round allows, in the organiser\'s words', () => {
+  const groups: EventGroupRules = {
+    groups: [{ key: 'mentor', label: 'Mentors' }, { key: 'mentee', label: 'Mentees' }, { key: 'staff', label: 'Staff' }],
+    question: 'Which are you?', allowMultiple: false, fallback: 'leave_unmatched',
+    rounds: [
+      { fromRound: 1, toRound: 1, mode: 'cross_group', allowedPairs: [] },
+      { fromRound: 2, toRound: 2, mode: 'custom', allowedPairs: ['mentee|mentor', 'staff|staff'] },
+    ],
+  };
+
+  it('across groups, a custom list of pairs, and an open round', () => {
+    expect(shared.roundRuleSentence(groups, 1)).toBe('everyone meets someone from another group.');
+    expect(shared.roundRuleSentence(groups, 2)).toBe('only Mentees with Mentors and Staff with each other may meet.');
+    expect(shared.roundRuleSentence(groups, 3)).toBe('anyone may meet anyone.');
+  });
+});

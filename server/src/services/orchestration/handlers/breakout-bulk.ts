@@ -36,6 +36,8 @@ import * as videoService from '../../video/video.service';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
 // Part 2 (10 Nov 2026) - manual rooms are attributed in the event's audit trail.
 import { recordEventAudit } from '../../audit/event-audit';
+// Part 2 Task 7 — rooms a host makes by hand meet the engine's one room checker (blocks always; group rules).
+import { judgeLiveRooms, recordMatchOverride, type OverriddenRoom } from '../../matching/live-room-guard';
 
 // ─── Host dashboard refresh — injected lazily to avoid circular imports ───
 let _emitHostDashboard: ((sessionId: string) => Promise<void>) | null = null;
@@ -97,6 +99,8 @@ export async function handleHostCreateBreakoutBulk(
     rooms: BulkCreateRoomSpec[];
     sharedDurationSeconds: number;
     timerVisibility?: 'visible' | 'hidden';
+    override?: boolean;
+    reason?: string;
   },
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
@@ -207,6 +211,23 @@ export async function handleHostCreateBreakoutBulk(
       }
     }
 
+    // Part 2 Task 7 — every room of the bulk held to the room checker before any is created, so a refusal creates
+    // none: never two people one of whom blocked the other; on an event with groups, only what this round's rule
+    // allows unless the owner overrides.
+    const actorId = getUserIdFromSocket(socket);
+    if (!actorId) return;
+    const guard = await judgeLiveRooms({
+      sessionId, round: activeSession.currentRound, actorId, request: data, rooms: rooms.map((r) => r.participantIds),
+    });
+    if (!guard.ok) {
+      socket.emit('error', { code: guard.code, message: guard.message });
+      if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
+      return;
+    }
+    const roomKey = (ids: string[]) => [...ids].sort().join('+');
+    const overriddenByRoom = new Map<string, OverriddenRoom>(guard.overridden.map((o) => [roomKey(o.memberIds), o]));
+    const overriddenCreated: OverriddenRoom[] = [];
+
     const createdMatchIds: string[] = [];
 
     // Phase 6 (5 May spec) — atomic per-room bulk-create.
@@ -314,6 +335,8 @@ export async function handleHostCreateBreakoutBulk(
       }
 
       createdMatchIds.push(matchId);
+      const overriddenRoom = overriddenByRoom.get(roomKey(participantIds));
+      if (overriddenRoom) overriddenCreated.push(overriddenRoom);
 
       // Phase 0 (1 May spec) — server-canonical room assignment for manual
       // host-created breakouts. Same architectural rule as auto-rounds:
@@ -457,6 +480,11 @@ export async function handleHostCreateBreakoutBulk(
         }
       }
     }
+
+    // One audit row for the rooms that were made against the group rule and were actually created.
+    await recordMatchOverride({
+      sessionId, actorId, round: activeSession.currentRound, via: 'breakout_bulk', overridden: overriddenCreated, reason: guard.reason,
+    });
 
     if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
     // Defensive: ensure LOBBY_OPEN dashboard polling is running while any
@@ -704,7 +732,7 @@ export async function handleHostSetBreakoutDurationAll(
 export async function handleHostAddToRoom(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string; userId: string; matchId: string },
+  data: { sessionId: string; userId: string; matchId: string; override?: boolean; reason?: string },
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
     if (!await verifyHost(socket, data.sessionId)) return;
@@ -756,6 +784,18 @@ export async function handleHostAddToRoom(
       return;
     }
 
+    // Part 2 Task 7 — the room as it will be, held to the room checker: never two people one of whom blocked the
+    // other; on an event with groups, only what this round's rule allows unless the owner overrides.
+    const actorId = getUserIdFromSocket(socket);
+    if (!actorId) return;
+    const guard = await judgeLiveRooms({
+      sessionId, round: activeSession.currentRound, actorId, request: data, rooms: [[...members, userId]],
+    });
+    if (!guard.ok) {
+      socket.emit('error', { code: guard.code, message: guard.message });
+      return;
+    }
+
     // Fill the first free slot — guarded so a concurrent add can't stack.
     const slot = !m.participant_b_id ? 'participant_b_id' : 'participant_c_id';
     const upd = await query(
@@ -768,6 +808,9 @@ export async function handleHostAddToRoom(
       socket.emit('error', { code: 'ROOM_CHANGED', message: 'The room just changed — try again' });
       return;
     }
+    await recordMatchOverride({
+      sessionId, actorId, round: activeSession.currentRound, via: 'add_to_room', overridden: guard.overridden, reason: guard.reason,
+    });
 
     const nameRes = await query<{ id: string; display_name: string }>(
       `SELECT id, display_name FROM users WHERE id = ANY($1)`,
