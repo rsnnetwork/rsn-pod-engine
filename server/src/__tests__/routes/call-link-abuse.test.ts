@@ -337,7 +337,7 @@ describe('one client\'s limits never keep another out of the same link (fix roun
     const block = src.slice(src.indexOf('// ─── The RSN Call link'), src.indexOf('/** Reading and entering by the link'));
     expect(block).not.toMatch(/req\.ip/);
     const keys = [...block.matchAll(/keyGenerator: ([^,\n]+)/g)].map((m) => m[1].trim());
-    expect(keys.sort()).toEqual(['callLinkEmailTargetKey', 'ipKey', 'ipKey', 'ipKey']);
+    expect(keys.sort()).toEqual(['callLinkEmailTargetKey', 'ipKey', 'ipKey', 'ipKey', 'ipKey']);
   });
 });
 
@@ -349,6 +349,73 @@ describe('the request\'s Origin decides the site the email opens (route wiring)'
     expect((mockSendEntryEmail.mock.calls.at(-1) as [string, { link: string }])[1].link.startsWith(`https://preview.rsn.network/call/${CODE_A}?entry=`)).toBe(true);
     await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', ip).set('Origin', 'https://evil.example').send({ email: EMAIL });
     expect((mockSendEntryEmail.mock.calls.at(-1) as [string, { link: string }])[1].link.startsWith(`https://app.rsn.network/call/${CODE_A}?entry=`)).toBe(true);
+  });
+});
+
+describe('a room behind one public address enters by code (venue Wi-Fi, spec 02)', () => {
+  it('fifty different addresses from one network address each ask for a code and verify it', async () => {
+    const venue = nextIp();
+    for (let i = 0; i < 50; i++) {
+      const email = `venue-${i}@example.org`;
+      const asked = await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', venue).send({ email });
+      expect(asked.status).toBe(200);
+      const { code } = (mockSendEntryEmail.mock.calls.at(-1) as [string, { code: string }])[1];
+      const verified = await request(app).post(`/api/call-links/${CODE_A}/verify`).set('cf-connecting-ip', venue).send({ email, code });
+      if (verified.status !== 200) throw new Error(`guest ${i}: ${verified.status} ${verified.text}`);
+      expect(verified.body.data).toMatchObject({ accountKind: 'event_guest', created: true });
+    }
+    expect(world.users.filter((u) => u.email.startsWith('venue-'))).toHaveLength(50);
+  });
+
+  it('the per-address limits still trip: a sixth code email for one address on one link, and an eleventh try for one address', async () => {
+    const venue = nextIp();
+    const email = 'one-address@example.org';
+    void signInCodeEmailLimiter.resetKey(signInCodeEmailKey(email));
+    for (let i = 0; i < 5; i++) {
+      expect((await request(app).post(`/api/call-links/${CODE_B}/email`).set('cf-connecting-ip', venue).send({ email })).status).toBe(200);
+    }
+    const sixth = await request(app).post(`/api/call-links/${CODE_B}/email`).set('cf-connecting-ip', venue).send({ email });
+    expect(sixth.status).toBe(429);
+    expect(sixth.body.error.message).toMatch(/this address/);
+    // Ten tries for one address (from ten network addresses), then the address's own bucket refuses the eleventh.
+    const answers: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const r = await request(app).post(`/api/call-links/${CODE_B}/verify`).set('cf-connecting-ip', nextIp()).send({ email, code: '000000' });
+      answers.push(r.status);
+    }
+    expect(answers.slice(0, 10).every((s) => s === 400)).toBe(true);
+    expect(answers[10]).toBe(429);
+  });
+});
+
+describe('sign-in and the call link never spend each other\'s per-client buckets', () => {
+  it('call-link verifications from one network address leave sign-in\'s code bucket for that address untouched', async () => {
+    const shared = nextIp();
+    for (let i = 0; i < 15; i++) {
+      const email = `link-only-${i}@example.org`;
+      await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', shared).send({ email });
+      const r = await request(app).post(`/api/call-links/${CODE_A}/verify`).set('cf-connecting-ip', shared).send({ email, code: '000000' });
+      expect(r.status).toBe(400);
+    }
+    // Fifteen is more than sign-in's per-network-address allowance (10 in 15 minutes): it has seen none of them.
+    const signIn = await request(app).post('/api/auth/magic-link/code').set('cf-connecting-ip', shared).send({ email: 'sign-in-person@example.org', code: '000000' });
+    expect(signIn.status).toBe(400);
+    expect(signIn.body.error.code).toBe('AUTH_SIGN_IN_CODE_WRONG');
+  });
+
+  it('sign-in code tries that fill sign-in\'s bucket for a network address leave the call link open from it', async () => {
+    const shared = nextIp();
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const r = await request(app).post('/api/auth/magic-link/code').set('cf-connecting-ip', shared).send({ email: `signer-${i}@example.org`, code: '000000' });
+      statuses.push(r.status);
+    }
+    expect(statuses[10]).toBe(429);
+    const email = 'after-sign-in@example.org';
+    expect((await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', shared).send({ email })).status).toBe(200);
+    const { code } = (mockSendEntryEmail.mock.calls.at(-1) as [string, { code: string }])[1];
+    const verified = await request(app).post(`/api/call-links/${CODE_A}/verify`).set('cf-connecting-ip', shared).send({ email, code });
+    expect(verified.status).toBe(200);
   });
 });
 

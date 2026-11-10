@@ -835,14 +835,22 @@ export const admissionRedeemIpLimiter = rateLimit({
   handler: admissionRedeemLimited,
 });
 
-//// ─── The RSN Call link (Part 2 foundation, Task 6, 11 Nov 2026; Review Focus 4; fix round 2) ─────────────
+// ─── The RSN Call link (Part 2 foundation, Task 6, 11 Nov 2026; Review Focus 4; fix round 2; venue NAT 11 Nov) ──────
 // An event's link is opened by people who are not signed in, so its per-client buckets are keyed by network address the
 // one way every signed-out limiter here is (clientIp, 7 Sep 2026: the real person behind Cloudflare, never the shared
 // edge address), and nothing on the link is keyed on a value many real people share, so nobody can fill a bucket to
-// keep others out of an event. What stops guessing is per target: the entry code's five tries and the per-address
-// buckets (the sign-in code's signInCodeEmailLimiter, and five code emails per link and address here); a call code is
-// 50 bits, and callLinkMissLimiter counts only the answers that found no event (404). Every address asking for a code gets
-// the same answer, so running a list of addresses through a link tells nothing.
+// keep others out of an event.
+//
+// The link's buckets are its own, never sign-in's: at an in-person event everyone on the venue's Wi-Fi shares one public
+// address, and a whole room has to be able to enter by code at once (spec 02, minimum friction). So the per-client caps
+// are wide (300 codes emailed and 300 codes tried per network address in 15 minutes, 300 landing reads a minute) and only
+// blunt mass spraying; sign-in keeps its own narrow ones, and neither spends the other's.
+//
+// What stops guessing is per target, and unchanged: a code is bound to one address and one event and dies after five
+// wrong tries (spendSignInCode), the sign-in code's per-address bucket (signInCodeEmailLimiter, shared on purpose so the
+// link adds no guessing budget against anyone's address), and five code emails per link and address here. A call code is
+// 50 bits, and callLinkMissLimiter counts only the answers that found no event (404). Every address asking for a code
+// gets the same answer, so running a list of addresses through a link tells nothing.
 const callLinkLimited = (message: string) => (_req: Request, res: Response) => {
   const response: ApiResponse = { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message } };
   res.status(429).json(response);
@@ -854,10 +862,13 @@ const linkOf = (req: Request) => {
   const raw = String(req.params?.code ?? '');
   return normaliseCallCode(raw) ?? raw.toLowerCase().replace(/[\s-]/g, '');
 };
+const CALL_LINK_ENTRY_WINDOW_MS = 15 * 60 * 1000;
 
+/** The landing: a whole room behind one address opens it within a minute. */
+export const CALL_LINK_READS_PER_CLIENT = 300;
 export const callLinkReadLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 60,
+  max: CALL_LINK_READS_PER_CLIENT,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: ipKey,
@@ -879,16 +890,31 @@ export const callLinkMissLimiter = rateLimit({
   handler: callLinkLimited('Too many links tried. Please wait 10 minutes, then try again.'),
 });
 
-/** Codes emailed: twenty an hour per network address. */
-export const CALL_LINK_EMAILS_PER_CLIENT = 20;
+/** Codes emailed: three hundred per network address in 15 minutes (a room behind one address). */
+export const CALL_LINK_EMAILS_PER_CLIENT = 300;
 export const callLinkEmailLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
+  windowMs: CALL_LINK_ENTRY_WINDOW_MS,
   max: CALL_LINK_EMAILS_PER_CLIENT,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: ipKey,
   store: buildStore('call-link-email'),
-  handler: callLinkLimited('Too many codes asked for. Please wait an hour, then try again.'),
+  handler: callLinkLimited('Too many codes asked for. Please wait 15 minutes, then try again.'),
+});
+
+/**
+ * Codes tried (the 6-digit code, or the email's button): three hundred per network address in 15 minutes. The link's own
+ * bucket, apart from sign-in's signInCodeLimiter, so a room entering by code never uses up sign-in, nor the reverse.
+ */
+export const CALL_LINK_VERIFIES_PER_CLIENT = 300;
+export const callLinkVerifyLimiter = rateLimit({
+  windowMs: CALL_LINK_ENTRY_WINDOW_MS,
+  max: CALL_LINK_VERIFIES_PER_CLIENT,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  store: buildStore('call-link-verify'),
+  handler: callLinkLimited('Too many codes tried. Please wait 15 minutes, then try again.'),
 });
 
 /** The per-link, per-address bucket for codes emailed: the link's stored spelling and a hash of the address. */

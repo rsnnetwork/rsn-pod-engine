@@ -29,7 +29,7 @@ import { validate } from '../middleware/validate';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import {
   admissionRedeemIpLimiter, admissionRedeemLimiter, callEntryLimiter, callLinkEmailLimiter, callLinkEmailTargetLimiter,
-  callLinkManageLimiter, callLinkMissLimiter, callLinkReadLimiter, signInCodeEmailLimiter, signInCodeLimiter,
+  callLinkManageLimiter, callLinkMissLimiter, callLinkReadLimiter, callLinkVerifyLimiter, signInCodeEmailLimiter,
 } from '../middleware/rateLimit';
 import * as callLink from '../services/session/call-link.service';
 import * as callEntry from '../services/session/call-entry.service';
@@ -68,7 +68,11 @@ const enterSchema = z.object({
   admissionCode: z.string().trim().min(1).max(40).optional(),
 });
 
-/** The sign-in code's per-address bucket, only when an address was sent (an entry token carries none). */
+/**
+ * The sign-in code's per-address bucket, only when an address was sent (an entry token carries none). Shared with sign-in
+ * on purpose: the link adds no guessing budget against anyone's address. The per-network-address bucket is the link's own
+ * (callLinkVerifyLimiter), so a room entering by code never uses up sign-in's.
+ */
 function entryCodeEmailBucket(req: Request, res: Response, next: NextFunction): void {
   if (typeof req.body?.email === 'string' && req.body.email.length > 0) {
     signInCodeEmailLimiter(req, res, next);
@@ -143,7 +147,7 @@ router.post('/:code/email', callLinkMissLimiter, callLinkEmailLimiter,
     }
   });
 
-router.post('/:code/verify', callLinkMissLimiter, signInCodeLimiter, validate(verifySchema, 'body', ENTRY_CODE_MESSAGE),
+router.post('/:code/verify', callLinkMissLimiter, callLinkVerifyLimiter, validate(verifySchema, 'body', ENTRY_CODE_MESSAGE),
   entryCodeEmailBucket, admissionTriesBucket,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
