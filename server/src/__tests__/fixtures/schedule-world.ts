@@ -60,6 +60,8 @@ export interface ScheduleWorld {
   honourLocks: boolean;
   /** The "is there a published version?" read fails (a database error), as on a connection drop. */
   failVersionRead: boolean;
+  /** The second check (any live match written from a published schedule?) fails too. */
+  failBoardCheck: boolean;
 }
 
 let clock = 0;
@@ -94,6 +96,7 @@ export function freshWorld(): ScheduleWorld {
     sql: [],
     honourLocks: true,
     failVersionRead: false,
+    failBoardCheck: false,
   };
 }
 
@@ -339,6 +342,14 @@ function handleLive(sql: string, params: unknown[]): { rows: unknown[]; rowCount
     if (params[2]) sched.live_conflicts = [];
     return rows([{ revision: sched.revision }]);
   }
+  if (sql === 'SELECT EXISTS (SELECT 1 FROM matches WHERE session_id = $1 AND (locked OR schedule_version IS NOT NULL)) AS board') {
+    if (world.failBoardCheck) throw new Error('Connection terminated unexpectedly');
+    return rows([{ board: world.matches.some((m) => m.locked || m.schedule_version !== null) }]);
+  }
+  if (sql === "UPDATE event_schedules SET live_conflicts = '[]'::jsonb WHERE session_id = $1") {
+    world.schedule!.live_conflicts = [];
+    return rows([]);
+  }
   if (sql === 'UPDATE event_schedules SET live_conflicts = live_conflicts || $2::jsonb WHERE session_id = $1') {
     const sched = world.schedule!;
     sched.live_conflicts = [...(sched.live_conflicts ?? []), ...JSON.parse(params[1] as string)];
@@ -449,6 +460,11 @@ function handleLive(sql: string, params: unknown[]): { rows: unknown[]; rowCount
   if (sql === "SELECT participant_a_id, participant_b_id, participant_c_id FROM matches WHERE session_id = $1 AND round_number != $2 AND status IN ('completed', 'active') AND is_manual = FALSE") {
     return rows(world.matches.filter((m) => m.round_number !== params[1] && (m.status === 'completed' || m.status === 'active') && !m.is_manual)
       .map((m) => ({ participant_a_id: m.a, participant_b_id: m.b, participant_c_id: m.c })));
+  }
+  // repairFutureRounds' own wipe on today's path (an event without a published schedule)
+  if (sql === "DELETE FROM matches WHERE session_id = $1 AND round_number >= $2 AND status = 'scheduled' AND locked = FALSE") {
+    world.matches = world.matches.filter((m) => !(m.round_number >= (params[1] as number) && m.status === 'scheduled' && !m.locked));
+    return rows([]);
   }
   if (sql === "DELETE FROM matches WHERE session_id = $1 AND round_number = $2 AND status IN ('scheduled', 'cancelled') AND locked = FALSE"
     || sql === 'DELETE FROM matches WHERE session_id = $1 AND round_number = $2 AND locked = FALSE') {

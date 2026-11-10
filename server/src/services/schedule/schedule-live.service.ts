@@ -25,8 +25,10 @@
 // refuses them.
 //
 // An event with no published version takes today's path untouched: every entry point asks hasPublishedSchedule first,
-// one indexed read, and the callers keep their own code for the answer "no". A failed read is not an answer: it
-// throws, the operation is abandoned and logged by its caller, and the next tick or the host's retry asks again.
+// one indexed read, and the callers keep their own code for the answer "no". When that read fails, a second check asks
+// whether any of the event's live matches came from a published schedule: none (every event without a board) takes
+// today's path as before; some, or a second failure, abandons the operation (its caller logs it, and the next tick or
+// the host's retry asks again), so an event with locked meetings is never run down today's path by mistake.
 
 import {
   checkRoom,
@@ -62,12 +64,41 @@ export { LOCKED_MATCH as LOCKED_MATCH_MESSAGE };
 
 /**
  * Whether the event has a published schedule version: the one question every live entry point asks before taking the
- * board's path. An event without board rows answers no and takes today's path. A failed read throws: an event that has
- * locked meetings must never be run down today's path by mistake, so the caller abandons the operation (each live
- * caller logs it, and its retry or next tick asks again).
+ * board's path. An event without board rows answers no and takes today's path. If the read fails, the event's live
+ * matches are checked for rows written from a published schedule: with none it answers no (today's path, unchanged);
+ * with some, or if that check fails too, it throws and the caller abandons the operation (each live caller logs it,
+ * and its retry or next tick asks again).
  */
 export async function hasPublishedSchedule(sessionId: string): Promise<boolean> {
-  return (await latestVersion(sessionId)) !== null;
+  try {
+    return (await latestVersion(sessionId)) !== null;
+  } catch (err) {
+    // The read failed. What matters is whether running today's path could disturb a published schedule: only an event
+    // whose live matches were written from one (a locked meeting, a row carrying its version) could be. Asked
+    // separately; an event with no such row takes today's path exactly as before the board existed.
+    let boardRows: boolean;
+    try {
+      boardRows = await hasBoardMatches(sessionId);
+    } catch (checkErr) {
+      logger.warn({ err, checkErr, sessionId }, 'Schedule reads failed: the operation is abandoned until the next try');
+      throw err;
+    }
+    if (boardRows) {
+      logger.warn({ err, sessionId }, 'The published schedule could not be read for an event that follows one: the operation is abandoned until the next try');
+      throw err;
+    }
+    logger.warn({ err, sessionId }, 'The published schedule could not be read; the event has no board rows, so it takes the path without a schedule');
+    return false;
+  }
+}
+
+/** Whether any of the event's live matches came from a published schedule (locked, or carrying a version). */
+async function hasBoardMatches(sessionId: string): Promise<boolean> {
+  const result = await query<{ board: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM matches WHERE session_id = $1 AND (locked OR schedule_version IS NOT NULL)) AS board`,
+    [sessionId],
+  );
+  return result.rows[0]?.board === true;
 }
 
 async function latestVersion(sessionId: string): Promise<number | null> {
@@ -514,7 +545,9 @@ function rebaseDraft(state: BoardState, draft: Draft, before: Draft, after: Draf
     const people = new Set([...removed.flatMap((n) => was.get(n)!), ...added.flatMap((n) => now.get(n)!)].map((s) => s.userId));
     const untouched = removed.every((n) => own.has(n) && seatsKey(own.get(n)!) === seatsKey(was.get(n)!))
       && added.every((n) => removed.includes(n) || !own.has(n))
-      && ![...own].some(([n, seats]) => !removed.includes(n) && seats.some((s) => people.has(s.userId)));
+      && ![...own].some(([n, seats]) => !removed.includes(n) && seats.some((s) => people.has(s.userId)))
+      // A lock the draft added to or took off one of those rooms is the organiser's own change too: never dropped unseen.
+      && [...removed, ...added].every((n) => draft.locks.has(lockKey(round, n)) === before.locks.has(lockKey(round, n)));
     if (!untouched) {
       const names = andList([...people].map((id) => nameOf(state, id)).sort());
       conflicts.push({
@@ -533,11 +566,21 @@ function rebaseDraft(state: BoardState, draft: Draft, before: Draft, after: Draf
   return conflicts;
 }
 
-async function addLiveConflicts(client: PoolClient, sessionId: string, conflicts: PublishPreviewItem[]): Promise<void> {
-  if (conflicts.length === 0) return;
+/** Flags appended for the board; a warning the board already shows for the same round is not added again. */
+async function addLiveConflicts(
+  client: PoolClient, sessionId: string, existing: PublishPreviewItem[], conflicts: PublishPreviewItem[],
+): Promise<void> {
+  const seen = new Set(existing.map((c) => `${c.round}|${c.message}`));
+  const fresh = conflicts.filter((c) => {
+    const key = `${c.round}|${c.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (fresh.length === 0) return;
   await client.query(
     `UPDATE event_schedules SET live_conflicts = live_conflicts || $2::jsonb WHERE session_id = $1`,
-    [sessionId, JSON.stringify(conflicts)],
+    [sessionId, JSON.stringify(fresh)],
   );
 }
 
@@ -633,7 +676,7 @@ export async function repairAffectedRounds(
     }, { actorId: null, automatic: true });
     if (!roomsChanged) return null;
     const published = await publishLocked(locked, work, { actorId: null, automatic: true, reason, note: null });
-    await addLiveConflicts(locked.client, sessionId, conflicts);
+    await addLiveConflicts(locked.client, sessionId, state.liveConflicts, conflicts);
     return published;
   });
   await warnHosts(sessionId, 'schedule_locked_vacancy', notices.losses, notices.hostIds);
@@ -760,7 +803,7 @@ export async function syncRoundIntoSchedule(sessionId: string, round: number, ac
       action: 'schedule.edited', round, generated: false, reason: 'live_edit', after: { op: 'live_round_confirmed', conflicts: conflicts.length },
     }, { actorId, automatic: false });
     const published = await publishLocked(locked, work, { actorId, automatic: false, reason: 'live_edit', note: null });
-    await addLiveConflicts(locked.client, sessionId, conflicts);
+    await addLiveConflicts(locked.client, sessionId, state.liveConflicts, conflicts);
     return published;
   });
   if (outcome.stale || !outcome.value) return;

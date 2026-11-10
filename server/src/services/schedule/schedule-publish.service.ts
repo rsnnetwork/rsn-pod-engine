@@ -252,11 +252,18 @@ export async function publishSchedule(
   if (actor) await requireOrganiser(sessionId, actor);
   const automatic = actor === null || opts.automatic === true;
   const prep = await prepareWrite(sessionId, false);
+  const settled = { value: false };
   const outcome = await withLockedDraft(sessionId, prep, expectedRevision, async (locked): Promise<PublishedVersion | PublishResult> => {
     const { state } = locked;
     if (isEnded(state)) throw new ConflictError(ErrorCodes.EVENT_ENDED, ENDED);
     // The draft is what is already published: nothing is written, the current version is the answer.
+    // An organiser who settled the live event's flagged rounds by taking its changes has nothing to publish, and the
+    // flags are settled all the same.
     if (state.published && state.publishedVersion !== null && sameSnapshot(snapshotOf(state, state.draft), state.published)) {
+      if (!automatic && state.liveConflicts.length > 0) {
+        await locked.client.query(`UPDATE event_schedules SET live_conflicts = '[]'::jsonb WHERE session_id = $1`, [sessionId]);
+        settled.value = true;
+      }
       return { version: state.publishedVersion, impactedUserIds: [], revision: state.revision };
     }
     const { blocking } = previewItems(state, state.draft);
@@ -270,7 +277,10 @@ export async function publishSchedule(
     throw new ConflictError(ErrorCodes.SCHEDULE_CHANGED, STALE, actor ? { board: await readBoard(sessionId, actor) } : undefined);
   }
   const published = outcome.value;
-  if (!('first' in published)) return published;
+  if (!('first' in published)) {
+    if (settled.value) void fanoutScheduleDraft(sessionId, actor?.userId);
+    return published;
+  }
   await announcePublished(sessionId, published);
   if (published.live) {
     // Loaded when used: the live service loads this one for its own versions.

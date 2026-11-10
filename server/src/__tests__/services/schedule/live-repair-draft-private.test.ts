@@ -310,3 +310,99 @@ describe('the host is told about planned meetings that cannot happen', () => {
     expect(planned(3).some((m) => key(membersOf(m)) === key(room.userIds))).toBe(false);
   });
 });
+
+describe('fix round 2: a failed read keeps an event without a board on today\'s path', () => {
+  it('no board rows: the first read fails, the second check finds none, and today\'s repair runs', async () => {
+    world.session.status = 'lobby_open';
+    world.session.current_round = 0;
+    world.failVersionRead = true;
+    const result = await repairFutureRounds(EVENT, 1, 'late_joiner', new Set(PEOPLE));
+    expect(result).toEqual({ regeneratedRounds: [1, 2, 3, 4, 5], errors: [] });
+    for (let round = 1; round <= 5; round++) expect(planned(round).flatMap(membersOf).sort()).toEqual([...PEOPLE].sort());
+    expect(world.matches.every((m) => !m.locked && m.schedule_version === null)).toBe(true);
+    expect(world.sql).toContain("DELETE FROM matches WHERE session_id = $1 AND round_number >= $2 AND status = 'scheduled' AND locked = FALSE");
+  });
+
+  it('board rows exist and the second check fails too: the repair is abandoned', async () => {
+    await liveEvent();
+    const before = world.matches.map((m) => ({ ...m }));
+    world.failVersionRead = true;
+    world.failBoardCheck = true;
+    await expect(repairFutureRounds(EVENT, 1, 'left')).rejects.toThrow('Connection terminated unexpectedly');
+    expect(world.matches).toEqual(before);
+  });
+});
+
+describe('fix round 2: a lock is the organiser\'s change too', () => {
+  it('an unpublished lock on a room the repair changes: the draft keeps the room and its lock, and the round is flagged', async () => {
+    await liveEvent();
+    const v1 = latest();
+    const room = v1.rounds[3].rooms.find((r) => r.userIds.includes('a'))!;
+    expect(room.locked).toBe(false);
+    // The organiser locks Ann's round-4 meeting on the board, and does not publish.
+    await op({ kind: 'lock_room', round: 4, room: room.room });
+    world.participants.find((p) => p.user_id === 'a')!.status = 'left';
+    await repairFutureRounds(EVENT, 1, 'left');
+
+    // The published version changed that room (Ann left, it was not locked there)...
+    expect(roomsIn(latest(), 4)).not.toContain(key(room.userIds));
+    // ...the draft kept it, people and lock, and flags round 4.
+    expect(world.locks).toContainEqual(expect.objectContaining({ round_number: 4, room_number: room.room }));
+    const board = await getBoard(EVENT, OWNER);
+    const kept = board.rounds[3].rooms.find((r) => r.roomNumber === room.room)!;
+    expect(kept.locked).toBe(true);
+    expect(kept.seats.map((s) => s.userId).sort()).toEqual([...room.userIds].sort());
+    expect(board.liveConflicts.map((c) => c.round)).toEqual([4]);
+  });
+});
+
+describe('fix round 2: the board\'s flags', () => {
+  /** Ann leaves while the organiser had taken Ann's round-4 partner out of their meeting: round 4 is flagged. */
+  async function flaggedRound4(): Promise<string> {
+    await liveEvent();
+    const partner = partnersIn(latest(), 4, 'a')[0];
+    await op({ kind: 'unassign', round: 4, userId: partner });
+    world.participants.find((p) => p.user_id === 'a')!.status = 'left';
+    await repairFutureRounds(EVENT, 1, 'left');
+    return partner;
+  }
+
+  it('a publish that finds the board equal to the live version writes nothing and settles the flags', async () => {
+    await flaggedRound4();
+    expect((await getBoard(EVENT, OWNER)).liveConflicts).toHaveLength(1);
+    // The organiser takes the live change: round 4 of the board becomes the published round 4.
+    const published = latest().rounds[3];
+    world.seats = world.seats.filter((s) => s.round_number !== 4);
+    for (const room of published.rooms) {
+      for (const userId of room.userIds) {
+        world.seats.push({
+          round_number: 4, room_number: room.room, user_id: userId, slot_locked: false, source: room.source,
+          override: room.override, fallback: room.fallback, created_at: 0,
+        });
+      }
+    }
+    const board = await getBoard(EVENT, OWNER);
+    expect(board.draftDiffersFromPublished).toBe(false);
+    const versions = world.versions.length;
+    const result = await publishSchedule(EVENT, OWNER, board.revision);
+    expect(result.version).toBe(versions);
+    expect(world.versions).toHaveLength(versions);
+    expect((await getBoard(EVENT, OWNER)).liveConflicts).toEqual([]);
+  });
+
+  it('the same warning for the same round is added once', async () => {
+    await flaggedRound4();
+    const first = [...world.schedule!.live_conflicts!];
+    expect(first).toHaveLength(1);
+    // The same clash again, on a fresh world, with the flag already shown.
+    resetWorld();
+    for (const id of PEOPLE) addPerson(id, NAMES[id], 'in_lobby');
+    await liveEvent();
+    world.schedule!.live_conflicts = [...first];
+    const partner = partnersIn(latest(), 4, 'a')[0];
+    await op({ kind: 'unassign', round: 4, userId: partner });
+    world.participants.find((p) => p.user_id === 'a')!.status = 'left';
+    await repairFutureRounds(EVENT, 1, 'left');
+    expect(world.schedule!.live_conflicts).toEqual(first);
+  });
+});

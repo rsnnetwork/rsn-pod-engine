@@ -164,6 +164,34 @@ beforeEach(() => {
     expect(now).toEqual(fixture().cases[name]);
   });
 
+  it('when that question fails, an event with no board rows still repairs exactly as recorded', async () => {
+    const name = 'inertFrom2LateJoiner';
+    const c = CASES[name];
+    const out = installWorld(ENGINE_FIXTURE.serviceWorlds[c.world]);
+    const answer = mockQuery.getMockImplementation()!;
+    mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (/FROM event_schedules/.test(sql)) throw new Error('Connection terminated unexpectedly');
+      if (/locked OR schedule_version IS NOT NULL/.test(sql)) return { rows: [{ board: false }] };
+      return answer(sql, params);
+    });
+    out.result = await repairFutureRounds(SESSION_ID, c.from, c.reason, c.present ? new Set(c.present) : undefined);
+    expect(out).toEqual(fixture().cases[name]);
+  });
+
+  it('when it fails for an event with board rows, nothing is deleted or made: the repair is abandoned', async () => {
+    const c = CASES.inertFrom2LateJoiner;
+    installWorld(ENGINE_FIXTURE.serviceWorlds[c.world]);
+    const answer = mockQuery.getMockImplementation()!;
+    mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (/FROM event_schedules/.test(sql)) throw new Error('Connection terminated unexpectedly');
+      if (/locked OR schedule_version IS NOT NULL/.test(sql)) return { rows: [{ board: true }] };
+      return answer(sql, params);
+    });
+    await expect(repairFutureRounds(SESSION_ID, c.from, c.reason)).rejects.toThrow('Connection terminated unexpectedly');
+    const sqls = mockQuery.mock.calls.map(([sql]) => String(sql));
+    expect(sqls.some((s) => /DELETE FROM matches|INSERT INTO matches/.test(s))).toBe(false);
+  });
+
   it('asks once whether the event has a published schedule, and reads nothing else of the board', async () => {
     await runCase('inertFrom2LateJoiner');
     const sqls = mockQuery.mock.calls.map(([sql]) => String(sql).replace(/\s+/g, ' '));
