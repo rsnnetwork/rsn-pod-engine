@@ -11,6 +11,11 @@ import { playTimerChime } from '@/lib/chime';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { mergeChatHistory, withoutTakenDown } from './chat-history';
+import { LOCKED_CODES, LOCKED_MEETING } from '@/features/schedule/locked-meeting';
+
+// Part 2 Tasks 9 and 13: the host's swap or exclude touched a meeting locked on the matching board. The live host
+// sees errors, so the sentence is shown as one.
+const LOCKED_ERRORS = Object.fromEntries(LOCKED_CODES.map((c) => [c, { msg: LOCKED_MEETING, severity: 'error' as const }]));
 
 // All socket event names we listen to — used for deterministic cleanup
 const SOCKET_EVENTS = [
@@ -1241,6 +1246,7 @@ export default function useSessionSocket(sessionId: string) {
         REMOVE_FAILED: { msg: 'Could not remove that participant. Try again.', severity: 'error' },
         DM_SEND_FAILED: { msg: 'Message could not be sent. Try again.', severity: 'error' },
         DM_REACT_FAILED: { msg: 'Reaction could not be added. Try again.', severity: 'info' },
+        ...LOCKED_ERRORS,
       };
       const entry = FRIENDLY[code] || { msg: rawMsg, severity: 'error' as const };
       // Toast for visibility, plus banner for persistence on critical issues.

@@ -13,6 +13,7 @@ import { useActionLock } from '@/hooks/useActionLock';
 import { useEscapeKey } from '@/hooks/useEscapeKey';
 import { useConfirm } from '@/hooks/useConfirm';
 import HostControlCenter from './HostControlCenter';
+import { LOCKED_LABEL, LOCKED_MEETING } from '@/features/schedule/locked-meeting';
 
 interface Props {
   sessionId: string;
@@ -231,7 +232,19 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
     setTimeout(cleanup, 10000);
   };
 
+  // Part 2 Tasks 9 and 13: the people of a meeting locked on the matching board stay where they are. The server refuses
+  // a swap or an exclude for them with the same sentence; saying it here spares the round trip.
+  const lockedInPreview = new Set((matchPreview?.matches ?? []).filter((m) => m.locked)
+    .flatMap((m) => [m.participantA.userId, m.participantB.userId, ...(m.participantC ? [m.participantC.userId] : [])]));
+  const refuseLocked = (userId: string) => {
+    if (!lockedInPreview.has(userId)) return false;
+    useToastStore.getState().addToast(LOCKED_MEETING, 'error');
+    setSwapMode(null);
+    return true;
+  };
+
   const handleParticipantClick = (userId: string) => {
+    if (refuseLocked(userId)) return;
     if (!swapMode) {
       setSwapMode(userId);
     } else if (swapMode === userId) {
@@ -244,6 +257,7 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
   };
 
   const excludeParticipant = (userId: string) => {
+    if (refuseLocked(userId)) return;
     socket?.emit('host:exclude_participant' as any, { sessionId, userId });
     setSwapMode(null);
   };
@@ -484,6 +498,11 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
                         {m.participantC!.displayName}
                       </button>
                     </>
+                  )}
+                  {m.locked && (
+                    <span data-testid="preview-locked" title={LOCKED_MEETING} className="text-[10px] font-semibold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full shrink-0">
+                      {LOCKED_LABEL}
+                    </span>
                   )}
                   {m.isTrio && (
                     <span className="text-[10px] text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded-full shrink-0">

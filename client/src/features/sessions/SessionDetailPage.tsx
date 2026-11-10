@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio, CircleDashed } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio, CircleDashed, LayoutGrid } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -339,6 +339,10 @@ export default function SessionDetailPage() {
   // The people who run the event are not matched, so they have no group to change.
   const isCohostOrHost = (p: { userId: string; isCohost?: boolean }) => !!p.isCohost || p.userId === session.hostUserId;
   const showAfterEventTools = phase === 'done' && mayRunEvent;
+  // The matching board (Part 2 Task 13): the people the server lets plan a rounds event's meetings (canActAsHost: the
+  // host, a co-host, the pod's director, a super admin), before it starts and while it runs.
+  const mayPlanMeetings = isRoundsEvent && (phase === 'pre' || phase === 'live')
+    && (isHost || viewerIsCohost || user?.role === 'super_admin' || pod?.memberRole === 'director');
   // A video meeting has no rounds to recap: its recap is who took part, further down this page.
   const openRecap = () => {
     if (isRoundsEvent) navigate(`/sessions/${sessionId}/recap`);
@@ -528,9 +532,18 @@ export default function SessionDetailPage() {
           {/* Overflow menu for host/admin. Host Controls button intentionally removed —
               live host controls live inside the /live page once the host clicks Enter Live Event.
               Co-hosts send invites too (26 Oct 2026), so they get the invite button and nothing else here. */}
-          {(isHost || isAdmin || mayInvite) && sessionStatusPhase(session.status) !== 'cancelled' && (
+          {(isHost || isAdmin || mayInvite || mayPlanMeetings) && sessionStatusPhase(session.status) !== 'cancelled' && (
             <div className="ml-auto flex items-center gap-2 flex-wrap">
               {mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}
+              {mayPlanMeetings && (
+                <Link
+                  to={`/sessions/${sessionId}/board`}
+                  data-testid="matching-board-link"
+                  className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+                >
+                  <LayoutGrid className="h-4 w-4" /> Matching board
+                </Link>
+              )}
               {mayInvite && (
                 // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
                 <button
