@@ -57,7 +57,12 @@ export default function ReasonShell() {
             </div>
           </div>
         )}
-        <main ref={main} className="min-h-0 flex-1 overflow-y-auto pb-[calc(96px+env(safe-area-inset-bottom))] pl-[max(13px,env(safe-area-inset-left))] pr-[max(13px,env(safe-area-inset-right))] pt-4 min-[721px]:pb-10 min-[721px]:pl-[22px] min-[721px]:pr-[max(22px,env(safe-area-inset-right))] min-[721px]:pt-[22px]">
+        {/* Below 721px the bottom bar (MobileNav, 69px and the safe area) is fixed over the foot of <main>. The bottom
+            padding lets the last thing on a page scroll up above it; the scroll padding, the same amount, keeps anything
+            the browser scrolls into view (a focused field, an anchor, scrollIntoView) above it too, instead of right
+            behind the bar at the foot of <main> (F7 fix round 3: End event landed under the bar). From 721px there is
+            no bar, so no scroll padding. */}
+        <main ref={main} className="min-h-0 flex-1 overflow-y-auto pb-[calc(96px+env(safe-area-inset-bottom))] scroll-pb-[calc(96px+env(safe-area-inset-bottom))] min-[721px]:scroll-pb-0 pl-[max(13px,env(safe-area-inset-left))] pr-[max(13px,env(safe-area-inset-right))] pt-4 min-[721px]:pb-10 min-[721px]:pl-[22px] min-[721px]:pr-[max(22px,env(safe-area-inset-right))] min-[721px]:pt-[22px]">
           <div className="mx-auto w-full max-w-[1400px]">
             {inPeople && <PeopleTabs />}
             {inAdmin && <AdminTabs />}
