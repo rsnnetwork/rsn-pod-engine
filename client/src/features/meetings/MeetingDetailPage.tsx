@@ -16,6 +16,7 @@ import Sheet from '@/features/reason/ui/Sheet';
 import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { meetingEntry } from '@/components/calendar/calendar-links';
 import { meetingFile } from '@/components/calendar/calendar-files';
+import { inviteEmailed, inviteLine } from '@/components/calendar/invite-words';
 import { CONNECTION_LOST } from '@/features/reason/errors';
 import { isGone, personHref } from '@/features/reason/human/profile-text';
 import { ACTION, JoinOrCountdown, PhaseChip } from './MeetingParts';
@@ -143,7 +144,12 @@ function MeetingActions({ meeting, now, standing: stands, canCancel, onCancel }:
   // An answered call (1 Nov 2026) is under way or over: it has no calendar entry, no time to move and nothing to
   // cancel, so while it stands it offers only Join and the conversation.
   const standing = stands && meeting.source !== 'instant';
+  // 11 Nov 2026 (RSN 09): whether my invitation went by email, said; Add manually is then quiet and optional.
+  const invite = standing ? inviteLine(meeting.inviteEmail, false, 'card') : null;
+  const emailed = inviteEmailed(meeting.inviteEmail);
   return (
+    <>
+    {invite && <p className="mt-4 text-[14px] text-[#4b5260]" data-testid="invite-line">{invite}</p>}
     <div className="mt-4 grid gap-2 min-[721px]:flex min-[721px]:flex-wrap min-[721px]:items-center">
       {/* On a phone Join is in the bar at the foot of the screen instead. */}
       {stands && <JoinOrCountdown meeting={meeting} now={now} className="hidden min-[721px]:inline-flex" />}
@@ -160,7 +166,8 @@ function MeetingActions({ meeting, now, standing: stands, canCancel, onCancel }:
             joinUrl: window.location.origin + meeting.joinPath,
           })}
           file={meetingFile(meeting.id)}
-          className={cn(ACTION, SECONDARY)}
+          emailed={emailed}
+          className={cn(ACTION, emailed ? 'text-[#2d3440] underline-offset-2 hover:underline' : SECONDARY)}
         />
       )}
       {standing && (
@@ -177,6 +184,7 @@ function MeetingActions({ meeting, now, standing: stands, canCancel, onCancel }:
         </button>
       )}
     </div>
+    </>
   );
 }
 

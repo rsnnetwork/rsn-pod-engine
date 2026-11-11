@@ -260,14 +260,20 @@ describe('personFacts: who the page is about', () => {
 
   // Final review, 21 Oct 2026 (C4): nobody could see anyone's LinkedIn. The hero links to it, on the Human Profile and
   // on Your profile, and only ever to an https address on LinkedIn: the old form once took any text as a link.
-  it('the LinkedIn the hero links to: an https address on linkedin.com, and nothing else', () => {
+  // Shirley pilot S6 (RSN 13): a LinkedIn profile address in any form opens as https://www.linkedin.com/in/<name>, so a row
+  // saved as http or with no protocol (before the server stored one form) is linked too, and always the same way.
+  it('the LinkedIn the hero links to: a LinkedIn profile in https, whatever form it was saved in, an https LinkedIn page as it is, and nothing else', () => {
     const linked = (linkedinUrl: string | null) => personFacts(person({ linkedinUrl })).linkedin;
     expect(linked('https://www.linkedin.com/in/nora-none')).toBe('https://www.linkedin.com/in/nora-none');
-    expect(linked('  https://uk.linkedin.com/in/nora  ')).toBe('https://uk.linkedin.com/in/nora');
-    expect(linked('https://linkedin.com/in/nora')).toBe('https://linkedin.com/in/nora');
+    expect(linked('  https://uk.linkedin.com/in/nora  ')).toBe('https://www.linkedin.com/in/nora');
+    expect(linked('https://linkedin.com/in/nora')).toBe('https://www.linkedin.com/in/nora');
     expect(linked('HTTPS://WWW.LINKEDIN.COM/in/Nora')).toBe('https://www.linkedin.com/in/Nora');
+    for (const saved of ['http://www.linkedin.com/in/nora', 'linkedin.com/in/nora', 'www.linkedin.com/in/nora/', 'http://linkedin.com/in/nora?utm_source=share']) {
+      expect({ saved, linked: linked(saved) }).toEqual({ saved, linked: 'https://www.linkedin.com/in/nora' });
+    }
+    expect(linked('https://www.linkedin.com/company/acme')).toBe('https://www.linkedin.com/company/acme');
     for (const bad of [
-      null, '', '   ', 'http://www.linkedin.com/in/nora', 'javascript:alert(1)', 'linkedin.com/in/nora', 'www.linkedin.com/in/nora',
+      null, '', '   ', 'javascript:alert(1)', 'http://www.linkedin.com/company/acme',
       'https://evil.example/in/nora', 'https://linkedin.com.evil.example/in/nora', 'https://notlinkedin.com/in/nora',
       'https://user:pass@www.linkedin.com/in/nora', 'data:text/html,<a>', 'https://', 'not a link',
     ]) {

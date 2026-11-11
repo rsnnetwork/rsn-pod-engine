@@ -74,7 +74,7 @@ describe('a newcomer who answers several of one member\'s searches', () => {
     ]);
     expect(await notifyMatchesOfNewUser('u-new')).toBe(1);
     expect(bells()).toEqual([
-      ['u-owner', 'Your Investors agent found someone', "You're looking to meet investors", '/agents/a-investors'],
+      ['u-owner', 'Your Investors search found someone', "You're looking to meet investors", '/agents/a-investors'],
     ]);
     expect(mockEmit).toHaveBeenCalledTimes(1);
     expect(mockTo).toHaveBeenCalledWith('user:u-owner');

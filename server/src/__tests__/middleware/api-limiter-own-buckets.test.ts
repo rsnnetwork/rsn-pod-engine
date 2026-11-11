@@ -52,6 +52,8 @@ describe('hasOwnBucket', () => {
     ['GET', '/api/call-links/K7M2-X9Q4-RA?x=1'],
     ['POST', '/api/call-links/k7m2x9q4ra/email'],
     ['POST', '/api/call-links/k7m2x9q4ra/verify'],
+    ['GET', '/api/public/profiles/AbCdEfGhIjKlMnOpQrStUv'],
+    ['HEAD', '/api/public/profiles/AbCdEfGhIjKlMnOpQrStUv/'],
   ])('%s %s keeps to its own bucket', (method, url) => {
     expect(hasOwnBucket(method, url)).toBe(true);
   });
@@ -69,12 +71,17 @@ describe('hasOwnBucket', () => {
     ['GET', '/api/call-links/k7m2x9q4ra/email'],
     ['POST', '/api/auth/magic-link'],
     ['GET', '/api/users/someone/image'],
+    ['POST', '/api/public/profiles/AbCdEfGhIjKlMnOpQrStUv'],
+    ['GET', '/api/public/profiles'],
+    ['GET', '/api/public/profiles/AbCdEfGhIjKlMnOpQrStUv/more'],
+    ['GET', '/api/users/me/public-link'],
+    ['POST', '/api/users/me/public-link'],
   ])('%s %s stays under the general limiter', (method, url) => {
     expect(hasOwnBucket(method, url)).toBe(false);
   });
 
-  it('names exactly four routes', () => {
-    expect(OWN_BUCKET_ROUTES).toHaveLength(4);
+  it('names exactly five routes (the public profile link since Shirley pilot S6)', () => {
+    expect(OWN_BUCKET_ROUTES).toHaveLength(5);
   });
 });
 
@@ -91,6 +98,7 @@ describe('the mount order is index.ts\'s', () => {
     expect(at("app.use('/api', noStore);")).toBeLessThan(limiter);
     expect(at("app.use('/api/sessions', eventImageRoutes);")).toBeGreaterThan(limiter);
     expect(at("app.use('/api/call-links', callLinkRoutes);")).toBeGreaterThan(limiter);
+    expect(at("app.use('/api/public/profiles', publicProfileRoutes);")).toBeGreaterThan(limiter);
   });
 });
 

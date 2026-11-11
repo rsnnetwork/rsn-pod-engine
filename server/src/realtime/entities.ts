@@ -42,6 +42,9 @@ export const E = {
   // T14: the asks waiting to join a closed circle, for the people who run it
   circleRequests: (circleId: string) => `circle:${circleId}:requests`,
   userCircles: (userId: string) => `user:${userId}:circles`,
+  // Circle wall (S4, 11 Nov 2026): a circle's discussion feed, and one post's thread on it (the pod wall's pair)
+  circleWall: (circleId: string) => `circle:${circleId}:wall`,
+  circleWallPost: (postId: string) => `circle-wall-post:${postId}`,
 
   // Session
   session: (sessionId: string) => `session:${sessionId}`,
@@ -89,6 +92,11 @@ export const E = {
   // Calls (1 Nov 2026): a call ringing the member, or one they rang, changed (rung, answered, declined,
   // cancelled, lapsed)
   userCalls: (userId: string) => `user:${userId}:calls`,
+
+  // Presence (11 Nov 2026, Shirley Palmer's RSN 07): the member came online, stepped away or went offline. Sent to
+  // their conversation partners (never across a block), so a thread header, an inbox dot and a call button redraw
+  // without polling
+  userPresence: (userId: string) => `user:${userId}:presence`,
 
   // Support
   supportTicket: (ticketId: string) => `support-ticket:${ticketId}`,

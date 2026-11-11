@@ -62,7 +62,9 @@ describe("a call line's own button (Call back, Call again, Call now, Join meetin
 describe('the wiring', () => {
   it('the thread hands the banner whether the other person is a former member and the video rule', () => {
     expect(read('features/messages/MessagesPage.tsx')).toMatch(
-      /<ThreadMeetingBanner conversationId=\{activeConv\.conversationId\} onCallNow=\{startCall\} former=\{otherIsFormer\} canCall=\{canCall\} \/>/);
+      /<ThreadMeetingBanner conversationId=\{activeConv\.conversationId\} onCallNow=\{startCall\} former=\{readOnly\} canCall=\{canCall\} \/>/);
+    // 11 Nov 2026 (item 16): someone I blocked is treated the same way: nothing to join, call or schedule.
+    expect(read('features/messages/MessagesPage.tsx')).toContain('const readOnly = otherIsFormer || blockedByMe;');
   });
 
   it('the banner and the call line both ask the rules, and draw nothing when the rules say so', () => {
@@ -70,7 +72,7 @@ describe('the wiring', () => {
     expect(banner).toMatch(/const action = meetingBannerAction\(\{ over, kind, callsUnlocked: !!data\?\.callsUnlocked, canCall, former \}\);/);
     expect(banner).toMatch(/if \(!action\) return null;/);
     const page = read('features/messages/MessagesPage.tsx');
-    expect(page).toMatch(/const action = messageCallAction\(\{\s*scheduled: act\.scheduled, scheduledLive, kind: act\.kind, canCall, callsUnlocked, former: otherIsFormer,\s*\}\);/);
+    expect(page).toMatch(/const action = messageCallAction\(\{\s*scheduled: act\.scheduled, scheduledLive, kind: act\.kind, canCall, callsUnlocked, former: readOnly,\s*\}\);/);
     expect(page).toMatch(/if \(!action\) return null;/);
   });
 });
@@ -81,12 +83,12 @@ describe("the thread's meeting and scheduling cards", () => {
   it('the thread tells the card the other person is a former member, and hands it no scheduler, call or calendar', () => {
     const page = read('features/messages/MessagesPage.tsx');
     const card = page.slice(page.indexOf('<SystemMessageCard'), page.indexOf('/>', page.indexOf('<SystemMessageCard')));
-    expect(card).toMatch(/onOpenScheduler=\{otherIsFormer \? undefined : \(\) => openSchedulerOn\(null\)\}/);
-    expect(card).toMatch(/onPickSlot=\{otherIsFormer \? undefined : \(slot\) => openSchedulerOn\(slot\)\}/);
-    expect(card).toMatch(/calendar=\{!otherIsFormer && m\.systemMeta\?\.type === 'meeting_confirmed'/);
-    expect(card).toMatch(/onCallNow=\{otherIsFormer \? undefined : startCall\}/);
+    expect(card).toMatch(/onOpenScheduler=\{readOnly \? undefined : \(\) => openSchedulerOn\(null\)\}/);
+    expect(card).toMatch(/onPickSlot=\{readOnly \? undefined : \(slot\) => openSchedulerOn\(slot\)\}/);
+    expect(card).toMatch(/calendar=\{!readOnly && m\.systemMeta\?\.type === 'meeting_confirmed'/);
+    expect(card).toMatch(/onCallNow=\{readOnly \? undefined : startCall\}/);
     expect(card).toMatch(/canCall=\{canCall\}/);
-    expect(card).toMatch(/former=\{otherIsFormer\}/);
+    expect(card).toMatch(/former=\{readOnly\}/);
   });
 
   it('the card offers Join and Call now by the same rules as the banner, and no times to pick with a former member', () => {

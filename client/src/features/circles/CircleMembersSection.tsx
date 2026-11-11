@@ -69,7 +69,7 @@ export default function CircleMembersSection({ circle }: { circle: CircleDetail 
   const managingActions = managing ? memberActions(managing, me, circle) : [];
 
   return (
-    <div className="space-y-2 animate-fade-in-up" data-testid="circle-members">
+    <div id="circle-members" className="scroll-mt-4 space-y-2 animate-fade-in-up" data-testid="circle-members">
       <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
         <Users className="h-4 w-4 text-rsn-red" /> Members
       </h2>

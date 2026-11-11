@@ -6,23 +6,28 @@
 // which entity tags its queries declare, whether it polls, its words) and the components in this folder
 // are drawn from it. Everything they DECIDE is in wall-logic.ts.
 //
-// Live updates. A wall whose routes send entity tags (the pod wall) declares them in each query's
-// meta.entities and never polls: the app-wide handler refetches a query when a tag it declares arrives.
-// A wall whose routes send none (the circle wall) is given pollMs instead. A phone that dropped its
-// connection missed whatever was sent meanwhile: the app-wide handler refetches every tagged query when the socket
-// connects again (P1 item 17), so the wall keeps no listener of its own.
+// Live updates. Both walls' routes send entity tags (the circle wall's since Shirley pilot S4, 11 Nov 2026), and each
+// query declares them in meta.entities: the app-wide handler refetches a query when a tag it declares arrives, so no
+// wall polls. A phone that dropped its connection missed whatever was sent meanwhile: the app-wide handler refetches
+// every tagged query when the socket connects again (P1 item 17), so the wall keeps no listener of its own.
+//
+// S4: an author's edit of a post is held here (useHeldPostEdit), so a refetch never loses what was typed. A ?post= link
+// to a post that has gone says "This post was removed." where it would be (WallNotices).
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
-import { useToastStore } from '@/stores/toastStore';
 import WallComposer from './WallComposer';
+import { LinkedPostNotice, WallNotMember } from './WallNotices';
 import WallPostCard from './WallPostCard';
-import { arrangeFeed, createCoalescer, isForbidden, retryUnlessAnswered, revealedPosts, viewerFor, wallErrorSentence } from './wall-logic';
+import { useHeldPostEdit } from './useHeldPostEdit';
+import {
+  arrangeFeed, createCoalescer, isForbidden, isNotFound, retryUnlessAnswered, revealedPosts, viewerFor, wallErrorSentence,
+} from './wall-logic';
 import type { WallConfig, WallFeedPage, WallPost, WallViewer } from './wall-types';
 
 /** "Show more" reveals this many posts at a time when the wall shows only the first few. */
@@ -31,14 +36,7 @@ const SHOW_MORE_STEP = 10;
 /** A burst of refetches is read once per this long (ms): short enough to feel live, long enough to fold a storm. */
 const REFETCH_WINDOW_MS = 200;
 
-/** What someone who is not an active member of the pod reads where the posts would be. */
-export function WallNotMember({ config }: { config: WallConfig }) {
-  return (
-    <Card className="!p-4" data-testid={`${config.testId}-not-member`}>
-      <p className="text-center text-sm text-gray-500">{config.copy.notMember}</p>
-    </Card>
-  );
-}
+export { WallNotMember };
 
 export default function Wall({ config, fallbackViewer, highlightPostId }: {
   config: WallConfig;
@@ -48,7 +46,6 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
   highlightPostId?: string;
 }) {
   const userId = useAuthStore((s) => s.user?.id);
-  const addToast = useToastStore((s) => s.addToast);
   const queryClient = useQueryClient();
   const [shown, setShown] = useState(config.visibleAtFirst);
   const [removedHere, setRemovedHere] = useState<string[]>([]);
@@ -61,14 +58,13 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
       const read = () => api.get(pageParam ? `${config.feedPath}?cursor=${encodeURIComponent(pageParam)}` : config.feedPath)
         .then((r) => r.data.data as WallFeedPage);
       // A burst of tags (a storm of reactions) asks for the feed again and again: the first page of a refetch waits
-      // for its window and shares one request with the rest of the burst. The first load, the pages after the
-      // first and a wall that polls are read at once.
+      // for its window and shares one request with the rest of the burst. The first load and the pages after the
+      // first are read at once.
       const refetching = pageParam === undefined && tagged && queryClient.getQueryData(config.keys.feed) !== undefined;
       return refetching ? coalesce(read) : read();
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
-    refetchInterval: config.pollMs,
     retry: retryUnlessAnswered,
     meta: { entities: config.entities.feed },
   });
@@ -89,9 +85,13 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
     meta: { entities: config.entities.post(wanted ?? '') },
   });
   const linkedPost = wanted !== undefined && !linked.isError && !loadedIds.has(wanted) ? linked.data : undefined;
-  useEffect(() => {
-    if (linked.isError && wanted) addToast('That post is no longer available.', 'info');
-  }, [linked.isError, wanted, addToast]);
+  // S4: a link to a post that has gone (removed, or hidden from this viewer: the server answers both alike, 404) says so
+  // where the post would be, rather than in a toast that is gone before it is read. Fix round 1: only a 404 says that;
+  // a phone that is offline, or a server fault, says what went wrong and offers to try again.
+  const held = useHeldPostEdit(config, { ids: loadedIds, rest, linkedPostId: linkedPost?.id });
+  const linkedOut = wanted !== undefined && !loadedIds.has(wanted) && linked.isError && held.editingId !== wanted;
+  const linkedGone = linkedOut && isNotFound(linked.error);
+  const linkedFailed = linkedOut && !isNotFound(linked.error);
 
   // The acting screen refreshes itself when its own change settles: a change that changed nothing (the same
   // reaction again) is answered 200 and sent to no one, so it gets no echo, and a moderator who is not a
@@ -102,6 +102,9 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
   };
 
   const visible = revealedPosts(rest, shown, highlightPostId);
+
+  // The post whose edit is open, when it is not among the cards drawn below.
+  const heldPost = held.heldFor(new Set([...(linkedPost ? [linkedPost.id] : []), ...pinned.map((p) => p.id), ...visible.map((p) => p.id)]));
   const hasMore = rest.length > visible.length || !!feed.hasNextPage;
   const showMore = () => {
     if (config.visibleAtFirst === undefined) { void feed.fetchNextPage(); return; }
@@ -131,12 +134,15 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
     );
   }
 
-  const card = (p: WallPost, showPinBadge: boolean, isLinked = false) => (
+  const card = (p: WallPost, showPinBadge: boolean, isLinked = false, gone = false) => (
     <WallPostCard
       key={p.id} config={config} post={p} viewer={viewer} userId={userId}
       showPinBadge={showPinBadge} linked={isLinked} highlighted={p.id === highlightPostId}
       onChanged={refresh}
       onRemoved={(id) => setRemovedHere((ids) => [...ids, id])}
+      edit={held.editOf(p)}
+      onEdit={held.editFor(p)}
+      gone={gone}
     />
   );
 
@@ -156,11 +162,15 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
         </Card>
       )}
 
+      {heldPost && card(heldPost.post, false, false, heldPost.gone)}
+      {(linkedGone || linkedFailed) && (
+        <LinkedPostNotice config={config} removed={linkedGone} error={linked.error} onRetry={() => void linked.refetch()} />
+      )}
       {linkedPost && card(linkedPost, !!linkedPost.pinnedAt, true)}
       {pinned.map((p) => card(p, true))}
       {visible.map((p) => card(p, false))}
 
-      {visible.length === 0 && pinned.length === 0 && !linkedPost && (
+      {visible.length === 0 && pinned.length === 0 && !linkedPost && !heldPost && (
         <p className="py-4 text-center text-sm text-gray-400" data-testid={`${config.testId}-empty`}>
           {viewer.canPost ? config.copy.empty : config.copy.emptyReadOnly}
         </p>

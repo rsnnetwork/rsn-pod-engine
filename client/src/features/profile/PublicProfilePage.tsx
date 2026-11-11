@@ -8,7 +8,7 @@ import ReportUserModal from '@/components/ReportUserModal';
 import {
   ArrowLeft, MapPin, Globe, Sparkles, Target, Heart,
   HelpCircle, Users, User, Award, Compass, Link2, Languages, Linkedin,
-  Ban, ShieldOff, MessageSquare, Flag, Send, Lock,
+  Ban, ShieldOff, MessageSquare, ShieldAlert, Send, Lock,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
@@ -18,6 +18,7 @@ import { hasEarlierAppPage } from './profile-back';
 import { useConfirm } from '@/hooks/useConfirm';
 import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 import { dropDraftsTo } from '@/features/messages/voice/composer-drafts';
+import { BLOCK_MEMBER, REPORT_MEMBER, blockConsequence, blockTitle } from '@/components/safety/safety-words';
 
 // 13 Aug 2026 (D1): Stefan — "the profile card needs a major visual upgrade,
 // the greatest thing on the platform", and "About was cut off / too narrow".
@@ -333,14 +334,14 @@ export default function PublicProfilePage() {
                     variant="ghost"
                     size="sm"
                     onClick={async () => {
-                      if (await ask({ title: `Block ${user.displayName || 'this person'}?`, body: "They won't be able to message you, and you won't be matched together in future events.", confirmLabel: 'Block', tone: 'danger' })) {
+                      if (await ask({ title: blockTitle(user.displayName), body: blockConsequence(user.displayName, 'profile'), confirmLabel: 'Block', tone: 'danger' })) {
                         blockMutation.mutate();
                       }
                     }}
                     isLoading={blockMutation.isPending}
                     className="min-h-[44px] text-xs text-red-500 hover:bg-red-50"
                   >
-                    <Ban className="h-3.5 w-3.5 mr-1.5" /> Block
+                    <Ban className="h-3.5 w-3.5 mr-1.5" /> {BLOCK_MEMBER}
                   </Button>
                 )}
               </div>
@@ -351,7 +352,7 @@ export default function PublicProfilePage() {
                 onClick={() => setReportOpen(true)}
                 className="inline-flex min-h-[44px] items-center gap-1.5 px-3 text-xs text-gray-400 transition-colors hover:text-red-500"
               >
-                <Flag className="h-3.5 w-3.5" /> Report this member
+                <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" /> {REPORT_MEMBER}
               </button>
             </div>
           )}
@@ -396,8 +397,8 @@ export default function PublicProfilePage() {
             </div>
             <p className="mb-4 text-xs text-gray-500">
               {isOwnProfile
-                ? 'Other members never see this. Your agents use it to find the right people for you.'
-                : 'Other members never see this. Their agents use it to find the right people for them.'}
+                ? 'Other members never see this. Your searches use it to find the right people for you.'
+                : 'Other members never see this. Their searches use it to find the right people for them.'}
             </p>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-x-8">
               <MatchField icon={Users} label="Who I Want to Meet" value={user.whoIWantToMeet} />

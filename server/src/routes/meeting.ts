@@ -13,8 +13,8 @@ import { authenticate } from '../middleware/auth';
 import { callRequestIdInPath, conversationIdInPath } from '../middleware/dm-path-ids';
 import * as meetingService from '../services/dm/meeting-windows.service';
 import * as callService from '../services/dm/meeting-call.service';
-import { areActive } from '../services/presence/presence.service';
-import { callLeaveLimiter, callReadLimiter, callRequestLimiter } from '../middleware/rateLimit';
+import { presenceOf } from '../services/presence/presence.service';
+import { callLeaveLimiter, callReadLimiter, callRequestLimiter, presenceReadLimiter } from '../middleware/rateLimit';
 import { buildMeetingFile, MEETING_FILE_HEADERS } from '../services/meetings/meeting-calendar';
 import { NotFoundError } from '../middleware/errors';
 import { query } from '../db';
@@ -57,23 +57,31 @@ router.get(
   },
 );
 
-// GET /dm/presence — online status of all my conversation partners, for the
-// green dot in the messages list (8 Sep 2026, Ali). Scoped to my own
-// conversations so it can't probe arbitrary users.
+// GET /dm/presence — where each of my conversation partners is now, for the dot in the messages list (8 Sep 2026,
+// Ali; three states 11 Nov 2026). Scoped to my own conversations so it can't probe arbitrary users, and a pair where
+// either has blocked the other is left out (a block hides presence both ways). `states` has online / away / offline,
+// a partner the read could not place left out (unknown); `online` is kept for screens that read only it.
 router.get(
   '/presence',
   authenticate,
+  presenceReadLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const me = req.user!.userId;
       const rows = await query<{ partner_id: string }>(
-        `SELECT CASE WHEN user_a_id = $1 THEN user_b_id ELSE user_a_id END AS partner_id
-           FROM dm_conversations
-          WHERE user_a_id = $1 OR user_b_id = $1`,
+        `SELECT CASE WHEN c.user_a_id = $1 THEN c.user_b_id ELSE c.user_a_id END AS partner_id
+           FROM dm_conversations c
+          WHERE (c.user_a_id = $1 OR c.user_b_id = $1)
+            AND NOT EXISTS (
+              SELECT 1 FROM user_blocks b
+               WHERE (b.blocker_id = c.user_a_id AND b.blocked_id = c.user_b_id)
+                  OR (b.blocker_id = c.user_b_id AND b.blocked_id = c.user_a_id))
+          LIMIT 500`,
         [me],
       );
-      const online = await areActive(rows.rows.map((r) => r.partner_id));
-      res.json({ success: true, data: { online } } as ApiResponse);
+      const states = await presenceOf(rows.rows.map((r) => r.partner_id));
+      const online = Object.fromEntries(Object.entries(states).map(([id, state]) => [id, state === 'online']));
+      res.json({ success: true, data: { online, states } } as ApiResponse);
     } catch (err) {
       next(err);
     }
@@ -315,15 +323,17 @@ router.post(
   },
 );
 
-// GET /dm/conversations/:id/partner-presence — is the other person online now?
+// GET /dm/conversations/:id/partner-presence — where the other person is now: `state` is online, away, offline, or
+// null when the read could not tell (11 Nov 2026, RSN 07); `online` is kept for screens that read only it.
 router.get(
   '/conversations/:id/partner-presence',
   authenticate,
   conversationIdInPath,
+  presenceReadLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const online = await callService.isPartnerOnline(req.params.id, req.user!.userId);
-      res.json({ success: true, data: { online } } as ApiResponse);
+      const state = await callService.partnerPresence(req.params.id, req.user!.userId);
+      res.json({ success: true, data: { online: state === 'online', state } } as ApiResponse);
     } catch (err) { next(err); }
   },
 );

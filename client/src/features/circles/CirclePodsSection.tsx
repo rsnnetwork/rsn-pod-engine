@@ -37,7 +37,7 @@ export default function CirclePodsSection({ circle }: { circle: CircleDetail }) 
   };
 
   return (
-    <div className="space-y-2 animate-fade-in-up" data-testid="circle-pods">
+    <div id="circle-pods" className="scroll-mt-4 space-y-2 animate-fade-in-up" data-testid="circle-pods">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
           <Box className="h-4 w-4 text-rsn-red" /> Pods in this circle

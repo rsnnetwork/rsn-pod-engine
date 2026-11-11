@@ -134,7 +134,7 @@ test('1.1, 1.3: the pencils place a photo and a banner, stored large, and a pod 
 
   await test.step('1.1 the banner: pencil, place, save; stored at 2400 by 800', async () => {
     const banner = me.page.getByTestId('profile-banner');
-    await me.page.getByRole('button', { name: 'Add a cover image' }).click();
+    await me.page.getByRole('button', { name: 'Add banner' }).click();
     const sheet = me.page.getByRole('dialog', { name: 'Edit your banner' });
     await sheet.locator('input[type="file"]').setInputFiles({ name: 'wide.jpg', mimeType: 'image/jpeg', buffer: await halves(me.page, 3000, 1500) });
     await expect(sheet.getByRole('slider', { name: 'Zoom' })).toBeVisible({ timeout: 20_000 });
@@ -667,7 +667,7 @@ test('5a, 5b, 5c: chat in the meeting room, Add to calendar, and the feedback th
     const page = (await openAs(browser, mia, `/meetings/${meetingId}`)).page;
     const maxPage = (await openAs(browser, max, `/meetings/${meetingId}`)).page;
     await markNotReloaded(maxPage);
-    await page.getByRole('button', { name: 'Add to calendar' }).click();
+    await page.getByRole('button', { name: 'Add manually', exact: true }).click();
     const menu = page.getByTestId('add-to-calendar-menu');
     for (const id of ['calendar-google', 'calendar-outlook', 'calendar-ics']) await tall(menu.getByTestId(id), id);
     const google = new URL((await menu.getByTestId('calendar-google').getAttribute('href'))!);
@@ -686,7 +686,7 @@ test('5a, 5b, 5c: chat in the meeting room, Add to calendar, and the feedback th
       window: moved.toISOString().replace('.000Z', 'Z'), durationMin: 45, type: 'video',
     })).status).toBe(200);
     await expect.poll(async () => {
-      await maxPage.getByRole('button', { name: 'Add to calendar' }).click();
+      await maxPage.getByRole('button', { name: 'Add manually', exact: true }).click();
       const href = await maxPage.getByTestId('add-to-calendar-menu').getByTestId('calendar-google').getAttribute('href').catch(() => null);
       await maxPage.keyboard.press('Escape');
       return href ? new URL(href).searchParams.get('dates')?.split('/')[0] : null;
@@ -1165,6 +1165,7 @@ test('7.4–7.6 and a legacy circle: invite from the sheet (never a removed conn
   });
 
   await test.step('7.5 Closed: a non-member sees the locked page and asks; the owner approves live; the page unlocks live', async () => {
+    await o.getByTestId('manage-open').click(); // Shirley pilot S3: Who can join is in the Manage menu
     await o.getByTestId('circle-settings').click();
     await o.getByTestId('circle-policy-closed').check();
     await o.getByTestId('circle-policy-save').click();

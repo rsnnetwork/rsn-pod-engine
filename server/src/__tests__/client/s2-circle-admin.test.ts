@@ -114,10 +114,16 @@ describe('pod visibility, one vocabulary (D2)', () => {
 describe('the circle page (S2 controls)', () => {
   const page = read('features/circles/CircleDetailPage.tsx');
 
-  it('Edit details and Invitations for the people who run it; Who can join for the owner only', () => {
-    expect(page).toMatch(/\{circle\.canManage && \(\s*<button type="button" onClick=\{\(\) => setSheet\('edit'\)\} data-testid="circle-edit" className=\{HEADER_ACTION\}>/);
-    expect(page).toMatch(/\{circle\.canManage && \(\s*<button type="button" onClick=\{\(\) => setSheet\('invitations'\)\} data-testid="circle-invitations"/);
-    expect(page).toMatch(/\{circle\.isOwner && circle\.joinPolicy !== undefined && \(\s*<button type="button" onClick=\{\(\) => setSheet\('settings'\)\}/);
+  // Shirley pilot S3 (RSN 11): the three are entries of the circle's Manage menu now, with the same test ids; who sees
+  // which is circleManageKeys (canManage; Visibility for isOwner), pinned in shirley-s3-manage-communities.test.ts.
+  it('Edit details and Invitations for the people who run it; Who can join for the owner only (in the Manage menu)', () => {
+    const menu = read('features/circles/CircleManageMenu.tsx');
+    expect(page).toMatch(/<CircleManageMenu circle=\{circle\} openSheet=\{setSheet\} openRequests=\{openRequests\} \/>/);
+    expect(menu).toMatch(/edit: \{ key: 'edit', onSelect: \(\) => openSheet\('edit'\), testId: 'circle-edit' \}/);
+    expect(menu).toMatch(/invitations: \{ key: 'invitations', onSelect: \(\) => openSheet\('invitations'\), testId: 'circle-invitations' \}/);
+    expect(menu).toMatch(/onSelect: \(\) => openSheet\('settings'\),\s*testId: 'circle-settings'/);
+    expect(menu).toMatch(/circleManageKeys\(circle, mayExportCircle\(circle\.myRole\)\)/);
+    expect(page).not.toMatch(/data-testid="circle-edit"|data-testid="circle-invitations"|data-testid="circle-settings"/);
   });
 
   it('the members section: a 44px Manage button only where there is an action, a sheet of actions, a confirm before a handover or a removal', () => {

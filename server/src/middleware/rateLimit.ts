@@ -104,7 +104,11 @@ function buildStore(prefix: string): RateLimitOptions['store'] | undefined {
  *   GET  /api/call-links/:code            the RSN Call link's landing (callLinkReadLimiter, with callLinkMissLimiter)
  *   POST /api/call-links/:code/email      a code by email (callLinkEmailLimiter, callLinkEmailTargetLimiter)
  *   POST /api/call-links/:code/verify     the code back (callLinkVerifyLimiter, the code's own tries)
+ *   GET  /api/public/profiles/:token      a member's public profile link (publicProfileReadLimiter, with
+ *                                         publicProfileMissLimiter; Shirley pilot S6)
  * Everything else, /api/call-links/me/events and /:code/entry and /:code/enter included, stays under the general one.
+ * An event link (/events/<slug>, 11 Nov 2026) is read by these same routes with its slug as `:code`, so its landing, its
+ * code email and its code check hold the same buckets, and its 404s count toward the same callLinkMissLimiter.
  * `path` is the request's path from /api on, without the query; a HEAD is a GET (Express answers it with the GET route).
  */
 export const OWN_BUCKET_ROUTES: ReadonlyArray<{ method: 'GET' | 'POST'; pattern: RegExp }> = [
@@ -112,6 +116,7 @@ export const OWN_BUCKET_ROUTES: ReadonlyArray<{ method: 'GET' | 'POST'; pattern:
   { method: 'GET', pattern: /^\/api\/call-links\/[^/]+\/?$/ },
   { method: 'POST', pattern: /^\/api\/call-links\/[^/]+\/email\/?$/ },
   { method: 'POST', pattern: /^\/api\/call-links\/[^/]+\/verify\/?$/ },
+  { method: 'GET', pattern: /^\/api\/public\/profiles\/[^/]+\/?$/ },
 ];
 
 /** Whether a request is one of OWN_BUCKET_ROUTES, so the general limiter leaves it to its own buckets. */
@@ -412,6 +417,19 @@ export const wallWriteLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// Shirley pilot S4 (11 Nov 2026): an author's edits of their posts and comments, on either wall, on top of
+// wallWriteLimiter. Posting and commenting have their own per-minute caps in the services (6 and 20); an edit writes
+// no new row, so it is counted here: 20 a minute is far more than a person correcting their words needs.
+export const wallEditLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('wall-edit'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You are editing too fast. Wait a moment, then try again.' } },
+});
+
 // Entities (21 Oct 2026). Reads are limited like the person brief, because any entity, and any member's
 // entities, can be asked for by id. Edits, joins and leaves share a write allowance. Creating has a small
 // hourly one of its own, because every new entity claims a name that nobody else can then take. Only an
@@ -570,6 +588,32 @@ export const callRequestLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have rung a lot of calls in the last few minutes. Try again in a little while.' } },
 });
 
+// Reporting a member, a message or a post (11 Nov 2026, Shirley Palmer's item 16). Each report lands in the moderation
+// queue of every admin, so a member files at most 10 an hour. Only a report filed counts: a refusal (yourself, already
+// reported today, something you cannot see) filed nothing.
+export const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('report'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have sent a lot of reports this hour. Our team is looking at them; try again later.' } },
+});
+
+// The presence of a person a member may call (11 Nov 2026, RSN 07): read when a thread or a profile opens, and again
+// when that person comes, goes or steps away. A minute's worth is far more than a member's screens ask.
+export const presenceReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('presence-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // Leaving a 1:1 call (2 Nov 2026, leave fix): one request per leave, so 30 a minute is far more than anyone leaves.
 export const callLeaveLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -706,6 +750,49 @@ export const eventImageReadLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
   store: buildStore('event-image-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// A member's public profile link (Shirley pilot S6, 11 Nov 2026): read signed out, by whoever the member shared it with,
+// so a whole room behind one venue's Wi-Fi may open it at once. It has the event image's venue-sized bucket: 600 reads
+// a minute per client (a signed-in reader by their account, everyone else by their network address). Guessing is
+// stopped by the token itself (128 random bits); the miss bucket below counts only the answers that found no profile
+// (404) per network address, keyed like the RSN Call link's buckets. It is venue-sized too (S6 fix round 1): a room
+// behind one Wi-Fi address scanning a link its owner has since replaced must not lock that room out of every other
+// link, so it allows 300 dead links in 10 minutes and only blunts mass scanning.
+export const PUBLIC_PROFILE_READS_PER_CLIENT = 600;
+export const publicProfileReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: PUBLIC_PROFILE_READS_PER_CLIENT,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('public-profile-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const PUBLIC_PROFILE_MISSES_MAX = 300;
+export const publicProfileMissLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: PUBLIC_PROFILE_MISSES_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  // Only a link that leads nowhere counts: every other answer is "successful" here.
+  requestWasSuccessful: (_req: Request, res: Response) => res.statusCode !== 404,
+  keyGenerator: (req: Request) => `ip:${clientIp(req)}`,
+  store: buildStore('public-profile-miss'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many links tried. Please wait 10 minutes, then try again.' } },
+});
+
+// The owner making, replacing or turning off their public link: a few presses at most, so 20 an hour per member.
+export const publicLinkWriteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('public-link-write'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
@@ -1013,6 +1100,20 @@ export const callEntryLimiter = rateLimit({
   handler: callLinkLimited(SLOW_DOWN),
 });
 
+/**
+ * The event form's link-name field (GET /sessions/event-link-name): it asks as the organiser types (the form waits for a
+ * pause), sixty a minute per person.
+ */
+export const eventLinkNameLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-link-name'),
+  handler: callLinkLimited(SLOW_DOWN),
+});
+
 /** The organisers' call-link card: reading it and rotating it, thirty a minute per person. */
 export const callLinkManageLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -1157,6 +1258,21 @@ export const eventReportExportLimiter = rateLimit({
   skip: (req: Request) => req.query?.format !== 'csv',
   store: buildStore('event-report-export'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: EVENT_REPORT_EXPORT_LIMITED } },
+});
+
+// An organiser's export of their circle or pod (Shirley pilot S7, item 20): twenty files in ten minutes per person, so
+// an organiser can take all four files several times over while a script copying member data out is stopped. Keyed per
+// member: the route signs in first. Every download is also written to the access log before it leaves.
+export const SPACE_EXPORT_LIMITED = 'You have downloaded a lot of files just now. Try again in a few minutes.';
+
+export const spaceExportLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('space-export'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: SPACE_EXPORT_LIMITED } },
 });
 
 // The waiting list (10 Nov 2026 spec, Part 3 Task 3): leaving it, and the organisers reading it, letting someone in and

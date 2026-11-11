@@ -3,6 +3,7 @@
 // "This organisation is context. The humans are the opportunity": the entity, then the people around it.
 // 30 Oct review (T15): its banner above the hero, the admins' Requests above its people (?requests=1, a bell's link,
 // opens the page there), and the circles it is linked to below them.
+// Shirley pilot S7 (RSN 15): what it offers (Services) between the Requests and its people; its admins edit them.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -17,11 +18,13 @@ import ReasonSheep from '../brand/ReasonSheep';
 import { shouldRetry, statusOf, viewFor } from '../human/profile-text';
 import ConfirmSheet from './ConfirmSheet';
 import EditEntitySheet from './EditEntitySheet';
+import EditServicesSheet from './EditServicesSheet';
 import EntityBanner from './EntityBanner';
 import EntityCircles from './EntityCircles';
 import EntityHero from './EntityHero';
 import EntityPeople from './EntityPeople';
 import EntityRequests from './EntityRequests';
+import EntityServices from './EntityServices';
 import RelationshipPanel from './RelationshipPanel';
 import { archiveEntity, entityKeys, fetchEntity } from './entity-api';
 import { entityError, isEntityId, loadFailedLine } from './entity-text';
@@ -65,6 +68,7 @@ function EntityProfile({ page, me, onClosing }: ProfileProps) {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const [editing, setEditing] = useState(false);
+  const [editingServices, setEditingServices] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const sending = useRef(false);
@@ -113,9 +117,13 @@ function EntityProfile({ page, me, onClosing }: ProfileProps) {
         onArchive={() => { setArchiveError(null); setArchiving(true); }}
       />
       <EntityRequests page={page} focus={toRequests} />
+      <EntityServices page={page} onEdit={() => setEditingServices(true)} />
       <EntityPeople page={page} me={me} />
       <EntityCircles page={page} />
       {editing && page.canEdit && <EditEntitySheet entity={entity} onClose={() => setEditing(false)} />}
+      {editingServices && page.canEdit && (
+        <EditServicesSheet entity={entity} services={page.services} onClose={() => setEditingServices(false)} />
+      )}
       <ConfirmSheet
         open={archiving}
         title={`Archive ${entity.name}?`}

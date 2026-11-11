@@ -351,6 +351,8 @@ router.get(
       // report came from so an admin can open the chat behind it. Statuses are
       // normalised to text so the two enums coexist ('actioned'/'reviewed' from
       // violations, 'resolved' from user_reports; both share 'open'/'dismissed').
+      // 11 Nov 2026: a member report of one message or post also carries what was reported and the copy of its words
+      // taken when it was reported (migration 150), which outlives the message or post being deleted.
       const result = await query(
         `SELECT * FROM (
            SELECT 'violation' AS source, v.id, v.reason, v.details, v.status::text AS status,
@@ -360,7 +362,8 @@ router.get(
                   reported.display_name AS "reportedName", reported.email AS "reportedEmail",
                   reported.id AS "reportedUserId",
                   resolver.display_name AS "resolverName",
-                  NULL::uuid AS "conversationId"
+                  NULL::uuid AS "conversationId",
+                  NULL::text AS "subjectKind", NULL::text AS "subjectExcerpt"
            FROM violations v
            LEFT JOIN users reporter ON reporter.id = v.reporter_id
            JOIN users reported ON reported.id = v.reported_user_id
@@ -373,7 +376,8 @@ router.get(
                   reported.display_name AS "reportedName", reported.email AS "reportedEmail",
                   reported.id AS "reportedUserId",
                   resolver.display_name AS "resolverName",
-                  r.conversation_id AS "conversationId"
+                  r.conversation_id AS "conversationId",
+                  r.subject_kind::text AS "subjectKind", r.subject_excerpt AS "subjectExcerpt"
            FROM user_reports r
            JOIN users reporter ON reporter.id = r.reporter_id
            JOIN users reported ON reported.id = r.reported_id

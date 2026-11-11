@@ -13,6 +13,8 @@ import { searchConnectedUsers } from '../services/invite/connected-users';
 import { toPublicMember } from '../services/user/public-card';
 import { searchMembers } from '../services/user/user-search.service';
 import * as blockService from '../services/block/block.service';
+import { endCallsOnBlock } from '../services/dm/meeting-call.service';
+import logger from '../config/logger';
 import { listUserEntities } from '../services/entity/entity.service';
 import { getAvatarBlob } from '../services/onboarding/avatar.service';
 import { entityReadLimiter } from '../middleware/rateLimit';
@@ -21,6 +23,7 @@ import {
   fanoutAccountAudience,
   fanoutAccountStatusChange,
   fanoutAdminEntities,
+  fanoutCommunitiesOf,
   fanoutPodEntities,
   fanoutProfileChange,
   fanoutUserBlocks,
@@ -29,7 +32,8 @@ import {
 import { NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
 import {
-  ApiResponse, UserRole, canonicalTimeZone, hasRoleAtLeast, PROFILE_LINK_HELP, PROFILE_LINK_MAX, parseProfileUrl, type ProfileLinkKind,
+  ApiResponse, UserRole, canonicalTimeZone, hasRoleAtLeast, LINKEDIN_PROFILE_HELP, linkedinProfileUrl, PROFILE_LINK_HELP,
+  PROFILE_LINK_MAX, parseProfileUrl, type ProfileLinkKind,
 } from '@rsn/shared';
 import * as bannerService from '../services/user/banner.service';
 import { getPictureSource, savePicture } from '../services/user/picture.service';
@@ -50,6 +54,20 @@ const profileLink = (kind: ProfileLinkKind) => z.string().max(PROFILE_LINK_MAX).
     return z.NEVER;
   }
   return result.url;
+});
+
+// LinkedIn (Shirley pilot S6, RSN 13): saved in the one form REASON stores, https://www.linkedin.com/in/<name>, whatever
+// form was typed (http, no protocol, a share query, a country site), so the profile always links it the same way. A
+// blank box (or null) clears it as before; anything that is not a LinkedIn profile address is refused in the sentence
+// the form shows under the field.
+const linkedinProfileField = z.string().max(500).nullable().optional().transform((value, ctx) => {
+  if (value === undefined || value === null || !value.trim()) return value;
+  const url = linkedinProfileUrl(value);
+  if (!url) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: LINKEDIN_PROFILE_HELP });
+    return z.NEVER;
+  }
+  return url;
 });
 
 // Part 3 Task 1: a member's zone is a real IANA zone, as onboarding already holds it (a new event takes its host's zone,
@@ -87,7 +105,7 @@ const updateUserSchema = z.object({
   jobTitle: z.string().max(200).nullable().optional(),
   industry: z.string().max(100).nullable().optional(),
   location: z.string().max(200).nullable().optional(),
-  linkedinUrl: z.string().max(500).nullable().optional(),
+  linkedinUrl: linkedinProfileField,
   websiteUrl: profileLink('website'),
   instagramUrl: profileLink('instagram'),
   xUrl: profileLink('x'),
@@ -114,6 +132,7 @@ const updateUserSchema = z.object({
   notifyMatches: z.boolean().optional(),
   profileVisible: z.boolean().optional(),
   inviteOptOutPublicEvents: z.boolean().optional(),
+  showCommunities: z.boolean().optional(),
 });
 
 // The member banner (21 Oct 2026) and photo (30 Oct review, T3a): `{ image?, crop? }` (picture-body.ts, shared with an
@@ -188,6 +207,9 @@ router.put(
       // Also ping the user's own room so other tabs / devices update
       // their profile-settings surfaces.
       fanoutUserEntity(req.user!.userId).catch(() => {});
+      // Shirley pilot S3: either switch changes what their profile's Communities section lists, for the people who share
+      // a space with them.
+      if ('showCommunities' in req.body || 'profileVisible' in req.body) void fanoutCommunitiesOf(req.user!.userId);
       // Where they are based and their time zone are on the admin inspector's
       // onboarding card, and their name on the admin user list.
       fanoutAdminEntities('users').catch(() => {});
@@ -420,6 +442,13 @@ router.get(
   memberIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // Shirley pilot S6: a block in either direction closes the profile, to admins as much as to members (blocks always
+      // win; the admin inspector is the moderation view). The answer is the very 404 an unknown id gets, so it tells
+      // nobody that a block stands, nor that the account exists.
+      const viewerId = req.user!.userId;
+      if (viewerId !== req.params.id && await blockService.areBlocked(viewerId, req.params.id)) {
+        throw new NotFoundError('User', req.params.id);
+      }
       const user = await identityService.getUserById(req.params.id);
 
       // Two cards (Stefan, 9 Sep 2026): the owner and admins get the full
@@ -616,6 +645,10 @@ router.post(
       // blocker's other tabs flip the Block button label and the
       // blocked user's profile-page Message button disappears.
       fanoutUserBlocks(req.user!.userId, req.params.id).catch(() => {});
+      // 11 Nov 2026 (item 16): a call ringing between them is withdrawn, the pair moves to a new call room and the old
+      // one is closed for both, so a block in the middle of a call ends it for both and an old token reaches nobody.
+      // Best-effort: the block is saved already.
+      endCallsOnBlock(req.user!.userId, req.params.id).catch((err) => logger.warn({ err }, 'ending calls on block failed (non-fatal)'));
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {

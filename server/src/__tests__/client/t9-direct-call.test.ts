@@ -82,12 +82,14 @@ describe('one Video call button, where canCall says', () => {
     const page = src('features/messages/MessagesPage.tsx');
     expect(page).toContain('const canCall = !!scheduling?.canCall;');
     // With T2 (1 Nov 2026): a former member's thread offers no call, so every call button also asks !otherIsFormer.
-    expect(page).toMatch(/\{activeConv && !otherIsFormer && canCall && \(\s*<CallButton\s+variant="icon"/);
-    expect(page).toMatch(/\{activeConv && !otherIsFormer && canCall && \(\s*<CallButton\s+variant="menu"/);
-    expect(page.match(/\{activeConv && !otherIsFormer && callsUnlocked && \(/g)).toHaveLength(2); // the two audio buttons
+    // 11 Nov 2026 (item 16): nor a thread with someone I blocked (readOnly = otherIsFormer || blockedByMe); the phone's
+    // menu items sit in the one labelled More menu, shown at every width, each wrapped sm:hidden.
+    expect(page).toMatch(/\{activeConv && !readOnly && canCall && \(\s*<CallButton\s+variant="icon"/);
+    expect(page).toMatch(/\{activeConv && !readOnly && canCall && \(\s*<div className="sm:hidden">\s*<CallButton\s+variant="menu"/);
+    expect(page.match(/\{activeConv && !readOnly && callsUnlocked && \(/g)).toHaveLength(2); // the two audio buttons
     expect(page).toMatch(/onClick=\{\(\) => startCall\('audio'\)\}/);
     // The scheduler keeps its place: it still steps aside only once calls are unlocked.
-    expect(page.match(/\{activeConv && !otherIsFormer && !callsUnlocked && \(/g)).toHaveLength(2);
+    expect(page.match(/\{activeConv && !readOnly && !callsUnlocked && \(/g)).toHaveLength(2);
     // Before calls unlock, the dialog offers video only (audio would be refused).
     expect(page).toContain('<CallRequestModal {...callRequest.modal} videoOnly={!callsUnlocked} />');
   });
@@ -100,7 +102,8 @@ describe('one Video call button, where canCall says', () => {
     expect(row).toMatch(/if \(!message && !call\) return closed;/);
     expect(row).toMatch(/data-testid="profile-hero-actions">[\s\S]*Message[\s\S]*\{call\}\s*<\/div>/);
     const button = src('features/calls/ProfileCallButton.tsx');
-    expect(button).toMatch(/useCallRequest\(brief\.canCall \? \{ userId \} : null, name\)/);
+    // 11 Nov 2026 (RSN 07): with the person's presence, so a press while they are offline opens the offline sheet.
+    expect(button).toMatch(/useCallRequest\(brief\.canCall \? \{ userId \} : null, name, \{/);
     expect(button).toMatch(/if \(!brief\.canCall\) return null;/);
     expect(button).toMatch(/<CallRequestModal \{\.\.\.call\.modal\} videoOnly \/>/);
     const api = src('features/calls/call-api.ts');

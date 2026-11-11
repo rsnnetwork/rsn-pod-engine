@@ -15,16 +15,24 @@ import { circleErrorSentence } from '@/features/circles/useCircleActions';
 
 interface Props { podId?: string; podName: string; canUnlink: boolean }
 
-export default function PodCircleChips({ podId, podName, canUnlink }: Props) {
-  const qc = useQueryClient();
-  const addToast = useToastStore((s) => s.addToast);
-  const { ask, confirmDialog } = useConfirm();
-  const { data: circles } = useQuery<Array<{ id: string; name: string }>>({
+/**
+ * The circles the pod is in, as the viewer may see them. One query (one cache entry) for the chips and for the pod's
+ * Manage menu (Shirley pilot S3), which offers Circles only when there are some.
+ */
+export function usePodCircles(podId: string | undefined) {
+  return useQuery<Array<{ id: string; name: string }>>({
     queryKey: ['circlesOfPod', podId],
     queryFn: () => api.get(`/circles/of-pod/${podId}`).then(r => r.data.data ?? []),
     enabled: !!podId,
     meta: { entities: podId ? [E.pod(podId)] : [] },
   });
+}
+
+export default function PodCircleChips({ podId, podName, canUnlink }: Props) {
+  const qc = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+  const { ask, confirmDialog } = useConfirm();
+  const { data: circles } = usePodCircles(podId);
   const unlink = useMutation({
     networkMode: 'always',
     mutationFn: (circle: { id: string; name: string }) => api.delete(`/circles/${circle.id}/pods/${podId}`),
@@ -51,7 +59,7 @@ export default function PodCircleChips({ podId, podName, canUnlink }: Props) {
 
   if (!circles || circles.length === 0) return null;
   return (
-    <div className="animate-fade-in-up" data-testid="pod-circle-chips">
+    <div id="pod-circles" className="scroll-mt-4 animate-fade-in-up" data-testid="pod-circle-chips">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs font-semibold text-gray-500">In circles:</span>
         {circles.map(c => (

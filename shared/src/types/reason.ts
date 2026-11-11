@@ -128,6 +128,53 @@ export interface PersonBrief {
   canCall?: boolean;
 }
 
+// ─── A profile's Communities (Shirley pilot S3, RSN 14) ──────────────────────
+// GET /people/:userId/communities and GET /people/me/communities (the preview). The circles and pods a person is in
+// that the viewer may see: a space anyone may discover (an open circle, a Public with approval or Public open pod), or
+// one the viewer is in with them. A private pod or a closed circle the viewer is not in is never named. Nothing at all
+// for a person who turned "Show my communities on my profile" off or is hidden from search, and a 404 (as for an
+// unknown member) when either has blocked the other. The server decides every row and its action; the screen draws them.
+
+/** The person's own role in the space: the organisers' roles (owner, moderator; director, host), or member. */
+export type ProfileCommunityRole = 'owner' | 'moderator' | 'director' | 'host' | 'member';
+
+/**
+ * Who may get in: 'open' (an open circle or a Public open pod: join at once), 'approval' (a Public with approval pod:
+ * ask, the director decides), 'members' (a closed circle or a private pod, listed only because the viewer is in it).
+ */
+export type ProfileCommunityAccess = 'open' | 'approval' | 'members';
+
+/**
+ * What the viewer can do from the row, by the space's own rules (Shirley pilot S2's removal rules included):
+ * 'open' (they are in it), 'join', 'request', 'pending' (their ask waits), 'none' (nothing: an organiser removed them
+ * from a space people join at once).
+ */
+export type ProfileCommunityAction = 'open' | 'join' | 'request' | 'pending' | 'none';
+
+export interface ProfileCommunity {
+  kind: 'circle' | 'pod';
+  id: string;
+  name: string;
+  role: ProfileCommunityRole;
+  access: ProfileCommunityAccess;
+  action: ProfileCommunityAction;
+  /** A pod whose director set rules to agree to before asking: the ask is made on the pod's page, where they are shown. */
+  hasJoinRules: boolean;
+}
+
+/** Why your own preview lists nothing although you are in spaces: only ever sent to the member about themselves. */
+export type ProfileCommunitiesHidden = 'setting_off' | 'hidden_from_search';
+
+export interface ProfileCommunities {
+  items: ProfileCommunity[];
+  /** Every row the viewer may see, of which `items` is one page. */
+  total: number;
+  /** The offset of the next page, or null when this page is the last. */
+  nextOffset: number | null;
+  /** Your own preview only: why nothing is shown. Never sent about anyone else. */
+  hidden?: ProfileCommunitiesHidden | null;
+}
+
 export interface RecentConnection {
   userId: string;
   displayName: string;

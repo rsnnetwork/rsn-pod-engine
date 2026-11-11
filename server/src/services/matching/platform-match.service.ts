@@ -929,7 +929,8 @@ async function notifyAgentsOfNewUser(newUserId: string): Promise<Set<string>> {
         );
         if (dedupe.rows.length > 0) continue;
 
-        const title = `Your ${g.label} agent found someone`;
+        // Shirley pilot S7 (item 21): one word for it everywhere a member reads it, "search".
+        const title = `Your ${g.label} search found someone`;
         const inserted = await query<{ id: string; created_at: Date }>(
           `INSERT INTO notifications (id, user_id, type, title, body, link)
            VALUES (gen_random_uuid(), $1, 'platform_match', $2, $3, $4)

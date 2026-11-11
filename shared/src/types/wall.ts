@@ -33,6 +33,8 @@ export interface WallPostBase extends WallReactionSummary {
   commentCount: number;
   pinnedAt: string | null;
   createdAt: string;
+  /** When its author last changed its words (S4, 11 Nov 2026); null when never. The screen says "Edited". */
+  editedAt: string | null;
 }
 
 /** A comment, or a reply to one (`parentCommentId` set; replies go one level deep). */
@@ -46,6 +48,10 @@ export interface WallComment {
   parentCommentId: string | null;
   likeCount: number;
   likedByMe: boolean;
+  /** When its author last changed its words (S4); null when never. */
+  editedAt: string | null;
+  /** Its author deleted it while it had replies (S4 fix round 1): no words; it reads "This comment was deleted" and the replies stay. */
+  withdrawn: boolean;
 }
 
 /** The answer to adding a comment or a reply. */
@@ -77,7 +83,9 @@ export interface PodWallComment extends WallComment {
 }
 
 /**
- * What the viewer may do on this pod's wall right now; the server decides, the screen only shows it.
+ * What the viewer may do on a wall right now; the server decides, the screen only shows it. Both walls' feeds send it
+ * (the circle wall's since S4: `canModerate` is the circle's owner, a moderator or a platform admin; `canPost` is a
+ * member of a circle that is not archived). On the pod wall:
  * A pod that is not open (archived, suspended or still a draft) takes no new posts, comments, replies,
  * reactions or likes from anyone, so `canPost` is false there. Moderation and your own words are never
  * switched off: `canModerate` stays true for the pod's director, host and platform admins whatever the pod's
@@ -98,6 +106,18 @@ export interface PodWallViewer {
 export interface PodWallCommentList {
   comments: PodWallComment[];
   truncated: boolean;
+}
+
+/** The answer to an author's edit of their post or comment (S4). `changed` is false when the words were the same. */
+export interface WallEditResult {
+  changed: boolean;
+  editedAt: string | null;
+}
+
+/** The answer to deleting a post or a comment. `alreadyRemoved`: someone else removed it a moment before (S4). */
+export interface WallDeleteResult {
+  ok: true;
+  alreadyRemoved: boolean;
 }
 
 /** GET /pods/:podId/wall/posts. `pinned` is on the first page only; at most three are shown. */

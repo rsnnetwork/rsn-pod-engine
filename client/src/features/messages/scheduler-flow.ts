@@ -6,8 +6,9 @@
 // land on the same moment. A person sees that instant on their own clock, 24-hour, in the form the emails and bells
 // use ("Sun 25 Oct, 13:00"), with the zone named on screen.
 
-import { MEETING_GRACE_MIN } from '@rsn/shared';
+import { MEETING_GRACE_MIN, type InviteEmailState } from '@rsn/shared';
 import { errorMessage } from '../reason/errors';
+import { bookedSentence } from '../../components/calendar/invite-words';
 
 export const SLOT_MINUTES = 30;
 const SLOT_MS = SLOT_MINUTES * 60_000;
@@ -289,9 +290,13 @@ export function meetingStands(confirmed: ConfirmedLike | null | undefined, now: 
   return !!confirmed && !isMeetingOver(confirmed.startAt, confirmed.durationMin, now);
 }
 
-/** "Meeting confirmed: Sun 25 Oct, 13:00", or "Meeting moved: …" for a meeting that already stood. */
-export function confirmedMessage(at: string, zone: string, moved: boolean): string {
-  return `${moved ? 'Meeting moved' : 'Meeting confirmed'}: ${slotLabel(at, zone)}`;
+/**
+ * The toast once a meeting is booked or moved (11 Nov 2026, Shirley Palmer's RSN 09): "Meeting booked. Calendar
+ * invitation sent by email." only when the server's answer says it went, else what is true (invite-words.ts). The time
+ * is on the card and the summary; the toast says what happened.
+ */
+export function confirmedMessage(inviteEmail: InviteEmailState | null | undefined, moved: boolean): string {
+  return bookedSentence(inviteEmail, moved, 'toast');
 }
 
 export type SaveOutcome =
@@ -336,10 +341,10 @@ export function saveOutcome(after: SchedulingLike, ctx: SaveContext, now: number
   return { kind: 'sent' };
 }
 
-/** The toast after a Save. "move" and "move-choice" ask; nothing has moved. */
-export function saveMessage(outcome: SaveOutcome, zone: string): string {
+/** The toast after a Save. "move" and "move-choice" ask; nothing has moved. A booking says what its invitation did. */
+export function saveMessage(outcome: SaveOutcome, zone: string, inviteEmail?: InviteEmailState | null): string {
   switch (outcome.kind) {
-    case 'confirmed': return confirmedMessage(outcome.startAt, zone, false);
+    case 'confirmed': return confirmedMessage(inviteEmail, false);
     case 'move': return `You can both meet at ${slotLabel(outcome.to, zone)}. Move the meeting there?`;
     case 'move-choice': return MOVE_CHOICE;
     case 'overlap': return SAVE_OVERLAP;

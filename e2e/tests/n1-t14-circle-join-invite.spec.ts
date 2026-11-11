@@ -118,6 +118,7 @@ test(`an owner invites from the sheet, closes the circle, approves an ask and ma
   await expect(members.getByText(invitee!.displayName)).toBeVisible({ timeout: 30_000 });
 
   // ── 2. Closed: the requester asks, the owner sees it live and approves; the requester's page unlocks ─────────
+  await o.getByTestId('manage-open').click(); // Shirley pilot S3: Who can join is in the Manage menu
   await o.getByTestId('circle-settings').click();
   await o.getByTestId('circle-policy-closed').check();
   await o.getByTestId('circle-policy-save').click();

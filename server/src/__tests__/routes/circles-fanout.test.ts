@@ -49,7 +49,7 @@ import * as linkService from '../../services/circle/circle-entities.service';
 import circleRoutes from '../../routes/circles';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { authenticate } from '../../middleware/auth';
-import { circleReadLimiter, circleWriteLimiter, wallWriteLimiter } from '../../middleware/rateLimit';
+import { circleReadLimiter, circleWriteLimiter, wallEditLimiter, wallWriteLimiter } from '../../middleware/rateLimit';
 import { E } from '../../realtime/entities';
 
 const CIRCLE = '8d5e0b64-1c1f-4c3f-9d1e-6a5d0f3b2a11';
@@ -271,12 +271,12 @@ describe('the routes are rate limited', () => {
     expect(unlimited).toEqual([]);
   });
 
-  // The wall polls every 30 s (all its loaded pages), and a phone that comes back to the tab reads the page, the
-  // feed and every open comment thread again. One allowance covers the circle's page and its wall: 120 a minute.
+  // A phone that comes back to the tab reads the page, the feed and every open comment thread again (S4: the wall no
+  // longer polls; it follows its entity tags). One allowance covers the circle's page and its wall: 120 a minute.
   it('a member reading a circle and its wall has 120 reads a minute, then is told to slow down, in words', async () => {
     const reader = as('user-busy-reader');
-    jest.mocked(wallService.listPosts).mockResolvedValue({ pinned: [], posts: [], nextCursor: null });
-    jest.mocked(wallService.listComments).mockResolvedValue([]);
+    jest.mocked(wallService.listPosts).mockResolvedValue({ pinned: [], posts: [], nextCursor: null, viewer: { canPost: true, canModerate: false } });
+    jest.mocked(wallService.listComments).mockResolvedValue({ comments: [], truncated: false });
     const paths = [`/circles/${CIRCLE}`, `/circles/${CIRCLE}/posts`, `/circles/posts/${POST}/comments`];
     for (let i = 0; i < 120; i += 1) {
       expect((await request(app).get(paths[i % paths.length]).set(reader)).status).toBe(200);
@@ -300,8 +300,13 @@ describe('the routes are rate limited', () => {
     ['post', '/:id/posts'], ['post', '/posts/:postId/react'], ['post', '/posts/:postId/share'], ['delete', '/posts/:postId'],
     ['post', '/posts/:postId/pin'], ['post', '/posts/:postId/unpin'], ['post', '/posts/:postId/comments'],
     ['post', '/comments/:commentId/like'], ['delete', '/comments/:commentId'],
+    ['patch', '/posts/:postId'], ['patch', '/comments/:commentId'],
   ])('the wall\'s %s %s carries the wall write limiter', (method, path) => {
     order(wallWriteLimiter, method, path);
+  });
+
+  it.each([['/posts/:postId'], ['/comments/:commentId']])('S4: an author\'s edit (PATCH %s) also carries the edit limiter', (path) => {
+    order(wallEditLimiter, 'patch', path);
   });
 
   it('every mutating route has one of the two: nothing is left unlimited', () => {
@@ -355,12 +360,35 @@ describe('production\'s client: the calls its circle screens make are answered a
     expect(circleService.createCircle).toHaveBeenCalledWith(PLATFORM, { name: 'Doctors', description: 'x' });
   });
 
-  it('the wall\'s calls (post, react, pin) reach the wall service as before', async () => {
+  it('the wall\'s calls (post, react, pin) reach the wall service, which decides who moderates (S4: no platform role at the route)', async () => {
     jest.mocked(wallService.reactToPost).mockResolvedValue({ reaction: 'like' } as never);
     const res = await request(app).post(`/circles/posts/${POST}/react`).set(as(MEMBER)).send({ reaction: 'like' });
     expect(res.status).toBe(200);
     expect(wallService.reactToPost).toHaveBeenCalledWith(POST, MEMBER, 'like');
-    expect((await request(app).post(`/circles/posts/${POST}/pin`).set(as(MEMBER))).status).toBe(403);
+    // A circle's owner or moderator is a plain member on the platform: the route lets them reach the service.
+    expect((await request(app).post(`/circles/posts/${POST}/pin`).set(as(MEMBER))).status).toBe(200);
+    expect(wallService.pinPost).toHaveBeenCalledWith(POST, MEMBER, 'member', true);
+    await request(app).post(`/circles/posts/${POST}/unpin`).set(as(MEMBER));
+    expect(wallService.pinPost).toHaveBeenLastCalledWith(POST, MEMBER, 'member', false);
+  });
+
+  it('S4: delete passes the platform role and answers alreadyRemoved; an edit passes the words and the stamp', async () => {
+    jest.mocked(wallService.deletePost).mockResolvedValue({ alreadyRemoved: true });
+    const del = await request(app).delete(`/circles/posts/${POST}`).set(as(MEMBER));
+    expect(del.body).toEqual({ success: true, data: { ok: true, alreadyRemoved: true } });
+    expect(wallService.deletePost).toHaveBeenCalledWith(POST, MEMBER, 'member');
+    jest.mocked(wallService.deleteComment).mockResolvedValue({ postId: POST, alreadyRemoved: false });
+    const delC = await request(app).delete(`/circles/comments/${POST}`).set(as(MEMBER));
+    expect(delC.body).toEqual({ success: true, data: { ok: true, alreadyRemoved: false } });
+    jest.mocked(wallService.editPost).mockResolvedValue({ changed: true, editedAt: null });
+    const edit = await request(app).patch(`/circles/posts/${POST}`).set(as(MEMBER)).send({ content: 'better', expectedEditedAt: null });
+    expect(edit.status).toBe(200);
+    expect(wallService.editPost).toHaveBeenCalledWith(POST, MEMBER, { content: 'better', expectedEditedAt: null });
+    jest.mocked(wallService.editComment).mockResolvedValue({ changed: false, editedAt: null, postId: POST });
+    const editC = await request(app).patch(`/circles/comments/${POST}`).set(as(MEMBER)).send({ content: 'same' });
+    expect(editC.body).toEqual({ success: true, data: { changed: false, editedAt: null } });
+    expect((await request(app).patch(`/circles/posts/${POST}`).set(as(MEMBER)).send({ content: 'x'.repeat(8001) })).status).toBe(400);
+    expect((await request(app).patch(`/circles/comments/${POST}`).set(as(MEMBER)).send({ content: '' })).status).toBe(400);
   });
 });
 
@@ -492,9 +520,9 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
   });
 
   it('the wall\'s reads carry the viewer\'s role, so a closed circle\'s wall is refused at the service', async () => {
-    jest.mocked(wallService.listPosts).mockResolvedValue({ pinned: [], posts: [], nextCursor: null });
+    jest.mocked(wallService.listPosts).mockResolvedValue({ pinned: [], posts: [], nextCursor: null, viewer: { canPost: true, canModerate: false } });
     jest.mocked(wallService.getPost).mockResolvedValue({ id: POST } as never);
-    jest.mocked(wallService.listComments).mockResolvedValue([]);
+    jest.mocked(wallService.listComments).mockResolvedValue({ comments: [], truncated: false });
     await request(app).get(`/circles/${CIRCLE}/posts`).set(as(MEMBER));
     expect(wallService.listPosts).toHaveBeenCalledWith(CIRCLE, MEMBER, { cursor: undefined }, 'member');
     await request(app).get(`/circles/posts/${POST}`).set(as(MEMBER));
@@ -570,7 +598,7 @@ describe('every circle route checks the ids in its path', () => {
   const POD_WORDS = "We couldn't find that pod.";
   const POST_WORDS = "We couldn't find that post.";
   const COMMENT_WORDS = "We couldn't find that comment.";
-  type Probe = { method: 'get' | 'post' | 'delete'; path: (bad: string) => string; says: string; reached: () => unknown[][]; role?: string; body?: object };
+  type Probe = { method: 'get' | 'post' | 'delete' | 'patch'; path: (bad: string) => string; says: string; reached: () => unknown[][]; role?: string; body?: object };
   const probes: Array<[string, Probe]> = [
     ['POST /:id/join', { method: 'post', path: (b) => `/circles/${b}/join`, says: CIRCLE_WORDS, reached: () => jest.mocked(circleService.joinCircle).mock.calls }],
     ['POST /:id/leave', { method: 'post', path: (b) => `/circles/${b}/leave`, says: CIRCLE_WORDS, reached: () => jest.mocked(circleService.leaveCircle).mock.calls }],
@@ -589,7 +617,15 @@ describe('every circle route checks the ids in its path', () => {
     ['POST /posts/:postId/comments', { method: 'post', path: (b) => `/circles/posts/${b}/comments`, says: POST_WORDS, body: { content: 'Hi' }, reached: () => jest.mocked(wallService.addComment).mock.calls }],
     ['POST /comments/:commentId/like', { method: 'post', path: (b) => `/circles/comments/${b}/like`, says: COMMENT_WORDS, body: { liked: true }, reached: () => jest.mocked(wallService.likeComment).mock.calls }],
     ['DELETE /comments/:commentId', { method: 'delete', path: (b) => `/circles/comments/${b}`, says: COMMENT_WORDS, reached: () => jest.mocked(wallService.deleteComment).mock.calls }],
+    ['PATCH /posts/:postId', { method: 'patch', path: (b) => `/circles/posts/${b}`, says: POST_WORDS, body: { content: 'Hi' }, reached: () => jest.mocked(wallService.editPost).mock.calls }],
+    ['PATCH /comments/:commentId', { method: 'patch', path: (b) => `/circles/comments/${b}`, says: COMMENT_WORDS, body: { content: 'Hi' }, reached: () => jest.mocked(wallService.editComment).mock.calls }],
   ];
+  beforeEach(() => {
+    jest.mocked(wallService.deletePost).mockResolvedValue({ alreadyRemoved: false });
+    jest.mocked(wallService.deleteComment).mockResolvedValue({ postId: POST, alreadyRemoved: false });
+    jest.mocked(wallService.editPost).mockResolvedValue({ changed: true, editedAt: null });
+    jest.mocked(wallService.editComment).mockResolvedValue({ changed: true, editedAt: null, postId: POST });
+  });
 
   describe.each(probes)('%s', (_label, probe) => {
     const send = (id: string) => request(app)[probe.method](probe.path(id)).set(as(MEMBER, probe.role ?? 'member')).send(probe.body ?? {});

@@ -57,8 +57,10 @@ describe('when feedback is asked for', () => {
     expect(feedbackCardDue(meeting({ myFeedback: undefined }), START + 1)).toBe(true);
   });
 
+  // 11 Nov 2026 (Shirley Palmer's RSN 08): leaving always returns to the conversation, and the question comes with it.
   it('leaving the room opens the question only after the other person had been in it, and only for a known meeting', () => {
-    expect(afterRoomPath({ conversationId: 'c-1', meetingId: 'm-1', hadPartner: true })).toBe('/meetings/m-1?feedback=1');
+    expect(afterRoomPath({ conversationId: 'c-1', meetingId: 'm-1', hadPartner: true })).toBe('/messages/c-1?feedback=m-1');
+    expect(afterRoomPath({ conversationId: 'c-1', meetingId: 'm 1', hadPartner: true })).toBe('/messages/c-1?feedback=m%201');
     expect(afterRoomPath({ conversationId: 'c-1', meetingId: 'm-1', hadPartner: false })).toBe('/messages/c-1');
     expect(afterRoomPath({ conversationId: 'c-1', meetingId: null, hadPartner: true })).toBe('/messages/c-1');
     expect(afterRoomPath({ conversationId: 'c-1', hadPartner: true })).toBe('/messages/c-1');
@@ -84,10 +86,11 @@ describe('the sheet', () => {
     expect(read('features/reason/ui/Sheet.tsx')).toMatch(/createPortal\(/);
   });
 
-  it('has Send and Skip in the pinned footer with the privacy line, every control 44px tall', () => {
+  it('has Send and Not now in the pinned footer with the privacy line, every control 44px tall', () => {
     expect(sheet).toMatch(/footer=\{/);
     expect(sheet).toContain('{FEEDBACK_PRIVACY}');
-    expect(sheet).toMatch(/>\s*Skip\s*</);
+    expect(sheet).toContain('{NOT_NOW}');
+    expect(sheet).not.toMatch(/>\s*Skip\s*</);
     expect(sheet).toMatch(/'Send'/);
     expect(sheet.match(/min-h-\[44px\]/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
   });
@@ -194,7 +197,7 @@ describe('whether the other person has been in the room', () => {
 
 describe('where leaving the room goes (worked out as the person leaves)', () => {
   const chat = '/messages/c-1';
-  const asked = '/meetings/m-1?feedback=1';
+  const asked = '/messages/c-1?feedback=m-1';
 
   it('to the question when the other person was seen, or is in the room as I leave, and the meeting is known', async () => {
     expect(await afterRoomLeave({ conversationId: 'c-1', meetingId: 'm-1', hadPartner: true, partnerHere: false })).toBe(asked);
@@ -274,7 +277,12 @@ describe('the meeting room', () => {
 
   it('notes whether the other person was ever in the room, and leaving goes to the question only then', () => {
     expect(room).toMatch(/<PartnerSeen onSeen=\{onPartnerSeen\} probe=\{partnerProbe\} \/>/);
-    expect(room).toMatch(/onDisconnected=\{leaveRoom\}/);
+    // S5 fix round 1: a room closed under both (a block mid-call) says "The call has ended." first, then the same leave.
+    const onDisconnected = room.slice(room.indexOf('onDisconnected={(reason) => {'), room.indexOf('style={{ position:', room.indexOf('onDisconnected=')));
+    // Fix round 2: a closed room asks nothing (onRoomClosed); any other disconnect leaves to the question as before.
+    expect(onDisconnected).toContain('if (reason === DisconnectReason.ROOM_DELETED) {');
+    expect(onDisconnected).toContain('onRoomClosed();');
+    expect(onDisconnected).toContain('leaveRoom();');
   });
 
   // Fix round 2: the leave reads what the room holds as the person leaves (who is in it now, and the meeting afresh

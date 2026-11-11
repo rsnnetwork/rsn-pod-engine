@@ -57,7 +57,9 @@ export interface ApprovedAccount {
  */
 export async function reopenClosedAccount(client: PoolClient, email: string): Promise<ApprovedAccount> {
   const reopened = await client.query<{ id: string }>(
-    `UPDATE users SET status = 'active', updated_at = NOW()
+    // A reopened account starts with no public profile link (Shirley pilot S6): closing clears it, and so does this,
+    // for an account closed before the link existed to be cleared.
+    `UPDATE users SET status = 'active', public_profile_token = NULL, public_profile_token_created_at = NULL, updated_at = NOW()
       WHERE LOWER(email) = LOWER($1) AND status = 'deactivated'
       RETURNING id`,
     [email],

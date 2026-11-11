@@ -3,7 +3,10 @@
 // GET    /people/connections/recent
 // GET    /people/everyone           ?q&cursor&limit  (10 Nov 2026) every member you may meet, A to Z
 // GET    /people/me/card            (21 Oct 2026) your own public card, exactly what others see
+// GET    /people/me/preview         (Shirley pilot S6) your own Human Profile as a member with no connection to you sees it
+// GET    /people/me/communities     (Shirley pilot S3) ?limit&offset your own communities as that member sees them
 // GET    /people/:userId/brief
+// GET    /people/:userId/communities ?limit&offset (Shirley pilot S3) the spaces they are in that you may see
 // PUT    /people/:userId/response  { response: 'saved' | 'passed' }
 // DELETE /people/:userId/response
 // PUT    /people/:userId/already-met   (10 Nov 2026) private "I met them outside REASON" marker
@@ -24,6 +27,7 @@ import * as outcomes from '../services/people/meeting-outcome.service';
 import * as brief from '../services/people/person-brief.service';
 import * as connections from '../services/people/connections.service';
 import * as everyone from '../services/people/everyone.service';
+import * as communities from '../services/people/communities.service';
 import { announceFeedbackToAdmins } from '../services/meetings/meeting-feedback.service';
 
 const router = Router();
@@ -51,6 +55,14 @@ const outcomeBody = z.object({
 // validate() has already replaced req.body with the parsed value, but Express types it any.
 type ResponseBody = z.infer<typeof responseBody>;
 type OutcomeBody = z.infer<typeof outcomeBody>;
+
+// A profile's Communities, a page at a time (Shirley pilot S3): 8 unless more are asked for, never more than 50.
+const communitiesQuery = z.object({
+  limit: z.coerce.number().int().min(1).optional()
+    .transform((n) => Math.min(n ?? communities.COMMUNITIES_PAGE, communities.COMMUNITIES_PAGE_MAX)),
+  offset: z.coerce.number().int().min(0).max(communities.COMMUNITIES_OFFSET_MAX).optional(),
+});
+type CommunitiesQuery = z.infer<typeof communitiesQuery>;
 
 // The reads change nothing, so they emit nothing. They are limited per member all the
 // same, and share one allowance: the brief can be aimed at any member by id. The two
@@ -118,6 +130,35 @@ router.get('/me/card', authenticate, peopleReadLimiter, async (req: Request, res
   }
 });
 
+// "Preview as others see it" (Shirley pilot S6, RSN 12): your own Human Profile exactly as a member with no connection
+// to you is sent it. Like /me/card it takes no id, and sits ahead of /:userId/brief.
+router.get('/me/preview', authenticate, peopleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await brief.getOwnPreview(req.user!.userId);
+    res.json({ success: true, data } as ApiResponse);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Your own communities exactly as a member with no connection to you is sent them (the preview), and why there are none
+// when a setting of yours hides them. Like /me/preview it takes no id, and sits ahead of /:userId/communities.
+router.get(
+  '/me/communities',
+  authenticate,
+  peopleReadLimiter,
+  validate(communitiesQuery, 'query'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const page: CommunitiesQuery = req.query as unknown as CommunitiesQuery;
+      const data = await communities.getOwnCommunitiesPreview(req.user!.userId, page);
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.get(
   '/:userId/brief',
   authenticate,
@@ -126,6 +167,25 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await brief.getPersonBrief(req.user!.userId, req.params.userId);
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// The circles and pods they are in that you may see (Shirley pilot S3, RSN 14): the service decides every row and its
+// button. A block either way is the 404 an unknown member gets; your own id is a 400 (yours is /me/communities).
+router.get(
+  '/:userId/communities',
+  authenticate,
+  peopleReadLimiter,
+  validate(userParams, 'params'),
+  validate(communitiesQuery, 'query'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const page: CommunitiesQuery = req.query as unknown as CommunitiesQuery;
+      const data = await communities.getProfileCommunities(req.user!.userId, req.user!.role, req.params.userId, page);
       res.json({ success: true, data } as ApiResponse);
     } catch (err) {
       next(err);

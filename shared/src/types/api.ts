@@ -75,6 +75,9 @@ export const ErrorCodes = {
   POD_MEMBER_EXISTS: 'POD_MEMBER_EXISTS',
   CIRCLE_MEMBER_EXISTS: 'CIRCLE_MEMBER_EXISTS',
   CIRCLE_CLOSED: 'CIRCLE_CLOSED',  // 403; a closed circle: joining needs an ask its managers approve, and its wall, members and events are for members
+  CIRCLE_ARCHIVED: 'CIRCLE_ARCHIVED',  // 409; an archived circle's wall is read-only (S4, 11 Nov 2026)
+  WALL_PINS_FULL: 'WALL_PINS_FULL',    // 409; a wall already has its most pinned posts (WALL_PINNED_MAX): unpin one first
+  WALL_EDIT_CONFLICT: 'WALL_EDIT_CONFLICT',  // 409; the post or comment was edited elsewhere since the editor opened it
   POD_MEMBER_NOT_FOUND: 'POD_MEMBER_NOT_FOUND',
   POD_UNAUTHORIZED: 'POD_UNAUTHORIZED',
 
@@ -172,6 +175,12 @@ export const ErrorCodes = {
   // Call errors (1 Nov 2026)
   CALL_PARTNER_OFFLINE: 'CALL_PARTNER_OFFLINE',  // 409; the person rung is not on REASON right now (no ring, no bell)
   CALL_ALREADY_WAITING: 'CALL_ALREADY_WAITING',  // 409; this pair already has a call ringing, from either side
+
+  // A member's public profile link (Shirley pilot S6)
+  PUBLIC_LINK_NONE: 'PUBLIC_LINK_NONE',  // 409; making a new link needs a link to replace (turned off in another tab)
+
+  // Reports (11 Nov 2026)
+  REPORT_ALREADY_SENT: 'REPORT_ALREADY_SENT',  // 409; the same reporter reported the same member, message or post in the last 24 hours
 
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',

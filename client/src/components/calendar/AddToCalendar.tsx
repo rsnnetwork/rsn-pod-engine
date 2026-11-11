@@ -3,6 +3,10 @@
 // Calendar user on a phone. Used by the meeting page, the thread's "Meeting confirmed" card, the scheduler and the
 // event page. On a phone the menu is the REASON Sheet; from 768px it opens beside the button.
 //
+// 11 Nov 2026 (Shirley Palmer's RSN 09): the calendar file comes FIRST (no sign-in, and it updates the emailed
+// invitation instead of adding a second entry), then Google and Outlook.com, each saying it opens another site that may
+// ask to sign in. When the invitation was emailed (`emailed`), the button is "Add manually": an optional, secondary step,
+// and the menu says adding it again may make a second entry. Each caller gives it a quiet look in that case.
 // - The two links are plain <a target="_blank"> pressed by the person, so a popup blocker lets them through.
 // - The file is fetched (or built) on the press, saved through an object URL that is kept for a minute: WebKit starts
 //   a blob download after the click returns, and revoking it on the same tick could leave no download at all.
@@ -15,11 +19,14 @@ import { errorMessage } from '@/features/reason/errors';
 import { useToastStore } from '@/stores/toastStore';
 import { cn } from '@/lib/utils';
 import { calendarLinks, type CalendarEntry } from './calendar-links';
+import {
+  ADD_MANUALLY, ADD_TO_CALENDAR, EMAILED_NOTE, GOOGLE_NOTE, ICS_OPTION, NOT_EMAILED_NOTE, OUTLOOK_NOTE, icsNote,
+} from './invite-words';
 
 const KEEP_FILE_MS = 60_000;
-const MENU_WIDTH = 288;
-const OPTION = 'flex min-h-[44px] w-full items-center gap-3 rounded-[11px] px-3 text-left text-[14px] font-semibold text-reason-ink hover:bg-[#f5f6f7] focus-visible:bg-[#f5f6f7]';
-const EMAIL_NOTE = "Already added from the email? You don't need to add it again.";
+const MENU_WIDTH = 300;
+const OPTION = 'flex min-h-[44px] w-full items-center gap-3 rounded-[11px] px-3 py-1.5 text-left text-[14px] font-semibold text-reason-ink hover:bg-[#f5f6f7] focus-visible:bg-[#f5f6f7]';
+const NOTE = 'block text-[12px] font-normal leading-snug text-reason-muted';
 
 interface Props {
   /** What the Google and Outlook.com links fill in. */
@@ -30,9 +37,12 @@ interface Props {
   /** The button's own look, so each place keeps its style. */
   className?: string;
   icon?: ReactNode;
+  /** The calendar invitation was (or is being) emailed: the button is "Add manually" and the menu says it is optional. */
+  emailed?: boolean;
 }
 
-export default function AddToCalendar({ entry, file, fileName = 'reason-meeting.ics', className, icon }: Props) {
+export default function AddToCalendar({ entry, file, fileName = 'reason-meeting.ics', className, icon, emailed = false }: Props) {
+  const label = emailed ? ADD_MANUALLY : ADD_TO_CALENDAR;
   const [open, setOpen] = useState(false);
   const [wide, setWide] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -56,21 +66,21 @@ export default function AddToCalendar({ entry, file, fileName = 'reason-meeting.
         aria-expanded={open}
         className={className}
       >
-        {icon ?? <CalendarPlus aria-hidden="true" className="h-4 w-4" />} Add to calendar
+        {icon ?? <CalendarPlus aria-hidden="true" className="h-4 w-4" />} {label}
       </button>
       {open && wide && (
         <Popover anchor={trigger} onClose={close}>
-          <Options entry={entry} file={file} fileName={fileName} onDone={close} />
+          <Options entry={entry} file={file} fileName={fileName} onDone={close} emailed={emailed} />
         </Popover>
       )}
-      <Sheet open={open && !wide} onClose={close} title="Add to calendar">
-        <Options entry={entry} file={file} fileName={fileName} onDone={close} />
+      <Sheet open={open && !wide} onClose={close} title={label}>
+        <Options entry={entry} file={file} fileName={fileName} onDone={close} emailed={emailed} />
       </Sheet>
     </>
   );
 }
 
-function Options({ entry, file, fileName, onDone }: { entry: CalendarEntry; file: Props['file']; fileName: string; onDone: () => void }) {
+function Options({ entry, file, fileName, onDone, emailed }: { entry: CalendarEntry; file: Props['file']; fileName: string; onDone: () => void; emailed: boolean }) {
   const addToast = useToastStore((s) => s.addToast);
   const [saving, setSaving] = useState(false);
   const links = calendarLinks(entry);
@@ -99,13 +109,7 @@ function Options({ entry, file, fileName, onDone }: { entry: CalendarEntry; file
   return (
     // data-scheduler-trigger: the thread's scheduler closes on a press outside it, and this menu is portalled out of it.
     <div className="py-2" data-testid="add-to-calendar-menu" data-scheduler-trigger>
-      <div role="menu" aria-label="Add to calendar" className="grid gap-1">
-        <a role="menuitem" href={links.google} target="_blank" rel="noopener" onClick={onDone} className={OPTION} data-testid="calendar-google">
-          <CalendarMark letter="G" /> Google Calendar
-        </a>
-        <a role="menuitem" href={links.outlook} target="_blank" rel="noopener" onClick={onDone} className={OPTION} data-testid="calendar-outlook">
-          <CalendarMark letter="O" /> Outlook.com
-        </a>
+      <div role="menu" aria-label={emailed ? ADD_MANUALLY : ADD_TO_CALENDAR} className="grid gap-1">
         <button
           role="menuitem"
           type="button"
@@ -115,10 +119,21 @@ function Options({ entry, file, fileName, onDone }: { entry: CalendarEntry; file
           data-testid="calendar-ics"
         >
           <span aria-hidden="true" className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#f3f4f6]"><Download className="h-4 w-4" /></span>
-          {saving ? 'Preparing the file…' : 'Apple Calendar or other (.ics)'}
+          <span className="min-w-0">
+            {saving ? 'Preparing the file…' : ICS_OPTION}
+            <span className={NOTE}>{icsNote(emailed)}</span>
+          </span>
         </button>
+        <a role="menuitem" href={links.google} target="_blank" rel="noopener" onClick={onDone} className={OPTION} data-testid="calendar-google">
+          <CalendarMark letter="G" />
+          <span className="min-w-0">Google Calendar<span className={NOTE}>{GOOGLE_NOTE}</span></span>
+        </a>
+        <a role="menuitem" href={links.outlook} target="_blank" rel="noopener" onClick={onDone} className={OPTION} data-testid="calendar-outlook">
+          <CalendarMark letter="O" />
+          <span className="min-w-0">Outlook.com<span className={NOTE}>{OUTLOOK_NOTE}</span></span>
+        </a>
       </div>
-      <p className="mt-2 px-3 text-[12px] leading-snug text-reason-muted">{EMAIL_NOTE}</p>
+      <p className="mt-2 px-3 text-[12px] leading-snug text-reason-muted" data-testid="calendar-note">{emailed ? EMAILED_NOTE : NOT_EMAILED_NOTE}</p>
     </div>
   );
 }

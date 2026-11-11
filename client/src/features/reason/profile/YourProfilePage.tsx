@@ -2,7 +2,9 @@
 // "Your profile", at /profile (21 Oct 2026). Stefan: "when I look at my profile, I should see my profile, how other
 // people see it - and then edit, where applicable". From the top: your banner (change it here), the hero exactly as
 // other members are shown it (your card from GET /people/me/card, drawn by the Human Profile's own frame), your
-// company, then what only you see, the two ways to edit, and a nudge to add LinkedIn while there is none.
+// company, then what only you see, the two ways to edit, and a nudge to add LinkedIn while there is none (or to fix one
+// nobody can open). Shirley pilot S6: the photo itself opens the photo editor, a real preview as others see it, and a
+// card to share your profile (your member link, and an opt-in public link).
 // The form that used to live here is at /profile/edit.
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -21,8 +23,10 @@ import { personFacts } from '../human/profile-text';
 import { errorMessage, fetchMyCard, reasonKeys } from '../api';
 import ProfileEntities from '../entities/ProfileEntities';
 import BannerEditor from './BannerEditor';
+import ShareProfileCard from './ShareProfileCard';
+import { PREVIEW_TO } from './share-text';
 import {
-  CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, needsLinkedin, privateRows, youCanBring,
+  CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, LINKEDIN_PROMPT, linkedinPrompt, privateRows, youCanBring,
 } from './your-profile-text';
 
 const PAGE = 'mx-auto grid w-full max-w-[1284px] gap-[11px] md:gap-[18px]';
@@ -70,6 +74,7 @@ export default function YourProfilePage() {
 
   const who = personFacts(card.data);
   const bring = youCanBring(card.data);
+  const linkedin = linkedinPrompt(card.data);
   return (
     <div className={PAGE}>
       <OnboardingWelcomeModal />
@@ -81,6 +86,8 @@ export default function YourProfilePage() {
         hasBanner={!!card.data.bannerUrl}
         photo={card.data.avatarUrl}
         photoAction={<PencilButton label="Edit photo" onClick={photo.edit} disabled={photo.busy} />}
+        onPhotoClick={photo.busy ? undefined : photo.edit}
+        photoLabel="Change your photo"
         who={who}
         kicker="Your profile, as others see it"
         note={<NoteBox title="This is what members see" line="Who you want to meet and what you are hoping to find stay private. Only you see them, below." />}
@@ -138,17 +145,20 @@ export default function YourProfilePage() {
       <div className="flex flex-wrap gap-2.5">
         <Link to={EDIT_PROFILE_TO} className={PRIMARY}>Edit profile</Link>
         <Link to={EDIT_ANSWERS_TO} className={QUIET}>Edit answers</Link>
+        <Link to={PREVIEW_TO} className={QUIET} data-testid="preview-profile">Preview as others see it</Link>
       </div>
 
-      {needsLinkedin(card.data) && (
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-[19px] border border-[#cfe0f5] bg-[#f3f8fd] p-[17px] md:rounded-[24px] md:p-6">
+      {linkedin && (
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-[19px] border border-[#cfe0f5] bg-[#f3f8fd] p-[17px] md:rounded-[24px] md:p-6" data-testid={`linkedin-prompt-${linkedin}`}>
           <div className="min-w-0">
-            <h2 className="text-[17px] font-bold [overflow-wrap:anywhere]">Optimize your profile: connect LinkedIn</h2>
-            <p className="mt-1 text-[13px] text-[#505762]">Add your LinkedIn profile so members can learn more about you.</p>
+            <h2 className="text-[17px] font-bold [overflow-wrap:anywhere]">{LINKEDIN_PROMPT[linkedin].title}</h2>
+            <p className="mt-1 text-[13px] text-[#505762]">{LINKEDIN_PROMPT[linkedin].line}</p>
           </div>
-          <Link to={CONNECT_LINKEDIN_TO} className="flex min-h-[44px] items-center rounded-[11px] bg-[#0a66c2] px-4 text-[14px] font-bold text-white hover:bg-[#004182]">Add LinkedIn</Link>
+          <Link to={CONNECT_LINKEDIN_TO} className="flex min-h-[44px] items-center rounded-[11px] bg-[#0a66c2] px-4 text-[14px] font-bold text-white hover:bg-[#004182]">{LINKEDIN_PROMPT[linkedin].action}</Link>
         </section>
       )}
+
+      <ShareProfileCard />
     </div>
   );
 }

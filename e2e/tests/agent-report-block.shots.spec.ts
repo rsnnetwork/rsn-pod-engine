@@ -83,7 +83,9 @@ test('capture report + block + join-from-message UI', async () => {
   await chat.screenshot({ path: path.join(OUT, '01-join-from-message.png') });
 
   // 2) The report dialog with the "Also block" option + the Block button in the header.
-  await chat.getByRole('button', { name: /Report this member/i }).click();
+  // 11 Nov 2026: Report member lives in the thread's labelled More menu at every width.
+  await chat.getByTestId('thread-more').click();
+  await chat.getByRole('menuitem', { name: /Report member/i }).click();
   await expect(chat.getByText(/Also block/i)).toBeVisible({ timeout: 10_000 });
   await chat.screenshot({ path: path.join(OUT, '02-report-with-block.png') });
   // Close the modal (Cancel).

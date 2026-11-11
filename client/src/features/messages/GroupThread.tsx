@@ -20,6 +20,8 @@ import ReplyQuote from './ReplyQuote';
 import ReplyStrip, { ReplyButton } from './ReplyStrip';
 import type { ReplyTarget } from './reply-text';
 import GroupMembersSheet from './GroupMembersSheet';
+import ReportUserModal, { type ReportSubject } from '@/components/ReportUserModal';
+import { MessageMoreButton } from './thread/ThreadSafety';
 import { dayHeaderLabel, sameLocalDay, timeOnly } from './message-time';
 import { groupKeys, isGroupId, useGroup, useGroupMessages, useMarkGroupRead, useSendGroupMessage } from './useGroups';
 import {
@@ -61,6 +63,8 @@ export default function GroupThread({ groupId }: { groupId: string }) {
   const [membersOpen, setMembersOpen] = useState(false);
   // The message being replied to (30 Oct 2026, L7): "Replying to …" above the box until it is sent or cancelled.
   const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
+  // Someone else's message being reported (11 Nov 2026, item 16): the sheet opens over the chat, which stays.
+  const [reporting, setReporting] = useState<{ m: GroupChatMessage } | null>(null);
   const composerBox = useRef<HTMLTextAreaElement | null>(null);
   const replyTo = useCallback((m: GroupChatMessage, mine: boolean) => {
     setReplyTarget({ id: m.id, senderName: m.senderName, content: m.content, mine });
@@ -189,7 +193,15 @@ export default function GroupThread({ groupId }: { groupId: string }) {
         {thread.isFetchNextPageError && <p role="alert" className="mb-2 text-center text-sm text-red-600">{EARLIER_FAILED}</p>}
         {messages.length === 0
           ? <p data-testid="group-thread-empty" className="py-8 text-center text-sm text-gray-500">{GROUP_EMPTY}</p>
-          : <MessageList messages={messages} myUserId={myUserId} onReply={replyTo} />}
+          : <MessageList messages={messages} myUserId={myUserId} onReply={replyTo} onReport={(m) => setReporting({ m })} />}
+      {/* Report message (11 Nov 2026, item 16): the person stays in the group chat; the REASON team reviews it. */}
+      <ReportUserModal
+        open={!!reporting}
+        onClose={() => setReporting(null)}
+        reportedId={reporting?.m.fromUserId ?? ''}
+        reportedDisplayName={reporting?.m.senderName}
+        subject={reporting ? { kind: 'group_message', id: reporting.m.id, excerpt: reporting.m.content } satisfies ReportSubject : null}
+      />
       </div>
       <GroupComposer groupId={groupId} replyTarget={replyTarget} onReplyDone={() => setReplyTarget(null)} boxRef={composerBox} />
       <GroupMembersSheet open={membersOpen} onClose={() => setMembersOpen(false)} group={group} myUserId={myUserId ?? ''} />
@@ -229,10 +241,12 @@ function ThreadHeader({ group, onMembers }: { group: DmGroupDetail; onMembers: (
  * picture open their profile (30 Oct 2026, L7); a former member's do not. Each message offers Reply, and a reply shows
  * the message it answers.
  */
-function MessageList({ messages, myUserId, onReply }: {
+function MessageList({ messages, myUserId, onReply, onReport }: {
   messages: GroupChatMessage[];
   myUserId: string | undefined;
   onReply: (m: GroupChatMessage, mine: boolean) => void;
+  /** Someone else's message, reported from its "⋯" (11 Nov 2026). */
+  onReport: (m: GroupChatMessage) => void;
 }) {
   const loadedIds = new Set(messages.map((m) => m.id));
   const rows: ReactNode[] = [];
@@ -294,6 +308,7 @@ function MessageList({ messages, myUserId, onReply }: {
                 <Linkify text={m.content} className={BUBBLE_LINK} />
               </div>
               <ReplyButton onReply={() => onReply(m, mine)} />
+              {!mine && <MessageMoreButton onReport={() => onReport(m)} />}
             </div>
           ))}
           <p className="mt-1 px-1 text-[11px] text-gray-400">{timeOnly(new Date(last.createdAt))}</p>

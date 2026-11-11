@@ -87,6 +87,12 @@ interface FrameProps {
   badge?: ReactNode;
   /** Drawn on the photo's lower right: the pencil, on your own profile only (30 Oct review, T3a). */
   photoAction?: ReactNode;
+  /**
+   * Your own profile only (Shirley pilot S6, RSN 13): the photo itself is a button that opens the photo editor, the same
+   * as the pencil, named by `photoLabel`. On anyone else's profile the photo is only a picture.
+   */
+  onPhotoClick?: () => void;
+  photoLabel?: string;
   /** True when a banner is drawn above the hero: the photo then overlaps its lower edge. */
   hasBanner?: boolean;
   /** The box under the tags. */
@@ -103,14 +109,27 @@ interface FrameProps {
 // photo, so the circle straddles the banner's lower edge. Without one it simply sits at the top of the card.
 const OVERLAP = '-mt-[85px] md:-mt-[118px]';
 
-export function HeroFrame({ photo, who, kicker, badge, photoAction, hasBanner = false, note, panel, actions, fit = 'screen' }: FrameProps) {
+export function HeroFrame({
+  photo, who, kicker, badge, photoAction, onPhotoClick, photoLabel, hasBanner = false, note, panel, actions, fit = 'screen',
+}: FrameProps) {
   const roleLine = [who.role, who.company].filter(Boolean).join(' · ');
+  const avatar = <Avatar src={photo} name={who.name} size="2xl" className="h-28 w-28 text-4xl ring-4 ring-white shadow-[0_10px_30px_rgba(17,18,22,.12)] md:h-36 md:w-36 md:text-5xl" />;
   return (
     <section className={GRID[fit]}>
       <section className="flex min-w-0 flex-col items-center rounded-[21px] border border-reason-line bg-white p-[18px] text-center md:rounded-[26px] md:p-7">
         {/* Round, centred, at every width. With none, or one that fails to load, Avatar draws initials in the same circle. */}
         <div className={cn('relative shrink-0 rounded-full', hasBanner && OVERLAP)} data-testid="profile-photo">
-          <Avatar src={photo} name={who.name} size="2xl" className="h-28 w-28 text-4xl ring-4 ring-white shadow-[0_10px_30px_rgba(17,18,22,.12)] md:h-36 md:w-36 md:text-5xl" />
+          {onPhotoClick ? (
+            <button
+              type="button"
+              onClick={onPhotoClick}
+              aria-label={photoLabel}
+              className="block rounded-full focus:outline-none focus-visible:ring-4 focus-visible:ring-reason-red focus-visible:ring-offset-2"
+              data-testid="profile-photo-button"
+            >
+              {avatar}
+            </button>
+          ) : avatar}
           {photoAction && <div className="absolute -bottom-1 -right-3">{photoAction}</div>}
         </div>
         <p className="mt-4 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#646a77] md:text-[11px]">{kicker}</p>

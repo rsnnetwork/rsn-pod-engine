@@ -25,10 +25,10 @@ import { query, transaction } from '../../db';
 import config from '../../config';
 import logger from '../../config/logger';
 import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
-import { ErrorCodes, type LiveCallRequest } from '@rsn/shared';
+import { ErrorCodes, type LiveCallRequest, type PresenceState } from '@rsn/shared';
 import { getVideoProvider } from '../video/video.service';
 import * as blockService from '../block/block.service';
-import { isActive } from '../presence/presence.service';
+import { presenceState } from '../presence/presence.service';
 import { stampAttendance } from '../meetings/meeting.service';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
 import { CURRENT_MEETING_ID } from '../meetings/current-meeting';
@@ -44,8 +44,14 @@ export const CALL_REQUEST_TTL_MS = 2 * 60 * 1000;
 export const MIN_CALL_MIN = 5;
 export const MAX_CALL_MIN = 240;
 
-export function callRoomId(conversationId: string): string {
-  return `dm-${conversationId}`;
+/**
+ * The pair's call room. A block during a call (11 Nov 2026, item 16) moves the pair to a new room (call_room_epoch, one
+ * up, migration 150) and closes the old one, so a token minted before the block (it lasts 4 hours, and LiveKit makes a
+ * room again for anyone who joins with one) only ever reaches an empty room nobody else is sent to. Epoch 0 is the room
+ * every conversation has always had.
+ */
+export function callRoomId(conversationId: string, epoch = 0): string {
+  return epoch > 0 ? `dm-${conversationId}-${epoch}` : `dm-${conversationId}`;
 }
 
 interface ConvParticipants {
@@ -62,6 +68,8 @@ interface ConvParticipants {
    * (current-meeting.ts): null when the pointer names a row that no longer stands at that time.
    */
   current_meeting_id: string | null;
+  /** Which call room the pair is in now (callRoomId). */
+  call_room_epoch: number;
 }
 
 /** Load the conversation, prove the caller is in it and not blocked either way. */
@@ -69,9 +77,9 @@ async function requireCallParticipant(conversationId: string, userId: string): P
   const r = await query<{
     id: string; user_a_id: string; user_b_id: string;
     calls_unlocked_at: Date | null; meeting_start_at: Date | null; meeting_duration_min: number | null;
-    current_meeting_id: string | null;
+    current_meeting_id: string | null; call_room_epoch: number | null;
   }>(
-    `SELECT id, user_a_id, user_b_id, calls_unlocked_at, meeting_start_at, meeting_duration_min, ${CURRENT_MEETING_ID}
+    `SELECT id, user_a_id, user_b_id, calls_unlocked_at, meeting_start_at, meeting_duration_min, call_room_epoch, ${CURRENT_MEETING_ID}
        FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
@@ -84,7 +92,7 @@ async function requireCallParticipant(conversationId: string, userId: string): P
   if (await blockService.areBlocked(userId, partnerId)) {
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You cannot call this member');
   }
-  return { ...conv, partnerId, iAmA: conv.user_a_id === userId };
+  return { ...conv, call_room_epoch: conv.call_room_epoch ?? 0, partnerId, iAmA: conv.user_a_id === userId };
 }
 
 /** Calls are only available once this pair's first scheduled meeting has happened. */
@@ -94,29 +102,13 @@ function requireUnlocked(conv: ConvParticipants): void {
   }
 }
 
-/** Is the partner actually on the platform now? Heartbeat first, socket fallback. */
-async function partnerIsOnline(partnerId: string, conversationId: string): Promise<boolean> {
-  const active = await isActive(partnerId);
-  if (active !== null) return active;
-  try {
-    const { io } = await import('../../index');
-    const sockets = await io.in(`user:${partnerId}`).fetchSockets();
-    return sockets.length > 0;
-  } catch (err) {
-    logger.warn({ err, conversationId }, 'partner presence check failed');
-    return false;
-  }
-}
-
 /**
- * Is the other participant actually on the platform right now? Uses the
- * app-level presence heartbeat (foreground pings) so a lingering/backgrounded
- * socket doesn't read as online. Falls back to a live socket check only when
- * Redis (the presence store) is unavailable.
+ * Where the other person in the conversation is now (11 Nov 2026, RSN 07): online, away or offline, or null when the
+ * read could not tell (presence.service.ts). Only a participant may ask, and never across a block (a 403, as for a call).
  */
-export async function isPartnerOnline(conversationId: string, userId: string): Promise<boolean> {
+export async function partnerPresence(conversationId: string, userId: string): Promise<PresenceState | null> {
   const conv = await requireCallParticipant(conversationId, userId);
-  return partnerIsOnline(conv.partnerId, conversationId);
+  return presenceState(conv.partnerId);
 }
 
 export interface CallToken {
@@ -244,8 +236,8 @@ async function recordJoin(conv: ConvParticipants, userId: string, standing: Stan
  * A LiveKit failure never fails the leave.
  */
 export async function leaveCallRoom(conversationId: string, userId: string, sid: string): Promise<{ removed: boolean }> {
-  const r = await query<{ user_a_id: string; user_b_id: string }>(
-    `SELECT user_a_id, user_b_id FROM dm_conversations WHERE id = $1`,
+  const r = await query<{ user_a_id: string; user_b_id: string; call_room_epoch: number | null }>(
+    `SELECT user_a_id, user_b_id, call_room_epoch FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
   const conv = r.rows[0];
@@ -254,7 +246,8 @@ export async function leaveCallRoom(conversationId: string, userId: string, sid:
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Not your conversation');
   }
   try {
-    return { removed: await getVideoProvider().removeParticipantIfSession(callRoomId(conversationId), userId, sid) };
+    const room = callRoomId(conversationId, conv.call_room_epoch ?? 0);
+    return { removed: await getVideoProvider().removeParticipantIfSession(room, userId, sid) };
   } catch (err) {
     logger.warn({ err, conversationId, userId }, 'taking a member who left out of the call room failed (non-fatal)');
     return { removed: false };
@@ -279,7 +272,7 @@ export async function getCallToken(
   const me = (await query<{ display_name: string | null }>(
     `SELECT display_name FROM users WHERE id = $1`, [userId],
   )).rows[0];
-  const roomName = callRoomId(conversationId);
+  const roomName = callRoomId(conversationId, conv.call_room_epoch);
   const issued = await getVideoProvider().issueJoinToken(
     userId, roomName, me?.display_name || 'Member', CALL_TOKEN_TTL_SECONDS,
   );
@@ -374,7 +367,7 @@ export function offlineSentence(name: string): string {
 /**
  * Ask the partner for a call of a chosen length. A video call needs a real mutual connection, no block and
  * both members (requireConnection); an audio call keeps the 9 Sep rule, calls unlocked (the first meeting
- * happened), with no block and both members (requireMembers). The partner must be online right now. Rings them with a bell notification + a live
+ * happened), with no block and both members (requireMembers). The partner must not be offline (online or away). Rings them with a bell notification + a live
  * `call:request`, and leaves a line in the thread. The caller then waits for accept/decline.
  */
 export async function requestCall(
@@ -389,8 +382,11 @@ export async function requestCall(
   const { name: partnerName } = await requireCallable(callKind, userId, conv.partnerId);
   const minutes = clampDuration(durationMin);
 
-  if (!(await partnerIsOnline(conv.partnerId, conversationId))) {
-    throw new ConflictError(ErrorCodes.CALL_PARTNER_OFFLINE, offlineSentence(partnerName));
+  // Only someone with no connection at all is refused (11 Nov 2026, RSN 07): an away member still gets the banner and
+  // the bell, and a read that could not tell lets the ring go rather than say offline wrongly. The refusal names them,
+  // so the screen can offer Try again, Find a time and Send a message.
+  if ((await presenceState(conv.partnerId)) === 'offline') {
+    throw new ConflictError(ErrorCodes.CALL_PARTNER_OFFLINE, offlineSentence(partnerName), { partnerName });
   }
 
   // A stale unanswered request shouldn't block a new one.
@@ -606,6 +602,41 @@ async function claimAnswer(requestId: string, status: 'declined' | 'cancelled'):
     [requestId],
   );
   return claimed.rows.length > 0;
+}
+
+/**
+ * A block ends what the two had going (11 Nov 2026, Shirley Palmer's item 16; the controller's ruling: a block during a
+ * call ends it for BOTH sides). A call still ringing between them is withdrawn (both screens told, the callee's banner
+ * closed). The pair moves to a new call room (call_room_epoch one up) and the old one is closed: LiveKit disconnects
+ * everyone in it, both rooms go back to their thread with "The call has ended.", and a token minted before the block can
+ * only reach the old room, which nobody is sent to again. No new token is minted for either while the block stands
+ * (requireCallParticipant). Best-effort past the move: the block itself is already saved.
+ */
+export async function endCallsOnBlock(blockerId: string, blockedId: string): Promise<void> {
+  const r = await query<{ id: string; call_room_epoch: number }>(
+    `UPDATE dm_conversations SET call_room_epoch = call_room_epoch + 1
+      WHERE user_a_id = LEAST($1::uuid, $2::uuid) AND user_b_id = GREATEST($1::uuid, $2::uuid)
+      RETURNING id, call_room_epoch`,
+    [blockerId, blockedId],
+  );
+  const moved = r.rows[0];
+  if (!moved) return;
+  const conversationId = moved.id;
+  const withdrawn = await query<RequestRow>(
+    `UPDATE call_requests SET status = 'cancelled', responded_at = NOW()
+      WHERE conversation_id = $1 AND status = 'pending'
+      RETURNING *`,
+    [conversationId],
+  );
+  if (withdrawn.rows.length > 0) {
+    await Promise.all(withdrawn.rows.map(closeCalleeBanners));
+    await emitCallChanged(conversationId, [blockerId, blockedId]);
+  }
+  try {
+    await getVideoProvider().closeRoom(callRoomId(conversationId, moved.call_room_epoch - 1));
+  } catch (err) {
+    logger.error({ err, conversationId }, 'closing the call room after a block failed');
+  }
 }
 
 /** The callee declines → the caller is told. Already answered (here or on another device): nothing is said. */

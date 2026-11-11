@@ -63,5 +63,6 @@ export function podWallConfig({ podId, me, podStatus, isActiveMember }: PodWallI
       notMember: 'Members talk here. Join the pod to read and post.',
     },
     authorHref: (authorId) => personHref(authorId, 'Pods'),
+    reportKind: 'pod_post',
   };
 }

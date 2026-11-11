@@ -218,14 +218,14 @@ test('a member reports another member from the profile page, and it appears in t
   const reporterPage = await openPage(reporter);
   await gotoRetry(reporterPage, `${APP}/profile/${reported.id}`);
 
-  const reportEntry = reporterPage.getByRole('button', { name: /Report this member/i });
+  const reportEntry = reporterPage.getByRole('button', { name: /Report member/i });
   await expect(reportEntry).toBeVisible({ timeout: 20_000 });
   await reportEntry.click();
 
   await reporterPage.getByLabel('Reason').selectOption('inappropriate_content');
   await reporterPage.getByPlaceholder(/helps our team understand/i).fill('Kept sending unsolicited spammy links.');
-  await reporterPage.getByRole('button', { name: 'Submit report' }).click();
-  await expect(reporterPage.getByText('Thanks. Our team will review this.')).toBeVisible({ timeout: 15_000 });
+  await reporterPage.getByRole('button', { name: 'Send report' }).click();
+  await expect(reporterPage.getByText('Thanks. The REASON team will review it.')).toBeVisible({ timeout: 15_000 });
 
   const adminPage = await openPage(admin);
   await gotoRetry(adminPage, `${APP}/admin/users/${reported.id}`);

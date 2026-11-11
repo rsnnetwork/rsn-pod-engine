@@ -233,7 +233,8 @@ describe('Phase X — 13 May live-test bug fixes', () => {
       // back button doesn't get stuck on /messages/new/:userId.
       expect(messagesPage).toMatch(/if\s*\(!composeToUserId\s*\|\|\s*!inboxData\)\s*return/);
       expect(messagesPage).toMatch(/inboxData\.find\(\s*c\s*=>\s*c\.otherUserId\s*===\s*composeToUserId\s*\)/);
-      expect(messagesPage).toMatch(/navigate\(`\/messages\/\$\{existing\.conversationId\}`,\s*\{\s*replace:\s*true\s*\}\)/);
+      // 11 Nov 2026: what the link asked for (?schedule=1 from a profile's "Find a time") goes with it.
+      expect(messagesPage).toMatch(/navigate\(`\/messages\/\$\{existing\.conversationId\}\$\{asked \? `\?\$\{asked\}` : ''\}`,\s*\{\s*replace:\s*true\s*\}\)/);
     });
 
     it('MessagesPage sendMutation POSTs to /dm/messages and replaces URL with new conv id after first send', () => {

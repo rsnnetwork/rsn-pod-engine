@@ -9,7 +9,10 @@
 const mockQuery = jest.fn<any, any[]>();
 const mockIssue = jest.fn((..._a: any[]) => Promise.resolve({ token: 'tok-123' }));
 const mockAreBlocked = jest.fn((..._a: any[]) => Promise.resolve(false));
-const mockIsActive = jest.fn((..._a: any[]) => Promise.resolve<boolean | null>(true));
+// 11 Nov 2026 (RSN 07): where the callee is (online, away, offline), or null when the read could not tell.
+const mockPresenceState = jest.fn((..._a: any[]) => Promise.resolve<'online' | 'away' | 'offline' | null>('online'));
+const mockRemoveParticipant = jest.fn((..._a: any[]) => Promise.resolve(undefined));
+const mockCloseRoom = jest.fn((..._a: any[]) => Promise.resolve(undefined));
 const mockFetchSockets = jest.fn((..._a: any[]) => Promise.resolve([] as unknown[]));
 const mockEmit = jest.fn();
 const mockSendBroadcast = jest.fn((..._a: any[]) => Promise.resolve({ conversationId: 'conv-1', message: { id: 'm1' } }));
@@ -38,13 +41,17 @@ jest.mock('../../../config/logger', () => ({
 }));
 jest.mock('../../../services/video/video.service', () => ({
   __esModule: true,
-  getVideoProvider: () => ({ issueJoinToken: (...a: unknown[]) => mockIssue(...a) }),
+  getVideoProvider: () => ({
+    issueJoinToken: (...a: unknown[]) => mockIssue(...a),
+    removeParticipant: (...a: unknown[]) => mockRemoveParticipant(...a),
+    closeRoom: (...a: unknown[]) => mockCloseRoom(...a),
+  }),
 }));
 jest.mock('../../../services/block/block.service', () => ({
   __esModule: true, areBlocked: (...a: unknown[]) => mockAreBlocked(...a),
 }));
 jest.mock('../../../services/presence/presence.service', () => ({
-  __esModule: true, isActive: (...a: unknown[]) => mockIsActive(...a),
+  __esModule: true, presenceState: (...a: unknown[]) => mockPresenceState(...a),
 }));
 jest.mock('../../../index', () => ({
   __esModule: true,
@@ -78,7 +85,7 @@ jest.mock('../../../realtime/entities', () => ({
 }));
 
 import {
-  callRoomId, getCallToken, isPartnerOnline, requestCall, acceptCallRequest,
+  callRoomId, getCallToken, partnerPresence, requestCall, acceptCallRequest, endCallsOnBlock,
   declineCallRequest, cancelCallRequest, clampDuration, CALL_REQUEST_TTL_MS,
   getIncomingCallRequest, getOutgoingCallRequest, requestCallToUser,
 } from '../../../services/dm/meeting-call.service';
@@ -175,7 +182,9 @@ beforeEach(() => {
   mockQuery.mockReset(); mockIssue.mockClear(); mockEmit.mockClear();
   mockSendBroadcast.mockClear(); mockBroadcastDm.mockClear(); mockEmitEntities.mockClear();
   mockAreBlocked.mockReset(); mockAreBlocked.mockResolvedValue(false);
-  mockIsActive.mockReset(); mockIsActive.mockResolvedValue(true);
+  mockPresenceState.mockReset(); mockPresenceState.mockResolvedValue('online');
+  mockRemoveParticipant.mockReset(); mockRemoveParticipant.mockResolvedValue(undefined);
+  mockCloseRoom.mockReset(); mockCloseRoom.mockResolvedValue(undefined);
   mockFetchSockets.mockReset(); mockFetchSockets.mockResolvedValue([]);
   mockRequireConnection.mockReset(); mockRequireConnection.mockResolvedValue({ name: 'Bo Brandt' });
   mockRequireMembers.mockReset(); mockRequireMembers.mockResolvedValue({ name: 'Bo Brandt' });
@@ -355,17 +364,21 @@ describe('getCallToken', () => {
   });
 });
 
-describe('isPartnerOnline', () => {
-  it('uses the presence heartbeat', async () => {
-    mockIsActive.mockResolvedValue(true);
-    expect(await isPartnerOnline('conv-1', 'u-a')).toBe(true);
-    mockIsActive.mockResolvedValue(false);
-    expect(await isPartnerOnline('conv-1', 'u-a')).toBe(false);
+describe('partnerPresence (11 Nov 2026, RSN 07)', () => {
+  it('is the other person\'s state: online, away, offline, or null when the read could not tell', async () => {
+    for (const state of ['online', 'away', 'offline', null] as const) {
+      mockPresenceState.mockResolvedValue(state);
+      expect(await partnerPresence('conv-1', 'u-a')).toBe(state);
+    }
+    expect(mockPresenceState).toHaveBeenLastCalledWith('u-b');
   });
-  it('falls back to a live socket check when Redis is unavailable', async () => {
-    mockIsActive.mockResolvedValue(null);
-    mockFetchSockets.mockResolvedValue([{ id: 's1' }]);
-    expect(await isPartnerOnline('conv-1', 'u-a')).toBe(true);
+  it('is refused across a block, as a call is', async () => {
+    mockAreBlocked.mockResolvedValue(true);
+    await expect(partnerPresence('conv-1', 'u-a')).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockPresenceState).not.toHaveBeenCalled();
+  });
+  it('is refused to someone outside the conversation', async () => {
+    await expect(partnerPresence('conv-1', 'u-stranger')).rejects.toMatchObject({ statusCode: 403 });
   });
 });
 
@@ -462,12 +475,23 @@ describe('requestCall', () => {
   });
 
   it('an offline callee is a 409 with exactly the plan\'s sentence, and no ring and no bell', async () => {
-    mockIsActive.mockResolvedValue(false);
+    mockPresenceState.mockResolvedValue('offline');
     await expect(requestCall('conv-1', 'u-a', 'video', 15)).rejects.toMatchObject({
       statusCode: 409, code: 'CALL_PARTNER_OFFLINE', message: "Bo Brandt isn't online right now. Send a message instead.",
+      // 11 Nov 2026: named, so the screen can offer Try again, Find a time and Send a message.
+      details: { partnerName: 'Bo Brandt' },
     });
     expect(mockQuery.mock.calls.some(c => /INSERT INTO call_requests|INSERT INTO notifications/.test(c[0] as string))).toBe(false);
     expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  // 11 Nov 2026 (RSN 07): only "offline" is refused. Someone away still gets the banner and the bell, and a read that
+  // could not tell lets the ring go rather than say offline wrongly.
+  it.each(['away', null] as const)('a callee who is %s is rung', async (state) => {
+    mockPresenceState.mockResolvedValue(state);
+    const rq = await requestCall('conv-1', 'u-a', 'video', 15);
+    expect(rq).toMatchObject({ status: 'pending', toUserId: 'u-b' });
+    expect(mockEmit.mock.calls.map(c => c[0])).toContain('call:request');
   });
 
   it('when unlocked and online: stores the request with the typed duration and rings the partner', async () => {
@@ -733,9 +757,82 @@ describe('requestCallToUser (the profile rings a person, not a conversation)', (
   });
 
   it('an offline connection is told the plan\'s sentence', async () => {
-    mockIsActive.mockResolvedValue(false);
+    mockPresenceState.mockResolvedValue('offline');
     await expect(requestCallToUser('u-a', 'u-b', 15)).rejects.toMatchObject({
       statusCode: 409, message: "Bo Brandt isn't online right now. Send a message instead.",
     });
+  });
+});
+
+// 11 Nov 2026 (Shirley Palmer's item 16; fix round 1, the controller's ruling): a block in the middle of a call ends it
+// for BOTH sides, and a token minted before the block can never reach the pair again.
+describe('endCallsOnBlock', () => {
+  const armBlock = (opts: { conversation: boolean; ringing: boolean; epoch?: number }) => {
+    mockQuery.mockImplementation((sql: string) => {
+      const q = String(sql).replace(/\s+/g, ' ');
+      if (/UPDATE dm_conversations SET call_room_epoch = call_room_epoch \+ 1/.test(q)) {
+        return Promise.resolve({ rows: opts.conversation ? [{ id: 'conv-1', call_room_epoch: opts.epoch ?? 1 }] : [] });
+      }
+      if (/UPDATE call_requests SET status = 'cancelled'/.test(q)) {
+        return Promise.resolve({ rows: opts.ringing ? [{ id: 'rq-9', conversation_id: 'conv-1', from_user_id: 'u-b', to_user_id: 'u-a', kind: 'video', duration_min: 15, status: 'cancelled', created_at: new Date() }] : [] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+  };
+
+  it('moves the pair to a new call room and CLOSES the old one, so both are put out and an old token reaches nobody', async () => {
+    armBlock({ conversation: true, ringing: false, epoch: 1 });
+    await endCallsOnBlock('u-a', 'u-b');
+    const move = mockQuery.mock.calls.find(c => /SET call_room_epoch = call_room_epoch \+ 1/.test(String(c[0])))!;
+    expect(String(move[0]).replace(/\s+/g, ' ')).toContain('WHERE user_a_id = LEAST($1::uuid, $2::uuid) AND user_b_id = GREATEST($1::uuid, $2::uuid) RETURNING id, call_room_epoch');
+    expect(move[1]).toEqual(['u-a', 'u-b']);
+    expect(mockCloseRoom).toHaveBeenCalledWith('dm-conv-1');
+    expect(mockRemoveParticipant).not.toHaveBeenCalled();
+  });
+
+  it('a second block (epoch 2) closes the room the pair had moved to (dm-<id>-1)', async () => {
+    armBlock({ conversation: true, ringing: false, epoch: 2 });
+    await endCallsOnBlock('u-b', 'u-a');
+    expect(mockCloseRoom).toHaveBeenCalledWith('dm-conv-1-1');
+  });
+
+  it('withdraws a call still ringing between the two, closes the callee\'s banner and tells both', async () => {
+    armBlock({ conversation: true, ringing: true });
+    await endCallsOnBlock('u-a', 'u-b');
+    const withdraw = mockQuery.mock.calls.find(c => /UPDATE call_requests SET status = 'cancelled'/.test(String(c[0])))!;
+    expect(String(withdraw[0])).toMatch(/WHERE conversation_id = \$1 AND status = 'pending'/);
+    expect(withdraw[1]).toEqual(['conv-1']);
+    expect(mockRooms).toContainEqual({ room: 'user:u-a', event: 'call:cancelled', payload: { requestId: 'rq-9', conversationId: 'conv-1' } });
+    expect(tagsSentTo('u-a')).toEqual(expect.arrayContaining(['user:u-a:calls', 'dm-conversation:conv-1']));
+    expect(tagsSentTo('u-b')).toEqual(expect.arrayContaining(['user:u-b:calls', 'dm-conversation:conv-1']));
+  });
+
+  it('with nothing ringing tells nobody, and still closes the room', async () => {
+    armBlock({ conversation: true, ringing: false });
+    await endCallsOnBlock('u-a', 'u-b');
+    expect(mockRooms).toEqual([]);
+    expect(mockEmitEntities).not.toHaveBeenCalled();
+    expect(mockCloseRoom).toHaveBeenCalledTimes(1);
+  });
+
+  it('LiveKit refusing the close never fails the block', async () => {
+    armBlock({ conversation: true, ringing: false });
+    mockCloseRoom.mockRejectedValue(new Error('livekit down'));
+    await expect(endCallsOnBlock('u-a', 'u-b')).resolves.toBeUndefined();
+  });
+
+  it('a pair with no conversation has nothing to end', async () => {
+    armBlock({ conversation: false, ringing: true });
+    await endCallsOnBlock('u-a', 'u-b');
+    expect(mockQuery.mock.calls.some(c => /UPDATE call_requests/.test(String(c[0])))).toBe(false);
+    expect(mockCloseRoom).not.toHaveBeenCalled();
+  });
+
+  it('after a block the pair\'s tokens are minted for the NEW room', async () => {
+    (conv as Record<string, unknown>).call_room_epoch = 1;
+    conv.calls_unlocked_at = new Date();
+    const t = await getCallToken('conv-1', 'u-a', 'video');
+    expect(t.roomName).toBe('dm-conv-1-1');
+    expect(mockIssue.mock.calls[0][1]).toBe('dm-conv-1-1');
   });
 });

@@ -30,15 +30,28 @@ jest.mock('../../services/people/meeting-outcome.service', () => ({ recordOutcom
 const mockBrief = jest.fn().mockResolvedValue({ person: { id: 'x' } });
 const mockRecent = jest.fn().mockResolvedValue([]);
 const mockCard = jest.fn().mockResolvedValue({ id: 'u-viewer', displayName: 'Vera Viewer', bannerUrl: null });
+const mockPreview = jest.fn().mockResolvedValue({ person: { id: 'u-viewer' }, relationship: { state: 'none' } });
 jest.mock('../../services/people/person-brief.service', () => ({
   getPersonBrief: (...a: unknown[]) => mockBrief(...a),
   listRecentConnections: (...a: unknown[]) => mockRecent(...a),
   getOwnCard: (...a: unknown[]) => mockCard(...a),
+  getOwnPreview: (...a: unknown[]) => mockPreview(...a),
   __esModule: true,
 }));
 const mockConnections = jest.fn().mockResolvedValue({ items: [], nextBefore: null });
 jest.mock('../../services/people/connections.service', () => ({
   listConnections: (...a: unknown[]) => mockConnections(...a),
+  __esModule: true,
+}));
+// Shirley pilot S3: a profile's Communities; the service is its own test (profile-communities.test.ts) and PGlite.
+const mockCommunities = jest.fn().mockResolvedValue({ items: [], total: 0, nextOffset: null });
+const mockOwnCommunities = jest.fn().mockResolvedValue({ items: [], total: 0, nextOffset: null, hidden: null });
+jest.mock('../../services/people/communities.service', () => ({
+  getProfileCommunities: (...a: unknown[]) => mockCommunities(...a),
+  getOwnCommunitiesPreview: (...a: unknown[]) => mockOwnCommunities(...a),
+  COMMUNITIES_PAGE: 8,
+  COMMUNITIES_PAGE_MAX: 50,
+  COMMUNITIES_OFFSET_MAX: 1000,
   __esModule: true,
 }));
 const mockFanout = jest.fn().mockResolvedValue(undefined);
@@ -293,7 +306,10 @@ describe('the routes are rate limited', () => {
     ['get', '/connections'],
     ['get', '/connections/recent'],
     ['get', '/me/card'],
+    ['get', '/me/preview'],
+    ['get', '/me/communities'],
     ['get', '/:userId/brief'],
+    ['get', '/:userId/communities'],
   ])('%s %s carries peopleReadLimiter, after authenticate and ahead of its handler', (method, path) => {
     const handlers = handlersOf(method, path);
     expect(handlers.length).toBeGreaterThan(1); // the route exists
@@ -528,5 +544,99 @@ describe('GET /people/me/card', () => {
     expect(paths.indexOf('/me/card')).toBeLessThan(paths.indexOf('/:userId/brief'));
     expect((await request(app).get('/people/me/brief').set(auth)).status).toBe(400);
     expect(mockBrief).not.toHaveBeenCalled();
+  });
+});
+
+// Shirley pilot S6 (RSN 12): "Preview as others see it" is the member's own Human Profile as a member with no connection
+// to them is sent it. It takes no id, like /me/card, so it can never be aimed at anyone else.
+describe('GET /people/me/preview', () => {
+  const auth = { Authorization: `Bearer ${token()}` };
+  type Layer = { route?: { path: string } };
+  const routePaths = () => (peopleRoutes as unknown as { stack: Layer[] }).stack
+    .flatMap((layer) => (layer.route ? [layer.route.path] : []));
+  beforeEach(() => { mockPreview.mockClear(); mockBrief.mockClear(); mockFanout.mockClear(); });
+
+  it("answers the signed-in member's own preview, built by the brief service, and tells no screens", async () => {
+    const res = await request(app).get(`/people/me/preview?userId=${TARGET}`).set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { person: { id: 'u-viewer' }, relationship: { state: 'none' } } });
+    expect(mockPreview).toHaveBeenCalledWith('u-viewer');
+    expect(mockPreview).not.toHaveBeenCalledWith(TARGET);
+    expect(mockBrief).not.toHaveBeenCalled();
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing token without calling the service', async () => {
+    expect((await request(app).get('/people/me/preview')).status).toBe(401);
+    expect(mockPreview).not.toHaveBeenCalled();
+  });
+
+  it('is registered before the brief', () => {
+    const paths = routePaths();
+    expect(paths.indexOf('/me/preview')).toBeGreaterThanOrEqual(0);
+    expect(paths.indexOf('/me/preview')).toBeLessThan(paths.indexOf('/:userId/brief'));
+  });
+});
+
+// Shirley pilot S3 (RSN 14): the spaces a member is in that the viewer may see. The service decides every row; the
+// route checks the id and the page, and passes the viewer and their platform role (a removal never holds an admin back).
+describe('GET /people/:userId/communities and /people/me/communities', () => {
+  const auth = { Authorization: `Bearer ${token()}` };
+  type Layer = { route?: { path: string } };
+  const routePaths = () => (peopleRoutes as unknown as { stack: Layer[] }).stack
+    .flatMap((layer) => (layer.route ? [layer.route.path] : []));
+  beforeEach(() => { mockCommunities.mockClear(); mockOwnCommunities.mockClear(); mockFanout.mockClear(); });
+
+  it('passes the viewer, their role and the person, the first page of 8 by default, and tells no screens', async () => {
+    const res = await request(app).get(`/people/${TARGET.toUpperCase()}/communities`).set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { items: [], total: 0, nextOffset: null } });
+    expect(mockCommunities).toHaveBeenCalledWith('u-viewer', 'member', TARGET, { limit: 8 });
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+
+  it('a page: limit capped at 50, offset as asked; a bad offset or limit is a 400 before the service', async () => {
+    await request(app).get(`/people/${TARGET}/communities?limit=500&offset=8`).set(auth);
+    expect(mockCommunities).toHaveBeenLastCalledWith('u-viewer', 'member', TARGET, { limit: 50, offset: 8 });
+    for (const q of ['offset=-1', 'offset=1001', 'limit=0', 'limit=abc', 'offset=1.5']) {
+      mockCommunities.mockClear();
+      expect((await request(app).get(`/people/${TARGET}/communities?${q}`).set(auth)).status).toBe(400);
+      expect(mockCommunities).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a malformed id is a 400 and no token a 401, neither reaching the service', async () => {
+    expect((await request(app).get('/people/not-a-member/communities').set(auth)).status).toBe(400);
+    expect((await request(app).get(`/people/${TARGET}/communities`)).status).toBe(401);
+    expect((await request(app).get('/people/me/communities')).status).toBe(401);
+    expect(mockCommunities).not.toHaveBeenCalled();
+    expect(mockOwnCommunities).not.toHaveBeenCalled();
+  });
+
+  it("a block, or a closed account, is the service's 404, passed on as it is", async () => {
+    mockCommunities.mockRejectedValueOnce(new NotFoundError('User', TARGET));
+    const res = await request(app).get(`/people/${TARGET}/communities`).set(auth);
+    expect(res.status).toBe(404);
+  });
+
+  it('an event guest is refused (people are members only), before the service', async () => {
+    dbQuery.mockResolvedValueOnce({ rows: [{ status: 'active', account_kind: 'event_guest' }] });
+    const res = await request(app).get(`/people/${TARGET}/communities`).set({ Authorization: `Bearer ${token('u-guest')}` });
+    expect(res.status).toBe(403);
+    expect(mockCommunities).not.toHaveBeenCalled();
+  });
+
+  it("/me/communities is always the signed-in member's own preview, whatever is in the address", async () => {
+    const res = await request(app).get(`/people/me/communities?userId=${TARGET}&limit=20`).set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ items: [], total: 0, nextOffset: null, hidden: null });
+    expect(mockOwnCommunities).toHaveBeenCalledWith('u-viewer', { limit: 20 });
+    expect(mockCommunities).not.toHaveBeenCalled();
+  });
+
+  it('/me/communities is registered before /:userId/communities', () => {
+    const paths = routePaths();
+    expect(paths.indexOf('/me/communities')).toBeGreaterThanOrEqual(0);
+    expect(paths.indexOf('/me/communities')).toBeLessThan(paths.indexOf('/:userId/communities'));
   });
 });

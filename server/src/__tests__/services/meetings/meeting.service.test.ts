@@ -325,6 +325,8 @@ describe('getMeeting', () => {
       context: 'Coffee about your seed round?', joinPath: '/meet/conv-1?scheduled=1&kind=video',
       attended: { me: true, them: false }, source: 'scheduled',
       myFeedback: null,
+      // 11 Nov 2026 (RSN 09): whether the viewer's calendar invitation went by email; none recorded here.
+      inviteEmail: null,
     });
     const [feedbackSql, feedbackParams] = mockQuery.mock.calls[1];
     expect(flat(feedbackSql)).toBe('SELECT worth_continuing, problems, problem_text FROM meeting_outcomes WHERE user_id = $1 AND meeting_id = $2');

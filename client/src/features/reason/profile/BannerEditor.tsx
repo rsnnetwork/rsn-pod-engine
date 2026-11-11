@@ -2,7 +2,8 @@
 // Your banner, with the pencil and "Remove" on it (21 Oct 2026, the 19 Oct feedback: "Users should be able to change
 // their banner from their profile"; the pencil since the 30 Oct review, T3a: "fix the size or position"). The pencil
 // opens the picture editor on the picture you chose last time, where you placed it; the server cuts the 2400 by 800
-// banner from it and tells your other screens. Remove asks first.
+// banner from it and tells your other screens. Remove asks first. Shirley pilot S6 (RSN 13): the control says "Add
+// banner" (the pencil "Change banner"), and the editor gives the size and says what a wide screen crops.
 import { useState } from 'react';
 import { ImagePlus } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -43,7 +44,7 @@ export default function BannerEditor({ bannerUrl }: { bannerUrl: string | null }
         <ProfileBanner src={bannerUrl}>
           <div className="absolute right-2 top-2 flex items-center gap-2 md:right-3 md:top-3">
             <button type="button" onClick={() => setConfirming(true)} disabled={busy} className={ON_BANNER}>Remove</button>
-            <PencilButton label="Edit banner" onClick={banner.edit} disabled={busy} />
+            <PencilButton label="Change banner" onClick={banner.edit} disabled={busy} />
           </div>
         </ProfileBanner>
       ) : (
@@ -54,7 +55,7 @@ export default function BannerEditor({ bannerUrl }: { bannerUrl: string | null }
           disabled={busy}
           className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-[14px] border border-dashed border-[#c9ccd2] bg-white px-4 text-[14px] font-bold text-reason-muted hover:bg-reason-soft disabled:cursor-default disabled:opacity-70"
         >
-          <ImagePlus className="h-4 w-4" aria-hidden="true" /> Add a cover image
+          <ImagePlus className="h-4 w-4" aria-hidden="true" /> Add banner
         </button>
       )}
       <PictureEditor {...banner.editor} />

@@ -1,7 +1,9 @@
 // client/src/features/meetings/MeetingFeedbackSheet.tsx
 // "How did your meeting with {name} go?" (30 Oct 2026, item 5c; L11): Worth continuing? Yes / Maybe / No, and Any
-// problems? Audio, Video, Connection, Behaviour, Other, with a text box. Send or Skip. Picking Behaviour offers the
+// problems? Audio, Video, Connection, Behaviour, Other, with a text box. Send or Not now. Picking Behaviour offers the
 // report. Only the person and the REASON team see it. A second answer edits the first: the sheet starts from it.
+// 11 Nov 2026 (Shirley Palmer's RSN 08): asked over the conversation after a call (`afterCall`), it says the answer can
+// be given later from the meeting under Events; "Not now", the backdrop and Escape all close it, nothing else waits.
 //
 // On a phone the sheet scrolls inside itself with Send pinned at its foot (the REASON Sheet's footer), every chip 44px.
 import { useEffect, useId, useRef, useState } from 'react';
@@ -13,8 +15,8 @@ import ReportUserModal from '@/components/ReportUserModal';
 import { useSubmitMeetingFeedback } from './useMeetings';
 import { meetingError } from './meeting-words';
 import {
-  feedbackBody, feedbackTitle, reportLine, toggleProblem, FEEDBACK_PRIVACY, FEEDBACK_SAVED, PROBLEM_OPTIONS,
-  PROBLEM_TEXT_LABEL, PROBLEM_TEXT_MAX, PROBLEMS_QUESTION, WORTH_OPTIONS, WORTH_QUESTION,
+  feedbackBody, feedbackTitle, reportLine, toggleProblem, ANSWER_LATER, FEEDBACK_PRIVACY, FEEDBACK_SAVED, NOT_NOW,
+  PROBLEM_OPTIONS, PROBLEM_TEXT_LABEL, PROBLEM_TEXT_MAX, PROBLEMS_QUESTION, WORTH_OPTIONS, WORTH_QUESTION,
 } from './meeting-feedback';
 
 const SKIP = 'min-h-[44px] rounded-[11px] border border-reason-line px-4 text-[14px] font-bold';
@@ -23,9 +25,15 @@ const CHIP = 'min-h-[44px] rounded-full border px-3.5 text-[13px] font-bold';
 // A selected chip's text is the darker red: the brand red on this pink is 4.15:1, under AA.
 const chip = (selected: boolean) => cn(CHIP, selected ? 'border-reason-red bg-reason-pink text-reason-red-hover' : 'border-reason-line');
 
-interface Props { open: boolean; meeting: Meeting; onClose: () => void }
+interface Props {
+  open: boolean;
+  meeting: Meeting;
+  onClose: () => void;
+  /** Asked over the conversation just after the call: it says the answer can wait. */
+  afterCall?: boolean;
+}
 
-export default function MeetingFeedbackSheet({ open, meeting, onClose }: Props) {
+export default function MeetingFeedbackSheet({ open, meeting, onClose, afterCall }: Props) {
   const addToast = useToastStore((s) => s.addToast);
   const send = useSubmitMeetingFeedback(meeting.id);
   const name = meeting.partner.displayName;
@@ -72,10 +80,10 @@ export default function MeetingFeedbackSheet({ open, meeting, onClose }: Props) 
         title={feedbackTitle(name)}
         footer={(
           <div className="flex w-full flex-col gap-2">
-            <p className="text-[12px] text-reason-muted">{FEEDBACK_PRIVACY}</p>
+            <p className="text-[12px] text-reason-muted">{FEEDBACK_PRIVACY}{afterCall ? ` ${ANSWER_LATER}` : ''}</p>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={onClose} className={SKIP}>
-                Skip
+              <button type="button" onClick={onClose} className={SKIP} data-testid="feedback-not-now">
+                {NOT_NOW}
               </button>
               <button type="button" onClick={submit} disabled={!worth || send.isPending} aria-describedby={worth ? undefined : hintId} className={SEND}>
                 {send.isPending ? 'Sending…' : 'Send'}

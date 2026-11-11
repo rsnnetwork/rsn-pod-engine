@@ -53,13 +53,11 @@ describe('the links', () => {
     expect(url.searchParams.get('location')).toBe(JOIN);
   });
 
-  it('the server builds the same two links for the email (calendar.service meetingCalendarLinks)', () => {
+  it('the email builds no links of its own any more (11 Nov 2026, RSN 09): its attached invitation is the way in', () => {
     const server = fs.readFileSync(path.join(__dirname, '../../services/calendar/calendar.service.ts'), 'utf8');
-    if (!server.includes('meetingCalendarLinks')) return; // reason-m1 before the server release R10h lands
-    // eslint-disable-next-line @typescript-eslint/no-var-requires -- loaded only once the server builder is on this branch
-    const { meetingCalendarLinks } = require('../../services/calendar/calendar.service');
-    expect(meetingCalendarLinks({ partnerName: 'Bo', kind: 'video', startAt: entry.start, durationMin: 30, joinUrl: JOIN }))
-      .toEqual(calendarLinks(entry));
+    expect(server).not.toContain('meetingCalendarLinks');
+    const dispatch = fs.readFileSync(path.join(__dirname, '../../services/dm/meeting-windows.service.ts'), 'utf8');
+    expect(dispatch).not.toMatch(/googleCalendarUrl|outlookCalendarUrl/);
   });
 
   it('an event: "{title} on REASON", its length, the event page as the way in, or its place when held in person', () => {
@@ -91,13 +89,20 @@ describe('the links', () => {
 describe('the shared component', () => {
   const src = () => read('components/calendar/AddToCalendar.tsx');
 
-  it('one button, "Add to calendar", opening a menu of Google Calendar, Outlook.com and the file', () => {
+  it('one button, "Add to calendar" ("Add manually" once the invitation was emailed), opening the file FIRST, then Google Calendar and Outlook.com (11 Nov 2026, RSN 09)', () => {
     const s = src();
-    expect(s).toMatch(/\} Add to calendar\s*<\/button>/);
-    expect(s).toContain('Google Calendar');
-    expect(s).toContain('Outlook.com');
-    expect(s).toContain('Apple Calendar or other (.ics)');
-    expect(s).toContain("Already added from the email? You don't need to add it again.");
+    expect(s).toContain('const label = emailed ? ADD_MANUALLY : ADD_TO_CALENDAR;');
+    expect(s).toMatch(/\} \{label\}\s*<\/button>/);
+    const ics = s.indexOf('data-testid="calendar-ics"');
+    const google = s.indexOf('data-testid="calendar-google"');
+    const outlook = s.indexOf('data-testid="calendar-outlook"');
+    expect(ics).toBeGreaterThan(0);
+    expect(ics).toBeLessThan(google);
+    expect(google).toBeLessThan(outlook);
+    expect(s).toContain('{saving ? \'Preparing the file…\' : ICS_OPTION}');
+    expect(s).toContain('{GOOGLE_NOTE}');
+    expect(s).toContain('{OUTLOOK_NOTE}');
+    expect(s).toContain('{emailed ? EMAILED_NOTE : NOT_EMAILED_NOTE}');
   });
 
   it('the links open from the press itself, in a new tab, so a popup blocker lets them through', () => {

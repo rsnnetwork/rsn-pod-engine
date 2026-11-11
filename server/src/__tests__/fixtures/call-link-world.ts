@@ -25,7 +25,11 @@ export interface WEvent {
   archived_at: Date | null; registration_opens_at: Date | null; visibility: EventVisibility | null;
   admission_mode: AdmissionMode | null; host_user_id: string; scheduled_at: Date | null; config: object;
   event_format: string; pod_id: string; pod_name: string; pod_visibility: string;
+  /** The event link (migration 154): every event added gets 'rsn' and the next number, a tail when not public. */
+  link_name: string | null; link_number: number | null; link_tail: string | null;
 }
+/** An event link the event had before (event_link_aliases). */
+export interface WAlias { slug: string; session_id: string; name: string; number: number; secret: boolean; created: number }
 export interface WLink {
   id: string; email: string; token_hash: string; expires_at: Date; used_at: Date | null; created_at: Date;
   purpose: string; target_id: string | null; code_hash: string | null; code_attempts: number;
@@ -53,6 +57,9 @@ export const world = {
   /** Part 3 Task 5: an event's extra matching questions, and each person's answers (by key(sessionId, userId)). */
   questions: new Map<string, EventMatchingQuestion[]>(),
   answers: new Map<string, EventAnswers>(),
+  /** The event link's counters and old links (migration 154). */
+  counters: new Map<string, number>(),
+  aliases: [] as WAlias[],
   sql: [] as string[],
   writes: [] as string[],
 };
@@ -68,6 +75,29 @@ export function resetWorld(): void {
   world.places = new Map(); world.requests = new Map(); world.audience = new Set(); world.rules = new Map();
   world.memberGroups = new Map(); world.audit = []; world.sql = []; world.writes = []; world.line = [];
   world.questions = new Map(); world.answers = new Map();
+  world.counters = new Map(); world.aliases = [];
+}
+
+/** eventLinkNeedsTailSql, read from the row (the world has no circles): not public, or invitation-only. */
+export function needsTail(e: WEvent): boolean {
+  const isPublic = e.visibility === 'public' || e.visibility === 'public_with_approval'
+    || (e.visibility === null && e.pod_visibility === 'public');
+  return !(isPublic && e.admission_mode !== 'restricted');
+}
+
+const TAIL_FIRST = 'abcdefghijkmnpqrstuvwxyz';
+const TAIL_REST = '23456789abcdefghijkmnpqrstuvwxyz';
+/** A well-formed tail, drawn here (the service draws its own). */
+export function worldTail(): string {
+  let t = TAIL_FIRST[crypto.randomInt(TAIL_FIRST.length)];
+  while (t.length < 6) t += TAIL_REST[crypto.randomInt(TAIL_REST.length)];
+  return t;
+}
+
+/** The event's link as its slug ('rsn-3', 'rsn-3-k7m2q9'), or null before it has one. */
+export function slugOf(e: WEvent): string | null {
+  if (!e.link_name || !e.link_number) return null;
+  return e.link_tail ? `${e.link_name}-${e.link_number}-${e.link_tail}` : `${e.link_name}-${e.link_number}`;
 }
 
 export function addUser(over: Partial<WUser> & { id: string; email: string }): WUser {
@@ -84,8 +114,16 @@ export function addEvent(over: Partial<WEvent> & { id: string; call_code: string
     title: 'Founders breakfast', description: 'Coffee and introductions', status: 'scheduled', publication: 'published',
     archived_at: null, registration_opens_at: null, visibility: 'public', admission_mode: 'open', host_user_id: uuid(1),
     scheduled_at: new Date(Date.now() + 2 * 24 * 3600_000), config: { numberOfRounds: 3 }, event_format: 'speed_networking',
-    pod_id: 'pod-1', pod_name: 'Secret Pod Name', pod_visibility: 'private', ...over,
+    pod_id: 'pod-1', pod_name: 'Secret Pod Name', pod_visibility: 'private',
+    link_name: null, link_number: null, link_tail: null, ...over,
   };
+  if (!('link_name' in over)) {
+    const n = (world.counters.get('rsn') ?? 0) + 1;
+    world.counters.set('rsn', n);
+    e.link_name = 'rsn';
+    e.link_number = n;
+    e.link_tail = needsTail(e) ? worldTail() : null;
+  }
   world.events.push(e);
   return e;
 }
@@ -343,7 +381,84 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     const h = e ? userById(e.host_user_id) : undefined;
     // Answered with every column the row has (the pod's name too), as a careless SELECT * would: the landing must
     // pick what it shows itself.
-    return rows(e ? [{ ...e, host_name: h?.display_name ?? null, host_avatar: null }] : []);
+    return rows(e ? [{ ...e, host_name: h?.display_name ?? null, host_avatar: null, link_needs_tail: needsTail(e) }] : []);
+  }
+
+  // ── sessions: the event link (migration 154; event-link.service.ts) ──
+  if (sql.includes('FROM sessions s LEFT JOIN users h ON h.id = s.host_user_id WHERE s.id = (SELECT el_m.id FROM (')) {
+    const [name, number, tail, slug] = params as [string, number, string | null, string];
+    const current = world.events.find((x) => x.link_name === name && x.link_number === number
+      && (x.link_tail ?? null) === (tail ?? null) && (x.link_tail !== null || !needsTail(x)));
+    const alias = current ? undefined : world.aliases.find((a) => a.slug === slug
+      && (a.secret || !needsTail(eventById(a.session_id) as WEvent)));
+    const e = current ?? (alias ? eventById(alias.session_id) : undefined);
+    const h = e ? userById(e.host_user_id) : undefined;
+    return rows(e ? [{ ...e, host_name: h?.display_name ?? null, host_avatar: null, link_needs_tail: needsTail(e) }] : []);
+  }
+  if (sql.startsWith('SELECT s.id, s.pod_id, s.circle_id, s.link_name, s.link_number, s.link_tail,')) {
+    const e = eventById(params[0]);
+    return rows(e ? [{
+      id: e.id, pod_id: e.pod_id, circle_id: null, link_name: e.link_name, link_number: e.link_number,
+      link_tail: e.link_tail, needs_tail: needsTail(e), host_user_id: e.host_user_id,
+    }] : []);
+  }
+  if (sql.startsWith('SELECT link_name FROM sessions WHERE pod_id = $1 AND link_name IS NOT NULL')) {
+    const latest = [...world.events].reverse().find((x) => x.pod_id === params[0] && x.link_name && x.id !== params[1]);
+    return rows(latest ? [{ link_name: latest.link_name }] : []);
+  }
+  if (sql.startsWith('INSERT INTO event_link_counters (name, last_number) VALUES ($1, 1) ON CONFLICT (name) DO UPDATE')) {
+    const n = (world.counters.get(String(params[0])) ?? 0) + 1;
+    world.counters.set(String(params[0]), n);
+    return rows([{ last_number: n }]);
+  }
+  if (sql === 'SELECT last_number FROM event_link_counters WHERE name = $1') {
+    const n = world.counters.get(String(params[0]));
+    return rows(n === undefined ? [] : [{ last_number: n }]);
+  }
+  if (sql.startsWith('SELECT 1 FROM sessions WHERE link_name = $1 AND link_number = $2 UNION ALL')) {
+    const held = world.events.some((x) => x.link_name === params[0] && x.link_number === params[1])
+      || world.aliases.some((a) => a.name === params[0] && a.number === params[1]);
+    return rows(held ? [{}] : []);
+  }
+  if (sql.startsWith('INSERT INTO event_link_aliases (slug, session_id, name, number, secret)')) {
+    const [slug, session_id, name, number, secret] = params as [string, string, string, number, boolean];
+    if (world.aliases.some((a) => a.slug === slug)) return rows([], 0);
+    world.aliases.push({ slug, session_id, name, number, secret, created: world.aliases.length });
+    world.writes.push(`alias:${slug}`);
+    return rows([], 1);
+  }
+  if (sql.startsWith('SELECT number FROM event_link_aliases WHERE session_id = $1 AND name = $2 ORDER BY created_at DESC LIMIT 1')) {
+    const own = world.aliases.filter((a) => a.session_id === params[0] && a.name === params[1]).sort((a, b) => b.created - a.created)[0];
+    return rows(own ? [{ number: own.number }] : []);
+  }
+  if (sql === 'DELETE FROM event_link_aliases WHERE session_id = $1 AND name = $2 AND number = $3') {
+    const before = world.aliases.length;
+    world.aliases = world.aliases.filter((a) => !(a.session_id === params[0] && a.name === params[1] && a.number === params[2]));
+    return rows([], before - world.aliases.length);
+  }
+  if (sql === 'DELETE FROM event_link_aliases WHERE session_id = $1 AND secret') {
+    const before = world.aliases.length;
+    world.aliases = world.aliases.filter((a) => !(a.session_id === params[0] && a.secret));
+    return rows([], before - world.aliases.length);
+  }
+  if (sql === 'UPDATE sessions SET link_name = $2, link_number = $3, link_tail = $4 WHERE id = $1') {
+    const e = eventById(params[0]);
+    if (!e) return rows([], 0);
+    if (world.events.some((x) => x.id !== e.id && x.link_name === params[1] && x.link_number === params[2])) {
+      throw Object.assign(new Error('duplicate key value violates unique constraint "idx_sessions_event_link"'), { code: '23505' });
+    }
+    e.link_name = String(params[1]);
+    e.link_number = Number(params[2]);
+    e.link_tail = (params[3] as string | null) ?? null;
+    world.writes.push(`link:${e.id}`);
+    return rows([], 1);
+  }
+  if (sql === 'UPDATE sessions SET link_tail = $2 WHERE id = $1 AND link_tail IS NOT NULL') {
+    const e = eventById(params[0]);
+    if (!e || !e.link_tail) return rows([], 0);
+    e.link_tail = String(params[1]);
+    world.writes.push(`tail:${e.id}`);
+    return rows([], 1);
   }
   if (sql === 'SELECT call_code FROM sessions WHERE id = $1') {
     const e = eventById(params[0]);
@@ -402,6 +517,7 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
       archived_at: e.archived_at, registration_opens_at: e.registration_opens_at,
       place: world.places.get(key(e.id, userId))?.status ?? null, request: world.requests.get(key(e.id, userId)) ?? null,
       waiting: waitlistPositionOf(e.id, userId) !== null,
+      link_name: e.link_name, link_number: e.link_number, link_tail: e.link_tail, link_needs_tail: needsTail(e),
     })));
   }
 

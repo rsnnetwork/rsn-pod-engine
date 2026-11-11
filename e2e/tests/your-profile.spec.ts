@@ -120,11 +120,11 @@ async function stripedPicture(page: Page, width: number, height: number): Promis
 
 const bannerOf = (page: Page) => page.getByTestId('profile-banner');
 const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-/** With no banner there is no strip, only "Add a cover image" (10 Nov 2026); with one, its pencil. Either opens the editor; saved, it closes. */
+/** With no banner there is no strip, only "Add banner" (10 Nov 2026); with one, its pencil. Either opens the editor; saved, it closes. */
 async function chooseBanner(page: Page, picture: Buffer) {
-  const add = page.getByRole('button', { name: 'Add a cover image' });
+  const add = page.getByRole('button', { name: 'Add banner' });
   if (await add.count()) await add.click();
-  else await bannerOf(page).getByRole('button', { name: 'Edit banner' }).click();
+  else await bannerOf(page).getByRole('button', { name: 'Change banner' }).click();
   const editor = page.getByRole('dialog', { name: 'Edit your banner' });
   await editor.locator('input[type="file"]').setInputFiles({ name: 'banner.jpg', mimeType: 'image/jpeg', buffer: picture });
   await expect(editor.getByRole('slider', { name: 'Zoom' })).toBeVisible({ timeout: 30_000 });
@@ -198,7 +198,7 @@ test(`the banner: changed on your profile, seen there and on your Human Profile 
   await expect(me.page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible({ timeout: SLOW });
   // No banner yet: no empty strip, only the slim way to add one.
   await expect(bannerOf(me.page)).toHaveCount(0);
-  await expect(me.page.getByRole('button', { name: 'Add a cover image' })).toBeVisible();
+  await expect(me.page.getByRole('button', { name: 'Add banner' })).toBeVisible();
 
   // The pencil: a tall picture, placed as it opens (its middle), is cut to its middle 3:1 band at its own 1200x400.
   await chooseBanner(me.page, await stripedPicture(me.page, 1200, 1600));
@@ -401,20 +401,21 @@ test(`a stored LinkedIn share link never blocks a save and is left as it was; an
   expect(sent!).not.toHaveProperty('linkedinUrl');
   expect((await pool.query('SELECT linkedin_url, job_title FROM users WHERE id = $1', [owner.id])).rows[0])
     .toEqual({ linkedin_url: share, job_title: `Founder ${run}` });
-  // The share link is an https address on LinkedIn: the hero links it, and there is no card asking for LinkedIn.
+  // The share link is a LinkedIn profile: the hero links it, in the one https form (Shirley pilot S6: shown predictably),
+  // and there is no card asking for LinkedIn.
   await gotoRetry(page, `${APP}/profile`);
   await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: SLOW });
-  await expect(page.getByRole('link', { name: /^LinkedIn/ })).toHaveAttribute('href', share);
+  await expect(page.getByRole('link', { name: /^LinkedIn/ })).toHaveAttribute('href', `https://www.linkedin.com/in/ada-share-${run}`);
   await expect(page.getByText('Optimize your profile: connect LinkedIn')).toHaveCount(0);
 
-  // An http address: the hero links nothing, so the card asks to connect LinkedIn, and the form shows the address as it
-  // is stored, for the member to put right.
-  const old = `http://www.linkedin.com/in/ada-old-${run}`;
+  // An address that is no LinkedIn profile: the hero links nothing, so the card says it needs fixing, and the form shows
+  // the address as it is stored, for the member to put right. (An http LinkedIn address is linked in https since S6.)
+  const old = `www.linkedin-old.example/in/ada-old-${run}`;
   await pool.query('UPDATE users SET linkedin_url = $2 WHERE id = $1', [owner.id, old]);
   await gotoRetry(page, `${APP}/profile`);
-  await expect(page.getByText('Optimize your profile: connect LinkedIn')).toBeVisible({ timeout: SLOW });
+  await expect(page.getByText('Your LinkedIn link needs fixing')).toBeVisible({ timeout: SLOW });
   await expect(page.getByRole('link', { name: /^LinkedIn/ })).toHaveCount(0);
-  await page.getByRole('link', { name: 'Add LinkedIn' }).click();
+  await page.getByRole('link', { name: 'Fix LinkedIn' }).click();
   await expect(page).toHaveURL(/\/profile\/edit#linkedin$/);
   await expect(page.locator('#linkedin')).toHaveValue(old, { timeout: SLOW });
   await expect(page.locator('#linkedin')).toBeFocused({ timeout: 15_000 });
@@ -423,7 +424,7 @@ test(`a stored LinkedIn share link never blocks a save and is left as it was; an
   await pool.query('UPDATE users SET linkedin_url = NULL, job_title = $2 WHERE id = $1', [owner.id, OWNER.title]);
 });
 
-test(`More on the Human Profile: Report this member, and Block, which asks first and leaves; the notice then offers Unblock, which brings the profile back (${ENGINE})`, async () => {
+test(`More on the Human Profile: Report member, and Block member, which asks first and leaves; the notice then offers Unblock, which brings the profile back (${ENGINE})`, async () => {
   test.setTimeout(240_000);
   const { ctx, page, errors } = await signedIn(viewer, { width: 390, height: 844 });
   await gotoRetry(page, `${APP}/people/${owner.id}`);
@@ -432,13 +433,13 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   await expectReachable(page, more, 'More');
 
   await more.click();
-  await expectReachable(page, page.getByRole('button', { name: 'Block', exact: true }), 'Block');
-  await page.getByRole('button', { name: 'Report this member' }).click();
+  await expectReachable(page, page.getByRole('button', { name: 'Block member', exact: true }), 'Block');
+  await page.getByRole('button', { name: 'Report member' }).click();
   await expect(page.getByRole('heading', { name: `Report ${OWNER.name}` })).toBeVisible();
   // The move bar steps aside, so it cannot cover the dialog's buttons on a phone.
   await expect(page.getByRole('region', { name: 'Your move' })).toHaveCount(0);
   await page.waitForTimeout(700); // the dialog fades in
-  await expectReachable(page, page.getByRole('button', { name: 'Submit report' }), 'Submit report');
+  await expectReachable(page, page.getByRole('button', { name: 'Send report' }), 'Send report');
   await page.getByRole('button', { name: 'Cancel' }).click();
   await expect(page.getByRole('region', { name: 'Your move' })).toBeVisible();
 
@@ -446,16 +447,17 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   // The question is drawn in the page (T2, 1 Nov 2026), so it is answered here with its own buttons: arming
   // acceptConfirmDialogs would confirm the first question too, and the block would happen before the spec dismisses it.
   await more.click();
-  await page.getByRole('button', { name: 'Block', exact: true }).click();
+  await page.getByRole('button', { name: 'Block member', exact: true }).click();
   await expect(page.getByRole('dialog', { name: `Block ${OWNER.name}?` })).toBeVisible();
-  await expect(page.getByTestId('confirm-dialog-body')).toHaveText("They won't be able to message you, and you won't be matched together in future events.");
+  // 11 Nov 2026 (Shirley Palmer's item 16): every consequence, before it is done.
+  await expect(page.getByTestId('confirm-dialog-body')).toHaveText(`${OWNER.name} won't be able to message or call you, you won't be matched together, and you won't see each other's posts or comments. They aren't told. Any conversation you have stays, read-only. You can unblock them from their profile.`);
   await page.getByTestId('confirm-dialog-cancel').click();
   await expect(page.getByTestId('confirm-dialog-body')).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible();
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(0);
   // Accepted: blocked, said, and the page leaves the profile (opened directly, so back is For You).
   await more.click();
-  await page.getByRole('button', { name: 'Block', exact: true }).click();
+  await page.getByRole('button', { name: 'Block member', exact: true }).click();
   await confirmInPage(page);
   await expect(page.getByText(`${OWNER.name} is blocked. They can no longer message you, and you won't be matched together.`)).toBeVisible({ timeout: 30_000 });
   await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
@@ -488,18 +490,21 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   await ctx.close();
 });
 
-test(`Report this member with "Also block" ticked: the report is sent, they are blocked, and Done leaves the profile (${ENGINE})`, async () => {
+test(`Report member with "Also block" ticked: the report is sent, they are blocked, and Done leaves the profile (${ENGINE})`, async () => {
   test.setTimeout(180_000);
   const { ctx, page, errors } = await signedIn(viewer, { width: 390, height: 844 });
   await gotoRetry(page, `${APP}/people/${reported.id}`);
   await expect(page.getByRole('heading', { level: 1, name: REPORTED_NAME })).toBeVisible({ timeout: SLOW });
   await page.getByRole('button', { name: 'More' }).click();
-  await page.getByRole('button', { name: 'Report this member' }).click();
+  await page.getByRole('button', { name: 'Report member' }).click();
   await expect(page.getByRole('heading', { name: `Report ${REPORTED_NAME}` })).toBeVisible();
+  // No reason is chosen for the person (11 Nov 2026): Send report waits for one.
+  await expect(page.getByRole('button', { name: 'Send report' })).toBeDisabled();
+  await page.getByLabel('Reason').selectOption('spam');
   await page.getByLabel('Details (optional)').fill(`spec ${run}`);
   await page.getByText(`Also block ${REPORTED_NAME}`).click();
-  await page.getByRole('button', { name: 'Submit report' }).click();
-  await expect(page.getByText(`You've also blocked ${REPORTED_NAME}.`)).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: 'Send report' }).click();
+  await expect(page.getByText(`You also blocked ${REPORTED_NAME}: they can no longer message or call you.`, { exact: false })).toBeVisible({ timeout: 30_000 });
   expect((await pool.query('SELECT 1 FROM user_reports WHERE reporter_id = $1 AND reported_id = $2', [viewer.id, reported.id])).rowCount).toBe(1);
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, reported.id])).rowCount).toBe(1);
   await page.getByRole('button', { name: 'Done' }).click();
@@ -538,9 +543,9 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     expect(await brokenWords(own.page.getByRole('heading', { level: 1 })), `your name at ${at}`).toEqual([]);
     // Scrolled to first, as the links below are: the photo's pencil sits at the bottom right of a tile at least 430px
     // tall under the banner, so on a short window (1024x768) it is under the fold at the page's top (fix round 2).
-    // With no banner there is no strip, only "Add a cover image" (10 Nov 2026), and the photo's pencil.
+    // With no banner there is no strip, only "Add banner" (10 Nov 2026), and the photo's pencil.
     await expect(bannerOf(own.page)).toHaveCount(0);
-    for (const pencil of ['Add a cover image', 'Edit photo']) {
+    for (const pencil of ['Add banner', 'Edit photo']) {
       const button = own.page.getByRole('button', { name: pencil });
       await button.scrollIntoViewIfNeeded();
       expect((await button.boundingBox())!.height, `${pencil} at ${at}`).toBeGreaterThanOrEqual(44);
@@ -550,7 +555,7 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     await pool.query(`UPDATE users SET banner_blob = decode($2, 'base64'), banner_mime = 'image/png', banner_updated_at = NOW() WHERE id = $1`, [owner.id, TINY_PNG]);
     await own.page.reload();
     await expect(bannerOf(own.page)).toBeVisible({ timeout: SLOW });
-    for (const name of ['Edit banner', 'Remove', 'Edit photo']) {
+    for (const name of ['Change banner', 'Remove', 'Edit photo']) {
       const button = own.page.getByRole('button', { name, exact: true });
       await button.scrollIntoViewIfNeeded();
       expect((await button.boundingBox())!.height, `${name} at ${at}`).toBeGreaterThanOrEqual(44);
@@ -575,7 +580,7 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     const more = other.page.getByRole('button', { name: 'More' });
     await expectReachable(other.page, more, `More at ${at}`);
     await more.click();
-    for (const label of ['Block', 'Report this member']) {
+    for (const label of ['Block member', 'Report member']) {
       await expectReachable(other.page, other.page.getByRole('button', { name: label, exact: true }), `${label} at ${at}`);
     }
     await noSidewaysScroll(other.page, `More open at ${at}`);

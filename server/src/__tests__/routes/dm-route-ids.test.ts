@@ -58,9 +58,9 @@ jest.mock('../../services/dm/meeting-call.service', () => ({
   acceptCallRequest: stand('acceptCallRequest', { token: 't' }),
   declineCallRequest: stand('declineCallRequest', undefined),
   cancelCallRequest: stand('cancelCallRequest', undefined),
-  isPartnerOnline: stand('isPartnerOnline', false),
+  partnerPresence: stand('partnerPresence', 'online'),
 }));
-jest.mock('../../services/presence/presence.service', () => ({ __esModule: true, areActive: jest.fn().mockResolvedValue({}) }));
+jest.mock('../../services/presence/presence.service', () => ({ __esModule: true, presenceOf: jest.fn().mockResolvedValue({}) }));
 jest.mock('../../services/orchestration/handlers/dm-handlers', () => ({ __esModule: true, broadcastDmMessage: jest.fn() }));
 jest.mock('../../realtime/fanout', () => ({
   __esModule: true,
@@ -102,7 +102,7 @@ const routes: Array<{ method: Method; path: (id: string) => string; body?: objec
   { method: 'post', path: (id) => `/dm/conversations/${id}/call-token`, body: { kind: 'video' }, says: CONVERSATION, service: 'getCallToken' },
   { method: 'post', path: (id) => `/dm/conversations/${id}/call/request`, body: { kind: 'video', durationMin: 15 }, says: CONVERSATION, service: 'requestCall' },
   { method: 'get', path: (id) => `/dm/conversations/${id}/call/pending`, says: CONVERSATION, service: 'getPendingCallRequest' },
-  { method: 'get', path: (id) => `/dm/conversations/${id}/partner-presence`, says: CONVERSATION, service: 'isPartnerOnline' },
+  { method: 'get', path: (id) => `/dm/conversations/${id}/partner-presence`, says: CONVERSATION, service: 'partnerPresence' },
   { method: 'post', path: (id) => `/dm/call/requests/${id}/accept`, says: CALL_REQUEST, service: 'acceptCallRequest' },
   { method: 'post', path: (id) => `/dm/call/requests/${id}/decline`, says: CALL_REQUEST, service: 'declineCallRequest' },
   { method: 'post', path: (id) => `/dm/call/requests/${id}/cancel`, says: CALL_REQUEST, service: 'cancelCallRequest' },

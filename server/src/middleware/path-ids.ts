@@ -14,7 +14,7 @@ import { validate } from './validate';
 export const PATH_REFUSALS = {
   member: "We couldn't find that member.",
   notification: "We couldn't find that notification.",
-  agent: "We couldn't find that agent.",
+  agent: "We couldn't find that search.",
   circle: "We couldn't find that circle.",
   pod: "We couldn't find that pod.",
   event: "We couldn't find that event.",

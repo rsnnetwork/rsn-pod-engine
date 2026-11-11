@@ -134,7 +134,7 @@ export function answer(sqlRaw: string, params: unknown[] = []): { rows: unknown[
     for (const u of hit) { if (sql.includes('SET role')) u.role = String(params[0]); else u.status = String(params[0]); }
     return ok(hit.map((u) => ({ id: u.id })));
   }
-  if (sql === "UPDATE users SET status = 'deactivated', updated_at = NOW() WHERE id = $1") {
+  if (sql === "UPDATE users SET status = 'deactivated', public_profile_token = NULL, public_profile_token_created_at = NULL, updated_at = NOW() WHERE id = $1") {
     const u = world.users.find((x) => x.id === params[0]);
     if (u) u.status = 'deactivated';
     return ok([], u ? 1 : 0);
