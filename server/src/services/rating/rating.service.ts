@@ -664,21 +664,30 @@ export async function finalizeRoundRatings(
 
 // ─── Get Session Statistics ─────────────────────────────────────────────────
 
+//
+// `scoredRatingCount` (Part 3 Task 4, 11 Nov 2026) is how many ratings are scores that count toward an average: not
+// marked "didn't work" (or otherwise excluded), on rooms that took place (completed or reassigned), the event report's
+// filter. `totalRatings` counts the excluded ones too, so a screen that hides an average resting on fewer than
+// RATING_FIGURE_MIN ratings gates on this, never on totalRatings: five ratings of which four were "didn't work" are
+// one person's score. Every other field is as it was.
 export async function getSessionRatingStats(sessionId: string): Promise<{
   totalRatings: number;
   avgQualityScore: number;
   meetAgainRate: number;
   mutualMeetAgainCount: number;
+  scoredRatingCount: number;
 }> {
   const statsResult = await query<{
     totalRatings: string;
     avgQualityScore: string;
     meetAgainCount: string;
+    scoredRatingCount: string;
   }>(
     `SELECT
        COUNT(*)::text AS "totalRatings",
        COALESCE(AVG(quality_score) FILTER (WHERE NOT excluded_from_quality_stats), 0)::text AS "avgQualityScore",
-       COUNT(*) FILTER (WHERE meet_again = TRUE)::text AS "meetAgainCount"
+       COUNT(*) FILTER (WHERE meet_again = TRUE)::text AS "meetAgainCount",
+       COUNT(*) FILTER (WHERE NOT r.excluded_from_quality_stats AND m.status IN ('completed', 'reassigned'))::text AS "scoredRatingCount"
      FROM ratings r
      JOIN matches m ON m.id = r.match_id
      WHERE m.session_id = $1`,
@@ -702,6 +711,7 @@ export async function getSessionRatingStats(sessionId: string): Promise<{
     avgQualityScore: parseFloat(parseFloat(stats.avgQualityScore).toFixed(2)),
     meetAgainRate: totalRatings > 0 ? parseFloat((meetAgainCount / totalRatings).toFixed(4)) : 0,
     mutualMeetAgainCount: parseInt(mutualResult.rows[0]?.count || '0', 10),
+    scoredRatingCount: parseInt(stats.scoredRatingCount ?? '0', 10) || 0,
   };
 }
 
