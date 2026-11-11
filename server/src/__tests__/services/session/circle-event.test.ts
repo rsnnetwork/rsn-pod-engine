@@ -36,6 +36,14 @@ jest.mock('../../../realtime/emit', () => ({
   __esModule: true,
 }));
 
+// The event link (migration 154) is its own service with its own tests (event-link.test.ts): here it answers at once, so
+// these statements stay the circle's own.
+const mockEnsureEventLink = jest.fn().mockResolvedValue({ name: 'rsn', number: 1, tail: 'k7m2q9' });
+jest.mock('../../../services/session/event-link.service', () => ({
+  ...jest.requireActual('../../../services/session/event-link.service'),
+  ensureEventLink: (...args: unknown[]) => mockEnsureEventLink(...args),
+}));
+
 import { PodType, UserRole } from '@rsn/shared';
 import { createSession, updateSession } from '../../../services/session/session.service';
 import { eventAudienceSql, canSeeEvent, canRegister, type EventAccessFacts } from '../../../services/session/event-access';
