@@ -327,6 +327,14 @@ describe('the event form\'s link-name field', () => {
     });
   });
 
+  it('editing: the tail follows the visibility the form now shows, not only the one saved', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public' });
+    expect((await checkEventLinkName(host, { sessionId: EVENT })).private).toBe(false);
+    expect((await checkEventLinkName(host, { sessionId: EVENT, visibility: 'private' })).private).toBe(true);
+    eventOf().admission_mode = 'restricted';
+    expect((await checkEventLinkName(host, { sessionId: EVENT, visibility: 'public' })).private).toBe(true);
+  });
+
   it('a name that cannot be used says why, and offers no number', async () => {
     addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'private' });
     expect(await checkEventLinkName(host, { sessionId: EVENT, name: 'admin' })).toMatchObject({
@@ -354,6 +362,8 @@ describe('the SQL the rules are written in', () => {
     expect(sql).toContain("s.admission_mode IS DISTINCT FROM 'restricted'");
     expect(sql).toContain("el_c.join_policy = 'closed'");
     expect(() => eventLinkNeedsTailSql('s; DROP')).toThrow();
+    expect(() => eventLinkNeedsTailSql('s', "'public'")).toThrow();
+    expect(eventLinkNeedsTailSql('s', '$2')).toContain('COALESCE($2::text, s.visibility)');
   });
 
   it('a current link needs its exact tail and opens without one only while public; an old link with a tail always, without only while public', () => {
