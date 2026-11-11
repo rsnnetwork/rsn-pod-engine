@@ -239,6 +239,8 @@ export default function CallLinkPage() {
   const signOut = async () => {
     await logout();
     setStarted(false);
+    // Part 3 Task 8: the next person who signs in on this page gets their own automatic enter (a leave spent it).
+    setAutoTried(false);
     setPhase('summary');
   };
 

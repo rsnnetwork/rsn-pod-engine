@@ -285,6 +285,10 @@ describe('leaving the line on the call link never enters again by itself', () =>
     expect(page).toContain("onClick={() => (userId ? joinAgain() : setPhase('email'))}");
     expect(page.match(/joinAgain\(\)/g)).toHaveLength(1);
   });
+
+  it('"Not you?" re-arms it for whoever signs in next (a leave spent it; no endless joining spinner)', () => {
+    expect(page).toMatch(/const signOut = async \(\) => \{\s*await logout\(\);\s*setStarted\(false\);[^}]*?setAutoTried\(false\);[^}]*?\};/);
+  });
 });
 
 // ─── 5. Confirm first ──────────────────────────────────────────────────────────────────────────────────────────────
