@@ -886,16 +886,25 @@ test(`05 calendar booking does not duplicate: one slot, one valid invitation eac
   await expect(page.getByRole('dialog').filter({ hasText: /Outlook|Microsoft/ }), 'no calendar sign-in is asked for').toHaveCount(0);
   const save = page.getByRole('button', { name: /Save and send availability/i });
   const schedulerOpen = () => page.getByTestId('meeting-scheduler').isVisible().catch(() => false);
-  await atBothWidths(page, 'the scheduler', async (w) => {
+  // "Save and send availability" appears only once a time is chosen (SchedulerSaveBar shows it while unsaved), so the
+  // time is chosen first at each width, and only if the choice is not already standing (a second tap would undo it).
+  const slot = page.locator(`[data-slot="${KEY}"]`);
+  const chooseTheTime = async () => {
     if (!(await schedulerOpen())) await openScheduler(page);
+    if (await save.isVisible().catch(() => false)) return;
+    await slot.scrollIntoViewIfNeeded();
+    await slot.click();
+    await expect(save).toBeVisible({ timeout: 10_000 });
+  };
+  await atBothWidths(page, 'the scheduler', async (w) => {
+    await chooseTheTime();
     await fits(page, save, `Save and send availability @${w}`);
   });
-  if (!(await schedulerOpen())) await openScheduler(page);
-  const slot = page.locator(`[data-slot="${KEY}"]`);
-  await slot.scrollIntoViewIfNeeded();
-  await slot.click();
+  await chooseTheTime();
   await save.click();
-  await expect(page.getByRole('status').getByText(/^Meeting confirmed: /)).toBeVisible({ timeout: 20_000 });
+  // Saving a time the other person already offered books it: the thread gains the "Meeting confirmed" card (there is
+  // no separate toast; the card and the booking's API answer below are the proof).
+  await expect(page.getByTestId('system-message-card').filter({ hasText: /Meeting confirmed/i }).last()).toBeVisible({ timeout: 30_000 });
 
   // Booked: the thread says the invitation went by email, with Join and a quiet Add manually.
   const card = page.getByTestId('system-message-card').filter({ hasText: /Meeting confirmed/i }).last();
