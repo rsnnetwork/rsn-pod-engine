@@ -1,4 +1,5 @@
-import { test, expect, type Browser, type BrowserContext, type Page, type Locator } from '@playwright/test';
+import { test, expect, type Browser, type BrowserContext, type Page, type Locator, type Download } from '@playwright/test';
+import * as fs from 'fs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuid } from 'uuid';
 import { createTestUser, pool, type TestUser } from '../helpers/auth';
@@ -55,10 +56,29 @@ async function api(who: TestUser, method: string, p: string, body?: unknown) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${who.accessToken}` },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const text = await res.text();
+  // The raw bytes, as they came: res.text() decodes UTF-8 the WHATWG way, which DROPS a leading byte-order mark, so a
+  // CSV's BOM can only be seen in the bytes (the event report spec's lesson, p3-event-report-api.spec.ts).
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const text = bytes.toString('utf8');
   let json: any = null;
   try { json = JSON.parse(text); } catch { /* a CSV file, not JSON */ }
-  return { status: res.status, json, text, headers: res.headers };
+  return { status: res.status, json, text, bytes, headers: res.headers };
+}
+
+/**
+ * A CSV as bytes: it starts with the UTF-8 BOM EF BB BF (so Excel reads non-ASCII names right), and its text after the
+ * BOM is returned for the content checks.
+ */
+function csvAfterBom(bytes: Buffer, label: string): string {
+  expect([...bytes.subarray(0, 3)], `${label} starts with the UTF-8 BOM`).toEqual([0xef, 0xbb, 0xbf]);
+  return bytes.subarray(3).toString('utf8');
+}
+
+/** A file the browser saved: the same bytes the server sent (BOM included), never re-encoded. */
+async function savedCsv(download: Download, label: string): Promise<string> {
+  const saved = await download.path();
+  expect(saved, `${label} was saved`).toBeTruthy();
+  return csvAfterBom(fs.readFileSync(saved!), label);
 }
 
 async function signedIn(user: TestUser, viewport: { width: number; height: number }): Promise<Page> {
@@ -191,11 +211,11 @@ test(`an organiser exports members (no emails, logged first); others are refused
   expect(file.headers.get('content-type')).toBe('text/csv; charset=utf-8');
   expect(file.headers.get('content-disposition')).toMatch(/^attachment; filename="reason-circle-members-\d{4}-\d{2}-\d{2}\.csv"$/);
   expect(file.headers.get('cache-control')).toBe('no-store');
-  expect(file.text.charCodeAt(0)).toBe(0xfeff);
-  expect(file.text).toContain('Name,Role,Joined\r\n');
-  expect(file.text).toContain(`${RUN} Owner,Owner,`);
-  expect(file.text).toContain(`${RUN} Member,Member,`);
-  expect(file.text).not.toMatch(/@rsn-e2e\.invalid|@/);
+  const members = csvAfterBom(file.bytes, 'members.csv');
+  expect(members.startsWith('Name,Role,Joined\r\n')).toBe(true);
+  expect(members).toContain(`${RUN} Owner,Owner,`);
+  expect(members).toContain(`${RUN} Member,Member,`);
+  expect(members).not.toMatch(/@rsn-e2e\.invalid|@/);
   const logged = await pool.query(
     `SELECT details FROM audit_log WHERE action = 'space.export_downloaded' AND entity_type = 'circle' AND entity_id = $1 AND actor_id = $2`,
     [circleId, o.id]);
@@ -225,6 +245,10 @@ test(`an organiser exports members (no emails, logged first); others are refused
   await fitsViewport(op, membersButton);
   const [download] = await Promise.all([op.waitForEvent('download', { timeout: 30_000 }), membersButton.click()]);
   expect(download.suggestedFilename()).toMatch(/^reason-circle-members-\d{4}-\d{2}-\d{2}\.csv$/);
+  const saved = await savedCsv(download, 'the downloaded members.csv');
+  expect(saved.startsWith('Name,Role,Joined\r\n')).toBe(true);
+  expect(saved).toContain(`${RUN} Owner,Owner,`);
+  expect(saved).not.toMatch(/@/);
 
   const mp = await signedIn(m, PHONE);
   await gotoRetry(mp, `${APP}/circles/${circleId}`);
@@ -243,10 +267,12 @@ test(`an organiser exports members (no emails, logged first); others are refused
   expect((await api(admin!, 'POST', `/circles/${circleId}/archive`)).status).toBe(200);
   const archivedFile = await api(o, 'GET', `/circles/${circleId}/export?section=members`);
   expect(archivedFile.status).toBe(200);
-  expect(archivedFile.text).toContain(`${RUN} Owner,Owner,`);
-  expect(archivedFile.text).not.toMatch(/@/);
+  const archivedMembers = csvAfterBom(archivedFile.bytes, 'the archived circle\'s members.csv');
+  expect(archivedMembers).toContain(`${RUN} Owner,Owner,`);
+  expect(archivedMembers).not.toMatch(/@/);
   const archivedSpace = await api(o, 'GET', `/circles/${circleId}/export?section=space`);
-  expect(archivedSpace.text).toContain('\r\nStatus,Archived\r\n');
+  expect(archivedSpace.status).toBe(200);
+  expect(csvAfterBom(archivedSpace.bytes, 'the archived circle\'s space.csv')).toContain('\r\nStatus,Archived\r\n');
   expect((await api(m, 'GET', `/circles/${circleId}/export?section=members`)).status).toBe(404);
   expect((await api(otherAdmin!, 'GET', `/circles/${circleId}/export?section=members`)).status).toBe(404);
   const ran = await api(o, 'GET', '/circles/archived/mine');
@@ -263,6 +289,7 @@ test(`an organiser exports members (no emails, logged first); others are refused
   await fitsViewport(op, archivedMembersButton);
   const [archivedDownload] = await Promise.all([op.waitForEvent('download', { timeout: 30_000 }), archivedMembersButton.click()]);
   expect(archivedDownload.suggestedFilename()).toMatch(/^reason-circle-members-\d{4}-\d{2}-\d{2}\.csv$/);
+  expect(await savedCsv(archivedDownload, 'the archived circle\'s downloaded members.csv')).toContain(`${RUN} Owner,Owner,`);
   // The plain member's Circles page has no such section.
   await gotoRetry(mp, `${APP}/circles`);
   await expect(mp.getByTestId(`circle-archived-export-${circleId}`)).toHaveCount(0);
