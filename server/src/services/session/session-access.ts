@@ -97,6 +97,9 @@ export async function canViewSession(
   userId: string,
   sessionId: string,
   userRole: string,
+  // Part 3 Task 3 (controller ruling): a place on the event's waiting list opens the event PAGE only (GET /sessions/:id),
+  // never the live state or the attendee list, so only that route asks for it.
+  opts: { eventPage?: boolean } = {},
 ): Promise<boolean> {
   if (userRole === 'admin' || userRole === 'super_admin') return true;
 
@@ -131,7 +134,8 @@ export async function canViewSession(
   if (s.visibility) {
     const { readEventAccessFacts, canSeeEvent } = await import('./event-access');
     const facts = await readEventAccessFacts(sessionId, userId);
-    return !!facts && canSeeEvent(facts, userRole);
+    // canSeeEvent counts a waiting row (the page's rule); anything else reads the event as if they were not waiting.
+    return !!facts && canSeeEvent(opts.eventPage ? facts : { ...facts, waitlistPosition: null }, userRole);
   }
 
   if (s.host_user_id === userId || s.is_cohost) return true;
@@ -152,7 +156,9 @@ export async function canViewSession(
   }
 
   // Part 3 Task 3 (controller ruling): someone on the event's waiting list opens its page (canSeeEvent's rule for an event
-  // with its own visibility). Only a row still 'waiting': a left, lapsed, removed or promoted one gives nothing here.
+  // with its own visibility), and only its page. Only a row still 'waiting': a left, lapsed, removed or promoted one
+  // gives nothing here.
+  if (!opts.eventPage) return false;
   const waiting = await query<{ waiting: number }>(
     `SELECT 1 AS waiting FROM event_waitlist WHERE session_id = $1 AND user_id = $2 AND status = 'waiting' LIMIT 1`,
     [sessionId, userId],
