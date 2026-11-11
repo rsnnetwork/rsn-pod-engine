@@ -234,6 +234,15 @@ describe('"Before you join" opens on both refusals and registers again with what
     expect(page).toMatch(/onSuccess: \(res\) => \{\s*setAnswersSheetOpen\(false\);/);
   });
 
+  it('closes on already registered or full, so no stale sheet sits over a Registered or full page', () => {
+    const onError = page.slice(page.indexOf('onError: (err: any) => {', page.indexOf('const registerMutation')), page.indexOf('onSettled: () => {', page.indexOf('const registerMutation')));
+    expect(onError).toContain("if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'SESSION_FULL') setAnswersSheetOpen(false);");
+    // Before the branches that toast and refetch, so the sheet is gone whichever of the two came back.
+    expect(onError.indexOf('setAnswersSheetOpen(false)')).toBeLessThan(onError.indexOf("if (errCode === 'SESSION_ALREADY_REGISTERED') {"));
+    // A refusal for answers keeps it open.
+    expect(onError).toMatch(/\} else if \(needsAnswers\(err\)\) \{[^}]*setAnswersSheetOpen\(true\);/);
+  });
+
   function drawForm(props: Record<string, unknown>): string {
     const mod = loadClientModule(`${DIR}/EventAnswersForm.tsx`, { 'lucide-react': iconStandIns });
     return renderToStaticMarkup(createElement(mod.default as never, { formId: 'f', mine: {}, onSubmit: () => undefined, ...props } as never));

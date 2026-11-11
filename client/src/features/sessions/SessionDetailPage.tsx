@@ -269,6 +269,8 @@ export default function SessionDetailPage() {
     },
     onError: (err: any) => {
       const errCode = err?.response?.data?.error?.code;
+      // A sheet left open over a page that is now Registered or full would be stale: these two answers close it.
+      if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'SESSION_FULL') setAnswersSheetOpen(false);
       if (errCode === 'SESSION_ALREADY_REGISTERED') {
         addToast('You\'re already registered for this event!', 'info');
         qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
@@ -612,7 +614,6 @@ export default function SessionDetailPage() {
             Co-hosts send invites too (26 Oct 2026), so they get the invite button and nothing else here. */}
         {(isHost || isAdmin || mayInvite || mayPlanMeetings) && sessionStatusPhase(session.status) !== 'cancelled' && (
           <>
-            {mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}
             {mayPlanMeetings && (
               <Link
                 to={`/sessions/${sessionId}/board`}
@@ -657,6 +658,8 @@ export default function SessionDetailPage() {
                     Delete permanently are in the Event status card below, as the server's allowedActions say. */}
               </>
             )}
+            {/* End event last among the tools (the owner's order: Matching board, Invite people, Copy, Edit, End event). */}
+            {mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}
           </>
         )}
       </div>
