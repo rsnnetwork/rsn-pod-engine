@@ -29,6 +29,7 @@ import {
 } from './profile-text';
 import { blockMember, errorMessage, fetchBrief, reasonKeys, setAlreadyMet, setPersonResponse } from '../api';
 import { useConfirm } from '@/hooks/useConfirm';
+import { dropDraftsTo } from '@/features/messages/voice/composer-drafts';
 
 // The line under "could not load" when the failure itself has nothing more specific to say.
 const LOAD_HINT = 'Try again in a moment.';
@@ -216,6 +217,8 @@ export default function HumanProfilePage() {
     networkMode: 'always',
     mutationFn: () => blockMember(userId),
     onSuccess: () => {
+      // Nothing can be sent to them now: an unsent message to them is dropped (11 Nov 2026).
+      dropDraftsTo(userId);
       addToast(`${name} is blocked. They can no longer message you, and you won't be matched together.`, 'success');
       leaveBlocked();
     },

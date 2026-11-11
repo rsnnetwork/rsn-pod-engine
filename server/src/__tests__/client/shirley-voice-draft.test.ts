@@ -26,6 +26,7 @@ import {
 } from '../../../../client/src/features/messages/voice/voice-note';
 import { createVoiceRecorder, pickRecordingType, type MediaRecorderLike, type RecorderDeps, type StreamLike } from '../../../../client/src/features/messages/voice/voice-recorder';
 import { iconStandIns, loadClientModule, readClientSource } from './load-client-module';
+import { SenderChangedError, isSenderChanged, sendAsMember } from '../../../../client/src/features/messages/thread/send-as';
 
 const ME = 'me-0001';
 const A = 'user-a';
@@ -612,8 +613,10 @@ describe('the page mounts one box per conversation', () => {
   });
 
   it('closing or reloading the tab with a voice note unsent or recording asks first', () => {
-    // In the app shell, so a reload from any page asks while the member has a note unsent (Minor 3).
-    expect(readClientSource('features/reason/shell/ReasonShell.tsx')).toMatch(/useUnsentVoiceGuard\(user\?\.id\);/);
+    // At the App root, so a reload from any page asks while the member has a note unsent, the full-screen pages outside
+    // the shell too (Minor 3, fix round 2).
+    expect(readClientSource('App.tsx')).toMatch(/useUnsentVoiceGuard\(signedInId\);/);
+    expect(readClientSource('features/reason/shell/ReasonShell.tsx')).not.toMatch(/useUnsentVoiceGuard/);
     expect(page).not.toMatch(/useLeaveGuard/);
     expect(box).toMatch(/useLeaveGuard\(recorder\.state !== 'idle'\)/);
     const guard = readClientSource('features/messages/voice/useLeaveGuard.ts');
@@ -734,5 +737,145 @@ describe('fix round 1 (11 Nov 2026)', () => {
     expect(html).toMatch(/<button[^>]*aria-label="Send message"[^>]*>|<button[^>]*disabled=""[^>]*aria-label="Send message"/);
     const send = html.match(/<button[^>]*aria-label="Send message"[^>]*>/)?.[0] ?? '';
     expect(send).toContain('disabled=""');
+  });
+});
+
+describe('fix round 2 (11 Nov 2026): a message is sent as the member who pressed Send, or not at all', () => {
+  /** A send whose upload waits until `land()`; the member, and the member-change listeners, under the test's control. */
+  function rig(start: string | null = 'member-1') {
+    let member: string | null = start;
+    const listeners = new Set<() => void>();
+    let land: (() => void) | null = null;
+    let seenSignal: AbortSignal | null = null;
+    const posts: Array<{ sentAs: string; attachment: unknown }> = [];
+    const sending = sendAsMember({ text: 'hello' }, {
+      memberNow: () => member,
+      watchMember: (changed) => { listeners.add(changed); return () => { listeners.delete(changed); }; },
+      prepare: (_v, signal) => { seenSignal = signal; return new Promise<{ url: string }>((resolve) => { land = () => resolve({ url: 'x' }); }); },
+      post: async (attachment, sentAs) => { posts.push({ sentAs, attachment }); return { ok: true }; },
+    });
+    return {
+      sending,
+      posts,
+      listeners,
+      signal: () => seenSignal,
+      signOut: () => { member = null; listeners.forEach((f) => f()); },
+      signIn: (who: string) => { member = who; listeners.forEach((f) => f()); },
+      /** Another tab's sign-in adopted here: the member is someone else before the change is announced. */
+      swapQuietly: (who: string) => { member = who; },
+      land: () => land!(),
+    };
+  }
+
+  it('the normal case: posted once, as the member who pressed Send, and the listener is gone afterwards', async () => {
+    const t = rig();
+    t.land();
+    await expect(t.sending).resolves.toEqual({ ok: true });
+    expect(t.posts).toEqual([{ sentAs: 'member-1', attachment: { url: 'x' } }]);
+    expect(t.listeners.size).toBe(0);
+  });
+
+  it('signing out mid-upload stops the upload, and nothing is posted', async () => {
+    const t = rig();
+    t.signOut();
+    expect(t.signal()?.aborted).toBe(true);
+    t.land();
+    await expect(t.sending).rejects.toBeInstanceOf(SenderChangedError);
+    expect(t.posts).toHaveLength(0);
+  });
+
+  it('another member signing in mid-upload: nothing is posted under the new account', async () => {
+    const t = rig();
+    t.signIn('member-2');
+    t.land();
+    await expect(t.sending).rejects.toBeInstanceOf(SenderChangedError);
+    expect(t.posts).toHaveLength(0);
+  });
+
+  it('another member adopted from another tab before the change is announced: still nothing posted', async () => {
+    const t = rig();
+    t.swapQuietly('member-2');
+    t.land();
+    await expect(t.sending).rejects.toBeInstanceOf(SenderChangedError);
+    expect(t.posts).toHaveLength(0);
+  });
+
+  it('with nobody signed in, nothing is sent', async () => {
+    const t = rig(null);
+    await expect(t.sending).rejects.toBeInstanceOf(SenderChangedError);
+    expect(t.posts).toHaveLength(0);
+  });
+
+  it('a post that fails because the member changed is a stop, not a failure to toast; any other failure is itself', async () => {
+    let member = 'member-1';
+    const stopped = sendAsMember({}, {
+      memberNow: () => member,
+      watchMember: () => () => {},
+      prepare: async () => null,
+      post: async () => { member = 'member-2'; throw new Error('Network Error'); },
+    });
+    await expect(stopped).rejects.toBeInstanceOf(SenderChangedError);
+    const failed = sendAsMember({}, {
+      memberNow: () => 'member-1', watchMember: () => () => {}, prepare: async () => null,
+      post: async () => { throw new Error('Network Error'); },
+    });
+    await expect(failed).rejects.toThrow('Network Error');
+    expect(isSenderChanged(new SenderChangedError())).toBe(true);
+    expect(isSenderChanged(new Error('x'))).toBe(false);
+  });
+
+  it('the API client refuses to attach another member\'s token to a send meant for this one (run, with stand-ins)', () => {
+    let token: string | null = 'token-of:member-1';
+    const api = loadClientModule('lib/api.ts', {
+      '@/stores/authStore': {
+        useAuthStore: { getState: () => ({ accessToken: token }) },
+        accountBlockedReason: () => null,
+        tokenSubject: (t: string) => t.split(':')[1] ?? null,
+      },
+      '@/lib/runtimeEndpoints': { API_BASE_URL: '/api' },
+    }).default as { interceptors: { request: { handlers: Array<{ fulfilled: (cfg: Record<string, unknown>) => Record<string, unknown> }> } } };
+    const attach = api.interceptors.request.handlers[0].fulfilled;
+    const cfg = () => ({ headers: {} as Record<string, string>, sentAs: 'member-1' });
+    expect((attach(cfg()).headers as Record<string, string>).Authorization).toBe('Bearer token-of:member-1');
+    const refused = () => { try { attach(cfg()); return null; } catch (err) { return err; } };
+    token = 'token-of:member-2';
+    expect(isSenderChanged(refused())).toBe(true);
+    token = null;
+    expect(isSenderChanged(refused())).toBe(true);
+    token = 'token-of:member-2';
+    expect((attach({ headers: {} }).headers as Record<string, string>).Authorization).toBe('Bearer token-of:member-2');
+  });
+
+  it('the send hook sends through the guard, aborts uploads with it, and says nothing when it stopped for a member change', () => {
+    const hook = readClientSource('features/messages/thread/useSendMessage.ts');
+    expect(hook).toMatch(/return sendAsMember\(vars, \{/);
+    expect(hook).toMatch(/memberNow: \(\) => useAuthStore\.getState\(\)\.user\?\.id \?\? null,/);
+    expect(hook).toMatch(/watchMember: onMemberChange,/);
+    expect(hook).toMatch(/\}, \{ signal, sentAs \}\);/);
+    expect(hook).toMatch(/if \(isSenderChanged\(err\)\) return;/);
+    const box = readClientSource('features/messages/DmComposer.tsx');
+    expect(box).toMatch(/uploadImageToCloudinary\(vars\.image\.file, setUploadFraction, signal\)/);
+    expect(box).toMatch(/uploadAudioToCloudinary\(vars\.audio\.blob, vars\.audio\.durationMs, setUploadFraction, signal\)/);
+    const lib = readClientSource('lib/cloudinary.ts');
+    expect(lib.match(/stopOnAbort\(xhr, signal, reject\);/g)).toHaveLength(2);
+    expect(lib).toMatch(/signal\.addEventListener\('abort', abort, \{ once: true \}\)/);
+  });
+
+  it('a member-change listener that throws never stops the others, or the sign-out (run on the real query cache)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- the real module, as the app loads it
+    const cache = require('../../../../client/src/lib/queryClient') as typeof import('../../../../client/src/lib/queryClient');
+    let ran = 0;
+    const offBad = cache.onMemberChange(() => { throw new Error('a broken listener'); });
+    const offGood = cache.onMemberChange(() => { ran += 1; });
+    expect(() => cache.clearCache()).not.toThrow();
+    expect(ran).toBe(1);
+    offBad();
+    offGood();
+    cache.clearCache();
+    expect(ran).toBe(1);
+  });
+
+  it('blocking from the REASON profile (/people/:userId) drops what was written to them (Minor 2)', () => {
+    expect(readClientSource('features/reason/human/HumanProfilePage.tsx')).toMatch(/mutationFn: \(\) => blockMember\(userId\),\s*onSuccess: \(\) => \{\s*\/\/[^\n]*\n\s*dropDraftsTo\(userId\);/);
   });
 });

@@ -18,12 +18,21 @@ let cacheOwner: string | null = null;
 // Client-only state that belongs to one member too (unsent message drafts, 11 Nov 2026) is emptied at the same moments.
 const memberChangeListeners = new Set<() => void>();
 
-/** Run `forget` whenever the signed-in member changes or signs out, as the query cache is emptied. */
-export function onMemberChange(forget: () => void): void {
+/**
+ * Run `forget` whenever the signed-in member changes or signs out, as the query cache is emptied (drafts are cleared, a
+ * send on its way is stopped). Answers a way to stop listening.
+ */
+export function onMemberChange(forget: () => void): () => void {
   memberChangeListeners.add(forget);
+  return () => { memberChangeListeners.delete(forget); };
 }
 
-const memberChanged = () => { memberChangeListeners.forEach((forget) => forget()); };
+/** Each listener on its own: one that throws can never stop the others, or a sign-out. */
+const memberChanged = () => {
+  [...memberChangeListeners].forEach((forget) => {
+    try { forget(); } catch { /* a listener's failure must never block signing out; the others still run */ }
+  });
+};
 
 /**
  * A member's session has loaded. The same member (a token refresh, a session re-check) changes nothing. A

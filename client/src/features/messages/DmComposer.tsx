@@ -95,16 +95,16 @@ export default function DmComposer({
   useLeaveGuard(recorder.state !== 'idle');
 
   const send = useSendMessage<SendVars>(conversationId, toUserId, {
-    prepareAttachment: async (vars) => {
+    prepareAttachment: async (vars, signal) => {
       if (vars.image) {
         setUploadFraction(0);
-        const result = await uploadImageToCloudinary(vars.image.file, setUploadFraction);
+        const result = await uploadImageToCloudinary(vars.image.file, setUploadFraction, signal);
         setUploadFraction(null);
         return { url: result.url, type: 'image', meta: result };
       }
       if (vars.audio) {
         setUploadFraction(0);
-        const result = await uploadAudioToCloudinary(vars.audio.blob, vars.audio.durationMs, setUploadFraction);
+        const result = await uploadAudioToCloudinary(vars.audio.blob, vars.audio.durationMs, setUploadFraction, signal);
         setUploadFraction(null);
         return { url: result.url, type: 'audio', meta: result };
       }

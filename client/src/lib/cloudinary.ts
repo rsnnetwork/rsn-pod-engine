@@ -39,6 +39,14 @@ export const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
 // length it would see is the one this client reports (controller ruling, 11 Nov 2026).
 export const MAX_AUDIO_DURATION_MS = VOICE_NOTE_UPLOAD_LIMIT_MS;
 
+/** An upload stops when its send is stopped (the signed-in member changed, 11 Nov 2026). */
+function stopOnAbort(xhr: XMLHttpRequest, signal: AbortSignal | undefined, reject: (err: Error) => void): void {
+  if (!signal) return;
+  const abort = () => { xhr.abort(); reject(new Error('Upload stopped')); };
+  if (signal.aborted) { abort(); return; }
+  signal.addEventListener('abort', abort, { once: true });
+}
+
 export function isCloudinaryConfigured(): boolean {
   return !!CLOUD_NAME && !!UPLOAD_PRESET;
 }
@@ -96,6 +104,7 @@ export function validateImageFile(file: File): ValidationFailure | null {
 export async function uploadImageToCloudinary(
   file: File,
   onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<CloudinaryImageResult> {
   if (!isCloudinaryConfigured()) {
     throw new Error('Cloudinary is not configured');
@@ -141,6 +150,7 @@ export async function uploadImageToCloudinary(
     };
 
     xhr.onerror = () => reject(new Error('Network error uploading image'));
+    stopOnAbort(xhr, signal, reject);
     xhr.send(form);
   });
 }
@@ -172,6 +182,7 @@ export async function uploadAudioToCloudinary(
   blob: Blob,
   durationMs: number,
   onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<CloudinaryAudioResult> {
   if (!isCloudinaryConfigured()) {
     throw new Error('Cloudinary is not configured');
@@ -226,6 +237,7 @@ export async function uploadAudioToCloudinary(
     };
 
     xhr.onerror = () => reject(new Error('Network error uploading voice message'));
+    stopOnAbort(xhr, signal, reject);
     xhr.send(form);
   });
 }
