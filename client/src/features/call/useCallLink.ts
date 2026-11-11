@@ -18,7 +18,8 @@ function callTags(userId: string, sessionId: string | null): string[] {
   return [
     E.userSessions(userId),
     E.user(userId),
-    ...(sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionGroups(sessionId)] : []),
+    // Part 3 Task 8: and its waiting list (their number moves as people ahead leave or are promoted).
+    ...(sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionGroups(sessionId), E.sessionWaitlist(sessionId)] : []),
   ];
 }
 
@@ -102,7 +103,13 @@ export function useCallActions(code: string) {
     onSettled: () => refresh(),
   });
 
-  return { sendCode, verify, enter, refresh };
+  // Part 3 Task 8: off a full event's waiting list (the guest-allowed call-link route).
+  const leaveWaitlist = useMutation({
+    mutationFn: () => api.delete(CALL_API.leaveWaitlist(code)).then((r) => r.data.data as CallEntryState),
+    onSettled: () => refresh(),
+  });
+
+  return { sendCode, verify, enter, leaveWaitlist, refresh };
 }
 
 /** The signed-in person's events by link: the guest home's list. */

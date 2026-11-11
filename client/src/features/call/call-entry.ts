@@ -28,6 +28,8 @@ export const CALL_API = {
   enter: (code: string) => `/call-links/${enc(code)}/enter`,
   myEvents: () => '/call-links/me/events',
   mySchedule: (sessionId: string) => `/sessions/${enc(sessionId)}/schedule/mine`,
+  /** Part 3 Task 8: off a full event's waiting list (answers the person's state on the link). */
+  leaveWaitlist: (code: string) => `/call-links/${enc(code)}/waitlist`,
 } as const;
 
 // ─── The four stages the progress dots name ───────────────────────────────────
@@ -37,7 +39,7 @@ export const PROGRESS_STEPS = ['Open link', 'Identify', 'Check', 'Join call'] as
 /** Every screen the call page can show. */
 export type CallScreen =
   | 'summary' | 'email' | 'code'
-  | 'details' | 'joining' | 'live' | 'waiting' | 'pending'
+  | 'details' | 'joining' | 'live' | 'waiting' | 'pending' | 'waitlisted'
   | 'declined' | 'refused' | 'ended' | 'cancelled';
 
 /** Which of the four dots a screen is on (0-based). */
@@ -88,6 +90,9 @@ export function callScreenOf({ landing, entry, phase, started }: ScreenInput): C
       return 'waiting';
     case 'pending_approval':
       return 'pending';
+    // Part 3 Task 8: the event is full and they are on its line; the page moves on by itself once a place is theirs.
+    case 'waitlisted':
+      return 'waitlisted';
     case 'declined':
       return 'declined';
     case 'refused':
@@ -188,7 +193,18 @@ export const CALL_WORDS = {
   joinFailed: "We couldn't take you in just now. Please try again.",
   linkExpired: 'That link from the email no longer works. Enter your email to get a new code.',
   becomeMember: 'Become a REASON member: meet people beyond this event.',
+  waitlistMore: "We'll email you and ring your bell the moment a place opens, and it's yours.",
+  leaveWaitlist: 'Leave the waiting list',
+  leaveWaitlistTitle: 'Leave the waiting list?',
+  leaveWaitlistBody: "You'll lose your place in the line.",
+  leftWaitlist: 'You left the waiting list.',
+  leaveWaitlistFailed: "We couldn't take you off the waiting list just now. Please try again.",
 } as const;
+
+/** "{title} is full. You're number {n} on the waiting list." */
+export function waitlistedSentence(title: string, position: number): string {
+  return `${title} is full. You're number ${position} on the waiting list.`;
+}
 
 /** "You're in. {title} starts {when}." */
 export function youreInSentence(title: string, startsAt: string | null, zone: string | null | undefined, now: number = Date.now()): string {

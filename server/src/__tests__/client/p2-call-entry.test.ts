@@ -70,7 +70,7 @@ function landing(over: Partial<CallLanding> = {}): CallLanding {
 function state(over: Partial<CallEntryState> = {}): CallEntryState {
   return {
     step: 'details', sessionId: null, livePath: null, missing: { ...NOTHING }, refusal: null,
-    startsAt: '2026-11-20T17:00:00.000Z', ...over,
+    startsAt: '2026-11-20T17:00:00.000Z', waitlistPosition: null, ...over,
   };
 }
 
@@ -251,12 +251,13 @@ describe('no page of the flow asks a member-only route', () => {
   });
 
   it('every request in features/call goes through CALL_API (no other path is written there)', () => {
+    // Part 3 Task 8: leaving a full event's waiting list is a DELETE, through CALL_API.leaveWaitlist like the rest.
     const files = sourcesUnder(path.join(CLIENT, 'features/call'));
     expect(files.length).toBeGreaterThanOrEqual(12);
     for (const file of files) {
       const src = fs.readFileSync(file, 'utf8');
       const calls = src.match(/api\.(?:get|post|put|patch|delete)\(\s*[^,)]*/g) ?? [];
-      for (const call of calls) expect({ file: rel(file), call }).toEqual({ file: rel(file), call: expect.stringMatching(/api\.(get|post)\(CALL_API\.\w+\(/) });
+      for (const call of calls) expect({ file: rel(file), call }).toEqual({ file: rel(file), call: expect.stringMatching(/api\.(get|post|delete)\(CALL_API\.\w+\(/) });
     }
   });
 

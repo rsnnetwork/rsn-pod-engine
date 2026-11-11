@@ -2,15 +2,21 @@
 // T11 (1 Nov 2026; L17) — what the event page offers someone who is not registered, read from the server's
 // `session.access` (never guessed from the pod): Register, Request to join (a short sheet with an optional
 // message, then "Request sent · Withdraw"), or the private notice. The server has the last word on each press.
+// Part 3 Task 8: a full event offers "Join the waiting list" in place of Register (the same press, which then asks the
+// server for the line), and someone on the line reads "On the waiting list · number {n}" with "Leave the waiting list",
+// whatever the event's mode (an approval on a full event queues the person too).
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Lock, Send, UserPlus } from 'lucide-react';
-import type { EventAccessMode, EventJoinRequestStatus, EventVisibility } from '@rsn/shared';
+import { Hourglass, Lock, LogOut, Send, UserPlus } from 'lucide-react';
+import type { EventAccessMode, EventJoinRequestStatus, EventVisibility, EventWaitlistAccess } from '@rsn/shared';
 import Sheet from '@/features/reason/ui/Sheet';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
+import { useConfirm } from '@/hooks/useConfirm';
 import { circlePrivateNotice } from './circle-preset';
+import { useLeaveWaitlist } from './waitlist/useWaitlist';
+import { WAITLIST_COPY } from './waitlist/waitlist-text';
 
 /** The `access` block GET /sessions/:id carries (T11). Absent on a server before T11: the page then offers Register. */
 export interface EventAccess {
@@ -19,6 +25,8 @@ export interface EventAccess {
   myRequest: EventJoinRequestStatus | null;
   autoRegister: boolean;
   canManageRequests: boolean;
+  /** Part 3 Task 3: whether the event is full, and this person's number in its line. Absent on a server before it. */
+  waitlist?: EventWaitlistAccess;
 }
 
 export const ACCESS_COPY = {
@@ -47,7 +55,7 @@ function serverSentence(err: unknown): string {
 interface Props {
   sessionId: string;
   access: EventAccess | undefined;
-  /** "Register" before the event, "Join Late" while it runs. */
+  /** "Register" before the event, "Join Late" while it runs. On a full event the same press joins the waiting list. */
   registerLabel: string;
   onRegister: () => void;
   registering: boolean;
@@ -60,6 +68,8 @@ export default function EventAccessActions({ sessionId, access, registerLabel, o
   const addToast = useToastStore((s) => s.addToast);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const { ask: askFirst, confirmDialog } = useConfirm();
+  const leave = useLeaveWaitlist(sessionId);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['session', sessionId] });
 
@@ -84,6 +94,26 @@ export default function EventAccessActions({ sessionId, access, registerLabel, o
   });
 
   const mode = access?.mode ?? 'register';
+  const position = access?.waitlist?.position ?? null;
+
+  // On the line: their number, and the way off it (asked first: the place in the line is not given back).
+  if (position !== null) {
+    const leaveLine = async () => {
+      if (!(await askFirst({ title: WAITLIST_COPY.leaveTitle, body: WAITLIST_COPY.leaveBody, confirmLabel: WAITLIST_COPY.leave, tone: 'danger' }))) return;
+      leave.mutate();
+    };
+    return (
+      <div data-testid="event-on-waitlist" className="flex flex-wrap items-center gap-3">
+        <span className="flex items-center gap-2 px-4 min-h-[44px] rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          <Hourglass className="h-4 w-4 flex-shrink-0" /> {WAITLIST_COPY.onLine(position)}
+        </span>
+        <Button data-testid="event-leave-waitlist" variant="ghost" className="min-h-[44px]" onClick={() => void leaveLine()} isLoading={leave.isPending}>
+          <LogOut className="h-4 w-4 mr-2" /> {WAITLIST_COPY.leave}
+        </Button>
+        {confirmDialog}
+      </div>
+    );
+  }
 
   if (mode === 'private') {
     return (
@@ -146,6 +176,18 @@ export default function EventAccessActions({ sessionId, access, registerLabel, o
           <p className="text-xs text-gray-400 mt-1 text-right">{message.length}/{MESSAGE_MAX}</p>
         </Sheet>
       </>
+    );
+  }
+
+  // Full: the same press asks for the line (the page sends `waitlist: true` when the server says full).
+  if (access?.waitlist?.full) {
+    return (
+      <div data-testid="event-full" className="flex flex-wrap items-center gap-3">
+        <p className="text-sm font-medium text-gray-700">{WAITLIST_COPY.full}</p>
+        <Button data-testid="event-join-waitlist" onClick={onRegister} isLoading={registering} className="btn-glow min-h-[44px]">
+          <Hourglass className="h-4 w-4 mr-2" /> {WAITLIST_COPY.join}
+        </Button>
+      </div>
     );
   }
 

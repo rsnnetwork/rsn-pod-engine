@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Spinner';
 import ToastContainer from '@/components/ui/Toast';
 import { useAuthStore } from '@/stores/authStore';
+import { useToastStore } from '@/stores/toastStore';
 import {
   CALL_WORDS, admissionRefusalOf, callScreenOf, detailsFieldsFor, enterFailure, landingFailure, progressIndexOf,
   refusalSentence, tokenFailureMessage, verifyFailure, type AdmissionRefusal, type CallScreen, type EntryFailure,
@@ -52,7 +53,8 @@ export default function CallLinkPage() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const { landing, entry, userId, checked } = useCallLink(code);
-  const { sendCode, verify, enter } = useCallActions(code);
+  const { sendCode, verify, enter, leaveWaitlist } = useCallActions(code);
+  const addToast = useToastStore((s) => s.addToast);
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const guest = isEventGuest(user);
@@ -209,6 +211,22 @@ export default function CallLinkPage() {
     }
   };
 
+  // Part 3 Task 8: off the line. The page starts again from the event (its Join would queue them at the back), so the
+  // join it already made is not remembered as tried.
+  const leaveTheLine = async () => {
+    try {
+      await leaveWaitlist.mutateAsync();
+      setStarted(false);
+      setAutoTried(false);
+      setJoinError(null);
+      addToast(CALL_WORDS.leftWaitlist, 'info');
+    } catch (err) {
+      const said = enterFailure(err);
+      if (said.closed) setClosed(said.closed);
+      else addToast(CALL_WORDS.leaveWaitlistFailed, 'error');
+    }
+  };
+
   const signOut = async () => {
     await logout();
     setStarted(false);
@@ -309,6 +327,20 @@ export default function CallLinkPage() {
     case 'pending':
       body = (
         <CallWaitingStep landing={event} kind={screen} sessionId={state?.sessionId ?? null} startsAt={state?.startsAt ?? event.scheduledAt} guest={guest} />
+      );
+      break;
+    case 'waitlisted':
+      body = (
+        <CallWaitingStep
+          landing={event}
+          kind="waitlisted"
+          sessionId={state?.sessionId ?? null}
+          startsAt={state?.startsAt ?? event.scheduledAt}
+          guest={guest}
+          position={state?.waitlistPosition ?? null}
+          onLeave={leaveTheLine}
+          leaving={leaveWaitlist.isPending}
+        />
       );
       break;
     case 'ended':

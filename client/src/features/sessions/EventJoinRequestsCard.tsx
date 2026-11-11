@@ -3,6 +3,7 @@
 // one row per person who asked, with Approve and Decline (44px). It follows the server live: every request write
 // tells the organisers' open pages (session:<id>, sent with session:<id>:join-requests).
 // Final fix wave X1 (2 Nov 2026): a decline is final (the person cannot ask again), so Decline asks first, in the page.
+// Part 3 Task 8: an approval on a full event puts the person on its waiting list; the toast says their number.
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
@@ -12,6 +13,7 @@ import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useConfirm } from '@/hooks/useConfirm';
+import { WAITLIST_COPY, approvedQueuedPosition } from './waitlist/waitlist-text';
 
 interface RequestRow {
   id: string;
@@ -70,11 +72,14 @@ export default function EventJoinRequestsCard({ sessionId, focus }: Props) {
   const answer = useMutation({
     mutationFn: ({ row, verb }: { row: RequestRow; verb: 'approve' | 'decline' }) =>
       api.post(`/sessions/${sessionId}/requests/${row.userId}/${verb}`),
-    onSuccess: (_res, { row, verb }) => {
+    onSuccess: (res, { row, verb }) => {
       const name = row.firstName || row.displayName;
-      addToast(verb === 'approve' ? REQUESTS_COPY.approved(name) : REQUESTS_COPY.declined(name), 'success');
+      const queued = verb === 'approve' ? approvedQueuedPosition(res.data?.data) : null;
+      if (queued !== null) addToast(WAITLIST_COPY.approvedQueued(name, queued), 'success');
+      else addToast(verb === 'approve' ? REQUESTS_COPY.approved(name) : REQUESTS_COPY.declined(name), 'success');
       qc.invalidateQueries({ queryKey: ['session-join-requests', sessionId] });
       qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
+      qc.invalidateQueries({ queryKey: ['session-waitlist', sessionId] });
     },
     onError: (err) => addToast(serverSentence(err), 'error'),
   });

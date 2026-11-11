@@ -67,7 +67,8 @@ const queriesIn = (text: string) => [...text.matchAll(/use(?:Infinite)?Query(?:<
 
 describe('every new query follows the tags the brief names', () => {
   it('lifecycle: the page\'s event query follows session:<id>, and every step refreshes it', () => {
-    expect(detail).toMatch(/queryKey: \['session', sessionId\][\s\S]{0,400}meta: \{ entities: sessionId \? \[E\.session\(sessionId\)\] : \[\] \}/);
+    // Part 3 Task 8: the same read follows the event's waiting list too (its access block carries it).
+    expect(detail).toMatch(/queryKey: \['session', sessionId\][\s\S]{0,600}meta: \{ entities: sessionId \? \[E\.session\(sessionId\)(, E\.sessionWaitlist\(sessionId\))?\] : \[\] \}/);
     expect(src.useLifecycle).toMatch(/qc\.invalidateQueries\(\{ queryKey: \['session', sessionId\] \}\)/);
   });
 

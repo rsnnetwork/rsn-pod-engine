@@ -17,6 +17,7 @@ const STEP_CHIP: Record<CallEventSummary['step'], { label: string; tone: 'live' 
   enter: { label: 'Live now', tone: 'live' },
   wait_for_start: { label: "You're in", tone: 'good' },
   pending_approval: { label: 'Waiting for approval', tone: 'wait' },
+  waitlisted: { label: 'On the waiting list', tone: 'wait' },
   request: { label: 'Not asked yet', tone: 'muted' },
   details: { label: 'Finish joining', tone: 'wait' },
   identify: { label: 'Finish joining', tone: 'wait' },

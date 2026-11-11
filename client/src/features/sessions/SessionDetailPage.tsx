@@ -38,6 +38,8 @@ import EventHistoryPanel from './history/EventHistoryPanel';
 import EventReportCard from './report/EventReportCard';
 import { useEventGroups } from './groups/useEventGroups';
 import ParticipantGroupControl from './groups/ParticipantGroupControl';
+import WaitlistCard from './waitlist/WaitlistCard';
+import { WAITLIST_COPY, registerBody, waitlistedPosition } from './waitlist/waitlist-text';
 
 /** The icon over each figure under an event's title. */
 const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
@@ -79,7 +81,8 @@ export default function SessionDetailPage() {
       if (err?.response?.status === 403) return false;
       return failureCount < 3;
     },
-    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
+    // Part 3 Task 8: the access block carries the waiting list (full, my number), which session:<id>:waitlist moves.
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionWaitlist(sessionId)] : [] },
   });
 
   const { data: pod } = useQuery({
@@ -89,10 +92,15 @@ export default function SessionDetailPage() {
     meta: { entities: session?.podId ? [E.pod(session.podId)] : [] },
   });
 
+  // Part 3 Task 8: someone only on the waiting list opens the event page, never its attendee list or live state (the
+  // server refuses both). The list is read once they hold a place: a promotion clears their number (session:<id>), which
+  // turns this read on, and the page reads "Registered" without a refresh.
+  const waitingInLine = session?.access?.waitlist?.position != null;
   const { data: participants } = useQuery({
     queryKey: ['session-participants', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
-    enabled: !!sessionId,
+    enabled: !!sessionId && !waitingInLine,
+    retry: (failureCount, err: unknown) => (err as { response?: { status?: number } })?.response?.status !== 403 && failureCount < 3,
     // R2 safety net (20 May 2026 — live-test post-mortem). Entity-tag
     // fanout is the primary refresh path, but missed emits at scattered
     // session_participants write sites left clients showing stale lists
@@ -180,6 +188,8 @@ export default function SessionDetailPage() {
   const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
   // T11 (1 Nov 2026), D11: what this viewer may do comes from the server (session.access), never from the pod.
   const access: EventAccess | undefined = session?.access;
+  // Part 3 Task 8: the event cannot take this viewer now: it is full, or they are already on its waiting list.
+  const cannotTakeMe = !!access?.waitlist && (access.waitlist.full || access.waitlist.position !== null);
   const [autoRegistering, setAutoRegistering] = useState(false);
   // Bug 13 (April 19) — block the auto-register useEffect after an EXPLICIT
   // unregister click. Without this, unregister → isRegistered flips false →
@@ -215,6 +225,7 @@ export default function SessionDetailPage() {
       }).catch(err => {
         const code = err?.response?.data?.error?.code;
         if (code === 'SESSION_ALREADY_REGISTERED') return; // idempotent — silent
+        if (code === 'SESSION_FULL') return void qc.invalidateQueries({ queryKey: ['session', sessionId] }); // Part 3: offers the line
         const msg = err?.response?.data?.error?.message;
         if (msg) addToast(msg, 'error');
       })
@@ -227,24 +238,42 @@ export default function SessionDetailPage() {
 
   const openEdit = () => setEditOpen(true);
 
+  // Part 3 Task 8: one press at a time. A double press (or a double tap) sends one request, so it joins the line once;
+  // the server would give the same number again anyway.
+  const registerInFlight = useRef(false);
   const registerMutation = useMutation({
-    mutationFn: () => api.post(`/sessions/${sessionId}/register`),
-    onSuccess: () => {
+    // A full event (the server's access.waitlist.full) asks for the waiting list: 202 and the person's number.
+    mutationFn: () => api.post(`/sessions/${sessionId}/register`, registerBody(access)),
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
       qc.invalidateQueries({ queryKey: ['session', sessionId] });
-      addToast('Registered for event!', 'success');
+      const position = waitlistedPosition(res);
+      if (position !== null) addToast(WAITLIST_COPY.joinedToast(position), 'info');
+      else addToast('Registered for event!', 'success');
     },
     onError: (err: any) => {
       const errCode = err?.response?.data?.error?.code;
       if (errCode === 'SESSION_ALREADY_REGISTERED') {
         addToast('You\'re already registered for this event!', 'info');
         qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
+      } else if (errCode === 'SESSION_FULL') {
+        // It filled while the page was open: read it again, and the page offers the waiting list.
+        qc.invalidateQueries({ queryKey: ['session', sessionId] });
+        addToast(err?.response?.data?.error?.message || WAITLIST_COPY.full, 'info');
       } else {
         const msg = err?.response?.data?.error?.message || 'Failed to register';
         addToast(msg, 'error');
       }
     },
+    onSettled: () => {
+      registerInFlight.current = false;
+    },
   });
+  const register = () => {
+    if (registerInFlight.current) return;
+    registerInFlight.current = true;
+    registerMutation.mutate();
+  };
 
   // The copy names its type (D9): sent as config only, the server read it from config.eventType, which a row from
   // before 26 Oct may name wrongly.
@@ -339,6 +368,8 @@ export default function SessionDetailPage() {
   const hasRoom = liveKindOf(eventFormat) !== 'none';
   const place = eventPlace(eventFormat, session.config);
   const facts = eventFacts(eventFormat, session.config);
+  // The people tile counts the attendee list, which a person still waiting cannot read.
+  const tiles = facts.length + (waitingInLine ? 0 : 1);
   const groupsData = groupsView.data;
   // The people who run the event are not matched, so they have no group to change.
   const isCohostOrHost = (p: { userId: string; isCohost?: boolean }) => !!p.isCohost || p.userId === session.hostUserId;
@@ -399,23 +430,33 @@ export default function SessionDetailPage() {
             </p>
           </div>
           {/* Part 2 Task 11: the people running the event read where it stands (Draft … Cancelled); members as before. */}
-          {mayRunEvent && isEventLifecycleChip(session.lifecycle) ? (
-            <Badge variant={lifecycleColor(session.lifecycle)} className="shrink-0">{lifecycleLabel(session.lifecycle)}</Badge>
-          ) : (
-            <Badge variant={statusVariant} className="shrink-0">{sessionStatusLabel(session.status)}</Badge>
-          )}
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            {mayRunEvent && isEventLifecycleChip(session.lifecycle) ? (
+              <Badge variant={lifecycleColor(session.lifecycle)} className="shrink-0">{lifecycleLabel(session.lifecycle)}</Badge>
+            ) : (
+              <Badge variant={statusVariant} className="shrink-0">{sessionStatusLabel(session.status)}</Badge>
+            )}
+            {/* Part 3 Task 8: every place is taken. Attendees are told only this, never a count. */}
+            {access?.waitlist?.full && (phase === 'pre' || phase === 'live') && (
+              <span data-testid="event-full-chip">
+                <Badge variant="warning" className="shrink-0">{WAITLIST_COPY.fullChip}</Badge>
+              </span>
+            )}
+          </div>
         </div>
         {/* The place spans the card, under the title and the status, so a long address has room on a phone. */}
         {place && <EventPlace place={place} over={phase === 'done'} />}
 
-        <div className={`grid ${facts.length + 1 === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'} gap-4 mt-4 pt-4 border-t border-gray-200`}>
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
-              <Users className="h-4 w-4" />
+        <div className={`grid ${tiles === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'} gap-4 mt-4 pt-4 border-t border-gray-200`}>
+          {!waitingInLine && (
+            <div className="text-center">
+              <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
+                <Users className="h-4 w-4" />
+              </div>
+              <p className="text-lg font-bold text-[#1a1a2e]">{(participants || []).length}</p>
+              <p className="text-xs text-gray-400">{(participants || []).length === 1 ? 'participant' : 'participants'}</p>
             </div>
-            <p className="text-lg font-bold text-[#1a1a2e]">{(participants || []).length}</p>
-            <p className="text-xs text-gray-400">{(participants || []).length === 1 ? 'participant' : 'participants'}</p>
-          </div>
+          )}
           {facts.map((fact) => {
             const Icon = FACT_ICONS[fact.key] ?? Settings;
             return (
@@ -432,7 +473,7 @@ export default function SessionDetailPage() {
       </Card>
 
       {/* Late-join warning */}
-      {(session.status === 'lobby_open' || session.status === 'round_active' || session.status === 'round_rating' || session.status === 'round_transition') && !isRegistered && (
+      {(session.status === 'lobby_open' || session.status === 'round_active' || session.status === 'round_rating' || session.status === 'round_transition') && !isRegistered && !cannotTakeMe && (
         <div className="flex items-start gap-3 rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 animate-fade-in-up stagger-1">
           <AlertTriangle className="h-5 w-5 text-amber-400 flex-shrink-0 mt-0.5" />
           <div>
@@ -459,7 +500,7 @@ export default function SessionDetailPage() {
               sessionId={sessionId!}
               access={access}
               registerLabel={session.status === 'scheduled' ? 'Register' : 'Join Late'}
-              onRegister={() => registerMutation.mutate()}
+              onRegister={register}
               registering={registerMutation.isPending}
               circleName={session.circle?.name}
             />
@@ -619,7 +660,7 @@ export default function SessionDetailPage() {
       )}
 
       {/* The event's chat: kept with it once it has ended; inside the live event while it runs. */}
-      {sessionId && (phase === 'done' || phase === 'live') && (
+      {sessionId && (phase === 'done' || phase === 'live') && !waitingInLine && (
         <div className="animate-fade-in-up stagger-2">
           <EventChatHistory sessionId={sessionId} live={phase === 'live'} canEnterLive={isRegistered || isHost} />
         </div>
@@ -632,6 +673,12 @@ export default function SessionDetailPage() {
         <EventJoinRequestsCard sessionId={sessionId} focus={searchParams.get('requests') === '1'} />
       )}
 
+      {/* Part 3 Task 8: a full event's waiting list, for the people who run it (the card draws nothing for anyone the
+          server refuses, and nothing while the event has room and nobody waits). */}
+      {mayRunEvent && (phase === 'pre' || phase === 'live') && sessionId && (
+        <WaitlistCard sessionId={sessionId} full={!!access?.waitlist?.full} />
+      )}
+
       {mayInvite && sessionId && (
         <InviteStatusList
           target={{ type: 'session', sessionId, podId: session.podId ?? null }}
@@ -641,7 +688,15 @@ export default function SessionDetailPage() {
         />
       )}
 
+      {/* Part 3 Task 8: someone still waiting reads who is coming once a place is theirs. */}
+      {waitingInLine && (
+        <Card data-testid="waitlist-people-later" className="animate-fade-in-up stagger-2">
+          <p className="text-gray-500 text-sm text-center py-2">{WAITLIST_COPY.peopleLater}</p>
+        </Card>
+      )}
+
       {/* Participants */}
+      {!waitingInLine && (
       <div id="participants" className="scroll-mt-4 animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
           <Users className="h-5 w-5 text-rsn-red" /> Participants ({participantTotal ?? (participants || []).filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId).length})
@@ -772,6 +827,7 @@ export default function SessionDetailPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* Part 2 Task 11: who did what to this event, for the people running it (the server refuses anyone else). */}
       {mayRunEvent && sessionId && <EventHistoryPanel sessionId={sessionId} />}
