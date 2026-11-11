@@ -8,7 +8,8 @@ import { expectReachable } from '../helpers/viewport-fit';
 // ─────────────────────────────────────────────────────────────────────────────
 // Shirley Palmer's walkthrough, 11 Nov 2026, task S5 (item 16 safety; RSN 07 presence; RSN 08 after a call; RSN 09
 // booking). Throwaway members (@rsn-e2e.invalid): Shirley, Ana and Ben; Shirley connected to Ana and to Ben by an
-// accepted request. Ana writes to Shirley through the API.
+// accepted request. Ana writes to Shirley through the API. Test 1b adds Cara (connected to Shirley the same way) so the
+// group chat has the three people it needs, with Ben kept outside it.
 //   1. Reports by API: a message is reported as its author, with a copy of its words kept after the message is
 //      deleted; the same report again is "You already reported this."; yourself, your own message and someone else's
 //      chat are refused.
@@ -47,10 +48,13 @@ const RUN = Date.now().toString(36);
 const SHIRLEY_NAME = `Shirley Safe ${RUN}`;
 const ANA_NAME = `Ana Safe ${RUN}`;
 const BEN_NAME = `Ben Safe ${RUN}`;
+const CARA_NAME = `Cara Safe ${RUN}`;
 
 let browser: Browser;
 let shirley: TestUser, ana: TestUser, ben: TestUser;
 let admin: TestUser | undefined;
+// The group chat's third person: a group needs at least three (GROUP_CHAT_MIN_MEMBERS), and Ben must stay outside it.
+let cara: TestUser | undefined;
 let circleId = '';
 let groupId = '';
 let anaConv = '';
@@ -154,7 +158,7 @@ test.afterAll(async () => {
   // This run's own circle and group chat, by id, before their makers go.
   if (circleId) await pool.query(`DELETE FROM circles WHERE id = $1`, [circleId]).catch(() => {});
   if (groupId) await pool.query(`DELETE FROM dm_groups WHERE id = $1`, [groupId]).catch(() => {});
-  await cleanup(pool, { ids: [shirley?.id, ana?.id, ben?.id, admin?.id].filter(Boolean) as string[] });
+  await cleanup(pool, { ids: [shirley?.id, ana?.id, ben?.id, cara?.id, admin?.id].filter(Boolean) as string[] });
   const swept = await cleanupByPrefix(pool, 'e2etest-s5-');
   if (swept) console.log(`  swept ${swept} leftover s5-* account(s)`);
 });
@@ -207,7 +211,10 @@ test('1b) a circle comment and a group chat message are reported as their author
   expect((await api(shirley, 'POST', '/reports', { reason: 'spam', subject: { kind: 'circle_comment', id: comment } })).json?.error?.message).toBe('You already reported this.');
   expect((await api(ana, 'POST', '/reports', { reason: 'spam', subject: { kind: 'circle_comment', id: comment } })).json?.error?.message).toBe('You cannot report your own comment.');
 
-  const group = await api(shirley, 'POST', '/groups', { name: `S5 Group ${RUN}`, memberIds: [ana.id] });
+  // A group chat is three people at least, each one Shirley has met (an accepted request counts): Ana and Cara.
+  cara = await member('cara', CARA_NAME);
+  await connect(shirley, cara);
+  const group = await api(shirley, 'POST', '/groups', { name: `S5 Group ${RUN}`, memberIds: [ana.id, cara.id] });
   expect(group.status, JSON.stringify(group.json)).toBe(201);
   groupId = group.json.data.id;
   expect((await api(ana, 'POST', `/groups/${groupId}/messages`, { content: `S5 group words ${RUN}` })).status).toBe(201);
