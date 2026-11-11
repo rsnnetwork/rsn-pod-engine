@@ -23,7 +23,7 @@ export interface SendMessageOptions<V> {
   toastOnError?: boolean;
 }
 
-export function useSendMessage<V extends { content: string; replyToId?: string | null }>(
+export function useSendMessage<V extends { content: string; replyToId?: string | null; toUserId?: string }>(
   conversationId: string | undefined,
   toUserId: string | undefined,
   options: SendMessageOptions<V> = {},
@@ -32,10 +32,13 @@ export function useSendMessage<V extends { content: string; replyToId?: string |
   const { addToast } = useToastStore();
   return useMutation({
     mutationFn: async (vars: V) => {
-      if (!toUserId) throw new Error('No recipient');
+      // A recipient named in the send itself wins (11 Nov 2026, RSN 01): a voice note goes to the person it was recorded
+      // for, fixed when Send was pressed, whatever conversation is open by the time its upload ends.
+      const to = vars.toUserId ?? toUserId;
+      if (!to) throw new Error('No recipient');
       const attachment = options.prepareAttachment ? await options.prepareAttachment(vars) : null;
       const res = await api.post('/dm/messages', {
-        toUserId,
+        toUserId: to,
         content: vars.content,
         attachment,
         // A quoted reply (30 Oct 2026) names the message it answers; only then does the body carry it.

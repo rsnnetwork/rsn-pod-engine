@@ -116,7 +116,8 @@ describe('the emoji picker (L9)', () => {
   });
 
   it.each([
-    ['the one-to-one composer', 'features/messages/MessagesPage.tsx', /onPick=\{\(e\) => pickInto\(textareaRef\.current, draft, e, setDraft\)\}/],
+    // The one-to-one box is its own component since 11 Nov 2026 (DmComposer, keyed by conversation); its text is that conversation's draft.
+    ['the one-to-one composer', 'features/messages/DmComposer.tsx', /onPick=\{\(e\) => pickInto\(boxRef\.current, text, e, \(next\) => setTextDraft\(threadKey, toUserId, next\)\)\}/],
     ['the group composer (new)', 'features/messages/GroupThread.tsx', /onPick=\{\(e\) => pickInto\(boxRef\.current, content, e,/],
     ['the live chat', 'features/live/ChatPanel.tsx', /onPick=\{\(e\) => pickInto\(inputRef\.current, input, e, setInput\)\}/],
   ])('%s uses it, and sending closes it', (_what, file, pick) => {
@@ -128,11 +129,12 @@ describe('the emoji picker (L9)', () => {
 
   it('the old one-pick pickers are gone: no pick closes the picker or focuses the box', () => {
     expect(read('features/messages/MessagesPage.tsx')).not.toMatch(/setDraft\(prev => prev \+ e\)/);
+    expect(read('features/messages/DmComposer.tsx')).not.toMatch(/prev \+ e\)/);
     expect(read('features/live/ChatPanel.tsx')).not.toMatch(/setInput\(input \+ e\); setShowEmoji\(false\)/);
   });
 
   it('the smile stays hidden on a phone in Messages, whose keyboard has its own emoji panel', () => {
-    expect(read('features/messages/MessagesPage.tsx')).toMatch(/className="hidden sm:flex w-11 h-11 items-center/);
+    expect(read('features/messages/DmComposer.tsx')).toMatch(/className="hidden sm:flex w-11 h-11 items-center/);
     expect(read('features/messages/GroupThread.tsx')).toMatch(/className="hidden h-11 w-11 [^"]*sm:flex"/);
   });
 });
@@ -142,13 +144,13 @@ describe('the 1:1 composer (P22, P23)', () => {
     expect(isComposingEnter({ isComposing: true, keyCode: 13 })).toBe(true);
     expect(isComposingEnter({ isComposing: false, keyCode: 229 })).toBe(true);
     expect(isComposingEnter({ isComposing: false, keyCode: 13 })).toBe(false);
-    for (const file of ['features/messages/MessagesPage.tsx', 'features/messages/GroupThread.tsx', 'features/live/ChatPanel.tsx']) {
+    for (const file of ['features/messages/DmComposer.tsx', 'features/messages/GroupThread.tsx', 'features/live/ChatPanel.tsx']) {
       expect(read(file)).toMatch(/e\.key === 'Enter' && !e\.shiftKey && !isComposingEnter\(e\.nativeEvent\)/);
     }
   });
 
   it('every button beside the box is 44px on every width, so they line up with the 44px box from 640px too', () => {
-    const page = read('features/messages/MessagesPage.tsx');
+    const page = read('features/messages/DmComposer.tsx');
     expect(page).not.toMatch(/sm:w-9 sm:h-9|sm:!w-9 sm:!h-9/);
     expect(page).toMatch(/className="!w-11 !h-11 !p-0 flex-shrink-0"/);
   });
@@ -203,10 +205,11 @@ describe('quoted replies (L7)', () => {
   });
 
   it.each([
-    ['the one-to-one thread', 'features/messages/MessagesPage.tsx', /<ReplyButton onReply=\{\(\) => replyTo\(m, fromMe\)\} \/>/],
-    ['the group thread', 'features/messages/GroupThread.tsx', /<ReplyButton onReply=\{\(\) => onReply\(m, mine\)\} \/>/],
-  ])('%s offers Reply on each message, shows the quote, and the strip with its cancel above the box', (_what, file, button) => {
-    const src = read(file);
+    ['the one-to-one thread', ['features/messages/MessagesPage.tsx', 'features/messages/DmComposer.tsx'], /<ReplyButton onReply=\{\(\) => replyTo\(m, fromMe\)\} \/>/],
+    ['the group thread', ['features/messages/GroupThread.tsx'], /<ReplyButton onReply=\{\(\) => onReply\(m, mine\)\} \/>/],
+  ])('%s offers Reply on each message, shows the quote, and the strip with its cancel above the box', (_what, files, button) => {
+    // The one-to-one thread's box (with the strip) is DmComposer since 11 Nov 2026.
+    const src = (files as string[]).map(read).join('\n');
     expect(src).toMatch(button);
     expect(src).toMatch(/\{m\.replyTo && (\(\s*<div[^>]*>\s*)?<ReplyQuote quote=\{m\.replyTo\} loaded=\{loadedIds\.has\(m\.replyTo\.id\)\}/);
     expect(src).toMatch(/<ReplyStrip target=\{replyTarget\} onCancel=/);
@@ -215,7 +218,7 @@ describe('quoted replies (L7)', () => {
   it('the reply goes to the server with the message, and only when there is one (production\'s body is unchanged otherwise)', () => {
     // The 1:1 send is T7's shared hook (thread/useSendMessage.ts); the composer hands it the reply.
     expect(read('features/messages/thread/useSendMessage.ts')).toContain('...(vars.replyToId ? { replyToId: vars.replyToId } : {}),');
-    expect(read('features/messages/MessagesPage.tsx')).toContain('replyToId: replyTarget?.id ?? null,');
+    expect(read('features/messages/DmComposer.tsx')).toContain('replyToId: replyTarget?.id ?? null,');
     expect(read('features/messages/useGroups.ts')).toMatch(/\{ content, \.\.\.\(replyToId \? \{ replyToId \} : \{\}\) \}/);
   });
 

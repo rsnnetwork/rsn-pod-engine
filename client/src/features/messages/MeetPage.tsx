@@ -511,7 +511,9 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
             </div>
           </div>
           <aside className={`h-[45dvh] shrink-0 sm:h-auto sm:w-80 ${chatOpen ? 'flex flex-col' : 'hidden'}`} aria-label="Chat panel">
+            {/* Keyed by the conversation, like the Messages box (11 Nov 2026): a draft never moves to another call's chat. */}
             <CallChatPanel
+              key={conversationId}
               conversationId={conversationId}
               open={chatOpen}
               onClose={() => setChatOpen(false)}
