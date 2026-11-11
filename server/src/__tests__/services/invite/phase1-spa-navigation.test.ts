@@ -138,7 +138,8 @@ describe('Phase 1 — SPA navigation + name-fallback architecture', () => {
       // not be a bare `.catch(() => {})`.
       const idx = src.indexOf("api.post(`/sessions/${sessionId}/register`).then");
       expect(idx).toBeGreaterThan(-1);
-      const block = src.slice(idx, idx + 600);
+      // Up to the effect's end (the review I1 guard for an answer that comes back after the page moved made it longer).
+      const block = src.slice(idx, src.indexOf('.finally(', idx));
       expect(block).not.toMatch(/\.catch\(\(\)\s*=>\s*\{\s*\/?\*[^*]*\*\/\s*\}\)/);
       expect(block).toMatch(/addToast/);
     });

@@ -148,7 +148,8 @@ describe('the waiting list follows the server without a refresh', () => {
     const hook = read(`${WAITLIST_DIR}/useWaitlist.ts`);
     expect(hook).toContain("queryKey: ['session-waitlist', sessionId]");
     expect(hook).toContain('meta: { entities: [E.sessionWaitlist(sessionId), E.sessionParticipants(sessionId)] },');
-    expect(hook).toContain('retry: (count, err: unknown) => !notForThisViewer(err) && count < 2');
+    // Review I2 (11 Nov 2026): nor a 429, whose re-read waits for the limit's window (realtime/rate-limited-reads.ts).
+    expect(hook).toContain('retry: (count, err: unknown) => !notForThisViewer(err) && !isRateLimited(err) && count < 2');
   });
 
   it('the call link follows the line once it knows the event', () => {
@@ -172,7 +173,8 @@ describe('the page of someone still on the line reads nothing that refuses them'
   it('the attendee list is read only once they hold no number in the line, and a 403 is not retried', () => {
     expect(page).toContain('const waitingInLine = session?.access?.waitlist?.position != null;');
     expect(page).toContain('enabled: !!sessionId && !waitingInLine,');
-    expect(page).toContain('retry: (failureCount, err: unknown) => (err as { response?: { status?: number } })?.response?.status !== 403 && failureCount < 3,');
+    // Review I2: nor a 429 (its re-read waits for the limit's window).
+    expect(page).toContain('(err as { response?: { status?: number } })?.response?.status !== 403 && !isRateLimited(err) && failureCount < 3,');
   });
 
   it('no people tile, no attendee list and no event chat while waiting; a plain line in their place', () => {
