@@ -113,12 +113,13 @@ export default function AdminUserInspectorPage() {
     refetchInterval: (q: any) => (q.state.data?.enrichment?.status === 'searching' ? 3000 : false),
   });
 
-  // Same endpoint PublicProfilePage uses — reuse its existing entity tag.
+  // The inspector's own read (Shirley pilot S6 fix round 1): GET /users/:id answers a block either way with a 404, for
+  // admins too, so a member who blocks every admin would otherwise blind this page. The admin read asks about no block.
   const profileQuery = useQuery({
     queryKey: ['admin-inspect-profile', id],
-    queryFn: () => api.get(`/users/${id}`).then((r) => r.data.data),
+    queryFn: () => api.get(`/admin/users/${encodeURIComponent(id ?? '')}`).then((r) => r.data.data),
     enabled: admin && !!id,
-    meta: { entities: id ? [E.user(id)] : [] },
+    meta: { entities: id ? [E.user(id), E.adminUsers] : [E.adminUsers] },
   });
 
   // Admin-only E2 diagnostic endpoint — no realtime entity emitted server-side.

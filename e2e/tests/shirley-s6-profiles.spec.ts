@@ -31,7 +31,7 @@ const UNKNOWN_ID = '00000000-0000-4000-8000-000000000006';
 
 interface Person { id: string; email: string; token: string; refresh: string }
 
-async function makePerson(label: string, opts: { kind?: 'member' | 'event_guest'; visible?: boolean } = {}): Promise<Person> {
+async function makePerson(label: string, opts: { kind?: 'member' | 'event_guest'; visible?: boolean; role?: 'member' | 'admin' } = {}): Promise<Person> {
   const id = uuid();
   const email = `s6-${label}-${RUN}@rsn-e2e.invalid`;
   const kind = opts.kind ?? 'member';
@@ -39,12 +39,12 @@ async function makePerson(label: string, opts: { kind?: 'member' | 'event_guest'
     `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed,
                         onboarding_status, onboarding_version, email_verified, company, job_title, industry, location,
                         account_kind, profile_visible)
-     VALUES ($1, $2, $3, $4, 'Test', 'active', 'member', true, true, 'completed', 2, true, 'TestCo', 'Test Account', 'Tech',
+     VALUES ($1, $2, $3, $4, 'Test', 'active', $7, true, true, 'completed', 2, true, 'TestCo', 'Test Account', 'Tech',
              'Lisbon, Portugal', $5, $6)`,
-    [id, email, label === 'owner' ? OWNER_NAME : `S6 ${label} ${RUN}`, label === 'owner' ? 'Owner' : label, kind, opts.visible ?? kind === 'member'],
+    [id, email, label === 'owner' ? OWNER_NAME : `S6 ${label} ${RUN}`, label === 'owner' ? 'Owner' : label, kind, opts.visible ?? kind === 'member', opts.role ?? 'member'],
   );
   const sessionId = uuid();
-  const token = jwt.sign({ sub: id, email, role: 'member', displayName: label, sessionId }, SECRET, { expiresIn: '1h' });
+  const token = jwt.sign({ sub: id, email, role: opts.role ?? 'member', displayName: label, sessionId }, SECRET, { expiresIn: '1h' });
   const refresh = jwt.sign({ sub: id, sessionId, type: 'refresh' }, SECRET, { expiresIn: '1d' });
   return { id, email, token, refresh };
 }
@@ -66,9 +66,10 @@ let blocker: Person | undefined;
 let blockee: Person | undefined;
 let closed: Person | undefined;
 let guest: Person | undefined;
+let admin: Person | undefined;
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
-const people = () => [owner, stranger, blocker, blockee, closed, guest].filter((p): p is Person => !!p);
+const people = () => [owner, stranger, blocker, blockee, closed, guest, admin].filter((p): p is Person => !!p);
 
 test.beforeAll(async () => {
   expect(SECRET, 'E2E_JWT_SECRET (or JWT_SECRET) is needed to sign the throwaway members').toBeTruthy();
@@ -78,14 +79,16 @@ test.beforeAll(async () => {
   blockee = await makePerson('blockee');
   closed = await makePerson('closed');
   guest = await makePerson('guest', { kind: 'event_guest' });
+  admin = await makePerson('admin', { role: 'admin' });
   await pool.query(
     `UPDATE users SET bio = $2, what_i_can_help_with = $3, who_i_want_to_meet = $4, my_intent = $5, interests = $6,
                       linkedin_url = NULL
       WHERE id = $1`,
     [owner.id, 'Curious about humans.', 'Hosting circles for curious people', WANT, INTENT, [`SECRET-INTEREST-${RUN}`]],
   );
-  await pool.query(`INSERT INTO user_blocks (blocker_id, blocked_id) VALUES ($1, $2), ($3, $4)`,
-    [blocker.id, owner.id, owner.id, blockee.id]);
+  // The owner also blocks an admin: the admin inspector must still see them (S6 fix round 1).
+  await pool.query(`INSERT INTO user_blocks (blocker_id, blocked_id) VALUES ($1, $2), ($3, $4), ($3, $5)`,
+    [blocker.id, owner.id, owner.id, blockee.id, admin.id]);
   console.log(`[shirley-s6] engine=${engineLabel()} app=${APP} api=${SERVER}`);
 });
 
@@ -109,6 +112,12 @@ test('GET /users/:id answers a block, either way, exactly as it answers an unkno
     expect(res.status, viewer.email).toBe(404);
     expect(res.json).toEqual(unknown.json);
   }
+  // An admin the owner blocked: the member-facing read is the same 404, the admin inspector's own read is not.
+  expect((await call('GET', `/users/${owner!.id}`, { as: admin })).json).toEqual(unknown.json);
+  const inspector = await call('GET', `/admin/users/${owner!.id}`, { as: admin });
+  expect(inspector.status, JSON.stringify(inspector.json)).toBe(200);
+  expect(inspector.json.data).toMatchObject({ id: owner!.id, email: owner!.email, displayName: OWNER_NAME });
+  expect((await call('GET', `/admin/users/${owner!.id}`, { as: stranger })).status).toBe(403);
   const open = await call('GET', `/users/${owner!.id}`, { as: stranger });
   expect(open.status).toBe(200);
   expect(JSON.stringify(open.json)).not.toMatch(/SECRET-/);

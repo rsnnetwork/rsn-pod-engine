@@ -120,11 +120,11 @@ async function stripedPicture(page: Page, width: number, height: number): Promis
 
 const bannerOf = (page: Page) => page.getByTestId('profile-banner');
 const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-/** With no banner there is no strip, only "Add a cover image" (10 Nov 2026); with one, its pencil. Either opens the editor; saved, it closes. */
+/** With no banner there is no strip, only "Add banner" (10 Nov 2026); with one, its pencil. Either opens the editor; saved, it closes. */
 async function chooseBanner(page: Page, picture: Buffer) {
-  const add = page.getByRole('button', { name: 'Add a cover image' });
+  const add = page.getByRole('button', { name: 'Add banner' });
   if (await add.count()) await add.click();
-  else await bannerOf(page).getByRole('button', { name: 'Edit banner' }).click();
+  else await bannerOf(page).getByRole('button', { name: 'Change banner' }).click();
   const editor = page.getByRole('dialog', { name: 'Edit your banner' });
   await editor.locator('input[type="file"]').setInputFiles({ name: 'banner.jpg', mimeType: 'image/jpeg', buffer: picture });
   await expect(editor.getByRole('slider', { name: 'Zoom' })).toBeVisible({ timeout: 30_000 });
@@ -198,7 +198,7 @@ test(`the banner: changed on your profile, seen there and on your Human Profile 
   await expect(me.page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible({ timeout: SLOW });
   // No banner yet: no empty strip, only the slim way to add one.
   await expect(bannerOf(me.page)).toHaveCount(0);
-  await expect(me.page.getByRole('button', { name: 'Add a cover image' })).toBeVisible();
+  await expect(me.page.getByRole('button', { name: 'Add banner' })).toBeVisible();
 
   // The pencil: a tall picture, placed as it opens (its middle), is cut to its middle 3:1 band at its own 1200x400.
   await chooseBanner(me.page, await stripedPicture(me.page, 1200, 1600));
@@ -539,9 +539,9 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     expect(await brokenWords(own.page.getByRole('heading', { level: 1 })), `your name at ${at}`).toEqual([]);
     // Scrolled to first, as the links below are: the photo's pencil sits at the bottom right of a tile at least 430px
     // tall under the banner, so on a short window (1024x768) it is under the fold at the page's top (fix round 2).
-    // With no banner there is no strip, only "Add a cover image" (10 Nov 2026), and the photo's pencil.
+    // With no banner there is no strip, only "Add banner" (10 Nov 2026), and the photo's pencil.
     await expect(bannerOf(own.page)).toHaveCount(0);
-    for (const pencil of ['Add a cover image', 'Edit photo']) {
+    for (const pencil of ['Add banner', 'Edit photo']) {
       const button = own.page.getByRole('button', { name: pencil });
       await button.scrollIntoViewIfNeeded();
       expect((await button.boundingBox())!.height, `${pencil} at ${at}`).toBeGreaterThanOrEqual(44);
@@ -551,7 +551,7 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     await pool.query(`UPDATE users SET banner_blob = decode($2, 'base64'), banner_mime = 'image/png', banner_updated_at = NOW() WHERE id = $1`, [owner.id, TINY_PNG]);
     await own.page.reload();
     await expect(bannerOf(own.page)).toBeVisible({ timeout: SLOW });
-    for (const name of ['Edit banner', 'Remove', 'Edit photo']) {
+    for (const name of ['Change banner', 'Remove', 'Edit photo']) {
       const button = own.page.getByRole('button', { name, exact: true });
       await button.scrollIntoViewIfNeeded();
       expect((await button.boundingBox())!.height, `${name} at ${at}`).toBeGreaterThanOrEqual(44);

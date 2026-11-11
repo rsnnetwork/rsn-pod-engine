@@ -7,6 +7,7 @@ import * as path from 'path';
 import { PICTURE_SHAPES } from '@rsn/shared';
 import { PREVIEW_TO, SHARE_WORDS, memberLinkFor, publicLinkFor } from '../../../../client/src/features/reason/profile/share-text';
 import { bannerHints } from '../../../../client/src/components/picture/picture-file';
+import { toPublicMember } from '../../services/user/public-card';
 
 const CLIENT = path.join(__dirname, '../../../../client/src');
 const read = (rel: string) => fs.readFileSync(path.join(CLIENT, rel), 'utf8').replace(/\r\n/g, '\n');
@@ -29,10 +30,29 @@ describe('the two links', () => {
     expect(PREVIEW_TO).toBe('/profile/preview');
   });
 
-  it('the consent line says who can see the public link and what it never shows', () => {
-    expect(SHARE_WORDS.consent).toMatch(/even people who are not on REASON/);
-    expect(SHARE_WORDS.consent).toMatch(/never shows your answers, your email, your communities or a way to contact you/);
-    expect(SHARE_WORDS.consent).toMatch(/Turn it off or make a new link at any time/);
+  it('the consent line says who can see the public link, signed out and blocked people included, and that turning it off stops it at once', () => {
+    expect(SHARE_WORDS.consent).toMatch(/^Anyone with this link can see your public card, signed out, even people who are not on REASON and people you have blocked:/);
+    expect(SHARE_WORDS.consent).toMatch(/It never shows your answers, your email or phone, your communities or your entities, and nobody can message, meet or call you on REASON from it\./);
+    expect(SHARE_WORDS.consent).toMatch(/Turning it off, or making a new link, stops the old link at once\.$/);
+    // The links are shown, so it must not claim there is no way to reach the member.
+    expect(SHARE_WORDS.consent).not.toMatch(/a way to contact you/);
+  });
+
+  // S6 fix round 1: every key the server's public card sends is named in the consent line. The card is toPublicMember
+  // without the id, plus canBring (public-link.service.ts); a public field added to toPublicMember fails here until the
+  // consent line names it.
+  it('names every field the public card sends', () => {
+    const card = Object.keys(toPublicMember({ id: 'x' })).filter((k) => k !== 'id').concat('canBring').sort();
+    const said: Record<string, RegExp> = {
+      displayName: /your name/, firstName: /your name/, lastName: /your name/,
+      avatarUrl: /photo/, bannerUrl: /banner/,
+      professionalRole: /your role/, jobTitle: /job title/, company: /company/,
+      industry: /industry/, location: /location/, bio: /your bio/, languages: /languages you speak/,
+      expertiseText: /your expertise/, whatICanHelpWith: /what you can help with/, canBring: /what you can help with/,
+      linkedinUrl: /LinkedIn/, websiteUrl: /website/, instagramUrl: /Instagram/, xUrl: /\bX\b/, facebookUrl: /Facebook/,
+    };
+    expect(card).toEqual(Object.keys(said).sort());
+    for (const key of card) expect({ key, named: said[key].test(SHARE_WORDS.consent) }).toEqual({ key, named: true });
     for (const words of Object.values(SHARE_WORDS)) expect(words).not.toMatch(/\bsessions?\b|token|\bid\b/i);
   });
 });

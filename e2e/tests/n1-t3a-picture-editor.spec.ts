@@ -234,10 +234,10 @@ for (const width of WIDTHS) {
     await expect(page.getByRole('heading', { level: 1, name: `Pia Picture banner${width}` })).toBeVisible({ timeout: SLOW });
     const banner = page.getByTestId('profile-banner');
     const pencil = banner.getByRole('button', { name: 'Change banner' });
-    // No banner yet: no empty strip, only the slim "Add a cover image" button (10 Nov 2026); the pencil is on the banner once there is one.
+    // No banner yet: no empty strip, only the slim "Add banner" button (10 Nov 2026; named so since Shirley pilot S6); the pencil ("Change banner") is on the banner once there is one.
     await expect(banner).toHaveCount(0);
     const add = page.getByRole('button', { name: 'Add banner' });
-    await expectReachable(page, add, `${at}: the add-a-cover-image button`);
+    await expectReachable(page, add, `${at}: the Add banner button`);
     expect((await add.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 
     await add.click();

@@ -134,7 +134,7 @@ test('1.1, 1.3: the pencils place a photo and a banner, stored large, and a pod 
 
   await test.step('1.1 the banner: pencil, place, save; stored at 2400 by 800', async () => {
     const banner = me.page.getByTestId('profile-banner');
-    await me.page.getByRole('button', { name: 'Add a cover image' }).click();
+    await me.page.getByRole('button', { name: 'Add banner' }).click();
     const sheet = me.page.getByRole('dialog', { name: 'Edit your banner' });
     await sheet.locator('input[type="file"]').setInputFiles({ name: 'wide.jpg', mimeType: 'image/jpeg', buffer: await halves(me.page, 3000, 1500) });
     await expect(sheet.getByRole('slider', { name: 'Zoom' })).toBeVisible({ timeout: 20_000 });

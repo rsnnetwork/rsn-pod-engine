@@ -715,8 +715,10 @@ export const eventImageReadLimiter = rateLimit({
 // A member's public profile link (Shirley pilot S6, 11 Nov 2026): read signed out, by whoever the member shared it with,
 // so a whole room behind one venue's Wi-Fi may open it at once. It has the event image's venue-sized bucket: 600 reads
 // a minute per client (a signed-in reader by their account, everyone else by their network address). Guessing is
-// stopped by the token itself (128 random bits) and by the miss bucket below, which counts only the answers that found
-// no profile (404) per network address.
+// stopped by the token itself (128 random bits); the miss bucket below counts only the answers that found no profile
+// (404) per network address, keyed like the RSN Call link's buckets. It is venue-sized too (S6 fix round 1): a room
+// behind one Wi-Fi address scanning a link its owner has since replaced must not lock that room out of every other
+// link, so it allows 300 dead links in 10 minutes and only blunts mass scanning.
 export const PUBLIC_PROFILE_READS_PER_CLIENT = 600;
 export const publicProfileReadLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -728,7 +730,7 @@ export const publicProfileReadLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
-export const PUBLIC_PROFILE_MISSES_MAX = 60;
+export const PUBLIC_PROFILE_MISSES_MAX = 300;
 export const publicProfileMissLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: PUBLIC_PROFILE_MISSES_MAX,
