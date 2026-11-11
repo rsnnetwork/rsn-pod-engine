@@ -24,8 +24,8 @@ import {
 } from './communities-text';
 
 type Props =
-  | { mode: 'member'; userId: string; first: string }
-  | { mode: 'preview'; first: string };
+  | { mode: 'member'; userId: string }
+  | { mode: 'preview' };
 
 type Call = 'join-circle' | 'join-pod' | 'request-pod';
 
@@ -95,6 +95,9 @@ export default function ProfileCommunities(props: Props) {
     enabled: !!me,
     // A 4xx is an answer (the 404 of a block): asking again changes nothing.
     retry: shouldRetry,
+    // Not kept once the profile closes: who may see which space changes without telling a viewer outside it, so a
+    // profile opened again reads the server first rather than drawing last time's rows (a space since made private).
+    gcTime: 0,
     meta: { entities: communitiesEntities(me, them, loaded) },
   });
 
@@ -131,9 +134,11 @@ export default function ProfileCommunities(props: Props) {
       </div>
     );
   }
-  if (list.isError) {
-    // A block or a closed account answers 404: the profile itself says so, and this section is left out.
-    if (statusOf(list.error) === 404) return null;
+  // A block or a closed account answers 404, even on a refetch: the profile itself says so, and this section goes.
+  if (list.isError && statusOf(list.error) === 404) return null;
+  // Any other failure shows the card only when there is nothing to show: a background refetch that fails keeps the
+  // last good list on screen (React Query keeps its data), and the next tag or focus asks again.
+  if (list.isError && !list.data) {
     return (
       <Section kicker={COMMUNITIES_KICKER} title="Could not load communities." className="mt-[11px] md:mt-[18px]">
         <p className="text-[14px] text-[#505762]">{errorMessage(list.error, 'Try again in a moment.')}</p>
@@ -151,7 +156,7 @@ export default function ProfileCommunities(props: Props) {
   }
 
   return (
-    <Section kicker={COMMUNITIES_KICKER} title={communitiesTitle(props.first, total)} className="mt-[11px] md:mt-[18px]">
+    <Section kicker={COMMUNITIES_KICKER} title={communitiesTitle(total)} className="mt-[11px] md:mt-[18px]">
       <div data-testid="profile-communities">
         <ul className="grid">
           {items.map((c) => <Row key={`${c.kind}-${c.id}`} c={c} busy={busyId === c.id} onCall={onCall} />)}

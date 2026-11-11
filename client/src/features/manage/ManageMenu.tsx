@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { ChevronDown, SlidersHorizontal } from 'lucide-react';
 import Sheet from '@/features/reason/ui/Sheet';
+import { Spinner } from '@/components/ui/Spinner';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { cn } from '@/lib/utils';
 import { MANAGE, MANAGE_LABEL, type ManageKey } from './manage-menu';
@@ -27,6 +28,8 @@ interface Props {
   title: string;
   entries: ManageEntry[];
   className?: string;
+  /** While an entry's work runs on (an archive), the button says so ("Archiving...") and does not open. */
+  busy?: string;
 }
 
 const ENTRY = 'flex min-h-[48px] w-full flex-col items-start justify-center rounded-xl px-3 py-2 text-left hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-rsn-red';
@@ -60,7 +63,7 @@ function Entries({ entries, onPick }: { entries: ManageEntry[]; onPick: (e: Mana
   );
 }
 
-export default function ManageMenu({ title, entries, className }: Props) {
+export default function ManageMenu({ title, entries, className, busy }: Props) {
   const wide = useMediaQuery('(min-width: 768px)');
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
@@ -129,8 +132,11 @@ export default function ManageMenu({ title, entries, className }: Props) {
 
   if (entries.length === 0) return null;
 
+  // The desktop menu gives focus back to the button before the entry runs (a sheet the entry opens then takes it, and
+  // gives it back to the button when it closes); the phone's Sheet gives it back by itself.
   const pick = (e: ManageEntry) => {
     setOpen(false);
+    if (wide) trigger.current?.focus();
     afterClose(e.onSelect);
   };
 
@@ -139,14 +145,17 @@ export default function ManageMenu({ title, entries, className }: Props) {
       <button
         ref={trigger}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => { if (!busy) setOpen((o) => !o); }}
         aria-expanded={open}
-        aria-haspopup="dialog"
+        // A phone opens a dialog (the Sheet); a desktop opens a disclosure, a plain group of buttons, like the account menu.
+        aria-haspopup={wide ? undefined : 'dialog'}
         aria-controls={open ? panelId : undefined}
+        aria-disabled={busy ? true : undefined}
+        aria-busy={busy ? true : undefined}
         data-testid="manage-open"
-        className={cn('inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 text-sm font-semibold text-[#1a1a2e] hover:bg-gray-50', open && 'border-rsn-red', className)}
+        className={cn('inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 text-sm font-semibold text-[#1a1a2e] hover:bg-gray-50', open && 'border-rsn-red', busy && 'opacity-60', className)}
       >
-        <SlidersHorizontal className="h-4 w-4" aria-hidden="true" /> {MANAGE}
+        {busy ? <Spinner className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />} {busy ?? MANAGE}
         <ChevronDown className="h-4 w-4 text-gray-400" aria-hidden="true" />
       </button>
       {open && !wide && (

@@ -5,7 +5,7 @@
 import type { ProfileCommunities, ProfileCommunitiesHidden, ProfileCommunity, ProfileCommunityRole } from '@rsn/shared';
 import { E } from '../../../realtime/entities';
 
-export const COMMUNITIES_KICKER = 'Communities';
+export const COMMUNITIES_KICKER = 'Circles and pods';
 /** The first page, and each page after it that "Show more" reads. */
 export const FIRST_PAGE = 8;
 export const MORE_PAGE = 24;
@@ -18,8 +18,12 @@ export const ROLE_LABEL: Record<ProfileCommunityRole, string> = {
   member: 'Member',
 };
 
-export function communitiesTitle(first: string, total: number): string {
-  return total === 1 ? `The 1 community ${first} is in.` : `The ${total} communities ${first} is in.`;
+/**
+ * The section's title: "Communities" and how many the VIEWER may see. It never claims to be every space the person is
+ * in: the private and closed ones the viewer is not in are left out, and say nothing about how many there are.
+ */
+export function communitiesTitle(visible: number): string {
+  return `Communities (${visible})`;
 }
 
 /** A row's kind and, when it is not open to all, how people get in. */

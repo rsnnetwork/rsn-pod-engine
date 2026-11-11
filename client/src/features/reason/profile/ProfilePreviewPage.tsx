@@ -135,7 +135,7 @@ export default function ProfilePreviewPage() {
             <ProfileHero brief={preview.data} who={personFacts(preview.data.person)} source={null} userId={me} />
             <ProfileDetails brief={preview.data} who={personFacts(preview.data.person)} source={null} onRecordOutcome={inPreview} />
             {/* Shirley pilot S3 (RSN 14): your communities as that member sees them (GET /people/me/communities). */}
-            <ProfileCommunities mode="preview" first={personFacts(preview.data.person).first} />
+            <ProfileCommunities mode="preview" />
           </div>
         ) : preview.isError ? (
           <Failed error={preview.error} onRetry={() => void preview.refetch()} />

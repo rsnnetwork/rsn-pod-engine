@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ProfileCommunities, ProfileCommunity } from '@rsn/shared';
 import {
-  CIRCLE_HINT, EXPORT_SCREEN_ON_MAIN, MANAGE_LABEL, POD_HINT, SECTION_ID, circleManageKeys, podManageKeys,
+  CIRCLE_HINT, MANAGE_LABEL, POD_HINT, SECTION_ID, circleManageKeys, podManageKeys,
 } from '../../../../client/src/features/manage/manage-menu';
 import {
   ROLE_LABEL, communitiesEntities, communitiesTitle, previewEmptyText, rowBadges, rowButton, rowToast, spaceHref,
@@ -17,7 +17,7 @@ const SRC = path.join(__dirname, '../../../../client/src');
 const read = (rel: string) => fs.readFileSync(path.join(SRC, rel), 'utf8').replace(/\r\n/g, '\n');
 
 describe('the circle Manage menu: who sees which entry (circleManageKeys)', () => {
-  it("the owner: every entry of the brief, in its order (Export once S7's screen is on main)", () => {
+  it("the owner: every entry of the brief, in its order (Export by S7's own rule on the viewer's role)", () => {
     expect(circleManageKeys({ canManage: true, isOwner: true })).toEqual(['edit', 'members', 'invitations', 'pods', 'events', 'visibility', 'moderation']);
     expect(circleManageKeys({ canManage: true, isOwner: true }, true)).toEqual(['edit', 'members', 'invitations', 'pods', 'events', 'visibility', 'moderation', 'export']);
   });
@@ -51,19 +51,25 @@ describe('the pod Manage menu: who sees which entry (podManageKeys)', () => {
     expect(podManageKeys({ ...pod, role: 'member' })).toEqual([]);
     expect(podManageKeys({ ...pod, role: null })).toEqual([]);
   });
-  it('Circles only while the pod is in one; nothing on an archived pod (its page offers Reactivate)', () => {
+  it('Circles only while the pod is in one; an archived pod offers only Export, to whoever exports (its page offers Reactivate)', () => {
     expect(podManageKeys({ ...pod, role: 'director', inCircles: false })).not.toContain('circles');
     expect(podManageKeys({ ...pod, role: 'director', status: 'archived' })).toEqual([]);
+    expect(podManageKeys({ ...pod, role: 'director', status: 'archived' }, true)).toEqual(['export']);
+    expect(podManageKeys({ ...pod, role: 'host', status: 'archived' }, true)).toEqual(['export']);
     expect(podManageKeys({ ...pod, role: null, platformAdmin: true, status: 'archived' })).toEqual([]);
   });
-  it('every entry has words; the export screen is not on main yet (the marked slot)', () => {
+  it('Export is added whenever the viewer\'s own role exports, whatever else they may do (S7: owner, moderator, director, host)', () => {
+    expect(circleManageKeys({ canManage: false }, true)).toEqual(['export']);
+    expect(podManageKeys({ ...pod, role: 'member' }, true)).toEqual(['export']);
+    expect(circleManageKeys({ canManage: true, isOwner: true }, false)).not.toContain('export');
+  });
+  it('every entry has words and a hint', () => {
     expect(MANAGE_LABEL).toMatchObject({
       edit: 'Edit details', members: 'Members', invitations: 'Invitations', pods: 'Pods', events: 'Events',
       visibility: 'Visibility', moderation: 'Moderation', export: 'Export',
     });
     for (const k of circleManageKeys({ canManage: true, isOwner: true }, true)) expect(CIRCLE_HINT[k]).toBeTruthy();
     for (const k of podManageKeys({ ...pod, role: 'director' }, true)) expect(POD_HINT[k]).toBeTruthy();
-    expect(EXPORT_SCREEN_ON_MAIN).toBe(false);
   });
 });
 
@@ -74,6 +80,10 @@ describe('ManageMenu: a sheet on a phone, a menu on a desktop', () => {
     expect(menu).toMatch(/inline-flex min-h-\[44px\]/);
     expect(menu).toMatch(/data-testid="manage-open"/);
     expect(menu).toMatch(/aria-expanded=\{open\}/);
+    // A dialog on a phone (the Sheet), a plain disclosure group on a desktop.
+    expect(menu).toMatch(/aria-haspopup=\{wide \? undefined : 'dialog'\}/);
+    expect(menu).toMatch(/role="group"/);
+    expect(menu).not.toMatch(/role="menu"/);
   });
   it('under 768px the bottom Sheet (portalled, Escape closes, focus trapped); from 768px a menu portalled to body', () => {
     expect(menu).toMatch(/useMediaQuery\('\(min-width: 768px\)'\)/);
@@ -90,7 +100,13 @@ describe('ManageMenu: a sheet on a phone, a menu on a desktop', () => {
     expect(menu).toMatch(/Math\.max\(EDGE, Math\.min\(box\.left, window\.innerWidth - width - EDGE\)\)/);
   });
   it('an entry runs once the menu has closed (so focus going back does not undo a scroll or a new sheet)', () => {
-    expect(menu).toMatch(/setOpen\(false\);\s*afterClose\(e\.onSelect\);/);
+    expect(menu).toMatch(/setOpen\(false\);\s*if \(wide\) trigger\.current\?\.focus\(\);\s*afterClose\(e\.onSelect\);/);
+  });
+  it('a busy entry (an archive) keeps the button saying so, and it does not open meanwhile', () => {
+    expect(menu).toMatch(/onClick=\{\(\) => \{ if \(!busy\) setOpen\(\(o\) => !o\); \}\}/);
+    expect(menu).toMatch(/aria-busy=\{busy \? true : undefined\}/);
+    expect(menu).toMatch(/\{busy \?\? MANAGE\}/);
+    expect(read('features/pods/PodDetailPage.tsx')).toMatch(/busy=\{deleteMutation\.isPending \? 'Archiving\.\.\.' : undefined\}/);
   });
 });
 
@@ -157,8 +173,9 @@ describe("a profile's Communities: each row's words and button (communities-text
     expect(rowBadges(row({ kind: 'circle', access: 'members' }))).toEqual(['Circle', 'Closed']);
     expect(ROLE_LABEL).toEqual({ owner: 'Owner', moderator: 'Moderator', director: 'Director', host: 'Host', member: 'Member' });
     expect(spaceHref(row({ kind: 'circle', id: 'c1' }))).toBe('/circles/c1');
-    expect(communitiesTitle('Shirley', 1)).toBe('The 1 community Shirley is in.');
-    expect(communitiesTitle('Shirley', 4)).toBe('The 4 communities Shirley is in.');
+    // The count is what the viewer may see, never a claim about every space the person is in.
+    expect(communitiesTitle(1)).toBe('Communities (1)');
+    expect(communitiesTitle(4)).toBe('Communities (4)');
     expect(rowToast('request-pod', 'Curious 12')).toMatch(/request to join Curious 12 was sent/);
   });
   it('your own preview says why it is empty', () => {
@@ -187,10 +204,14 @@ describe('the Communities section on a profile and in the preview', () => {
     expect(section).toMatch(/fetchMyCommunities\(pageParam, limit\) : fetchCommunities\(props\.userId, pageParam, limit\)/);
     expect(section).toMatch(/getNextPageParam: \(last\) => last\.nextOffset \?\? undefined/);
     expect(section).toMatch(/retry: shouldRetry/);
+    expect(section).toMatch(/gcTime: 0,/);
   });
   it("another member's profile: left out when it has nothing, or on a 404; a skeleton while loading; an error with Try again", () => {
     expect(section).toMatch(/if \(items\.length === 0\) \{\s*if \(!preview\) return null;/);
-    expect(section).toMatch(/if \(statusOf\(list\.error\) === 404\) return null;/);
+    expect(section).toMatch(/if \(list\.isError && statusOf\(list\.error\) === 404\) return null;/);
+    // A failed background refetch keeps the last good list: the card only when there is no data.
+    expect(section).toMatch(/if \(list\.isError && !list\.data\) \{/);
+    expect(section).toMatch(/title=\{communitiesTitle\(total\)\}/);
     expect(section).toMatch(/<Skeleton /);
     expect(section).toMatch(/Try again/);
   });
@@ -203,8 +224,8 @@ describe('the Communities section on a profile and in the preview', () => {
     expect(section).toMatch(/'join-circle': \(id\) => api\.post\(`\/circles\/\$\{id\}\/join`\)/);
   });
   it('is on a member\'s profile and in the preview, never on the public link\'s card', () => {
-    expect(read('features/reason/human/HumanProfilePage.tsx')).toMatch(/<ProfileCommunities mode="member" userId=\{userId\} first=\{who\.first\} \/>/);
-    expect(read('features/reason/profile/ProfilePreviewPage.tsx')).toMatch(/<ProfileCommunities mode="preview" first=/);
+    expect(read('features/reason/human/HumanProfilePage.tsx')).toMatch(/<ProfileCommunities mode="member" userId=\{userId\} \/>/);
+    expect(read('features/reason/profile/ProfilePreviewPage.tsx')).toMatch(/<ProfileCommunities mode="preview" \/>/);
     expect(read('features/reason/profile/PublicCardView.tsx')).not.toMatch(/Communit/);
     expect(read('features/reason/profile/SharedProfilePage.tsx')).not.toMatch(/Communit/);
   });

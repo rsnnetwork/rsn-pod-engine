@@ -138,7 +138,7 @@ function Profile({ brief, userId, source, hideBar }: { brief: PersonBrief; userI
         <ProfileHero brief={brief} who={who} source={source} userId={userId} />
         <ProfileDetails brief={brief} who={who} source={source} onRecordOutcome={() => setOutcomeOpen(true)} />
         {/* Shirley pilot S3 (RSN 14): the circles and pods they are in that you may see. */}
-        <ProfileCommunities mode="member" userId={userId} first={who.first} />
+        <ProfileCommunities mode="member" userId={userId} />
       </main>
       {showBar && (
         <MoveBar

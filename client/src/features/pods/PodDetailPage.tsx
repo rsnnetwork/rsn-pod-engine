@@ -479,7 +479,7 @@ export default function PodDetailPage() {
             </Button>
           )}
           {/* S3: Edit details, Members, Invitations, Circles, Events, Visibility, Moderation, Duplicate pod and Archive pod. */}
-          <ManageMenu title={`Manage ${pod.name}`} entries={manageEntries} />
+          <ManageMenu title={`Manage ${pod.name}`} entries={manageEntries} busy={deleteMutation.isPending ? 'Archiving...' : undefined} />
           {isMember && !isPodDirector && (
             // S2: leaving asks first (CLAUDE.md §12), and says what it means for a private pod.
             <Button
