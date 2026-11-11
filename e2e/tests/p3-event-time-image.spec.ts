@@ -236,9 +236,23 @@ test(`widths: the event page and the call link have no sideways scroll at 360, 7
     await expect(page.getByTestId('event-image').locator('img')).toBeVisible();
     await fitsWidth(page, page.getByTestId('event-image'), `the event image at ${width}px`);
     await noSidewaysScroll(page, `the event page at ${width}px`);
-    await gotoRetry(page, `${APP}/call/${link.json.data.code}`);
-    await expect(page.getByTestId('call-event-summary').filter({ visible: true }).first()).toBeVisible({ timeout: 30_000 });
-    await noSidewaysScroll(page, `the call link at ${width}px`);
     await ctx.close();
+
+    // The call link signed out, as its first visitor sees it. A signed-in member who holds a place (the viewer was
+    // registered by opening the event page) is shown the waiting step instead, with only the compact reminder below
+    // 1024px, so the full summary is not theirs to see there.
+    const out = await browser.newContext({ viewport: { width, height: width < 768 ? 844 : 900 }, hasTouch: width < 1024, timezoneId: NEW_YORK });
+    await primePreview(out);
+    const linkPage = await out.newPage();
+    try {
+      await gotoRetry(linkPage, `${APP}/call/${link.json.data.code}`);
+      const summary = linkPage.getByTestId('call-event-summary').filter({ visible: true }).first();
+      await expect(summary).toBeVisible({ timeout: 30_000 });
+      await expect(summary.getByText('Tuesday 1 December, 14:00 (CET)')).toBeVisible();
+      await fitsWidth(linkPage, summary.getByTestId('event-image'), `the call link hero at ${width}px`);
+      await noSidewaysScroll(linkPage, `the call link at ${width}px`);
+    } finally {
+      await out.close();
+    }
   }
 });
