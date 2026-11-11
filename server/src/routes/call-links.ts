@@ -20,8 +20,15 @@
 //   GET  /sessions/:id/call-link         { code, path, url }
 //   POST /sessions/:id/call-link/rotate  a new code; the old link stops working at once
 //
-// A code that leads nowhere (malformed, unknown, a hidden draft, a deleted event) answers one identical 404 on every
-// route here, and every such 404 counts toward callLinkMissLimiter (Review Focus 4; rateLimit.ts says how it is keyed).
+// `:code` is a call code or an event link's slug (Stefan, 11 Nov 2026: /events/rsn-3, /events/rsn-3-k7m2q9 for an event
+// that is not public, or a link the event had before): the same routes, limits and guest reach serve both, and
+// event-link.service.ts decides which slugs still open (a slug without its tail never opens an event that is not public).
+// A code or slug that leads nowhere (malformed, unknown, without its tail, a hidden draft, a deleted event) answers one
+// identical 404 on every route here, and every such 404 counts toward callLinkMissLimiter (Review Focus 4; rateLimit.ts
+// says how it is keyed).
+//
+// GET /sessions/:id/call-link also carries the event link (`eventLink`: its name, number, slug, path, address and whether
+// it has a tail); the name is set on the event's own create and edit routes (`linkName`, routes/sessions.ts).
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';

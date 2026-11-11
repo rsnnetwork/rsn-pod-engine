@@ -31,6 +31,7 @@ import {
 import { applyRegistrationGroups } from './event-groups.service';
 import { applyRegistrationAnswers } from './event-questions.service';
 import { ensureCallCode } from './call-link.service';
+import { ensureEventLink } from './event-link.service';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 import { notifyEventRescheduled } from './event-notices';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
@@ -53,6 +54,7 @@ const SESSION_COLUMNS = `
   cancelled_at AS "cancelledAt",
   cancel_reason AS "cancelReason",
   timezone,
+  link_name AS "linkName",
   (image_blob IS NOT NULL) AS "hasImage", image_updated_at AS "imageUpdatedAt",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
@@ -240,12 +242,21 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   } catch (err) {
     logger.warn({ err, sessionId }, 'createSession: call code not set yet; the first read of the link sets it');
   }
+  // The event link (Stefan, 11 Nov 2026): the name chosen (checked by the route), else the default; the next number;
+  // a tail when the event is not public. Best-effort as above: the link's first read gives it one instead (with the
+  // default name), and the reply below carries the name it got.
+  let linkName: string | null = null;
+  try {
+    linkName = (await ensureEventLink(sessionId, input.linkName)).name;
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'createSession: event link not set yet; the first read of the link sets it');
+  }
 
   // The circle's members are rung (no email) and their pages told. A draft rings nobody: publishing it does.
   if (circle && publication === 'published') await announceCircleEvent({ sessionId, actorId: userId, circle });
 
   logger.info({ sessionId, podId: input.podId, userId, circleId: circle?.id }, 'Session created');
-  return withEventImageUrl(result.rows[0]);
+  return withEventImageUrl(linkName ? { ...result.rows[0], linkName } : result.rows[0]);
 }
 
 export async function getSessionById(sessionId: string): Promise<Session> {
@@ -374,8 +385,14 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     }
   }
 
+  // The event link follows the edit: a new name, or a visibility or circle that adds or drops its tail
+  // (event-link.service.ts says why each rule is as it is). After the row's own write, so the tail reads the new access.
+  const linkMayChange = input.linkName !== undefined || input.visibility !== undefined || circleChanges;
+
   if (setClauses.length === 0) {
-    return session;
+    if (!linkMayChange) return session;
+    const parts = await ensureEventLink(sessionId, input.linkName);
+    return { ...session, linkName: parts.name };
   }
 
   values.push(sessionId);
@@ -384,6 +401,7 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     values
   );
   const result = { rows: updated.rows.map(withEventImageUrl) };
+  if (linkMayChange) result.rows[0] = { ...result.rows[0], linkName: (await ensureEventLink(sessionId, input.linkName)).name };
 
   // A draft's circle is told nothing yet (Part 2 Task 2): publishing it rings the circle it names then.
   if (circleChanges && session.publication !== 'draft') {

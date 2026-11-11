@@ -32,6 +32,7 @@ import { getCanonicalConnectedSet } from '../services/orchestration/state/canoni
 import {
   ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
   EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes, GROUP_LIMITS, isGroupKey, canonicalTimeZone,
+  eventLinkNameProblem, normaliseEventLinkName,
   type WaitlistedRegistration, type EventAnswers,
 } from '@rsn/shared';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
@@ -39,7 +40,8 @@ import { query } from '../db';
 import logger from '../config/logger';
 import { sendRegistrationEmail } from '../services/session/registration-email';
 import type { Server as SocketServer } from 'socket.io';
-import { matchingPresetsLimiter } from '../middleware/rateLimit';
+import { eventLinkNameLimiter, matchingPresetsLimiter } from '../middleware/rateLimit';
+import { checkEventLinkName } from '../services/session/event-link.service';
 import { listMatchingPresets } from '../services/matching/matching-template-choice';
 
 const router = Router();
@@ -97,6 +99,20 @@ const eventFormatSchema = z.enum(EVENT_FORMAT_KEYS as [EventFormat, ...EventForm
 // T11 (1 Nov 2026) — who can join. Optional: production's form sends none, and the event follows its pod (NULL).
 const eventVisibilitySchema = z.enum(EVENT_VISIBILITY_KEYS as [EventVisibility, ...EventVisibility[]]);
 
+/**
+ * The event link's name (Stefan, 11 Nov 2026): trimmed and lower-cased, then held to the shared rule (2 to 40 letters,
+ * digits and single hyphens, not a reserved word), refused in the organiser's words. Empty means "not chosen": the
+ * event keeps its name (an edit) or gets the default (a new event). Production's forms send none.
+ */
+export const eventLinkNameSchema = z.string().max(100, 'The link name can have at most 40 characters.')
+  .transform((raw) => normaliseEventLinkName(raw))
+  .superRefine((name, ctx) => {
+    if (name === '') return;
+    const problem = eventLinkNameProblem(name);
+    if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+  })
+  .transform((name) => (name === '' ? undefined : name));
+
 // Part 3 Task 1 (K1): the event's IANA zone, spelled as the runtime spells it. Optional: production's forms send none,
 // and the service then takes the host's own zone when it is real, else UTC.
 const eventZoneSchema = z.string().transform((zone, ctx) => {
@@ -136,6 +152,7 @@ export const createSessionSchema = z.object({
   publication: z.enum(['draft', 'published']).optional(),
   registrationOpensAt: z.string().datetime().nullable().optional(),
   timezone: eventZoneSchema.optional(),
+  linkName: eventLinkNameSchema.optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -180,6 +197,7 @@ export const updateSessionSchema = z.object({
   circleId: z.string().uuid().nullable().optional(),
   // Part 3 Task 1 — a new zone; the instant in scheduledAt is kept as sent.
   timezone: eventZoneSchema.optional(),
+  linkName: eventLinkNameSchema.optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -258,6 +276,38 @@ router.get(
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const response: ApiResponse = { success: true, data: await listMatchingPresets() };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /sessions/event-link-name ──────────────────────────────────────────
+// The event form's link-name field (Stefan, 11 Nov 2026): the default name, whether the typed one can be used, the
+// number it would most likely get and the address. ?podId= when creating (the pod's directors and hosts), ?sessionId=
+// when editing (the event's host); admins either way. Declared before /:id, which would read it as an event id.
+
+const eventLinkNameQuerySchema = z.object({
+  podId: z.string().uuid().optional(),
+  sessionId: z.string().uuid().optional(),
+  circleId: z.string().uuid().optional(),
+  name: z.string().max(100).optional(),
+  visibility: eventVisibilitySchema.optional(),
+}).refine((q) => !!q.podId || !!q.sessionId, { message: 'Choose the pod first.', path: ['podId'] });
+
+router.get(
+  '/event-link-name',
+  authenticate,
+  eventLinkNameLimiter,
+  validate(eventLinkNameQuerySchema, 'query', 'Check what you entered and try again.'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const q = req.query as z.infer<typeof eventLinkNameQuerySchema>;
+      const data = await checkEventLinkName(
+        { userId: req.user!.userId, role: req.user!.role as UserRole }, q, { origin: req.get('origin') },
+      );
+      const response: ApiResponse = { success: true, data };
       res.json(response);
     } catch (err) {
       next(err);

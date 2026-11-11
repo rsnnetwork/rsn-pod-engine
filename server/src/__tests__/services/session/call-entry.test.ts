@@ -763,6 +763,52 @@ describe('the landing for a signed-in viewer, and their events', () => {
   });
 });
 
+describe('the event link (/events/<name>-<n>[-<tail>], Stefan 11 Nov 2026) is a way in like the call link', () => {
+  it('a newcomer emails, verifies and enters by a public event link; the email opens the event link, never the call link', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'open', visibility: 'public' });
+    await sendCallEntryCode('rsn-1', NEW_EMAIL, { origin: 'https://preview.rsn.network' });
+    const [, mail] = mockSendEntryEmail.mock.calls.at(-1) as [string, { code: string; link: string }];
+    expect(mail.link).toMatch(/^https:\/\/preview\.rsn\.network\/events\/rsn-1\?entry=[0-9a-f]{64}$/);
+    expect(mail.link).not.toContain(CODE);
+    const tokens = await verifyCallEntry('rsn-1', { email: NEW_EMAIL, code: mail.code });
+    const guestId = subjectOf(tokens.accessToken);
+    const state = await enterCall('rsn-1', guestId, UserRole.MEMBER, { displayName: 'Nadia' });
+    expect(state.step).toBe('wait_for_start');
+    expect(world.places.get(key(EVENT, guestId))?.status).toBe('registered');
+  });
+
+  it('a private event: the tailed link is a way in, the link without the tail is the call link\'s one 404 on every step', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'open', visibility: 'private' });
+    const tailed = `rsn-1-${world.events[0].link_tail}`;
+    await sendCallEntryCode(tailed, NEW_EMAIL);
+    const [, mail] = mockSendEntryEmail.mock.calls.at(-1) as [string, { link: string }];
+    expect(new URL(mail.link).pathname).toBe(`/events/${tailed}`);
+    const unknown = await refusal(sendCallEntryCode('zzzzzzzzzz', NEW_EMAIL));
+    expect(unknown).toMatchObject({ status: 404 });
+    expect(await refusal(sendCallEntryCode('rsn-1', NEW_EMAIL))).toEqual(unknown);
+    expect(await refusal(readCallEntry('rsn-1', MEMBER, UserRole.MEMBER))).toEqual(unknown);
+    expect(await refusal(enterCall('rsn-1', MEMBER, UserRole.MEMBER, {}))).toEqual(unknown);
+    expect(mockSendEntryEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('a code asked by the call link still emails the call link (the screens without /events keep working)', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'open', visibility: 'public' });
+    const mail = await emailed(NEW_EMAIL);
+    expect(new URL(mail.link).pathname).toBe(`/call/${CODE}`);
+  });
+
+  it('a person\'s events carry each event\'s link (its tail when private), beside the code as before', async () => {
+    addEvent({ id: EVENT, call_code: CODE, visibility: 'public' });
+    addEvent({ id: uuid(101), call_code: 'cccccccccc', visibility: 'private' });
+    world.places.set(key(EVENT, MEMBER), { status: 'registered', admitted_via: 'open' });
+    world.places.set(key(uuid(101), MEMBER), { status: 'registered', admitted_via: 'invite' });
+    const list = await listMyCallEvents(MEMBER);
+    const byCode = Object.fromEntries(list.map((e) => [e.code, e.linkPath]));
+    expect(byCode[CODE]).toBe('/events/rsn-1');
+    expect(byCode.cccccccccc).toBe(`/events/rsn-2-${world.events[1].link_tail}`);
+  });
+});
+
 function walk(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
     const full = path.join(dir, d.name);

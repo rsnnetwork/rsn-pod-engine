@@ -12,6 +12,10 @@ export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:3001',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+  // The event link's site (Stefan, 11 Nov 2026), e.g. https://rsn.network once that site forwards /events/* to the app.
+  // Unset (today): the site the organiser is on, when it is one of ours, else CLIENT_URL. Only an http(s) origin is
+  // taken; anything else is ignored (services/session/event-link.service.ts, eventLinkBaseUrl).
+  eventLinkBaseUrl: process.env.EVENT_LINK_BASE_URL || '',
 
   // Database
   databaseUrl: process.env.DATABASE_URL || 'postgres://rsn_dev:rsn_dev_password@localhost:5432/rsn_dev',
