@@ -554,8 +554,14 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     }
     // With a banner (a 1x1 picture stored straight in the row), its Remove and pencil sit at its top, clear of the centred photo.
     await pool.query(`UPDATE users SET banner_blob = decode($2, 'base64'), banner_mime = 'image/png', banner_updated_at = NOW() WHERE id = $1`, [owner.id, TINY_PNG]);
+    // The card read after the reload is checked first (prod smoke 12 Nov: the strip was missing and nothing said why),
+    // so a failure says whether the server sent no banner, refused the read, or the page did not draw it.
+    const cardRead = own.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/people/me/card' && r.request().method() === 'GET', { timeout: SLOW });
     await own.page.reload();
-    await expect(bannerOf(own.page)).toBeVisible({ timeout: SLOW });
+    const card = await cardRead;
+    expect(card.status(), `your card is read again after the reload at ${at}`).toBe(200);
+    expect((await card.json())?.data?.bannerUrl, `the card carries the banner written to the row at ${at}`).toEqual(expect.stringContaining(`/api/users/${owner.id}/banner?v=`));
+    await expect(bannerOf(own.page), `the banner strip is drawn at ${at}`).toBeVisible({ timeout: SLOW });
     for (const name of ['Change banner', 'Remove', 'Edit photo']) {
       const button = own.page.getByRole('button', { name, exact: true });
       await button.scrollIntoViewIfNeeded();
