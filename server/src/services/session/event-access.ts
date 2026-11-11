@@ -358,6 +358,11 @@ export interface EventAccessFacts {
   placesTaken: number;
   /** Part 3 Task 3: this person's place in the waiting list (1 = next), or null when they are not waiting. */
   waitlistPosition: number | null;
+  /**
+   * Fix round 1 (review I-1): the people waiting ahead of this person (everyone waiting, when they are not on the line),
+   * the door's own count (waitlistAheadSql), so the page's "full" is the door's "full".
+   */
+  waitlistAhead: number;
 }
 
 interface FactsRow {
@@ -386,6 +391,7 @@ interface FactsRow {
   capacity?: number | string | null;
   places_taken?: number | string | null;
   waitlist_position?: number | string | null;
+  waitlist_ahead?: number | string | null;
 }
 
 type Reader = (text: string, params: unknown[]) => Promise<{ rows: FactsRow[] }>;
@@ -418,7 +424,8 @@ export async function readEventAccessFacts(
             (s.admission_mode IS NOT NULL AND ${personalInviteSql('s', '$2')}) AS admission_personal_invite,
             ${eventCapacitySql('s')} AS capacity,
             ${capacityTakenSql('s')} AS places_taken,
-            ${waitlistPositionSql('s', '$2')} AS waitlist_position
+            ${waitlistPositionSql('s', '$2')} AS waitlist_position,
+            ${waitlistAheadSql('s', '$2')} AS waitlist_ahead
        FROM sessions s
        LEFT JOIN pods p ON p.id = s.pod_id
       WHERE s.id = $1`,
@@ -456,6 +463,7 @@ export async function readEventAccessFacts(
     capacity: positiveIntOrNull(row.capacity),
     placesTaken: Number(row.places_taken ?? 0) || 0,
     waitlistPosition: positiveIntOrNull(row.waitlist_position),
+    waitlistAhead: Number(row.waitlist_ahead ?? 0) || 0,
   };
 }
 
@@ -684,9 +692,21 @@ export function summariseEventAccess(f: EventAccessFacts, role: string | undefin
   };
 }
 
-/** Part 3 Task 3: every place the event has is taken (capacityTakenSql against its capacity). */
-export function eventIsFull(f: Pick<EventAccessFacts, 'capacity' | 'placesTaken'>): boolean {
-  return f.capacity !== null && f.placesTaken >= f.capacity;
+/**
+ * Part 3 Task 3: no place is free for this person: the places taken and the people waiting ahead of them fill the
+ * capacity. The register door's own rule (registerParticipantTx), so the page and the door always agree (fix round 1,
+ * review I-1): with anyone waiting, a newcomer reads full; the first in line reads a free place as theirs.
+ */
+export function eventIsFull(f: Pick<EventAccessFacts, 'capacity' | 'placesTaken' | 'waitlistAhead'>): boolean {
+  return f.capacity !== null && f.placesTaken + f.waitlistAhead >= f.capacity;
+}
+
+/**
+ * Fix round 1 (review I-1): people are waiting while a place is free, so a promotion is overdue (a restart, a failed
+ * pass, a release that did not tell the line). Whoever reads it moves the line on (session.service lineStalled).
+ */
+export function lineLooksStalled(f: Pick<EventAccessFacts, 'capacity' | 'placesTaken' | 'waitlistAhead' | 'waitlistPosition'>): boolean {
+  return f.capacity !== null && f.placesTaken < f.capacity && (f.waitlistAhead > 0 || f.waitlistPosition !== null);
 }
 
 // ─── Admission per event: the rules (Part 2, Task 4, 10 Nov 2026; D3) ────────

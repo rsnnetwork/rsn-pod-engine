@@ -120,6 +120,12 @@ export function placesTakenIn(sessionId: string): number {
   return [...world.places].filter(([k, p]) => k.startsWith(`${sessionId}:`) && p.status !== 'removed' && k !== key(sessionId, e?.host_user_id ?? '')).length;
 }
 
+/** Fix round 1: the people waiting ahead of the person (everyone waiting, when they are not on the line). */
+export function waitlistAheadOf(sessionId: string, userId: string): number {
+  const position = waitlistPositionOf(sessionId, userId);
+  return position !== null ? position - 1 : world.line.filter((l) => l.session_id === sessionId && l.status === 'waiting').length;
+}
+
 /** Part 3 Task 3: the person's place in the event's waiting list (1 = next), or null. */
 export function waitlistPositionOf(sessionId: string, userId: string): number | null {
   const waiting = world.line.filter((l) => l.session_id === sessionId && l.status === 'waiting');
@@ -150,6 +156,7 @@ export function factsOf(sessionId: string, userId: string) {
     // Part 3 Task 3: an event's limit (config.maxParticipants; none in most tests), the places held by anyone but its
     // host, and the person's place in its waiting list.
     capacity: capacityOf(e), placesTaken: placesTakenIn(sessionId), waitlistPosition: waitlistPositionOf(sessionId, userId),
+    waitlistAhead: waitlistAheadOf(sessionId, userId),
   };
 }
 

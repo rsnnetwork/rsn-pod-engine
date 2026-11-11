@@ -38,7 +38,7 @@ const base: EventAccessFacts = {
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
   outsideClosedCircle: false, admissionMode: null, entitled: false, entitledVia: null,
   publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
-  capacity: null, placesTaken: 0, waitlistPosition: null,
+  capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0,
 };
 
 type Viewer = 'organiser' | 'admin' | 'member' | 'invitee' | 'listed' | 'codeHolder' | 'stranger' | 'removed';
@@ -479,7 +479,10 @@ describe('no admission path makes anyone a circle or pod member (a guest above a
     const body = service.slice(service.indexOf('export async function registerParticipant('), service.indexOf('export async function unregisterParticipant('));
     expect(body).not.toMatch(/circle_members|joinCircle/);
     expect(body.match(/INSERT INTO pod_members/g)).toHaveLength(1);
-    expect(body).toMatch(/if \(!isGuest\) \{\s*try \{\s*await client\.query\(\s*`INSERT INTO pod_members/);
+    // Fix round 1 (review I-3): the auto-add is written where the place is given (after the capacity lock), and it is
+    // still only for a member: the guest check decides whether it is written at all.
+    expect(body).toMatch(/joinsPublicPod = !isGuest;/);
+    expect(body).toMatch(/if \(!joinsPublicPod\) return;[\s\S]{0,120}`INSERT INTO pod_members/);
   });
 });
 

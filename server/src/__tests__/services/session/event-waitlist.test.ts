@@ -79,11 +79,13 @@ import * as path from 'path';
 import type { Socket } from 'socket.io';
 import { ErrorCodes, UserRole, formatEventTime } from '@rsn/shared';
 import {
-  addEvent, addUser, lineOf, placeOf, positionOf, resetWaitlistWorld, wid, world, type WwEvent,
+  addEvent, addPlace, addUser, lineOf, placeOf, positionOf, resetWaitlistWorld, wid, world, type WwEvent,
 } from '../../fixtures/waitlist-world';
 import {
-  admitFromWaitlist, afterPlaceFreed, leaveWaitlist, listWaitlist, promoteFromWaitlist, registerOrWaitlist, removeFromWaitlist,
+  admitFromWaitlist, afterPlaceFreed, eventsHeldByActiveAccounts, leaveWaitlist, listWaitlist, moveWaitlistsOn, promoteFromWaitlist,
+  registerOrWaitlist, removeFromWaitlist,
 } from '../../../services/session/event-waitlist.service';
+import { lineLooksStalled, readEventAccessFacts, summariseEventAccess } from '../../../services/session/event-access';
 import { registerParticipant, unregisterParticipant } from '../../../services/session/session.service';
 import { approveRequest } from '../../../services/session/event-requests.service';
 import { acceptInvite } from '../../../services/invite/invite.service';
@@ -201,13 +203,52 @@ describe('a full event puts the next person on its waiting list, and a freed pla
 
   it('the line is first in, first out: a place freed before its promotion runs goes to the first in line, never a newcomer', async () => {
     await fullEventWithLine();
-    await unregisterParticipant(EVENT, A); // a place is free; the promotion has not run yet
-    expect(await refusal(registerParticipant(EVENT, E, UserRole.MEMBER))).toMatchObject({ status: 409, code: 'SESSION_FULL' });
-    expect(await registerOrWaitlist(EVENT, E, UserRole.MEMBER, { joinedVia: 'register' })).toMatchObject({ kind: 'waitlisted', position: 3 });
+    await unregisterParticipant(EVENT, A); // a place is free; its promotion has not run (a restart, a failed pass)
     expect(await refusal(registerParticipant(EVENT, D, UserRole.MEMBER))).toMatchObject({ code: 'SESSION_FULL' }); // second in line
     await expect(registerParticipant(EVENT, C, UserRole.MEMBER)).resolves.toMatchObject({ isNewRegistration: true }); // first in line
     expect(lineOf(EVENT, C)?.status).toBe('promoted');
     expect(positionOf(EVENT, D)).toBe(1);
+  });
+
+  it('a stalled line heals itself: a newcomer refused only because people wait while a place is free moves the line on (fix round 1, I-1a)', async () => {
+    await fullEventWithLine();
+    await unregisterParticipant(EVENT, A); // nobody called afterPlaceFreed
+    expect(await refusal(registerParticipant(EVENT, E, UserRole.MEMBER))).toMatchObject({ status: 409, code: 'SESSION_FULL' });
+    await flush();
+    expect(placeOf(EVENT, C)?.status).toBe('registered');
+    expect(bellsOf(C)).toHaveLength(1);
+    expect(positionOf(EVENT, D)).toBe(1);
+    // The same through the queueing path: E joins behind D, and a second stall heals the same way.
+    await unregisterParticipant(EVENT, B);
+    expect(await registerOrWaitlist(EVENT, E, UserRole.MEMBER, { joinedVia: 'register' })).toMatchObject({ kind: 'waitlisted', position: 2 });
+    await flush();
+    expect(placeOf(EVENT, D)?.status).toBe('registered');
+    expect(positionOf(EVENT, E)).toBe(1);
+  });
+
+  it('the page says "full" exactly when the door does: with people waiting, a free place is the first in line\'s (fix round 1, I-1b)', async () => {
+    await fullEventWithLine();
+    await unregisterParticipant(EVENT, A);
+    const summary = async (who: string) => summariseEventAccess((await readEventAccessFacts(EVENT, who))!, UserRole.MEMBER).waitlist;
+    expect(await summary(E)).toEqual({ full: true, position: null }); // a newcomer: 1 taken + 2 waiting ahead >= 2
+    expect(await refusal(registerParticipant(EVENT, E, UserRole.MEMBER))).toMatchObject({ code: 'SESSION_FULL' });
+    world.rows.line.filter((l) => l.status === 'waiting').forEach((l) => { l.status = 'left'; });
+    expect(await summary(E)).toEqual({ full: false, position: null }); // nobody waits: the free place is anyone's
+    await expect(registerParticipant(EVENT, E, UserRole.MEMBER)).resolves.toMatchObject({ isNewRegistration: true });
+    expect(await summary(D)).toEqual({ full: true, position: null });
+  });
+
+  it('a pass that lapses someone releases its savepoint: no savepoint is left nested (fix round 1, M-3)', async () => {
+    await fullEventWithLine();
+    world.rows.users.find((u) => u.id === C)!.status = 'suspended';
+    await unregisterParticipant(EVENT, A);
+    const from = world.sql.length;
+    await promoteFromWaitlist(EVENT);
+    const sql = world.sql.slice(from);
+    const rolledBack = sql.indexOf('ROLLBACK TO SAVEPOINT promote_one');
+    expect(rolledBack).toBeGreaterThan(-1);
+    expect(sql[rolledBack + 1]).toBe('RELEASE SAVEPOINT promote_one');
+    expect(sql.filter((s) => s === 'SAVEPOINT promote_one')).toHaveLength(sql.filter((s) => s === 'RELEASE SAVEPOINT promote_one').length);
   });
 
   it('a completed event promotes nobody', async () => {
@@ -302,6 +343,44 @@ describe('every admission rule is re-run at promotion', () => {
     await unregisterParticipant(EVENT, A);
     await afterPlaceFreed(EVENT, 'unregister');
     expect(placeOf(EVENT, C)?.status).toBe('registered');
+  });
+
+  it('an invite entry is promoted through its invite only while the invite stands; a revoked one lapses it (ruling, M-2)', async () => {
+    addEvent({ id: EVENT, host_user_id: HOST, visibility: 'private', admission_mode: null });
+    world.rows.podMembers.push({ pod_id: 'pod-1', user_id: A, role: 'member' }, { pod_id: 'pod-1', user_id: B, role: 'member' });
+    await registerParticipant(EVENT, A, UserRole.MEMBER);
+    await registerParticipant(EVENT, B, UserRole.MEMBER);
+    const invite = (id: string, user: string, status: string) => world.rows.invites.push({
+      id, code: id, session_id: EVENT, invitee_email: world.rows.users.find((u) => u.id === user)!.email, status, max_uses: 1,
+      use_count: 1, inviter_id: HOST, created_at: new Date(), accepted_by_user_id: user,
+    });
+    invite('inv-c', C, 'accepted');
+    invite('inv-d', D, 'accepted');
+    for (const u of [C, D]) await registerOrWaitlist(EVENT, u, UserRole.MEMBER, { viaInvite: true, joinedVia: 'invite' });
+    world.rows.invites.find((i) => i.id === 'inv-c')!.status = 'revoked';
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(lineOf(EVENT, C)).toMatchObject({ status: 'lapsed', lapsed_reason: ErrorCodes.INVITE_REVOKED });
+    expect(placeOf(EVENT, D)?.status).toBe('registered'); // D's invite still stands
+  });
+
+  it('an expired invite lapses with INVITE_EXPIRED, and an approval entry whose request is no longer approved with EVENT_NEEDS_APPROVAL', async () => {
+    addEvent({ id: EVENT, host_user_id: HOST, visibility: 'public_with_approval', admission_mode: null, config: { maxParticipants: 1 } });
+    world.rows.podMembers.push({ pod_id: 'pod-1', user_id: A, role: 'member' });
+    await registerParticipant(EVENT, A, UserRole.MEMBER);
+    world.rows.invites.push({
+      id: 'inv-c', code: 'inv-c', session_id: EVENT, invitee_email: world.rows.users.find((u) => u.id === C)!.email, status: 'pending',
+      max_uses: 1, use_count: 0, inviter_id: HOST, created_at: new Date(), expires_at: new Date(Date.now() + 60_000),
+    });
+    await registerOrWaitlist(EVENT, C, UserRole.MEMBER, { viaInvite: true, joinedVia: 'invite' });
+    world.rows.requests.push({ id: 'req-d', session_id: EVENT, user_id: D, status: 'approved' });
+    await registerOrWaitlist(EVENT, D, UserRole.MEMBER, { approvedRequest: true, joinedVia: 'approval' });
+    world.rows.invites[0].expires_at = new Date(Date.now() - 1000);
+    world.rows.requests[0].status = 'withdrawn';
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(lineOf(EVENT, C)).toMatchObject({ status: 'lapsed', lapsed_reason: ErrorCodes.INVITE_EXPIRED });
+    expect(lineOf(EVENT, D)).toMatchObject({ status: 'lapsed', lapsed_reason: ErrorCodes.EVENT_NEEDS_APPROVAL });
   });
 
   it('an invite accepted on a full event puts them on the line: the accept succeeds, no defensive insert gives a place', async () => {
@@ -414,6 +493,22 @@ describe('a waiting person reaches no attendee surface (Review Focus #2)', () =>
   });
 });
 
+describe('the admin\'s own status writes (fix round 1, I-2)', () => {
+  it('eventsHeldByActiveAccounts reads the upcoming and live events active accounts hold a place in; moveWaitlistsOn moves each line on', async () => {
+    await fullEventWithLine();
+    const OTHER = wid(101);
+    addEvent({ id: OTHER, host_user_id: HOST, status: 'completed' });
+    addPlace(OTHER, A);
+    expect(await eventsHeldByActiveAccounts([A, B])).toEqual([EVENT]);
+    world.rows.users.find((u) => u.id === A)!.status = 'banned'; // the admin's own write, after the read
+    moveWaitlistsOn([EVENT, EVENT]);
+    await flush();
+    expect(placeOf(EVENT, C)?.status).toBe('registered');
+    expect(bellsOf(C)).toHaveLength(1);
+    expect(await eventsHeldByActiveAccounts([A])).toEqual([]); // a banned account holds no place
+  });
+});
+
 describe('every deliberate release moves the line on (wiring)', () => {
   const src = (rel: string) => fs.readFileSync(path.join(__dirname, '../../..', rel), 'utf8').split(String.fromCharCode(13)).join('');
 
@@ -435,6 +530,17 @@ describe('every deliberate release moves the line on (wiring)', () => {
     expect(del).toContain('await freePlacesOf(userId, freedEvents)');
     expect(identity).toMatch(/if \(status !== 'active' && user\.status === 'active'\) await freePlacesOf\(userId, await eventsWithPlace\(userId\)\)/);
     expect(identity).toContain("afterPlaceFreed(sessionId, 'account')");
+  });
+
+  it('a read of the event page or the call link entry moves a stalled line on (fix round 1, I-1)', () => {
+    expect(src('routes/sessions.ts')).toContain('if (facts && lineLooksStalled(facts)) sessionService.lineStalled(req.params.id);');
+    expect(src('services/session/call-entry.service.ts')).toContain('if (lineLooksStalled(facts)) lineStalled(event.id);');
+    const f = { capacity: 2, placesTaken: 1, waitlistAhead: 0, waitlistPosition: null };
+    expect(lineLooksStalled(f)).toBe(false);
+    expect(lineLooksStalled({ ...f, waitlistAhead: 2 })).toBe(true);
+    expect(lineLooksStalled({ ...f, waitlistPosition: 1 })).toBe(true);
+    expect(lineLooksStalled({ ...f, placesTaken: 2, waitlistAhead: 2 })).toBe(false);
+    expect(lineLooksStalled({ ...f, capacity: null, waitlistAhead: 2 })).toBe(false);
   });
 
   it('the paths that queue are the call link, an approval, an invite and the page asking for it; the live join never queues', () => {

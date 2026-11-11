@@ -159,15 +159,15 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
       // Check membership
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
-      // Auto-add to pod (public pod, not a member) - INSERT INTO pod_members
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
       // Check existing registration — none found (Part 3 Task 3: read before capacity)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // Part 3 Task 3 (K3): a new place is given under the event's capacity lock, after the person's row is read again
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // and the places held are counted against the capacity (host and co-hosts not counted)
-      mockQuery.mockResolvedValueOnce({ rows: [{ taken: 5, capacity: 500, runs: false }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ taken: 5, capacity: 500, ahead: 0, runs: false }], rowCount: 1 });
+      // Auto-add to pod (public pod, not a member) - INSERT INTO pod_members, after the lock (fix round 1, review I-3)
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
       // INSERT session_participants
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'sp-1', sessionId: 'session-123', userId: 'user-new', status: 'registered' }], rowCount: 1 });
 
@@ -175,6 +175,12 @@ describe('Session Service', () => {
       expect(participant).toBeDefined();
       // S15 — a fresh INSERT is the only path that earns the confirmation email.
       expect(participant.isNewRegistration).toBe(true);
+      // Fix round 1 (review I-3): the lock comes before the pod row, as on every other path that gives a place.
+      const sqls = mockQuery.mock.calls.map(([sql]) => String(sql));
+      const lockAt = sqls.findIndex((sql) => sql.includes('pg_advisory_xact_lock'));
+      const podAt = sqls.findIndex((sql) => sql.includes('INSERT INTO pod_members'));
+      expect(lockAt).toBeGreaterThan(-1);
+      expect(podAt).toBeGreaterThan(lockAt);
     });
   });
 

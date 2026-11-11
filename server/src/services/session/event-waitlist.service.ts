@@ -48,7 +48,7 @@ import { ensureCallCode } from './call-link.service';
 import { isLiveStatus } from './main-room';
 import { ringEventBells } from './event-notices';
 import {
-  lockEventCapacity, registerParticipantTx, syncLiveRegistration,
+  lineStalled, lockEventCapacity, registerParticipantTx, syncLiveRegistration,
   type RegisterOptions, type RegisterTxOptions,
 } from './session.service';
 
@@ -58,7 +58,7 @@ export type PlaceOutcome =
   | { kind: 'waitlisted'; position: number; isNew: boolean };
 
 /** What freed a place (afterPlaceFreed): only deliberate acts do. */
-export type PlaceFreedCause = 'unregister' | 'removed' | 'cohost' | 'capacity' | 'account';
+export type PlaceFreedCause = 'unregister' | 'removed' | 'cohost' | 'capacity' | 'account' | 'stalled';
 
 /** The most people the organisers' list shows, and the most one promotion pass gives a place to. */
 export const WAITLIST_LIST_MAX = 500;
@@ -132,31 +132,17 @@ export async function registerOrWaitlist(
   options: RegisterOptions & { joinedVia: WaitlistJoinedVia },
 ): Promise<PlaceOutcome> {
   const { joinedVia, ...registerOptions } = options;
-  const outcome = await transaction<PlaceOutcome>(async (client) => {
-    await lockEventCapacity(client, sessionId);
-    await client.query('SAVEPOINT before_place');
-    try {
-      const participant = await registerParticipantTx(client, sessionId, userId, role, registerOptions);
-      await client.query('RELEASE SAVEPOINT before_place');
-      const { isNewRegistration, ...row } = participant;
-      return { kind: 'registered', participant: row, isNewRegistration };
-    } catch (err) {
-      if (!(err instanceof AppError) || err.code !== ErrorCodes.SESSION_FULL) throw err;
-      await client.query('ROLLBACK TO SAVEPOINT before_place');
-      const viaInvite = !!registerOptions.viaInvite || !!registerOptions.personalInviteCreatedAt;
-      const groupKeys = await checkRegistrationGroups(
-        client, sessionId, userId, role, registerOptions.groupKeys, !viaInvite && !registerOptions.approvedRequest,
-      );
-      const queued = await joinWaitlist(client, sessionId, userId, { joinedVia, groupKeys });
-      if (queued.isNew) {
-        await recordEventAudit({
-          sessionId, actorId: userId, action: 'waitlist.joined', automatic: false, subjectUserIds: [userId],
-          after: { joinedVia, position: queued.position },
-        }, client);
-      }
-      return { kind: 'waitlisted', position: queued.position, isNew: queued.isNew };
-    }
-  });
+  // Fix round 1 (review I-1): the recount found people waiting while a place is free; the line is moved on below.
+  let stalled = false;
+  const onLineStalled = () => { stalled = true; };
+  let outcome: PlaceOutcome;
+  try {
+    outcome = await transaction<PlaceOutcome>((client) => placeOrQueue(client, sessionId, userId, role, joinedVia, {
+      ...registerOptions, onLineStalled,
+    }));
+  } finally {
+    if (stalled) lineStalled(sessionId);
+  }
 
   if (outcome.kind === 'registered') {
     await syncLiveRegistration(sessionId, userId);
@@ -165,6 +151,38 @@ export async function registerOrWaitlist(
     void emitWaitlistChanged(sessionId, [userId]);
   }
   return outcome;
+}
+
+/** registerOrWaitlist's transaction: the lock, then the registration under a savepoint, else the line. */
+async function placeOrQueue(
+  client: PoolClient, sessionId: string, userId: string, role: UserRole | undefined, joinedVia: WaitlistJoinedVia,
+  registerOptions: RegisterTxOptions,
+): Promise<PlaceOutcome> {
+  await lockEventCapacity(client, sessionId);
+  await client.query('SAVEPOINT before_place');
+  try {
+    const participant = await registerParticipantTx(client, sessionId, userId, role, registerOptions);
+    await client.query('RELEASE SAVEPOINT before_place');
+    const { isNewRegistration, ...row } = participant;
+    return { kind: 'registered', participant: row, isNewRegistration };
+  } catch (err) {
+    if (!(err instanceof AppError) || err.code !== ErrorCodes.SESSION_FULL) throw err;
+    // Fix round 1 (review M-3): rolled back to, then released, so no savepoint is left nested.
+    await client.query('ROLLBACK TO SAVEPOINT before_place');
+    await client.query('RELEASE SAVEPOINT before_place');
+    const viaInvite = !!registerOptions.viaInvite || !!registerOptions.personalInviteCreatedAt;
+    const groupKeys = await checkRegistrationGroups(
+      client, sessionId, userId, role, registerOptions.groupKeys, !viaInvite && !registerOptions.approvedRequest,
+    );
+    const queued = await joinWaitlist(client, sessionId, userId, { joinedVia, groupKeys });
+    if (queued.isNew) {
+      await recordEventAudit({
+        sessionId, actorId: userId, action: 'waitlist.joined', automatic: false, subjectUserIds: [userId],
+        after: { joinedVia, position: queued.position },
+      }, client);
+    }
+    return { kind: 'waitlisted', position: queued.position, isNew: queued.isNew };
+  }
 }
 
 /** Take oneself off the line. Leaving a line one is not on changes nothing ({ left: false }). */
@@ -248,8 +266,11 @@ export async function admitFromWaitlist(sessionId: string, actor: Actor, userId:
     await lockEventCapacity(client, sessionId);
     const entry = await waitingEntry(client, sessionId, userId);
     if (!entry) throw new AppError(404, ErrorCodes.WAITLIST_ENTRY_NOT_FOUND, NOT_WAITING);
+    // An invite or an approval that no longer stands gives no say-so here either; the organiser's own act lets them in
+    // over capacity, and every other rule still decides (a refusal comes back to the organiser).
+    const said = await sayingSo(client, sessionId, entry);
     await registerParticipantTx(client, sessionId, userId, entry.role ?? undefined, {
-      ...promotionOptions(entry), overCapacity: true,
+      ...('options' in said ? said.options : baseOptions(entry)), overCapacity: true,
     });
     await recordEventAudit({
       sessionId, actorId: actor.userId, action: 'waitlist.admitted_over_capacity', automatic: false, subjectUserIds: [userId],
@@ -281,15 +302,59 @@ async function waitingEntry(client: PoolClient, sessionId: string, userId: strin
   return r.rows[0] ?? null;
 }
 
-/** The say-so a waiting person is promoted with: the same one they joined the line with. */
-function promotionOptions(entry: WaitingEntry): RegisterTxOptions {
+/** What every promotion carries: it comes from the line, with the group the person chose when they joined it. */
+function baseOptions(entry: WaitingEntry): RegisterTxOptions {
   const groupKeys = entry.group_keys && entry.group_keys.length > 0 ? entry.group_keys : undefined;
-  return {
-    fromWaitlist: true,
-    ...(groupKeys ? { groupKeys } : {}),
-    approvedRequest: entry.joined_via === 'approval',
-    viaInvite: entry.joined_via === 'invite',
-  };
+  return { fromWaitlist: true, ...(groupKeys ? { groupKeys } : {}) };
+}
+
+/**
+ * The say-so a waiting person is promoted with: the one they joined the line with, while it still stands. Controller
+ * ruling (fix round 1, review M-2): someone who joined through an invite comes in through that invite only while it is
+ * valid (accepted, or pending and not expired); a revoked or expired one lapses them with its own refusal code
+ * (INVITE_REVOKED, INVITE_EXPIRED; INVITE_NOT_FOUND when none is left). Someone who joined through an approval keeps it
+ * unless their request is no longer approved (EVENT_NEEDS_APPROVAL). Everyone else is checked by the rules alone.
+ */
+async function sayingSo(
+  client: PoolClient, sessionId: string, entry: WaitingEntry,
+): Promise<{ options: RegisterTxOptions } | { refusal: string }> {
+  const base = baseOptions(entry);
+  if (entry.joined_via === 'invite') {
+    const invites = await client.query<{ status: string; past: boolean }>(
+      `SELECT i.status::text AS status, (i.expires_at IS NOT NULL AND i.expires_at <= NOW()) AS past
+         FROM invites i
+        WHERE i.session_id = $1
+          AND (i.accepted_by_user_id = $2 OR lower(i.invitee_email) = (SELECT lower(iu.email) FROM users iu WHERE iu.id = $2))`,
+      [sessionId, entry.user_id],
+    );
+    const rows = invites.rows;
+    if (rows.some((i) => i.status === 'accepted' || (i.status === 'pending' && !i.past))) return { options: { ...base, viaInvite: true } };
+    if (rows.some((i) => i.status === 'revoked')) return { refusal: ErrorCodes.INVITE_REVOKED };
+    if (rows.some((i) => i.status === 'expired' || i.past)) return { refusal: ErrorCodes.INVITE_EXPIRED };
+    return { refusal: ErrorCodes.INVITE_NOT_FOUND };
+  }
+  if (entry.joined_via === 'approval') {
+    const request = await client.query<{ status: string }>(
+      `SELECT status FROM event_join_requests WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, entry.user_id],
+    );
+    if (request.rows[0]?.status === 'approved') return { options: { ...base, approvedRequest: true } };
+    return { refusal: ErrorCodes.EVENT_NEEDS_APPROVAL };
+  }
+  return { options: base };
+}
+
+/** A turn that lapses (with why), audited as the product's own act. */
+async function lapse(client: PoolClient, sessionId: string, entry: WaitingEntry, reason: string, pass: PromotionPass): Promise<void> {
+  await client.query(
+    `UPDATE event_waitlist SET status = 'lapsed', lapsed_reason = $2, decided_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND status = 'waiting'`,
+    [entry.id, reason],
+  );
+  pass.lapsed.push({ userId: entry.user_id, reason });
+  await recordEventAudit({
+    sessionId, actorId: null, action: 'waitlist.lapsed', automatic: true, subjectUserIds: [entry.user_id], reason,
+  }, client);
 }
 
 interface PromotionPass {
@@ -323,9 +388,14 @@ async function promoteTx(client: PoolClient, sessionId: string): Promise<Promoti
     );
     const entry = next.rows[0];
     if (!entry) break;
+    const said = await sayingSo(client, sessionId, entry);
+    if ('refusal' in said) {
+      await lapse(client, sessionId, entry, said.refusal, pass);
+      continue;
+    }
     await client.query('SAVEPOINT promote_one');
     try {
-      const place = await registerParticipantTx(client, sessionId, entry.user_id, entry.role ?? undefined, promotionOptions(entry));
+      const place = await registerParticipantTx(client, sessionId, entry.user_id, entry.role ?? undefined, said.options);
       await client.query('RELEASE SAVEPOINT promote_one');
       if (place.isNewRegistration) {
         free -= 1;
@@ -335,7 +405,9 @@ async function promoteTx(client: PoolClient, sessionId: string): Promise<Promoti
         }, client);
       }
     } catch (err) {
+      // Fix round 1 (review M-3): rolled back to, then released, so a pass with many lapses nests no subtransactions.
       await client.query('ROLLBACK TO SAVEPOINT promote_one');
+      await client.query('RELEASE SAVEPOINT promote_one');
       if (!(err instanceof AppError)) throw err;
       // Someone the count says fits but the registration finds full (an admin's own place over the line): stop here.
       if (err.code === ErrorCodes.SESSION_FULL) break;
@@ -347,16 +419,7 @@ async function promoteTx(client: PoolClient, sessionId: string): Promise<Promoti
         continue;
       }
       // No longer allowed in (an entitlement revoked, a removal, an account closed): their turn lapses, with why.
-      const reason = String(err.code ?? 'REFUSED').slice(0, 64);
-      await client.query(
-        `UPDATE event_waitlist SET status = 'lapsed', lapsed_reason = $2, decided_at = NOW(), updated_at = NOW()
-          WHERE id = $1 AND status = 'waiting'`,
-        [entry.id, reason],
-      );
-      pass.lapsed.push({ userId: entry.user_id, reason });
-      await recordEventAudit({
-        sessionId, actorId: null, action: 'waitlist.lapsed', automatic: true, subjectUserIds: [entry.user_id], reason,
-      }, client);
+      await lapse(client, sessionId, entry, String(err.code ?? 'REFUSED').slice(0, 64), pass);
     }
   }
   return pass;
@@ -388,6 +451,29 @@ export async function afterPlaceFreed(sessionId: string, cause: PlaceFreedCause)
   } catch (err) {
     logger.warn({ err, sessionId, cause }, 'A place freed, but the waiting list could not move on (non-fatal)');
   }
+}
+
+/**
+ * Part 3 Task 3, fix round 1 (review I-2): the upcoming and live events where these accounts, while still active, hold a
+ * place, read in one statement before their status is written (the admin's bulk action and a report resolved with a
+ * suspension or a ban write users.status themselves). Pass the answer to moveWaitlistsOn once the write has committed.
+ */
+export async function eventsHeldByActiveAccounts(userIds: string[]): Promise<string[]> {
+  if (userIds.length === 0) return [];
+  const r = await query<{ session_id: string }>(
+    `SELECT DISTINCT sp.session_id FROM session_participants sp
+       JOIN sessions s ON s.id = sp.session_id
+       JOIN users u ON u.id = sp.user_id
+      WHERE sp.user_id = ANY($1::uuid[]) AND u.status = 'active' AND sp.status <> 'removed'
+        AND s.status NOT IN ('completed', 'cancelled')`,
+    [userIds],
+  );
+  return (r?.rows ?? []).map((row) => row.session_id);
+}
+
+/** Part 3 Task 3, fix round 1: each of these events' waiting list moves on (in the background; never throws). */
+export function moveWaitlistsOn(sessionIds: string[]): void {
+  for (const sessionId of new Set(sessionIds)) void afterPlaceFreed(sessionId, 'account');
 }
 
 // ─── Telling people ──────────────────────────────────────────────────────────

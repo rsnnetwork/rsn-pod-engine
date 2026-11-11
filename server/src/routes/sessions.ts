@@ -14,7 +14,9 @@ import {
 } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
-import { canSeeEvent, managesRequests, readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
+import {
+  canSeeEvent, lineLooksStalled, managesRequests, readEventAccessFacts, summariseEventAccess,
+} from '../services/session/event-access';
 import { readEventCircle } from '../services/circle/circle-events.service';
 import { summariseEventLifecycle } from '../services/session/event-lifecycle.service';
 import * as eventRequests from '../services/session/event-requests.service';
@@ -279,6 +281,8 @@ router.get(
       // so the event page stops guessing from the pod.
       const facts = await readEventAccessFacts(req.params.id, req.user!.userId);
       const access = facts ? summariseEventAccess(facts, req.user!.role) : undefined;
+      // Part 3 Task 3, fix round 1 (review I-1): people waiting while a place is free: the line is moved on (background).
+      if (facts && lineLooksStalled(facts)) sessionService.lineStalled(req.params.id);
       // T13 (1 Nov 2026) — additive: the circle the event is for, so its page says "For <circle>" with a link.
       const circle = await readEventCircle(session?.circleId);
       // Part 2 Task 2 — additive: where the event stands (draft … cancelled) and the steps this viewer may take.

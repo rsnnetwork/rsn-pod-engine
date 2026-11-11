@@ -15,7 +15,7 @@ const base: EventAccessFacts = {
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
   outsideClosedCircle: false,
   publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
-  admissionMode: null, entitled: false, entitledVia: null, capacity: null, placesTaken: 0, waitlistPosition: null,
+  admissionMode: null, entitled: false, entitledVia: null, capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0,
 };
 const f = (over: Partial<EventAccessFacts>): EventAccessFacts => ({ ...base, ...over });
 const M = UserRole.MEMBER;

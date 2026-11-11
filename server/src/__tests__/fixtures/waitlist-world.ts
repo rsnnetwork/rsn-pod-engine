@@ -24,7 +24,7 @@ export interface WwLine {
 }
 export interface WwInvite {
   id: string; code: string; session_id: string; invitee_email: string | null; status: string; max_uses: number; use_count: number;
-  inviter_id: string; created_at: Date;
+  inviter_id: string; created_at: Date; accepted_by_user_id?: string | null; expires_at?: Date | null;
 }
 
 interface Rows {
@@ -150,6 +150,7 @@ function factsRow(e: WwEvent, userId: string) {
     admission_code_held: false,
     admission_personal_invite: !!mode && !!u && personallyInvited(e, u),
     capacity: capacityOf(e), places_taken: placesTaken(e.id), waitlist_position: positionOf(e.id, userId),
+    waitlist_ahead: aheadOf(e.id, userId),
   };
 }
 
@@ -378,6 +379,28 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     }));
   }
 
+  // ── the say-so a promotion re-reads (fix round 1): the person's invites to the event and their request ──
+  if (sql.startsWith('SELECT i.status::text AS status, (i.expires_at IS NOT NULL AND i.expires_at <= NOW()) AS past FROM invites i')) {
+    const u = userById(b);
+    return rows(world.rows.invites.filter((i) => i.session_id === a
+      && (i.accepted_by_user_id === b || (!!u && i.invitee_email?.toLowerCase() === u.email)))
+      .map((i) => ({ status: i.status, past: !!i.expires_at && i.expires_at.getTime() <= Date.now() })));
+  }
+  if (sql === 'SELECT status FROM event_join_requests WHERE session_id = $1 AND user_id = $2') {
+    const r = world.rows.requests.find((x) => x.session_id === a && x.user_id === b);
+    return rows(r ? [{ status: r.status }] : []);
+  }
+  if (sql.startsWith('INSERT INTO pod_members (pod_id, user_id, role, status)')) {
+    if (!world.rows.podMembers.some((m) => m.pod_id === a && m.user_id === b)) world.rows.podMembers.push({ pod_id: String(a), user_id: String(b), role: 'member' });
+    return rows([], 1);
+  }
+  if (sql.startsWith('SELECT DISTINCT sp.session_id FROM session_participants sp JOIN sessions s ON s.id = sp.session_id JOIN users u ON u.id = sp.user_id')) {
+    const ids = params[0] as string[];
+    const live = (sid: string) => !['completed', 'cancelled'].includes(eventById(sid)?.status ?? 'completed');
+    return rows([...new Set(world.rows.places.filter((x) => ids.includes(x.user_id) && active(x.user_id) && x.status !== 'removed' && live(x.session_id))
+      .map((x) => x.session_id))].map((session_id) => ({ session_id })));
+  }
+
   // ── requests to join ──
   if (/FROM event_join_requests r WHERE r\.session_id = \$1 AND r\.user_id = \$2 FOR UPDATE$/.test(sql)) {
     const r = world.rows.requests.find((x) => x.session_id === a && x.user_id === b);
@@ -402,6 +425,7 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     const i = world.rows.invites.find((x) => x.id === b)!;
     i.use_count += 1;
     i.status = 'accepted';
+    i.accepted_by_user_id = i.accepted_by_user_id ?? String(a);
     return rows([{ id: i.id, code: i.code, status: i.status, useCount: i.use_count, sessionId: i.session_id }]);
   }
   if (sql.startsWith('UPDATE notifications SET is_read = TRUE')) return rows([]);

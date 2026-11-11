@@ -46,7 +46,7 @@ import {
   lifecycleOfCallEvent, visibilityOf, type CallEventRow,
 } from './call-link.service';
 import {
-  EVENT_ADMISSION_REQUIRED_SENTENCE, canRegister, needsApproval, readEventAccessFacts, runsEvent,
+  EVENT_ADMISSION_REQUIRED_SENTENCE, canRegister, lineLooksStalled, needsApproval, readEventAccessFacts, runsEvent,
   type EventAccessFacts,
 } from './event-access';
 import {
@@ -55,6 +55,7 @@ import {
 import { fanoutEventGroups, getEventGroupRules, setParticipantGroups } from './event-groups.service';
 import { requestToJoin } from './event-requests.service';
 import { leaveWaitlist, registerOrWaitlist } from './event-waitlist.service';
+import { lineStalled } from './session.service';
 import { eventImageColumns, eventImageUrlOf } from './event-image-url';
 import { sendRegistrationEmail } from './registration-email';
 
@@ -300,6 +301,8 @@ export async function readCallEntryForEvent(event: CallEventRow, userId: string,
   }
   // Part 3 Task 3: on the full event's waiting list. Not an enterable step: entering again changes nothing.
   if (facts.waitlistPosition !== null) {
+    // Fix round 1 (review I-1): a guest on the line cannot register past it, so their own read moves a stalled line on.
+    if (lineLooksStalled(facts)) lineStalled(event.id);
     return { ...base, step: 'waitlisted', sessionId: event.id, waitlistPosition: facts.waitlistPosition };
   }
   if (facts.myRequest === 'pending') return { ...base, step: 'pending_approval', sessionId: event.id };

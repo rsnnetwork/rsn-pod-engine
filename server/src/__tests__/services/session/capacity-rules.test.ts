@@ -124,6 +124,34 @@ describe('who holds a place', () => {
     expect(placeOf(EVENT, admin)?.status).toBe('registered');
   });
 
+  // Fix round 1 (review I-3): one lock order everywhere. The public pod's auto-add is written where the place is given:
+  // after the capacity lock and the recount for a new place (as registerOrWaitlist and the promotion already do), and a
+  // full event writes no pod row at all.
+  it('a public pod\'s event (no visibility of its own): the pod row is written after the capacity lock, and never for a full event', async () => {
+    world.rows.events[0].visibility = null;
+    world.rows.events[0].admission_mode = null;
+    const newcomer = fresh();
+    const from = world.sql.length;
+    await registerParticipant(EVENT, newcomer, UserRole.MEMBER);
+    const sql = world.sql.slice(from);
+    const lock = sql.findIndex((s) => s.includes('pg_advisory_xact_lock'));
+    const recount = sql.findIndex((s) => s.includes(' AS taken, '));
+    const pod = sql.findIndex((s) => s.startsWith('INSERT INTO pod_members'));
+    const place = sql.findIndex((s) => s.startsWith('INSERT INTO session_participants'));
+    expect(lock).toBeGreaterThan(-1);
+    expect(lock).toBeLessThan(recount);
+    expect(recount).toBeLessThan(pod);
+    expect(pod).toBeLessThan(place);
+    expect(world.rows.podMembers.some((m) => m.user_id === newcomer)).toBe(true);
+
+    await registerParticipant(EVENT, fresh(), UserRole.MEMBER);
+    const late = fresh();
+    const before = world.sql.length;
+    expect(await refusal(registerParticipant(EVENT, late, UserRole.MEMBER))).toEqual(FULL);
+    expect(world.sql.slice(before).some((s) => s.startsWith('INSERT INTO pod_members'))).toBe(false);
+    expect(world.rows.podMembers.some((m) => m.user_id === late)).toBe(false);
+  });
+
   it('an event with no limit (an old config without the key) takes everyone, as before', async () => {
     world.rows.events[0].config = {};
     for (let i = 0; i < 5; i += 1) await registerParticipant(EVENT, fresh(), UserRole.MEMBER);

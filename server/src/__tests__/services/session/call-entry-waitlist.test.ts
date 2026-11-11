@@ -62,8 +62,11 @@ jest.mock('../../../services/session/event-admission.service', () => {
   };
 });
 const mockRegister = jest.fn();
+const mockLineStalled = jest.fn();
 jest.mock('../../../services/session/session.service', () => ({
-  registerParticipant: (...a: unknown[]) => mockRegister(...a), __esModule: true,
+  registerParticipant: (...a: unknown[]) => mockRegister(...a),
+  lineStalled: (...a: unknown[]) => mockLineStalled(...a),
+  __esModule: true,
 }));
 const mockPlace = jest.fn();
 jest.mock('../../../services/session/event-waitlist.service', () => {
@@ -130,6 +133,7 @@ beforeEach(() => {
   world.places.set(key(EVENT, A), { status: 'registered', admitted_via: 'open' });
   world.places.set(key(EVENT, B), { status: 'registered', admitted_via: 'open' });
   mockRegistrationEmail.mockReset();
+  mockLineStalled.mockReset();
   mockRegister.mockReset().mockImplementation(modelRegister({
     guestMayRegister: guestMayRegister as never, canRegister: canRegister as never, admittedViaOf: admittedViaOf as never,
   }));
@@ -162,6 +166,14 @@ describe('a guest entering a full event by its link', () => {
     promoteFirst(EVENT);
     expect(await readCallEntry(CODE, GUEST, UserRole.MEMBER)).toMatchObject({ step: 'wait_for_start', sessionId: EVENT, waitlistPosition: null });
     expect((await listMyCallEvents(GUEST)).map((e) => e.step)).toEqual(['wait_for_start']);
+  });
+
+  it('a guest on a stalled line (a place free, the promotion never ran) moves it on by reading their entry (fix round 1, I-1)', async () => {
+    await enterCall(CODE, GUEST, UserRole.MEMBER, { displayName: 'Grace Guest' });
+    expect(mockLineStalled).not.toHaveBeenCalled();
+    world.places.delete(key(EVENT, A)); // a place freed, nobody told the line
+    expect(await readCallEntry(CODE, GUEST, UserRole.MEMBER)).toMatchObject({ step: 'waitlisted', waitlistPosition: 1 });
+    expect(mockLineStalled).toHaveBeenCalledWith(EVENT);
   });
 
   it('leaving the line by the link takes them off it and answers where they stand', async () => {

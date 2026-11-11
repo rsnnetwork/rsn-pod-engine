@@ -549,7 +549,26 @@ export interface RegisterOptions {
  *   fromWaitlist  the person is being promoted from the event's waiting list (promoteFromWaitlist): an event guest who
  *                 joined the line through the call link may take the place (guestMayRegister's onWaitlist).
  */
-export type RegisterTxOptions = RegisterOptions & { overCapacity?: boolean; fromWaitlist?: boolean };
+export type RegisterTxOptions = RegisterOptions & {
+  overCapacity?: boolean;
+  fromWaitlist?: boolean;
+  /**
+   * Fix round 1 (review I-1): called when the recount finds people waiting while a place is free (a promotion that never
+   * ran: a restart, a failed pass, a path that freed a place without telling the line). The caller moves the line on
+   * once its own transaction is over (lineStalled), so the first arrival heals a stalled event.
+   */
+  onLineStalled?: () => void;
+};
+
+/**
+ * Fix round 1 (review I-1): move the waiting list of an event on, in the background, after the caller's transaction (the
+ * promotion waits for the capacity lock, so it always reads what that transaction committed). Never throws.
+ */
+export function lineStalled(sessionId: string): void {
+  void import('./event-waitlist.service')
+    .then((w) => w.afterPlaceFreed(sessionId, 'stalled'))
+    .catch((err: unknown) => logger.warn({ err, sessionId }, 'A stalled waiting list could not be moved on (non-fatal)'));
+}
 
 // S15 (live-test 2026-06-06) — isNewRegistration distinguishes a FRESH
 // registration from a re-activation (a 'left'/'no_show' row flipping back to
@@ -575,9 +594,16 @@ export async function registerParticipant(
   userRole?: UserRole,
   options?: RegisterOptions,
 ): Promise<RegisterResult> {
-  const participant = await transaction((client) => registerParticipantTx(client, sessionId, userId, userRole, options ?? {}));
-  await syncLiveRegistration(sessionId, userId);
-  return participant;
+  let stalled = false;
+  try {
+    const participant = await transaction((client) => registerParticipantTx(client, sessionId, userId, userRole, {
+      ...(options ?? {}), onLineStalled: () => { stalled = true; },
+    }));
+    await syncLiveRegistration(sessionId, userId);
+    return participant;
+  } finally {
+    if (stalled) lineStalled(sessionId);
+  }
 }
 
 /**
@@ -673,6 +699,7 @@ async function registerParticipantTx(
   }
 
   // Enforce pod visibility rules for session access (admin/super_admin bypass)
+  let joinsPublicPod = false;
   const podResult = await client.query(
     `SELECT visibility FROM pods WHERE id = $1`,
     [session.podId]
@@ -687,17 +714,10 @@ async function registerParticipantTx(
 
     if (podVisibility === 'public' && !isMember) {
       // Auto-add to pod when registering for a session in a public pod. Never an event guest (Part 2, Task 3):
-      // they take the event's place only, and never become a pod member. A full event undoes it with the rest of the
-      // registration (the transaction, or registerOrWaitlist's savepoint).
-      if (!isGuest) {
-        try {
-          await client.query(
-            `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
-             ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
-            [session.podId, userId]
-          );
-        } catch { /* ignore if already member */ }
-      }
+      // they take the event's place only, and never become a pod member. Fix round 1 (review I-3): written where the
+      // place is given (joinPublicPod below), after the capacity lock and the recount for a new place, so every path
+      // takes the lock before this row (registerOrWaitlist and the promotion do), and a full event writes nothing.
+      joinsPublicPod = !isGuest;
     } else if ((podVisibility === 'invite_only' || podVisibility === 'private') && !isMember) {
       // For private/invite-only pods, only allow if user has a valid (accepted) invite
       // User must go through acceptInvite() first which adds them to pod + marks invite
@@ -749,9 +769,25 @@ async function registerParticipantTx(
     }
   };
 
+  // The public pod's auto-add (see joinsPublicPod above): once, where the place is given.
+  const joinPublicPod = async (): Promise<void> => {
+    if (!joinsPublicPod) return;
+    joinsPublicPod = false;
+    try {
+      await client.query(
+        `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+         ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
+        [session.podId, userId]
+      );
+    } catch { /* ignore if already member */ }
+  };
+
   if (existingStatus) {
     // A place they already hold (left, disconnected, no-show), or a removal a personal invite lifts: taken back with no
-    // capacity check (K3: leaving never gave the place up) and no lock.
+    // capacity check (K3: leaving never gave the place up) and no lock. Controller ruling (fix round 1, review M-1): a
+    // removal lifted by the organiser's own personal invite may go over capacity, as before: it is an explicit organiser
+    // act, like "Let in now", so it is not held to the line or the capacity.
+    await joinPublicPod();
     await writeGroups(false);
     // Re-register. H1b (26 Oct 2026) — guarded like every other status write. An invite accept and the REST register
     // run outside the event's guard, so a kick could land between the read above and this write, which used to undo
@@ -809,9 +845,13 @@ async function registerParticipantTx(
   // The people who run the event never take a place from anyone (the host and co-hosts are not counted) and are never
   // turned away or queued; an organiser's "Let in now" is let in over capacity on purpose.
   const heldToCapacity = !isAdmin && !room.rows[0]?.runs && !options.overCapacity;
+  // Fix round 1 (review I-1): people waiting while a place is free means a promotion is overdue; the caller moves the
+  // line on after this transaction (it is moved on even when this person is let in or refused here).
+  if (heldToCapacity && capacity !== null && ahead > 0 && taken < capacity) options.onLineStalled?.();
   if (heldToCapacity && capacity !== null && taken + ahead >= capacity) {
     throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
   }
+  await joinPublicPod();
 
   // Someone promoted from the waiting list answered the group question when they joined it (their keys come with them);
   // one who has none (the event gained groups since) is let in for the organiser to place, as an approval is.
