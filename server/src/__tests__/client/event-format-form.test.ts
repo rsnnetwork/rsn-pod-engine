@@ -269,11 +269,12 @@ describe('what the forms send', () => {
 
   it('an edit sends its type every time, its words trimmed, and a description emptied on purpose as empty', () => {
     const { values } = editEventValues({ title: 'Mixer', description: 'Old words', format: 'video_meeting', config: { durationMinutes: 45, maxParticipants: 20 }, timezone: 'Europe/Copenhagen' }, '2026-11-02T10:00');
-    const body = eventChanges({ ...values, title: '  Mixer two ', description: '' }, { isAdmin: false });
+    // A changed time goes with its zone, read on the event's clock.
+    const body = eventChanges({ ...values, title: '  Mixer two ', description: '', scheduledAt: '2026-11-02T11:00' }, { isAdmin: false, opened: values });
     expect(body).toEqual({
       title: 'Mixer two',
       description: '',
-      scheduledAt: '2026-11-02T09:00:00.000Z',
+      scheduledAt: '2026-11-02T10:00:00.000Z',
       timezone: 'Europe/Copenhagen',
       format: 'video_meeting',
       config: { durationMinutes: 45, maxParticipants: 20 },
@@ -282,7 +283,7 @@ describe('what the forms send', () => {
 
   it('an edit of an event with no date leaves the date out rather than sending an empty one', () => {
     const { values } = editEventValues({ title: 'Copy', format: 'video_meeting', config: {} }, '');
-    expect(eventChanges(values, { isAdmin: false })).not.toHaveProperty('scheduledAt');
+    expect(eventChanges(values, { isAdmin: false, opened: values })).not.toHaveProperty('scheduledAt');
   });
 });
 
@@ -508,7 +509,7 @@ describe('a round length that is not whole minutes reads rounded; the stored sec
     expect(r.confirm).toBe('Switching to Video meeting removes the round settings (6 rounds × 1.7 min). Continue?');
     expect(r.values.roundMinutes).toBe(values.roundMinutes);
     // Saved again as speed networking, untouched: the same 100 seconds go back.
-    expect(eventChanges(values, { isAdmin: false }).config.roundMinutes).toBe(values.roundMinutes);
+    expect(eventChanges(values, { isAdmin: false, opened: values }).config.roundMinutes).toBe(values.roundMinutes);
   });
 });
 
