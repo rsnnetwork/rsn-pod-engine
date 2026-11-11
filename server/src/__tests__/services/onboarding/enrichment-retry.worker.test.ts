@@ -29,9 +29,17 @@ jest.mock('../../../realtime/fanout', () => ({
   fanoutUserEntity: (...args: unknown[]) => mockFanoutUser(...args),
 }));
 const mockGetState = jest.fn();
+const mockFailInterrupted = jest.fn();
+const mockStageEvent = jest.fn();
+jest.mock('../../../services/onboarding/stage-events.repo', () => ({
+  __esModule: true,
+  record: (...args: unknown[]) => mockStageEvent(...args),
+}));
 jest.mock('../../../services/onboarding/enrichment.repo', () => ({
   __esModule: true,
   getEnrichmentState: (...args: unknown[]) => mockGetState(...args),
+  failInterruptedLookups: (...args: unknown[]) => mockFailInterrupted(...args),
+  INTERRUPTED_LOOKUP_ERROR: 'interrupted before it finished',
 }));
 const mockProvider = jest.fn();
 jest.mock('../../../services/onboarding/providers/registry', () => ({
@@ -71,6 +79,8 @@ beforeEach(() => {
   mockFanoutUser.mockReset().mockResolvedValue(undefined);
   mockGetState.mockReset().mockResolvedValue({ status: 'failed', source: 'scrapingdog', error: 'not stored yet, retrying later', startedAt: null, completedAt: null });
   mockProvider.mockReset().mockReturnValue('scrapingdog');
+  mockFailInterrupted.mockReset().mockResolvedValue([]);
+  mockStageEvent.mockReset().mockResolvedValue(undefined);
   (logger.warn as jest.Mock).mockClear();
 });
 
@@ -227,4 +237,32 @@ it('no log line written by the worker names anyone: ids and states only', async 
   await processEnrichmentRetries();
   const logged = JSON.stringify([...(logger.info as jest.Mock).mock.calls, ...(logger.warn as jest.Mock).mock.calls]);
   for (const personal of ['Jane Doe', 'Sam Lee', 'jane@example.com', 'jane-doe', 'linkedin.com']) expect(logged).not.toContain(personal);
+});
+
+// ─── 12 Nov 2026: every lookup ends in a terminal state ──────────────────────────────────────────────────────────
+describe('a lookup a stopped server left searching', () => {
+  it('each tick ends it: failed, on the inspector timeline, and the member\'s screens told', async () => {
+    mockFailInterrupted.mockResolvedValue([{ userId: 'u-1', source: 'scrapingdog' }, { userId: 'u-2', source: null }]);
+    db([]);
+    await processEnrichmentRetries();
+    expect(mockFailInterrupted).toHaveBeenCalledTimes(1);
+    expect(mockStageEvent).toHaveBeenCalledWith('u-1', 'enrich_failed', { provider: 'scrapingdog', reason: 'interrupted before it finished' });
+    expect(mockStageEvent).toHaveBeenCalledWith('u-2', 'enrich_failed', { provider: 'unknown', reason: 'interrupted before it finished' });
+    expect(mockFanoutUser.mock.calls).toEqual([['u-1'], ['u-2']]);
+  });
+
+  it.each(['claude_web', 'none'])('runs with ENRICH_PROVIDER=%s too (a lookup left searching is ended whatever the provider)', async (provider) => {
+    mockProvider.mockReturnValue(provider);
+    mockFailInterrupted.mockResolvedValue([{ userId: 'u-1', source: 'claude_web' }]);
+    db([]);
+    await processEnrichmentRetries();
+    expect(mockFanoutUser).toHaveBeenCalledWith('u-1');
+    expect(claims()).toHaveLength(0);
+  });
+
+  it('it runs before the claim, so a retry claimed in the same tick is never swept by it', async () => {
+    db([userJob], { member: memberRow() });
+    await processEnrichmentRetries();
+    expect(mockFailInterrupted.mock.invocationCallOrder[0]).toBeLessThan(mockRunEnrichment.mock.invocationCallOrder[0]);
+  });
 });

@@ -59,9 +59,10 @@ const TERMINAL_ENRICHMENT_STATUSES = new Set<EnrichmentStatus>(['found', 'partia
 /**
  * Upsert enrichment state onto user_intent_profiles. Only fields present on
  * `state` are written — EXCEPT two behaviors enforced here (not left to
- * callers): status 'searching' always resets enrichment_error to null and
- * stamps enrichment_started_at (a fresh attempt); any terminal status always
- * stamps enrichment_completed_at.
+ * callers): status 'searching' always resets enrichment_error and
+ * enrichment_completed_at to null and stamps enrichment_started_at (a fresh
+ * attempt, not finished yet); any terminal status always stamps
+ * enrichment_completed_at.
  *
  * 21 Oct 2026: `linkedinUrl` is the address the lookup this state describes
  * ran for (null: a lookup for no address). It is kept beside the state, in
@@ -82,7 +83,9 @@ export async function setEnrichmentState(
   const sourceProvided = 'source' in state;
   const errorProvided = isSearching || 'error' in state;
   const startedAtProvided = isSearching || 'startedAt' in state;
-  const completedAtProvided = isTerminal || 'completedAt' in state;
+  // 12 Nov 2026: 'searching' also clears enrichment_completed_at. It used to keep the previous attempt's time, so a
+  // retry in flight read as "searching, completed 10 minutes ago" and looked stuck. A searching row has no end yet.
+  const completedAtProvided = isSearching || isTerminal || 'completedAt' in state;
   const lookupProvided = 'linkedinUrl' in state;
 
   const source = sourceProvided ? state.source ?? null : null;
@@ -142,6 +145,34 @@ export async function getEnrichmentState(userId: string): Promise<EnrichmentDbSt
     startedAt: toIsoOrNull(row.enrichment_started_at),
     completedAt: toIsoOrNull(row.enrichment_completed_at),
   };
+}
+
+/**
+ * A lookup still 'searching' this long after it started was cut off by a server that stopped under it (a deploy, a
+ * crash): the lookup itself ends inside its 150 s deadline. Ten minutes also outlasts an extras pass that runs late.
+ */
+export const INTERRUPTED_LOOKUP_AFTER_MS = 10 * 60 * 1000;
+export const INTERRUPTED_LOOKUP_ERROR = 'interrupted before it finished';
+
+export const FAIL_INTERRUPTED_LOOKUPS_SQL = `UPDATE user_intent_profiles
+      SET enrichment_status = 'failed', enrichment_error = $2, enrichment_completed_at = NOW(), updated_at = NOW()
+    WHERE enrichment_status = 'searching'
+      AND (enrichment_started_at IS NULL OR enrichment_started_at < NOW() - make_interval(secs => $1))
+  RETURNING user_id, enrichment_source`;
+
+/**
+ * Give every lookup that a stopped server left 'searching' a terminal state, so none stays 'searching' for ever (12 Nov
+ * 2026). One statement asks the question again, so with several instances each row is ended once. The address record
+ * (inferred_profile.lastLookup) is kept: it still says which address failed. Returns the members it ended.
+ */
+export async function failInterruptedLookups(
+  olderThanMs: number = INTERRUPTED_LOOKUP_AFTER_MS,
+): Promise<Array<{ userId: string; source: string | null }>> {
+  const r = await query<{ user_id: string; enrichment_source: string | null }>(FAIL_INTERRUPTED_LOOKUPS_SQL, [
+    Math.round(olderThanMs / 1000),
+    INTERRUPTED_LOOKUP_ERROR,
+  ]);
+  return r.rows.map((x) => ({ userId: x.user_id, source: x.enrichment_source }));
 }
 
 /** The address the member's latest state is about (inferred_profile.lastLookup.linkedinUrl); null when none is recorded. */

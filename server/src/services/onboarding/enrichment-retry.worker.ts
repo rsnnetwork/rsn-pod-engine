@@ -17,6 +17,8 @@
 //     already happened, so a result left on the request would never reach them); otherwise the request's lookup runs
 //     again, inside the 150 s deadline (enrichment-preload.ts).
 // After a member's lookup, found or not, their screens are told through their own entity tag (user:<id>).
+// Each tick also ends any lookup a stopped server left 'searching' for ten minutes (marked failed), so every lookup,
+// a retry with nobody watching included, ends in a terminal state.
 // Always with scheduleRetry false: a retry never asks for another.
 
 import { query } from '../../db';
@@ -24,7 +26,8 @@ import logger from '../../config/logger';
 import { fanoutUserEntity } from '../../realtime/fanout';
 import { normalizeLinkedinUrl } from './enrichment.service';
 import { resolveEnrichProvider } from './providers/registry';
-import { getEnrichmentState } from './enrichment.repo';
+import { failInterruptedLookups, getEnrichmentState, INTERRUPTED_LOOKUP_ERROR } from './enrichment.repo';
+import { record as recordStageEvent } from './stage-events.repo';
 import { claimDueEnrichmentRetries, purgeStaleEnrichmentRetries, type DueEnrichRetry } from './enrichment-retry.repo';
 import { runEnrichment } from './enrichment.orchestrator';
 import { preloadJoinRequestEnrichment } from '../join-request/enrichment-preload';
@@ -104,6 +107,19 @@ async function retryForRequest(job: DueEnrichRetry & { join_request_id: string }
   );
 }
 
+/**
+ * Every lookup ends in a terminal state (12 Nov 2026): one a stopped server left 'searching' for ten minutes is marked
+ * failed, written to the admin inspector's timeline, and its member's screens are told. Runs whatever the provider.
+ */
+async function endInterruptedLookups(): Promise<void> {
+  const ended = await failInterruptedLookups();
+  for (const { userId, source } of ended) {
+    logger.warn({ userId, source }, 'enrichment: a lookup left searching by a stopped server was marked failed');
+    recordStageEvent(userId, 'enrich_failed', { provider: source ?? 'unknown', reason: INTERRUPTED_LOOKUP_ERROR }).catch(() => {});
+    await fanoutUserEntity(userId);
+  }
+}
+
 async function runRetry(job: DueEnrichRetry): Promise<void> {
   if (job.user_id) return retryForMember(job.user_id, 'member');
   if (job.join_request_id) return retryForRequest({ ...job, join_request_id: job.join_request_id });
@@ -117,6 +133,7 @@ export async function processEnrichmentRetries(): Promise<void> {
   try {
     const purged = await purgeStaleEnrichmentRetries();
     if (purged > 0) logger.info({ purged }, 'enrichment retry: dropped retries left waiting a day');
+    await endInterruptedLookups();
     if (resolveEnrichProvider() !== 'scrapingdog') return;
     const due = await claimDueEnrichmentRetries();
     for (const job of due) {
