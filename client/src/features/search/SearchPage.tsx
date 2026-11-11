@@ -21,6 +21,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { errorMessage } from '@/features/reason/errors';
 import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
+import SearchesHelp from './SearchesHelp';
 import api from '@/lib/api';
 
 interface Result {
@@ -120,6 +121,7 @@ export default function SearchPage() {
     <div className="mx-auto w-full max-w-6xl">
       <h1 className="font-display text-2xl font-bold text-[#1a1a2e]">Find people</h1>
       <p className="mt-1 text-sm text-gray-500">Search by name, job title or company.</p>
+      <SearchesHelp />
 
       <div className="relative mt-4">
         <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />

@@ -383,7 +383,7 @@ describe('the entities api: the contract\'s addresses, an id is data and never p
     expect(loadEntityApi().exported).toEqual([
       'approveEntityMember', 'archiveEntity', 'createEntity', 'declineEntityMember', 'entityKeys', 'fetchEntities', 'fetchEntity',
       'fetchEntityPictureSource', 'fetchPersonEntities', 'leaveEntity', 'removeEntityMember', 'removeEntityPicture',
-      'saveEntityPicture', 'setMyEntityRole', 'updateEntity',
+      'saveEntityPicture', 'setEntityServices', 'setMyEntityRole', 'updateEntity',
     ]);
   });
 });

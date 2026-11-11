@@ -70,6 +70,7 @@ import meetingRoutes from './routes/meeting';
 import meetingsRoutes from './routes/meetings';
 import callsRoutes from './routes/calls';
 import circleRoutes from './routes/circles';
+import { circleExportRoutes, podExportRoutes } from './routes/space-export';
 import entityRoutes from './routes/entities';
 import reportRoutes from './routes/reports';
 import groupRoutes from './routes/groups';
@@ -357,6 +358,7 @@ app.use('/api/onboarding/v2', onboardingV2Routes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/pods', podRoutes);
 app.use('/api/pods', podWallRoutes); // a pod's wall: /:podId/wall/…, a path shape the pods router does not use
+app.use('/api/pods', podExportRoutes); // its organisers' export: /:id/export (Shirley pilot S7)
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/invites', inviteRoutes);
 app.use('/api/ratings', ratingRoutes);
@@ -393,6 +395,7 @@ app.use('/api/matches', matchesRoutes);
 app.use('/api/people', peopleRoutes);
 app.use('/api/agents', agentRoutes);
 app.use('/api/circles', circleRoutes);
+app.use('/api/circles', circleExportRoutes); // its organisers' export: /:id/export (Shirley pilot S7)
 app.use('/api/entities', entityRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/groups', groupRoutes);

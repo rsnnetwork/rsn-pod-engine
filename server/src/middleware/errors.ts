@@ -31,6 +31,8 @@ const NOT_FOUND_LABELS: Record<string, string> = {
   'LinkedIn photo': 'LinkedIn photo',
   Session: 'event',
   Poke: 'meeting request',
+  // Shirley pilot S7 (item 21): members know an agent as one of "your searches".
+  Agent: 'search',
 };
 
 function notFoundLabel(entity: string): string {

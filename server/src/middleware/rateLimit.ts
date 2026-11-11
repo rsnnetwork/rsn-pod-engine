@@ -1205,6 +1205,21 @@ export const eventReportExportLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: EVENT_REPORT_EXPORT_LIMITED } },
 });
 
+// An organiser's export of their circle or pod (Shirley pilot S7, item 20): twenty files in ten minutes per person, so
+// an organiser can take all four files several times over while a script copying member data out is stopped. Keyed per
+// member: the route signs in first. Every download is also written to the access log before it leaves.
+export const SPACE_EXPORT_LIMITED = 'You have downloaded a lot of files just now. Try again in a few minutes.';
+
+export const spaceExportLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('space-export'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: SPACE_EXPORT_LIMITED } },
+});
+
 // The waiting list (10 Nov 2026 spec, Part 3 Task 3): leaving it, and the organisers reading it, letting someone in and
 // taking someone off it. Thirty a minute per person. Joining it is the registration's own (the register route, the call
 // link's entry, an approval, an invite accept), under their limits.

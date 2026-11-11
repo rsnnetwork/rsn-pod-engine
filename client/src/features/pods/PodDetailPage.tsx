@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio,
   Pencil, Trash2, UserPlus, Lock, Mail, UserCheck, X,
-  Clock, CopyPlus, XCircle, AlertTriangle, MessagesSquare,
+  Clock, CopyPlus, XCircle, AlertTriangle, MessagesSquare, Download,
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
@@ -28,6 +28,8 @@ import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
 import PodCircleChips from './PodCircleChips';
+import SpaceExportSheet from '@/features/spaces/SpaceExportSheet';
+import { mayExportPod } from '@/features/spaces/space-export';
 import { POD_VISIBILITY_COPY } from '@rsn/shared';
 
 // ─── Label / icon maps ──────────────────────────────────────────────────────
@@ -77,6 +79,8 @@ export default function PodDetailPage() {
 
   // "Invite members": the invite sheet (features/invites, 26 Oct 2026), the people chosen from your connections.
   const [inviteOpen, setInviteOpen] = useState(false);
+  // Shirley pilot S7 (item 20): its director and hosts export its data.
+  const [exportOpen, setExportOpen] = useState(false);
 
   const [memberStatusFilter, setMemberStatusFilter] = useState<string | null>(null);
   // Duplicate pod: open CreatePodModal pre-filled
@@ -298,6 +302,13 @@ export default function PodDetailPage() {
   const isPodDirector     = myMembership?.role === 'director' || pod.memberRole === 'director';
   const canManage        = isPodDirector || isAdminUser;
   const canManageOrHost = canManage || myMembership?.role === 'host' || pod.memberRole === 'host';
+  // The viewer's own active role, never an admin's powers: the server refuses an export to anyone else.
+  const canExport = isMember && mayExportPod(myMembership?.status === 'active' ? myMembership.role : pod.memberRole);
+  const exportButton = canExport && (
+    <Button variant="secondary" onClick={() => setExportOpen(true)} data-testid="pod-export">
+      <Download className="h-4 w-4 mr-2" /> Export
+    </Button>
+  );
 
   const vis    = VISIBILITY_CONFIG[pod.visibility] || VISIBILITY_CONFIG.public;
   const VisIcon = vis.icon;
@@ -416,6 +427,7 @@ export default function PodDetailPage() {
               Reactivate Pod
             </Button>
           )}
+          {exportButton}
           <p className="text-sm text-gray-400 self-center">This pod is archived. Events and data are preserved.</p>
         </div>
       ) : pod.status !== 'archived' && (isMember || canManage) && (
@@ -435,6 +447,7 @@ export default function PodDetailPage() {
               <Pencil className="h-4 w-4 mr-2" /> Edit Pod
             </Button>
           )}
+          {exportButton}
           {canManage && (
             <Button variant="secondary" onClick={() => setDuplicateOpen(true)}>
               <CopyPlus className="h-4 w-4 mr-2" /> Duplicate Pod
@@ -481,6 +494,9 @@ export default function PodDetailPage() {
 
       {/* ── Full Edit Modal ──────────────────────────────────────────────── */}
       <EditPodModal open={editOpen} onClose={() => setEditOpen(false)} pod={pod} />
+      {exportOpen && canExport && podId && (
+        <SpaceExportSheet kind="pod" spaceId={podId} name={pod.name} onClose={() => setExportOpen(false)} />
+      )}
 
       {/* ── Duplicate Pod Modal (pre-filled CreatePodModal) ─────────────── */}
       <CreatePodModal

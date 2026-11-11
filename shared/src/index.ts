@@ -120,6 +120,7 @@ export * from './types/entity';
 import {
   COMPANY_ROLES as _COMPANY_ROLES, ENTITY_KINDS as _ENTITY_KINDS, ENTITY_KIND_LABELS as _ENTITY_KIND_LABELS,
   ENTITY_LIMITS as _ENTITY_LIMITS, ENTITY_ROLES as _ENTITY_ROLES, ENTITY_ROLE_LABELS as _ENTITY_ROLE_LABELS,
+  ENTITY_SERVICE_CATEGORIES as _ENTITY_SERVICE_CATEGORIES, ENTITY_SERVICE_LABELS as _ENTITY_SERVICE_LABELS,
 } from './types/entity';
 export const COMPANY_ROLES = _COMPANY_ROLES;
 export const ENTITY_KINDS = _ENTITY_KINDS;
@@ -127,6 +128,16 @@ export const ENTITY_KIND_LABELS = _ENTITY_KIND_LABELS;
 export const ENTITY_LIMITS = _ENTITY_LIMITS;
 export const ENTITY_ROLES = _ENTITY_ROLES;
 export const ENTITY_ROLE_LABELS = _ENTITY_ROLE_LABELS;
+export const ENTITY_SERVICE_CATEGORIES = _ENTITY_SERVICE_CATEGORIES;
+export const ENTITY_SERVICE_LABELS = _ENTITY_SERVICE_LABELS;
+// An organiser's export of their circle or pod (Shirley pilot S7): VALUES the export sheet renders, named exports as above.
+export * from './types/space-export';
+import {
+  SPACE_EXPORT_COPY as _SPACE_EXPORT_COPY, SPACE_EXPORT_SECTIONS as _SPACE_EXPORT_SECTIONS, SPACE_KINDS as _SPACE_KINDS,
+} from './types/space-export';
+export const SPACE_EXPORT_COPY = _SPACE_EXPORT_COPY;
+export const SPACE_EXPORT_SECTIONS = _SPACE_EXPORT_SECTIONS;
+export const SPACE_KINDS = _SPACE_KINDS;
 // Event formats and pod types (26 Oct 2026): the one definition every pod and event form reads and the server
 // enforces, with its rules. Real VALUES the client renders and calls, so each has its own named export, same
 // as OPENINGS above.

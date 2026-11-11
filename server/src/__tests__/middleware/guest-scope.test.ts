@@ -91,6 +91,7 @@ import meetingRoutes from '../../routes/meeting';
 import meetingsRoutes from '../../routes/meetings';
 import callsRoutes from '../../routes/calls';
 import circleRoutes from '../../routes/circles';
+import { circleExportRoutes, podExportRoutes } from '../../routes/space-export';
 import entityRoutes from '../../routes/entities';
 import reportRoutes from '../../routes/reports';
 import groupRoutes from '../../routes/groups';
@@ -119,6 +120,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/onboarding', onboardingRoutes],
   ['/api/pods', podRoutes],
   ['/api/pods', podWallRoutes],
+  ['/api/pods', podExportRoutes],
   ['/api/sessions', sessionRoutes],
   ['/api/invites', inviteRoutes],
   ['/api/ratings', ratingRoutes],
@@ -152,6 +154,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/people', peopleRoutes],
   ['/api/agents', agentRoutes],
   ['/api/circles', circleRoutes],
+  ['/api/circles', circleExportRoutes],
   ['/api/entities', entityRoutes],
   ['/api/reports', reportRoutes],
   ['/api/groups', groupRoutes],
@@ -185,6 +188,9 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['get', `/api/pods/${OTHER}`],
   ['get', `/api/pods/${OTHER}/wall/posts`],
   ['get', '/api/circles'],
+  // Shirley pilot S7: an organiser's export is a member's (an organiser's) surface.
+  ['get', `/api/circles/${OTHER}/export?section=members`],
+  ['get', `/api/pods/${OTHER}/export?section=members`],
   ['get', '/api/matches/platform'],
   ['get', '/api/agents'],
   ['get', '/api/pokes/received'],

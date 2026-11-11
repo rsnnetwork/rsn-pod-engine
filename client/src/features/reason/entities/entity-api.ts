@@ -2,8 +2,8 @@
 // Everything the Entities pages read and write: the routes of the entities contract (Task 10, 21 Oct 2026).
 import api from '@/lib/api';
 import type {
-  CreateEntityResult, EntityList, EntityMembershipResult, EntityPage, EntityRole, LeaveEntityResult, PersonEntity,
-  PictureCrop, PictureSource,
+  CreateEntityResult, EntityList, EntityMembershipResult, EntityPage, EntityRole, EntityService, LeaveEntityResult,
+  PersonEntity, PictureCrop, PictureSource, SetEntityServicesBody,
 } from '@rsn/shared';
 import type { EntityChanges, NewEntityBody } from './entity-form';
 
@@ -67,3 +67,7 @@ export const removeEntityPicture = (id: string, kind: EntityPictureKind) => api.
 /** The picture the editor opens on: the one the admin chose, with where they placed it. */
 export const fetchEntityPictureSource = (id: string, kind: EntityPictureKind) =>
   api.get(`/entities/${entitySegment(id)}/${kind}/source`).then((r) => r.data.data as PictureSource);
+
+// Shirley pilot S7 (brief item 15): what it offers, the whole list in order ([] clears it). Its admins and platform admins only.
+export const setEntityServices = (id: string, body: SetEntityServicesBody) =>
+  api.put(`/entities/${entitySegment(id)}/services`, body).then((r) => r.data.data.services as EntityService[]);

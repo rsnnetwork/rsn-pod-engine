@@ -71,7 +71,54 @@ export const ENTITY_LIMITS = {
   searchMax: 200,
   /** The most entities `others` holds, searched or not. */
   othersMax: 30,
+  /** Shirley pilot S7 (RSN 15): one service's description, in characters. */
+  serviceDescriptionMax: 280,
+  /** The most services one entity lists: one per category, so never more than the list holds. */
+  servicesMax: 15,
 } as const;
+
+// ─── Services (Shirley pilot S7, 11 Nov 2026; brief RSN 15) ─────────────────────────────────────────────────────
+// What an organisation offers lives on the Entity, never on a Person: "A person is not an organisation or a service
+// catalogue." An entity lists services from this controlled list, each with an optional short description and an
+// optional https website. The CHECK in migration 152 is this list written out; migration-152.test.ts fails if the two
+// ever differ. Removing a category later is a new migration that maps the rows first (the safe enum pattern).
+export const ENTITY_SERVICE_CATEGORIES = [
+  'advisory', 'coaching', 'consulting', 'design', 'development', 'education_training', 'events', 'finance', 'funding',
+  'hiring_recruitment', 'legal', 'marketing', 'mentoring', 'research', 'other',
+] as const;
+export type EntityServiceCategory = (typeof ENTITY_SERVICE_CATEGORIES)[number];
+
+export const ENTITY_SERVICE_LABELS: Record<EntityServiceCategory, string> = {
+  advisory: 'Advisory',
+  coaching: 'Coaching',
+  consulting: 'Consulting',
+  design: 'Design',
+  development: 'Development',
+  education_training: 'Education and training',
+  events: 'Events',
+  finance: 'Finance',
+  funding: 'Funding',
+  hiring_recruitment: 'Hiring and recruitment',
+  legal: 'Legal',
+  marketing: 'Marketing',
+  mentoring: 'Mentoring',
+  research: 'Research',
+  other: 'Other',
+};
+
+/** One service an entity offers, as its page shows it. */
+export interface EntityService {
+  category: EntityServiceCategory;
+  /** At most ENTITY_LIMITS.serviceDescriptionMax characters, or null. */
+  description: string | null;
+  /** An https address, or null. */
+  website: string | null;
+}
+
+/** PUT /api/entities/:id/services: the whole list, in the order the page shows it. An empty list clears it. */
+export interface SetEntityServicesBody {
+  services: Array<{ category: EntityServiceCategory; description?: string | null; website?: string | null }>;
+}
 
 // ─── What the API answers (GET /api/entities and the routes under it) ────────
 // The 30 Oct review's fields (T15) are optional in these types so code built against the types before them still
@@ -188,6 +235,8 @@ export interface EntityPage {
   /** 30 Oct review, only when `canEdit`: the people waiting for an answer (at most 200), and how many wait. */
   requests?: EntityRequest[];
   requestCount?: number;
+  /** Shirley pilot S7 (RSN 15): what it offers, in its admins' order. Shown on the entity's page only. */
+  services?: EntityService[];
 }
 
 /** One of a person's entities: GET /api/users/:id/entities, and the person brief's `entities`. */

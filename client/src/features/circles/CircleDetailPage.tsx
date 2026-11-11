@@ -11,11 +11,12 @@
 // T13 (1 Nov 2026; 30 Oct review 6.5): its managers schedule an event for everyone in it ("Schedule an event" in the
 // header's row of actions). Its events are its own and its pods', as the server lists them, and the page follows the
 // member's own events too, so a new circle event shows without a refresh.
+// Shirley pilot S7 (item 20): its owner and moderators export its data (Export, in the same row of organiser actions).
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Users, CalendarPlus, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox, Pencil, Send } from 'lucide-react';
+import { ArrowLeft, Users, CalendarPlus, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox, Pencil, Send, Download } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
@@ -32,6 +33,8 @@ import { scheduleForCircleHref } from '@/features/sessions/circle-preset';
 import CircleOrganisationsSection from './CircleOrganisationsSection';
 import EditCircleSheet from './EditCircleSheet';
 import CircleInvitesSheet from './CircleInvitesSheet';
+import SpaceExportSheet from '@/features/spaces/SpaceExportSheet';
+import { mayExportCircle } from '@/features/spaces/space-export';
 import { LOCKED_COPY, WHO_CAN_JOIN, circleEntities, requestsLabel, type CircleDetail } from './circle-logic';
 import { EDIT_DETAILS, INVITATIONS } from './circle-admin';
 
@@ -44,7 +47,7 @@ export default function CircleDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightPostId = searchParams.get('post') || undefined;
   const { user } = useAuthStore();
-  const [sheet, setSheet] = useState<'invite' | 'settings' | 'edit' | 'invitations' | null>(null);
+  const [sheet, setSheet] = useState<'invite' | 'settings' | 'edit' | 'invitations' | 'export' | null>(null);
   const qc = useQueryClient();
   // Final fix wave CM5 (2 Nov 2026): the people who run the circle also follow its asks (circle:<id>:requests), so its
   // Requests (n) count moves with them. Read from the page's own answer once it has one; the tags follow each render.
@@ -120,6 +123,11 @@ export default function CircleDetailPage() {
               <Settings2 className="h-4 w-4" /> {WHO_CAN_JOIN}
             </button>
           )}
+          {mayExportCircle(circle.myRole) && (
+            <button type="button" onClick={() => setSheet('export')} data-testid="circle-export" className={HEADER_ACTION}>
+              <Download className="h-4 w-4" /> Export
+            </button>
+          )}
           {circle.canManage && (circle.joinPolicy === 'closed' || (circle.requestCount ?? 0) > 0) && (
             <button type="button" onClick={openRequests} data-testid="circle-requests-open" className={HEADER_ACTION}>
               <Inbox className="h-4 w-4" /> {requestsLabel(circle.requestCount)}
@@ -179,6 +187,7 @@ export default function CircleDetailPage() {
       )}
       {requestsOpen && <CircleRequestsSheet circleId={circle.id} onClose={closeRequests} />}
       {sheet === 'edit' && <EditCircleSheet circle={circle} onClose={() => setSheet(null)} />}
+      {sheet === 'export' && <SpaceExportSheet kind="circle" spaceId={circle.id} name={circle.name} onClose={() => setSheet(null)} />}
       {sheet === 'invitations' && (
         <CircleInvitesSheet circleId={circle.id} circleName={circle.name} onClose={() => setSheet(null)} onInvite={() => setSheet('invite')} />
       )}

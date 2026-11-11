@@ -57,6 +57,14 @@ jest.mock('../../services/entity/entity.service', () => ({
   archiveEntity: (...a: unknown[]) => mockArchive(...a),
   __esModule: true,
 }));
+// Shirley pilot S7: the page also carries the entity's services (their own routes: s7-entity-services-routes.test.ts).
+const mockListServices = jest.fn().mockResolvedValue([]);
+jest.mock('../../services/entity/entity-services.service', () => ({
+  ...jest.requireActual('../../services/entity/entity-services.service'),
+  listEntityServices: (...a: unknown[]) => mockListServices(...a),
+  setEntityServices: jest.fn(),
+  __esModule: true,
+}));
 const mockFanoutEntity = jest.fn().mockResolvedValue(undefined);
 const mockFanoutProfile = jest.fn().mockResolvedValue(undefined);
 const mockFanoutCircles = jest.fn().mockResolvedValue(undefined);
@@ -272,8 +280,9 @@ describe('GET /entities/:id', () => {
     mockGet.mockResolvedValueOnce(page);
     const res = await request(app).get(`/entities/${ID}`).set(me);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, data: page });
+    expect(res.body).toEqual({ success: true, data: { ...page, services: [] } });
     expect(mockGet).toHaveBeenCalledWith('u-page', ID, false);
+    expect(mockListServices).toHaveBeenCalledWith(ID);
     expect(mockFanoutEntity).not.toHaveBeenCalled();
   });
 
@@ -707,7 +716,8 @@ describe("production's shapes are unchanged (additive only)", () => {
     });
     const page = await request(app).get(`/entities/${ID}`).set(as('u-compat'));
     expect(page.body.data).toMatchObject({ entity, people: [], myRole: null, canEdit: false });
-    expect(Object.keys(page.body.data).sort()).toEqual(['canEdit', 'circles', 'entity', 'myPendingChange', 'myRole', 'myStatus', 'people']);
+    // Shirley pilot S7 adds `services` beside them.
+    expect(Object.keys(page.body.data).sort()).toEqual(['canEdit', 'circles', 'entity', 'myPendingChange', 'myRole', 'myStatus', 'people', 'services']);
   });
 });
 

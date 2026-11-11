@@ -19,13 +19,19 @@
 // GET    /entities/:id/logo/source | /banner/source   the picture the editor opens on
 // Public (an <img> sends no token): GET /entities/:id/logo?v= and /banner?v=
 //
+// Shirley pilot S7 (RSN 15), its admins and platform admins:
+// PUT    /entities/:id/services     { services: [{ category, description?, website? }] }  { services }   the whole list,
+//                                   in order (at most one per category); [] clears it. GET /entities/:id carries them.
+//
 // A person's entities (GET /users/:id/entities) are in routes/users.ts; an entity's links to circles are made from
 // the circle (routes/circles.ts). The service decides who may do what; the routes check the shape of what was sent
 // and tell the screens once a write is done.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { ApiResponse, ENTITY_KINDS, ENTITY_LIMITS, ENTITY_ROLES, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import {
+  ApiResponse, ENTITY_KINDS, ENTITY_LIMITS, ENTITY_ROLES, ENTITY_SERVICE_CATEGORIES, UserRole, hasRoleAtLeast,
+} from '@rsn/shared';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import {
@@ -34,6 +40,7 @@ import {
 import { fanoutEntityChange, fanoutEntityCircles, fanoutProfileChange } from '../realtime/fanout';
 import * as entities from '../services/entity/entity.service';
 import * as entityPictures from '../services/entity/entity-pictures.service';
+import * as entityServices from '../services/entity/entity-services.service';
 import { blankToNull, characterCount, normaliseName, normaliseWebsite } from '../services/entity/entity-fields';
 import { pictureBodySchema, type PictureBody } from './picture-body';
 
@@ -99,12 +106,39 @@ const updateBody = z.object({ name: name.optional(), kind: kind.optional(), ...d
   .refine((changes) => Object.values(changes).some((v) => v !== undefined), { message: 'Nothing to change.' });
 const membershipBody = z.object({ role, title: optionalText(ENTITY_LIMITS.titleMax, 'the title') });
 
+// S7: one service. The description is counted in characters (an emoji is one), as VARCHAR(280) counts it; blank is
+// null. The website is https only (normaliseServiceWebsite); javascript: and every other scheme are refused.
+const service = z.object({
+  category: z.enum(ENTITY_SERVICE_CATEGORIES, { errorMap: () => ({ message: 'Choose a service from the list.' }) }),
+  description: z.string().max(ENTITY_LIMITS.serviceDescriptionMax * 2, `Keep each description to ${ENTITY_LIMITS.serviceDescriptionMax} characters.`).nullable().optional()
+    .transform((s) => blankToNull(s ?? null))
+    .refine((s) => s === null || characterCount(s) <= ENTITY_LIMITS.serviceDescriptionMax,
+      `Keep each description to ${ENTITY_LIMITS.serviceDescriptionMax} characters.`),
+  website: z.string().max(ENTITY_LIMITS.websiteMax, entityServices.SERVICE_WEBSITE_REFUSED).nullable().optional()
+    .transform((s, ctx) => {
+      const typed = blankToNull(s ?? null);
+      if (typed === null) return null;
+      const address = entityServices.normaliseServiceWebsite(typed);
+      if (address === null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: entityServices.SERVICE_WEBSITE_REFUSED });
+        return z.NEVER;
+      }
+      return address;
+    }),
+}).strict();
+const servicesBody = z.object({
+  services: z.array(service, { required_error: 'Send the list of services.', invalid_type_error: 'Send the list of services.' })
+    .max(ENTITY_LIMITS.servicesMax, `List at most ${ENTITY_LIMITS.servicesMax} services.`)
+    .refine((list) => new Set(list.map((s) => s.category)).size === list.length, 'Each service can be listed once.'),
+}).strict();
+
 // validate() has already replaced req.body / req.query with the parsed value, but Express types them
 // loosely. A field that was not sent is not in the parsed value, so an edit changes only what it names.
 type ListQuery = z.infer<typeof listQuery>;
 type CreateBody = z.infer<typeof createBody>;
 type UpdateBody = z.infer<typeof updateBody>;
 type MembershipBody = z.infer<typeof membershipBody>;
+type ServicesBody = z.infer<typeof servicesBody>;
 
 // ── Reads (they change nothing, so they emit nothing) ───────────────────────
 
@@ -122,8 +156,12 @@ router.get('/', authenticate, entityReadLimiter, validate(listQuery, 'query'),
 router.get('/:id', authenticate, entityReadLimiter, validate(entityParams, 'params'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await entities.getEntity(req.user!.userId, req.params.id, isPlatformAdmin(req));
-      res.json({ success: true, data } satisfies ApiResponse);
+      const [page, services] = await Promise.all([
+        entities.getEntity(req.user!.userId, req.params.id, isPlatformAdmin(req)),
+        // S7: what it offers. getEntity has decided the entity is live (404 otherwise), so nothing of an archived one is sent.
+        entityServices.listEntityServices(req.params.id),
+      ]);
+      res.json({ success: true, data: { ...page, services } } satisfies ApiResponse);
     } catch (err) {
       next(err);
     }
@@ -193,6 +231,21 @@ router.delete('/:id/members/me', authenticate, entityWriteLimiter, validate(enti
       // The last person out archives it, and it leaves the circle pages that list it.
       if (data.archived) void fanoutEntityCircles(req.params.id);
       res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+// S7 (RSN 15): what it offers, set by its admins. The services show on its page, which follows entity:<id>.
+router.put('/:id/services', authenticate, entityWriteLimiter, validate(entityParams, 'params'),
+  validate(servicesBody, 'body', 'Check the services and try again.'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const me = req.user!.userId;
+      const { services } = req.body as ServicesBody;
+      const saved = await entityServices.setEntityServices(me, req.params.id, services, isPlatformAdmin(req));
+      void fanoutEntityChange(req.params.id, me);
+      res.json({ success: true, data: { services: saved } } satisfies ApiResponse);
     } catch (err) {
       next(err);
     }
