@@ -102,13 +102,19 @@ async function placeStatus(sessionId: string, userId: string): Promise<string | 
   return r.rows[0]?.status ?? null;
 }
 
-/** The page's own registration may open the sheet by itself; otherwise the member presses Register. */
+/**
+ * The page's own registration may open the sheet by itself (Register is busy until it answers); otherwise the member
+ * presses Register. Whichever comes first: the sheet can open over Register between a look and a press (WebKit, iPhone
+ * and iPad, 11 Nov 2026), so a press the sheet beat to the screen is not waited on; the sheet is looked for again.
+ */
 async function openBeforeYouJoin(page: Page): Promise<Locator> {
   const sheet = page.getByTestId('before-you-join-sheet');
   const register = page.getByTestId('event-register');
   await expect(sheet.or(register).first()).toBeVisible({ timeout: 30_000 });
-  if (!(await sheet.isVisible())) await register.click();
-  await expect(sheet).toBeVisible({ timeout: LIVE });
+  await expect(async () => {
+    if (!(await sheet.isVisible())) await register.click({ timeout: 2_000 });
+    await expect(sheet).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 30_000 });
   await expect(page.getByRole('dialog', { name: 'Before you join' })).toBeVisible();
   return sheet;
 }

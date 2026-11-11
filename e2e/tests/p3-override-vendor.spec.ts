@@ -60,6 +60,10 @@ test.beforeAll(async () => {
   expect(created.status, created.text).toBe(201);
   eventId = created.json.data.id;
   made.sessions.push(eventId);
+  // Co-hosts are made from the event's registered participants (the server refuses anyone else with NOT_A_PARTICIPANT),
+  // so the co-host registers first: before the groups, which would otherwise ask them for a group.
+  const registered = await api(cohost, 'POST', `/sessions/${eventId}/register`);
+  expect(registered.status, registered.text).toBe(201);
   const cohosted = await api(owner, 'POST', `/sessions/${eventId}/cohosts/${cohost.id}`);
   expect(cohosted.status, cohosted.text).toBeLessThan(300);
   const groups = await api(owner, 'PUT', `/sessions/${eventId}/groups`, {
@@ -107,7 +111,9 @@ test(`owner: sees both tiles at 44px and switches to "Me and my co-hosts" (${whe
   await shot(page, 'override-owner');
 
   const saved = page.waitForResponse((r) => r.url().includes(`/api/sessions/${eventId}/groups`) && r.request().method() === 'PUT');
-  await both.check();
+  // A press, then the checked state read with retries: the tile turns checked a tick after the press (the save's pending
+  // state reaches the screen through the query client's next tick), which check()'s one immediate read can miss (iPad).
+  await both.click();
   expect((await saved).status(), 'the choice was saved').toBe(200);
   await expect(both).toBeChecked({ timeout: LIVE });
   expect(await storedOverride()).toBe('owner_and_cohosts');
@@ -119,7 +125,11 @@ test(`owner: sees both tiles at 44px and switches to "Me and my co-hosts" (${whe
   await expectNotReloaded(cohostPage, "the co-host's page");
   await shot(cohostPage, 'override-cohost');
 
-  await only.check();
+  // The tile is checked the moment it is pressed, before the save answers: the stored choice is read after the save.
+  const savedBack = page.waitForResponse((r) => r.url().includes(`/api/sessions/${eventId}/groups`) && r.request().method() === 'PUT');
+  await expect(only, 'the first save has settled before the next press').toHaveAttribute('aria-disabled', 'false', { timeout: LIVE });
+  await only.click();
+  expect((await savedBack).status(), 'the choice was saved back').toBe(200);
   await expect(only).toBeChecked({ timeout: LIVE });
   expect(await storedOverride()).toBe('owner');
   await expect(cohostPage.getByTestId('override-setting')).toContainText('Now: only the owner.', { timeout: LIVE });
@@ -146,7 +156,8 @@ test(`presets: Buyers and vendors is in the groups form and in the matching styl
   const card = presets.getByRole('radio', { name: /^Buyers and vendors/ });
   await expect(presets).toContainText('Buyers meet vendors first', { timeout: LIVE });
   await expect(card).toBeVisible();
-  const label = presets.locator('label').filter({ has: card });
+  // `has` is looked for inside each label, so it is the radio on its own (`card` starts from the list, which no label holds).
+  const label = presets.locator('label').filter({ has: create.page.getByRole('radio', { name: /^Buyers and vendors/ }) });
   await tall(label, 'Buyers and vendors card');
   await fitsWidth(create.page, label, 'Buyers and vendors card');
   await card.check();
