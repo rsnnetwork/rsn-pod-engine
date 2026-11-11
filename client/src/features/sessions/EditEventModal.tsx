@@ -94,7 +94,8 @@ function EditEventSheet({ onClose, session, podType, podVisibility, podName, isA
     networkMode: 'always',
     // T11: "Who can join" is sent only when the organiser changed it, so an event that follows its pod keeps doing so.
     mutationFn: (values: EventFormValues) => api.put(`/sessions/${session.id}`, {
-      ...eventChanges(values, { isAdmin }),
+      // The time and zone go only when the organiser changed them from what the form opened with.
+      ...eventChanges(values, { isAdmin, opened: start.values }),
       ...(visibilityChosen ? { visibility } : {}),
     }),
     onSuccess: () => {

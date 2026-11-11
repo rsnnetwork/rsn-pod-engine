@@ -316,7 +316,8 @@ export interface EventChangesBody {
   title: string;
   description: string;
   scheduledAt?: string;
-  timezone: string;
+  /** Sent with the time, only when the organiser changed the date or the zone. */
+  timezone?: string;
   format: EventFormat;
   config: Record<string, unknown>;
 }
@@ -365,17 +366,24 @@ export function eventBody(values: EventFormValues, o: { isAdmin: boolean }): New
 }
 
 /**
- * PUT /sessions/:id. The type and the zone are sent every time; an event with no date keeps none rather than getting an
- * empty one. A new zone with the same wall clock is a new instant (14:00 Copenhagen is not 14:00 London), so the
- * server tells the event's people it has moved.
+ * PUT /sessions/:id. The type is sent every time. The time and the zone are sent only when the organiser changed the
+ * date field or the zone field from what the form opened with (`opened`, compared as the fields hold them, never as a
+ * re-derived instant): the field holds the time to the minute, so rebuilding it would move an event stored with
+ * seconds, or in the autumn's repeated hour, and the server would tell everyone it had moved (task 6 review, #6). When
+ * either changed, both go: a new zone with the same wall clock is a new instant (14:00 Copenhagen is not 14:00
+ * London), and the server tells the event's people it has moved. An event with no date keeps none rather than getting
+ * an empty one.
  */
-export function eventChanges(values: EventFormValues, o: { isAdmin: boolean }): EventChangesBody {
-  const scheduledAt = instantOf(values);
+export function eventChanges(
+  values: EventFormValues, o: { isAdmin: boolean; opened: Pick<EventFormValues, 'scheduledAt' | 'timezone'> },
+): EventChangesBody {
+  const moved = values.scheduledAt !== o.opened.scheduledAt || values.timezone !== o.opened.timezone;
+  const scheduledAt = moved ? instantOf(values) : null;
   return {
     title: values.title.trim(),
     description: values.description.trim(),
     ...(scheduledAt ? { scheduledAt } : {}),
-    timezone: values.timezone,
+    ...(moved ? { timezone: values.timezone } : {}),
     format: values.format,
     config: settingsFor(values, o.isAdmin),
   };

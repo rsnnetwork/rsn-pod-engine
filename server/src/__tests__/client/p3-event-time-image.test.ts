@@ -46,15 +46,38 @@ describe('the event forms read and write the time on the EVENT zone, never the b
     expect(wall).toBe('2026-12-01T14:00');
     const { values } = editEventValues({ title: 'Evening', format: 'video_meeting', config: {}, timezone: 'Europe/Copenhagen' }, wall);
     expect(values.timezone).toBe('Europe/Copenhagen');
-    expect(eventChanges(values, { isAdmin: false })).toMatchObject({ scheduledAt: '2026-12-01T13:00:00.000Z', timezone: 'Europe/Copenhagen' });
+    // Saved with the time changed and changed back, it is the same instant again.
+    expect(eventChanges({ ...values, scheduledAt: '2026-12-01T14:00' }, { isAdmin: false, opened: { ...values, scheduledAt: '2026-12-01T15:00' } }))
+      .toMatchObject({ scheduledAt: '2026-12-01T13:00:00.000Z', timezone: 'Europe/Copenhagen' });
     // The same 14:00 in Karachi is another instant: the zone, not the browser, decides.
     expect(eventBody(start, { isAdmin: false }).scheduledAt).toBe('2026-12-01T09:00:00.000Z');
   });
 
   it('a new zone with the same wall clock is a new instant (the edit sends it, so the server tells people it moved)', () => {
     const { values } = editEventValues({ title: 'Evening', format: 'video_meeting', config: {}, timezone: 'Europe/Copenhagen' }, '2026-12-01T14:00');
-    expect(eventChanges({ ...values, timezone: 'Europe/London' }, { isAdmin: false }))
+    expect(eventChanges({ ...values, timezone: 'Europe/London' }, { isAdmin: false, opened: values }))
       .toMatchObject({ scheduledAt: '2026-12-01T14:00:00.000Z', timezone: 'Europe/London' });
+  });
+
+  // Task 6 review, #6: the field holds the time to the minute, so a time rebuilt from it would move an event stored with
+  // seconds, or in the autumn's repeated hour, and the server would tell everyone it had moved.
+  it.each([
+    ['the repeated hour, first 02:30 (CEST)', '2026-10-25T00:30:00.000Z'],
+    ['the repeated hour, second 02:30 (CET)', '2026-10-25T01:30:00.000Z'],
+    ['a time with seconds', '2026-12-01T13:00:30.000Z'],
+  ])('a title-only edit of an event at %s sends no time and no zone', (_label, scheduledAt) => {
+    const session = { title: 'Evening', format: 'video_meeting', config: {}, timezone: 'Europe/Copenhagen', scheduledAt };
+    const { values } = editEventValues(session, eventWallTime(session));
+    const body = eventChanges({ ...values, title: 'Evening, renamed' }, { isAdmin: false, opened: values });
+    expect(body).not.toHaveProperty('scheduledAt');
+    expect(body).not.toHaveProperty('timezone');
+    expect(body.title).toBe('Evening, renamed');
+  });
+
+  it('the edit form compares with the values it opened with, not with a re-derived instant', () => {
+    expect(read('features/sessions/EditEventModal.tsx')).toContain('eventChanges(values, { isAdmin, opened: start.values })');
+    const form = read('features/sessions/event-format-form.ts');
+    expect(form).toContain('values.scheduledAt !== o.opened.scheduledAt || values.timezone !== o.opened.timezone');
   });
 
   it('summer time and its edges: 2 Jul is CEST; the spring gap reads later; the autumn overlap is the first', () => {
