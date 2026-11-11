@@ -215,6 +215,26 @@ describe('"Before you join" opens on both refusals and registers again with what
     expect(page).toMatch(/<MyEventAnswersSheet\s+sessionId=\{sessionId\}\s+open=\{answersSheetOpen\}[\s\S]*?mode="join"[\s\S]*?onJoin=\{registerWithAnswers\}/);
   });
 
+  // Final preview fix (11 Nov 2026; WebKit, iPhone and iPad): Register was pressable while the page registered the member
+  // itself, and the sheet that registration's refusal opened then covered the button under the press. Register is busy
+  // (disabled, with its spinner) from the first frame the page means to register until that answers, so a person sees
+  // either the sheet or a Register they can press.
+  it('Register is busy while the page registers the member itself, from the first frame', () => {
+    expect(page).toContain('const pageRegistering = autoRegistering || autoRegisterDue();');
+    expect(page).toMatch(/<EventAccessActions[\s\S]*?registering=\{registerMutation\.isPending \|\| pageRegistering\}/);
+    expect(page).toContain('if (autoRegistering || !autoRegisterDue()) return;');
+    // Taken, it stays busy until the list says Registered (no Register flashing between the two).
+    expect(page).toContain(".then(() => qc.invalidateQueries({ queryKey: ['session-participants', sessionId] }))");
+    const due = page.slice(page.indexOf('const autoRegisterDue = (): boolean => {'), page.indexOf('const pageRegistering'));
+    for (const guard of [
+      'if (explicitlyUnregisteredRef.current) return false;',
+      "if (phase === 'done' || phase === 'cancelled') return false;",
+      'if (access && !access.autoRegister) return false;',
+      'if (autoRegisterTriedRef.current === sessionId) return false;',
+      'return !!(session && user && participants && !isRegistered && sessionId);',
+    ]) expect(due).toContain(guard);
+  });
+
   it('retries /register with the body: the old body plus { groupKeys, answers }', () => {
     expect(page).toContain('mutationFn: (choices?: GivenAnswers) => api.post(`/sessions/${sessionId}/register`, registerBodyWith(registerBody(access), choices)),');
     expect(page).toContain('return registerMutation.mutateAsync(given);');

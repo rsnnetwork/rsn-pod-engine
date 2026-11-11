@@ -220,22 +220,32 @@ export default function SessionDetailPage() {
   // used to swallow these errors which made the user think the auto-register
   // worked when it didn't, then the Register button appeared mysteriously.
   // Part 3 Task 10: a refusal for a group or a required answer opens "Before you join" instead of a toast.
-  useEffect(() => {
-    if (explicitlyUnregisteredRef.current) return;
+  //
+  // Final preview fix (11 Nov 2026): whether the page is about to register this member is one rule, read by the effect
+  // and by Register, which shows it is working from the first frame until that registration has answered (and, when it
+  // took, until the list reads Registered). Register used to stay pressable meanwhile: a press sent a second request,
+  // the sheet the first refusal opened covered the button under the press, and the second refusal then said "Answer the
+  // questions first." to someone who had not been asked anything yet.
+  const autoRegisterDue = (): boolean => {
+    if (explicitlyUnregisteredRef.current) return false;
     // An event that has ended or was cancelled takes nobody (the server refuses, and the refusal showed as an error
     // to anyone opening it who had not registered: a pod member reading the chat, someone following a link).
-    if (phase === 'done' || phase === 'cancelled') return;
+    if (phase === 'done' || phase === 'cancelled') return false;
     // T11 (L17): opening the page registers only the event's audience and its invitees. A server before T11 sends
     // no access block, and the page registers as it always did.
-    if (access && !access.autoRegister) return;
+    if (access && !access.autoRegister) return false;
     // T13 fix round 1: at most one try per event, whatever answers next (a failure, a refetch of the list).
-    if (autoRegisterTriedRef.current === sessionId) return;
-    if (session && user && participants && !isRegistered && !autoRegistering && sessionId) {
-      autoRegisterTriedRef.current = sessionId;
-      setAutoRegistering(true);
-      api.post(`/sessions/${sessionId}/register`).then(() => {
-        qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
-      }).catch(err => {
+    if (autoRegisterTriedRef.current === sessionId) return false;
+    return !!(session && user && participants && !isRegistered && sessionId);
+  };
+  const pageRegistering = autoRegistering || autoRegisterDue();
+  useEffect(() => {
+    if (autoRegistering || !autoRegisterDue()) return;
+    autoRegisterTriedRef.current = sessionId ?? null;
+    setAutoRegistering(true);
+    // Register stays busy until the list it invalidates has been read again (it then says Registered).
+    api.post(`/sessions/${sessionId}/register`).then(() => qc.invalidateQueries({ queryKey: ['session-participants', sessionId] }))
+      .catch(err => {
         const code = err?.response?.data?.error?.code;
         if (code === 'SESSION_ALREADY_REGISTERED') return; // idempotent — silent
         if (code === 'SESSION_FULL') return void qc.invalidateQueries({ queryKey: ['session', sessionId] }); // Part 3: offers the line
@@ -243,8 +253,7 @@ export default function SessionDetailPage() {
         const msg = err?.response?.data?.error?.message;
         if (msg) addToast(msg, 'error');
       })
-        .finally(() => setAutoRegistering(false));
-    }
+      .finally(() => setAutoRegistering(false));
     // T13 fix round 1: the participant list and the server's autoRegister are deps too. The event and the list load in
     // parallel, and when the list came second the effect never ran again, so a circle member (whose list read is a little
     // slower) was left looking at Register.
@@ -533,7 +542,7 @@ export default function SessionDetailPage() {
             access={access}
             registerLabel={session.status === 'scheduled' ? 'Register' : 'Join Late'}
             onRegister={register}
-            registering={registerMutation.isPending}
+            registering={registerMutation.isPending || pageRegistering}
             circleName={session.circle?.name}
           />
         )}

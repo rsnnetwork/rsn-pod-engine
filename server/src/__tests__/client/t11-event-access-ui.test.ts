@@ -31,7 +31,7 @@ describe('the event page (D11, L17)', () => {
   });
 
   it('auto-registers only when the server says so (the audience and invitees); an old server keeps the old behaviour', () => {
-    expect(detail).toMatch(/if \(access && !access\.autoRegister\) return;/);
+    expect(detail).toMatch(/if \(access && !access\.autoRegister\) return false;/);
   });
 
   it('offers Register, Request to join or the private notice by the server\'s mode', () => {

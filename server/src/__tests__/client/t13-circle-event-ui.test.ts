@@ -132,12 +132,14 @@ describe('the event page', () => {
   it('registers on opening whichever of the event and the participant list arrives last, and tries at most once', () => {
     const effect = detail.slice(detail.indexOf('// Auto-register:'), detail.indexOf('const openEdit'));
     expect(effect).toMatch(/\}, \[session\?\.id, user\?\.id, isRegistered, !!participants, access\?\.autoRegister, phase\]\);/);
-    expect(effect).toMatch(/if \(autoRegisterTriedRef\.current === sessionId\) return;/);
-    expect(effect).toMatch(/autoRegisterTriedRef\.current = sessionId;\s*setAutoRegistering\(true\);/);
+    expect(effect).toMatch(/if \(autoRegisterTriedRef\.current === sessionId\) return false;/);
+    expect(effect).toMatch(/autoRegisterTriedRef\.current = sessionId \?\? null;\s*setAutoRegistering\(true\);/);
     expect(detail).toMatch(/const autoRegisterTriedRef = useRef<string \| null>\(null\);/);
     // The guards it always had stay: an explicit unregister, an ended event, the server's autoRegister.
-    expect(effect).toMatch(/if \(explicitlyUnregisteredRef\.current\) return;/);
-    expect(effect).toMatch(/if \(access && !access\.autoRegister\) return;/);
+    expect(effect).toMatch(/if \(explicitlyUnregisteredRef\.current\) return false;/);
+    expect(effect).toMatch(/if \(access && !access\.autoRegister\) return false;/);
+    // Final preview fix (11 Nov 2026): the effect asks the same rule Register reads (autoRegisterDue).
+    expect(effect).toMatch(/if \(autoRegistering \|\| !autoRegisterDue\(\)\) return;/);
   });
 
   it('Duplicate keeps the circle, and a refusal reads in the server\'s words', () => {

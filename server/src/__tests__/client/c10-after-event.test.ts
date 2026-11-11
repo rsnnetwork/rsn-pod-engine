@@ -377,7 +377,7 @@ describe('the completed event page: back to pod, the event, the recap, message e
   });
 
   it('an ended event is not registered for behind the reader\'s back (it refuses, and that showed as an error)', () => {
-    expect(page).toMatch(/if \(phase === 'done' \|\| phase === 'cancelled'\) return;/);
+    expect(page).toMatch(/if \(phase === 'done' \|\| phase === 'cancelled'\) return false;/);
   });
 });
 
