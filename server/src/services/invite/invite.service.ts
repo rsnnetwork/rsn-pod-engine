@@ -923,7 +923,7 @@ async function applyInviteRegistration(
         // Part 3 Task 3: a full event puts them on its waiting list instead of failing the accept (they are promoted with
         // the invite's say-so when a place frees); the accept succeeds and lands on the event page.
         const placed = await registerOrWaitlist(invite.sessionId, userId, undefined, {
-          personalInviteCreatedAt, viaInvite: true, joinedVia: 'invite',
+          personalInviteCreatedAt, viaInvite: true, joinedVia: 'invite', inviteId: invite.id,
         });
         if (placed.kind === 'waitlisted') waitlistPosition = placed.position;
       } catch (err) {

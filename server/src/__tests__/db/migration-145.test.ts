@@ -40,10 +40,17 @@ describe('migration 145 (an event\'s waiting list)', () => {
     expect(f).toContain('updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()');
     expect(f).toContain('queued_at TIMESTAMPTZ NOT NULL DEFAULT NOW()');
     expect(f).toContain('UNIQUE (session_id, user_id)');
-    // Every foreign key states what a delete does.
-    const references = f.match(/REFERENCES [a-z_]+\([a-z_]+\)[^,)]*/g) ?? [];
-    expect(references).toHaveLength(3);
-    for (const ref of references) expect(ref).toMatch(/ON DELETE (CASCADE|SET NULL)/);
+    // Every foreign key states what a delete does (the fourth is the invite's, below).
+    const references = f.match(/REFERENCES [a-z_]+\([a-z_]+\) ON DELETE [A-Z ]+?(?=[,;)])/g) ?? [];
+    expect(references).toHaveLength(4);
+    for (const ref of references) expect(ref).toMatch(/ON DELETE (CASCADE|SET NULL)$/);
+  });
+
+  it('remembers the invite that queued the person (fix round 3): guarded, set to NULL when the invite is deleted, indexed', () => {
+    const f = flat(sql);
+    expect(f).toContain('ALTER TABLE event_waitlist ADD COLUMN IF NOT EXISTS invite_id UUID NULL REFERENCES invites(id) ON DELETE SET NULL;');
+    expect(f).toContain('CREATE INDEX IF NOT EXISTS idx_event_waitlist_invite ON event_waitlist (invite_id) WHERE invite_id IS NOT NULL;');
+    expect((f.match(/ADD COLUMN/g) ?? []).length).toBe((f.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
   });
 
   it('holds the statuses, the ways in and a short lapse reason to their lists', () => {

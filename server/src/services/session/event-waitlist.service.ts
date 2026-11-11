@@ -93,17 +93,18 @@ export async function joinWaitlist(
   client: PoolClient,
   sessionId: string,
   userId: string,
-  input: { joinedVia: WaitlistJoinedVia; groupKeys?: string[] },
+  input: { joinedVia: WaitlistJoinedVia; groupKeys?: string[]; inviteId?: string | null },
 ): Promise<{ position: number; isNew: boolean }> {
+  // Fix round 3 (controller ruling): the invite that queued the person is kept on the row (invite_id).
   const written = await client.query<{ id: string }>(
-    `INSERT INTO event_waitlist (session_id, user_id, joined_via, group_keys)
-     VALUES ($1, $2, $3, $4::text[])
+    `INSERT INTO event_waitlist (session_id, user_id, joined_via, group_keys, invite_id)
+     VALUES ($1, $2, $3, $4::text[], $5)
      ON CONFLICT (session_id, user_id) DO UPDATE
-        SET status = 'waiting', joined_via = EXCLUDED.joined_via, group_keys = EXCLUDED.group_keys,
+        SET status = 'waiting', joined_via = EXCLUDED.joined_via, group_keys = EXCLUDED.group_keys, invite_id = EXCLUDED.invite_id,
             lapsed_reason = NULL, queued_at = NOW(), decided_at = NULL, decided_by = NULL, updated_at = NOW()
       WHERE event_waitlist.status IN ('left', 'lapsed', 'promoted')
      RETURNING id`,
-    [sessionId, userId, input.joinedVia, input.groupKeys ?? []],
+    [sessionId, userId, input.joinedVia, input.groupKeys ?? [], input.inviteId ?? null],
   );
   const isNew = (written.rowCount ?? 0) > 0;
   if (!isNew) {
@@ -129,9 +130,9 @@ export async function registerOrWaitlist(
   sessionId: string,
   userId: string,
   role: UserRole | undefined,
-  options: RegisterOptions & { joinedVia: WaitlistJoinedVia },
+  options: RegisterOptions & { joinedVia: WaitlistJoinedVia; inviteId?: string },
 ): Promise<PlaceOutcome> {
-  const { joinedVia, ...registerOptions } = options;
+  const { joinedVia, inviteId, ...registerOptions } = options;
   // Fix round 1 (review I-1): the recount found people waiting while a place is free; the line is moved on below.
   let stalled = false;
   const onLineStalled = () => { stalled = true; };
@@ -139,7 +140,7 @@ export async function registerOrWaitlist(
   try {
     outcome = await transaction<PlaceOutcome>((client) => placeOrQueue(client, sessionId, userId, role, joinedVia, {
       ...registerOptions, onLineStalled,
-    }));
+    }, inviteId ?? null));
   } finally {
     if (stalled) lineStalled(sessionId);
   }
@@ -156,7 +157,7 @@ export async function registerOrWaitlist(
 /** registerOrWaitlist's transaction: the lock, then the registration under a savepoint, else the line. */
 async function placeOrQueue(
   client: PoolClient, sessionId: string, userId: string, role: UserRole | undefined, joinedVia: WaitlistJoinedVia,
-  registerOptions: RegisterTxOptions,
+  registerOptions: RegisterTxOptions, inviteId: string | null,
 ): Promise<PlaceOutcome> {
   await lockEventCapacity(client, sessionId);
   await client.query('SAVEPOINT before_place');
@@ -174,7 +175,7 @@ async function placeOrQueue(
     const groupKeys = await checkRegistrationGroups(
       client, sessionId, userId, role, registerOptions.groupKeys, !viaInvite && !registerOptions.approvedRequest,
     );
-    const queued = await joinWaitlist(client, sessionId, userId, { joinedVia, groupKeys });
+    const queued = await joinWaitlist(client, sessionId, userId, { joinedVia, groupKeys, inviteId });
     if (queued.isNew) {
       await recordEventAudit({
         sessionId, actorId: userId, action: 'waitlist.joined', automatic: false, subjectUserIds: [userId],
@@ -287,13 +288,14 @@ interface WaitingEntry {
   user_id: string;
   joined_via: WaitlistJoinedVia;
   group_keys: string[] | null;
+  invite_id: string | null;
   role: UserRole | null;
 }
 
 /** The person's waiting row, locked for this transaction (so leaving the line waits for a promotion in flight). */
 async function waitingEntry(client: PoolClient, sessionId: string, userId: string): Promise<WaitingEntry | null> {
   const r = await client.query<WaitingEntry>(
-    `SELECT w.id, w.user_id, w.joined_via, w.group_keys, u.role
+    `SELECT w.id, w.user_id, w.joined_via, w.group_keys, w.invite_id, u.role
        FROM event_waitlist w JOIN users u ON u.id = w.user_id
       WHERE w.session_id = $1 AND w.user_id = $2 AND w.status = 'waiting'
       FOR UPDATE OF w`,
@@ -320,6 +322,24 @@ async function sayingSo(
   client: PoolClient, sessionId: string, entry: WaitingEntry,
 ): Promise<{ options: RegisterTxOptions } | { refusal: string }> {
   const base = baseOptions(entry);
+  if (entry.joined_via === 'invite' && entry.invite_id) {
+    // Fix round 3 (controller ruling): the invite that queued them, remembered on the row. While it stands they come in
+    // through it, as the accept would have let them in (viaInvite), except on an invitation-only event, where a shared
+    // link never admits (Part 2 ruling) and only an entitlement does (the rules alone decide there). A revoked or expired
+    // invite lapses them with its own code. An invite deleted since (invite_id cleared) falls to the lookup below.
+    const named = await client.query<{ status: string; past: boolean; admission_mode: string | null }>(
+      `SELECT i.status::text AS status, (i.expires_at IS NOT NULL AND i.expires_at <= NOW()) AS past, s.admission_mode
+         FROM invites i JOIN sessions s ON s.id = $1
+        WHERE i.id = $2 AND i.session_id = $1`,
+      [sessionId, entry.invite_id],
+    );
+    const invite = named.rows[0];
+    if (invite) {
+      if (invite.status === 'expired' || invite.past) return { refusal: ErrorCodes.INVITE_EXPIRED };
+      if (invite.status !== 'accepted' && invite.status !== 'pending') return { refusal: ErrorCodes.INVITE_REVOKED };
+      return { options: invite.admission_mode === 'restricted' ? base : { ...base, viaInvite: true } };
+    }
+  }
   if (entry.joined_via === 'invite') {
     const invites = await client.query<{ status: string; past: boolean }>(
       `SELECT i.status::text AS status, (i.expires_at IS NOT NULL AND i.expires_at <= NOW()) AS past
@@ -390,7 +410,7 @@ async function promoteTx(client: PoolClient, sessionId: string, opts: { onlyIfFr
   while (free > 0 && tries < WAITLIST_LIST_MAX) {
     tries += 1;
     const next = await client.query<WaitingEntry>(
-      `SELECT w.id, w.user_id, w.joined_via, w.group_keys, u.role
+      `SELECT w.id, w.user_id, w.joined_via, w.group_keys, w.invite_id, u.role
          FROM event_waitlist w JOIN users u ON u.id = w.user_id
         WHERE w.session_id = $1 AND w.status = 'waiting'
         ORDER BY w.queued_at, w.id

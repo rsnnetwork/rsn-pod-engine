@@ -213,3 +213,42 @@ describe('an event of a closed circle', () => {
     expect(() => closedCircleOutsiderSql('s; DROP', '$2')).toThrow();
   });
 });
+
+// ─── Part 3 Task 3 (controller ruling after the 11 Nov prod smoke): a waiting person opens the event's page ─────────
+// A 'waiting' row (waitlistPosition set) lets its person see the event, on a NULL event and on one with its own
+// visibility, as a place does. Never a draft, never past a closed circle they are outside, and only while waiting: a
+// left, lapsed, removed or promoted row gives no position, so nothing. Lists are unchanged (visibleEventsSql reads no line).
+describe('someone on the waiting list sees the event they wait for', () => {
+  it('an event with its own private visibility (an open-admission event in a pod is link-only): seen while waiting', () => {
+    const outsider = f({ visibility: 'private', admissionMode: 'open' });
+    expect(canSeeEvent(outsider, M)).toBe(false);
+    expect(canSeeEvent({ ...outsider, waitlistPosition: 1 }, M)).toBe(true);
+    expect(canSeeEvent(f({ visibility: 'private', waitlistPosition: 3 }), M)).toBe(true);
+  });
+
+  it('a NULL event in a private pod: seen while waiting, as a place holder sees it', () => {
+    expect(canSeeEvent(f({ podVisibility: 'private' }), M)).toBe(false);
+    expect(canSeeEvent(f({ podVisibility: 'private', waitlistPosition: 1 }), M)).toBe(true);
+  });
+
+  it('a left, lapsed, removed or promoted row (no position) gives nothing', () => {
+    expect(canSeeEvent(f({ visibility: 'private', waitlistPosition: null }), M)).toBe(false);
+    expect(canSeeEvent(f({ podVisibility: 'private', waitlistPosition: null }), M)).toBe(false);
+  });
+
+  it('never a draft, never a closed account, never past a closed circle they are outside', () => {
+    expect(canSeeEvent(f({ visibility: 'private', publication: 'draft', waitlistPosition: 1 }), M)).toBe(false);
+    expect(canSeeEvent(f({ visibility: 'private', accountActive: false, waitlistPosition: 1 }), M)).toBe(false);
+    expect(canSeeEvent(f({ visibility: 'public', outsideClosedCircle: true, waitlistPosition: 1 }), M)).toBe(false);
+  });
+
+  it('the list predicates never read the waiting list: the event stays unlisted to them', () => {
+    expect(visibleEventsSql('s', '$2')).not.toContain('event_waitlist');
+    expect(publicEventsSql('s')).not.toContain('event_waitlist');
+  });
+
+  it('the access block a waiting person reads names their place and says full', () => {
+    const waiting = f({ visibility: 'private', admissionMode: 'open', capacity: 2, placesTaken: 2, waitlistPosition: 1 });
+    expect(summariseEventAccess(waiting, M).waitlist).toEqual({ full: true, position: 1 });
+  });
+});

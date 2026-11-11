@@ -272,7 +272,9 @@ router.get(
   uuidInPath('id', PATH_REFUSALS.event),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const canView = await canViewSession(req.user!.userId, req.params.id, req.user!.role);
+      // Part 3 Task 3 (controller ruling): the event page, which someone on its waiting list may open (to see their place
+      // and leave the line); the live state and the attendee list stay closed to them.
+      const canView = await canViewSession(req.user!.userId, req.params.id, req.user!.role, { eventPage: true });
       if (!canView) await refuseView(req.params.id);
 
       const session = await sessionService.getSessionById(req.params.id);

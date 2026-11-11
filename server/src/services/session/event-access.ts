@@ -515,15 +515,21 @@ export function canSeeEvent(f: EventAccessFacts, role: string | undefined): bool
   if (runsEvent(f, role)) return true;
   if (f.publication === 'draft') return false;
   if (hiddenByClosedCircle(f, role)) return false;
+  // Part 3 Task 3 (controller ruling, 11 Nov 2026 prod smoke): someone on the event's waiting list (a 'waiting' row:
+  // waitlistPosition is set; left, lapsed, removed and promoted rows give none) opens its page, to see where they are
+  // in the line and to leave it. Never a draft (above), and never past a closed circle they are outside: the line is
+  // not a tie to the circle (hiddenByClosedCircle reads no waiting row). Lists are unchanged: the event is not listed to
+  // them for being on its line.
+  const waiting = f.waitlistPosition !== null;
   if (f.visibility === null) {
     // Today's rule (canViewSession): a place that is not removed, an active pod member, or a public pod.
-    return holdsPlace(f) || f.inAudience || f.podVisibility === 'public';
+    return holdsPlace(f) || waiting || f.inAudience || f.podVisibility === 'public';
   }
   if (f.visibility === 'public' || f.visibility === 'public_with_approval') return true;
   // Part 2 Task 4 fix round 1: someone an event with an admission mode has entitled (an allowed email, a redeemed code,
   // a personal invite) opens its page, or a private invitation-only event could never be registered for. Lists are
   // unchanged: such an event stays unlisted to them.
-  return f.inAudience || f.isInvited || holdsPlace(f) || (f.admissionMode !== null && f.entitled);
+  return f.inAudience || f.isInvited || holdsPlace(f) || waiting || (f.admissionMode !== null && f.entitled);
 }
 
 /**

@@ -11,8 +11,10 @@ type Register = (...args: unknown[]) => unknown;
 export function passThroughWaitlist(register: Register) {
   return {
     __esModule: true,
-    registerOrWaitlist: async (sessionId: string, userId: string, role: unknown, options: { joinedVia?: string } & Record<string, unknown>) => {
-      const { joinedVia: _joinedVia, ...registerOptions } = options;
+    registerOrWaitlist: async (
+      sessionId: string, userId: string, role: unknown, options: { joinedVia?: string; inviteId?: string } & Record<string, unknown>,
+    ) => {
+      const { joinedVia: _joinedVia, inviteId: _inviteId, ...registerOptions } = options;
       const participant = (await register(sessionId, userId, role, registerOptions)) as { isNewRegistration?: boolean } | undefined;
       return { kind: 'registered' as const, participant, isNewRegistration: !!participant?.isNewRegistration };
     },
