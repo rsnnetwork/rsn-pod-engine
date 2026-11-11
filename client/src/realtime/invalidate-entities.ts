@@ -48,22 +48,90 @@ const firstReadOnItsWay = (query: Query) => query.state.fetchStatus === 'fetchin
  * Several tags heard during one first read each ask for this; the first re-read is from after all of them, so the
  * others join it instead of cancelling it (fix round 2: three tags were four requests, two thrown away).
  */
-function readAgainWhenItLands(client: QueryClient, query: Query): Promise<void> {
+function readAgainWhenItLands(client: QueryClient, query: Query, onSend?: () => void): Promise<void> {
   const hash = query.queryHash;
-  const again = () => client.invalidateQueries({ predicate: (q) => q.queryHash === hash }, { cancelRefetch: false });
+  const again = () => {
+    onSend?.();
+    return client.invalidateQueries({ predicate: (q) => q.queryHash === hash }, { cancelRefetch: false });
+  };
   return (query.promise ?? Promise.resolve()).then(again, again);
+}
+
+/**
+ * A read that entity:changed refreshes is sent at once, then at most once more per this window while changes naming it
+ * keep coming: the changes inside a window are answered together, by one read when it ends.
+ */
+export const CHANGE_READ_WINDOW_MS = 1000;
+
+/** Answers entity:changed (see changeReader). `forget` drops a query that left the cache; `stop` drops waiting reads. */
+interface ChangeReader {
+  read(entities: readonly string[]): void;
+  forget(hash: string): void;
+  stop(): void;
 }
 
 /**
  * A change the server told of (entity:changed): every query that declares one of its tags is read again, and one whose
  * first read is on its way is read again once that read lands (fix round 1).
+ * Final preview fix (11 Nov 2026): a burst of changes no longer reads every tagged query once per change. A query not
+ * read for a change in the last CHANGE_READ_WINDOW_MS is read at once, as before; one read for a change inside the window
+ * is read once when the window ends, and further changes before then join that read (as they join a read due once a first
+ * read lands). Eight people registering within two seconds made an organiser's event page send each of its eleven
+ * session reads eight times (each change cancelled and resent the last), so the organiser's own 240 requests a minute ran
+ * out, and the next change's read (Cancel event) was refused: the page kept "Registration open" with the event cancelled.
  */
-function readChanged(client: QueryClient, entities: readonly string[]): Promise<void> {
-  if (entities.length === 0) return Promise.resolve();
-  const set = new Set(entities);
-  const onTheirWay = client.getQueryCache().findAll({ predicate: (query) => touchesEntities(query, set) && firstReadOnItsWay(query) });
-  return Promise.all([invalidateEntities(client, entities), ...onTheirWay.map((query) => readAgainWhenItLands(client, query))])
-    .then(() => undefined);
+function changeReader(client: QueryClient, now: () => number): ChangeReader {
+  const lastRead = new Map<string, number>();
+  const atWindowEnd = new Map<string, ReturnType<typeof setTimeout>>();
+  const whenItLands = new Set<string>();
+
+  const readNow = (queries: Query[], at: number) => {
+    if (queries.length === 0) return;
+    const hashes = new Set(queries.map((query) => query.queryHash));
+    for (const hash of hashes) lastRead.set(hash, at);
+    const firstReads = queries.filter(firstReadOnItsWay);
+    void client.invalidateQueries({ predicate: (query) => hashes.has(query.queryHash) });
+    for (const query of firstReads) {
+      whenItLands.add(query.queryHash);
+      void readAgainWhenItLands(client, query, () => whenItLands.delete(query.queryHash));
+    }
+  };
+
+  const readAtWindowEnd = (hash: string, wait: number) => {
+    atWindowEnd.set(hash, setTimeout(() => {
+      atWindowEnd.delete(hash);
+      const query = client.getQueryCache().get(hash);
+      if (query) readNow([query], now());
+    }, wait));
+  };
+
+  return {
+    read(entities) {
+      if (entities.length === 0) return;
+      const set = new Set(entities);
+      const at = now();
+      const atOnce: Query[] = [];
+      for (const query of client.getQueryCache().findAll({ predicate: (q) => touchesEntities(q, set) })) {
+        const hash = query.queryHash;
+        // A read already due after this change (at the window's end, or once a first read lands) answers it too.
+        if (atWindowEnd.has(hash) || whenItLands.has(hash)) continue;
+        const since = at - (lastRead.get(hash) ?? Number.NEGATIVE_INFINITY);
+        if (since < CHANGE_READ_WINDOW_MS) readAtWindowEnd(hash, CHANGE_READ_WINDOW_MS - since);
+        else atOnce.push(query);
+      }
+      readNow(atOnce, at);
+    },
+    forget(hash) {
+      lastRead.delete(hash);
+      const timer = atWindowEnd.get(hash);
+      if (timer) clearTimeout(timer);
+      atWindowEnd.delete(hash);
+    },
+    stop() {
+      for (const timer of atWindowEnd.values()) clearTimeout(timer);
+      atWindowEnd.clear();
+    },
+  };
 }
 
 /** True when the query declares any tag at all: it follows the server's changes, so a gap in hearing them matters. */
@@ -134,8 +202,9 @@ export interface EntitySignals {
 export interface EntityChange { entities?: string[]; replayed?: boolean }
 
 /**
- * Keeps the cache in step with the server: entity:changed refreshes the reads its tags name, at once (the server's
- * replay to a joining socket comes this way too); a reconnect refreshes the tagged reads that started before it (CX1),
+ * Keeps the cache in step with the server: entity:changed refreshes the reads its tags name, at once, and a read already
+ * refreshed for a change in the last CHANGE_READ_WINDOW_MS once when that window ends (the server's replay to a joining
+ * socket comes this way too); a reconnect refreshes the tagged reads that started before it (CX1),
  * and the first connect only those older than the replay covers (fix wave 2). The first connect in a quiet window is
  * answered at once; any more within the window are answered together, once, when it ends, so a socket reconnecting
  * every second refreshes once per window, not once per connect; that one refresh reads again what started before the
@@ -146,16 +215,17 @@ export function subscribeEntitySync(
   client: QueryClient,
   { now = Date.now }: { now?: () => number } = {},
 ): () => void {
+  const changes = changeReader(client, now);
   const onChanged = (data: EntityChange) => {
     const entities = Array.isArray(data?.entities) ? data.entities : [];
     if (data?.replayed && connects > 0) { replayed(entities); return; }
-    void readChanged(client, entities);
+    changes.read(entities);
   };
   const starts: ReadStarts = new Map();
   const heldSince = (query: Query) => query.state.dataUpdatedAt || now();
   for (const query of client.getQueryCache().getAll()) starts.set(query.queryHash, heldSince(query));
   const unwatch = client.getQueryCache().subscribe((event: QueryCacheNotifyEvent) => {
-    if (event.type === 'removed') starts.delete(event.query.queryHash);
+    if (event.type === 'removed') { starts.delete(event.query.queryHash); changes.forget(event.query.queryHash); }
     else if (event.type === 'added') starts.set(event.query.queryHash, heldSince(event.query));
     else if (event.type === 'updated' && event.action.type === 'fetch') starts.set(event.query.queryHash, now());
   });
@@ -196,6 +266,7 @@ export function subscribeEntitySync(
     socket.off('entity:changed', onChanged);
     socket.off('connect', onConnect);
     unwatch();
+    changes.stop();
     if (trailing) clearTimeout(trailing);
   };
 }
