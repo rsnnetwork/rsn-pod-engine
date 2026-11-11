@@ -50,6 +50,8 @@ export interface WallComment {
   likedByMe: boolean;
   /** When its author last changed its words (S4); null when never. */
   editedAt: string | null;
+  /** Its author deleted it while it had replies (S4 fix round 1): no words; it reads "This comment was deleted" and the replies stay. */
+  withdrawn: boolean;
 }
 
 /** The answer to adding a comment or a reply. */

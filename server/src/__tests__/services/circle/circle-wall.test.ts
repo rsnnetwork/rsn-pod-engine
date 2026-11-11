@@ -28,8 +28,10 @@ jest.mock('../../../config/logger', () => ({
   __esModule: true,
 }));
 const mockFanout = jest.fn();
+const mockFanoutShares = jest.fn();
 jest.mock('../../../realtime/fanout', () => ({
   fanoutCircleWall: (...args: unknown[]) => mockFanout(...args),
+  fanoutCircleWallShares: (...args: unknown[]) => mockFanoutShares(...args),
   __esModule: true,
 }));
 const mockPush = jest.fn();
@@ -62,7 +64,7 @@ const EDITED_AT = new Date('2026-11-11T11:00:00.000Z');
 type Role = 'owner' | 'moderator' | 'member' | null;
 interface CircleState { name: string; archived: boolean; join_policy: 'open' | 'closed'; role: Role }
 interface LockedPost { author_id: string; circle_id?: string; content?: string; media?: unknown[]; deleted_at: Date | null; pinned_at?: Date | null; edited_at?: Date | null; shared_from_post_id?: string | null }
-interface LockedComment { author_id: string; post_id?: string; circle_id?: string; content?: string; deleted_at: Date | null; post_deleted_at?: Date | null; edited_at?: Date | null }
+interface LockedComment { author_id: string; post_id?: string; circle_id?: string; content?: string; deleted_at: Date | null; post_deleted_at?: Date | null; edited_at?: Date | null; withdrawn_at?: Date | null; has_replies?: boolean }
 
 interface World {
   circles: Record<string, CircleState>;
@@ -87,7 +89,9 @@ interface World {
   likeTarget: { circle_id: string; post_id: string } | null;
   likeChanged: boolean;
   shareSource: { id: string; shared_from_post_id: string | null } | null;
-  shareRoot: { id: string; circle_id: string } | null;
+  shareRoot: { id: string; circle_id: string; blocked?: boolean } | null;
+  /** S4 fix round 1: who had bells about a removed post or comment (deleted with it). */
+  purgedBells: Array<{ user_id: string }>;
 }
 let world: World;
 
@@ -152,7 +156,8 @@ function answer(sql: string, params: unknown[] = []): unknown {
     return rows(c ? [{ join_policy: c.join_policy }] : []);
   }
   if (is(/^SELECT p\.id, p\.shared_from_post_id FROM circle_posts p WHERE p\.id = \$1 AND p\.deleted_at IS NULL/)) return rows(world.shareSource ? [world.shareSource] : []);
-  if (is(/^SELECT id, circle_id FROM circle_posts WHERE id = \$1 AND deleted_at IS NULL$/)) return rows(world.shareRoot ? [world.shareRoot] : []);
+  if (is(/^SELECT o\.id, o\.circle_id, EXISTS \(SELECT 1 FROM user_blocks b/)) return rows(world.shareRoot ? [{ blocked: false, ...world.shareRoot }] : []);
+  if (is(/^DELETE FROM notifications WHERE type IN \(/)) return rows(world.purgedBells);
   if (is(/^INSERT INTO circle_post_reactions/)) return rows(world.reactionChanged ? [{ post_id: POST }] : []);
   if (is(/^DELETE FROM circle_post_reactions/)) return rows(world.reactionCleared ? [{ post_id: POST }] : []);
   if (is(/FROM circle_post_reactions WHERE post_id = \$1 GROUP BY reaction/)) {
@@ -166,18 +171,20 @@ function answer(sql: string, params: unknown[] = []): unknown {
   if (is(/^INSERT INTO circle_comment_likes/)) return rows(world.likeChanged ? [{ comment_id: COMMENT }] : []);
   if (is(/^DELETE FROM circle_comment_likes/)) return rows(world.likeChanged ? [{ comment_id: COMMENT }] : []);
   if (is(/count\(\*\)::int AS like_count, bool_or\(user_id = \$2\) AS liked_by_me FROM circle_comment_likes/)) return rows([{ like_count: 1, liked_by_me: true }]);
-  if (is(/^SELECT c\.author_id, c\.post_id, p\.circle_id, c\.content, c\.edited_at, c\.deleted_at, p\.deleted_at AS post_deleted_at/)) {
+  if (is(/^SELECT c\.author_id, c\.post_id, p\.circle_id, c\.content, c\.edited_at, c\.deleted_at, c\.withdrawn_at, p\.deleted_at AS post_deleted_at/)) {
     const lc = world.lockedComment;
     const c = lc ? circleOf(lc.circle_id ?? C1) : undefined;
-    return rows(lc ? [{ post_id: POST, circle_id: C1, content: 'first words', edited_at: null, post_deleted_at: null, ...lc, archived: !!c?.archived, is_member: !!c?.role }] : []);
+    return rows(lc ? [{ post_id: POST, circle_id: C1, content: 'first words', edited_at: null, withdrawn_at: null, post_deleted_at: null, ...lc, archived: !!c?.archived, is_member: !!c?.role }] : []);
   }
   if (is(/^UPDATE circle_post_comments SET content = \$2, edited_at = NOW\(\) WHERE id = \$1 RETURNING edited_at$/)) return rows([{ edited_at: EDITED_AT }]);
-  if (is(/^SELECT c\.author_id, c\.post_id, p\.circle_id, c\.content, c\.created_at, c\.edited_at, c\.deleted_at FROM circle_post_comments c JOIN circle_posts p/)) {
-    return rows(world.lockedComment ? [{ post_id: POST, circle_id: C1, content: 'first words', created_at: CREATED_AT, edited_at: null, ...world.lockedComment }] : []);
+  if (is(/^SELECT c\.author_id, c\.post_id, p\.circle_id, c\.content, c\.created_at, c\.edited_at, c\.deleted_at, c\.withdrawn_at, EXISTS/)) {
+    return rows(world.lockedComment ? [{ post_id: POST, circle_id: C1, content: 'first words', created_at: CREATED_AT, edited_at: null, withdrawn_at: null, has_replies: false, ...world.lockedComment }] : []);
   }
   if (is(/^UPDATE circle_post_comments SET deleted_at = NOW\(\), deleted_by = \$2/)) {
-    return rows(Array.from({ length: world.commentsRemoved }, (_, i) => ({ id: `gone-${i}` })));
+    return rows(Array.from({ length: world.commentsRemoved }, (_, i) => ({ id: `gone-${i}`, withdrawn_at: null })));
   }
+  if (is(/^UPDATE circle_post_comments SET content = '', withdrawn_at = NOW\(\), deleted_by = \$2 WHERE id = \$1$/)) return rows([]);
+  if (is(/^UPDATE circle_posts SET comment_count = GREATEST\(comment_count - 1, 0\) WHERE id = \$1$/)) return rows([]);
   if (is(/^UPDATE circle_posts SET comment_count = GREATEST\(comment_count - \$2, 0\) WHERE id = \$1$/)) return rows([]);
   throw new Error(`Unexpected SQL in the circle wall test: ${text.slice(0, 240)}`);
 }
@@ -212,9 +219,11 @@ beforeEach(() => {
     likeChanged: true,
     shareSource: { id: POST, shared_from_post_id: null },
     shareRoot: null,
+    purgedBells: [],
   };
   mockQuery.mockImplementation(async (sql: string, params?: unknown[]) => answer(sql, params ?? []));
   mockFanout.mockResolvedValue(undefined);
+  mockFanoutShares.mockResolvedValue(undefined);
   mockEmitEntities.mockResolvedValue(undefined);
 });
 
@@ -670,6 +679,7 @@ describe('reactToPost', () => {
     expect(out).toEqual({ reactionCount: 3, reactions: { love: 2, like: 1 }, myReaction: 'love' });
     expect(paramsOf(/^INSERT INTO notifications/)).toEqual([
       AUTHOR, C1, 'circle_reaction', 'Vera Viewer reacted to your post', 'hello circle', `/circles/${C1}?post=${POST}`, VIEWER, 60,
+      `/circles/${C1}?post=${POST}`,
     ]);
     expect(mockFanout).toHaveBeenCalledWith(C1, [E.circleWallPost(POST)]);
   });
@@ -751,7 +761,7 @@ describe('listComments', () => {
     expect(list).toEqual({
       comments: [{
         id: COMMENT, authorId: AUTHOR, authorName: 'Ada', authorAvatarUrl: null, authorClosed: false, content: 'x',
-        createdAt: CREATED_AT, parentCommentId: null, likeCount: 2, likedByMe: true, editedAt: EDITED_AT,
+        createdAt: CREATED_AT, parentCommentId: null, likeCount: 2, likedByMe: true, editedAt: EDITED_AT, withdrawn: false,
       }],
       truncated: false,
     });
@@ -782,14 +792,35 @@ describe('likeComment', () => {
 });
 
 describe('deleteComment', () => {
-  it('the author: the comment and its replies go, the count by all of them, each saying who', async () => {
-    world.commentsRemoved = 3;
+  it('the author, a comment with no replies: it goes alone, saying who; no record', async () => {
+    world.commentsRemoved = 1;
     await expect(deleteComment(COMMENT, VIEWER, 'member')).resolves.toEqual({ postId: POST, alreadyRemoved: false });
-    expect(sqlOf(calls(/^UPDATE circle_post_comments SET deleted_at/)[0])).toMatch(/WHERE \(id = \$1 OR parent_comment_id = \$1\) AND deleted_at IS NULL RETURNING id$/);
-    expect(paramsOf(/^UPDATE circle_post_comments SET deleted_at/)).toEqual([COMMENT, VIEWER]);
-    expect(paramsOf(/comment_count = GREATEST/)).toEqual([POST, 3]);
+    expect(sqlOf(calls(/^UPDATE circle_post_comments SET deleted_at/)[0])).toMatch(/WHERE \(id = \$1 OR \(\$3::boolean AND parent_comment_id = \$1\)\) AND deleted_at IS NULL RETURNING id, withdrawn_at$/);
+    expect(paramsOf(/^UPDATE circle_post_comments SET deleted_at/)).toEqual([COMMENT, VIEWER, false]);
+    expect(paramsOf(/comment_count = GREATEST/)).toEqual([POST, 1]);
     expect(calls(/INSERT INTO audit_log/)).toHaveLength(0);
     expect(mockFanout).toHaveBeenCalledWith(C1, [E.circleWallPost(POST)]);
+  });
+
+  it('fix round 1 (ruling): the author\'s comment with replies is withdrawn; other people\'s replies stay', async () => {
+    world.lockedComment = { author_id: VIEWER, deleted_at: null, has_replies: true };
+    await expect(deleteComment(COMMENT, VIEWER, 'member')).resolves.toEqual({ postId: POST, alreadyRemoved: false });
+    expect(paramsOf(/^UPDATE circle_post_comments SET content = '', withdrawn_at = NOW\(\)/)).toEqual([COMMENT, VIEWER]);
+    expect(calls(/^UPDATE circle_post_comments SET deleted_at/)).toHaveLength(0);
+    expect(calls(/comment_count = GREATEST\(comment_count - 1, 0\)/)).toHaveLength(1);
+    expect(calls(/INSERT INTO audit_log/)).toHaveLength(0);
+    world.lockedComment = { author_id: VIEWER, deleted_at: null, has_replies: true, withdrawn_at: new Date() };
+    await expect(deleteComment(COMMENT, VIEWER, 'member')).resolves.toEqual({ postId: POST, alreadyRemoved: true });
+  });
+
+  it('a moderator removes a comment with its thread; the count moves by the live ones only (a withdrawn one was already off it)', async () => {
+    asRole('moderator');
+    world.lockedComment = { author_id: AUTHOR, deleted_at: null, has_replies: true };
+    world.commentsRemoved = 3;
+    await deleteComment(COMMENT, VIEWER, 'member');
+    expect(paramsOf(/^UPDATE circle_post_comments SET deleted_at/)).toEqual([COMMENT, VIEWER, true]);
+    expect(paramsOf(/comment_count = GREATEST\(comment_count - \$2/)).toEqual([POST, 3]);
+    expect(JSON.parse((paramsOf(/INSERT INTO audit_log/) as unknown[])[4] as string)).toMatchObject({ repliesRemoved: 2 });
   });
 
   it('D8: an author no longer in the circle still deletes their own comment', async () => {
@@ -841,5 +872,121 @@ describe('sharePost — attribution to the root, never into the same circle, onl
   it('the sharer must be in the target circle too', async () => {
     world.circles[C2].role = null;
     await expect(sharePost(POST, VIEWER, { circleId: C2, clientId: CLIENT_ID })).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
+
+// ─── S4 fix round 1 ──────────────────────────────────────────────────────────
+
+describe('fix round 1: blocks win on share cards, both ways', () => {
+  it('the feed\'s share card carries no original by someone blocked either way (no words, no name)', async () => {
+    await listPosts(C1, VIEWER);
+    const feed = sqlOf(calls(/ORDER BY p\.created_at DESC/)[0]);
+    expect(feed).toContain('AND NOT EXISTS (SELECT 1 FROM user_blocks ob WHERE (ob.blocker_id = $2 AND ob.blocked_id = o.author_id) OR (ob.blocker_id = o.author_id AND ob.blocked_id = $2))) AS shared_from');
+  });
+
+  it('a share whose original the viewer may not see says only that it is not available', async () => {
+    world.feed = [aPost({ shared_from_post_id: 'p-root', shared_from: null })];
+    const [p] = (await listPosts(C1, VIEWER)).posts;
+    expect(p).toMatchObject({ sharedFrom: null, sharedUnavailable: true });
+    world.feed = [aPost()];
+    expect((await listPosts(C1, VIEWER)).posts[0].sharedUnavailable).toBe(false);
+  });
+
+  it('sharing a share checks the ORIGINAL author against the sharer, both ways: a block answers as a missing post', async () => {
+    world.shareSource = { id: POST, shared_from_post_id: 'p-root' };
+    world.shareRoot = { id: 'p-root', circle_id: C2, blocked: true };
+    await expect(sharePost(POST, VIEWER, { circleId: C2, clientId: CLIENT_ID })).rejects.toMatchObject(POST_MISSING);
+    const root = calls(/^SELECT o\.id, o\.circle_id, EXISTS \(SELECT 1 FROM user_blocks b/)[0];
+    expect(sqlOf(root)).toContain('(b.blocker_id = $2 AND b.blocked_id = o.author_id) OR (b.blocker_id = o.author_id AND b.blocked_id = $2)');
+    expect(root[1]).toEqual(['p-root', VIEWER]);
+    expect(writes()).toHaveLength(0);
+  });
+});
+
+describe('fix round 1: removed words leave the bell lists too', () => {
+  it('removing a post deletes every bell about it in the same transaction, then tells their people', async () => {
+    asRole('owner');
+    world.lockedPost = { author_id: AUTHOR, deleted_at: null };
+    world.purgedBells = [{ user_id: 'member-7' }, { user_id: 'member-8' }, { user_id: 'member-7' }];
+    await deletePost(POST, VIEWER, 'member');
+    const purge = calls(/^DELETE FROM notifications/)[0];
+    expect(sqlOf(purge)).toBe(`DELETE FROM notifications WHERE type IN ('circle_post', 'circle_reaction', 'circle_comment', 'circle_reply') AND (link = $1 OR link LIKE $2) RETURNING user_id`);
+    expect(purge[1]).toEqual([`/circles/${C1}?post=${POST}`, `/circles/${C1}?post=${POST}&%`]);
+    expect(mockTxSql.some((q) => /^DELETE FROM notifications/.test(q))).toBe(true);
+    expect(mockEmitEntities).toHaveBeenCalledWith(mockIo, ['member-7'], [E.userNotifications('member-7')]);
+    expect(mockEmitEntities).toHaveBeenCalledWith(mockIo, ['member-8'], [E.userNotifications('member-8')]);
+    expect(mockEmitEntities.mock.calls.filter((c) => (c[1] as string[])[0] === 'member-7')).toHaveLength(1);
+  });
+
+  it('an author deleting their own post does the same', async () => {
+    await deletePost(POST, VIEWER, 'member');
+    expect(calls(/^DELETE FROM notifications/)).toHaveLength(1);
+  });
+
+  it('a second removal (alreadyRemoved) deletes nothing more', async () => {
+    world.lockedPost = { author_id: VIEWER, deleted_at: new Date() };
+    await deletePost(POST, VIEWER, 'member');
+    expect(calls(/^DELETE FROM notifications/)).toHaveLength(0);
+  });
+
+  it('a comment\'s bells name it, so removing it (and a moderator\'s removal of its thread) deletes exactly theirs', async () => {
+    asRole('moderator');
+    world.lockedComment = { author_id: AUTHOR, deleted_at: null };
+    world.commentsRemoved = 2;
+    await deleteComment(COMMENT, VIEWER, 'member');
+    const purge = calls(/^DELETE FROM notifications/)[0];
+    expect(sqlOf(purge)).toBe(`DELETE FROM notifications WHERE type IN ('circle_post', 'circle_reaction', 'circle_comment', 'circle_reply') AND link = ANY($1::text[]) RETURNING user_id`);
+    expect(purge[1][0]).toEqual([`/circles/${C1}?post=${POST}&comment=gone-0`, `/circles/${C1}?post=${POST}&comment=gone-1`]);
+  });
+
+  it('a withdrawn comment\'s bells go too', async () => {
+    world.lockedComment = { author_id: VIEWER, deleted_at: null, has_replies: true };
+    await deleteComment(COMMENT, VIEWER, 'member');
+    expect(calls(/^DELETE FROM notifications/)[0][1][0]).toEqual([`/circles/${C1}?post=${POST}&comment=${COMMENT}`]);
+  });
+
+  it('comment and reply bells link to the post and name the comment, deduped per post', async () => {
+    await addComment(POST, VIEWER, 'Congrats!');
+    const bell = calls(/^INSERT INTO notifications/)[0];
+    expect((bell[1] as unknown[])[5]).toBe(`/circles/${C1}?post=${POST}&comment=${COMMENT}`);
+    expect((bell[1] as unknown[])[8]).toBe(`/circles/${C1}?post=${POST}`);
+    expect(sqlOf(bell)).toContain("(n.link = $9::text OR starts_with(n.link, $9::text || '&'))");
+  });
+});
+
+describe('fix round 1: shares in other circles follow a removal or an edit of their original', () => {
+  it('a removal and an edit tell the circles holding shares of the post', async () => {
+    await deletePost(POST, VIEWER, 'member');
+    expect(mockFanoutShares).toHaveBeenCalledWith(POST);
+    mockFanoutShares.mockClear();
+    world.lockedPost = { author_id: VIEWER, deleted_at: null };
+    await editPost(POST, VIEWER, { content: 'new words' });
+    expect(mockFanoutShares).toHaveBeenCalledWith(POST);
+  });
+
+  it('an edit that changed nothing tells nobody', async () => {
+    await editPost(POST, VIEWER, { content: 'hello circle' });
+    expect(mockFanoutShares).not.toHaveBeenCalled();
+  });
+});
+
+describe('fix round 1: withdrawn comments in the thread', () => {
+  it('a withdrawn comment is listed without words while a reply under it is still there; it cannot be answered, liked or edited', async () => {
+    world.comments = [{
+      id: COMMENT, author_id: AUTHOR, display_name: 'Ada', avatar_url: null, author_former: false, content: '',
+      created_at: CREATED_AT, edited_at: null, withdrawn_at: new Date(), parent_comment_id: null, like_count: 0, liked_by_me: false,
+    }];
+    const { comments } = await listComments(POST, VIEWER, 'member');
+    expect(comments[0]).toMatchObject({ withdrawn: true, content: '' });
+    const list = sqlOf(calls(/FROM circle_post_comments c JOIN users u/)[0]);
+    expect(list).toContain('AND (c.withdrawn_at IS NULL OR EXISTS (SELECT 1 FROM circle_post_comments wr WHERE wr.parent_comment_id = c.id AND wr.deleted_at IS NULL))');
+    world.parent = { id: 'cm-top', author_id: AUTHOR, parent_comment_id: null };
+    await addComment(POST, VIEWER, 'reply', 'cm-top');
+    expect(sqlOf(calls(/^SELECT c\.id, c\.author_id, c\.parent_comment_id FROM circle_post_comments c/)[0])).toContain('c.deleted_at IS NULL AND c.withdrawn_at IS NULL');
+    await likeComment(COMMENT, VIEWER, true);
+    expect(sqlOf(calls(/^SELECT p\.circle_id, c\.post_id FROM circle_post_comments c/)[0])).toContain('c.withdrawn_at IS NULL');
+    world.lockedComment = { author_id: VIEWER, deleted_at: null, withdrawn_at: new Date() };
+    await expect(editComment(COMMENT, VIEWER, { content: 'x' })).rejects.toMatchObject({ statusCode: 404, message: 'This comment was removed.' });
   });
 });

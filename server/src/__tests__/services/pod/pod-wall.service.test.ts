@@ -92,7 +92,7 @@ interface World {
   parent: { id: string; author_id: string; parent_comment_id: string | null } | null;
   comments: Record<string, unknown>[];
   lockedPost: { author_id: string; deleted_at: Date | null; content?: string; media?: unknown[]; edited_at?: Date | null } | null;
-  lockedComment: { author_id: string; post_id: string; deleted_at: Date | null; content?: string; post_deleted_at?: Date | null } | null;
+  lockedComment: { author_id: string; post_id: string; deleted_at: Date | null; content?: string; post_deleted_at?: Date | null; withdrawn_at?: Date | null; has_replies?: boolean } | null;
   commentsRemoved: number;
   /** How many posts the pin/unpin statement matched (0 = the post is gone or in another pod). */
   pinnedRows: number;
@@ -102,6 +102,8 @@ interface World {
   pinnedCount: number;
   /** S4: whether the post a pin locks has been removed. */
   pinnedPostRemoved: boolean;
+  /** S4 fix round 1: who had bells about a removed post or comment (deleted with it). */
+  purgedBells: Array<{ user_id: string }>;
   likeTarget: { post_id: string } | null;
   likeCount: number;
   likedByMe: boolean;
@@ -168,6 +170,11 @@ function answer(sql: string): unknown {
     return rows(world.lockedPost ? [{ content: 'hello pod', media: [], created_at: CREATED_AT, edited_at: null, ...world.lockedPost }] : []);
   }
   if (is(/^INSERT INTO audit_log \(actor_id, action, entity_type, entity_id, details\) VALUES \(\$1, \$2, \$3, \$4, \$5\)$/)) return rows([]);
+  // S4 fix round 1: the moderator's right, read under the lock; and the bells a removal deletes.
+  if (is(/^SELECT role FROM pod_members WHERE pod_id = \$1 AND user_id = \$2 AND status = 'active'$/)) {
+    return rows(world.member && world.member.status === 'active' ? [{ role: world.member.role }] : []);
+  }
+  if (is(/^DELETE FROM notifications WHERE type IN \(/)) return rows(world.purgedBells);
   if (is(/^UPDATE pod_posts SET content = \$2, link_url = \$3, edited_at = NOW\(\) WHERE id = \$1 RETURNING edited_at$/)) return rows([{ edited_at: EDITED_AT }]);
   if (is(/^UPDATE pod_post_comments SET content = \$2, edited_at = NOW\(\) WHERE id = \$1 RETURNING edited_at$/)) return rows([{ edited_at: EDITED_AT }]);
   if (is(/UPDATE pod_posts SET deleted_at = NOW\(\), deleted_by = \$2 WHERE id = \$1/)) return rows([]);
@@ -200,12 +207,14 @@ function answer(sql: string): unknown {
   }
   if (is(/FROM pod_post_comments c JOIN pod_posts p ON p\.id = c\.post_id WHERE c\.id = \$1 AND p\.pod_id = \$2/)) {
     return rows(world.lockedComment
-      ? [{ content: 'first words', created_at: CREATED_AT, edited_at: null, post_deleted_at: null, ...world.lockedComment }]
+      ? [{ content: 'first words', created_at: CREATED_AT, edited_at: null, post_deleted_at: null, withdrawn_at: null, has_replies: false, ...world.lockedComment }]
       : []);
   }
   if (is(/UPDATE pod_post_comments SET deleted_at = NOW\(\)/)) {
-    return rows(Array.from({ length: world.commentsRemoved }, (_, i) => ({ id: `gone-${i}` })));
+    return rows(Array.from({ length: world.commentsRemoved }, (_, i) => ({ id: `gone-${i}`, withdrawn_at: null })));
   }
+  if (is(/^UPDATE pod_post_comments SET content = '', withdrawn_at = NOW\(\), deleted_by = \$2 WHERE id = \$1$/)) return rows([]);
+  if (is(/^UPDATE pod_posts SET comment_count = GREATEST\(comment_count - 1, 0\) WHERE id = \$1$/)) return rows([]);
   if (is(/UPDATE pod_posts SET comment_count = GREATEST\(comment_count - \$2, 0\)/)) return rows([]);
   throw new Error(`Unexpected SQL in the pod wall test: ${text.slice(0, 240)}`);
 }
@@ -238,6 +247,7 @@ beforeEach(() => {
     wasPinned: true,
     pinnedCount: 0,
     pinnedPostRemoved: false,
+    purgedBells: [],
     likeTarget: { post_id: POST },
     likeCount: 1,
     likedByMe: true,
@@ -860,8 +870,10 @@ describe('setPinned', () => {
     await wall.setPinned(POD, POST, asMember, true);
     const inTx = mockTxSql.map((q) => q.replace(/\s+/g, ' ').trim());
     expect(inTx[0]).toMatch(/^SELECT author_id, content, created_at, edited_at, deleted_at, pinned_at FROM pod_posts WHERE id = \$1 AND pod_id = \$2 FOR UPDATE$/);
-    expect(inTx[1]).toMatch(/^UPDATE pod_posts SET pinned_at = CASE WHEN \$2::boolean THEN NOW\(\) ELSE NULL END WHERE id = \$1$/);
-    expect(inTx[2]).toMatch(/^INSERT INTO audit_log/);
+    // Fix round 1: the moderator's right is read again under the lock.
+    expect(inTx[1]).toMatch(/^SELECT role FROM pod_members WHERE pod_id = \$1 AND user_id = \$2 AND status = 'active'$/);
+    expect(inTx[2]).toMatch(/^UPDATE pod_posts SET pinned_at = CASE WHEN \$2::boolean THEN NOW\(\) ELSE NULL END WHERE id = \$1$/);
+    expect(inTx[3]).toMatch(/^INSERT INTO audit_log/);
     expect(calls(/pinned_at FROM pod_posts WHERE id = \$1/)[0][1]).toEqual([POST, POD]);
   });
 
@@ -916,8 +928,9 @@ describe('reactToPost', () => {
     it('rings the post author once an hour per post, with the post as the link', async () => {
       await wall.reactToPost(POD, POST, asMember, 'love');
       const [bell] = calls(/INSERT INTO notifications/);
-      expect(bell[1]).toEqual([AUTHOR, POD, 'pod_reaction', 'Vera Viewer reacted to your post', 'hello pod', `/pods/${POD}?post=${POST}`, VIEWER, 60]);
-      expect(sqlOf(bell)).toMatch(/n\.type = \$3::text AND n\.link = \$6::text AND n\.created_at > NOW\(\) - make_interval\(mins => \$8::int\)/);
+      expect(bell[1]).toEqual([AUTHOR, POD, 'pod_reaction', 'Vera Viewer reacted to your post', 'hello pod', `/pods/${POD}?post=${POST}`, VIEWER, 60, `/pods/${POD}?post=${POST}`]);
+      // Deduped per post: its link, or (fix round 1) a comment's link under it.
+      expect(sqlOf(bell)).toMatch(/n\.type = \$3::text AND \(n\.link = \$9::text OR starts_with\(n\.link, \$9::text \|\| '&'\)\) AND n\.created_at > NOW\(\) - make_interval\(mins => \$8::int\)/);
     });
 
     it('is not sent for a reaction to your own post, or when a reaction is cleared', async () => {
@@ -999,8 +1012,8 @@ describe('addComment', () => {
       await comment({ content: 'agreed', parentCommentId: REPLY_TO });
       const bells = calls(/INSERT INTO notifications/).map((c) => c[1]);
       expect(bells).toEqual([
-        ['commenter-1', POD, 'pod_reply', 'Vera Viewer replied to your comment', 'agreed', `/pods/${POD}?post=${POST}`, VIEWER, 15],
-        [AUTHOR, POD, 'pod_comment', 'Vera Viewer commented on your post', 'agreed', `/pods/${POD}?post=${POST}`, VIEWER, 15],
+        ['commenter-1', POD, 'pod_reply', 'Vera Viewer replied to your comment', 'agreed', `/pods/${POD}?post=${POST}&comment=${COMMENT}`, VIEWER, 15, `/pods/${POD}?post=${POST}`],
+        [AUTHOR, POD, 'pod_comment', 'Vera Viewer commented on your post', 'agreed', `/pods/${POD}?post=${POST}&comment=${COMMENT}`, VIEWER, 15, `/pods/${POD}?post=${POST}`],
       ]);
     });
 
@@ -1015,7 +1028,8 @@ describe('addComment', () => {
     it('ring the post author for a comment, once every 15 minutes per post', async () => {
       await comment({ content: 'Welcome!' });
       const [bell] = calls(/INSERT INTO notifications/);
-      expect(bell[1]).toEqual([AUTHOR, POD, 'pod_comment', 'Vera Viewer commented on your post', 'Welcome!', `/pods/${POD}?post=${POST}`, VIEWER, 15]);
+      // Fix round 1: a comment's bell names the comment (so it can be removed with it); it is deduped per post.
+      expect(bell[1]).toEqual([AUTHOR, POD, 'pod_comment', 'Vera Viewer commented on your post', 'Welcome!', `/pods/${POD}?post=${POST}&comment=${COMMENT}`, VIEWER, 15, `/pods/${POD}?post=${POST}`]);
       expect(sqlOf(bell)).toMatch(/n\.created_at > NOW\(\) - make_interval\(mins => \$8::int\)/);
     });
 
@@ -1049,7 +1063,7 @@ describe('addComment', () => {
       await comment({ content: 'Welcome!' });
       expect(mockPush).toHaveBeenCalledWith(`user:${AUTHOR}`, 'notification:new', {
         id: 'n-9', type: 'pod_comment', title: 'Vera Viewer commented on your post', body: 'Welcome!',
-        link: `/pods/${POD}?post=${POST}`, isRead: false, createdAt: new Date('2026-10-26T10:06:00.000Z'),
+        link: `/pods/${POD}?post=${POST}&comment=${COMMENT}`, isRead: false, createdAt: new Date('2026-10-26T10:06:00.000Z'),
       });
       expect(mockEmitEntities).toHaveBeenCalledWith(mockIo, [AUTHOR], [E.userNotifications(AUTHOR)]);
     });
@@ -1081,7 +1095,7 @@ describe('listComments', () => {
       comments: [{
         id: COMMENT, authorId: AUTHOR, authorName: 'Ada Author', authorAvatarUrl: null, authorClosed: false,
         content: 'first', createdAt: '2026-10-26T10:05:00.000Z', parentCommentId: null, likeCount: 2, likedByMe: true,
-        editedAt: null,
+        editedAt: null, withdrawn: false,
       }],
       truncated: false,
     });
@@ -1170,7 +1184,7 @@ describe('likeComment', () => {
   it('only reaches a live comment of a live post of THIS pod whose authors the viewer has not blocked', async () => {
     await wall.likeComment(POD, COMMENT, asMember, true);
     const sql = sqlOf(calls(/SELECT c\.post_id FROM pod_post_comments c/)[0]);
-    expect(sql).toMatch(/c\.id = \$1 AND p\.pod_id = \$3 AND c\.deleted_at IS NULL AND p\.deleted_at IS NULL/);
+    expect(sql).toMatch(/c\.id = \$1 AND p\.pod_id = \$3 AND c\.deleted_at IS NULL AND c\.withdrawn_at IS NULL AND p\.deleted_at IS NULL/);
     expect(sql).toMatch(/b\.blocker_id = \$2 AND b\.blocked_id = p\.author_id/);
     expect(sql).toMatch(/b\.blocker_id = \$2 AND b\.blocked_id = c\.author_id/);
     // ...and not a reply that hangs under a comment the viewer cannot see.
@@ -1186,15 +1200,37 @@ describe('likeComment', () => {
 });
 
 describe('deleteComment', () => {
-  it('lets the author delete their own comment, and its replies go with it, and the post\'s count drops by all of them', async () => {
+  it('a moderator removes a comment and its replies, and the post\'s count drops by all of them', async () => {
+    world.member = { role: 'host', status: 'active' };
+    world.lockedComment = { author_id: AUTHOR, post_id: POST, deleted_at: null, has_replies: true };
     world.commentsRemoved = 3;
     const out = await wall.deleteComment(POD, COMMENT, asMember);
     const [soft] = calls(/UPDATE pod_post_comments SET deleted_at/);
-    expect(sqlOf(soft)).toMatch(/WHERE \(id = \$1 OR parent_comment_id = \$1\) AND deleted_at IS NULL RETURNING id$/);
+    expect(sqlOf(soft)).toMatch(/WHERE \(id = \$1 OR \(\$3::boolean AND parent_comment_id = \$1\)\) AND deleted_at IS NULL RETURNING id, withdrawn_at$/);
+    expect(soft[1]).toEqual([COMMENT, VIEWER, true]);
     expect(calls(/UPDATE pod_posts SET comment_count = GREATEST/)[0][1]).toEqual([POST, 3]);
     expect(calls(/DELETE FROM pod_post_comments/i)).toHaveLength(0);
-    expect(mockTxSql.filter((q) => /FOR UPDATE|^UPDATE pod_post_comments SET deleted_at|^UPDATE pod_posts SET comment_count/.test(q))).toHaveLength(3);
     expect(out).toEqual({ postId: POST, alreadyRemoved: false });
+  });
+
+  it('fix round 1: the author deleting their own comment with no replies removes it alone', async () => {
+    world.commentsRemoved = 1;
+    await wall.deleteComment(POD, COMMENT, asMember);
+    expect(calls(/UPDATE pod_post_comments SET deleted_at/)[0][1]).toEqual([COMMENT, VIEWER, false]);
+    expect(calls(/UPDATE pod_posts SET comment_count = GREATEST/)[0][1]).toEqual([POST, 1]);
+    expect(mockTxSql.filter((q) => /FOR UPDATE|^UPDATE pod_post_comments SET deleted_at|^UPDATE pod_posts SET comment_count/.test(q))).toHaveLength(3);
+  });
+
+  it('fix round 1 (ruling): the author\'s comment with replies is withdrawn, never taking other people\'s replies', async () => {
+    world.lockedComment = { author_id: VIEWER, post_id: POST, deleted_at: null, has_replies: true };
+    await expect(wall.deleteComment(POD, COMMENT, asMember)).resolves.toEqual({ postId: POST, alreadyRemoved: false });
+    expect(calls(/^UPDATE pod_post_comments SET content = '', withdrawn_at = NOW\(\), deleted_by = \$2 WHERE id = \$1$/)[0][1]).toEqual([COMMENT, VIEWER]);
+    expect(calls(/UPDATE pod_post_comments SET deleted_at/)).toHaveLength(0);
+    expect(calls(/^UPDATE pod_posts SET comment_count = GREATEST\(comment_count - 1, 0\) WHERE id = \$1$/)).toHaveLength(1);
+    expect(calls(/INSERT INTO audit_log/)).toHaveLength(0);
+    // A second delete of the withdrawn comment changes nothing.
+    world.lockedComment = { author_id: VIEWER, post_id: POST, deleted_at: null, has_replies: true, withdrawn_at: new Date() };
+    await expect(wall.deleteComment(POD, COMMENT, asMember)).resolves.toEqual({ postId: POST, alreadyRemoved: true });
   });
 
   it('locks the comment inside its transaction, and only for a post of this pod', async () => {
@@ -1333,7 +1369,7 @@ describe('S4 D8: someone no longer in the pod may delete their own words, and no
     await expect(wall.deletePost(POD, POST, asMember)).resolves.toEqual({ alreadyRemoved: false });
     await expect(wall.deleteComment(POD, COMMENT, asMember)).resolves.toEqual({ postId: POST, alreadyRemoved: false });
     expect(calls(/UPDATE pod_posts SET deleted_at/)[0][1]).toEqual([POST, VIEWER]);
-    expect(calls(/UPDATE pod_post_comments SET deleted_at/)[0][1]).toEqual([COMMENT, VIEWER]);
+    expect(calls(/UPDATE pod_post_comments SET deleted_at/)[0][1]).toEqual([COMMENT, VIEWER, false]);
     // Their own words: no moderation record.
     expect(calls(/INSERT INTO audit_log/)).toHaveLength(0);
   });
@@ -1596,5 +1632,102 @@ describe('S4: editComment, the author\'s own words', () => {
     }];
     const list = await wall.listComments(POD, POST, asMember);
     expect(list.comments[0].editedAt).toBe(EDITED_AT.toISOString());
+  });
+});
+
+// ─── S4 fix round 1 ──────────────────────────────────────────────────────────
+
+describe('fix round 1: the moderator\'s right is read under the lock (a host demoted at that moment cannot act)', () => {
+  const demotedUnderLock = () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (/^SELECT role FROM pod_members WHERE pod_id = \$1 AND user_id = \$2 AND status = 'active'$/.test(norm(sql))) return rows([]);
+      return answer(sql);
+    });
+  };
+
+  it('a removal of someone else\'s post is refused, and nothing is written', async () => {
+    world.member = { role: 'host', status: 'active' };
+    world.lockedPost = { author_id: AUTHOR, deleted_at: null };
+    demotedUnderLock();
+    await expect(wall.deletePost(POD, POST, asMember)).rejects.toMatchObject({ statusCode: 403 });
+    expect(writes()).toHaveLength(0);
+  });
+
+  it('a pin is refused, and nothing is written', async () => {
+    world.member = { role: 'director', status: 'active' };
+    world.wasPinned = false;
+    demotedUnderLock();
+    await expect(wall.setPinned(POD, POST, asMember, true)).rejects.toMatchObject({ statusCode: 403 });
+    expect(writes()).toHaveLength(0);
+  });
+
+  it('a comment removal is refused', async () => {
+    world.member = { role: 'host', status: 'active' };
+    world.lockedComment = { author_id: AUTHOR, post_id: POST, deleted_at: null };
+    demotedUnderLock();
+    await expect(wall.deleteComment(POD, COMMENT, asMember)).rejects.toMatchObject({ statusCode: 403 });
+    expect(writes()).toHaveLength(0);
+  });
+
+  it('the right is read after the post\'s lock, on the same transaction', async () => {
+    world.member = { role: 'host', status: 'active' };
+    world.lockedPost = { author_id: AUTHOR, deleted_at: null };
+    await wall.deletePost(POD, POST, asMember);
+    const lock = mockTxSql.findIndex((q) => /FROM pod_posts WHERE id = \$1 AND pod_id = \$2 FOR UPDATE$/.test(q));
+    const role = mockTxSql.findIndex((q) => /^SELECT role FROM pod_members/.test(q));
+    expect(lock).toBe(0);
+    expect(role).toBeGreaterThan(lock);
+  });
+
+  it('a platform admin needs no row: the right comes from the platform role', async () => {
+    world.member = null;
+    world.lockedPost = { author_id: AUTHOR, deleted_at: null };
+    await expect(wall.deletePost(POD, POST, asAdmin)).resolves.toEqual({ alreadyRemoved: false });
+    expect(calls(/^SELECT role FROM pod_members/)).toHaveLength(0);
+  });
+});
+
+describe('fix round 1: removed words leave the bell lists (pod)', () => {
+  it('a post removal deletes every bell about the post in its transaction, then tells their people once each', async () => {
+    world.lockedPost = { author_id: VIEWER, deleted_at: null };
+    world.purgedBells = [{ user_id: 'member-3' }, { user_id: 'member-3' }];
+    await wall.deletePost(POD, POST, asMember);
+    const purge = calls(/^DELETE FROM notifications/)[0];
+    expect(sqlOf(purge)).toContain(`type IN ('pod_post', 'pod_reaction', 'pod_comment', 'pod_reply')`);
+    expect(purge[1]).toEqual([`/pods/${POD}?post=${POST}`, `/pods/${POD}?post=${POST}&%`]);
+    expect(mockTxSql.some((q) => /^DELETE FROM notifications/.test(q))).toBe(true);
+    expect(mockEmitEntities.mock.calls.filter((c) => (c[1] as string[])[0] === 'member-3')).toEqual([[mockIo, ['member-3'], [E.userNotifications('member-3')]]]);
+  });
+
+  it('a comment removal deletes exactly the bells that name the comments removed', async () => {
+    world.member = { role: 'host', status: 'active' };
+    world.lockedComment = { author_id: AUTHOR, post_id: POST, deleted_at: null, has_replies: true };
+    world.commentsRemoved = 2;
+    await wall.deleteComment(POD, COMMENT, asMember);
+    expect(calls(/^DELETE FROM notifications/)[0][1]).toEqual([
+      [`/pods/${POD}?post=${POST}&comment=gone-0`, `/pods/${POD}?post=${POST}&comment=gone-1`],
+    ]);
+  });
+
+  it('a withdrawn comment\'s bells go too; nothing is removed twice', async () => {
+    world.lockedComment = { author_id: VIEWER, post_id: POST, deleted_at: null, has_replies: true };
+    await wall.deleteComment(POD, COMMENT, asMember);
+    expect(calls(/^DELETE FROM notifications/)[0][1][0]).toEqual([`/pods/${POD}?post=${POST}&comment=${COMMENT}`]);
+    mockQuery.mockClear();
+    world.lockedComment = { author_id: VIEWER, post_id: POST, deleted_at: new Date() };
+    await wall.deleteComment(POD, COMMENT, asMember);
+    expect(calls(/^DELETE FROM notifications/)).toHaveLength(0);
+  });
+
+  it('a withdrawn comment lists without words while a reply is under it, and cannot be answered or edited', async () => {
+    world.comments = [{
+      id: COMMENT, author_id: AUTHOR, display_name: 'Ada', avatar_url: null, author_closed: false, content: 'gone words',
+      created_at: CREATED_AT, edited_at: null, withdrawn_at: new Date(), parent_comment_id: null, like_count: 0, liked_by_me: false,
+    }];
+    const { comments } = await wall.listComments(POD, POST, asMember);
+    expect(comments[0]).toMatchObject({ withdrawn: true, content: '' });
+    expect(sqlOf(calls(/FROM pod_post_comments c JOIN users u/)[0])).toContain('AND (c.withdrawn_at IS NULL OR EXISTS (SELECT 1 FROM pod_post_comments wr WHERE wr.parent_comment_id = c.id AND wr.deleted_at IS NULL))');
+    world.lockedComment = { author_id: VIEWER, post_id: POST, deleted_at: null, withdrawn_at: new Date() };
+    await expect(wall.editComment(POD, COMMENT, asMember, { content: 'x' })).rejects.toMatchObject({ statusCode: 404, message: 'This comment was removed.' });
   });
 });

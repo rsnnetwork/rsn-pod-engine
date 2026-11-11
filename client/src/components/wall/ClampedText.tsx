@@ -4,11 +4,12 @@
 // The cut is measured, not guessed from the length: the text is drawn clamped, and "Show more" appears only when its
 // full height is taller than the clamp (it is measured again when the box changes width, so turning a phone sideways
 // is right). A long word or address with no spaces breaks anywhere, so nothing scrolls sideways at 360px. A post a link
-// names opens in full (`open`).
+// names opens in full (`open`); S4 fix round 1: it is measured too, against the clamp's height in lines, so a long one
+// still offers "Show less".
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import Linkify from '@/components/ui/Linkify';
-import { CLAMP_CLASS, overflowsClamp } from './wall-logic';
+import { CLAMP_CLASS, CLAMP_LINES, clampHeight, overflowsClamp } from './wall-logic';
 
 export default function ClampedText({ text, kind, open: openFromLink, className = '', testId }: {
   text: string;
@@ -28,14 +29,20 @@ export default function ClampedText({ text, kind, open: openFromLink, className 
 
   useLayoutEffect(() => {
     const el = box.current;
-    if (!el || expanded) return undefined;
-    const measure = () => setCut(overflowsClamp(el.scrollHeight, el.clientHeight));
+    if (!el) return undefined;
+    // Clamped: is the full text taller than the box? Open: is it taller than the clamp would be (its lines times its
+    // line height), so a text drawn open from the start still folds.
+    const measure = () => {
+      if (!expanded) { setCut(overflowsClamp(el.scrollHeight, el.clientHeight)); return; }
+      const style = getComputedStyle(el);
+      setCut(overflowsClamp(el.scrollHeight, clampHeight(style.lineHeight, style.fontSize, CLAMP_LINES[kind])));
+    };
     measure();
     if (typeof ResizeObserver === 'undefined') return undefined;
     const watcher = new ResizeObserver(measure);
     watcher.observe(el);
     return () => watcher.disconnect();
-  }, [text, expanded]);
+  }, [text, expanded, kind]);
 
   return (
     <>
@@ -46,7 +53,7 @@ export default function ClampedText({ text, kind, open: openFromLink, className 
       >
         <Linkify text={text} />
       </p>
-      {/* Measured while clamped, and kept while open, so "Show less" folds it back. */}
+      {/* Measured clamped or open, so "Show more" opens it and "Show less" folds it back. */}
       {cut && (
         <button
           type="button"

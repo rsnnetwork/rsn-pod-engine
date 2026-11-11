@@ -29,6 +29,8 @@ export interface WallPost extends WallPostBase {
   circleId?: string;
   authorClosed?: boolean;
   sharedFrom?: SharedFrom | null;
+  /** S4 fix round 1: a share whose original this viewer may not see (removed, closed to them, or blocked either way). */
+  sharedUnavailable?: boolean;
 }
 
 export interface WallComment extends SharedWallComment {

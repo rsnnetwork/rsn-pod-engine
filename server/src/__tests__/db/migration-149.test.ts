@@ -43,10 +43,31 @@ describe('migration 149 (wall edits and the moderation trail)', () => {
     );
   });
 
-  it('every statement is guarded, and nothing is dropped, deleted, written or made NOT NULL', () => {
-    const statements = code(sql).split(';').map((st) => st.replace(/\s+/g, ' ').trim()).filter(Boolean);
-    expect(statements).toHaveLength(6);
+  it('fix round 1: withdrawn_at on both comment tables, and the shares index a removal or an edit tells', () => {
+    const f = flat(sql);
+    expect(f).toContain('ALTER TABLE pod_post_comments ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ NULL;');
+    expect(f).toContain('ALTER TABLE circle_post_comments ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ NULL;');
+    expect(f).toContain('CREATE INDEX IF NOT EXISTS idx_circle_posts_shared_from ON circle_posts (shared_from_post_id) WHERE shared_from_post_id IS NOT NULL AND deleted_at IS NULL;');
+    expect(f).toContain("CREATE INDEX IF NOT EXISTS idx_notifications_wall_link ON notifications (link text_pattern_ops) WHERE type IN ('circle_post', 'circle_reaction', 'circle_comment', 'circle_reply', 'pod_post', 'pod_reaction', 'pod_comment', 'pod_reply');");
+  });
+
+  it('fix round 1: the comment check allows empty words only on a withdrawn comment; the old check is found by what it says', () => {
+    const f = flat(sql);
+    expect(f).toContain("FOREACH t IN ARRAY ARRAY['pod_post_comments', 'circle_post_comments'] LOOP");
+    expect(f).toContain("AND pg_get_constraintdef(oid) ILIKE '%length(TRIM(%content%'");
+    expect(f).toContain("AND conname <> t || '_words_or_withdrawn'");
+    expect(f).toContain("IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = t::regclass AND conname = t || '_words_or_withdrawn') THEN");
+    expect(f).toContain("CHECK (length(content) <= 4000 AND (length(btrim(content)) > 0 OR (withdrawn_at IS NOT NULL AND content = %L)))");
+  });
+
+  it('every statement is guarded, and nothing is deleted, written or made NOT NULL; the only DROP is the old comment check', () => {
+    const outsideDo = code(sql).replace(/DO \$\$[\s\S]*?END \$\$;/g, '');
+    const statements = outsideDo.split(';').map((st) => st.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    expect(statements).toHaveLength(10);
     for (const st of statements) expect(st).toMatch(/IF NOT EXISTS/);
-    expect(flat(sql)).not.toMatch(/\bDROP\b|DELETE FROM|\bUPDATE \w+ SET|INSERT INTO|TRUNCATE|SET NOT NULL|NOT NULL DEFAULT/i);
+    expect(outsideDo).not.toMatch(/\bDROP\b/);
+    expect(flat(sql).match(/\bDROP\b/g)).toHaveLength(1);
+    expect(flat(sql)).toContain("EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', t, old_check.conname);");
+    expect(flat(sql)).not.toMatch(/DELETE FROM|\bUPDATE \w+ SET|INSERT INTO|TRUNCATE|SET NOT NULL|NOT NULL DEFAULT/i);
   });
 });

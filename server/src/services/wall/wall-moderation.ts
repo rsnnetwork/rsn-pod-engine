@@ -10,9 +10,17 @@
 //   * An author's edit is refused when the words changed elsewhere since the editor opened them (expectedEditedAt),
 //     so two tabs never overwrite each other without a word.
 
+//   * S4 fix round 1: when a post or a comment is removed (by a moderator or by its author), the bells that carry its
+//     words are deleted in the same transaction, and the people they were for are told (their bell tag) once it has
+//     committed, so a removed post's words do not stay in anyone's bell list. A comment's bells name the comment in
+//     their link (`?post=<id>&comment=<id>`) so they can be found; the page reads only `post`.
+
 import type { PoolClient } from 'pg';
 import { ErrorCodes } from '@rsn/shared';
 import { AppError, NotFoundError } from '../../middleware/errors';
+import logger from '../../config/logger';
+import { E } from '../../realtime/entities';
+import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 
 /** The most posts a wall keeps pinned. */
 export const WALL_PINNED_MAX = 3;
@@ -73,3 +81,60 @@ export function editStampHolds(current: Date | null, expected: string | null | u
 }
 
 export const editConflict = () => new AppError(409, ErrorCodes.WALL_EDIT_CONFLICT, EDIT_CONFLICT);
+
+// ── Bells that carry removed words ──────────────────────────────────────────────────────────────────────────────
+
+/** Every bell type a wall rings, by space. The new-post bell carries the post's words; the others a comment's or the post's. */
+export const WALL_BELL_TYPES: Record<WallSpace, string[]> = {
+  circle: ['circle_post', 'circle_reaction', 'circle_comment', 'circle_reply'],
+  pod: ['pod_post', 'pod_reaction', 'pod_comment', 'pod_reply'],
+};
+
+/** A comment's or reply's bell link: the post's, naming the comment, so its bells can be found when it is removed. */
+/**
+ * The space's bell types as SQL literals, from the fixed list above (nothing a member types reaches it), so the planner
+ * can use idx_notifications_wall_link (migration 149), whose predicate names the same types.
+ */
+const bellTypesSql = (space: WallSpace) => WALL_BELL_TYPES[space].map((t) => `'${t}'`).join(', ');
+
+/** A link as a LIKE prefix: its own %, _ and backslash are escaped (a wall link has none, but a prefix must not widen). */
+const likePrefix = (link: string) => link.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+export const commentBellLink = (postLink: string, commentId: string) => `${postLink}&comment=${commentId}`;
+
+/**
+ * Deletes, on the removal's own transaction, every wall bell about a removed post (its link is the post's, or the post's
+ * with a comment named after it). Answers who had one, to be told once the removal commits.
+ */
+export async function purgePostBells(client: PoolClient, space: WallSpace, postLink: string): Promise<string[]> {
+  const r = await client.query<{ user_id: string }>(
+    `DELETE FROM notifications
+      WHERE type IN (${bellTypesSql(space)}) AND (link = $1 OR link LIKE $2)
+      RETURNING user_id`,
+    [postLink, `${likePrefix(postLink)}&%`],
+  );
+  return [...new Set(r.rows.map((row) => row.user_id))];
+}
+
+/** The same for removed comments: the bells whose link names one of them. */
+export async function purgeCommentBells(client: PoolClient, space: WallSpace, links: string[]): Promise<string[]> {
+  if (links.length === 0) return [];
+  const r = await client.query<{ user_id: string }>(
+    `DELETE FROM notifications WHERE type IN (${bellTypesSql(space)}) AND link = ANY($1::text[]) RETURNING user_id`,
+    [links],
+  );
+  return [...new Set(r.rows.map((row) => row.user_id))];
+}
+
+/** After the removal has committed: each person whose bell was deleted is sent their own bell tag. Never throws. */
+export async function tellBellOwners(userIds: string[]): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io || userIds.length === 0) return;
+  for (const userId of userIds) {
+    try {
+      await emitEntities(io, [userId], [E.userNotifications(userId)]);
+    } catch (err) {
+      logger.warn({ err, userId }, 'wall bell removal: telling the bell failed (non-fatal)');
+    }
+  }
+}

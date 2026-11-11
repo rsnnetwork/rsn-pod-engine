@@ -11,10 +11,8 @@
 // wall polls. A phone that dropped its connection missed whatever was sent meanwhile: the app-wide handler refetches
 // every tagged query when the socket connects again (P1 item 17), so the wall keeps no listener of its own.
 //
-// S4: an author's edit of a post is held here (its draft and the stamp the post had when it opened), so the card can
-// be drawn again (a refetch, "Show more" in the feed) without losing what was typed, and a post removed while its edit
-// is open stays on screen as "This post was removed." with the text to copy. A ?post= link to a post that has gone
-// says "This post was removed." where the post would be.
+// S4: an author's edit of a post is held here (useHeldPostEdit), so a refetch never loses what was typed. A ?post= link
+// to a post that has gone says "This post was removed." where it would be (WallNotices).
 
 import { useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -24,9 +22,11 @@ import { Skeleton } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import WallComposer from './WallComposer';
-import WallPostCard, { type PostEdit } from './WallPostCard';
+import { LinkedPostNotice, WallNotMember } from './WallNotices';
+import WallPostCard from './WallPostCard';
+import { useHeldPostEdit } from './useHeldPostEdit';
 import {
-  LINKED_POST_REMOVED, arrangeFeed, createCoalescer, isForbidden, retryUnlessAnswered, revealedPosts, viewerFor, wallErrorSentence,
+  arrangeFeed, createCoalescer, isForbidden, isNotFound, retryUnlessAnswered, revealedPosts, viewerFor, wallErrorSentence,
 } from './wall-logic';
 import type { WallConfig, WallFeedPage, WallPost, WallViewer } from './wall-types';
 
@@ -36,14 +36,7 @@ const SHOW_MORE_STEP = 10;
 /** A burst of refetches is read once per this long (ms): short enough to feel live, long enough to fold a storm. */
 const REFETCH_WINDOW_MS = 200;
 
-/** What someone who is not an active member of the pod reads where the posts would be. */
-export function WallNotMember({ config }: { config: WallConfig }) {
-  return (
-    <Card className="!p-4" data-testid={`${config.testId}-not-member`}>
-      <p className="text-center text-sm text-gray-500">{config.copy.notMember}</p>
-    </Card>
-  );
-}
+export { WallNotMember };
 
 export default function Wall({ config, fallbackViewer, highlightPostId }: {
   config: WallConfig;
@@ -57,7 +50,6 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
   const [shown, setShown] = useState(config.visibleAtFirst);
   const [removedHere, setRemovedHere] = useState<string[]>([]);
   const [coalesce] = useState(() => createCoalescer(REFETCH_WINDOW_MS));
-  const [editing, setEditing] = useState<(PostEdit & { post: WallPost }) | null>(null);
   const tagged = config.entities.feed.length > 0;
 
   const feed = useInfiniteQuery({
@@ -93,9 +85,14 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
     meta: { entities: config.entities.post(wanted ?? '') },
   });
   const linkedPost = wanted !== undefined && !linked.isError && !loadedIds.has(wanted) ? linked.data : undefined;
-  // S4: a link to a post that has gone (removed, or hidden from this viewer: the server answers both alike) says so
-  // where the post would be, rather than in a toast that is gone before it is read.
-  const linkedGone = wanted !== undefined && !loadedIds.has(wanted) && linked.isError && editing?.post.id !== wanted;
+  // S4: a link to a post that has gone (removed, or hidden from this viewer: the server answers both alike, 404) says so
+  // where the post would be, rather than in a toast that is gone before it is read. Fix round 1: only a 404 says that;
+  // a phone that is offline, or a server fault, says what went wrong and offers to try again.
+  const held = useHeldPostEdit(config, { ids: loadedIds, rest, linkedPostId: linkedPost?.id });
+  const linkedOut = wanted !== undefined && !loadedIds.has(wanted) && linked.isError && held.editingId !== wanted;
+  const linkedGone = linkedOut && isNotFound(linked.error);
+  const linkedFailed = linkedOut && !isNotFound(linked.error);
+
 
   // The acting screen refreshes itself when its own change settles: a change that changed nothing (the same
   // reaction again) is answered 200 and sent to no one, so it gets no echo, and a moderator who is not a
@@ -107,16 +104,8 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
 
   const visible = revealedPosts(rest, shown, highlightPostId);
 
-  // The post whose edit is open, when it is not among the cards drawn below: loaded but past "Show more", or gone.
-  const drawn = new Set([...(linkedPost ? [linkedPost.id] : []), ...pinned.map((p) => p.id), ...visible.map((p) => p.id)]);
-  const editedId = editing?.post.id;
-  const held = editing && !drawn.has(editing.post.id) ? (rest.find((p) => p.id === editedId) ?? editing.post) : null;
-  const heldGone = !!editing && !loadedIds.has(editing.post.id) && linkedPost?.id !== editing.post.id;
-  // Opening an edit keeps the stamp the card shows (a save of a moment ago included), so the next edit is not refused.
-  const editFor = (p: WallPost) => (draft: string | null, stamp?: string | null) => setEditing((cur) => {
-    if (draft === null) return null;
-    return cur && cur.post.id === p.id ? { ...cur, draft } : { post: p, draft, stamp: stamp !== undefined ? stamp : (p.editedAt ?? null) };
-  });
+  // The post whose edit is open, when it is not among the cards drawn below.
+  const heldPost = held.heldFor(new Set([...(linkedPost ? [linkedPost.id] : []), ...pinned.map((p) => p.id), ...visible.map((p) => p.id)]));
   const hasMore = rest.length > visible.length || !!feed.hasNextPage;
   const showMore = () => {
     if (config.visibleAtFirst === undefined) { void feed.fetchNextPage(); return; }
@@ -152,8 +141,8 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
       showPinBadge={showPinBadge} linked={isLinked} highlighted={p.id === highlightPostId}
       onChanged={refresh}
       onRemoved={(id) => setRemovedHere((ids) => [...ids, id])}
-      edit={editing && editing.post.id === p.id ? { draft: editing.draft, stamp: editing.stamp } : null}
-      onEdit={editFor(p)}
+      edit={held.editOf(p)}
+      onEdit={held.editFor(p)}
       gone={gone}
     />
   );
@@ -174,17 +163,15 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
         </Card>
       )}
 
-      {held && card(held, false, false, heldGone)}
-      {linkedGone && (
-        <Card className="!p-4" data-testid={`${config.testId}-linked-removed`}>
-          <p className="text-center text-sm text-gray-600" role="status">{LINKED_POST_REMOVED}</p>
-        </Card>
+      {heldPost && card(heldPost.post, false, false, heldPost.gone)}
+      {(linkedGone || linkedFailed) && (
+        <LinkedPostNotice config={config} removed={linkedGone} error={linked.error} onRetry={() => void linked.refetch()} />
       )}
       {linkedPost && card(linkedPost, !!linkedPost.pinnedAt, true)}
       {pinned.map((p) => card(p, true))}
       {visible.map((p) => card(p, false))}
 
-      {visible.length === 0 && pinned.length === 0 && !linkedPost && !held && (
+      {visible.length === 0 && pinned.length === 0 && !linkedPost && !heldPost && (
         <p className="py-4 text-center text-sm text-gray-400" data-testid={`${config.testId}-empty`}>
           {viewer.canPost ? config.copy.empty : config.copy.emptyReadOnly}
         </p>

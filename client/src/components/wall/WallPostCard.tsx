@@ -1,11 +1,5 @@
-// One post on a wall: who wrote it, what they said, its reactions, and the controls the viewer is allowed.
-//
-// Two separate questions decide the controls, and the server answers both (viewer.canPost, viewer.canModerate):
-//   * posting (like, react, comment): an active member of a pod that is open. A pod that is archived, suspended
-//     or still a draft takes nothing new from anyone, so those buttons are not drawn there (the circle wall
-//     keeps drawing them and says "join" when tapped, because a circle's non-member can join).
-//   * moderating: a moderator deletes anyone's post and pins; an author deletes their own. Neither is switched
-//     off by the pod's state, so Delete and Pin never wait on canPost.
+// One post on a wall: who wrote it, what they said (WallPostBody), its reactions (WallPostReactions), the controls the
+// viewer is allowed (WallPostActions) and its comments.
 //
 // A change that changed nothing (the same reaction again, a pin of a pinned post) is answered 200 and tells
 // no screen, the acting one included, so every action here applies the answer it got and refreshes the feed
@@ -15,27 +9,21 @@
 // then says "Edited"; the draft is held by the wall, so it survives the card being drawn again, and the post being
 // removed while it is open (`gone`). Long words are cut to ten lines with "Show more" (ClampedText). A link that
 // names the post opens it in full, with its comments and the box to write one. A delete that someone else made a
-// moment before says "Already removed."
+// moment before says "Already removed." S4 fix round 1: the card was split into the pieces above, with no change in
+// what it draws or does.
 
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ExternalLink, Link2, MessageCircle, Pencil, Pin, Share2, ThumbsUp, Trash2 } from 'lucide-react';
+import { Pin } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import Card from '@/components/ui/Card';
 import api from '@/lib/api';
-import { useToastStore } from '@/stores/toastStore';
-import ClampedText from './ClampedText';
 import WallComments from './WallComments';
-import ReportPostButton from './ReportPostButton';
-import WallEditForm from './WallEditForm';
-import {
-  EDITED_LABEL, LINKED_POST_REMOVED, REACTIONS, canDeleteWallItem, canEditWallItem, canPinWallPost, deletedSentence, domainOf,
-  isConflict, reactionOf, timeAgo, wallErrorSentence,
-} from './wall-logic';
-import type { ReactionKey, WallConfig, WallPost, WallViewer } from './wall-types';
-import { useConfirm } from '@/hooks/useConfirm';
-
-const actionBtn = 'flex items-center gap-1.5 min-h-[44px] px-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-800';
+import WallPostActions from './WallPostActions';
+import WallPostBody from './WallPostBody';
+import { ReactionSummaryRow, useWallReactions } from './WallPostReactions';
+import { EDITED_LABEL, timeAgo } from './wall-logic';
+import type { WallConfig, WallPost, WallViewer } from './wall-types';
 
 /** The author's edit of this post, held by the wall: the words being written, and the stamp the post had when it opened. */
 export interface PostEdit {
@@ -63,21 +51,13 @@ export default function WallPostCard({
   /** The post was removed while its author's edit was open: the edit stays, to be copied, and nothing else is drawn. */
   gone?: boolean;
 }) {
-  const addToast = useToastStore((s) => s.addToast);
   const root = useRef<HTMLDivElement>(null);
   const [openComments, setOpenComments] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [shareOpen, setShareOpen] = useState<null | 'menu' | 'target'>(null);
-  const [reacting, setReacting] = useState(false);
-  const { ask, confirmDialog } = useConfirm();
-  // What the server answered to my last reaction, until the post itself brings the same numbers back.
-  const [local, setLocal] = useState<{ reactionCount: number; reactions: WallPost['reactions']; myReaction: ReactionKey | null } | null>(null);
-  const reactionsSeen = `${p.reactionCount}|${p.myReaction}|${JSON.stringify(p.reactions)}`;
-  useEffect(() => { setLocal(null); }, [reactionsSeen]);
+  const r = useWallReactions(p, viewer, config, onChanged);
 
-  // A link that names this post (a bell, a shared address) brings it into view, once per link, and opens its
-  // comments if it has any and the wall wants that (the bell said someone commented). Once per link: the wall
-  // refetches whenever anything in the pod changes, and the page must not jump back to this post each time.
+  // A link that names this post (a bell, a shared address) brings it into view, once per link, and opens its comments
+  // if the wall wants that. Once per link: the wall refetches whenever anything changes, and the page must not jump back
+  // to this post each time.
   const arrived = useRef(false);
   useEffect(() => {
     if (!highlighted) { arrived.current = false; return; }
@@ -94,97 +74,21 @@ export default function WallPostCard({
   const content = saved?.content ?? p.content;
   const editedAt = saved ? saved.editedAt : (p.editedAt ?? null);
 
-  const reactionCount = local?.reactionCount ?? p.reactionCount ?? 0;
-  const reactions = local?.reactions ?? p.reactions ?? {};
-  const myReaction = local ? local.myReaction : (p.myReaction ?? null);
-  const mine = reactionOf(myReaction);
-  const topEmojis = REACTIONS.filter((r) => (reactions[r.key] ?? 0) > 0)
-    .sort((a, b) => (reactions[b.key] ?? 0) - (reactions[a.key] ?? 0)).slice(0, 3);
-
-  const mayDelete = canDeleteWallItem(viewer, p.authorId, userId);
-  const mayPin = canPinWallPost(viewer);
-  const mayEdit = canEditWallItem(viewer, p.authorId, userId);
-  // Who cannot post sees the buttons they could never use only where the wall explains instead of hiding.
-  const showsReactions = viewer.canPost || config.copy.reactNeedsMembership !== undefined;
-  const showsCommentButton = showsReactions || p.commentCount > 0;
-  // A post the viewer can do nothing with (an archived pod, someone else's words, no comments) has no row of controls.
-  // Someone else's post can be reported from where it is (11 Nov 2026, item 16).
-  const mayReport = !!config.reportKind && !!userId && p.authorId !== userId;
-  const hasControls = !gone && (showsReactions || showsCommentButton || !!config.share || mayDelete || mayPin || mayEdit || mayReport);
-  const authorHref = !p.authorClosed && config.authorHref ? config.authorHref(p.authorId) : null;
-
-  const react = async (key: ReactionKey | null) => {
-    if (!viewer.canPost) {
-      if (config.copy.reactNeedsMembership) addToast(config.copy.reactNeedsMembership, 'info');
-      return;
-    }
-    if (reacting) return;
-    setReacting(true); setPickerOpen(false);
-    try {
-      const r = await api.post(`${config.itemBase}/posts/${p.id}/react`, { reaction: key });
-      setLocal(r.data.data);
-      onChanged();
-    } catch (err) {
-      addToast(wallErrorSentence(err, 'Could not react.'), 'error');
-      // The pod was archived since the page last looked: read the feed again, so these buttons go.
-      if (isConflict(err)) onChanged();
-    } finally {
-      setReacting(false);
-    }
-  };
-
-  const del = async () => {
-    if (!(await ask({ title: 'Delete this post?', body: 'Its comments go with it. This cannot be undone.', confirmLabel: 'Delete', tone: 'danger' }))) return;
-    try {
-      const r = await api.delete(`${config.itemBase}/posts/${p.id}`);
-      addToast(deletedSentence('post', r.data?.data?.alreadyRemoved), 'info');
-      if (edit) onEdit(null);
-      onRemoved(p.id);
-      onChanged();
-    } catch (err) {
-      addToast(wallErrorSentence(err, 'Could not delete.'), 'error');
-    }
-  };
-
-  const pin = async () => {
-    try {
-      await api.post(`${config.itemBase}/posts/${p.id}/${p.pinnedAt ? 'unpin' : 'pin'}`);
-      onChanged();
-    } catch (err) {
-      addToast(wallErrorSentence(err, 'Could not pin.'), 'error');
-    }
-  };
-
   const saveEdit = async (text: string) => {
-    const r = await api.patch(`${config.itemBase}/posts/${p.id}`, { content: text, expectedEditedAt: edit?.stamp ?? null });
-    const answer = r.data?.data as { changed?: boolean; editedAt?: string | null } | undefined;
+    const res = await api.patch(`${config.itemBase}/posts/${p.id}`, { content: text, expectedEditedAt: edit?.stamp ?? null });
+    const answer = res.data?.data as { changed?: boolean; editedAt?: string | null } | undefined;
     if (answer?.changed) setSaved({ content: text, editedAt: answer.editedAt ?? editedAt });
     onEdit(null);
     onChanged();
   };
 
-  const copyLink = async () => {
-    if (!config.share) return;
-    const url = `${window.location.origin}${config.share.href(p)}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      addToast('Link copied.', 'success');
-    } catch {
-      window.prompt('Copy this link', url);
-    }
-    setShareOpen(null);
-  };
-
+  const authorHref = !p.authorClosed && config.authorHref ? config.authorHref(p.authorId) : null;
   const authorName = <p className="min-w-0 break-words text-sm font-semibold text-gray-900">{p.authorName || 'Member'}</p>;
   const avatar = <Avatar src={p.authorAvatarUrl || undefined} name={p.authorName || 'Member'} size="sm" />;
-  const sharedImage = p.sharedFrom?.media?.find((m) => m.type === 'image');
 
   return (
     <div ref={root} className="scroll-mt-4">
-      <Card
-        className={`!p-4 ${highlighted ? 'ring-2 ring-rsn-red/40' : ''}`}
-        data-testid={`wall-post-${p.id}`}
-      >
+      <Card className={`!p-4 ${highlighted ? 'ring-2 ring-rsn-red/40' : ''}`} data-testid={`wall-post-${p.id}`}>
         {linked && (
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400" data-testid="linked-post">Linked post</p>
         )}
@@ -208,212 +112,20 @@ export default function WallPostCard({
                 </span>
               )}
             </div>
-            {edit ? (
-              <WallEditForm
-                draft={edit.draft}
-                onDraft={(text) => onEdit(text)}
-                original={content}
-                maxLength={8000}
-                allowEmpty={p.media.length > 0 || !!p.sharedFrom}
-                gone={gone ? LINKED_POST_REMOVED : undefined}
-                label="Edit your post"
-                onSave={saveEdit}
-                onCancel={() => onEdit(null)}
-                testId={`edit-post-${p.id}`}
-              />
-            ) : content && (
-              <div className="mt-1 text-sm text-gray-800">
-                <ClampedText text={content} kind="post" open={highlighted} testId={`post-text-${p.id}`} />
-              </div>
-            )}
-            {p.sharedFrom && (
-              <Link
-                to={`/circles/${p.sharedFrom.circleId}?post=${p.sharedFrom.id}`}
-                className="mt-2 block rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 hover:bg-gray-100 transition-colors"
-                data-testid={`shared-from-${p.id}`}
-              >
-                <p className="text-xs font-semibold text-gray-500 flex items-center gap-1">
-                  <Share2 className="h-3 w-3" /> Shared from {p.sharedFrom.circleName}
-                  {p.sharedFrom.authorName ? ` · ${p.sharedFrom.authorName}` : ''}
-                </p>
-                {p.sharedFrom.content && (
-                  <p className="mt-1 text-xs text-gray-700 line-clamp-4 whitespace-pre-wrap break-words">{p.sharedFrom.content}</p>
-                )}
-                {sharedImage && (
-                  <img src={sharedImage.url} alt="" className="mt-2 rounded-md max-h-40 w-auto max-w-full object-contain" loading="lazy" />
-                )}
-              </Link>
-            )}
-            {p.media.filter((m) => m.type === 'image').map((m) => (
-              <img
-                key={m.url} src={m.url} alt=""
-                className="mt-2 rounded-lg max-h-80 w-auto max-w-full object-contain bg-gray-50"
-                loading="lazy"
-              />
-            ))}
-            {p.linkUrl && (
-              <a
-                href={p.linkUrl} target="_blank" rel="noopener noreferrer"
-                className="mt-2 flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 hover:bg-gray-50 transition-colors min-h-[44px]"
-              >
-                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                <span className="font-medium">{domainOf(p.linkUrl)}</span>
-                <span className="truncate text-gray-400">{p.linkUrl}</span>
-              </a>
-            )}
-
-            {(reactionCount > 0 || p.commentCount > 0) && (
-              <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
-                <span data-testid={`reaction-summary-${p.id}`} className="flex items-center gap-1">
-                  {reactionCount > 0 && (
-                    <>
-                      <span aria-hidden>{topEmojis.map((r) => r.emoji).join('')}</span>
-                      <span>{reactionCount}</span>
-                    </>
-                  )}
-                </span>
-                {p.commentCount > 0 && <span>{p.commentCount} {p.commentCount === 1 ? 'comment' : 'comments'}</span>}
-              </div>
-            )}
-
-            {hasControls && (
-              <div className="mt-1 -ml-2 flex items-center gap-0.5 flex-wrap border-t border-gray-100 pt-1">
-                {showsReactions && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => void (mine ? react(null) : react('like'))}
-                      disabled={reacting}
-                      aria-pressed={!!mine}
-                      aria-label={mine ? `Remove your ${mine.label} reaction` : 'Like'}
-                      className={`${actionBtn} ${mine ? 'text-rsn-red' : ''}`}
-                      data-testid={`react-button-${p.id}`}
-                    >
-                      {mine ? <span aria-hidden>{mine.emoji}</span> : <ThumbsUp className="h-3.5 w-3.5" />}
-                      {mine ? mine.label : 'Like'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPickerOpen((v) => !v)}
-                      aria-label="Choose a reaction"
-                      aria-expanded={pickerOpen}
-                      className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-700"
-                      data-testid={`reaction-picker-toggle-${p.id}`}
-                    >
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    </button>
-                  </>
-                )}
-                {showsCommentButton && (
-                  <button
-                    type="button"
-                    onClick={() => setOpenComments((v) => !v)}
-                    aria-expanded={openComments}
-                    className={actionBtn}
-                    data-testid={`comment-button-${p.id}`}
-                  >
-                    <MessageCircle className="h-3.5 w-3.5" />
-                    {showsReactions ? 'Comment' : 'Comments'}
-                  </button>
-                )}
-                {config.share && (
-                  <button
-                    type="button"
-                    onClick={() => setShareOpen((v) => (v ? null : 'menu'))}
-                    className={actionBtn}
-                    aria-expanded={!!shareOpen}
-                    data-testid={`share-button-${p.id}`}
-                  >
-                    <Share2 className="h-3.5 w-3.5" />
-                    Share
-                  </button>
-                )}
-                {mayReport && config.reportKind && (
-                  <ReportPostButton
-                    kind={config.reportKind}
-                    postId={p.id}
-                    authorId={p.authorId}
-                    authorName={p.authorName}
-                    excerpt={p.content}
-                    className={actionBtn}
-                  />
-                )}
-                {(mayDelete || mayPin || mayEdit) && (
-                  // Together, at the right edge: on a 360px phone they wrap onto a line of their own as a group.
-                  <div className="ml-auto flex items-center gap-0.5">
-                    {mayEdit && !edit && (
-                      <button
-                        type="button" onClick={() => onEdit(content, editedAt)}
-                        className={`${actionBtn} text-gray-400 hover:text-gray-800`}
-                        aria-label="Edit post" title="Edit post"
-                        data-testid={`edit-post-button-${p.id}`}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {mayDelete && (
-                      <button type="button" onClick={() => void del()} className={`${actionBtn} text-gray-300 hover:text-red-500`} aria-label="Delete post" title="Delete post" data-testid={`delete-post-${p.id}`}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {mayPin && (
-                      <button
-                        type="button" onClick={() => void pin()}
-                        className={`${actionBtn} ${p.pinnedAt ? 'text-rsn-red' : 'text-gray-300'}`}
-                        aria-label={p.pinnedAt ? 'Unpin post' : 'Pin post'}
-                        title={p.pinnedAt ? 'Unpin post' : 'Pin post'}
-                        data-testid={`pin-post-${p.id}`}
-                      >
-                        <Pin className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {pickerOpen && (
-              <div
-                role="group" aria-label="Choose a reaction"
-                className="mt-1 flex flex-wrap gap-1 rounded-xl border border-gray-200 bg-white p-1 shadow-sm"
-                data-testid={`reaction-picker-${p.id}`}
-              >
-                {REACTIONS.map((r) => (
-                  <button
-                    key={r.key} type="button"
-                    onClick={() => void react(myReaction === r.key ? null : r.key)}
-                    aria-label={`React: ${r.label}`}
-                    aria-pressed={myReaction === r.key}
-                    className={`flex min-h-[44px] min-w-[44px] items-center gap-1 rounded-lg px-2 text-xs hover:bg-gray-50 ${myReaction === r.key ? 'bg-rsn-red-light text-rsn-red' : 'text-gray-700'}`}
-                  >
-                    <span className="text-lg" aria-hidden>{r.emoji}</span>
-                    <span className="hidden sm:inline">{r.label}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {config.share && shareOpen === 'menu' && (
-              <div className="mt-1 flex flex-wrap gap-1 rounded-xl border border-gray-200 bg-white p-1 shadow-sm" data-testid={`share-menu-${p.id}`}>
-                <button type="button" onClick={() => void copyLink()} className={actionBtn} data-testid={`copy-link-${p.id}`}>
-                  <Link2 className="h-3.5 w-3.5" /> Copy link
-                </button>
-                {config.share.renderTargetForm && (
-                  <button type="button" onClick={() => setShareOpen('target')} className={actionBtn} data-testid={`share-to-circle-${p.id}`}>
-                    <Share2 className="h-3.5 w-3.5" /> Share to a circle
-                  </button>
-                )}
-              </div>
-            )}
-            {config.share?.renderTargetForm && shareOpen === 'target' && config.share.renderTargetForm({ post: p, onDone: () => setShareOpen(null) })}
-
+            <WallPostBody post={p} content={content} highlighted={highlighted} edit={edit} gone={gone} onEdit={onEdit} onSave={saveEdit} />
+            <ReactionSummaryRow post={p} r={r} />
+            <WallPostActions
+              config={config} post={p} viewer={viewer} userId={userId} content={content} editedAt={editedAt}
+              edit={edit} onEdit={onEdit} gone={gone} r={r}
+              openComments={openComments} onToggleComments={() => setOpenComments((v) => !v)}
+              onChanged={onChanged} onRemoved={onRemoved}
+            />
             {openComments && !gone && (
               <WallComments config={config} postId={p.id} viewer={viewer} userId={userId} onChanged={onChanged} />
             )}
           </div>
         </div>
       </Card>
-      {confirmDialog}
     </div>
   );
 }

@@ -39,14 +39,14 @@ import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { E } from '../../realtime/entities';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
-import { fanoutCircleWall } from '../../realtime/fanout';
+import { fanoutCircleWall, fanoutCircleWallShares } from '../../realtime/fanout';
 import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { FORMER_MEMBER_NAME, activeMemberSql } from '../users/active-member';
 import { isPlatformAdmin } from './circle-managers';
 import {
-  EDIT_EMPTY_COMMENT, EDIT_EMPTY_POST, ONLY_OWN_EDITS, WALL_PINNED_MAX, commentRemoved, editConflict, editStampHolds,
-  pinsFull, postRemoved, recordModeration,
+  EDIT_EMPTY_COMMENT, EDIT_EMPTY_POST, ONLY_OWN_EDITS, WALL_PINNED_MAX, commentBellLink, commentRemoved, editConflict,
+  editStampHolds, pinsFull, postRemoved, purgeCommentBells, purgePostBells, recordModeration, tellBellOwners,
 } from '../wall/wall-moderation';
 
 /** What a reader outside a closed circle is told by every read of its wall (30 Oct review 7.5). */
@@ -106,6 +106,8 @@ export interface WallPost {
   reactions: Partial<Record<ReactionKind, number>>;
   myReaction: ReactionKind | null;
   sharedFrom: SharedFrom | null;
+  /** S4 fix round 1: a share whose original the viewer may not see; drawn as "This post isn't available". */
+  sharedUnavailable: boolean;
 }
 
 export interface ReactionSummary {
@@ -350,15 +352,16 @@ async function ringCircleMembers(circleId: string, authorId: string, bell: Omit<
 }
 
 /**
- * One bell to one person about something another member did, deduped per (person, type, link) inside a window. They
- * must still be in the circle, with an open account and group bells on, and not blocked by the actor or blocking them.
- * Never throws.
+ * One bell to one person about something another member did, deduped per (person, type, post) inside a window: the
+ * post's link, or a comment's link under it (S4 fix round 1: a comment's bell names the comment, so it can be removed
+ * with it). They must still be in the circle, with an open account and group bells on, and not blocked by the actor or
+ * blocking them. Never throws.
  */
 async function ringOne(
   circleId: string,
   recipientId: string,
   actorId: string,
-  bell: BellPayload,
+  bell: BellPayload & { postLink: string },
   dedupeMinutes: number,
 ): Promise<void> {
   try {
@@ -375,12 +378,13 @@ async function ringOne(
               OR (b.blocker_id = $7 AND b.blocked_id = u.id))
          AND NOT EXISTS (
            SELECT 1 FROM notifications n
-           WHERE n.user_id = u.id AND n.type = $3::text AND n.link = $6::text
+           WHERE n.user_id = u.id AND n.type = $3::text
+             AND (n.link = $9::text OR starts_with(n.link, $9::text || '&'))
              AND n.created_at > NOW() - make_interval(mins => $8::int))
        RETURNING id, user_id, created_at`,
-      [recipientId, circleId, bell.type, bell.title, bell.body, bell.link, actorId, dedupeMinutes],
+      [recipientId, circleId, bell.type, bell.title, bell.body, bell.link, actorId, dedupeMinutes, bell.postLink],
     );
-    await pushBells(inserted.rows, bell);
+    await pushBells(inserted.rows, { type: bell.type, title: bell.title, body: bell.body, link: bell.link });
   } catch (err) {
     logger.warn({ err, circleId, recipientId, type: bell.type }, 'circle wall bell failed (non-fatal)');
   }
@@ -393,7 +397,7 @@ const nameOf = (access: CircleWallAccess) => access.viewerName?.trim() || 'A mem
 /** The post columns every read shares. $2 is always the viewer. */
 const POST_SELECT = `
   SELECT p.id, p.circle_id, p.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_former,
-         p.content, p.media, p.link_url, p.comment_count, p.pinned_at, p.created_at, p.edited_at,
+         p.content, p.media, p.link_url, p.comment_count, p.pinned_at, p.created_at, p.edited_at, p.shared_from_post_id,
          (SELECT count(*)::int FROM circle_post_reactions r WHERE r.post_id = p.id) AS reaction_count,
          (SELECT COALESCE(json_object_agg(x.reaction, x.n), '{}'::json)
             FROM (SELECT reaction, count(*)::int AS n FROM circle_post_reactions WHERE post_id = p.id GROUP BY reaction) x) AS reactions,
@@ -406,7 +410,11 @@ const POST_SELECT = `
             JOIN users ou ON ou.id = o.author_id
            WHERE o.id = p.shared_from_post_id AND o.deleted_at IS NULL
              AND (oc.join_policy <> 'closed'
-                  OR EXISTS (SELECT 1 FROM circle_members om WHERE om.circle_id = o.circle_id AND om.user_id = $2))) AS shared_from
+                  OR EXISTS (SELECT 1 FROM circle_members om WHERE om.circle_id = o.circle_id AND om.user_id = $2))
+             -- S4 fix round 1: blocks win on a share card too, either way (neither the words nor the name).
+             AND NOT EXISTS (SELECT 1 FROM user_blocks ob
+                              WHERE (ob.blocker_id = $2 AND ob.blocked_id = o.author_id)
+                                 OR (ob.blocker_id = o.author_id AND ob.blocked_id = $2))) AS shared_from
   FROM circle_posts p JOIN users u ON u.id = p.author_id`;
 
 export const BLOCK_FILTER = `
@@ -529,6 +537,9 @@ function mapPost(row: any): WallPost {
     reactions: row.reactions ?? {},
     myReaction: row.my_reaction ?? null,
     sharedFrom: row.shared_from ?? null,
+    // A share whose original this viewer may not see (removed, in a closed circle they are outside, or by someone
+    // blocked either way): the card says only "This post isn't available", the same for every reason.
+    sharedUnavailable: !!row.shared_from_post_id && !row.shared_from,
   };
 }
 
@@ -600,7 +611,9 @@ const LOCK_POST = `SELECT author_id, circle_id, content, media, created_at, edit
  * The author deletes their own post (D8: also once they are no longer in the circle); the circle's owner, its
  * moderators and platform admins delete any. Anyone else outside the circle is answered as if there were no such post.
  * A moderator's removal of someone else's post is recorded with its words. A post someone removed a moment before
- * answers alreadyRemoved to whoever could have removed it, and tells nobody again.
+ * answers alreadyRemoved to whoever could have removed it, and tells nobody again. S4 fix round 1: every bell that
+ * carries the post's words (its new-post, reaction, comment and reply bells) is deleted in the same transaction, and
+ * the people they were for are told; the circles holding shares of it are told too, so their cards say it is gone.
  */
 export async function deletePost(postId: string, userId: string, viewerRole?: string): Promise<{ alreadyRemoved: boolean }> {
   const done = await transaction(async (client) => {
@@ -615,7 +628,7 @@ export async function deletePost(postId: string, userId: string, viewerRole?: st
         throw post.deleted_at ? postRemoved(postId) : new ForbiddenError(ONLY_OWN_POSTS);
       }
     }
-    if (post.deleted_at) return { circleId: post.circle_id, alreadyRemoved: true };
+    if (post.deleted_at) return { circleId: post.circle_id, alreadyRemoved: true, rung: [] as string[] };
     await client.query(`UPDATE circle_posts SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1`, [postId, userId]);
     await client.query(`UPDATE circles SET post_count = GREATEST(post_count - 1, 0) WHERE id = $1`, [post.circle_id]);
     if (!own) {
@@ -624,9 +637,14 @@ export async function deletePost(postId: string, userId: string, viewerRole?: st
         snapshot: { postId, authorId: post.author_id, content: post.content, media: post.media, createdAt: post.created_at, editedAt: post.edited_at },
       });
     }
-    return { circleId: post.circle_id, alreadyRemoved: false };
+    const rung = await purgePostBells(client, 'circle', postLink(post.circle_id, postId));
+    return { circleId: post.circle_id, alreadyRemoved: false, rung };
   });
-  if (!done.alreadyRemoved) await fanoutCircleWall(done.circleId, [E.circleWallPost(postId)]);
+  if (!done.alreadyRemoved) {
+    await tellBellOwners(done.rung);
+    await fanoutCircleWall(done.circleId, [E.circleWallPost(postId)]);
+    await fanoutCircleWallShares(postId);
+  }
   return { alreadyRemoved: done.alreadyRemoved };
 }
 
@@ -718,7 +736,10 @@ export async function editPost(
     );
     return { circleId: post.circle_id, changed: true, editedAt: w.rows[0].edited_at };
   });
-  if (done.changed) await fanoutCircleWall(done.circleId, [E.circleWallPost(postId)]);
+  if (done.changed) {
+    await fanoutCircleWall(done.circleId, [E.circleWallPost(postId)]);
+    await fanoutCircleWallShares(postId);
+  }
   return { changed: done.changed, editedAt: done.editedAt };
 }
 
@@ -727,7 +748,7 @@ export async function editPost(
  * the ORIGINAL post (sharing a share points at the root, so attribution never
  * drifts). The sharer must be in the circle they share from (D2: only its members
  * read it) and in the target circle (createPost enforces it), and must not be
- * blocked either way by the original author.
+ * blocked either way by the author of the post they share or of its original.
  */
 export async function sharePost(
   postId: string,
@@ -747,10 +768,17 @@ export async function sharePost(
 
   let root = { id: postId, circleId: src.circleId };
   if (srcRow.rows[0].shared_from_post_id) {
-    const orig = await query<{ id: string; circle_id: string }>(
-      `SELECT id, circle_id FROM circle_posts WHERE id = $1 AND deleted_at IS NULL`,
-      [srcRow.rows[0].shared_from_post_id],
+    // S4 fix round 1: the ORIGINAL's author is checked against the sharer too, both ways: a share of a share must not
+    // carry a blocked person's words on (answered as a post that is not there, as for the share itself).
+    const orig = await query<{ id: string; circle_id: string; blocked: boolean }>(
+      `SELECT o.id, o.circle_id,
+              EXISTS (SELECT 1 FROM user_blocks b
+                       WHERE (b.blocker_id = $2 AND b.blocked_id = o.author_id)
+                          OR (b.blocker_id = o.author_id AND b.blocked_id = $2)) AS blocked
+         FROM circle_posts o WHERE o.id = $1 AND o.deleted_at IS NULL`,
+      [srcRow.rows[0].shared_from_post_id, userId],
     );
+    if (orig.rows[0]?.blocked) throw postNotFound(postId);
     if (orig.rows.length > 0) root = { id: orig.rows[0].id, circleId: orig.rows[0].circle_id };
     if (root.circleId !== src.circleId) await assertNotClosed(root.circleId);
   }
@@ -820,6 +848,7 @@ export async function reactToPost(
         title: `${nameOf(access)} reacted to your post`,
         body: excerpt(post.content, 'Your post on the wall'),
         link: postLink(post.circleId, postId),
+        postLink: postLink(post.circleId, postId),
       }, REACTION_BELL_DEDUPE_MINUTES);
     }
   } else {
@@ -873,7 +902,7 @@ export async function addComment(
   if (parentCommentId) {
     const parent = await query<{ id: string; author_id: string; parent_comment_id: string | null }>(
       `SELECT c.id, c.author_id, c.parent_comment_id FROM circle_post_comments c
-       WHERE c.id = $1 AND c.post_id = $2 AND c.deleted_at IS NULL
+       WHERE c.id = $1 AND c.post_id = $2 AND c.deleted_at IS NULL AND c.withdrawn_at IS NULL
          ${commentVisibleTo('$3')}`,
       [parentCommentId, postId, userId],
     );
@@ -893,11 +922,12 @@ export async function addComment(
     return { id: ins.rows[0].id, createdAt: ins.rows[0].created_at, parentCommentId: attachTo };
   });
 
-  const link = postLink(post.circleId, postId);
+  const ofPost = postLink(post.circleId, postId);
+  const link = commentBellLink(ofPost, made.id);
   const name = nameOf(access);
   if (repliedToAuthor && repliedToAuthor !== userId) {
     await ringOne(post.circleId, repliedToAuthor, userId, {
-      type: 'circle_reply', title: `${name} replied to your comment`, body: excerpt(trimmed, 'See the reply'), link,
+      type: 'circle_reply', title: `${name} replied to your comment`, body: excerpt(trimmed, 'See the reply'), link, postLink: ofPost,
     }, COMMENT_BELL_DEDUPE_MINUTES);
   }
   if (post.authorId !== userId && post.authorId !== repliedToAuthor) {
@@ -906,6 +936,7 @@ export async function addComment(
       title: `${name} commented on your post`,
       body: excerpt(trimmed, excerpt(post.content, 'See the comment')),
       link,
+      postLink: ofPost,
     }, COMMENT_BELL_DEDUPE_MINUTES);
   }
   await fanoutCircleWall(post.circleId, [E.circleWallPost(postId)]);
@@ -920,11 +951,14 @@ export interface WallComment {
   likeCount: number; likedByMe: boolean;
   /** S4: when its author last changed its words; null when never. */
   editedAt: Date | null;
+  /** S4 fix round 1: its author deleted it while it had replies: no words, "This comment was deleted", replies stay. */
+  withdrawn: boolean;
 }
 
 /**
  * A post's comments and replies, oldest first, without authors blocked either way and without replies under a comment
  * the viewer cannot see. At most 400: `truncated` says there are more. Someone outside the circle: as if no such post.
+ * A withdrawn comment is listed (with no words) only while a reply under it is still there.
  */
 export async function listComments(
   postId: string,
@@ -934,21 +968,25 @@ export async function listComments(
   await postInReach(postId, viewerId, viewerRole);
   const r = await query<any>(
     `SELECT c.id, c.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_former,
-            c.content, c.created_at, c.edited_at, c.parent_comment_id,
+            c.content, c.created_at, c.edited_at, c.withdrawn_at, c.parent_comment_id,
             (SELECT count(*)::int FROM circle_comment_likes l WHERE l.comment_id = c.id) AS like_count,
             EXISTS (SELECT 1 FROM circle_comment_likes l WHERE l.comment_id = c.id AND l.user_id = $2) AS liked_by_me
      FROM circle_post_comments c JOIN users u ON u.id = c.author_id
      WHERE c.post_id = $1 AND c.deleted_at IS NULL
+       AND (c.withdrawn_at IS NULL OR EXISTS (
+         SELECT 1 FROM circle_post_comments wr WHERE wr.parent_comment_id = c.id AND wr.deleted_at IS NULL))
        ${commentVisibleTo('$2')}
      ORDER BY c.created_at ASC, c.id ASC LIMIT $3`,
     [postId, viewerId, COMMENTS_SHOWN + 1],
   );
   // `any`: a row of the SELECT above.
   const comments = r.rows.slice(0, COMMENTS_SHOWN).map((row: any): WallComment => ({
-    id: row.id, authorId: row.author_id, ...authorOf(row), content: row.content, createdAt: row.created_at,
+    id: row.id, authorId: row.author_id, ...authorOf(row),
+    content: row.withdrawn_at ? '' : row.content, createdAt: row.created_at,
     parentCommentId: row.parent_comment_id ?? null,
     likeCount: row.like_count ?? 0, likedByMe: !!row.liked_by_me,
     editedAt: row.edited_at ?? null,
+    withdrawn: !!row.withdrawn_at,
   }));
   return { comments, truncated: r.rows.length > COMMENTS_SHOWN };
 }
@@ -961,7 +999,7 @@ export async function likeComment(
 ): Promise<{ likeCount: number; likedByMe: boolean }> {
   const c = await query<{ circle_id: string; post_id: string }>(
     `SELECT p.circle_id, c.post_id FROM circle_post_comments c JOIN circle_posts p ON p.id = c.post_id
-     WHERE c.id = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL
+     WHERE c.id = $1 AND c.deleted_at IS NULL AND c.withdrawn_at IS NULL AND p.deleted_at IS NULL
        ${BLOCK_FILTER}
        ${commentVisibleTo('$2')}`,
     [commentId, userId],
@@ -1000,9 +1038,10 @@ export async function editComment(
   const done = await transaction(async (client) => {
     const r = await client.query<{
       author_id: string; post_id: string; circle_id: string; content: string; edited_at: Date | null;
-      deleted_at: Date | null; post_deleted_at: Date | null; archived: boolean; is_member: boolean;
+      deleted_at: Date | null; withdrawn_at: Date | null; post_deleted_at: Date | null; archived: boolean; is_member: boolean;
     }>(
-      `SELECT c.author_id, c.post_id, p.circle_id, c.content, c.edited_at, c.deleted_at, p.deleted_at AS post_deleted_at,
+      `SELECT c.author_id, c.post_id, p.circle_id, c.content, c.edited_at, c.deleted_at, c.withdrawn_at,
+              p.deleted_at AS post_deleted_at,
               (ci.archived_at IS NOT NULL) AS archived,
               EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = p.circle_id AND m.user_id = $2) AS is_member
          FROM circle_post_comments c
@@ -1019,7 +1058,7 @@ export async function editComment(
       throw new ForbiddenError(ONLY_OWN_EDITS);
     }
     if (comment.post_deleted_at) throw postRemoved(comment.post_id);
-    if (comment.deleted_at) throw commentRemoved(commentId);
+    if (comment.deleted_at || comment.withdrawn_at) throw commentRemoved(commentId);
     if (!comment.is_member) throw new ForbiddenError(NO_LONGER_IN);
     if (comment.archived) throw new AppError(409, ErrorCodes.CIRCLE_ARCHIVED, CIRCLE_ARCHIVED_READ_ONLY);
     if (!editStampHolds(comment.edited_at, input.expectedEditedAt)) throw editConflict();
@@ -1038,9 +1077,15 @@ export async function editComment(
 
 /**
  * Delete a comment: its author (D8: also once they are no longer in the circle), the circle's owner or a moderator, or
- * a platform admin, archived or not. Its replies go with it and the post's count drops by all of them; each row records
- * who removed it, and a moderator's removal of someone else's comment is recorded with its words. A comment removed a
- * moment before answers alreadyRemoved. Anyone else outside the circle: as if there were no such comment.
+ * a platform admin, archived or not. Each row records who removed it, and the bells that carry its words are deleted in
+ * the same transaction (their people are told once it commits).
+ *   * A moderator removes the comment and its replies, and the post's count drops by every live one of them; the
+ *     removal of someone else's words is recorded with them.
+ *   * Its author (S4 fix round 1, controller ruling) never takes other people's words with theirs: a top-level comment
+ *     that still has replies is withdrawn (its words cleared, "This comment was deleted", the replies stay); any other
+ *     is removed alone. An author's own deletion is not a moderation and is not recorded.
+ * A comment removed or withdrawn a moment before answers alreadyRemoved to whoever could have removed it. Anyone else
+ * outside the circle: as if there were no such comment.
  */
 export async function deleteComment(
   commentId: string,
@@ -1050,9 +1095,10 @@ export async function deleteComment(
   const done = await transaction(async (client) => {
     const r = await client.query<{
       author_id: string; post_id: string; circle_id: string; content: string; created_at: Date;
-      edited_at: Date | null; deleted_at: Date | null;
+      edited_at: Date | null; deleted_at: Date | null; withdrawn_at: Date | null; has_replies: boolean;
     }>(
-      `SELECT c.author_id, c.post_id, p.circle_id, c.content, c.created_at, c.edited_at, c.deleted_at
+      `SELECT c.author_id, c.post_id, p.circle_id, c.content, c.created_at, c.edited_at, c.deleted_at, c.withdrawn_at,
+              EXISTS (SELECT 1 FROM circle_post_comments rr WHERE rr.parent_comment_id = c.id AND rr.deleted_at IS NULL) AS has_replies
          FROM circle_post_comments c JOIN circle_posts p ON p.id = c.post_id
         WHERE c.id = $1 AND p.deleted_at IS NULL
         FOR UPDATE OF c`,
@@ -1068,29 +1114,52 @@ export async function deleteComment(
         throw comment.deleted_at ? commentRemoved(commentId) : new ForbiddenError(ONLY_OWN_COMMENTS);
       }
     }
-    if (comment.deleted_at) return { circleId: comment.circle_id, postId: comment.post_id, alreadyRemoved: true };
-    const gone = await client.query<{ id: string }>(
+    const ofPost = postLink(comment.circle_id, comment.post_id);
+    const nothing = { circleId: comment.circle_id, postId: comment.post_id, alreadyRemoved: true, rung: [] as string[] };
+    if (comment.deleted_at || (own && comment.withdrawn_at)) return nothing;
+
+    if (own && comment.has_replies) {
+      await client.query(
+        `UPDATE circle_post_comments SET content = '', withdrawn_at = NOW(), deleted_by = $2 WHERE id = $1`,
+        [commentId, userId],
+      );
+      if (!comment.withdrawn_at) {
+        await client.query(`UPDATE circle_posts SET comment_count = GREATEST(comment_count - 1, 0) WHERE id = $1`, [comment.post_id]);
+      }
+      const rung = await purgeCommentBells(client, 'circle', [commentBellLink(ofPost, commentId)]);
+      return { ...nothing, alreadyRemoved: false, rung };
+    }
+
+    // Its author's comment with no replies, or a moderator's removal of a comment and its thread.
+    const gone = await client.query<{ id: string; withdrawn_at: Date | null }>(
       `UPDATE circle_post_comments SET deleted_at = NOW(), deleted_by = $2
-       WHERE (id = $1 OR parent_comment_id = $1) AND deleted_at IS NULL
-       RETURNING id`,
-      [commentId, userId],
+       WHERE (id = $1 OR ($3::boolean AND parent_comment_id = $1)) AND deleted_at IS NULL
+       RETURNING id, withdrawn_at`,
+      [commentId, userId, !own],
     );
-    const removed = Math.max(gone.rowCount ?? 1, 1);
-    await client.query(
-      `UPDATE circle_posts SET comment_count = GREATEST(comment_count - $2, 0) WHERE id = $1`,
-      [comment.post_id, removed],
-    );
+    // A withdrawn comment was already taken off the count when it was withdrawn.
+    const counted = gone.rows.filter((row) => !row.withdrawn_at).length;
+    if (counted > 0) {
+      await client.query(
+        `UPDATE circle_posts SET comment_count = GREATEST(comment_count - $2, 0) WHERE id = $1`,
+        [comment.post_id, counted],
+      );
+    }
     if (!own) {
       await recordModeration(client, {
         actorId: userId, action: 'wall_comment_removed', space: 'circle', spaceId: comment.circle_id,
         snapshot: {
           postId: comment.post_id, commentId, authorId: comment.author_id, content: comment.content,
-          createdAt: comment.created_at, editedAt: comment.edited_at, repliesRemoved: removed - 1,
+          createdAt: comment.created_at, editedAt: comment.edited_at, repliesRemoved: Math.max(gone.rows.length - 1, 0),
         },
       });
     }
-    return { circleId: comment.circle_id, postId: comment.post_id, alreadyRemoved: false };
+    const rung = await purgeCommentBells(client, 'circle', gone.rows.map((row) => commentBellLink(ofPost, row.id)));
+    return { ...nothing, alreadyRemoved: false, rung };
   });
-  if (!done.alreadyRemoved) await fanoutCircleWall(done.circleId, [E.circleWallPost(done.postId)]);
+  if (!done.alreadyRemoved) {
+    await tellBellOwners(done.rung);
+    await fanoutCircleWall(done.circleId, [E.circleWallPost(done.postId)]);
+  }
   return { postId: done.postId, alreadyRemoved: done.alreadyRemoved };
 }

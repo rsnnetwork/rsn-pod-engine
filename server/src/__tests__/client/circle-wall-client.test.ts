@@ -16,11 +16,13 @@ import {
   CIRCLE_WALL_NOT_MEMBER, circleCannotPostNote, circleWallConfig,
 } from '../../../../client/src/features/circles/circle-wall-config';
 import {
-  CLAMP_CLASS, EDITED_LABEL, LINKED_POST_REMOVED, canDeleteWallItem, canEditWallItem, deletedSentence, overflowsClamp,
+  CLAMP_CLASS, CLAMP_LINES, EDITED_LABEL, LINKED_POST_REMOVED, SHARED_UNAVAILABLE, WITHDRAWN_COMMENT, canDeleteWallItem, canEditWallItem,
+  clampHeight, deletedSentence, newerStamp, overflowsClamp,
 } from '../../../../client/src/components/wall/wall-logic';
 import { CIRCLE_WALL_MEMBERS_ONLY } from '../../services/circle/circle-wall.service';
 
 const CLIENT_SRC = path.join(__dirname, '../../../../client/src');
+const NL = String.fromCharCode(10);
 const read = (rel: string) => fs.readFileSync(path.join(CLIENT_SRC, rel), 'utf8').replace(/\r\n/g, '\n');
 
 const CIRCLE = '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03';
@@ -129,8 +131,11 @@ describe('the screens', () => {
   const circleWall = read('features/circles/CircleWall.tsx');
   const page = read('features/circles/CircleDetailPage.tsx');
   const wall = read('components/wall/Wall.tsx');
-  const card = read('components/wall/WallPostCard.tsx');
-  const comments = read('components/wall/WallComments.tsx');
+  const held = read('components/wall/useHeldPostEdit.ts');
+  const notices = read('components/wall/WallNotices.tsx');
+  // S4 fix round 1: the post card is split into its body, reactions and actions; the comment row out of the comments.
+  const card = ['WallPostCard', 'WallPostBody', 'WallPostActions', 'WallPostReactions'].map((f) => read(`components/wall/${f}.tsx`)).join(NL);
+  const comments = ['WallComments', 'WallCommentRow'].map((f) => read(`components/wall/${f}.tsx`)).join(NL);
   const clamped = read('components/wall/ClampedText.tsx');
   const form = read('components/wall/WallEditForm.tsx');
 
@@ -154,22 +159,36 @@ describe('the screens', () => {
   });
 
   it('a delete that someone else made a moment before says so', () => {
-    expect(card).toMatch(/deletedSentence\('post', r\.data\?\.data\?\.alreadyRemoved\)/);
+    expect(card).toMatch(/deletedSentence\('post', res\.data\?\.data\?\.alreadyRemoved\)/);
     expect(comments).toMatch(/deletedSentence\('comment', r\.data\?\.data\?\.alreadyRemoved\)/);
   });
 
   it('the wall holds the edit, so a post removed while it is open stays as "This post was removed." with the text', () => {
-    expect(wall).toMatch(/const \[editing, setEditing\] = useState</);
-    expect(wall).toMatch(/const heldGone = !!editing && !loadedIds\.has\(editing\.post\.id\)/);
-    expect(wall).toMatch(/\{held && card\(held, false, false, heldGone\)\}/);
+    expect(held).toMatch(/const \[editing, setEditing\] = useState</);
+    expect(wall).toMatch(/\{heldPost && card\(heldPost\.post, false, false, heldPost\.gone\)\}/);
     expect(card).toMatch(/gone=\{gone \? LINKED_POST_REMOVED : undefined\}/);
+  });
+
+  it('fix round 1: an edited post pushed off the loaded pages is looked up by id, and only a 404 makes it "removed"', () => {
+    expect(held).toMatch(/queryFn: \(\) => api\.get\(`\$\{config\.itemBase\}\/posts\/\$\{out\}`\)/);
+    expect(held).toMatch(/meta: \{ entities: config\.entities\.post\(out \?\? ''\) \}/);
+    expect(held).toMatch(/gone: out !== undefined && lookup\.isError && isNotFound\(lookup\.error\)/);
+    expect(held).toMatch(/loaded\.rest\.find\(\(p\) => p\.id === editing\.post\.id\) \?\? \(out \? lookup\.data : undefined\) \?\? editing\.post/);
   });
 
   it('a link to a post that has gone says "This post was removed." where it would be, not in a passing toast', () => {
     // While its author's edit of it is open, the edit itself says it was removed (once, not twice).
-    expect(wall).toMatch(/const linkedGone = wanted !== undefined && !loadedIds\.has\(wanted\) && linked\.isError && editing\?\.post\.id !== wanted;/);
-    expect(wall).toMatch(/data-testid=\{`\$\{config\.testId\}-linked-removed`\}/);
+    expect(wall).toMatch(/const linkedOut = wanted !== undefined && !loadedIds\.has\(wanted\) && linked\.isError && held\.editingId !== wanted;/);
+    expect(notices).toMatch(/data-testid=\{`\$\{config\.testId\}-linked-removed`\}/);
     expect(wall).not.toMatch(/That post is no longer available/);
+  });
+
+  it('fix round 1: only a 404 says "removed"; offline or a server fault says so in words and offers Try again', () => {
+    expect(wall).toMatch(/const linkedGone = linkedOut && isNotFound\(linked\.error\);/);
+    expect(wall).toMatch(/const linkedFailed = linkedOut && !isNotFound\(linked\.error\);/);
+    expect(notices).toMatch(/wallErrorSentence\(error, 'We could not open that post just now\.'\)/);
+    expect(notices).toMatch(/data-testid=\{`\$\{config\.testId\}-linked-failed`\}/);
+    expect(notices).toMatch(/onClick=\{onRetry\} className="mt-2 min-h-\[44px\]">Try again</);
   });
 
   it('a comment: Edit by canEditWallItem, PATCH with its stamp, "Edited", cut at six lines, held when it goes', () => {
@@ -180,10 +199,39 @@ describe('the screens', () => {
     expect(comments).toMatch(/gone=\{gone \? 'This comment was removed\.' : undefined\}/);
   });
 
+  it('fix round 1: a comment edit reopened right after a save opens with the version the server answered', () => {
+    expect(comments).toMatch(/saved\.current\[c\.id\] = \{ content: text, editedAt:/);
+    expect(comments).toMatch(/const stamp = newerStamp\(c\.editedAt, mine\?\.editedAt\);/);
+    expect(comments).toMatch(/onEdit=\{\(\) => setEditing\(openedEdit\(c\)\)\}/);
+  });
+
+  it('fix round 1: a withdrawn comment says "This comment was deleted." with its replies under it; only a moderator can clear it', () => {
+    expect(comments).toMatch(/if \(c\.withdrawn\) \{/);
+    expect(comments).toMatch(/\{WITHDRAWN_COMMENT\}/);
+    expect(comments).toMatch(/\{viewer\.canModerate && \(/);
+    expect(comments).toMatch(/The replies stay\. This cannot be undone\./);
+  });
+
+  it("fix round 1: a share card the viewer may not see says only \"This post isn't available\"", () => {
+    expect(card).toMatch(/\) : p\.sharedUnavailable && \(/);
+    expect(card).toMatch(/\{SHARED_UNAVAILABLE\}/);
+    expect(card).toMatch(/allowEmpty=\{p\.media\.length > 0 \|\| !!p\.sharedFrom \|\| !!p\.sharedUnavailable\}/);
+  });
+
+  it('fix round 10: no wall component is over 200 lines', () => {
+    for (const f of ['Wall', 'WallPostCard', 'WallPostBody', 'WallPostActions', 'WallPostReactions', 'WallCommentRow', 'WallNotices', 'ClampedText', 'WallEditForm']) {
+      const lines = read(`components/wall/${f}.tsx`).split(NL).length;
+      expect({ f, under200: lines <= 200 }).toEqual({ f, under200: true });
+    }
+  });
+
   it('long words never scroll sideways at 360px, and "Show more" is a 44px target measured from the box', () => {
     expect(clamped).toMatch(/min-w-0 whitespace-pre-wrap break-words \[overflow-wrap:anywhere\]/);
     expect(clamped).toMatch(/CLAMP_CLASS\[kind\]/);
     expect(clamped).toMatch(/new ResizeObserver\(measure\)/);
+    // Fix round 1: drawn open from a link, it is measured against the clamp's lines, so it still offers "Show less".
+    expect(clamped).toMatch(/clampHeight\(style\.lineHeight, style\.fontSize, CLAMP_LINES\[kind\]\)/);
+    expect(clamped).not.toMatch(/if \(!el \|\| expanded\) return/);
     expect(clamped).toMatch(/className="min-h-\[44px\]/);
   });
 
@@ -199,5 +247,26 @@ describe('the screens', () => {
     for (const src of [clamped, form, circleWall, read('features/circles/circle-wall-config.ts')]) {
       expect(src).not.toMatch(/setQueryData|setInterval|refetchInterval|window\.location\.reload/);
     }
+  });
+});
+
+describe('fix round 1: the pure rules', () => {
+  it('a reopened edit takes the later stamp of the list and the last save', () => {
+    expect(newerStamp(null, null)).toBeNull();
+    expect(newerStamp('2026-11-11T10:00:00.000Z', null)).toBe('2026-11-11T10:00:00.000Z');
+    expect(newerStamp(null, '2026-11-11T10:00:00.000Z')).toBe('2026-11-11T10:00:00.000Z');
+    expect(newerStamp('2026-11-11T10:00:00.000Z', '2026-11-11T10:05:00.000Z')).toBe('2026-11-11T10:05:00.000Z');
+    expect(newerStamp('2026-11-11T10:05:00.000Z', '2026-11-11T10:00:00.000Z')).toBe('2026-11-11T10:05:00.000Z');
+  });
+
+  it('a text drawn open is measured against the clamp: its lines times its line height (normal = 1.5 x the font)', () => {
+    expect(CLAMP_LINES).toEqual({ post: 10, comment: 6 });
+    expect(clampHeight('20px', '14px', 10)).toBe(200);
+    expect(clampHeight('normal', '16px', 6)).toBe(144);
+  });
+
+  it('the words', () => {
+    expect(SHARED_UNAVAILABLE).toBe("This post isn't available");
+    expect(WITHDRAWN_COMMENT).toBe('This comment was deleted.');
   });
 });

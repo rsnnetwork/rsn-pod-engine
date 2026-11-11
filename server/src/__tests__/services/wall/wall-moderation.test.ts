@@ -1,7 +1,8 @@
 // ─── What both walls share about editing and moderation (Shirley pilot S4, 11 Nov 2026) ─────────────────────────
 
 import {
-  EDIT_CONFLICT, PINS_FULL, WALL_PINNED_MAX, editConflict, editStampHolds, pinsFull, postRemoved, commentRemoved, recordModeration,
+  EDIT_CONFLICT, PINS_FULL, WALL_BELL_TYPES, WALL_PINNED_MAX, commentBellLink, editConflict, editStampHolds, pinsFull, postRemoved,
+  commentRemoved, purgeCommentBells, purgePostBells, recordModeration, tellBellOwners,
 } from '../../../services/wall/wall-moderation';
 
 describe('the edit stamp an editor opened', () => {
@@ -54,5 +55,42 @@ describe('recordModeration', () => {
     expect(JSON.parse(params[4])).toEqual({
       wall: 'circle', postId: 'p-1', authorId: 'a-1', content: 'rude', createdAt: '2026-11-11T10:00:00.000Z', editedAt: null,
     });
+  });
+});
+
+describe('fix round 1: bells that carry removed words', () => {
+  it('a comment\'s bell link is the post\'s, naming the comment', () => {
+    expect(commentBellLink('/circles/c?post=p', 'k')).toBe('/circles/c?post=p&comment=k');
+  });
+
+  it('a post\'s bells: every wall bell type of the space, its link or a comment link under it; each person once', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [{ user_id: 'a' }, { user_id: 'b' }, { user_id: 'a' }] });
+    await expect(purgePostBells({ query } as never, 'pod', '/pods/x?post=p')).resolves.toEqual(['a', 'b']);
+    const [sql, params] = query.mock.calls[0];
+    expect(String(sql).replace(/\s+/g, ' ').trim()).toBe(
+      `DELETE FROM notifications WHERE type IN ('pod_post', 'pod_reaction', 'pod_comment', 'pod_reply') AND (link = $1 OR link LIKE $2) RETURNING user_id`,
+    );
+    expect(params).toEqual(['/pods/x?post=p', '/pods/x?post=p&%']);
+    expect(WALL_BELL_TYPES.pod).toEqual(['pod_post', 'pod_reaction', 'pod_comment', 'pod_reply']);
+    expect(WALL_BELL_TYPES.circle).toEqual(['circle_post', 'circle_reaction', 'circle_comment', 'circle_reply']);
+  });
+
+  it('comments\' bells: exactly the links named; none named, nothing asked', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [{ user_id: 'c' }] });
+    await expect(purgeCommentBells({ query } as never, 'circle', [])).resolves.toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+    await expect(purgeCommentBells({ query } as never, 'circle', ['/l1', '/l2'])).resolves.toEqual(['c']);
+    expect(String(query.mock.calls[0][0])).toBe(`DELETE FROM notifications WHERE type IN ('circle_post', 'circle_reaction', 'circle_comment', 'circle_reply') AND link = ANY($1::text[]) RETURNING user_id`);
+    expect(query.mock.calls[0][1]).toEqual([['/l1', '/l2']]);
+  });
+
+  it('a link used as a LIKE prefix cannot widen it: %, _ and backslash are escaped', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [] });
+    await purgePostBells({ query } as never, 'circle', '/c/a_b%c\\d');
+    expect(query.mock.calls[0][1][1]).toBe('/c/a\\_b\\%c\\\\d&%');
+  });
+
+  it('telling the people is quiet when there is no socket server', async () => {
+    await expect(tellBellOwners(['a'])).resolves.toBeUndefined();
   });
 });

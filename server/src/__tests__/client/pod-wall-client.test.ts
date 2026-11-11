@@ -18,6 +18,7 @@ import { podEventsInOrder } from '../../../../client/src/features/pods/pod-event
 
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
 const CLIENT_SRC = path.join(__dirname, '../../../../client/src');
+const NL = String.fromCharCode(10);
 const read = (rel: string) => fs.readFileSync(path.join(CLIENT_SRC, rel), 'utf8').replace(/\r\n/g, '\n');
 const WALL_DIR = path.join(CLIENT_SRC, 'components/wall');
 const wallFiles = () => fs.readdirSync(WALL_DIR).filter((f) => /\.tsx?$/.test(f)).map((f) => ({ name: f, src: read(`components/wall/${f}`) }));
@@ -158,7 +159,7 @@ describe('every query of the wall declares the entities it depends on', () => {
     ]);
     // The feed, the single linked post and a post's comments.
     expect(calls.map((c) => `${c.file}:${c.hook}`).sort()).toEqual([
-      'Wall.tsx:useInfiniteQuery', 'Wall.tsx:useQuery', 'WallComments.tsx:useQuery',
+      'Wall.tsx:useInfiniteQuery', 'Wall.tsx:useQuery', 'WallComments.tsx:useQuery', 'useHeldPostEdit.ts:useQuery',
     ]);
     for (const c of calls) expect({ ...c, declares: /meta:\s*\{\s*entities:\s*config\.entities\./.test(c.body) }).toEqual({ ...c, declares: true });
   });
@@ -207,8 +208,9 @@ describe('every query of the wall declares the entities it depends on', () => {
 });
 
 describe('moderation and posting are separate in the components too', () => {
-  const card = read('components/wall/WallPostCard.tsx');
-  const comments = read('components/wall/WallComments.tsx');
+  // S4 fix round 1: the post card is split into its body, reactions and actions; the comment row out of the comments.
+  const card = ['WallPostCard', 'WallPostBody', 'WallPostActions', 'WallPostReactions'].map((f) => read(`components/wall/${f}.tsx`)).join(NL);
+  const comments = ['WallComments', 'WallCommentRow'].map((f) => read(`components/wall/${f}.tsx`)).join(NL);
   const wall = read('components/wall/Wall.tsx');
 
   it('Delete is shown by canDeleteWallItem (a moderator, or the author), Pin by canPinWallPost, never by canPost', () => {

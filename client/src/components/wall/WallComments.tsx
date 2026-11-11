@@ -12,21 +12,15 @@
 
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
-import { CornerDownRight, Send, Trash2 } from 'lucide-react';
-import Avatar from '@/components/ui/Avatar';
+import { Send } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import { useConfirm } from '@/hooks/useConfirm';
-import ReportCommentButton from './ReportCommentButton';
-import ClampedText from './ClampedText';
+import WallCommentRow from './WallCommentRow';
 import WallEditForm from './WallEditForm';
-import {
-  EDITED_LABEL, canDeleteWallItem, canEditWallItem, deletedSentence, isConflict, normalizeComments, retryUnlessAnswered, threadOf,
-  timeAgo, wallErrorSentence,
-} from './wall-logic';
+import { deletedSentence, isConflict, newerStamp, normalizeComments, retryUnlessAnswered, threadOf, wallErrorSentence } from './wall-logic';
 import type { WallCommentList, WallComment, WallConfig, WallViewer } from './wall-types';
 
 const inputClass = 'min-h-[44px] min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rsn-red/30';
@@ -99,7 +93,12 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
   };
 
   const remove = async (c: WallComment) => {
-    if (!(await ask({ title: 'Delete this comment?', body: 'Its replies go with it. This cannot be undone.', confirmLabel: 'Delete', tone: 'danger' }))) return;
+    // Fix round 1: the author's own delete keeps other people's replies; a moderator's takes the thread.
+    const own = c.authorId === userId;
+    const body = own && !c.parentCommentId && repliesOf(c.id).length > 0
+      ? 'It will read "This comment was deleted". The replies stay. This cannot be undone.'
+      : own || c.parentCommentId ? 'This cannot be undone.' : 'Its replies go with it. This cannot be undone.';
+    if (!(await ask({ title: 'Delete this comment?', body, confirmLabel: 'Delete', tone: 'danger' }))) return;
     try {
       const r = await api.delete(`${config.itemBase}/comments/${c.id}`);
       addToast(deletedSentence('comment', r.data?.data?.alreadyRemoved), 'info');
@@ -111,10 +110,21 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
     }
   };
 
+  // What each of the author's saves wrote and the stamp it answered, so a quick reopen (before the list has refreshed)
+  // opens with the version the server has, and is not refused as stale (fix round 1).
+  const saved = useRef<Record<string, { content: string; editedAt: string | null }>>({});
   const saveEdit = async (c: WallComment, text: string) => {
-    await api.patch(`${config.itemBase}/comments/${c.id}`, { content: text, expectedEditedAt: editing?.stamp ?? null });
+    const res = await api.patch(`${config.itemBase}/comments/${c.id}`, { content: text, expectedEditedAt: editing?.stamp ?? null });
+    saved.current[c.id] = { content: text, editedAt: (res.data?.data?.editedAt as string | null | undefined) ?? null };
     setEditing(null);
     void reload();
+  };
+
+  const openedEdit = (c: WallComment) => {
+    const mine = saved.current[c.id];
+    const stamp = newerStamp(c.editedAt, mine?.editedAt);
+    const fresher = !!mine && stamp === mine.editedAt && stamp !== (c.editedAt ?? null);
+    return { comment: c, draft: fresher ? mine.content : c.content, stamp };
   };
 
   const editForm = (c: WallComment, gone: boolean) => editing && (
@@ -134,99 +144,35 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
   // A comment whose edit is open but that is no longer in the thread (removed, or its parent was).
   const heldGone = editing && !all.some((c) => c.id === editing.comment.id) ? editing.comment : null;
 
-  const renderComment = (c: WallComment, isReply: boolean) => {
-    const href = !c.authorClosed && config.authorHref ? config.authorHref(c.authorId) : null;
-    const avatar = <Avatar src={c.authorAvatarUrl || undefined} name={c.authorName || 'Member'} size="sm" />;
-    return (
-      <div key={c.id} className={`flex items-start gap-2 ${isReply ? 'ml-8' : ''}`} data-testid={`comment-${c.id}`}>
-        {isReply && <CornerDownRight className="mt-2 h-3 w-3 shrink-0 text-gray-300" aria-hidden />}
-        {href ? (
-          // A 44px target around the 32px picture; the negative margin keeps the row where it was.
-          <Link to={href} className="-m-1.5 flex h-11 w-11 shrink-0 items-center justify-center" aria-label={`${c.authorName || 'Member'}'s profile`}>
-            {avatar}
-          </Link>
-        ) : avatar}
-        <div className="min-w-0 flex-1">
-          <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
-            <p className="break-words text-xs font-semibold text-gray-700">
-              {c.authorName || 'Member'} <span className="font-normal text-gray-400">· {timeAgo(c.createdAt)}</span>
-              {c.editedAt && <span className="font-normal text-gray-400" data-testid={`comment-edited-${c.id}`}> · {EDITED_LABEL}</span>}
-            </p>
-            {editing?.comment.id === c.id
-              ? editForm(c, false)
-              : <ClampedText text={c.content} kind="comment" className="text-sm text-gray-800" testId={`comment-text-${c.id}`} />}
-          </div>
-          <div className="-ml-1 flex flex-wrap items-center gap-0.5">
-            {canLike ? (
-              <button
-                type="button" onClick={() => void like(c)}
-                aria-pressed={c.likedByMe}
-                className={`min-h-[44px] min-w-[44px] px-2 text-xs font-semibold ${c.likedByMe ? 'text-rsn-red' : 'text-gray-500 hover:text-gray-800'}`}
-                data-testid={`comment-like-${c.id}`}
-              >
-                {c.likedByMe ? 'Liked' : 'Like'}{c.likeCount > 0 ? ` · ${c.likeCount}` : ''}
-              </button>
-            ) : c.likeCount > 0 && (
-              <span className="px-2 text-xs text-gray-500" data-testid={`comment-likes-${c.id}`}>
-                {c.likeCount} {c.likeCount === 1 ? 'like' : 'likes'}
-              </span>
-            )}
-            {!isReply && viewer.canPost && (
-              <button
-                type="button"
-                onClick={() => { setReplyTo(replyTo === c.id ? null : c.id); setReplyDraft(''); requestAnimationFrame(() => replyRef.current?.focus()); }}
-                className="min-h-[44px] min-w-[44px] px-2 text-xs font-semibold text-gray-500 hover:text-gray-800"
-                data-testid={`reply-button-${c.id}`}
-              >
-                Reply
-              </button>
-            )}
-            {config.reportKind && userId && c.authorId !== userId && (
-              <ReportCommentButton kind={config.reportKind} commentId={c.id} authorId={c.authorId} authorName={c.authorName} excerpt={c.content} />
-            )}
-            {canEditWallItem(viewer, c.authorId, userId) && editing?.comment.id !== c.id && (
-              <button
-                type="button"
-                onClick={() => setEditing({ comment: c, draft: c.content, stamp: c.editedAt ?? null })}
-                className="min-h-[44px] min-w-[44px] px-2 text-xs font-semibold text-gray-500 hover:text-gray-800"
-                data-testid={`comment-edit-${c.id}`}
-              >
-                Edit
-              </button>
-            )}
-            {canDeleteWallItem(viewer, c.authorId, userId) && (
-              <button
-                type="button" onClick={() => void remove(c)}
-                aria-label="Delete comment"
-                className="flex min-h-[44px] min-w-[44px] items-center justify-center px-2 text-gray-300 hover:text-red-500"
-                data-testid={`comment-delete-${c.id}`}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          {!isReply && repliesOf(c.id).map((r) => renderComment(r, true))}
-          {!isReply && replyTo === c.id && (
-            <div className="ml-8 flex items-center gap-2" data-testid={`reply-form-${c.id}`}>
-              <input
-                ref={replyRef}
-                value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(replyDraft, c.id); } }}
-                placeholder={`Reply to ${c.authorName || 'this comment'}…`}
-                maxLength={4000}
-                disabled={full}
-                aria-label="Your reply"
-                className={inputClass}
-              />
-              <Button size="sm" onClick={() => void send(replyDraft, c.id)} disabled={full || sending || !replyDraft.trim()} className="min-h-[44px] min-w-[44px]" aria-label="Send reply">
-                <Send className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          )}
+  const renderComment = (c: WallComment, isReply: boolean): JSX.Element => (
+    <WallCommentRow
+      key={c.id} config={config} comment={c} isReply={isReply} viewer={viewer} userId={userId} canLike={canLike}
+      editForm={editing?.comment.id === c.id ? editForm(c, false) : null}
+      onLike={() => void like(c)}
+      onReply={() => { setReplyTo(replyTo === c.id ? null : c.id); setReplyDraft(''); requestAnimationFrame(() => replyRef.current?.focus()); }}
+      onEdit={() => setEditing(openedEdit(c))}
+      onDelete={() => void remove(c)}
+    >
+      {!isReply && repliesOf(c.id).map((r) => renderComment(r, true))}
+      {!isReply && replyTo === c.id && (
+        <div className="ml-8 flex items-center gap-2" data-testid={`reply-form-${c.id}`}>
+          <input
+            ref={replyRef}
+            value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(replyDraft, c.id); } }}
+            placeholder={`Reply to ${c.authorName || 'this comment'}…`}
+            maxLength={4000}
+            disabled={full}
+            aria-label="Your reply"
+            className={inputClass}
+          />
+          <Button size="sm" onClick={() => void send(replyDraft, c.id)} disabled={full || sending || !replyDraft.trim()} className="min-h-[44px] min-w-[44px]" aria-label="Send reply">
+            <Send className="h-3.5 w-3.5" />
+          </Button>
         </div>
-      </div>
-    );
-  };
+      )}
+    </WallCommentRow>
+  );
 
   return (
     <div className="mt-3 border-t border-gray-100 pt-3 space-y-2" data-testid={`comments-${postId}`}>

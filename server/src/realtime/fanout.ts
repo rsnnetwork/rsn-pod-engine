@@ -172,6 +172,30 @@ export async function fanoutCircleWall(
   }
 }
 
+/** The most circles one post's change tells about the shares of it. */
+export const CIRCLE_WALL_SHARES_MAX = 20;
+
+/**
+ * S4 fix round 1: a post was removed or edited, and other circles may hold shares of it, whose cards carry its words.
+ * Each such circle (at most CIRCLE_WALL_SHARES_MAX, live shares only) is told through fanoutCircleWall, so its cards are
+ * read again: the words change, or the card says the post is not available. Never throws.
+ */
+export async function fanoutCircleWallShares(postId: string): Promise<void> {
+  if (!getRealtimeIo()) return;
+  try {
+    const { query } = await import('../db');
+    const circles = await query<{ circle_id: string }>(
+      `SELECT DISTINCT circle_id FROM circle_posts
+        WHERE shared_from_post_id = $1 AND deleted_at IS NULL
+        ORDER BY circle_id LIMIT $2`,
+      [postId, CIRCLE_WALL_SHARES_MAX],
+    );
+    for (const row of circles.rows) await fanoutCircleWall(row.circle_id);
+  } catch (err) {
+    logger.warn({ err, postId }, 'fanoutCircleWallShares: failed to fan out');
+  }
+}
+
 // ─── Session-scoped fanout ──────────────────────────────────────────────────
 //
 // Mirrors the legacy notifySessionListChanged audience: anyone who is a
