@@ -13,8 +13,8 @@ import { primePreview } from '../helpers/preview-bypass';
 // talks to the production API. Run three times: chromium at 360px (default), E2E_DEVICE="iPhone 14" (WebKit) and
 // E2E_DEVICE="iPad Mini" (a tablet).
 //
-//   full     a throwaway host makes an event with one place (API), open to anyone with its link; member A takes the
-//            place (API). Member B opens the event page: "This event is full.", a "Full" chip, "Join the waiting list"
+//   full     a throwaway host makes an event with two places (API; the server's smallest capacity), open to anyone
+//            with its link; members A and C take both places (API). Member B opens the event page: "This event is full.", a "Full" chip, "Join the waiting list"
 //            (44px, inside the screen) and no Register. The host's page is open on the same event: its "Waiting list"
 //            card says "Nobody is waiting.".
 //   join     B double-clicks "Join the waiting list": one request leaves the page, the toast says "number 1", the page
@@ -23,7 +23,7 @@ import { primePreview } from '../helpers/preview-bypass';
 //            While waiting B's page reads no attendee list: "You'll see who's coming once a place is yours.".
 //   promote  A unregisters (API). Within 10 s B's open page reads "Registered" without a reload, and B's bell shows
 //            "A place opened in {title}: it's yours". The host's card is back to "Nobody is waiting.".
-//   guest    a fresh address opens the event's call link signed out (B now holds the only place): email, the 6-digit
+//   guest    a fresh address opens the event's call link signed out (B and C now hold both places): email, the 6-digit
 //            code (its keyed hash written here, as p2-call-link-entry does), a name, Join: the screen reads "{title} is
 //            full. You're number 1 on the waiting list." with the promise and "Leave the waiting list" (asked first);
 //            leaving brings the event's summary back and the guest's row is `left`.
@@ -44,6 +44,8 @@ let browser: Browser;
 let host: TestUser;
 let a: TestUser;
 let b: TestUser;
+/** The second place's holder: a capacity is at least 2, so A and C fill the event before B arrives. */
+let c: TestUser;
 let podId = '';
 let eventId = '';
 let code = '';
@@ -92,11 +94,12 @@ test.beforeAll(async () => {
   host = await throwaway('Host', { first: 'Organiser' });
   a = await throwaway('A', { first: 'Ada' });
   b = await throwaway('B', { first: 'Ben' });
-  // A and B are the pod's members, so both may see the event and register for it.
-  podId = await seedPod(host, `P3T8 pod ${RUN}`, [a, b]);
+  c = await throwaway('C', { first: 'Cy' });
+  // A, B and C are the pod's members, so all may see the event and register for it.
+  podId = await seedPod(host, `P3T8 pod ${RUN}`, [a, b, c]);
 
   const scheduledAt = new Date(Date.now() + 2 * 24 * 3600_000).toISOString();
-  const created = await api(host, 'POST', '/sessions', { podId, title: TITLE, scheduledAt, config: { maxParticipants: 1 } });
+  const created = await api(host, 'POST', '/sessions', { podId, title: TITLE, scheduledAt, config: { maxParticipants: 2 } });
   expect(created.status, created.text).toBe(201);
   eventId = created.json.data.id;
   made.sessions.push(eventId);
@@ -106,9 +109,11 @@ test.beforeAll(async () => {
   expect(link.status, link.text).toBe(200);
   code = link.json.data.code;
 
-  // A takes the one place (the host holds none).
-  const taken = await api(a, 'POST', `/sessions/${eventId}/register`);
-  expect(taken.status, taken.text).toBe(201);
+  // A and C take both places (the host holds none).
+  for (const m of [a, c]) {
+    const taken = await api(m, 'POST', `/sessions/${eventId}/register`);
+    expect(taken.status, taken.text).toBe(201);
+  }
 });
 
 test.afterAll(async () => {
