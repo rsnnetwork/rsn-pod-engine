@@ -21,7 +21,7 @@ describe('X4: the event form does not move under a person while the matching cho
 
   it('the loading rows are shaped like the loaded choices: a card per preset (and the admin\'s Other), a name over a line', () => {
     expect(src).toMatch(/data-testid="matching-presets-loading"/);
-    expect(src).toMatch(/Array\.from\(\{ length: isAdmin \? 5 : 4 \}/);
+    expect(src).toMatch(/Array\.from\(\{ length: isAdmin \? 6 : 5 \}/);
     expect(src).toMatch(/<div key=\{i\} className=\{card\(false\)\}>/);
     // Measured: below 400px three of the four presets' lines wrap once, so their placeholders take a second line there.
     expect(src).toMatch(/\{i < 3 && <span className="[^"]*min-\[400px\]:hidden" \/>\}/);

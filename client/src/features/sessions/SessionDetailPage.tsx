@@ -671,6 +671,7 @@ export default function SessionDetailPage() {
           phase={phase}
           mayRunEvent={mayRunEvent}
           isRoundsEvent={isRoundsEvent}
+          mayChooseOverride={isHost || user?.role === 'super_admin'}
           groups={groupsView}
         />
       )}

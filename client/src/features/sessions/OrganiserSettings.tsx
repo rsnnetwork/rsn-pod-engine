@@ -29,10 +29,12 @@ interface Props {
   phase: StatusPhase;
   mayRunEvent: boolean;
   isRoundsEvent: boolean;
+  /** The owner or a super admin: the only people who may choose who can override the group rules. */
+  mayChooseOverride: boolean;
   groups: { data?: EventGroupsView; isLoading: boolean; isError: boolean; error: unknown; refetch: () => unknown };
 }
 
-export default function OrganiserSettings({ event, phase, mayRunEvent, isRoundsEvent, groups }: Props) {
+export default function OrganiserSettings({ event, phase, mayRunEvent, isRoundsEvent, mayChooseOverride, groups }: Props) {
   const lifecycle = isEventLifecycleChip(event.lifecycle) ? event.lifecycle : null;
   const hasActions = Array.isArray(event.allowedActions) && event.allowedActions.length > 0;
   if (!mayRunEvent && !hasActions) return null;
@@ -55,7 +57,7 @@ export default function OrganiserSettings({ event, phase, mayRunEvent, isRoundsE
       )}
       {mayRunEvent && (phase === 'pre' || phase === 'live') && <CallLinkCard sessionId={event.id} isDraft={lifecycle === 'draft'} />}
       {mayRunEvent && before && <EventAdmissionCard sessionId={event.id} title={title} />}
-      {mayRunEvent && before && isRoundsEvent && <EventGroupsCard sessionId={event.id} numberOfRounds={numberOfRounds} view={groups} />}
+      {mayRunEvent && before && isRoundsEvent && <EventGroupsCard sessionId={event.id} numberOfRounds={numberOfRounds} view={groups} mayChooseOverride={mayChooseOverride} />}
       {/* Part 3 Task 10: the extra matching questions, after the groups; shown live too, locked (the server refuses a change). */}
       {mayRunEvent && (before || phase === 'live') && isRoundsEvent && <EventQuestionsCard sessionId={event.id} locked={phase === 'live'} />}
     </section>

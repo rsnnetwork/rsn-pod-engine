@@ -31,6 +31,8 @@ export function useSaveEventGroups(sessionId: string) {
       allowMultiple: rules.allowMultiple,
       fallback: rules.fallback,
       rounds: rules.rounds,
+      // Left out unless the owner is choosing it: the server then keeps the stored choice.
+      ...(rules.overrideBy ? { overrideBy: rules.overrideBy } : {}),
     }).then((r) => r.data.data as EventGroupRules),
     onSuccess: () => { qc.invalidateQueries({ queryKey: groupsKey(sessionId) }); },
   });

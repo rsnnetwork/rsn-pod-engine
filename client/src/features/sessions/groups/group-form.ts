@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { FieldErrors, Resolver } from 'react-hook-form';
 import {
   DEFAULT_GROUP_QUESTION, GROUP_LIMITS, GROUP_PRESETS, explainRoundCapacity, groupPairKey, validateGroupRules,
-  type EventGroup, type EventGroupRules, type GroupFallback, type GroupPresetId, type RoundRule, type RoundRuleMode,
+  type EventGroup, type EventGroupRules, type GroupFallback, type GroupOverrideBy, type GroupPresetId, type RoundRule, type RoundRuleMode,
 } from '@rsn/shared';
 
 export const GROUPS_COPY = {
@@ -50,7 +50,18 @@ export const GROUPS_COPY = {
   changed: 'Group changed.',
   noGroup: 'No group',
   chooseGroup: 'Choose a group.',
+  overrideLegend: 'Who can override these rules',
+  overrideHint: 'Overriding puts two people together in a round the rules would not allow. Every override is recorded.',
+  overrideOwner: 'Only me',
+  overrideOwnerAndCohosts: 'Me and my co-hosts',
+  overrideReadOnly: "Only the event's owner can change who may override these rules.",
+  overrideNow: (choice: GroupOverrideBy) => (choice === 'owner_and_cohosts' ? 'Now: the owner and the co-hosts.' : 'Now: only the owner.'),
 } as const;
+
+export const OVERRIDE_OPTIONS: ReadonlyArray<{ value: GroupOverrideBy; label: string }> = [
+  { value: 'owner', label: GROUPS_COPY.overrideOwner },
+  { value: 'owner_and_cohosts', label: GROUPS_COPY.overrideOwnerAndCohosts },
+];
 
 export type PresetChoice = GroupPresetId | 'custom';
 
@@ -59,6 +70,7 @@ export const PRESET_OPTIONS: ReadonlyArray<{ id: PresetChoice; label: string }> 
   { id: 'teachers_pupils', label: 'Teachers and pupils' },
   { id: 'employers_candidates', label: 'Employers and candidates' },
   { id: 'mentors_mentees', label: 'Mentors and mentees' },
+  { id: 'buyers_vendors', label: 'Buyers and vendors' },
   { id: 'custom', label: 'Custom' },
 ];
 
@@ -237,7 +249,7 @@ export function ruleLine(rule: RoundRule, groups: ReadonlyArray<{ key: string; l
 /** The form's schema for an event of this many rounds: each shared validator issue is raised at its own field. */
 export function groupFormSchema(numberOfRounds: number) {
   return z.object({
-    preset: z.enum(['founders_funders', 'teachers_pupils', 'employers_candidates', 'mentors_mentees', 'custom']),
+    preset: z.enum(['founders_funders', 'teachers_pupils', 'employers_candidates', 'mentors_mentees', 'buyers_vendors', 'custom']),
     groups: z.array(z.object({ key: z.string(), label: z.string().max(GROUP_LIMITS.labelMaxLength, `Keep a group's name to ${GROUP_LIMITS.labelMaxLength} characters.`) })),
     question: z.string().max(GROUP_LIMITS.questionMaxLength, `Ask the group question in 1 to ${GROUP_LIMITS.questionMaxLength} characters.`),
     allowMultiple: z.boolean(),

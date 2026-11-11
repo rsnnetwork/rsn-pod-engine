@@ -321,7 +321,7 @@ describe('matching groups', () => {
   const founders = (rounds = 3): EventGroupRules => ({ ...presetValues('founders_funders', rounds), groups: [...GROUP_PRESETS.founders_funders.groups] });
 
   it('offers the presets, the per-range rules and the fallback in the brief\'s words', () => {
-    expect(PRESET_OPTIONS.map((p) => p.label)).toEqual(['Founders and funders', 'Teachers and pupils', 'Employers and candidates', 'Mentors and mentees', 'Custom']);
+    expect(PRESET_OPTIONS.map((p) => p.label)).toEqual(['Founders and funders', 'Teachers and pupils', 'Employers and candidates', 'Mentors and mentees', 'Buyers and vendors', 'Custom']);
     expect(RULE_MODE_OPTIONS.map((o) => o.label)).toEqual(['Everyone can meet', 'Only different groups meet', 'Choose pairs']);
     expect(FALLBACK_OPTIONS.map((o) => o.label)).toEqual(['Leave people unmatched', 'Let them meet their own group']);
     expect(src.rulesEditor).toContain('{GROUPS_COPY.fallbackLegend}');

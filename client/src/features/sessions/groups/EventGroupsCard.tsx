@@ -14,6 +14,7 @@ import { FALLBACK_OPTIONS, GROUPS_COPY, ruleLine } from './group-form';
 import { useSaveEventGroups } from './useEventGroups';
 import CapacityNotice from './CapacityNotice';
 import GroupsEditorSheet from './GroupsEditorSheet';
+import OverrideSetting from './OverrideSetting';
 
 /** The groups card's anchor: /sessions/:id#groups (Task 13's board links to it). */
 export const GROUPS_ANCHOR = 'groups';
@@ -23,10 +24,12 @@ interface Props {
   sessionId: string;
   numberOfRounds: number;
   /** The page's read of the groups (useEventGroups), shared with the participant list's group chips. */
+  /** The event's owner or a super admin: only they may change who can override (a co-host reads it). */
+  mayChooseOverride?: boolean;
   view: { data?: EventGroupsView; isLoading: boolean; isError: boolean; error: unknown; refetch: () => unknown };
 }
 
-export default function EventGroupsCard({ sessionId, numberOfRounds, view }: Props) {
+export default function EventGroupsCard({ sessionId, numberOfRounds, view, mayChooseOverride = false }: Props) {
   const addToast = useToastStore((s) => s.addToast);
   const { ask, confirmDialog } = useConfirm();
   const save = useSaveEventGroups(sessionId);
@@ -64,7 +67,7 @@ export default function EventGroupsCard({ sessionId, numberOfRounds, view }: Pro
   };
   const removeAll = async () => {
     if (!rules || !(await ask({ title: GROUPS_COPY.removeTitle, body: GROUPS_COPY.removeBody, confirmLabel: GROUPS_COPY.remove, tone: 'danger' }))) return;
-    saveRules({ ...rules, groups: [], rounds: [] }).catch((err: unknown) => addToast(organiserSentence(err, GROUPS_COPY.fallback), 'error'));
+    saveRules({ ...rules, overrideBy: undefined, groups: [], rounds: [] }).catch((err: unknown) => addToast(organiserSentence(err, GROUPS_COPY.fallback), 'error'));
   };
   const openEditor = () => { setServerError(null); setEditing(true); };
 
@@ -82,6 +85,15 @@ export default function EventGroupsCard({ sessionId, numberOfRounds, view }: Pro
     >
       {view.isLoading && <LoadingRows label="Loading the groups" />}
       {view.isError && <ErrorRow message={GROUPS_COPY.error} onRetry={() => view.refetch()} />}
+      {view.data && (
+        <OverrideSetting
+          current={view.data.overrideBy ?? rules?.overrideBy ?? 'owner'}
+          rules={rules}
+          canChoose={mayChooseOverride}
+          save={save}
+          onError={(err) => addToast(organiserSentence(err, GROUPS_COPY.fallback), 'error')}
+        />
+      )}
       {view.data && !hasGroups && <EmptyRow testId="groups-empty">{GROUPS_COPY.none}</EmptyRow>}
       {rules && hasGroups && (
         <div className="space-y-3">

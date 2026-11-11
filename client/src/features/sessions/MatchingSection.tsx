@@ -120,10 +120,10 @@ function WhoMeetsWhom({ templateId, onTemplate, onTouched, presets, isAdmin, tem
       <legend className="mb-1 block text-sm font-medium text-gray-600">Who should meet whom</legend>
       <p className="mb-3 text-xs text-gray-500">REASON pairs these people first when it can. Everyone still meets someone.</p>
       {presets.isLoading ? (
-        // Shaped like the loaded choices (four presets, each a name over a line, and an admin's "Other templates"), so
+        // Shaped like the loaded choices (five presets, each a name over a line, and an admin's "Other templates"), so
         // nothing below moves when they land: Safari keeps no scroll anchor, and a field scrolled to would slide (X4).
         <div aria-busy="true" aria-label="Loading the matching choices" className="grid gap-2" data-testid="matching-presets-loading">
-          {Array.from({ length: isAdmin ? 5 : 4 }, (_, i) => (
+          {Array.from({ length: isAdmin ? 6 : 5 }, (_, i) => (
             <div key={i} className={card(false)}>
               <span className={cn(RADIO, 'rounded-full bg-gray-200')} />
               <span className="min-w-0 flex-1">
