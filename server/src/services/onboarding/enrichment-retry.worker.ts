@@ -50,17 +50,17 @@ interface MemberNow {
 }
 
 /**
- * The member's own lookup, with what their account says now: the address on their profile now (the scheduled one
- * only when the profile holds none: the older onboarding looks up an address it does not save), and nothing at all
- * for an account that is not active or a member who already has a result. Tells their screens.
+ * The member's own lookup, with what their account says now: the address on their profile now, and nothing at all for
+ * an account that is not active, a profile with no address (the member removed it: the address they withdrew is never
+ * looked up; the claimed row is gone) or a member who already has a result. Tells their screens.
  */
-async function retryForMember(userId: string, why: 'member' | 'request', scheduledUrl: string): Promise<void> {
+async function retryForMember(userId: string, why: 'member' | 'request'): Promise<void> {
   const res = await query<MemberNow>(
     `SELECT linkedin_url, display_name, status::text AS status FROM users WHERE id = $1`,
     [userId],
   );
   const member = res.rows[0];
-  const linkedinUrl = normalizeLinkedinUrl(member?.linkedin_url) ?? normalizeLinkedinUrl(scheduledUrl);
+  const linkedinUrl = normalizeLinkedinUrl(member?.linkedin_url);
   if (!member || member.status !== 'active' || !linkedinUrl) {
     logger.info({ userId, why, found: !!member, status: member?.status, hasAddress: !!linkedinUrl },
       'enrichment retry: nothing to do for this member');
@@ -95,7 +95,7 @@ async function retryForRequest(job: DueEnrichRetry & { join_request_id: string }
   }
   if (request.user_id) {
     logger.info({ joinRequestId: request.id, userId: request.user_id }, 'enrichment retry: the applicant has an account now');
-    await retryForMember(request.user_id, 'request', request.linkedin_url ?? job.linkedin_url);
+    await retryForMember(request.user_id, 'request');
     return;
   }
   await preloadJoinRequestEnrichment(
@@ -105,11 +105,12 @@ async function retryForRequest(job: DueEnrichRetry & { join_request_id: string }
 }
 
 async function runRetry(job: DueEnrichRetry): Promise<void> {
-  if (job.user_id) return retryForMember(job.user_id, 'member', job.linkedin_url);
+  if (job.user_id) return retryForMember(job.user_id, 'member');
   if (job.join_request_id) return retryForRequest({ ...job, join_request_id: job.join_request_id });
 }
 
-/** Run the retry that is due. Safe to call on an interval; never throws past its own log line. */
+/** Run the retry that is due. Safe to call on an interval: a retry's own failure is logged here; a database error in
+ *  the purge or the claim ends the tick and is logged by the caller (index.ts). */
 export async function processEnrichmentRetries(): Promise<void> {
   if (running) return;
   running = true;

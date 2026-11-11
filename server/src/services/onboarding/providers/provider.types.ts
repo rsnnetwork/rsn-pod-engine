@@ -15,8 +15,10 @@ export type ProviderOutcome =
   // 202s past the attempt budget; `rateLimited` when it was the plan's rate
   // limit that never cleared (a follow-up call would be limited too);
   // `notReady` when ScrapingDog said it is fetching the page now and to ask
-  // again in two to three minutes (a later attempt is the only way to get it).
-  | { kind: 'retry_exhausted'; rateLimited?: boolean; notReady?: boolean }
+  // again in two to three minutes (a later attempt is the only way to get it);
+  // `timedOut` when the live call timed out or failed and the cached call had
+  // too little time left to answer: the outcome is unknown, so a later attempt.
+  | { kind: 'retry_exhausted'; rateLimited?: boolean; notReady?: boolean; timedOut?: boolean }
   | { kind: 'provider_error'; reason: string }; // network / 5xx / bad key
 
 export interface EnrichmentProvider {

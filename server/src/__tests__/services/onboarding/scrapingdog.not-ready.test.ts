@@ -307,3 +307,77 @@ describe('reasons and log messages never carry the profile', () => {
     expect(out).toEqual({ kind: 'provider_error', reason: 'Profile [profile] is private' });
   });
 });
+
+// ─── Re-review N3: a live call cut at its 80 s cap leaves the cached call too little time for ScrapingDog's ~50 s
+// answer. The outcome is unknown, not "no such profile": a later attempt. This test moves the clock through both cuts.
+describe('a live call cut at its 80 s hard cap', () => {
+  /** AbortSignal.timeout on the faked clock, so advancing the timers fires the real cut-off path in scrape(). */
+  function abortOnFakeClock(): jest.SpyInstance {
+    return jest.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const c = new AbortController();
+      setTimeout(() => c.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), ms);
+      return c.signal;
+    });
+  }
+  /** A fetch that answers only when its signal is cut, or with `answer` for the canonical (cached) id. */
+  function hangUntilCut(cachedAnswer?: () => Response) {
+    return jest.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (cachedAnswer && new URL(String(input)).searchParams.get('id') === SLUG) return Promise.resolve(cachedAnswer());
+      return new Promise<Response>((_, reject) => {
+        const signal = (init as RequestInit).signal!;
+        signal.addEventListener('abort', () => reject(signal.reason));
+      });
+    });
+  }
+
+  it('live hangs to its 80 s cut, the cached call gets the 25 s left and is cut too: retry_exhausted timedOut (a later attempt), at 105 s', async () => {
+    jest.useFakeTimers({ now: Date.UTC(2026, 10, 12, 10) });
+    const timeouts = abortOnFakeClock();
+    const fetchMock = hangUntilCut();
+    const started = Date.now();
+    let settled: unknown;
+    const promise = scrapingdogProvider.enrich({ linkedinUrl: URL_IN }).then((o) => { settled = o; return o; });
+
+    await jest.advanceTimersByTimeAsync(79_999);
+    expect(settled).toBeUndefined();                // still waiting on the live call
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);         // 80 s: the live call is cut
+    expect(fetchMock).toHaveBeenCalledTimes(2);     // the cached call starts at once
+    expect(timeouts.mock.calls.map((c) => c[0])).toEqual([80_000, 25_000]);
+    await jest.advanceTimersByTimeAsync(24_999);
+    expect(settled).toBeUndefined();
+    await jest.advanceTimersByTimeAsync(1);         // 105 s: the cached call is cut too
+
+    expect(await promise).toEqual({ kind: 'retry_exhausted', timedOut: true });
+    expect(Date.now() - started).toBe(105_000);
+    const logs = answerLogs();
+    expect(logs.map((l) => `${l.call}:${l.status}`)).toEqual(['live:0', 'cached:0']);
+    expect(logs[0].message).toBe('The operation was aborted due to timeout');
+  });
+
+  it('a cached 404 after the cut is a definite answer: no retry asked for', async () => {
+    jest.useFakeTimers({ now: Date.UTC(2026, 10, 12, 10) });
+    abortOnFakeClock();
+    hangUntilCut(() => mockResponse(404));
+    const promise = scrapingdogProvider.enrich({ linkedinUrl: URL_IN });
+    await jest.advanceTimersByTimeAsync(80_000);
+
+    expect(await promise).toEqual({ kind: 'provider_error', reason: 'The operation was aborted due to timeout' });
+  });
+
+  it('a cached profile after the cut is used as before', async () => {
+    jest.useFakeTimers({ now: Date.UTC(2026, 10, 12, 10) });
+    abortOnFakeClock();
+    hangUntilCut(() => mockResponse(200, FULL));
+    const promise = scrapingdogProvider.enrich({ linkedinUrl: URL_IN });
+    await jest.advanceTimersByTimeAsync(80_000);
+
+    const out = await promise;
+    expect(out.kind).toBe('found');
+  });
+
+  it('a live error that comes FAST leaves the cached call its full time; its 5xx then stands (no unknown outcome)', async () => {
+    jest.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('socket hang up')).mockResolvedValueOnce(mockResponse(500));
+    expect(await scrapingdogProvider.enrich({ linkedinUrl: URL_IN })).toEqual({ kind: 'provider_error', reason: 'socket hang up' });
+  });
+});

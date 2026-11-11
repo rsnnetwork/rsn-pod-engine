@@ -547,7 +547,9 @@ async function scrape(linkId: string, budget: ScrapeBudget, call: ScrapeCall): P
     }
     return { kind: 'retry_exhausted' };
   } catch (err) {
-    const reason = err instanceof Error ? scrubMessage(err.message, linkId) : 'unknown';
+    // A fetch cut by AbortSignal.timeout rejects with a DOMException, which is not always `instanceof Error`.
+    const message = (err as { message?: unknown } | null)?.message;
+    const reason = typeof message === 'string' ? scrubMessage(message, linkId) : 'unknown';
     logAnswer(call, linkId, 0, attempt, elapsed(), reason);
     return { kind: 'provider_error', reason };
   }
@@ -592,6 +594,14 @@ export const scrapingdogProvider: EnrichmentProvider = {
       // verdict. Only a live 404/410 still says the profile does not exist.
       if (cached?.kind === 'retry_exhausted' && cached.notReady && live.kind !== 'not_found') {
         return { kind: 'retry_exhausted', notReady: true };
+      }
+      // 12 Nov 2026 (re-review N3): the live call timed out or failed, and the cached call then had less than its own
+      // time (ScrapingDog's "not stored yet" takes ~50 s) or none at all, and said nothing definite. The outcome is
+      // unknown, not "no such profile": one later attempt, which costs nothing unless it finds the profile.
+      const cachedShortOfTime = !cachedBudget || cachedBudget.hardCapMs < CACHED_BUDGET.hardCapMs;
+      const cachedSaidNothing = !cached || (cached.kind !== 'ok' && cached.kind !== 'not_found');
+      if (live.kind === 'provider_error' && cachedShortOfTime && cachedSaidNothing) {
+        return { kind: 'retry_exhausted', timedOut: true };
       }
       // Otherwise the live attempt's verdict stands
       // (an empty body is "no such profile"; a failure is reported as it was).

@@ -43,7 +43,7 @@ import {
   type EnrichResult,
 } from './enrichment.service';
 
-import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
+import { getCachedEnrichment, getEnrichmentState, getLastLookupUrl, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
 import { resolveEnrichProvider, runProvider, statusFromResult, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
 import { tryGravatar } from './avatar.service';
@@ -64,8 +64,9 @@ export const SEARCHING_LOCK_MS = 3 * 60 * 1000;
  * The lookup answered after its deadline (12 Nov 2026): the member was already
  * marked failed, but a profile ScrapingDog billed is kept rather than thrown
  * away, and a "try again later" still gets its one later attempt. Only over
- * this attempt's own deadline failure: if a newer lookup has started or
- * finished since, its state stands. No extras pass here (one more paid call).
+ * this attempt's own deadline failure, for the address it looked up: if a
+ * newer lookup has started or finished since, or looked up another address,
+ * its state stands. No extras pass here (one more paid call).
  */
 async function keepLateAnswer(
   userId: string,
@@ -83,6 +84,9 @@ async function keepLateAnswer(
   if (late.kind !== 'found' && late.kind !== 'partial') return;
   const now = await getEnrichmentState(userId).catch(() => null);
   if (now?.status !== 'failed' || now.error !== DEADLINE_REASON) return;
+  // Re-review N1: and for this address. Another attempt, on another address, may have been cut at its deadline too.
+  const lastLookedUp = await getLastLookupUrl(userId).catch(() => null);
+  if (!lastLookedUp || linkedinSlug(lastLookedUp) !== linkedinSlug(linkedinUrl)) return;
   const result = applyMatchVerification(late.result, linkedinUrl);
   await saveEnrichedCandidate(userId, result).catch((err) =>
     logger.warn({ err, userId }, 'enrichment: saveEnrichedCandidate failed (non-fatal)'),
@@ -156,7 +160,7 @@ async function writeState(userId: string, state: Parameters<typeof setEnrichment
   try {
     await setEnrichmentState(userId, state);
   } catch (err) {
-    logger.warn({ err, userId, state }, 'enrichment: failed to persist state transition (non-fatal)');
+    logger.warn({ err, userId, status: state.status }, 'enrichment: failed to persist state transition (non-fatal)');
   }
 }
 
@@ -236,7 +240,7 @@ function mapFailureOutcome(
     case 'provider_error':
       return { status: 'failed', error: outcome.reason };
     case 'retry_exhausted': {
-      const what = outcome.notReady ? 'not stored yet' : 'retry exhausted';
+      const what = outcome.notReady ? 'not stored yet' : outcome.timedOut ? 'timed out' : 'retry exhausted';
       return { status: 'failed', error: retryScheduled ? `${what}, retrying later` : what };
     }
   }

@@ -144,6 +144,15 @@ export async function getEnrichmentState(userId: string): Promise<EnrichmentDbSt
   };
 }
 
+/** The address the member's latest state is about (inferred_profile.lastLookup.linkedinUrl); null when none is recorded. */
+export async function getLastLookupUrl(userId: string): Promise<string | null> {
+  const r = await query<{ lookup_url: string | null }>(
+    `SELECT inferred_profile->'lastLookup'->>'linkedinUrl' AS lookup_url FROM user_intent_profiles WHERE user_id = $1`,
+    [userId],
+  );
+  return r.rows[0]?.lookup_url ?? null;
+}
+
 export interface ApplyFields {
   jobTitle?: string | null;
   company?: string | null;

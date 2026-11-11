@@ -433,7 +433,12 @@ router.post(
       // Fire-and-forget: runEnrichment persists every transition (including
       // re-confirming the cache-hit path above) and never throws, but the
       // .catch() here is belt-and-braces against a truly unexpected rejection.
-      runEnrichment(userId, { linkedinUrl, fullName: known.name || undefined }).catch((err) =>
+      // A later attempt (12 Nov 2026) looks up the address on the member's profile at the time; this older route also
+      // looks up an address it does not save, and a retry for that one would find nothing to look up. So a retry is
+      // asked for only when the address looked up IS the profile's.
+      const scheduleRetry = !!linkedinUrl && !!known.linkedin
+        && enrichment.linkedinSlug(linkedinUrl) === enrichment.linkedinSlug(known.linkedin);
+      runEnrichment(userId, { linkedinUrl, fullName: known.name || undefined, scheduleRetry }).catch((err) =>
         logger.error({ err, userId }, 'runEnrichment fire-and-forget rejected unexpectedly'),
       );
     } catch (err) {

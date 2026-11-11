@@ -59,6 +59,7 @@ describe('a lookup that brings back nothing', () => {
   it.each([
     [{ kind: 'retry_exhausted' }, 'still 202 when the budget ran out'],
     [{ kind: 'retry_exhausted', rateLimited: true }, 'rate limited'],
+    [{ kind: 'retry_exhausted', timedOut: true }, 'timed out (outcome unknown)'],
   ])('%o is a wait too: logged (%s) and retried once later', async (outcome, reason) => {
     mockRunProvider.mockResolvedValue(outcome);
     await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });

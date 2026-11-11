@@ -35,6 +35,7 @@ export function emptyReason(outcome: ProviderOutcome): string {
       return outcome.reason;
     case 'retry_exhausted':
       if (outcome.notReady) return 'not stored yet (asked to try again later)';
+      if (outcome.timedOut) return 'timed out (outcome unknown)';
       return outcome.rateLimited ? 'rate limited' : 'still 202 when the budget ran out';
     default:
       return 'no result';

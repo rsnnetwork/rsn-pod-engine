@@ -139,10 +139,20 @@ describe('a member\'s own lookup', () => {
     expect(mockRunEnrichment.mock.calls[0][1].linkedinUrl).toBe(FIXED);
   });
 
-  it('a profile without an address (the older onboarding does not save the one it looks up) uses the scheduled one', async () => {
-    db([userJob], { member: memberRow({ linkedin_url: null }) });
+  // Re-review N2: a member who removed their LinkedIn within the ten minutes withdrew that address; it is never looked up.
+  it.each([null, '', '   '])('a profile whose address is now %p: the scheduled address is NOT looked up, the row is simply gone', async (now) => {
+    db([userJob], { member: memberRow({ linkedin_url: now }) });
     await processEnrichmentRetries();
-    expect(mockRunEnrichment.mock.calls[0][1].linkedinUrl).toBe(FIXED);
+    expect(claims()).toHaveLength(1); // the claim deleted the row
+    expect(mockRunEnrichment).not.toHaveBeenCalled();
+    expect(mockFanoutUser).not.toHaveBeenCalled();
+  });
+
+  it('the same for an approval whose applicant has an account but removed the address', async () => {
+    db([requestJob], { request: requestRow({ user_id: 'u-7' }), member: memberRow({ linkedin_url: null }) });
+    await processEnrichmentRetries();
+    expect(mockRunEnrichment).not.toHaveBeenCalled();
+    expect(mockPreload).not.toHaveBeenCalled();
   });
 
   it.each([
