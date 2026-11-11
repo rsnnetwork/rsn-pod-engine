@@ -27,7 +27,7 @@
 
 import { test, expect, Browser, BrowserContext, Locator, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, APP } from '../helpers/live-ui';
+import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
@@ -560,7 +560,11 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     await own.page.reload();
     const card = await cardRead;
     expect(card.status(), `your card is read again after the reload at ${at}`).toBe(200);
-    expect((await card.json())?.data?.bannerUrl, `the card carries the banner written to the row at ${at}`).toEqual(expect.stringContaining(`/api/users/${owner.id}/banner?v=`));
+    // The page's own copy of the body can be gone by the time it is asked for (Chrome drops it once the page reads
+    // again), so the same card is read once more here, outside the page, with the member's own token.
+    const direct = await own.ctx.request.get(`${SERVER}/api/people/me/card`, { headers: { Authorization: `Bearer ${owner.accessToken}` } });
+    expect(direct.status(), `the card read outside the page at ${at}`).toBe(200);
+    expect((await direct.json())?.data?.bannerUrl, `the card carries the banner written to the row at ${at}`).toEqual(expect.stringContaining(`/api/users/${owner.id}/banner?v=`));
     await expect(bannerOf(own.page), `the banner strip is drawn at ${at}`).toBeVisible({ timeout: SLOW });
     for (const name of ['Change banner', 'Remove', 'Edit photo']) {
       const button = own.page.getByRole('button', { name, exact: true });
