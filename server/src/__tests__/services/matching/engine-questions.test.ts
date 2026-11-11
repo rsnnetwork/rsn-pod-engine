@@ -198,6 +198,111 @@ describe('the engine: answers choose among the meetings the event allows', () =>
   });
 });
 
+// ─── Fix round 1 (review C1): questions never make a round worse ─────────────────────────────────────────────
+
+const FIVE = ['A', 'B', 'C', 'D', 'E'];
+/** Every pair of the five already met in the event, except A-B, B-C and C-D (the reviewer's probe, case 1). */
+const ONLY_AB_BC_CD = (() => {
+  const allowed = new Set([pairKey('A', 'B'), pairKey('B', 'C'), pairKey('C', 'D')]);
+  const met: string[][] = [];
+  for (let i = 0; i < FIVE.length; i++) {
+    for (let j = i + 1; j < FIVE.length; j++) if (!allowed.has(pairKey(FIVE[i], FIVE[j]))) met.push([FIVE[i], FIVE[j]]);
+  }
+  return met;
+})();
+const B_C_ALIKE: Record<string, EventAnswers> = {
+  A: { sector: ['health'] }, B: { sector: ['fintech'] }, C: { sector: ['fintech'] }, D: { sector: ['health'] }, E: { sector: ['health'] },
+};
+const metSet = (pairs: string[][]) => new Set(pairs.map(([a, b]) => pairKey(a, b)));
+const repeatsOf = (r: RoundAssignment, met: Set<string>) => {
+  let n = 0;
+  for (const p of r.pairs) {
+    const ids = [p.participantAId, p.participantBId, p.participantCId].filter((x): x is string => !!x);
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) if (met.has(pairKey(ids[i], ids[j]))) n += 1;
+  }
+  return n;
+};
+
+describe('questions never seat fewer people or make more repeats (review C1)', () => {
+  it('probe case 1: five people, only A-B, B-C and C-D allowed fresh; questions pull B to C, yet nobody is left out', () => {
+    const used = metSet(ONLY_AB_BC_CD);
+    const without = engine.generateRound(FIVE.map(guest), configOf(), new Set(used), [], 3);
+    const withQ = engine.generateRound(FIVE.map(guest), configOf({ answers: B_C_ALIKE }), new Set(used), [], 3);
+    expect(placed(without)).toHaveLength(5);
+    expect(placed(withQ)).toHaveLength(5);
+    expect(withQ.byeParticipants ?? []).toEqual([]);
+    expect(repeatsOf(withQ, used)).toBeLessThanOrEqual(repeatsOf(without, used));
+    expect(roomsOf(withQ)).toEqual(roomsOf(without));
+  });
+
+  it('probe case 2: the odd person out never joins a pair they already met because of answers', () => {
+    const used = metSet([['L', 'C'], ['L', 'D'], ['A', 'C'], ['A', 'D'], ['B', 'C'], ['B', 'D']]);
+    const answers = { A: { sector: ['fintech'] }, B: { sector: ['fintech'] }, C: { sector: ['health'] }, D: { sector: ['health'] }, L: { sector: ['health'] } };
+    const people = ['A', 'B', 'C', 'D', 'L'].map(guest);
+    const without = engine.generateRound(people, configOf(), new Set(used), [], 3);
+    const withQ = engine.generateRound(people, configOf({ answers }), new Set(used), [], 3);
+    expect(roomsOf(without)).toEqual(['A+B+L', 'C+D']);
+    expect(roomsOf(withQ)).toEqual(['A+B+L', 'C+D']);
+    expect(repeatsOf(withQ, used)).toBe(0);
+  });
+
+  it('the plan at Start seats everyone in every round with no more repeats than without questions', async () => {
+    const met = ONLY_AB_BC_CD;
+    installWorld({ questions: true, people: FIVE, answers: B_C_ALIKE, met });
+    const withQ = await generateSessionSchedule(SESSION_ID, undefined, ['host']);
+    mockQuery.mockReset();
+    installWorld({ questions: false, people: FIVE, met });
+    const without = await generateSessionSchedule(SESSION_ID, undefined, ['host']);
+    const seated = (o: typeof withQ) => o.rounds.reduce((n, r) => n + placed(r).length, 0);
+    expect(seated(withQ)).toBeGreaterThanOrEqual(seated(without));
+    const repeatsOver = (o: typeof withQ) => {
+      const seen = metSet(met);
+      let n = 0;
+      for (const r of o.rounds) {
+        n += repeatsOf(r, seen);
+        for (const p of r.pairs) {
+          const ids = [p.participantAId, p.participantBId, p.participantCId].filter((x): x is string => !!x);
+          for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) seen.add(pairKey(ids[i], ids[j]));
+        }
+      }
+      return n;
+    };
+    expect(repeatsOver(withQ)).toBeLessThanOrEqual(repeatsOver(without));
+  });
+
+  it('Live Match (the ladder): the same level, everyone seated and no more in-event repeats than without questions', async () => {
+    const met = ONLY_AB_BC_CD;
+    installWorld({ questions: true, people: FIVE, answers: B_C_ALIKE, met });
+    const withQ = await generateSingleRound(SESSION_ID, 3, ['host']);
+    mockQuery.mockReset();
+    installWorld({ questions: false, people: FIVE, met });
+    const without = await generateSingleRound(SESSION_ID, 3, ['host']);
+    expect(placed(withQ)).toHaveLength(placed(without).length);
+    expect(withQ.fallbackLevel).toBeLessThanOrEqual(without.fallbackLevel ?? 0);
+    expect(repeatsOf(withQ, metSet(met))).toBeLessThanOrEqual(repeatsOf(without, metSet(met)));
+  });
+
+  it('the board\'s generator: everyone seated, no more repeats of the pairs it keeps apart than without questions', async () => {
+    const avoid = metSet(ONLY_AB_BC_CD);
+    installWorld({ questions: true, people: FIVE, answers: B_C_ALIKE });
+    const withQ = (await prepareBoardRoundGenerator(SESSION_ID, FIVE))(FIVE, 3, avoid);
+    mockQuery.mockReset();
+    installWorld({ questions: false, people: FIVE });
+    const without = (await prepareBoardRoundGenerator(SESSION_ID, FIVE))(FIVE, 3, avoid);
+    expect(placed(withQ)).toHaveLength(placed(without).length);
+    expect(repeatsOf(withQ, avoid)).toBeLessThanOrEqual(repeatsOf(without, avoid));
+    expect(withQ.usedRepeats ?? false).toBe(without.usedRepeats ?? false);
+  });
+
+  it('an event whose questions nobody answered yet matches exactly as one without questions (review M2)', async () => {
+    installWorld({ questions: true, answers: {} });
+    expect((await prepareBoardRoundGenerator(SESSION_ID, PEOPLE)).affinity).toBeUndefined();
+    mockQuery.mockReset();
+    installWorld({ questions: true, answers: {} });
+    expect(roomsOf(await generateSingleRound(SESSION_ID, 1, ['host']))).toEqual(['A+C', 'B+D']);
+  });
+});
+
 describe('the board\'s redistribution: answers order the candidates after fairness', () => {
   const ctx: RoomCheckContext = {
     round: 1, rules: null, groupsOf: () => [], hardExcluded: () => false, metBefore: () => false, maxRoomSize: 3,
@@ -213,6 +318,21 @@ describe('the board\'s redistribution: answers order the candidates after fairne
     expect(redistributeRound(base).seated.get(1)!.slice(0, 2)).toEqual(['A', 'C']);
     const affinity = (x: string, y: string) => (BY_SECTOR[x]?.sector[0] === BY_SECTOR[y]?.sector[0] ? 1 : 0);
     expect(redistributeRound({ ...base, affinity }).seated.get(1)!.slice(0, 2)).toEqual(['A', 'B']);
+  });
+
+  it('answers never leave a later room empty: the seats without them are kept when they seat more (review C1)', () => {
+    // Rooms 1 (A) and 2 (B), basket D then C. D is kept from B and from C. A's answers suit C. Taking C for room 1 would
+    // leave D with no room at all (not room 2, not a trio with C), so the seating without answers (A+D, B+C) is kept.
+    const twoOnly: RoomCheckContext = {
+      ...ctx, hardExcluded: (x, y) => ['B+D', 'C+D'].includes([x, y].sort().join('+')),
+    };
+    const r = redistributeRound({
+      round: 1, seated: new Map([[1, ['A']], [2, ['B']]]), lockedRooms: new Set<number>(), lockedSlots: new Set<string>(),
+      basket: ['D', 'C'], ctx: twoOnly, generate: noEngine, affinity: (x, y) => ([x, y].sort().join('+') === 'A+C' ? 1 : 0),
+    });
+    expect(r.seated.get(1)).toEqual(['A', 'D']);
+    expect(r.seated.get(2)).toEqual(['B', 'C']);
+    expect(r.waiting).toEqual([]);
   });
 
   it('fewer meetings still comes before answers', () => {
@@ -233,18 +353,25 @@ const QUESTION_ROW = {
   options: SECTOR.options,
 };
 
-function installWorld(opts: { questions: boolean }) {
+function installWorld(opts: {
+  questions: boolean; people?: string[]; answers?: Record<string, EventAnswers>; met?: string[][];
+}) {
+  const people = opts.people ?? PEOPLE;
+  const answers = opts.answers ?? BY_SECTOR;
   mockGetSessionById.mockResolvedValue({ id: SESSION_ID, podId: null, hostUserId: 'host', config: { numberOfRounds: 3 } });
   mockQuery.mockImplementation(async (sql: string) => {
     if (/FROM session_participants sp\s+JOIN users u/.test(sql) || /FROM users u\s+WHERE u\.id = ANY/.test(sql)) {
-      return { rows: PEOPLE.map(guest) };
+      return { rows: people.map(guest) };
+    }
+    if (/SELECT participant_a_id, participant_b_id, participant_c_id FROM matches/.test(sql)) {
+      return { rows: (opts.met ?? []).map(([a, b]) => ({ participant_a_id: a, participant_b_id: b, participant_c_id: null })) };
     }
     if (/FROM event_matching_questions/.test(sql) && !/event_question_answers/.test(sql)) {
       return { rows: opts.questions ? [QUESTION_ROW] : [] };
     }
     if (/FROM event_question_answers/.test(sql)) {
       return {
-        rows: Object.entries(BY_SECTOR).map(([userId, a]) => ({ user_id: userId, key: 'sector', option_keys: a.sector })),
+        rows: Object.entries(answers).map(([userId, a]) => ({ user_id: userId, key: 'sector', option_keys: a.sector })),
       };
     }
     return { rows: [], rowCount: 0 };

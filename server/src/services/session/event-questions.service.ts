@@ -32,7 +32,7 @@ import { resolveEventOrganiserIds } from '../post-event-message/event-organisers
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { E } from '../../realtime/entities';
 import { isLiveStatus } from './main-room';
-import { canSeeEvent, readEventAccessFacts } from './event-access';
+import { canSeeEvent, readEventAccessFacts, runsEvent, type EventAccessFacts } from './event-access';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 
 /** A read in the caller's transaction when there is one, else on the pool. */
@@ -110,7 +110,8 @@ export async function getMyAnswers(sessionId: string, userId: string, client?: P
 
 /**
  * The engine's signal for these people (Part 3 Task 5): the event's questions and each person's answers, or undefined
- * when the event has none (one read of event_matching_questions, nothing more: the engine then adds no term at all).
+ * when the event has none (one read of event_matching_questions, nothing more: the engine then adds no term at all) or
+ * none of these people has answered any of them yet.
  * Best-effort, as the intent signals are: a soft preference must never stop a round, so a failed read is logged and
  * matching goes on without it.
  */
@@ -128,6 +129,9 @@ export async function loadQuestionSignals(sessionId: string, userIds: string[]):
       );
       for (const row of r.rows) (answersByUser[row.user_id] ??= {})[row.key] = row.option_keys;
     }
+    // Fix round 1 (review M2): while nobody being matched has answered, the event matches exactly as one without
+    // questions (no term at all), so adding a question changes no room before anyone answers it.
+    if (Object.keys(answersByUser).length === 0) return undefined;
     return { questions: questions.map(publicShape), answersByUser };
   } catch (err) {
     logger.warn({ err, sessionId }, 'Matching questions could not be read; the round is made without them (non-fatal)');
@@ -274,11 +278,39 @@ export async function saveMyAnswers(
   return result;
 }
 
-/** PUT /sessions/:id/questions/mine: anyone who can see the event answers for themselves (an unseen event reads as unknown). */
+/**
+ * Who may read an event's questions and answer them for themselves: anyone who can see the event, and (fix round 1,
+ * review M4) anyone with a tie to it even where the page rules would not show it to them: a place that is not removed, a
+ * waiting-list row, or a request (pending or approved). That is a guest who came in by the RSN Call link alone, on an
+ * event with an admission mode. Never a draft, except to the people who run it, and never a closed account.
+ */
+function mayAnswer(facts: EventAccessFacts | null, role: UserRole | undefined): facts is EventAccessFacts {
+  if (!facts || !facts.accountActive) return false;
+  if (canSeeEvent(facts, role)) return true;
+  if (facts.publication === 'draft' && !runsEvent(facts, role)) return false;
+  const holds = facts.participantStatus !== null && facts.participantStatus !== 'removed';
+  return holds || facts.waitlistPosition !== null || facts.myRequest === 'pending' || facts.myRequest === 'approved';
+}
+
+/** PUT /sessions/:id/questions/mine: anyone who may answer (mayAnswer) answers for themselves; anyone else reads unknown. */
 export async function saveMyAnswersAs(sessionId: string, viewer: Actor, answers: unknown): Promise<MyAnswersResult> {
   const facts = await readEventAccessFacts(sessionId, viewer.userId);
-  if (!facts || !canSeeEvent(facts, viewer.role)) throw new NotFoundError('Session', sessionId, NOT_FOUND);
+  if (!mayAnswer(facts, viewer.role)) throw new NotFoundError('Session', sessionId, NOT_FOUND);
   return saveMyAnswers(sessionId, viewer.userId, answers);
+}
+
+/**
+ * The answers sent with a request to join (POST /sessions/:id/requests, fix round 1), saved before the request as the
+ * call link's entry saves them: someone who may not answer is left to the request's own refusal (nothing is saved), and
+ * once the event is live the answers are left as they are. The answers are the person's own and stay editable, so a
+ * request refused afterwards leaves nothing harmful behind.
+ */
+export async function saveAnswersWithRequest(sessionId: string, viewer: Actor, answers: EventAnswers): Promise<void> {
+  if (Object.keys(answers).length === 0) return;
+  const facts = await readEventAccessFacts(sessionId, viewer.userId);
+  if (!mayAnswer(facts, viewer.role)) return;
+  const result = await transaction((tx) => saveMyAnswersTx(tx, sessionId, viewer.userId, answers, true));
+  if (result.changed) void fanoutMyAnswers(sessionId, viewer.userId);
 }
 
 /**
@@ -429,17 +461,21 @@ export async function saveEventQuestions(sessionId: string, actor: Actor, questi
     if (window === 'live') throw new ConflictError(ErrorCodes.SESSION_IN_PROGRESS, QUESTIONS_LIVE_SENTENCE);
     if (window === 'ended') throw new ConflictError(ErrorCodes.EVENT_ENDED, QUESTIONS_ENDED_SENTENCE);
     const before = await getEventQuestions(sessionId, client);
+    // Fix round 1 (review M3): a save that changes nothing writes, audits and tells nobody.
+    if (JSON.stringify(before) === JSON.stringify(next)) return { questions: before, changed: false };
     const affected = await writeQuestions(client, sessionId, actor.userId, next);
     const after = await getEventQuestions(sessionId, client);
     await recordEventAudit({
       sessionId, actorId: actor.userId, action: 'questions.changed', automatic: false, subjectUserIds: affected,
       before: before.length > 0 ? before : null, after: after.length > 0 ? after : null,
     }, client);
-    return after;
+    return { questions: after, changed: true };
   });
-  void fanoutEventQuestions(sessionId);
-  void emitEventAuditChanged(sessionId);
-  return saved;
+  if (saved.changed) {
+    void fanoutEventQuestions(sessionId);
+    void emitEventAuditChanged(sessionId);
+  }
+  return saved.questions;
 }
 
 // ─── What a screen reads ─────────────────────────────────────────────────────
@@ -464,17 +500,22 @@ function countsOf(questions: EventMatchingQuestion[], all: Array<{ answers: Even
  */
 export async function readEventQuestions(sessionId: string, viewer: Actor): Promise<EventQuestionsView> {
   const facts = await readEventAccessFacts(sessionId, viewer.userId);
-  if (!facts || !canSeeEvent(facts, viewer.role)) throw new NotFoundError('Session', sessionId, NOT_FOUND);
+  if (!mayAnswer(facts, viewer.role)) throw new NotFoundError('Session', sessionId, NOT_FOUND);
   const questions = await getEventQuestions(sessionId);
   const mine = questions.length > 0 ? await answersOf(readerOf(), sessionId, viewer.userId) : {};
   const view: EventQuestionsView = { questions, mine, missingRequired: missingRequiredQuestions(questions, mine) };
   const { allowed } = await canActAsHost(viewer.userId, viewer.role, sessionId);
   if (!allowed) return view;
   if (questions.length === 0) return { ...view, answers: [], counts: {} };
+  // Fix round 1 (review M1): only the people tied to the event (a place that is not removed, a waiting-list row, a
+  // pending request) are listed and counted; someone who answered on a public page and never asked for a place is not.
   const rows = await query<{ user_id: string; key: string; option_keys: string[] }>(
     `SELECT a.user_id, q.key, a.option_keys
        FROM event_question_answers a JOIN event_matching_questions q ON q.id = a.question_id
       WHERE a.session_id = $1
+        AND (EXISTS (SELECT 1 FROM session_participants sp WHERE sp.session_id = a.session_id AND sp.user_id = a.user_id AND sp.status <> 'removed')
+             OR EXISTS (SELECT 1 FROM event_waitlist w WHERE w.session_id = a.session_id AND w.user_id = a.user_id AND w.status = 'waiting')
+             OR EXISTS (SELECT 1 FROM event_join_requests r WHERE r.session_id = a.session_id AND r.user_id = a.user_id AND r.status = 'pending'))
       ORDER BY a.user_id, q.position
       LIMIT $2`,
     [sessionId, ORGANISER_ANSWERS_MAX],

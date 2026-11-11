@@ -83,7 +83,7 @@ import { ErrorCodes, UserRole, type EventMatchingQuestion } from '@rsn/shared';
 import { enterCall, readCallEntry } from '../../../services/session/call-entry.service';
 import { getCallLanding } from '../../../services/session/call-link.service';
 import {
-  applyRegistrationAnswers, readEventQuestions, saveEventQuestions, saveMyAnswers, saveMyAnswersAs,
+  applyRegistrationAnswers, readEventQuestions, saveAnswersWithRequest, saveEventQuestions, saveMyAnswers, saveMyAnswersAs,
 } from '../../../services/session/event-questions.service';
 import { admittedViaOf, canRegister } from '../../../services/session/event-access';
 import { guestMayRegister } from '../../../services/session/guest-registration';
@@ -386,6 +386,70 @@ describe('saveMyAnswers', () => {
   });
 });
 
+describe('fix round 1: a tie to the event lets a person read and answer even where the page is closed to them (review M4)', () => {
+  beforeEach(() => {
+    // A private approval event: the page is closed to someone with no tie to it.
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'private' });
+    world.questions.set(EVENT, [SECTOR]);
+  });
+
+  it('without a place, a request or a waiting row: unknown (404) to read and to answer', async () => {
+    expect(await refusal(readEventQuestions(EVENT, { userId: MEMBER, role: UserRole.MEMBER }))).toMatchObject({ status: 404 });
+    expect(await refusal(saveMyAnswersAs(EVENT, { userId: MEMBER, role: UserRole.MEMBER }, { sector: ['health'] }))).toMatchObject({ status: 404 });
+  });
+
+  it('with a pending request (a guest who came in by the link alone): reads the questions and answers them', async () => {
+    world.requests.set(key(EVENT, MEMBER), 'pending');
+    expect((await readEventQuestions(EVENT, { userId: MEMBER, role: UserRole.MEMBER })).missingRequired).toEqual(['sector']);
+    await saveMyAnswersAs(EVENT, { userId: MEMBER, role: UserRole.MEMBER }, { sector: ['health'] });
+    expect(world.answers.get(key(EVENT, MEMBER))).toEqual({ sector: ['health'] });
+  });
+
+  it('with a place: the same', async () => {
+    world.places.set(key(EVENT, MEMBER), { status: 'registered', admitted_via: null });
+    expect((await readEventQuestions(EVENT, { userId: MEMBER, role: UserRole.MEMBER })).questions).toEqual([SECTOR]);
+  });
+
+  it('never on a draft the person does not run', async () => {
+    world.events[0].publication = 'draft';
+    world.requests.set(key(EVENT, MEMBER), 'pending');
+    expect(await refusal(readEventQuestions(EVENT, { userId: MEMBER, role: UserRole.MEMBER }))).toMatchObject({ status: 404 });
+  });
+});
+
+describe('fix round 1: a request to join carries the answers (POST /:id/requests)', () => {
+  it('saves them for someone who may answer, before the request', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'public_with_approval' });
+    world.questions.set(EVENT, [SECTOR]);
+    await saveAnswersWithRequest(EVENT, { userId: MEMBER, role: UserRole.MEMBER }, { sector: ['fintech'] });
+    expect(world.answers.get(key(EVENT, MEMBER))).toEqual({ sector: ['fintech'] });
+    await flush();
+    expect(answersTagSentTo()).toEqual([[HOST, MEMBER].sort()]);
+  });
+
+  it('leaves someone who may not answer to the request\'s own refusal: nothing saved, nothing thrown', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'private' });
+    world.questions.set(EVENT, [SECTOR]);
+    await saveAnswersWithRequest(EVENT, { userId: MEMBER, role: UserRole.MEMBER }, { sector: ['fintech'] });
+    expect(world.answers.get(key(EVENT, MEMBER))).toBeUndefined();
+  });
+
+  it('once the event is live, leaves the answers alone without a refusal', async () => {
+    addEvent({ id: EVENT, call_code: CODE, admission_mode: 'approval', visibility: 'public_with_approval', status: 'round_active' });
+    world.questions.set(EVENT, [SECTOR]);
+    await saveAnswersWithRequest(EVENT, { userId: MEMBER, role: UserRole.MEMBER }, { sector: ['fintech'] });
+    expect(world.answers.get(key(EVENT, MEMBER))).toBeUndefined();
+  });
+
+  it('the route takes `answers` with the same rule as the call link and saves them before requestToJoin (source)', () => {
+    const route = fs.readFileSync(path.join(__dirname, '../../../routes/sessions.ts'), 'utf8');
+    expect(route).toContain('const joinRequestSchema = z.object({ message: z.string().trim().max(500).optional(), answers: eventAnswersSchema.optional() });');
+    const handler = route.slice(route.indexOf("'/:id/requests',"), route.indexOf("'/:id/requests/mine',"));
+    expect(handler.indexOf('saveAnswersWithRequest(')).toBeGreaterThan(0);
+    expect(handler.indexOf('saveAnswersWithRequest(')).toBeLessThan(handler.indexOf('eventRequests.requestToJoin('));
+  });
+});
+
 describe('readEventQuestions: answers are the person\'s own and the organisers\'', () => {
   beforeEach(() => {
     addEvent({ id: EVENT, call_code: CODE, admission_mode: 'open', visibility: 'public' });
@@ -413,6 +477,14 @@ describe('readEventQuestions: answers are the person\'s own and the organisers\'
     expect(view.answers).toEqual([{ userId: MEMBER, answers: { sector: ['health'] } }, { userId: GUEST, answers: { sector: ['fintech'] } }]);
     expect(view.counts).toEqual({ sector: { fintech: 1, health: 1 } });
   });
+
+  it('the organisers list and count only people tied to the event: a place, a waiting row, a pending request (review M1)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../../services/session/event-questions.service.ts'), 'utf8').replace(/\s+/g, ' ');
+    const read = src.slice(src.indexOf('export async function readEventQuestions('));
+    expect(read).toContain("EXISTS (SELECT 1 FROM session_participants sp WHERE sp.session_id = a.session_id AND sp.user_id = a.user_id AND sp.status <> 'removed')");
+    expect(read).toContain("EXISTS (SELECT 1 FROM event_waitlist w WHERE w.session_id = a.session_id AND w.user_id = a.user_id AND w.status = 'waiting')");
+    expect(read).toContain("EXISTS (SELECT 1 FROM event_join_requests r WHERE r.session_id = a.session_id AND r.user_id = a.user_id AND r.status = 'pending')");
+  });
 });
 
 // ─── The organiser's save, on a recording database ───────────────────────────
@@ -434,6 +506,14 @@ describe('saveEventQuestions', () => {
     return statements;
   }
   const host = { userId: HOST, role: UserRole.MEMBER };
+
+  it('a save that changes nothing writes, audits and tells nobody (review M3)', async () => {
+    const statements = recordingDb('scheduled', [SECTOR]);
+    expect(await saveEventQuestions(EVENT, host, [SECTOR])).toEqual([SECTOR]);
+    expect(statements.some((s) => /^(INSERT|UPDATE|DELETE)/.test(s))).toBe(false);
+    await flush();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
 
   it('is refused while the event is live, in words, and writes nothing', async () => {
     const statements = recordingDb('round_active');

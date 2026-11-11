@@ -155,7 +155,31 @@ export class MatchingEngineV1 implements IMatchingEngine {
 
   // ─── Private Methods ─────────────────────────────────────────────────────
 
+  /**
+   * One round. Part 3 Task 5 (K5, fix round 1): an event's matching questions change the pair scores, and the greedy
+   * steps (an odd count, more than 30 people, the trio) take pairs in score order, so a soft term alone could seat fewer
+   * people or make a repeat. With questions the round is therefore made twice, with and without them, and the one with
+   * questions is kept only when it is no worse (questionsNoWorse): as many people seated and no more repeats. Without
+   * questions the round is made once, exactly as before.
+   */
   private generateSingleRound(
+    participants: MatchingParticipant[],
+    config: MatchingConfig,
+    usedPairs: Set<string>,
+    hardExclusions: Set<string>,
+    encounterMap: Map<string, EncounterHistoryEntry>,
+    roundNumber: number,
+    options?: { regenerate?: boolean },
+  ): RoundAssignment {
+    const round = this.buildRound(participants, config, usedPairs, hardExclusions, encounterMap, roundNumber, options);
+    if (!config.eventQuestions) return round;
+    const plain = this.buildRound(
+      participants, { ...config, eventQuestions: undefined }, usedPairs, hardExclusions, encounterMap, roundNumber, options,
+    );
+    return questionsNoWorse(round, plain, usedPairs, encounterMap) ? round : plain;
+  }
+
+  private buildRound(
     participants: MatchingParticipant[],
     config: MatchingConfig,
     usedPairs: Set<string>,
@@ -846,6 +870,49 @@ export class MatchingEngineV1 implements IMatchingEngine {
     const setB = new Set(b.map((s) => s.toLowerCase()));
     return a.filter((item) => setB.has(item.toLowerCase())).length;
   }
+}
+
+// ─── Part 3 Task 5 (K5, fix round 1): questions never make a round worse ───────────────────────────────────────
+
+/** Everyone a round seats (in a pair or a trio). */
+export function seatedIn(round: Pick<RoundAssignment, 'pairs'>): number {
+  return round.pairs.reduce((n, p) => n + (p.participantCId ? 3 : 2), 0);
+}
+
+/** Every pair of people a round's rooms make meet: one per pair, all three of a trio. */
+export function meetingKeysOf(round: Pick<RoundAssignment, 'pairs'>): string[] {
+  const keys: string[] = [];
+  for (const p of round.pairs) {
+    const people = [p.participantAId, p.participantBId, p.participantCId].filter((x): x is string => !!x);
+    for (let i = 0; i < people.length; i++) {
+      for (let j = i + 1; j < people.length; j++) keys.push(pairKey(people[i], people[j]));
+    }
+  }
+  return keys;
+}
+
+/** How many of a round's meetings are in `met` (trio meetings included). */
+export function repeatsIn(round: Pick<RoundAssignment, 'pairs'>, met: ReadonlySet<string>): number {
+  return meetingKeysOf(round).filter((k) => met.has(k)).length;
+}
+
+/**
+ * Whether a round made with an event's matching questions is no worse than the same round made without them: it seats at
+ * least as many people, makes no more repeats of pairs the caller keeps apart in this round (`usedPairs`: the event's
+ * own earlier meetings and those the event's repeat policy forbids), and no more meetings of people who met before (the
+ * encounter history the event's policy reads). Every meeting of a trio counts.
+ */
+export function questionsNoWorse(
+  withQuestions: Pick<RoundAssignment, 'pairs'>,
+  without: Pick<RoundAssignment, 'pairs'>,
+  usedPairs: ReadonlySet<string>,
+  encounterMap?: ReadonlyMap<string, EncounterHistoryEntry>,
+): boolean {
+  if (seatedIn(withQuestions) < seatedIn(without)) return false;
+  if (repeatsIn(withQuestions, usedPairs) > repeatsIn(without, usedPairs)) return false;
+  if (!encounterMap || encounterMap.size === 0) return true;
+  const metBefore = new Set([...encounterMap].filter(([, e]) => (e.timesMet ?? 0) > 0).map(([k]) => k));
+  return repeatsIn(withQuestions, metBefore) <= repeatsIn(without, metBefore);
 }
 
 /**

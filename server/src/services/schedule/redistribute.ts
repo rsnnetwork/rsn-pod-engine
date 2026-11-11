@@ -79,7 +79,42 @@ function waitingReason(ctx: RoomCheckContext, id: string, candidates: string[][]
   return refusedByRule ? 'group_rule' : 'no_allowed_partner';
 }
 
+/**
+ * Seat the basket. Part 3 Task 5 (K5, fix round 1): an event's matching questions (`affinity`) only order the candidates,
+ * and step 2 fills rooms one at a time, so a preference alone could leave a later room with nobody it may take. With
+ * `affinity` the basket is therefore seated twice, with and without it, and the result with it is kept only when it
+ * seats at least as many people with no more same-group fallbacks and no more repeats. Without `affinity` it is seated
+ * once, exactly as before.
+ */
 export function redistributeRound(input: RedistributeInput): RedistributeResult {
+  const result = seatOnce(input);
+  if (!input.affinity) return result;
+  const plain = seatOnce({ ...input, affinity: undefined });
+  return affinityNoWorse(input.ctx, result, plain) ? result : plain;
+}
+
+/** Same-group fallbacks and repeats among the rooms a result holds (each warning counted per person it names). */
+function costsOf(ctx: RoomCheckContext, result: RedistributeResult): { fallback: number; repeat: number } {
+  let fallback = 0;
+  let repeat = 0;
+  for (const members of result.seated.values()) {
+    if (members.length < 2) continue;
+    for (const w of verdictOf(ctx, members).warnings) {
+      if (w.kind === 'same_group_fallback') fallback += w.userIds.length;
+      if (w.kind === 'repeat') repeat += w.userIds.length;
+    }
+  }
+  return { fallback, repeat };
+}
+
+function affinityNoWorse(ctx: RoomCheckContext, withAffinity: RedistributeResult, without: RedistributeResult): boolean {
+  if (withAffinity.placed.length < without.placed.length) return false;
+  const a = costsOf(ctx, withAffinity);
+  const b = costsOf(ctx, without);
+  return a.fallback <= b.fallback && a.repeat <= b.repeat;
+}
+
+function seatOnce(input: RedistributeInput): RedistributeResult {
   const { ctx, lockedRooms } = input;
   const seated = new Map<number, string[]>([...input.seated].map(([room, members]) => [room, [...members]]));
   const occupied = new Set([...seated.values()].flat());

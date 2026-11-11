@@ -21,7 +21,7 @@ import { readEventCircle } from '../services/circle/circle-events.service';
 import { summariseEventLifecycle } from '../services/session/event-lifecycle.service';
 import * as eventRequests from '../services/session/event-requests.service';
 import { fanoutEventGroups } from '../services/session/event-groups.service';
-import { fanoutMyAnswers } from '../services/session/event-questions.service';
+import { fanoutMyAnswers, saveAnswersWithRequest } from '../services/session/event-questions.service';
 import { eventAnswersSchema } from './event-questions';
 import { eventChatReadLimiter, eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
@@ -470,7 +470,9 @@ router.get(
 // An event that asks the host to approve each place: the person asks, may withdraw, and the event's organisers
 // approve or decline. Every write tells the organisers and the requester (session:<id>:join-requests).
 
-const joinRequestSchema = z.object({ message: z.string().trim().max(500).optional() });
+// Part 3 Task 5 (fix round 1): a request may carry the answers to the event's matching questions, saved before it is
+// sent (as the RSN Call link's entry saves them), so a member asks with one call.
+const joinRequestSchema = z.object({ message: z.string().trim().max(500).optional(), answers: eventAnswersSchema.optional() });
 const joinRequestListSchema = z.object({ status: z.enum(['pending', 'approved', 'declined', 'withdrawn']).optional() });
 const requesterPath = z.object({ userId: z.string().uuid() });
 
@@ -489,6 +491,8 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const message = (req.body.message as string | undefined)?.trim() || null;
+      const { answers } = req.body as z.infer<typeof joinRequestSchema>;
+      if (answers) await saveAnswersWithRequest(req.params.id, { userId: req.user!.userId, role: req.user!.role }, answers);
       const request = await eventRequests.requestToJoin(req.params.id, req.user!.userId, req.user!.role, message);
       const response: ApiResponse = { success: true, data: request };
       res.status(201).json(response);
@@ -619,7 +623,7 @@ router.post(
   validate(registerBodySchema.default({})),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const options = registerOptionsOf(req.body as z.infer<typeof registerBodySchema>);
+      const options = registerOptionsOf(req.body);
       const asked = registerWaitlistSchema.safeParse(req.body);
       if (!asked.success) throw new ValidationError('Check what you entered and try again.');
       const participant = asked.data.waitlist === true

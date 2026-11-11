@@ -11,7 +11,7 @@ import {
 } from '@rsn/shared';
 import { getMatchingEngine, DEFAULT_ENGINE_ID } from './matching.registry';
 import { IMatchingEngine, pairKey } from './matching.interface';
-import { groupGate } from './matching.engine';
+import { groupGate, meetingKeysOf, questionsNoWorse, seatedIn } from './matching.engine';
 import { getEventGroupRules, groupsForParticipants } from '../session/event-groups.service';
 import { loadQuestionSignals } from '../session/event-questions.service';
 import { reduceRepeatPairs } from './repeat-reduction';
@@ -277,7 +277,19 @@ export async function generateSessionSchedule(
 
   // Generate schedule. An event with groups plans round by round through generateGroupedRound, so each round
   // gets the organiser's fallback and its capacity sentence; an event without groups takes the engine's own path.
-  const output = groupRules ? planGroupedSchedule(engine, input) : await engine.generateSchedule(input);
+  const plan = (planInput: MatchingInput) => (groupRules ? planGroupedSchedule(engine, planInput) : engine.generateSchedule(planInput));
+  let output = await plan(input);
+  // Part 3 Task 5 (K5, fix round 1): questions never make the plan worse. With questions the plan is made without them
+  // too, and that one is kept when the one with them seats fewer people over the rounds or makes more repeats (a pair
+  // meeting again within the plan, or meeting a pair already met in the event or, per its policy, before it).
+  if (config.eventQuestions) {
+    const plainOutput = await plan({ ...input, config: { ...config, eventQuestions: undefined } });
+    const before = new Set([
+      ...existingRounds.flatMap((r) => meetingKeysOf(r)),
+      ...encounterHistory.filter((e) => (e.timesMet ?? 0) > 0).map((e) => pairKey(e.userAId, e.userBId)),
+    ]);
+    if (!planNoWorse(output, plainOutput, before)) output = plainOutput;
+  }
 
   // Persist matches to database
   await persistMatches(sessionId, output.rounds, templateIdOf(sessionConfig));
@@ -340,6 +352,27 @@ async function templateWeightsFor(
     }
   }
   return { weights, templateId: effectiveTemplateId };
+}
+
+/** People seated over a plan's rounds, and its repeats: meetings of pairs met before it or earlier in the plan. */
+function planOutcome(output: MatchingOutput, before: ReadonlySet<string>): { seated: number; repeats: number } {
+  const met = new Set(before);
+  let seated = 0;
+  let repeats = 0;
+  for (const round of output.rounds) {
+    seated += seatedIn(round);
+    const keys = meetingKeysOf(round);
+    repeats += keys.filter((k) => met.has(k)).length;
+    for (const k of keys) met.add(k);
+  }
+  return { seated, repeats };
+}
+
+/** Part 3 Task 5 (K5, fix round 1): a plan made with matching questions seats as many and repeats no more than without. */
+function planNoWorse(withQuestions: MatchingOutput, without: MatchingOutput, before: ReadonlySet<string>): boolean {
+  const a = planOutcome(withQuestions, before);
+  const b = planOutcome(without, before);
+  return a.seated >= b.seated && a.repeats <= b.repeats;
 }
 
 // ─── Matching groups (Part 2 Task 7, 10 Nov 2026 spec sections 05 and 07) ────────────────────────────────
@@ -606,21 +639,31 @@ export async function prepareBoardRoundGenerator(sessionId: string, userIds: str
   const byId = new Map(rows.map((p) => [p.userId, p]));
   const seatedBy = (round: RoundAssignment) => round.pairs.reduce((n, p) => n + roomMembers(p).length, 0);
 
-  const generator: BoardRoundGenerator = (people, round, avoid) => {
+  const seatRound = (seatConfig: MatchingConfig, people: string[], round: number, avoid: ReadonlySet<string>): RoundAssignment => {
     const participants = people.map((id) => byId.get(id)).filter((p): p is MatchingParticipant => !!p);
     const evenCount = participants.length - (participants.length % 2);
     const target = groupRules
-      ? groupedPlacementTarget(groupRules, participants, round, config.numberOfRounds, evenCount)
+      ? groupedPlacementTarget(groupRules, participants, round, seatConfig.numberOfRounds, evenCount)
       : evenCount;
     const withinEvent = matchingPolicy === 'none' ? [] : [...avoid];
     const strict = generateGroupedRound({
-      participants, config, excludedPairs: new Set([...withinEvent, ...earlierEvents]), encounterHistory, round, engine,
+      participants, config: seatConfig, excludedPairs: new Set([...withinEvent, ...earlierEvents]), encounterHistory, round, engine,
     });
     if (seatedBy(strict) >= target || withinEvent.length === 0) return strict;
     const relaxed = generateGroupedRound({
-      participants, config, excludedPairs: new Set(earlierEvents), encounterHistory, round, engine,
+      participants, config: seatConfig, excludedPairs: new Set(earlierEvents), encounterHistory, round, engine,
     });
     return seatedBy(relaxed) > seatedBy(strict) ? { ...relaxed, usedRepeats: true } : strict;
+  };
+  const generator: BoardRoundGenerator = (people, round, avoid) => {
+    const chosen = seatRound(config, people, round, avoid);
+    if (!config.eventQuestions) return chosen;
+    // Part 3 Task 5 (K5, fix round 1): questions never make the board's round worse. The round is seated without them
+    // too, and that one is kept when the one with them seats fewer people or repeats more of the pairs this round keeps
+    // apart (the event's own meetings and those its repeat policy forbids; every meeting of a trio counts).
+    const plain = seatRound({ ...config, eventQuestions: undefined }, people, round, avoid);
+    const keptApart = new Set([...(matchingPolicy === 'none' ? [] : [...avoid]), ...earlierEvents]);
+    return questionsNoWorse(chosen, plain, keptApart) ? chosen : plain;
   };
   if (eventQuestions) {
     const { questions, answersByUser } = eventQuestions;
@@ -892,60 +935,75 @@ export async function generateSingleRound(
   const sortedExcludedKeys = Array.from(excludedPairs).sort();
   const halfExcludedPairs = new Set(sortedExcludedKeys.slice(Math.floor(sortedExcludedKeys.length / 2)));
 
-  let round: RoundAssignment | null = null;
-  let landedAtLevel = 0;
+  // Part 3 Task 5 (K5, fix round 1): the ladder, as one function of the config, so an event with matching questions can
+  // climb it twice (with and without them) and keep the questions' result only when it is no worse.
+  const climbLadder = (ladderConfig: MatchingConfig): { round: RoundAssignment | null; landedAtLevel: number } => {
+    let round: RoundAssignment | null = null;
+    let landedAtLevel = 0;
+    for (let level = 0; level <= 4; level++) {
+      const baseExcluded = level >= 4 ? new Set<string>()
+                         : level >= 3 ? halfExcludedPairs
+                         : excludedPairs;
+      // #5b — excludePairKeys (the current preview arrangement) is NEVER relaxed,
+      // even at L4, so Re-match always rotates to a different arrangement.
+      const levelExcluded = options?.excludePairKeys?.length
+        ? new Set<string>([...baseExcluded, ...options.excludePairKeys])
+        : baseExcluded;
+      const freshnessScale = level >= 2 ? 0
+                           : level >= 1 ? 0.5
+                           : 1;
+      const levelConfig: MatchingConfig = {
+        ...ladderConfig,
+        weights: {
+          ...ladderConfig.weights,
+          encounterFreshness: (ladderConfig.weights.encounterFreshness ?? 0.10) * freshnessScale,
+        },
+      };
 
-  for (let level = 0; level <= 4; level++) {
-    const baseExcluded = level >= 4 ? new Set<string>()
-                       : level >= 3 ? halfExcludedPairs
-                       : excludedPairs;
-    // #5b — excludePairKeys (the current preview arrangement) is NEVER relaxed,
-    // even at L4, so Re-match always rotates to a different arrangement.
-    const levelExcluded = options?.excludePairKeys?.length
-      ? new Set<string>([...baseExcluded, ...options.excludePairKeys])
-      : baseExcluded;
-    const freshnessScale = level >= 2 ? 0
-                         : level >= 1 ? 0.5
-                         : 1;
-    const levelConfig: MatchingConfig = {
-      ...config,
-      weights: {
-        ...config.weights,
-        encounterFreshness: (config.weights.encounterFreshness ?? 0.10) * freshnessScale,
-      },
-    };
+      round = groupRules
+        ? generateGroupedRound({
+          participants: participantsResult.rows, config: levelConfig, excludedPairs: levelExcluded, encounterHistory,
+          round: roundNumber, regenerate: options?.regenerate === true, engine,
+        })
+        : engine.generateRound(
+          participantsResult.rows,
+          levelConfig,
+          levelExcluded,
+          encounterHistory,
+          roundNumber,
+          { regenerate: options?.regenerate === true },
+        );
 
-    round = groupRules
-      ? generateGroupedRound({
-        participants: participantsResult.rows, config: levelConfig, excludedPairs: levelExcluded, encounterHistory,
-        round: roundNumber, regenerate: options?.regenerate === true, engine,
-      })
-      : engine.generateRound(
-        participantsResult.rows,
-        levelConfig,
-        levelExcluded,
-        encounterHistory,
-        roundNumber,
-        { regenerate: options?.regenerate === true },
-      );
+      const matchedIds = new Set<string>();
+      for (const p of round.pairs) {
+        matchedIds.add(p.participantAId);
+        matchedIds.add(p.participantBId);
+        if (p.participantCId) matchedIds.add(p.participantCId);
+      }
+      landedAtLevel = level;
 
-    const matchedIds = new Set<string>();
-    for (const p of round.pairs) {
-      matchedIds.add(p.participantAId);
-      matchedIds.add(p.participantBId);
-      if (p.participantCId) matchedIds.add(p.participantCId);
+      // Complete: every eligible participant (rounded down to even) is placed.
+      // Above-even-count leftover gets handled by the engine's trio path.
+      if (matchedIds.size >= placementTarget) break;
+
+      if (level === 4) {
+        logger.warn(
+          { sessionId, roundNumber, level, matched: matchedIds.size, eligibleEvenCount },
+          'Fallback ladder exhausted at L4 — accepting incomplete matching',
+        );
+      }
     }
-    landedAtLevel = level;
+    return { round, landedAtLevel };
+  };
 
-    // Complete: every eligible participant (rounded down to even) is placed.
-    // Above-even-count leftover gets handled by the engine's trio path.
-    if (matchedIds.size >= placementTarget) break;
-
-    if (level === 4) {
-      logger.warn(
-        { sessionId, roundNumber, level, matched: matchedIds.size, eligibleEvenCount },
-        'Fallback ladder exhausted at L4 — accepting incomplete matching',
-      );
+  let { round, landedAtLevel } = climbLadder(config);
+  // Questions never make the round worse: the ladder without them is climbed too, and its result is kept when the one
+  // with them lands on a higher level (relaxes more), seats fewer people or makes more repeats of pairs the event keeps
+  // apart (every meeting of a trio counts). An event without questions climbs once, exactly as before.
+  if (config.eventQuestions && round) {
+    const plain = climbLadder({ ...config, eventQuestions: undefined });
+    if (plain.round && (landedAtLevel > plain.landedAtLevel || !questionsNoWorse(round, plain.round, excludedPairs))) {
+      ({ round, landedAtLevel } = plain);
     }
   }
 
