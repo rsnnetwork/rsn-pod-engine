@@ -11,12 +11,14 @@
 //    named person anywhere.
 // 5. The recap no longer builds a CSV or a JSON file in the browser: organisers get "See the event report".
 // 6. Every button and link the card and page draw is at least 44px tall.
+import * as fs from 'fs';
+import * as path from 'path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { EventReport, EventReportMeeting, EventReportPerson, EventReportSummary } from '@rsn/shared';
 import { historySentence, type HistoryEntry } from '../../../../client/src/features/sessions/history/history-text';
 import {
-  REPORT_COPY, averageText, filterCounts, filterPeople, mutualLine, nameLookup, personCounts, presenceLine,
+  REPORT_COPY, averageText, eventAverageText, filterCounts, filterPeople, mutualLine, nameLookup, personCounts, presenceLine,
   ratingLines, reportFileName, reportTiles, roomLine, roundCards, downloadFailedSentence,
 } from '../../../../client/src/features/sessions/report/report-text';
 import { iconStandIns, loadClientModule, readClientSource } from './load-client-module';
@@ -250,7 +252,19 @@ describe('the downloads: a blob through lib/api.ts, never window.open', () => {
     expect(downloadFailedSentence({ response: { status: 429 } })).toBe('You have downloaded this report a lot just now. Try again in a few minutes.');
     const hook = read(`${REPORT_DIR}/useEventReport.ts`);
     expect(hook).toContain("addToast(downloadFailedSentence(err), 'error')");
-    expect(hook).toContain('if (busy) return;');
+  });
+
+  it('two taps in one frame start one download: the guard is a ref, set before anything awaits', () => {
+    const hook = read(`${REPORT_DIR}/useEventReport.ts`);
+    expect(hook).toContain('const running = useRef(false);');
+    const body = hook.slice(hook.indexOf('const download = async'), hook.indexOf('return { download, busy };'));
+    const guard = body.indexOf('if (running.current) return;');
+    const set = body.indexOf('running.current = true;');
+    expect(guard).toBeGreaterThan(-1);
+    expect(set).toBeGreaterThan(guard);
+    expect(set).toBeLessThan(body.indexOf('await '));
+    expect(body).toMatch(/finally \{\s*running\.current = false;/);
+    expect(body).not.toContain('if (busy) return;');
   });
 });
 
@@ -320,7 +334,13 @@ describe('what the report says', () => {
   const draw = (name: string, r: EventReport) => renderToStaticMarkup(createElement(sections()[name] as never, { report: r }));
 
   it('the empty states: nobody registered, no meetings, no mutual matches', () => {
-    expect(draw('AttendanceSection', report())).toContain('Nobody registered for this event.');
+    const nobody = draw('AttendanceSection', report({ people: [person('h', 'Hana Host', { role: 'host', outcome: 'stayed' })] }));
+    expect(nobody).toContain('Nobody registered for this event.');
+    // Only the sentence: no filter chips and no rows (not even the host's own).
+    expect(nobody).not.toContain('report-attendance-filter');
+    expect(nobody).not.toContain('<button');
+    expect(nobody).not.toContain('report-person');
+    expect(draw('AttendanceSection', empty())).toContain('report-attendance-filter');
     expect(draw('RoundsSection', empty())).toContain('No meetings took place.');
     expect(draw('MutualSection', empty())).toContain('No mutual matches yet.');
     expect(REPORT_COPY).toMatchObject({
@@ -375,11 +395,46 @@ describe('the recap no longer builds files in the browser', () => {
   });
 
   it('organisers get "See the event report" (44px); members\' own recap is unchanged', () => {
-    expect(recap).toMatch(/\{\(isHost \|\| isAdmin\) && \(\s*<Link\s+to=\{`\/sessions\/\$\{sessionId\}\/report`\}/);
+    expect(recap).toContain("const isOrganiser = isHost || isAdmin || pod?.memberRole === 'director' || pod?.memberRole === 'host';");
+    expect(recap).toMatch(/\{isOrganiser && \(\s*<Link\s+to=\{`\/sessions\/\$\{sessionId\}\/report`\}/);
     const link = recap.slice(recap.indexOf('data-testid="recap-report-link"'), recap.indexOf('See the event report'));
     expect(link).toContain('min-h-[44px]');
     expect(recap).toContain('See the event report');
     expect(recap).toContain('api.get(`/ratings/sessions/${sessionId}/people-met`)');
+  });
+});
+
+describe('the recap shows no event-wide rating figure under five ratings, to anyone', () => {
+  const recap = read('features/sessions/RecapPage.tsx');
+
+  it('the host and co-hosts get no event grid: no "Mutual Matches (all)", no "Total Ratings", no host branch', () => {
+    expect(recap).not.toContain('Mutual Matches (all)');
+    expect(recap).not.toContain('Total Ratings');
+    expect(recap).toContain('{stats && !isHost && (');
+    expect(recap).not.toMatch(/isHost \? \(/);
+  });
+
+  it('GET /ratings/sessions/:id/stats is the EVENT\'s average over every rating in it, for whoever reads it (an admin too)', () => {
+    const service = fs.readFileSync(path.join(__dirname, '../../services/rating/rating.service.ts'), 'utf8').replace(/\r\n/g, '\n');
+    const fn = service.slice(service.indexOf('export async function getSessionRatingStats'), service.indexOf('// ─── Export Session Data'));
+    expect(fn).toContain('COALESCE(AVG(quality_score) FILTER (WHERE NOT excluded_from_quality_stats), 0)');
+    expect(fn).toContain('WHERE m.session_id = $1`');
+    expect(fn).not.toMatch(/rater_id|ratee_id|\$2/);
+  });
+
+  it('so the one avgQualityScore the recap draws goes through eventAverageText, never toFixed on its own', () => {
+    // Once in the Stats type, once in the tile.
+    expect(recap.split('avgQualityScore').length - 1).toBe(2);
+    expect(recap).toContain('eventAverageText(stats.totalRatings, stats.avgQualityScore)');
+    expect(recap).not.toMatch(/avgQualityScore\.toFixed|avgQuality\)\.toFixed/);
+  });
+
+  it('eventAverageText: none reads "No ratings yet", 1-4 "Too few ratings to show", 5 and up the average', () => {
+    expect(eventAverageText(0, 0)).toEqual({ text: 'No ratings yet', figure: false });
+    expect(eventAverageText(1, 4)).toEqual({ text: 'Too few ratings to show', figure: false });
+    expect(eventAverageText(4, 3.75)).toEqual({ text: 'Too few ratings to show', figure: false });
+    expect(eventAverageText(5, 4)).toEqual({ text: '4.0', figure: true });
+    expect(eventAverageText(12, 4.25)).toEqual({ text: '4.3', figure: true });
   });
 });
 

@@ -18,9 +18,17 @@ export function AttendanceSection({ report }: { report: EventReport }) {
   const shown = filterPeople(report.people, filter);
   const zone = report.event.timezone;
 
+  // Nobody registered: the sentence alone, no filter and no list (the host's own row is not an attendance).
+  if (report.summary.registered === 0) {
+    return (
+      <OrganiserCard testId="report-attendance" title={REPORT_COPY.attendance}>
+        <EmptyRow testId="report-attendance-empty">{REPORT_COPY.emptyPeople}</EmptyRow>
+      </OrganiserCard>
+    );
+  }
+
   return (
     <OrganiserCard testId="report-attendance" title={REPORT_COPY.attendance}>
-      {report.summary.registered === 0 && <EmptyRow testId="report-attendance-empty">{REPORT_COPY.emptyPeople}</EmptyRow>}
       <div role="group" aria-label="Show" data-testid="report-attendance-filter" className="mb-3 flex flex-wrap gap-2">
         {ATTENDANCE_FILTERS.map((f) => (
           <button

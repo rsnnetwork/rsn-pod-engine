@@ -11,6 +11,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
+import { eventAverageText } from './report/report-text';
 
 interface Connection {
   userId: string;
@@ -197,6 +198,17 @@ export default function RecapPage() {
   });
   const isHost = session?.hostUserId === user?.id || cohostData === true;
 
+  // The pod's director or host runs the event too (the event page's mayRunEvent); the same cached read as that page.
+  const { data: pod } = useQuery({
+    queryKey: ['pod', session?.podId],
+    queryFn: () => api.get(`/pods/${session.podId}`).then(r => r.data.data),
+    enabled: !!session?.podId,
+    meta: { entities: session?.podId ? [E.pod(session.podId)] : [] },
+  });
+  // Part 3 Task 9: the people running the event read its figures in the event report, where small numbers are held
+  // back; the recap no longer shows them an event-wide grid of its own.
+  const isOrganiser = isHost || isAdmin || pod?.memberRole === 'director' || pod?.memberRole === 'host';
+
   const { data: unratedData, refetch: refetchUnrated } = useQuery({
     queryKey: ['unrated-partners', sessionId],
     queryFn: () => api.get(`/ratings/unrated?sessionId=${sessionId}`).then(r => r.data.data),
@@ -274,7 +286,7 @@ export default function RecapPage() {
           Event details
         </Link>
         {/* Part 3 Task 9: the organisers' figures, rooms and spreadsheets are the event report's, made on the server. */}
-        {(isHost || isAdmin) && (
+        {isOrganiser && (
           <Link
             to={`/sessions/${sessionId}/report`}
             data-testid="recap-report-link"
@@ -329,26 +341,9 @@ export default function RecapPage() {
         </div>
       )}
 
-      {/* Stats grid — host sees event-level stats, participants see personal stats */}
-      {stats && (
-        isHost ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Card className="text-center py-4">
-              <Star className="h-5 w-5 text-amber-400 mx-auto mb-1" />
-              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.avgQualityScore.toFixed(1)}</p>
-              <p className="text-xs text-gray-400">Avg Rating</p>
-            </Card>
-            <Card className="text-center py-4">
-              <Handshake className="h-5 w-5 text-indigo-500 mx-auto mb-1" />
-              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.mutualMeetAgainCount}</p>
-              <p className="text-xs text-gray-400">Mutual Matches (all)</p>
-            </Card>
-            <Card className="text-center py-4">
-              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.totalRatings}</p>
-              <p className="text-xs text-gray-400">Total Ratings</p>
-            </Card>
-          </div>
-        ) : (
+      {/* Stats grid: a member's own figures. The event's host and co-hosts get none here (the event report has the
+          event's figures, small numbers withheld); the event-wide average below follows the same rule. */}
+      {stats && !isHost && (
           // Phase 2 (1 May 2026 spec) — three deterministic metrics from the
           // server's meeting_records aggregate. Stefan's strict definitions:
           //   People Met       = distinct partners (meeting Alice 3 times = 1)
@@ -381,15 +376,19 @@ export default function RecapPage() {
                   <p className="text-2xl font-bold text-[#1a1a2e]">{mutualMatches}</p>
                   <p className="text-xs text-gray-400">Mutual Matches</p>
                 </Card>
-                <Card className="text-center py-4">
+                {/* The EVENT's average (every rating in it), not this member's: under five ratings it would be a named
+                    partner's score, so it is withheld, and an event with none reads so, never 0.0. */}
+                <Card className="text-center py-4" data-testid="recap-event-average">
                   <Star className="h-5 w-5 text-amber-400 mx-auto mb-1" />
-                  <p className="text-2xl font-bold text-[#1a1a2e]">{stats.avgQualityScore.toFixed(1)}</p>
+                  {(() => {
+                    const avg = eventAverageText(stats.totalRatings, stats.avgQualityScore);
+                    return <p className={avg.figure ? 'text-2xl font-bold text-[#1a1a2e]' : 'text-sm font-medium text-gray-500 py-1.5'}>{avg.text}</p>;
+                  })()}
                   <p className="text-xs text-gray-400">Avg Rating</p>
                 </Card>
               </div>
             );
           })()
-        )
       )}
 
       {/* Unrated conversations — late rating */}

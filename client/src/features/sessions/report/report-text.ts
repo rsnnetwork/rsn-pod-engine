@@ -10,7 +10,7 @@ import type {
   EventReport, EventReportMeeting, EventReportMutualMatch, EventReportOutcome, EventReportPerson, EventReportSection,
   EventReportSummary,
 } from '@rsn/shared';
-import { formatEventTime, utcToZonedWallTime } from '@rsn/shared';
+import { RATING_FIGURE_MIN, formatEventTime, utcToZonedWallTime } from '@rsn/shared';
 
 export const REPORT_COPY = {
   cardTitle: 'Event report',
@@ -67,6 +67,17 @@ export function averageText(avg: number | null, withheld: boolean, submitted: nu
 export function shareText(rate: number | null, withheld: boolean, submitted: number): string {
   if (rate !== null) return `${Math.round(rate * 100)}%`;
   return averageText(null, withheld, submitted);
+}
+
+/**
+ * The recap's "Avg Rating": GET /ratings/sessions/:id/stats is the EVENT's average over every rating in it (whoever
+ * reads it), so it follows the report's rule. Under RATING_FIGURE_MIN ratings it would be a named partner's score:
+ * "Too few ratings to show"; none at all: "No ratings yet", never "0.0". `figure` says whether `text` is a number.
+ */
+export function eventAverageText(totalRatings: number, average: number): { text: string; figure: boolean } {
+  if (totalRatings <= 0) return { text: REPORT_COPY.noRatings, figure: false };
+  if (totalRatings < RATING_FIGURE_MIN) return { text: REPORT_COPY.withheld, figure: false };
+  return { text: average.toFixed(1), figure: true };
 }
 
 export interface FigureLine { label: string; value: string }

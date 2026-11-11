@@ -5,7 +5,7 @@
 // person). Anyone but the people running the event is refused (403), and an unknown event is 404: neither is retried,
 // and the card draws nothing for them.
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { EventReport, EventReportSection } from '@rsn/shared';
 import api from '@/lib/api';
@@ -25,18 +25,25 @@ export function useEventReport(sessionId: string, enabled = true) {
   });
 }
 
-/** The three download buttons' state: which one is fetching, and a toast when one fails. A second press waits. */
+/**
+ * The three download buttons' state: which one is fetching, and a toast when one fails. A second press while one runs
+ * does nothing: the guard is a ref, set before anything awaits, so two taps in one frame (before React has drawn the
+ * disabled buttons) still start one download.
+ */
 export function useReportDownloads(sessionId: string, report: EventReport | undefined) {
   const addToast = useToastStore((s) => s.addToast);
   const [busy, setBusy] = useState<EventReportSection | null>(null);
+  const running = useRef(false);
   const download = async (section: EventReportSection) => {
-    if (busy) return;
+    if (running.current) return;
+    running.current = true;
     setBusy(section);
     try {
       await downloadReportSection(sessionId, section, report);
     } catch (err) {
       addToast(downloadFailedSentence(err), 'error');
     } finally {
+      running.current = false;
       setBusy(null);
     }
   };
