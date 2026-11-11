@@ -451,7 +451,7 @@ async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
     const reason = typeof message === 'string' ? scrubMessage(message, linkId) : 'unknown';
     logAnswer(linkId, 0, attempt, elapsed(), reason);
     // Cut at the hard cap: ScrapingDog said nothing, so the outcome is unknown, not "no such profile" (re-review N3).
-    // One later attempt; it costs nothing unless it finds the profile.
+    // A later attempt (while one is allowed); it costs nothing unless it finds the profile.
     const name = (err as { name?: unknown } | null)?.name;
     if (name === 'TimeoutError' || name === 'AbortError') return { kind: 'retry_exhausted', timedOut: true };
     return { kind: 'provider_error', reason };

@@ -44,7 +44,8 @@ describe('migration 155 (enrichment retries)', () => {
 
   it('the schedules and the claim use only what the migration makes', () => {
     for (const s of [SCHEDULE_REQUEST_RETRY_SQL, SCHEDULE_USER_RETRY_SQL]) {
-      expect(s).toMatch(/INSERT INTO enrichment_retries \(join_request_id, user_id, linkedin_url, full_name, run_at\)/);
+      // attempt is migration 156's column.
+      expect(s).toMatch(/INSERT INTO enrichment_retries \(join_request_id, user_id, linkedin_url, full_name, run_at, attempt\)/);
     }
     // A request keeps its first row; a member's latest address wins through the member index's own predicate.
     expect(SCHEDULE_REQUEST_RETRY_SQL).toMatch(/ON CONFLICT DO NOTHING/);

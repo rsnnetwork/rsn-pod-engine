@@ -7,7 +7,7 @@
 //
 // 12 Nov 2026: a lookup that found nothing was dropped without a word (`if (!result) return;`), which hid six days of
 // ScrapingDog answering "not stored yet, try again after 2-3 minutes". Every empty end is logged now (ids and a reason,
-// never a name, email or address), and a lookup that ScrapingDog asked us to repeat later gets one later attempt
+// never a name, email or address), and a lookup that ScrapingDog asked us to repeat later gets up to two later attempts
 // (enrichment-retry.repo / .worker). The lookup has the same 150 s deadline as a member's own (providers/deadline.ts);
 // a profile that arrives after it is still kept.
 
@@ -17,7 +17,7 @@ import { applyMatchVerification, normalizeLinkedinUrl } from '../onboarding/enri
 import { resolveEnrichProvider, runProvider, resultFromOutcome, type EnrichProviderName } from '../onboarding/providers/registry';
 import type { ProviderOutcome } from '../onboarding/providers/provider.types';
 import { raceProviderDeadline } from '../onboarding/providers/deadline';
-import { scheduleEnrichmentRetry } from '../onboarding/enrichment-retry.repo';
+import { nextRetryAttempt, scheduleEnrichmentRetry } from '../onboarding/enrichment-retry.repo';
 
 export interface PreloadInput {
   id: string;
@@ -74,12 +74,12 @@ async function keepOnRequest(
 }
 
 /**
- * Look the applicant up and keep what is found on the request. Never throws. `scheduleRetry` is false for the one
- * later attempt itself, so a retry never asks for another.
+ * Look the applicant up and keep what is found on the request. Never throws. `retryAttempt` is 0 at approval, and the
+ * later attempt's number (1 or 2) when the retry worker runs it: the next one is asked for only while one is allowed.
  */
 export async function preloadJoinRequestEnrichment(
   request: PreloadInput,
-  options: { scheduleRetry: boolean },
+  options: { retryAttempt: number },
 ): Promise<void> {
   try {
     const provider = resolveEnrichProvider();
@@ -98,11 +98,12 @@ export async function preloadJoinRequestEnrichment(
         .catch((err) => logger.warn({ err, joinRequestId: request.id }, 'join-request enrichment preload: keeping the late answer failed'));
     }
     if (await keepOnRequest(request.id, provider, outcome, linkedinUrl, false)) return;
-    const retryScheduled = outcome.kind === 'retry_exhausted' && options.scheduleRetry
-      ? await scheduleEnrichmentRetry({ joinRequestId: request.id }, { linkedinUrl, fullName: request.fullName })
+    const nextAttempt = nextRetryAttempt(options.retryAttempt);
+    const retryScheduled = outcome.kind === 'retry_exhausted' && nextAttempt !== null
+      ? await scheduleEnrichmentRetry({ joinRequestId: request.id }, { linkedinUrl, fullName: request.fullName }, nextAttempt)
       : false;
     logger.warn(
-      { joinRequestId: request.id, provider, outcome: outcome.kind, reason: emptyReason(outcome), retryScheduled, retry: !options.scheduleRetry },
+      { joinRequestId: request.id, provider, outcome: outcome.kind, reason: emptyReason(outcome), retryScheduled, attempt: options.retryAttempt },
       'join-request enrichment preload found nothing',
     );
   } catch (err) {

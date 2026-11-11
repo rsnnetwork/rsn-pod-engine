@@ -303,10 +303,10 @@ export async function reviewJoinRequest(
     // Preload the LinkedIn enrichment NOW — during the approval → login gap — so the
     // member's profile card is fully populated the instant they log in (instead of
     // running the ~50s lookup at onboarding). Background; never blocks approval.
-    // An empty end is logged, and "try again later" gets one later attempt (enrichment-preload.ts).
+    // An empty end is logged, and "try again later" gets up to two later attempts (enrichment-preload.ts).
     preloadJoinRequestEnrichment(
       { id, fullName: reviewed.fullName, email: reviewed.email, linkedinUrl: reviewed.linkedinUrl },
-      { scheduleRetry: true },
+      { retryAttempt: 0 },
     ).catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
 
     // In-app notification for the approved user (only if they already have an account), told to their bell through

@@ -53,8 +53,8 @@ import { CLAIM_DUE_RETRIES_SQL, ENRICH_RETRY_BATCH, PURGE_STALE_RETRIES_SQL } fr
 
 const TYPO = 'https://www.linkedin.com/in/jane-dooe';
 const FIXED = 'https://www.linkedin.com/in/jane-doe';
-const requestJob = { id: 'r-1', join_request_id: 'jr-1', user_id: null, linkedin_url: FIXED, full_name: 'Jane Doe' };
-const userJob = { id: 'r-2', join_request_id: null, user_id: 'u-9', linkedin_url: FIXED, full_name: 'Sam Lee' };
+const requestJob = { id: 'r-1', join_request_id: 'jr-1', user_id: null, linkedin_url: FIXED, full_name: 'Jane Doe', attempt: 1 };
+const userJob = { id: 'r-2', join_request_id: null, user_id: 'u-9', linkedin_url: FIXED, full_name: 'Sam Lee', attempt: 1 };
 const requestRow = (over: Record<string, unknown> = {}) => ({
   id: 'jr-1', full_name: 'Jane Doe', email: 'jane@example.com', linkedin_url: FIXED, status: 'approved', has_result: false, user_id: null, ...over,
 });
@@ -134,12 +134,18 @@ describe('each tick', () => {
 });
 
 describe('a member\'s own lookup', () => {
-  it('runs with the address on their profile NOW, never scheduling another, and tells their screens', async () => {
+  it('runs with the address on their profile NOW, as attempt 1 (which may ask for attempt 2), and tells their screens', async () => {
     db([userJob], { member: memberRow() });
     await processEnrichmentRetries();
-    expect(mockRunEnrichment).toHaveBeenCalledWith('u-9', { linkedinUrl: FIXED, fullName: 'Sam Lee', scheduleRetry: false });
+    expect(mockRunEnrichment).toHaveBeenCalledWith('u-9', { linkedinUrl: FIXED, fullName: 'Sam Lee', retryAttempt: 1 });
     expect(mockFanoutUser).toHaveBeenCalledWith('u-9');
     expect(mockFanoutUser.mock.invocationCallOrder[0]).toBeGreaterThan(mockRunEnrichment.mock.invocationCallOrder[0]);
+  });
+
+  it('attempt 2 runs as attempt 2 (it asks for none)', async () => {
+    db([{ ...userJob, attempt: 2 }], { member: memberRow() });
+    await processEnrichmentRetries();
+    expect(mockRunEnrichment.mock.calls[0][1]).toMatchObject({ retryAttempt: 2 });
   });
 
   it('a typo corrected after the retry was scheduled: the corrected address is looked up, never the typo', async () => {
@@ -192,12 +198,12 @@ describe('a member\'s own lookup', () => {
 });
 
 describe('an approval-time lookup', () => {
-  it('with no account yet: the request is looked up again, never scheduling another', async () => {
+  it('with no account yet: the request is looked up again as attempt 1', async () => {
     db([requestJob], { request: requestRow() });
     await processEnrichmentRetries();
     expect(mockPreload).toHaveBeenCalledWith(
       { id: 'jr-1', fullName: 'Jane Doe', email: 'jane@example.com', linkedinUrl: FIXED },
-      { scheduleRetry: false },
+      { retryAttempt: 1 },
     );
     expect(mockRunEnrichment).not.toHaveBeenCalled();
   });
@@ -205,7 +211,7 @@ describe('an approval-time lookup', () => {
   it('when the applicant has an account by now: their own lookup runs with their profile\'s CURRENT address, then their screens are told', async () => {
     db([requestJob], { request: requestRow({ user_id: 'u-7', linkedin_url: TYPO }), member: memberRow({ linkedin_url: FIXED, display_name: 'Jane D' }) });
     await processEnrichmentRetries();
-    expect(mockRunEnrichment).toHaveBeenCalledWith('u-7', { linkedinUrl: FIXED, fullName: 'Jane D', scheduleRetry: false });
+    expect(mockRunEnrichment).toHaveBeenCalledWith('u-7', { linkedinUrl: FIXED, fullName: 'Jane D', retryAttempt: 1 });
     expect(mockFanoutUser).toHaveBeenCalledWith('u-7');
     expect(mockPreload).not.toHaveBeenCalled();
   });

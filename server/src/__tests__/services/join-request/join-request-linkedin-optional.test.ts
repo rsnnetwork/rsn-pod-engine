@@ -138,7 +138,7 @@ describe('approving from the dashboard (reviewJoinRequest)', () => {
     expect(enrichedWrites()).toHaveLength(0);
     const retries = mockQuery.mock.calls.filter((c) => /INSERT INTO enrichment_retries/.test(String(c[0])));
     expect(retries).toHaveLength(1);
-    expect(retries[0][1]).toEqual(['jr-1', 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', 600]);
+    expect(retries[0][1]).toEqual(['jr-1', 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', 600, 3, 1]);
     const said = (logger.warn as jest.Mock).mock.calls.filter((c) => c[1] === 'join-request enrichment preload found nothing');
     expect(said).toEqual([[expect.objectContaining({ joinRequestId: 'jr-1', outcome: 'retry_exhausted', reason: 'not stored yet (asked to try again later)' }), 'join-request enrichment preload found nothing']]);
   });

@@ -27,7 +27,7 @@ jest.mock('../../../services/onboarding/providers/registry', () => {
 
 import logger from '../../../config/logger';
 import { preloadJoinRequestEnrichment } from '../../../services/join-request/enrichment-preload';
-import { ENRICH_RETRY_DELAY_MS } from '../../../services/onboarding/enrichment-retry.repo';
+import { ENRICH_RETRY_DELAYS_MS, ENRICH_RETRY_DAILY_LIMIT } from '../../../services/onboarding/enrichment-retry.repo';
 
 const warn = logger.warn as jest.Mock;
 const REQUEST = { id: 'jr-1', fullName: 'Jane Doe', email: 'jane@example.com', linkedinUrl: 'https://www.linkedin.com/in/jane-doe' };
@@ -45,11 +45,12 @@ describe('a lookup that brings back nothing', () => {
   it('"not stored yet": logged with the request id and the reason, and ONE later attempt is scheduled for the same address', async () => {
     mockRunProvider.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
 
-    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
 
     expect(writes()).toHaveLength(0);
     expect(inserts()).toHaveLength(1);
-    expect(inserts()[0][1]).toEqual(['jr-1', 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', ENRICH_RETRY_DELAY_MS / 1000]);
+    // Attempt 1, ten minutes on, within the daily limit.
+    expect(inserts()[0][1]).toEqual(['jr-1', 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', ENRICH_RETRY_DELAYS_MS[0] / 1000, ENRICH_RETRY_DAILY_LIMIT, 1]);
     expect(String(inserts()[0][0])).toMatch(/ON CONFLICT DO NOTHING/);
     expect(nothingLogs()).toEqual([expect.objectContaining({
       joinRequestId: 'jr-1', outcome: 'retry_exhausted', reason: 'not stored yet (asked to try again later)', retryScheduled: true,
@@ -62,7 +63,7 @@ describe('a lookup that brings back nothing', () => {
     [{ kind: 'retry_exhausted', timedOut: true }, 'timed out (outcome unknown)'],
   ])('%o is a wait too: logged (%s) and retried once later', async (outcome, reason) => {
     mockRunProvider.mockResolvedValue(outcome);
-    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
     expect(inserts()).toHaveLength(1);
     expect(nothingLogs()).toEqual([expect.objectContaining({ joinRequestId: 'jr-1', reason, retryScheduled: true })]);
   });
@@ -72,25 +73,35 @@ describe('a lookup that brings back nothing', () => {
     [{ kind: 'provider_error', reason: 'scrapingdog 500' }, 'scrapingdog 500'],
   ])('%o is an answer, not a wait: logged with its reason, no later attempt', async (outcome, reason) => {
     mockRunProvider.mockResolvedValue(outcome);
-    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
     expect(inserts()).toHaveLength(0);
     expect(nothingLogs()).toEqual([expect.objectContaining({ joinRequestId: 'jr-1', outcome: outcome.kind, reason, retryScheduled: false })]);
   });
 
-  it('the later attempt itself never schedules another (once, at most)', async () => {
+  it('later attempt 1 asks for attempt 2, thirty minutes on', async () => {
     mockRunProvider.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
 
-    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: false });
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 1 });
+
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0][1]).toEqual(['jr-1', 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', ENRICH_RETRY_DELAYS_MS[1] / 1000, ENRICH_RETRY_DAILY_LIMIT, 2]);
+    expect(ENRICH_RETRY_DELAYS_MS[1]).toBe(30 * 60 * 1000);
+  });
+
+  it('later attempt 2 asks for none (at most two later attempts)', async () => {
+    mockRunProvider.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
+
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 2 });
 
     expect(inserts()).toHaveLength(0);
-    expect(nothingLogs()).toEqual([expect.objectContaining({ joinRequestId: 'jr-1', retryScheduled: false, retry: true })]);
+    expect(nothingLogs()).toEqual([expect.objectContaining({ joinRequestId: 'jr-1', retryScheduled: false, attempt: 2 })]);
   });
 
   it('a retry that is already waiting is not doubled, and that is logged too', async () => {
     mockRunProvider.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
     mockQuery.mockResolvedValue({ rows: [], rowCount: 0 }); // ON CONFLICT DO NOTHING: nothing inserted
 
-    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
 
     expect(nothingLogs()).toEqual([expect.objectContaining({ retryScheduled: false })]);
   });
@@ -99,7 +110,7 @@ describe('a lookup that brings back nothing', () => {
     mockRunProvider.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
     mockQuery.mockRejectedValue(new Error('db down'));
 
-    await expect(preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true })).resolves.toBeUndefined();
+    await expect(preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 })).resolves.toBeUndefined();
     expect(warn.mock.calls.some((c) => c[1] === 'enrichment: could not schedule the later lookup')).toBe(true);
   });
 });
@@ -121,7 +132,7 @@ describe('the 150 s deadline (a request retry, or an approval, never hangs the w
     jest.useFakeTimers();
     mockRunProvider.mockReturnValue(new Promise(() => {}));
 
-    const run = preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    const run = preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
     await jest.advanceTimersByTimeAsync(150_000);
     await run;
 
@@ -135,7 +146,7 @@ describe('the 150 s deadline (a request retry, or an approval, never hangs the w
     let answer!: (o: unknown) => void;
     mockRunProvider.mockReturnValue(new Promise((r) => { answer = r; }));
 
-    const run = preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    const run = preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
     await jest.advanceTimersByTimeAsync(150_000);
     await run;
     expect(writes()).toHaveLength(0);
@@ -163,7 +174,7 @@ describe('a lookup that finds the person', () => {
       },
     });
 
-    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
 
     expect(writes()).toHaveLength(1);
     expect(writes()[0][1][1]).toBe('jr-1');
@@ -174,16 +185,16 @@ describe('a lookup that finds the person', () => {
 
   it('no log line names the applicant: no name, email or address, only ids and reasons', async () => {
     mockRunProvider.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
-    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
     mockRunProvider.mockResolvedValue({ kind: 'provider_error', reason: 'scrapingdog 500' });
-    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await preloadJoinRequestEnrichment(REQUEST, { retryAttempt: 0 });
 
     const logged = JSON.stringify([...warn.mock.calls, ...(logger.info as jest.Mock).mock.calls]);
     for (const personal of ['Jane Doe', 'jane@example.com', 'jane-doe', 'linkedin.com']) expect(logged).not.toContain(personal);
   });
 
   it('no LinkedIn on the request: no lookup, nothing logged as missing', async () => {
-    await preloadJoinRequestEnrichment({ ...REQUEST, linkedinUrl: null }, { scheduleRetry: true });
+    await preloadJoinRequestEnrichment({ ...REQUEST, linkedinUrl: null }, { retryAttempt: 0 });
     expect(mockRunProvider).not.toHaveBeenCalled();
     expect(nothingLogs()).toHaveLength(0);
   });

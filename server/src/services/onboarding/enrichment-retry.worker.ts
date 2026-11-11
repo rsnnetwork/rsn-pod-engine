@@ -19,7 +19,7 @@
 // After a member's lookup, found or not, their screens are told through their own entity tag (user:<id>).
 // Each tick also ends any lookup a stopped server left 'searching' for ten minutes (marked failed), so every lookup,
 // a retry with nobody watching included, ends in a terminal state.
-// Always with scheduleRetry false: a retry never asks for another.
+// Each run carries its attempt number (1 or 2): attempt 1 may ask for attempt 2 (30 minutes on), attempt 2 for none.
 
 import { query } from '../../db';
 import logger from '../../config/logger';
@@ -57,7 +57,7 @@ interface MemberNow {
  * an account that is not active, a profile with no address (the member removed it: the address they withdrew is never
  * looked up; the claimed row is gone) or a member who already has a result. Tells their screens.
  */
-async function retryForMember(userId: string, why: 'member' | 'request'): Promise<void> {
+async function retryForMember(userId: string, why: 'member' | 'request', attempt: number): Promise<void> {
   const res = await query<MemberNow>(
     `SELECT linkedin_url, display_name, status::text AS status FROM users WHERE id = $1`,
     [userId],
@@ -76,8 +76,8 @@ async function retryForMember(userId: string, why: 'member' | 'request'): Promis
     logger.info({ userId, why, status: state.status }, 'enrichment retry: the member already has a result');
     return;
   }
-  logger.info({ userId, why }, 'enrichment retry: running the member\'s lookup again');
-  await runEnrichment(userId, { linkedinUrl, fullName: member.display_name ?? undefined, scheduleRetry: false });
+  logger.info({ userId, why, attempt }, 'enrichment retry: running the member\'s lookup again');
+  await runEnrichment(userId, { linkedinUrl, fullName: member.display_name ?? undefined, retryAttempt: attempt });
   await fanoutUserEntity(userId);
 }
 
@@ -98,12 +98,12 @@ async function retryForRequest(job: DueEnrichRetry & { join_request_id: string }
   }
   if (request.user_id) {
     logger.info({ joinRequestId: request.id, userId: request.user_id }, 'enrichment retry: the applicant has an account now');
-    await retryForMember(request.user_id, 'request');
+    await retryForMember(request.user_id, 'request', job.attempt);
     return;
   }
   await preloadJoinRequestEnrichment(
     { id: request.id, fullName: request.full_name, email: request.email, linkedinUrl: request.linkedin_url ?? job.linkedin_url },
-    { scheduleRetry: false },
+    { retryAttempt: job.attempt },
   );
 }
 
@@ -121,7 +121,7 @@ async function endInterruptedLookups(): Promise<void> {
 }
 
 async function runRetry(job: DueEnrichRetry): Promise<void> {
-  if (job.user_id) return retryForMember(job.user_id, 'member');
+  if (job.user_id) return retryForMember(job.user_id, 'member', job.attempt);
   if (job.join_request_id) return retryForRequest({ ...job, join_request_id: job.join_request_id });
 }
 

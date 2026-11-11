@@ -47,7 +47,7 @@ import { getCachedEnrichment, getEnrichmentState, getLastLookupUrl, saveEnriched
 import { resolveEnrichProvider, runProvider, statusFromResult, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
 import { tryGravatar } from './avatar.service';
-import { scheduleEnrichmentRetry } from './enrichment-retry.repo';
+import { nextRetryAttempt, scheduleEnrichmentRetry } from './enrichment-retry.repo';
 import { DEADLINE_REASON, raceProviderDeadline } from './providers/deadline';
 import { fanoutUserEntity } from '../../realtime/fanout';
 import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
@@ -63,7 +63,7 @@ export const SEARCHING_LOCK_MS = 3 * 60 * 1000;
 /**
  * The lookup answered after its deadline (12 Nov 2026): the member was already
  * marked failed, but a profile ScrapingDog billed is kept rather than thrown
- * away, and a "try again later" still gets its one later attempt. Only over
+ * away, and a "try again later" still gets its next later attempt. Only over
  * this attempt's own deadline failure, for the address it looked up: if a
  * newer lookup has started or finished since, or looked up another address,
  * its state stands. No extras pass here (one more paid call).
@@ -74,11 +74,11 @@ async function keepLateAnswer(
   late: ProviderOutcome,
   linkedinUrl: string,
   startedAtMs: number,
-  scheduleRetry: boolean,
+  nextAttempt: number | null,
 ): Promise<void> {
   logger.info({ userId, kind: late.kind }, 'enrichment: provider answered after the deadline');
   if (late.kind === 'retry_exhausted') {
-    if (scheduleRetry) await scheduleEnrichmentRetry({ userId }, { linkedinUrl });
+    if (nextAttempt !== null) await scheduleEnrichmentRetry({ userId }, { linkedinUrl }, nextAttempt);
     return;
   }
   if (late.kind !== 'found' && late.kind !== 'partial') return;
@@ -99,8 +99,12 @@ async function keepLateAnswer(
 export interface RunEnrichmentInput {
   linkedinUrl: string | null;
   fullName?: string;
-  /** False for the one later attempt itself (enrichment-retry.worker.ts), so a retry never schedules another. */
+  /** False when no later attempt may be asked for at all (the older /onboarding/enrich route, for an address it does
+   *  not save). */
   scheduleRetry?: boolean;
+  /** Which later attempt this run is (enrichment-retry.worker.ts): 1 or 2; absent for a member's own lookup. A run
+   *  asks for the next attempt only while it is allowed (enrichment-retry.repo: at most 2), so attempt 2 asks for none. */
+  retryAttempt?: number;
 }
 
 /** True when `cached` is usable as-is for `requestedLinkedinUrl` — no genuinely
@@ -385,10 +389,11 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Step 7: not_found / retry_exhausted / provider_error.
     tryGravatar(userId).catch(() => {});
     // 12 Nov 2026: ScrapingDog said "not stored yet, try again after 2-3 minutes" (or kept answering 202, or
-    // rate-limited past the budget): one later attempt, once, for this address (the latest address wins).
-    const scheduleRetry = input.scheduleRetry !== false;
-    const retryScheduled = outcome.kind === 'retry_exhausted' && scheduleRetry
-      ? await scheduleEnrichmentRetry({ userId }, { linkedinUrl: resolvedLinkedinUrl, fullName: input.fullName })
+    // rate-limited past the budget, or the call was cut): the next later attempt, while one is allowed, for this
+    // address (the latest address wins).
+    const nextAttempt = input.scheduleRetry === false ? null : nextRetryAttempt(input.retryAttempt ?? 0);
+    const retryScheduled = outcome.kind === 'retry_exhausted' && nextAttempt !== null
+      ? await scheduleEnrichmentRetry({ userId }, { linkedinUrl: resolvedLinkedinUrl, fullName: input.fullName }, nextAttempt)
       : false;
     const { status, error } = mapFailureOutcome(outcome, retryScheduled);
     await writeState(userId, { status, error, source: provider, linkedinUrl: resolvedLinkedinUrl });
@@ -400,7 +405,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     if (late) {
       const url = resolvedLinkedinUrl;
       late
-        .then((answer) => keepLateAnswer(userId, provider, answer, url, startedAtMs, scheduleRetry))
+        .then((answer) => keepLateAnswer(userId, provider, answer, url, startedAtMs, nextAttempt))
         .catch((err) => logger.warn({ err, userId }, 'enrichment: keeping the late answer failed (non-fatal)'));
     }
   } catch (err) {
