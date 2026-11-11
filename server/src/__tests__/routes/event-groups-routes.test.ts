@@ -155,7 +155,12 @@ describe('the wiring', () => {
     const start = src.indexOf("'/:id/register',");
     const route = src.slice(start, src.indexOf('\n);\n', start));
     expect(route).toMatch(/validate\(registerBodySchema\.default\(\{\}\)\)/);
-    expect(route).toMatch(/registerParticipant\(\s*req\.params\.id, req\.user!\.userId, req\.user!\.role, groupKeys \? \{ groupKeys \} : undefined,\s*\)/);
-    expect(src).toMatch(/const registerBodySchema = z\.object\(\{\s*groupKeys: z\.array\(z\.string\(\)\.refine\(isGroupKey,[^)]*\)\)\.max\(GROUP_LIMITS\.maxGroups\)\.optional\(\),\s*\}\)\.passthrough\(\);/);
+    // Part 3 Task 5: the options come from registerOptionsOf, which gives { groupKeys } for a body with groups only and
+    // undefined for a body with neither groups nor answers, exactly the two values passed before.
+    expect(route).toMatch(/registerParticipant\(req\.params\.id, req\.user!\.userId, req\.user!\.role, options\)/);
+    const helper = src.slice(src.indexOf('function registerOptionsOf('), src.indexOf('async function registerOrQueueFromEventPage('));
+    expect(helper).toContain('if (!body.groupKeys && !answers) return undefined;');
+    expect(helper).toContain('return { ...(body.groupKeys ? { groupKeys: body.groupKeys } : {}), ...(answers ? { answers } : {}) };');
+    expect(src).toMatch(/const registerBodySchema = z\.object\(\{\s*groupKeys: z\.array\(z\.string\(\)\.refine\(isGroupKey,[^)]*\)\)\.max\(GROUP_LIMITS\.maxGroups\)\.optional\(\),[^}]*answers: eventAnswersSchema\.optional\(\),\s*\}\)\.passthrough\(\);/);
   });
 });

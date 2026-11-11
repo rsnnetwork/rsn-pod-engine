@@ -38,6 +38,8 @@ export const EVENT_AUDIT_ACTIONS = [
   // Part 3 Task 3: the waiting list. promoted and lapsed are the product's own (automatic); the rest are people's.
   'waitlist.joined', 'waitlist.left', 'waitlist.promoted', 'waitlist.lapsed', 'waitlist.admitted_over_capacity',
   'waitlist.removed',
+  // Part 3 Task 5: an organiser changed the event's extra matching questions (before and after). Answers are not audited.
+  'questions.changed',
 ] as const;
 
 export type EventAuditAction = typeof EVENT_AUDIT_ACTIONS[number];

@@ -71,6 +71,8 @@ export const E = {
   sessionRatings: (sessionId: string) => `session:${sessionId}:ratings`,
   /** 10 Nov 2026 spec, Part 3 Task 3: the event's waiting list (who is in line, in order), for its organisers and the line. */
   sessionWaitlist: (sessionId: string) => `session:${sessionId}:waitlist`,
+  /** 10 Nov 2026 spec, Part 3 Task 5: the event's extra matching questions and the answers to them. */
+  sessionQuestions: (sessionId: string) => `session:${sessionId}:questions`,
 
   // Match (in-event)
   match: (matchId: string) => `match:${matchId}`,

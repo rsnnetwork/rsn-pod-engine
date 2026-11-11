@@ -100,6 +100,7 @@ import eventChatRoutes from '../../routes/event-chat';
 import eventAuditRoutes from '../../routes/event-audit';
 import eventLifecycleRoutes from '../../routes/event-lifecycle';
 import eventGroupRoutes from '../../routes/event-groups';
+import eventQuestionRoutes from '../../routes/event-questions';
 import eventAdmissionRoutes from '../../routes/event-admission';
 import eventWaitlistRoutes from '../../routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from '../../routes/call-links';
@@ -125,6 +126,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/sessions', eventAuditRoutes],
   ['/api/sessions', eventLifecycleRoutes],
   ['/api/sessions', eventGroupRoutes],
+  ['/api/sessions', eventQuestionRoutes],
   ['/api/sessions', eventAdmissionRoutes],
   ['/api/sessions', eventWaitlistRoutes],
   ['/api/sessions', sessionCallLinkRoutes],
@@ -206,6 +208,8 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['delete', `/api/sessions/${EVENT}/chat/${OTHER}`],
   ['get', `/api/sessions/${EVENT}/feedback`],
   ['get', `/api/sessions/${EVENT}/audit`],
+  // Part 3 Task 5: only an organiser saves the event's matching questions (a guest answers their own only).
+  ['put', `/api/sessions/${EVENT}/questions`],
   // Part 3 Task 4: the event report and its CSVs are its organisers' (members only).
   ['get', `/api/sessions/${EVENT}/report`],
   ['get', `/api/sessions/${EVENT}/report?format=csv&section=attendance`],
@@ -256,6 +260,9 @@ const GUEST_OPEN: Array<[Verb, string]> = [
   ['post', `/api/sessions/${EVENT}/feedback`],
   ['get', `/api/sessions/${EVENT}/schedule/mine`],
   ['get', `/api/sessions/${EVENT}/groups`],
+  // Part 3 Task 5: the event's matching questions, and answering them for themselves.
+  ['get', `/api/sessions/${EVENT}/questions`],
+  ['put', `/api/sessions/${EVENT}/questions/mine`],
   ['post', '/api/ratings'],
   ['get', '/api/ratings/unrated'],
   ['get', `/api/ratings/match/${OTHER}`],

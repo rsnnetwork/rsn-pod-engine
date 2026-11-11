@@ -6,8 +6,8 @@
 
 import {
   MatchingInput, MatchingOutput, MatchingConfig, MatchingParticipant,
-  RoundAssignment, MatchPair, EncounterHistoryEntry, HardConstraint,
-  groupsAllowed, ruleForRound,
+  RoundAssignment, MatchPair, EncounterHistoryEntry, HardConstraint, MatchingEventQuestions,
+  EVENT_QUESTION_WEIGHT, groupsAllowed, questionAffinity, ruleForRound,
 } from '@rsn/shared';
 import { IMatchingEngine, pairKey } from './matching.interface';
 import {
@@ -147,7 +147,7 @@ export class MatchingEngineV1 implements IMatchingEngine {
     encounterHistory: EncounterHistoryEntry[]
   ): { score: number; reasonTags: string[] } {
     const encounterMap = this.buildEncounterMap(encounterHistory);
-    const r = this.computePairScore(a, b, config.weights, encounterMap);
+    const r = this.computePairScore(a, b, config.weights, encounterMap, config.eventQuestions);
     // Public scorePair contract is { score, reasonTags } per IMatchingEngine
     // — premiumInfluenced is consumed internally by generateSingleRound.
     return { score: r.score, reasonTags: r.reasonTags };
@@ -191,8 +191,10 @@ export class MatchingEngineV1 implements IMatchingEngine {
           continue;
         }
 
+        // Part 3 Task 5 (K5): scored only here, after the used-pair, hard-exclusion and group-rule skips above, so an
+        // event's matching questions only ever choose among pairs the event already allows.
         const r = this.computePairScore(
-          participants[i], participants[j], config.weights, encounterMap
+          participants[i], participants[j], config.weights, encounterMap, config.eventQuestions
         );
 
         // Phase 1 (5 May spec) — Re-match jitter. ±2.5% noise is small
@@ -363,8 +365,12 @@ export class MatchingEngineV1 implements IMatchingEngine {
         if (mayMeet && (!mayMeet(leftover.userId, pairs[pi].participantAId)
           || !mayMeet(leftover.userId, pairs[pi].participantBId))) continue;
 
-        const scoreA = this.computePairScore(participants[leftover.idx], participants[aIdx], config.weights, encounterMap).score;
-        const scoreB = this.computePairScore(participants[leftover.idx], participants[bIdx], config.weights, encounterMap).score;
+        const scoreA = this.computePairScore(
+          participants[leftover.idx], participants[aIdx], config.weights, encounterMap, config.eventQuestions,
+        ).score;
+        const scoreB = this.computePairScore(
+          participants[leftover.idx], participants[bIdx], config.weights, encounterMap, config.eventQuestions,
+        ).score;
         const avgScore = (scoreA + scoreB) / 2;
 
         if (avgScore > bestTrioScore) {
@@ -437,7 +443,8 @@ export class MatchingEngineV1 implements IMatchingEngine {
     a: MatchingParticipant,
     b: MatchingParticipant,
     weights: Record<string, number | undefined>,
-    encounterMap: Map<string, EncounterHistoryEntry>
+    encounterMap: Map<string, EncounterHistoryEntry>,
+    questions?: MatchingEventQuestions,
   ): { score: number; reasonTags: string[]; premiumInfluenced: boolean } {
     let totalScore = 0;
     let totalWeight = 0;
@@ -630,6 +637,19 @@ export class MatchingEngineV1 implements IMatchingEngine {
         totalWeight += weights.mutualMeetAgainBoost;
         if (encounter.averageRating >= 4) reasonTags.push('positive_history');
       }
+    }
+
+    // 12. Part 3 Task 5 (K5) — the event's extra matching questions, a soft preference only. Present only for an event
+    //     that has questions: without them nothing is added, not even a zero weight, so the score is exactly as before.
+    //     The callers score only pairs that passed every hard exclusion and the round's group rule, and sort by times met
+    //     before the score, so answers never make a refused meeting or a repeat. Unanswered reads 0.5 (neutral). The
+    //     reason comes last, so a pair's matchReason (its first reason) is unchanged.
+    if (questions) {
+      const w = weights.eventQuestions ?? EVENT_QUESTION_WEIGHT;
+      const affinity = questionAffinity(questions.answersByUser[a.userId], questions.answersByUser[b.userId], questions.questions);
+      totalScore += affinity * w;
+      totalWeight += w;
+      if (affinity > 0.5) reasonTags.push('event_answers');
     }
 
     // Normalize to 0-1

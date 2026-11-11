@@ -1,6 +1,7 @@
 // ─── Match Domain Types ──────────────────────────────────────────────────────
 
 import type { EventGroupRules, RoundCapacity } from '../events/group-rules';
+import type { EventAnswers, EventMatchingQuestion } from '../events/matching-questions';
 
 export enum MatchStatus {
   SCHEDULED = 'scheduled',
@@ -169,6 +170,18 @@ export interface MatchingConfig {
    * before groups existed. `groupsByUser` holds each person's group keys in this event (never their account's).
    */
   groupRules?: MatchingGroupRules;
+  /**
+   * Part 3 Task 5 (K5) — an event's extra matching questions and each person's answers, as a SOFT preference only: one
+   * more weighted term in the pair score (weights.eventQuestions, else EVENT_QUESTION_WEIGHT), for pairs that already
+   * passed every hard exclusion and the round's group rule, below the times-met sort. Absent for an event without
+   * questions, which then adds no term at all and matches exactly as before.
+   */
+  eventQuestions?: MatchingEventQuestions;
+}
+
+export interface MatchingEventQuestions {
+  questions: EventMatchingQuestion[];
+  answersByUser: Record<string, EventAnswers>;
 }
 
 export interface MatchingGroupRules {
@@ -208,6 +221,8 @@ export interface MatchingWeights {
   avoidPenalty?: number;
   // Phase 2 — per-event check-in intention overlay.
   eventIntentionAlignment?: number;
+  // Part 3 Task 5 — an event's extra matching questions (only when it has some; EVENT_QUESTION_WEIGHT when unset).
+  eventQuestions?: number;
   [key: string]: number | undefined;
 }
 

@@ -17,7 +17,10 @@
 //                       every admission, capacity, removal and guest rule holds), or sends the request an approval event
 //                       asks for. Calling it again changes nothing. Part 3 Task 3: a full event puts the person on its
 //                       waiting list (registerOrWaitlist; step 'waitlisted' with their position), and the first in line
-//                       is given the next place that frees.
+//                       is given the next place that frees. Part 3 Task 5: the event's extra matching questions are
+//                       answered here too (a required one is `missing.questions`, asked on approval events as well), and
+//                       the answers are kept whether the person ends up with a place, on the waiting list or waiting for
+//                       approval.
 //
 // Open items this file closes (handed over by Tasks 3 and 4):
 //   - A guest cannot call POST /sessions/:id/admission/redeem (not on the guest allowlist). Their admission code is
@@ -30,7 +33,7 @@
 
 import {
   ErrorCodes, callLinkPath, cleanCallDisplayName, eventZone,
-  type AccountKind, type CallEntryState, type CallEventSummary, type EventLifecycle, type UserRole,
+  type AccountKind, type CallEntryState, type CallEventSummary, type EventAnswers, type EventLifecycle, type UserRole,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
 import config from '../../config';
@@ -53,6 +56,7 @@ import {
   ADMISSION_CODE_USED_SENTENCE, fanoutAdmissionChanged, hashAdmissionCode, normaliseAdmissionCode, redeemAdmissionCode,
 } from './event-admission.service';
 import { fanoutEventGroups, getEventGroupRules, setParticipantGroups } from './event-groups.service';
+import { fanoutMyAnswers, requiredQuestionsMissing, saveMyAnswers } from './event-questions.service';
 import { requestToJoin } from './event-requests.service';
 import { leaveWaitlist, registerOrWaitlist } from './event-waitlist.service';
 import { lineStalled } from './session.service';
@@ -74,7 +78,7 @@ export const CALL_INVITATION_ONLY_SENTENCE =
 /** The participant statuses that hold a place (left and no-show come back through a registration). */
 const PLACE_STATUSES: readonly string[] = ['registered', 'checked_in', 'in_lobby', 'in_round'];
 
-const NOTHING_MISSING = { displayName: false, group: false, admissionCode: false } as const;
+const NOTHING_MISSING = { displayName: false, group: false, admissionCode: false, questions: false } as const;
 
 const iso = (d: Date | string | null): string | null => (d ? new Date(d).toISOString() : null);
 
@@ -323,16 +327,18 @@ export async function readCallEntryForEvent(event: CallEventRow, userId: string,
     };
   }
   // A request carries no group: the organisers place an approved person (Task 5's ruling), so only the name is asked.
+  // Part 3 Task 5: the event's required matching questions are still asked (the answers are the person's own, kept
+  // without a place, and the organisers read them while deciding the request).
   if (needsApproval(facts, role)) {
     const asked = { ...missing, group: false };
-    return { ...base, missing: asked, step: asked.displayName ? 'details' : 'request' };
+    return { ...base, missing: asked, step: asked.displayName || asked.questions ? 'details' : 'request' };
   }
   const decision = canRegister(facts, role);
   if (!decision.ok) return refused({ ...base, missing }, decision.code, decision.message);
   return { ...base, missing };
 }
 
-/** What the event still needs from this person before a place: a name, a group, an admission code. */
+/** What the event still needs from this person before a place: a name, a group, an admission code, a required answer. */
 async function missingFor(
   event: CallEventRow, facts: EventAccessFacts, person: PersonRow, userId: string,
 ): Promise<CallEntryState['missing']> {
@@ -346,6 +352,7 @@ async function missingFor(
     displayName: needsName(person),
     group,
     admissionCode: admissionModeOf(event) === 'restricted' && !facts.entitled && !facts.isInvited,
+    questions: await requiredQuestionsMissing(event.id, userId, event.status),
   };
 }
 
@@ -371,7 +378,7 @@ export async function enterCall(
   code: string,
   userId: string,
   role: UserRole,
-  input: { displayName?: string; groupKeys?: string[]; admissionCode?: string },
+  input: { displayName?: string; groupKeys?: string[]; admissionCode?: string; answers?: EventAnswers },
   opts: { origin?: string } = {},
 ): Promise<CallEntryState> {
   const event = await eventForViewer(code, { userId, role });
@@ -413,6 +420,12 @@ export async function enterCall(
       );
       renamed = (r.rowCount ?? 0) > 0;
     }
+    // Part 3 Task 5: the answers to the event's matching questions, the person's own, kept whatever comes next (a place,
+    // the waiting list, a request). Once the event is live nothing is asked and nothing here changes them.
+    let answered = false;
+    if (input.answers && Object.keys(input.answers).length > 0) {
+      answered = (await saveMyAnswers(event.id, userId, input.answers, client, { quietWhenLocked: true })).changed;
+    }
     let codeGroup: string | null = null;
     let redeemed = false;
     if (spendCode) {
@@ -433,13 +446,14 @@ export async function enterCall(
         grouped = true;
       }
     }
-    return { renamed, redeemed, grouped };
+    return { renamed, redeemed, grouped, answered };
   });
 
   const podId = await podOf(event.id);
   if (written.renamed) void fanoutProfileChange(userId);
   if (written.redeemed) void fanoutAdmissionChanged(event.id, { everyone: true, podId, people: [userId] });
   if (written.grouped) void fanoutEventGroups(event.id);
+  if (written.answered) void fanoutMyAnswers(event.id, userId);
 
   const now = await readCallEntryForEvent(event, userId, role);
   if (now.step === 'request') {
@@ -448,7 +462,9 @@ export async function enterCall(
   }
   // The person's own group goes in with the place (registerParticipant writes it in the same transaction).
   const groupAnswered = !now.missing.group || !!groupKeys;
-  if (now.step !== 'details' || now.missing.displayName || now.missing.admissionCode || !groupAnswered) return now;
+  if (now.step !== 'details' || now.missing.displayName || now.missing.admissionCode || now.missing.questions || !groupAnswered) {
+    return now;
+  }
 
   try {
     // A full event puts them on its waiting list (the line tells its own screens); a place is told as before.
@@ -467,6 +483,7 @@ export async function enterCall(
     if (!(err instanceof AppError)) throw err;
     if (err.code === ErrorCodes.SESSION_ALREADY_REGISTERED) return readCallEntryForEvent(event, userId, role);
     if (err.code === ErrorCodes.EVENT_GROUP_REQUIRED) return { ...now, missing: { ...now.missing, group: true } };
+    if (err.code === ErrorCodes.EVENT_ANSWERS_REQUIRED) return { ...now, missing: { ...now.missing, questions: true } };
     if (err.statusCode === 403 || err.statusCode === 409) return refused(now, err.code, err.message);
     throw err;
   }

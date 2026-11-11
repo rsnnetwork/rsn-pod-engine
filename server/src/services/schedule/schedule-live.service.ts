@@ -482,6 +482,8 @@ function seatAffected(
       ? generator(group, round, avoid)
       : { roundNumber: round, pairs: [], byeParticipant: null }),
     meetingsOf: meetingsCounter(work, round),
+    // Part 3 Task 5: an event with matching questions prefers alike (or unlike) answers among the seats it may give.
+    ...(generator?.affinity && { affinity: generator.affinity }),
   });
   const next: Rooms = new Map();
   for (const [n, members] of result.seated) {

@@ -5,7 +5,8 @@
 //   1. a locked room is never read or written; a locked seat keeps its person where they are;
 //   2. each unlocked room holding one person gets the basket person the room checker allows, preferring a
 //      rule-abiding pair over the organiser's same-group fallback, then someone they have not met, then whoever
-//      has had the fewest meetings, then registration order;
+//      has had the fewest meetings, then (Part 3 Task 5, an event with matching questions) whose answers suit best,
+//      then registration order;
 //   3. the rest of the basket is paired by the engine (`generate`: Task 7's generateGroupedRound, which applies
 //      the round's rule and the organiser's fallback) into new rooms numbered after the highest in use;
 //   4. anyone still waiting joins an unlocked pair as a trio only when the checker allows the three, else waits,
@@ -29,6 +30,11 @@ export interface RedistributeInput {
   generate: (people: string[]) => RoundAssignment;
   /** Meetings each person already has in the event (fewer is preferred when filling a seat); none known = 0. */
   meetingsOf?: (userId: string) => number;
+  /**
+   * Part 3 Task 5 (K5) — how well two people's answers to the event's matching questions suit each other (0..1). Only an
+   * event with questions passes it; it orders the candidates the checker already allows, after fairness, never before.
+   */
+  affinity?: (a: string, b: string) => number;
 }
 
 export interface RedistributeResult {
@@ -97,7 +103,9 @@ export function redistributeRound(input: RedistributeInput): RedistributeResult 
     for (const id of waitingSet) {
       const v = verdictOf(ctx, [...members, id]);
       if (!v.ok) continue;
-      const cost = [...seatCost(v, id), meetings(id), order.get(id)!];
+      const cost = input.affinity
+        ? [...seatCost(v, id), meetings(id), -input.affinity(members[0], id), order.get(id)!]
+        : [...seatCost(v, id), meetings(id), order.get(id)!];
       if (!best || lessThan(cost, best.cost)) best = { id, cost };
     }
     if (best) seat(room, best.id);

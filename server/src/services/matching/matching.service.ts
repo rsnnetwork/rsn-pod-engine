@@ -7,12 +7,13 @@ import {
   MatchingInput, MatchingOutput, MatchingConfig, MatchingWeights,
   MatchingParticipant, EncounterHistoryEntry, RoundAssignment,
   MatchStatus, Match, HardConstraint, MatchPair, MatchingGroupRules, EventGroupRules,
-  explainRoundCapacity, groupPairKey, groupsAllowed, ruleForRound,
+  explainRoundCapacity, groupPairKey, groupsAllowed, questionAffinity, ruleForRound,
 } from '@rsn/shared';
 import { getMatchingEngine, DEFAULT_ENGINE_ID } from './matching.registry';
 import { IMatchingEngine, pairKey } from './matching.interface';
 import { groupGate } from './matching.engine';
 import { getEventGroupRules, groupsForParticipants } from '../session/event-groups.service';
+import { loadQuestionSignals } from '../session/event-questions.service';
 import { reduceRepeatPairs } from './repeat-reduction';
 import * as sessionService from '../session/session.service';
 import { loadHardExclusions, type HardExclusions } from './hard-exclusions';
@@ -255,6 +256,10 @@ export async function generateSessionSchedule(
     globalOptimize: customConfig?.globalOptimize ?? true,
     ...(groupRules && { groupRules }),
   };
+  // Part 3 Task 5 (K5) — the event's extra matching questions, a soft preference inside the pair score; none for an
+  // event without questions (one read, config unchanged).
+  const eventQuestions = await loadQuestionSignals(sessionId, userIds);
+  if (eventQuestions) config.eventQuestions = eventQuestions;
 
   const input: MatchingInput = {
     sessionId,
@@ -539,7 +544,13 @@ function hardConstraintsOf(exclusions: HardExclusions): HardConstraint[] {
 // ─── The matching board's engine (Part 2 Task 8) ────────────────────────────
 
 /** Pairs a round for the board: `people` (who to seat), `avoid` (pairKeys already planned or met in the event). */
-export type BoardRoundGenerator = (people: string[], round: number, avoid: ReadonlySet<string>) => RoundAssignment;
+export type BoardRoundGenerator = ((people: string[], round: number, avoid: ReadonlySet<string>) => RoundAssignment) & {
+  /**
+   * Part 3 Task 5 (K5) — how well two people's answers to the event's matching questions suit each other (0..1), for the
+   * board's redistribution to prefer among the people it may seat; absent for an event without questions.
+   */
+  affinity?: (a: string, b: string) => number;
+};
 
 /**
  * The engine as the matching board drives it, prepared once for an event: the same people rows, premium requests,
@@ -580,6 +591,8 @@ export async function prepareBoardRoundGenerator(sessionId: string, userIds: str
   const exclusions = await loadHardExclusions(sessionId, rows.map((p) => p.userId));
   const groupRules = await loadGroupRules(sessionId);
   const { weights } = await templateWeightsFor(session, sessionConfig);
+  // Part 3 Task 5 (K5) — the event's matching questions; none for an event without them (config unchanged).
+  const eventQuestions = await loadQuestionSignals(sessionId, rows.map((p) => p.userId));
   const config: MatchingConfig = {
     weights,
     hardConstraints: hardConstraintsOf(exclusions),
@@ -587,12 +600,13 @@ export async function prepareBoardRoundGenerator(sessionId: string, userIds: str
     avoidDuplicates: true,
     globalOptimize: false,
     ...(groupRules && { groupRules }),
+    ...(eventQuestions && { eventQuestions }),
   };
   const engine = getMatchingEngine(sessionConfig.matchingAlgorithmId || DEFAULT_ENGINE_ID);
   const byId = new Map(rows.map((p) => [p.userId, p]));
   const seatedBy = (round: RoundAssignment) => round.pairs.reduce((n, p) => n + roomMembers(p).length, 0);
 
-  return (people, round, avoid) => {
+  const generator: BoardRoundGenerator = (people, round, avoid) => {
     const participants = people.map((id) => byId.get(id)).filter((p): p is MatchingParticipant => !!p);
     const evenCount = participants.length - (participants.length % 2);
     const target = groupRules
@@ -608,6 +622,11 @@ export async function prepareBoardRoundGenerator(sessionId: string, userIds: str
     });
     return seatedBy(relaxed) > seatedBy(strict) ? { ...relaxed, usedRepeats: true } : strict;
   };
+  if (eventQuestions) {
+    const { questions, answersByUser } = eventQuestions;
+    generator.affinity = (a, b) => questionAffinity(answersByUser[a], answersByUser[b], questions);
+  }
+  return generator;
 }
 
 // ─── Generate Single Round ──────────────────────────────────────────────────
@@ -835,6 +854,11 @@ export async function generateSingleRound(
   }
   // Onboarding-intent enhancement — designation / wantsToMeet / avoid + per-event intent.
   await attachIntentSignals(participantsResult.rows, sessionId);
+  // Part 3 Task 5 (K5) — the event's extra matching questions: a soft preference inside the pair score, which every
+  // level of the ladder below keeps (the ladder relaxes repeats only). None for an event without questions (one read,
+  // config unchanged).
+  const eventQuestions = await loadQuestionSignals(sessionId, participantsResult.rows.map((p) => p.userId));
+  if (eventQuestions) config.eventQuestions = eventQuestions;
 
   // Phase 3 (1 May spec) — engine lookup via registry.
   const engine = getMatchingEngine(sessionConfig.matchingAlgorithmId || DEFAULT_ENGINE_ID);

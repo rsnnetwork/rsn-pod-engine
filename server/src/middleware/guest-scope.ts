@@ -59,6 +59,9 @@ export const GUEST_ROUTES: ReadonlyArray<{ method: GuestRouteMethod; pattern: Re
   { method: 'POST', pattern: exact(`/api/sessions/${ID}/feedback`) },
   { method: 'GET', pattern: exact(`/api/sessions/${ID}/schedule/mine`) },
   { method: 'GET', pattern: exact(`/api/sessions/${ID}/groups`) },
+  // Part 3 Task 5: the event's extra matching questions, and answering them for themselves.
+  { method: 'GET', pattern: exact(`/api/sessions/${ID}/questions`) },
+  { method: 'PUT', pattern: exact(`/api/sessions/${ID}/questions/mine`) },
   // Rating the people they met at it.
   { method: '*', pattern: below('/api/ratings') },
   // Reporting someone at their event (fix round 1). Only the report itself: the moderation routes

@@ -44,6 +44,7 @@ import {
   capacityTakenSql, eventCapacitySql, managesRequests, readEventAccessFacts, waitlistPositionSql,
 } from './event-access';
 import { checkRegistrationGroups } from './event-groups.service';
+import { applyRegistrationAnswers } from './event-questions.service';
 import { ensureCallCode } from './call-link.service';
 import { isLiveStatus } from './main-room';
 import { ringEventBells } from './event-notices';
@@ -174,6 +175,12 @@ async function placeOrQueue(
     const viaInvite = !!registerOptions.viaInvite || !!registerOptions.personalInviteCreatedAt;
     const groupKeys = await checkRegistrationGroups(
       client, sessionId, userId, role, registerOptions.groupKeys, !viaInvite && !registerOptions.approvedRequest,
+    );
+    // Part 3 Task 5: answers to the event's matching questions are the person's own and are kept whether or not a place
+    // comes with them (the registration's own write was rolled back above), with the same rule for a required question:
+    // only a person's own first registration waits for it. An event without questions makes one read here and stops.
+    await applyRegistrationAnswers(
+      client, sessionId, userId, role, registerOptions.answers, !viaInvite && !registerOptions.approvedRequest,
     );
     const queued = await joinWaitlist(client, sessionId, userId, { joinedVia, groupKeys, inviteId });
     if (queued.isNew) {

@@ -727,7 +727,7 @@ describe('the landing for a signed-in viewer, and their events', () => {
     addEvent({ id: EVENT, call_code: CODE, admission_mode: 'open' });
     const before = await getCallLanding(CODE, { userId: MEMBER, role: UserRole.MEMBER });
     expect(before.viewer).toEqual({ signedIn: true, accountKind: 'member', sessionId: null, step: 'details' });
-    expect(before.asks).toEqual({ displayName: false, group: null, admissionCode: false });
+    expect(before.asks).toEqual({ displayName: false, group: null, admissionCode: false, questions: null });
     await enterCall(CODE, MEMBER, UserRole.MEMBER, {});
     const after = await getCallLanding(CODE, { userId: MEMBER, role: UserRole.MEMBER });
     expect(after.viewer).toEqual({ signedIn: true, accountKind: 'member', sessionId: EVENT, step: 'wait_for_start' });

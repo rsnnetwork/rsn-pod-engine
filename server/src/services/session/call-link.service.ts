@@ -26,6 +26,7 @@ import type { Actor } from '../roles/actor';
 import { resolveEventOrganiserIds } from '../post-event-message/event-organisers';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 import { getEventGroupRules } from './event-groups.service';
+import { questionsToAsk } from './event-questions.service';
 import { readEventAccessFacts, runsEvent } from './event-access';
 import { eventImageColumns, eventImageUrlOf } from './event-image-url';
 
@@ -268,9 +269,11 @@ export async function getCallLanding(
     admission: effectiveAdmissionOf(event),
   };
   if (!viewer) {
+    // Part 3 Task 5: every matching question the event asks (required first); never anyone's answers.
+    const questions = await questionsToAsk(event.id, null, event.status);
     return {
       ...base,
-      asks: { displayName: true, group, admissionCode: mode === 'restricted' },
+      asks: { displayName: true, group, admissionCode: mode === 'restricted', questions },
       viewer: { signedIn: false, accountKind: null, sessionId: null, step: 'identify' },
     };
   }
@@ -279,9 +282,16 @@ export async function getCallLanding(
   const { readCallEntryForEvent } = await import('./call-entry.service');
   const state = await readCallEntryForEvent(event, viewer.userId, viewer.role);
   const kind = await query<{ account_kind: AccountKind }>(`SELECT account_kind FROM users WHERE id = $1`, [viewer.userId]);
+  // Part 3 Task 5: the questions this viewer has not answered, only while there is a step that asks them.
+  const questions = state.step === 'details' || state.step === 'request'
+    ? await questionsToAsk(event.id, viewer.userId, event.status)
+    : null;
   return {
     ...base,
-    asks: { displayName: state.missing.displayName, group: state.missing.group ? group : null, admissionCode: state.missing.admissionCode },
+    asks: {
+      displayName: state.missing.displayName, group: state.missing.group ? group : null,
+      admissionCode: state.missing.admissionCode, questions,
+    },
     viewer: {
       signedIn: true,
       accountKind: kind.rows[0]?.account_kind ?? null,

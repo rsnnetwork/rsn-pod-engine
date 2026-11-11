@@ -12,7 +12,8 @@
 //                            here, after its code is proved and before anything is spent or made: 403 in the
 //                            event's words, details.admissionCode true when an admission code would let it in.
 //   GET  /:code/entry        where the signed-in person stands                                           authenticate
-//   POST /:code/enter        { displayName?, groupKeys?, admissionCode? }  give what is missing and enter  authenticate
+//   POST /:code/enter        { displayName?, groupKeys?, admissionCode?, answers? }  give what is missing and enter
+//                            (answers: the event's extra matching questions, Part 3 Task 5)            authenticate
 //   DELETE /:code/waitlist   leave the full event's waiting list (Part 3 Task 3); answers the entry state    authenticate
 //
 // And the organisers' side, mounted at /api/sessions beside the event routes:
@@ -27,6 +28,7 @@ import { z } from 'zod';
 import { GROUP_LIMITS, isGroupKey, type ApiResponse, type UserRole } from '@rsn/shared';
 import { authenticate, optionalAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
+import { eventAnswersSchema } from './event-questions';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import {
   admissionRedeemIpLimiter, admissionRedeemLimiter, callEntryLimiter, callLinkEmailLimiter, callLinkEmailTargetLimiter,
@@ -68,6 +70,8 @@ const enterSchema = z.object({
   displayName: z.string().max(200).optional(),
   groupKeys: z.array(z.string().refine(isGroupKey, "That group isn't one of this event's groups.")).max(GROUP_LIMITS.maxGroups).optional(),
   admissionCode: z.string().trim().min(1).max(40).optional(),
+  // Part 3 Task 5: at most 5 questions, at most 8 answers each, every key 32 characters at most.
+  answers: eventAnswersSchema.optional(),
 });
 
 /**

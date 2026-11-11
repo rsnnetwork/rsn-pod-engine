@@ -247,6 +247,8 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     return rows(world.rows.podMembers.filter((x) => x.pod_id === a && x.user_id === b));
   }
   if (sql === 'SELECT key, label, description FROM event_groups WHERE session_id = $1 ORDER BY position, key') return rows([]);
+  // Part 3 Task 5: no event in this world asks matching questions (the waiting list reads the one table and stops).
+  if (sql === 'SELECT id, key, prompt, kind, prefer, required, options FROM event_matching_questions WHERE session_id = $1 ORDER BY position, key') return rows([]);
   if (/^SELECT \(SELECT COUNT\(\*\)::int FROM session_participants ct .* AS taken, .* AS capacity, .* AS ahead, .* AS runs FROM sessions s WHERE s\.id = \$1$/.test(sql)) {
     const e = eventById(a)!;
     return rows([{ taken: placesTaken(e.id), capacity: capacityOf(e), ahead: aheadOf(e.id, String(b)), runs: organiser(e, b) }]);

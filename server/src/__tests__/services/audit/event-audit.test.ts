@@ -111,10 +111,10 @@ describe('recordEventAudit', () => {
     expect(d).toMatchObject({ before: 'open', after: 'approval', round: 2, scheduleVersion: 3, reason: 'why' });
   });
 
-  it('names the thirty-two actions of the brief, the three added for rows that must read true, the call link rotation, the report download and (Part 3 Task 3) the six waiting-list actions (43, no repeats)', () => {
-    expect(EVENT_AUDIT_ACTIONS).toHaveLength(43);
-    expect(new Set(EVENT_AUDIT_ACTIONS).size).toBe(43);
-    expect(EVENT_AUDIT_ACTIONS).toContain('report.downloaded');
+  it('names the thirty-two actions of the brief, the three added for rows that must read true, the call link rotation, the report download and (Part 3 Task 3) the six waiting-list actions and (Part 3 Task 5) the questions change (44, no repeats)', () => {
+    expect(EVENT_AUDIT_ACTIONS).toHaveLength(44);
+    expect(new Set(EVENT_AUDIT_ACTIONS).size).toBe(44);
+    expect(EVENT_AUDIT_ACTIONS).toContain('questions.changed');
     expect(EVENT_AUDIT_ACTIONS).toEqual(expect.arrayContaining([
       'waitlist.joined', 'waitlist.left', 'waitlist.promoted', 'waitlist.lapsed', 'waitlist.admitted_over_capacity', 'waitlist.removed',
     ]));
