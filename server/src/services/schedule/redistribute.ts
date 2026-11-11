@@ -87,9 +87,15 @@ function waitingReason(ctx: RoomCheckContext, id: string, candidates: string[][]
  * once, exactly as before.
  */
 export function redistributeRound(input: RedistributeInput): RedistributeResult {
-  const result = seatOnce(input);
+  const { result, affinityDecided } = seatOnce(input);
   if (!input.affinity) return result;
-  const plain = seatOnce({ ...input, affinity: undefined });
+  // Fix round 2 (review I1): when the answers chose no seat the order without them would not have chosen, the seating
+  // without them is this very seating; and one that places the whole basket with no fallback and no repeat cannot be
+  // beaten. Either way there is no second seating (and no second engine run).
+  if (!affinityDecided) return result;
+  const cost = costsOf(input.ctx, result);
+  if (result.waiting.length === 0 && cost.fallback === 0 && cost.repeat === 0) return result;
+  const { result: plain } = seatOnce({ ...input, affinity: undefined });
   return affinityNoWorse(input.ctx, result, plain) ? result : plain;
 }
 
@@ -114,7 +120,8 @@ function affinityNoWorse(ctx: RoomCheckContext, withAffinity: RedistributeResult
   return a.fallback <= b.fallback && a.repeat <= b.repeat;
 }
 
-function seatOnce(input: RedistributeInput): RedistributeResult {
+/** One seating, and whether the answers ever chose a seat registration order would not have (step 2 only reads them). */
+function seatOnce(input: RedistributeInput): { result: RedistributeResult; affinityDecided: boolean } {
   const { ctx, lockedRooms } = input;
   const seated = new Map<number, string[]>([...input.seated].map(([room, members]) => [room, [...members]]));
   const occupied = new Set([...seated.values()].flat());
@@ -131,18 +138,23 @@ function seatOnce(input: RedistributeInput): RedistributeResult {
   const openRooms = () => [...seated.keys()].filter((room) => !lockedRooms.has(room)).sort((a, b) => a - b);
 
   // 2. Rooms holding one person.
+  let affinityDecided = false;
   for (const room of openRooms()) {
     const members = seated.get(room)!;
     if (members.length !== 1) continue;
     let best: { id: string; cost: number[] } | null = null;
+    let bestWithout: { id: string; cost: number[] } | null = null;
     for (const id of waitingSet) {
       const v = verdictOf(ctx, [...members, id]);
       if (!v.ok) continue;
+      const plainCost = [...seatCost(v, id), meetings(id), order.get(id)!];
       const cost = input.affinity
         ? [...seatCost(v, id), meetings(id), -input.affinity(members[0], id), order.get(id)!]
-        : [...seatCost(v, id), meetings(id), order.get(id)!];
+        : plainCost;
       if (!best || lessThan(cost, best.cost)) best = { id, cost };
+      if (input.affinity && (!bestWithout || lessThan(plainCost, bestWithout.cost))) bestWithout = { id, cost: plainCost };
     }
+    if (best && bestWithout && best.id !== bestWithout.id) affinityDecided = true;
     if (best) seat(room, best.id);
   }
 
@@ -182,5 +194,5 @@ function seatOnce(input: RedistributeInput): RedistributeResult {
     ];
     return { userId: id, reason: waitingReason(ctx, id, candidates) };
   });
-  return { seated, placed, waiting };
+  return { result: { seated, placed, waiting }, affinityDecided };
 }

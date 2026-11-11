@@ -350,7 +350,7 @@ import {
   MATCHING_QUESTIONS_CARD_LINE as _MATCHING_QUESTIONS_CARD_LINE, isQuestionKey as _isQuestionKey,
   questionAffinity as _questionAffinity, validateEventQuestions as _validateEventQuestions,
   cleanEventAnswers as _cleanEventAnswers, missingRequiredQuestions as _missingRequiredQuestions,
-  unansweredQuestions as _unansweredQuestions,
+  unansweredQuestions as _unansweredQuestions, prepareAnswers as _prepareAnswers, preparedAffinity as _preparedAffinity,
 } from './events/matching-questions';
 export const MAX_EVENT_QUESTIONS = _MAX_EVENT_QUESTIONS;
 export const MIN_QUESTION_OPTIONS = _MIN_QUESTION_OPTIONS;
@@ -365,6 +365,8 @@ export const validateEventQuestions = _validateEventQuestions;
 export const cleanEventAnswers = _cleanEventAnswers;
 export const missingRequiredQuestions = _missingRequiredQuestions;
 export const unansweredQuestions = _unansweredQuestions;
+export const prepareAnswers = _prepareAnswers;
+export const preparedAffinity = _preparedAffinity;
 // The call link's "does the event still need something" (Part 3 Task 5 adds the questions): a VALUE the client calls.
 import { somethingMissing as _somethingMissing } from './types/call-link';
 export const somethingMissing = _somethingMissing;
