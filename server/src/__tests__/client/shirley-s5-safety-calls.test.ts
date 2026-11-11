@@ -314,7 +314,9 @@ describe('after a 1:1 call', () => {
     const src = readClientSource('features/messages/MeetPage.tsx');
     expect(src).toContain('const leave = useCallback(() => navigate(`/messages/${conversationId}`, { replace: true }), [navigate, conversationId]);');
     expect(src).toContain(']).then(([to]) => navigate(to, { replace: true }));');
-    expect(src.match(/navigate\(/g)).toHaveLength(2);
+    // The third: a room closed under both (a block) goes back to the chat too, also replacing the room (fix round 2).
+    expect(src.match(/navigate\(/g)).toHaveLength(3);
+    expect(src).toContain('navigate(`/messages/${conversationId}`, { replace: true });\n  }, [navigate, conversationId]);');
   });
 
   it('the thread asks over itself as an optional sheet with "Not now", once (the flag is dropped by replacing the address)', () => {
@@ -456,7 +458,12 @@ describe('fix round 1: a block during a call ends it for both', () => {
   it('the room closed under them sends both back to the thread with a calm sentence', () => {
     const src = readClientSource('features/messages/MeetPage.tsx');
     expect(src).toContain("export const CALL_ENDED = 'The call has ended.';");
-    expect(src).toMatch(/onDisconnected=\{\(reason\) => \{[\s\S]{0,200}if \(reason === DisconnectReason\.ROOM_DELETED\) addToast\(CALL_ENDED, 'info'\);\s*leaveRoom\(\);/);
+    // Fix round 2: back to the chat with no "How did your meeting go?" about the person just blocked (onRoomClosed skips
+    // the ?feedback= landing); an ordinary disconnect still leaves the usual way.
+    expect(src).toMatch(/if \(reason === DisconnectReason\.ROOM_DELETED\) \{\s*addToast\(CALL_ENDED, 'info'\);\s*onRoomClosed\(\);\s*return;\s*\}\s*leaveRoom\(\);/);
+    const closed = src.slice(src.indexOf('const leaveClosedRoom = useCallback'), src.indexOf('const live = conn'));
+    expect(closed).not.toMatch(/afterRoomLeave|feedback/);
+    expect(src).toContain('onRoomClosed={leaveClosedRoom}');
   });
 });
 

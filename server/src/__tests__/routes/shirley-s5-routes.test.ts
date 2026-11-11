@@ -221,6 +221,6 @@ describe('POST /users/:id/block (source)', () => {
   it('after the block is saved and both sides told, ends any call between the two, best-effort', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../routes/users.ts'), 'utf8');
     const block = src.slice(src.indexOf("'/:id/block',"), src.indexOf('// DELETE /users/:id/block'));
-    expect(block).toMatch(/fanoutUserBlocks\(req\.user!\.userId, req\.params\.id\)\.catch\(\(\) => \{\}\);\s*\/\/[^\n]*\n[^\n]*\n\s*endCallsOnBlock\(req\.user!\.userId, req\.params\.id\)\.catch\(/);
+    expect(block).toMatch(/fanoutUserBlocks\(req\.user!\.userId, req\.params\.id\)\.catch\(\(\) => \{\}\);(\s*\/\/[^\n]*)+\s*endCallsOnBlock\(req\.user!\.userId, req\.params\.id\)\.catch\(/);
   });
 });

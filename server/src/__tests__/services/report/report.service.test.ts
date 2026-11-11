@@ -302,7 +302,8 @@ describe('a wall comment, a group message, an event chat message', () => {
       own: () => arm({ groupMessage: { from_user_id: REPORTER, content: 'mine' } }),
       readsThroughTheWall: () => {
         const read = mockQuery.mock.calls.find((c) => /JOIN dm_group_members gm/.test(String(c[0])))!;
-        expect(String(read[0]).replace(/\s+/g, ' ')).toContain('JOIN dm_group_members gm ON gm.group_id = m.group_id AND gm.user_id = $2 WHERE m.id = $1 AND m.group_id IS NOT NULL');
+        // Only what the group's own read shows them: messages written since they joined (fix round 2).
+        expect(String(read[0]).replace(/\s+/g, ' ')).toContain('JOIN dm_group_members gm ON gm.group_id = m.group_id AND gm.user_id = $2 WHERE m.id = $1 AND m.group_id IS NOT NULL AND m.created_at >= gm.joined_at');
       },
     },
     {
@@ -311,7 +312,8 @@ describe('a wall comment, a group message, an event chat message', () => {
       hidden: () => { arm({ eventMessage: { sender_id: REPORTED, content: 'Nasty reply', scope: 'lobby' } }); mockEventChatAccess.mockResolvedValue(null); },
       gone: () => arm({ eventMessage: null }),
       own: () => arm({ eventMessage: { sender_id: REPORTER, content: 'mine', scope: 'lobby' } }),
-      readsThroughTheWall: () => expect(mockEventChatAccess).toHaveBeenCalledWith(REPORTER, 'member', 'ev-1'),
+      // The room's own chat rule (fix round 2): someone registered and in the room before the start reads its lobby.
+      readsThroughTheWall: () => expect(mockEventChatAccess).toHaveBeenCalledWith(REPORTER, 'member', 'ev-1', { inSessionRoom: true }),
     },
   ];
 
@@ -369,6 +371,20 @@ describe('a wall comment, a group message, an event chat message', () => {
     arm({ eventMessage: { sender_id: REPORTED, content: 'room words', scope: 'room', audience_ids: [REPORTED, REPORTER] } });
     await submitReport(me, { reason: 'spam', subject: { kind: 'event_chat_message', id: 'x-1' } });
     expect(inserted()[8]).toBe('room words');
+  });
+
+  // Fix round 2 (I-1): before the event starts, a registered member in its room has no joined_at yet; the room's own
+  // chat rule (inSessionRoom) lets them read the lobby, so the report rule must too. Someone with no place still can't.
+  it('a registered member in the room before the start can report a lobby message; someone with no place cannot', async () => {
+    const roomRule = (registered: boolean) => (_u: string, _r: string, _s: string, opts?: { inSessionRoom?: boolean }) =>
+      Promise.resolve(registered && opts?.inSessionRoom ? 'all' : null);
+    arm({ eventMessage: { sender_id: REPORTED, content: 'Lobby words', scope: 'lobby' } });
+    mockEventChatAccess.mockImplementation(roomRule(true));
+    await submitReport(me, { reason: 'harassment', subject: { kind: 'event_chat_message', id: 'x-1' } });
+    expect(inserted().slice(6)).toEqual(['event_chat_message', 'x-1', 'Lobby words']);
+    arm({ eventMessage: { sender_id: REPORTED, content: 'Lobby words', scope: 'lobby' } });
+    mockEventChatAccess.mockImplementation(roomRule(false));
+    await expect(submitReport(me, { reason: 'harassment', subject: { kind: 'event_chat_message', id: 'x-1' } })).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("an event chat message whose sender's account is gone is \"no longer there\"", async () => {

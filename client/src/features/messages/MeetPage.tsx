@@ -280,6 +280,14 @@ export default function MeetPage() {
       departRef.current(),
     ]).then(([to]) => navigate(to, { replace: true }));
   }, [navigate, conversationId, meeting?.meetingId, conn?.meetingId, isScheduled, readMeetingId]);
+  // The room was closed under both people (a block during the call, S5 fix round 2): straight back to the chat, with
+  // no "How did your meeting go?", which would ask each to rate the person just blocked (or the one who blocked them).
+  const leaveClosedRoom = useCallback(() => {
+    if (leftRoom.current) return;
+    leftRoom.current = true;
+    setLeaving(true);
+    navigate(`/messages/${conversationId}`, { replace: true });
+  }, [navigate, conversationId]);
   const live = conn && conn.room === roomKey ? conn : null;
 
   // A scheduled meeting opened early waits on a countdown; one long over says
@@ -398,7 +406,7 @@ export default function MeetPage() {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
   }
 
-  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} leaving={leaving} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} departRef={departRef} />;
+  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} onRoomClosed={leaveClosedRoom} leaving={leaving} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} departRef={departRef} />;
 }
 
 /**
@@ -408,12 +416,14 @@ export default function MeetPage() {
  * phone, with the stage shrinking above it; it lives inside the LiveKit room, so the call runs on while they type.
  * The page is 100dvh and keeps the iPhone's home-indicator inset clear under whatever is lowest.
  */
-function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSeen, partnerProbe, departRef }: {
+function CallRoom({ conversationId, kind, live, leaveRoom, onRoomClosed, leaving, onPartnerSeen, partnerProbe, departRef }: {
   conversationId: string;
   kind: 'audio' | 'video';
   live: { token: string; url: string };
   /** Leaving the room: to the feedback question after a meeting the other person was in, else to the chat (T8). */
   leaveRoom: () => void;
+  /** The room was closed under both people: back to the chat, asking nothing. */
+  onRoomClosed: () => void;
   /** The person has pressed leave and is on their way out. */
   leaving: boolean;
   onPartnerSeen: () => void;
@@ -490,8 +500,13 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
         video={kind === 'video'}
         audio
         onDisconnected={(reason) => {
-          // The room was closed under both people (a block during the call, 11 Nov 2026): said calmly on the thread.
-          if (reason === DisconnectReason.ROOM_DELETED) addToast(CALL_ENDED, 'info');
+          // The room was closed under both people (a block during the call, 11 Nov 2026): said calmly on the thread,
+          // and no question about a meeting with someone just blocked.
+          if (reason === DisconnectReason.ROOM_DELETED) {
+            addToast(CALL_ENDED, 'info');
+            onRoomClosed();
+            return;
+          }
           leaveRoom();
         }}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'transparent' }}

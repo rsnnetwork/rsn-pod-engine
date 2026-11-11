@@ -640,8 +640,9 @@ router.post(
       // blocker's other tabs flip the Block button label and the
       // blocked user's profile-page Message button disappears.
       fanoutUserBlocks(req.user!.userId, req.params.id).catch(() => {});
-      // 11 Nov 2026 (item 16): a call ringing between them is withdrawn, and the person blocked is taken out of the
-      // pair's call room, so a block in the middle of a call ends it. Best-effort: the block is saved already.
+      // 11 Nov 2026 (item 16): a call ringing between them is withdrawn, the pair moves to a new call room and the old
+      // one is closed for both, so a block in the middle of a call ends it for both and an old token reaches nobody.
+      // Best-effort: the block is saved already.
       endCallsOnBlock(req.user!.userId, req.params.id).catch((err) => logger.warn({ err }, 'ending calls on block failed (non-fatal)'));
       const response: ApiResponse = { success: true, data: result };
       res.json(response);

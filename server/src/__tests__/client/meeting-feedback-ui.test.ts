@@ -279,7 +279,9 @@ describe('the meeting room', () => {
     expect(room).toMatch(/<PartnerSeen onSeen=\{onPartnerSeen\} probe=\{partnerProbe\} \/>/);
     // S5 fix round 1: a room closed under both (a block mid-call) says "The call has ended." first, then the same leave.
     const onDisconnected = room.slice(room.indexOf('onDisconnected={(reason) => {'), room.indexOf('style={{ position:', room.indexOf('onDisconnected=')));
-    expect(onDisconnected).toContain("if (reason === DisconnectReason.ROOM_DELETED) addToast(CALL_ENDED, 'info');");
+    // Fix round 2: a closed room asks nothing (onRoomClosed); any other disconnect leaves to the question as before.
+    expect(onDisconnected).toContain('if (reason === DisconnectReason.ROOM_DELETED) {');
+    expect(onDisconnected).toContain('onRoomClosed();');
     expect(onDisconnected).toContain('leaveRoom();');
   });
 

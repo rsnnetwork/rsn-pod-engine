@@ -466,7 +466,9 @@ test('6b) a block during a call ends it for both: each lands on the thread with 
 
     expect((await api(shirley, 'POST', `/users/${ana.id}/block`, {})).status).toBe(200);
     for (const [who, p] of [['Shirley', page], ['Ana', anaPage]] as const) {
-      await expect(p, `${who} is back on the thread`).toHaveURL(new RegExp(`/messages/${anaConv}`), { timeout: 30_000 });
+      // Straight to the thread, with no "How did your meeting go?" about the person just blocked (fix round 2).
+      await expect(p, `${who} is back on the thread`).toHaveURL(new RegExp(`/messages/${anaConv}$`), { timeout: 30_000 });
+      await expect(p.getByRole('dialog', { name: /How did your meeting with/ }), `${who} is asked nothing`).toHaveCount(0);
       await expect(p.getByText('The call has ended.'), `${who} is told calmly`).toBeVisible({ timeout: 15_000 });
     }
     // Neither gets back in: the call page refuses a new entry while the block stands.

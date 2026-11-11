@@ -189,8 +189,9 @@ async function resolveCircleComment(reporter: Reporter, commentId: string): Prom
 }
 
 /**
- * A message in a group chat the reporter is a member of now. Someone who left, or was never in it, reads it as "no
- * longer there". REASON's own lines cannot be reported.
+ * A message in a group chat the reporter is a member of now, written since they joined it (what the group's own read
+ * shows them). Someone who left, was never in it, or joined after the message reads it as "no longer there". REASON's
+ * own lines cannot be reported.
  */
 async function resolveGroupMessage(reporterId: string, messageId: string): Promise<ResolvedSubject> {
   const r = await query<{
@@ -200,7 +201,7 @@ async function resolveGroupMessage(reporterId: string, messageId: string): Promi
     `SELECT m.from_user_id, m.content, m.kind, m.attachment_type, m.attachment_url
        FROM direct_messages m
        JOIN dm_group_members gm ON gm.group_id = m.group_id AND gm.user_id = $2
-      WHERE m.id = $1 AND m.group_id IS NOT NULL`,
+      WHERE m.id = $1 AND m.group_id IS NOT NULL AND m.created_at >= gm.joined_at`,
     [messageId, reporterId],
   );
   const m = r.rows[0];
@@ -228,7 +229,10 @@ async function resolveEventChatMessage(reporter: Reporter, messageId: string): P
   );
   const m = r.rows[0];
   if (!m || !m.sender_id) throw new NotFoundError('Message', messageId, REPORT_WORDS.messageGone);
-  const access = await canReadEventChat(reporter.userId, reporter.role, m.session_id);
+  // The same rule the room's own chat uses (fix round 2): someone registered and in the room before the event starts
+  // reads its lobby chat (their joined_at is still empty then), so they can report what they read there. A removed
+  // member, or someone with no place, still reads nothing.
+  const access = await canReadEventChat(reporter.userId, reporter.role, m.session_id, { inSessionRoom: true });
   const roomOk = m.scope === 'room' && access === 'all' && (m.audience_ids ?? []).includes(reporter.userId);
   if (!access || (m.scope !== 'lobby' && !roomOk)) throw new NotFoundError('Message', messageId, REPORT_WORDS.messageGone);
   return { authorId: m.sender_id, excerpt: excerptOf(m.content), conversationId: null };
