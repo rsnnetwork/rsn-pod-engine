@@ -910,3 +910,17 @@ describe('fix round 2 (11 Nov 2026): a message is sent as the member who pressed
     expect(readClientSource('features/reason/human/HumanProfilePage.tsx')).toMatch(/mutationFn: \(\) => blockMember\(userId\),\s*onSuccess: \(\) => \{\s*\/\/[^\n]*\n\s*dropDraftsTo\(userId\);/);
   });
 });
+
+describe('fix round 4 (11 Nov 2026): a picture sent before moving away completes like a voice note or a text', () => {
+  it('nothing in the box stops a send when the box goes: the only stop is a member change, for pictures as for the rest', () => {
+    const box = readClientSource('features/messages/DmComposer.tsx');
+    // The picture goes through the same send as text (sendText), with the File captured in the send itself.
+    expect(box).toMatch(/send\.mutate\(\{\s*threadKey, voiceId: null, textToken, toUserId, content, image: pendingImage,/);
+    expect(box).toMatch(/uploadImageToCloudinary\(vars\.image\.file, setUploadFraction, signal\)/);
+    // No abort of its own: no controller, and the unmount clean-ups only revoke a preview address and mark it gone.
+    expect(box).not.toMatch(/AbortController|\.abort\(\)|cancelQueries|reset\(\)/);
+    const hook = readClientSource('features/messages/thread/useSendMessage.ts');
+    expect(hook).toMatch(/watchMember: onMemberChange,/);
+    expect(hook).not.toMatch(/useEffect/);
+  });
+});
