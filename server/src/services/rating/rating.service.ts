@@ -708,10 +708,10 @@ export async function getSessionRatingStats(sessionId: string): Promise<{
 // ─── Export Session Data ────────────────────────────────────────────────────
 // Generates a structured export object for post-event reporting.
 //
-// Privacy (11 Nov 2026, Part 3 Task 4): a rating's `feedback` is a member's private note about a partner and is never
-// exported (always null). A score a named person gave (quality_score), their one-sided meet_again and a pair's
-// last_quality_score are individual too: only `individualScores` (an admin) gets them, everyone else reads null.
-// Every field stays, so the production recap that saves this file keeps working.
+// Privacy (11 Nov 2026, Part 3 Task 4): a rating's `feedback` (a member's private note about a partner), the score a
+// named person gave (quality_score), their one-sided meet_again and a pair's last_quality_score are individual: only
+// `individualScores` (an admin) gets them; everyone else (the event's host) reads null. Every field stays, so the
+// production recap that saves this file keeps working.
 
 export async function exportSessionData(sessionId: string, opts: { individualScores: boolean }): Promise<{
   session: any;
@@ -762,7 +762,7 @@ export async function exportSessionData(sessionId: string, opts: { individualSco
             uf.display_name AS from_name, ut.display_name AS to_name,
             CASE WHEN $2::boolean THEN r.quality_score END AS quality_score,
             CASE WHEN $2::boolean THEN r.meet_again END AS meet_again,
-            NULL::text AS feedback, r.created_at,
+            CASE WHEN $2::boolean THEN r.feedback END AS feedback, r.created_at,
             m.round_number
      FROM ratings r
      JOIN matches m ON m.id = r.match_id

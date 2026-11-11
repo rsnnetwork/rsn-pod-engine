@@ -229,6 +229,24 @@ describe('mutual matches', () => {
   });
 });
 
+describe('the small-numbers rule', () => {
+  it('no file carries a rating figure (an average, a distribution or a share), only counts, so nothing can rest on too few ratings', () => {
+    const r = report({
+      people: [person('u-a'), person('u-b')],
+      meetings: [meeting('m-1', ['u-a', 'u-b'], { ratingsSubmitted: 1, ratingsExpected: 2 })],
+      mutualMatches: [{ userIds: ['u-a', 'u-b'], rounds: [1] }],
+      summary: { avgQuality: 5, qualityDistribution: [0, 0, 0, 0, 1], meetAgainRate: 1 } as EventReport['summary'],
+      rounds: [{ round: 1, avgQuality: 5, meetAgainRate: 1 } as EventReport['rounds'][number]],
+    });
+    for (const section of ['attendance', 'meetings', 'mutual-matches'] as const) {
+      const [header, ...rows] = parse(bodyOf(r, section));
+      expect(header.join(',')).not.toMatch(/average|quality|score|rate|share|distribution|meet again/i);
+      // Every number in the file is a count or a round/room number, never 5 (the average) or 1.0 (the share) as a figure.
+      for (const row of rows) for (const cell of row) expect(cell).not.toMatch(/^\d+\.\d+$/);
+    }
+  });
+});
+
 describe('the file name', () => {
   it('is the event\'s day on its own clock and the part, never the title', () => {
     // 23:30Z on 10 Nov is 00:30 on 11 Nov in Copenhagen.

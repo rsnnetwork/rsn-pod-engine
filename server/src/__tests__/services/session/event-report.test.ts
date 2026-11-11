@@ -32,7 +32,7 @@ jest.mock('../../../realtime/emit', () => ({
   __esModule: true,
 }));
 
-import { UserRole } from '@rsn/shared';
+import { RATING_FIGURE_MIN, UserRole } from '@rsn/shared';
 import {
   EVENT_SQL, MEETINGS_SQL, PAIRS_SQL, PEOPLE_SQL, RATINGS_SQL,
   fanoutLateRating, fanoutSessionRatings, getEventReport,
@@ -78,12 +78,12 @@ function match(id: string, round: number, seats: (string | null)[], over: Record
     id, round_number: round, participant_a_id: seats[0] ?? null, participant_b_id: seats[1] ?? null,
     participant_c_id: seats[2] ?? null, departed_user_ids: [], status: 'completed', is_manual: false, is_override: false,
     assignment_source: null, schedule_version: null, started_at: at('2026-11-10T17:10:00.000Z'),
-    ended_at: at('2026-11-10T17:18:00.000Z'), ratings_expected: 0, ratings_submitted: 0, mutual_rows: 0, ...over,
+    ended_at: at('2026-11-10T17:18:00.000Z'), ratings_expected: 0, ratings_submitted: 0, mutual_rows: 0, meet_again_rows: 0, ...over,
   };
 }
 
 const ratingRound = (round: number, over: Record<string, unknown> = {}) => ({
-  round_number: round, ratings: 0, q1: 0, q2: 0, q3: 0, q4: 0, q5: 0, didnt_work: 0, meet_again: 0, ...over,
+  round_number: round, ratings: 0, q1: 0, q2: 0, q3: 0, q4: 0, q5: 0, didnt_work: 0, ...over,
 });
 
 beforeEach(() => {
@@ -173,7 +173,7 @@ describe('attendance', () => {
     expect(summary).toMatchObject({
       registered: 2, attended: 0, noShows: 2, removed: 0, stayed: 0, leftEarly: 0, couldNotJoin: 0, attendanceRate: 0,
       roundsRun: 0, meetings: 0, uniquePairsMet: 0, ratingsExpected: 0, ratingCompletion: null, avgQuality: null,
-      meetAgainRate: null, mutualMatches: 0, qualityDistribution: [0, 0, 0, 0, 0],
+      meetAgainRate: null, mutualMatches: 0, qualityDistribution: null, ratingFiguresWithheld: false,
     });
     expect(people.map((p) => p.outcome)).toEqual(['no_show', 'no_show']);
   });
@@ -330,23 +330,94 @@ describe('who met whom', () => {
 describe('ratings, in aggregate only', () => {
   it('"didn\'t work" ratings are out of the average and the distribution, and counted on their own', async () => {
     world.ratings = [
-      ratingRound(1, { ratings: 4, q4: 1, q5: 2, didnt_work: 1, meet_again: 2 }),
-      ratingRound(2, { ratings: 2, q1: 1, q3: 1, meet_again: 1 }),
+      ratingRound(1, { ratings: 6, q3: 1, q4: 2, q5: 2, didnt_work: 1 }),
+      ratingRound(2, { ratings: 5, q1: 1, q2: 1, q3: 1, q4: 1, q5: 1 }),
     ];
-    world.matches = [match('m-1', 1, ['u-a', 'u-b']), match('m-2', 2, ['u-a', 'u-b'])];
+    world.matches = [
+      match('m-1', 1, ['u-a', 'u-b', 'u-c'], { ratings_expected: 6, ratings_submitted: 6, meet_again_rows: 3 }),
+      match('m-2', 2, ['u-a', 'u-b', 'u-c'], { ratings_expected: 6, ratings_submitted: 5, meet_again_rows: 1 }),
+    ];
     const { summary, rounds } = await getEventReport(SESSION, ACTOR);
-    expect(summary.qualityDistribution).toEqual([1, 0, 1, 1, 2]);
-    // (1 + 3 + 4 + 5 + 5) / 5, never the "didn't work" one's score.
+    expect(summary.qualityDistribution).toEqual([1, 1, 2, 3, 3]);
+    // (1 + 2 + 3 + 3 + 4 + 4 + 4 + 5 + 5 + 5) / 10, never the "didn't work" one's score.
     expect(summary.avgQuality).toBe(3.6);
     expect(summary.didntWork).toBe(1);
-    expect(summary.meetAgainRate).toBe(0.5);
-    expect(rounds.map((r) => [r.avgQuality, r.meetAgainRate])).toEqual([[4.67, 0.5], [2, 0.5]]);
+    expect(summary).toMatchObject({ ratingsSubmitted: 11, meetAgainRate: 0.3636, ratingFiguresWithheld: false });
+    // Round 1: (3 + 4 + 4 + 5 + 5) / 5; round 2: (1 + 2 + 3 + 4 + 5) / 5.
+    expect(rounds.map((r) => [r.avgQuality, r.meetAgainRate, r.ratingFiguresWithheld])).toEqual([[4.2, 0.5, false], [3, 0.2, false]]);
+  });
+
+  it('the "meet again" share is over ratingsSubmitted: the same ratings, from rooms that took place only', async () => {
+    world.matches = [
+      match('m-1', 1, ['u-a', 'u-b'], { ratings_expected: 2, ratings_submitted: 2, meet_again_rows: 2 }),
+      match('m-2', 1, ['u-c', 'u-d'], { ratings_expected: 2, ratings_submitted: 2, meet_again_rows: 1 }),
+      match('m-3', 1, ['u-e', 'u-f'], { ratings_expected: 2, ratings_submitted: 1, meet_again_rows: 0 }),
+      // A room nobody came to and a cancelled one: a rating filed there wrote stray rows, and they are not a meeting's.
+      match('m-ns', 1, ['u-g', 'u-h'], { status: 'no_show', ratings_expected: 2, ratings_submitted: 1, meet_again_rows: 1 }),
+      match('m-cx', 1, ['u-i', 'u-j'], { status: 'cancelled', ratings_expected: 2, ratings_submitted: 1, meet_again_rows: 1 }),
+    ];
+    const { summary, rounds } = await getEventReport(SESSION, ACTOR);
+    expect(summary.ratingsSubmitted).toBe(5);
+    expect(summary.meetAgainRate).toBe(3 / 5);
+    expect(rounds[0]).toMatchObject({ ratingsSubmitted: 5, meetAgainRate: 0.6 });
+  });
+
+  it('a rating on a round that never started makes no round', async () => {
+    world.matches = [match('m-1', 1, ['u-a', 'u-b'])];
+    // As if RATINGS_SQL had let one through: rounds come from the rooms, never from a rating row.
+    world.ratings = [ratingRound(4, { ratings: 1, q5: 1 })];
+    const { rounds } = await getEventReport(SESSION, ACTOR);
+    expect(rounds.map((r) => r.round)).toEqual([1]);
+  });
+
+  it(`a figure resting on fewer than ${RATING_FIGURE_MIN} ratings is withheld; at ${RATING_FIGURE_MIN} it shows; counts always show`, async () => {
+    expect(RATING_FIGURE_MIN).toBe(5);
+    const room = (id: string, round: number, submitted: number, meetAgain: number) =>
+      match(id, round, ['u-a', 'u-b', 'u-c'], { ratings_expected: 6, ratings_submitted: submitted, meet_again_rows: meetAgain, mutual_rows: 2 });
+    world.pairs = [{ a: 'u-a', b: 'u-b', mutual_rounds: [1] }];
+
+    // Four ratings in all: nothing but counts.
+    world.matches = [room('m-1', 1, 4, 3)];
+    world.ratings = [ratingRound(1, { ratings: 4, q5: 4 })];
+    let r = await getEventReport(SESSION, ACTOR);
+    expect(r.summary).toMatchObject({
+      avgQuality: null, qualityDistribution: null, meetAgainRate: null, ratingFiguresWithheld: true,
+      ratingsSubmitted: 4, ratingsExpected: 6, didntWork: 0, mutualMatches: 1,
+    });
+    expect(r.rounds[0]).toMatchObject({ avgQuality: null, meetAgainRate: null, ratingFiguresWithheld: true, ratingsSubmitted: 4, mutualPairs: 1 });
+
+    // Five: every figure shows.
+    world.matches = [room('m-1', 1, 5, 3)];
+    world.ratings = [ratingRound(1, { ratings: 5, q4: 1, q5: 4 })];
+    r = await getEventReport(SESSION, ACTOR);
+    expect(r.summary).toMatchObject({ avgQuality: 4.8, qualityDistribution: [0, 0, 0, 1, 4], meetAgainRate: 0.6, ratingFiguresWithheld: false });
+    expect(r.rounds[0]).toMatchObject({ avgQuality: 4.8, meetAgainRate: 0.6, ratingFiguresWithheld: false });
+
+    // Five submitted but one marked "didn't work": four scores, so the average and distribution are withheld while the
+    // "meet again" share (five ratings) shows.
+    world.ratings = [ratingRound(1, { ratings: 5, q5: 4, didnt_work: 1 })];
+    r = await getEventReport(SESSION, ACTOR);
+    expect(r.summary).toMatchObject({ avgQuality: null, qualityDistribution: null, meetAgainRate: 0.6, didntWork: 1, ratingFiguresWithheld: true });
+
+    // An event-wide figure can show while each small round's is withheld.
+    world.matches = [room('m-1', 1, 3, 2), room('m-2', 2, 3, 1)];
+    world.ratings = [ratingRound(1, { ratings: 3, q5: 3 }), ratingRound(2, { ratings: 3, q3: 3 })];
+    r = await getEventReport(SESSION, ACTOR);
+    expect(r.summary).toMatchObject({ avgQuality: 4, meetAgainRate: 0.5, ratingFiguresWithheld: false });
+    expect(r.rounds.map((x) => [x.avgQuality, x.meetAgainRate, x.ratingFiguresWithheld])).toEqual([[null, null, true], [null, null, true]]);
+  });
+
+  it('no ratings at all: every figure is null and nothing is "withheld"', async () => {
+    world.matches = [match('m-1', 1, ['u-a', 'u-b'], { ratings_expected: 2 })];
+    const { summary, rounds } = await getEventReport(SESSION, ACTOR);
+    expect(summary).toMatchObject({ avgQuality: null, qualityDistribution: null, meetAgainRate: null, ratingFiguresWithheld: false });
+    expect(rounds[0].ratingFiguresWithheld).toBe(false);
   });
 
   it('nothing in the report names a score a person gave or received, a one-sided meet again or a note', async () => {
     world.people = [person('u-a'), person('u-b')];
     world.matches = [match('m-1', 1, ['u-a', 'u-b'], { ratings_expected: 2, ratings_submitted: 2 })];
-    world.ratings = [ratingRound(1, { ratings: 2, q2: 1, q5: 1, meet_again: 1 })];
+    world.ratings = [ratingRound(1, { ratings: 2, q2: 1, q5: 1 })];
     const text = JSON.stringify(await getEventReport(SESSION, ACTOR));
     for (const key of ['quality_score', 'qualityScore', 'feedback"', 'meetAgain"', 'meet_again', 'ratingGiven', 'rating_given', 'theirMeetAgain']) {
       expect(text).not.toContain(key);
@@ -383,6 +454,11 @@ describe('the statements', () => {
     expect(flat(PEOPLE_SQL)).toContain("JOIN matches m ON m.id = mr.match_id AND m.status IN ('completed', 'reassigned')");
     expect(flat(PAIRS_SQL)).toContain("JOIN matches m ON m.id = mr.match_id AND m.status IN ('completed', 'reassigned')");
     for (const k of [1, 2, 3, 4, 5]) expect(flat(RATINGS_SQL)).toContain(`r.quality_score = ${k} AND NOT r.excluded_from_quality_stats`);
+    // Scores too count only meetings that took place: a rating on a no-show or cancelled room, or on a round that
+    // never started, never reaches an average, the distribution or "didn't work".
+    expect(flat(RATINGS_SQL)).toContain("JOIN matches m ON m.id = r.match_id AND m.status IN ('completed', 'reassigned')");
+    expect(flat(MEETINGS_SQL)).toContain('COUNT(*) FILTER (WHERE meet_again_self IS TRUE)::int AS meet_again_rows');
+    expect(flat(RATINGS_SQL)).not.toMatch(/meet_again/);
     expect(flat(MEETINGS_SQL)).toContain("m.status <> 'scheduled'");
     expect(flat(PAIRS_SQL)).toContain('LEAST(mr.user_id, mr.partner_id) AS a, GREATEST(mr.user_id, mr.partner_id) AS b');
     expect(flat(PEOPLE_SQL)).toContain('COUNT(DISTINCT mr.partner_id) FILTER (WHERE mr.is_mutual)');

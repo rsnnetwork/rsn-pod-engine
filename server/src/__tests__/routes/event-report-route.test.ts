@@ -7,7 +7,7 @@
 //
 // And the two ratings routes this task touches: POST /ratings tells the organisers' report only once the event is
 // closing or over, and the legacy GET /ratings/sessions/:id/export keeps its shape but gives a host no private note
-// and no individual score (an admin still gets the scores, never the notes).
+// and no individual score (an admin still gets both, the notes and the scores).
 
 import express from 'express';
 import request from 'supertest';
@@ -89,8 +89,8 @@ const REPORT: EventReport = {
   summary: {
     registered: 1, attended: 1, noShows: 0, removed: 0, stayed: 1, leftEarly: 0, couldNotJoin: 0, guests: 0,
     attendanceRate: 1, roundsPlanned: 1, roundsRun: 0, meetings: 0, manualRooms: 0, uniquePairsMet: 0, ratingsExpected: 0,
-    ratingsSubmitted: 0, ratingCompletion: null, avgQuality: null, qualityDistribution: [0, 0, 0, 0, 0], didntWork: 0,
-    meetAgainRate: null, mutualMatches: 0, feedbackCount: 0, scheduleVersionsPublished: 0,
+    ratingsSubmitted: 0, ratingCompletion: null, avgQuality: null, qualityDistribution: null, didntWork: 0,
+    meetAgainRate: null, ratingFiguresWithheld: false, mutualMatches: 0, feedbackCount: 0, scheduleVersionsPublished: 0,
   },
   people: [{
     userId: HOST, displayName: '=SUM(1,2)', email: 'a@example.com', accountKind: 'member', formerMember: false,
@@ -254,7 +254,7 @@ function legacyExportRows(sql: string, params: unknown[]): { rows: Record<string
         match_id: MATCH, from_user_id: HOST, to_user_id: 'u-b', from_name: 'Ana', to_name: 'Ben', round_number: 1,
         quality_score: /CASE WHEN \$2::boolean THEN r\.quality_score END/.test(sql) && !scores ? null : 2,
         meet_again: /CASE WHEN \$2::boolean THEN r\.meet_again END/.test(sql) && !scores ? null : false,
-        feedback: /NULL::text AS feedback/.test(sql) ? null : PRIVATE_NOTE,
+        feedback: /CASE WHEN \$2::boolean THEN r\.feedback END AS feedback/.test(sql) && !scores ? null : PRIVATE_NOTE,
       }],
     };
   }
@@ -285,12 +285,23 @@ describe('GET /ratings/sessions/:id/export keeps its shape and stops leaking', (
     expect(JSON.stringify(res.body)).not.toContain(PRIVATE_NOTE);
   });
 
-  it('an admin still gets the scores, and never the private note either', async () => {
-    const res = await request(app).get(`/ratings/sessions/${SESSION}/export`).set(as(nextMember(), 'admin'));
-    expect(res.status).toBe(200);
-    const [rating] = res.body.data.ratings;
-    expect(rating).toMatchObject({ quality_score: 2, meet_again: false, feedback: null });
-    expect(res.body.data.encounters[0].last_quality_score).toBe(2);
-    expect(JSON.stringify(res.body)).not.toContain(PRIVATE_NOTE);
+  it('an admin still gets the private notes and the individual scores', async () => {
+    for (const role of ['admin', 'super_admin']) {
+      const res = await request(app).get(`/ratings/sessions/${SESSION}/export`).set(as(nextMember(), role));
+      expect(res.status).toBe(200);
+      const [rating] = res.body.data.ratings;
+      expect(rating).toMatchObject({ quality_score: 2, meet_again: false, feedback: PRIVATE_NOTE });
+      expect(res.body.data.encounters[0].last_quality_score).toBe(2);
+    }
+  });
+
+  it('the export statement withholds the note, the score and the vote unless the caller is an admin ($2)', async () => {
+    await request(app).get(`/ratings/sessions/${SESSION}/export`).set(as(HOST));
+    const [sql, params] = mockQuery.mock.calls.find(([q]) => /uf\.display_name AS from_name/.test(q as string))!;
+    const flat = (sql as string).replace(/\s+/g, ' ');
+    expect(flat).toContain('CASE WHEN $2::boolean THEN r.feedback END AS feedback');
+    expect(flat).toContain('CASE WHEN $2::boolean THEN r.quality_score END AS quality_score');
+    expect(flat).toContain('CASE WHEN $2::boolean THEN r.meet_again END AS meet_again');
+    expect(params).toEqual([SESSION, false]);
   });
 });

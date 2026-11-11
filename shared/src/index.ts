@@ -298,8 +298,11 @@ export const estimatedRoundStarts = _estimatedRoundStarts;
 // The matching board's draft (10 Nov 2026 spec, Part 2 Task 8): its types, and the one VALUE the board's screen
 // reads (the alternative that leaves a person in the basket), exported by name as OPENINGS above.
 export * from './types/schedule';
-// The organisers' event report (10 Nov 2026 spec, Part 3 Task 4; K4): types only.
+// The organisers' event report (10 Nov 2026 spec, Part 3 Task 4; K4): its types, and the one VALUE the server and
+// the report screen share (the fewest ratings a rating figure may rest on), exported by name as OPENINGS above.
 export * from './types/event-report';
+import { RATING_FIGURE_MIN as _RATING_FIGURE_MIN } from './types/event-report';
+export const RATING_FIGURE_MIN = _RATING_FIGURE_MIN;
 import { BOARD_BASKET_ROOM as _BOARD_BASKET_ROOM } from './types/schedule';
 export const BOARD_BASKET_ROOM = _BOARD_BASKET_ROOM;
 // Confirm it's you again before a sensitive change (10 Nov 2026 spec, Part 3 Task 2): the kinds of change, the proof's

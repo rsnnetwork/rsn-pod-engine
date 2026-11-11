@@ -11,6 +11,8 @@
 //
 // Privacy (K4): counts, averages and distributions only. No score a named person gave or received, no one-sided
 // "meet again" (a rejection signal), no private note (ratings.feedback). The mutual pairs are named: both opted in.
+// Rating figures count only meetings that took place, and an average, a distribution or a "meet again" share that
+// would rest on fewer than RATING_FIGURE_MIN (5) ratings is withheld (null): in a small round it would name a score.
 // Emails go to the event's host, its co-hosts and admins only (the 9 Sep rule); a pod's director or host reads the
 // report without them. A closed, suspended or banned account reads "Former member", with no email, and still counts.
 
@@ -18,7 +20,7 @@ import type {
   EventReport, EventReportMeeting, EventReportMutualMatch, EventReportOutcome, EventReportPerson, EventReportRound,
   EventReportSummary,
 } from '@rsn/shared';
-import { ErrorCodes, eventZone } from '@rsn/shared';
+import { ErrorCodes, RATING_FIGURE_MIN, eventZone } from '@rsn/shared';
 import logger from '../../config/logger';
 import { query } from '../../db';
 import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
@@ -99,6 +101,7 @@ interface MatchRow {
   ratings_expected: number;
   ratings_submitted: number;
   mutual_rows: number;
+  meet_again_rows: number;
 }
 
 interface RatingRoundRow {
@@ -106,7 +109,6 @@ interface RatingRoundRow {
   ratings: number;
   q1: number; q2: number; q3: number; q4: number; q5: number;
   didnt_work: number;
-  meet_again: number;
 }
 
 interface PairRow {
@@ -178,7 +180,8 @@ export const MEETINGS_SQL = `
     SELECT match_id,
            COUNT(*)::int AS ratings_expected,
            COUNT(*) FILTER (WHERE meet_again_self IS NOT NULL)::int AS ratings_submitted,
-           COUNT(*) FILTER (WHERE is_mutual)::int AS mutual_rows
+           COUNT(*) FILTER (WHERE is_mutual)::int AS mutual_rows,
+           COUNT(*) FILTER (WHERE meet_again_self IS TRUE)::int AS meet_again_rows
       FROM meeting_records
      WHERE session_id = $1 AND is_recap_eligible
      GROUP BY match_id
@@ -187,13 +190,18 @@ export const MEETINGS_SQL = `
          m.status, m.is_manual, m.is_override, m.assignment_source, m.schedule_version, m.started_at, m.ended_at,
          COALESCE(mr.ratings_expected, 0) AS ratings_expected,
          COALESCE(mr.ratings_submitted, 0) AS ratings_submitted,
-         COALESCE(mr.mutual_rows, 0) AS mutual_rows
+         COALESCE(mr.mutual_rows, 0) AS mutual_rows,
+         COALESCE(mr.meet_again_rows, 0) AS meet_again_rows
     FROM matches m
     LEFT JOIN mr ON mr.match_id = m.id
    WHERE m.session_id = $1 AND m.status <> 'scheduled'
    ORDER BY m.round_number, m.is_manual, m.created_at, m.id`;
 
-/** 4. The ratings per round: how many, the 1-5 counts without "didn't work", "didn't work", "meet again". */
+/**
+ * 4. The scores per round, on meetings that took place only (a rating on a room nobody came to, a cancelled room or a
+ * round that never started is not a meeting's): how many, the 1-5 counts without "didn't work", and "didn't work".
+ * The "meet again" share is read from meeting_records with the other counts, so its denominator is ratingsSubmitted.
+ */
 export const RATINGS_SQL = `
   SELECT m.round_number,
          COUNT(*)::int AS ratings,
@@ -202,10 +210,9 @@ export const RATINGS_SQL = `
          COUNT(*) FILTER (WHERE r.quality_score = 3 AND NOT r.excluded_from_quality_stats)::int AS q3,
          COUNT(*) FILTER (WHERE r.quality_score = 4 AND NOT r.excluded_from_quality_stats)::int AS q4,
          COUNT(*) FILTER (WHERE r.quality_score = 5 AND NOT r.excluded_from_quality_stats)::int AS q5,
-         COUNT(*) FILTER (WHERE r.excluded_from_quality_stats)::int AS didnt_work,
-         COUNT(*) FILTER (WHERE r.meet_again)::int AS meet_again
+         COUNT(*) FILTER (WHERE r.excluded_from_quality_stats)::int AS didnt_work
     FROM ratings r
-    JOIN matches m ON m.id = r.match_id
+    JOIN matches m ON m.id = r.match_id AND m.status IN ('completed', 'reassigned')
    WHERE m.session_id = $1
    GROUP BY m.round_number
    ORDER BY m.round_number`;
@@ -230,6 +237,40 @@ function averageOf(dist: readonly number[]): number | null {
   let sum = 0;
   dist.forEach((count, i) => { n += count; sum += count * (i + 1); });
   return n > 0 ? Math.round((sum / n) * 100) / 100 : null;
+}
+
+interface RatingFigures {
+  avgQuality: number | null;
+  qualityDistribution: [number, number, number, number, number] | null;
+  meetAgainRate: number | null;
+  ratingFiguresWithheld: boolean;
+}
+
+/**
+ * The rating figures over some ratings, each withheld (null) when it would rest on fewer than RATING_FIGURE_MIN of
+ * them: in a small round an average of 5.0, or a "meet again" share beside the named rooms and mutual pairs, would say
+ * what a named person gave. The average and distribution rest on the scores; the "meet again" share on the ratings
+ * submitted (its denominator).
+ */
+function ratingFigures(distribution: [number, number, number, number, number], meetAgain: number, submitted: number): RatingFigures {
+  const scored = distribution.reduce((n, c) => n + c, 0);
+  const scoresShown = scored >= RATING_FIGURE_MIN;
+  const shareShown = submitted >= RATING_FIGURE_MIN;
+  return {
+    avgQuality: scoresShown ? averageOf(distribution) : null,
+    qualityDistribution: scoresShown ? distribution : null,
+    meetAgainRate: shareShown ? rate(meetAgain, submitted) : null,
+    ratingFiguresWithheld: (scored > 0 && !scoresShown) || (submitted > 0 && !shareShown),
+  };
+}
+
+/** The "meet again" ratings on each round's meetings that took place. */
+function meetAgainByRound(rows: MatchRow[]): Map<number, number> {
+  const byRound = new Map<number, number>();
+  for (const m of rows) {
+    if (HELD.has(m.status)) byRound.set(m.round_number, (byRound.get(m.round_number) ?? 0) + m.meet_again_rows);
+  }
+  return byRound;
 }
 
 function plannedRounds(raw: string | null): number | null {
@@ -311,14 +352,17 @@ function toMeetings(rows: MatchRow[]): EventReportMeeting[] {
   });
 }
 
-function toRounds(meetings: EventReportMeeting[], ratings: RatingRoundRow[], mutual: EventReportMutualMatch[]): EventReportRound[] {
+function toRounds(
+  meetings: EventReportMeeting[], ratings: RatingRoundRow[], meetAgain: Map<number, number>, mutual: EventReportMutualMatch[],
+): EventReportRound[] {
   const rounds = new Map<number, EventReportRound & { people: Set<string> }>();
   const roundOf = (n: number) => {
     let r = rounds.get(n);
     if (!r) {
       r = {
         round: n, rooms: 0, seated: 0, byes: 0, completed: 0, noShow: 0, cancelled: 0, reassigned: 0,
-        ratingsExpected: 0, ratingsSubmitted: 0, avgQuality: null, meetAgainRate: null, mutualPairs: 0, people: new Set(),
+        ratingsExpected: 0, ratingsSubmitted: 0, avgQuality: null, meetAgainRate: null, ratingFiguresWithheld: false,
+        mutualPairs: 0, people: new Set(),
       };
       rounds.set(n, r);
     }
@@ -339,10 +383,13 @@ function toRounds(meetings: EventReportMeeting[], ratings: RatingRoundRow[], mut
     r.ratingsExpected += m.ratingsExpected;
     r.ratingsSubmitted += m.ratingsSubmitted;
   }
-  for (const row of ratings) {
-    const r = roundOf(row.round_number);
-    r.avgQuality = averageOf([row.q1, row.q2, row.q3, row.q4, row.q5]);
-    r.meetAgainRate = rate(row.meet_again, row.ratings);
+  const scores = new Map(ratings.map((row) => [row.round_number, row]));
+  for (const r of rounds.values()) {
+    const row = scores.get(r.round);
+    const figures = ratingFigures(row ? [row.q1, row.q2, row.q3, row.q4, row.q5] : [0, 0, 0, 0, 0], meetAgain.get(r.round) ?? 0, r.ratingsSubmitted);
+    r.avgQuality = figures.avgQuality;
+    r.meetAgainRate = figures.meetAgainRate;
+    r.ratingFiguresWithheld = figures.ratingFiguresWithheld;
   }
   for (const pair of mutual) for (const n of pair.rounds) roundOf(n).mutualPairs++;
   return [...rounds.values()]
@@ -351,8 +398,8 @@ function toRounds(meetings: EventReportMeeting[], ratings: RatingRoundRow[], mut
 }
 
 function toSummary(
-  people: EventReportPerson[], meetings: EventReportMeeting[], ratings: RatingRoundRow[], pairs: PairRow[],
-  mutual: EventReportMutualMatch[], event: EventRow,
+  people: EventReportPerson[], meetings: EventReportMeeting[], ratings: RatingRoundRow[], meetAgainRounds: Map<number, number>,
+  pairs: PairRow[], mutual: EventReportMutualMatch[], event: EventRow,
 ): EventReportSummary {
   const places = people.filter((p) => p.role === 'participant');
   const count = (o: EventReportOutcome) => places.filter((p) => p.outcome === o).length;
@@ -361,17 +408,16 @@ function toSummary(
   // A meeting is a room that took place with someone to meet: a bye (one seat, nobody left) is a room, not a meeting.
   const met = held.filter((m) => m.userIds.length + m.departedUserIds.length >= 2);
   const distribution: [number, number, number, number, number] = [0, 0, 0, 0, 0];
-  let ratingsTotal = 0;
   let didntWork = 0;
-  let meetAgain = 0;
   for (const r of ratings) {
     distribution[0] += r.q1; distribution[1] += r.q2; distribution[2] += r.q3; distribution[3] += r.q4; distribution[4] += r.q5;
-    ratingsTotal += r.ratings;
     didntWork += r.didnt_work;
-    meetAgain += r.meet_again;
   }
+  let meetAgain = 0;
+  for (const n of meetAgainRounds.values()) meetAgain += n;
   const ratingsExpected = held.reduce((n, m) => n + m.ratingsExpected, 0);
   const ratingsSubmitted = held.reduce((n, m) => n + m.ratingsSubmitted, 0);
+  const figures = ratingFigures(distribution, meetAgain, ratingsSubmitted);
   return {
     registered: places.length,
     attended,
@@ -390,10 +436,11 @@ function toSummary(
     ratingsExpected,
     ratingsSubmitted,
     ratingCompletion: rate(ratingsSubmitted, ratingsExpected),
-    avgQuality: averageOf(distribution),
-    qualityDistribution: distribution,
+    avgQuality: figures.avgQuality,
+    qualityDistribution: figures.qualityDistribution,
     didntWork,
-    meetAgainRate: rate(meetAgain, ratingsTotal),
+    meetAgainRate: figures.meetAgainRate,
+    ratingFiguresWithheld: figures.ratingFiguresWithheld,
     mutualMatches: mutual.length,
     feedbackCount: event.feedback_count,
     scheduleVersionsPublished: event.schedule_versions,
@@ -433,6 +480,7 @@ export async function getEventReport(sessionId: string, actor: Actor): Promise<E
     .map((row) => toPerson(row, seesEmail, eventEndedAt, event.has_matches))
     .sort(byOutcomeThenName);
   const meetings = toMeetings(matchResult.rows);
+  const meetAgain = meetAgainByRound(matchResult.rows);
   const mutualMatches: EventReportMutualMatch[] = pairResult.rows
     .filter((p) => (p.mutual_rounds ?? []).length > 0)
     .map((p) => ({ userIds: [p.a, p.b], rounds: (p.mutual_rounds ?? []).map(Number) }));
@@ -448,9 +496,9 @@ export async function getEventReport(sessionId: string, actor: Actor): Promise<E
       endedAt: iso(event.ended_at),
     },
     generatedAt: new Date().toISOString(),
-    summary: toSummary(people, meetings, ratingResult.rows, pairResult.rows, mutualMatches, event),
+    summary: toSummary(people, meetings, ratingResult.rows, meetAgain, pairResult.rows, mutualMatches, event),
     people,
-    rounds: toRounds(meetings, ratingResult.rows, mutualMatches),
+    rounds: toRounds(meetings, ratingResult.rows, meetAgain, mutualMatches),
     meetings,
     mutualMatches,
   };

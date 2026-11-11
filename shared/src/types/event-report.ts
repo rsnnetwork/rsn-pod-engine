@@ -5,6 +5,13 @@
 // There are no money or ticket figures. By design there is no score a named person gave or received, no one-sided
 // "meet again" and no private note: only counts, averages and the mutual pairs (both people opted in).
 // Every time is an ISO instant; the event's own zone (`event.timezone`) is the clock the screens and the CSV use.
+//
+// Every rating figure counts only ratings on meetings that took place (completed or reassigned rooms), and a figure
+// resting on fewer than RATING_FIGURE_MIN ratings is withheld (null): in a small event or round an average of 5.0 or
+// a "meet again" share would tell the organiser what a named person in a named room said. Counts are never withheld.
+
+/** The fewest ratings a rating figure (an average, a distribution, a "meet again" share) may rest on. */
+export const RATING_FIGURE_MIN = 5;
 
 /** How a person's event went. `removed` (an organiser took their place away) is read before the rest. */
 export type EventReportOutcome = 'stayed' | 'left_early' | 'could_not_join' | 'no_show' | 'removed';
@@ -42,14 +49,19 @@ export interface EventReportSummary {
   ratingsSubmitted: number;
   /** ratingsSubmitted / ratingsExpected; null when none were expected. */
   ratingCompletion: number | null;
-  /** The average 1-5 score, without the ratings marked "didn't work"; null when there is none. */
+  /**
+   * The average 1-5 score of meetings that took place, without the ratings marked "didn't work"; null when it would
+   * rest on fewer than RATING_FIGURE_MIN scores (none included).
+   */
   avgQuality: number | null;
-  /** How many scores were 1, 2, 3, 4 and 5, without the "didn't work" ones. */
-  qualityDistribution: [number, number, number, number, number];
-  /** Ratings marked "didn't work" (or filed on a room that never took place): kept out of the average. */
+  /** How many of those scores were 1, 2, 3, 4 and 5; null, like avgQuality, under RATING_FIGURE_MIN scores. */
+  qualityDistribution: [number, number, number, number, number] | null;
+  /** Ratings on meetings that took place that the rater marked "didn't work": kept out of the average. A count. */
   didntWork: number;
-  /** Share of the ratings that said "meet again"; null when there is none. */
+  /** "Meet again" ratings / ratingsSubmitted (the same ratings); null under RATING_FIGURE_MIN ratings submitted. */
   meetAgainRate: number | null;
+  /** True when ratings were given but a figure above is withheld because it would rest on too few of them. */
+  ratingFiguresWithheld: boolean;
   /** Different pairs who both said they'd meet again. */
   mutualMatches: number;
   /** People who wrote feedback about the event (the text is in the host's recap, not here). */
@@ -101,8 +113,12 @@ export interface EventReportRound {
   reassigned: number;
   ratingsExpected: number;
   ratingsSubmitted: number;
+  /** The round's average score; null under RATING_FIGURE_MIN scores (see the summary). */
   avgQuality: number | null;
+  /** The round's "meet again" ratings / its ratingsSubmitted; null under RATING_FIGURE_MIN ratings submitted. */
   meetAgainRate: number | null;
+  /** True when the round had ratings but a figure above is withheld because it would rest on too few of them. */
+  ratingFiguresWithheld: boolean;
   mutualPairs: number;
 }
 

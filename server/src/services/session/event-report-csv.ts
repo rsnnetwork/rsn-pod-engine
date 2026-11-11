@@ -3,7 +3,9 @@
 // Three files an organiser can open in a spreadsheet: attendance (one row per person), meetings (one row per room)
 // and mutual matches (one row per pair who both said they'd meet again). Built from the same EventReport the screen
 // reads, so the file never says more than the report: no scores by name, no private notes, and emails only where the
-// report carries them.
+// report carries them. The files hold counts only (ratings given and expected, mutual pairs): no rating figure (an
+// average, a distribution, a "meet again" share) is in any of them, so nothing here can rest on fewer than
+// RATING_FIGURE_MIN ratings. The figures, withheld under that minimum, are on the report's screen only.
 //
 // Every cell goes through csvCell (lib/csv.ts): RFC 4180 quoting, and a name such as =HYPERLINK(...) is written as
 // text. The file has a UTF-8 BOM for Excel and CRLF line ends, and is assembled by joining strings: no regex ever runs

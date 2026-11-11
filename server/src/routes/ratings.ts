@@ -139,9 +139,9 @@ router.get(
 );
 
 // ─── GET /sessions/:id/export — Export session data (admin/host) ────────────
-// The production recap's Export button reads this, so its shape stays. Since 11 Nov 2026 (Part 3 Task 4) it no
-// longer gives out what a member wrote privately about a partner (every rating's `feedback` is null), and the
-// individual scores (a rating's quality_score and meet_again, a pair's last_quality_score) only reach an admin.
+// The production recap's Export button reads this, so its shape stays. Since 11 Nov 2026 (Part 3 Task 4) what a
+// member wrote privately about a partner (a rating's `feedback`) and the individual scores (a rating's quality_score
+// and meet_again, a pair's last_quality_score) only reach an admin; the event's host reads them as null.
 
 router.get(
   '/sessions/:id/export',
