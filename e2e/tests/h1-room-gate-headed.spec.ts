@@ -14,12 +14,13 @@ import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 //      no state, and none of the chat the member and the host send while it waits; its own message is refused,
 //      it is not in the event's room, its resync gets no roster, and its heartbeats never put it on the roster.
 //   3. The event state the member reads carries nobody's email (the host's still has the Host Control Center list).
-//   4. The stranger opening the link in a browser is stopped by the page (it never asks to join).
+//   4. The stranger opening the link in a browser is stopped by the page: one of its stop screens, never a join, nothing
+//      from the room, no video token.
 //   5. A former member (left the pod, still has the link) is stopped by the page the same way.
 //   6. The member leaves and comes back in, then refreshes: still in, with the chat.
 //   7. The host kicks the member; the member clicks away from the recap (production's page then tells the server
 //      it left) and opens the link again: still removed, bounced to the recap, and refused a video token.
-//   8. A member of an invite-only pod, not yet registered, opens its event: the join registers them and lets them in.
+//   8. A member of a private pod (the retired "invite only"), not yet registered, opens its event: the join registers them and lets them in.
 // Cleans up exactly what it made, by id (helpers/live-ui cleanup); never cleanupTestData().
 const POD_ONLY = 'This event is only open to its pod\'s members.';
 const REMOVED = 'You have been removed from this event.';
@@ -86,6 +87,14 @@ const sent = (frames: Frame[], event: string, after = 0) => frames.filter((f) =>
 const participantStatus = async (sessionId: string, userId: string) =>
   (await pool.query('SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2', [sessionId, userId])).rows[0]?.status ?? null;
 /** The HTTP status of an API call (helpers/api throws on any non-2xx). */
+/** The live page's three stop screens (SessionGuard): a 403, a 404, or anything else. Answers the one shown. */
+const STOP_SCREENS = ['This event is not open to you.', 'This event no longer exists', 'Couldn\'t load the event'];
+async function stoppedOn(page: Page): Promise<string> {
+  const any = page.getByRole('heading', { name: new RegExp(STOP_SCREENS.map((t) => t.replace(/[.']/g, (c) => `\\${c}`)).join('|')) });
+  await expect(any.first()).toBeVisible({ timeout: 45_000 });
+  return (await any.first().innerText()).trim();
+}
+
 async function httpStatus(user: TestUser, method: string, path: string): Promise<number> {
   const res = await fetch(`${SERVER}/api${path}`, {
     method, headers: { Authorization: `Bearer ${user.accessToken}`, 'Content-Type': 'application/json' },
@@ -217,32 +226,45 @@ test('H1: a stranger on a private pod\'s running event is refused and receives n
   expect((state?.data?.hccParticipants || []).length, 'the host still has the Host Control Center list').toBeGreaterThan(0);
   console.log('  ✓ 3 the member\'s event state carries no email; the host\'s keeps the Host Control Center list');
 
-  // 4. The stranger's browser with the link: the page stops it before it ever asks to join.
+  // 4. The stranger's browser with the link: the page stops it before it ever asks to join. Since 2 Nov 2026 the live
+  // page's guard answers GET /sessions/:id's 403 with the final refusal ("This event is not open to you."); a 404 reads
+  // "This event no longer exists" and anything else "Couldn't load the event". Any of the three is a stop; what matters
+  // is that the page never joins, hears nothing from the room and gets no video token.
   const S = await openPage(stranger);
   const tPage = Date.now();
   await gotoRetry(S.page, `${APP}/session/${sessionId}/live`);
-  await expect(S.page.getByText('Couldn\'t load the event')).toBeVisible({ timeout: 45_000 });
+  const strangerScreen = await stoppedOn(S.page);
+  await say(M.page, 'H1 said while the stranger\'s page is open');
+  await until(() => hostHeard('H1 said while the stranger\'s page is open'), 15_000, 'the member\'s message at the host');
+  await wait(2000);
   expect(sent(S.frames, 'session:join', tPage), 'the page never asks to join').toEqual([]);
-  expect(got(S.frames, 'chat:message', tPage)).toEqual([]);
+  for (const e of ROOM_EVENTS) expect(got(S.frames, e, tPage), `${e} never reaches the stranger's page`).toEqual([]);
+  expect(await tilesSeen(S.page), 'no video on the stranger\'s page').toBe(0);
+  expect(await httpStatus(stranger, 'POST', `/sessions/${sessionId}/token`), 'no video token for a stranger').toBeGreaterThanOrEqual(400);
   await S.page.screenshot({ path: 'test-results/h1-4-stranger-page.png' }).catch(() => {});
-  console.log('  ✓ 4 the stranger\'s page: "Couldn\'t load the event", never joined');
+  console.log(`  ✓ 4 the stranger's page: "${strangerScreen}", never joined, nothing from the room, no video token`);
 
   // 5. A former member (left the pod, still has the link): stopped by the page the same way.
   const F = await openPage(former);
   const tFormer = Date.now();
   await gotoRetry(F.page, `${APP}/session/${sessionId}/live`);
-  await expect(F.page.getByText('Couldn\'t load the event')).toBeVisible({ timeout: 45_000 });
+  const formerScreen = await stoppedOn(F.page);
   await say(M.page, 'H1 said while the former member looks');
   await until(() => hostHeard('H1 said while the former member looks'), 15_000, 'the member\'s message at the host');
   await wait(2000);
   expect(sent(F.frames, 'session:join', tFormer), 'the former member\'s page never asks to join').toEqual([]);
   for (const e of ROOM_EVENTS) expect(got(F.frames, e, tFormer), e).toEqual([]);
+  expect(await tilesSeen(F.page), 'no video on the former member\'s page').toBe(0);
+  expect(await httpStatus(former, 'POST', `/sessions/${sessionId}/token`), 'no video token for a former member').toBeGreaterThanOrEqual(400);
   await F.page.screenshot({ path: 'test-results/h1-5-former-member-page.png' }).catch(() => {});
-  console.log('  ✓ 5 the former member\'s page: "Couldn\'t load the event", never joined, no chat');
+  console.log(`  ✓ 5 the former member's page: "${formerScreen}", never joined, no chat, no video token`);
 
-  // 6. The member leaves and comes back in; a refresh keeps them in.
+  // 6. The member leaves and comes back in; a refresh keeps them in. Since T2 (1 Nov 2026) Leave asks first ("Leave this
+  // event?"); the step had not run since then (step 4 stopped the spec). The question is answered here, and Leave lands
+  // on the event's own page (/sessions/<id>, COM-05).
   await M.page.getByRole('button', { name: /Leave Event/ }).click();
-  await M.page.waitForURL(/\/sessions/, { timeout: 20_000 });
+  await M.page.getByTestId('confirm-dialog-confirm').click({ timeout: 15_000 }).catch(() => { /* answered by acceptConfirmDialogs */ });
+  await expect(M.page).toHaveURL(new RegExp(`/sessions/${sessionId}$`), { timeout: 20_000 });
   await until(async () => (await participantStatus(sessionId, member.id)) === 'left', 20_000, 'the member marked left');
   const tBack = Date.now();
   await gotoRetry(M.page, `${APP}/session/${sessionId}/live`);
@@ -308,7 +330,7 @@ test('H1: a stranger on a private pod\'s running event is refused and receives n
   expect(got(ioSock.got, 'error', tIo), 'a member of an invite-only pod is never refused').toEqual([]);
   const ioStatus = await participantStatus(ioSess.id, ioMember.id);
   expect(ioStatus === null || ioStatus === 'removed', `registered by the join (status ${ioStatus})`).toBe(false);
-  console.log('  ✓ 8 a member of an invite-only pod opened its event: registered by the join and let in');
+  console.log('  ✓ 8 a member of a private pod opened its event: registered by the join and let in');
 
   console.log('✓ H1 SMOKE COMPLETE: only the people the event admits are in its live room');
 });
