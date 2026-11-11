@@ -153,7 +153,8 @@ describe('getPlatformMatches', () => {
     });
     const res = await getPlatformMatches('u-founder');
     expect(res.matches).toEqual([]);
-    expect(res.nextEvent).toEqual({ id: 's1', title: 'RSN August', scheduledAt: when });
+    // Part 3 Task 1 (additive): the event's zone (none on this row: UTC) and its image (none).
+    expect(res.nextEvent).toEqual({ id: 's1', title: 'RSN August', scheduledAt: when, timezone: 'UTC', imageUrl: null });
   });
 
   // 9 Sep 2026 (Stefan): a narrow profile must never get an empty page. With

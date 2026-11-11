@@ -25,6 +25,7 @@ jest.mock('../../config', () => ({
     resendApiKey: 'test-key',
     emailFrom: 'noreply@rsn.network',
     clientUrl: 'https://app.rsn.network',
+    apiBaseUrl: 'https://api.rsn.network',
     magicLinkExpiryMinutes: 15,
   },
 }));
@@ -72,6 +73,9 @@ const APP = 'https://app.rsn.network';
 const calendarEvent = {
   title: 'Founders Evening', description: 'An evening of founders.', startTime: STARTS, durationMinutes: 60,
   organizerName: 'Host', organizerEmail: 'host@example.com', sessionId: 's-1', place: 'The Ivy, 1-5 West St, London',
+  // Part 3 Task 1: the event's zone and image. A zone that is not one reads UTC; an image address that is not this
+  // API's own event image is never shown, so neither can carry markup in.
+  timezone: 'Europe/London', imageUrl: 'https://api.rsn.network/api/sessions/s-1/image?v=1',
 };
 const inviteData = {
   inviterName: 'Stefan', type: 'session' as const, targetName: 'Founders Evening', inviteUrl: `${APP}/invite/ABC123`, calendarEvent,
@@ -94,6 +98,9 @@ const cases: Case[] = [
   email('sendInviteEmail', 'an event invite', ['to', 'data'], ['delivered+guest@resend.dev', inviteData]),
   email('sendInviteEmail', 'a platform invite', ['to', 'data'], ['delivered+guest@resend.dev', { ...inviteData, type: 'platform' }]),
   email('sendSessionRegistrationConfirmationEmail', 'the event registration', ['to', 'data'], ['delivered+ana@resend.dev', {
+    recipientName: 'Ana', sessionTitle: 'Founders Evening', sessionUrl: `${APP}/sessions/s-1`, calendarEvent,
+  }]),
+  email('buildRegistrationConfirmationEmail', 'the event registration, as built', ['data'], [{
     recipientName: 'Ana', sessionTitle: 'Founders Evening', sessionUrl: `${APP}/sessions/s-1`, calendarEvent,
   }]),
   email('sendJoinRequestConfirmationEmail', 'the request received', ['to', 'fullName'], ['delivered+sam@resend.dev', 'Sam Applicant']),
@@ -140,7 +147,8 @@ const cases: Case[] = [
     reason: 'The venue closed.', link: `${APP}/sessions/s1`,
   }]),
   email('sendEventReminderEmail', 'an event reminder', ['to', 'data'], ['delivered+ana@resend.dev', {
-    eventTitle: 'Founders breakfast', when: 'tomorrow at 18:00', link: `${APP}/sessions/s1`,
+    eventTitle: 'Founders breakfast', when: 'tomorrow at 18:00 (CET)', link: `${APP}/sessions/s1`,
+    imageUrl: 'https://api.rsn.network/api/sessions/s1/image?v=1',
   }]),
   email('sendEventRescheduledEmail', 'an event moved to a new time', ['to', 'data'], ['delivered+ana@resend.dev', {
     eventTitle: 'Founders breakfast', previousWhen: 'Thursday 5 November, 18:00 (CET)',

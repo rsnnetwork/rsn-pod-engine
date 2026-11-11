@@ -1006,7 +1006,7 @@ describe('Session Routes - Extended', () => {
       const facts = (over: Partial<eventAccess.EventAccessFacts>): eventAccess.EventAccessFacts => ({
         visibility: 'private', podId: 'p1', podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
         inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
-        outsideClosedCircle: false, publication: 'published', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
+        outsideClosedCircle: false, publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
         admissionMode: null, entitled: false, entitledVia: null, ...over,
       });
       let readFacts: jest.SpyInstance;

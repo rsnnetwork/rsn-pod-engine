@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import {
   CALL_CODE_ALPHABET, CALL_CODE_LENGTH, DEFAULT_GROUP_QUESTION, ErrorCodes, callLinkPath, eventDurationMinutes,
-  eventLifecycleOf, isEventPublication, normaliseCallCode, resolveEventFormat,
+  eventLifecycleOf, eventZone, isEventPublication, normaliseCallCode, resolveEventFormat,
   type AccountKind, type AdmissionMode, type CallLanding, type CallLandingGroupAsk, type EffectiveAdmission,
   type EventLifecycle, type EventVisibility, type UserRole,
 } from '@rsn/shared';
@@ -27,6 +27,7 @@ import { resolveEventOrganiserIds } from '../post-event-message/event-organisers
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 import { getEventGroupRules } from './event-groups.service';
 import { readEventAccessFacts, runsEvent } from './event-access';
+import { eventImageColumns, eventImageUrlOf } from './event-image-url';
 
 /** The one answer for a code that leads nowhere the asker may go: malformed, unknown, a hidden draft, a deleted event. */
 export const CALL_LINK_NOT_FOUND = "We couldn't find that event.";
@@ -156,6 +157,10 @@ export interface CallEventRow {
   host_user_id: string;
   host_name: string | null;
   host_avatar: string | null;
+  /** Part 3 Task 1: the event's zone and whether it has an image (absent on a row built by hand: UTC, none). */
+  timezone?: string | null;
+  has_image?: boolean | null;
+  image_updated_at?: Date | null;
 }
 
 /** The event a well-formed, known code names, whatever its state, or null. Callers decide who may see a draft. */
@@ -165,7 +170,7 @@ export async function findCallEvent(raw: string): Promise<CallEventRow | null> {
   const result = await query<CallEventRow>(
     `SELECT s.id, s.call_code, s.title, s.description, s.scheduled_at, s.config, s.event_format, s.status::text AS status,
             s.publication, s.archived_at, s.registration_opens_at, s.visibility, s.admission_mode, s.host_user_id,
-            h.display_name AS host_name, h.avatar_url AS host_avatar
+            h.display_name AS host_name, h.avatar_url AS host_avatar, s.timezone, ${eventImageColumns('s')}
        FROM sessions s
        LEFT JOIN users h ON h.id = s.host_user_id
       WHERE s.call_code = $1`,
@@ -254,6 +259,8 @@ export async function getCallLanding(
     title: event.title,
     description: event.description,
     scheduledAt: event.scheduled_at ? new Date(event.scheduled_at).toISOString() : null,
+    timezone: eventZone(event.timezone),
+    imageUrl: eventImageUrlOf(event.id, event),
     durationMinutes: eventDurationMinutes(format, (event.config ?? null) as object | null),
     format,
     host: { displayName: event.host_name?.trim() || 'The organiser', avatarUrl: event.host_avatar ?? null },

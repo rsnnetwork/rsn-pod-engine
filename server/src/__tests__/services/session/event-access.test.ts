@@ -14,7 +14,7 @@ const base: EventAccessFacts = {
   visibility: null, podId: 'p', podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
   outsideClosedCircle: false,
-  publication: 'published', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
+  publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
   admissionMode: null, entitled: false, entitledVia: null,
 };
 const f = (over: Partial<EventAccessFacts>): EventAccessFacts => ({ ...base, ...over });

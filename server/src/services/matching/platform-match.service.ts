@@ -39,7 +39,8 @@ import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
 import { fitToUnits } from '../poke/request-text';
 import { isReservedTestAddress } from '../identity/reserved-address';
 import { visibleEventsSql } from '../session/event-access';
-import { canBring, type MatchStrength, type MeetingFormat } from '@rsn/shared';
+import { eventImageColumns, eventImageUrlOf } from '../session/event-image-url';
+import { canBring, eventZone, type MatchStrength, type MeetingFormat } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -95,7 +96,8 @@ export interface PlatformMatch {
 export interface PlatformMatchesResult {
   matches: PlatformMatch[];
   profileIncomplete: boolean;
-  nextEvent: { id: string; title: string; scheduledAt: Date } | null;
+  /** Part 3 Task 1 (additive): the event's IANA zone (its time reads on that clock) and its image (null: none). */
+  nextEvent: { id: string; title: string; scheduledAt: Date; timezone: string; imageUrl: string | null } | null;
   /** The viewer's OWN want, shown back to them on each card. */
   youAreLookingFor: string | null;
 }
@@ -642,15 +644,20 @@ export async function getPlatformMatches(
   // take the next event of ANY pod, so a private pod's event was named to people outside
   // it. T2 (1 Nov 2026), D1: the rule is the events the member may open (visibleEventSql),
   // so an invite-only pod's event is no longer named to people it would then refuse. T11: visibleEventsSql (an event's own visibility; NULL as T2).
-  const nextEventRes = await query<{ id: string; title: string; scheduledAt: Date }>(
-    `SELECT s.id, s.title, s.scheduled_at AS "scheduledAt"
+  const nextEventRes = await query<{
+    id: string; title: string; scheduledAt: Date; timezone: string | null; has_image: boolean | null; image_updated_at: Date | null;
+  }>(
+    `SELECT s.id, s.title, s.scheduled_at AS "scheduledAt", s.timezone, ${eventImageColumns('s')}
        FROM sessions s
       WHERE s.status = 'scheduled' AND s.scheduled_at > NOW()
         AND ${visibleEventsSql('s', '$1')}
       ORDER BY s.scheduled_at ASC LIMIT 1`,
     [userId],
   );
-  const nextEvent = nextEventRes.rows[0] ?? null;
+  const next = nextEventRes.rows[0];
+  const nextEvent = next
+    ? { id: next.id, title: next.title, scheduledAt: next.scheduledAt, timezone: eventZone(next.timezone), imageUrl: eventImageUrlOf(next.id, next) }
+    : null;
 
   if (!me || !me.onboardingCompleted) {
     return { matches: [], profileIncomplete: true, nextEvent, youAreLookingFor: null };

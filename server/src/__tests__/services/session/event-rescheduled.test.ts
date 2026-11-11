@@ -76,7 +76,7 @@ function arm(session: Record<string, unknown> = {}) {
       const next = params.find((p) => p instanceof Date || (typeof p === 'string' && /^2026-/.test(p)));
       return { rows: [{ ...before, title: before.title, scheduledAt: next ? new Date(next as string) : before.scheduledAt }], rowCount: 1 };
     }
-    if (/SELECT s\.id, s\.title, s\.status::text AS status, s\.publication, s\.archived_at, s\.registration_opens_at\s+FROM sessions s WHERE s\.id = \$1/.test(sql)) {
+    if (/SELECT s\.id, s\.title, s\.status::text AS status, s\.publication, s\.archived_at, s\.registration_opens_at, s\.timezone\s+FROM sessions s WHERE s\.id = \$1/.test(sql)) {
       return { rows: [event], rowCount: 1 };
     }
     if (/FROM users u\s+WHERE u\.id <> \$2/.test(sql)) return { rows: recipients, rowCount: recipients.length };
@@ -99,14 +99,17 @@ beforeEach(() => {
   mockEmitEntities.mockClear();
   mockSendMoved.mockReset().mockResolvedValue({ sent: true });
   mockEmailEnabled.mockReset().mockResolvedValue(true);
-  event = { id: SESSION_ID, title: 'Founders evening', status: 'scheduled', publication: 'published', archived_at: null, registration_opens_at: null };
-  recipients = [person(A), person(B, { timezone: 'Asia/Karachi' })];
+  event = {
+    id: SESSION_ID, title: 'Founders evening', status: 'scheduled', publication: 'published', archived_at: null, registration_opens_at: null,
+    timezone: 'Asia/Karachi',
+  };
+  recipients = [person(A), person(B, { timezone: 'America/New_York' })];
   bells = [];
   arm();
 });
 
 describe('notifyEventRescheduled', () => {
-  it('on: each person gets one bell ("{title} has moved to {when}") in their own zone, and one email', async () => {
+  it('on: each person gets one bell ("{title} has moved to {when}") on the event\'s clock, naming its zone (Part 3 Task 1), and one email', async () => {
     const result = await notifyEventRescheduled(SESSION_ID, OLD, NEW, ACTOR);
 
     expect(result).toEqual({ notified: 2 });
@@ -114,7 +117,7 @@ describe('notifyEventRescheduled', () => {
     expect(bells[0].type).toBe('event_rescheduled');
     expect(bells[0].ids).toEqual([A, B]);
     expect(bells[0].titles).toEqual([
-      'Founders evening has moved to Wednesday 18 November, 13:00 (UTC)',
+      'Founders evening has moved to Wednesday 18 November, 18:00 (GMT+5)',
       'Founders evening has moved to Wednesday 18 November, 18:00 (GMT+5)',
     ]);
     expect(bells[0].link).toBe(`/sessions/${SESSION_ID}`);
@@ -122,8 +125,8 @@ describe('notifyEventRescheduled', () => {
     expect(mockSendMoved).toHaveBeenCalledTimes(2);
     expect(mockSendMoved.mock.calls[0]).toEqual([`${A}@example.test`, {
       eventTitle: 'Founders evening',
-      previousWhen: 'Tuesday 17 November, 13:00 (UTC)',
-      when: 'Wednesday 18 November, 13:00 (UTC)',
+      previousWhen: 'Tuesday 17 November, 18:00 (GMT+5)',
+      when: 'Wednesday 18 November, 18:00 (GMT+5)',
       link: `https://app.rsn.network/sessions/${SESSION_ID}`,
     }]);
   });
@@ -230,6 +233,29 @@ describe('updateSession calls it only when the start moved on a published event'
     expect(updated.scheduledAt).toEqual(NEW);
     expect(bellsRung()).toHaveLength(0);
     expect(mockSendMoved).not.toHaveBeenCalled();
+  });
+
+  it('one edit that changes the zone and the time: the old time reads in the old zone, the new in the new (fix round 1, M2)', async () => {
+    arm({ timezone: 'Europe/Copenhagen' });
+    event = { ...event, timezone: 'Europe/London' };
+    await updateSession(SESSION_ID, ACTOR, { scheduledAt: NEW.toISOString(), timezone: 'Europe/London' }, UserRole.MEMBER);
+    await settle();
+    expect(bells[0].titles).toEqual([
+      'Founders evening has moved to Wednesday 18 November, 13:00 (GMT)',
+      'Founders evening has moved to Wednesday 18 November, 13:00 (GMT)',
+    ]);
+    expect(mockSendMoved.mock.calls[0][1]).toMatchObject({
+      previousWhen: 'Tuesday 17 November, 14:00 (CET)', when: 'Wednesday 18 November, 13:00 (GMT)',
+    });
+  });
+
+  it('an edit that keeps the zone writes both times in it', async () => {
+    arm({ timezone: 'Asia/Karachi' });
+    await updateSession(SESSION_ID, ACTOR, { scheduledAt: NEW.toISOString() }, UserRole.MEMBER);
+    await settle();
+    expect(mockSendMoved.mock.calls[0][1]).toMatchObject({
+      previousWhen: 'Tuesday 17 November, 18:00 (GMT+5)', when: 'Wednesday 18 November, 18:00 (GMT+5)',
+    });
   });
 
   it('an event given its first time is not a move: nobody is told "it was ..."', async () => {

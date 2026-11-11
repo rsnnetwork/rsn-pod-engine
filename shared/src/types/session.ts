@@ -184,6 +184,13 @@ export interface Session {
   /** When it was cancelled, and the organiser's reason, if they gave one. */
   cancelledAt?: Date | null;
   cancelReason?: string | null;
+  /**
+   * Part 3 Task 1 (K1) — the IANA zone every time of the event is written in (sessions.timezone): bells, emails and
+   * screens print its wall clock and name it. Existing events took their host's zone, else UTC.
+   */
+  timezone: string;
+  /** Part 3 Task 1 — the event's image (absolute, with ?v= its last change), or null when it has none. */
+  imageUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -230,6 +237,11 @@ export interface CreateSessionInput {
   publication?: EventPublication;
   /** Part 2 Task 2 — registration opens at this ISO time; omitted or null: as soon as it is published. */
   registrationOpensAt?: string | null;
+  /**
+   * Part 3 Task 1 — the event's IANA zone. Omitted (production's form): the host's own zone when it is real, else UTC.
+   * scheduledAt stays an instant: the form converts its wall clock in this zone before sending.
+   */
+  timezone?: string;
   config?: SessionConfigInput;
 }
 
@@ -243,6 +255,8 @@ export interface UpdateSessionInput {
   visibility?: EventVisibility;
   /** T13 (1 Nov 2026) — set (a circle's manager) or clear (null) the circle the event is for. */
   circleId?: string | null;
+  /** Part 3 Task 1 — a new zone. The stored instant is kept: the server never reinterprets scheduledAt. */
+  timezone?: string;
   config?: SessionConfigInput;
 }
 

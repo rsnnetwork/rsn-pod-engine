@@ -821,7 +821,7 @@ describe('POST /invites/:id/remind', () => {
       if (/SELECT status, account_kind FROM users/.test(sql)) return { rows: [{ status: 'active', account_kind: 'member' }] };
       if (/FROM invites WHERE id = \$1/.test(sql)) return { rows: row ? [row] : [] };
       if (/display_name AS "displayName"/.test(sql)) return { rows: [{ displayName: 'Organiser' }] };
-      if (/SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions/.test(sql)) {
+      if (/SELECT title, scheduled_at, host_user_id, config, event_format, timezone, [\s\S]*?FROM sessions/.test(sql)) {
         return { rows: [{ title: 'Kickoff', scheduled_at: null, host_user_id: 'u-host', config: {}, event_format: 'video_meeting' }] };
       }
       if (/SELECT name FROM pods WHERE id = \$1/.test(sql)) return { rows: [{ name: 'Reason circle' }] };

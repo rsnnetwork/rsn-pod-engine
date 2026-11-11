@@ -6,6 +6,7 @@ import { v4 as uuid } from 'uuid';
 import { eventDurationMinutes } from '@rsn/shared';
 import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
 import { query } from '../../db';
+import { eventImageColumns, eventImageUrlOf } from '../session/event-image-url';
 
 interface CalendarEventData {
   title: string;
@@ -136,6 +137,13 @@ export interface SessionCalendarEvent {
   sessionId?: string;
   /** Where an in-person event happens (30 Oct 2026); absent for an event online. */
   place?: string;
+  /**
+   * The event's own zone (Part 3 Task 1, K1): the emails write its time on this clock, named. The calendar file and
+   * links stay UTC instants, which every calendar shows in its own zone.
+   */
+  timezone?: string | null;
+  /** The event's image (Part 3 Task 1), for the head of its emails; null when it has none. */
+  imageUrl?: string | null;
 }
 
 /**
@@ -178,8 +186,12 @@ export function computeSessionDurationMinutes(cfg: object | null | undefined): n
  * the self-registration confirmation email.
  */
 export async function buildSessionCalendarEvent(sessionId: string): Promise<SessionCalendarEvent | undefined> {
-  const r = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null }>(
-    'SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1',
+  const r = await query<{
+    title: string; scheduled_at: string | null; host_user_id: string; config: any; event_format?: string | null;
+    timezone: string | null; has_image: boolean | null; image_updated_at: Date | null;
+  }>(
+    `SELECT title, scheduled_at, host_user_id, config, event_format, timezone, ${eventImageColumns('sessions')}
+       FROM sessions WHERE id = $1`,
     [sessionId],
   );
   const session = r.rows[0];
@@ -199,6 +211,8 @@ export async function buildSessionCalendarEvent(sessionId: string): Promise<Sess
     organizerEmail: host?.email,
     sessionId,
     place: eventPlaceOf(session),
+    timezone: session.timezone,
+    imageUrl: eventImageUrlOf(sessionId, session),
   };
 }
 

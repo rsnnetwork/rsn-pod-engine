@@ -26,7 +26,7 @@ import { activeSessions } from '../services/orchestration/state/session-state';
 import { getCanonicalConnectedSet } from '../services/orchestration/state/canonical-state';
 import {
   ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
-  EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes, GROUP_LIMITS, isGroupKey,
+  EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes, GROUP_LIMITS, isGroupKey, canonicalTimeZone,
 } from '@rsn/shared';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
@@ -91,6 +91,31 @@ const eventFormatSchema = z.enum(EVENT_FORMAT_KEYS as [EventFormat, ...EventForm
 // T11 (1 Nov 2026) — who can join. Optional: production's form sends none, and the event follows its pod (NULL).
 const eventVisibilitySchema = z.enum(EVENT_VISIBILITY_KEYS as [EventVisibility, ...EventVisibility[]]);
 
+// Part 3 Task 1 (K1): the event's IANA zone, spelled as the runtime spells it. Optional: production's forms send none,
+// and the service then takes the host's own zone when it is real, else UTC.
+const eventZoneSchema = z.string().transform((zone, ctx) => {
+  const canonical = canonicalTimeZone(zone);
+  if (!canonical) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: sessionService.EVENT_ZONE_REFUSAL });
+    return z.NEVER;
+  }
+  return canonical;
+});
+
+/**
+ * A zone that is not a real one is refused before the body's other checks, in the forms' own words: the 400's message
+ * is the sentence (the forms show a refusal's message as it is), and the field carries it too.
+ */
+function refuseUnknownEventZone(req: Request, _res: Response, next: NextFunction): void {
+  const body = req.body as Record<string, unknown> | undefined;
+  const zone = body && typeof body === 'object' ? body.timezone : undefined;
+  if (zone === undefined || (typeof zone === 'string' && canonicalTimeZone(zone))) {
+    next();
+    return;
+  }
+  next(new ValidationError(sessionService.EVENT_ZONE_REFUSAL, { timezone: [sessionService.EVENT_ZONE_REFUSAL] }));
+}
+
 export const createSessionSchema = z.object({
   podId: z.string().uuid(),
   title: z.string().min(1).max(300),
@@ -104,6 +129,7 @@ export const createSessionSchema = z.object({
   // Optional: production's form sends neither, and the event is published at once, as today.
   publication: z.enum(['draft', 'published']).optional(),
   registrationOpensAt: z.string().datetime().nullable().optional(),
+  timezone: eventZoneSchema.optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -146,6 +172,8 @@ export const updateSessionSchema = z.object({
   visibility: eventVisibilitySchema.optional(),
   // T13 (1 Nov 2026) — name a circle (one its managers run) or clear it with null. Production's edit form sends none.
   circleId: z.string().uuid().nullable().optional(),
+  // Part 3 Task 1 — a new zone; the instant in scheduledAt is kept as sent.
+  timezone: eventZoneSchema.optional(),
   config: z.object({
     eventType: z.string().optional(),
     numberOfRounds: z.number().int().min(1).max(20).optional(),
@@ -185,6 +213,7 @@ export const updateSessionSchema = z.object({
 router.post(
   '/',
   authenticate,
+  refuseUnknownEventZone,
   validate(createSessionSchema),
   auditMiddleware('create_session', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
@@ -314,6 +343,7 @@ router.get(
 router.put(
   '/:id',
   authenticate,
+  refuseUnknownEventZone,
   validate(updateSessionSchema),
   auditMiddleware('update_session', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {

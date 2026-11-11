@@ -38,6 +38,10 @@ export interface CallLanding {
   title: string;
   description: string | null;
   scheduledAt: string | null;
+  /** Part 3 Task 1 — the event's IANA zone: the landing prints its times on this clock, named. */
+  timezone: string;
+  /** Part 3 Task 1 — the event's image (absolute), or null. */
+  imageUrl: string | null;
   durationMinutes: number;
   format: EventFormat;
   host: { displayName: string; avatarUrl: string | null };
@@ -66,6 +70,10 @@ export interface CallEventSummary {
   code: string;
   title: string;
   scheduledAt: string | null;
+  /** Part 3 Task 1 — the event's IANA zone. */
+  timezone: string;
+  /** Part 3 Task 1 — the event's image (absolute), or null. */
+  imageUrl: string | null;
   lifecycle: EventLifecycle;
   step: CallEntryStep;
 }
