@@ -247,4 +247,20 @@ test('5 rounds · host + co-host + 4 participants · matching → breakout → r
     await pageOf(i + 1).screenshot({ path: `test-results/5round-p${i + 1}-end.png` }).catch(() => {});
   }
   console.log('  ✓ Event ended — all participants left the live room (recap).');
+
+  // ── Part 3 Task 4: the organisers' event report, read by the host once the event is over ──
+  await expect.poll(async () => (await pool.query<{ status: string }>(`SELECT status FROM sessions WHERE id = $1`, [sessionId])).rows[0]?.status,
+    { timeout: 30_000, message: 'the event is completed' }).toBe('completed');
+  const report = (await apiRequest(host, 'GET', `/sessions/${sessionId}/report`)).data;
+  expect(report.summary.roundsRun, 'the report counts the rounds that ran').toBeGreaterThanOrEqual(1);
+  expect(report.summary.meetings, 'the report counts the meetings that took place').toBeGreaterThanOrEqual(1);
+  const registrants = new Set<string>([coh, ...P].map(u => u.id));
+  const listed = new Set<string>(report.people.map((p: { userId: string }) => p.userId));
+  for (const m of report.meetings as Array<{ userIds: string[] }>) {
+    for (const id of m.userIds) {
+      expect(registrants.has(id), `meeting seat ${id} is one of the event's registrants`).toBe(true);
+      expect(listed.has(id), `meeting seat ${id} is in the report's people`).toBe(true);
+    }
+  }
+  console.log(`  ✓ Event report: ${report.summary.roundsRun} rounds run, ${report.summary.meetings} meetings, ${report.summary.mutualMatches} mutual matches.`);
 });

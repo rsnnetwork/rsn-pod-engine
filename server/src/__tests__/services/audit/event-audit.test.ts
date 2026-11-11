@@ -111,10 +111,11 @@ describe('recordEventAudit', () => {
     expect(d).toMatchObject({ before: 'open', after: 'approval', round: 2, scheduleVersion: 3, reason: 'why' });
   });
 
-  it('names the thirty-two actions of the brief, the three added for rows that must read true, and the call link rotation (36, no repeats)', () => {
-    expect(EVENT_AUDIT_ACTIONS).toHaveLength(36);
-    expect(new Set(EVENT_AUDIT_ACTIONS).size).toBe(36);
+  it('names the thirty-two actions of the brief, the three added for rows that must read true, the call link rotation and the report download (37, no repeats)', () => {
+    expect(EVENT_AUDIT_ACTIONS).toHaveLength(37);
+    expect(new Set(EVENT_AUDIT_ACTIONS).size).toBe(37);
     expect(EVENT_AUDIT_ACTIONS).toContain('call_link.rotated');
+    expect(EVENT_AUDIT_ACTIONS).toContain('report.downloaded');
     expect(EVENT_AUDIT_ACTIONS).toEqual(expect.arrayContaining(['participant.removed', 'breakout.created', 'match.round_announced']));
   });
 

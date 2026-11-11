@@ -36,6 +36,8 @@ import * as emailService from '../../email/email.service';
 import { emitEntities } from '../../../realtime/emit';
 import { E } from '../../../realtime/entities';
 import { fanoutSessionCompleted } from '../../../realtime/fanout';
+// Part 3 Task 4 — the organisers' event report counts each round's meetings and ratings.
+import { fanoutSessionRatings } from '../../session/event-report.service';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 
@@ -874,6 +876,8 @@ export async function endRatingWindow(
   try {
     // Finalize ratings for the round
     await ratingService.finalizeRoundRatings(sessionId, roundNumber);
+    // The round's meeting_records were just written: the event report's readers refetch once per round.
+    void fanoutSessionRatings(sessionId);
 
     io.to(sessionRoom(sessionId)).emit('rating:window_closed', { roundNumber });
     // Phase 2 dual-emit — session + participants refresh after rating

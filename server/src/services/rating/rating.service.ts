@@ -707,8 +707,13 @@ export async function getSessionRatingStats(sessionId: string): Promise<{
 
 // ─── Export Session Data ────────────────────────────────────────────────────
 // Generates a structured export object for post-event reporting.
+//
+// Privacy (11 Nov 2026, Part 3 Task 4): a rating's `feedback` (a member's private note about a partner), the score a
+// named person gave (quality_score), their one-sided meet_again and a pair's last_quality_score are individual: only
+// `individualScores` (an admin) gets them; everyone else (the event's host) reads null. Every field stays, so the
+// production recap that saves this file keeps working.
 
-export async function exportSessionData(sessionId: string): Promise<{
+export async function exportSessionData(sessionId: string, opts: { individualScores: boolean }): Promise<{
   session: any;
   participants: any[];
   rounds: any[];
@@ -755,7 +760,9 @@ export async function exportSessionData(sessionId: string): Promise<{
   const ratingsResult = await query(
     `SELECT r.match_id, r.from_user_id, r.to_user_id,
             uf.display_name AS from_name, ut.display_name AS to_name,
-            r.quality_score, r.meet_again, r.feedback, r.created_at,
+            CASE WHEN $2::boolean THEN r.quality_score END AS quality_score,
+            CASE WHEN $2::boolean THEN r.meet_again END AS meet_again,
+            CASE WHEN $2::boolean THEN r.feedback END AS feedback, r.created_at,
             m.round_number
      FROM ratings r
      JOIN matches m ON m.id = r.match_id
@@ -763,20 +770,21 @@ export async function exportSessionData(sessionId: string): Promise<{
      JOIN users ut ON ut.id = r.to_user_id
      WHERE m.session_id = $1
      ORDER BY m.round_number, r.created_at`,
-    [sessionId]
+    [sessionId, opts.individualScores]
   );
 
   // Mutual encounters from this session
   const encountersResult = await query(
     `SELECT eh.user_a_id, eh.user_b_id, eh.times_met,
-            eh.mutual_meet_again, eh.last_quality_score,
+            eh.mutual_meet_again,
+            CASE WHEN $2::boolean THEN eh.last_quality_score END AS last_quality_score,
             ua.display_name AS a_name, ub.display_name AS b_name
      FROM encounter_history eh
      JOIN users ua ON ua.id = eh.user_a_id
      JOIN users ub ON ub.id = eh.user_b_id
      WHERE eh.last_session_id = $1
      ORDER BY eh.mutual_meet_again DESC, ua.display_name`,
-    [sessionId]
+    [sessionId, opts.individualScores]
   );
 
   const stats = await getSessionRatingStats(sessionId);

@@ -16,6 +16,7 @@ import {
 import { query } from '../../db';
 import logger from '../../config/logger';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../middleware/errors';
+import { csvCell } from '../../lib/csv';
 
 const MEETING_GONE = "We couldn't find that meeting.";
 
@@ -286,16 +287,8 @@ export const ADMIN_FEEDBACK_CSV_COLUMNS = [
 /** "Profile" for a row the profile's outcome sheet wrote; the source itself otherwise. */
 export const sourceLabel = (source: MeetingFeedbackSource | null): string => source ?? 'profile';
 
-/**
- * One cell. Quoted when it holds a comma, a quote or a line break; and a cell a spreadsheet would read as a formula
- * (it starts with =, +, -, @, a tab or a carriage return: member-written text can) is written with a ' in front.
- */
-export function csvCell(value: string | number | null | undefined): string {
-  if (value === null || value === undefined) return '';
-  let s = String(value);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
+/** One cell, as every server CSV writes it (lib/csv.ts); still exported here for this module's callers. */
+export { csvCell };
 
 export function adminFeedbackCsv(rows: AdminFeedbackRow[]): string {
   const lines = rows.map((r) => [
