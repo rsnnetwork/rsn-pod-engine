@@ -13,8 +13,10 @@ export type ProviderOutcome =
   | { kind: 'partial'; result: EnrichResult; photoUrl: string | null; missing: string[] }
   | { kind: 'not_found'; reason: string } // 400/404/410 — profile genuinely unretrievable
   // 202s past the attempt budget; `rateLimited` when it was the plan's rate
-  // limit that never cleared (a follow-up call would be limited too).
-  | { kind: 'retry_exhausted'; rateLimited?: boolean }
+  // limit that never cleared (a follow-up call would be limited too);
+  // `notReady` when ScrapingDog said it is fetching the page now and to ask
+  // again in two to three minutes (a later attempt is the only way to get it).
+  | { kind: 'retry_exhausted'; rateLimited?: boolean; notReady?: boolean }
   | { kind: 'provider_error'; reason: string }; // network / 5xx / bad key
 
 export interface EnrichmentProvider {

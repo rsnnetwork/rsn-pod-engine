@@ -40,6 +40,7 @@ import { processAutoReminders } from './services/join-request/join-request.servi
 import { pruneExpiredAuthTokens } from './services/maintenance/token-cleanup';
 import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
 import { processMeetingReminders } from './services/meetings/meeting-reminder.worker';
+import { processEnrichmentRetries, ENRICH_RETRY_INTERVAL_MS } from './services/onboarding/enrichment-retry.worker';
 import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS } from './services/session/overdue-events';
 import { processEventReminders, EVENT_REMINDER_INTERVAL_MS } from './services/session/event-reminder.worker';
 
@@ -461,6 +462,13 @@ async function start(): Promise<void> {
       processMeetingReminders().catch(err =>
         logger.error({ err }, 'Meeting reminder cycle failed'));
     }, MEETING_REMINDER_INTERVAL);
+
+    // A LinkedIn lookup ScrapingDog asked us to repeat later runs once more when due (12 Nov 2026). The claim
+    // deletes the row under FOR UPDATE SKIP LOCKED, so several instances run each retry once.
+    setInterval(() => {
+      processEnrichmentRetries().catch(err =>
+        logger.error({ err }, 'Enrichment retry cycle failed'));
+    }, ENRICH_RETRY_INTERVAL_MS);
 
     // Event reminders, 24 hours and 1 hour before (Part 2 Task 10): dark until EVENT_COMMS is report or on. Each
     // reminder is claimed in the database, so several instances running it tell a person once.

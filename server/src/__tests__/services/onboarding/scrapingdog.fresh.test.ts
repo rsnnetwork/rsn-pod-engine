@@ -193,8 +193,8 @@ describe('enrich: live first, cached only to fill', () => {
     expect(out.kind).toBe('found');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = String(fetchMock.mock.calls[0][0]);
-    expect(url.toLowerCase()).toContain('linkid=jane-doe');
-    expect(url).not.toContain('linkId=jane-doe&');
+    expect(url.toLowerCase()).toContain('&id=jane-doe&');
+    expect(url).not.toContain('&id=jane-doe&');
     if (out.kind === 'found') expect(out.result.sources).toEqual(['scrapingdog:jane-doe:live']);
   });
 
@@ -204,7 +204,7 @@ describe('enrich: live first, cached only to fill', () => {
       .mockResolvedValueOnce(mock(200, shradhaCached));
     const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(String(fetchMock.mock.calls[1][0])).toContain('linkId=shradhadhikari&');
+    expect(String(fetchMock.mock.calls[1][0])).toContain('&id=shradhadhikari&');
     expect(out.kind).toBe('partial');
     if (out.kind !== 'partial') throw new Error('expected partial');
     expect(out.result.profile?.currentCompany).toBe('Vokt');

@@ -10,8 +10,7 @@ import config from '../../config';
 import { AppError, ConflictError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoinRequestDeclineEmail, sendJoinRequestReminderEmail } from '../email/email.service';
-import { applyMatchVerification, normalizeLinkedinUrl } from '../onboarding/enrichment.service';
-import { resolveEnrichProvider, runProvider, resultFromOutcome } from '../onboarding/providers/registry';
+import { preloadJoinRequestEnrichment } from './enrichment-preload';
 import { reopenClosedAccount, announceReopened, promoteEventGuest, announceGuestPromoted } from '../identity/account-access';
 import { applicantBaseUrl, signInOriginFor } from './applicant-links';
 
@@ -304,37 +303,11 @@ export async function reviewJoinRequest(
     // Preload the LinkedIn enrichment NOW — during the approval → login gap — so the
     // member's profile card is fully populated the instant they log in (instead of
     // running the ~50s lookup at onboarding). Background; never blocks approval.
-    // Routed through the same provider registry the onboarding orchestrator uses
-    // (A5) — but this preload has no user row yet, so it CANNOT use the
-    // user-scoped enrichment state machine; it keeps its original shape (write
-    // straight to join_requests.enriched, fire-and-forget).
-    (async (): Promise<void> => {
-      const provider = resolveEnrichProvider();
-      if (provider === 'none') return;
-      // LinkedIn is optional on the form: with no address (NULL, or an empty string in older rows) there
-      // is nothing to look up, and no paid lookup is run. Approval itself never depends on it.
-      const linkedinUrl = normalizeLinkedinUrl(reviewed.linkedinUrl);
-      if (!linkedinUrl) return;
-      const outcome = await runProvider(provider, {
-        linkedinUrl,
-        fullName: reviewed.fullName,
-        email: reviewed.email,
-      });
-      const result = resultFromOutcome(outcome);
-      if (!result) return;
-      const verified = applyMatchVerification(result, linkedinUrl);
-      if (verified.confidence > 0) {
-        // Stash the RESOLVED provider onto the cached blob (additive — every
-        // existing reader of this JSONB duck-types it and none reads
-        // `provider` strictly) so identity.service.ts's copy-forward can
-        // attribute the preload to whichever provider actually ran instead of
-        // assuming a fixed one.
-        await query(`UPDATE join_requests SET enriched = $1::jsonb WHERE id = $2`, [
-          JSON.stringify({ ...verified, provider }),
-          id,
-        ]);
-      }
-    })().catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
+    // An empty end is logged, and "try again later" gets one later attempt (enrichment-preload.ts).
+    preloadJoinRequestEnrichment(
+      { id, fullName: reviewed.fullName, email: reviewed.email, linkedinUrl: reviewed.linkedinUrl },
+      { scheduleRetry: true },
+    ).catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
 
     // In-app notification for the approved user (only if they already have an account), told to their bell through
     // its tag (H2b item 6, 26 Oct 2026)

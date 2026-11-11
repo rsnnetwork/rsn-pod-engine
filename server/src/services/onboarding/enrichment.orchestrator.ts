@@ -47,6 +47,7 @@ import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnri
 import { resolveEnrichProvider, runProvider, statusFromResult, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
 import { tryGravatar } from './avatar.service';
+import { scheduleEnrichmentRetry } from './enrichment-retry.repo';
 import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -80,6 +81,8 @@ function withDeadline(run: Promise<ProviderOutcome>, userId: string): Promise<Pr
 export interface RunEnrichmentInput {
   linkedinUrl: string | null;
   fullName?: string;
+  /** False for the one later attempt itself (enrichment-retry.worker.ts), so a retry never schedules another. */
+  scheduleRetry?: boolean;
 }
 
 /** True when `cached` is usable as-is for `requestedLinkedinUrl` — no genuinely
@@ -217,7 +220,7 @@ function mapFailureOutcome(
     case 'provider_error':
       return { status: 'failed', error: outcome.reason };
     case 'retry_exhausted':
-      return { status: 'failed', error: 'retry exhausted' };
+      return { status: 'failed', error: outcome.notReady ? 'not stored yet, retrying later' : 'retry exhausted' };
   }
 }
 
@@ -361,7 +364,15 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     tryGravatar(userId).catch(() => {});
     const { status, error } = mapFailureOutcome(outcome);
     await writeState(userId, { status, error, source: provider, linkedinUrl: resolvedLinkedinUrl });
-    logTerminal(userId, provider, status, startedAtMs, error ? { reason: sanitizeErrorMessage(error) } : undefined);
+    // 12 Nov 2026: ScrapingDog said "not stored yet, try again after 2-3 minutes" (or kept answering 202, or
+    // rate-limited past the budget): one later attempt, once, for the same address.
+    const retryScheduled = outcome.kind === 'retry_exhausted' && input.scheduleRetry !== false
+      ? await scheduleEnrichmentRetry({ userId }, { linkedinUrl: resolvedLinkedinUrl, fullName: input.fullName })
+      : false;
+    logTerminal(userId, provider, status, startedAtMs, {
+      ...(error ? { reason: sanitizeErrorMessage(error) } : {}),
+      ...(outcome.kind === 'retry_exhausted' ? { retryScheduled } : {}),
+    });
   } catch (err) {
     // Never throws: any unexpected failure still lands in a terminal, visible
     // state rather than disappearing into an unhandled rejection.

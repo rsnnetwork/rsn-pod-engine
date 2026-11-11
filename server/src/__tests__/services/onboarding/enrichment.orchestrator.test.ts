@@ -32,6 +32,12 @@ jest.mock('../../../services/onboarding/enrichment.repo', () => ({
   setEnrichmentState: jest.fn(),
 }));
 
+const mockScheduleRetry = jest.fn().mockResolvedValue(true);
+jest.mock('../../../services/onboarding/enrichment-retry.repo', () => ({
+  __esModule: true,
+  scheduleEnrichmentRetry: (...args: unknown[]) => mockScheduleRetry(...args),
+}));
+
 jest.mock('../../../services/onboarding/providers/scrapingdog.provider', () => ({
   __esModule: true,
   scrapingdogProvider: { name: 'scrapingdog', enrich: jest.fn() },
@@ -286,6 +292,35 @@ describe('runEnrichment', () => {
     expect(params.status).toBe('failed');
     expect(typeof params.error).toBe('string');
     expect(params.error.length).toBeGreaterThan(0);
+  });
+
+  // 12 Nov 2026: ScrapingDog's "not stored yet, try again after 2-3 minutes" gets ONE later attempt.
+  it('"not stored yet": failed with that reason, and one later attempt is scheduled for this member and address', async () => {
+    mockScrapingdogEnrich.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
+
+    await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+    const [, params] = lastStateCall();
+    expect(params).toMatchObject({ status: 'failed', error: 'not stored yet, retrying later', linkedinUrl: REQ_URL });
+    expect(mockScheduleRetry).toHaveBeenCalledTimes(1);
+    expect(mockScheduleRetry).toHaveBeenCalledWith({ userId: 'u1' }, { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+    expect((logger.info as jest.Mock).mock.calls.find((c) => c[1] === 'enrichment terminal')?.[0])
+      .toMatchObject({ userId: 'u1', outcome: 'failed', retryScheduled: true });
+  });
+
+  it('the later attempt itself (scheduleRetry false) never schedules another', async () => {
+    mockScrapingdogEnrich.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
+    await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe', scheduleRetry: false });
+    expect(mockScheduleRetry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ kind: 'not_found', reason: 'scrapingdog 404' }],
+    [{ kind: 'provider_error', reason: 'scrapingdog 500' }],
+  ])('an answer that is not a wait (%o) schedules nothing', async (outcome) => {
+    mockScrapingdogEnrich.mockResolvedValue(outcome);
+    await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+    expect(mockScheduleRetry).not.toHaveBeenCalled();
   });
 
   // 18 Sep 2026 (Shradha): a member sat on "less than a minute" for six

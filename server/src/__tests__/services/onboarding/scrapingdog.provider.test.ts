@@ -250,7 +250,7 @@ describe('scrapingdogProvider', () => {
     await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/claus-sønderskov-51b2943' });
 
     const calledUrl = String(fetchMock.mock.calls[0][0]);
-    expect(calledUrl.toLowerCase()).toContain('linkid=claus-s%c3%b8nderskov-51b2943');
+    expect(calledUrl.toLowerCase()).toContain('&id=claus-s%c3%b8nderskov-51b2943');
     expect(calledUrl).toContain('premium=true');
     expect(calledUrl).not.toContain('private=true');
   });
@@ -286,11 +286,11 @@ describe('scrapingdogProvider', () => {
     const fetchMock = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       // The live scrape goes through the scrambled-case linkId; the cached copy through the canonical slug.
-      return url.includes('linkId=shradhadhikari&') ? mockResponse(200, cachedBody) : mockResponse(202);
+      return url.includes('&id=shradhadhikari&') ? mockResponse(200, cachedBody) : mockResponse(202);
     });
 
     const promise = scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
-    // RETRY_DELAY_MS=20_000: live attempts at 0s, 20s and 40s; the fourth would start at 60s, past the budget.
+    // RETRY_DELAY_MS=15_000: live attempts at 0s, 15s and 30s; the fourth would start at 45s, the end of the budget.
     for (let i = 0; i < 4; i++) await jest.advanceTimersByTimeAsync(20_000);
 
     const outcome = await promise;
@@ -310,9 +310,10 @@ describe('scrapingdogProvider', () => {
 
     const outcome = await promise;
     expect(outcome).toEqual({ kind: 'retry_exhausted' });
-    // Three live attempts inside the 45s budget, then one cached-copy attempt (also 202, its own 20s budget allows one more).
-    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
-    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(4);
+    // Three live attempts inside the 45s budget (0, 15, 30s), then three cached-copy attempts inside its 40s budget
+    // (0, 15, 30s): 12 Nov 2026, the cached budget used to equal the wait, so the cached copy was never asked twice.
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('&id=slow-index&'))).toHaveLength(3);
   });
 
   it('a single fetch never runs past the live hard cap', async () => {
@@ -346,7 +347,7 @@ describe('scrapingdogProvider', () => {
 
     expect(outcome.kind).toBe('found');
     const calledUrl = String(fetchMock.mock.calls[0][0]);
-    expect(calledUrl.toLowerCase()).toContain('linkid=john-doe');
+    expect(calledUrl.toLowerCase()).toContain('&id=john-doe&');
     if (outcome.kind === 'found') {
       expect(outcome.result.requestedLinkedinUrl).toBe('https://www.linkedin.com/in/john-doe');
     }

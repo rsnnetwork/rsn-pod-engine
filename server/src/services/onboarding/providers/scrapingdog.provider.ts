@@ -29,16 +29,42 @@
 //      organizations, followers. All of it is mapped now, and summarised into
 //      `highlights` for the host and the extraction step.
 //
+// 12 Nov 2026: nothing was found for anyone since 6 Nov. ScrapingDog now
+// answers a page it holds no copy of, after about 50 seconds, with HTTP 400
+// `{success:false, message:"The copy of this profile will be scraped and
+// stored in our db, please try again after 2-3 minutes."}` (seen live on
+// 11 Nov, twice for the same id 3 minutes apart). Three things went wrong:
+//   1. "try again" in that message read as a rate limit, the 5 s backoff no
+//      longer fit the budget, and the cached copy was skipped as if the plan
+//      were limited: every lookup ended "retry exhausted" after 50.2 s.
+//   2. The live id got a fresh random casing on every call, so the copy
+//      ScrapingDog stored for one call was never asked for again. The casing
+//      now changes once per 90-day window (the refresh period), so the
+//      approval-time lookup, the member's own run and a later retry all ask
+//      for the same id and pick up the copy the first one caused.
+//   3. Nothing logged the answer. Every answer that is not a profile is
+//      logged now (status, attempt, elapsed; never the key or the slug).
+// The endpoint is the documented one (`/profile?type=profile&id=`, docs read
+// 12 Nov 2026); the old `/linkedin/?linkId=` is no longer in the docs.
+//
 // Security: the api_key never appears in anything this module returns,
 // throws, or logs — only status codes and (sanitized) error messages.
 
 import config from '../../../config';
+import logger from '../../../config/logger';
 import { linkedinSlug, normalizeLinkedinUrl, type EnrichResult, type EnrichedProfile } from '../enrichment.service';
 import type { EnrichmentProvider, ProviderOutcome } from './provider.types';
 
-const BASE = 'https://api.scrapingdog.com/linkedin/';
-const RETRY_DELAY_MS = 20_000;
+const BASE = 'https://api.scrapingdog.com/profile';
+// A 202 is "accepted, still scraping" (docs, LinkedIn API only, not billed):
+// the same request is sent again. 15 s apart, inside each budget below.
+const RETRY_DELAY_MS = 15_000;
 const MAX_ATTEMPTS = 6;
+// ScrapingDog's "no copy yet, it is being fetched, ask again in 2-3 minutes".
+// Asking again inside the same call cannot help; a later attempt can.
+const NOT_READY = /scraped and stored|try again after \d/i;
+// The refresh period: one live id per window (see note 2 above).
+const LOOKUP_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 // 3 Sep 2026: the Lite plan allows 2 concurrent LinkedIn scrapes. A third
 // member onboarding at the same moment got `{success:false, message:"Too many
 // requests, please wait."}` and was marked FAILED on the spot, as if the plan
@@ -67,9 +93,13 @@ const FETCH_TIMEOUT_MS = 100_000;
 // rate limit that never cleared skips the cached copy. The live page keeps a
 // long first fetch (a cold scrape can take 60-90s); the cached copy answers
 // from ScrapingDog's own store in seconds, so its budget is short.
+// 12 Nov 2026: the cached budget (20 s) equalled the 202 wait (20 s), so the
+// cached copy never got a second attempt; it now allows two more. Both hard
+// caps together (135 s) stay inside the orchestrator's 150 s deadline, and
+// each lets ScrapingDog's ~50 s "not stored yet" answer arrive.
 interface ScrapeBudget { budgetMs: number; hardCapMs: number }
-const LIVE_BUDGET: ScrapeBudget = { budgetMs: 45_000, hardCapMs: 90_000 };
-const CACHED_BUDGET: ScrapeBudget = { budgetMs: 20_000, hardCapMs: 30_000 };
+const LIVE_BUDGET: ScrapeBudget = { budgetMs: 45_000, hardCapMs: 80_000 };
+const CACHED_BUDGET: ScrapeBudget = { budgetMs: 40_000, hardCapMs: 55_000 };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -85,8 +115,9 @@ function redact(msg: string): string {
  * The slug with its letter casing scrambled, so ScrapingDog's cache (keyed on
  * the exact linkId) is missed and LinkedIn is read live. Slugs are
  * case-insensitive on LinkedIn. Always differs from the canonical lowercase
- * form when the slug has any letter at all; a seed makes it reproducible in
- * tests, and a fresh seed per request means no two requests share a key.
+ * form when the slug has any letter at all; the same seed gives the same id.
+ * The provider seeds it with the 90-day lookup window (12 Nov 2026): a seed
+ * per request meant no request ever found the copy an earlier one caused.
  */
 export function freshSlug(slug: string, seed: number = Date.now()): string {
   const letters = [...slug].filter((c) => /[a-z]/i.test(c)).length;
@@ -107,11 +138,16 @@ export function freshSlug(slug: string, seed: number = Date.now()): string {
   return out.join('');
 }
 
+/** The 90-day window a moment falls in: the seed of the live id, so every lookup in one window asks for the same id. */
+export function lookupWindow(now: number = Date.now()): number {
+  return Math.floor(now / LOOKUP_WINDOW_MS);
+}
+
 async function fetchOnce(linkId: string, timeoutMs: number): Promise<{ status: number; body?: any }> {
   // premium=true is the working parameter — private=true returns a hard 400
   // ("Try again or use premium=true") per the live A2 discovery call. Bare
   // no-flag also worked, but ScrapingDog's own error text recommends premium.
-  const url = `${BASE}?api_key=${config.scrapingdogApiKey}&type=profile&linkId=${encodeURIComponent(linkId)}&premium=true`;
+  const url = `${BASE}?api_key=${config.scrapingdogApiKey}&type=profile&id=${encodeURIComponent(linkId)}&premium=true`;
   const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   // Parse the body regardless of status: ScrapingDog reports request/plan
   // problems (bad param, quota exhaustion) as a JSON `{success:false}` body,
@@ -406,14 +442,40 @@ type Scrape =
   | { kind: 'ok'; body: any }
   | Extract<ProviderOutcome, { kind: 'not_found' | 'retry_exhausted' | 'provider_error' }>;
 
-/** One attempt loop for one linkId: 202 → wait, rate limit → back off, plan error → provider_error.
+type ScrapeCall = 'live' | 'cached';
+
+/** ScrapingDog's message for the log: short, without the key, and without the profile id in any casing. */
+function scrubMessage(message: string, linkId: string): string {
+  const m = redact(message).slice(0, 300);
+  const needle = linkId.toLowerCase();
+  if (!needle) return m.slice(0, 200);
+  const lower = m.toLowerCase();
+  let out = '';
+  let from = 0;
+  for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, from)) {
+    out += m.slice(from, at) + '[profile]';
+    from = at + needle.length;
+  }
+  return (out + m.slice(from)).slice(0, 200);
+}
+
+/** Every answer that is not a profile, in the log: never the key, never the slug or any personal data. */
+function logAnswer(call: ScrapeCall, linkId: string, status: number, attempt: number, elapsedMs: number, message?: string): void {
+  logger.warn(
+    { provider: 'scrapingdog', call, status, attempt, elapsedMs, ...(message ? { message: scrubMessage(message, linkId) } : {}) },
+    'scrapingdog: lookup answered without a profile',
+  );
+}
+
+/** One attempt loop for one linkId: 202 → wait, rate limit → back off, "not stored yet" → stop, plan error → provider_error.
  *  Every wait is taken only when the next attempt would still start inside the budget. */
-async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
+async function scrape(linkId: string, budget: ScrapeBudget, call: ScrapeCall): Promise<Scrape> {
   const startedAt = Date.now();
   const elapsed = () => Date.now() - startedAt;
   const anotherAttemptFitsAfter = (delayMs: number) => elapsed() + delayMs < budget.budgetMs;
+  let attempt = 0;
   try {
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    for (attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const timeoutMs = Math.max(1_000, Math.min(FETCH_TIMEOUT_MS, budget.hardCapMs - elapsed()));
       const { status, body } = await fetchOnce(linkId, timeoutMs);
 
@@ -424,6 +486,9 @@ async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
       // plain 404/410 with NO such body falls through to not_found below.
       if (body && !Array.isArray(body) && typeof body === 'object' && body.success === false) {
         const message = typeof body.message === 'string' ? body.message : 'scrapingdog error';
+        logAnswer(call, linkId, status, attempt, elapsed(), message);
+        // Checked before the rate limit: this message says "try again" too.
+        if (NOT_READY.test(message)) return { kind: 'retry_exhausted', notReady: true };
         if (status === 429 || RATE_LIMITED.test(message)) {
           const delay = RATE_LIMIT_DELAY_MS * attempt;
           if (attempt < MAX_ATTEMPTS && anotherAttemptFitsAfter(delay)) { await sleep(delay); continue; }
@@ -431,12 +496,13 @@ async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
         }
         return { kind: 'provider_error', reason: redact(message) };
       }
+      if (status === 200) return { kind: 'ok', body };
+      logAnswer(call, linkId, status, attempt, elapsed(), typeof body?.message === 'string' ? body.message : undefined);
       if (status === 429) {
         const delay = RATE_LIMIT_DELAY_MS * attempt;
         if (attempt < MAX_ATTEMPTS && anotherAttemptFitsAfter(delay)) { await sleep(delay); continue; }
         return { kind: 'retry_exhausted', rateLimited: true };
       }
-      if (status === 200) return { kind: 'ok', body };
       if (status === 202) {
         if (attempt < MAX_ATTEMPTS && anotherAttemptFitsAfter(RETRY_DELAY_MS)) { await sleep(RETRY_DELAY_MS); continue; }
         return { kind: 'retry_exhausted' };
@@ -451,7 +517,9 @@ async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
     }
     return { kind: 'retry_exhausted' };
   } catch (err) {
-    return { kind: 'provider_error', reason: err instanceof Error ? redact(err.message) : 'unknown' };
+    const reason = err instanceof Error ? redact(err.message) : 'unknown';
+    logAnswer(call, linkId, 0, attempt, elapsed(), reason);
+    return { kind: 'provider_error', reason };
   }
 }
 
@@ -462,8 +530,8 @@ export const scrapingdogProvider: EnrichmentProvider = {
     if (!slug) return { kind: 'not_found', reason: 'no /in/ slug in submitted URL' };
     const requestedUrl = normalizeLinkedinUrl(linkedinUrl)!;
 
-    // 1. The live page, through a linkId ScrapingDog has never cached.
-    const live = await scrape(freshSlug(slug), LIVE_BUDGET);
+    // 1. The live page, through this window's id (cached by ScrapingDog at most since the window began).
+    const live = await scrape(freshSlug(slug, lookupWindow()), LIVE_BUDGET, 'live');
     let liveMapped = live.kind === 'ok' ? mapProfile(live.body, requestedUrl) : null;
     const sources: string[] = [];
     if (liveMapped) sources.push(`scrapingdog:${slug}:live`);
@@ -478,7 +546,7 @@ export const scrapingdogProvider: EnrichmentProvider = {
     // Thin, or with entries the guest view masked: the cached copy may hold
     // the headline, the About or the older positions the live page hid.
     if ((!liveMapped || isThin(liveMapped.profile) || liveMapped.masked > 0) && !liveFailedHard) {
-      const cached = await scrape(slug, CACHED_BUDGET);
+      const cached = await scrape(slug, CACHED_BUDGET, 'cached');
       if (cached.kind === 'ok') {
         cachedMapped = mapProfile(cached.body, requestedUrl);
         if (cachedMapped) sources.push(`scrapingdog:${slug}`);
