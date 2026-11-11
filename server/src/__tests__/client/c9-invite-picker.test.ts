@@ -583,7 +583,8 @@ describe('the pod page and the event page open the sheet and show the list', () 
   it('the pod\'s list is there for its director and host of any pod that is not archived, with no chip to reveal it; the members count no longer counts invites', () => {
     // Fix round 1: a draft or suspended pod can be invited to (the button shows, the server refuses only an archived
     // pod), so its organisers see the card too.
-    expect(pod).toMatch(/canManageOrHost && pod\.status !== 'archived' && podId && \(\s*<InviteStatusList\b/);
+    // Shirley pilot S3: wrapped in the section the Manage menu's Invitations goes to.
+    expect(pod).toMatch(/canManageOrHost && pod\.status !== 'archived' && podId && \(\s*<div id="pod-invitations" className="scroll-mt-4">\s*<InviteStatusList\b/);
     expect(pod).not.toMatch(/showPodPendingInvites|Pending Pod Invites|View & Remind/);
     expect(pod).toMatch(/- \(podMemberCounts\.pendingInvites \|\| 0\)/);
   });

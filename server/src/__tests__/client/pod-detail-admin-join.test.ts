@@ -32,7 +32,11 @@ describe('PodDetailPage membership and management are separate', () => {
 
   it('the manage controls stay for an admin whether or not they are a member', () => {
     expect(SRC).toMatch(/pod\.status !== 'archived' && \(isMember \|\| canManage\) &&/);
-    for (const label of ['Edit Pod', 'Duplicate Pod', 'Archive Pod']) expect(SRC).toContain(label);
+    // Shirley pilot S3: Edit, Duplicate and Archive are entries of the pod's Manage menu, whose keys come from the
+    // viewer's active role and platformAdmin (an admin who is not a member has them all: podManageKeys).
+    expect(SRC).toMatch(/<ManageMenu title=\{`Manage \$\{pod\.name\}`\} entries=\{manageEntries\} \/>/);
+    expect(SRC).toMatch(/platformAdmin: isAdminUser,/);
+    for (const key of ["edit: { key: 'edit'", "duplicate: { key: 'duplicate'", "archive: { key: 'archive'"]) expect(SRC).toContain(key);
   });
 
   it('Leave shows for an active member who is not the pod director, an admin-member included', () => {

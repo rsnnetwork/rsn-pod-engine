@@ -358,9 +358,10 @@ describe('REASON api: a member id is data, never part of the path', () => {
 
   it('still exports every name the pages import', () => {
     expect(loadApi().exported).toEqual([
-      'blockMember', 'errorMessage', 'fetchBlockStatus', 'fetchBrief', 'fetchConnections', 'fetchEveryone', 'fetchForYou', 'fetchMyCard',
+      'blockMember', 'errorMessage', 'fetchBlockStatus', 'fetchBrief', 'fetchCommunities', 'fetchConnections', 'fetchEveryone', 'fetchForYou', 'fetchMyCard',
       // Shirley pilot S6: the preview, and the public link.
-      'fetchMyPreview', 'fetchPictureSource', 'fetchPublicLink', 'fetchPublicProfile', 'fetchRecentConnections', 'makePublicLinkRequest',
+      // Shirley pilot S3: a profile's Communities, and your own in the preview.
+      'fetchMyCommunities', 'fetchMyPreview', 'fetchPictureSource', 'fetchPublicLink', 'fetchPublicProfile', 'fetchRecentConnections', 'makePublicLinkRequest',
       'personName', 'reasonKeys', 'recordOutcomeRequest', 'regeneratePublicLinkRequest', 'removeBannerRequest', 'revokePublicLinkRequest',
       'savePictureRequest', 'sendMeetRequest', 'setAlreadyMet', 'setPersonResponse', 'stateFromPoke', 'unblockMember',
     ]);

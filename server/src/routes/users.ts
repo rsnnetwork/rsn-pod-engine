@@ -23,6 +23,7 @@ import {
   fanoutAccountAudience,
   fanoutAccountStatusChange,
   fanoutAdminEntities,
+  fanoutCommunitiesOf,
   fanoutPodEntities,
   fanoutProfileChange,
   fanoutUserBlocks,
@@ -131,6 +132,7 @@ const updateUserSchema = z.object({
   notifyMatches: z.boolean().optional(),
   profileVisible: z.boolean().optional(),
   inviteOptOutPublicEvents: z.boolean().optional(),
+  showCommunities: z.boolean().optional(),
 });
 
 // The member banner (21 Oct 2026) and photo (30 Oct review, T3a): `{ image?, crop? }` (picture-body.ts, shared with an
@@ -205,6 +207,9 @@ router.put(
       // Also ping the user's own room so other tabs / devices update
       // their profile-settings surfaces.
       fanoutUserEntity(req.user!.userId).catch(() => {});
+      // Shirley pilot S3: either switch changes what their profile's Communities section lists, for the people who share
+      // a space with them.
+      if ('showCommunities' in req.body || 'profileVisible' in req.body) void fanoutCommunitiesOf(req.user!.userId);
       // Where they are based and their time zone are on the admin inspector's
       // onboarding card, and their name on the admin user list.
       fanoutAdminEntities('users').catch(() => {});

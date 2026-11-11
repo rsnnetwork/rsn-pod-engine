@@ -24,6 +24,8 @@ export const PRIVATE_MEMBER_KEYS: ReadonlySet<string> = new Set([
   'profileVisible', 'inviteOptOutPublicEvents', 'onboardingStatus', 'lastOnboardedAt',
   // the public profile link (Shirley pilot S6): only its owner is ever told it
   'publicProfileToken', 'publicProfileTokenCreatedAt',
+  // whether their profile lists their communities (Shirley pilot S3): a setting of theirs, not part of the card
+  'showCommunities',
 ]);
 
 /** The public card: who they are and what they offer — nothing about why they're here. */

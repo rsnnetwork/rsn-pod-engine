@@ -89,6 +89,11 @@ export interface User {
   notifyMatches: boolean;
   profileVisible: boolean;
   inviteOptOutPublicEvents: boolean;
+  /**
+   * Shirley pilot S3 (RSN 14): members who open the profile see the circles and pods the member is in that they may
+   * discover (on by default). Optional: an older server does not send it, and a screen reads a missing one as on.
+   */
+  showCommunities?: boolean;
   onboardingStatus?: OnboardingStatus;
   /** 2 once the member has finished the new onboarding; null before (an earlier one, or none). The preview gates on it. */
   onboardingVersion?: number | null;
@@ -197,6 +202,7 @@ export interface UpdateUserInput {
   notifyMatches?: boolean;
   profileVisible?: boolean;
   inviteOptOutPublicEvents?: boolean;
+  showCommunities?: boolean;
 }
 
 export interface PremiumSelection {

@@ -59,6 +59,7 @@ jest.mock('../../realtime/fanout', () => ({
   fanoutUserEntity: jest.fn().mockResolvedValue(undefined),
   fanoutAdminEntities: jest.fn().mockResolvedValue(undefined),
   fanoutPodEntities: jest.fn().mockResolvedValue(undefined),
+  fanoutCommunitiesOf: jest.fn().mockResolvedValue(undefined),
 }));
 
 import userRoutes from '../../routes/users';
@@ -66,6 +67,7 @@ import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import * as identityService from '../../services/identity/identity.service';
 import { searchConnectedUsers } from '../../services/invite/connected-users';
 import { NotFoundError } from '../../middleware/errors';
+import { fanoutCommunitiesOf } from '../../realtime/fanout';
 
 const app = express();
 app.use(express.json());
@@ -270,5 +272,38 @@ describe('PUT /users/me and LinkedIn', () => {
   it('a save that does not mention LinkedIn leaves it alone', async () => {
     expect((await put({ bio: 'Hi' })).status).toBe(200);
     expect((identityService.updateUser as jest.Mock).mock.calls[0][1]).not.toHaveProperty('linkedinUrl');
+  });
+});
+
+// Shirley pilot S3 (RSN 14): "Show my communities on my profile" is one of the member's own switches. It, or "Show me in
+// search", changes what their profile's Communities section lists, so the people they share a space with are told.
+describe('PUT /users/me and showCommunities', () => {
+  const put = (body: Record<string, unknown>) =>
+    request(app).put('/users/me').set('Authorization', `Bearer ${token('u-viewer')}`).send(body);
+  beforeEach(() => {
+    (identityService.updateUser as jest.Mock).mockReset().mockResolvedValue(subject);
+    (fanoutCommunitiesOf as jest.Mock).mockClear();
+  });
+
+  it.each([[false], [true]])('%p is saved and the people who share a space are told', async (on) => {
+    expect((await put({ showCommunities: on })).status).toBe(200);
+    expect(identityService.updateUser).toHaveBeenCalledWith('u-viewer', { showCommunities: on });
+    expect(fanoutCommunitiesOf).toHaveBeenCalledWith('u-viewer');
+  });
+
+  it('hiding from search tells them too', async () => {
+    expect((await put({ profileVisible: false })).status).toBe(200);
+    expect(fanoutCommunitiesOf).toHaveBeenCalledWith('u-viewer');
+  });
+
+  it('a save of anything else does not', async () => {
+    expect((await put({ bio: 'Hi' })).status).toBe(200);
+    expect(fanoutCommunitiesOf).not.toHaveBeenCalled();
+  });
+
+  it.each([['yes'], [1], [null]])('%p is not a switch: 400, nothing saved', async (bad) => {
+    expect((await put({ showCommunities: bad })).status).toBe(400);
+    expect(identityService.updateUser).not.toHaveBeenCalled();
+    expect(fanoutCommunitiesOf).not.toHaveBeenCalled();
   });
 });

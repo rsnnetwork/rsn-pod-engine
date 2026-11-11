@@ -730,6 +730,44 @@ export async function fanoutCirclesOfPod(podId: string, actorId: string): Promis
   }
 }
 
+// ─── Whether a member's profile lists their communities (Shirley pilot S3, RSN 14) ──────────────────────────────
+//
+// A member turned "Show my communities on my profile" on or off, or showed or hid themselves from search: what their
+// profile's Communities section lists changed for everyone who can see it. The people most likely to have it open are
+// the ones they share a space with, and they are the only ones the server can name: the members of each circle they are
+// in and the active members of each active pod they are in (at most COMMUNITY_AUDIENCE_MAX, plus the member). Each is
+// sent user:<member>:circles and user:<member>:pods, which that section follows (a tag carries no data). Anyone else
+// with the profile open catches up on focus, as with a member's entities.
+
+export const COMMUNITY_AUDIENCE_MAX = 2000;
+
+export async function fanoutCommunitiesOf(userId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const people = await query<{ user_id: string }>(
+      `SELECT DISTINCT a.user_id FROM (
+         SELECT o.user_id FROM circle_members mine
+           JOIN circles c ON c.id = mine.circle_id AND c.archived_at IS NULL
+           JOIN circle_members o ON o.circle_id = mine.circle_id
+          WHERE mine.user_id = $1
+         UNION
+         SELECT o.user_id FROM pod_members mine
+           JOIN pods p ON p.id = mine.pod_id AND p.status = 'active'
+           JOIN pod_members o ON o.pod_id = mine.pod_id AND o.status = 'active'
+          WHERE mine.user_id = $1 AND mine.status = 'active'
+       ) a
+       ORDER BY a.user_id LIMIT $2`,
+      [userId, COMMUNITY_AUDIENCE_MAX],
+    );
+    const recipients = [...new Set([userId, ...people.rows.map(r => r.user_id)])];
+    await emitEntities(io, recipients, [E.userCircles(userId), E.userPods(userId)]);
+  } catch (err) {
+    logger.warn({ err, userId }, 'fanoutCommunitiesOf: failed to fan out');
+  }
+}
+
 // ─── Invites withdrawn in bulk (final fix wave S2, 2 Nov 2026) ───────────────
 //
 // Closing a circle withdraws the invites made by people who do not run it. Each inviter's sent list and each invitee's

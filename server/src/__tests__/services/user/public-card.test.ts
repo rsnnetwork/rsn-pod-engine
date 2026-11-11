@@ -97,7 +97,7 @@ describe('toPublicMember', () => {
       'careerStage', 'currentState', 'email', 'goals', 'interests', 'inviteOptOutPublicEvents',
       'invitedByUserId', 'lastOnboardedAt', 'matchingNotes', 'meetingPreferences', 'myIntent',
       'notifyEmail', 'notifyEventReminders', 'notifyMatches', 'onboardingStatus', 'phone',
-      'profileVisible', 'publicProfileToken', 'publicProfileTokenCreatedAt', 'reasonsToConnect', 'timezone',
+      'profileVisible', 'publicProfileToken', 'publicProfileTokenCreatedAt', 'reasonsToConnect', 'showCommunities', 'timezone',
       'whatICareAbout', 'whoIWantToMeet',
       'whyIWantToMeet',
     ]);
