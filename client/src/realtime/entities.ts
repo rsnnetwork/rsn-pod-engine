@@ -44,6 +44,9 @@ export const E = {
   // T14: the asks waiting to join a closed circle, for the people who run it
   circleRequests: (circleId: string) => `circle:${circleId}:requests`,
   userCircles: (userId: string) => `user:${userId}:circles`,
+  // Circle wall (S4, 11 Nov 2026): a circle's discussion feed, and one post's thread on it (the pod wall's pair)
+  circleWall: (circleId: string) => `circle:${circleId}:wall`,
+  circleWallPost: (postId: string) => `circle-wall-post:${postId}`,
 
   // Session
   session: (sessionId: string) => `session:${sessionId}`,

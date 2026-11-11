@@ -5,6 +5,10 @@
 // its moderators still delete and its authors still take back their own words, so Delete is never tied to
 // posting. The comment list is the server's: comments by authors the viewer has blocked, and replies under
 // them, are already left out, and a list cut at 400 says so.
+//
+// Shirley pilot S4 (11 Nov 2026): an author edits their own comment or reply in place while they may post, and it then
+// says "Edited". The draft is held here, so a comment removed while its edit is open stays on screen as "This comment
+// was removed." with the text to copy. Long comments are cut to six lines with "Show more".
 
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,13 +16,17 @@ import { Link } from 'react-router-dom';
 import { CornerDownRight, Send, Trash2 } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
-import Linkify from '@/components/ui/Linkify';
 import { Spinner } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import { useConfirm } from '@/hooks/useConfirm';
 import ReportCommentButton from './ReportCommentButton';
-import { canDeleteWallItem, isConflict, normalizeComments, retryUnlessAnswered, threadOf, timeAgo, wallErrorSentence } from './wall-logic';
+import ClampedText from './ClampedText';
+import WallEditForm from './WallEditForm';
+import {
+  EDITED_LABEL, canDeleteWallItem, canEditWallItem, deletedSentence, isConflict, normalizeComments, retryUnlessAnswered, threadOf,
+  timeAgo, wallErrorSentence,
+} from './wall-logic';
 import type { WallCommentList, WallComment, WallConfig, WallViewer } from './wall-types';
 
 const inputClass = 'min-h-[44px] min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rsn-red/30';
@@ -38,6 +46,8 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
   const [replyDraft, setReplyDraft] = useState('');
   const { ask, confirmDialog } = useConfirm();
   const replyRef = useRef<HTMLInputElement>(null);
+  // The author's open edit: the comment, the words being written and the stamp it had when the edit opened.
+  const [editing, setEditing] = useState<{ comment: WallComment; draft: string; stamp: string | null } | null>(null);
 
   const thread = useQuery<WallCommentList>({
     queryKey: config.keys.comments(postId),
@@ -91,13 +101,38 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
   const remove = async (c: WallComment) => {
     if (!(await ask({ title: 'Delete this comment?', body: 'Its replies go with it. This cannot be undone.', confirmLabel: 'Delete', tone: 'danger' }))) return;
     try {
-      await api.delete(`${config.itemBase}/comments/${c.id}`);
+      const r = await api.delete(`${config.itemBase}/comments/${c.id}`);
+      addToast(deletedSentence('comment', r.data?.data?.alreadyRemoved), 'info');
+      if (editing?.comment.id === c.id) setEditing(null);
       void reload();
       onChanged();
     } catch (err) {
       addToast(wallErrorSentence(err, 'Could not delete.'), 'error');
     }
   };
+
+  const saveEdit = async (c: WallComment, text: string) => {
+    await api.patch(`${config.itemBase}/comments/${c.id}`, { content: text, expectedEditedAt: editing?.stamp ?? null });
+    setEditing(null);
+    void reload();
+  };
+
+  const editForm = (c: WallComment, gone: boolean) => editing && (
+    <WallEditForm
+      draft={editing.draft}
+      onDraft={(draft) => setEditing((cur) => (cur ? { ...cur, draft } : cur))}
+      original={c.content}
+      maxLength={4000}
+      allowEmpty={false}
+      gone={gone ? 'This comment was removed.' : undefined}
+      label="Edit your comment"
+      onSave={(text) => saveEdit(c, text)}
+      onCancel={() => setEditing(null)}
+      testId={`edit-comment-${c.id}`}
+    />
+  );
+  // A comment whose edit is open but that is no longer in the thread (removed, or its parent was).
+  const heldGone = editing && !all.some((c) => c.id === editing.comment.id) ? editing.comment : null;
 
   const renderComment = (c: WallComment, isReply: boolean) => {
     const href = !c.authorClosed && config.authorHref ? config.authorHref(c.authorId) : null;
@@ -115,10 +150,11 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
           <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
             <p className="break-words text-xs font-semibold text-gray-700">
               {c.authorName || 'Member'} <span className="font-normal text-gray-400">· {timeAgo(c.createdAt)}</span>
+              {c.editedAt && <span className="font-normal text-gray-400" data-testid={`comment-edited-${c.id}`}> · {EDITED_LABEL}</span>}
             </p>
-            <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">
-              <Linkify text={c.content} />
-            </p>
+            {editing?.comment.id === c.id
+              ? editForm(c, false)
+              : <ClampedText text={c.content} kind="comment" className="text-sm text-gray-800" testId={`comment-text-${c.id}`} />}
           </div>
           <div className="-ml-1 flex flex-wrap items-center gap-0.5">
             {canLike ? (
@@ -147,6 +183,16 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
             )}
             {config.reportKind && userId && c.authorId !== userId && (
               <ReportCommentButton kind={config.reportKind} commentId={c.id} authorId={c.authorId} authorName={c.authorName} excerpt={c.content} />
+            )}
+            {canEditWallItem(viewer, c.authorId, userId) && editing?.comment.id !== c.id && (
+              <button
+                type="button"
+                onClick={() => setEditing({ comment: c, draft: c.content, stamp: c.editedAt ?? null })}
+                className="min-h-[44px] min-w-[44px] px-2 text-xs font-semibold text-gray-500 hover:text-gray-800"
+                data-testid={`comment-edit-${c.id}`}
+              >
+                Edit
+              </button>
             )}
             {canDeleteWallItem(viewer, c.authorId, userId) && (
               <button
@@ -190,6 +236,11 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
           <button type="button" onClick={() => void thread.refetch()} className="min-h-[44px] px-1 font-semibold text-rsn-red">Try again</button>
         </p>
       ) : tops.map((c) => renderComment(c, false))}
+      {heldGone && (
+        <div className="rounded-lg bg-gray-50 px-2.5 py-1.5" data-testid={`comment-gone-${heldGone.id}`}>
+          {editForm(heldGone, true)}
+        </div>
+      )}
       {thread.data?.truncated && (
         <p className="text-xs text-gray-400" data-testid={`comments-truncated-${postId}`}>
           {`Showing the first ${all.length} comments. New comments are closed on this post.`}

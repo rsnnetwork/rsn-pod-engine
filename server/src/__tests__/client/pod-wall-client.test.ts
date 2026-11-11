@@ -70,7 +70,7 @@ describe('the pod wall\'s configuration', () => {
   });
 
   it('never polls: entity tags are the only way the pod wall updates', () => {
-    expect(config.pollMs).toBeUndefined();
+    expect('pollMs' in config).toBe(false);
     expect('refetchInterval' in config).toBe(false);
   });
 
@@ -163,11 +163,12 @@ describe('every query of the wall declares the entities it depends on', () => {
     for (const c of calls) expect({ ...c, declares: /meta:\s*\{\s*entities:\s*config\.entities\./.test(c.body) }).toEqual({ ...c, declares: true });
   });
 
-  it('the feed\'s only polling is the interval its configuration asks for, which the pod wall does not', () => {
+  it('the feed never polls (S4: both walls are told by entity tags)', () => {
     const wall = read('components/wall/Wall.tsx');
     const [feed] = callBodies(wall, 'useInfiniteQuery');
     expect(feed).toMatch(/meta:\s*\{\s*entities:\s*config\.entities\.feed\s*\}/);
-    expect(feed).toMatch(/refetchInterval:\s*config\.pollMs/);
+    expect(feed).not.toMatch(/refetchInterval/);
+    expect(read('components/wall/wall-types.ts')).not.toMatch(/pollMs/);
     expect(feed).toMatch(/queryKey:\s*config\.keys\.feed/);
     for (const { name, src } of wallFiles()) {
       expect({ name, polls: /setInterval|setTimeout\([^)]*fetch|window\.location\.reload|router\.refresh/.test(src) }).toEqual({ name, polls: false });
@@ -181,8 +182,8 @@ describe('every query of the wall declares the entities it depends on', () => {
     // Only the first page, only with posts already on screen, only on a wall whose entities are declared.
     expect(feed).toMatch(/const refetching = pageParam === undefined && tagged && queryClient\.getQueryData\(config\.keys\.feed\) !== undefined;/);
     expect(feed).toMatch(/refetching \? coalesce\(read\) : read\(\)/);
-    // The circle wall declares none, so its queries are read as they were.
-    expect(read('features/circles/CircleWall.tsx')).toMatch(/entities: \{ feed: \[\]/);
+    // S4: the circle wall declares its tags too (circle-wall-config.ts), so it is folded the same way.
+    expect(read('features/circles/circle-wall-config.ts')).toMatch(/E\.circleWall\(circleId\)/);
   });
 
   it('nothing in the wall writes the cache by hand: a change is a refetch (CLAUDE.md section 4)', () => {
@@ -196,14 +197,12 @@ describe('every query of the wall declares the entities it depends on', () => {
     expect(pod).not.toMatch(/refetchInterval|pollMs|setInterval|\buseQuery\b|\buseInfiniteQuery\b/);
   });
 
-  it('the circle wall keeps its 30-second poll and asks for no entity tags, as before (its routes emit none)', () => {
+  it('S4: the circle wall no longer polls; it is built from circleWallConfig and shows no posts to someone outside', () => {
     const circle = read('features/circles/CircleWall.tsx');
-    expect(circle).toMatch(/pollMs:\s*30_000/);
-    expect(circle).toMatch(/testId:\s*'circle-wall'/);
-    expect(circle).toMatch(/feed:\s*\[\]/);
-    expect(circle).toMatch(/feed:\s*\['circleWall', circleId\]/);
-    expect(circle).toMatch(/comments:\s*\(postId[^)]*\)\s*=>\s*\['wallComments', postId\]/);
-    expect(circle).toMatch(/export default function CircleWall\(\{ circleId, isMember, highlightPostId \}/);
+    expect(circle).not.toMatch(/pollMs|refetchInterval|setInterval/);
+    expect(circle).toMatch(/circleWallConfig\(\{ circleId, me, isMember \}\)/);
+    expect(circle).toMatch(/if \(!isMember && !admin\) return <WallNotMember config=\{config\} \/>;/);
+    expect(circle).toMatch(/fallbackViewer=\{\{ canPost: isMember, canModerate: canManage \}\}/);
   });
 });
 
@@ -251,7 +250,7 @@ describe('moderation and posting are separate in the components too', () => {
 
   it('a post the viewer can do nothing with (an archived pod, someone else\'s words, no comments) draws no empty row of controls under a divider', () => {
     // 11 Nov 2026 (item 16): someone else's post can always be reported (Report post), so that is a control too.
-    expect(card).toMatch(/const hasControls = showsReactions \|\| showsCommentButton \|\| !!config\.share \|\| mayDelete \|\| mayPin \|\| mayReport;/);
+    expect(card).toMatch(/const hasControls = !gone && \(showsReactions \|\| showsCommentButton \|\| !!config\.share \|\| mayDelete \|\| mayPin \|\| mayEdit \|\| mayReport\);/);
     expect(card).toMatch(/\{hasControls && \(\s*<div className="mt-1 -ml-2 flex items-center gap-0\.5 flex-wrap border-t/);
   });
 

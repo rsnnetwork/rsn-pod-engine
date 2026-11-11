@@ -10,24 +10,42 @@
 // A change that changed nothing (the same reaction again, a pin of a pinned post) is answered 200 and tells
 // no screen, the acting one included, so every action here applies the answer it got and refreshes the feed
 // when it settles (onChanged) instead of waiting for an echo.
+//
+// Shirley pilot S4 (11 Nov 2026): the author edits their own words in place (Edit, beside Delete), and the post
+// then says "Edited"; the draft is held by the wall, so it survives the card being drawn again, and the post being
+// removed while it is open (`gone`). Long words are cut to ten lines with "Show more" (ClampedText). A link that
+// names the post opens it in full, with its comments and the box to write one. A delete that someone else made a
+// moment before says "Already removed."
 
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ExternalLink, Link2, MessageCircle, Pin, Share2, ThumbsUp, Trash2 } from 'lucide-react';
+import { ChevronDown, ExternalLink, Link2, MessageCircle, Pencil, Pin, Share2, ThumbsUp, Trash2 } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import Card from '@/components/ui/Card';
-import Linkify from '@/components/ui/Linkify';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
+import ClampedText from './ClampedText';
 import WallComments from './WallComments';
 import ReportPostButton from './ReportPostButton';
-import { REACTIONS, canDeleteWallItem, canPinWallPost, domainOf, isConflict, reactionOf, timeAgo, wallErrorSentence } from './wall-logic';
+import WallEditForm from './WallEditForm';
+import {
+  EDITED_LABEL, LINKED_POST_REMOVED, REACTIONS, canDeleteWallItem, canEditWallItem, canPinWallPost, deletedSentence, domainOf,
+  isConflict, reactionOf, timeAgo, wallErrorSentence,
+} from './wall-logic';
 import type { ReactionKey, WallConfig, WallPost, WallViewer } from './wall-types';
 import { useConfirm } from '@/hooks/useConfirm';
 
 const actionBtn = 'flex items-center gap-1.5 min-h-[44px] px-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-800';
 
-export default function WallPostCard({ config, post: p, viewer, userId, showPinBadge, linked, highlighted, onChanged, onRemoved }: {
+/** The author's edit of this post, held by the wall: the words being written, and the stamp the post had when it opened. */
+export interface PostEdit {
+  draft: string;
+  stamp: string | null;
+}
+
+export default function WallPostCard({
+  config, post: p, viewer, userId, showPinBadge, linked, highlighted, onChanged, onRemoved, edit, onEdit, gone,
+}: {
   config: WallConfig;
   post: WallPost;
   viewer: WallViewer;
@@ -38,6 +56,12 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
   highlighted: boolean;
   onChanged: () => void;
   onRemoved: (postId: string) => void;
+  /** This post's edit, when its author has one open. */
+  edit: PostEdit | null;
+  /** Open the edit with these words (and the stamp the post has now), change them, or (null) close it. */
+  onEdit: (draft: string | null, stamp?: string | null) => void;
+  /** The post was removed while its author's edit was open: the edit stays, to be copied, and nothing else is drawn. */
+  gone?: boolean;
 }) {
   const addToast = useToastStore((s) => s.addToast);
   const root = useRef<HTMLDivElement>(null);
@@ -60,8 +84,15 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
     if (arrived.current) return;
     arrived.current = true;
     root.current?.scrollIntoView({ block: 'center', behavior: 'instant' });
-    if (config.openCommentsOnLink && p.commentCount > 0) setOpenComments(true);
-  }, [highlighted, config.openCommentsOnLink, p.commentCount]);
+    // S4: the comments open whether or not there are any yet, so a bell about a new post lands where a reply is written.
+    if (config.openCommentsOnLink) setOpenComments(true);
+  }, [highlighted, config.openCommentsOnLink]);
+
+  // What the author just saved, until the post itself brings the same words back from the server.
+  const [saved, setSaved] = useState<{ content: string; editedAt: string | null } | null>(null);
+  useEffect(() => { setSaved(null); }, [p.content, p.editedAt]);
+  const content = saved?.content ?? p.content;
+  const editedAt = saved ? saved.editedAt : (p.editedAt ?? null);
 
   const reactionCount = local?.reactionCount ?? p.reactionCount ?? 0;
   const reactions = local?.reactions ?? p.reactions ?? {};
@@ -72,13 +103,14 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
 
   const mayDelete = canDeleteWallItem(viewer, p.authorId, userId);
   const mayPin = canPinWallPost(viewer);
+  const mayEdit = canEditWallItem(viewer, p.authorId, userId);
   // Who cannot post sees the buttons they could never use only where the wall explains instead of hiding.
   const showsReactions = viewer.canPost || config.copy.reactNeedsMembership !== undefined;
   const showsCommentButton = showsReactions || p.commentCount > 0;
   // A post the viewer can do nothing with (an archived pod, someone else's words, no comments) has no row of controls.
   // Someone else's post can be reported from where it is (11 Nov 2026, item 16).
   const mayReport = !!config.reportKind && !!userId && p.authorId !== userId;
-  const hasControls = showsReactions || showsCommentButton || !!config.share || mayDelete || mayPin || mayReport;
+  const hasControls = !gone && (showsReactions || showsCommentButton || !!config.share || mayDelete || mayPin || mayEdit || mayReport);
   const authorHref = !p.authorClosed && config.authorHref ? config.authorHref(p.authorId) : null;
 
   const react = async (key: ReactionKey | null) => {
@@ -104,8 +136,9 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
   const del = async () => {
     if (!(await ask({ title: 'Delete this post?', body: 'Its comments go with it. This cannot be undone.', confirmLabel: 'Delete', tone: 'danger' }))) return;
     try {
-      await api.delete(`${config.itemBase}/posts/${p.id}`);
-      addToast('Post deleted.', 'info');
+      const r = await api.delete(`${config.itemBase}/posts/${p.id}`);
+      addToast(deletedSentence('post', r.data?.data?.alreadyRemoved), 'info');
+      if (edit) onEdit(null);
       onRemoved(p.id);
       onChanged();
     } catch (err) {
@@ -120,6 +153,14 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
     } catch (err) {
       addToast(wallErrorSentence(err, 'Could not pin.'), 'error');
     }
+  };
+
+  const saveEdit = async (text: string) => {
+    const r = await api.patch(`${config.itemBase}/posts/${p.id}`, { content: text, expectedEditedAt: edit?.stamp ?? null });
+    const answer = r.data?.data as { changed?: boolean; editedAt?: string | null } | undefined;
+    if (answer?.changed) setSaved({ content: text, editedAt: answer.editedAt ?? editedAt });
+    onEdit(null);
+    onChanged();
   };
 
   const copyLink = async () => {
@@ -157,17 +198,33 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               {authorHref ? <Link to={authorHref} className="min-w-0 hover:underline">{authorName}</Link> : authorName}
-              <p className="text-[11px] text-gray-400">{timeAgo(p.createdAt)}</p>
+              <p className="text-[11px] text-gray-400">
+                {timeAgo(p.createdAt)}
+                {editedAt && <span data-testid={`post-edited-${p.id}`}> · {EDITED_LABEL}</span>}
+              </p>
               {showPinBadge && p.pinnedAt && (
                 <span className="flex items-center gap-1 text-[10px] font-semibold text-rsn-red bg-rsn-red-light px-1.5 py-0.5 rounded-full" data-testid={`pinned-badge-${p.id}`}>
                   <Pin className="h-2.5 w-2.5" /> Pinned
                 </span>
               )}
             </div>
-            {p.content && (
-              <p className="text-sm text-gray-800 mt-1 whitespace-pre-wrap break-words">
-                <Linkify text={p.content} />
-              </p>
+            {edit ? (
+              <WallEditForm
+                draft={edit.draft}
+                onDraft={(text) => onEdit(text)}
+                original={content}
+                maxLength={8000}
+                allowEmpty={p.media.length > 0 || !!p.sharedFrom}
+                gone={gone ? LINKED_POST_REMOVED : undefined}
+                label="Edit your post"
+                onSave={saveEdit}
+                onCancel={() => onEdit(null)}
+                testId={`edit-post-${p.id}`}
+              />
+            ) : content && (
+              <div className="mt-1 text-sm text-gray-800">
+                <ClampedText text={content} kind="post" open={highlighted} testId={`post-text-${p.id}`} />
+              </div>
             )}
             {p.sharedFrom && (
               <Link
@@ -281,11 +338,21 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
                     className={actionBtn}
                   />
                 )}
-                {(mayDelete || mayPin) && (
-                  // Together, at the right edge: on a 360px phone they wrap onto a line of their own as a pair.
+                {(mayDelete || mayPin || mayEdit) && (
+                  // Together, at the right edge: on a 360px phone they wrap onto a line of their own as a group.
                   <div className="ml-auto flex items-center gap-0.5">
+                    {mayEdit && !edit && (
+                      <button
+                        type="button" onClick={() => onEdit(content, editedAt)}
+                        className={`${actionBtn} text-gray-400 hover:text-gray-800`}
+                        aria-label="Edit post" title="Edit post"
+                        data-testid={`edit-post-button-${p.id}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     {mayDelete && (
-                      <button type="button" onClick={() => void del()} className={`${actionBtn} text-gray-300 hover:text-red-500`} aria-label="Delete post" data-testid={`delete-post-${p.id}`}>
+                      <button type="button" onClick={() => void del()} className={`${actionBtn} text-gray-300 hover:text-red-500`} aria-label="Delete post" title="Delete post" data-testid={`delete-post-${p.id}`}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     )}
@@ -294,6 +361,7 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
                         type="button" onClick={() => void pin()}
                         className={`${actionBtn} ${p.pinnedAt ? 'text-rsn-red' : 'text-gray-300'}`}
                         aria-label={p.pinnedAt ? 'Unpin post' : 'Pin post'}
+                        title={p.pinnedAt ? 'Unpin post' : 'Pin post'}
                         data-testid={`pin-post-${p.id}`}
                       >
                         <Pin className="h-3.5 w-3.5" />
@@ -339,7 +407,7 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
             )}
             {config.share?.renderTargetForm && shareOpen === 'target' && config.share.renderTargetForm({ post: p, onDone: () => setShareOpen(null) })}
 
-            {openComments && (
+            {openComments && !gone && (
               <WallComments config={config} postId={p.id} viewer={viewer} userId={userId} onChanged={onChanged} />
             )}
           </div>

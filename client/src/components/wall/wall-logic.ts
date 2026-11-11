@@ -78,6 +78,37 @@ export function canDeleteWallItem(viewer: WallViewer, authorId: string, me: stri
 export const canPinWallPost = (viewer: WallViewer): boolean => viewer.canModerate;
 
 /**
+ * Edit is the author's own, and only while they may post (S4): a member of a space that is open. Someone who left
+ * keeps Delete for their own words (D8) and nothing else; a moderator never edits another person's words.
+ */
+export function canEditWallItem(viewer: WallViewer, authorId: string, me: string | undefined): boolean {
+  return viewer.canPost && me !== undefined && authorId === me;
+}
+
+/** The word after the time on something its author changed. */
+export const EDITED_LABEL = 'Edited';
+
+/** What a delete says: removed now, or removed a moment before by someone else (two moderators at once). */
+export const deletedSentence = (what: 'post' | 'comment', alreadyRemoved: boolean | undefined): string =>
+  alreadyRemoved ? 'Already removed.' : `${what === 'post' ? 'Post' : 'Comment'} deleted.`;
+
+/** Where a ?post= link lands when the post has gone (removed, or never there for this viewer). */
+export const LINKED_POST_REMOVED = 'This post was removed.';
+
+// ── Long words ───────────────────────────────────────────────────────────────
+
+/**
+ * How many lines a post or a comment shows before "Show more" (S4: one 8000-character post was dozens of screens on a
+ * 360px phone). Each is a literal Tailwind class so the build keeps it.
+ */
+export const CLAMP_CLASS = { post: 'line-clamp-[10]', comment: 'line-clamp-6' } as const;
+
+/** Whether text drawn clamped is cut: its full height is taller than the box it is drawn in (a pixel of rounding allowed). */
+export function overflowsClamp(scrollHeight: number, clientHeight: number): boolean {
+  return scrollHeight > clientHeight + 1;
+}
+
+/**
  * The first `shown` posts, reaching as far as the post a link names so a ?post= link is never hidden behind
  * "Load more". `shown` unset: everything that is loaded.
  */
@@ -163,8 +194,11 @@ export function wallErrorSentence(err: unknown, fallback: string): string {
   return errorMessage(err, fallback);
 }
 
-/** 403 on the pod wall: the viewer is not (or is no longer) an active member of the pod. */
+/** 403 on a wall's feed: the viewer is not (or is no longer) a member of the pod or the circle. */
 export const isForbidden = (err: unknown): boolean => statusOf(err) === 403;
+
+/** 404: the post or comment is gone (removed, or never there for this viewer; the two answer alike). */
+export const isNotFound = (err: unknown): boolean => statusOf(err) === 404;
 
 /**
  * 409 on a write: the wall changed under the viewer, because the pod was archived or closed after the page last

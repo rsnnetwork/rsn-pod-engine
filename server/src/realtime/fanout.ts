@@ -144,6 +144,34 @@ export async function fanoutPodWall(
   }
 }
 
+// ─── Circle wall fanout (Shirley pilot S4, 11 Nov 2026) ─────────────────────
+//
+// The circle wall's twin of fanoutPodWall. Every circle wall is read by its members only (D2), so the audience is
+// the circle's members and nobody else: not the person who made it, not a platform admin who is not in it (an admin
+// who acts refreshes their own screen when the change settles, as on the pod wall). Sends `circle:<id>:wall` plus
+// what the caller names (`circle-wall-post:<postId>`); `wall: false` leaves the feed's tag out for a change only a
+// thread shows (a like on a comment). Never throws: a change is saved before anyone is told.
+
+export async function fanoutCircleWall(
+  circleId: string,
+  extraEntities: string[] = [],
+  options: { wall?: boolean } = {},
+): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const result = await query<{ user_id: string }>(
+      `SELECT user_id FROM circle_members WHERE circle_id = $1`,
+      [circleId],
+    );
+    const entities = [...(options.wall === false ? [] : [E.circleWall(circleId)]), ...extraEntities];
+    await emitEntities(io, result.rows.map(r => r.user_id), entities);
+  } catch (err) {
+    logger.warn({ err, circleId }, 'fanoutCircleWall: failed to fan out');
+  }
+}
+
 // ─── Session-scoped fanout ──────────────────────────────────────────────────
 //
 // Mirrors the legacy notifySessionListChanged audience: anyone who is a
@@ -597,7 +625,7 @@ export async function fanoutEntityChange(
 // have open is told; a tag carries no data), the platform admins (final fix wave X3, 2 Nov 2026: they run every circle, L21, so their open Requests panel and
 // request count follow an ask or an answer; read bounded, CIRCLE_CHANGE_ADMINS_MAX), the actor and the changed people.
 // A circle's invites change through `extra` (circle:<id>:invites). Someone outside the circle with its page open is
-// not told, and catches up on focus, as with an entity. The circle's wall keeps its own refresh and is not told.
+// not told, and catches up on focus, as with an entity. The circle's wall has its own tags (fanoutCircleWall, S4); its feed also follows circle:<id>:members.
 //
 // Final fix wave S1 (2 Nov 2026): circle membership decides who sees, auto-registers for and registers for a circle's
 // events (event-access.ts), so each changed person is also sent, in their own emit only:

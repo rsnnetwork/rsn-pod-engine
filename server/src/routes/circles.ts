@@ -15,6 +15,9 @@
 // circle with its owner; only the owner (or a platform admin) chooses who can join, makes and unmakes moderators
 // (PATCH /:id/members/:userId/role) and hands the circle to someone else in it (POST /:id/transfer). A pod's own
 // director may take their pod out of any circle. Which circles a pod is in is read only by someone who may see the pod.
+// Shirley pilot S4 (11 Nov 2026): the wall. Its members read it (D2); its owner and moderators delete and pin (D3, the
+// service decides, so no route asks for a platform role); authors edit their own posts and comments (PATCH, also behind
+// wallEditLimiter); a delete answers alreadyRemoved when someone removed it a moment before.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -22,7 +25,7 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { requireRole } from '../middleware/rbac';
-import { circleReadLimiter, circleWriteLimiter, wallWriteLimiter } from '../middleware/rateLimit';
+import { circleReadLimiter, circleWriteLimiter, wallEditLimiter, wallWriteLimiter } from '../middleware/rateLimit';
 import { fanoutCircleChange, fanoutEntityChange, fanoutOwnInvites, fanoutPodEntities } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { ApiResponse, UserRole } from '@rsn/shared';
@@ -337,6 +340,18 @@ const commentSchema = z.object({
 });
 const reactSchema = z.object({ reaction: z.enum(['like', 'love', 'applause', 'insightful', 'celebrate']).nullable() });
 const likeSchema = z.object({ liked: z.boolean() });
+// S4: an author's edit; the stamp the editor opened (null: never edited) refuses an edit made over another one.
+const expectedEditedAt = z.string().datetime({ offset: true, message: 'Not a time.' }).nullable().optional();
+const editPostSchema = z.object({
+  content: z.string().max(8000, 'Keep a post to 8000 characters.'),
+  expectedEditedAt,
+});
+const editCommentSchema = z.object({
+  content: z.string().min(1, 'Write a comment first.').max(4000, 'Keep a comment to 4000 characters.'),
+  expectedEditedAt,
+});
+type EditPostBody = z.infer<typeof editPostSchema>;
+type EditCommentBody = z.infer<typeof editCommentSchema>;
 const shareSchema = z.object({
   circleId: z.string().uuid(),
   clientId: z.string().uuid(),
@@ -346,7 +361,7 @@ const shareSchema = z.object({
 const postInPath = uuidInPath('postId', PATH_REFUSALS.post);
 const commentInPath = uuidInPath('commentId', PATH_REFUSALS.comment);
 
-// GET /circles/:id/posts — the wall feed (any member; a closed circle's only to the people in it; keyset cursor)
+// GET /circles/:id/posts — the wall feed (S4, D2: its members and platform admins; keyset cursor; says what the viewer may do)
 router.get('/:id/posts', authenticate, circleReadLimiter, uuidInPath('id', PATH_REFUSALS.circle), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await wallService.listPosts(req.params.id, req.user!.userId, {
@@ -365,7 +380,7 @@ router.post('/:id/posts', authenticate, wallWriteLimiter, uuidInPath('id', PATH_
     } catch (err) { next(err); }
   });
 
-// GET /circles/posts/:postId — one post (any member; blocks respected → 404). Backs ?post= deep links.
+// GET /circles/posts/:postId — one post (its circle's members; blocks respected; anyone else gets the same 404). Backs ?post= links.
 router.get('/posts/:postId', authenticate, circleReadLimiter, postInPath, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await wallService.getPost(req.params.postId, req.user!.userId, req.user!.role);
@@ -395,31 +410,43 @@ router.post('/posts/:postId/share', authenticate, wallWriteLimiter, postInPath, 
     } catch (err) { next(err); }
   });
 
-// DELETE /circles/posts/:postId — author (own) or admin (any); soft delete
+// PATCH /circles/posts/:postId { content, expectedEditedAt? } — the author edits their words (S4)
+router.patch('/posts/:postId', authenticate, wallWriteLimiter, wallEditLimiter, postInPath, validate(editPostSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const body = req.body as EditPostBody;
+      const data = await wallService.editPost(req.params.postId, req.user!.userId, {
+        content: body.content, expectedEditedAt: body.expectedEditedAt,
+      });
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// DELETE /circles/posts/:postId — the author (D8: also once out of the circle), its owner and moderators, admins; soft
 router.delete('/posts/:postId', authenticate, wallWriteLimiter, postInPath, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await wallService.deletePost(req.params.postId, req.user!.userId, isAdminRole(req.user!.role));
-    res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    const { alreadyRemoved } = await wallService.deletePost(req.params.postId, req.user!.userId, req.user!.role);
+    res.json({ success: true, data: { ok: true, alreadyRemoved } } satisfies ApiResponse);
   } catch (err) { next(err); }
 });
 
-// POST /circles/posts/:postId/pin + /unpin — admin only
-router.post('/posts/:postId/pin', authenticate, wallWriteLimiter, requireRole(UserRole.ADMIN), postInPath,
+// POST /circles/posts/:postId/pin + /unpin — the circle's owner and moderators, and platform admins (S4: the service decides)
+router.post('/posts/:postId/pin', authenticate, wallWriteLimiter, postInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await wallService.pinPost(req.params.postId, true);
+      await wallService.pinPost(req.params.postId, req.user!.userId, req.user!.role, true);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
-router.post('/posts/:postId/unpin', authenticate, wallWriteLimiter, requireRole(UserRole.ADMIN), postInPath,
+router.post('/posts/:postId/unpin', authenticate, wallWriteLimiter, postInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await wallService.pinPost(req.params.postId, false);
+      await wallService.pinPost(req.params.postId, req.user!.userId, req.user!.role, false);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
-// GET /circles/posts/:postId/comments — any member (blocks filtered)
+// GET /circles/posts/:postId/comments — its circle's members (blocks filtered); { comments, truncated }
 router.get('/posts/:postId/comments', authenticate, circleReadLimiter, postInPath, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await wallService.listComments(req.params.postId, req.user!.userId, req.user!.role);
@@ -445,11 +472,23 @@ router.post('/comments/:commentId/like', authenticate, wallWriteLimiter, comment
     } catch (err) { next(err); }
   });
 
-// DELETE /circles/comments/:commentId — author or admin; soft delete (replies go with it)
+// PATCH /circles/comments/:commentId { content, expectedEditedAt? } — the author edits their words (S4)
+router.patch('/comments/:commentId', authenticate, wallWriteLimiter, wallEditLimiter, commentInPath, validate(editCommentSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const body = req.body as EditCommentBody;
+      const data = await wallService.editComment(req.params.commentId, req.user!.userId, {
+        content: body.content, expectedEditedAt: body.expectedEditedAt,
+      });
+      res.json({ success: true, data: { changed: data.changed, editedAt: data.editedAt } } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// DELETE /circles/comments/:commentId — the author (D8), its owner and moderators, admins; soft (replies go with it)
 router.delete('/comments/:commentId', authenticate, wallWriteLimiter, commentInPath, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await wallService.deleteComment(req.params.commentId, req.user!.userId, isAdminRole(req.user!.role));
-    res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    const { alreadyRemoved } = await wallService.deleteComment(req.params.commentId, req.user!.userId, req.user!.role);
+    res.json({ success: true, data: { ok: true, alreadyRemoved } } satisfies ApiResponse);
   } catch (err) { next(err); }
 });
 

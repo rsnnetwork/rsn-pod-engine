@@ -415,6 +415,19 @@ export const wallWriteLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// Shirley pilot S4 (11 Nov 2026): an author's edits of their posts and comments, on either wall, on top of
+// wallWriteLimiter. Posting and commenting have their own per-minute caps in the services (6 and 20); an edit writes
+// no new row, so it is counted here: 20 a minute is far more than a person correcting their words needs.
+export const wallEditLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('wall-edit'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You are editing too fast. Wait a moment, then try again.' } },
+});
+
 // Entities (21 Oct 2026). Reads are limited like the person brief, because any entity, and any member's
 // entities, can be asked for by id. Edits, joins and leaves share a write allowance. Creating has a small
 // hourly one of its own, because every new entity claims a name that nobody else can then take. Only an

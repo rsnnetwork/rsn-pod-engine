@@ -251,16 +251,17 @@ suite('circles: open or closed, asks, invites and a pod from the circle (real Po
       expect((await wall.listPosts(w.c, w.member, {}, 'member')).posts.map((p) => p.id)).toEqual([w.postId]);
     }, 30_000);
 
-    it('one post (the deep link) refuses (403)', async () => {
+    // S4 (D2): a post id answers someone outside exactly as a missing post does, so it confirms nothing.
+    it('one post (the deep link) is not there for someone outside', async () => {
       const w = await closedWorld();
-      await expect(wall.getPost(w.postId, w.stranger, 'member')).rejects.toMatchObject({ statusCode: 403 });
+      expect(await wall.getPost(w.postId, w.stranger, 'member')).toBeNull();
       expect(await wall.getPost(w.postId, w.member, 'member')).toMatchObject({ id: w.postId });
     }, 30_000);
 
-    it('a post\'s comments refuse (403)', async () => {
+    it('a post\'s comments are the missing post\'s 404 for someone outside', async () => {
       const w = await closedWorld();
-      await expect(wall.listComments(w.postId, w.stranger, 'member')).rejects.toMatchObject({ statusCode: 403 });
-      await expect(wall.listComments(w.postId, w.member, 'member')).resolves.toEqual([]);
+      await expect(wall.listComments(w.postId, w.stranger, 'member')).rejects.toMatchObject({ statusCode: 404 });
+      await expect(wall.listComments(w.postId, w.member, 'member')).resolves.toEqual({ comments: [], truncated: false });
     }, 30_000);
 
     it('sharing refuses both out of it (even for a member) and into it (for someone outside)', async () => {
@@ -269,6 +270,7 @@ suite('circles: open or closed, asks, invites and a pod from the circle (real Po
       await expect(wall.sharePost(w.postId, w.member, { circleId: open, clientId: randomUUID() }))
         .rejects.toMatchObject({ statusCode: 403 });
       const openPost = await post(open, w.owner, 'Open words');
+      // The stranger is in the open circle, so they read the post; the closed circle they are not in refuses the share.
       await expect(wall.sharePost(openPost, w.stranger, { circleId: w.c, clientId: randomUUID() }))
         .rejects.toMatchObject({ statusCode: 403 });
     }, 30_000);
@@ -280,18 +282,20 @@ suite('circles: open or closed, asks, invites and a pod from the circle (real Po
       const shared = await wall.sharePost(w.postId, w.member, { circleId: open, clientId: randomUUID() });
       expect(shared.sharedFrom).toMatchObject({ content: 'Inside words' });
       await run(`UPDATE {s}.circles SET join_policy = 'closed' WHERE id = $1`, [w.c]);
+      // The stranger is in the open circle the share was made in, so they read the share, without the closed words.
       expect((await wall.getPost(shared.id, w.stranger, 'member'))!.sharedFrom).toBeNull();
       expect((await wall.getPost(shared.id, w.member, 'member'))!.sharedFrom).toMatchObject({ content: 'Inside words' });
     }, 30_000);
 
-    it('an open circle\'s wall is read by anyone signed in, as before', async () => {
+    it('S4 (D2): an open circle\'s wall is its members\' too; someone outside is told to join', async () => {
       const owner = await person('Owner');
       const stranger = await person('Stranger');
       const c = await circle(owner);
       const postId = await post(c, owner);
-      expect((await wall.listPosts(c, stranger, {}, 'member')).posts).toHaveLength(1);
-      expect(await wall.getPost(postId, stranger, 'member')).toMatchObject({ id: postId });
-      await expect(wall.listComments(postId, stranger, 'member')).resolves.toEqual([]);
+      await expect(wall.listPosts(c, stranger, {}, 'member')).rejects.toMatchObject({ statusCode: 403 });
+      expect(await wall.getPost(postId, stranger, 'member')).toBeNull();
+      await expect(wall.listComments(postId, stranger, 'member')).rejects.toMatchObject({ statusCode: 404 });
+      expect((await wall.listPosts(c, owner, {}, 'member')).posts).toHaveLength(1);
     }, 30_000);
   });
 

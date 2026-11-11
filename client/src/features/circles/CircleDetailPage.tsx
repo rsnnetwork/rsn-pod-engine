@@ -175,7 +175,7 @@ export default function CircleDetailPage() {
           <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
             <MessagesSquare className="h-4 w-4 text-rsn-red" /> Wall
           </h2>
-          <CircleWall circleId={circle.id} isMember={circle.isMember} highlightPostId={highlightPostId} />
+          <CircleWall circleId={circle.id} isMember={circle.isMember} canManage={!!circle.canManage} highlightPostId={highlightPostId} />
         </div>
       )}
 

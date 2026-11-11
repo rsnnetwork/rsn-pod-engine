@@ -75,6 +75,9 @@ export const ErrorCodes = {
   POD_MEMBER_EXISTS: 'POD_MEMBER_EXISTS',
   CIRCLE_MEMBER_EXISTS: 'CIRCLE_MEMBER_EXISTS',
   CIRCLE_CLOSED: 'CIRCLE_CLOSED',  // 403; a closed circle: joining needs an ask its managers approve, and its wall, members and events are for members
+  CIRCLE_ARCHIVED: 'CIRCLE_ARCHIVED',  // 409; an archived circle's wall is read-only (S4, 11 Nov 2026)
+  WALL_PINS_FULL: 'WALL_PINS_FULL',    // 409; a wall already has its most pinned posts (WALL_PINNED_MAX): unpin one first
+  WALL_EDIT_CONFLICT: 'WALL_EDIT_CONFLICT',  // 409; the post or comment was edited elsewhere since the editor opened it
   POD_MEMBER_NOT_FOUND: 'POD_MEMBER_NOT_FOUND',
   POD_UNAUTHORIZED: 'POD_UNAUTHORIZED',
 

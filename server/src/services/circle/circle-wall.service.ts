@@ -3,8 +3,6 @@
 // REASON v1 Phase 4 (20 Jul 2026). The feed inside a circle: text + images +
 // external link shares (Stefan's wall answer), comments, pinning, moderation.
 // First UGC system in the platform — the rules that matter:
-//   * POSTING is circle-members-only; READING is any authenticated member, except a CLOSED circle's wall,
-//     which only its members and the people who run it read (T14, assertMayReadWall).
 //   * Blocks respected at read time (either direction) — the wall must not be
 //     a harassment bypass around the DM/poke block system.
 //   * Media = Cloudinary URLs only, validated here (host allowlist).
@@ -19,20 +17,52 @@
 // share into another circle with attribution to the original post, and bells
 // for the post author (reactions, comments) and the comment author (replies),
 // deduped per post so a popular post never floods anyone.
+//
+// Shirley pilot S4 (11 Nov 2026): the circle wall is brought to the pod wall's standard (pod-wall.service.ts).
+//   * D2: every circle's wall is read by its members only (and platform admins, who read and moderate every wall and
+//     do not post). Someone outside an open circle is told to join; outside a closed one, CIRCLE_CLOSED_READ. Any read
+//     or write that names a POST (one post, its comments, a reaction, a comment, a share) answers someone outside the
+//     circle exactly as it answers a post that does not exist, so a post id never confirms anything to them.
+//   * D3: the circle's owner and moderators (and platform admins) delete anyone's post or comment and pin and unpin.
+//     Moderation is recorded in audit_log with a snapshot of the words (wall-moderation.ts). At most three pinned.
+//   * Authors edit their own posts and comments while they are in the circle and it is not archived ("Edited").
+//     D8: someone no longer in the circle may still delete their own words, and nothing else.
+//   * An archived circle's wall is read-only: no new posts, comments, reactions, likes or edits. Moderation and taking
+//     back your own words are never switched off.
+//   * Every write tells the circle's members by entity tag (fanoutCircleWall: circle:<id>:wall, circle-wall-post:<id>),
+//     so the screen never polls. A write that changed nothing (a retried post, the same reaction again) tells nobody.
+//   * Every bell honours blocks both ways, the person still being in the circle, an open account and their group-bell
+//     setting, and is pushed live. The new-post bell opens the post (?post=), at most one per member per circle per hour.
 
+import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { E } from '../../realtime/entities';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
-import { AppError, NotFoundError } from '../../middleware/errors';
+import { fanoutCircleWall } from '../../realtime/fanout';
+import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { FORMER_MEMBER_NAME, activeMemberSql } from '../users/active-member';
 import { isPlatformAdmin } from './circle-managers';
+import {
+  EDIT_EMPTY_COMMENT, EDIT_EMPTY_POST, ONLY_OWN_EDITS, WALL_PINNED_MAX, commentRemoved, editConflict, editStampHolds,
+  pinsFull, postRemoved, recordModeration,
+} from '../wall/wall-moderation';
 
 /** What a reader outside a closed circle is told by every read of its wall (30 Oct review 7.5). */
 export const CIRCLE_CLOSED_READ = 'This circle is closed. Ask to join to see its wall, members and events.';
+/** S4 (D2): what someone outside an open circle is told by its feed. */
+export const CIRCLE_WALL_MEMBERS_ONLY = 'Members talk here. Join this circle to read and post on its wall.';
 /** A closed circle's posts are not carried into another circle, by anyone. */
 export const CLOSED_POST_STAYS = 'Posts in a closed circle stay in it.';
+export const CIRCLE_ARCHIVED_READ_ONLY = 'This circle is archived, so its wall is read-only.';
+const JOIN_TO_POST = 'Join this circle to post on its wall.';
+const POST_MISSING = 'That post could not be found';
+const COMMENT_MISSING = 'That comment could not be found';
+const ONLY_OWN_POSTS = 'You can only delete your own posts';
+const ONLY_OWN_COMMENTS = 'You can only delete your own comments';
+const ONLY_MODERATORS_PIN = "Only the circle's owner or a moderator can pin posts";
+const NO_LONGER_IN = 'You are no longer in this circle. You can still delete your own posts and comments.';
 
 export const POST_RATE_PER_MIN = 6;
 export const COMMENT_RATE_PER_MIN = 20;
@@ -44,6 +74,10 @@ export type ReactionKind = typeof REACTION_KINDS[number];
 export const REACTION_BELL_DEDUPE_MINUTES = 60;
 /** Comments and replies on the same post within this window collapse into one bell entry. */
 export const COMMENT_BELL_DEDUPE_MINUTES = 15;
+const POST_MAX_CHARS = 8000;
+const COMMENT_MAX_CHARS = 4000;
+const COMMENTS_SHOWN = 400;
+const BELL_EXCERPT_CHARS = 120;
 
 export interface WallMediaItem { type: 'image' | 'video'; url: string; meta?: Record<string, unknown> | null }
 
@@ -66,6 +100,8 @@ export interface WallPost {
   commentCount: number;
   pinnedAt: Date | null;
   createdAt: Date;
+  /** S4: when its author last changed its words; null when never. */
+  editedAt: Date | null;
   reactionCount: number;
   reactions: Partial<Record<ReactionKind, number>>;
   myReaction: ReactionKind | null;
@@ -78,36 +114,133 @@ export interface ReactionSummary {
   myReaction: ReactionKind | null;
 }
 
-// ── Guards ───────────────────────────────────────────────────────────────────
+/** What the viewer may do on this circle's wall; the screen draws only what this allows. */
+export interface CircleWallViewer {
+  /** Post, comment, reply, react, like and edit their own: a member of a circle that is not archived. */
+  canPost: boolean;
+  /** Delete anyone's post or comment, pin and unpin: the circle's owner or a moderator, or a platform admin. */
+  canModerate: boolean;
+}
 
-/**
- * T14 (1 Nov 2026): a closed circle's wall is read only by the people in it and platform admins (its owner and
- * moderators are in it; S2: having made the circle is no longer a reason). Every read of the wall asks this: the feed,
- * one post, its comments, and a share out of it, so no path leaks it (audit 05, riskiest point 2). A circle that does
- * not exist reads as before (an empty feed).
- */
-export async function assertMayReadWall(circleId: string, viewerId: string, viewerRole?: string): Promise<void> {
-  if (isPlatformAdmin(viewerRole)) return;
-  const r = await query<{ join_policy: string | null; inside: boolean }>(
-    `SELECT c.join_policy,
-            EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $2) AS inside
-       FROM circles c WHERE c.id = $1`,
+export interface CircleWallFeed {
+  pinned: WallPost[];
+  posts: WallPost[];
+  nextCursor: string | null;
+  viewer: CircleWallViewer;
+}
+
+const postNotFound = (id: string) => new NotFoundError('Post', id, POST_MISSING);
+const commentNotFound = (id: string) => new NotFoundError('Comment', id, COMMENT_MISSING);
+
+// ── Who may do what ──────────────────────────────────────────────────────────
+
+interface AccessRow {
+  name: string;
+  archived: boolean;
+  join_policy: string | null;
+  member_role: string | null;
+  viewer_name: string | null;
+}
+
+interface CircleWallAccess {
+  circleName: string;
+  joinPolicy: string | null;
+  archived: boolean;
+  viewerName: string | null;
+  /** In the circle (any role). */
+  isMember: boolean;
+  /** May read: in the circle, or a platform admin. */
+  mayRead: boolean;
+  canPost: boolean;
+  canModerate: boolean;
+}
+
+/** The circle and the viewer's place in it, in one read. Null when there is no such circle. */
+async function readAccess(circleId: string, viewerId: string, viewerRole?: string): Promise<CircleWallAccess | null> {
+  const r = await query<AccessRow>(
+    `SELECT c.name, (c.archived_at IS NOT NULL) AS archived, c.join_policy, m.role AS member_role,
+            (SELECT u.display_name FROM users u WHERE u.id = $2) AS viewer_name
+       FROM circles c
+       LEFT JOIN circle_members m ON m.circle_id = c.id AND m.user_id = $2
+      WHERE c.id = $1`,
     [circleId, viewerId],
   );
-  const circle = r.rows[0];
-  if (!circle || circle.join_policy !== 'closed' || circle.inside) return;
-  throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_READ);
+  const row = r.rows[0];
+  if (!row) return null;
+  const isAdmin = isPlatformAdmin(viewerRole);
+  const isMember = !!row.member_role;
+  return {
+    circleName: row.name,
+    joinPolicy: row.join_policy,
+    archived: !!row.archived,
+    viewerName: row.viewer_name,
+    isMember,
+    mayRead: isMember || isAdmin,
+    canPost: isMember && !row.archived,
+    canModerate: isAdmin || row.member_role === 'owner' || row.member_role === 'moderator',
+  };
 }
 
-async function requireCircleMember(circleId: string, userId: string, what = 'post'): Promise<void> {
-  const r = await query(
-    `SELECT 1 FROM circle_members WHERE circle_id = $1 AND user_id = $2`,
-    [circleId, userId],
-  );
-  if (r.rows.length === 0) {
-    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, `Join this circle to ${what}`);
-  }
+/**
+ * The feed's gate (D2): the circle's members and platform admins read its wall; anyone else is told how to get in
+ * (a closed circle in its own words). A circle that does not exist is a 404.
+ */
+async function resolveWallAccess(circleId: string, viewerId: string, viewerRole?: string): Promise<CircleWallAccess> {
+  const access = await readAccess(circleId, viewerId, viewerRole);
+  if (!access) throw new NotFoundError('Circle', circleId);
+  if (access.mayRead) return access;
+  if (access.joinPolicy === 'closed') throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_READ);
+  throw new ForbiddenError(CIRCLE_WALL_MEMBERS_ONLY);
 }
+
+/** Every read of a circle's wall asks this first (kept for callers that name the circle). */
+export async function assertMayReadWall(circleId: string, viewerId: string, viewerRole?: string): Promise<void> {
+  await resolveWallAccess(circleId, viewerId, viewerRole);
+}
+
+/** Post, comment, reply, react, like, edit: a member of a circle that is not archived. */
+function requireCanPost(access: CircleWallAccess): void {
+  if (!access.isMember) throw new ForbiddenError(JOIN_TO_POST);
+  if (access.archived) throw new AppError(409, ErrorCodes.CIRCLE_ARCHIVED, CIRCLE_ARCHIVED_READ_ONLY);
+}
+
+interface PostHead { circleId: string; authorId: string; content: string }
+
+/**
+ * A post as one viewer may reach it, with their access to its circle. Missing, in a circle the viewer is not in,
+ * or by someone blocked either way: all answered the same 404, so a post id confirms nothing. Removed: "This post
+ * was removed." (only someone who may read the circle gets that far).
+ */
+async function postInReach(postId: string, viewerId: string, viewerRole?: string): Promise<{ post: PostHead; access: CircleWallAccess }> {
+  const r = await query<{ circle_id: string; author_id: string; content: string; deleted_at: Date | null; blocked: boolean }>(
+    `SELECT p.circle_id, p.author_id, p.content, p.deleted_at,
+            EXISTS (SELECT 1 FROM user_blocks b
+                     WHERE (b.blocker_id = $2 AND b.blocked_id = p.author_id)
+                        OR (b.blocker_id = p.author_id AND b.blocked_id = $2)) AS blocked
+       FROM circle_posts p WHERE p.id = $1`,
+    [postId, viewerId],
+  );
+  const row = r.rows[0];
+  if (!row) throw postNotFound(postId);
+  const access = await readAccess(row.circle_id, viewerId, viewerRole);
+  if (!access?.mayRead || row.blocked) throw postNotFound(postId);
+  if (row.deleted_at) throw postRemoved(postId);
+  return { post: { circleId: row.circle_id, authorId: row.author_id, content: row.content }, access };
+}
+
+/** The viewer's role in a circle, read on the transaction's own client. */
+async function roleInCircle(
+  client: PoolClient,
+  circleId: string,
+  userId: string,
+): Promise<string | null> {
+  const r = await client.query<{ role: string }>(
+    `SELECT role FROM circle_members WHERE circle_id = $1 AND user_id = $2`, [circleId, userId]);
+  return r.rows[0]?.role ?? null;
+}
+
+const moderatesWith = (role: string | null, platformRole?: string) =>
+  isPlatformAdmin(platformRole) || role === 'owner' || role === 'moderator';
 
 /** The tables a wall counts a member's recent writes in. Named, never typed in, because the name is written into the SQL. */
 export type RateCountedTable = 'circle_posts' | 'circle_post_comments' | 'pod_posts' | 'pod_post_comments';
@@ -131,6 +264,7 @@ export function validateMedia(media: unknown): WallMediaItem[] {
   if (media.length > MAX_MEDIA_ITEMS) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `At most ${MAX_MEDIA_ITEMS} attachments`);
   }
+  // `any`: the items arrive as unchecked JSON; each one's shape is checked here before it is used.
   return media.map((m: any) => {
     if (!m || (m.type !== 'image' && m.type !== 'video') || typeof m.url !== 'string') {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported attachment');
@@ -150,58 +284,116 @@ export function extractLinkUrl(content: string): string | null {
   return m ? m[0].slice(0, 2000) : null;
 }
 
-const postLink = (circleId: string, postId: string) => `/circles/${circleId}?post=${postId}`;
-const excerpt = (content: string, fallback: string) => content.trim().slice(0, 120) || fallback;
+// ── Bells ────────────────────────────────────────────────────────────────────
 
-/**
- * One bell entry, deduped per (recipient, type, link) inside a window, pushed
- * over the socket when it was actually inserted. Never throws: a bell must not
- * fail the reaction or comment it reports.
- */
-async function bell(
-  userId: string,
-  type: 'circle_reaction' | 'circle_comment' | 'circle_reply',
-  title: string,
-  body: string,
-  link: string,
-  dedupeMinutes: number,
-): Promise<void> {
-  try {
-    const r = await query<{ id: string; created_at: Date }>(
-      `INSERT INTO notifications (id, user_id, type, title, body, link)
-       SELECT gen_random_uuid(), $1, $2, $3, $4, $5
-       WHERE NOT EXISTS (
-         SELECT 1 FROM notifications n
-         WHERE n.user_id = $1 AND n.type = $2 AND n.link = $5
-           AND n.created_at > NOW() - make_interval(mins => $6::int))
-       RETURNING id, created_at`,
-      [userId, type, title, body, link, dedupeMinutes],
-    );
-    if (r.rows.length === 0) return;
-    // Emit via dynamic import of the io instance (same pattern as pokes and invites).
-    const { io } = await import('../../index');
-    io.to(`user:${userId}`).emit('notification:new', {
-      id: r.rows[0].id, type, title, body, link, isRead: false, createdAt: r.rows[0].created_at,
-    });
-    // And the member's bell learns of the row through its entity tag, as every notification write tells it
-    // (H2b item 6, 26 Oct 2026); the row is committed (no transaction here) before anyone is told.
-    await emitEntities(io, [userId], [E.userNotifications(userId)]);
-  } catch (err) {
-    logger.warn({ err, userId, type, link }, 'wall bell failed (non-fatal)');
+type CircleBellType = 'circle_post' | 'circle_reaction' | 'circle_comment' | 'circle_reply';
+
+interface BellPayload { type: CircleBellType; title: string; body: string; link: string }
+interface BellRow { id: string; user_id: string; created_at: Date }
+
+/** The circle's page, where its wall is. Every bell about the wall links here or under it (`?post=`). */
+const circleLink = (circleId: string) => `/circles/${circleId}`;
+const postLink = (circleId: string, postId: string) => `/circles/${circleId}?post=${postId}`;
+/** The first 120 characters, counted as characters so a picture or emoji is never cut in half. */
+const excerpt = (text: string, fallback: string) =>
+  Array.from(text.trim()).slice(0, BELL_EXCERPT_CHARS).join('') || fallback;
+
+/** Pushes bells that were just written to their people: `notification:new` on their own room and their bell tag. */
+async function pushBells(rows: BellRow[], bell: BellPayload): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  for (const row of rows) {
+    try {
+      io.to(`user:${row.user_id}`).emit('notification:new', {
+        id: row.id, type: bell.type, title: bell.title, body: bell.body, link: bell.link,
+        isRead: false, createdAt: row.created_at,
+      });
+      await emitEntities(io, [row.user_id], [E.userNotifications(row.user_id)]);
+    } catch (err) {
+      logger.warn({ err, userId: row.user_id, type: bell.type }, 'circle wall bell push failed (non-fatal)');
+    }
   }
 }
 
-async function displayNameOf(userId: string): Promise<string> {
-  const r = await query<{ display_name: string | null }>(`SELECT display_name FROM users WHERE id = $1`, [userId]);
-  return r.rows[0]?.display_name?.trim() || 'A member';
+/**
+ * A new post rings the circle's other members, once per member per circle per hour, in ONE statement: members whose
+ * account is open, who have not switched group bells off, who are not blocked by the author or blocking them, and who
+ * have not had a new-post bell for this circle in the hour (its link is the circle's page or under it). The bell opens
+ * the post. Never throws: a bell must not fail the post it reports.
+ */
+async function ringCircleMembers(circleId: string, authorId: string, bell: Omit<BellPayload, 'type'>): Promise<void> {
+  try {
+    const inserted = await query<BellRow>(
+      `INSERT INTO notifications (id, user_id, type, title, body, link)
+       SELECT gen_random_uuid(), m.user_id, 'circle_post', $3::text, $4::text, $5::text
+       FROM circle_members m
+       JOIN users u ON u.id = m.user_id
+       WHERE m.circle_id = $1 AND m.user_id <> $2
+         AND u.status = 'active'
+         AND COALESCE((u.notification_prefs->>'group_bell')::boolean, true)
+         AND NOT EXISTS (
+           SELECT 1 FROM user_blocks b
+           WHERE (b.blocker_id = m.user_id AND b.blocked_id = $2)
+              OR (b.blocker_id = $2 AND b.blocked_id = m.user_id))
+         AND NOT EXISTS (
+           SELECT 1 FROM notifications n
+           WHERE n.user_id = m.user_id AND n.type = 'circle_post'
+             AND (n.link = $6::text OR starts_with(n.link, $6::text || '?'))
+             AND n.created_at > NOW() - INTERVAL '1 hour')
+       RETURNING id, user_id, created_at`,
+      [circleId, authorId, bell.title, bell.body, bell.link, circleLink(circleId)],
+    );
+    await pushBells(inserted.rows, { type: 'circle_post', ...bell });
+  } catch (err) {
+    logger.warn({ err, circleId }, 'circle_post bells failed (non-fatal)');
+  }
 }
+
+/**
+ * One bell to one person about something another member did, deduped per (person, type, link) inside a window. They
+ * must still be in the circle, with an open account and group bells on, and not blocked by the actor or blocking them.
+ * Never throws.
+ */
+async function ringOne(
+  circleId: string,
+  recipientId: string,
+  actorId: string,
+  bell: BellPayload,
+  dedupeMinutes: number,
+): Promise<void> {
+  try {
+    const inserted = await query<BellRow>(
+      `INSERT INTO notifications (id, user_id, type, title, body, link)
+       SELECT gen_random_uuid(), u.id, $3::text, $4::text, $5::text, $6::text
+       FROM users u
+       WHERE u.id = $1 AND u.status = 'active'
+         AND COALESCE((u.notification_prefs->>'group_bell')::boolean, true)
+         AND EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = $2 AND m.user_id = u.id)
+         AND NOT EXISTS (
+           SELECT 1 FROM user_blocks b
+           WHERE (b.blocker_id = u.id AND b.blocked_id = $7)
+              OR (b.blocker_id = $7 AND b.blocked_id = u.id))
+         AND NOT EXISTS (
+           SELECT 1 FROM notifications n
+           WHERE n.user_id = u.id AND n.type = $3::text AND n.link = $6::text
+             AND n.created_at > NOW() - make_interval(mins => $8::int))
+       RETURNING id, user_id, created_at`,
+      [recipientId, circleId, bell.type, bell.title, bell.body, bell.link, actorId, dedupeMinutes],
+    );
+    await pushBells(inserted.rows, bell);
+  } catch (err) {
+    logger.warn({ err, circleId, recipientId, type: bell.type }, 'circle wall bell failed (non-fatal)');
+  }
+}
+
+const nameOf = (access: CircleWallAccess) => access.viewerName?.trim() || 'A member';
 
 // ── Posts ────────────────────────────────────────────────────────────────────
 
 /** The post columns every read shares. $2 is always the viewer. */
 const POST_SELECT = `
   SELECT p.id, p.circle_id, p.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_former,
-         p.content, p.media, p.link_url, p.comment_count, p.pinned_at, p.created_at,
+         p.content, p.media, p.link_url, p.comment_count, p.pinned_at, p.created_at, p.edited_at,
          (SELECT count(*)::int FROM circle_post_reactions r WHERE r.post_id = p.id) AS reaction_count,
          (SELECT COALESCE(json_object_agg(x.reaction, x.n), '{}'::json)
             FROM (SELECT reaction, count(*)::int AS n FROM circle_post_reactions WHERE post_id = p.id GROUP BY reaction) x) AS reactions,
@@ -217,15 +409,38 @@ const POST_SELECT = `
                   OR EXISTS (SELECT 1 FROM circle_members om WHERE om.circle_id = o.circle_id AND om.user_id = $2))) AS shared_from
   FROM circle_posts p JOIN users u ON u.id = p.author_id`;
 
+export const BLOCK_FILTER = `
+  AND NOT EXISTS (
+    SELECT 1 FROM user_blocks b
+    WHERE (b.blocker_id = $2 AND b.blocked_id = p.author_id)
+       OR (b.blocker_id = p.author_id AND b.blocked_id = $2))`;
+
+interface OwnPostRow { id: string; circle_id: string; deleted_at: Date | null }
+
+async function findOwnPost(userId: string, clientId: string): Promise<OwnPostRow | null> {
+  const r = await query<OwnPostRow>(
+    `SELECT id, circle_id, deleted_at FROM circle_posts WHERE author_id = $1 AND client_id = $2`,
+    [userId, clientId],
+  );
+  return r.rows[0] ?? null;
+}
+
+/** A retried submit answers the post that was made the first time, and does nothing else. */
+async function answerRetry(circleId: string, viewerId: string, first: OwnPostRow): Promise<WallPost> {
+  if (first.circle_id !== circleId) throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'That post was already sent');
+  if (first.deleted_at) throw postRemoved(first.id);
+  const post = await readPost(first.id, viewerId);
+  if (!post) throw postNotFound(first.id);
+  return post;
+}
+
 export async function createPost(
   circleId: string,
   userId: string,
   input: { clientId: string; content?: string; media?: unknown; sharedFromPostId?: string | null },
 ): Promise<WallPost> {
-  const circle = await query(`SELECT id, name FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
-  if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
-  await requireCircleMember(circleId, userId);
-  await assertRate(userId, 'circle_posts', POST_RATE_PER_MIN, 'posting');
+  const access = await resolveWallAccess(circleId, userId);
+  requireCanPost(access);
 
   const content = (input.content ?? '').trim();
   const media = validateMedia(input.media);
@@ -233,60 +448,44 @@ export async function createPost(
   if (!content && media.length === 0 && !sharedFromPostId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Say something or attach something');
   }
-  if (content.length > 8000) {
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Post too long (max 8000 characters)');
+  if (content.length > POST_MAX_CHARS) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `Post too long (max ${POST_MAX_CHARS} characters)`);
   }
-  const linkUrl = extractLinkUrl(content);
 
-  const inserted = await transaction(async (client) => {
-    // UNIQUE(author_id, client_id) makes a retried submit return the original
-    // post instead of double-posting.
-    const ins = await client.query<{ id: string; created_at: Date }>(
+  // Before the rate cap: a retry posts nothing, so it must succeed even for a member at the cap, and rings nobody.
+  const first = await findOwnPost(userId, input.clientId);
+  if (first) return answerRetry(circleId, userId, first);
+  await assertRate(userId, 'circle_posts', POST_RATE_PER_MIN, 'posting');
+
+  const postId = await transaction(async (client) => {
+    // UNIQUE(author_id, client_id) makes a retried submit return the original post instead of double-posting.
+    const ins = await client.query<{ id: string }>(
       `INSERT INTO circle_posts (client_id, circle_id, author_id, content, media, link_url, shared_from_post_id)
        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
        ON CONFLICT (author_id, client_id) DO NOTHING
-       RETURNING id, created_at`,
-      [input.clientId, circleId, userId, content, JSON.stringify(media), linkUrl, sharedFromPostId],
+       RETURNING id`,
+      [input.clientId, circleId, userId, content, JSON.stringify(media), extractLinkUrl(content), sharedFromPostId],
     );
-    if (ins.rows.length > 0) {
-      await client.query(`UPDATE circles SET post_count = post_count + 1 WHERE id = $1`, [circleId]);
-      return ins.rows[0];
-    }
-    const existing = await client.query<{ id: string; created_at: Date }>(
-      `SELECT id, created_at FROM circle_posts WHERE author_id = $1 AND client_id = $2`,
-      [userId, input.clientId],
-    );
-    return existing.rows[0];
+    if (ins.rows.length === 0) return null;
+    await client.query(`UPDATE circles SET post_count = post_count + 1 WHERE id = $1`, [circleId]);
+    return ins.rows[0].id;
   });
-
-  // Bell the other circle members — ONE statement, deduped per member per
-  // circle per hour so a busy wall never becomes a notification firehose.
-  // Each member rung is then told through their notifications tag (H2b item 6, 26 Oct 2026), once the rows are in.
-  try {
-    const rung = await query<{ user_id: string }>(
-      `INSERT INTO notifications (id, user_id, type, title, body, link)
-       SELECT gen_random_uuid(), m.user_id, 'circle_post', $3, $4, $5
-       FROM circle_members m
-       WHERE m.circle_id = $1 AND m.user_id <> $2
-         AND NOT EXISTS (
-           SELECT 1 FROM notifications n
-           WHERE n.user_id = m.user_id AND n.type = 'circle_post' AND n.link = $5
-             AND n.created_at > NOW() - INTERVAL '1 hour')
-       RETURNING user_id`,
-      [circleId, userId,
-        `New post in ${circle.rows[0].name}`,
-        content.slice(0, 120) || (sharedFromPostId ? 'Shared a post' : 'Shared an attachment'),
-        `/circles/${circleId}`],
-    );
-    // One emit per member with their own tag (every member's tag to every member was N squared for a big circle).
-    const io = getRealtimeIo();
-    if (io) await Promise.all(rung.rows.map((r) => emitEntities(io, [r.user_id], [E.userNotifications(r.user_id)])));
-  } catch (err) {
-    logger.warn({ err, circleId }, 'circle_post notifications failed (non-fatal)');
+  if (!postId) {
+    // Its own twin, sent at the same moment, won the insert.
+    const twin = await findOwnPost(userId, input.clientId);
+    if (!twin) throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'That post was already sent');
+    return answerRetry(circleId, userId, twin);
   }
 
-  const post = await readPost(inserted.id, userId);
-  return post!;
+  await ringCircleMembers(circleId, userId, {
+    title: `New post in ${access.circleName}`,
+    body: excerpt(content, sharedFromPostId ? 'Shared a post' : 'Shared an attachment'),
+    link: postLink(circleId, postId),
+  });
+  await fanoutCircleWall(circleId);
+  const post = await readPost(postId, userId);
+  if (!post) throw postNotFound(postId);
+  return post;
 }
 
 async function readPost(postId: string, viewerId: string): Promise<WallPost | null> {
@@ -300,11 +499,15 @@ async function readPost(postId: string, viewerId: string): Promise<WallPost | nu
   return row ? mapPost(row) : null;
 }
 
-/** One post as its viewer sees it; null when it is gone or blocked either way; 403 in a closed circle they are outside. */
+/**
+ * One post as its viewer sees it (backs a ?post= link). Null when it is gone, blocked either way, or in a circle the
+ * viewer is not in: all the same answer, so a link confirms nothing to someone outside (D2).
+ */
 export async function getPost(postId: string, viewerId: string, viewerRole?: string): Promise<WallPost | null> {
   const post = await readPost(postId, viewerId);
-  if (post) await assertMayReadWall(post.circleId, viewerId, viewerRole);
-  return post;
+  if (!post) return null;
+  const access = await readAccess(post.circleId, viewerId, viewerRole);
+  return access?.mayRead ? post : null;
 }
 
 /** An author whose account is not active keeps their words, as "Former member" with no picture (T2). */
@@ -314,12 +517,14 @@ function authorOf(row: { display_name: string | null; avatar_url: string | null;
     : { authorName: row.display_name, authorAvatarUrl: row.avatar_url, authorClosed: false };
 }
 
+// `any`: a row of POST_SELECT, whose JSON columns (reactions, shared_from) pg hands back already parsed.
 function mapPost(row: any): WallPost {
   return {
     id: row.id, circleId: row.circle_id, authorId: row.author_id,
     ...authorOf(row),
     content: row.content, media: row.media ?? [], linkUrl: row.link_url,
     commentCount: row.comment_count, pinnedAt: row.pinned_at, createdAt: row.created_at,
+    editedAt: row.edited_at ?? null,
     reactionCount: row.reaction_count ?? 0,
     reactions: row.reactions ?? {},
     myReaction: row.my_reaction ?? null,
@@ -327,19 +532,13 @@ function mapPost(row: any): WallPost {
   };
 }
 
-export const BLOCK_FILTER = `
-  AND NOT EXISTS (
-    SELECT 1 FROM user_blocks b
-    WHERE (b.blocker_id = $2 AND b.blocked_id = p.author_id)
-       OR (b.blocker_id = p.author_id AND b.blocked_id = $2))`;
-
-/** Keyset feed: newest first; cursor = "<epoch_ms>_<id>". Pinned served separately. */
+/** Keyset feed: newest first; cursor = "<epoch_ms>_<id>". The pinned strip (newest pin first) rides on the first page. */
 export async function listPosts(
   circleId: string,
   viewerId: string,
   opts: { cursor?: string; limit?: number } = {},
   viewerRole?: string,
-): Promise<{ pinned: WallPost[]; posts: WallPost[]; nextCursor: string | null }> {
+): Promise<CircleWallFeed> {
   const limit = Math.min(opts.limit ?? 20, 50);
   const params: unknown[] = [circleId, viewerId];
   let keyset = '';
@@ -349,7 +548,7 @@ export async function listPosts(
     params.push(new Date(Number(m[1])), m[2]);
     keyset = `AND (p.created_at, p.id) < ($3, $4::uuid)`;
   }
-  await assertMayReadWall(circleId, viewerId, viewerRole);
+  const access = await resolveWallAccess(circleId, viewerId, viewerRole);
 
   const [pinned, page] = await Promise.all([
     opts.cursor
@@ -358,7 +557,7 @@ export async function listPosts(
           `${POST_SELECT}
            WHERE p.circle_id = $1 AND p.deleted_at IS NULL AND p.pinned_at IS NOT NULL
              ${BLOCK_FILTER}
-           ORDER BY p.pinned_at DESC LIMIT 3`,
+           ORDER BY p.pinned_at DESC LIMIT ${WALL_PINNED_MAX}`,
           [circleId, viewerId],
         ),
     query<any>(
@@ -379,67 +578,181 @@ export async function listPosts(
     pinned: pinned.rows.map(mapPost),
     posts: rows.map(mapPost),
     nextCursor: hasMore && last ? `${new Date(last.created_at).getTime()}_${last.id}` : null,
+    viewer: { canPost: access.canPost, canModerate: access.canModerate },
   };
 }
 
-/** Author soft-deletes their own post; admins delete any (checked in route). */
-export async function deletePost(postId: string, userId: string, isAdmin: boolean): Promise<void> {
-  await transaction(async (client) => {
-    const r = await client.query<{ author_id: string; circle_id: string; deleted_at: Date | null }>(
-      `SELECT author_id, circle_id, deleted_at FROM circle_posts WHERE id = $1 FOR UPDATE`,
-      [postId],
-    );
-    const post = r.rows[0];
-    if (!post || post.deleted_at) throw new NotFoundError('Post', postId);
-    if (!isAdmin && post.author_id !== userId) {
-      throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You can only delete your own posts');
-    }
-    await client.query(`UPDATE circle_posts SET deleted_at = NOW() WHERE id = $1`, [postId]);
-    await client.query(
-      `UPDATE circles SET post_count = GREATEST(post_count - 1, 0) WHERE id = $1`,
-      [post.circle_id],
-    );
-  });
+interface LockedPost {
+  author_id: string;
+  circle_id: string;
+  content: string;
+  media: unknown;
+  created_at: Date;
+  edited_at: Date | null;
+  deleted_at: Date | null;
+  pinned_at: Date | null;
 }
 
-export async function pinPost(postId: string, pin: boolean): Promise<void> {
-  const r = await query(
-    `UPDATE circle_posts SET pinned_at = ${pin ? 'NOW()' : 'NULL'}
-     WHERE id = $1 AND deleted_at IS NULL`,
-    [postId],
-  );
-  if (r.rowCount === 0) throw new NotFoundError('Post', postId);
+const LOCK_POST = `SELECT author_id, circle_id, content, media, created_at, edited_at, deleted_at, pinned_at
+                     FROM circle_posts WHERE id = $1 FOR UPDATE`;
+
+/**
+ * The author deletes their own post (D8: also once they are no longer in the circle); the circle's owner, its
+ * moderators and platform admins delete any. Anyone else outside the circle is answered as if there were no such post.
+ * A moderator's removal of someone else's post is recorded with its words. A post someone removed a moment before
+ * answers alreadyRemoved to whoever could have removed it, and tells nobody again.
+ */
+export async function deletePost(postId: string, userId: string, viewerRole?: string): Promise<{ alreadyRemoved: boolean }> {
+  const done = await transaction(async (client) => {
+    const r = await client.query<LockedPost>(LOCK_POST, [postId]);
+    const post = r.rows[0];
+    if (!post) throw postNotFound(postId);
+    const own = post.author_id === userId;
+    if (!own) {
+      const role = await roleInCircle(client, post.circle_id, userId);
+      if (!moderatesWith(role, viewerRole)) {
+        if (role === null) throw postNotFound(postId);
+        throw post.deleted_at ? postRemoved(postId) : new ForbiddenError(ONLY_OWN_POSTS);
+      }
+    }
+    if (post.deleted_at) return { circleId: post.circle_id, alreadyRemoved: true };
+    await client.query(`UPDATE circle_posts SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1`, [postId, userId]);
+    await client.query(`UPDATE circles SET post_count = GREATEST(post_count - 1, 0) WHERE id = $1`, [post.circle_id]);
+    if (!own) {
+      await recordModeration(client, {
+        actorId: userId, action: 'wall_post_removed', space: 'circle', spaceId: post.circle_id,
+        snapshot: { postId, authorId: post.author_id, content: post.content, media: post.media, createdAt: post.created_at, editedAt: post.edited_at },
+      });
+    }
+    return { circleId: post.circle_id, alreadyRemoved: false };
+  });
+  if (!done.alreadyRemoved) await fanoutCircleWall(done.circleId, [E.circleWallPost(postId)]);
+  return { alreadyRemoved: done.alreadyRemoved };
+}
+
+/**
+ * Pin or unpin (the circle's owner, a moderator or a platform admin), archived or not. At most WALL_PINNED_MAX posts are
+ * pinned, newest pin first: a pin past that is refused until one is unpinned. The post is locked first and the circle
+ * row after it (the order a delete takes them in), and the pinned count is read under the circle's lock, so two pins at
+ * once cannot pass the limit and a pin and an unpin at once each tell the circle. Re-pinning a pinned post moves it to
+ * the front; unpinning one that is not pinned changes nothing and tells nobody. Every pin and unpin is recorded.
+ */
+export async function pinPost(postId: string, userId: string, viewerRole: string | undefined, pin: boolean): Promise<void> {
+  const done = await transaction(async (client) => {
+    const r = await client.query<LockedPost>(LOCK_POST, [postId]);
+    const post = r.rows[0];
+    if (!post) throw postNotFound(postId);
+    const role = await roleInCircle(client, post.circle_id, userId);
+    if (!moderatesWith(role, viewerRole)) {
+      if (role === null) throw postNotFound(postId);
+      throw new ForbiddenError(ONLY_MODERATORS_PIN);
+    }
+    if (post.deleted_at) throw postRemoved(postId);
+    if (!pin && post.pinned_at === null) return { circleId: post.circle_id, changed: false };
+    if (pin && post.pinned_at === null) {
+      await client.query(`SELECT id FROM circles WHERE id = $1 FOR NO KEY UPDATE`, [post.circle_id]);
+      const held = await client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM circle_posts WHERE circle_id = $1 AND deleted_at IS NULL AND pinned_at IS NOT NULL`,
+        [post.circle_id],
+      );
+      if ((held.rows[0]?.n ?? 0) >= WALL_PINNED_MAX) throw pinsFull();
+    }
+    await client.query(
+      `UPDATE circle_posts SET pinned_at = CASE WHEN $2::boolean THEN NOW() ELSE NULL END WHERE id = $1`,
+      [postId, pin],
+    );
+    await recordModeration(client, {
+      actorId: userId, action: pin ? 'wall_post_pinned' : 'wall_post_unpinned', space: 'circle', spaceId: post.circle_id,
+      snapshot: { postId, authorId: post.author_id, content: post.content, createdAt: post.created_at, editedAt: post.edited_at },
+    });
+    return { circleId: post.circle_id, changed: true };
+  });
+  if (done.changed) await fanoutCircleWall(done.circleId, [E.circleWallPost(postId)]);
+}
+
+/**
+ * The author changes the words of their post while they are in the circle and it is not archived. Pictures and a
+ * shared post stay as they were; the same rules as posting (not empty unless something else is kept, at most 8000,
+ * the link card read again). Words that are the same change nothing and tell nobody. A post removed a moment before is
+ * "This post was removed."; `expectedEditedAt` refuses an edit made over another one. No bell rings for an edit.
+ */
+export async function editPost(
+  postId: string,
+  userId: string,
+  input: { content: string; expectedEditedAt?: string | null },
+): Promise<{ changed: boolean; editedAt: Date | null }> {
+  const content = input.content.trim();
+  if (content.length > POST_MAX_CHARS) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `Post too long (max ${POST_MAX_CHARS} characters)`);
+  }
+  const done = await transaction(async (client) => {
+    const r = await client.query<{
+      author_id: string; circle_id: string; content: string; media: unknown[] | null; shared_from_post_id: string | null;
+      edited_at: Date | null; deleted_at: Date | null; archived: boolean; is_member: boolean;
+    }>(
+      `SELECT p.author_id, p.circle_id, p.content, p.media, p.shared_from_post_id, p.edited_at, p.deleted_at,
+              (c.archived_at IS NOT NULL) AS archived,
+              EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = p.circle_id AND m.user_id = $2) AS is_member
+         FROM circle_posts p JOIN circles c ON c.id = p.circle_id
+        WHERE p.id = $1
+        FOR UPDATE OF p`,
+      [postId, userId],
+    );
+    const post = r.rows[0];
+    if (!post) throw postNotFound(postId);
+    if (post.author_id !== userId) {
+      if (!post.is_member) throw postNotFound(postId);
+      throw new ForbiddenError(ONLY_OWN_EDITS);
+    }
+    if (post.deleted_at) throw postRemoved(postId);
+    if (!post.is_member) throw new ForbiddenError(NO_LONGER_IN);
+    if (post.archived) throw new AppError(409, ErrorCodes.CIRCLE_ARCHIVED, CIRCLE_ARCHIVED_READ_ONLY);
+    if (!editStampHolds(post.edited_at, input.expectedEditedAt)) throw editConflict();
+    if (!content && (post.media ?? []).length === 0 && !post.shared_from_post_id) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, EDIT_EMPTY_POST);
+    }
+    if (content === post.content) return { circleId: post.circle_id, changed: false, editedAt: post.edited_at };
+    const w = await client.query<{ edited_at: Date }>(
+      `UPDATE circle_posts SET content = $2, link_url = $3, edited_at = NOW() WHERE id = $1 RETURNING edited_at`,
+      [postId, content, extractLinkUrl(content)],
+    );
+    return { circleId: post.circle_id, changed: true, editedAt: w.rows[0].edited_at };
+  });
+  if (done.changed) await fanoutCircleWall(done.circleId, [E.circleWallPost(postId)]);
+  return { changed: done.changed, editedAt: done.editedAt };
 }
 
 /**
  * Share a post into another circle: a new post there, by the sharer, carrying
  * the ORIGINAL post (sharing a share points at the root, so attribution never
- * drifts). The sharer must be a member of the target circle (createPost
- * enforces it) and must not be blocked either way by the original author.
+ * drifts). The sharer must be in the circle they share from (D2: only its members
+ * read it) and in the target circle (createPost enforces it), and must not be
+ * blocked either way by the original author.
  */
 export async function sharePost(
   postId: string,
   userId: string,
   input: { circleId: string; clientId: string; content?: string },
 ): Promise<WallPost> {
-  const src = await query<{ id: string; circle_id: string; shared_from_post_id: string | null }>(
-    `SELECT p.id, p.circle_id, p.shared_from_post_id
+  const { post: src } = await postInReach(postId, userId);
+  await assertNotClosed(src.circleId);
+  const srcRow = await query<{ id: string; shared_from_post_id: string | null }>(
+    `SELECT p.id, p.shared_from_post_id
      FROM circle_posts p
      WHERE p.id = $1 AND p.deleted_at IS NULL
        ${BLOCK_FILTER}`,
     [postId, userId],
   );
-  if (src.rows.length === 0) throw new NotFoundError('Post', postId);
-  await assertNotClosed(src.rows[0].circle_id);
+  if (srcRow.rows.length === 0) throw postNotFound(postId);
 
-  let root = { id: src.rows[0].id, circleId: src.rows[0].circle_id };
-  if (src.rows[0].shared_from_post_id) {
+  let root = { id: postId, circleId: src.circleId };
+  if (srcRow.rows[0].shared_from_post_id) {
     const orig = await query<{ id: string; circle_id: string }>(
       `SELECT id, circle_id FROM circle_posts WHERE id = $1 AND deleted_at IS NULL`,
-      [src.rows[0].shared_from_post_id],
+      [srcRow.rows[0].shared_from_post_id],
     );
     if (orig.rows.length > 0) root = { id: orig.rows[0].id, circleId: orig.rows[0].circle_id };
-    if (root.circleId !== src.rows[0].circle_id) await assertNotClosed(root.circleId);
+    if (root.circleId !== src.circleId) await assertNotClosed(root.circleId);
   }
   if (root.circleId === input.circleId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'That post is already in this circle. Copy its link instead.');
@@ -475,8 +788,10 @@ async function reactionSummary(postId: string, viewerId: string): Promise<Reacti
 }
 
 /**
- * Set (or with null, remove) the member's one reaction on a post. Members
- * only, like commenting. The author hears about it once per post per hour.
+ * Set (or with null, remove) the member's one reaction on a post. Members of a circle that is not archived only, on a
+ * post they can see (blocks both ways). The author hears about it once per post per hour, unless they block the member
+ * or are blocked by them, or have left. Sending the reaction the member already has, or clearing one that is not
+ * there, changes nothing: nobody is told or rung.
  */
 export async function reactToPost(
   postId: string,
@@ -486,59 +801,83 @@ export async function reactToPost(
   if (reaction !== null && !REACTION_KINDS.includes(reaction)) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unknown reaction');
   }
-  const post = await query<{ circle_id: string; author_id: string; content: string }>(
-    `SELECT circle_id, author_id, content FROM circle_posts WHERE id = $1 AND deleted_at IS NULL`, [postId]);
-  if (post.rows.length === 0) throw new NotFoundError('Post', postId);
-  const { circle_id: circleId, author_id: authorId, content } = post.rows[0];
-  await requireCircleMember(circleId, userId, 'react');
+  const { post, access } = await postInReach(postId, userId);
+  requireCanPost(access);
 
+  let changed: boolean;
   if (reaction) {
-    await query(
+    const set = await query<{ post_id: string }>(
       `INSERT INTO circle_post_reactions (post_id, user_id, reaction) VALUES ($1, $2, $3)
-       ON CONFLICT (post_id, user_id) DO UPDATE SET reaction = EXCLUDED.reaction, created_at = NOW()`,
+       ON CONFLICT (post_id, user_id) DO UPDATE SET reaction = EXCLUDED.reaction, created_at = NOW()
+         WHERE circle_post_reactions.reaction IS DISTINCT FROM EXCLUDED.reaction
+       RETURNING post_id`,
       [postId, userId, reaction],
     );
-    if (authorId !== userId) {
-      const name = await displayNameOf(userId);
-      await bell(authorId, 'circle_reaction', `${name} reacted to your post`,
-        excerpt(content, 'Your post on the wall'), postLink(circleId, postId), REACTION_BELL_DEDUPE_MINUTES);
+    changed = set.rows.length > 0;
+    if (changed && post.authorId !== userId) {
+      await ringOne(post.circleId, post.authorId, userId, {
+        type: 'circle_reaction',
+        title: `${nameOf(access)} reacted to your post`,
+        body: excerpt(post.content, 'Your post on the wall'),
+        link: postLink(post.circleId, postId),
+      }, REACTION_BELL_DEDUPE_MINUTES);
     }
   } else {
-    await query(`DELETE FROM circle_post_reactions WHERE post_id = $1 AND user_id = $2`, [postId, userId]);
+    const cleared = await query<{ post_id: string }>(
+      `DELETE FROM circle_post_reactions WHERE post_id = $1 AND user_id = $2 RETURNING post_id`, [postId, userId]);
+    changed = cleared.rows.length > 0;
   }
+  if (changed) await fanoutCircleWall(post.circleId, [E.circleWallPost(postId)]);
   return reactionSummary(postId, userId);
 }
 
 // ── Comments ─────────────────────────────────────────────────────────────────
 
+/**
+ * The comments (alias `c`) a viewer may see: the author is not blocked either way, and the comment is top-level or
+ * answers a comment that is still there and whose author is not blocked either way either (the pod wall's rule).
+ */
+const commentVisibleTo = (viewer: '$2' | '$3') => `
+  AND NOT EXISTS (
+    SELECT 1 FROM user_blocks b
+    WHERE (b.blocker_id = ${viewer} AND b.blocked_id = c.author_id)
+       OR (b.blocker_id = c.author_id AND b.blocked_id = ${viewer}))
+  AND (c.parent_comment_id IS NULL OR EXISTS (
+    SELECT 1 FROM circle_post_comments pc
+    WHERE pc.id = c.parent_comment_id AND pc.deleted_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM user_blocks pb
+        WHERE (pb.blocker_id = ${viewer} AND pb.blocked_id = pc.author_id)
+           OR (pb.blocker_id = pc.author_id AND pb.blocked_id = ${viewer}))))`;
+
+/**
+ * Comment on a post, or reply to a comment (a reply to a reply hangs under the top-level comment, but the bell goes to
+ * the person actually answered). Members of a circle that is not archived, on a post and a comment they can see.
+ */
 export async function addComment(
   postId: string,
   userId: string,
   content: string,
   parentCommentId?: string | null,
 ): Promise<{ id: string; createdAt: Date; parentCommentId: string | null }> {
-  const post = await query<{ circle_id: string; author_id: string; content: string }>(
-    `SELECT circle_id, author_id, content FROM circle_posts WHERE id = $1 AND deleted_at IS NULL`, [postId]);
-  if (post.rows.length === 0) throw new NotFoundError('Post', postId);
-  const { circle_id: circleId, author_id: postAuthorId, content: postContent } = post.rows[0];
-  await requireCircleMember(circleId, userId, 'comment');
-  await assertRate(userId, 'circle_post_comments', COMMENT_RATE_PER_MIN, 'commenting');
+  const { post, access } = await postInReach(postId, userId);
+  requireCanPost(access);
 
   const trimmed = content.trim();
   if (!trimmed) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Comment cannot be empty');
-  if (trimmed.length > 4000) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Comment too long');
+  if (trimmed.length > COMMENT_MAX_CHARS) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Comment too long');
+  await assertRate(userId, 'circle_post_comments', COMMENT_RATE_PER_MIN, 'commenting');
 
-  // One level of replies: a reply to a reply hangs under the top-level comment,
-  // but the bell goes to the person actually replied to.
   let attachTo: string | null = null;
   let repliedToAuthor: string | null = null;
   if (parentCommentId) {
     const parent = await query<{ id: string; author_id: string; parent_comment_id: string | null }>(
-      `SELECT id, author_id, parent_comment_id FROM circle_post_comments
-       WHERE id = $1 AND post_id = $2 AND deleted_at IS NULL`,
-      [parentCommentId, postId],
+      `SELECT c.id, c.author_id, c.parent_comment_id FROM circle_post_comments c
+       WHERE c.id = $1 AND c.post_id = $2 AND c.deleted_at IS NULL
+         ${commentVisibleTo('$3')}`,
+      [parentCommentId, postId, userId],
     );
-    if (parent.rows.length === 0) throw new NotFoundError('Comment', parentCommentId);
+    if (parent.rows.length === 0) throw commentNotFound(parentCommentId);
     attachTo = parent.rows[0].parent_comment_id ?? parent.rows[0].id;
     repliedToAuthor = parent.rows[0].author_id;
   }
@@ -554,16 +893,22 @@ export async function addComment(
     return { id: ins.rows[0].id, createdAt: ins.rows[0].created_at, parentCommentId: attachTo };
   });
 
-  const link = postLink(circleId, postId);
-  const name = await displayNameOf(userId);
+  const link = postLink(post.circleId, postId);
+  const name = nameOf(access);
   if (repliedToAuthor && repliedToAuthor !== userId) {
-    await bell(repliedToAuthor, 'circle_reply', `${name} replied to your comment`,
-      excerpt(trimmed, 'See the reply'), link, COMMENT_BELL_DEDUPE_MINUTES);
+    await ringOne(post.circleId, repliedToAuthor, userId, {
+      type: 'circle_reply', title: `${name} replied to your comment`, body: excerpt(trimmed, 'See the reply'), link,
+    }, COMMENT_BELL_DEDUPE_MINUTES);
   }
-  if (postAuthorId !== userId && postAuthorId !== repliedToAuthor) {
-    await bell(postAuthorId, 'circle_comment', `${name} commented on your post`,
-      excerpt(trimmed, excerpt(postContent, 'See the comment')), link, COMMENT_BELL_DEDUPE_MINUTES);
+  if (post.authorId !== userId && post.authorId !== repliedToAuthor) {
+    await ringOne(post.circleId, post.authorId, userId, {
+      type: 'circle_comment',
+      title: `${name} commented on your post`,
+      body: excerpt(trimmed, excerpt(post.content, 'See the comment')),
+      link,
+    }, COMMENT_BELL_DEDUPE_MINUTES);
   }
+  await fanoutCircleWall(post.circleId, [E.circleWallPost(postId)]);
   return made;
 }
 
@@ -573,55 +918,68 @@ export interface WallComment {
   authorClosed: boolean;
   content: string; createdAt: Date; parentCommentId: string | null;
   likeCount: number; likedByMe: boolean;
+  /** S4: when its author last changed its words; null when never. */
+  editedAt: Date | null;
 }
 
-export async function listComments(postId: string, viewerId: string, viewerRole?: string): Promise<WallComment[]> {
-  const of = await query<{ circle_id: string }>(`SELECT circle_id FROM circle_posts WHERE id = $1`, [postId]);
-  if (of.rows[0]) await assertMayReadWall(of.rows[0].circle_id, viewerId, viewerRole);
+/**
+ * A post's comments and replies, oldest first, without authors blocked either way and without replies under a comment
+ * the viewer cannot see. At most 400: `truncated` says there are more. Someone outside the circle: as if no such post.
+ */
+export async function listComments(
+  postId: string,
+  viewerId: string,
+  viewerRole?: string,
+): Promise<{ comments: WallComment[]; truncated: boolean }> {
+  await postInReach(postId, viewerId, viewerRole);
   const r = await query<any>(
     `SELECT c.id, c.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_former,
-            c.content, c.created_at, c.parent_comment_id,
+            c.content, c.created_at, c.edited_at, c.parent_comment_id,
             (SELECT count(*)::int FROM circle_comment_likes l WHERE l.comment_id = c.id) AS like_count,
             EXISTS (SELECT 1 FROM circle_comment_likes l WHERE l.comment_id = c.id AND l.user_id = $2) AS liked_by_me
      FROM circle_post_comments c JOIN users u ON u.id = c.author_id
      WHERE c.post_id = $1 AND c.deleted_at IS NULL
-       AND (c.parent_comment_id IS NULL OR EXISTS (
-         SELECT 1 FROM circle_post_comments pc WHERE pc.id = c.parent_comment_id AND pc.deleted_at IS NULL))
-       AND NOT EXISTS (
-         SELECT 1 FROM user_blocks b
-         WHERE (b.blocker_id = $2 AND b.blocked_id = c.author_id)
-            OR (b.blocker_id = c.author_id AND b.blocked_id = $2))
-     ORDER BY c.created_at ASC LIMIT 400`,
-    [postId, viewerId],
+       ${commentVisibleTo('$2')}
+     ORDER BY c.created_at ASC, c.id ASC LIMIT $3`,
+    [postId, viewerId, COMMENTS_SHOWN + 1],
   );
-  return r.rows.map((row: any) => ({
+  // `any`: a row of the SELECT above.
+  const comments = r.rows.slice(0, COMMENTS_SHOWN).map((row: any): WallComment => ({
     id: row.id, authorId: row.author_id, ...authorOf(row), content: row.content, createdAt: row.created_at,
     parentCommentId: row.parent_comment_id ?? null,
     likeCount: row.like_count ?? 0, likedByMe: !!row.liked_by_me,
+    editedAt: row.edited_at ?? null,
   }));
+  return { comments, truncated: r.rows.length > COMMENTS_SHOWN };
 }
 
-/** Like or unlike a comment. Members only. No bell: a like on a comment is a nod, not news. */
+/** Like or unlike a comment the member can see. Members of a circle that is not archived. No bell: a like is a nod. */
 export async function likeComment(
   commentId: string,
   userId: string,
   liked: boolean,
 ): Promise<{ likeCount: number; likedByMe: boolean }> {
-  const c = await query<{ circle_id: string }>(
-    `SELECT p.circle_id FROM circle_post_comments c JOIN circle_posts p ON p.id = c.post_id
-     WHERE c.id = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL`,
-    [commentId],
+  const c = await query<{ circle_id: string; post_id: string }>(
+    `SELECT p.circle_id, c.post_id FROM circle_post_comments c JOIN circle_posts p ON p.id = c.post_id
+     WHERE c.id = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL
+       ${BLOCK_FILTER}
+       ${commentVisibleTo('$2')}`,
+    [commentId, userId],
   );
-  if (c.rows.length === 0) throw new NotFoundError('Comment', commentId);
-  await requireCircleMember(c.rows[0].circle_id, userId, 'like comments');
-  if (liked) {
-    await query(
-      `INSERT INTO circle_comment_likes (comment_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+  const target = c.rows[0];
+  if (!target) throw commentNotFound(commentId);
+  const access = await readAccess(target.circle_id, userId);
+  if (!access?.mayRead) throw commentNotFound(commentId);
+  requireCanPost(access);
+  const written = liked
+    ? await query<{ comment_id: string }>(
+      `INSERT INTO circle_comment_likes (comment_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING comment_id`,
       [commentId, userId],
-    );
-  } else {
-    await query(`DELETE FROM circle_comment_likes WHERE comment_id = $1 AND user_id = $2`, [commentId, userId]);
-  }
+    )
+    : await query<{ comment_id: string }>(
+      `DELETE FROM circle_comment_likes WHERE comment_id = $1 AND user_id = $2 RETURNING comment_id`, [commentId, userId]);
+  // A like shows in the thread only, so no member's feed is read again.
+  if (written.rows.length > 0) await fanoutCircleWall(target.circle_id, [E.circleWallPost(target.post_id)], { wall: false });
   const n = await query<{ like_count: number; liked_by_me: boolean }>(
     `SELECT count(*)::int AS like_count, bool_or(user_id = $2) AS liked_by_me
      FROM circle_comment_likes WHERE comment_id = $1`,
@@ -630,27 +988,109 @@ export async function likeComment(
   return { likeCount: n.rows[0]?.like_count ?? 0, likedByMe: !!n.rows[0]?.liked_by_me };
 }
 
-/** Author or admin soft-deletes a comment; its replies go with it, and the count moves by all of them. */
-export async function deleteComment(commentId: string, userId: string, isAdmin: boolean): Promise<void> {
-  await transaction(async (client) => {
-    const r = await client.query<{ author_id: string; post_id: string; deleted_at: Date | null }>(
-      `SELECT author_id, post_id, deleted_at FROM circle_post_comments WHERE id = $1 FOR UPDATE`,
+/** The author changes the words of their comment or reply: the rules of editPost, at most 4000, never empty. */
+export async function editComment(
+  commentId: string,
+  userId: string,
+  input: { content: string; expectedEditedAt?: string | null },
+): Promise<{ changed: boolean; editedAt: Date | null; postId: string }> {
+  const content = input.content.trim();
+  if (!content) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, EDIT_EMPTY_COMMENT);
+  if (content.length > COMMENT_MAX_CHARS) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Comment too long');
+  const done = await transaction(async (client) => {
+    const r = await client.query<{
+      author_id: string; post_id: string; circle_id: string; content: string; edited_at: Date | null;
+      deleted_at: Date | null; post_deleted_at: Date | null; archived: boolean; is_member: boolean;
+    }>(
+      `SELECT c.author_id, c.post_id, p.circle_id, c.content, c.edited_at, c.deleted_at, p.deleted_at AS post_deleted_at,
+              (ci.archived_at IS NOT NULL) AS archived,
+              EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = p.circle_id AND m.user_id = $2) AS is_member
+         FROM circle_post_comments c
+         JOIN circle_posts p ON p.id = c.post_id
+         JOIN circles ci ON ci.id = p.circle_id
+        WHERE c.id = $1
+        FOR UPDATE OF c`,
+      [commentId, userId],
+    );
+    const comment = r.rows[0];
+    if (!comment) throw commentNotFound(commentId);
+    if (comment.author_id !== userId) {
+      if (!comment.is_member) throw commentNotFound(commentId);
+      throw new ForbiddenError(ONLY_OWN_EDITS);
+    }
+    if (comment.post_deleted_at) throw postRemoved(comment.post_id);
+    if (comment.deleted_at) throw commentRemoved(commentId);
+    if (!comment.is_member) throw new ForbiddenError(NO_LONGER_IN);
+    if (comment.archived) throw new AppError(409, ErrorCodes.CIRCLE_ARCHIVED, CIRCLE_ARCHIVED_READ_ONLY);
+    if (!editStampHolds(comment.edited_at, input.expectedEditedAt)) throw editConflict();
+    if (content === comment.content) {
+      return { circleId: comment.circle_id, postId: comment.post_id, changed: false, editedAt: comment.edited_at };
+    }
+    const w = await client.query<{ edited_at: Date }>(
+      `UPDATE circle_post_comments SET content = $2, edited_at = NOW() WHERE id = $1 RETURNING edited_at`,
+      [commentId, content],
+    );
+    return { circleId: comment.circle_id, postId: comment.post_id, changed: true, editedAt: w.rows[0].edited_at };
+  });
+  if (done.changed) await fanoutCircleWall(done.circleId, [E.circleWallPost(done.postId)], { wall: false });
+  return { changed: done.changed, editedAt: done.editedAt, postId: done.postId };
+}
+
+/**
+ * Delete a comment: its author (D8: also once they are no longer in the circle), the circle's owner or a moderator, or
+ * a platform admin, archived or not. Its replies go with it and the post's count drops by all of them; each row records
+ * who removed it, and a moderator's removal of someone else's comment is recorded with its words. A comment removed a
+ * moment before answers alreadyRemoved. Anyone else outside the circle: as if there were no such comment.
+ */
+export async function deleteComment(
+  commentId: string,
+  userId: string,
+  viewerRole?: string,
+): Promise<{ postId: string; alreadyRemoved: boolean }> {
+  const done = await transaction(async (client) => {
+    const r = await client.query<{
+      author_id: string; post_id: string; circle_id: string; content: string; created_at: Date;
+      edited_at: Date | null; deleted_at: Date | null;
+    }>(
+      `SELECT c.author_id, c.post_id, p.circle_id, c.content, c.created_at, c.edited_at, c.deleted_at
+         FROM circle_post_comments c JOIN circle_posts p ON p.id = c.post_id
+        WHERE c.id = $1 AND p.deleted_at IS NULL
+        FOR UPDATE OF c`,
       [commentId],
     );
-    const c = r.rows[0];
-    if (!c || c.deleted_at) throw new NotFoundError('Comment', commentId);
-    if (!isAdmin && c.author_id !== userId) {
-      throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You can only delete your own comments');
+    const comment = r.rows[0];
+    if (!comment) throw commentNotFound(commentId);
+    const own = comment.author_id === userId;
+    if (!own) {
+      const role = await roleInCircle(client, comment.circle_id, userId);
+      if (!moderatesWith(role, viewerRole)) {
+        if (role === null) throw commentNotFound(commentId);
+        throw comment.deleted_at ? commentRemoved(commentId) : new ForbiddenError(ONLY_OWN_COMMENTS);
+      }
     }
+    if (comment.deleted_at) return { circleId: comment.circle_id, postId: comment.post_id, alreadyRemoved: true };
     const gone = await client.query<{ id: string }>(
-      `UPDATE circle_post_comments SET deleted_at = NOW()
+      `UPDATE circle_post_comments SET deleted_at = NOW(), deleted_by = $2
        WHERE (id = $1 OR parent_comment_id = $1) AND deleted_at IS NULL
        RETURNING id`,
-      [commentId],
+      [commentId, userId],
     );
+    const removed = Math.max(gone.rowCount ?? 1, 1);
     await client.query(
       `UPDATE circle_posts SET comment_count = GREATEST(comment_count - $2, 0) WHERE id = $1`,
-      [c.post_id, Math.max(gone.rowCount ?? 1, 1)],
+      [comment.post_id, removed],
     );
+    if (!own) {
+      await recordModeration(client, {
+        actorId: userId, action: 'wall_comment_removed', space: 'circle', spaceId: comment.circle_id,
+        snapshot: {
+          postId: comment.post_id, commentId, authorId: comment.author_id, content: comment.content,
+          createdAt: comment.created_at, editedAt: comment.edited_at, repliesRemoved: removed - 1,
+        },
+      });
+    }
+    return { circleId: comment.circle_id, postId: comment.post_id, alreadyRemoved: false };
   });
+  if (!done.alreadyRemoved) await fanoutCircleWall(done.circleId, [E.circleWallPost(done.postId)]);
+  return { postId: done.postId, alreadyRemoved: done.alreadyRemoved };
 }
