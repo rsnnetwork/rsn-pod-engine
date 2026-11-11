@@ -18,6 +18,7 @@ import ReasonSheep from '../brand/ReasonSheep';
 import ProfileBanner from '../human/ProfileBanner';
 import ProfileHero from '../human/ProfileHero';
 import ProfileDetails from '../human/ProfileDetails';
+import ProfileCommunities from '../human/ProfileCommunities';
 import MoveBar from '../human/MoveBar';
 import { isGone, personFacts } from '../human/profile-text';
 import { errorMessage, fetchMyPreview, fetchPublicLink, fetchPublicProfile, reasonKeys } from '../api';
@@ -133,6 +134,8 @@ export default function ProfilePreviewPage() {
             )}
             <ProfileHero brief={preview.data} who={personFacts(preview.data.person)} source={null} userId={me} />
             <ProfileDetails brief={preview.data} who={personFacts(preview.data.person)} source={null} onRecordOutcome={inPreview} />
+            {/* Shirley pilot S3 (RSN 14): your communities as that member sees them (GET /people/me/communities). */}
+            <ProfileCommunities mode="preview" first={personFacts(preview.data.person).first} />
           </div>
         ) : preview.isError ? (
           <Failed error={preview.error} onRetry={() => void preview.refetch()} />

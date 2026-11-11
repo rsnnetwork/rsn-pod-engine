@@ -122,7 +122,7 @@ describe('the circle page (S2 controls)', () => {
     expect(menu).toMatch(/edit: \{ key: 'edit', onSelect: \(\) => openSheet\('edit'\), testId: 'circle-edit' \}/);
     expect(menu).toMatch(/invitations: \{ key: 'invitations', onSelect: \(\) => openSheet\('invitations'\), testId: 'circle-invitations' \}/);
     expect(menu).toMatch(/onSelect: \(\) => openSheet\('settings'\),\s*testId: 'circle-settings'/);
-    expect(menu).toMatch(/circleManageKeys\(circle, EXPORT_SCREEN_ON_MAIN\)/);
+    expect(menu).toMatch(/circleManageKeys\(circle, mayExportCircle\(circle\.myRole\)\)/);
     expect(page).not.toMatch(/data-testid="circle-edit"|data-testid="circle-invitations"|data-testid="circle-settings"/);
   });
 

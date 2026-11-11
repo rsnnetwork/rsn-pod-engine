@@ -164,15 +164,22 @@ describe('export: the screens', () => {
   const sheet = code('features/spaces/SpaceExportSheet.tsx');
   const download = code('features/spaces/download-space-file.ts');
 
-  it('a circle shows Export to its owner and moderators only, in its row of organiser actions', () => {
-    expect(circle).toContain('{mayExportCircle(circle.myRole) && (');
-    expect(circle).toContain('data-testid="circle-export" className={HEADER_ACTION}');
+  // Shirley pilot S3 (RSN 11): Export is an entry of each page's Manage menu, the only Export there, by this same rule.
+  it('a circle shows Export to its owner and moderators only, in its Manage menu', () => {
+    const menu = code('features/circles/CircleManageMenu.tsx');
+    expect(menu).toContain('circleManageKeys(circle, mayExportCircle(circle.myRole))');
+    expect(menu).toContain("export: { key: 'export', onSelect: () => openSheet('export'), testId: 'circle-export' },");
+    expect(circle).not.toContain('data-testid="circle-export"');
     expect(circle).toContain('<SpaceExportSheet kind="circle" spaceId={circle.id} name={circle.name}');
   });
 
   it('a pod shows Export to its active director and hosts only (never by an admin\'s powers), archived too', () => {
     expect(pod).toContain("const canExport = isMember && mayExportPod(myMembership?.status === 'active' ? myMembership.role : pod.memberRole);");
-    expect(pod.match(/\{exportButton\}/g)).toHaveLength(2);
+    expect(pod).toContain("export: { key: 'export', onSelect: () => setExportOpen(true), testId: 'pod-export' },");
+    expect(pod).toContain('}, canExport).flatMap(');
+    // The menu is drawn in the archived pod's row too, where Export is its only entry.
+    expect(pod.match(/<ManageMenu title=\{`Manage \$\{pod\.name\}`\} entries=\{manageEntries\}/g)).toHaveLength(2);
+    expect(pod).not.toMatch(/exportButton|data-testid="pod-export"/);
     expect(pod).toContain('{exportOpen && canExport && podId && (');
   });
 

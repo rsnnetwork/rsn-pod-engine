@@ -212,6 +212,9 @@ test(`an organiser exports members (no emails, logged first); others are refused
   // ── The screens at 360px ─────────────────────────────────────────────────────────────────────────────────
   const op = await signedIn(o, PHONE);
   await gotoRetry(op, `${APP}/circles/${circleId}`);
+  // Shirley pilot S3: Export is an entry of the circle's Manage menu (a bottom sheet at this width).
+  await fitsViewport(op, op.getByTestId('manage-open'));
+  await op.getByTestId('manage-open').click();
   const exportButton = op.getByTestId('circle-export');
   await fitsViewport(op, exportButton);
   await exportButton.click();
@@ -226,11 +229,15 @@ test(`an organiser exports members (no emails, logged first); others are refused
   const mp = await signedIn(m, PHONE);
   await gotoRetry(mp, `${APP}/circles/${circleId}`);
   await expect(mp.getByTestId(`circle-join-${circleId}`)).toBeVisible({ timeout: 30_000 });
+  // A plain member has no Manage menu, so no Export.
+  await expect(mp.getByTestId('manage-open')).toHaveCount(0);
   await expect(mp.getByTestId('circle-export')).toHaveCount(0);
 
-  // The pod's director (the owner made it) has Export there too.
+  // The pod's director (the owner made it) has Export there too, in the pod's Manage menu.
   await gotoRetry(op, `${APP}/pods/${podId}`);
+  await op.getByTestId('manage-open').click();
   await fitsViewport(op, op.getByTestId('pod-export'));
+  await op.keyboard.press('Escape');
 
   // ── Fix round 1: an ARCHIVED circle stays exportable by its owner (and moderators); anyone else gets 404 ──────
   expect((await api(admin!, 'POST', `/circles/${circleId}/archive`)).status).toBe(200);

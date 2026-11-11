@@ -3,7 +3,7 @@
 import api from '@/lib/api';
 import type {
   ConnectionList, EveryonePage, MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PictureCrop, PictureKind,
-  PictureSource, PublicMember, PublicProfileCard, PublicProfileLinkState, RecentConnection, WorthContinuing,
+  PictureSource, ProfileCommunities, PublicMember, PublicProfileCard, PublicProfileLinkState, RecentConnection, WorthContinuing,
 } from '@rsn/shared';
 import type { PokeStatus } from './person';
 
@@ -45,6 +45,9 @@ export const reasonKeys = {
   // Shirley pilot S6: your profile as a member with no connection to you sees it, and your public link.
   myPreview: ['reason', 'mine', 'preview'] as const,
   myPublicLink: ['reason', 'mine', 'public-link'] as const,
+  // Shirley pilot S3 (RSN 14): a profile's Communities (the spaces you may see), and your own as a member sees them.
+  communities: (userId: string) => ['reason', 'communities', userId] as const,
+  myCommunities: ['reason', 'mine', 'communities'] as const,
   // A public link's page, read signed out. Not under `mine`: it is anyone's page.
   publicProfile: (token: string) => ['reason', 'public-profile', token] as const,
   blockStatus: (userId: string) => ['reason', 'block-status', userId] as const,
@@ -63,6 +66,12 @@ export const fetchRecentConnections = () => api.get('/people/connections/recent'
 export const fetchMyCard = () => api.get('/people/me/card').then((r) => r.data.data as PublicMember);
 // Shirley pilot S6 (RSN 12): your own Human Profile exactly as a member with no connection to you is sent it.
 export const fetchMyPreview = () => api.get('/people/me/preview').then((r) => r.data.data as PersonBrief);
+// Shirley pilot S3 (RSN 14): a page of the circles and pods a member is in that you may see; your own, as a member with no
+// connection to you sees them (the preview).
+export const fetchCommunities = (userId: string, offset: number, limit: number) =>
+  api.get(`/people/${memberSegment(userId)}/communities`, { params: { offset, limit } }).then((r) => r.data.data as ProfileCommunities);
+export const fetchMyCommunities = (offset: number, limit: number) =>
+  api.get('/people/me/communities', { params: { offset, limit } }).then((r) => r.data.data as ProfileCommunities);
 
 // Your public profile link (D5): read it, make it (a second press keeps the same link), make a new one in its place, or
 // turn it off. Each answers where the link stands now.

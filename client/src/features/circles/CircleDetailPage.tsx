@@ -11,12 +11,15 @@
 // T13 (1 Nov 2026; 30 Oct review 6.5): its managers schedule an event for everyone in it ("Schedule an event" in the
 // header's row of actions). Its events are its own and its pods', as the server lists them, and the page follows the
 // member's own events too, so a new circle event shows without a refresh.
-// Shirley pilot S7 (item 20): its owner and moderators export its data (Export, in the same row of organiser actions).
+// Shirley pilot S3 (RSN 11): Edit details, Members, Invitations, Pods, Events, Visibility (who can join) and Moderation
+// (join requests) are one Manage menu (features/manage), each entry only for whoever may use it; Schedule an event,
+// Invite, Requests (n) and Join stay in the row because they are what people look for first.
+// Shirley pilot S7 (item 20): its owner and moderators export its data, from Export in that menu (SpaceExportSheet).
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Users, CalendarPlus, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox, Pencil, Send, Download } from 'lucide-react';
+import { ArrowLeft, Users, CalendarPlus, CircleDashed, MessagesSquare, Mail, Lock, Inbox } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
@@ -34,9 +37,8 @@ import CircleOrganisationsSection from './CircleOrganisationsSection';
 import EditCircleSheet from './EditCircleSheet';
 import CircleInvitesSheet from './CircleInvitesSheet';
 import SpaceExportSheet from '@/features/spaces/SpaceExportSheet';
-import { mayExportCircle } from '@/features/spaces/space-export';
-import { LOCKED_COPY, WHO_CAN_JOIN, circleEntities, requestsLabel, type CircleDetail } from './circle-logic';
-import { EDIT_DETAILS, INVITATIONS } from './circle-admin';
+import CircleManageMenu from './CircleManageMenu';
+import { LOCKED_COPY, circleEntities, requestsLabel, type CircleDetail } from './circle-logic';
 
 const HEADER_ACTION = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50';
 
@@ -106,28 +108,9 @@ export default function CircleDetailPage() {
               <Mail className="h-4 w-4" /> Invite
             </button>
           )}
-          {/* S2: the people who run it edit its name and description; the owner also chooses who can join there. */}
-          {circle.canManage && (
-            <button type="button" onClick={() => setSheet('edit')} data-testid="circle-edit" className={HEADER_ACTION}>
-              <Pencil className="h-4 w-4" /> {EDIT_DETAILS}
-            </button>
-          )}
-          {circle.canManage && (
-            <button type="button" onClick={() => setSheet('invitations')} data-testid="circle-invitations" className={HEADER_ACTION}>
-              <Send className="h-4 w-4" /> {INVITATIONS}
-            </button>
-          )}
-          {/* S2 (D3): who can join is the owner's choice (or a platform admin's). */}
-          {circle.isOwner && circle.joinPolicy !== undefined && (
-            <button type="button" onClick={() => setSheet('settings')} data-testid="circle-settings" className={HEADER_ACTION} aria-label={WHO_CAN_JOIN}>
-              <Settings2 className="h-4 w-4" /> {WHO_CAN_JOIN}
-            </button>
-          )}
-          {mayExportCircle(circle.myRole) && (
-            <button type="button" onClick={() => setSheet('export')} data-testid="circle-export" className={HEADER_ACTION}>
-              <Download className="h-4 w-4" /> Export
-            </button>
-          )}
+          {/* S3 (RSN 11): everything else the people who run it do is in one Manage menu, each entry only for whoever may
+              use it (the owner alone chooses who can join). */}
+          <CircleManageMenu circle={circle} openSheet={setSheet} openRequests={openRequests} />
           {circle.canManage && (circle.joinPolicy === 'closed' || (circle.requestCount ?? 0) > 0) && (
             <button type="button" onClick={openRequests} data-testid="circle-requests-open" className={HEADER_ACTION}>
               <Inbox className="h-4 w-4" /> {requestsLabel(circle.requestCount)}

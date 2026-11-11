@@ -17,6 +17,7 @@ import ReasonSheep from '../brand/ReasonSheep';
 import ProfileBanner from './ProfileBanner';
 import ProfileHero from './ProfileHero';
 import ProfileDetails from './ProfileDetails';
+import ProfileCommunities from './ProfileCommunities';
 import MoveBar from './MoveBar';
 import ProfileMoreMenu from './ProfileMoreMenu';
 import { useBlockedByYou } from './useBlockedByYou';
@@ -136,6 +137,8 @@ function Profile({ brief, userId, source, hideBar }: { brief: PersonBrief; userI
         )}
         <ProfileHero brief={brief} who={who} source={source} userId={userId} />
         <ProfileDetails brief={brief} who={who} source={source} onRecordOutcome={() => setOutcomeOpen(true)} />
+        {/* Shirley pilot S3 (RSN 14): the circles and pods they are in that you may see. */}
+        <ProfileCommunities mode="member" userId={userId} first={who.first} />
       </main>
       {showBar && (
         <MoveBar

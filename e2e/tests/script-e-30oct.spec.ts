@@ -1159,6 +1159,7 @@ test('7.4–7.6 and a legacy circle: invite from the sheet (never a removed conn
   });
 
   await test.step('7.5 Closed: a non-member sees the locked page and asks; the owner approves live; the page unlocks live', async () => {
+    await o.getByTestId('manage-open').click(); // Shirley pilot S3: Who can join is in the Manage menu
     await o.getByTestId('circle-settings').click();
     await o.getByTestId('circle-policy-closed').check();
     await o.getByTestId('circle-policy-save').click();

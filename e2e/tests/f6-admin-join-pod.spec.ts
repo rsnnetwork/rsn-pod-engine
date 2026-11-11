@@ -104,8 +104,12 @@ test('the screen: an admin who is not a member sees Join and the manage controls
   const join = page.getByRole('button', { name: /Join Pod/ });
   await expect(join).toBeVisible({ timeout: 30_000 });
   await expectReachable(page, join, 'Join Pod at phone width');
-  await expect(page.getByRole('button', { name: /Edit Pod/ }), 'manage controls stay for an admin who is not a member').toBeVisible();
-  await expect(page.getByRole('button', { name: /Archive Pod/ })).toBeVisible();
+  // Shirley pilot S3: the manage controls are entries of the Manage menu (a bottom sheet at phone width).
+  await expect(page.getByTestId('manage-open'), 'manage controls stay for an admin who is not a member').toBeVisible();
+  await page.getByTestId('manage-open').click();
+  await expect(page.getByTestId('pod-edit')).toBeVisible();
+  await expect(page.getByTestId('manage-archive')).toBeVisible();
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: /Leave Pod/ }), 'Leave is for members only').toHaveCount(0);
 
   // The wall opens to read and moderate, and says posting waits for joining.
@@ -114,7 +118,7 @@ test('the screen: an admin who is not a member sees Join and the manage controls
   await join.click();
   await expect(page.getByRole('button', { name: /Leave Pod/ })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('button', { name: /Join Pod/ })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /Edit Pod/ })).toBeVisible();
+  await expect(page.getByTestId('manage-open')).toBeVisible();
 
   const text = `Admin member post ${RUN}`;
   await page.getByPlaceholder('Write something to the pod…').click();
