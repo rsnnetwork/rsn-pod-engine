@@ -449,7 +449,7 @@ describe('after a 1:1 call', () => {
     expect(src).toContain(']).then(([to]) => navigate(to, { replace: true }));');
     // The third: a room closed under both (a block) goes back to the chat too, also replacing the room (fix round 2).
     expect(src.match(/navigate\(/g)).toHaveLength(3);
-    expect(src).toContain('navigate(`/messages/${conversationId}`, { replace: true });\n  }, [navigate, conversationId]);');
+    expect(src).toContain('navigate(`/messages/${conversationId}`, { replace: true });\n  }, [navigate, conversationId, addToast]);');
   });
 
   it('the thread asks over itself as an optional sheet with "Not now", once (the flag is dropped by replacing the address)', () => {
@@ -598,10 +598,82 @@ describe('fix round 1: a block during a call ends it for both', () => {
     expect(src).toContain("export const CALL_ENDED = 'The call has ended.';");
     // Fix round 2: back to the chat with no "How did your meeting go?" about the person just blocked (onRoomClosed skips
     // the ?feedback= landing); an ordinary disconnect still leaves the usual way.
-    expect(src).toMatch(/if \(reason === DisconnectReason\.ROOM_DELETED\) \{\s*addToast\(CALL_ENDED, 'info'\);\s*onRoomClosed\(\);\s*return;\s*\}\s*leaveRoom\(\);/);
+    expect(src).toMatch(/if \(reason === DisconnectReason\.ROOM_DELETED\) \{\s*onRoomClosed\(\);\s*return;\s*\}/);
+    // S5 fix 6: the closed-room leave says it itself, once, after its guard (three signals can lead there).
+    expect(src).toMatch(/if \(leftRoom\.current\) return;\s*leftRoom\.current = true;\s*setLeaving\(true\);\s*addToast\(CALL_ENDED, 'info'\);/);
     const closed = src.slice(src.indexOf('const leaveClosedRoom = useCallback'), src.indexOf('const live = conn'));
     expect(closed).not.toMatch(/afterRoomLeave|feedback/);
     expect(src).toContain('onRoomClosed={leaveClosedRoom}');
+  });
+});
+
+// S5 fix 6 (12 Nov 2026): on production LiveKit's ROOM_DELETED did not come (it answered "room not found" for a room
+// started half a second before the block) and Shirley sat in a dead call. The call page asks the server itself too.
+describe('fix 6: a block ends the call even when LiveKit says nothing', () => {
+  const load = (get: (url: string) => Promise<unknown>) => loadClientModule('features/messages/call-permission.ts', {
+    '@/lib/api': { __esModule: true, default: { get } },
+  }) as {
+    permissionFromStatus: (s: number | undefined) => string;
+    readCallPermission: (id: string) => Promise<string>;
+    readCallPermissionWithin: (id: string, ms?: number) => Promise<string>;
+    afterDisconnect: (reason: unknown, p: string) => string;
+    PERMISSION_READ_MS: number;
+  };
+  const { DisconnectReason } = require('livekit-client') as { DisconnectReason: Record<string, number> };
+
+  it('only a refusal ends the call: 403 or 404 is refused, a 2xx allowed, anything else (429, 500, no answer) unknown', () => {
+    const { permissionFromStatus } = load(() => Promise.resolve({ status: 200 }));
+    expect([200, 204, 403, 404, 429, 500, undefined].map(permissionFromStatus))
+      .toEqual(['allowed', 'allowed', 'refused', 'refused', 'unknown', 'unknown', 'unknown']);
+  });
+
+  it('reads the call permission the token check uses (partner-presence), never rejects, and gives up after a bound', async () => {
+    const asked: string[] = [];
+    const ok = load((url) => { asked.push(url); return Promise.resolve({ status: 200 }); });
+    expect(await ok.readCallPermission('c 1')).toBe('allowed');
+    expect(asked).toEqual(['/dm/conversations/c%201/partner-presence']);
+    const blocked = load(() => Promise.reject({ response: { status: 403 } }));
+    expect(await blocked.readCallPermission('c-1')).toBe('refused');
+    const offline = load(() => Promise.reject(new Error('Network Error')));
+    expect(await offline.readCallPermission('c-1')).toBe('unknown');
+    const hung = load(() => new Promise(() => undefined));
+    expect(await hung.readCallPermissionWithin('c-1', 5)).toBe('unknown');
+    expect(hung.PERMISSION_READ_MS).toBe(3_000);
+  });
+
+  it('a disconnect while the call is refused is a closed room, never a meeting to rate; ROOM_DELETED always is', () => {
+    const { afterDisconnect } = load(() => Promise.resolve({ status: 200 }));
+    expect(afterDisconnect(DisconnectReason.ROOM_DELETED, 'unknown')).toBe('closed');
+    expect(afterDisconnect(DisconnectReason.STATE_MISMATCH, 'refused')).toBe('closed');
+    expect(afterDisconnect(DisconnectReason.UNKNOWN_REASON, 'refused')).toBe('closed');
+    expect(afterDisconnect(DisconnectReason.STATE_MISMATCH, 'allowed')).toBe('leave');
+    expect(afterDisconnect(undefined, 'unknown')).toBe('leave');
+  });
+
+  it('the room reads the permission as it opens and on the block\'s own change, and ends the call once refused', () => {
+    const src = readClientSource('features/messages/MeetPage.tsx');
+    expect(src).toMatch(/queryKey: \['call-permission', conversationId\],\s*queryFn: \(\) => readCallPermission\(conversationId\),/);
+    expect(src).toContain("meta: { entities: myUserId ? [E.userBlocks(myUserId)] : [] },");
+    // Never on an answer an earlier call left behind: read afresh, and decided only once that read is in.
+    expect(src).toContain("refetchOnMount: 'always',");
+    expect(src).toContain('gcTime: 0,');
+    expect(src).toContain("const refusedNow = permission.isFetchedAfterMount && !permission.isFetching && permission.data === 'refused';");
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(refusedNow\) onRoomClosed\(\);\s*\}, \[refusedNow, onRoomClosed\]\);/);
+  });
+
+  it('any other disconnect asks first (bounded), its own leave does not, and a reconnect re-reads the permission', () => {
+    const src = readClientSource('features/messages/MeetPage.tsx');
+    expect(src).toMatch(/if \(reason === DisconnectReason\.CLIENT_INITIATED\) \{\s*leaveRoom\(\);\s*return;\s*\}/);
+    expect(src).toMatch(/void readCallPermissionWithin\(conversationId\)\.then\(\(now\) => \{\s*if \(afterDisconnect\(reason, now\) === 'closed'\) onRoomClosed\(\);\s*else leaveRoom\(\);\s*\}\);/);
+    expect(src).toContain('<RecheckOnReconnect recheck={recheckPermission} />');
+    expect(src).toContain('room.on(RoomEvent.Reconnecting, onReconnecting);');
+    expect(src).toContain('room.on(RoomEvent.SignalReconnecting, onReconnecting);');
+    expect(src).toContain('room.off(RoomEvent.Reconnecting, onReconnecting);');
+  });
+
+  it('the block tells both people with user:<id>:blocks, which is the tag the room listens for', () => {
+    const fanout = require('fs').readFileSync(require('path').join(__dirname, '../../realtime/fanout.ts'), 'utf8') as string;
+    expect(fanout).toMatch(/\[blockerId, blockedId\],\s*\[E\.userBlocks\(blockerId\), E\.userBlocks\(blockedId\)\],/);
   });
 });
 

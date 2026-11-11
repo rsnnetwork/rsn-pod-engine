@@ -85,7 +85,7 @@ jest.mock('../../../realtime/entities', () => ({
 }));
 
 import {
-  callRoomId, getCallToken, partnerPresence, requestCall, acceptCallRequest, endCallsOnBlock,
+  callRoomId, getCallToken, partnerPresence, requestCall, acceptCallRequest, endCallsOnBlock, CLOSE_AGAIN_AFTER_MS,
   declineCallRequest, cancelCallRequest, clampDuration, CALL_REQUEST_TTL_MS,
   getIncomingCallRequest, getOutgoingCallRequest, requestCallToUser,
 } from '../../../services/dm/meeting-call.service';
@@ -767,6 +767,8 @@ describe('requestCallToUser (the profile rings a person, not a conversation)', (
 // 11 Nov 2026 (Shirley Palmer's item 16; fix round 1, the controller's ruling): a block in the middle of a call ends it
 // for BOTH sides, and a token minted before the block can never reach the pair again.
 describe('endCallsOnBlock', () => {
+  // The close right away only; the later closes (CLOSE_AGAIN_AFTER_MS) have their own test below.
+  const NOW_ONLY = { closeAgainAfterMs: [] as number[] };
   const armBlock = (opts: { conversation: boolean; ringing: boolean; epoch?: number }) => {
     mockQuery.mockImplementation((sql: string) => {
       const q = String(sql).replace(/\s+/g, ' ');
@@ -782,7 +784,7 @@ describe('endCallsOnBlock', () => {
 
   it('moves the pair to a new call room and CLOSES the old one, so both are put out and an old token reaches nobody', async () => {
     armBlock({ conversation: true, ringing: false, epoch: 1 });
-    await endCallsOnBlock('u-a', 'u-b');
+    await endCallsOnBlock('u-a', 'u-b', NOW_ONLY);
     const move = mockQuery.mock.calls.find(c => /SET call_room_epoch = call_room_epoch \+ 1/.test(String(c[0])))!;
     expect(String(move[0]).replace(/\s+/g, ' ')).toContain('WHERE user_a_id = LEAST($1::uuid, $2::uuid) AND user_b_id = GREATEST($1::uuid, $2::uuid) RETURNING id, call_room_epoch');
     expect(move[1]).toEqual(['u-a', 'u-b']);
@@ -792,13 +794,13 @@ describe('endCallsOnBlock', () => {
 
   it('a second block (epoch 2) closes the room the pair had moved to (dm-<id>-1)', async () => {
     armBlock({ conversation: true, ringing: false, epoch: 2 });
-    await endCallsOnBlock('u-b', 'u-a');
+    await endCallsOnBlock('u-b', 'u-a', NOW_ONLY);
     expect(mockCloseRoom).toHaveBeenCalledWith('dm-conv-1-1');
   });
 
   it('withdraws a call still ringing between the two, closes the callee\'s banner and tells both', async () => {
     armBlock({ conversation: true, ringing: true });
-    await endCallsOnBlock('u-a', 'u-b');
+    await endCallsOnBlock('u-a', 'u-b', NOW_ONLY);
     const withdraw = mockQuery.mock.calls.find(c => /UPDATE call_requests SET status = 'cancelled'/.test(String(c[0])))!;
     expect(String(withdraw[0])).toMatch(/WHERE conversation_id = \$1 AND status = 'pending'/);
     expect(withdraw[1]).toEqual(['conv-1']);
@@ -809,7 +811,7 @@ describe('endCallsOnBlock', () => {
 
   it('with nothing ringing tells nobody, and still closes the room', async () => {
     armBlock({ conversation: true, ringing: false });
-    await endCallsOnBlock('u-a', 'u-b');
+    await endCallsOnBlock('u-a', 'u-b', NOW_ONLY);
     expect(mockRooms).toEqual([]);
     expect(mockEmitEntities).not.toHaveBeenCalled();
     expect(mockCloseRoom).toHaveBeenCalledTimes(1);
@@ -818,12 +820,22 @@ describe('endCallsOnBlock', () => {
   it('LiveKit refusing the close never fails the block', async () => {
     armBlock({ conversation: true, ringing: false });
     mockCloseRoom.mockRejectedValue(new Error('livekit down'));
-    await expect(endCallsOnBlock('u-a', 'u-b')).resolves.toBeUndefined();
+    await expect(endCallsOnBlock('u-a', 'u-b', NOW_ONLY)).resolves.toBeUndefined();
+  });
+
+  // S5 fix 6 (12 Nov 2026): on production LiveKit answered "room not found" for a room started half a second before the
+  // block (read as already closed), and both stayed in the call. The old room is closed again a little later.
+  it('closes the old room again later, a failed close included, and only the old room', async () => {
+    armBlock({ conversation: true, ringing: false, epoch: 2 });
+    mockCloseRoom.mockRejectedValueOnce(new Error('livekit down'));
+    await endCallsOnBlock('u-a', 'u-b', { closeAgainAfterMs: [0, 0] });
+    expect(mockCloseRoom.mock.calls).toEqual([['dm-conv-1-1'], ['dm-conv-1-1'], ['dm-conv-1-1']]);
+    expect(CLOSE_AGAIN_AFTER_MS).toEqual([2_000, 6_000]);
   });
 
   it('a pair with no conversation has nothing to end', async () => {
     armBlock({ conversation: false, ringing: true });
-    await endCallsOnBlock('u-a', 'u-b');
+    await endCallsOnBlock('u-a', 'u-b', NOW_ONLY);
     expect(mockQuery.mock.calls.some(c => /UPDATE call_requests/.test(String(c[0])))).toBe(false);
     expect(mockCloseRoom).not.toHaveBeenCalled();
   });

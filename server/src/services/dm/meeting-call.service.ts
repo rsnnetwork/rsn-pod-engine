@@ -611,8 +611,19 @@ async function claimAnswer(requestId: string, status: 'declined' | 'cancelled'):
  * everyone in it, both rooms go back to their thread with "The call has ended.", and a token minted before the block can
  * only reach the old room, which nobody is sent to again. No new token is minted for either while the block stands
  * (requireCallParticipant). Best-effort past the move: the block itself is already saved.
+ *
+ * The old room is closed again a little later (S5 fix 6, 12 Nov 2026). On production a block made half a second after
+ * the room started was answered "room not found" by LiveKit, which reads as already closed, and both people stayed in
+ * the call. Closing the old room is always safe: nobody is sent to it again. The screens also leave by themselves on
+ * the block's own user:<id>:blocks change (MeetPage), so this is the second way to the same end.
  */
-export async function endCallsOnBlock(blockerId: string, blockedId: string): Promise<void> {
+export const CLOSE_AGAIN_AFTER_MS: readonly number[] = [2_000, 6_000];
+
+export async function endCallsOnBlock(
+  blockerId: string,
+  blockedId: string,
+  { closeAgainAfterMs = CLOSE_AGAIN_AFTER_MS }: { closeAgainAfterMs?: readonly number[] } = {},
+): Promise<void> {
   const r = await query<{ id: string; call_room_epoch: number }>(
     `UPDATE dm_conversations SET call_room_epoch = call_room_epoch + 1
       WHERE user_a_id = LEAST($1::uuid, $2::uuid) AND user_b_id = GREATEST($1::uuid, $2::uuid)
@@ -632,10 +643,18 @@ export async function endCallsOnBlock(blockerId: string, blockedId: string): Pro
     await Promise.all(withdrawn.rows.map(closeCalleeBanners));
     await emitCallChanged(conversationId, [blockerId, blockedId]);
   }
-  try {
-    await getVideoProvider().closeRoom(callRoomId(conversationId, moved.call_room_epoch - 1));
-  } catch (err) {
-    logger.error({ err, conversationId }, 'closing the call room after a block failed');
+  const oldRoom = callRoomId(conversationId, moved.call_room_epoch - 1);
+  const close = async () => {
+    try {
+      await getVideoProvider().closeRoom(oldRoom);
+    } catch (err) {
+      logger.error({ err, conversationId }, 'closing the call room after a block failed');
+    }
+  };
+  await close();
+  for (const ms of closeAgainAfterMs) {
+    await new Promise<void>((resolve) => { setTimeout(resolve, ms).unref?.(); });
+    await close();
   }
 }
 
