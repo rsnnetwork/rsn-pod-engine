@@ -96,7 +96,7 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
     [input.fullName, email, input.linkedinUrl, input.reason, signInOriginFor(requestOrigin)]
   );
 
-  logger.info({ email }, 'New join request submitted');
+  logger.info({ id: result.rows[0].id }, 'New join request submitted');
 
   // Notify all admins about the new join request, and tell each admin's bell through its tag (H2b item 6, 26 Oct 2026)
   try {
@@ -117,7 +117,7 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
 
   // Send confirmation email (non-blocking)
   sendJoinRequestConfirmationEmail(email, input.fullName).catch(err =>
-    logger.error({ err, email }, 'Failed to send join request confirmation')
+    logger.error({ err, id: result.rows[0].id }, 'Failed to send join request confirmation')
   );
 
   // Fan out the email-action review email to every admin (non-blocking).
@@ -283,7 +283,7 @@ export async function reviewJoinRequest(
   // A suspended or banned account stays that way: no "you're in" email or
   // notification that approval cannot honour. The admin sees why on the row.
   if (account?.blockedStatus) {
-    logger.warn({ id, email: reviewed.email, status: account.blockedStatus }, 'Approved a join request for a suspended/banned account; it stays blocked');
+    logger.warn({ id, status: account.blockedStatus }, 'Approved a join request for a suspended/banned account; it stays blocked');
     return reviewed;
   }
 
@@ -293,11 +293,11 @@ export async function reviewJoinRequest(
     // falls back to, open on the site the applicant asked from (the preview, or the app).
     const applicantUrl = applicantBaseUrl(row);
     const approvalLoginUrl = await generateApprovalMagicLink(reviewed.email, applicantUrl).catch(err => {
-      logger.warn({ err, email: reviewed.email }, 'Failed to generate approval magic link — falling back to login URL');
+      logger.warn({ err, id }, 'Failed to generate approval magic link — falling back to login URL');
       return `${applicantUrl}/login`;
     });
     sendJoinRequestWelcomeEmail(reviewed.email, reviewed.fullName, approvalLoginUrl).catch(err =>
-      logger.error({ err, email: reviewed.email }, 'Failed to send welcome email')
+      logger.error({ err, id }, 'Failed to send welcome email')
     );
 
     // Preload the LinkedIn enrichment NOW — during the approval → login gap — so the
@@ -329,7 +329,7 @@ export async function reviewJoinRequest(
     }
   } else {
     sendJoinRequestDeclineEmail(reviewed.email, reviewed.fullName).catch(err =>
-      logger.error({ err, email: reviewed.email }, 'Failed to send decline email')
+      logger.error({ err, id }, 'Failed to send decline email')
     );
   }
 
@@ -397,10 +397,10 @@ export async function pokeJoinRequest(id: string): Promise<JoinRequest> {
   // Send reminder email (non-blocking). It opens the site the applicant asked from.
   const loginUrl = `${applicantBaseUrl(updated.rows[0])}/login`;
   sendJoinRequestReminderEmail(poked.email, poked.fullName, loginUrl, poked.reminderCount).catch(err =>
-    logger.error({ err, email: poked.email }, 'Failed to send reminder email')
+    logger.error({ err, id }, 'Failed to send reminder email')
   );
 
-  logger.info({ id, email: poked.email, reminderCount: poked.reminderCount }, 'Join request poked');
+  logger.info({ id, reminderCount: poked.reminderCount }, 'Join request poked');
   return poked;
 }
 
@@ -466,7 +466,7 @@ export async function processAutoReminders(): Promise<{ reminded: number; expire
         [jr.id]
       );
       expired++;
-      logger.info({ id: jr.id, email: jr.email }, 'Auto-expired join request (30 days, never activated)');
+      logger.info({ id: jr.id }, 'Auto-expired join request (30 days, never activated)');
       continue;
     }
 
@@ -528,6 +528,6 @@ async function generateApprovalMagicLink(email: string, baseUrl: string): Promis
   );
 
   const magicLinkUrl = `${baseUrl}/auth/verify?token=${token}`;
-  logger.info({ email: normalizedEmail }, 'Approval magic link generated (7-day expiry)');
+  logger.info('Approval magic link generated (7-day expiry)');
   return magicLinkUrl;
 }

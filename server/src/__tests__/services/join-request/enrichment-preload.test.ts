@@ -49,7 +49,7 @@ describe('a lookup that brings back nothing', () => {
 
     expect(writes()).toHaveLength(0);
     expect(inserts()).toHaveLength(1);
-    expect(inserts()[0][1]).toEqual(['jr-1', null, 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', ENRICH_RETRY_DELAY_MS / 1000]);
+    expect(inserts()[0][1]).toEqual(['jr-1', 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', ENRICH_RETRY_DELAY_MS / 1000]);
     expect(String(inserts()[0][0])).toMatch(/ON CONFLICT DO NOTHING/);
     expect(nothingLogs()).toEqual([expect.objectContaining({
       joinRequestId: 'jr-1', outcome: 'retry_exhausted', reason: 'not stored yet (asked to try again later)', retryScheduled: true,
@@ -103,6 +103,52 @@ describe('a lookup that brings back nothing', () => {
   });
 });
 
+describe('the 150 s deadline (a request retry, or an approval, never hangs the worker)', () => {
+  const FOUND = {
+    kind: 'found',
+    photoUrl: null,
+    result: {
+      profile: { fullName: 'Jane Doe', headline: 'CTO', currentRole: 'CTO', currentCompany: 'Acme', pastRoles: [], skills: [] },
+      confidence: 0.95, sources: ['scrapingdog:jane-doe:live'],
+      foundLinkedinUrl: 'https://www.linkedin.com/in/jane-doe', requestedLinkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+      enrichedAt: '2026-11-12T10:00:00.000Z',
+    },
+  };
+  afterEach(() => jest.useRealTimers());
+
+  it('a lookup that never answers ends at 150 s, logged, with no retry scheduled', async () => {
+    jest.useFakeTimers();
+    mockRunProvider.mockReturnValue(new Promise(() => {}));
+
+    const run = preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await jest.advanceTimersByTimeAsync(150_000);
+    await run;
+
+    expect(writes()).toHaveLength(0);
+    expect(inserts()).toHaveLength(0);
+    expect(nothingLogs()).toEqual([expect.objectContaining({ joinRequestId: 'jr-1', outcome: 'provider_error', reason: 'provider deadline of 150s reached' })]);
+  });
+
+  it('a profile that arrives after the deadline is still kept, only on a request that has none yet', async () => {
+    jest.useFakeTimers();
+    let answer!: (o: unknown) => void;
+    mockRunProvider.mockReturnValue(new Promise((r) => { answer = r; }));
+
+    const run = preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    await jest.advanceTimersByTimeAsync(150_000);
+    await run;
+    expect(writes()).toHaveLength(0);
+
+    answer(FOUND);
+    await jest.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(writes()).toHaveLength(1);
+    expect(String(writes()[0][0])).toMatch(/WHERE id = \$2 AND enriched IS NULL/);
+    expect(writes()[0][1][1]).toBe('jr-1');
+  });
+});
+
 describe('a lookup that finds the person', () => {
   it('keeps the result on the request with the provider, schedules nothing and logs no "nothing"', async () => {
     mockRunProvider.mockResolvedValue({
@@ -123,6 +169,16 @@ describe('a lookup that finds the person', () => {
     expect(JSON.parse(String(writes()[0][1][0]))).toMatchObject({ provider: 'scrapingdog', confidence: 0.95 });
     expect(inserts()).toHaveLength(0);
     expect(nothingLogs()).toHaveLength(0);
+  });
+
+  it('no log line names the applicant: no name, email or address, only ids and reasons', async () => {
+    mockRunProvider.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
+    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+    mockRunProvider.mockResolvedValue({ kind: 'provider_error', reason: 'scrapingdog 500' });
+    await preloadJoinRequestEnrichment(REQUEST, { scheduleRetry: true });
+
+    const logged = JSON.stringify([...warn.mock.calls, ...(logger.info as jest.Mock).mock.calls]);
+    for (const personal of ['Jane Doe', 'jane@example.com', 'jane-doe', 'linkedin.com']) expect(logged).not.toContain(personal);
   });
 
   it('no LinkedIn on the request: no lookup, nothing logged as missing', async () => {

@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { transactionControl } from './transaction-control';
-import { SCHEDULE_RETRY_SQL, CLAIM_DUE_RETRIES_SQL } from '../../services/onboarding/enrichment-retry.repo';
+import { SCHEDULE_REQUEST_RETRY_SQL, SCHEDULE_USER_RETRY_SQL, CLAIM_DUE_RETRIES_SQL } from '../../services/onboarding/enrichment-retry.repo';
 
 const MIGRATIONS = path.join(__dirname, '../../db/migrations');
 const FILE = '155_enrichment_retries.sql';
@@ -42,9 +42,15 @@ describe('migration 155 (enrichment retries)', () => {
     expect(f).toContain('CREATE INDEX IF NOT EXISTS idx_enrichment_retries_run_at ON enrichment_retries (run_at);');
   });
 
-  it('the schedule and the claim use only what the migration makes', () => {
-    expect(SCHEDULE_RETRY_SQL).toMatch(/INSERT INTO enrichment_retries \(join_request_id, user_id, linkedin_url, full_name, run_at\)/);
-    expect(SCHEDULE_RETRY_SQL).toMatch(/ON CONFLICT DO NOTHING/);
+  it('the schedules and the claim use only what the migration makes', () => {
+    for (const s of [SCHEDULE_REQUEST_RETRY_SQL, SCHEDULE_USER_RETRY_SQL]) {
+      expect(s).toMatch(/INSERT INTO enrichment_retries \(join_request_id, user_id, linkedin_url, full_name, run_at\)/);
+    }
+    // A request keeps its first row; a member's latest address wins through the member index's own predicate.
+    expect(SCHEDULE_REQUEST_RETRY_SQL).toMatch(/ON CONFLICT DO NOTHING/);
+    expect(flat(SCHEDULE_USER_RETRY_SQL)).toContain(
+      'ON CONFLICT (user_id) WHERE user_id IS NOT NULL DO UPDATE SET linkedin_url = EXCLUDED.linkedin_url, full_name = EXCLUDED.full_name, run_at = EXCLUDED.run_at',
+    );
     expect(CLAIM_DUE_RETRIES_SQL).toMatch(/RETURNING id, join_request_id, user_id, linkedin_url, full_name/);
   });
 });

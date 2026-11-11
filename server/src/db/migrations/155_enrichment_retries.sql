@@ -11,7 +11,8 @@
 -- several instances never run it twice, and the retry never asks for another: one later attempt, at most. A server that
 -- restarts before run_at keeps the row; one that stops in the minute a retry runs loses that one attempt (the member's
 -- next lookup or an admin refresh covers it).
--- The partial unique indexes keep one waiting row per request and per member (a second schedule does nothing).
+-- The partial unique indexes keep one waiting row per request and per member: a second schedule for a request does
+-- nothing; for a member it replaces the waiting row (their latest address wins, see enrichment-retry.repo.ts).
 -- linkedin_url and full_name are the lookup's input, kept only until the retry runs.
 --
 -- Only adds: one new table and its indexes, each made only when missing. Safe to run twice.

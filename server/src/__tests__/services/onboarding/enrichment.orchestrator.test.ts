@@ -32,6 +32,12 @@ jest.mock('../../../services/onboarding/enrichment.repo', () => ({
   setEnrichmentState: jest.fn(),
 }));
 
+const mockFanoutUser = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../../realtime/fanout', () => ({
+  __esModule: true,
+  fanoutUserEntity: (...args: unknown[]) => mockFanoutUser(...args),
+}));
+
 const mockScheduleRetry = jest.fn().mockResolvedValue(true);
 jest.mock('../../../services/onboarding/enrichment-retry.repo', () => ({
   __esModule: true,
@@ -308,10 +314,76 @@ describe('runEnrichment', () => {
       .toMatchObject({ userId: 'u1', outcome: 'failed', retryScheduled: true });
   });
 
-  it('the later attempt itself (scheduleRetry false) never schedules another', async () => {
+  it('the later attempt itself (scheduleRetry false) never schedules another, and its error text promises nothing', async () => {
     mockScrapingdogEnrich.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
     await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe', scheduleRetry: false });
     expect(mockScheduleRetry).not.toHaveBeenCalled();
+    expect(lastStateCall()[1]).toMatchObject({ status: 'failed', error: 'not stored yet' });
+  });
+
+  it('a schedule that could not be written: the error text says no retry is coming', async () => {
+    mockScrapingdogEnrich.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
+    mockScheduleRetry.mockResolvedValueOnce(false);
+    await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+    expect(lastStateCall()[1]).toMatchObject({ status: 'failed', error: 'not stored yet' });
+  });
+
+  it('a 202 or rate limit past the budget: "retry exhausted, retrying later" only when a retry is waiting', async () => {
+    mockScrapingdogEnrich.mockResolvedValue({ kind: 'retry_exhausted' });
+    await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+    expect(lastStateCall()[1]).toMatchObject({ error: 'retry exhausted, retrying later' });
+  });
+
+  // 12 Nov 2026 (review I3): a profile ScrapingDog billed after the deadline used to be dropped.
+  describe('an answer after the 150 s deadline', () => {
+    const DEADLINE_ERROR = 'provider deadline of 150s reached';
+    afterEach(() => jest.useRealTimers());
+
+    async function cutAtDeadline(): Promise<(o: unknown) => void> {
+      jest.useFakeTimers();
+      let answer!: (o: unknown) => void;
+      mockScrapingdogEnrich.mockReturnValue(new Promise((r) => { answer = r; }));
+      const run = runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+      await jest.advanceTimersByTimeAsync(150_000);
+      await run;
+      expect(lastStateCall()[1]).toMatchObject({ status: 'failed', error: DEADLINE_ERROR });
+      return answer;
+    }
+    const settle = async () => { await jest.advanceTimersByTimeAsync(0); for (let i = 0; i < 10; i++) await Promise.resolve(); };
+
+    it('a profile that arrives late is kept over this attempt\'s own deadline failure, and the screens are told', async () => {
+      const answer = await cutAtDeadline();
+      mockGetEnrichmentState.mockResolvedValue({ status: 'failed', source: 'scrapingdog', error: DEADLINE_ERROR, startedAt: null, completedAt: null });
+      mockSaveEnrichedCandidate.mockClear();
+
+      answer({ kind: 'found', result: foundResult(), photoUrl: null });
+      await settle();
+
+      expect(mockSaveEnrichedCandidate).toHaveBeenCalledWith('u1', expect.objectContaining({ confidence: expect.any(Number) }));
+      expect(lastStateCall()[1]).toMatchObject({ status: 'found', source: 'scrapingdog', linkedinUrl: REQ_URL });
+      expect(mockFanoutUser).toHaveBeenCalledWith('u1');
+    });
+
+    it('a newer lookup has started since: the late profile does not overwrite it', async () => {
+      const answer = await cutAtDeadline();
+      mockGetEnrichmentState.mockResolvedValue({ status: 'searching', source: 'scrapingdog', error: null, startedAt: new Date().toISOString(), completedAt: null });
+      mockSaveEnrichedCandidate.mockClear();
+      const writes = mockSetEnrichmentState.mock.calls.length;
+
+      answer({ kind: 'found', result: foundResult(), photoUrl: null });
+      await settle();
+
+      expect(mockSaveEnrichedCandidate).not.toHaveBeenCalled();
+      expect(mockSetEnrichmentState.mock.calls.length).toBe(writes);
+    });
+
+    it('a late "not stored yet" still gets its one later attempt', async () => {
+      const answer = await cutAtDeadline();
+      expect(mockScheduleRetry).not.toHaveBeenCalled(); // a deadline is not a wait ScrapingDog asked for
+      answer({ kind: 'retry_exhausted', notReady: true });
+      await settle();
+      expect(mockScheduleRetry).toHaveBeenCalledWith({ userId: 'u1' }, { linkedinUrl: REQ_URL });
+    });
   });
 
   it.each([
