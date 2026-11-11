@@ -325,7 +325,7 @@ const cases: EmailCase[] = [
   },
   {
     fn: 'sendEmailChangedNoticeEmail', label: 'the email changed notice', subject: 'Your REASON sign-in email was changed',
-    says: ["Your REASON sign-in email was changed to n•••@example.org. If this wasn't you, reply to this email straight away."],
+    says: ["Your REASON sign-in email was changed to n•••@example.org. If this wasn't you, contact REASON support straight away."],
     run: () => emailService.sendEmailChangedNoticeEmail('delivered+ana@resend.dev', { maskedNew: 'n•••@example.org' }),
   },
 ];

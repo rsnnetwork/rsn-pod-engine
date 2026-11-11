@@ -7,7 +7,7 @@ import { recordAudit } from '../middleware/audit';
 import { adminOnboardingExportLimiter, clientIp } from '../middleware/rateLimit';
 import { ONBOARDING_CSV_COLUMNS, onboardingReportRows } from '../services/onboarding/onboarding-report';
 import { requireRole } from '../middleware/rbac';
-import { guardAccountChange } from '../middleware/role-guard';
+import { accountChangeRefusal, guardAccountChange, readTargetRoles } from '../middleware/role-guard';
 import { requireReauthForAdminRoleChange } from '../middleware/reauth';
 import { query } from '../db';
 import { ApiResponse, ErrorCodes, UserRole } from '@rsn/shared';
@@ -405,8 +405,17 @@ router.post(
       const { action, adminNotes, source } = req.body;
 
       // Find the reported user so a suspend/ban can act on them, from whichever
-      // table this row lives in.
-      let reportedUserId: string | null = null;
+      // table this row lives in. Read first: only a super admin suspends or bans a
+      // super admin (middleware/role-guard.ts), and a refused resolve writes nothing.
+      const reported = source === 'report'
+        ? await query<{ user_id: string }>(`SELECT reported_id AS user_id FROM user_reports WHERE id = $1`, [req.params.id])
+        : await query<{ user_id: string }>(`SELECT reported_user_id AS user_id FROM violations WHERE id = $1`, [req.params.id]);
+      const reportedUserId: string | null = reported.rows[0]?.user_id ?? null;
+      if ((action === 'suspend' || action === 'ban') && reportedUserId) {
+        const roles = await readTargetRoles([reportedUserId]);
+        const refusal = accountChangeRefusal(req.user!.role, [...roles.values()]);
+        if (refusal) throw refusal;
+      }
 
       if (source === 'report') {
         // Member report (user_reports): dismiss = no action, anything else = resolved.
@@ -415,10 +424,6 @@ router.post(
         } else {
           await reportService.resolveReport(req.params.id, req.user!.userId, adminNotes);
         }
-        const rep = await query<{ reported_id: string }>(
-          `SELECT reported_id FROM user_reports WHERE id = $1`, [req.params.id]
-        );
-        reportedUserId = rep.rows[0]?.reported_id ?? null;
       } else {
         const newStatus = action === 'dismiss' ? 'dismissed' : 'actioned';
         await query(
@@ -426,10 +431,6 @@ router.post(
            WHERE id = $4`,
           [newStatus, adminNotes || null, req.user!.userId, req.params.id]
         );
-        const violation = await query<{ reported_user_id: string }>(
-          `SELECT reported_user_id FROM violations WHERE id = $1`, [req.params.id]
-        );
-        reportedUserId = violation.rows[0]?.reported_user_id ?? null;
       }
 
       // Suspend/ban acts on the reported user regardless of which table it came from.

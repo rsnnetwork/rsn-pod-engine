@@ -130,8 +130,12 @@ test('a member confirms it is them to change their sign-in email and to close th
   const closed = await call('POST', '/users/me/close', { token: secondPair.accessToken, body: { reauthToken: closeProof } });
   expect(closed.status, JSON.stringify(closed.json)).toBe(200);
   expect(closed.json.data).toEqual({ closed: true });
-  const after = await call('GET', '/users/me', { token: secondPair.accessToken });
-  expect(after.status).toBe(401);
+  // The instance that closed it forgets the account at once; another instance's account cache may let a request through
+  // for up to 60 seconds, so the signed-in call is polled for up to 75 seconds until it is refused.
+  await expect.poll(
+    async () => (await call('GET', '/users/me', { token: secondPair.accessToken })).status,
+    { timeout: 75_000, intervals: [1_000, 2_000, 5_000] },
+  ).toBe(401);
   const row = await pool.query(`SELECT status FROM users WHERE id = $1`, [memberId]);
   expect(row.rows[0].status).toBe('deactivated');
 });

@@ -36,24 +36,41 @@ async function currentEmail(userId: string): Promise<string> {
   return row.email;
 }
 
-/** Refuse when another account already signs in with `email`. */
+/**
+ * Refuse when another account already signs in with `email`, in any case: an address stored before every write path
+ * lower-cased it must still count as taken.
+ */
 async function assertAddressFree(userId: string, email: string): Promise<void> {
-  const taken = await query<{ id: string }>(`SELECT id FROM users WHERE email = $1 AND id <> $2 LIMIT 1`, [email, userId]);
+  const taken = await query<{ id: string }>(
+    `SELECT id FROM users WHERE lower(email) = lower($1) AND id <> $2 LIMIT 1`,
+    [email, userId],
+  );
   if (taken.rows[0]) throw emailInUse();
 }
 
 /**
- * Email a code to `newEmail` that makes it the member's sign-in email once typed. Refuses the address they already
- * have, an address no person can receive mail at (reserved-address.ts; allowed only to an account that is itself on
- * one, the platform's own test members), and one another account has. The member's earlier unused change codes die.
+ * The checks that tell an unproven caller nothing about anyone else, run BEFORE the change_email proof is spent so a
+ * typo never costs the member their code: the address they already have, and an address no person can receive mail at
+ * (reserved-address.ts; allowed only to an account that is itself on one, the platform's own test members). Whether
+ * another account has the address is asked only after the proof (requestEmailChange).
  */
-export async function requestEmailChange(userId: string, newEmail: string): Promise<{ sent: true; devCode?: string }> {
+export async function assertNewAddressAcceptable(userId: string, newEmail: string): Promise<void> {
   const email = newEmail.trim().toLowerCase();
   const current = await currentEmail(userId);
   if (email === current.toLowerCase()) throw new AppError(400, ErrorCodes.INVALID_INPUT, "That's already your email.");
   if (isReservedTestAddress(email) && !isReservedTestAddress(current)) {
     throw new AppError(400, ErrorCodes.INVALID_INPUT, "That address can't receive email. Please use another one.");
   }
+}
+
+/**
+ * Email a code to `newEmail` that makes it the member's sign-in email once typed. The route has already spent the
+ * member's change_email proof; the cheap checks run again here (nothing may reach the write without them), then the
+ * address must be free. The member's earlier unused change codes die.
+ */
+export async function requestEmailChange(userId: string, newEmail: string): Promise<{ sent: true; devCode?: string }> {
+  const email = newEmail.trim().toLowerCase();
+  await assertNewAddressAcceptable(userId, email);
   await assertAddressFree(userId, email);
 
   const token = crypto.randomBytes(32).toString('hex');

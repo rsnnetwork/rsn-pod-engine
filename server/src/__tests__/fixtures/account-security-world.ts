@@ -24,6 +24,9 @@ export const world = {
   links: [] as WorldLink[],
   refresh: [] as WorldRefresh[],
   audit: [] as WorldAudit[],
+  /** Moderation rows: a legacy violation and a member report, each naming the reported member. */
+  violations: [] as Array<{ id: string; reported_user_id: string; status: string }>,
+  reports: [] as Array<{ id: string; reported_id: string }>,
   statements: [] as string[],
   /** Runs before each statement is answered (a test that makes something happen between two statements). */
   onStatement: null as ((sql: string) => void) | null,
@@ -34,6 +37,8 @@ export function resetWorld(users: WorldUser[]): void {
   world.links = [];
   world.refresh = [];
   world.audit = [];
+  world.violations = [];
+  world.reports = [];
   world.statements = [];
   world.onStatement = null;
 }
@@ -88,8 +93,9 @@ export function answer(sqlRaw: string, params: unknown[] = []): { rows: unknown[
     const u = world.users.find((x) => x.id === params[0]);
     return ok(u ? [{ email: u.email }] : []);
   }
-  if (sql === 'SELECT id FROM users WHERE email = $1 AND id <> $2 LIMIT 1') {
-    return ok(world.users.filter((u) => u.email === params[0] && u.id !== params[1]).slice(0, 1).map((u) => ({ id: u.id })));
+  if (sql === 'SELECT id FROM users WHERE lower(email) = lower($1) AND id <> $2 LIMIT 1') {
+    const wanted = String(params[0]).toLowerCase();
+    return ok(world.users.filter((u) => u.email.toLowerCase() === wanted && u.id !== params[1]).slice(0, 1).map((u) => ({ id: u.id })));
   }
   if (sql === 'SELECT id, role FROM users WHERE id = ANY($1::uuid[])') {
     const ids = params[0] as string[];
@@ -156,6 +162,19 @@ export function answer(sqlRaw: string, params: unknown[] = []): { rows: unknown[
     const r = world.refresh.find((x) => x.id === params[0]);
     if (r) r.revoked_at = new Date();
     return ok([], r ? 1 : 0);
+  }
+
+  // ── moderation (POST /admin/violations/:id/resolve) ──
+  if (sql === 'SELECT reported_user_id AS user_id FROM violations WHERE id = $1') {
+    return ok(world.violations.filter((v) => v.id === params[0]).map((v) => ({ user_id: v.reported_user_id })));
+  }
+  if (sql === 'SELECT reported_id AS user_id FROM user_reports WHERE id = $1') {
+    return ok(world.reports.filter((r) => r.id === params[0]).map((r) => ({ user_id: r.reported_id })));
+  }
+  if (sql === 'UPDATE violations SET status = $1, admin_notes = $2, resolved_by = $3, resolved_at = NOW(), updated_at = NOW() WHERE id = $4') {
+    const v = world.violations.find((x) => x.id === params[3]);
+    if (v) v.status = String(params[0]);
+    return ok([], v ? 1 : 0);
   }
 
   // ── audit_log ──
