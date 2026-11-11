@@ -7,6 +7,8 @@ import { recordAudit } from '../middleware/audit';
 import { adminOnboardingExportLimiter, clientIp } from '../middleware/rateLimit';
 import { ONBOARDING_CSV_COLUMNS, onboardingReportRows } from '../services/onboarding/onboarding-report';
 import { requireRole } from '../middleware/rbac';
+import { guardAccountChange } from '../middleware/role-guard';
+import { requireReauthForAdminRoleChange } from '../middleware/reauth';
 import { query } from '../db';
 import { ApiResponse, ErrorCodes, UserRole } from '@rsn/shared';
 import { ConflictError } from '../middleware/errors';
@@ -179,25 +181,47 @@ const bulkUserActionSchema = z.object({
   userIds: z.array(z.string().uuid()).min(1).max(100),
   action: z.enum(['suspend', 'ban', 'activate', 'delete', 'change_role']),
   value: z.string().optional(),
+  // The fresh proof a change to or from an admin role needs (middleware/reauth.ts). Kept here: validation drops what
+  // the schema does not name.
+  reauthToken: z.string().max(4096).optional(),
 });
 
+const BULK_ROLES = ['member', 'admin', 'super_admin'];
+const bulkRoleInBody = (req: Request, res: Response, next: NextFunction) => {
+  if (req.body.action === 'change_role' && (!req.body.value || !BULK_ROLES.includes(req.body.value))) {
+    res.status(400).json({ success: false, error: { message: 'Invalid role' } });
+    return;
+  }
+  next();
+};
+
+// Who may do what (middleware/role-guard.ts): only a super admin acts on a super admin, or moves anyone to or from admin
+// or super_admin; such a role change also needs a fresh admin_role proof. Every role change is on record.
 router.post(
   '/users/bulk-action',
   authenticate,
   requireRole(UserRole.ADMIN),
   validate(bulkUserActionSchema),
+  bulkRoleInBody,
+  guardAccountChange({
+    targets: (req) => req.body.userIds,
+    newRole: (req) => (req.body.action === 'change_role' ? req.body.value : undefined),
+  }),
+  requireReauthForAdminRoleChange,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { userIds, action, value } = req.body;
 
       if (action === 'change_role') {
-        if (!value || !['member', 'admin', 'super_admin'].includes(value)) {
-          return res.status(400).json({ success: false, error: { message: 'Invalid role' } });
-        }
+        const before = res.locals.targetRoles as Map<string, string>;
         const result = await query<{ id: string }>(
           `UPDATE users SET role = $1, updated_at = NOW() WHERE id = ANY($2::uuid[]) RETURNING id`,
           [value, userIds]
         );
+        await Promise.all(result.rows.map(row => recordAudit({
+          actorId: req.user!.userId, action: 'user.role_changed', entityType: 'user', entityId: row.id,
+          details: { from: before.get(row.id) ?? null, to: value, bulk: true }, ipAddress: req.ip,
+        })));
         // Phase May-19 realtime — admin-users list refresh + per-user
         // entity tag so each affected user's role badge updates immediately.
         fanoutAdminEntities('users').catch(() => {});

@@ -54,6 +54,10 @@ export const ErrorCodes = {
   AUTH_SIGN_IN_CODE_WRONG: 'AUTH_SIGN_IN_CODE_WRONG',
   AUTH_SIGN_IN_CODE_EXPIRED: 'AUTH_SIGN_IN_CODE_EXPIRED',
   AUTH_SIGN_IN_LOCKED: 'AUTH_SIGN_IN_LOCKED',
+  // Part 3 Task 2 (11 Nov 2026): a sensitive change (sign-in email, closing the account, an admin role) asked without a
+  // fresh proof from an emailed code; details.scope names the kind of proof it needs (shared/src/identity/reauth.ts).
+  REAUTH_REQUIRED: 'REAUTH_REQUIRED',    // 403
+  EMAIL_IN_USE: 'EMAIL_IN_USE',          // 409; the new sign-in email already belongs to another account
 
   // User errors
   USER_NOT_FOUND: 'USER_NOT_FOUND',

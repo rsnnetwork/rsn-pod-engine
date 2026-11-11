@@ -663,10 +663,12 @@ export interface SignInCodeRow {
   link_live: boolean;
 }
 
-const SIGN_IN_CODE_COLUMNS = `id, email, token_hash, code_hash, used_at, code_attempts,
+/** The columns spendSignInCode reads (SignInCodeRow); $2 is the code's life in minutes. */
+export const SIGN_IN_CODE_COLUMNS = `id, email, token_hash, code_hash, used_at, code_attempts,
        created_at > NOW() - make_interval(mins => $2::int) AS code_live, expires_at > NOW() AS link_live`;
 
-const codeWrong = (attemptsLeft?: number) => new AppError(
+/** A wrong code, or no code to try: one refusal for every purpose, so the answer never tells which it was. */
+export const codeWrong = (attemptsLeft?: number) => new AppError(
   400, ErrorCodes.AUTH_SIGN_IN_CODE_WRONG, 'That code is not right.', attemptsLeft === undefined ? undefined : { attemptsLeft },
 );
 
@@ -897,7 +899,8 @@ export async function signInForEventEntry(
 
 // ─── Token Management ───────────────────────────────────────────────────────
 
-async function generateTokenPair(user: User): Promise<AuthTokenPair> {
+/** A fresh access and refresh token pair for `user`, the refresh token's hash stored before it is handed out. */
+export async function generateTokenPair(user: User): Promise<AuthTokenPair> {
   const sessionId = uuid();
 
   const accessPayload: Omit<JwtPayload, 'iat' | 'exp'> = {

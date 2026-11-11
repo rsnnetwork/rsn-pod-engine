@@ -6,6 +6,8 @@ import { authenticate } from '../middleware/auth';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { recordAudit } from '../middleware/audit';
 import { requireRole } from '../middleware/rbac';
+import { guardAccountChange } from '../middleware/role-guard';
+import { requireReauthForAdminRoleChange } from '../middleware/reauth';
 import * as identityService from '../services/identity/identity.service';
 import { searchConnectedUsers } from '../services/invite/connected-users';
 import { toPublicMember } from '../services/user/public-card';
@@ -458,23 +460,34 @@ router.get(
 
 // ─── PUT /users/:id/role (admin only) ───────────────────────────────────────
 
+// The role is checked first; then who may make the change (only a super admin grants or removes admin or super_admin,
+// or changes a super admin: middleware/role-guard.ts); then, for an admin role, a fresh proof from an emailed code
+// (`reauthToken` in the body, scope admin_role). Every change is on record with the role before and after.
+const roleInBody = (req: Request, res: Response, next: NextFunction) => {
+  const { role } = req.body ?? {};
+  if (!role || !Object.values(UserRole).includes(role)) {
+    res.status(400).json({ success: false, error: { message: 'Invalid role' } });
+    return;
+  }
+  next();
+};
+
 router.put(
   '/:id/role',
   authenticate,
   requireRole(UserRole.ADMIN),
+  roleInBody,
+  guardAccountChange({ targets: (req) => [req.params.id], newRole: (req) => req.body.role }),
+  requireReauthForAdminRoleChange,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { role } = req.body;
-      if (!role || !Object.values(UserRole).includes(role)) {
-        return res.status(400).json({ success: false, error: { message: 'Invalid role' } });
-      }
-
-      // Only super_admin can assign admin or super_admin roles
-      if ((role === UserRole.ADMIN || role === UserRole.SUPER_ADMIN) && req.user!.role !== UserRole.SUPER_ADMIN) {
-        return res.status(403).json({ success: false, error: { message: 'Only super admins can assign admin roles' } });
-      }
-
+      const from = (res.locals.targetRoles as Map<string, string>).get(req.params.id.toLowerCase()) ?? null;
       const user = await identityService.updateUserRole(req.params.id, role);
+      await recordAudit({
+        actorId: req.user!.userId, action: 'user.role_changed', entityType: 'user', entityId: req.params.id,
+        details: { from, to: role }, ipAddress: req.ip,
+      });
       // Phase May-19 realtime — admin-users list refresh + per-user
       // entity tag so the target's user-scoped queries refetch.
       fanoutAdminEntities('users').catch(() => {});
@@ -493,6 +506,8 @@ router.put(
   '/:id/status',
   authenticate,
   requireRole(UserRole.ADMIN),
+  // Only a super admin suspends, bans, removes or reactivates a super admin (middleware/role-guard.ts).
+  guardAccountChange({ targets: (req) => [req.params.id] }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { status } = req.body;

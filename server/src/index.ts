@@ -46,6 +46,7 @@ import { processEventReminders, EVENT_REMINDER_INTERVAL_MS } from './services/se
 // Routes
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
+import accountSecurityRoutes from './routes/account-security';
 import onboardingRoutes from './routes/onboarding';
 import onboardingV2Routes from './routes/onboarding-v2';
 import podRoutes from './routes/pods';
@@ -341,6 +342,9 @@ app.get('/health/deep', async (_req, res) => {
 // ─── API Routes ─────────────────────────────────────────────────────────────
 
 app.use('/api/auth', authRoutes);
+// The member's own email change and account close (Part 3 Task 2) before the users router, so /me/email/* and /me/close
+// are served there and never read as /:id.
+app.use('/api/users/me', accountSecurityRoutes);
 app.use('/api/users', userRoutes);
 // Onboarding v2 (21 Oct 2026) before v1, so its /v2 paths never reach the v1 router.
 app.use('/api/onboarding/v2', onboardingV2Routes);
