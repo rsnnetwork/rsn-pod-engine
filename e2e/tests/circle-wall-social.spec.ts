@@ -18,6 +18,15 @@ import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 //     ORIGINAL post (never into the circle it already lives in);
 //   * ?post= deep links scroll the post into view, from a share or the bell;
 //   * all of it on a 390px phone with 44px targets and no sideways scroll.
+//
+// Shirley pilot S4 (11 Nov 2026), deliberate changes this spec now asserts exactly:
+//   * D2: every circle's wall is its members' only, and a post or comment id answers someone outside the circle
+//     exactly as one that does not exist (404), so an id confirms nothing (it was 403, which confirmed it);
+//   * a comment's or reply's bell names the comment (`?post=<id>&comment=<id>`), so it can be removed with it;
+//   * a post's comments are { comments, truncated }, as on the pod wall;
+//   * an author deleting their own comment that has replies withdraws it ("This comment was deleted", a placeholder
+//     with no author) and the replies stay; a moderator removes the placeholder and its replies in one action;
+//   * a ?post= link opens the post's comments by itself.
 
 let browser: Browser;
 let admin: TestUser, author: TestUser, reactor: TestUser, outsider: TestUser;
@@ -88,7 +97,11 @@ test('reactions, replies, likes, deletes and shares, with the bells that go with
   expect(made.json.data).toMatchObject({ reactionCount: 0, reactions: {}, myReaction: null, sharedFrom: null });
 
   // ── Reactions ──
-  expect((await apiAs(outsider, 'POST', `/circles/posts/${postId}/react`, { reaction: 'love' })).status, 'a non-member cannot react').toBe(403);
+  // S4 (D2): a non-member is refused, with the same 404 as a post that does not exist (the id confirms nothing).
+  const outsiderReact = await apiAs(outsider, 'POST', `/circles/posts/${postId}/react`, { reaction: 'love' });
+  expect(outsiderReact.status, 'a non-member cannot react').toBe(404);
+  expect(outsiderReact.json.error.message).toBe((await apiAs(outsider, 'POST', `/circles/posts/${uuid()}/react`, { reaction: 'love' })).json.error.message);
+  expect((await postAs(author, postId)).reactionCount, 'the refused reaction was not counted').toBe(0);
   expect((await apiAs(reactor, 'POST', `/circles/posts/${postId}/react`, { reaction: 'angry' })).status, 'unknown reaction').toBe(400);
 
   let r = await apiAs(reactor, 'POST', `/circles/posts/${postId}/react`, { reaction: 'love' });
@@ -119,14 +132,15 @@ test('reactions, replies, likes, deletes and shares, with the bells that go with
   expect(c1.json.data.parentCommentId).toBeNull();
   bells = await bellsOf(author, 'circle_comment');
   expect(bells.rows).toHaveLength(1);
-  expect(bells.rows[0]).toMatchObject({ title: 'Wall Reactor commented on your post', link: `/circles/${circleA}?post=${postId}` });
+  // S4 fix round 1: the bell names the comment, so removing the comment removes its bell.
+  expect(bells.rows[0]).toMatchObject({ title: 'Wall Reactor commented on your post', link: `/circles/${circleA}?post=${postId}&comment=${c1.json.data.id}` });
 
   const r1 = await apiAs(author, 'POST', `/circles/posts/${postId}/comments`, { content: 'Thank you!', parentCommentId: c1.json.data.id });
   expect(r1.status).toBe(201);
   expect(r1.json.data.parentCommentId).toBe(c1.json.data.id);
   bells = await bellsOf(reactor, 'circle_reply');
   expect(bells.rows).toHaveLength(1);
-  expect(bells.rows[0]).toMatchObject({ title: 'Wall Author replied to your comment', link: `/circles/${circleA}?post=${postId}` });
+  expect(bells.rows[0]).toMatchObject({ title: 'Wall Author replied to your comment', link: `/circles/${circleA}?post=${postId}&comment=${r1.json.data.id}` });
   expect((await bellsOf(author, 'circle_comment')).rows, 'your own reply on your own post rings nothing').toHaveLength(1);
 
   // A reply to the reply hangs under the top-level comment; the bell goes to the author of the reply.
@@ -136,30 +150,51 @@ test('reactions, replies, likes, deletes and shares, with the bells that go with
   expect((await bellsOf(author, 'circle_reply')).rows).toHaveLength(1);
   expect((await bellsOf(author, 'circle_comment')).rows, 'replied-to author is the post author: one bell, not two').toHaveLength(1);
 
-  expect((await apiAs(outsider, 'POST', `/circles/comments/${r1.json.data.id}/like`, { liked: true })).status).toBe(403);
+  // S4 (D2): outside the circle a comment id is a 404, like one that does not exist.
+  expect((await apiAs(outsider, 'POST', `/circles/comments/${r1.json.data.id}/like`, { liked: true })).status).toBe(404);
   const liked = await apiAs(reactor, 'POST', `/circles/comments/${r1.json.data.id}/like`, { liked: true });
   expect(liked.json.data).toEqual({ likeCount: 1, likedByMe: true });
   const again = await apiAs(reactor, 'POST', `/circles/comments/${r1.json.data.id}/like`, { liked: true });
   expect(again.json.data, 'liking twice is still one like').toEqual({ likeCount: 1, likedByMe: true });
 
-  const listAsAuthor = (await apiAs(author, 'GET', `/circles/posts/${postId}/comments`)).json.data as any[];
+  // S4: a post's comments come as { comments, truncated }; someone outside the circle gets the post's 404.
+  const commentsOf = async (u: TestUser) => (await apiAs(u, 'GET', `/circles/posts/${postId}/comments`)).json.data.comments as any[];
+  expect((await apiAs(outsider, 'GET', `/circles/posts/${postId}/comments`)).status).toBe(404);
+  const listAsAuthor = await commentsOf(author);
   expect(listAsAuthor.map(c => [c.content, c.parentCommentId])).toEqual([
     ['Congrats, big step!', null],
     ['Thank you!', c1.json.data.id],
     ['Any beta seats left?', c1.json.data.id],
   ]);
   expect(listAsAuthor[1]).toMatchObject({ likeCount: 1, likedByMe: false });
-  const listAsReactor = (await apiAs(reactor, 'GET', `/circles/posts/${postId}/comments`)).json.data as any[];
+  const listAsReactor = await commentsOf(reactor);
   expect(listAsReactor[1]).toMatchObject({ likeCount: 1, likedByMe: true });
   expect((await postAs(author, postId)).commentCount).toBe(3);
   console.log('  ✓ comments: reply nesting, bells to the right person, likes idempotent and members only.');
 
-  // ── Delete a comment: its replies go with it, count moves by all of them ──
-  expect((await apiAs(outsider, 'DELETE', `/circles/comments/${c1.json.data.id}`)).status).toBe(403);
-  expect((await apiAs(reactor, 'DELETE', `/circles/comments/${c1.json.data.id}`)).status).toBe(200);
-  expect((await apiAs(author, 'GET', `/circles/posts/${postId}/comments`)).json.data).toEqual([]);
+  // ── Delete a comment ──
+  // S4 (D2): outside the circle, a comment id is a 404 and nothing is removed.
+  expect((await apiAs(outsider, 'DELETE', `/circles/comments/${c1.json.data.id}`)).status).toBe(404);
+  // S4 (ruling): its author deleting their own comment never takes other people's replies: the comment is withdrawn,
+  // a placeholder with no author, no words and no likes, and the two replies stay under it. The count drops by one.
+  const own = await apiAs(reactor, 'DELETE', `/circles/comments/${c1.json.data.id}`);
+  expect(own.status).toBe(200);
+  expect(own.json.data).toEqual({ ok: true, alreadyRemoved: false });
+  const afterOwn = await commentsOf(author);
+  expect(afterOwn.map(c => [c.id, c.withdrawn, c.content, c.authorId, c.authorName, c.parentCommentId])).toEqual([
+    [c1.json.data.id, true, '', '', null, null],
+    [r1.json.data.id, false, 'Thank you!', author.id, 'Wall Author', c1.json.data.id],
+    [r2.json.data.id, false, 'Any beta seats left?', reactor.id, 'Wall Reactor', c1.json.data.id],
+  ]);
+  expect((await postAs(author, postId)).commentCount).toBe(2);
+  expect((await apiAs(reactor, 'DELETE', `/circles/comments/${c1.json.data.id}`)).json.data, 'deleting it again changes nothing').toEqual({ ok: true, alreadyRemoved: true });
+  expect((await apiAs(author, 'POST', `/circles/posts/${postId}/comments`, { content: 'to the placeholder', parentCommentId: c1.json.data.id })).status, 'nobody replies to the placeholder itself').toBe(404);
+  // A moderator (the platform admin, who runs every circle) removes the placeholder and its replies in one action.
+  const cleared = await apiAs(admin, 'DELETE', `/circles/comments/${c1.json.data.id}`);
+  expect(cleared.json.data).toEqual({ ok: true, alreadyRemoved: false });
+  expect(await commentsOf(author)).toEqual([]);
   expect((await postAs(author, postId)).commentCount).toBe(0);
-  console.log('  ✓ deleting a top-level comment takes its two replies; count back to 0.');
+  console.log('  ✓ own delete withdraws the comment and keeps the replies; a moderator clears the thread; count back to 0.');
 
   // ── Share ──
   const share = await apiAs(reactor, 'POST', `/circles/posts/${postId}/share`, { circleId: circleB, clientId: uuid(), content: 'Worth a look' });
@@ -171,16 +206,24 @@ test('reactions, replies, likes, deletes and shares, with the bells that go with
 
   expect((await apiAs(reactor, 'POST', `/circles/posts/${postId}/share`, { circleId: circleA, clientId: uuid() })).status, 'not into its own circle').toBe(400);
   expect((await apiAs(reactor, 'POST', `/circles/posts/${sharedId}/share`, { circleId: circleA, clientId: uuid() })).status, 'a share of a share still points home: not into the root circle').toBe(400);
-  expect((await apiAs(outsider, 'POST', `/circles/posts/${postId}/share`, { circleId: circleB, clientId: uuid() })).status, 'must be a member of the target circle').toBe(403);
+  // S4 (D2): someone outside circle A cannot read the post, so cannot share it: the same 404 as a missing post.
+  expect((await apiAs(outsider, 'POST', `/circles/posts/${postId}/share`, { circleId: circleB, clientId: uuid() })).status, 'cannot share what they cannot read').toBe(404);
 
-  const seen = await apiAs(outsider, 'GET', `/circles/posts/${sharedId}`);
-  expect(seen.status, 'reading is open to any member').toBe(200);
+  // S4 (D2): every circle's wall is read by its members only. The share is read by a member of circle B; someone outside
+  // B is answered exactly as for a post that does not exist (404), so the id confirms nothing.
+  const seen = await apiAs(author, 'GET', `/circles/posts/${sharedId}`);
+  expect(seen.status, 'a member of the circle reads it').toBe(200);
   expect(seen.json.data.sharedFrom.id).toBe(postId);
-  expect((await apiAs(outsider, 'GET', `/circles/posts/${uuid()}`)).status).toBe(404);
+  const outside = await apiAs(outsider, 'GET', `/circles/posts/${sharedId}`);
+  const missing = await apiAs(outsider, 'GET', `/circles/posts/${uuid()}`);
+  expect(outside.status, 'someone outside the circle reads nothing').toBe(404);
+  expect(missing.status).toBe(404);
+  expect(outside.json).toEqual(missing.json);
+  expect((await apiAs(outsider, 'GET', `/circles/${circleB}/posts`)).status, 'nor its feed').toBe(403);
 
   const feedB = (await apiAs(author, 'GET', `/circles/${circleB}/posts`)).json.data;
   expect(feedB.posts.find((p: any) => p.id === sharedId)?.sharedFrom?.circleName).toBe('E2E Social A');
-  console.log('  ✓ share: attribution to the original, never into its own circle, readable by anyone.');
+  console.log('  ✓ share: attribution to the original, never into its own circle, read by the circle\'s members only.');
 });
 
 test('on a phone: react from the picker, comment, reply, like, share, follow the deep link and the bell, delete', async () => {
@@ -219,8 +262,9 @@ test('on a phone: react from the picker, comment, reply, like, share, follow the
   await expect.poll(async () => (await postAs(reactor, postId)).myReaction).toBe('like');
   console.log('  ✓ picker: five 44px reactions, celebrate → remove → like, server agrees.');
 
-  // Comment, reply, like, delete the reply.
-  await page.getByTestId(`comment-button-${postId}`).click();
+  // Comment, reply, like, delete the reply. S4: the ?post= link has already opened the post's comments (and the box to
+  // write one), so they are not toggled here.
+  await expect(page.getByTestId(`comments-${postId}`)).toBeVisible({ timeout: 15_000 });
   const commentBox = page.getByLabel('Your comment');
   await commentBox.fill('Great news, congrats!');
   await commentBox.press('Enter');
@@ -298,8 +342,10 @@ test('on a phone: react from the picker, comment, reply, like, share, follow the
   await expect(aPage.getByTestId(`wall-post-${postId}`)).toHaveCount(0, { timeout: 15_000 });
   const gone = await pool.query(`SELECT deleted_at FROM circle_posts WHERE id = $1`, [postId]);
   expect(gone.rows[0].deleted_at).not.toBeNull();
-  // The share in B now shows nothing to attribute (the original is gone), but the share itself stays.
+  // The share in B now shows nothing to attribute (the original is gone), but the share itself stays, saying only that
+  // the post isn't available (S4 fix round 1).
   const shareNow = await postAs(reactor, s2.rows[0].id);
   expect(shareNow.sharedFrom).toBeNull();
+  expect(shareNow.sharedUnavailable).toBe(true);
   console.log('  ✓ author deleted the post; the repost survives without its attribution.');
 });

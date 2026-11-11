@@ -312,7 +312,8 @@ test("Ali's script, steps 1 to 8, on production", async () => {
   await ali.getByText('Walkthrough Mate replied to your comment').first().click();
   await expect(ali).toHaveURL(new RegExp(`/circles/${circleA}\\?post=${postId}`), { timeout: 30_000 });
   await expect(ali.getByTestId(`wall-post-${postId}`)).toBeVisible({ timeout: 30_000 });
-  await ali.getByTestId(`comment-button-${postId}`).click();
+  // S4: the bell's ?post= link has already opened the post's comments; they are not toggled here.
+  await expect(ali.getByTestId(`comments-${postId}`)).toBeVisible({ timeout: 15_000 });
   await expect(ali.getByText('Replying to Ali: looks great on a phone.')).toBeVisible({ timeout: 15_000 });
   await shot(ali, 'bell-entry-landed-on-the-post');
 
@@ -329,6 +330,10 @@ test("Ali's script, steps 1 to 8, on production", async () => {
   await acceptConfirmDialogs(ali);
   await ali.getByTestId(`comment-delete-${aliComment}`).click();
   await expect(ali.getByText('Thanks for reading, feedback welcome.')).toHaveCount(0, { timeout: 15_000 });
+  // S4 (ruling): her own comment had a reply from someone else, so it is withdrawn, not taken with the reply: it reads
+  // "This comment was deleted." and the reply stays under it.
+  await expect(ali.getByTestId(`comment-withdrawn-${aliComment}`)).toHaveText('This comment was deleted.', { timeout: 15_000 });
+  await expect(ali.getByText('Replying to Ali: looks great on a phone.')).toBeVisible();
   ali.once('dialog', d => d.accept());
   await acceptConfirmDialogs(ali);
   await ali.getByTestId(`delete-post-${postId}`).click();
@@ -336,5 +341,5 @@ test("Ali's script, steps 1 to 8, on production", async () => {
   const gone = await pool.query(`SELECT deleted_at FROM circle_posts WHERE id = $1`, [postId]);
   expect(gone.rows[0].deleted_at).not.toBeNull();
   await shot(ali, 'post-deleted');
-  console.log('  step 7: deleted my comment (its reply went with it) and my post from the trash icons.');
+  console.log('  step 7: deleted my comment (withdrawn, the reply kept) and my post from the trash icons.');
 });

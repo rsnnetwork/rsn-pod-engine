@@ -233,7 +233,8 @@ test('A posts from a phone, B sees it live on a desktop that never reloads and r
   await expect(bellOf(bobPage)).toContainText('1', { timeout: 15_000 });
   const postBells = await bellsOf(bob, 'pod_post');
   expect(postBells.rows).toHaveLength(1);
-  expect(postBells.rows[0]).toMatchObject({ title: `New post in ${podName}`, link: `/pods/${podId}` });
+  // S4: the new-post bell opens the post itself (still one per member per pod per hour).
+  expect(postBells.rows[0]).toMatchObject({ title: `New post in ${podName}`, link: `/pods/${podId}?post=${postId}` });
 
   // B replies on the post.
   await cardOf(bobPage, postId).getByTestId(`comment-button-${postId}`).click();
@@ -247,7 +248,8 @@ test('A posts from a phone, B sees it live on a desktop that never reloads and r
   await expect(bellOf(alicePage)).toContainText('1', { timeout: 15_000 });
   const commentBells = await bellsOf(alice, 'pod_comment');
   expect(commentBells.rows).toHaveLength(1);
-  expect(commentBells.rows[0]).toMatchObject({ title: `${bob.displayName} commented on your post`, link: `/pods/${podId}?post=${postId}` });
+  // S4 fix round 1: a comment's bell names the comment, so removing the comment removes its bell.
+  expect(commentBells.rows[0]).toMatchObject({ title: `${bob.displayName} commented on your post`, link: `/pods/${podId}?post=${postId}&comment=${await commentIdOf(reply)}` });
 
   // A follows the bell: the pod opens on that post, outlined, in view, with the comment open.
   await bellOf(alicePage).click();
@@ -353,6 +355,9 @@ test('a removed member is told so live and the server answers 403; a visitor rea
   const text = `Members only ${Date.now().toString(36)}`;
   expect((await apiAs(director, 'POST', `/pods/${podId}/wall/posts`, { clientId: crypto.randomUUID(), content: text })).status).toBe(201);
   const postId = await postIdOf(text);
+  const carolsText = `Carol's own words ${Date.now().toString(36)}`;
+  expect((await apiAs(carol, 'POST', `/pods/${podId}/wall/posts`, { clientId: crypto.randomUUID(), content: carolsText })).status).toBe(201);
+  const carolsPostId = await postIdOf(carolsText);
 
   const carolPage = await pageAt(carol, `/pods/${podId}`, { width: 390, height: 844 });
   await expect(cardOf(carolPage, postId)).toBeVisible({ timeout: 30_000 });
@@ -370,10 +375,16 @@ test('a removed member is told so live and the server answers 403; a visitor rea
   expect((await apiAs(carol, 'POST', `/pods/${podId}/wall/posts`, { clientId: crypto.randomUUID(), content: 'let me in' })).status).toBe(403);
   await shot(carolPage, 'removed-390');
 
-  // On a fresh load it is the same, and her words are not hers to delete any more.
+  // On a fresh load it is the same.
   await carolPage.reload({ waitUntil: 'domcontentloaded' });
   await expect(carolPage.getByText(NOT_A_MEMBER)).toBeVisible({ timeout: 30_000 });
   await expect(carolPage.getByPlaceholder(PLACEHOLDER)).toHaveCount(0);
+  // S4 (D8): someone removed may still delete their OWN words, and nothing else: someone else's post keeps the 403.
+  expect((await apiAs(carol, 'DELETE', `/pods/${podId}/wall/posts/${postId}`)).status).toBe(403);
+  const ownDelete = await apiAs(carol, 'DELETE', `/pods/${podId}/wall/posts/${carolsPostId}`);
+  expect(ownDelete.status).toBe(200);
+  expect(ownDelete.json.data).toEqual({ ok: true, alreadyRemoved: false });
+  expect((await apiAs(carol, 'PATCH', `/pods/${podId}/wall/posts/${carolsPostId}`, { content: 'edited after removal' })).status, 'nor edit').toBe(403);
 
   // A visitor to the public pod: the page shows, the posts do not.
   const ninaPage = await pageAt(nina, `/pods/${podId}`, { width: 1280, height: 900 });
@@ -576,9 +587,10 @@ test('the first ten posts, Load more, and a ?post= link to a post that is not on
   await expect(cardOf(middle, ids[8])).toBeVisible({ timeout: 30_000 });
   await expect(cardOf(middle, ids[8])).toHaveClass(/ring-rsn-red/);
 
-  // A link to a post that is gone says so and breaks nothing.
+  // A link to a post that is gone says so where the post would be (S4: "This post was removed.", in place of a toast
+  // that was gone before it was read) and breaks nothing.
   const missing = await pageAt(alice, `/pods/${bigPodId}?post=${crypto.randomUUID()}`, { width: 390, height: 844 });
-  await expect(missing.getByText('That post is no longer available.')).toBeVisible({ timeout: 30_000 });
+  await expect(missing.getByTestId('pod-wall-linked-removed')).toHaveText('This post was removed.', { timeout: 30_000 });
   await expect(cards(missing)).toHaveCount(10);
 });
 
