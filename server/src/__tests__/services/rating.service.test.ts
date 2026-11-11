@@ -387,6 +387,24 @@ describe('Rating Service', () => {
       expect(stats.mutualMeetAgainCount).toBe(2);
     });
 
+    it('adds scoredRatingCount: scores that count toward the average, on rooms that took place, beside every field it had', async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          // Five ratings, four of them "didn't work": the average rests on one person's score.
+          rows: [{ totalRatings: '5', avgQualityScore: '4.0000', meetAgainCount: '2', scoredRatingCount: '1' }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [{ count: '1' }], rowCount: 1 });
+
+      const stats = await ratingService.getSessionRatingStats('session-1');
+      expect(stats).toEqual({ totalRatings: 5, avgQualityScore: 4, meetAgainRate: 0.4, mutualMeetAgainCount: 1, scoredRatingCount: 1 });
+      const sql = (mockQuery.mock.calls[0][0] as string).replace(/\s+/g, ' ');
+      expect(sql).toContain(`COUNT(*) FILTER (WHERE NOT r.excluded_from_quality_stats AND m.status IN ('completed', 'reassigned'))::text AS "scoredRatingCount"`);
+      // The existing figures are untouched.
+      expect(sql).toContain('COUNT(*)::text AS "totalRatings"');
+      expect(sql).toContain('COALESCE(AVG(quality_score) FILTER (WHERE NOT excluded_from_quality_stats), 0)::text AS "avgQualityScore"');
+    });
+
     it('should handle zero ratings gracefully', async () => {
       mockQuery
         .mockResolvedValueOnce({

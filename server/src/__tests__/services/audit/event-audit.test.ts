@@ -190,6 +190,29 @@ describe('listEventAudit', () => {
     expect(entries[1]).toMatchObject({ automatic: true, reason: 'late_joiner', round: 3 });
   });
 
+  it('a report.downloaded row says which part was downloaded, and only that; no other row carries the field', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        row(1, { action: 'report.downloaded', details: { automatic: false, after: { section: 'attendance', rows: 12 } } }),
+        row(2, { action: 'report.downloaded', details: { automatic: false, after: { section: 'mutual-matches', rows: 2 } } }),
+        row(3, { action: 'report.downloaded', details: { automatic: false, after: { section: 'meetings', rows: 5 } } }),
+        // A section it does not know, an after that was trimmed, and none at all read null.
+        row(4, { action: 'report.downloaded', details: { automatic: false, after: { section: 'everything', rows: 1 } } }),
+        row(5, { action: 'report.downloaded', details: { automatic: false, after: { truncated: true } } }),
+        row(6, { action: 'report.downloaded', details: null }),
+        // Another action with a section-shaped after never gains the field.
+        row(7, { action: 'schedule.edited', details: { automatic: false, after: { section: 'attendance' } } }),
+      ],
+    });
+    const { entries } = await listEventAudit(SESSION, {});
+    expect(entries.map((e) => e.reportSection)).toEqual(['attendance', 'mutual-matches', 'meetings', null, null, null, undefined]);
+    expect('reportSection' in entries[6]).toBe(false);
+    // Nothing else from the stored details is read out: not the row count, not the raw after.
+    expect(Object.keys(entries[0]).sort()).toEqual(
+      ['action', 'actor', 'at', 'automatic', 'id', 'reason', 'reportSection', 'round', 'scheduleVersion', 'subjects']);
+    expect(JSON.stringify(entries)).not.toMatch(/"rows"|"after"|everything/);
+  });
+
   it('names subjects in one query, and a closed or unknown subject reads "Former member"', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [row(1, { details: { automatic: false, subjectUserIds: [HOST, GUEST] } })] });
     mockQuery.mockResolvedValueOnce({ rows: [{ id: HOST, display_name: 'Hana Host', active: true }, { id: GUEST, display_name: 'Closed One', active: false }] });

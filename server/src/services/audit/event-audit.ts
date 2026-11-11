@@ -13,6 +13,7 @@
 //     path cannot fail on an audit write. It tells the organisers' screens straight away.
 
 import type { PoolClient } from 'pg';
+import type { EventReportSection } from '@rsn/shared';
 import logger from '../../config/logger';
 import { query } from '../../db';
 import { ValidationError } from '../../middleware/errors';
@@ -63,6 +64,20 @@ export interface EventAuditRow {
   scheduleVersion: number | null;
   subjects: EventAuditPerson[];
   reason: string | null;
+  /**
+   * Part 3 Task 4: on a report.downloaded row only, which part of the event report was downloaded (null when the stored
+   * row names none it knows). Absent on every other action. Nothing else from the row's details is read out.
+   */
+  reportSection?: EventReportSection | null;
+}
+
+/** The parts of the event report a report.downloaded row may name. */
+const REPORT_SECTIONS: readonly EventReportSection[] = ['attendance', 'meetings', 'mutual-matches'];
+
+/** The section a report.downloaded row stored (details.after.section), when it is one of the report's parts. */
+function reportSectionOf(after: unknown): EventReportSection | null {
+  const section = after && typeof after === 'object' ? (after as { section?: unknown }).section : undefined;
+  return REPORT_SECTIONS.find((s) => s === section) ?? null;
 }
 
 /** The most a row's details may weigh, in characters of JSON. Beyond it before/after are replaced. */
@@ -236,6 +251,7 @@ export async function listEventAudit(
       scheduleVersion: typeof d.scheduleVersion === 'number' ? d.scheduleVersion : null,
       subjects,
       reason: typeof d.reason === 'string' ? d.reason : null,
+      ...(row.action === 'report.downloaded' ? { reportSection: reportSectionOf(d.after) } : {}),
     };
   });
 

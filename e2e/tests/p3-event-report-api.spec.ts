@@ -20,19 +20,24 @@ let host: TestUser | undefined, memberA: TestUser | undefined, memberB: TestUser
 let podId: string | undefined;
 let eventId: string | undefined;
 
-interface Answer { status: number; json: any; text: string; headers: Headers }
+interface Answer { status: number; json: any; text: string; bytes: Buffer; headers: Headers }
 
-/** A call whose answer the test reads whatever its status, as JSON when it is JSON and as text always. */
+/**
+ * A call whose answer the test reads whatever its status: its raw bytes, and as JSON when it is JSON. The bytes are
+ * read as they came: fetch's res.text() decodes UTF-8 the WHATWG way, which drops a leading byte-order mark, so a CSV's
+ * BOM can only be seen in the bytes.
+ */
 async function call(user: TestUser | null, method: string, path: string, body?: unknown): Promise<Answer> {
   const res = await fetch(`${API}/api${path}`, {
     method,
     headers: { 'Content-Type': 'application/json', ...(user ? { Authorization: `Bearer ${user.accessToken}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const text = await res.text();
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const text = bytes.toString('utf8');
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* a CSV */ }
-  return { status: res.status, json, text, headers: res.headers };
+  return { status: res.status, json, text, bytes, headers: res.headers };
 }
 
 /** A throwaway account on the reserved test domain, named for this run (or as given). */
@@ -113,8 +118,10 @@ test('the host reads an event\'s report and downloads its attendance CSV; a part
   expect(file.headers.get('content-type')).toBe('text/csv; charset=utf-8');
   expect(file.headers.get('content-disposition')).toMatch(/^attachment; filename="rsn-event-\d{4}-\d{2}-\d{2}-attendance\.csv"$/);
   expect(file.headers.get('cache-control')).toBe('no-store');
-  expect(file.text.charCodeAt(0)).toBe(0xfeff);
-  const lines = file.text.slice(1).split('\r\n');
+  // The file starts with the UTF-8 byte-order mark EF BB BF (so Excel reads non-ASCII names right); the rest is read
+  // without it.
+  expect([...file.bytes.subarray(0, 3)], 'the CSV starts with the UTF-8 BOM').toEqual([0xef, 0xbb, 0xbf]);
+  const lines = file.bytes.subarray(3).toString('utf8').split('\r\n');
   expect(lines[0]).toBe([
     'Name', 'Email', 'Account', 'Role', 'Groups', `Registered at (${data.event.timezone})`, 'How admitted',
     `Joined at (${data.event.timezone})`, `Left at (${data.event.timezone})`, 'Outcome', 'Missed a meeting',

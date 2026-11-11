@@ -267,9 +267,19 @@ function legacyExportRows(sql: string, params: unknown[]): { rows: Record<string
       }],
     };
   }
-  if (/AS "totalRatings"/.test(sql)) return { rows: [{ totalRatings: '1', avgQualityScore: '2', meetAgainCount: '0' }] };
+  if (/AS "totalRatings"/.test(sql)) {
+    return { rows: [{ totalRatings: '5', avgQualityScore: '2', meetAgainCount: '0', ...(/AS "scoredRatingCount"/.test(sql) ? { scoredRatingCount: '1' } : {}) }] };
+  }
   return { rows: [] };
 }
+
+describe('GET /ratings/sessions/:id/stats says how many ratings the average rests on', () => {
+  it('keeps every field and adds scoredRatingCount, the scores behind the average (not totalRatings)', async () => {
+    const res = await request(app).get(`/ratings/sessions/${SESSION}/stats`).set(as(HOST));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ totalRatings: 5, avgQualityScore: 2, meetAgainRate: 0, mutualMeetAgainCount: 0, scoredRatingCount: 1 });
+  });
+});
 
 describe('GET /ratings/sessions/:id/export keeps its shape and stops leaking', () => {
   it('a host gets every field, but no private note and no individual score', async () => {
