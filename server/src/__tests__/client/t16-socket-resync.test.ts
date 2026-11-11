@@ -35,7 +35,8 @@ import * as path from 'path';
 import { QueryClient } from '@tanstack/query-core';
 import { QueryObserver } from '@tanstack/query-core';
 import {
-  CHANGE_READ_WINDOW_MS, CONNECT_RESYNC_WINDOW_MS, REPLAY_TRUST_MS, subscribeEntitySync, type EntitySignals,
+  CHANGE_READ_RECENT_MS, CHANGE_READ_WINDOWS, CHANGE_READ_WINDOW_MS, CONNECT_RESYNC_WINDOW_MS, REPLAY_TRUST_MS,
+  subscribeEntitySync, type EntitySignals,
 } from '../../../../client/src/realtime/invalidate-entities';
 
 const CLIENT = path.join(__dirname, '../../../../client/src');
@@ -616,6 +617,159 @@ describe('subscribeEntitySync: a connect refreshes what may have been missed, wi
         jest.useRealTimers();
         qc.clear();
       }
+    });
+  });
+
+  // Review of the final preview fix (11 Nov 2026): I3 (a steady stream, not only a burst, stays under the limit), I4 (a
+  // read on its way is never cancelled for a change), M1 (a waiting re-read ends with the subscription), M4 (a first read
+  // on its way inside a burst).
+  describe('a steady stream, slow reads and reads on their way', () => {
+    const reached = (qc: QueryClient, call: unknown[]) => {
+      const filters = call[0] as { predicate?: (q: unknown) => boolean };
+      return qc.getQueryCache().getAll().filter((q) => filters.predicate?.(q)).map((q) => JSON.stringify(q.queryKey));
+    };
+    const readsOf = (qc: QueryClient, spy: jest.SpyInstance, key: unknown[]) =>
+      spy.mock.calls.filter((call) => reached(qc, call).includes(JSON.stringify(key))).length;
+
+    beforeEach(() => jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] }));
+    afterEach(() => jest.useRealTimers());
+
+    it('the window grows to 3 s after 6 change reads in a minute and to 5 s after 12', () => {
+      expect(CHANGE_READ_RECENT_MS).toBe(60_000);
+      expect(CHANGE_READ_WINDOWS).toEqual([{ after: 12, ms: 5000 }, { after: 6, ms: 3000 }]);
+    });
+
+    it('a change every 2.5 s for three minutes: about one read in 3 to 5 s once it is busy, each change still answered', async () => {
+      const qc = new QueryClient();
+      await qc.fetchQuery({ queryKey: ['session', 's1'], queryFn: () => ({}), meta: { entities: ['session:s1'] } });
+      const spy = jest.spyOn(qc, 'invalidateQueries');
+      const socket = fakeSocket();
+      let t = 7_000_000;
+      subscribeEntitySync(socket, qc, { now: () => t });
+      const readsAt: number[] = [];
+      let seen = 0;
+      const tick = (ms: number) => {
+        for (let i = 0; i < ms; i += 100) {
+          t += 100; jest.advanceTimersByTime(100);
+          const n = readsOf(qc, spy, ['session', 's1']);
+          for (; seen < n; seen++) readsAt.push(t);
+        }
+      };
+      const changes: number[] = [];
+      for (let i = 0; i < 72; i++) { // 180 s
+        changes.push(t);
+        socket.emit('entity:changed', { entities: ['session:s1'] });
+        const n = readsOf(qc, spy, ['session', 's1']);
+        for (; seen < n; seen++) readsAt.push(t);
+        tick(2500);
+      }
+      tick(6000);
+      const inMinute = (from: number) => readsAt.filter((at) => at >= changes[0] + from && at < changes[0] + from + 60_000).length;
+      // Once per change would be 24 a minute; busy, the 3 s and 5 s windows hold it near twelve.
+      expect(inMinute(0)).toBeLessThanOrEqual(18);
+      expect(inMinute(60_000)).toBeLessThanOrEqual(13);
+      expect(inMinute(120_000)).toBeLessThanOrEqual(13);
+      // No change is left unread, and none waits longer than the widest window.
+      for (const at of changes) {
+        const answered = readsAt.find((r) => r >= at);
+        expect(answered).toBeDefined();
+        expect(answered! - at).toBeLessThanOrEqual(5000);
+      }
+      // Quiet for a minute, the window is back to a second: a change at once, the next one a second later.
+      tick(70_000);
+      const before = readsOf(qc, spy, ['session', 's1']);
+      socket.emit('entity:changed', { entities: ['session:s1'] });
+      expect(readsOf(qc, spy, ['session', 's1'])).toBe(before + 1);
+      tick(200);
+      socket.emit('entity:changed', { entities: ['session:s1'] });
+      tick(700);
+      expect(readsOf(qc, spy, ['session', 's1'])).toBe(before + 1);
+      tick(200);
+      expect(readsOf(qc, spy, ['session', 's1'])).toBe(before + 2);
+      qc.clear();
+    });
+
+    it('reads slower than the window (1.5 s), a change every 400 ms: nothing is cancelled, answers land during the burst, the last one is current', async () => {
+      const qc = new QueryClient();
+      const socket = fakeSocket();
+      let t = 8_000_000;
+      subscribeEntitySync(socket, qc, { now: () => t });
+      let server = 0;
+      let sent = 0;
+      let aborted = 0;
+      const landed: number[] = [];
+      const observer = new QueryObserver(qc, {
+        queryKey: ['session', 's3'], meta: { entities: ['session:s3'] }, retry: false,
+        queryFn: ({ signal }) => {
+          sent += 1;
+          const answer = server;
+          signal.addEventListener('abort', () => { aborted += 1; });
+          return new Promise<number>((resolve) => setTimeout(() => { landed.push(answer); resolve(answer); }, 1500));
+        },
+      });
+      const off = observer.subscribe(() => {});
+      const step = async (ms: number) => {
+        for (let i = 0; i < ms; i += 100) { t += 100; jest.advanceTimersByTime(100); await flush(); await flush(); }
+      };
+      await step(1600);                         // the page's first read lands
+      expect(landed).toEqual([0]);
+      for (let i = 0; i < 15; i++) {            // 6 s of changes
+        server += 1;
+        socket.emit('entity:changed', { entities: ['session:s3'] });
+        await step(400);
+      }
+      expect(aborted).toBe(0);
+      expect(landed.length).toBeGreaterThanOrEqual(4); // answers kept landing during the burst
+      await step(5000);
+      expect(aborted).toBe(0);
+      expect(qc.getQueryData(['session', 's3'])).toBe(server);
+      expect(sent).toBe(landed.length);
+      off(); qc.clear();
+    });
+
+    it('a burst during a first read on its way: one more read the moment it lands, then the page is current', async () => {
+      const qc = new QueryClient();
+      const socket = fakeSocket();
+      let t = 9_000_000;
+      subscribeEntitySync(socket, qc, { now: () => t });
+      let server = 'v0';
+      let calls = 0;
+      const observer = new QueryObserver(qc, {
+        queryKey: ['pod', 'p4'], meta: { entities: ['pod:p4'] }, retry: false,
+        queryFn: () => { calls += 1; const answer = server; return new Promise<string>((r) => setTimeout(() => r(answer), 1000)); },
+      });
+      const off = observer.subscribe(() => {});
+      const step = async (ms: number) => {
+        for (let i = 0; i < ms; i += 100) { t += 100; jest.advanceTimersByTime(100); await flush(); await flush(); }
+      };
+      for (let i = 1; i <= 3; i++) { server = `v${i}`; socket.emit('entity:changed', { entities: ['pod:p4'] }); await step(200); }
+      expect(calls).toBe(1);                    // all three joined the read due once the first lands
+      await step(500);                           // it lands at 1000 ms, and is read once more at once
+      expect(calls).toBe(2);
+      await step(1100);
+      expect(qc.getQueryData(['pod', 'p4'])).toBe('v3');
+      expect(calls).toBe(2);
+      off(); qc.clear();
+    });
+
+    it('unsubscribing while a re-read waits for a read on its way sends nothing when it lands', async () => {
+      const qc = new QueryClient();
+      const spy = jest.spyOn(qc, 'invalidateQueries');
+      const socket = fakeSocket();
+      let t = 10_000_000;
+      const unsubscribe = subscribeEntitySync(socket, qc, { now: () => t });
+      let calls = 0;
+      const observer = new QueryObserver(qc, {
+        queryKey: ['pod', 'p5'], meta: { entities: ['pod:p5'] }, retry: false,
+        queryFn: () => { calls += 1; return new Promise<string>((r) => setTimeout(() => r('x'), 1000)); },
+      });
+      const off = observer.subscribe(() => {});
+      socket.emit('entity:changed', { entities: ['pod:p5'] });
+      unsubscribe();
+      t += 2000; jest.advanceTimersByTime(2000); await flush(); await flush();
+      expect(spy).not.toHaveBeenCalled();
+      expect(calls).toBe(1);
+      off(); qc.clear();
     });
   });
 

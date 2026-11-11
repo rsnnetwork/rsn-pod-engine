@@ -54,7 +54,10 @@ export function useAdmissionCodes(sessionId: string) {
     queryKey: admissionKeys.codes(sessionId),
     queryFn: () => api.get(`/sessions/${sessionId}/admission/codes`).then((r) => (r.data.data ?? []) as AdmissionCodeRow[]),
     retry: retryUnlessRefused,
-    meta: { entities: admissionEntities(sessionId) },
+    // Review I3 (11 Nov 2026): only session:<id>:admission. The list never reads the event's places (a code's state is its
+    // own row: made, revoked, redeemed), and every one of those writes tells session:<id>:admission
+    // (fanoutAdmissionChanged), so a registration need not read it again.
+    meta: { entities: [E.sessionAdmission(sessionId)] },
   });
 }
 

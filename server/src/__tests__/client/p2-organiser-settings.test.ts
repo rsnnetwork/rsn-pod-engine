@@ -72,11 +72,13 @@ describe('every new query follows the tags the brief names', () => {
     expect(src.useLifecycle).toMatch(/qc\.invalidateQueries\(\{ queryKey: \['session', sessionId\] \}\)/);
   });
 
-  it('admission: overview, emails and codes follow session:<id>:admission (and the participants, whose places move the counts)', () => {
+  it('admission: overview, emails and codes follow session:<id>:admission (overview and emails also the participants, whose places move them)', () => {
     const queries = queriesIn(src.useAdmission);
     expect(queries).toHaveLength(3);
     expect(src.useAdmission).toMatch(/const admissionEntities = \(sessionId: string\) => \[E\.sessionAdmission\(sessionId\), E\.sessionParticipants\(sessionId\)\];/);
-    for (const q of queries) expect(q).toMatch(/meta: \{ entities: admissionEntities\(sessionId\) \}/);
+    for (const q of queries.slice(0, 2)) expect(q).toMatch(/meta: \{ entities: admissionEntities\(sessionId\) \}/);
+    // Review I3: the codes list reads no places, so only its own tag (every code write tells it).
+    expect(queries[2]).toMatch(/meta: \{ entities: \[E\.sessionAdmission\(sessionId\)\] \}/);
   });
 
   it('groups follow session:<id>:groups; history session:<id>:audit; the call link session:<id>', () => {
@@ -85,8 +87,9 @@ describe('every new query follows the tags the brief names', () => {
     const [history] = queriesIn(src.history);
     expect(history).toMatch(/meta: \{ entities: \[E\.sessionAudit\(sessionId\)\] \}/);
     const [link] = queriesIn(src.callLink);
-    // Task 6's rotate tells the organisers session:<id>:call-link and session:<id> (fanoutCallLink); the card follows both.
-    expect(link).toMatch(/meta: \{ entities: \[E\.session\(sessionId\), E\.sessionCallLink\(sessionId\)\] \}/);
+    // Task 6's rotate (and the first code) tell the organisers session:<id>:call-link (fanoutCallLink); review I3: the
+    // card follows only that, not every change to the event.
+    expect(link).toMatch(/meta: \{ entities: \[E\.sessionCallLink\(sessionId\)\] \}/);
   });
 
   it('no other file of the section reads the server without a tag', () => {

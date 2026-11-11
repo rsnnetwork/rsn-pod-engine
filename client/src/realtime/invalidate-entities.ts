@@ -48,20 +48,28 @@ const firstReadOnItsWay = (query: Query) => query.state.fetchStatus === 'fetchin
  * Several tags heard during one first read each ask for this; the first re-read is from after all of them, so the
  * others join it instead of cancelling it (fix round 2: three tags were four requests, two thrown away).
  */
-function readAgainWhenItLands(client: QueryClient, query: Query, onSend?: () => void): Promise<void> {
+function readAgainWhenItLands(client: QueryClient, query: Query): Promise<void> {
   const hash = query.queryHash;
-  const again = () => {
-    onSend?.();
-    return client.invalidateQueries({ predicate: (q) => q.queryHash === hash }, { cancelRefetch: false });
-  };
+  const again = () => client.invalidateQueries({ predicate: (q) => q.queryHash === hash }, { cancelRefetch: false });
   return (query.promise ?? Promise.resolve()).then(again, again);
 }
 
 /**
- * A read that entity:changed refreshes is sent at once, then at most once more per this window while changes naming it
- * keep coming: the changes inside a window are answered together, by one read when it ends.
+ * A read that entity:changed refreshes is sent at once, then at most once more per window while changes naming it keep
+ * coming: the changes inside a window are answered together, by one read when it ends. The window is this second while
+ * the read is quiet, and grows with how often changes have read it in the last CHANGE_READ_RECENT_MS (review I3): a
+ * steady stream of changes (a join wave, a registration rush) reads it at most every 3 s, then every 5 s, about twelve
+ * times a minute however fast the changes come (an organiser's eleven event reads: about 130 of the 240 a minute), and the
+ * window shrinks back as that minute empties.
  */
 export const CHANGE_READ_WINDOW_MS = 1000;
+/** How far back a read's change-driven reads are counted for its window. */
+export const CHANGE_READ_RECENT_MS = 60_000;
+/** The window once a read has been re-read for changes at least `after` times in the last minute (largest first). */
+export const CHANGE_READ_WINDOWS: ReadonlyArray<{ after: number; ms: number }> = [
+  { after: 12, ms: 5000 },
+  { after: 6, ms: 3000 },
+];
 
 /** Answers entity:changed (see changeReader). `forget` drops a query that left the cache; `stop` drops waiting reads. */
 interface ChangeReader {
@@ -71,30 +79,59 @@ interface ChangeReader {
 }
 
 /**
- * A change the server told of (entity:changed): every query that declares one of its tags is read again, and one whose
- * first read is on its way is read again once that read lands (fix round 1).
+ * A change the server told of (entity:changed): every query that declares one of its tags is read again.
  * Final preview fix (11 Nov 2026): a burst of changes no longer reads every tagged query once per change. A query not
- * read for a change in the last CHANGE_READ_WINDOW_MS is read at once, as before; one read for a change inside the window
- * is read once when the window ends, and further changes before then join that read (as they join a read due once a first
- * read lands). Eight people registering within two seconds made an organiser's event page send each of its eleven
- * session reads eight times (each change cancelled and resent the last), so the organiser's own 240 requests a minute ran
- * out, and the next change's read (Cancel event) was refused: the page kept "Registration open" with the event cancelled.
+ * read for a change within its window is read at once, as before; one read for a change inside its window is read once
+ * when the window ends, and further changes before then join that read. Eight people registering within two seconds made
+ * an organiser's event page send each of its eleven session reads eight times (each change cancelled and resent the
+ * last), so the organiser's own 240 requests a minute ran out, and the next change's read (Cancel event) was refused: the
+ * page kept "Registration open" with the event cancelled.
+ * Review I3: the window grows with the read's recent change-driven reads (CHANGE_READ_WINDOWS), so a sustained stream is
+ * bounded too, not only a burst.
+ * Review I4: a read already on its way is never cancelled for a change. It is marked, and read once more the moment it
+ * lands (or fails); changes until then join that read. A slow phone (reads longer than the window) used to cancel every
+ * read before it landed, and each cancelled read still counted against the limit; now each read lands, and the page is
+ * at most one read behind.
  */
 function changeReader(client: QueryClient, now: () => number): ChangeReader {
-  const lastRead = new Map<string, number>();
+  const recent = new Map<string, number[]>();
   const atWindowEnd = new Map<string, ReturnType<typeof setTimeout>>();
   const whenItLands = new Set<string>();
+  let stopped = false;
+
+  /** This query's change-driven reads in the last CHANGE_READ_RECENT_MS, oldest first (older ones are dropped). */
+  const recentReads = (hash: string, at: number): number[] => {
+    const kept = (recent.get(hash) ?? []).filter((t) => at - t < CHANGE_READ_RECENT_MS);
+    if (kept.length > 0) recent.set(hash, kept); else recent.delete(hash);
+    return kept;
+  };
+  const noteRead = (hash: string, at: number) => { recent.set(hash, [...recentReads(hash, at), at]); };
+  const windowFor = (count: number) => CHANGE_READ_WINDOWS.find((w) => count >= w.after)?.ms ?? CHANGE_READ_WINDOW_MS;
+
+  /** Read once more as soon as the read on its way lands (or fails): its answer may be from before the change. */
+  const readWhenItLands = (query: Query) => {
+    const hash = query.queryHash;
+    if (whenItLands.has(hash)) return;
+    whenItLands.add(hash);
+    const again = () => {
+      // Forgotten (the query left the cache) or unsubscribed meanwhile: nothing is sent.
+      if (stopped || !whenItLands.delete(hash)) return;
+      noteRead(hash, now());
+      void client.invalidateQueries({ predicate: (q) => q.queryHash === hash }, { cancelRefetch: false });
+    };
+    void (query.promise ?? Promise.resolve()).then(again, again);
+  };
 
   const readNow = (queries: Query[], at: number) => {
-    if (queries.length === 0) return;
-    const hashes = new Set(queries.map((query) => query.queryHash));
-    for (const hash of hashes) lastRead.set(hash, at);
-    const firstReads = queries.filter(firstReadOnItsWay);
-    void client.invalidateQueries({ predicate: (query) => hashes.has(query.queryHash) });
-    for (const query of firstReads) {
-      whenItLands.add(query.queryHash);
-      void readAgainWhenItLands(client, query, () => whenItLands.delete(query.queryHash));
+    const idle: Query[] = [];
+    for (const query of queries) {
+      if (query.state.fetchStatus === 'fetching') readWhenItLands(query);
+      else idle.push(query);
     }
+    if (idle.length === 0) return;
+    const hashes = new Set(idle.map((query) => query.queryHash));
+    for (const hash of hashes) noteRead(hash, at);
+    void client.invalidateQueries({ predicate: (query) => hashes.has(query.queryHash) }, { cancelRefetch: false });
   };
 
   const readAtWindowEnd = (hash: string, wait: number) => {
@@ -113,23 +150,28 @@ function changeReader(client: QueryClient, now: () => number): ChangeReader {
       const atOnce: Query[] = [];
       for (const query of client.getQueryCache().findAll({ predicate: (q) => touchesEntities(q, set) })) {
         const hash = query.queryHash;
-        // A read already due after this change (at the window's end, or once a first read lands) answers it too.
+        // A read already due after this change (at the window's end, or once the read on its way lands) answers it too.
         if (atWindowEnd.has(hash) || whenItLands.has(hash)) continue;
-        const since = at - (lastRead.get(hash) ?? Number.NEGATIVE_INFINITY);
-        if (since < CHANGE_READ_WINDOW_MS) readAtWindowEnd(hash, CHANGE_READ_WINDOW_MS - since);
+        const reads = recentReads(hash, at);
+        const since = reads.length > 0 ? at - reads[reads.length - 1] : Number.POSITIVE_INFINITY;
+        const span = windowFor(reads.length);
+        if (since < span) readAtWindowEnd(hash, span - since);
         else atOnce.push(query);
       }
       readNow(atOnce, at);
     },
     forget(hash) {
-      lastRead.delete(hash);
+      recent.delete(hash);
+      whenItLands.delete(hash);
       const timer = atWindowEnd.get(hash);
       if (timer) clearTimeout(timer);
       atWindowEnd.delete(hash);
     },
     stop() {
+      stopped = true;
       for (const timer of atWindowEnd.values()) clearTimeout(timer);
       atWindowEnd.clear();
+      whenItLands.clear();
     },
   };
 }

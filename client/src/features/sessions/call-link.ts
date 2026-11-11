@@ -39,7 +39,10 @@ export function useCallLink(sessionId: string, enabled: boolean) {
       // Review I2: never a 429, whose re-read waits for the limit's window (realtime/rate-limited-reads.ts).
       return status !== 403 && status !== 404 && status !== 429 && count < 2;
     },
-    meta: { entities: [E.session(sessionId), E.sessionCallLink(sessionId)] },
+    // Review I3 (11 Nov 2026): only its own tag. The read is the code and the address, which change only when the code
+    // is first given or rotated, and both tell session:<id>:call-link (call-link.service fanoutCallLink). Under
+    // session:<id> it was read again for every registration, join and leave, which spent the organiser's request limit.
+    meta: { entities: [E.sessionCallLink(sessionId)] },
   });
 }
 
