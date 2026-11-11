@@ -30,6 +30,9 @@ function listedZones(): readonly string[] {
   return listed;
 }
 
+const canonicalCache = new Map<string, string | null>();
+const CANONICAL_CACHE_MAX = 1000;
+
 /**
  * The zone, spelled as the runtime spells it (its zone list, else Intl's own resolved name when that differs only in
  * case, else as given); null when it is not a real zone. Offsets ("+05:45") are refused even where the runtime
@@ -38,6 +41,17 @@ function listedZones(): readonly string[] {
  */
 export function canonicalTimeZone(input: string | null | undefined): string | null {
   const tz = (input ?? '').trim();
+  // Every formatter asks this once per call, so the answer for a name is kept (fix round 1, M3): a list of events
+  // formats in a handful of zones. Bounded: a stream of invented names cannot grow it without limit.
+  const cached = canonicalCache.get(tz);
+  if (cached !== undefined) return cached;
+  const answer = canonicalTimeZoneUncached(tz);
+  if (canonicalCache.size >= CANONICAL_CACHE_MAX) canonicalCache.clear();
+  canonicalCache.set(tz, answer);
+  return answer;
+}
+
+function canonicalTimeZoneUncached(tz: string): string | null {
   if (!tz || tz.length > ZONE_MAX_LEN || !IANA_SHAPE.test(tz)) return null;
   let resolved: string;
   try {

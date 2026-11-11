@@ -370,8 +370,10 @@ describe('GET /sessions/:id', () => {
     expect(before).toEqual({
       ...productionRow,
       participantCount: 3,
-      // Part 3 Task 1 adds `imageUrl` (additive): null for an event with no image.
+      // Part 3 Task 1 adds `imageUrl` (additive): null for an event with no image; and the zone, canonical (none on this
+      // row: UTC, as every other surface sends it).
       imageUrl: null,
+      timezone: 'UTC',
       // Part 2 Task 4 adds `admission` (additive): an event with no mode and no visibility follows its pod's rules.
       access: { visibility: null, mode: 'register', myRequest: null, autoRegister: true, canManageRequests: false, admission: 'pod_rules' },
     });

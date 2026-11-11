@@ -58,7 +58,7 @@ import userRoutes from '../../../routes/users';
 import { errorHandler, notFoundHandler } from '../../../middleware/errorHandler';
 import { EVENT_IMAGE_READS_PER_CLIENT } from '../../../middleware/rateLimit';
 import { createSessionSchema, updateSessionSchema } from '../../../routes/sessions';
-import { createSession } from '../../../services/session/session.service';
+import { createSession, withEventImageUrl } from '../../../services/session/session.service';
 import { eventImageUrl } from '../../../services/session/event-image-url';
 import { BLUE, sizeOf, solid } from '../../fixtures/real-pictures';
 import { dataUrl } from '../../fixtures/pictures';
@@ -253,6 +253,18 @@ describe('GET /sessions/:id/image (public) and DELETE', () => {
     expect((await from('198.51.100.7')).status).toBe(429);
     expect((await from('198.51.100.8')).status).toBe(404);
   }, 60_000);
+});
+
+describe('withEventImageUrl, the one Session mapper (fix round 1, M1)', () => {
+  it('sends the zone as every other surface does: canonical, UTC for a name the runtime does not know', () => {
+    const row = { id: 'e1', hasImage: false, imageUpdatedAt: null } as never as Parameters<typeof withEventImageUrl>[0];
+    expect(withEventImageUrl({ ...row, timezone: 'europe/copenhagen' }).timezone).toBe('Europe/Copenhagen');
+    expect(withEventImageUrl({ ...row, timezone: 'posix/Not_A_Zone' }).timezone).toBe('UTC');
+    const mapped = withEventImageUrl({ ...row, timezone: 'Asia/Karachi', hasImage: true, imageUpdatedAt: new Date(5) });
+    expect(mapped).toMatchObject({ timezone: 'Asia/Karachi', imageUrl: 'https://api.example.test/api/sessions/e1/image?v=5' });
+    expect(mapped).not.toHaveProperty('hasImage');
+    expect(mapped).not.toHaveProperty('imageUpdatedAt');
+  });
 });
 
 describe('eventImageUrl', () => {

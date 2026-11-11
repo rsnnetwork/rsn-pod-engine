@@ -235,6 +235,29 @@ describe('updateSession calls it only when the start moved on a published event'
     expect(mockSendMoved).not.toHaveBeenCalled();
   });
 
+  it('one edit that changes the zone and the time: the old time reads in the old zone, the new in the new (fix round 1, M2)', async () => {
+    arm({ timezone: 'Europe/Copenhagen' });
+    event = { ...event, timezone: 'Europe/London' };
+    await updateSession(SESSION_ID, ACTOR, { scheduledAt: NEW.toISOString(), timezone: 'Europe/London' }, UserRole.MEMBER);
+    await settle();
+    expect(bells[0].titles).toEqual([
+      'Founders evening has moved to Wednesday 18 November, 13:00 (GMT)',
+      'Founders evening has moved to Wednesday 18 November, 13:00 (GMT)',
+    ]);
+    expect(mockSendMoved.mock.calls[0][1]).toMatchObject({
+      previousWhen: 'Tuesday 17 November, 14:00 (CET)', when: 'Wednesday 18 November, 13:00 (GMT)',
+    });
+  });
+
+  it('an edit that keeps the zone writes both times in it', async () => {
+    arm({ timezone: 'Asia/Karachi' });
+    await updateSession(SESSION_ID, ACTOR, { scheduledAt: NEW.toISOString() }, UserRole.MEMBER);
+    await settle();
+    expect(mockSendMoved.mock.calls[0][1]).toMatchObject({
+      previousWhen: 'Tuesday 17 November, 18:00 (GMT+5)', when: 'Wednesday 18 November, 18:00 (GMT+5)',
+    });
+  });
+
   it('an event given its first time is not a move: nobody is told "it was ..."', async () => {
     arm({ scheduledAt: null });
     const updated = await updateSession(SESSION_ID, ACTOR, { scheduledAt: NEW.toISOString() }, UserRole.MEMBER);

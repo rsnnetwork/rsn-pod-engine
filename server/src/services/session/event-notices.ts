@@ -110,6 +110,11 @@ interface MovedRecipient {
  */
 export async function notifyEventRescheduled(
   sessionId: string, previousAt: Date, nextAt: Date, actorId: string,
+  /**
+   * The zone the old time was on, when the same edit changed the zone too (fix round 1, M2): "it was 14:00 (CET)" is
+   * written on the clock people knew it by. Omitted: the event's zone as it is now.
+   */
+  previousZone?: string | null,
 ): Promise<{ notified: number }> {
   if (config.eventComms !== 'on') return { notified: 0 };
   if (previousAt.getTime() === nextAt.getTime()) return { notified: 0 };
@@ -134,13 +139,16 @@ export async function notifyEventRescheduled(
     );
     if (recipients.rows.length === 0) return { notified: 0 };
 
+    // Written once for the event (fix round 1, M3): every person reads the same time on the event's clock.
+    const when = { previous: formatEventTime(previousAt, previousZone ?? event.timezone), next: formatEventTime(nextAt, event.timezone) };
+    const title = `${event.title} has moved to ${when.next}`;
     const notified = await ringEventBells(
       'event_rescheduled',
-      recipients.rows.map((r) => ({ userId: r.id, title: `${event.title} has moved to ${formatEventTime(nextAt, event.timezone)}` })),
+      recipients.rows.map((r) => ({ userId: r.id, title })),
       'Join from the event page.',
       eventPagePath(sessionId),
     );
-    await emailMove(event, previousAt, nextAt, recipients.rows);
+    await emailMove(event, when, recipients.rows);
     return { notified };
   } catch (err) {
     logger.warn({ err, sessionId }, 'Event moved, but its notices could not all be sent (non-fatal)');
@@ -148,7 +156,7 @@ export async function notifyEventRescheduled(
   }
 }
 
-async function emailMove(event: MovedEventRow, previousAt: Date, nextAt: Date, recipients: MovedRecipient[]): Promise<void> {
+async function emailMove(event: MovedEventRow, when: { previous: string; next: string }, recipients: MovedRecipient[]): Promise<void> {
   try {
     if (!(await emailService.isEmailTypeEnabled('event_rescheduled'))) return;
     const wanted = recipients.filter((r) => r.email && r.notify_email !== false);
@@ -158,8 +166,8 @@ async function emailMove(event: MovedEventRow, previousAt: Date, nextAt: Date, r
       for (const person of wanted) {
         await emailService.sendEventRescheduledEmail(person.email as string, {
           eventTitle: event.title,
-          previousWhen: formatEventTime(previousAt, event.timezone),
-          when: formatEventTime(nextAt, event.timezone),
+          previousWhen: when.previous,
+          when: when.next,
           link,
         }).catch((err: unknown) => {
           logger.warn({ err, sessionId: event.id, userId: person.id }, 'Event-moved email failed (non-fatal)');

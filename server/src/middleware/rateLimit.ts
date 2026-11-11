@@ -96,6 +96,33 @@ function buildStore(prefix: string): RateLimitOptions['store'] | undefined {
 }
 
 /**
+ * The signed-out routes that hold their own venue-sized bucket (11 Nov 2026, Part 3 Task 1 fix round 1). The general
+ * limiter below counts everyone signed out behind one address as one person, 100 a minute in production, and it runs
+ * before every router, so a room behind one venue's Wi-Fi would be refused there long before these routes' own wider
+ * buckets were reached. Exactly these, by method and shape, and nothing else under their prefixes:
+ *   GET  /api/sessions/:id/image          an event's image (eventImageReadLimiter, 600 a minute per client)
+ *   GET  /api/call-links/:code            the RSN Call link's landing (callLinkReadLimiter, with callLinkMissLimiter)
+ *   POST /api/call-links/:code/email      a code by email (callLinkEmailLimiter, callLinkEmailTargetLimiter)
+ *   POST /api/call-links/:code/verify     the code back (callLinkVerifyLimiter, the code's own tries)
+ * Everything else, /api/call-links/me/events and /:code/entry and /:code/enter included, stays under the general one.
+ * `path` is the request's path from /api on, without the query; a HEAD is a GET (Express answers it with the GET route).
+ */
+export const OWN_BUCKET_ROUTES: ReadonlyArray<{ method: 'GET' | 'POST'; pattern: RegExp }> = [
+  { method: 'GET', pattern: /^\/api\/sessions\/[^/]+\/image\/?$/ },
+  { method: 'GET', pattern: /^\/api\/call-links\/[^/]+\/?$/ },
+  { method: 'POST', pattern: /^\/api\/call-links\/[^/]+\/email\/?$/ },
+  { method: 'POST', pattern: /^\/api\/call-links\/[^/]+\/verify\/?$/ },
+];
+
+/** Whether a request is one of OWN_BUCKET_ROUTES, so the general limiter leaves it to its own buckets. */
+export function hasOwnBucket(method: string, path: string): boolean {
+  const verb = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase();
+  // A path is short (Express caps a URL long before a pattern could struggle), and it is read without its query.
+  const bare = path.split('?')[0];
+  return OWN_BUCKET_ROUTES.some((r) => r.method === verb && r.pattern.test(bare));
+}
+
+/**
  * General API rate limiter
  */
 export const apiLimiter = rateLimit({
@@ -104,6 +131,8 @@ export const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
+  // The routes with a venue-sized bucket of their own are left to it (hasOwnBucket above).
+  skip: (req: Request) => hasOwnBucket(req.method, req.originalUrl ?? `${req.baseUrl}${req.path}`),
   store: buildStore('api'),
   handler: (_req, res) => {
     const response: ApiResponse = {

@@ -145,7 +145,7 @@ describe('the invite', () => {
     const built = buildInviteEmail(mockSent.invite[0].data as never);
     expect(built.text).toContain('When: Tuesday 17 November, 14:00 (CET)');
     expect(built.html).toContain('When: Tuesday 17 November, 14:00 (CET)');
-    expect(built.html).toContain(`<img src="${IMAGE_URL}" alt="" width="560"`);
+    expect(built.html).toContain(`<img src="${IMAGE_URL}" alt="" width="480"`);
   });
 
   it('an invite to a pod has no When line and no image', () => {
@@ -165,7 +165,7 @@ describe('the registration email', () => {
     expect(built.html).toContain('Tuesday 17 November, 14:00 (CET)');
     expect(built.text).toContain('When: Tuesday 17 November, 14:00 (CET)');
     expect(built.html).not.toContain('GMT');
-    expect(built.html).toContain(`<img src="${IMAGE_URL}" alt="" width="560"`);
+    expect(built.html).toContain(`<img src="${IMAGE_URL}" alt="" width="480"`);
   });
 
   it('an event with no image sends no image', async () => {

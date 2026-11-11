@@ -13,7 +13,7 @@ import {
   liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS, type SessionCircle,
   type EventPublication,
   type AdmittedVia,
-  canonicalTimeZone, FALLBACK_TIME_ZONE,
+  canonicalTimeZone, eventZone, FALLBACK_TIME_ZONE,
 } from '@rsn/shared';
 import { eventImageUrl } from './event-image-url';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
@@ -60,11 +60,14 @@ type SessionRow = Omit<Session, 'imageUrl'> & { hasImage?: boolean | null; image
 
 /**
  * Part 3 Task 1: the one mapper that gives every Session-shaped answer its image's address (eventImageUrl), in place
- * of the two columns it is made from.
+ * of the two columns it is made from, and its zone as every other surface sends it (fix round 1, M1): canonical, and
+ * UTC for a stored name the runtime does not know (the backfill took any name pg_timezone_names lists).
  */
-export function withEventImageUrl<T extends SessionRow>(row: T): Omit<T, 'hasImage' | 'imageUpdatedAt'> & { imageUrl: string | null } {
-  const { hasImage, imageUpdatedAt, ...rest } = row;
-  return { ...rest, imageUrl: eventImageUrl(row.id, !!hasImage, imageUpdatedAt ?? null) };
+export function withEventImageUrl<T extends SessionRow>(
+  row: T,
+): Omit<T, 'hasImage' | 'imageUpdatedAt' | 'timezone'> & { timezone: string; imageUrl: string | null } {
+  const { hasImage, imageUpdatedAt, timezone, ...rest } = row;
+  return { ...rest, timezone: eventZone(timezone), imageUrl: eventImageUrl(row.id, !!hasImage, imageUpdatedAt ?? null) };
 }
 
 /** Part 3 Task 1: the refusal for a zone that is not a real IANA zone, at the field. */
@@ -394,7 +397,8 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   const movedFrom = session.scheduledAt;
   if (session.publication === 'published' && input.scheduledAt && movedFrom && movedTo
     && new Date(movedTo).getTime() !== new Date(movedFrom).getTime()) {
-    void notifyEventRescheduled(sessionId, new Date(movedFrom), new Date(movedTo), userId);
+    // Part 3 Task 1 fix round 1 (M2): the old time is written in the zone it had, should this edit change the zone too.
+    void notifyEventRescheduled(sessionId, new Date(movedFrom), new Date(movedTo), userId, session.timezone);
   }
 
   return result.rows[0];

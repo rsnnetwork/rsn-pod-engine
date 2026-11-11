@@ -559,7 +559,7 @@ export async function sendHostRecapEmail(
 function eventImageHead(imageUrl: string | null | undefined): string {
   const api = (config.apiBaseUrl ?? '').replace(/\/+$/, '');
   if (!imageUrl || !api || !imageUrl.startsWith(`${api}/api/sessions/`)) return '';
-  return `<img src="${escapeAttr(imageUrl)}" alt="" width="560" style="display:block;width:100%;max-width:100%;height:auto;border:0;border-radius:10px;margin:0 0 24px 0;" />`;
+  return `<img src="${escapeAttr(imageUrl)}" alt="" width="480" style="width:100%;max-width:480px;height:auto;display:block;border:0;border-radius:10px;margin:0 0 24px 0;" />`;
 }
 
 /** When an event starts, on its own clock and naming its zone ("Tuesday 17 November, 14:00 (CET)"); UTC when it has none. */

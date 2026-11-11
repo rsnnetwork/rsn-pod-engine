@@ -189,25 +189,27 @@ function reportWhoWouldBeTold(wouldTell: Array<{ sessionId: string; kind: Remind
 async function tell(
   event: DueEvent, startsAt: Date, now: Date, kind: ReminderKind, people: ClaimedPerson[],
 ): Promise<{ belled: number; emailed: number }> {
+  // Written once for the event (fix round 1, M3): everyone reads the same time on the event's clock.
+  const when = relativeEventTime(startsAt, now, event.timezone);
+  const title = `${event.title} starts ${when}`;
   const belled = await ringEventBells(
     'event_reminder',
-    people.map((p) => ({ userId: p.user_id, title: `${event.title} starts ${relativeEventTime(startsAt, now, event.timezone)}` })),
+    people.map((p) => ({ userId: p.user_id, title })),
     'Join from the event page.',
     eventPagePath(event.id),
   );
-  const emailed = await emailReminders(event, startsAt, now, kind, people);
+  const emailed = await emailReminders(event, startsAt, when, kind, people);
   return { belled, emailed };
 }
 
 async function emailReminders(
-  event: DueEvent, startsAt: Date, now: Date, kind: ReminderKind, people: ClaimedPerson[],
+  event: DueEvent, startsAt: Date, when: string, kind: ReminderKind, people: ClaimedPerson[],
 ): Promise<number> {
   try {
     const wanted = people.filter((p) => p.email && p.notify_email !== false);
     if (wanted.length === 0) return 0;
     if (!(await emailService.isEmailTypeEnabled('event_reminder'))) return 0;
     const link = eventPageUrl(event.id);
-    const when = relativeEventTime(startsAt, now, event.timezone);
     const imageUrl = eventImageUrlOf(event.id, event);
     const sentTo: string[] = await emailService.asBulkEmail(async () => {
       const sent: string[] = [];
