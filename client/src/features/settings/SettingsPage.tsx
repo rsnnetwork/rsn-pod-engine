@@ -11,6 +11,7 @@ import { Bell, Shield, Eye, CreditCard, Check, Lock, Zap, MessageSquare } from '
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { messageSoundOn, setMessageSoundOn } from '@/lib/chime';
+import CalendarsCard from '@/features/calendar/CalendarsCard';
 
 /**
  * Phase J (1 May 2026 spec) — per-channel toggles for chat notifications.
@@ -371,6 +372,9 @@ export default function SettingsPage() {
           )}
         </div>
       </Card>
+
+      {/* Shirley pilot S8: optional calendar free/busy. Shows nothing while the server has it switched off. */}
+      <CalendarsCard />
 
       {/* Account */}
       <Card className="animate-fade-in-up">

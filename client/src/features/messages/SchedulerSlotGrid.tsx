@@ -8,6 +8,7 @@
 
 import type { RefObject } from 'react';
 import { cellAriaLabel, cellState, cellText, dayLabel, type CellState } from './scheduler-flow';
+import { BUSY_ARIA_SUFFIX, BUSY_CELL_WORD } from '../calendar/calendar-words';
 
 const CELL_CLASS: Record<CellState, string> = {
   agreed: 'border-emerald-400 bg-emerald-100 text-emerald-800 hover:bg-emerald-200',
@@ -30,9 +31,14 @@ interface Props {
   booked: string | null;
   flashKey: string | null;
   onPress: (state: CellState, key: string) => void;
+  /**
+   * Times busy in the member's OWN connected calendar (Shirley pilot S8): striped and labelled, never disabled, so a
+   * busy time can still be picked. Empty when no calendar is connected or calendar free/busy is off.
+   */
+  busy?: ReadonlySet<string>;
 }
 
-export default function SchedulerSlotGrid({ gridRef, dayKey, slots, labels, mine, saved, theirs, booked, flashKey, onPress }: Props) {
+export default function SchedulerSlotGrid({ gridRef, dayKey, slots, labels, mine, saved, theirs, booked, flashKey, onPress, busy }: Props) {
   return (
     <div
       ref={gridRef}
@@ -46,7 +52,8 @@ export default function SchedulerSlotGrid({ gridRef, dayKey, slots, labels, mine
         <div className="grid grid-cols-3 gap-1.5 min-[420px]:grid-cols-4 md:grid-cols-6">
           {slots.map((key, i) => {
             const state = cellState({ key, mine, saved, theirs, booked });
-            const text = cellText(state);
+            const isBusy = busy?.has(key) === true;
+            const text = cellText(state) || (isBusy ? BUSY_CELL_WORD : '');
             return (
               <button
                 key={key}
@@ -54,10 +61,11 @@ export default function SchedulerSlotGrid({ gridRef, dayKey, slots, labels, mine
                 data-slot={key}
                 onClick={() => onPress(state, key)}
                 aria-pressed={state === 'agreed' || state === 'booked' ? undefined : mine.has(key)}
-                aria-label={cellAriaLabel(state, labels[i])}
+                aria-label={cellAriaLabel(state, labels[i]) + (isBusy ? BUSY_ARIA_SUFFIX : '')}
+                data-busy={isBusy ? 'true' : undefined}
                 className={`flex min-h-[44px] flex-col items-center justify-center rounded-lg border px-1 leading-tight transition-colors ${
                   CELL_CLASS[state]
-                } ${flashKey === key ? 'ring-2 ring-rsn-red ring-offset-1' : ''}`}
+                } ${isBusy ? 'rsn-busy-stripes' : ''} ${flashKey === key ? 'ring-2 ring-rsn-red ring-offset-1' : ''}`}
               >
                 <span className="text-xs font-semibold">{labels[i]}</span>
                 {text && <span className="text-[10px]">{text}</span>}

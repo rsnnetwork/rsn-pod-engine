@@ -32,6 +32,8 @@ export const E = {
   userNotifications: (userId: string) => `user:${userId}:notifications`,
   /** The entities (companies, funds…) a member is linked to. */
   userEntities: (userId: string) => `user:${userId}:entities`,
+  /** Shirley pilot S8 (12 Nov 2026): the member's own connected calendars (connect, disconnect, needs reconnecting). */
+  userCalendars: (userId: string) => `user:${userId}:calendars`,
 
   // Entity: an organisation members create (a company, a fund…), not this file's realtime "entities"
   entity: (entityId: string) => `entity:${entityId}`,

@@ -27,6 +27,7 @@ import { useSchedulerActions } from './useSchedulerActions';
 import { useSchedulerData } from './useSchedulerData';
 import { useSchedulerDraft } from './useSchedulerDraft';
 import { useReveal, useSchedulerScroll } from './useSchedulerScroll';
+import SchedulerCalendarLine, { useSchedulerBusy } from '../calendar/SchedulerCalendar';
 
 /** What the page can ask of the panel. */
 export interface SchedulerHandle {
@@ -77,6 +78,9 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
   });
   useImperativeHandle(ref, () => ({ requestClose }));
   const [showAllOverlap, setShowAllOverlap] = useState(false);
+  // Shirley pilot S8: the member's own busy times, when calendar free/busy is on and a calendar is connected. A hint
+  // only: booking never reads it, and the picker works the same without it.
+  const calendar = useSchedulerBusy(visible, zone, now);
 
   if (!data) return <SchedulerLoadState failed={query.isError} onRetry={() => void query.refetch()} />;
 
@@ -141,6 +145,7 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
         {savedZone && savedZone !== ownZone && (
           <p className="text-[11px] text-gray-600">Emails show times in {savedZone}, the time zone in your profile.</p>
         )}
+        <SchedulerCalendarLine state={calendar} />
         <SchedulerDayStrip
           days={model.days.map(d => d.dayKey)}
           current={current.dayKey}
@@ -160,6 +165,7 @@ const MeetingScheduler = forwardRef<SchedulerHandle, SchedulerProps>(function Me
           booked={bookedKey}
           flashKey={flashKey}
           onPress={pressCell}
+          busy={calendar.busyKeys}
         />
         <p className="text-[11px] text-gray-500">Scroll the times for earlier or later in the day.</p>
         <SchedulerTypedTime

@@ -191,3 +191,9 @@
     font-size: 16px !important;
   }
 }
+
+/* Calendar free/busy (Shirley pilot S8): a time that is busy in the member's own calendar. Striped, so it reads as a
+   hint over whatever colour the cell already has (free, theirs, mine), and the cell stays selectable. */
+.rsn-busy-stripes {
+  background-image: repeating-linear-gradient(135deg, rgba(100, 116, 139, 0.18) 0 4px, transparent 4px 8px);
+}
