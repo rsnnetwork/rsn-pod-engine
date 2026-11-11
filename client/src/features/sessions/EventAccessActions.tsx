@@ -5,10 +5,12 @@
 // Part 3 Task 8: a full event offers "Join the waiting list" in place of Register (the same press, which then asks the
 // server for the line), and someone on the line reads "On the waiting list · number {n}" with "Leave the waiting list",
 // whatever the event's mode (an approval on a full event queues the person too).
-import { useState } from 'react';
+// Part 3 Task 10: an approval event that asks extra matching questions asks them in the request sheet, and the answers
+// go with the request (a /register on an approval event is refused, answers and all; POST /requests keeps them).
+import { useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Hourglass, Lock, LogOut, Send, UserPlus } from 'lucide-react';
-import type { EventAccessMode, EventJoinRequestStatus, EventVisibility, EventWaitlistAccess } from '@rsn/shared';
+import type { EventAccessMode, EventAnswers, EventJoinRequestStatus, EventVisibility, EventWaitlistAccess } from '@rsn/shared';
 import Sheet from '@/features/reason/ui/Sheet';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
@@ -17,6 +19,8 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { circlePrivateNotice } from './circle-preset';
 import { useLeaveWaitlist } from './waitlist/useWaitlist';
 import { WAITLIST_COPY } from './waitlist/waitlist-text';
+import { useEventQuestions } from './questions/useEventQuestions';
+import EventAnswersForm from './questions/EventAnswersForm';
 
 /** The `access` block GET /sessions/:id carries (T11). Absent on a server before T11: the page then offers Register. */
 export interface EventAccess {
@@ -74,7 +78,10 @@ export default function EventAccessActions({ sessionId, access, registerLabel, o
   const refresh = () => qc.invalidateQueries({ queryKey: ['session', sessionId] });
 
   const ask = useMutation({
-    mutationFn: () => api.post(`/sessions/${sessionId}/requests`, message.trim() ? { message: message.trim() } : {}),
+    mutationFn: (answers?: EventAnswers) => api.post(`/sessions/${sessionId}/requests`, {
+      ...(message.trim() ? { message: message.trim() } : {}),
+      ...(answers && Object.keys(answers).length > 0 ? { answers } : {}),
+    }),
     onSuccess: () => {
       setSheetOpen(false);
       setMessage('');
@@ -95,6 +102,10 @@ export default function EventAccessActions({ sessionId, access, registerLabel, o
 
   const mode = access?.mode ?? 'register';
   const position = access?.waitlist?.position ?? null;
+  // Part 3 Task 10: the event's questions, read when the request sheet opens (a refused read asks nothing).
+  const answersFormId = useId();
+  const questions = useEventQuestions(sessionId, sheetOpen && mode === 'request');
+  const asked = questions.data?.questions ?? [];
 
   // On the line: their number, and the way off it (asked first: the place in the line is not given back).
   if (position !== null) {
@@ -156,13 +167,30 @@ export default function EventAccessActions({ sessionId, access, registerLabel, o
           footer={(
             <div className="flex justify-end gap-3">
               <Button variant="ghost" className="min-h-[44px]" onClick={() => setSheetOpen(false)} disabled={ask.isPending}>Cancel</Button>
-              <Button data-testid="event-request-send" className="min-h-[44px]" onClick={() => ask.mutate()} isLoading={ask.isPending}>
-                {ACCESS_COPY.send}
-              </Button>
+              {asked.length > 0 ? (
+                <Button type="submit" form={answersFormId} data-testid="event-request-send" className="min-h-[44px]" isLoading={ask.isPending}>
+                  {ACCESS_COPY.send}
+                </Button>
+              ) : (
+                <Button data-testid="event-request-send" className="min-h-[44px]" onClick={() => ask.mutate(undefined)} isLoading={ask.isPending || questions.isLoading}>
+                  {ACCESS_COPY.send}
+                </Button>
+              )}
             </div>
           )}
         >
           <p className="text-sm text-gray-600 mb-3">{ACCESS_COPY.requestBody}</p>
+          {asked.length > 0 && (
+            <div className="mb-4">
+              <EventAnswersForm
+                formId={answersFormId}
+                group={null}
+                questions={asked}
+                mine={questions.data?.mine ?? {}}
+                onSubmit={({ answers }) => ask.mutate(answers)}
+              />
+            </div>
+          )}
           <label htmlFor="event-request-message" className="block text-sm font-medium text-gray-800 mb-1">{ACCESS_COPY.messageLabel}</label>
           <textarea
             id="event-request-message"

@@ -1,12 +1,14 @@
 // One person on the matching board: their group, their name, their standing. A button, so a tap or Enter selects them
 // (MoveSheet), and on a desktop pointer it can be dragged (native drag and drop, board-dnd.ts). An occupied seat is
-// also a drop target: dropping someone on it swaps the two.
-import { useState, type DragEvent } from 'react';
+// also a drop target: dropping someone on it swaps the two. Part 3 Task 10: their answers to the event's matching
+// questions, under the name (organisers only: the board's answers context is empty for anyone else).
+import { useContext, useState, type DragEvent } from 'react';
 import { Lock } from 'lucide-react';
 import type { BoardPerson } from '@rsn/shared';
 import { cn } from '@/lib/utils';
 import { BOARD_DRAG_TYPE, encodeDrag, type DragSource, type DropTarget } from './board-dnd';
 import { statusNote } from './board-model';
+import { BoardAnswersContext } from './board-answers';
 
 interface Props {
   person: BoardPerson;
@@ -32,9 +34,12 @@ export default function SeatChip({
 }: Props) {
   const [over, setOver] = useState(false);
   const note = statusNote(person.status);
+  const answers = useContext(BoardAnswersContext).labelsFor(person.userId);
   const accepts = !!dropTarget && dragging;
-  const label = [groups.length ? `${groups.join(', ')}:` : '', person.displayName, note ? `(${note})` : '', slotLocked ? '(seat locked)' : '']
-    .filter(Boolean).join(' ');
+  const label = [
+    groups.length ? `${groups.join(', ')}:` : '', person.displayName, note ? `(${note})` : '',
+    answers.length ? `(${answers.join(', ')})` : '', slotLocked ? '(seat locked)' : '',
+  ].filter(Boolean).join(' ');
 
   const start = (e: DragEvent<HTMLButtonElement>) => {
     e.dataTransfer.setData(BOARD_DRAG_TYPE, encodeDrag(source));
@@ -84,6 +89,13 @@ export default function SeatChip({
         {groups.length > 0 && <span className="text-[#5a6670]">{groups.join(', ')}: </span>}
         <span className="font-medium">{person.displayName}</span>
         {note && <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">{note}</span>}
+        {answers.length > 0 && (
+          <span data-testid="seat-answers" className="mt-1 flex flex-wrap gap-1">
+            {answers.map((a, i) => (
+              <span key={`${a}-${i}`} className="max-w-full truncate rounded-full bg-[#e3f1ee] px-2 py-0.5 text-[11px] font-semibold text-[#1d6b5c]">{a}</span>
+            ))}
+          </span>
+        )}
       </span>
       {slotLocked && <Lock className="h-3.5 w-3.5 shrink-0 text-[#1d6b5c]" aria-hidden="true" />}
     </button>

@@ -312,7 +312,7 @@ export default function CallLinkPage() {
     case 'details':
       body = (
         <CallDetailsStep
-          fields={detailsFieldsFor(state!.missing, event.asks.group)}
+          fields={detailsFieldsFor(state!.missing, event.asks.group, event.asks.questions ?? null)}
           refusal={admissionError ?? (state!.refusal ? refusalSentence(state!) : null)}
           approval={approval}
           defaults={{ admissionCode: '' }}

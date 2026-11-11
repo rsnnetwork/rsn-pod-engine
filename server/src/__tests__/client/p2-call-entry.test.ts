@@ -39,7 +39,8 @@ const sourcesUnder = (dir: string): string[] => fs.readdirSync(dir, { withFileTy
   });
 const rel = (file: string) => path.relative(CLIENT, file).split(path.sep).join('/');
 
-const NOTHING = { displayName: false, group: false, admissionCode: false };
+// Part 3 Task 5 added `questions` to both shapes (a required matching question unanswered; the questions asked).
+const NOTHING = { displayName: false, group: false, admissionCode: false, questions: false };
 const INVITATION_ONLY = 'This event is invitation only. Enter your admission code, or ask the organiser to invite this email address.';
 
 const GROUPS = {
@@ -61,7 +62,7 @@ function landing(over: Partial<CallLanding> = {}): CallLanding {
     host: { displayName: 'Stefan', avatarUrl: null },
     lifecycle: 'registration_open',
     admission: 'open',
-    asks: { displayName: true, group: null, admissionCode: false },
+    asks: { displayName: true, group: null, admissionCode: false, questions: null },
     viewer: { signedIn: false, accountKind: null, sessionId: null, step: 'identify' },
     ...over,
   };
@@ -299,11 +300,11 @@ describe('the details step renders only the fields flagged in missing', () => {
   });
 
   it.each([
-    [{ displayName: true, group: false, admissionCode: false }, { name: true, group: false, code: false }],
-    [{ displayName: false, group: true, admissionCode: false }, { name: false, group: true, code: false }],
-    [{ displayName: false, group: false, admissionCode: true }, { name: false, group: false, code: true }],
-    [{ displayName: true, group: true, admissionCode: true }, { name: true, group: true, code: true }],
-    [{ displayName: false, group: false, admissionCode: false }, { name: false, group: false, code: false }],
+    [{ displayName: true, group: false, admissionCode: false, questions: false }, { name: true, group: false, code: false }],
+    [{ displayName: false, group: true, admissionCode: false, questions: false }, { name: false, group: true, code: false }],
+    [{ displayName: false, group: false, admissionCode: true, questions: false }, { name: false, group: false, code: true }],
+    [{ displayName: true, group: true, admissionCode: true, questions: false }, { name: true, group: true, code: true }],
+    [{ displayName: false, group: false, admissionCode: false, questions: false }, { name: false, group: false, code: false }],
   ])('missing %j draws %j', (missing, expected) => {
     expect(has(draw(missing))).toEqual(expected);
   });
@@ -376,12 +377,12 @@ describe('which screen a person is on', () => {
 
 describe('what the flow says', () => {
   it('"This event will ask for: …" lists only what this event asks', () => {
-    expect(asksSentence({ displayName: true, group: null, admissionCode: false }, false)).toBe('This event will ask for: your email, your name');
-    expect(asksSentence({ displayName: true, group: GROUPS, admissionCode: false }, false)).toBe('This event will ask for: your email, your name, your group');
-    expect(asksSentence({ displayName: true, group: GROUPS, admissionCode: true }, false))
+    expect(asksSentence({ displayName: true, group: null, admissionCode: false, questions: null }, false)).toBe('This event will ask for: your email, your name');
+    expect(asksSentence({ displayName: true, group: GROUPS, admissionCode: false, questions: null }, false)).toBe('This event will ask for: your email, your name, your group');
+    expect(asksSentence({ displayName: true, group: GROUPS, admissionCode: true, questions: null }, false))
       .toBe('This event will ask for: your email, your name, your group, an admission code');
-    expect(asksSentence({ displayName: false, group: null, admissionCode: false }, true)).toBeNull();
-    expect(asksSentence({ displayName: false, group: GROUPS, admissionCode: false }, true)).toBe('This event will ask for: your group');
+    expect(asksSentence({ displayName: false, group: null, admissionCode: false, questions: null }, true)).toBeNull();
+    expect(asksSentence({ displayName: false, group: GROUPS, admissionCode: false, questions: null }, true)).toBe('This event will ask for: your group');
   });
 
   it('the fixed sentences, verbatim', () => {

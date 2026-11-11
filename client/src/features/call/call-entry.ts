@@ -12,7 +12,7 @@
 
 import {
   EVENT_FORMATS, formatEventTime,
-  type CallEntryState, type CallLanding, type CallLandingGroupAsk, type EventFormat,
+  type CallEntryState, type CallLanding, type CallLandingGroupAsk, type EventFormat, type EventMatchingQuestion,
 } from '@rsn/shared';
 import { codeErrorMessage } from '../auth/sign-in-code';
 
@@ -71,9 +71,9 @@ export interface ScreenInput {
   started: boolean;
 }
 
-/** True when the event still needs something from the person before a place. */
+/** True when the event still needs something from the person before a place (Part 3 Task 10: a required answer too). */
 export function somethingMissing(missing: CallEntryState['missing']): boolean {
-  return missing.displayName || missing.group || missing.admissionCode;
+  return missing.displayName || missing.group || missing.admissionCode || !!missing.questions;
 }
 
 /** The screen for what the server says, and how far the person has got on this page. */
@@ -116,26 +116,41 @@ export interface DetailsFields {
   displayName: boolean;
   group: CallLandingGroupAsk | null;
   admissionCode: boolean;
+  /** Part 3 Task 10: the event's unanswered matching questions (required first), or null when none are asked here. */
+  questions: EventMatchingQuestion[] | null;
 }
 
-/** The fields the details step shows: exactly those the server flagged in `missing` (a group only with its question). */
-export function detailsFieldsFor(missing: CallEntryState['missing'], groupAsk: CallLandingGroupAsk | null): DetailsFields {
+/**
+ * The fields the details step shows: exactly those the server flagged in `missing` (a group only with its question).
+ * The event's matching questions (`asks.questions`: the unanswered ones, required first) are shown when a required one
+ * is missing, or when the step is shown anyway for something else, so the optional ones can be answered on the way;
+ * an event that needs nothing else is never stopped for an optional question.
+ */
+export function detailsFieldsFor(
+  missing: CallEntryState['missing'], groupAsk: CallLandingGroupAsk | null, questionsAsk: EventMatchingQuestion[] | null = null,
+): DetailsFields {
+  const stepShown = missing.displayName || missing.group || missing.admissionCode || !!missing.questions;
   return {
     displayName: missing.displayName,
     group: missing.group && groupAsk && groupAsk.options.length > 0 ? groupAsk : null,
     admissionCode: missing.admissionCode,
+    questions: stepShown && questionsAsk && questionsAsk.length > 0 ? questionsAsk : null,
   };
 }
 
 // ─── The event, as the summary says it ────────────────────────────────────────
 
-/** "This event will ask for: your email, your name, your group, an admission code" (signed out), or what is left. */
+/**
+ * "This event will ask for: your email, your name, your group, an admission code, a few matching questions" (signed
+ * out), or what is left.
+ */
 export function asksSentence(asks: CallLanding['asks'], signedIn: boolean): string | null {
   const parts = [
     ...(signedIn ? [] : ['your email']),
     ...(asks.displayName ? ['your name'] : []),
     ...(asks.group ? ['your group'] : []),
     ...(asks.admissionCode ? ['an admission code'] : []),
+    ...(asks.questions && asks.questions.length > 0 ? [asks.questions.length === 1 ? 'one matching question' : 'a few matching questions'] : []),
   ];
   return parts.length > 0 ? `This event will ask for: ${parts.join(', ')}` : null;
 }

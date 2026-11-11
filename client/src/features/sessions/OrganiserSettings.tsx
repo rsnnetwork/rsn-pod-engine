@@ -1,8 +1,9 @@
 // ─── The organiser's settings on the event page (Part 2 Task 11; spec 03, 04, 05, 11) ───────────────────────────────
-// In order: the event's status and lifecycle steps, the RSN Call link, admission, and matching groups. Each card asks
-// the server and draws nothing for someone it refuses, so `mayRunEvent` (the page's guess at who runs the event) only
-// spares everyone else the requests. Admission and groups change only before the event (the server refuses while it is
-// live or once it is over), so they show only then; groups only for an event with rounds.
+// In order: the event's status and lifecycle steps, the RSN Call link, admission, matching groups and (Part 3 Task 10)
+// the extra matching questions. Each card asks the server and draws nothing for someone it refuses, so `mayRunEvent`
+// (the page's guess at who runs the event) only spares everyone else the requests. Admission and groups change only
+// before the event (the server refuses while it is live or once it is over), so they show only then; groups only for an
+// event with rounds. The questions show while live too, locked.
 import { DEFAULT_SESSION_CONFIG, type EventGroupsView } from '@rsn/shared';
 import { isEventLifecycleChip } from './statusConfig';
 import type { StatusPhase } from './statusConfig';
@@ -10,6 +11,7 @@ import EventLifecycleActions from './lifecycle/EventLifecycleActions';
 import CallLinkCard from './CallLinkCard';
 import EventAdmissionCard from './admission/EventAdmissionCard';
 import EventGroupsCard from './groups/EventGroupsCard';
+import EventQuestionsCard from './questions/EventQuestionsCard';
 
 /** The fields of GET /sessions/:id these cards read. */
 export interface OrganiserEvent {
@@ -54,6 +56,8 @@ export default function OrganiserSettings({ event, phase, mayRunEvent, isRoundsE
       {mayRunEvent && (phase === 'pre' || phase === 'live') && <CallLinkCard sessionId={event.id} isDraft={lifecycle === 'draft'} />}
       {mayRunEvent && before && <EventAdmissionCard sessionId={event.id} title={title} />}
       {mayRunEvent && before && isRoundsEvent && <EventGroupsCard sessionId={event.id} numberOfRounds={numberOfRounds} view={groups} />}
+      {/* Part 3 Task 10: the extra matching questions, after the groups; shown live too, locked (the server refuses a change). */}
+      {mayRunEvent && (before || phase === 'live') && isRoundsEvent && <EventQuestionsCard sessionId={event.id} locked={phase === 'live'} />}
     </section>
   );
 }

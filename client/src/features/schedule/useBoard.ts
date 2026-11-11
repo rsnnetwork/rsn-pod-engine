@@ -1,8 +1,8 @@
 // ─── The matching board's data (10 Nov 2026 spec, Part 2 Task 13) ────────────────────────────────────────
 //
-// One read (GET /sessions/:id/schedule), kept live by the board's three tags: the draft itself (any organiser's
-// edit), the event's groups (a regroup changes a room's verdict) and its people (someone registers or leaves: the
-// basket). Every write names the revision of the board on screen; the server answers with the whole board, which IS
+// One read (GET /sessions/:id/schedule), kept live by the board's tags: the draft itself (any organiser's edit), the
+// event's groups (a regroup changes a room's verdict), its people (someone registers or leaves: the basket) and (Part 3
+// Task 10) its matching questions (a changed question or answer changes the redistribution's choices). Every write names the revision of the board on screen; the server answers with the whole board, which IS
 // the server's state, so it is put in the cache as it came (the one setQueryData here, applyReturnedBoard). A write
 // made against an older board is refused with the board as it is now: that board is shown, with the server's
 // sentence. A move the room checker refuses comes back with alternatives, for the screen to offer.
@@ -103,7 +103,7 @@ export function useBoard(sessionId: string) {
       const status = boardErrorOf(err).status;
       return status !== 403 && status !== 404 && status !== 409 && failures < 2;
     },
-    meta: { entities: [E.sessionSchedule(sessionId), E.sessionGroups(sessionId), E.sessionParticipants(sessionId)] },
+    meta: { entities: [E.sessionSchedule(sessionId), E.sessionGroups(sessionId), E.sessionParticipants(sessionId), E.sessionQuestions(sessionId)] },
   });
 
   /** The server's board, as it answered (a publish refused as stale hands its board here too). */

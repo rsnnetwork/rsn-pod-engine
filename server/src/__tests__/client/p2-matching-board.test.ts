@@ -131,8 +131,8 @@ describe('a drop is one board op (spec 06 core interactions, 12/07 and 12/08)', 
 describe('useBoard: one live read, and the server\'s board as the only hand-written cache entry', () => {
   const hook = code(`${SCHEDULE_DIR}/useBoard.ts`);
 
-  it('the read declares the draft, the groups and the people as its tags', () => {
-    expect(hook).toContain('meta: { entities: [E.sessionSchedule(sessionId), E.sessionGroups(sessionId), E.sessionParticipants(sessionId)] }');
+  it('the read declares the draft, the groups and the people as its tags (and, Part 3 Task 10, the questions)', () => {
+    expect(hook).toContain('meta: { entities: [E.sessionSchedule(sessionId), E.sessionGroups(sessionId), E.sessionParticipants(sessionId), E.sessionQuestions(sessionId)] }');
     expect(clientE.sessionSchedule('s-1')).toBe('session:s-1:schedule');
     expect(clientE.sessionGroups('s-1')).toBe('session:s-1:groups');
     expect(clientE.sessionParticipants('s-1')).toBe('session:s-1:participants');

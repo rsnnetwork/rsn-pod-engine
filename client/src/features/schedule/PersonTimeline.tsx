@@ -1,12 +1,14 @@
 // One attendee's meetings across every round (spec 07: "review all assignments for that attendee"), and the
 // organiser's late and no-show marks (spec 07 "Missing participants", 12/10): marking someone late empties their
 // unlocked seats before the round they arrive for and seats the rest again; a locked meeting keeps the gap and shows it.
-import { useId, useState } from 'react';
+// Part 3 Task 10: and their answers to the event's matching questions (organisers only, from the board's context).
+import { useContext, useId, useState } from 'react';
 import { Clock, UserX, Undo2 } from 'lucide-react';
 import type { BoardOp, BoardPerson, ScheduleBoard } from '@rsn/shared';
 import Sheet from '@/features/reason/ui/Sheet';
 import { cn } from '@/lib/utils';
 import { STATUS_LABEL, groupLabels, startsAtLabel, timelineLine, timelineOf } from './board-model';
+import { BoardAnswersContext } from './board-answers';
 
 interface Props {
   board: ScheduleBoard;
@@ -33,12 +35,22 @@ export default function PersonTimeline({ board, person, busy, canEdit, onRun, on
   const groups = groupLabels(board, current.groupKeys);
   const editable = canEdit && rounds.some((r) => r.editable);
   const name = current.displayName;
+  const answers = useContext(BoardAnswersContext).linesFor(person.userId);
 
   return (
     <Sheet open onClose={onClose} title={`${name}'s meetings`}>
       <p className="text-[14px] text-[#5a6670]">
         {[groups.join(', '), STATUS_LABEL[current.status]].filter(Boolean).join(' · ')}
       </p>
+      {answers.length > 0 && (
+        <ul data-testid="person-answers" className="mt-2 space-y-0.5 text-[14px] text-[#3d4a55]">
+          {answers.map((a) => (
+            <li key={a.prompt} className="[overflow-wrap:anywhere]">
+              <span className="text-[#5a6670]">{a.prompt}</span> <span className="font-semibold">{a.labels.join(', ')}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <ol className="mt-3 flex flex-col gap-2" data-testid="person-timeline">
         {entries.map((e) => (
           <li key={e.round} className="rounded-xl border border-[#e3e7ea] bg-white px-3 py-2">

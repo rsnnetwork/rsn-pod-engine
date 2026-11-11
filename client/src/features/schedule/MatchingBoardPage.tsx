@@ -4,7 +4,9 @@
 // rooms, the basket) and an all-rounds table; Auto generate, edit by drag and drop on a desktop pointer or by select and
 // move (MoveSheet) on a phone or the keyboard, lock, redistribute, late and no-show marks, conflicts, and Publish. The
 // server checks and answers every change with the whole board (useBoard); this page only decides what to ask.
-import { useEffect, useState } from 'react';
+// Part 3 Task 10: each seat and each person's meetings show their answers to the event's matching questions, read from
+// the organisers' questions read (the server gives everyone's answers to organisers only).
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Loader2 } from 'lucide-react';
@@ -30,6 +32,8 @@ import RefusalSheet from './RefusalSheet';
 import PersonTimeline from './PersonTimeline';
 import PublishPanel from './PublishPanel';
 import LiveConflictsNotice from './LiveConflictsNotice';
+import { BoardAnswersContext, boardAnswersOf } from './board-answers';
+import { useEventQuestions } from '../sessions/questions/useEventQuestions';
 
 const BACK = 'inline-flex min-h-[44px] items-center gap-2 text-[14px] text-[#5a6670] hover:text-[#12293a]';
 
@@ -58,6 +62,8 @@ export default function MatchingBoardPage() {
     meta: { entities: [E.session(sessionId)] },
   });
   const { board, isLoading, error, refetch, busy, run, runAll, applyReturnedBoard, refusal, clearRefusal } = useBoard(sessionId);
+  const questions = useEventQuestions(sessionId);
+  const answers = useMemo(() => boardAnswersOf(questions.data), [questions.data]);
   const { ask, confirmDialog } = useConfirm();
   const addToast = useToastStore((s) => s.addToast);
   const fine = useFinePointer();
@@ -163,6 +169,7 @@ export default function MatchingBoardPage() {
   const time = startsAtLabel(active?.startsAt ?? null, zone);
 
   return (
+    <BoardAnswersContext.Provider value={answers}>
     <div className="mx-auto flex w-full min-w-0 max-w-[1200px] flex-col gap-4">
       <div className="flex flex-col gap-1">
         {back}
@@ -246,6 +253,7 @@ export default function MatchingBoardPage() {
       <PublishPanel sessionId={sessionId} board={board} open={publishOpen} onClose={() => setPublishOpen(false)} applyReturnedBoard={applyReturnedBoard} />
       {confirmDialog}
     </div>
+    </BoardAnswersContext.Provider>
   );
 }
 

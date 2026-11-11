@@ -1,19 +1,23 @@
 // "Check" (Part 2, Task 12; spec 02 "show only those missing fields, then continue directly into the event"): only the
 // fields the server flagged in `missing`. A name; the event's group question as large tiles (a radio for one group, a
 // checkbox each where the event allows several), at least 56px tall; an admission code for an invitation-only event,
-// under the event's own sentence. Nothing else: no profile, no interests.
+// under the event's own sentence; and (Part 3 Task 10) the event's extra matching questions as the same tiles, optional
+// ones marked "(optional)", shown only when a required one is missing or the step is shown anyway (detailsFieldsFor).
+// Nothing else: no profile, no interests.
 import { useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { ArrowRight, Check } from 'lucide-react';
-import { CALL_DISPLAY_NAME_MAX, cleanCallDisplayName } from '@rsn/shared';
+import { CALL_DISPLAY_NAME_MAX, cleanCallDisplayName, type EventAnswers } from '@rsn/shared';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { cn } from '@/lib/utils';
+import ChoiceTiles from '@/features/sessions/questions/ChoiceTiles';
+import { QUESTIONS_COPY } from '@/features/sessions/questions/question-form';
 import { CALL_WORDS, enterFailure, type DetailsFields, type EntryFailure } from './call-entry';
 
-interface DetailsForm { displayName: string; groupKey: string; groupKeys: string[]; admissionCode: string }
+interface DetailsForm { displayName: string; groupKey: string; groupKeys: string[]; admissionCode: string; answers: EventAnswers }
 
-export interface DetailsAnswer { displayName?: string; groupKeys?: string[]; admissionCode?: string }
+export interface DetailsAnswer { displayName?: string; groupKeys?: string[]; admissionCode?: string; answers?: EventAnswers }
 
 interface Props {
   fields: DetailsFields;
@@ -28,8 +32,8 @@ interface Props {
 
 export default function CallDetailsStep({ fields, refusal, approval, defaults, submit, onClosed }: Props) {
   const [failure, setFailure] = useState<EntryFailure | null>(null);
-  const { register, handleSubmit, watch, formState: { errors, isSubmitting } } = useForm<DetailsForm>({
-    defaultValues: { displayName: '', groupKey: '', groupKeys: [], admissionCode: defaults.admissionCode },
+  const { control, register, handleSubmit, watch, formState: { errors, isSubmitting } } = useForm<DetailsForm>({
+    defaultValues: { displayName: '', groupKey: '', groupKeys: [], admissionCode: defaults.admissionCode, answers: {} },
   });
   const group = fields.group;
   const chosen = group?.multiple ? (watch('groupKeys') ?? []) : [watch('groupKey')].filter(Boolean);
@@ -40,6 +44,8 @@ export default function CallDetailsStep({ fields, refusal, approval, defaults, s
     if (fields.displayName) answer.displayName = cleanCallDisplayName(form.displayName) ?? form.displayName;
     if (group) answer.groupKeys = group.multiple ? form.groupKeys : [form.groupKey];
     if (fields.admissionCode) answer.admissionCode = form.admissionCode.trim();
+    const answers = Object.fromEntries(Object.entries(form.answers ?? {}).filter(([, keys]) => Array.isArray(keys) && keys.length > 0));
+    if (fields.questions && Object.keys(answers).length > 0) answer.answers = answers;
     try {
       await submit(answer);
     } catch (err) {
@@ -124,6 +130,28 @@ export default function CallDetailsStep({ fields, refusal, approval, defaults, s
           )}
         </fieldset>
       )}
+
+      {fields.questions?.map((q) => (
+        <Controller
+          key={q.key}
+          control={control}
+          name={`answers.${q.key}`}
+          rules={{ validate: (v) => (!q.required || (Array.isArray(v) && v.length > 0) ? true : QUESTIONS_COPY.chooseAnswer) }}
+          render={({ field, fieldState }) => (
+            <ChoiceTiles
+              legend={q.prompt}
+              options={q.options}
+              multiple={q.kind === 'multiple'}
+              optional={!q.required}
+              value={field.value ?? []}
+              onChange={field.onChange}
+              error={fieldState.error?.message}
+              testId={`call-question-${q.key}`}
+              name={`call-question-${q.key}`}
+            />
+          )}
+        />
+      ))}
 
       {fields.admissionCode && (
         <Input

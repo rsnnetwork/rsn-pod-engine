@@ -89,7 +89,8 @@ describe('Register asks for the waiting list only when the event is full', () =>
 
   it('the event page\'s Register sends that body, and reads a 202 as a place in the line', () => {
     const page = read('features/sessions/SessionDetailPage.tsx');
-    expect(page).toContain('api.post(`/sessions/${sessionId}/register`, registerBody(access))');
+    // Part 3 Task 10: the same body, plus the group and answers a "Before you join" retry gave (registerBodyWith).
+    expect(page).toContain('api.post(`/sessions/${sessionId}/register`, registerBodyWith(registerBody(access), choices))');
     expect(page).toContain('const position = waitlistedPosition(res);');
     expect(page).toContain('addToast(WAITLIST_COPY.joinedToast(position), \'info\')');
     // The auto-register on opening never asks for the line (the server never auto-registers onto a full event).
@@ -328,7 +329,8 @@ const mutation = { mutate: noop, mutateAsync: async () => undefined, isPending: 
 function accessActions(access: Record<string, unknown>) {
   const mod = loadClientModule('features/sessions/EventAccessActions.tsx', {
     'lucide-react': iconStandIns,
-    '@tanstack/react-query': { useMutation: () => mutation, useQueryClient: () => ({ invalidateQueries: noop }) },
+    // Part 3 Task 10: the request sheet reads the event's questions (none here).
+    '@tanstack/react-query': { useMutation: () => mutation, useQuery: () => ({ data: undefined, isLoading: false }), useQueryClient: () => ({ invalidateQueries: noop }) },
     '@/stores/toastStore': { useToastStore: (pick: (s: { addToast: () => void }) => unknown) => pick({ addToast: noop }) },
     '@/lib/api': { __esModule: true, default: {} },
     '@/hooks/useConfirm': { useConfirm: () => ({ ask: async () => true, confirmDialog: null }) },

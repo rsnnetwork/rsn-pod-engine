@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { CallEntryState, CallEntryVerification, CallEventSummary, CallLanding, MySchedule } from '@rsn/shared';
+import type { CallEntryState, CallEntryVerification, CallEventSummary, CallLanding, EventAnswers, MySchedule } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
@@ -19,7 +19,11 @@ function callTags(userId: string, sessionId: string | null): string[] {
     E.userSessions(userId),
     E.user(userId),
     // Part 3 Task 8: and its waiting list (their number moves as people ahead leave or are promoted).
-    ...(sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionGroups(sessionId), E.sessionWaitlist(sessionId)] : []),
+    // Part 3 Task 10: and its matching questions (an organiser's change moves what the details step asks).
+    ...(sessionId ? [
+      E.session(sessionId), E.sessionParticipants(sessionId), E.sessionGroups(sessionId), E.sessionWaitlist(sessionId),
+      E.sessionQuestions(sessionId),
+    ] : []),
   ];
 }
 
@@ -70,7 +74,7 @@ export function useCallLink(code: string) {
 export interface SendCodeInput { email: string; admissionCode?: string }
 /** The proof (the typed code, or the email's button), and an admission code for an invitation-only event. */
 export type VerifyInput = ({ email: string; code: string } | { token: string }) & { admissionCode?: string };
-export interface EnterInput { displayName?: string; groupKeys?: string[]; admissionCode?: string }
+export interface EnterInput { displayName?: string; groupKeys?: string[]; admissionCode?: string; answers?: EventAnswers }
 
 /** Asking for the code, checking it (or the email's button), and entering. */
 export function useCallActions(code: string) {
