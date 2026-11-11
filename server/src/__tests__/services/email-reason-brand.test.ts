@@ -298,6 +298,16 @@ const cases: EmailCase[] = [
       when: 'Friday 6 November, 18:00 (CET)', link: 'https://app.rsn.network/sessions/s1',
     }),
   },
+  // Part 3 Task 3: a place from the waiting list.
+  {
+    fn: 'sendWaitlistPromotedEmail', label: 'a place from the waiting list', subject: "You're in: Founders breakfast",
+    brandLine: MEET, brandLineInHtml: true,
+    says: ["A place opened in", "and it's yours.", 'Open the event', 'Unregister from the event page'],
+    run: () => emailService.sendWaitlistPromotedEmail('delivered+ana@resend.dev', {
+      eventTitle: 'Founders breakfast', when: 'Friday 6 November, 18:00 (CET)', link: 'https://app.rsn.network/sessions/s1',
+      live: false, calendarEvent: { ...aCalendarEvent, sessionId: 's-1' },
+    }),
+  },
   {
     fn: 'sendCallEntryCodeEmail', label: 'an event entry code', subject: 'Your code for Founders breakfast',
     underCard: "If you didn't ask for this code, you can safely ignore this email.",

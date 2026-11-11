@@ -212,7 +212,7 @@ describe('the audience fragment', () => {
       visibility: 'private', podId: POD_ID, podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
       inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
       publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
-      admissionMode: null, entitled: false, entitledVia: null,
+      admissionMode: null, entitled: false, entitledVia: null, capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0, eventStatus: 'scheduled',
     };
     expect(canSeeEvent(facts, UserRole.MEMBER)).toBe(true);
     expect(canRegister(facts, UserRole.MEMBER)).toEqual({ ok: true, addToPod: false });

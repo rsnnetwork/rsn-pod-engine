@@ -101,6 +101,7 @@ import eventAuditRoutes from '../../routes/event-audit';
 import eventLifecycleRoutes from '../../routes/event-lifecycle';
 import eventGroupRoutes from '../../routes/event-groups';
 import eventAdmissionRoutes from '../../routes/event-admission';
+import eventWaitlistRoutes from '../../routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from '../../routes/call-links';
 import scheduleRoutes from '../../routes/schedule';
 import eventImageRoutes from '../../routes/event-image';
@@ -125,6 +126,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/sessions', eventLifecycleRoutes],
   ['/api/sessions', eventGroupRoutes],
   ['/api/sessions', eventAdmissionRoutes],
+  ['/api/sessions', eventWaitlistRoutes],
   ['/api/sessions', sessionCallLinkRoutes],
   ['/api/call-links', callLinkRoutes],
   ['/api/sessions', scheduleRoutes],
@@ -245,6 +247,8 @@ const GUEST_OPEN: Array<[Verb, string]> = [
   ['get', `/api/sessions/${EVENT}/state`],
   ['post', `/api/sessions/${EVENT}/token`],
   ['delete', `/api/sessions/${EVENT}/register`],
+  // Part 3 Task 3: leaving the waiting list a guest joined through the call link.
+  ['delete', `/api/sessions/${EVENT}/waitlist/mine`],
   ['post', `/api/sessions/${EVENT}/intention`],
   ['get', `/api/sessions/${EVENT}/participants`],
   ['get', `/api/sessions/${EVENT}/participant-counts`],

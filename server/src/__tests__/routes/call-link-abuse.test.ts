@@ -82,6 +82,9 @@ jest.mock('../../services/session/event-admission.service', () => {
   };
 });
 jest.mock('../../services/session/session.service', () => ({ registerParticipant: jest.fn(), __esModule: true }));
+// Part 3 Task 3: the entry places people through registerOrWaitlist (the same mocked registration here).
+jest.mock('../../services/session/event-waitlist.service', () =>
+  jest.requireActual('../fixtures/waitlist-passthrough').passThroughWaitlist(() => undefined));
 
 import callLinkRoutes from '../../routes/call-links';
 import authRoutes from '../../routes/auth';

@@ -96,6 +96,10 @@ jest.mock('../../../services/session/session.service', () => ({
   registerParticipant: (...a: unknown[]) => mockRegister(...a),
   __esModule: true,
 }));
+// Part 3 Task 3: enterCall places people through registerOrWaitlist; here it is the same mocked registration (no event
+// in this world is full; the waiting list's own tests enter full events).
+jest.mock('../../../services/session/event-waitlist.service', () =>
+  jest.requireActual('../../fixtures/waitlist-passthrough').passThroughWaitlist((...a: unknown[]) => mockRegister(...a)));
 
 import fs from 'fs';
 import path from 'path';

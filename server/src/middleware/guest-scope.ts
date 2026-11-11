@@ -50,6 +50,8 @@ export const GUEST_ROUTES: ReadonlyArray<{ method: GuestRouteMethod; pattern: Re
   { method: 'GET', pattern: exact(`/api/sessions/${ID}/state`) },
   { method: 'POST', pattern: exact(`/api/sessions/${ID}/token`) },
   { method: 'DELETE', pattern: exact(`/api/sessions/${ID}/register`) },
+  // Part 3 Task 3: leaving the waiting list a guest joined through the call link.
+  { method: 'DELETE', pattern: exact(`/api/sessions/${ID}/waitlist/mine`) },
   { method: 'POST', pattern: exact(`/api/sessions/${ID}/intention`) },
   { method: 'GET', pattern: exact(`/api/sessions/${ID}/participants`) },
   { method: 'GET', pattern: exact(`/api/sessions/${ID}/participant-counts`) },

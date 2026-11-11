@@ -28,6 +28,9 @@ export interface RegistrationOutcome {
   refusalCode?: string;
 }
 
+/** Part 3 Task 3: what a full event's live door tells someone who holds no place there. */
+export const EVENT_FULL_ROOM_SENTENCE = 'This event is full. Join the waiting list on the event page.';
+
 /** The words someone the event does not admit reads: the event is over, it is only for its pod's members, or try again. */
 export function eventRoomRefusal(eventStatus: string, registrationCode: string | undefined): EventRoomRefusal {
   if (eventStatus === 'completed') return { code: ErrorCodes.EVENT_ENDED, message: 'This event has ended.' };
@@ -52,6 +55,10 @@ export function eventRoomRefusal(eventStatus: string, registrationCode: string |
   if (registrationCode === ErrorCodes.EVENT_GROUP_REQUIRED) {
     return { code: ErrorCodes.EVENT_GROUP_REQUIRED, message: 'Choose your group for this event first, on the event page.' };
   }
+  // Part 3 Task 3: a full event's newcomer (no place yet) is not let in; the live page cannot queue them itself.
+  if (registrationCode === ErrorCodes.SESSION_FULL) {
+    return { code: ErrorCodes.SESSION_FULL, message: EVENT_FULL_ROOM_SENTENCE };
+  }
   if (registrationCode === ErrorCodes.AUTH_FORBIDDEN) {
     return { code: ErrorCodes.AUTH_FORBIDDEN, message: 'This event is only open to its pod\'s members.' };
   }
@@ -69,8 +76,10 @@ async function readAdmission(sessionId: string, userId: string, role: string | u
 }
 
 /**
- * What a join does with this socket. A removed row gets the terminal bounce. Someone refused only because the
- * event is full joins as before, on purpose. When the read fails, nobody who should be in is dropped (one
+ * What a join does with this socket. A removed row gets the terminal bounce. Part 3 Task 3 (controller ruling): someone
+ * refused only because the event is full is refused too (they used to be let in with no row, on purpose; the waiting
+ * list now holds them), with the waiting-list sentence. Anyone holding a row that is not removed (left, no-show
+ * included) is admitted above, as before: leaving never gave the place up. When the read fails, nobody who should be in is dropped (one
  * transient pool or Neon error on a reconnect or a focus return must not throw a member or the host out of a
  * running event): someone this registration proved (registered now, or already registered) and a socket the
  * event has already let into its room are let in; anyone else is asked about once more, then refused.
@@ -93,7 +102,6 @@ export async function decideRoomEntry(opts: {
   }
   if (admission === 'removed') return { kind: 'evict' };
   if (admission === 'admitted') return { kind: 'enter' };
-  if (registration.refusalCode === ErrorCodes.SESSION_FULL) return { kind: 'enter' };
   return { kind: 'refuse', refusal: eventRoomRefusal(eventStatus, registration.refusalCode) };
 }
 

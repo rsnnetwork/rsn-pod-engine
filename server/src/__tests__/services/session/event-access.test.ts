@@ -15,7 +15,7 @@ const base: EventAccessFacts = {
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
   outsideClosedCircle: false,
   publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
-  admissionMode: null, entitled: false, entitledVia: null,
+  admissionMode: null, entitled: false, entitledVia: null, capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0, eventStatus: 'scheduled',
 };
 const f = (over: Partial<EventAccessFacts>): EventAccessFacts => ({ ...base, ...over });
 const M = UserRole.MEMBER;
@@ -113,10 +113,10 @@ describe('someone the host removed from the event (final fix wave SM2)', () => {
     expect(summariseEventAccess(f({ podVisibility: 'public', inAudience: true, participantStatus: 'registered' }), M).autoRegister).toBe(true);
   });
 
-  it("keeps the access block's shape: production's client (origin/main) never reads it, and only a value changed (Part 2 Task 4 adds one field, admission, and removes none)", () => {
+  it("keeps the access block's shape: production's client (origin/main) never reads it, and only a value changed (Part 2 Task 4 adds one field, admission, Part 3 Task 3 one more, waitlist, and neither removes any)", () => {
     const removed = f({ podVisibility: 'public', inAudience: true, participantStatus: 'removed' });
     expect(Object.keys(summariseEventAccess(removed, M)).sort())
-      .toEqual(['admission', 'autoRegister', 'canManageRequests', 'mode', 'myRequest', 'visibility']);
+      .toEqual(['admission', 'autoRegister', 'canManageRequests', 'mode', 'myRequest', 'visibility', 'waitlist']);
   });
 });
 

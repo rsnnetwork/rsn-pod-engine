@@ -63,11 +63,11 @@ describe('migration 108 (notification types for the 25 Oct batch)', () => {
     expect(allowedTypes(sql, FILE)).toEqual(expect.arrayContaining(previous));
   });
 
-  it('is restated after 099 by this file, by 118 and by 135 (Part 2 Task 2) only, and each later one carries every one of these types forward (a later restatement is a new migration; migration-118.test.ts and migration-135.test.ts follow it)', () => {
+  it('is restated after 099 by this file, by 118, by 135 (Part 2 Task 2) and by 145 (Part 3 Task 3) only, and each later one carries every one of these types forward (a later restatement is a new migration; migration-118.test.ts and migration-135.test.ts follow it)', () => {
     const restating = fs.readdirSync(MIGRATIONS)
       .filter((file) => /^\d{3}_.+\.sql$/.test(file) && Number(file.slice(0, 3)) > 99)
       .filter((file) => /notifications_type_check/.test(code(fs.readFileSync(path.join(MIGRATIONS, file), 'utf8'))));
-    expect(restating).toEqual([FILE, '118_notification_types_circles.sql', '135_event_lifecycle.sql']);
+    expect(restating).toEqual([FILE, '118_notification_types_circles.sql', '135_event_lifecycle.sql', '145_event_waitlist.sql']);
     for (const laterFile of restating.slice(1)) {
       const later = allowedTypes(fs.readFileSync(path.join(MIGRATIONS, laterFile), 'utf8'), laterFile);
       expect(later).toEqual(expect.arrayContaining(allowedTypes(sql, FILE)));

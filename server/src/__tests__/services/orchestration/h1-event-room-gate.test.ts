@@ -169,6 +169,19 @@ function answer(sql: string, params: unknown[]): Answer {
   if (sql === "SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show') AND u.status = 'active'") {
     return { rows: [{ count: String(world.participants.filter((p) => p.session_id === a && !['removed', 'left', 'no_show'].includes(p.status)).length) }] };
   }
+  // Part 3 Task 3 (K3): a new place reads the person's row again under the capacity lock, then counts the places held by
+  // anyone but the host and co-hosts (a row that is not removed) against the event's capacity.
+  if (/^SELECT session_participants\.id, .* FROM session_participants WHERE session_id = \$1 AND user_id = \$2$/.test(sql)) {
+    const p = participant(a, b);
+    return { rows: p ? [{ ...p }] : [] };
+  }
+  if (/AS taken, .* AS capacity, .* AS runs FROM sessions s WHERE s\.id = \$1$/.test(sql)) {
+    const s = world.sessions.get(a as string);
+    if (!s) return { rows: [] };
+    const organiser = (id: unknown) => id === s.host_user_id || world.cohosts.some((c) => c.session_id === a && c.user_id === id);
+    const taken = world.participants.filter((p) => p.session_id === a && p.status !== 'removed' && !organiser(p.user_id)).length;
+    return { rows: [{ taken, capacity: s.config?.maxParticipants ?? null, runs: organiser(b) }] };
+  }
   // The registration's read of the person's row (H1b: with when a removal of theirs was made), and the plain re-read.
   if (sql === 'SELECT id, status, left_at FROM session_participants WHERE session_id = $1 AND user_id = $2'
       || sql === 'SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2') {
@@ -961,10 +974,11 @@ describe('a removed participant', () => {
     expect(present(ev.sessionId, kicked)).toBe(false);
   });
 
-  it('gets the same bounce when the event is full (the registration says SESSION_FULL before it looks at their row)', async () => {
+  it('gets the same bounce when the event is full (Part 3 Task 3: the registration answers the removal before capacity)', async () => {
     const ev = event({ visibility: 'public', maxParticipants: 2 });
     const other = person('Other');
     register(ev.sessionId, other);
+    register(ev.sessionId, person('Another'));
     const kicked = person('Kicked');
     register(ev.sessionId, kicked, 'removed');
     const s = connect(kicked);
@@ -1148,13 +1162,17 @@ describe('the people an event admits', () => {
   });
 });
 
-// ── Full: unchanged on purpose ──────────────────────────────────────────────
+// ── Full: Part 3 Task 3 (controller ruling) ─────────────────────────────────
+// Someone refused only because the event is full used to join the room with no row, on purpose. The waiting list now
+// holds them: the live door refuses a full event's newcomer with the waiting-list sentence, and lets in, as before,
+// anyone holding a row that is not removed (left and no-show included: leaving never gave the place up).
 
-describe('a person refused only because the event is full keeps today\'s behaviour', () => {
-  it('joins the room as before: state, presence and the lobby chat, but no registration', async () => {
+describe('a person refused only because the event is full', () => {
+  it('is refused at the live door with the waiting-list sentence: no room, no presence, no chat, no row', async () => {
     const ev = event({ visibility: 'public', maxParticipants: 2 });
     const member = person('Member');
     register(ev.sessionId, member);
+    register(ev.sessionId, person('Second'));
     const memberSock = connect(member);
     const hostSock = connect(ev.host);
     await join(hostSock, ev.sessionId);
@@ -1162,11 +1180,21 @@ describe('a person refused only because the event is full keeps today\'s behavio
     const over = person('OverCapacity');
     const s = connect(over);
     await join(s, ev.sessionId);
-    expectAdmitted(s, ev.sessionId);
-    expect(present(ev.sessionId, over)).toBe(true);
+    expectRefused(s, ev.sessionId, { code: 'SESSION_FULL', message: 'This event is full. Join the waiting list on the event page.' });
+    expect(present(ev.sessionId, over)).toBe(false);
     expect(world.participants.some((p) => p.user_id === over)).toBe(false);
     await handleChatSend(io, asSocket(memberSock), { sessionId: ev.sessionId, message: 'Busy one', scope: 'lobby' });
-    expect(chatTexts(s)).toEqual(['Busy one']);
+    expect(chatTexts(s)).toEqual([]);
+  });
+
+  it('the host and the co-hosts hold no place: a full event of two takes a second member while the host is in', async () => {
+    const ev = event({ visibility: 'public', maxParticipants: 2 });
+    register(ev.sessionId, person('First'));
+    const second = person('Second');
+    const s = connect(second);
+    await join(s, ev.sessionId);
+    expectAdmitted(s, ev.sessionId);
+    expect(world.participants.some((p) => p.user_id === second)).toBe(true);
   });
 
   it('a registered participant of a full event is let in as before', async () => {

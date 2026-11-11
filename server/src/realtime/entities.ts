@@ -67,6 +67,8 @@ export const E = {
   sessionPublishedSchedule: (sessionId: string) => `session:${sessionId}:published-schedule`,
   /** 10 Nov 2026 spec, Part 3 Task 4: the event's ratings and who met whom changed, for its organisers' report. */
   sessionRatings: (sessionId: string) => `session:${sessionId}:ratings`,
+  /** 10 Nov 2026 spec, Part 3 Task 3: the event's waiting list (who is in line, in order), for its organisers and the line. */
+  sessionWaitlist: (sessionId: string) => `session:${sessionId}:waitlist`,
 
   // Match (in-event)
   match: (matchId: string) => `match:${matchId}`,

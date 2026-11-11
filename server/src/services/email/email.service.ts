@@ -1683,6 +1683,64 @@ REASON — Meet people you have a reason to know.`;
   return sendEmail({ to, subject, html, text });
 }
 
+// ─── A place from the waiting list (10 Nov 2026 spec, Part 3 Task 3) ─────────
+// A full event's first person in line was given a place that freed. Transactional, like the "you're registered" email
+// (the person asked for the place and it is theirs): it ignores notify_email, and only the admin switch
+// 'event_waitlist_promoted' (seeded on by migration 145) stops it, in event-waitlist.service.ts. `when` is already on
+// the event's own clock and named; a live event says so instead.
+export interface WaitlistPromotedEmailData {
+  eventTitle: string;
+  /** When it starts, on the event's clock and named ("Tuesday 17 November, 14:00 (CET)"), or "It's on now." */
+  when: string;
+  /** The event's page for a member, its RSN Call link for a guest. */
+  link: string;
+  /** The event is live: the button says "Join now". */
+  live: boolean;
+  /** The event's calendar entry, attached as an .ics when there is one. */
+  calendarEvent?: InviteEmailData['calendarEvent'];
+}
+
+export function buildWaitlistPromotedEmail(data: WaitlistPromotedEmailData): { subject: string; html: string; text: string } {
+  const subject = `You're in: ${data.eventTitle}`;
+  const button = data.live ? 'Join now' : 'Open the event';
+  const unregister = "Can't make it? Unregister from the event page so the next person on the waiting list gets your place.";
+  const whenHtml = data.when
+    ? `<p data-when style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 8px 0;text-align:center;">${escapeHtml(data.when)}</p>`
+    : '';
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}
+          ${eventImageHead(data.calendarEvent?.imageUrl)}
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;text-align:center;">
+            A place opened in <strong>${escapeHtml(data.eventTitle)}</strong> and it's yours.
+          </p>
+          ${whenHtml}
+          <div style="text-align:center;margin:28px 0;">
+            <a href="${escapeAttr(data.link)}"
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+              ${button}
+            </a>
+          </div>
+          <p style="color:#64748b;font-size:13px;line-height:1.5;margin:0;text-align:center;">${escapeHtml(unregister)}</p>
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
+          REASON — Meet people you have a reason to know.
+        </p>
+      </div>
+    </body></html>`;
+  const whenText = data.when ? `\n\n${data.when}` : '';
+  const text = `A place opened in ${data.eventTitle} and it's yours.${whenText}\n\n${button}: ${data.link}\n\n${unregister}\n\nREASON — Meet people you have a reason to know.`;
+  return { subject, html, text };
+}
+
+export async function sendWaitlistPromotedEmail(to: string, data: WaitlistPromotedEmailData): Promise<SendEmailResult> {
+  const { subject, html, text } = buildWaitlistPromotedEmail(data);
+  const attachments = data.calendarEvent ? [{ filename: 'event.ics', content: eventIcs(data.calendarEvent) }] : undefined;
+  return sendEmail({ to, subject, html, text, attachments });
+}
+
 // ─── The RSN Call link's entry code (Part 2 foundation, Task 6, 11 Nov 2026) ────
 // Someone opened an event's link and gave this address. The email carries the 6-digit code to type on the link's
 // page and a button that opens the event's link with a one-time entry token (it signs in that browser). The code

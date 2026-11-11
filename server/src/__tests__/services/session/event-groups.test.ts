@@ -102,6 +102,18 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
     return rows([{ id: 'sp', sessionId: params[0], userId: params[1], status: 'registered' }]);
   }
   if (/^UPDATE invites SET status = 'accepted'/.test(sql)) return rows([]);
+  // Part 3 Task 3 (K3): a new place reads the person's row again under the capacity lock, then counts the places held
+  // (the host left out; the fake has no co-hosts) against the event's capacity; a place given ends any waiting row.
+  if (/^SELECT session_participants.id, .* FROM session_participants WHERE session_id = \$1 AND user_id = \$2$/.test(sql)) {
+    const status = world.participants.get(params[1] as string);
+    return rows(status ? [{ id: 'sp', sessionId: params[0], userId: params[1], status }] : []);
+  }
+  if (/^SELECT \(SELECT COUNT\(\*\)::int FROM session_participants ct .* AS taken, .* AS capacity, .* AS runs FROM sessions s WHERE s.id = \$1$/.test(sql)) {
+    const taken = [...world.participants].filter(([id, st]) => st !== 'removed' && id !== world.session.host_user_id).length;
+    const capacity = (world.session.config as { maxParticipants?: number }).maxParticipants ?? null;
+    return rows([{ taken, capacity, runs: params[1] === world.session.host_user_id }]);
+  }
+  if (/^UPDATE event_waitlist SET status = 'promoted'/.test(sql)) return rows([]);
 
   // event-groups.service
   if (sql === 'SELECT key, label, description FROM event_groups WHERE session_id = $1 ORDER BY position, key') {
@@ -686,7 +698,7 @@ describe('a draft (Part 2 Task 2): its groups exist only for the people who run 
     visibility: 'public', podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
     inAudience: true, isInvited: true, participantStatus: null, accountActive: true, myRequest: null,
     outsideClosedCircle: false, publication: 'draft', archived: false, registrationOpensAt: null, eventTimezone: null,
-    isPodAdmin: false, placesHeld: 0, admissionMode: null, entitled: false, entitledVia: null, ...overrides,
+    isPodAdmin: false, placesHeld: 0, admissionMode: null, entitled: false, entitledVia: null, capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0, eventStatus: 'scheduled', ...overrides,
   });
   const NOT_FOUND = { status: 404, message: "We couldn't find that event." };
 

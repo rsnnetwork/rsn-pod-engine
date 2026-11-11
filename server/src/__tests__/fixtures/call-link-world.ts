@@ -47,6 +47,8 @@ export const world = {
   rules: new Map<string, EventGroupRules>(),
   memberGroups: new Map<string, { keys: string[]; by: string }>(),
   audit: [] as Array<{ action: string; sessionId: string }>,
+  /** Part 3 Task 3: a full event's waiting list, in order (the waiting-list tests fill it; nothing else does). */
+  line: [] as Array<{ session_id: string; user_id: string; status: string }>,
   sql: [] as string[],
   writes: [] as string[],
 };
@@ -60,7 +62,7 @@ export const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart
 export function resetWorld(): void {
   world.users = []; world.events = []; world.links = []; world.entries = []; world.invites = []; world.codes = [];
   world.places = new Map(); world.requests = new Map(); world.audience = new Set(); world.rules = new Map();
-  world.memberGroups = new Map(); world.audit = []; world.sql = []; world.writes = [];
+  world.memberGroups = new Map(); world.audit = []; world.sql = []; world.writes = []; world.line = [];
 }
 
 export function addUser(over: Partial<WUser> & { id: string; email: string }): WUser {
@@ -106,6 +108,31 @@ function personallyInvited(sessionId: string, email: string): boolean {
 
 const ACTIVE_PLACE = ['registered', 'checked_in', 'in_lobby', 'in_round'];
 
+/** Part 3 Task 3: the event's limit, or null. */
+export function capacityOf(e: WEvent): number | null {
+  const n = (e.config as { maxParticipants?: number }).maxParticipants;
+  return typeof n === 'number' && n >= 1 ? n : null;
+}
+
+/** Part 3 Task 3: the places held by anyone but the host (this world has no co-hosts): rows that are not removed. */
+export function placesTakenIn(sessionId: string): number {
+  const e = eventById(sessionId);
+  return [...world.places].filter(([k, p]) => k.startsWith(`${sessionId}:`) && p.status !== 'removed' && k !== key(sessionId, e?.host_user_id ?? '')).length;
+}
+
+/** Fix round 1: the people waiting ahead of the person (everyone waiting, when they are not on the line). */
+export function waitlistAheadOf(sessionId: string, userId: string): number {
+  const position = waitlistPositionOf(sessionId, userId);
+  return position !== null ? position - 1 : world.line.filter((l) => l.session_id === sessionId && l.status === 'waiting').length;
+}
+
+/** Part 3 Task 3: the person's place in the event's waiting list (1 = next), or null. */
+export function waitlistPositionOf(sessionId: string, userId: string): number | null {
+  const waiting = world.line.filter((l) => l.session_id === sessionId && l.status === 'waiting');
+  const i = waiting.findIndex((l) => l.user_id === userId);
+  return i === -1 ? null : i + 1;
+}
+
 /** Everything the access rules read, from the world (readEventAccessFacts' answer). */
 export function factsOf(sessionId: string, userId: string) {
   const e = eventById(sessionId);
@@ -126,6 +153,10 @@ export function factsOf(sessionId: string, userId: string) {
     entitledVia: entitledVia as 'allow_list' | 'code' | 'invite' | null,
     publication: (e.publication === 'draft' ? 'draft' : 'published') as 'draft' | 'published', archived: !!e.archived_at,
     registrationOpensAt: e.registration_opens_at, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
+    // Part 3 Task 3: an event's limit (config.maxParticipants; none in most tests), the places held by anyone but its
+    // host, and the person's place in its waiting list.
+    capacity: capacityOf(e), placesTaken: placesTakenIn(sessionId), waitlistPosition: waitlistPositionOf(sessionId, userId),
+    waitlistAhead: waitlistAheadOf(sessionId, userId), eventStatus: e.status,
   };
 }
 
@@ -347,7 +378,8 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
   if (sql.startsWith('WITH mine AS (')) {
     const userId = String(params[0]);
     const mine = world.events.filter((e) => world.places.has(key(e.id, userId))
-      || ['pending', 'approved', 'declined'].includes(world.requests.get(key(e.id, userId)) ?? ''));
+      || ['pending', 'approved', 'declined'].includes(world.requests.get(key(e.id, userId)) ?? '')
+      || waitlistPositionOf(e.id, userId) !== null);
     const ended = (e: WEvent) => ['completed', 'cancelled'].includes(e.status) || !!e.archived_at;
     const listed = mine.filter((e) => e.publication === 'published' || e.host_user_id === userId)
       .sort((a, b) => Number(ended(a)) - Number(ended(b))
@@ -358,6 +390,7 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
       id: e.id, call_code: e.call_code, title: e.title, scheduled_at: e.scheduled_at, status: e.status, publication: e.publication,
       archived_at: e.archived_at, registration_opens_at: e.registration_opens_at,
       place: world.places.get(key(e.id, userId))?.status ?? null, request: world.requests.get(key(e.id, userId)) ?? null,
+      waiting: waitlistPositionOf(e.id, userId) !== null,
     })));
   }
 

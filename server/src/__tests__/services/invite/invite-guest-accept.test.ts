@@ -56,6 +56,9 @@ jest.mock('../../../services/session/session.service', () => ({
   registerParticipant: (...args: unknown[]) => mockRegister(...args),
   __esModule: true,
 }));
+// Part 3 Task 3: the accept places people through registerOrWaitlist; here it is the same mocked registration.
+jest.mock('../../../services/session/event-waitlist.service', () =>
+  jest.requireActual('../../fixtures/waitlist-passthrough').passThroughWaitlist((...a: unknown[]) => mockRegister(...a)));
 
 import { acceptInvite } from '../../../services/invite/invite.service';
 

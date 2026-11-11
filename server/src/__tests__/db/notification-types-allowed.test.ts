@@ -4,7 +4,7 @@
 // that type fail; the insert sits in a best-effort catch, so nothing shows except a warning in the log. That is how
 // circle invites went without a bell from migration 090 on, until 118 added the type. This test reads every
 // notification insert in server/src and fails when a type it writes is not in the latest definition of the list
-// (the highest-numbered migration that restates it: 135 since Part 2 Task 2), so the next type to be added without a
+// (the highest-numbered migration that restates it: 145 since Part 3 Task 3), so the next type to be added without a
 // migration fails here, before it ships.
 
 import * as fs from 'fs';
@@ -162,10 +162,11 @@ describe('every notification type the server inserts is allowed by notifications
     expect(new Set(scanned.flatMap((s) => s.types)).size).toBeGreaterThanOrEqual(18);
   });
 
-  it("reads the latest definition of the list: 135, which restates 118's list and adds the four event bells", () => {
-    expect(path.basename(latestAllowlistMigration())).toBe('135_event_lifecycle.sql');
+  it("reads the latest definition of the list: 145, which restates 135's list (118's and the four event bells) and adds the waiting-list bell", () => {
+    expect(path.basename(latestAllowlistMigration())).toBe('145_event_waitlist.sql');
     expect(allowed).toEqual(expect.arrayContaining([
       'circle_invite', 'event_cancelled', 'event_reminder', 'event_rescheduled', 'event_schedule_changed',
+      'event_waitlist_promoted',
     ]));
   });
 

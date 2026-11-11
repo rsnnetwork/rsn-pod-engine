@@ -165,6 +165,13 @@ const cases: Case[] = [
   email('sendEmailChangedNoticeEmail', 'the email changed notice', ['oldAddress', 'data'], ['delivered+ana@resend.dev', {
     maskedNew: 'n•••@example.org',
   }]),
+  // Part 3 Task 3: a place from the waiting list (live and not).
+  email('sendWaitlistPromotedEmail', 'a place from the waiting list', ['to', 'data'], ['delivered+ana@resend.dev', {
+    eventTitle: 'Founders breakfast', when: 'Friday 6 November, 18:00 (CET)', link: `${APP}/sessions/s1`, live: false, calendarEvent,
+  }]),
+  email('buildWaitlistPromotedEmail', 'a place from the waiting list while live, as built', ['data'], [{
+    eventTitle: 'Founders breakfast', when: "It's on now.", link: `${APP}/call/k7m2x9q4ra`, live: true, calendarEvent,
+  }]),
 ];
 
 /** Exports that build no email: the shared card and the admin switch. Anything new must be put in one list or the other. */

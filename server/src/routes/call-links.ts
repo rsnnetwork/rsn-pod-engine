@@ -13,6 +13,7 @@
 //                            event's words, details.admissionCode true when an admission code would let it in.
 //   GET  /:code/entry        where the signed-in person stands                                           authenticate
 //   POST /:code/enter        { displayName?, groupKeys?, admissionCode? }  give what is missing and enter  authenticate
+//   DELETE /:code/waitlist   leave the full event's waiting list (Part 3 Task 3); answers the entry state    authenticate
 //
 // And the organisers' side, mounted at /api/sessions beside the event routes:
 //   GET  /sessions/:id/call-link         { code, path, url }
@@ -30,6 +31,7 @@ import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import {
   admissionRedeemIpLimiter, admissionRedeemLimiter, callEntryLimiter, callLinkEmailLimiter, callLinkEmailTargetLimiter,
   callLinkManageLimiter, callLinkMissLimiter, callLinkReadLimiter, callLinkVerifyLimiter, signInCodeEmailLimiter,
+  waitlistLimiter,
 } from '../middleware/rateLimit';
 import * as callLink from '../services/session/call-link.service';
 import * as callEntry from '../services/session/call-entry.service';
@@ -178,6 +180,16 @@ router.post('/:code/enter', callLinkMissLimiter, authenticate, callEntryLimiter,
         req.params.code, req.user!.userId, req.user!.role as UserRole, req.body as z.infer<typeof enterSchema>,
         { origin: req.get('origin') },
       );
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+router.delete('/:code/waitlist', callLinkMissLimiter, authenticate, waitlistLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await callEntry.leaveCallWaitlist(req.params.code, req.user!.userId, req.user!.role as UserRole);
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);

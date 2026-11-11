@@ -301,7 +301,7 @@ interface CancelRecipient {
 
 /**
  * An event that has not started is cancelled, with the organiser's reason if they gave one. Everyone who held a place
- * (not removed) and every co-host, but the person cancelling, gets one bell, and an email when their email switch and
+ * (not removed), every co-host and (Part 3 Task 3) everyone on its waiting list, but the person cancelling, gets one bell, and an email when their email switch and
  * the admin's 'event_cancelled' switch are both on. The one guarded UPDATE is the only write: a second cancel (or two
  * pressed at once) finds it cancelled, is refused, and sends no second notice. Returns how many people were rung.
  */
@@ -337,7 +337,8 @@ async function noticeOfCancellation(row: LifecycleRow, actor: Actor, reason: str
          FROM users u
         WHERE u.id <> $2 AND ${activeMemberSql('u')}
           AND (u.id IN (SELECT sp.user_id FROM session_participants sp WHERE sp.session_id = $1 AND sp.status <> 'removed')
-               OR u.id IN (SELECT c.user_id FROM session_cohosts c WHERE c.session_id = $1))`,
+               OR u.id IN (SELECT c.user_id FROM session_cohosts c WHERE c.session_id = $1)
+               OR u.id IN (SELECT w.user_id FROM event_waitlist w WHERE w.session_id = $1 AND w.status = 'waiting'))`,
       [row.id, actor.userId],
     );
     if (recipients.rows.length === 0) return 0;

@@ -1145,6 +1145,8 @@ export async function handleHostRemoveParticipant(
       sessionId: data.sessionId, actorId: getUserIdFromSocket(socket), action: 'participant.removed', automatic: false, subjectUserIds: [data.userId], reason: `Removed from the event: ${String(data.reason ?? '').slice(0, 300)}`,
     });
     logger.info({ sessionId: data.sessionId, removedUserId: data.userId }, 'Participant removed by host');
+    // Part 3 Task 3: the removal freed their place: the first person on the waiting list is given it (never throws).
+    void import('../../session/event-waitlist.service').then((w) => w.afterPlaceFreed(data.sessionId, 'removed'));
   } catch (err: any) {
     socket.emit('error', { code: 'REMOVE_FAILED', message: err.message });
   }
@@ -2241,6 +2243,8 @@ export async function handleAssignCohost(
     else if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
 
     logger.info({ sessionId, userId, role, grantedBy: hostId }, 'Co-host assigned');
+    // Part 3 Task 3: a co-host holds no place, so their place goes to the first person on the waiting list.
+    void import('../../session/event-waitlist.service').then((w) => w.afterPlaceFreed(sessionId, 'cohost'));
   } catch (err) {
     logger.error({ err }, 'Error assigning co-host');
     socket.emit('error', { code: 'COHOST_FAILED', message: 'Failed to assign co-host' });

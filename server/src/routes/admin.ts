@@ -17,6 +17,7 @@ import { ConflictError } from '../middleware/errors';
 import * as joinRequestService from '../services/join-request/join-request.service';
 import * as reportService from '../services/report/report.service';
 import { fanoutAccountStatusChange, fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
+import { eventsHeldByActiveAccounts, moveWaitlistsOn } from '../services/session/event-waitlist.service';
 
 const router = Router();
 
@@ -243,10 +244,14 @@ router.post(
         default: return res.status(400).json({ success: false, error: { message: 'Invalid action' } });
       }
 
+      // Part 3 Task 3, fix round 1 (review I-2): a suspended, banned or closed account holds no place, so the events the
+      // active ones held a place in move their waiting list on once the write is done.
+      const freedEvents = statusUpdate === 'active' ? [] : await eventsHeldByActiveAccounts(userIds);
       const result = await query<{ id: string }>(
         `UPDATE users SET status = $1, updated_at = NOW() WHERE id = ANY($2::uuid[]) RETURNING id`,
         [statusUpdate, userIds]
       );
+      moveWaitlistsOn(freedEvents);
 
       // Who closed or suspended an account is on record (23 Sep 2026: nobody could tell).
       await Promise.all(result.rows.map(row => recordAudit({
@@ -438,7 +443,10 @@ router.post(
       // Suspend/ban acts on the reported user regardless of which table it came from.
       if ((action === 'suspend' || action === 'ban') && reportedUserId) {
         const userStatus = action === 'suspend' ? 'suspended' : 'banned';
+        // Part 3 Task 3, fix round 1 (review I-2): their places free once the status is written: the lines move on.
+        const freedEvents = await eventsHeldByActiveAccounts([reportedUserId]);
         await query(`UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2`, [userStatus, reportedUserId]);
+        moveWaitlistsOn(freedEvents);
         invalidateUserStatusCache(reportedUserId);
         // Phase May-19 realtime — also flip the target user's UI so
         // their session-state listeners react immediately.

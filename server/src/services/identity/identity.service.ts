@@ -1280,7 +1280,31 @@ export async function updateUserStatus(userId: string, status: 'active' | 'suspe
   await query('UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2', [status, userId]);
   invalidateUserStatusCache(userId);
   logger.info({ userId, oldStatus: user.status, newStatus: status }, 'User status updated');
+  // Part 3 Task 3: a suspended, banned or closed account holds no place (capacityTakenSql counts active accounts), so
+  // every upcoming or live event it held one in moves its waiting list on.
+  if (status !== 'active' && user.status === 'active') await freePlacesOf(userId, await eventsWithPlace(userId));
   return getUserById(userId);
+}
+
+/** Part 3 Task 3: the upcoming and live events where this person holds a place (any row that is not removed). */
+async function eventsWithPlace(userId: string): Promise<string[]> {
+  const r = await query<{ session_id: string }>(
+    `SELECT DISTINCT sp.session_id FROM session_participants sp JOIN sessions s ON s.id = sp.session_id
+      WHERE sp.user_id = $1 AND sp.status <> 'removed' AND s.status NOT IN ('completed', 'cancelled')`,
+    [userId],
+  );
+  return (r?.rows ?? []).map((row) => row.session_id);
+}
+
+/** Part 3 Task 3: tell each event's waiting list that a place freed (in the background; never throws). */
+async function freePlacesOf(userId: string, sessionIds: string[]): Promise<void> {
+  if (sessionIds.length === 0) return;
+  try {
+    const { afterPlaceFreed } = await import('../session/event-waitlist.service');
+    for (const sessionId of sessionIds) void afterPlaceFreed(sessionId, 'account');
+  } catch (err) {
+    logger.warn({ err, userId }, 'An account closed, but the waiting lists of its events were not told (non-fatal)');
+  }
 }
 
 export async function deleteUser(userId: string): Promise<void> {
@@ -1288,6 +1312,9 @@ export async function deleteUser(userId: string): Promise<void> {
 
   // Remove from all pods
   await query(`UPDATE pod_members SET status = 'removed', left_at = NOW() WHERE user_id = $1 AND status = 'active'`, [userId]);
+
+  // Part 3 Task 3: the upcoming and live events they hold a place in, read before the places are removed below.
+  const freedEvents = await eventsWithPlace(userId);
 
   // Phase 2A (5 May spec) — capture the user's live-session footprint BEFORE
   // the bulk update so we can sync each affected in-memory state machine.
@@ -1327,4 +1354,5 @@ export async function deleteUser(userId: string): Promise<void> {
   await query(`UPDATE users SET status = 'deactivated', updated_at = NOW() WHERE id = $1`, [userId]);
   invalidateUserStatusCache(userId);
   logger.info({ userId }, 'User deleted (deactivated)');
+  await freePlacesOf(userId, freedEvents);
 }

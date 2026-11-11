@@ -11,6 +11,7 @@ import { eventImageColumns, eventImageUrlOf } from '../session/event-image-url';
 import { NotFoundError, ConflictError, AppError, ForbiddenError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
+import { registerOrWaitlist } from '../session/event-waitlist.service';
 import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
 import * as circleService from '../circle/circle.service';
 import { mayInviteToCircle } from '../circle/circle-managers';
@@ -815,6 +816,11 @@ export interface AcceptInviteResult {
   redirectTo: string;
   registeredFor: { sessionId?: string; podId?: string; circleId?: string };
   /**
+   * Part 3 Task 3 (additive): the event was full, so the person is this number on its waiting list (1 = next) and holds
+   * no place yet (participantStatus is then absent).
+   */
+  waitlistPosition?: number;
+  /**
    * Phase 4 (1 May spec) — server-confirmed participant status. Client uses
    * this to know the registration is fully committed before navigating, so
    * the live page never lands with a stale "not registered" cache. Absent
@@ -838,11 +844,14 @@ async function followDatabaseAfterPersonalInvite(sessionId: string, userId: stri
   }
 }
 
+/** What an accept gave: the event, pod or circle; Part 3 Task 3: or a place in a full event's waiting list. */
+interface InviteRegistration { sessionId?: string; podId?: string; circleId?: string; waitlistPosition?: number }
+
 async function applyInviteRegistration(
   invite: Invite,
   userId: string,
-): Promise<{ sessionId?: string; podId?: string; circleId?: string }> {
-  const out: { sessionId?: string; podId?: string; circleId?: string } = {};
+): Promise<InviteRegistration> {
+  const out: InviteRegistration = {};
 
   // 13 Aug 2026 (C3): a circle invite joins the circle. joinCircle is
   // idempotent (ON CONFLICT DO NOTHING, counter moves only on a real insert).
@@ -908,13 +917,26 @@ async function applyInviteRegistration(
     // withdrawal missed, or one accepted again) never undoes a later kick.
     const personalInviteCreatedAt = invite.inviteeEmail ? new Date(invite.createdAt) : undefined;
     try {
+      let waitlistPosition: number | null = null;
       try {
         // T2 (D2): an invite is the host's say-so, so a pod that asks for approval takes the person into this event.
-        await sessionService.registerParticipant(invite.sessionId, userId, undefined, { personalInviteCreatedAt, viaInvite: true });
+        // Part 3 Task 3: a full event puts them on its waiting list instead of failing the accept (they are promoted with
+        // the invite's say-so when a place frees); the accept succeeds and lands on the event page.
+        const placed = await registerOrWaitlist(invite.sessionId, userId, undefined, {
+          personalInviteCreatedAt, viaInvite: true, joinedVia: 'invite',
+        });
+        if (placed.kind === 'waitlisted') waitlistPosition = placed.position;
       } catch (err) {
-        // Already registered — fine, idempotent. Capacity (SESSION_FULL, also a ConflictError), status, or
-        // other validation error — bubble up so the user gets a definitive error and nobody is written in below.
+        // Already registered — fine, idempotent. A status or other validation error — bubble up so the user gets a
+        // definitive error and nobody is written in below.
         if (!(err instanceof ConflictError && err.code === ErrorCodes.SESSION_ALREADY_REGISTERED)) throw err;
+      }
+
+      if (waitlistPosition !== null) {
+        // Waiting, not in: the defensive INSERT below would give them the place the line is for.
+        out.sessionId = invite.sessionId;
+        out.waitlistPosition = waitlistPosition;
+        return out;
       }
 
       // Defensive idempotent INSERT to handle the rare case where
@@ -945,6 +967,12 @@ async function applyInviteRegistration(
   }
 
   return out;
+}
+
+/** registeredFor as the accept has always answered it (the waiting-list position is its own field). */
+function registeredForOf(r: InviteRegistration): AcceptInviteResult['registeredFor'] {
+  const { waitlistPosition: _position, ...registeredFor } = r;
+  return registeredFor;
 }
 
 function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; podId?: string; circleId?: string }): string {
@@ -1077,7 +1105,7 @@ export async function acceptInvite(
     // Pre-fix the undefined value made the client think the server failed
     // and surface the false-negative "Failed to accept invite" toast.
     let participantStatusIdempotent: string | undefined;
-    if (registered.sessionId) {
+    if (registered.sessionId && registered.waitlistPosition === undefined) {
       const sr = await query<{ status: string }>(
         `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
         [registered.sessionId, userId],
@@ -1087,7 +1115,8 @@ export async function acceptInvite(
     return {
       invite,
       redirectTo: computeRedirectTo(invite, registered),
-      registeredFor: registered,
+      registeredFor: registeredForOf(registered),
+      ...(registered.waitlistPosition !== undefined ? { waitlistPosition: registered.waitlistPosition } : {}),
       participantStatus: participantStatusIdempotent,
     };
   }
@@ -1141,7 +1170,7 @@ export async function acceptInvite(
   // confirm registration is fully committed before navigating to the live
   // page. Eliminates the post-redirect 404 race Stefan reported.
   let participantStatus: string | undefined;
-  if (registered.sessionId) {
+  if (registered.sessionId && registered.waitlistPosition === undefined) {
     const statusRes = await query<{ status: string }>(
       `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
       [registered.sessionId, userId],
@@ -1152,7 +1181,8 @@ export async function acceptInvite(
   return {
     invite: finalInvite,
     redirectTo: computeRedirectTo(invite, registered),
-    registeredFor: registered,
+    registeredFor: registeredForOf(registered),
+    ...(registered.waitlistPosition !== undefined ? { waitlistPosition: registered.waitlistPosition } : {}),
     participantStatus,
   };
 }

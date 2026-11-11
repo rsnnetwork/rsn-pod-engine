@@ -21,7 +21,7 @@
 import {
   ADMISSION_MODES, ErrorCodes, UserRole, formatEventTime, hasRoleAtLeast, isEventVisibility,
   type AdmissionMode, type AdmittedVia, type EffectiveAdmission,
-  type EventAccessMode, type EventJoinRequestStatus, type EventPublication, type EventVisibility,
+  type EventAccessMode, type EventJoinRequestStatus, type EventPublication, type EventVisibility, type EventWaitlistAccess,
 } from '@rsn/shared';
 import { query } from '../../db';
 import { AppError } from '../../middleware/errors';
@@ -80,6 +80,65 @@ export function placesHeldSql(sessionAlias: string): string {
   return `(SELECT COUNT(*)::int FROM session_participants ph
             WHERE ph.session_id = ${s}.id AND ph.status <> 'removed' AND ph.user_id IS DISTINCT FROM ${s}.host_user_id
               AND NOT EXISTS (SELECT 1 FROM session_cohosts phc WHERE phc.session_id = ${s}.id AND phc.user_id = ph.user_id))`;
+}
+
+/**
+ * Part 3 Task 3 (K3): the places that count against the event's capacity: placesHeldSql's rule (a participant row that is
+ * not removed, of anyone but the host and the co-hosts) for an account that is active (a removed, suspended or banned
+ * account holds none). `left`, `disconnected` and `no_show` keep their place: leaving the waiting room or closing the
+ * tab is not giving the place up; only unregistering, being removed, being made a co-host or the account closing is.
+ * An integer SQL expression.
+ */
+export function capacityTakenSql(sessionAlias: string): string {
+  checked(sessionAlias, '$1');
+  const s = sessionAlias;
+  return `(SELECT COUNT(*)::int FROM session_participants ct JOIN users ct_u ON ct_u.id = ct.user_id
+            WHERE ct.session_id = ${s}.id AND ct.status <> 'removed' AND ct.user_id IS DISTINCT FROM ${s}.host_user_id
+              AND ${activeMemberSql('ct_u')}
+              AND NOT EXISTS (SELECT 1 FROM session_cohosts ctc WHERE ctc.session_id = ${s}.id AND ctc.user_id = ct.user_id))`;
+}
+
+/**
+ * Part 3 Task 3: the event's capacity (sessions.config.maxParticipants), or NULL when it has none (a config without the
+ * key, or 0, reads as unlimited, as registerParticipant always read it). An integer SQL expression.
+ */
+export function eventCapacitySql(sessionAlias: string): string {
+  checked(sessionAlias, '$1');
+  const s = sessionAlias;
+  return `(CASE WHEN jsonb_typeof(${s}.config->'maxParticipants') = 'number'
+                 AND (${s}.config->>'maxParticipants')::numeric >= 1
+            THEN floor((${s}.config->>'maxParticipants')::numeric)::int END)`;
+}
+
+/**
+ * Part 3 Task 3: how many people are waiting ahead of the person in `userParam` (an active account, status 'waiting'):
+ * everyone on the line when they are not on it, else the people queued before them. A new place goes to someone only
+ * when the free places outnumber the people ahead of them, so nobody takes a place from the line by registering in the
+ * moment between a release and its promotion, and the line stays first in, first out. An integer SQL expression.
+ */
+export function waitlistAheadSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  const s = sessionAlias;
+  const u = userParam;
+  return `(SELECT COUNT(*)::int FROM event_waitlist wa JOIN users wa_u ON wa_u.id = wa.user_id
+            WHERE wa.session_id = ${s}.id AND wa.status = 'waiting' AND wa.user_id <> ${u} AND ${activeMemberSql('wa_u')}
+              AND NOT EXISTS (SELECT 1 FROM event_waitlist wa_me WHERE wa_me.session_id = ${s}.id AND wa_me.user_id = ${u}
+                                AND wa_me.status = 'waiting' AND (wa_me.queued_at, wa_me.id) < (wa.queued_at, wa.id)))`;
+}
+
+/**
+ * Part 3 Task 3: the person's place in the event's waiting list (1 = next), or NULL when they are not waiting. The line
+ * is ordered by (queued_at, id); someone ahead whose account is no longer active is not counted (they lapse when their
+ * turn comes).
+ */
+export function waitlistPositionSql(sessionAlias: string, userParam: string): string {
+  checked(sessionAlias, userParam);
+  const s = sessionAlias;
+  const u = userParam;
+  return `(SELECT 1 + (SELECT COUNT(*)::int FROM event_waitlist wl_a JOIN users wl_au ON wl_au.id = wl_a.user_id
+                        WHERE wl_a.session_id = wl_m.session_id AND wl_a.status = 'waiting' AND ${activeMemberSql('wl_au')}
+                          AND (wl_a.queued_at, wl_a.id) < (wl_m.queued_at, wl_m.id))
+             FROM event_waitlist wl_m WHERE wl_m.session_id = ${s}.id AND wl_m.user_id = ${u} AND wl_m.status = 'waiting')`;
 }
 
 /**
@@ -274,6 +333,8 @@ export interface EventAccessFacts {
   outsideClosedCircle: boolean;
   /** Part 2 Task 2 (D1): a draft is seen only by the people who run it. */
   publication: EventPublication;
+  /** Part 3 Task 3, fix round 2 (re-review N-1): sessions.status ('scheduled', a live status, 'completed', 'cancelled'). */
+  eventStatus: string;
   /** Part 2 Task 2: it has been archived (out of the default lists; its page stays as it was). */
   archived: boolean;
   /** Part 2 Task 2: registration opens then (null: as soon as it is published). */
@@ -293,6 +354,17 @@ export interface EventAccessFacts {
   entitled: boolean;
   /** Which of the three, in that order; null when not entitled. */
   entitledVia: 'allow_list' | 'code' | 'invite' | null;
+  /** Part 3 Task 3: sessions.config.maxParticipants, or null when the event has no limit (eventCapacitySql). */
+  capacity: number | null;
+  /** Part 3 Task 3: the places that count against the capacity (capacityTakenSql: active accounts only). */
+  placesTaken: number;
+  /** Part 3 Task 3: this person's place in the waiting list (1 = next), or null when they are not waiting. */
+  waitlistPosition: number | null;
+  /**
+   * Fix round 1 (review I-1): the people waiting ahead of this person (everyone waiting, when they are not on the line),
+   * the door's own count (waitlistAheadSql), so the page's "full" is the door's "full".
+   */
+  waitlistAhead: number;
 }
 
 interface FactsRow {
@@ -318,6 +390,11 @@ interface FactsRow {
   admission_listed?: boolean | null;
   admission_code_held?: boolean | null;
   admission_personal_invite?: boolean | null;
+  capacity?: number | string | null;
+  places_taken?: number | string | null;
+  waitlist_position?: number | string | null;
+  waitlist_ahead?: number | string | null;
+  event_status?: string | null;
 }
 
 type Reader = (text: string, params: unknown[]) => Promise<{ rows: FactsRow[] }>;
@@ -347,7 +424,12 @@ export async function readEventAccessFacts(
             s.admission_mode,
             (s.admission_mode IS NOT NULL AND ${admissionListedSql('s', '$2')}) AS admission_listed,
             (s.admission_mode IS NOT NULL AND ${admissionCodeHeldSql('s', '$2')}) AS admission_code_held,
-            (s.admission_mode IS NOT NULL AND ${personalInviteSql('s', '$2')}) AS admission_personal_invite
+            (s.admission_mode IS NOT NULL AND ${personalInviteSql('s', '$2')}) AS admission_personal_invite,
+            ${eventCapacitySql('s')} AS capacity,
+            ${capacityTakenSql('s')} AS places_taken,
+            ${waitlistPositionSql('s', '$2')} AS waitlist_position,
+            ${waitlistAheadSql('s', '$2')} AS waitlist_ahead,
+            s.status::text AS event_status
        FROM sessions s
        LEFT JOIN pods p ON p.id = s.pod_id
       WHERE s.id = $1`,
@@ -381,7 +463,19 @@ export async function readEventAccessFacts(
     admissionMode,
     entitled: entitledVia !== null,
     entitledVia,
+    // A row without these (a test's, or one read before migration 145) reads as today's event: no limit, nobody waiting.
+    capacity: positiveIntOrNull(row.capacity),
+    placesTaken: Number(row.places_taken ?? 0) || 0,
+    waitlistPosition: positiveIntOrNull(row.waitlist_position),
+    waitlistAhead: Number(row.waitlist_ahead ?? 0) || 0,
+    // A row without it (a test's) reads as today's event: scheduled.
+    eventStatus: row.event_status ?? 'scheduled',
   };
+}
+
+function positiveIntOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return value !== null && value !== undefined && Number.isInteger(n) && n >= 1 ? n : null;
 }
 
 function isAdmissionMode(value: unknown): value is AdmissionMode {
@@ -582,17 +676,48 @@ export interface EventAccessSummary {
   canManageRequests: boolean;
   /** Part 2 Task 4: what decides a place (effectiveAdmission). */
   admission: EffectiveAdmission;
+  /**
+   * Part 3 Task 3: whether every place is taken, and this person's place in the waiting list. Never a count (attendees
+   * are told "full", nothing more; the organisers read numbers from GET /sessions/:id/participant-counts).
+   */
+  waitlist: EventWaitlistAccess;
 }
 
 export function summariseEventAccess(f: EventAccessFacts, role: string | undefined): EventAccessSummary {
+  const full = eventIsFull(f);
   return {
     visibility: f.visibility,
     mode: eventAccessMode(f, role),
     myRequest: f.myRequest,
-    autoRegister: autoRegisters(f, role),
+    // A full event the person holds no place in would only answer SESSION_FULL to the page's own registration: the page
+    // offers the waiting list instead (an event that never fills reads exactly as before).
+    autoRegister: autoRegisters(f, role) && !(full && !holdsPlace(f) && !runsEvent(f, role)),
     canManageRequests: f.visibility !== null && managesRequests(f, role),
     admission: effectiveAdmission(f),
+    waitlist: { full, position: f.waitlistPosition },
   };
+}
+
+/**
+ * Part 3 Task 3: no place is free for this person: the places taken and the people waiting ahead of them fill the
+ * capacity. The register door's own rule (registerParticipantTx), so the page and the door always agree (fix round 1,
+ * review I-1): with anyone waiting, a newcomer reads full; the first in line reads a free place as theirs.
+ */
+export function eventIsFull(f: Pick<EventAccessFacts, 'capacity' | 'placesTaken' | 'waitlistAhead'>): boolean {
+  return f.capacity !== null && f.placesTaken + f.waitlistAhead >= f.capacity;
+}
+
+/**
+ * Fix round 1 (review I-1): people are waiting while a place is free, so a promotion is overdue (a restart, a failed
+ * pass, a release that did not tell the line). Whoever reads it moves the line on (session.service lineStalled).
+ */
+export function lineLooksStalled(
+  f: Pick<EventAccessFacts, 'capacity' | 'placesTaken' | 'waitlistAhead' | 'waitlistPosition' | 'eventStatus' | 'publication'>,
+): boolean {
+  // Fix round 2 (re-review N-1): only an event the promotion would move (published, upcoming or live). A draft, a
+  // completed and a cancelled event keep their waiting rows inert, and reading them starts nothing.
+  if (f.publication === 'draft' || f.eventStatus === 'completed' || f.eventStatus === 'cancelled') return false;
+  return f.capacity !== null && f.placesTaken < f.capacity && (f.waitlistAhead > 0 || f.waitlistPosition !== null);
 }
 
 // ─── Admission per event: the rules (Part 2, Task 4, 10 Nov 2026; D3) ────────

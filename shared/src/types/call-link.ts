@@ -20,10 +20,12 @@ import type { AccountKind } from './user';
  *   ended             the event is over
  *   cancelled         the event was cancelled
  *   refused           they may not take a place (`refusal` says why), e.g. the host removed them
+ *   waitlisted        the event is full and they are on its waiting list (`waitlistPosition`, 1 = next); the first in
+ *                     line is given the next place that frees (Part 3 Task 3)
  */
 export type CallEntryStep =
   | 'identify' | 'details' | 'request' | 'pending_approval' | 'declined'
-  | 'enter' | 'wait_for_start' | 'ended' | 'cancelled' | 'refused';
+  | 'enter' | 'wait_for_start' | 'ended' | 'cancelled' | 'refused' | 'waitlisted';
 
 /** The question an event with matching groups asks, and its answers. */
 export interface CallLandingGroupAsk {
@@ -63,6 +65,8 @@ export interface CallEntryState {
   missing: { displayName: boolean; group: boolean; admissionCode: boolean };
   refusal: { code: string; message: string } | null;
   startsAt: string | null;
+  /** Part 3 Task 3: their place in the event's waiting list (1 = next) when `step` is 'waitlisted', else null. */
+  waitlistPosition: number | null;
 }
 
 /** One of a person's events reached by its link (their place or their request), for the guest home. */
