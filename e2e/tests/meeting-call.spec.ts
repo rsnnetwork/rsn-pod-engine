@@ -215,8 +215,8 @@ test.describe.serial('meeting + call', () => {
     // Outlook.com and a file, and the .ics endpoint serves a real invite. Scoped to the card in the thread, which is
     // where it stays: the scheduler panel offers the same menu while it is open, and a page-wide match finds both.
     const card = page.getByTestId('system-message-card').filter({ hasText: /Meeting confirmed/i });
-    await expect(card.getByRole('button', { name: /Add manually|Add to calendar/i })).toBeVisible({ timeout: 10_000 });
-    await card.getByRole('button', { name: /Add manually|Add to calendar/i }).click();
+    await expect(card.getByRole('button', { name: 'Add manually', exact: true })).toBeVisible({ timeout: 10_000 });
+    await card.getByRole('button', { name: 'Add manually', exact: true }).click();
     const menu = page.getByTestId('add-to-calendar-menu');
     await expect(menu.getByRole('menuitem', { name: 'Google Calendar' })).toBeVisible();
     await expect(menu.getByRole('menuitem', { name: 'Outlook.com' })).toBeVisible();

@@ -229,9 +229,9 @@ test('two people go from silence to a booked meeting, each step arriving on both
 
   const boCard = cards(boPage).filter({ hasText: confirmed });
   await expect(boCard.getByRole('button', { name: /Join meeting/i })).toBeVisible();
-  await expect(boCard.getByRole('button', { name: /Add manually|Add to calendar/i })).toBeVisible();
+  await expect(boCard.getByRole('button', { name: 'Add manually', exact: true })).toBeVisible();
   // 1 Nov 2026 (T7, L10): it opens the menu of Google Calendar, Outlook.com and a file.
-  await boCard.getByRole('button', { name: /Add manually|Add to calendar/i }).click();
+  await boCard.getByRole('button', { name: 'Add manually', exact: true }).click();
   await expect(boPage.getByTestId('add-to-calendar-menu').getByRole('menuitem', { name: 'Google Calendar' })).toBeVisible();
   await expect(boPage.getByTestId('add-to-calendar-menu').getByRole('menuitem', { name: 'Outlook.com' })).toBeVisible();
   await boPage.keyboard.press('Escape');

@@ -160,7 +160,7 @@ test('Script B: a request becomes a booked meeting both find under Events; both 
       await noSidewaysScroll(p, 'Events');
     }
     await gotoRetry(piaPage, `${APP}/meetings/${meetingId}`);
-    await piaPage.getByRole('button', { name: /Add manually|Add to calendar/ }).click();
+    await piaPage.getByRole('button', { name: 'Add manually', exact: true }).click();
     for (const id of ['calendar-google', 'calendar-outlook', 'calendar-ics']) await tall(piaPage.getByTestId('add-to-calendar-menu').getByTestId(id), id);
     await piaPage.keyboard.press('Escape');
   });

@@ -28,6 +28,13 @@ import { expectReachable } from '../helpers/viewport-fit';
 //      your meeting with Ana go?" as a sheet; "Not now" closes it and drops the question from the address; Back never
 //      re-enters the call.
 //   7. At 360px: the More menu, the report sheet and the offline sheet fit, every action 44px, nothing scrolls sideways.
+//   Fix round 1 (review s5-review.md):
+//   1b. A circle comment and a group chat message are reported as their authors, with the same copy, the same 24-hour
+//       guard and the same refusals (pod comments and event chat messages: jest and PGlite only; a pod or a live event
+//       is too much to stand up here).
+//   3.  In a blocked thread neither side can react (API, both ways), and no reaction trigger or Reply is drawn.
+//   6b. A block during a call ends it for BOTH: each room goes back to the thread with "The call has ended.", and
+//       neither can get back into the call.
 // Reports filed here sit in the admin moderation queue for the length of the run; deleting the throwaway members at the
 // end removes them (user_reports cascades with the reporter and the reported).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,6 +50,9 @@ const BEN_NAME = `Ben Safe ${RUN}`;
 
 let browser: Browser;
 let shirley: TestUser, ana: TestUser, ben: TestUser;
+let admin: TestUser | undefined;
+let circleId = '';
+let groupId = '';
 let anaConv = '';
 let benConv = '';
 let firstMsg = '';
@@ -141,7 +151,10 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) await c.close().catch(() => {});
   try { await browser?.close(); } catch { /* already closed */ }
-  await cleanup(pool, { ids: [shirley?.id, ana?.id, ben?.id].filter(Boolean) as string[] });
+  // This run's own circle and group chat, by id, before their makers go.
+  if (circleId) await pool.query(`DELETE FROM circles WHERE id = $1`, [circleId]).catch(() => {});
+  if (groupId) await pool.query(`DELETE FROM dm_groups WHERE id = $1`, [groupId]).catch(() => {});
+  await cleanup(pool, { ids: [shirley?.id, ana?.id, ben?.id, admin?.id].filter(Boolean) as string[] });
   const swept = await cleanupByPrefix(pool, 'e2etest-s5-');
   if (swept) console.log(`  swept ${swept} leftover s5-* account(s)`);
 });
@@ -171,6 +184,39 @@ test('1) a message is reported as its author, its words kept after it is deleted
   await pool.query(`DELETE FROM direct_messages WHERE id = $1 AND from_user_id = $2`, [firstMsg, ana.id]);
   const kept = await pool.query<{ subject_excerpt: string }>(`SELECT subject_excerpt FROM user_reports WHERE id = $1`, [row.rows[0].id]);
   expect(kept.rows[0].subject_excerpt).toBe(`S5 first message ${RUN}`);
+});
+
+test('1b) a circle comment and a group chat message are reported as their authors, once a day, never your own', async () => {
+  test.setTimeout(120_000);
+  admin = await createTestUser(`s5-admin-${RUN}`, 'admin');
+  const made = await api(admin, 'POST', '/circles', { name: `S5 Circle ${RUN}` });
+  expect(made.status, JSON.stringify(made.json)).toBe(201);
+  circleId = made.json.data.id;
+  for (const u of [shirley, ana]) expect((await api(u, 'POST', `/circles/${circleId}/join`)).status).toBeLessThan(300);
+  expect((await api(ana, 'POST', `/circles/${circleId}/posts`, { clientId: crypto.randomUUID(), content: `S5 post ${RUN}` })).status).toBeLessThan(300);
+  const post = (await pool.query<{ id: string }>(`SELECT id FROM circle_posts WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1`, [circleId])).rows[0].id;
+  expect((await api(ana, 'POST', `/circles/posts/${post}/comments`, { content: `S5 comment ${RUN}` })).status).toBeLessThan(300);
+  const comment = (await pool.query<{ id: string }>(`SELECT id FROM circle_post_comments WHERE post_id = $1 ORDER BY created_at DESC LIMIT 1`, [post])).rows[0].id;
+
+  const byComment = await api(shirley, 'POST', '/reports', { reason: 'harassment', subject: { kind: 'circle_comment', id: comment } });
+  expect(byComment.status, JSON.stringify(byComment.json)).toBe(201);
+  const row = (await pool.query<{ reported_id: string; subject_excerpt: string }>(
+    `SELECT reported_id, subject_excerpt FROM user_reports WHERE reporter_id = $1 AND subject_id = $2`, [shirley.id, comment],
+  )).rows[0];
+  expect(row).toEqual({ reported_id: ana.id, subject_excerpt: `S5 comment ${RUN}` });
+  expect((await api(shirley, 'POST', '/reports', { reason: 'spam', subject: { kind: 'circle_comment', id: comment } })).json?.error?.message).toBe('You already reported this.');
+  expect((await api(ana, 'POST', '/reports', { reason: 'spam', subject: { kind: 'circle_comment', id: comment } })).json?.error?.message).toBe('You cannot report your own comment.');
+
+  const group = await api(shirley, 'POST', '/groups', { name: `S5 Group ${RUN}`, memberIds: [ana.id] });
+  expect(group.status, JSON.stringify(group.json)).toBe(201);
+  groupId = group.json.data.id;
+  expect((await api(ana, 'POST', `/groups/${groupId}/messages`, { content: `S5 group words ${RUN}` })).status).toBe(201);
+  const gm = (await pool.query<{ id: string }>(`SELECT id FROM direct_messages WHERE group_id = $1 AND from_user_id = $2 ORDER BY created_at DESC LIMIT 1`, [groupId, ana.id])).rows[0].id;
+  const byGroup = await api(shirley, 'POST', '/reports', { reason: 'spam', subject: { kind: 'group_message', id: gm } });
+  expect(byGroup.status, JSON.stringify(byGroup.json)).toBe(201);
+  expect((await pool.query(`SELECT 1 FROM user_reports WHERE reporter_id = $1 AND subject_id = $2 AND reported_id = $3 AND subject_excerpt = $4`,
+    [shirley.id, gm, ana.id, `S5 group words ${RUN}`])).rowCount).toBe(1);
+  expect((await api(ben, 'POST', '/reports', { reason: 'spam', subject: { kind: 'group_message', id: gm } })).status, 'Ben is not in the group').toBe(404);
 });
 
 test('2) Report member and Report message are labelled, say what happens, choose no reason, and keep Shirley in the thread', async () => {
@@ -248,7 +294,17 @@ test('3) Block member says every consequence first, keeps Shirley in a read-only
   await expect(page.locator(`[data-message-id="${secondMsg}"]`), 'the messages are still there').toBeVisible();
   await expect(page.getByRole('main').locator('textarea'), 'no message box').toHaveCount(0);
   await expect(page.getByTestId('video-call-button'), 'no call').toHaveCount(0);
+  // Read-only means read-only (fix round 1): no reaction trigger and no Reply; Report message is still offered.
+  await expect(page.getByRole('button', { name: 'Add reaction' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Reply' })).toHaveCount(0);
+  await expect(page.locator(`[data-message-id="${secondMsg}"]`).getByRole('button', { name: 'More actions for this message' })).toHaveCount(1);
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [shirley.id, ana.id])).rowCount).toBe(1);
+  // A reaction cannot cross the block, from either side (REST; the socket goes through the same check).
+  for (const who of [ana, shirley]) {
+    const reacted = await api(who, 'POST', `/dm/messages/${secondMsg}/reactions`, { emoji: 'heart' });
+    expect(reacted.status, `${who === ana ? 'Ana' : 'Shirley'} reacting across the block`).toBe(403);
+  }
+  expect((await pool.query(`SELECT 1 FROM dm_message_reactions WHERE message_id = $1`, [secondMsg])).rowCount).toBe(0);
   // Ana is not told, and cannot call.
   const ring = await api(ana, 'POST', `/dm/conversations/${anaConv}/call/request`, { kind: 'video', durationMin: 15 });
   expect(ring.status).toBe(403);
@@ -384,6 +440,42 @@ test('6) after a 1:1 call, Leave lands on the conversation with an optional "Not
     expect(page.url(), 'Back does not re-enter the call').not.toMatch(/\/meet\//);
     await anaPage.getByRole('button', { name: 'Leave call and go back to chat' }).click().catch(() => {});
   } finally {
+    await media.close().catch(() => {});
+  }
+});
+
+test('6b) a block during a call ends it for both: each lands on the thread with "The call has ended.", and neither gets back in', async () => {
+  test.setTimeout(240_000);
+  test.skip(LOCAL, 'needs a real LiveKit server; the local API only mocks one');
+  const media = await chromium.launch({
+    headless: HEADLESS,
+    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--disable-features=MediaFoundationD3D11VideoCapture'],
+  });
+  try {
+    const anaPage = await signedIn(ana, 390, 844, media);
+    await gotoRetry(anaPage, `${APP}/messages/${anaConv}`);
+    await expect.poll(async () => (await api(shirley, 'GET', `/dm/conversations/${anaConv}/partner-presence`)).json?.data?.state, { timeout: 30_000 }).toBe('online');
+    const rung = await api(shirley, 'POST', `/dm/conversations/${anaConv}/call/request`, { kind: 'video', durationMin: 15 });
+    expect(rung.status, JSON.stringify(rung.json)).toBe(201);
+    expect((await api(ana, 'POST', `/dm/call/requests/${rung.json.data.id}/accept`)).status).toBe(200);
+    const page = await signedIn(shirley, 390, 844, media);
+    await openThread(page, anaConv, ANA_NAME);
+    await gotoRetry(page, `${APP}/meet/${anaConv}?kind=video`);
+    await gotoRetry(anaPage, `${APP}/meet/${anaConv}?kind=video`);
+    await expect(page.locator('.lk-participant-tile')).toHaveCount(2, { timeout: 45_000 });
+
+    expect((await api(shirley, 'POST', `/users/${ana.id}/block`, {})).status).toBe(200);
+    for (const [who, p] of [['Shirley', page], ['Ana', anaPage]] as const) {
+      await expect(p, `${who} is back on the thread`).toHaveURL(new RegExp(`/messages/${anaConv}`), { timeout: 30_000 });
+      await expect(p.getByText('The call has ended.'), `${who} is told calmly`).toBeVisible({ timeout: 15_000 });
+    }
+    // Neither gets back in: the call page refuses a new entry while the block stands.
+    await gotoRetry(anaPage, `${APP}/meet/${anaConv}?kind=video`);
+    await expect(anaPage.getByText(/cannot call this member|Could not start the call/i)).toBeVisible({ timeout: 30_000 });
+    await expect(anaPage.locator('.lk-participant-tile')).toHaveCount(0);
+    expect((await pool.query<{ e: number }>(`SELECT call_room_epoch AS e FROM dm_conversations WHERE id = $1`, [anaConv])).rows[0].e, 'the pair moved to a new call room').toBeGreaterThanOrEqual(1);
+  } finally {
+    await api(shirley, 'DELETE', `/users/${ana.id}/block`).catch(() => undefined);
     await media.close().catch(() => {});
   }
 });

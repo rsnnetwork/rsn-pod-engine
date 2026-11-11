@@ -450,7 +450,7 @@ test(`More on the Human Profile: Report member, and Block member, which asks fir
   await page.getByRole('button', { name: 'Block member', exact: true }).click();
   await expect(page.getByRole('dialog', { name: `Block ${OWNER.name}?` })).toBeVisible();
   // 11 Nov 2026 (Shirley Palmer's item 16): every consequence, before it is done.
-  await expect(page.getByTestId('confirm-dialog-body')).toHaveText(`${OWNER.name} won't be able to message or call you, you won't be matched together, and you won't see each other's posts or comments. They aren't told. Your conversation stays, read-only. You can unblock them from the conversation or their profile.`);
+  await expect(page.getByTestId('confirm-dialog-body')).toHaveText(`${OWNER.name} won't be able to message or call you, you won't be matched together, and you won't see each other's posts or comments. They aren't told. Any conversation you have stays, read-only. You can unblock them from their profile.`);
   await page.getByTestId('confirm-dialog-cancel').click();
   await expect(page.getByTestId('confirm-dialog-body')).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible();
