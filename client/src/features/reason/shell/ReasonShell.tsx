@@ -20,6 +20,7 @@ import MobileNav from './MobileNav';
 import PeopleTabs, { PEOPLE_TABS } from './PeopleTabs';
 import AdminTabs from './AdminTabs';
 import useMainScrollMemory from './useMainScrollMemory';
+import { useUnsentVoiceGuard } from '@/features/messages/voice/useLeaveGuard';
 import { NAV_BY_KEY, onAdmin } from './nav';
 
 export default function ReasonShell() {
@@ -31,6 +32,9 @@ export default function ReasonShell() {
   // (?tab=, ?q= and ?view= are the same page); it is done before paint so no frame is drawn mid-list.
   useMainScrollMemory(main);
   const user = useAuthStore((s) => s.user);
+  // A voice note this member has not sent, kept in a conversation: closing or reloading the tab from ANY page asks
+  // first, since the note outlives the Messages page but not the tab (11 Nov 2026).
+  useUnsentVoiceGuard(user?.id);
   // The Messages badge: unread one-to-one messages and, since group chats (26 Oct 2026, C12), every group's unread. The
   // browser tab's "(N) REASON" reads the same number (useMessagesUnread).
   const unreadCount = useMessagesUnread();

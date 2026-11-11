@@ -90,8 +90,8 @@ describe('Phase X — 13 May live-test bug fixes', () => {
       expect(cloudinaryLib).toMatch(/export async function uploadAudioToCloudinary/);
       // Audio caps pinned so a future bump is intentional.
       expect(cloudinaryLib).toMatch(/MAX_AUDIO_BYTES\s*=\s*5\s*\*\s*1024\s*\*\s*1024/);
-      // 11 Nov 2026 (RSN 06): the cap is 1 minute, one constant (VOICE_NOTE_MAX_MS), plus the stop's moment of lag.
-      expect(cloudinaryLib).toMatch(/MAX_AUDIO_DURATION_MS\s*=\s*VOICE_NOTE_MAX_MS \+ 5_000/);
+      // 11 Nov 2026 (RSN 06): the cap is 1 minute, one constant (VOICE_NOTE_MAX_MS), plus the stop's moment of lag (65 s).
+      expect(cloudinaryLib).toMatch(/MAX_AUDIO_DURATION_MS\s*=\s*VOICE_NOTE_UPLOAD_LIMIT_MS;/);
       // Audio uploads use /auto/upload so the same preset works for both
       // images and audio. Pin the endpoint.
       expect(cloudinaryLib).toMatch(/\/auto\/upload/);

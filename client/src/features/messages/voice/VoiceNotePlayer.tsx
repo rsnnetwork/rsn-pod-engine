@@ -9,7 +9,8 @@ import { Mic, Pause, Play } from 'lucide-react';
 import { VOICE_COPY, playbackClock, voiceTotalMs } from './voice-note';
 
 interface Props {
-  src: string;
+  /** null until the address is ready (a draft's is made after its first render): the button waits, nothing loads. */
+  src: string | null;
   /** The length recorded with the note, if any (a sent note's Cloudinary length, a draft's recorded length). */
   durationMs: number | null;
   tone: 'own' | 'theirs' | 'draft';
@@ -48,6 +49,7 @@ export default function VoiceNotePlayer({ src, durationMs, tone, testId, status 
       <button
         type="button"
         onClick={toggle}
+        disabled={!src}
         aria-label={playing ? VOICE_COPY.pause : VOICE_COPY.play}
         className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-rsn-red ring-1 ring-gray-200 hover:bg-gray-50"
       >
@@ -70,7 +72,7 @@ export default function VoiceNotePlayer({ src, durationMs, tone, testId, status 
           {status && <span className="ml-auto shrink-0 font-medium">{status}</span>}
         </div>
       </div>
-      <audio
+      {src && <audio
         ref={audioRef}
         src={src}
         preload="metadata"
@@ -81,7 +83,7 @@ export default function VoiceNotePlayer({ src, durationMs, tone, testId, status 
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setCurrentSec(total !== null ? total / 1000 : currentSec); }}
-      />
+      />}
     </div>
   );
 }

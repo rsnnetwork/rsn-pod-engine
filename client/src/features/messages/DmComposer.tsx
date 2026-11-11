@@ -23,18 +23,22 @@ import ReplyStrip from './ReplyStrip';
 import type { ReplyTarget } from './reply-text';
 import { useSendMessage } from './thread/useSendMessage';
 import {
-  claimVoiceSend, clearTextDraftIf, discardVoiceDraft, keepVoiceDraft, releaseVoiceSend, setTextDraft, textDraftOf,
-  useComposerDrafts, voiceDraftOf,
+  claimTextSend, claimVoiceSend, discardVoiceDraft, dropVoiceById, endTextSend, keepVoiceDraft, releaseVoiceSend,
+  setTextDraft, textDraftOf, textSendingOf, useComposerDrafts, voiceDraftOf,
 } from './voice/composer-drafts';
-import { VOICE_COPY, needsDiscardConfirm } from './voice/voice-note';
+import { VOICE_COPY, isOverCap } from './voice/voice-note';
 import { useVoiceRecorder } from './voice/useVoiceRecorder';
 import { useLeaveGuard } from './voice/useLeaveGuard';
 import RecordingBar from './voice/RecordingBar';
 import VoiceDraftCard from './voice/VoiceDraftCard';
 
 interface SendVars {
-  /** The box the message was sent from: what is cleared when it lands. */
+  /** The box the message was sent from. */
   threadKey: string;
+  /** The voice note on its way (cleared or released by id when the answer comes, wherever its draft is kept by then). */
+  voiceId: number | null;
+  /** The text send under way (ended by its number when the answer comes, wherever its draft is kept by then). */
+  textToken: number | null;
   toUserId: string;
   content: string;
   image: { file: File } | null;
@@ -63,6 +67,11 @@ export default function DmComposer({
   const { ask, confirmDialog } = useConfirm();
   const text = useComposerDrafts((s) => textDraftOf(s, threadKey, toUserId));
   const voice = useComposerDrafts((s) => voiceDraftOf(s, threadKey, toUserId));
+  // A text from this conversation on its way, from this box or one mounted here before (left and came back mid-send).
+  const textSending = useComposerDrafts((s) => textSendingOf(s, threadKey, toUserId));
+  // The member this box was opened for. After a sign-out or another member's sign-in it writes nothing more.
+  const epoch = useRef(useComposerDrafts.getState().epoch);
+  const sameMember = () => useComposerDrafts.getState().epoch === epoch.current;
   const [showEmoji, setShowEmoji] = useState(false);
   const closeEmoji = useCallback(() => setShowEmoji(false), []);
   const emojiToggleRef = useRef<HTMLButtonElement>(null);
@@ -73,11 +82,10 @@ export default function DmComposer({
   // says so, but touches nothing on the page: not the reply being written there, not the address.
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  // A text sent with Enter twice, or Send double-clicked, before the first press has re-rendered the box: one message.
-  const textInFlight = useRef(false);
   useEffect(() => () => { if (pendingImage) URL.revokeObjectURL(pendingImage.previewUrl); }, [pendingImage]);
   const recorder = useVoiceRecorder({
     onRecorded: (b, durationMs, how) => {
+      if (!sameMember()) return;
       keepVoiceDraft(threadKey, toUserId, b, durationMs);
       if (how === 'left') addToast(VOICE_COPY.keptFor(recipientName), 'info');
       if (how === 'cap') addToast(VOICE_COPY.capReached, 'info');
@@ -104,13 +112,11 @@ export default function DmComposer({
     },
     // Both run for the box the message was sent from, even when another conversation is open by then.
     onSent: (data, vars) => {
-      if (vars.audio) {
-        discardVoiceDraft(vars.threadKey);
+      if (vars.voiceId !== null) {
+        dropVoiceById(vars.voiceId);
         addToast(VOICE_COPY.sentTo(recipientName), 'success');
-      } else {
-        textInFlight.current = false;
-        clearTextDraftIf(vars.threadKey, vars.toUserId, vars.content);
       }
+      if (vars.textToken !== null) endTextSend(vars.textToken, vars.content, true);
       if (!mounted.current) return;
       if (vars.image) setPendingImage(null);
       onReplyDone();
@@ -118,28 +124,32 @@ export default function DmComposer({
     },
     onFailed: (_err, vars) => {
       setUploadFraction(null);
-      if (vars.audio) releaseVoiceSend(vars.threadKey);
-      else textInFlight.current = false;
+      if (vars.voiceId !== null) releaseVoiceSend(vars.voiceId);
+      if (vars.textToken !== null) endTextSend(vars.textToken, vars.content, false);
     },
   });
 
   const sendText = () => {
     const content = text.trim();
     if (!content && !pendingImage) return;
-    if (send.isPending || textInFlight.current) return;
-    textInFlight.current = true;
+    // Marked sending in one synchronous step: Enter twice, a double click, or a box mounted here again mid-send, one message.
+    const textToken = claimTextSend(threadKey, toUserId);
+    if (textToken === null) return;
     setShowEmoji(false);
     send.mutate({
-      threadKey, toUserId, content, image: pendingImage, audio: null, replyToId: replyTarget?.id ?? null,
+      threadKey, voiceId: null, textToken, toUserId, content, image: pendingImage, audio: null, replyToId: replyTarget?.id ?? null,
     });
   };
 
   const sendVoice = () => {
+    if (voice && isOverCap(voice.durationMs)) { addToast(VOICE_COPY.tooLong, 'error'); return; }
     // Taken and marked sending in one step: a second press, here or in this conversation's box mounted again, gets null.
     const claimed = claimVoiceSend(threadKey, toUserId);
     if (!claimed) return;
     send.mutate({
       threadKey,
+      voiceId: claimed.id,
+      textToken: null,
       toUserId: claimed.toUserId,
       content: '',
       image: null,
@@ -150,10 +160,9 @@ export default function DmComposer({
 
   const discardVoice = async () => {
     if (!voice || voice.sending) return;
-    if (needsDiscardConfirm(voice.durationMs)) {
-      const yes = await ask({ title: VOICE_COPY.discardTitle, body: VOICE_COPY.discardBody, confirmLabel: VOICE_COPY.discard, tone: 'danger' });
-      if (!yes) return;
-    }
+    // Destructive, so it always asks first, whatever the note's length (CLAUDE.md §12; controller ruling 11 Nov 2026).
+    const yes = await ask({ title: VOICE_COPY.discardTitle, body: VOICE_COPY.discardBody, confirmLabel: VOICE_COPY.discard, tone: 'danger' });
+    if (!yes) return;
     discardVoiceDraft(threadKey);
   };
 
@@ -190,6 +199,7 @@ export default function DmComposer({
           voice={voice}
           recipientName={recipientName}
           uploadFraction={voice.sending ? uploadFraction : null}
+          tooLong={isOverCap(voice.durationMs)}
           onSend={sendVoice}
           onDiscard={() => { void discardVoice(); }}
         />
@@ -208,7 +218,7 @@ export default function DmComposer({
           boxRef={boxRef}
           onFocus={() => { onBoxFocus(); setShowEmoji(false); }}
           onSend={sendText}
-          busy={send.isPending}
+          busy={send.isPending || textSending}
           hasImage={!!pendingImage}
           canAttach={cloudinaryReady}
           onPickImage={pickImage}

@@ -19,7 +19,7 @@
 //   3. Set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET
 //      in Vercel project env → Production. Redeploy.
 
-import { VOICE_NOTE_MAX_MS } from '@/features/messages/voice/voice-note';
+import { VOICE_COPY, VOICE_NOTE_UPLOAD_LIMIT_MS } from '@/features/messages/voice/voice-note';
 
 const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME as string | undefined;
 const UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET as string | undefined;
@@ -34,8 +34,10 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB — matches the preset
 export const ALLOWED_AUDIO_TYPES = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/mpeg'] as const;
 export const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
 // The recorder stops itself at VOICE_NOTE_MAX_MS (1 minute, 11 Nov 2026, RSN 06; it was 5 minutes). The upload check
-// allows the stop's moment of lag (the tail flush before stop) on top, and no more.
-export const MAX_AUDIO_DURATION_MS = VOICE_NOTE_MAX_MS + 5_000;
+// allows the stop's moment of lag (the tail flush before stop) on top, and no more: 65 s. This check and the recorder
+// are the cap's only enforcement. The server has no duration check of its own: it cannot measure the file, and the
+// length it would see is the one this client reports (controller ruling, 11 Nov 2026).
+export const MAX_AUDIO_DURATION_MS = VOICE_NOTE_UPLOAD_LIMIT_MS;
 
 export function isCloudinaryConfigured(): boolean {
   return !!CLOUD_NAME && !!UPLOAD_PRESET;
@@ -154,7 +156,7 @@ export function validateAudioBlob(blob: Blob, durationMs: number): ValidationFai
     return { reason: 'too-large', message: 'Voice message is over the 5 MB limit' };
   }
   if (durationMs > MAX_AUDIO_DURATION_MS) {
-    return { reason: 'too-large', message: 'Voice notes can be up to 1 minute long' };
+    return { reason: 'too-large', message: VOICE_COPY.tooLong };
   }
   return null;
 }
@@ -185,6 +187,7 @@ export async function uploadAudioToCloudinary(
   const ext = blob.type.includes('webm') ? 'webm'
     : blob.type.includes('mp4') ? 'mp4'
     : blob.type.includes('ogg') ? 'ogg'
+    : blob.type.includes('aac') ? 'aac'
     : 'webm';
   const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type || 'audio/webm' });
 

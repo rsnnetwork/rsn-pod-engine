@@ -2,7 +2,7 @@
 // note or Discard. It says "Not sent" until the server has it, names who it is for, and plays with its length shown.
 // It takes the message box's place, so the only way on is one of its two labelled buttons.
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { Send, Trash2 } from 'lucide-react';
 import VoiceNotePlayer from './VoiceNotePlayer';
 import { VOICE_COPY } from './voice-note';
@@ -13,13 +13,20 @@ interface Props {
   recipientName: string | null;
   /** 0..1 while the note uploads in this box; null otherwise. */
   uploadFraction: number | null;
+  /** Longer than an upload accepts (the recorder's timers were held): said, and Send is off. */
+  tooLong: boolean;
   onSend: () => void;
   onDiscard: () => void;
 }
 
-export default function VoiceDraftCard({ voice, recipientName, uploadFraction, onSend, onDiscard }: Props) {
-  const src = useMemo(() => URL.createObjectURL(voice.blob), [voice.blob]);
-  useEffect(() => () => URL.revokeObjectURL(src), [src]);
+export default function VoiceDraftCard({ voice, recipientName, uploadFraction, tooLong, onSend, onDiscard }: Props) {
+  // Made and revoked by the same effect, so StrictMode's mount, clean-up, mount in development leaves a live address.
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    const url = URL.createObjectURL(voice.blob);
+    setSrc(url);
+    return () => URL.revokeObjectURL(url);
+  }, [voice.blob]);
   const status = voice.sending
     ? `${VOICE_COPY.sending}${uploadFraction !== null ? ` ${Math.round(uploadFraction * 100)}%` : ''}`
     : VOICE_COPY.notSent;
@@ -31,6 +38,9 @@ export default function VoiceDraftCard({ voice, recipientName, uploadFraction, o
         <span className="min-w-0 truncate">Voice note to {recipientName || 'this person'}</span>
       </p>
       <VoiceNotePlayer src={src} durationMs={voice.durationMs} tone="draft" testId="dm-audio-preview" />
+      {tooLong && (
+        <p role="alert" className="mt-2 text-sm font-medium text-rsn-red" data-testid="dm-voice-too-long">{VOICE_COPY.tooLong}</p>
+      )}
       <div className="mt-2 flex items-center justify-end gap-2">
         <button
           type="button"
@@ -45,7 +55,7 @@ export default function VoiceDraftCard({ voice, recipientName, uploadFraction, o
         <button
           type="button"
           onClick={onSend}
-          disabled={voice.sending}
+          disabled={voice.sending || tooLong}
           className="flex min-h-[44px] items-center gap-1.5 rounded-full bg-rsn-red px-4 text-sm font-semibold text-white hover:bg-rsn-red/90 disabled:cursor-not-allowed disabled:opacity-60"
           data-testid="dm-voice-send"
         >

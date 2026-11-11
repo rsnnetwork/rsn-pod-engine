@@ -44,9 +44,8 @@ import type { DmMessage } from './thread/dm-message';
 import { useThreadMessages } from './thread/useThreadMessages';
 import DmComposer from './DmComposer';
 import VoiceNotePlayer from './voice/VoiceNotePlayer';
-import { anyUnsentVoice, moveNewMessageDrafts, threadKeyOf, useComposerDrafts } from './voice/composer-drafts';
+import { dropDraftsTo, moveNewMessageDrafts, threadKeyOf } from './voice/composer-drafts';
 import { VOICE_COPY, knownDurationMs } from './voice/voice-note';
-import { useLeaveGuard } from './voice/useLeaveGuard';
 
 interface ConversationSummary {
   conversationId: string;
@@ -108,11 +107,14 @@ export default function MessagesPage() {
   const { addToast } = useToastStore();
   const myUserId = user?.id;
   const { ask, confirmDialog } = useConfirm();
-  // The message being replied to (30 Oct 2026, L7): "Replying to …" above the box until it is sent or cancelled.
-  const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
-  const clearReply = useCallback(() => setReplyTarget(null), []);
-  // A voice note recorded or kept unsent in any conversation: closing or reloading the tab asks first (11 Nov 2026).
-  useLeaveGuard(useComposerDrafts(anyUnsentVoice));
+  // The message box's key: who is signed in, and this conversation (or the person a first message is for).
+  const threadKey = threadKeyOf(myUserId, { conversationId: activeId, toUserId: composeToUserId });
+  // The message being replied to (30 Oct 2026, L7): "Replying to …" above the box until it is sent or cancelled. It is
+  // kept with the conversation it was chosen in and shown only there, so another conversation never shows it, not
+  // even for the one render an effect resetting it on navigation would take (11 Nov 2026).
+  const [reply, setReply] = useState<{ key: string; target: ReplyTarget } | null>(null);
+  const replyTarget = reply && reply.key === threadKey ? reply.target : null;
+  const clearReply = useCallback(() => setReply(null), []);
   // REASON Phase 2 — "Find a time" panel (availability windows) per thread.
   const [schedulerOpen, setSchedulerOpen] = useState(false);
   // A time on a proposal card asks the panel for that time's confirm card (26 Oct 2026).
@@ -204,8 +206,11 @@ export default function MessagesPage() {
     }
   }, [composeToUserId, inboxData, navigate, myUserId]);
 
-  // A reply belongs to its conversation: opening another one drops it.
-  useEffect(() => { setReplyTarget(null); }, [activeId, composeToUserId]);
+  // Nothing can be sent to a former member: what was written to them is dropped, so no hidden note keeps the leave
+  // prompt up (11 Nov 2026).
+  useEffect(() => {
+    inboxData?.filter((c) => c.otherIsFormerMember).forEach((c) => dropDraftsTo(c.otherUserId));
+  }, [inboxData]);
 
   // Real-time subscriptions: refresh inbox + active thread on incoming events.
   useEffect(() => {
@@ -289,6 +294,7 @@ export default function MessagesPage() {
     if (!(await ask({ title: `Block ${name || 'this person'}?`, body: "They won't be able to message you, and you won't be matched again. You can unblock them from their profile.", confirmLabel: 'Block', tone: 'danger' }))) return;
     try {
       await api.post(`/users/${userId}/block`, {});
+      dropDraftsTo(userId);
       addToast(`You blocked ${name || 'this person'}.`, 'success');
       qc.invalidateQueries({ queryKey: ['dm-conversations'] });
       navigate('/messages');
@@ -458,18 +464,22 @@ export default function MessagesPage() {
 
   // Reply (30 Oct 2026, L7): the strip above the box names the message, and the box takes the focus for the answer.
   const replyTo = (m: DmMessage, fromMe: boolean) => {
-    setReplyTarget({
+    if (!threadKey) return;
+    setReply({ key: threadKey, target: {
       id: m.id,
       senderName: fromMe ? (user?.displayName ?? '') : (headerContext?.otherDisplayName ?? ''),
       content: replyContentOf(m),
       mine: fromMe,
-    });
+    } });
     textareaRef.current?.focus();
   };
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/dm/conversations/${id}`),
-    onSuccess: () => {
+    onSuccess: (_res, id) => {
+      // What was written in it and not sent goes with it.
+      const partner = inboxData?.find((c) => c.conversationId === id)?.otherUserId;
+      if (partner) dropDraftsTo(partner);
       addToast('Conversation deleted', 'info');
       qc.invalidateQueries({ queryKey: ['dm-conversations'] });
       navigate('/messages');
@@ -481,8 +491,6 @@ export default function MessagesPage() {
 
   if (!myUserId) return <PageLoader />;
 
-  // The message box's key: who is signed in, and this conversation (or the person a first message is for).
-  const threadKey = threadKeyOf(myUserId, { conversationId: activeId, toUserId: composeToUserId });
   // The first message to someone made the conversation: its address replaces /messages/new/:userId (Feature 18), and
   // what is still unsent in the box moves with it.
   const firstSent = (conversationId: string) => {

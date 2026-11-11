@@ -7,8 +7,13 @@ export const VOICE_NOTE_MAX_MS = 60_000;
 export const VOICE_NOTE_COUNTDOWN_MS = 10_000;
 /** A take shorter than this holds no speech (a tap on Record then Stop): it is dropped, not kept. */
 export const VOICE_NOTE_MIN_MS = 250;
-/** Discarding a stopped note asks first from this length on; a shorter one is a slip, gone at once. */
-export const DISCARD_CONFIRM_FROM_MS = 3_000;
+/**
+ * The longest note an upload accepts: the cap plus the stop's moment of lag (the tail flush before stop). The cap is
+ * enforced here, on the client, and by this upload check (lib/cloudinary.ts) only: the server cannot measure a voice
+ * note (the length it stores is the one the client reports), so it has no duration check of its own (controller
+ * ruling, 11 Nov 2026).
+ */
+export const VOICE_NOTE_UPLOAD_LIMIT_MS = VOICE_NOTE_MAX_MS + 5_000;
 /** How far past its total a note may seem to play before the player stops it (a browser's last tick lands late). */
 const OVERRUN_GRACE_MS = 1_000;
 
@@ -26,6 +31,7 @@ export const VOICE_COPY = {
   pause: 'Pause voice note',
   discardTitle: 'Discard this voice note?',
   discardBody: 'It has not been sent. Once discarded it cannot be brought back.',
+  tooLong: 'This voice note is longer than 60 seconds. Record a shorter one.',
   unsupported: "This browser can't record voice notes. Try the latest Chrome, Safari, Edge or Firefox.",
   capReached: 'Voice notes can be up to 1 minute long. Yours stopped at 1 minute and has not been sent.',
   sentTo: (name: string | null) => `Voice note sent to ${name || 'them'}.`,
@@ -83,8 +89,12 @@ export function playbackClock(currentSec: number, totalMs: number | null): {
   };
 }
 
-export function needsDiscardConfirm(durationMs: number): boolean {
-  return durationMs >= DISCARD_CONFIRM_FROM_MS;
+/**
+ * Longer than an upload accepts: possible only when the browser held the recorder's timers (an iPhone locked or a tab
+ * in the background mid-recording), so the cap's stop came late. Sending would fail every time: it is said instead.
+ */
+export function isOverCap(durationMs: number): boolean {
+  return durationMs > VOICE_NOTE_UPLOAD_LIMIT_MS;
 }
 
 /** Why the microphone could not be used, in the member's words. */

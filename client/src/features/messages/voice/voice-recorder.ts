@@ -61,6 +61,18 @@ export interface VoiceRecorder {
 const FLUSH_BEFORE_STOP_MS = 120;
 const TICK_MS = 100;
 
+/**
+ * The recording format, the first this browser can record: webm/Opus (Chrome, Edge, Firefox, Safari 18.4+), else mp4/AAC
+ * (Safari on iPhone and Mac before 18.4, which has no webm recorder). '' lets the browser choose, for a browser that
+ * answers no to all of them. The upload and the file name follow whatever the recorder actually made (blob.type).
+ */
+export const RECORDING_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'] as const;
+
+export function pickRecordingType(isTypeSupported: ((type: string) => boolean) | undefined): string {
+  if (!isTypeSupported) return '';
+  return RECORDING_TYPES.find((t) => { try { return isTypeSupported(t); } catch { return false; } }) ?? '';
+}
+
 export function createVoiceRecorder<S extends StreamLike>(deps: RecorderDeps<S>, events: RecorderEvents<S>): VoiceRecorder {
   let state: RecorderState = 'idle';
   let recorder: MediaRecorderLike | null = null;
@@ -71,6 +83,9 @@ export function createVoiceRecorder<S extends StreamLike>(deps: RecorderDeps<S>,
   let cancelled = false;
   let disposed = false;
   let ending: TakeEnd | null = null;
+  // Each Record press is an attempt; Cancel or leaving while the browser still asks for the microphone ends it, and a
+  // permission granted afterwards to an ended attempt only releases the microphone.
+  let attempt = 0;
 
   const setState = (next: RecorderState) => {
     state = next;
@@ -98,17 +113,20 @@ export function createVoiceRecorder<S extends StreamLike>(deps: RecorderDeps<S>,
     if (!deps.supported()) { events.onError(VOICE_COPY.unsupported); return; }
     cancelled = false;
     ending = null;
+    attempt += 1;
+    const mine = attempt;
     setState('starting');
     let granted: S;
     try {
       granted = await deps.getUserMedia();
     } catch (err) {
+      if (mine !== attempt || disposed) return;
       setState('idle');
-      if (!disposed) events.onError(micErrorSentence(err));
+      events.onError(micErrorSentence(err));
       return;
     }
+    if (mine !== attempt || disposed) { granted.getTracks().forEach((t) => t.stop()); return; }
     stream = granted;
-    if (disposed || cancelled) { release(); setState('idle'); return; }
     let r: MediaRecorderLike;
     try {
       r = deps.createRecorder(granted);
@@ -146,6 +164,7 @@ export function createVoiceRecorder<S extends StreamLike>(deps: RecorderDeps<S>,
   };
 
   const cancel = () => {
+    if (state === 'starting') { attempt += 1; setState('idle'); return; }
     cancelled = true;
     if (state !== 'recording' || !recorder) return;
     if (timer !== null) { deps.clearInterval(timer); timer = null; }
@@ -158,7 +177,7 @@ export function createVoiceRecorder<S extends StreamLike>(deps: RecorderDeps<S>,
     cancel,
     dispose: () => {
       if (state === 'recording') end('left');
-      else cancelled = true;
+      else attempt += 1;
       disposed = true;
     },
     state: () => state,

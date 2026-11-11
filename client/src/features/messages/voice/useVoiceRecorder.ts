@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  createVoiceRecorder, type MediaRecorderLike, type RecorderDeps, type RecorderState, type TakeEnd, type VoiceRecorder,
+  createVoiceRecorder, pickRecordingType, type MediaRecorderLike, type RecorderDeps, type RecorderState, type TakeEnd, type VoiceRecorder,
 } from './voice-recorder';
 
 interface Handlers {
@@ -20,7 +20,7 @@ function browserRecorderDeps(): RecorderDeps<MediaStream> {
       && !!navigator.mediaDevices?.getUserMedia,
     getUserMedia: () => navigator.mediaDevices.getUserMedia({ audio: true }),
     createRecorder: (stream) => {
-      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      const mime = pickRecordingType(MediaRecorder.isTypeSupported?.bind(MediaRecorder));
       const r = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       const like: MediaRecorderLike = {
         get state() { return r.state; },

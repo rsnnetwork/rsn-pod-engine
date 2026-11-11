@@ -16,14 +16,15 @@ import { createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as drafts from '../../../../client/src/features/messages/voice/composer-drafts';
 import {
-  claimVoiceSend, discardVoiceDraft, keepVoiceDraft, releaseVoiceSend, setTextDraft, clearTextDraftIf, textDraftOf,
-  threadKeyOf, useComposerDrafts, voiceDraftOf, anyUnsentVoice,
+  claimVoiceSend, discardVoiceDraft, keepVoiceDraft, releaseVoiceSend, setTextDraft, textDraftOf,
+  threadKeyOf, useComposerDrafts, voiceDraftOf, anyUnsentVoice, claimTextSend, endTextSend, textSendingOf, dropVoiceById,
+  dropDraftsTo, clearComposerDrafts, moveNewMessageDrafts,
 } from '../../../../client/src/features/messages/voice/composer-drafts';
 import {
-  VOICE_NOTE_MAX_MS, VOICE_NOTE_COUNTDOWN_MS, DISCARD_CONFIRM_FROM_MS, VOICE_COPY, formatClock, recordingClock,
-  playbackClock, voiceTotalMs, knownDurationMs, needsDiscardConfirm, micErrorSentence,
+  VOICE_NOTE_MAX_MS, VOICE_NOTE_COUNTDOWN_MS, VOICE_NOTE_UPLOAD_LIMIT_MS, VOICE_COPY, formatClock, recordingClock,
+  playbackClock, voiceTotalMs, knownDurationMs, isOverCap, micErrorSentence,
 } from '../../../../client/src/features/messages/voice/voice-note';
-import { createVoiceRecorder, type MediaRecorderLike, type RecorderDeps, type StreamLike } from '../../../../client/src/features/messages/voice/voice-recorder';
+import { createVoiceRecorder, pickRecordingType, type MediaRecorderLike, type RecorderDeps, type StreamLike } from '../../../../client/src/features/messages/voice/voice-recorder';
 import { iconStandIns, loadClientModule, readClientSource } from './load-client-module';
 
 const ME = 'me-0001';
@@ -33,7 +34,7 @@ const KEY_A = threadKeyOf(ME, { conversationId: 'conv-a' })!;
 const KEY_B = threadKeyOf(ME, { conversationId: 'conv-b' })!;
 const blob = (bytes = 10) => new Blob([new Uint8Array(bytes)], { type: 'audio/webm' });
 
-beforeEach(() => useComposerDrafts.setState({ drafts: {} }));
+beforeEach(() => useComposerDrafts.setState({ drafts: {}, epoch: 0 }));
 
 // ─── RSN 01: a draft belongs to one conversation and one recipient ───────────────────────────────────────────────────
 
@@ -68,11 +69,26 @@ describe('drafts are keyed by the member, the conversation and the recipient', (
 
   it('a sent text clears the box only when it still holds what was sent (more typed meanwhile stays)', () => {
     setTextDraft(KEY_A, A, 'hello');
-    clearTextDraftIf(KEY_A, A, 'hello');
+    endTextSend(claimTextSend(KEY_A, A)!, 'hello', true);
     expect(textDraftOf(useComposerDrafts.getState(), KEY_A, A)).toBe('');
+    setTextDraft(KEY_A, A, 'hello');
+    const token = claimTextSend(KEY_A, A)!;
     setTextDraft(KEY_A, A, 'hello again');
-    clearTextDraftIf(KEY_A, A, 'hello');
+    endTextSend(token, 'hello', true);
     expect(textDraftOf(useComposerDrafts.getState(), KEY_A, A)).toBe('hello again');
+  });
+
+  it('a text on its way is sent once: a second press, or the box mounted again mid-send, gets nothing (Minor 8)', () => {
+    setTextDraft(KEY_A, A, 'see you at ten');
+    const first = claimTextSend(KEY_A, A);
+    expect(first).not.toBeNull();
+    expect(claimTextSend(KEY_A, A)).toBeNull();
+    expect(textSendingOf(useComposerDrafts.getState(), KEY_A, A)).toBe(true);
+    expect(textSendingOf(useComposerDrafts.getState(), KEY_B, B)).toBe(false);
+    endTextSend(first!, 'see you at ten', false);
+    expect(textSendingOf(useComposerDrafts.getState(), KEY_A, A)).toBe(false);
+    expect(textDraftOf(useComposerDrafts.getState(), KEY_A, A)).toBe('see you at ten');
+    expect(claimTextSend(KEY_A, A)).not.toBeNull();
   });
 
   it('a first message to someone made the conversation: what is unsent in the new-message box moves there, for that person only', () => {
@@ -98,12 +114,74 @@ describe('drafts are keyed by the member, the conversation and the recipient', (
     expect(voiceDraftOf(useComposerDrafts.getState(), threadKeyOf(ME, { conversationId: 'conv-x' })!, A)).toBeNull();
   });
 
-  it('the page knows when any voice note is unsent, to ask before the tab is closed or reloaded', () => {
-    expect(anyUnsentVoice(useComposerDrafts.getState())).toBe(false);
+  it('the app knows when the signed-in member has a voice note unsent, to ask before the tab is closed or reloaded', () => {
+    expect(anyUnsentVoice(useComposerDrafts.getState(), ME)).toBe(false);
     keepVoiceDraft(KEY_A, A, blob(), 4_000);
-    expect(anyUnsentVoice(useComposerDrafts.getState())).toBe(true);
+    expect(anyUnsentVoice(useComposerDrafts.getState(), ME)).toBe(true);
     discardVoiceDraft(KEY_A);
-    expect(anyUnsentVoice(useComposerDrafts.getState())).toBe(false);
+    expect(anyUnsentVoice(useComposerDrafts.getState(), ME)).toBe(false);
+  });
+
+  it('only the signed-in member\'s notes count; with nobody signed in, none (I1)', () => {
+    keepVoiceDraft(threadKeyOf('someone-else', { conversationId: 'conv-z' })!, A, blob(), 4_000);
+    expect(anyUnsentVoice(useComposerDrafts.getState(), ME)).toBe(false);
+    expect(anyUnsentVoice(useComposerDrafts.getState(), null)).toBe(false);
+    expect(anyUnsentVoice(useComposerDrafts.getState(), 'someone-else')).toBe(true);
+  });
+
+  it('signing out, a blocked session, or another member signing in empties every draft, and boxes opened before write nothing more (I1)', () => {
+    // The real query cache: its member-change moments are where the drafts are emptied.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- loaded here, after the store, as the app loads it
+    const cache = require('../../../../client/src/lib/queryClient') as typeof import('../../../../client/src/lib/queryClient');
+    keepVoiceDraft(KEY_A, A, blob(), 4_000);
+    setTextDraft(KEY_B, B, 'private words');
+    cache.clearCache();
+    expect(useComposerDrafts.getState().drafts).toEqual({});
+    expect(useComposerDrafts.getState().epoch).toBe(1);
+    keepVoiceDraft(KEY_A, A, blob(), 4_000);
+    cache.setCacheOwner('first-member');
+    cache.setCacheOwner('first-member');
+    expect(voiceDraftOf(useComposerDrafts.getState(), KEY_A, A)).not.toBeNull();
+    cache.setCacheOwner('second-member');
+    expect(useComposerDrafts.getState().drafts).toEqual({});
+    clearComposerDrafts();
+    expect(useComposerDrafts.getState().epoch).toBe(3);
+  });
+
+  it('nothing written to someone who can no longer get messages (blocked, conversation deleted, former member) is kept (Minor 2)', () => {
+    keepVoiceDraft(KEY_A, A, blob(), 4_000);
+    setTextDraft(threadKeyOf(ME, { toUserId: A })!, A, 'hello');
+    keepVoiceDraft(KEY_B, B, blob(), 4_000);
+    dropDraftsTo(A);
+    const state = useComposerDrafts.getState();
+    expect(voiceDraftOf(state, KEY_A, A)).toBeNull();
+    expect(textDraftOf(state, threadKeyOf(ME, { toUserId: A })!, A)).toBe('');
+    expect(voiceDraftOf(state, KEY_B, B)).not.toBeNull();
+  });
+
+  it('a note sending from a new-message box that becomes the conversation mid-upload is cleared, or released, where it is now (Minor 1)', () => {
+    const fresh = threadKeyOf(ME, { toUserId: A })!;
+    keepVoiceDraft(fresh, A, blob(), 6_000);
+    const sending = claimVoiceSend(fresh, A)!;
+    moveNewMessageDrafts(ME, A, 'conv-a');
+    expect(voiceDraftOf(useComposerDrafts.getState(), KEY_A, A)?.sending).toBe(true);
+    releaseVoiceSend(sending.id);
+    expect(voiceDraftOf(useComposerDrafts.getState(), KEY_A, A)?.sending).toBe(false);
+    const again = claimVoiceSend(KEY_A, A)!;
+    dropVoiceById(again.id);
+    expect(voiceDraftOf(useComposerDrafts.getState(), KEY_A, A)).toBeNull();
+    expect(anyUnsentVoice(useComposerDrafts.getState(), ME)).toBe(false);
+  });
+
+  it('a text sending from a new-message box that becomes the conversation mid-send is ended where it is now (Minor 1)', () => {
+    const fresh = threadKeyOf(ME, { toUserId: A })!;
+    setTextDraft(fresh, A, 'first words');
+    const token = claimTextSend(fresh, A)!;
+    moveNewMessageDrafts(ME, A, 'conv-a');
+    expect(textSendingOf(useComposerDrafts.getState(), KEY_A, A)).toBe(true);
+    endTextSend(token, 'first words', true);
+    expect(textSendingOf(useComposerDrafts.getState(), KEY_A, A)).toBe(false);
+    expect(textDraftOf(useComposerDrafts.getState(), KEY_A, A)).toBe('');
   });
 });
 
@@ -119,8 +197,8 @@ describe('one send per note, however many taps (RSN 05, double click)', () => {
 
   it('a failed send gives the note back, unsent, for another try; a sent one is gone', () => {
     keepVoiceDraft(KEY_A, A, blob(), 5_000);
-    claimVoiceSend(KEY_A, A);
-    releaseVoiceSend(KEY_A);
+    const claimed = claimVoiceSend(KEY_A, A)!;
+    releaseVoiceSend(claimed.id);
     expect(voiceDraftOf(useComposerDrafts.getState(), KEY_A, A)?.sending).toBe(false);
     expect(claimVoiceSend(KEY_A, A)).not.toBeNull();
     discardVoiceDraft(KEY_A);
@@ -155,9 +233,19 @@ describe('the recording cap is one constant: 60 seconds, a countdown in the last
 
   it('the upload check allows the stop\'s moment of lag past the cap and no more', () => {
     const lib = readClientSource('lib/cloudinary.ts');
-    expect(lib).toMatch(/import \{ VOICE_NOTE_MAX_MS \} from '@\/features\/messages\/voice\/voice-note';/);
-    expect(lib).toMatch(/export const MAX_AUDIO_DURATION_MS = VOICE_NOTE_MAX_MS \+ 5_000;/);
-    expect(lib).toContain("'Voice notes can be up to 1 minute long'");
+    expect(VOICE_NOTE_UPLOAD_LIMIT_MS).toBe(65_000);
+    expect(lib).toMatch(/import \{ VOICE_COPY, VOICE_NOTE_UPLOAD_LIMIT_MS \} from '@\/features\/messages\/voice\/voice-note';/);
+    expect(lib).toMatch(/export const MAX_AUDIO_DURATION_MS = VOICE_NOTE_UPLOAD_LIMIT_MS;/);
+    expect(lib).toMatch(/message: VOICE_COPY\.tooLong/);
+    // The server has no duration check of its own (controller ruling): said where the cap is enforced.
+    expect(lib).toMatch(/The server has no duration check of its own/);
+    expect(readClientSource('features/messages/voice/voice-note.ts')).toMatch(/so it has no duration check of its own/);
+  });
+
+  it('a note longer than an upload accepts (timers held on a locked phone) says so, never "try again" (Minor 7)', () => {
+    expect(VOICE_COPY.tooLong).toBe('This voice note is longer than 60 seconds. Record a shorter one.');
+    expect(isOverCap(65_000)).toBe(false);
+    expect(isOverCap(65_001)).toBe(true);
   });
 });
 
@@ -203,10 +291,11 @@ describe('words', () => {
     expect(VOICE_COPY.discard).toBe('Discard');
   });
 
-  it('discarding asks first only for a note of 3 seconds or more', () => {
-    expect(DISCARD_CONFIRM_FROM_MS).toBe(3_000);
-    expect(needsDiscardConfirm(2_999)).toBe(false);
-    expect(needsDiscardConfirm(3_000)).toBe(true);
+  it('discarding always asks first, whatever the length (CLAUDE.md §12, controller ruling)', () => {
+    const box = readClientSource('features/messages/DmComposer.tsx');
+    const discard = box.slice(box.indexOf('const discardVoice = async'), box.indexOf('const pickImage'));
+    expect(discard).toMatch(/const yes = await ask\(\{ title: VOICE_COPY\.discardTitle/);
+    expect(discard).not.toMatch(/durationMs/);
   });
 
   it('a microphone problem is said in plain words, never an error name', () => {
@@ -510,8 +599,10 @@ describe('the page mounts one box per conversation', () => {
   });
 
   it('a voice note sent is cleared from its own conversation, by the key it was sent from, and says who it went to', () => {
-    expect(box).toMatch(/discardVoiceDraft\(vars\.threadKey\)/);
-    expect(box).toMatch(/releaseVoiceSend\(vars\.threadKey\)/);
+    expect(box).toMatch(/dropVoiceById\(vars\.voiceId\)/);
+    expect(box).toMatch(/releaseVoiceSend\(vars\.voiceId\)/);
+    expect(box).toMatch(/endTextSend\(vars\.textToken, vars\.content, true\)/);
+    expect(box).toMatch(/endTextSend\(vars\.textToken, vars\.content, false\)/);
     expect(box).toMatch(/VOICE_COPY\.sentTo\(/);
   });
 
@@ -521,7 +612,9 @@ describe('the page mounts one box per conversation', () => {
   });
 
   it('closing or reloading the tab with a voice note unsent or recording asks first', () => {
-    expect(page).toMatch(/useLeaveGuard\(useComposerDrafts\(anyUnsentVoice\)\)/);
+    // In the app shell, so a reload from any page asks while the member has a note unsent (Minor 3).
+    expect(readClientSource('features/reason/shell/ReasonShell.tsx')).toMatch(/useUnsentVoiceGuard\(user\?\.id\);/);
+    expect(page).not.toMatch(/useLeaveGuard/);
     expect(box).toMatch(/useLeaveGuard\(recorder\.state !== 'idle'\)/);
     const guard = readClientSource('features/messages/voice/useLeaveGuard.ts');
     expect(guard).toMatch(/addEventListener\('beforeunload'/);
@@ -542,5 +635,104 @@ describe('the page mounts one box per conversation', () => {
 
   it('the chat panel in the call room is keyed by its conversation too', () => {
     expect(readClientSource('features/messages/MeetPage.tsx')).toMatch(/<CallChatPanel\s+key=\{conversationId\}/);
+  });
+});
+
+describe('fix round 1 (11 Nov 2026)', () => {
+  const page = readClientSource('features/messages/MessagesPage.tsx');
+  const box = readClientSource('features/messages/DmComposer.tsx');
+
+  it('Cancel while the browser still asks for the microphone ends the attempt at once; a later grant only releases the mic (Minor 5)', async () => {
+    let grant: ((s: StreamLike) => void) | null = null;
+    let stopped = 0;
+    let made = 0;
+    const states: string[] = [];
+    const rec = createVoiceRecorder({
+      supported: () => true,
+      getUserMedia: () => new Promise<StreamLike>((resolve) => { grant = resolve; }),
+      createRecorder: () => { made += 1; return new FakeRecorder(); },
+      now: () => 0, setInterval: () => 1, clearInterval: () => {}, setTimeout: () => {},
+    }, { onState: (x) => states.push(x), onTick: () => {}, onRecorded: () => {}, onError: () => {} });
+    const started = rec.start();
+    expect(rec.state()).toBe('starting');
+    rec.cancel();
+    expect(rec.state()).toBe('idle');
+    expect(states).toEqual(['starting', 'idle']);
+    grant!({ getTracks: () => [{ stop: () => { stopped += 1; } }] });
+    await started;
+    expect(made).toBe(0);
+    expect(stopped).toBe(1);
+    expect(rec.state()).toBe('idle');
+  });
+
+  it('a Record pressed again after a cancelled ask records once, with the second grant', async () => {
+    const grants: Array<(s: StreamLike) => void> = [];
+    let made = 0;
+    const rec = createVoiceRecorder({
+      supported: () => true,
+      getUserMedia: () => new Promise<StreamLike>((resolve) => { grants.push(resolve); }),
+      createRecorder: () => { made += 1; return new FakeRecorder(); },
+      now: () => 0, setInterval: () => 1, clearInterval: () => {}, setTimeout: () => {},
+    }, { onState: () => {}, onTick: () => {}, onRecorded: () => {}, onError: () => {} });
+    const first = rec.start();
+    rec.cancel();
+    const second = rec.start();
+    const mic = () => ({ getTracks: () => [{ stop: () => {} }] });
+    grants[0](mic());
+    grants[1](mic());
+    await Promise.all([first, second]);
+    expect(made).toBe(1);
+    expect(rec.state()).toBe('recording');
+  });
+
+  it('iPhone: the recorder picks a format the browser can record, mp4 where webm is not supported', () => {
+    expect(pickRecordingType((t) => t.startsWith('audio/webm'))).toBe('audio/webm;codecs=opus');
+    expect(pickRecordingType((t) => t === 'audio/mp4')).toBe('audio/mp4');
+    expect(pickRecordingType(() => false)).toBe('');
+    expect(pickRecordingType(undefined)).toBe('');
+    expect(pickRecordingType(() => { throw new Error('old Safari'); })).toBe('');
+    expect(readClientSource('features/messages/voice/useVoiceRecorder.ts')).toMatch(/pickRecordingType\(MediaRecorder\.isTypeSupported/);
+    expect(readClientSource('lib/cloudinary.ts')).toMatch(/blob\.type\.includes\('mp4'\) \? 'mp4'/);
+  });
+
+  it('the reply quote is kept with its conversation and shown only there: no effect resets it a render late (Minor 6)', () => {
+    expect(page).toMatch(/const \[reply, setReply\] = useState<\{ key: string; target: ReplyTarget \} \| null>\(null\);/);
+    expect(page).toMatch(/const replyTarget = reply && reply\.key === threadKey \? reply\.target : null;/);
+    expect(page).not.toMatch(/setReplyTarget\(null\); \}, \[activeId/);
+  });
+
+  it('blocking, deleting the conversation, or the other person leaving REASON drops what was written to them (Minor 2)', () => {
+    expect(page).toMatch(/await api\.post\(`\/users\/\$\{userId\}\/block`, \{\}\);\s*dropDraftsTo\(userId\);/);
+    expect(page).toMatch(/if \(partner\) dropDraftsTo\(partner\);/);
+    expect(page).toMatch(/inboxData\?\.filter\(\(c\) => c\.otherIsFormerMember\)\.forEach\(\(c\) => dropDraftsTo\(c\.otherUserId\)\)/);
+    expect(readClientSource('features/profile/PublicProfilePage.tsx')).toMatch(/if \(userId\) dropDraftsTo\(userId\);/);
+    expect(readClientSource('components/ReportUserModal.tsx')).toMatch(/dropDraftsTo\(reportedId\);/);
+  });
+
+  it('a box opened for one member writes no take after the member changed; text and voice sends are claimed in the store', () => {
+    expect(box).toMatch(/if \(!sameMember\(\)\) return;\s*keepVoiceDraft/);
+    expect(box).toMatch(/const textToken = claimTextSend\(threadKey, toUserId\);\s*if \(textToken === null\) return;/);
+    expect(box).toMatch(/busy=\{send\.isPending \|\| textSending\}/);
+    expect(box).toMatch(/if \(voice && isOverCap\(voice\.durationMs\)\) \{ addToast\(VOICE_COPY\.tooLong, 'error'\); return; \}/);
+  });
+
+  it('an over-cap note says why on its card and its Send is off', () => {
+    const fresh = threadKeyOf(ME, { conversationId: 'conv-long' })!;
+    keepVoiceDraft(fresh, A, blob(), 80_000);
+    const html = renderToStaticMarkup(createElement(composer(), {
+      myUserId: ME, threadKey: fresh, conversationId: 'conv-long', toUserId: A, recipientName: 'Ana',
+      replyTarget: null, onReplyDone: () => {}, boxRef: { current: null }, onBoxFocus: () => {},
+    }));
+    expect(html).toContain('This voice note is longer than 60 seconds. Record a shorter one.');
+    expect(buttonTag(html, 'dm-voice-send')).toContain('disabled=""');
+  });
+
+  it('while a text from this conversation is on its way, its Send is off in a box mounted again', () => {
+    setTextDraft(KEY_A, A, 'on its way');
+    claimTextSend(KEY_A, A);
+    const html = draw(KEY_A, A);
+    expect(html).toMatch(/<button[^>]*aria-label="Send message"[^>]*>|<button[^>]*disabled=""[^>]*aria-label="Send message"/);
+    const send = html.match(/<button[^>]*aria-label="Send message"[^>]*>/)?.[0] ?? '';
+    expect(send).toContain('disabled=""');
   });
 });

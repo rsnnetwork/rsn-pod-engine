@@ -15,13 +15,26 @@ export const queryClient = new QueryClient({
 // Whose data the cache holds. null: nobody is signed in, or it was just emptied.
 let cacheOwner: string | null = null;
 
+// Client-only state that belongs to one member too (unsent message drafts, 11 Nov 2026) is emptied at the same moments.
+const memberChangeListeners = new Set<() => void>();
+
+/** Run `forget` whenever the signed-in member changes or signs out, as the query cache is emptied. */
+export function onMemberChange(forget: () => void): void {
+  memberChangeListeners.add(forget);
+}
+
+const memberChanged = () => { memberChangeListeners.forEach((forget) => forget()); };
+
 /**
  * A member's session has loaded. The same member (a token refresh, a session re-check) changes nothing. A
  * different one empties the cache first, so no page can read what the last member left. Requests still on
  * their way for the last member are cancelled with it, so a late answer cannot land in the new cache.
  */
 export function setCacheOwner(memberId: string): void {
-  if (cacheOwner !== null && cacheOwner !== memberId) queryClient.clear();
+  if (cacheOwner !== null && cacheOwner !== memberId) {
+    queryClient.clear();
+    memberChanged();
+  }
   cacheOwner = memberId;
 }
 
@@ -29,4 +42,5 @@ export function setCacheOwner(memberId: string): void {
 export function clearCache(): void {
   queryClient.clear();
   cacheOwner = null;
+  memberChanged();
 }
