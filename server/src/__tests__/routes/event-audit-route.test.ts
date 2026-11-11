@@ -89,6 +89,20 @@ describe('GET /sessions/:id/audit', () => {
     expect(gone.status).toBe(404);
   });
 
+  it('answers a report download row with the part downloaded (reportSection), as the service gave it', async () => {
+    mockCanAct.mockResolvedValue({ allowed: true, effectiveRole: 'event_host' });
+    const entry = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-000000000001', at: '2026-11-11T09:00:00.000Z',
+      actor: { id: '22222222-2222-4222-8222-222222222222', displayName: 'Hana Host' }, automatic: false,
+      action: 'report.downloaded', round: null, scheduleVersion: null, subjects: [], reason: null, reportSection: 'mutual-matches',
+    };
+    mockList.mockResolvedValue({ entries: [entry], nextCursor: null });
+    const res = await request(app).get(`/sessions/${SESSION}/audit`).set('Authorization', `Bearer ${token('member')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.entries[0]).toEqual(entry);
+    expect(res.body.data.entries[0].reportSection).toBe('mutual-matches');
+  });
+
   it('passes the cursor and limit on', async () => {
     mockCanAct.mockResolvedValue({ allowed: true, effectiveRole: 'event_host' });
     const cursor = '2026-11-10T12:00:59.000000Z|aaaaaaaa-aaaa-4aaa-8aaa-000000000001';
