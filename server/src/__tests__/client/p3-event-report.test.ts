@@ -18,7 +18,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { EventReport, EventReportMeeting, EventReportPerson, EventReportSummary } from '@rsn/shared';
 import { historySentence, type HistoryEntry } from '../../../../client/src/features/sessions/history/history-text';
 import {
-  REPORT_COPY, averageText, eventAverageText, filterCounts, filterPeople, mutualLine, nameLookup, personCounts, presenceLine,
+  REPORT_COPY, averageText, eventAverageText, filterCounts, filterPeople, mutualLine, nameLookup, organiserRows, personCounts, presenceLine,
   ratingLines, reportFileName, reportTiles, roomLine, roundCards, downloadFailedSentence,
 } from '../../../../client/src/features/sessions/report/report-text';
 import { iconStandIns, loadClientModule, readClientSource } from './load-client-module';
@@ -301,6 +301,43 @@ describe('what the report says', () => {
     const people = full().people;
     expect(filterCounts(people)).toEqual({ all: 5, came: 4, left_early: 1, could_not_join: 0, no_show: 1, removed: 0 });
     expect(filterPeople(people, 'no_show').map((p) => p.displayName)).toEqual(['Nia']);
+  });
+
+  it('the host and co-hosts are never under an outcome chip nor in its number; All lists them apart', () => {
+    // The preview smoke's event: the host never joined (outcome no_show), A and B registered and did not come.
+    const people = [
+      person('h', 'Hana Host', { role: 'host', outcome: 'no_show' }),
+      person('c', 'Cora Cohost', { role: 'co_host', outcome: 'no_show' }),
+      person('a', 'Ana'),
+      person('b', 'Ben'),
+    ];
+    expect(filterCounts(people)).toEqual({ all: 2, came: 0, left_early: 0, could_not_join: 0, no_show: 2, removed: 0 });
+    expect(filterPeople(people, 'no_show').map((p) => p.userId)).toEqual(['a', 'b']);
+    expect(filterPeople(people, 'all').map((p) => p.userId)).toEqual(['a', 'b']);
+    // An organiser who stayed is not under Came either.
+    const stayed = [
+      person('h', 'Hana Host', { role: 'host', outcome: 'stayed', joinedAt: '2026-12-01T17:00:00.000Z' }),
+      person('a', 'Ana', { outcome: 'stayed', joinedAt: '2026-12-01T17:01:00.000Z' }),
+    ];
+    expect(filterCounts(stayed).came).toBe(1);
+    expect(organiserRows(people).map((p) => p.userId)).toEqual(['h', 'c']);
+
+    const r = report({ summary: summary({ registered: 2, noShows: 2 }), people });
+    const sectionsMod = loadClientModule(`${REPORT_DIR}/ReportSections.tsx`, { 'lucide-react': iconStandIns });
+    const html = renderToStaticMarkup(createElement(sectionsMod.AttendanceSection as never, { report: r }));
+    // The chips' numbers agree with the tiles (Registered 2, Didn't come 2).
+    expect(html).toMatch(/All <span[^>]*>2<\/span>/);
+    expect(html).toMatch(/Didn&#x27;t come <span[^>]*>2<\/span>/);
+    expect(html.match(/data-testid="report-person"/g)).toHaveLength(2);
+    // Under All, the organisers in their own group, with their badge and no outcome.
+    expect(html).toContain('Running the event');
+    const group = html.slice(html.indexOf('data-testid="report-organisers"'));
+    expect(group.match(/data-testid="report-organiser"/g)).toHaveLength(2);
+    expect(group).toContain('Host');
+    expect(group).toContain('Co-host');
+    expect(group).not.toContain('Didn&#x27;t come');
+    // The group is drawn only under All.
+    expect(read(`${REPORT_DIR}/ReportSections.tsx`)).toContain("const organisers = filter === 'all' ? organiserRows(report.people) : [];");
   });
 
   it('a person: times on the event\'s clock with the zone, counts only', () => {

@@ -2,20 +2,42 @@
 // Stacked cards, never a wide table, so a 360px phone reads every row without sideways scrolling. Counts and names
 // only: the report carries no score a named person gave or received, so none can be drawn here.
 import { useState } from 'react';
-import type { EventReport } from '@rsn/shared';
+import type { EventReport, EventReportPerson } from '@rsn/shared';
 import { cn } from '@/lib/utils';
 import { EmptyRow, OrganiserCard } from '../organiser-ui';
 import {
-  ATTENDANCE_FILTERS, OUTCOME_WORDS, REPORT_COPY, filterCounts, filterPeople, mutualLine, nameLookup, personBadges,
-  personCounts, presenceLine, roundCards, type AttendanceFilter,
+  ATTENDANCE_FILTERS, OUTCOME_WORDS, REPORT_COPY, filterCounts, filterPeople, mutualLine, nameLookup, organiserRows,
+  personBadges, personCounts, presenceLine, roundCards, type AttendanceFilter,
 } from './report-text';
 
 const CHIP = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-4 text-sm font-medium transition-colors';
+
+/** One person as a stacked card. An organiser's card has no outcome or counts: they ran the event, not attended it. */
+function PersonRow({ person: p, zone, testId }: { person: EventReportPerson; zone: string; testId: string }) {
+  const presence = presenceLine(p, zone);
+  const organiser = p.role !== 'participant';
+  return (
+    <li data-testid={testId} className="min-w-0 rounded-xl border border-gray-200 px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="min-w-0 font-medium text-[#1a1a2e] [overflow-wrap:anywhere]">{p.displayName}</span>
+        {personBadges(p).map((b) => (
+          <span key={b} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{b}</span>
+        ))}
+      </div>
+      {p.email && <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">{p.email}</p>}
+      {!organiser && <p className="mt-1 text-sm text-gray-700">{OUTCOME_WORDS[p.outcome]}</p>}
+      {presence && <p className="text-xs text-gray-500">{presence}</p>}
+      {p.groups.length > 0 && <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">{p.groups.join(', ')}</p>}
+      {!organiser && <p className="text-xs text-gray-500">{personCounts(p)}</p>}
+    </li>
+  );
+}
 
 export function AttendanceSection({ report }: { report: EventReport }) {
   const [filter, setFilter] = useState<AttendanceFilter>('all');
   const counts = filterCounts(report.people);
   const shown = filterPeople(report.people, filter);
+  const organisers = filter === 'all' ? organiserRows(report.people) : [];
   const zone = report.event.timezone;
 
   // Nobody registered: the sentence alone, no filter and no list (the host's own row is not an attendance).
@@ -42,27 +64,18 @@ export function AttendanceSection({ report }: { report: EventReport }) {
           </button>
         ))}
       </div>
-      {shown.length === 0 && report.people.length > 0 && <EmptyRow>{REPORT_COPY.emptyFilter}</EmptyRow>}
+      {shown.length === 0 && <EmptyRow>{REPORT_COPY.emptyFilter}</EmptyRow>}
       <ul className="space-y-2">
-        {shown.map((p) => {
-          const presence = presenceLine(p, zone);
-          return (
-            <li key={p.userId} data-testid="report-person" className="min-w-0 rounded-xl border border-gray-200 px-3 py-2.5">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span className="min-w-0 font-medium text-[#1a1a2e] [overflow-wrap:anywhere]">{p.displayName}</span>
-                {personBadges(p).map((b) => (
-                  <span key={b} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{b}</span>
-                ))}
-              </div>
-              {p.email && <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">{p.email}</p>}
-              <p className="mt-1 text-sm text-gray-700">{OUTCOME_WORDS[p.outcome]}</p>
-              {presence && <p className="text-xs text-gray-500">{presence}</p>}
-              {p.groups.length > 0 && <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">{p.groups.join(', ')}</p>}
-              {p.role === 'participant' && <p className="text-xs text-gray-500">{personCounts(p)}</p>}
-            </li>
-          );
-        })}
+        {shown.map((p) => <PersonRow key={p.userId} person={p} zone={zone} testId="report-person" />)}
       </ul>
+      {organisers.length > 0 && (
+        <div data-testid="report-organisers" className="mt-4">
+          <h3 className="mb-2 text-sm font-semibold text-gray-600">{REPORT_COPY.runningTheEvent}</h3>
+          <ul className="space-y-2">
+            {organisers.map((p) => <PersonRow key={p.userId} person={p} zone={zone} testId="report-organiser" />)}
+          </ul>
+        </div>
+      )}
     </OrganiserCard>
   );
 }

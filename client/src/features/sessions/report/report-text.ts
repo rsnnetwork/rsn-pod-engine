@@ -28,6 +28,7 @@ export const REPORT_COPY = {
   emptyMeetings: 'No meetings took place.',
   emptyMutual: 'No mutual matches yet.',
   emptyFilter: 'Nobody here.',
+  runningTheEvent: 'Running the event',
   withheld: 'Too few ratings to show',
   noRatings: 'No ratings yet',
   attendance: 'Attendance',
@@ -109,8 +110,10 @@ export const ROLE_WORDS: Record<EventReportPerson['role'], string | null> = { ho
 export type AttendanceFilter = 'all' | 'came' | 'left_early' | 'could_not_join' | 'no_show' | 'removed';
 
 /**
- * The chips over the list. "Came" is everyone who came at all (the "Came" tile: stayed, left early, or came but met
- * nobody); the next two narrow it. The rest are one outcome each.
+ * The chips over the list. They count and list the event's places only, as the tiles do: the host and co-hosts are
+ * not registrants ("Registered" leaves them out), so they are never under a chip nor in its number; the "All" view
+ * lists them apart, under "Running the event". "Came" is everyone who came at all (the "Came" tile: stayed, left
+ * early, or came but met nobody); the next two narrow it. The rest are one outcome each.
  */
 export const ATTENDANCE_FILTERS: ReadonlyArray<{ key: AttendanceFilter; label: string }> = [
   { key: 'all', label: 'All' },
@@ -121,7 +124,11 @@ export const ATTENDANCE_FILTERS: ReadonlyArray<{ key: AttendanceFilter; label: s
   { key: 'removed', label: 'Removed' },
 ];
 
+/** The event's host or a co-host: listed apart, never under an outcome chip. */
+export const runsTheEvent = (p: EventReportPerson) => p.role === 'host' || p.role === 'co_host';
+
 function inFilter(p: EventReportPerson, filter: AttendanceFilter): boolean {
+  if (runsTheEvent(p)) return false;
   if (filter === 'all') return true;
   if (filter === 'came') return p.outcome !== 'removed' && p.outcome !== 'no_show';
   return p.outcome === filter;
@@ -129,6 +136,11 @@ function inFilter(p: EventReportPerson, filter: AttendanceFilter): boolean {
 
 export function filterPeople(people: EventReportPerson[], filter: AttendanceFilter): EventReportPerson[] {
   return people.filter((p) => inFilter(p, filter));
+}
+
+/** The host and co-hosts, for the "Running the event" group under All. */
+export function organiserRows(people: EventReportPerson[]): EventReportPerson[] {
+  return people.filter(runsTheEvent);
 }
 
 export function filterCounts(people: EventReportPerson[]): Record<AttendanceFilter, number> {
