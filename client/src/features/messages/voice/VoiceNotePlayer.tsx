@@ -1,12 +1,12 @@
 // One voice note, played (Shirley Palmer, 11 Nov 2026, RSN 06): a 44px play / pause, a progress bar, and
 // "elapsed / total", the same for a note not yet sent, one sent and one received. The browser's own <audio controls>
 // is gone: on a webm fresh from MediaRecorder it knew no length, so its clock ran on past the end. The total here is
-// the file's own length when the browser knows it, else the length recorded with the note (voiceTotalMs), and the
-// clock and the bar are held at it (playbackClock).
+// the length known with the note (the recorder's measure, or the length stored with a sent one), the file's own only
+// when none is known (voiceTotalMs), and the clock and the bar are held at it (playbackClock).
 
 import { useRef, useState, type ReactNode } from 'react';
 import { Mic, Pause, Play } from 'lucide-react';
-import { VOICE_COPY, playbackClock, voiceTotalMs } from './voice-note';
+import { LENGTH_PROBE_SEC, VOICE_COPY, needsLengthProbe, playbackClock, voiceTotalMs } from './voice-note';
 
 interface Props {
   /** null until the address is ready (a draft's is made after its first render): the button waits, nothing loads. */
@@ -24,6 +24,8 @@ export default function VoiceNotePlayer({ src, durationMs, tone, testId, status 
   const [playing, setPlaying] = useState(false);
   const [currentSec, setCurrentSec] = useState(0);
   const [fileSec, setFileSec] = useState<number | null>(null);
+  // While the browser is made to work out a length it did not know (needsLengthProbe), its jump to the end is not shown.
+  const probing = useRef(false);
   const total = voiceTotalMs(fileSec, durationMs);
   const clock = playbackClock(currentSec, total);
 
@@ -35,9 +37,22 @@ export default function VoiceNotePlayer({ src, durationMs, tone, testId, status 
     a.play().catch(() => setPlaying(false));
   };
 
+  const onLength = (a: HTMLAudioElement) => {
+    if (!probing.current && needsLengthProbe(a.duration, durationMs)) {
+      probing.current = true;
+      a.currentTime = LENGTH_PROBE_SEC;
+      return;
+    }
+    if (probing.current && Number.isFinite(a.duration)) {
+      probing.current = false;
+      a.currentTime = 0;
+    }
+    setFileSec(a.duration);
+  };
+
   const onTime = () => {
     const a = audioRef.current;
-    if (!a) return;
+    if (!a || probing.current) return;
     const next = playbackClock(a.currentTime, total);
     if (next.overran) { a.pause(); setCurrentSec(total! / 1000); return; }
     setCurrentSec(a.currentTime);
@@ -77,8 +92,8 @@ export default function VoiceNotePlayer({ src, durationMs, tone, testId, status 
         src={src}
         preload="metadata"
         className="hidden"
-        onLoadedMetadata={(e) => setFileSec(e.currentTarget.duration)}
-        onDurationChange={(e) => setFileSec(e.currentTarget.duration)}
+        onLoadedMetadata={(e) => onLength(e.currentTarget)}
+        onDurationChange={(e) => onLength(e.currentTarget)}
         onTimeUpdate={onTime}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}

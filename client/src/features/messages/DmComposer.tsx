@@ -106,7 +106,9 @@ export default function DmComposer({
         setUploadFraction(0);
         const result = await uploadAudioToCloudinary(vars.audio.blob, vars.audio.durationMs, setUploadFraction, signal);
         setUploadFraction(null);
-        return { url: result.url, type: 'audio', meta: result };
+        // Stored with the message: the recorder's own measure is the length every player shows (RSN 06). A fresh webm
+        // carries none, and Cloudinary's can be missing.
+        return { url: result.url, type: 'audio', meta: { ...result, durationMs: Math.round(vars.audio.durationMs) } };
       }
       return null;
     },

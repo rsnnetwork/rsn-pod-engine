@@ -9,9 +9,9 @@ export const VOICE_NOTE_COUNTDOWN_MS = 10_000;
 export const VOICE_NOTE_MIN_MS = 250;
 /**
  * The longest note an upload accepts: the cap plus the stop's moment of lag (the tail flush before stop). The cap is
- * enforced here, on the client, and by this upload check (lib/cloudinary.ts) only: the server cannot measure a voice
- * note (the length it stores is the one the client reports), so it has no duration check of its own (controller
- * ruling, 11 Nov 2026).
+ * enforced by the recorder and by this upload check (lib/cloudinary.ts). The server cannot measure a voice note: it
+ * checks only the length the client reports with it (durationMs / durationSec, at most 65 s, routes/dm.ts), which is
+ * also the length every player shows (controller rulings, 11 Nov 2026).
  */
 export const VOICE_NOTE_UPLOAD_LIMIT_MS = VOICE_NOTE_MAX_MS + 5_000;
 /** How far past its total a note may seem to play before the player stops it (a browser's last tick lands late). */
@@ -57,21 +57,37 @@ export function recordingClock(elapsedMs: number): { label: string; secondsLeft:
   };
 }
 
+const positive = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0;
+
 /**
- * A note's total length: the file's own when the browser knows it, else the length recorded with it. A webm fresh from
- * MediaRecorder carries no length, so Chrome says Infinity for it; that is what made the old player's clock run on.
+ * A note's total length: the length known with it (the recorder's measure for an unsent note, the length stored with a
+ * sent or received one), and only when there is none, the file's own. Never the browser's first: a webm fresh from
+ * MediaRecorder carries no length, and Chrome reports Infinity, NaN or a wrong small number for it until it has played
+ * it through (prod smoke, 11 Nov 2026: a 2.5 s note showed "0:00 / 0:00").
  */
 export function voiceTotalMs(elementDurationSec: number | null | undefined, knownMs: number | null | undefined): number | null {
-  if (typeof elementDurationSec === 'number' && Number.isFinite(elementDurationSec) && elementDurationSec > 0) {
-    return Math.round(elementDurationSec * 1000);
-  }
-  return typeof knownMs === 'number' && Number.isFinite(knownMs) && knownMs > 0 ? knownMs : null;
+  if (positive(knownMs)) return Math.round(knownMs);
+  return positive(elementDurationSec) ? Math.round(elementDurationSec * 1000) : null;
 }
 
-/** The length a sent note was stored with (Cloudinary's, in seconds), or null. */
-export function knownDurationMs(meta: { durationSec?: number } | null | undefined): number | null {
+/**
+ * The length a sent note was stored with: the recorder's own measure (durationMs, since 11 Nov 2026), else Cloudinary's
+ * (durationSec, every note before then), else null.
+ */
+export function knownDurationMs(meta: { durationMs?: number; durationSec?: number } | null | undefined): number | null {
+  if (positive(meta?.durationMs)) return Math.round(meta!.durationMs!);
   const sec = meta?.durationSec;
-  return typeof sec === 'number' && Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : null;
+  return positive(sec) ? Math.round(sec * 1000) : null;
+}
+
+/**
+ * A file whose length the browser does not know yet (Infinity or NaN) and none known with it: the player seeks far past
+ * the end once, which makes the browser work the length out, then goes back to the start.
+ */
+export const LENGTH_PROBE_SEC = 1e101;
+
+export function needsLengthProbe(elementDurationSec: number, knownMs: number | null): boolean {
+  return !positive(knownMs) && !Number.isFinite(elementDurationSec);
 }
 
 /** The player: elapsed / total, progress 0..1, both held at the total; overran says the player should stop it there. */

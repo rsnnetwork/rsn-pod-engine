@@ -23,6 +23,15 @@ const router = Router();
 // Feature 19 (13 May spec) — Cloudinary image attachment. Content becomes
 // optional when an attachment is present; the service layer also enforces
 // the same rule and rejects payloads that have neither.
+// A voice note is at most 60 s; an upload may run 5 s past that (the recorder's stop lags a moment). The server cannot
+// measure the file, so it checks the length the client reports with it, which is also the length every player shows
+// (client features/messages/voice/voice-note.ts, VOICE_NOTE_UPLOAD_LIMIT_MS; 11 Nov 2026, RSN 06). Both are optional
+// so a note sent by a client from before then is still taken; a length that is there must be a real one.
+export const VOICE_NOTE_UPLOAD_LIMIT_MS = 65_000;
+export const VOICE_NOTE_TOO_LONG = 'This voice note is longer than 60 seconds. Record a shorter one.';
+const voiceLengthMs = z.number().finite().positive().max(VOICE_NOTE_UPLOAD_LIMIT_MS, VOICE_NOTE_TOO_LONG);
+const voiceLengthSec = z.number().finite().positive().max(VOICE_NOTE_UPLOAD_LIMIT_MS / 1000, VOICE_NOTE_TOO_LONG);
+
 const sendBodySchema = z.object({
   toUserId: z.string().uuid(),
   content: z.string().max(4000).optional().default(''),
@@ -30,6 +39,15 @@ const sendBodySchema = z.object({
     url: z.string().url(),
     type: z.enum(['image', 'audio']),
     meta: z.record(z.any()).optional().nullable(),
+  }).superRefine((a, ctx) => {
+    if (a.type !== 'audio' || !a.meta) return;
+    for (const [key, rule] of [['durationMs', voiceLengthMs], ['durationSec', voiceLengthSec]] as const) {
+      if (a.meta[key] === undefined || a.meta[key] === null) continue;
+      const checked = rule.safeParse(a.meta[key]);
+      if (!checked.success) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['meta', key], message: checked.error.issues[0]?.message ?? VOICE_NOTE_TOO_LONG });
+      }
+    }
   }).optional().nullable(),
   // 30 Oct 2026: the earlier message of this conversation the new one answers (a quoted reply). Optional, so
   // production's client, which never sends it, is answered exactly as before. Lower-cased: Postgres reads either case

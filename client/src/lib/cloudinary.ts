@@ -34,9 +34,8 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB — matches the preset
 export const ALLOWED_AUDIO_TYPES = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/mpeg'] as const;
 export const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
 // The recorder stops itself at VOICE_NOTE_MAX_MS (1 minute, 11 Nov 2026, RSN 06; it was 5 minutes). The upload check
-// allows the stop's moment of lag (the tail flush before stop) on top, and no more: 65 s. This check and the recorder
-// are the cap's only enforcement. The server has no duration check of its own: it cannot measure the file, and the
-// length it would see is the one this client reports (controller ruling, 11 Nov 2026).
+// allows the stop's moment of lag (the tail flush before stop) on top, and no more: 65 s. The server cannot measure
+// the file: it checks only the length this client reports with it (routes/dm.ts, at most 65 s too).
 export const MAX_AUDIO_DURATION_MS = VOICE_NOTE_UPLOAD_LIMIT_MS;
 
 /** An upload stops when its send is stopped (the signed-in member changed, 11 Nov 2026). */

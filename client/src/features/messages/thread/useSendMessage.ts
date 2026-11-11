@@ -15,7 +15,7 @@ import { isSenderChanged, sendAsMember } from './send-as';
 /** At most one attachment per message, uploaded before the send (Messages only; the call room sends text). */
 export type DmAttachment =
   | { url: string; type: 'image'; meta: CloudinaryImageResult }
-  | { url: string; type: 'audio'; meta: CloudinaryAudioResult };
+  | { url: string; type: 'audio'; meta: CloudinaryAudioResult & { durationMs: number } };
 
 export interface SendMessageOptions<V> {
   /** Uploads what the message carries and answers it, or null for text alone. Stops when `signal` aborts. */

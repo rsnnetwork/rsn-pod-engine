@@ -22,7 +22,7 @@ import {
 } from '../../../../client/src/features/messages/voice/composer-drafts';
 import {
   VOICE_NOTE_MAX_MS, VOICE_NOTE_COUNTDOWN_MS, VOICE_NOTE_UPLOAD_LIMIT_MS, VOICE_COPY, formatClock, recordingClock,
-  playbackClock, voiceTotalMs, knownDurationMs, isOverCap, micErrorSentence,
+  playbackClock, voiceTotalMs, knownDurationMs, isOverCap, micErrorSentence, needsLengthProbe, LENGTH_PROBE_SEC,
 } from '../../../../client/src/features/messages/voice/voice-note';
 import { createVoiceRecorder, pickRecordingType, type MediaRecorderLike, type RecorderDeps, type StreamLike } from '../../../../client/src/features/messages/voice/voice-recorder';
 import { iconStandIns, loadClientModule, readClientSource } from './load-client-module';
@@ -238,9 +238,9 @@ describe('the recording cap is one constant: 60 seconds, a countdown in the last
     expect(lib).toMatch(/import \{ VOICE_COPY, VOICE_NOTE_UPLOAD_LIMIT_MS \} from '@\/features\/messages\/voice\/voice-note';/);
     expect(lib).toMatch(/export const MAX_AUDIO_DURATION_MS = VOICE_NOTE_UPLOAD_LIMIT_MS;/);
     expect(lib).toMatch(/message: VOICE_COPY\.tooLong/);
-    // The server has no duration check of its own (controller ruling): said where the cap is enforced.
-    expect(lib).toMatch(/The server has no duration check of its own/);
-    expect(readClientSource('features/messages/voice/voice-note.ts')).toMatch(/so it has no duration check of its own/);
+    // The server cannot measure the file: it checks the reported length (routes/dm.ts), said where the cap is enforced.
+    expect(lib).toMatch(/The server cannot measure\s+\/\/ the file: it checks only the length this client reports with it/);
+    expect(readClientSource('features/messages/voice/voice-note.ts')).toMatch(/The server cannot measure a voice note/);
   });
 
   it('a note longer than an upload accepts (timers held on a locked phone) says so, never "try again" (Minor 7)', () => {
@@ -259,14 +259,45 @@ describe('playback shows total length, elapsed time and progress, and stops at t
     expect(formatClock(Number.NaN)).toBe('0:00');
   });
 
-  it('the total is the file\'s own length when the browser knows it, else the recorded length (a fresh webm says Infinity)', () => {
-    expect(voiceTotalMs(12.4, 12_000)).toBe(12_400);
-    expect(voiceTotalMs(Number.POSITIVE_INFINITY, 12_000)).toBe(12_000);
-    expect(voiceTotalMs(Number.NaN, 12_000)).toBe(12_000);
+  it('the total is the length known with the note, whatever the browser says of the file (prod smoke: "0:00 / 0:00")', () => {
+    // A 2.6 s note whose fresh webm Chrome reported as a tiny length, Infinity, NaN or 0: always 0:02.
+    for (const browserSays of [0.05, Number.POSITIVE_INFINITY, Number.NaN, 0, -1, null, undefined]) {
+      expect(voiceTotalMs(browserSays, 2_600)).toBe(2_600);
+      expect(playbackClock(0, voiceTotalMs(browserSays, 2_600)).label).toBe('0:00 / 0:02');
+    }
+    expect(voiceTotalMs(12.4, 12_000)).toBe(12_000);
+    // Only with no length known is the file's own used, when it is a real one.
+    expect(voiceTotalMs(12.4, null)).toBe(12_400);
+    expect(voiceTotalMs(Number.POSITIVE_INFINITY, null)).toBeNull();
     expect(voiceTotalMs(undefined, null)).toBeNull();
+  });
+
+  it('a sent note\'s length: the recorder\'s measure stored with it, else Cloudinary\'s seconds (older notes), else none', () => {
+    expect(knownDurationMs({ durationMs: 2_640, durationSec: 0 })).toBe(2_640);
+    expect(knownDurationMs({ durationMs: 2_640, durationSec: 9 })).toBe(2_640);
     expect(knownDurationMs({ durationSec: 7.5 })).toBe(7_500);
+    expect(knownDurationMs({ durationMs: Number.NaN, durationSec: 7.5 })).toBe(7_500);
     expect(knownDurationMs({})).toBeNull();
     expect(knownDurationMs(null)).toBeNull();
+  });
+
+  it('a file with no length known anywhere is probed once (seek far past the end, then back); one with a known length never', () => {
+    expect(LENGTH_PROBE_SEC).toBeGreaterThan(1e100);
+    expect(needsLengthProbe(Number.POSITIVE_INFINITY, null)).toBe(true);
+    expect(needsLengthProbe(Number.NaN, null)).toBe(true);
+    expect(needsLengthProbe(Number.POSITIVE_INFINITY, 2_600)).toBe(false);
+    expect(needsLengthProbe(12.4, null)).toBe(false);
+    const player = readClientSource('features/messages/voice/VoiceNotePlayer.tsx');
+    expect(player).toMatch(/needsLengthProbe\(a\.duration, durationMs\)\) \{\s*probing\.current = true;\s*a\.currentTime = LENGTH_PROBE_SEC;/);
+    expect(player).toMatch(/if \(probing\.current && Number\.isFinite\(a\.duration\)\) \{\s*probing\.current = false;\s*a\.currentTime = 0;/);
+    expect(player).toMatch(/if \(!a \|\| probing\.current\) return;/);
+  });
+
+  it('the recorder\'s measure is stored with a sent voice note, and every bubble plays with the stored length', () => {
+    const box = readClientSource('features/messages/DmComposer.tsx');
+    expect(box).toMatch(/return \{ url: result\.url, type: 'audio', meta: \{ \.\.\.result, durationMs: Math\.round\(vars\.audio\.durationMs\) \} \};/);
+    expect(readClientSource('features/messages/MessagesPage.tsx')).toMatch(/durationMs=\{knownDurationMs\(m\.attachmentMeta\)\}/);
+    expect(readClientSource('features/messages/voice/VoiceDraftCard.tsx')).toMatch(/durationMs=\{voice\.durationMs\}/);
   });
 
   it('elapsed and progress never pass the total; the label is elapsed / total', () => {
