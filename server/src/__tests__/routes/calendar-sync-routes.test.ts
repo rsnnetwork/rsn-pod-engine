@@ -694,17 +694,57 @@ describe('disconnecting', () => {
     expect((await request(app).delete('/api/calendar/connections/google').set(as(ME))).status).toBe(200);
   });
 
-  it('connecting again hands the replaced grant back to Google, never the new one (S8 review M1)', async () => {
-    await connect('google');
-    let n = 1;
+  /** Google answers a new connect for `email` with a new refresh token, and refreshes with a working access token. */
+  const googleAccount = (email: string, tag: string) => {
     provider.googleToken = (form) => (form.get('grant_type') === 'authorization_code'
-      ? { status: 200, body: { access_token: `g-at-new${++n}`, expires_in: 3600, refresh_token: `g-rt-new${n}`, scope: `openid email ${GOOGLE_SCOPE}` } }
-      : { status: 200, body: { access_token: 'g-at-x', expires_in: 3600 } });
+      ? { status: 200, body: { access_token: `g-at-${tag}`, expires_in: 3600, refresh_token: `g-rt-${tag}`, scope: `openid email ${GOOGLE_SCOPE}`, id_token: idToken({ email }) } }
+      : { status: 200, body: { access_token: `g-at-${tag}-r`, expires_in: 3600 } });
+  };
+
+  it('connecting the SAME Google account again revokes nothing: Google would end the new connection too (S8 review N1)', async () => {
+    await connect('google');                     // shirley@gmail.example, g-rt-1
+    googleAccount('Shirley@Gmail.example', 'same');
+    sent = [];
+    await connect('google');
+    await new Promise((r) => setImmediate(r));
+    expect(sentTo('https://oauth2.googleapis.com/revoke')).toHaveLength(0);
+    expect(open(KEY, find(ME, 'google')!.refresh_token_enc, tokenAad(ME, 'google', 'refresh'))).toBe('g-rt-same');
+    // Still connected afterwards: the next busy read uses the new grant and nothing asks to reconnect.
+    find(ME, 'google')!.access_expires_at = new Date(Date.now() - 1000);
+    const later = await request(app).get('/api/calendar/busy').query(RANGE).set(as(ME));
+    expect(later.body.data.errors).toEqual([]);
+    expect(find(ME, 'google')!.status).toBe('active');
+  });
+
+  it('connecting a DIFFERENT Google account hands the replaced grant back, never the new one (S8 review M1, N1)', async () => {
+    await connect('google');                     // shirley@gmail.example, g-rt-1
+    googleAccount('shirley.work@example.com', 'other');
     sent = [];
     await connect('google');
     await new Promise((r) => setImmediate(r));
     expect(sentTo('https://oauth2.googleapis.com/revoke').map((x) => x.form!.get('token'))).toEqual(['g-rt-1']);
-    expect(open(KEY, find(ME, 'google')!.refresh_token_enc, tokenAad(ME, 'google', 'refresh'))).toBe('g-rt-new2');
+    expect(open(KEY, find(ME, 'google')!.refresh_token_enc, tokenAad(ME, 'google', 'refresh'))).toBe('g-rt-other');
+  });
+
+  it('an account that cannot be told apart (no address from the provider) is never revoked', async () => {
+    await connect('google');
+    provider.googleToken = (form) => (form.get('grant_type') === 'authorization_code'
+      ? { status: 200, body: { access_token: 'g-at-anon', expires_in: 3600, refresh_token: 'g-rt-anon', scope: `openid email ${GOOGLE_SCOPE}` } }
+      : { status: 200, body: { access_token: 'g-at-x', expires_in: 3600 } });
+    sent = [];
+    await connect('google');
+    await new Promise((r) => setImmediate(r));
+    expect(sentTo('https://oauth2.googleapis.com/revoke')).toHaveLength(0);
+  });
+
+  it('Microsoft: a reconnect of the same or another account never calls a revoke (it has none)', async () => {
+    await connect('microsoft');
+    provider.msToken = () => ({ status: 200, body: { access_token: 'm-at-2', expires_in: 3600, refresh_token: 'm-rt-2', scope: 'openid email offline_access https://graph.microsoft.com/Calendars.ReadBasic', id_token: idToken({ preferred_username: 'other@outlook.example' }) } });
+    sent = [];
+    await connect('microsoft');
+    await new Promise((r) => setImmediate(r));
+    expect(sent.filter((x) => x.url.pathname.includes('revoke'))).toHaveLength(0);
+    expect(find(ME, 'microsoft')!.status).toBe('active');
   });
 
   it('still disconnects when the provider\'s revoke fails, and Microsoft (no revoke call) says it was not revoked there', async () => {

@@ -14,7 +14,7 @@ import Sheet from '@/features/reason/ui/Sheet';
 import { useToastStore } from '@/stores/toastStore';
 import { cn } from '@/lib/utils';
 import {
-  BLOCKED_BROWSER_TEXT, CONSENT_LINES, CONSENT_MICROSOFT_NOTE, CONSENT_TITLE, androidBrowserUrl, blockedBrowser,
+  BLOCKED_BROWSER_TEXT, CONSENT_LINES, CONSENT_MICROSOFT_NOTE, CONSENT_TITLE, androidBrowserUrl, appleMobile, blockedBrowser,
   continueLabel, continueUrl, openInBrowserLabel,
 } from './calendar-words';
 import { calendarErrorMessage, useConnectCalendar } from './useCalendar';
@@ -36,7 +36,10 @@ function isStandalone(): boolean {
 export default function CalendarConsentSheet({ provider, returnTo, onClose }: Props) {
   const { addToast } = useToastStore();
   const connect = useConnectCalendar();
-  const blocked = useMemo(() => blockedBrowser(navigator.userAgent, isStandalone()), []);
+  const blocked = useMemo(() => blockedBrowser(navigator.userAgent, isStandalone(), navigator.maxTouchPoints), []);
+  // On an iPhone or iPad, "Open in Safari" from the home-screen app or another app's browser often opens the same kind of
+  // view again, so Copy link (which always works) leads and Open in Safari is the second choice (S8 review N2).
+  const copyFirst = useMemo(() => appleMobile(navigator.userAgent, navigator.maxTouchPoints), []);
   const [copied, setCopied] = useState(false);
   // Back from the provider's page can bring this page back from the browser's memory (bfcache) as it was left: busy,
   // with both buttons off. Start again then (S8 review M2).
@@ -66,21 +69,27 @@ export default function CalendarConsentSheet({ provider, returnTo, onClose }: Pr
     }
   };
 
+  const PRIMARY = 'bg-reason-ink text-white hover:opacity-90';
+  const SECONDARY = 'border border-reason-line bg-white text-reason-ink';
+  const copyButton = blocked && (
+    <button type="button" onClick={() => void copy()} data-testid="calendar-copy-link" className={cn(BUTTON, copyFirst ? PRIMARY : SECONDARY)}>
+      {copied ? 'Link copied' : 'Copy link'}
+    </button>
+  );
+  const openLink = blocked && (
+    <a
+      href={android && blocked === 'in-app' ? androidBrowserUrl(carryOn) : carryOn}
+      target="_blank"
+      rel="noopener noreferrer"
+      data-testid="calendar-open-in-browser"
+      className={cn(BUTTON, copyFirst ? SECONDARY : PRIMARY)}
+    >
+      {openInBrowserLabel(blocked, android)}
+    </a>
+  );
+  // The leading action sits last (on the right, where Continue is), the other before it.
   const footer = !provider ? null : blocked ? (
-    <>
-      <button type="button" onClick={() => void copy()} className={cn(BUTTON, 'border border-reason-line bg-white text-reason-ink')}>
-        {copied ? 'Link copied' : 'Copy link'}
-      </button>
-      <a
-        href={android && blocked === 'in-app' ? androidBrowserUrl(carryOn) : carryOn}
-        target="_blank"
-        rel="noopener noreferrer"
-        data-testid="calendar-open-in-browser"
-        className={cn(BUTTON, 'bg-reason-ink text-white hover:opacity-90')}
-      >
-        {openInBrowserLabel(blocked, android)}
-      </a>
-    </>
+    copyFirst ? <>{openLink}{copyButton}</> : <>{copyButton}{openLink}</>
   ) : (
     <>
       <button type="button" onClick={onClose} disabled={leaving} className={cn(BUTTON, 'border border-reason-line bg-white text-reason-ink')}>

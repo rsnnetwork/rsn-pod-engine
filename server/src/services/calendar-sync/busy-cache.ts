@@ -65,16 +65,31 @@ export function keyTtlSeconds(entries: readonly CachedBusy[], now: number): numb
   return Math.max(1, Math.floor((oldest + BUSY_MAX_AGE_MS - now) / 1000));
 }
 
+// A write reads the key, adds its entry and writes it back. Two at once for the same member and provider (two tabs, or
+// two calendars' reads finishing together) could each drop the other's entry, which only costs a cache miss, but they
+// are run one after the other in this process so it does not happen (S8 review N3). Across instances it still can; the
+// cost is the same miss, never a privacy or correctness problem.
+const writing = new Map<string, Promise<void>>();
+
 export async function writeBusy(userId: string, provider: CalendarProvider, field: string, busy: CalendarBusyInterval[], now: number = Date.now()): Promise<void> {
   const redis = getRedisClient();
   if (!redis) return;
+  const key = busyKey(userId, provider);
+  const before = writing.get(key) ?? Promise.resolve();
+  const mine = before.then(async () => {
+    try {
+      const kept = entriesOf(await redis.get(key), now).filter((e) => e.field !== field);
+      const entries: Entry[] = [{ field, at: now, busy }, ...kept].slice(0, MAX_ENTRIES);
+      await redis.set(key, JSON.stringify({ entries }), 'EX', keyTtlSeconds(entries, now));
+    } catch (err) {
+      logger.warn({ err, provider }, 'calendar busy cache: write failed');
+    }
+  });
+  writing.set(key, mine);
   try {
-    const key = busyKey(userId, provider);
-    const kept = entriesOf(await redis.get(key), now).filter((e) => e.field !== field);
-    const entries: Entry[] = [{ field, at: now, busy }, ...kept].slice(0, MAX_ENTRIES);
-    await redis.set(key, JSON.stringify({ entries }), 'EX', keyTtlSeconds(entries, now));
-  } catch (err) {
-    logger.warn({ err, provider }, 'calendar busy cache: write failed');
+    await mine;
+  } finally {
+    if (writing.get(key) === mine) writing.delete(key);
   }
 }
 

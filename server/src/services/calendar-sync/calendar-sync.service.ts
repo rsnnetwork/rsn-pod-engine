@@ -207,12 +207,24 @@ export async function finishConnect(userId: string, provider: CalendarProvider, 
     accessExpiresAt: new Date(Date.now() + granted.expiresIn * 1000),
   });
   await forgetBusy(userId, [provider]);
-  if (previous) void revokeReplaced(previous, granted.refreshToken);
+  if (previous) void revokeReplaced(previous, granted.refreshToken, granted.accountEmail);
   return connection;
 }
 
-/** The grant a reconnect replaced, revoked where the provider allows (never the new one). Never throws. */
-async function revokeReplaced(previous: repo.ConnectionRow, newRefreshToken: string): Promise<void> {
+/** Two account addresses are known and name different accounts. */
+export function differentAccount(before: string | null, after: string | null): boolean {
+  return !!before && !!after && before.trim().toLowerCase() !== after.trim().toLowerCase();
+}
+
+/**
+ * The grant a reconnect replaced, revoked where the provider allows, but ONLY when the member connected a DIFFERENT
+ * account (S8 review N1). Google's revoke ends the whole grant (the member's consent to REASON), so revoking the old
+ * token of the SAME account would also end the connection just made. With the same account (or an account that cannot
+ * be told apart) the old sealed token is simply dropped by the upsert; Google retires its oldest refresh tokens itself.
+ * Never throws.
+ */
+async function revokeReplaced(previous: repo.ConnectionRow, newRefreshToken: string, newAccountEmail: string | null): Promise<void> {
+  if (!differentAccount(previous.account_email, newAccountEmail)) return;
   const key = calendarTokenKey();
   const creds = providerCredentials(previous.provider);
   if (!key || !creds) return;
@@ -336,10 +348,10 @@ async function needsReconnect(row: repo.ConnectionRow, code: string): Promise<Pr
 
 /** Our own setup is wrong (the Calendar API off, a client refused): said at error level once per provider per process. */
 const misconfiguredLogged = new Set<string>();
-function logMisconfigured(provider: CalendarProvider): void {
+function logMisconfigured(provider: CalendarProvider, reason: string | undefined): void {
   if (misconfiguredLogged.has(provider)) return;
   misconfiguredLogged.add(provider);
-  logger.error({ provider }, 'Calendar provider refused REASON itself (API not enabled, project suspended or client refused): busy times are unavailable for everyone until the provider console is fixed; no member is asked to reconnect');
+  logger.error({ provider, reason }, 'Calendar provider refused REASON itself (API not enabled, project suspended or client refused): busy times are unavailable for everyone until the provider console is fixed; no member is asked to reconnect');
 }
 
 async function readProvider(row: repo.ConnectionRow, range: { from: number; to: number; zone: string }, deadline: AbortSignal): Promise<ProviderRead> {
@@ -367,7 +379,7 @@ async function readProvider(row: repo.ConnectionRow, range: { from: number; to: 
     if (err instanceof SecretBoxError) return needsReconnect(row, 'key');
     if (err instanceof CalendarProviderError && NEEDS_RECONNECT.has(err.kind)) return needsReconnect(row, err.kind);
     const kind = err instanceof CalendarProviderError ? err.kind : 'unexpected';
-    if (kind === 'misconfigured') logMisconfigured(row.provider);
+    if (kind === 'misconfigured') logMisconfigured(row.provider, (err as CalendarProviderError).reason);
     else logger.warn({ provider: row.provider, kind, stale: !!cached }, 'Calendar busy read failed; the picker goes on without it');
     return cached ? { ok: true, spans: fromIntervals(cached.busy) } : { ok: false, code: 'unavailable' };
   }

@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  BUSY_DAYS, CONSENT_KEEP, CONSENT_LINES, CONSENT_MICROSOFT_NOTE, OUTCOME_MESSAGE, PICKER_UNAVAILABLE, androidBrowserUrl,
+  BUSY_DAYS, CONSENT_KEEP, appleMobile, CONSENT_LINES, CONSENT_MICROSOFT_NOTE, OUTCOME_MESSAGE, PICKER_UNAVAILABLE, androidBrowserUrl,
   blockedBrowser, busyRange, busySlotKeys, continueUrl, hintDismissedKey, isOutcome, openInBrowserLabel, returnPathFrom,
 } from '../../../../client/src/features/calendar/calendar-words';
 
@@ -184,6 +184,12 @@ describe('S8 fix round 1', () => {
     expect(blockedBrowser(`${IPHONE} LinkedInApp`, false)).toBe('in-app');
     expect(blockedBrowser('Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 Mobile Safari/537.36', false)).toBe('in-app');
     expect(openInBrowserLabel('ios-home-screen', false)).toBe('Open in Safari');
+    // N2: an iPad's home-screen app reports a Mac; a real Mac (no touch) is never blocked.
+    const IPAD = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15';
+    expect(blockedBrowser(IPAD, true, 5)).toBe('ios-home-screen');
+    expect(blockedBrowser(IPAD, true, 0)).toBeNull();
+    expect(appleMobile(IPAD, 5)).toBe(true);
+    expect(appleMobile(ANDROID_CHROME, 5)).toBe(false);
     expect(openInBrowserLabel('in-app', true)).toBe('Open in your browser');
   });
 
@@ -192,12 +198,17 @@ describe('S8 fix round 1', () => {
     expect(androidBrowserUrl('https://app.rsn.network/settings?calendarConnect=microsoft'))
       .toBe('intent://app.rsn.network/settings?calendarConnect=microsoft#Intent;scheme=https;end');
     const sheet = code('features/calendar/CalendarConsentSheet.tsx');
-    expect(sheet).toContain('const blocked = useMemo(() => blockedBrowser(navigator.userAgent, isStandalone()), []);');
+    expect(sheet).toContain('const blocked = useMemo(() => blockedBrowser(navigator.userAgent, isStandalone(), navigator.maxTouchPoints), []);');
     expect(sheet).toContain('data-testid="calendar-open-in-browser"');
     expect(sheet).toMatch(/blocked \? \(/);
+    // N2: on an iPhone or iPad, Copy link leads (filled, last) and Open in Safari is second.
+    expect(sheet).toContain('const copyFirst = useMemo(() => appleMobile(navigator.userAgent, navigator.maxTouchPoints), []);');
+    expect(sheet).toContain('copyFirst ? <>{openLink}{copyButton}</> : <>{copyButton}{openLink}</>');
+    expect(sheet).toContain("className={cn(BUTTON, copyFirst ? PRIMARY : SECONDARY)}");
     const card = code('features/calendar/CalendarsCard.tsx');
     expect(card).toContain("const asked = params.get('calendarConnect');");
-    expect(card).toContain('if (on && (providers as string[]).includes(asked)) setConsentFor(asked as CalendarProvider);');
+    expect(card).toContain("const alreadyActive = connections.data?.some((c) => c.provider === asked && c.status === 'active');");
+    expect(card).toContain('if (on && (providers as string[]).includes(asked) && !alreadyActive) setConsentFor(asked as CalendarProvider);');
   });
 
   it('I1: the consent says how long busy times are kept, in the same words as the owner checklist', () => {

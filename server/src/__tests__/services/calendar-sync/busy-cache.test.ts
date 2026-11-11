@@ -58,6 +58,16 @@ describe('the busy-time cache', () => {
     expect(entries).toHaveLength(MAX_ENTRIES);
   });
 
+  it('two writes at once for the same member and provider both land (S8 review N3)', async () => {
+    await Promise.all([
+      writeBusy(U, 'google', 'a', busy, T0),
+      writeBusy(U, 'google', 'b', busy, T0 + 1),
+      writeBusy(U, 'google', 'c', busy, T0 + 2),
+    ]);
+    const entries = JSON.parse(store.get(busyKey(U, 'google'))!.value).entries as Array<{ field: string }>;
+    expect(entries.map((e) => e.field).sort()).toEqual(['a', 'b', 'c']);
+  });
+
   it('holds only when, never what: each entry is its range, when it was read and the busy stretches', async () => {
     await writeBusy(U, 'google', 'f1', busy, T0);
     const entries = JSON.parse(store.get(busyKey(U, 'google'))!.value).entries as object[];

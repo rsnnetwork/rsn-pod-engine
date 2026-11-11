@@ -127,8 +127,13 @@ export type BlockedBrowser = 'ios-home-screen' | 'in-app';
 
 const IN_APP_UA = /FBAN|FBAV|FB_IAB|FBIOS|Instagram|LinkedInApp|WhatsApp|Line\/|Snapchat|Twitter|TikTok|musical_ly|BytedanceWebview|MicroMessenger|Pinterest/i;
 
-export function blockedBrowser(userAgent: string, standalone: boolean): BlockedBrowser | null {
-  if (standalone && /iPhone|iPad|iPod/.test(userAgent)) return 'ios-home-screen';
+/** An iPhone, iPod or iPad. iPadOS reports a Mac's user agent, so a Mac that takes touches is an iPad (S8 review N2). */
+export function appleMobile(userAgent: string, maxTouchPoints = 0): boolean {
+  return /iPhone|iPad|iPod/.test(userAgent) || (/Macintosh/.test(userAgent) && maxTouchPoints > 1);
+}
+
+export function blockedBrowser(userAgent: string, standalone: boolean, maxTouchPoints = 0): BlockedBrowser | null {
+  if (standalone && appleMobile(userAgent, maxTouchPoints)) return 'ios-home-screen';
   if (IN_APP_UA.test(userAgent)) return 'in-app';
   // An Android app's own WebView says "; wv)"; Chrome itself never does.
   if (/Android/.test(userAgent) && /; wv\)/.test(userAgent)) return 'in-app';

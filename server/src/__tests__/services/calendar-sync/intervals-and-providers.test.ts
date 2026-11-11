@@ -134,6 +134,27 @@ describe('Google', () => {
     expect(NEEDS_RECONNECT.has('misconfigured')).toBe(false);
   });
 
+  it('only Google\'s own project words mean our setup; a member-level 403 never does (S8 review N4)', async () => {
+    const errOf = async (p: Promise<unknown>) => p.then(() => null, (e) => e as CalendarProviderError);
+    answers.push({ status: 403, body: { error: { errors: [{ reason: 'accessNotConfigured' }] } } });
+    const refused = await errOf(google.busy('AT', { from: 0, to: 1, zone: 'UTC' }));
+    expect([refused?.kind, refused?.reason]).toEqual(['misconfigured', 'accessnotconfigured']);
+    // A Google 403 that merely says something "is disabled" is the member's, not ours.
+    answers.push({ status: 403, body: { error: { message: 'Calendar sharing is disabled for this user' } } });
+    expect((await errOf(google.busy('AT', { from: 0, to: 1, zone: 'UTC' })))?.kind).toBe('forbidden');
+    // A Microsoft tenant's block: passing for the member (no reconnect), and never logged as our setup.
+    for (const message of ['Access to OData is disabled.', 'The mailbox is blocked by policy', 'MailboxNotEnabledForRESTAPI']) {
+      answers.push({ status: 403, body: { error: { code: 'ErrorAccessDenied', message } } });
+      expect([message, (await errOf(microsoft.busy('AT', { from: 0, to: 1, zone: 'UTC' })))?.kind]).toEqual([message, 'unavailable']);
+    }
+    // Microsoft never reports "misconfigured" from its data API, even with Google's words in the body.
+    answers.push({ status: 403, body: { error: { message: 'accessNotConfigured' } } });
+    expect((await errOf(microsoft.busy('AT', { from: 0, to: 1, zone: 'UTC' })))?.kind).toBe('forbidden');
+    answers.push({ status: 401, body: { error: 'invalid_client' } });
+    const client = await errOf(google.refresh({ creds: CREDS, refreshToken: 'rt' }));
+    expect([client?.kind, client?.reason]).toEqual(['misconfigured', 'invalid_client']);
+  });
+
   it('a call stops when the caller\'s overall deadline passes (S8 review M6)', async () => {
     let seen: AbortSignal | undefined;
     global.fetch = ((_url: string, init: RequestInit = {}) => {

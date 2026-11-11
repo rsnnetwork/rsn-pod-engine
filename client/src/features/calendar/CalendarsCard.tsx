@@ -51,7 +51,8 @@ function CalendarsCardBody({ on, providers, connections }: {
       next.delete('calendarConnect');
       return next;
     }, { replace: true });
-    if (on && (providers as string[]).includes(asked)) setConsentFor(asked as CalendarProvider);
+    const alreadyActive = connections.data?.some((c) => c.provider === asked && c.status === 'active');
+    if (on && (providers as string[]).includes(asked) && !alreadyActive) setConsentFor(asked as CalendarProvider);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per link that arrives in the address
   }, [asked]);
 

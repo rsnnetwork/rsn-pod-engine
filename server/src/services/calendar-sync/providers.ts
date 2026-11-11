@@ -36,7 +36,8 @@ export type ProviderErrorKind =
   | 'bad_response';
 
 export class CalendarProviderError extends Error {
-  constructor(public readonly kind: ProviderErrorKind, public readonly status?: number) {
+  /** `reason`: for `misconfigured`, the provider's own short code that showed it (for the log), never its message. */
+  constructor(public readonly kind: ProviderErrorKind, public readonly status?: number, public readonly reason?: string) {
     super(`Calendar provider error: ${kind}`);
     this.name = 'CalendarProviderError';
   }
@@ -115,17 +116,33 @@ function tokenErrorKind(status: number, body: Record<string, unknown>): Provider
   return 'bad_response';
 }
 
-/** A data API's refusal, as a kind. */
-function apiErrorKind(status: number, body: Record<string, unknown>): ProviderErrorKind {
-  if (status === 401) return 'unauthorized';
-  if (status === 429) return 'rate_limited';
-  if (status >= 500) return 'unavailable';
+/** A token endpoint's refusal, as an error that carries the code when it is our own setup. */
+function tokenError(status: number, body: Record<string, unknown>): CalendarProviderError {
+  const kind = tokenErrorKind(status, body);
+  return new CalendarProviderError(kind, status, kind === 'misconfigured' ? String(body.error) : undefined);
+}
+
+// Google's own words for "the REASON project cannot use the Calendar API" (the API is off, the project suspended or
+// denied): only these, from Google only (S8 review N4), so a member's own refusal is never read as our setup.
+const GOOGLE_PROJECT_REFUSED = /accessnotconfigured|service_disabled|has not been used in project|projectdenied/;
+// A Microsoft tenant's administrator has blocked calendar access for the member's organisation: reconnecting would not
+// help, and it is not our setup either, so it is passing (unavailable), quietly.
+const MICROSOFT_TENANT_BLOCKED = /is disabled|blocked|suspended|mailboxnotenabled/;
+
+/** A data API's refusal, as an error of a kind. */
+function apiError(provider: 'google' | 'microsoft', status: number, body: Record<string, unknown>): CalendarProviderError {
+  if (status === 401) return new CalendarProviderError('unauthorized', status);
+  if (status === 429) return new CalendarProviderError('rate_limited', status);
+  if (status >= 500) return new CalendarProviderError('unavailable', status);
   if (status === 403) {
     const text = JSON.stringify(body).toLowerCase();
-    if (/accessnotconfigured|service_disabled|has not been used in project|is disabled|projectdenied|suspended/.test(text)) return 'misconfigured';
-    return /ratelimit|quota|usagelimit|throttl/.test(text) ? 'rate_limited' : 'forbidden';
+    const refused = provider === 'google' ? GOOGLE_PROJECT_REFUSED.exec(text) : null;
+    if (refused) return new CalendarProviderError('misconfigured', status, refused[0]);
+    if (/ratelimit|quota|usagelimit|throttl/.test(text)) return new CalendarProviderError('rate_limited', status);
+    if (provider === 'microsoft' && MICROSOFT_TENANT_BLOCKED.test(text)) return new CalendarProviderError('unavailable', status);
+    return new CalendarProviderError('forbidden', status);
   }
-  return 'bad_response';
+  return new CalendarProviderError('bad_response', status);
 }
 
 /** The email in an ID token's claims. The token came straight from the provider over TLS, so it is read, not verified. */
@@ -149,7 +166,7 @@ async function tokenCall(url: string, form: Record<string, string>, deadline?: A
     body: new URLSearchParams(form).toString(),
   }, deadline);
   const body = await jsonOf(res);
-  if (!res.ok) throw new CalendarProviderError(tokenErrorKind(res.status, body), res.status);
+  if (!res.ok) throw tokenError(res.status, body);
   if (!str(body.access_token)) throw new CalendarProviderError('bad_response', res.status);
   return body;
 }
@@ -211,7 +228,7 @@ export const google: CalendarProviderAdapter = {
       }),
     }, signal);
     const body = await jsonOf(res);
-    if (!res.ok) throw new CalendarProviderError(apiErrorKind(res.status, body), res.status);
+    if (!res.ok) throw apiError('google', res.status, body);
     const primary = (body.calendars as Record<string, { busy?: unknown; errors?: unknown }> | undefined)?.primary;
     if (!primary || (Array.isArray(primary.errors) && primary.errors.length > 0) || !Array.isArray(primary.busy)) {
       throw new CalendarProviderError('bad_response', res.status);
@@ -303,7 +320,7 @@ export const microsoft: CalendarProviderAdapter = {
         headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', Prefer: 'outlook.timezone="UTC"' },
       }, signal);
       const body = await jsonOf(res);
-      if (!res.ok) throw new CalendarProviderError(apiErrorKind(res.status, body), res.status);
+      if (!res.ok) throw apiError('microsoft', res.status, body);
       if (!Array.isArray(body.value)) throw new CalendarProviderError('bad_response', res.status);
       for (const event of body.value as GraphEvent[]) {
         const span = graphEventSpan(event, range.zone);
