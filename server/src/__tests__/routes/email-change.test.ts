@@ -69,6 +69,7 @@ beforeEach(() => {
 });
 
 const userOf = (id: string) => world.users.find((u) => u.id === id)!;
+const liveGrants = () => world.links.filter((l) => l.purpose === 'reauth' && l.used_at && l.expires_at.getTime() > Date.now());
 const lastChangeCode = () => ((sendEmailChangeCodeEmail as jest.Mock).mock.calls.at(-1) as [string, { code: string }])[1].code;
 
 /** Ask for the new address's code with a fresh proof, and answer the code the email to it carries. */
@@ -104,22 +105,56 @@ describe('asking for a code at the new address', () => {
     expect(again.body.error.code).toBe('REAUTH_REQUIRED');
   });
 
-  it('refuses the address the member already has (400), one another account has (409 EMAIL_IN_USE), and nonsense (400)', async () => {
-    const same = await as(ANA).post('/api/users/me/email/code', { newEmail: ANA.email.toUpperCase(), reauthToken: await grantFor(ANA, 'change_email') });
+  it('refuses the address the member already has (400) before the proof is spent, so the typo costs no code', async () => {
+    const token = await grantFor(ANA, 'change_email');
+    const same = await as(ANA).post('/api/users/me/email/code', { newEmail: ANA.email.toUpperCase(), reauthToken: token });
     expect(same.status).toBe(400);
     expect(same.body.error.message).toBe("That's already your email.");
+    expect(liveGrants()).toHaveLength(1);
+    // The same proof still works for a good address.
+    expect((await as(ANA).post('/api/users/me/email/code', { newEmail: NEW, reauthToken: token })).status).toBe(200);
+  });
+
+  it('a proof-less request for the member\'s own or a reserved address is the plain 400, never a REAUTH_REQUIRED', async () => {
+    expect((await as(ANA).post('/api/users/me/email/code', { newEmail: ANA.email })).body.error.message).toBe("That's already your email.");
+    expect((await as(ANA).post('/api/users/me/email/code', { newEmail: 'gone@rsn-e2e.invalid' })).status).toBe(400);
+    expect(sendEmailChangeCodeEmail).not.toHaveBeenCalled();
+  });
+
+  it('another account\'s address is asked about only after the proof is spent: unproven 403, proven 409 EMAIL_IN_USE', async () => {
+    const unproven = await as(ANA).post('/api/users/me/email/code', { newEmail: BO.email });
+    expect(unproven.status).toBe(403);
+    expect(unproven.body.error.code).toBe('REAUTH_REQUIRED');
     const taken = await as(ANA).post('/api/users/me/email/code', { newEmail: BO.email, reauthToken: await grantFor(ANA, 'change_email') });
     expect(taken.status).toBe(409);
     expect(taken.body.error).toEqual({ code: 'EMAIL_IN_USE', message: 'That email is already used by another account.' });
+    expect(liveGrants()).toHaveLength(0);
     const nonsense = await as(ANA).post('/api/users/me/email/code', { newEmail: 'not an address', reauthToken: 'x' });
     expect(nonsense.status).toBe(400);
     expect(sendEmailChangeCodeEmail).not.toHaveBeenCalled();
   });
 
+  it('an address stored in mixed case is still taken, at the request and again at the code', async () => {
+    userOf(BO.id).email = 'Ana.New@Reason-Members.org';
+    const taken = await as(ANA).post('/api/users/me/email/code', { newEmail: NEW, reauthToken: await grantFor(ANA, 'change_email') });
+    expect(taken.status).toBe(409);
+    expect(taken.body.error.code).toBe('EMAIL_IN_USE');
+    // Taken in mixed case after the code went out: the code is refused and left unspent.
+    userOf(BO.id).email = BO.email;
+    const code = await codeToNewAddress();
+    userOf(BO.id).email = 'ANA.NEW@reason-members.org';
+    const res = await as(ANA).post('/api/users/me/email/verify', { code });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('EMAIL_IN_USE');
+    expect(userOf(ANA.id).email).toBe(ANA.email);
+  });
+
   it("refuses an address no person can receive mail at, unless the account is itself one of the platform's test members", async () => {
-    const reserved = await as(ANA).post('/api/users/me/email/code', { newEmail: 'gone@rsn-e2e.invalid', reauthToken: await grantFor(ANA, 'change_email') });
+    const token = await grantFor(ANA, 'change_email');
+    const reserved = await as(ANA).post('/api/users/me/email/code', { newEmail: 'gone@rsn-e2e.invalid', reauthToken: token });
     expect(reserved.status).toBe(400);
     expect(reserved.body.error.message).toBe("That address can't receive email. Please use another one.");
+    expect(liveGrants()).toHaveLength(1);
     expect(await codeToNewAddress(TEST_MEMBER, 'p3t2-b@rsn-e2e.invalid')).toMatch(/^\d{6}$/);
   });
 

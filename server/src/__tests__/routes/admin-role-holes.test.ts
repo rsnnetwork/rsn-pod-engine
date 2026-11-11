@@ -200,3 +200,43 @@ describe('a super admin changing an admin role needs a fresh admin_role proof', 
     expect(liveGrants()).toHaveLength(1);
   });
 });
+
+describe('resolving a report with a suspend or ban follows the same rule', () => {
+  const VIOLATION = '7a000000-0000-4000-8000-000000000001';
+  const REPORT = '7a000000-0000-4000-8000-000000000002';
+  const resolve = (actor: typeof ADMIN, id: string, body: object) => as(actor).post(`/api/admin/violations/${id}/resolve`, body);
+
+  it("an admin resolving a violation against a super admin with suspend or ban is 403, and nothing is written", async () => {
+    world.violations.push({ id: VIOLATION, reported_user_id: SUPER.id, status: 'open' });
+    world.reports.push({ id: REPORT, reported_id: SUPER.id });
+    for (const action of ['suspend', 'ban']) {
+      const res = await resolve(ADMIN, VIOLATION, { action });
+      expect(res.status).toBe(403);
+      expect(res.body.error.message).toBe('Only a super admin can change another super admin.');
+      const viaReport = await resolve(ADMIN, REPORT, { action, source: 'report' });
+      expect(viaReport.status).toBe(403);
+    }
+    expect(statusOf(SUPER.id)).toBe('active');
+    expect(world.violations[0].status).toBe('open');
+    expect(world.statements.filter((s) => /^(INSERT|UPDATE|DELETE)/.test(s))).toEqual([]);
+  });
+
+  it('a super admin may suspend a super admin through a violation, and an admin still bans a member', async () => {
+    world.violations.push({ id: VIOLATION, reported_user_id: OTHER_SUPER.id, status: 'open' });
+    const res = await resolve(SUPER, VIOLATION, { action: 'suspend', adminNotes: 'Spam' });
+    expect(res.status).toBe(200);
+    expect(statusOf(OTHER_SUPER.id)).toBe('suspended');
+    expect(world.violations[0].status).toBe('actioned');
+
+    world.violations.push({ id: REPORT, reported_user_id: MEMBER.id, status: 'open' });
+    expect((await resolve(ADMIN, REPORT, { action: 'ban' })).status).toBe(200);
+    expect(statusOf(MEMBER.id)).toBe('banned');
+  });
+
+  it('an admin may still dismiss or warn on a report against a super admin: nothing about the account changes', async () => {
+    world.violations.push({ id: VIOLATION, reported_user_id: SUPER.id, status: 'open' });
+    expect((await resolve(ADMIN, VIOLATION, { action: 'warn' })).status).toBe(200);
+    expect(world.violations[0].status).toBe('actioned');
+    expect(statusOf(SUPER.id)).toBe('active');
+  });
+});

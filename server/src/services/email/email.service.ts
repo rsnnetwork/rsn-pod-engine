@@ -1773,8 +1773,8 @@ export interface EmailChangedNoticeEmailData {
 
 export async function sendEmailChangedNoticeEmail(oldAddress: string, data: EmailChangedNoticeEmailData): Promise<SendEmailResult> {
   const subject = 'Your REASON sign-in email was changed';
-  const line = `Your REASON sign-in email was changed to ${data.maskedNew}. If this wasn't you, reply to this email straight away.`;
+  const line = `Your REASON sign-in email was changed to ${data.maskedNew}. If this wasn't you, contact REASON support straight away.`;
   const html = accountEmailPage(`
-          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0;">Your REASON sign-in email was changed to ${escapeHtml(data.maskedNew)}. If this wasn't you, reply to this email straight away.</p>`);
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0;">Your REASON sign-in email was changed to ${escapeHtml(data.maskedNew)}. If this wasn't you, contact REASON support straight away.</p>`);
   return sendEmail({ to: oldAddress, subject, html, text: line });
 }

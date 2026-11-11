@@ -1,7 +1,8 @@
 // ─── The member's own sensitive account changes (Part 3 Task 2, 11 Nov 2026) ──────────────────────────────────────
 //
 // Mounted at /api/users/me, ahead of routes/users.ts, so /me/email/* and /me/close are served here.
-//   POST /email/code   { newEmail, reauthToken }  a change_email proof spent, then a code to the new address
+//   POST /email/code   { newEmail, reauthToken }  the address checked (not their own, not reserved), a change_email
+//                                                 proof spent, then the address checked free and a code sent to it
 //   POST /email/verify { code }                   the new address's code: the change, and a fresh token pair
 //   POST /close        { reauthToken }            a close_account proof spent, then the account closed as an admin's
 //                                                 DELETE /users/:id closes it
@@ -19,7 +20,9 @@ import {
   closeAccountLimiter, emailChangeCodeLimiter, emailChangeTargetLimiter, emailChangeVerifyLimiter,
 } from '../middleware/rateLimit';
 import * as identityService from '../services/identity/identity.service';
-import { confirmEmailChange, requestEmailChange } from '../services/identity/email-change.service';
+import {
+  assertNewAddressAcceptable, confirmEmailChange, requestEmailChange,
+} from '../services/identity/email-change.service';
 import { accountAudience, fanoutAccountAudience, fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
 
 const router = Router();
@@ -36,12 +39,18 @@ const emailVerifySchema = z.object({
 });
 const closeSchema = z.object({ reauthToken });
 
+/** The new address is not the member's own nor one no person can receive mail at: checked before the proof is spent. */
+const newAddressChecks = (req: Request, _res: Response, next: NextFunction): void => {
+  assertNewAddressAcceptable(req.user!.userId, req.body.newEmail).then(() => next(), next);
+};
+
 router.post(
   '/email/code',
   authenticate,
   emailChangeCodeLimiter,
   validate(emailCodeSchema),
   emailChangeTargetLimiter,
+  newAddressChecks,
   requireRecentReauth('change_email'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
