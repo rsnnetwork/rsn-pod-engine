@@ -21,6 +21,8 @@ export interface WwPlace { session_id: string; user_id: string; status: string; 
 export interface WwLine {
   id: string; session_id: string; user_id: string; status: string; joined_via: string; group_keys: string[];
   lapsed_reason: string | null; queued_at: number; decided_by: string | null;
+  /** Fix round 3: the invite that queued them (invite accept), or none. */
+  invite_id?: string | null;
 }
 export interface WwInvite {
   id: string; code: string; session_id: string; invitee_email: string | null; status: string; max_uses: number; use_count: number;
@@ -315,19 +317,20 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
   }
 
   // ── the line ──
-  if (sql.startsWith('INSERT INTO event_waitlist (session_id, user_id, joined_via, group_keys)')) {
+  if (sql.startsWith('INSERT INTO event_waitlist (session_id, user_id, joined_via, group_keys, invite_id)')) {
     const existing = lineOf(String(a), String(b));
     if (existing) {
       if (!['left', 'lapsed', 'promoted'].includes(existing.status)) return rows([], 0);
       Object.assign(existing, {
         status: 'waiting', joined_via: String(params[2]), group_keys: params[3] as string[], lapsed_reason: null,
-        queued_at: ++world.clock, decided_by: null,
+        queued_at: ++world.clock, decided_by: null, invite_id: (params[4] as string | null) ?? null,
       });
       return rows([{ id: existing.id }]);
     }
     const line: WwLine = {
       id: nextId(), session_id: String(a), user_id: String(b), status: 'waiting', joined_via: String(params[2]),
       group_keys: (params[3] as string[]) ?? [], lapsed_reason: null, queued_at: ++world.clock, decided_by: null,
+      invite_id: (params[4] as string | null) ?? null,
     };
     world.rows.line.push(line);
     return rows([{ id: line.id }]);
@@ -361,15 +364,16 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     return rows([], l ? 1 : 0);
   }
   const lineEntry = (l: WwLine) => ({
-    id: l.id, user_id: l.user_id, joined_via: l.joined_via, group_keys: l.group_keys, role: userById(l.user_id)?.role ?? null,
+    id: l.id, user_id: l.user_id, joined_via: l.joined_via, group_keys: l.group_keys, invite_id: l.invite_id ?? null,
+    role: userById(l.user_id)?.role ?? null,
   });
   const waiting = (sessionId: unknown) => world.rows.line.filter((l) => l.session_id === sessionId && l.status === 'waiting')
     .sort((x, y) => x.queued_at - y.queued_at || x.id.localeCompare(y.id));
-  if (sql.startsWith('SELECT w.id, w.user_id, w.joined_via, w.group_keys, u.role FROM event_waitlist w JOIN users u ON u.id = w.user_id WHERE w.session_id = $1 AND w.user_id = $2')) {
+  if (sql.startsWith('SELECT w.id, w.user_id, w.joined_via, w.group_keys, w.invite_id, u.role FROM event_waitlist w JOIN users u ON u.id = w.user_id WHERE w.session_id = $1 AND w.user_id = $2')) {
     const l = waiting(a).find((x) => x.user_id === b);
     return rows(l ? [lineEntry(l)] : []);
   }
-  if (sql.startsWith('SELECT w.id, w.user_id, w.joined_via, w.group_keys, u.role FROM event_waitlist w JOIN users u ON u.id = w.user_id WHERE w.session_id = $1 AND w.status = \'waiting\' ORDER BY w.queued_at, w.id LIMIT 1')) {
+  if (sql.startsWith('SELECT w.id, w.user_id, w.joined_via, w.group_keys, w.invite_id, u.role FROM event_waitlist w JOIN users u ON u.id = w.user_id WHERE w.session_id = $1 AND w.status = \'waiting\' ORDER BY w.queued_at, w.id LIMIT 1')) {
     const l = waiting(a)[0];
     return rows(l ? [lineEntry(l)] : []);
   }
@@ -387,6 +391,10 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
   }
 
   // ── the say-so a promotion re-reads (fix round 1): the person's invites to the event and their request ──
+  if (sql.startsWith('SELECT i.status::text AS status, (i.expires_at IS NOT NULL AND i.expires_at <= NOW()) AS past, s.admission_mode FROM invites i JOIN sessions s ON s.id = $1 WHERE i.id = $2')) {
+    const i = world.rows.invites.find((x) => x.id === b && x.session_id === a);
+    return rows(i ? [{ status: i.status, past: !!i.expires_at && i.expires_at.getTime() <= Date.now(), admission_mode: eventById(a)?.admission_mode ?? null }] : []);
+  }
   if (sql.startsWith('SELECT i.status::text AS status, (i.expires_at IS NOT NULL AND i.expires_at <= NOW()) AS past FROM invites i')) {
     const u = userById(b);
     return rows(world.rows.invites.filter((i) => i.session_id === a

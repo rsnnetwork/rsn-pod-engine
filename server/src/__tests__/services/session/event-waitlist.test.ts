@@ -592,6 +592,72 @@ describe('the say-so at promotion (fix round 2, N-2 and N-3)', () => {
   });
 });
 
+describe('a shared link remembered on the waiting row (fix round 3, controller ruling)', () => {
+  const link = () => world.rows.invites.push({
+    id: 'link-1', code: 'LINK1', session_id: EVENT, invitee_email: null, status: 'accepted', max_uses: 25, use_count: 1,
+    inviter_id: HOST, created_at: new Date(), accepted_by_user_id: D, // the link's first accepter is someone else
+  });
+  /** A full event of two that only its pod's members and its invitees join: A and B (pod members) hold the places. */
+  async function fullFor(over: Partial<WwEvent>) {
+    addEvent({ id: EVENT, host_user_id: HOST, ...over });
+    world.rows.podMembers.push({ pod_id: 'pod-1', user_id: A, role: 'member' }, { pod_id: 'pod-1', user_id: B, role: 'member' });
+    await registerParticipant(EVENT, A, UserRole.MEMBER);
+    await registerParticipant(EVENT, B, UserRole.MEMBER);
+    link();
+  }
+
+  it.each([
+    ['a private (members-only) event', { visibility: 'private', admission_mode: null }],
+    ['an approval event', { visibility: 'public', admission_mode: 'approval' }],
+  ] as const)('%s: a later accepter of the link is queued with the invite, and promoted through it when a place frees', async (_label, over) => {
+    await fullFor(over as Partial<WwEvent>);
+    const accepted = await acceptInvite('LINK1', E);
+    expect(accepted).toMatchObject({ waitlistPosition: 1 });
+    expect(lineOf(EVENT, E)).toMatchObject({ status: 'waiting', joined_via: 'invite', invite_id: 'link-1' });
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(placeOf(EVENT, E)?.status).toBe('registered');
+    expect(lineOf(EVENT, E)?.status).toBe('promoted');
+  });
+
+  it('the link revoked while they wait: they lapse with INVITE_REVOKED', async () => {
+    await fullFor({ visibility: 'private', admission_mode: null });
+    await acceptInvite('LINK1', E);
+    world.rows.invites.find((i) => i.id === 'link-1')!.status = 'revoked';
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(lineOf(EVENT, E)).toMatchObject({ status: 'lapsed', lapsed_reason: ErrorCodes.INVITE_REVOKED });
+    expect(placeOf(EVENT, E)).toBeUndefined();
+  });
+
+  it('the link past its expiry: they lapse with INVITE_EXPIRED', async () => {
+    await fullFor({ visibility: 'private', admission_mode: null });
+    await acceptInvite('LINK1', E);
+    world.rows.invites.find((i) => i.id === 'link-1')!.expires_at = new Date(Date.now() - 1000);
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(lineOf(EVENT, E)).toMatchObject({ status: 'lapsed', lapsed_reason: ErrorCodes.INVITE_EXPIRED });
+  });
+
+  it('an invitation-only event never admits through a shared link: a row that remembers one lapses with the admission code', async () => {
+    addEvent({ id: EVENT, host_user_id: HOST, visibility: 'private', admission_mode: 'restricted' });
+    for (const id of [A, B]) world.rows.entries.push({ session_id: EVENT, email: world.rows.users.find((u) => u.id === id)!.email, revoked_at: null });
+    await registerParticipant(EVENT, A, UserRole.MEMBER);
+    await registerParticipant(EVENT, B, UserRole.MEMBER);
+    link();
+    // (Accepting the link cannot queue anyone here: the registration refuses before capacity. The row stands in for one
+    // written before the event became invitation only.)
+    world.rows.line.push({
+      id: '20000000-0000-4000-8000-000000000006', session_id: EVENT, user_id: E, status: 'waiting', joined_via: 'invite',
+      group_keys: [], lapsed_reason: null, queued_at: ++world.clock, decided_by: null, invite_id: 'link-1',
+    });
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(lineOf(EVENT, E)).toMatchObject({ status: 'lapsed', lapsed_reason: ErrorCodes.EVENT_ADMISSION_REQUIRED });
+    expect(placeOf(EVENT, E)).toBeUndefined();
+  });
+});
+
 describe('the admin\'s own status writes (fix round 1, I-2)', () => {
   it('eventsHeldByActiveAccounts reads the upcoming and live events active accounts hold a place in; moveWaitlistsOn moves each line on', async () => {
     await fullEventWithLine();

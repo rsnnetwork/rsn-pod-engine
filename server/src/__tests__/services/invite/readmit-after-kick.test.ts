@@ -24,7 +24,7 @@ describe('#4B — kicked user re-admitted only by a fresh personal invite', () =
     expect(inviteSvc).toMatch(/personalInviteCreatedAt = invite\.inviteeEmail \? new Date\(invite\.createdAt\) : undefined/);
     // T2 (1 Nov 2026): with viaInvite, which only lets an invitee into a pod that asks for approval (D2).
     // Part 3 Task 3: through registerOrWaitlist (registerParticipant's rules, plus the waiting list on a full event).
-    expect(inviteSvc).toMatch(/registerOrWaitlist\([^)]*\{\s*personalInviteCreatedAt,\s*viaInvite: true,\s*joinedVia: 'invite',\s*\}/s);
+    expect(inviteSvc).toMatch(/registerOrWaitlist\([^)]*\{\s*personalInviteCreatedAt,\s*viaInvite: true,\s*joinedVia: 'invite',\s*inviteId: invite\.id,\s*\}/s);
   });
 
   it('the accept\'s own insert lifts a removed row only when its removal was made before the personal invite', () => {
