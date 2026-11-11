@@ -1107,3 +1107,30 @@ export const closeAccountLimiter = rateLimit({
   store: buildStore('close-account'),
   handler: accountSecurityLimited('Too many tries. Please wait 15 minutes, then try again.'),
 });
+
+// The organisers' event report (10 Nov 2026 spec, Part 3 Task 4): reading it, thirty a minute per person (a page that
+// re-reads after every rating change keeps well inside); and the CSV downloads, twenty in ten minutes per person, which
+// lets an organiser take all three parts several times and stops a script copying member data out. Keyed per member:
+// the route signs in first. The download limiter counts only format=csv.
+export const eventReportReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-report-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const EVENT_REPORT_EXPORT_LIMITED = 'You have downloaded this report a lot just now. Try again in a few minutes.';
+
+export const eventReportExportLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  skip: (req: Request) => req.query?.format !== 'csv',
+  store: buildStore('event-report-export'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: EVENT_REPORT_EXPORT_LIMITED } },
+});

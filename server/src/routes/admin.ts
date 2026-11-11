@@ -5,6 +5,8 @@ import { validate } from '../middleware/validate';
 import { authenticate, invalidateUserStatusCache } from '../middleware/auth';
 import { recordAudit } from '../middleware/audit';
 import { adminOnboardingExportLimiter, clientIp } from '../middleware/rateLimit';
+import { csvRow } from '../lib/csv';
+import type { CsvValue } from '../lib/csv';
 import { ONBOARDING_CSV_COLUMNS, onboardingReportRows } from '../services/onboarding/onboarding-report';
 import { requireRole } from '../middleware/rbac';
 import { accountChangeRefusal, guardAccountChange, readTargetRoles } from '../middleware/role-guard';
@@ -1239,18 +1241,18 @@ router.get(
 // the same compute fn the JSON endpoint uses, so the export can never
 // drift from the on-screen view.
 
-function toCsv(rows: any[], columns: string[]): string {
-  const escape = (v: any): string => {
-    if (v === null || v === undefined) return '';
-    const s = String(v);
-    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-      return `"${s.replace(/"/g, '""')}"`;
-    }
-    return s;
-  };
-  const header = columns.join(',');
-  const body = rows.map(r => columns.map(c => escape(r[c])).join(',')).join('\n');
+// Every cell goes through the shared csvCell (lib/csv.ts): quoted when it must be, and a cell that starts like a
+// formula (=, +, -, @, a tab) is written as text, so a member's name or answer never runs in a spreadsheet.
+function toCsv(rows: Array<Record<string, unknown>>, columns: string[]): string {
+  const header = csvRow(columns);
+  const body = rows.map(r => csvRow(columns.map(c => cellValue(r[c])))).join('\n');
   return `${header}\n${body}\n`;
+}
+
+/** An analytics or onboarding value as a cell: text and numbers as they are, anything else as its string. */
+function cellValue(v: unknown): CsvValue {
+  if (v === null || v === undefined || typeof v === 'string' || typeof v === 'number') return v;
+  return String(v);
 }
 
 router.get(
@@ -1297,9 +1299,6 @@ router.get(
 // for a sheet. Members' own words leave REASON in this file, so who took it, when and how many rows is written to
 // audit_log (D13). A read, so no entity tags.
 
-/** A cell a spreadsheet would run as a formula (member-written text can start with =, +, -, @) is written as text. */
-const asText = (v: string | null): string | null => (v && /^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
-
 router.get(
   '/onboarding/export.csv',
   authenticate,
@@ -1316,12 +1315,12 @@ router.get(
         details: { rows: rows.length },
         ipAddress: clientIp(req),
       });
-      const cells = rows.map(r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, asText(v)])));
       const day = new Date().toISOString().slice(0, 10);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="reason-onboarding-answers-${day}.csv"`);
       res.setHeader('Cache-Control', 'no-store');
-      res.send(toCsv(cells, [...ONBOARDING_CSV_COLUMNS]));
+      // toCsv writes a cell that starts like a formula (a member's own words can) as text.
+      res.send(toCsv(rows, [...ONBOARDING_CSV_COLUMNS]));
     } catch (err) {
       next(err);
     }

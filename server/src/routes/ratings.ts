@@ -9,6 +9,7 @@ import * as ratingService from '../services/rating/rating.service';
 import * as sessionService from '../services/session/session.service';
 import { notifyRatingSubmitted } from '../services/orchestration/orchestration.service';
 import { ForbiddenError } from '../middleware/errors';
+import { fanoutLateRating } from '../services/session/event-report.service';
 
 const router = Router();
 
@@ -37,6 +38,9 @@ router.post(
       // Trigger early-exit check: if all participants have rated, end rating window immediately
       notifyRatingSubmitted(req.user!.userId).catch(() => {});
       res.status(201).json({ success: true, data: rating });
+      // A rating sent once the event is closing or over (the recap) changes its organisers' report; a live round's
+      // ratings are announced once, when the round's rating window closes. Never throws.
+      void fanoutLateRating(req.body.matchId);
     } catch (err) {
       next(err);
     }
@@ -135,6 +139,9 @@ router.get(
 );
 
 // ─── GET /sessions/:id/export — Export session data (admin/host) ────────────
+// The production recap's Export button reads this, so its shape stays. Since 11 Nov 2026 (Part 3 Task 4) it no
+// longer gives out what a member wrote privately about a partner (every rating's `feedback` is null), and the
+// individual scores (a rating's quality_score and meet_again, a pair's last_quality_score) only reach an admin.
 
 router.get(
   '/sessions/:id/export',
@@ -142,13 +149,14 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Only the session's own host or a system admin can export
-      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
+      const isAdmin = hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+      if (!isAdmin) {
         const session = await sessionService.getSessionById(req.params.id);
         if (session.hostUserId !== req.user!.userId) {
           throw new ForbiddenError('Only the session host or an admin can export session data');
         }
       }
-      const exportData = await ratingService.exportSessionData(req.params.id);
+      const exportData = await ratingService.exportSessionData(req.params.id, { individualScores: isAdmin });
       res.json({ success: true, data: exportData });
     } catch (err) {
       next(err);

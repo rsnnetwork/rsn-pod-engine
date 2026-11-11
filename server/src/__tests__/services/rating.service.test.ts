@@ -408,7 +408,7 @@ describe('Rating Service', () => {
     it('a missing event is a 404 that says "event", with the SESSION_NOT_FOUND code (H2b fix round 1, the M8 pattern)', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
-      await expect(ratingService.exportSessionData('missing-session'))
+      await expect(ratingService.exportSessionData('missing-session', { individualScores: false }))
         .rejects.toMatchObject({ statusCode: 404, code: 'SESSION_NOT_FOUND', message: "We couldn't find that event." });
     });
   });

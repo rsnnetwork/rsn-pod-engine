@@ -104,6 +104,7 @@ import eventAdmissionRoutes from '../../routes/event-admission';
 import callLinkRoutes, { sessionCallLinkRoutes } from '../../routes/call-links';
 import scheduleRoutes from '../../routes/schedule';
 import eventImageRoutes from '../../routes/event-image';
+import eventReportRoutes from '../../routes/event-report';
 
 // The API exactly as index.ts mounts it, in the same order (the last test below holds the two lists together).
 const MOUNTS: Array<[string, express.Router]> = [
@@ -128,6 +129,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/call-links', callLinkRoutes],
   ['/api/sessions', scheduleRoutes],
   ['/api/sessions', eventImageRoutes],
+  ['/api/sessions', eventReportRoutes],
   ['/api/join-requests', joinRequestRoutes],
   ['/api/admin', adminRoutes],
   ['/api/admin', adminInspectRoutes],
@@ -202,6 +204,9 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['delete', `/api/sessions/${EVENT}/chat/${OTHER}`],
   ['get', `/api/sessions/${EVENT}/feedback`],
   ['get', `/api/sessions/${EVENT}/audit`],
+  // Part 3 Task 4: the event report and its CSVs are its organisers' (members only).
+  ['get', `/api/sessions/${EVENT}/report`],
+  ['get', `/api/sessions/${EVENT}/report?format=csv&section=attendance`],
   // Part 2 Task 2: an event's lifecycle steps are its organisers' (members only).
   ['post', `/api/sessions/${EVENT}/publish`],
   ['post', `/api/sessions/${EVENT}/unpublish`],
