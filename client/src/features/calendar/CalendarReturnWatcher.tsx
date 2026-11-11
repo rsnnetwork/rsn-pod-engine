@@ -8,7 +8,7 @@ import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useToastStore } from '@/stores/toastStore';
 import { OUTCOME_MESSAGE, connectedMessage, isOutcome, isProviderName } from './calendar-words';
-import { calendarErrorMessage, useFinishCalendar } from './useCalendar';
+import { calendarErrorMessage, useCalendarSwitch, useFinishCalendar } from './useCalendar';
 
 const CALENDAR_PARAMS = ['calendar', 'calendarProvider', 'calendarTicket'] as const;
 
@@ -16,6 +16,7 @@ export default function CalendarReturnWatcher() {
   const [params, setParams] = useSearchParams();
   const { addToast } = useToastStore();
   const finish = useFinishCalendar();
+  const { on, known } = useCalendarSwitch();
   const handled = useRef<string | null>(null);
 
   const outcome = params.get('calendar');
@@ -23,7 +24,9 @@ export default function CalendarReturnWatcher() {
   const ticket = params.get('calendarTicket');
 
   useEffect(() => {
-    if (!isOutcome(outcome)) return;
+    // Nothing until the server has said whether calendar free/busy is on: then the words always leave the address, but
+    // only while it is on is anything said or finished (S8 review M3: a crafted link shows nothing while it is off).
+    if (!isOutcome(outcome) || !known) return;
     // Out of the address every time they are seen: a page that rewrites its own query from an older copy (Messages
     // drops its ?schedule=1 that way) may put them back once, and a refresh must never finish a spent ticket again.
     setParams((now) => {
@@ -32,7 +35,7 @@ export default function CalendarReturnWatcher() {
       return next;
     }, { replace: true });
     const seen = `${outcome}|${provider}|${ticket}`;
-    if (handled.current === seen) return;
+    if (!on || handled.current === seen) return;
     handled.current = seen;
 
     if (outcome !== 'finish') {
@@ -49,7 +52,7 @@ export default function CalendarReturnWatcher() {
       onError: (err) => addToast(calendarErrorMessage(err, OUTCOME_MESSAGE.failed.text), 'error'),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per outcome that arrives in the address
-  }, [outcome, provider, ticket]);
+  }, [outcome, provider, ticket, known, on]);
 
   return null;
 }

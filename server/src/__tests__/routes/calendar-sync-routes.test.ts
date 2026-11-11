@@ -95,15 +95,21 @@ function fakeQuery(sqlRaw: string, p: unknown[] = []) {
 jest.mock('../../db', () => ({ __esModule: true, query: (sql: string, p?: unknown[]) => fakeQuery(sql, p), transaction: jest.fn() }));
 
 // ── An in-memory Redis ──────────────────────────────────────────────────────
-const hashes = new Map<string, Map<string, string>>();
 const strings = new Map<string, string>();
+const ttls = new Map<string, number>();
+const busyKeys = () => [...strings.keys()].filter((k) => k.startsWith('rsn:calendar:busy:')).sort();
 let redisOn = true;
 const fakeRedis = {
-  hget: async (k: string, f: string) => hashes.get(k)?.get(f) ?? null,
-  hset: async (k: string, f: string, v: string) => { if (!hashes.has(k)) hashes.set(k, new Map()); hashes.get(k)!.set(f, v); return 1; },
+  get: async (k: string) => strings.get(k) ?? null,
   expire: async () => 1,
-  del: async (...keys: string[]) => { let n = 0; for (const k of keys) n += hashes.delete(k) || strings.delete(k) ? 1 : 0; return n; },
-  set: async (k: string, v: string, ..._rest: unknown[]) => { if (strings.has(k)) return null; strings.set(k, v); return 'OK'; },
+  del: async (...keys: string[]) => { let n = 0; for (const k of keys) n += strings.delete(k) ? 1 : 0; return n; },
+  set: async (k: string, v: string, ...rest: unknown[]) => {
+    if (rest.includes('NX') && strings.has(k)) return null;
+    strings.set(k, v);
+    const ex = rest.indexOf('EX');
+    if (ex >= 0) ttls.set(k, Number(rest[ex + 1]));
+    return 'OK';
+  },
 };
 jest.mock('../../services/redis/redis.client', () => ({ __esModule: true, getRedisClient: () => (redisOn ? fakeRedis : null) }));
 
@@ -116,6 +122,7 @@ jest.mock('../../realtime/fanout', () => ({
 // ── Google and Microsoft ────────────────────────────────────────────────────
 interface Sent { url: URL; form: URLSearchParams | null; json: unknown; headers: Record<string, string> }
 let sent: Sent[] = [];
+const signals: AbortSignal[] = [];
 type Answer = { status: number; body: unknown };
 const idToken = (claims: Record<string, unknown>) => `x.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`;
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/calendar.freebusy';
@@ -127,13 +134,14 @@ let provider: {
   revoke: () => Answer;
 };
 const realFetch = global.fetch;
+const defaultBusy = (): Answer => ({ status: 200, body: { calendars: { primary: { busy: [{ start: '2026-12-01T09:00:00Z', end: '2026-12-01T10:00:00Z' }] } } } });
 function defaultProviders() {
   let msRefresh = 0;
   provider = {
     googleToken: (form) => (form.get('grant_type') === 'authorization_code'
       ? { status: 200, body: { access_token: 'g-at-1', expires_in: 3600, refresh_token: 'g-rt-1', scope: `openid email ${GOOGLE_SCOPE}`, id_token: idToken({ email: 'shirley@gmail.example' }) } }
       : { status: 200, body: { access_token: 'g-at-2', expires_in: 3600, scope: GOOGLE_SCOPE } }),
-    googleBusy: () => ({ status: 200, body: { calendars: { primary: { busy: [{ start: '2026-12-01T09:00:00Z', end: '2026-12-01T10:00:00Z' }] } } } }),
+    googleBusy: defaultBusy,
     msToken: (form) => (form.get('grant_type') === 'authorization_code'
       ? { status: 200, body: { access_token: 'm-at-1', expires_in: 3600, refresh_token: 'm-rt-1', scope: 'openid email offline_access https://graph.microsoft.com/Calendars.ReadBasic', id_token: idToken({ preferred_username: 'shirley@outlook.example' }) } }
       : { status: 200, body: { access_token: `m-at-r${++msRefresh}`, expires_in: 3600, refresh_token: `m-rt-r${msRefresh}` } }),
@@ -151,6 +159,7 @@ function fakeFetch(input: string | URL, init: RequestInit = {}): Promise<Respons
   const isForm = (headers['Content-Type'] ?? '').includes('urlencoded');
   const form = isForm ? new URLSearchParams(body) : null;
   sent.push({ url, form, json: !isForm && body ? JSON.parse(body) : null, headers });
+  if (init.signal) signals.push(init.signal);
   const where = `${url.origin}${url.pathname}`;
   let a: Answer;
   if (where === 'https://oauth2.googleapis.com/token') a = provider.googleToken(form!);
@@ -169,7 +178,18 @@ import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { forgetAccountGate } from '../../middleware/auth';
 import { pkceChallenge } from '../../services/calendar-sync/oauth-envelope';
 import { open, seal, tokenAad } from '../../services/calendar-sync/secret-box';
-import { forgetCalendarConnections } from '../../services/calendar-sync/calendar-sync.service';
+import logger from '../../config/logger';
+import { beginConnect, forgetCalendarConnections, outcomeUrl, safeReturnPath } from '../../services/calendar-sync/calendar-sync.service';
+
+const ch = (code: number) => String.fromCharCode(code);
+const BACKSLASH = ch(92);
+/** Return paths that must never leave the app (S8 review C1): control characters, whitespace, backslashes, // and the like. */
+const BAD_RETURNS = [
+  `/${ch(9)}/evil.example`, `/${ch(10)}/evil.example`, `/${ch(13)}/evil.example`, `/${ch(9)}${BACKSLASH}evil.example`,
+  `/${BACKSLASH}evil.example`, `/${BACKSLASH}${BACKSLASH}evil.example`, '//evil.example/x', '///evil.example', '/ /evil.example',
+  `/${ch(0)}/evil.example`, `/${ch(0x2028)}/evil.example`, `/${ch(0xa0)}/evil.example`, 'https://evil.example/x',
+  'javascript:alert(1)', 'evil.example', '', `/${'a'.repeat(300)}`,
+];
 
 const app = express();
 app.set('trust proxy', 1);
@@ -227,7 +247,7 @@ async function connect(p: 'google' | 'microsoft', who = ME) {
 beforeEach(() => {
   Object.keys(mockConfig).forEach((k) => delete mockConfig[k]);
   Object.assign(mockConfig, baseConfig);
-  table.clear(); audits.length = 0; fanouts.length = 0; hashes.clear(); strings.clear(); kinds.clear();
+  table.clear(); audits.length = 0; fanouts.length = 0; strings.clear(); ttls.clear(); kinds.clear();
   redisOn = true; sent = []; ip++; run++;
   ME = `a0000000-0000-4000-8000-${String(run).padStart(12, '0')}`;
   SOMEONE = `b0000000-0000-4000-8000-${String(run).padStart(12, '0')}`;
@@ -243,7 +263,7 @@ afterAll(() => { global.fetch = realFetch; });
 describe('switched off: no calendar anywhere', () => {
   const routes: Array<[string, string]> = [
     ['post', '/api/calendar/connect/google'], ['get', '/api/calendar/google/start?t=x'], ['get', '/api/calendar/google/callback?code=c&state=s'],
-    ['post', '/api/calendar/connections/google/finish'], ['get', '/api/calendar/connections'], ['delete', '/api/calendar/connections/google'],
+    ['post', '/api/calendar/connections/google/finish'], ['get', '/api/calendar/connections'],
     ['get', `/api/calendar/busy?from=${RANGE.from}&to=${RANGE.to}`],
   ];
 
@@ -252,7 +272,7 @@ describe('switched off: no calendar anywhere', () => {
     ['on without a key (fails closed)', { calendarTokenKey: '' }],
     ['on with a key that is not 32 bytes', { calendarTokenKey: randomBytes(16).toString('base64') }],
     ['on with no provider credentials', { googleCalendarClientSecret: '', microsoftCalendarClientId: '' }],
-  ])('%s: every route answers the 404 of a route that does not exist, and the config says off', async (_label, over) => {
+  ])('%s: every route answers the 404 of a route that does not exist (the list too, with nothing connected), and the config says off', async (_label, over) => {
     Object.assign(mockConfig, over);
     for (const [method, url] of routes) {
       const res = await (request(app) as unknown as Record<string, (u: string) => request.Test>)[method](url).set(as(ME)).set(from());
@@ -262,7 +282,32 @@ describe('switched off: no calendar anywhere', () => {
     }
     const cfg = await request(app).get('/api/public/config');
     expect(cfg.body).toEqual({ success: true, data: { calendar: { enabled: false, providers: [] } } });
+    // Disconnecting is never switched off (S8 review M5): with nothing connected it simply says so.
+    expect((await request(app).delete('/api/calendar/connections/google').set(as(ME))).body).toEqual({ success: true, data: { disconnected: true, revokedAtProvider: false } });
+    expect((await request(app).delete('/api/calendar/connections/google')).status).toBe(401);
     expect(sent).toHaveLength(0);
+  });
+
+  it('switched off again, a member still sees and removes what they connected (revoked at Google while its keys are set)', async () => {
+    await connect('google');
+    await connect('microsoft', SOMEONE);
+    mockConfig.calendarSync = 'off';
+    sent = []; fanouts.length = 0;
+    const list = await request(app).get('/api/calendar/connections').set(as(ME));
+    expect(list.status).toBe(200);
+    expect(list.body.data.map((c: { provider: string }) => c.provider)).toEqual(['google']);
+    expect((await request(app).get('/api/calendar/busy').query(RANGE).set(as(ME))).status).toBe(404);
+    expect((await request(app).post('/api/calendar/connect/google').set(as(ME)).send({})).status).toBe(404);
+    const gone = await request(app).delete('/api/calendar/connections/google').set(as(ME));
+    expect(gone.body.data).toEqual({ disconnected: true, revokedAtProvider: true });
+    expect(sentTo('https://oauth2.googleapis.com/revoke')).toHaveLength(1);
+    expect(find(ME, 'google')).toBeUndefined();
+    expect(fanouts).toEqual([ME]);
+    expect((await request(app).get('/api/calendar/connections').set(as(ME))).status).toBe(404);
+    // With no key left at all, the row still goes (nothing can be revoked without it).
+    mockConfig.calendarTokenKey = '';
+    expect((await request(app).delete('/api/calendar/connections/microsoft').set(as(SOMEONE))).body.data).toEqual({ disconnected: true, revokedAtProvider: false });
+    expect(table.size).toBe(0);
   });
 
   it('says on, and which providers, once the switch, the key and a provider are all there', async () => {
@@ -271,6 +316,7 @@ describe('switched off: no calendar anywhere', () => {
     expect((await request(app).get('/api/public/config')).body.data).toEqual({ calendar: { enabled: true, providers: ['google'] } });
     const res = await request(app).post('/api/calendar/connect/microsoft').set(as(ME)).send({});
     expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('CALENDAR_PROVIDER_NOT_OFFERED');
   });
 });
 
@@ -411,15 +457,45 @@ describe('connecting', () => {
     expect(table.size).toBe(0);
   });
 
-  it('a return path that is not ours is Settings, and the site is only ever one of ours', async () => {
-    const begin = await request(app).post('/api/calendar/connect/google').set(as(ME)).set('Origin', 'https://evil.example').send({ returnTo: '//evil.example/x' });
-    const startUrl = new URL(begin.body.data.url);
-    const start = await request(app).get(startUrl.pathname + startUrl.search).set(from());
-    const state = new URL(start.headers.location).searchParams.get('state')!;
-    const cookie = String(start.headers['set-cookie'][0]).split(';')[0];
-    const cb = await request(app).get(`/api/calendar/google/callback?code=c&state=${encodeURIComponent(state)}`).set('Cookie', cookie);
-    const landing = new URL(cb.headers.location);
-    expect(landing.origin + landing.pathname).toBe('https://app.rsn.network/settings');
+  it('a return path that is not a plain path on our site is refused at connect (400), never sealed', async () => {
+    for (const [i, returnTo] of BAD_RETURNS.entries()) {
+      // A member each: the connect limiter allows ten an hour per member.
+      const who = `e0000000-0000-4000-8000-${String(run * 100 + i).padStart(12, '0')}`;
+      const res = await request(app).post('/api/calendar/connect/google').set(as(who)).send({ returnTo });
+      expect([JSON.stringify(returnTo), res.status]).toEqual([JSON.stringify(returnTo), 400]);
+    }
+    expect((await request(app).post('/api/calendar/connect/google').set(as(ME)).send({ returnTo: '/messages/c1?schedule=1' })).status).toBe(200);
+  });
+
+  it('even a bad return path sealed into a start (bypassing the route) lands on the app, never another site (S8 review C1)', async () => {
+    for (const returnTo of BAD_RETURNS) {
+      const start = new URL(beginConnect(ME, 'google', 'https://evil.example', returnTo));
+      const begun = await request(app).get(start.pathname + start.search).set(from());
+      const state = new URL(begun.headers.location).searchParams.get('state')!;
+      const cookie = String(begun.headers['set-cookie'][0]).split(';')[0];
+      for (const q of [`code=c&state=${encodeURIComponent(state)}`, `error=access_denied&state=${encodeURIComponent(state)}`]) {
+        const cb = await request(app).get(`/api/calendar/google/callback?${q}`).set('Cookie', cookie);
+        const landing = new URL(cb.headers.location);
+        expect([JSON.stringify(returnTo), landing.origin]).toEqual([JSON.stringify(returnTo), 'https://app.rsn.network']);
+      }
+    }
+  });
+
+  it('safeReturnPath and outcomeUrl: tab, CR, LF, backslash, protocol-relative, encoded and dot-segment variants', () => {
+    for (const bad of BAD_RETURNS) {
+      expect([JSON.stringify(bad), safeReturnPath(bad)]).toEqual([JSON.stringify(bad), '/settings']);
+      const u = new URL(outcomeUrl('https://app.rsn.network', bad, 'finish', 'google', 'T'));
+      expect([JSON.stringify(bad), u.origin, u.pathname]).toEqual([JSON.stringify(bad), 'https://app.rsn.network', '/settings']);
+    }
+    // Encoded tricks stay a path on our site (percent-encoding is never decoded into a host).
+    for (const encoded of ['/%2F%2Fevil.example', '/%09/evil.example', '/%5C%5Cevil.example', '/%0d%0a/evil.example']) {
+      const u = new URL(outcomeUrl('https://app.rsn.network', encoded, 'failed', 'google'));
+      expect([encoded, u.origin]).toEqual([encoded, 'https://app.rsn.network']);
+      expect(u.pathname.startsWith('//')).toBe(false);
+    }
+    expect(safeReturnPath('/messages/c1?schedule=1')).toBe('/messages/c1?schedule=1');
+    expect(safeReturnPath('/a/../settings?x=1')).toBe('/settings?x=1');
+    expect(safeReturnPath('/a/..//evil.example')).toBe('/settings');
   });
 
   it('an event guest cannot connect, and no route answers without signing in', async () => {
@@ -455,9 +531,11 @@ describe('busy times', () => {
     const reads = sent.length;
     expect(reads).toBeGreaterThanOrEqual(2);
     // Only times are cached: never a title or anyone else.
-    const cached = [...hashes.entries()];
-    expect(cached.map(([k]) => k).sort()).toEqual([`rsn:calendar:busy:${ME}:google`, `rsn:calendar:busy:${ME}:microsoft`]);
-    for (const [, fields] of cached) for (const v of fields.values()) expect(Object.keys(JSON.parse(v)).sort()).toEqual(['at', 'busy']);
+    expect(busyKeys()).toEqual([`rsn:calendar:busy:${ME}:google`, `rsn:calendar:busy:${ME}:microsoft`]);
+    for (const k of busyKeys()) {
+      for (const e of JSON.parse(strings.get(k)!).entries) expect(Object.keys(e).sort()).toEqual(['at', 'busy', 'field']);
+      expect(ttls.get(k)).toBe(1800); // 30 minutes from the fetch, never more
+    }
 
     const second = await busy();
     expect(second.body.data.busy).toEqual(first.body.data.busy);
@@ -525,6 +603,39 @@ describe('busy times', () => {
     expect(limited.body.data).toMatchObject({ busy: [{ start: '2026-12-01T09:00:00.000Z' }], errors: [] });
   });
 
+  it('our own setup refused (Calendar API not enabled): unavailable for the member, never a reconnect, logged loudly once (S8 review I3)', async () => {
+    await connect('google');
+    const notEnabled = { error: { code: 403, errors: [{ reason: 'accessNotConfigured', domain: 'usageLimits' }],
+      message: 'Google Calendar API has not been used in project 123 before or it is disabled.', status: 'PERMISSION_DENIED',
+      details: [{ reason: 'SERVICE_DISABLED' }] } };
+    provider.googleBusy = () => ({ status: 403, body: notEnabled });
+    fanouts.length = 0;
+    const first = await busy();
+    expect(first.status).toBe(200);
+    expect(first.body.data.errors).toEqual([{ provider: 'google', code: 'unavailable' }]);
+    expect(first.body.data.connected).toEqual([{ provider: 'google', status: 'active' }]);
+    expect(find(ME, 'google')!.status).toBe('active');
+    expect(fanouts).toEqual([]);
+    await busy();
+    const loud = (logger.error as jest.Mock).mock.calls.filter((c) => String(c[1]).includes('refused REASON itself'));
+    expect(loud).toHaveLength(1);
+    // A client id or secret the provider refuses at refresh is the same: not the member's grant.
+    find(ME, 'google')!.access_expires_at = new Date(Date.now() - 1000);
+    provider.googleToken = () => ({ status: 401, body: { error: 'invalid_client' } });
+    provider.googleBusy = defaultBusy;
+    expect((await busy()).body.data.errors).toEqual([{ provider: 'google', code: 'unavailable' }]);
+    expect(find(ME, 'google')!.status).toBe('active');
+  });
+
+  it('every provider call carries the busy read\'s overall deadline (S8 review M6)', async () => {
+    await connect('microsoft');
+    find(ME, 'microsoft')!.access_expires_at = new Date(Date.now() - 1000);
+    signals.length = 0;
+    await busy();
+    expect(signals.length).toBeGreaterThanOrEqual(2); // the refresh and the calendar view
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
   it('a token the key cannot open (a lost or changed key) asks to reconnect, never a 500', async () => {
     await connect('google');
     const other = randomBytes(32);
@@ -570,17 +681,30 @@ describe('disconnecting', () => {
   it('revokes at Google, deletes the row and its cached times, tells the member\'s screens, logs the provider only', async () => {
     await connect('google');
     await request(app).get('/api/calendar/busy').query(RANGE).set(as(ME));
-    expect(hashes.size).toBe(1);
+    expect(busyKeys()).toHaveLength(1);
     fanouts.length = 0; audits.length = 0;
     const res = await request(app).delete('/api/calendar/connections/google').set(as(ME));
     expect(res.body.data).toEqual({ disconnected: true, revokedAtProvider: true });
     expect(sentTo('https://oauth2.googleapis.com/revoke')[0].form!.get('token')).toBe('g-rt-1');
     expect(table.size).toBe(0);
-    expect(hashes.size).toBe(0);
+    expect(busyKeys()).toHaveLength(0);
     expect(fanouts).toEqual([ME]);
     expect(audits[0].slice(0, 5)).toEqual([ME, 'calendar.disconnected', 'user', ME, JSON.stringify({ provider: 'google', revokedAtProvider: true })]);
     // Twice is harmless.
     expect((await request(app).delete('/api/calendar/connections/google').set(as(ME))).status).toBe(200);
+  });
+
+  it('connecting again hands the replaced grant back to Google, never the new one (S8 review M1)', async () => {
+    await connect('google');
+    let n = 1;
+    provider.googleToken = (form) => (form.get('grant_type') === 'authorization_code'
+      ? { status: 200, body: { access_token: `g-at-new${++n}`, expires_in: 3600, refresh_token: `g-rt-new${n}`, scope: `openid email ${GOOGLE_SCOPE}` } }
+      : { status: 200, body: { access_token: 'g-at-x', expires_in: 3600 } });
+    sent = [];
+    await connect('google');
+    await new Promise((r) => setImmediate(r));
+    expect(sentTo('https://oauth2.googleapis.com/revoke').map((x) => x.form!.get('token'))).toEqual(['g-rt-1']);
+    expect(open(KEY, find(ME, 'google')!.refresh_token_enc, tokenAad(ME, 'google', 'refresh'))).toBe('g-rt-new2');
   });
 
   it('still disconnects when the provider\'s revoke fails, and Microsoft (no revoke call) says it was not revoked there', async () => {

@@ -9,9 +9,11 @@ import { contextOptions, engineLabel, launchBrowser } from '../helpers/engine';
 //
 // Calendar free/busy ships dark (CALENDAR_SYNC=off). Which half of this spec runs is decided by the server itself,
 // through GET /api/public/config, never by a guess:
-//   OFF (today) — the config says off; every calendar route answers 404 (signed in or not); at 360px Settings has no
-//                 Calendars card and the meeting picker (a real conversation between two throwaways, opened with
-//                 ?schedule=1) has no calendar line, no striped cell, nothing that says "calendar" but the zone line.
+//   OFF (today) — the config says off; every connect, busy and OAuth route answers 404 (signed in or not); the list of
+//                 connections answers only a member who has one (404 here), and disconnecting still works signed in
+//                 (S8 review M5); at 360px, once the page has read the config, Settings has no Calendars card and the
+//                 meeting picker (a real conversation between two throwaways, opened with ?schedule=1) has no calendar
+//                 line, no striped cell, nothing that says "calendar" but the zone line.
 //   ON (after the owner's Google and Microsoft registrations and the switch) — the config names the providers; the
 //                 member's connections and busy times answer empty; a start address leads to the provider's consent
 //                 screen with PKCE (S256) and our nonce cookie; at 360px the Calendars card and its consent sheet fit
@@ -87,9 +89,17 @@ async function noSidewaysScroll(page: Page) {
   expect(scroll).toBeLessThanOrEqual(width + 1);
 }
 
+/** Navigate, and wait until the app has read the server's public config: only then does "no calendar UI" mean anything. */
+async function gotoAfterConfig(page: Page, url: string) {
+  const config = page.waitForResponse((r) => r.url().includes('/api/public/config') && r.ok(), { timeout: 60_000 });
+  await gotoRetry(page, url);
+  const answer = await (await config).json();
+  expect(answer.data.calendar.enabled, 'the page read the config the server sends').toBe(calendarOn);
+}
+
 /** The meeting picker of Shirley's conversation with Ben, open. */
 async function openPicker(page: Page) {
-  await gotoRetry(page, `${APP}/messages/${conversationId}?schedule=1`);
+  await gotoAfterConfig(page, `${APP}/messages/${conversationId}?schedule=1`);
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 45_000 });
   await expect(page.getByTestId('slot-grid')).toBeVisible({ timeout: 20_000 });
 }
@@ -128,11 +138,9 @@ test(`switched off: the config says so, every calendar route is a 404, and no ca
 
   const range = `from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 86_400_000).toISOString())}`;
   const routes: Array<[string, string, unknown?]> = [
-    ['GET', '/calendar/connections'],
     ['POST', '/calendar/connect/google', {}],
     ['POST', '/calendar/connect/microsoft', {}],
     ['POST', '/calendar/connections/google/finish', { ticket: 'x' }],
-    ['DELETE', '/calendar/connections/google'],
     ['GET', `/calendar/busy?${range}`],
     ['GET', '/calendar/google/start?t=x'],
     ['GET', '/calendar/microsoft/callback?code=x&state=y'],
@@ -144,9 +152,17 @@ test(`switched off: the config says so, every calendar route is a 404, and no ca
       expect(res.json?.error?.code).toBe('NOT_FOUND');
     }
   }
+  // A member can always see and remove what they connected (S8 review M5): the list answers only someone who has a
+  // calendar connected (a 404 for this throwaway, who has none), and disconnecting always works when signed in.
+  expect((await api(me, 'GET', '/calendar/connections')).status).toBe(404);
+  expect((await api(null, 'GET', '/calendar/connections')).status).toBe(401);
+  const removed = await api(me, 'DELETE', '/calendar/connections/google');
+  expect(removed.status).toBe(200);
+  expect(removed.json.data).toEqual({ disconnected: true, revokedAtProvider: false });
+  expect((await api(null, 'DELETE', '/calendar/connections/google')).status).toBe(401);
 
   const page = await signedIn(me, PHONE);
-  await gotoRetry(page, `${APP}/settings`);
+  await gotoAfterConfig(page, `${APP}/settings`);
   await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible({ timeout: 45_000 });
   await expect(page.getByRole('heading', { name: 'Privacy' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('calendars-card')).toHaveCount(0);
@@ -197,7 +213,7 @@ test(`switched on: providers named, empty reads, a PKCE start, and the card, con
   expect(forged.headers.get('location') ?? '').toMatch(/\/settings\?calendar=failed/);
 
   const page = await signedIn(me, PHONE);
-  await gotoRetry(page, `${APP}/settings`);
+  await gotoAfterConfig(page, `${APP}/settings`);
   const card = page.getByTestId('calendars-card');
   await expect(card).toBeVisible({ timeout: 45_000 });
   await expect(card.getByText(/never what your events are/)).toBeVisible();
@@ -210,6 +226,8 @@ test(`switched on: providers named, empty reads, a PKCE start, and the card, con
   await expect(consentText).toBeVisible();
   await expect(consentText).toContainText('never sees what your events are');
   await expect(consentText).toContainText('not the calendar invitation REASON emails you');
+  await expect(consentText).toContainText('nor the calendar file you can download from a meeting');
+  await expect(consentText).toContainText('REASON keeps your busy times for at most 30 minutes');
   await fitsViewport(page, page.getByTestId('calendar-consent-continue'));
   await fitsViewport(page, page.getByRole('button', { name: 'Not now' }));
   await noSidewaysScroll(page);

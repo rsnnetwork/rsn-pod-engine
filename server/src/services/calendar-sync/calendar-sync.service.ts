@@ -20,7 +20,7 @@
 
 import { ErrorCodes, type CalendarBusy, type CalendarConnection, type CalendarDisconnectResult, type CalendarProvider } from '@rsn/shared';
 import logger from '../../config/logger';
-import { AppError, NotFoundError, ValidationError } from '../../middleware/errors';
+import { AppError, ValidationError } from '../../middleware/errors';
 import { fanoutUserCalendars } from '../../realtime/fanout';
 import { clientOriginConfig, resolveClientBaseUrl } from '../identity/client-origin';
 import { browserBindingRefusal, newOauthNonce } from '../identity/oauth-browser-binding';
@@ -49,7 +49,9 @@ const providerFailed = () => new AppError(502, ErrorCodes.CALENDAR_PROVIDER_FAIL
 function ready(provider: CalendarProvider): { key: Buffer; creds: ProviderCredentials } {
   const key = calendarTokenKey();
   const creds = providerCredentials(provider);
-  if (!providerAvailable(provider) || !key || !creds) throw new NotFoundError('Calendar provider');
+  if (!providerAvailable(provider) || !key || !creds) {
+    throw new AppError(404, ErrorCodes.CALENDAR_PROVIDER_NOT_OFFERED, 'That calendar cannot be connected right now.');
+  }
   return { key, creds };
 }
 
@@ -57,19 +59,45 @@ function ready(provider: CalendarProvider): { key: Buffer; creds: ProviderCreden
 
 export const DEFAULT_RETURN = '/settings';
 
-/** A same-site path to come back to, or Settings. */
+// A return path is checked twice, and the second check is the one that matters. The first refuses anything that is not
+// plainly a path on our site: not a string, too long, not starting with one "/", or holding a backslash, whitespace or a
+// control character. URL parsers strip tab, CR and LF and read "\" as "/", so "/\t/evil.example" would otherwise become
+// the protocol-relative "//evil.example" (S8 review C1). The second builds the URL against a fixed origin and keeps the
+// result only when it is still that origin, returning just its path and query. outcomeUrl then checks the final URL's
+// origin once more against the app's, so no return path can ever take the browser (or a ticket) to another site.
+const PATH_ORIGIN = 'https://return-path.invalid';
+const BACKSLASH = 92;
+/** A backslash, whitespace (any Unicode space) or a control character: never in a return path. */
+function hasUnsafePathChar(text: string): boolean {
+  for (const ch of text) {
+    const c = ch.codePointAt(0) ?? 0;
+    if (c <= 0x20 || (c >= 0x7f && c <= 0xa0) || c === BACKSLASH || c === 0x1680 || (c >= 0x2000 && c <= 0x200f)
+      || (c >= 0x2028 && c <= 0x202f) || c === 0x205f || c === 0x3000 || c === 0xfeff) return true;
+  }
+  return false;
+}
+
+/** A same-site path (and query) to come back to, or Settings. */
 export function safeReturnPath(raw: unknown): string {
-  if (typeof raw !== 'string' || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\') || raw.length > 300) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 300) return DEFAULT_RETURN;
+  if (!raw.startsWith('/') || raw.startsWith('//') || hasUnsafePathChar(raw)) return DEFAULT_RETURN;
+  let url: URL;
+  try {
+    url = new URL(raw, `${PATH_ORIGIN}/`);
+  } catch {
     return DEFAULT_RETURN;
   }
-  return raw;
+  if (url.origin !== PATH_ORIGIN || !url.pathname.startsWith('/') || url.pathname.startsWith('//')) return DEFAULT_RETURN;
+  return `${url.pathname}${url.search}`;
 }
 
 export type ConnectOutcome = 'finish' | 'cancelled' | 'failed' | 'try_again' | 'admin';
 
 /** The app address the browser lands on: the return path on one of our own sites, with the outcome in the query. */
 export function outcomeUrl(clientBase: string, returnTo: string, outcome: ConnectOutcome, provider: CalendarProvider, ticket?: string): string {
-  const url = new URL(safeReturnPath(returnTo), `${clientBase}/`);
+  const appOrigin = new URL(clientBase).origin;
+  let url = new URL(safeReturnPath(returnTo), `${appOrigin}/`);
+  if (url.origin !== appOrigin) url = new URL(DEFAULT_RETURN, `${appOrigin}/`);
   url.searchParams.set('calendar', outcome);
   url.searchParams.set('calendarProvider', provider);
   if (ticket) url.searchParams.set('calendarTicket', ticket);
@@ -169,6 +197,8 @@ export async function finishConnect(userId: string, provider: CalendarProvider, 
     logger.warn({ provider }, 'Calendar connect: the provider gave no refresh token');
     throw providerFailed();
   }
+  // A connect again replaces the grant: the one it replaces is handed back to the provider afterwards (S8 review M1).
+  const previous = await repo.sealedRow(userId, provider);
   const connection = await repo.upsertConnection(userId, provider, {
     accountEmail: granted.accountEmail,
     scopes: granted.scopes,
@@ -177,7 +207,21 @@ export async function finishConnect(userId: string, provider: CalendarProvider, 
     accessExpiresAt: new Date(Date.now() + granted.expiresIn * 1000),
   });
   await forgetBusy(userId, [provider]);
+  if (previous) void revokeReplaced(previous, granted.refreshToken);
   return connection;
+}
+
+/** The grant a reconnect replaced, revoked where the provider allows (never the new one). Never throws. */
+async function revokeReplaced(previous: repo.ConnectionRow, newRefreshToken: string): Promise<void> {
+  const key = calendarTokenKey();
+  const creds = providerCredentials(previous.provider);
+  if (!key || !creds) return;
+  try {
+    const old = open(key, previous.refresh_token_enc, tokenAad(previous.user_id, previous.provider, 'refresh'));
+    if (old !== newRefreshToken) await PROVIDERS[previous.provider].revoke({ creds, token: old });
+  } catch {
+    // A grant the key cannot open, or a provider that does not answer: nothing more can be done for it.
+  }
 }
 
 export const listConnections = (userId: string): Promise<CalendarConnection[]> => repo.listForMember(userId);
@@ -227,6 +271,9 @@ export async function forgetCalendarConnections(userId: string): Promise<void> {
 // ─── Busy times ──────────────────────────────────────────────────────────────
 
 export const MAX_RANGE_MS = 31 * 86_400_000;
+/** The whole busy read (refreshes and every page of every provider) answers within this, or goes on without it. */
+export const BUSY_DEADLINE_MS = 10_000;
+const HOUR_MS = 3_600_000;
 const PAST_SLACK_MS = 2 * 86_400_000;
 const FUTURE_LIMIT_MS = 62 * 86_400_000;
 const EXPIRY_MARGIN_MS = 60_000;
@@ -241,13 +288,14 @@ export function busyRange(r: BusyRequest, now: number = Date.now()): { from: num
   if (to - from > MAX_RANGE_MS) throw new ValidationError('Choose a time range of 31 days or less.');
   if (from < now - PAST_SLACK_MS || to > now + FUTURE_LIMIT_MS) throw new ValidationError('Choose a time range around now.');
   const zone = r.zone && knownZone(r.zone) ? r.zone : 'UTC';
-  return { from, to, zone };
+  // Whole hours, so the ranges a member can ask for (and the cache entries they make) stay few (S8 review I1).
+  return { from: Math.floor(from / HOUR_MS) * HOUR_MS, to: Math.ceil(to / HOUR_MS) * HOUR_MS, zone };
 }
 
 const refreshing = new Map<string, Promise<string>>();
 
 /** A fresh access token, refreshing (once at a time per connection in this process) when it has run out. */
-async function accessTokenFor(row: repo.ConnectionRow, key: Buffer, creds: ProviderCredentials, force: boolean): Promise<string> {
+async function accessTokenFor(row: repo.ConnectionRow, key: Buffer, creds: ProviderCredentials, force: boolean, deadline?: AbortSignal): Promise<string> {
   const valid = row.access_token_enc && row.access_expires_at
     && new Date(row.access_expires_at).getTime() - EXPIRY_MARGIN_MS > Date.now();
   if (valid && !force) return open(key, row.access_token_enc as Buffer, tokenAad(row.user_id, row.provider, 'access'));
@@ -255,7 +303,7 @@ async function accessTokenFor(row: repo.ConnectionRow, key: Buffer, creds: Provi
   if (inFlight) return inFlight;
   const run = (async () => {
     const refreshToken = open(key, row.refresh_token_enc, tokenAad(row.user_id, row.provider, 'refresh'));
-    const r = await PROVIDERS[row.provider].refresh({ creds, refreshToken });
+    const r = await PROVIDERS[row.provider].refresh({ creds, refreshToken, signal: deadline });
     // Rotated on every refresh: Microsoft's new refresh token, or Google's same one sealed again under a fresh IV.
     await repo.saveRefresh(
       row.id,
@@ -286,7 +334,15 @@ async function needsReconnect(row: repo.ConnectionRow, code: string): Promise<Pr
   return { ok: false, code: 'reconnect' };
 }
 
-async function readProvider(row: repo.ConnectionRow, range: { from: number; to: number; zone: string }): Promise<ProviderRead> {
+/** Our own setup is wrong (the Calendar API off, a client refused): said at error level once per provider per process. */
+const misconfiguredLogged = new Set<string>();
+function logMisconfigured(provider: CalendarProvider): void {
+  if (misconfiguredLogged.has(provider)) return;
+  misconfiguredLogged.add(provider);
+  logger.error({ provider }, 'Calendar provider refused REASON itself (API not enabled, project suspended or client refused): busy times are unavailable for everyone until the provider console is fixed; no member is asked to reconnect');
+}
+
+async function readProvider(row: repo.ConnectionRow, range: { from: number; to: number; zone: string }, deadline: AbortSignal): Promise<ProviderRead> {
   const key = calendarTokenKey();
   const creds = providerCredentials(row.provider);
   if (!key || !creds || !providerAvailable(row.provider)) return { ok: false, code: 'unavailable' };
@@ -298,10 +354,10 @@ async function readProvider(row: repo.ConnectionRow, range: { from: number; to: 
   try {
     let spans: Span[];
     try {
-      spans = await adapter.busy(await accessTokenFor(row, key, creds, false), range);
+      spans = await adapter.busy(await accessTokenFor(row, key, creds, false, deadline), range, deadline);
     } catch (err) {
       if (!(err instanceof CalendarProviderError) || err.kind !== 'unauthorized') throw err;
-      spans = await adapter.busy(await accessTokenFor(row, key, creds, true), range);
+      spans = await adapter.busy(await accessTokenFor(row, key, creds, true, deadline), range, deadline);
     }
     const merged = mergeSpans(spans, range.from, range.to);
     await writeBusy(row.user_id, row.provider, field, toIntervals(merged));
@@ -311,7 +367,8 @@ async function readProvider(row: repo.ConnectionRow, range: { from: number; to: 
     if (err instanceof SecretBoxError) return needsReconnect(row, 'key');
     if (err instanceof CalendarProviderError && NEEDS_RECONNECT.has(err.kind)) return needsReconnect(row, err.kind);
     const kind = err instanceof CalendarProviderError ? err.kind : 'unexpected';
-    logger.warn({ provider: row.provider, kind, stale: !!cached }, 'Calendar busy read failed; the picker goes on without it');
+    if (kind === 'misconfigured') logMisconfigured(row.provider);
+    else logger.warn({ provider: row.provider, kind, stale: !!cached }, 'Calendar busy read failed; the picker goes on without it');
     return cached ? { ok: true, spans: fromIntervals(cached.busy) } : { ok: false, code: 'unavailable' };
   }
 }
@@ -320,9 +377,10 @@ async function readProvider(row: repo.ConnectionRow, range: { from: number; to: 
 export async function busyFor(userId: string, request: BusyRequest): Promise<CalendarBusy> {
   const range = busyRange(request);
   const rows = await repo.sealedRowsOf(userId);
+  const deadline = AbortSignal.timeout(BUSY_DEADLINE_MS);
   const reads = await Promise.all(rows.map(async (row) => ({
     row,
-    read: row.status === 'active' ? await readProvider(row, range) : { ok: false as const, code: 'reconnect' as const },
+    read: row.status === 'active' ? await readProvider(row, range, deadline) : { ok: false as const, code: 'reconnect' as const },
   })));
   const spans: Span[] = [];
   const errors: CalendarBusy['errors'] = [];

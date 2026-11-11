@@ -26,7 +26,13 @@ export type ProviderErrorKind =
   | 'forbidden'
   | 'rate_limited'
   | 'unavailable'
-  /** Something the provider should never send (or our own settings are wrong, e.g. a bad client secret). */
+  /**
+   * OUR side is set up wrong, not the member's grant: the Calendar API not enabled or the project suspended (Google's
+   * 403 accessNotConfigured / SERVICE_DISABLED), a client id or secret refused (invalid_client, unauthorized_client).
+   * Never a reconnect: connecting again could not fix it. Read as "unavailable" and logged loudly (S8 review I3).
+   */
+  | 'misconfigured'
+  /** Something the provider should never send. */
   | 'bad_response';
 
 export class CalendarProviderError extends Error {
@@ -58,8 +64,9 @@ export interface CalendarProviderAdapter {
   hasCalendarScope(scopes: readonly string[]): boolean;
   authorizeUrl(a: { creds: ProviderCredentials; redirectUri: string; state: string; challenge: string }): string;
   exchangeCode(a: { creds: ProviderCredentials; redirectUri: string; code: string; verifier: string }): Promise<GrantedTokens>;
-  refresh(a: { creds: ProviderCredentials; refreshToken: string }): Promise<RefreshedTokens>;
-  busy(accessToken: string, range: BusyRange): Promise<Span[]>;
+  /** `signal` is the caller's overall deadline for the busy read (each call also has its own 8-second limit). */
+  refresh(a: { creds: ProviderCredentials; refreshToken: string; signal?: AbortSignal }): Promise<RefreshedTokens>;
+  busy(accessToken: string, range: BusyRange, signal?: AbortSignal): Promise<Span[]>;
   /** True when the provider confirmed it forgot the grant; false when it has no such call or did not confirm. */
   revoke(a: { creds: ProviderCredentials; token: string }): Promise<boolean>;
 }
@@ -67,9 +74,21 @@ export interface CalendarProviderAdapter {
 const TIMEOUT_MS = 8000;
 const MAX_PAGES = 10;
 
-async function send(url: string, init: RequestInit): Promise<Response> {
+/** This call's own 8-second limit, and the caller's deadline when there is one: whichever comes first aborts it. */
+function limitOf(deadline?: AbortSignal): AbortSignal {
+  const own = AbortSignal.timeout(TIMEOUT_MS);
+  if (!deadline) return own;
+  const both = new AbortController();
+  const stop = () => both.abort();
+  if (deadline.aborted) stop();
+  deadline.addEventListener('abort', stop, { once: true });
+  own.addEventListener('abort', stop, { once: true });
+  return both.signal;
+}
+
+async function send(url: string, init: RequestInit, deadline?: AbortSignal): Promise<Response> {
   try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    return await fetch(url, { ...init, signal: limitOf(deadline) });
   } catch {
     throw new CalendarProviderError('unavailable');
   }
@@ -90,6 +109,7 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 
 function tokenErrorKind(status: number, body: Record<string, unknown>): ProviderErrorKind {
   const error = str(body.error);
   if (error === 'invalid_grant' || error === 'interaction_required' || error === 'consent_required') return 'invalid_grant';
+  if (error === 'invalid_client' || error === 'unauthorized_client') return 'misconfigured';
   if (status === 429) return 'rate_limited';
   if (status >= 500) return 'unavailable';
   return 'bad_response';
@@ -102,6 +122,7 @@ function apiErrorKind(status: number, body: Record<string, unknown>): ProviderEr
   if (status >= 500) return 'unavailable';
   if (status === 403) {
     const text = JSON.stringify(body).toLowerCase();
+    if (/accessnotconfigured|service_disabled|has not been used in project|is disabled|projectdenied|suspended/.test(text)) return 'misconfigured';
     return /ratelimit|quota|usagelimit|throttl/.test(text) ? 'rate_limited' : 'forbidden';
   }
   return 'bad_response';
@@ -121,12 +142,12 @@ export function emailFromIdToken(idToken: unknown): string | null {
   }
 }
 
-async function tokenCall(url: string, form: Record<string, string>): Promise<Record<string, unknown>> {
+async function tokenCall(url: string, form: Record<string, string>, deadline?: AbortSignal): Promise<Record<string, unknown>> {
   const res = await send(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: new URLSearchParams(form).toString(),
-  });
+  }, deadline);
   const body = await jsonOf(res);
   if (!res.ok) throw new CalendarProviderError(tokenErrorKind(res.status, body), res.status);
   if (!str(body.access_token)) throw new CalendarProviderError('bad_response', res.status);
@@ -178,17 +199,17 @@ export const google: CalendarProviderAdapter = {
     grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: redirectUri,
     client_id: creds.clientId, client_secret: creds.clientSecret,
   })),
-  refresh: async ({ creds, refreshToken }) => refreshed(await tokenCall(GOOGLE_TOKEN_URL, {
+  refresh: async ({ creds, refreshToken, signal }) => refreshed(await tokenCall(GOOGLE_TOKEN_URL, {
     grant_type: 'refresh_token', refresh_token: refreshToken, client_id: creds.clientId, client_secret: creds.clientSecret,
-  })),
-  busy: async (accessToken, range) => {
+  }, signal)),
+  busy: async (accessToken, range, signal) => {
     const res = await send('https://www.googleapis.com/calendar/v3/freeBusy', {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         timeMin: new Date(range.from).toISOString(), timeMax: new Date(range.to).toISOString(), items: [{ id: 'primary' }],
       }),
-    });
+    }, signal);
     const body = await jsonOf(res);
     if (!res.ok) throw new CalendarProviderError(apiErrorKind(res.status, body), res.status);
     const primary = (body.calendars as Record<string, { busy?: unknown; errors?: unknown }> | undefined)?.primary;
@@ -263,11 +284,11 @@ export const microsoft: CalendarProviderAdapter = {
     client_id: creds.clientId, client_secret: creds.clientSecret,
   })),
   // Microsoft hands a NEW refresh token on every refresh; the caller seals and keeps it.
-  refresh: async ({ creds, refreshToken }) => refreshed(await tokenCall(`${MICROSOFT_AUTHORITY}/token`, {
+  refresh: async ({ creds, refreshToken, signal }) => refreshed(await tokenCall(`${MICROSOFT_AUTHORITY}/token`, {
     grant_type: 'refresh_token', refresh_token: refreshToken, scope: MICROSOFT_SCOPES,
     client_id: creds.clientId, client_secret: creds.clientSecret,
-  })),
-  busy: async (accessToken, range) => {
+  }, signal)),
+  busy: async (accessToken, range, signal) => {
     const spans: Span[] = [];
     let url: string | null = `${MICROSOFT_GRAPH}/me/calendar/calendarView?${new URLSearchParams({
       startDateTime: new Date(range.from).toISOString(),
@@ -280,7 +301,7 @@ export const microsoft: CalendarProviderAdapter = {
       if (!url.startsWith(`${MICROSOFT_GRAPH}/`)) throw new CalendarProviderError('bad_response');
       const res = await send(url, {
         headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', Prefer: 'outlook.timezone="UTC"' },
-      });
+      }, signal);
       const body = await jsonOf(res);
       if (!res.ok) throw new CalendarProviderError(apiErrorKind(res.status, body), res.status);
       if (!Array.isArray(body.value)) throw new CalendarProviderError('bad_response', res.status);

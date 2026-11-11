@@ -184,6 +184,7 @@ export const ErrorCodes = {
   CALENDAR_WRONG_ACCOUNT: 'CALENDAR_WRONG_ACCOUNT',  // 403; the connect was started while signed in as another member
   CALENDAR_SCOPE_MISSING: 'CALENDAR_SCOPE_MISSING',  // 400; the calendar permission was unticked on the provider's screen
   CALENDAR_PROVIDER_FAILED: 'CALENDAR_PROVIDER_FAILED',  // 502; the provider did not finish the connection
+  CALENDAR_PROVIDER_NOT_OFFERED: 'CALENDAR_PROVIDER_NOT_OFFERED',  // 404; that provider is not configured on this server
 
   // Reports (11 Nov 2026)
   REPORT_ALREADY_SENT: 'REPORT_ALREADY_SENT',  // 409; the same reporter reported the same member, message or post in the last 24 hours

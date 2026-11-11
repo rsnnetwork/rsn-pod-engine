@@ -2,7 +2,7 @@
 
 import { allDaySpan, mergeSpans, toIntervals, zonedMidnight } from '../../../services/calendar-sync/intervals';
 import {
-  CalendarProviderError, emailFromIdToken, google, GOOGLE_FREEBUSY_SCOPE, graphEventSpan, microsoft,
+  CalendarProviderError, emailFromIdToken, google, GOOGLE_FREEBUSY_SCOPE, graphEventSpan, microsoft, NEEDS_RECONNECT,
 } from '../../../services/calendar-sync/providers';
 
 const T = (iso: string) => Date.parse(iso);
@@ -116,6 +116,37 @@ describe('Google', () => {
     expect(await kindOf(google.busy('AT', { from: 0, to: 1, zone: 'UTC' }))).toBe('rate_limited');
     answers.push({ status: 403, body: { error: { errors: [{ reason: 'insufficientPermissions' }] } } });
     expect(await kindOf(google.busy('AT', { from: 0, to: 1, zone: 'UTC' }))).toBe('forbidden');
+  });
+
+  it('our own setup refused is "misconfigured", never a reconnect (S8 review I3)', async () => {
+    const kindOf = async (p: Promise<unknown>) => p.then(() => 'ok', (e) => (e instanceof CalendarProviderError ? e.kind : 'other'));
+    for (const body of [
+      { error: { code: 403, errors: [{ reason: 'accessNotConfigured' }], message: 'Google Calendar API has not been used in project 1 before or it is disabled.' } },
+      { error: { code: 403, status: 'PERMISSION_DENIED', details: [{ reason: 'SERVICE_DISABLED' }] } },
+    ]) {
+      answers.push({ status: 403, body });
+      expect(await kindOf(google.busy('AT', { from: 0, to: 1, zone: 'UTC' }))).toBe('misconfigured');
+    }
+    for (const error of ['invalid_client', 'unauthorized_client']) {
+      answers.push({ status: 401, body: { error } });
+      expect(await kindOf(microsoft.refresh({ creds: CREDS, refreshToken: 'rt' }))).toBe('misconfigured');
+    }
+    expect(NEEDS_RECONNECT.has('misconfigured')).toBe(false);
+  });
+
+  it('a call stops when the caller\'s overall deadline passes (S8 review M6)', async () => {
+    let seen: AbortSignal | undefined;
+    global.fetch = ((_url: string, init: RequestInit = {}) => {
+      seen = init.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+    }) as typeof fetch;
+    const deadline = new AbortController();
+    const reading = google.busy('AT', { from: 0, to: 1, zone: 'UTC' }, deadline.signal);
+    deadline.abort();
+    await expect(reading).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(seen?.aborted).toBe(true);
   });
 
   it('revokes the refresh token at Google', async () => {

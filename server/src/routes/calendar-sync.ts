@@ -1,8 +1,9 @@
 // ─── Calendar free/busy (Shirley pilot S8, 12 Nov 2026; brief RSN 10; plan decision D7) ───────────────────────────────
 //
 // Mounted at /api/calendar. While calendar free/busy is off (CALENDAR_SYNC is not 'on', or its key or every provider's
-// credentials are missing: services/calendar-sync/settings.ts) EVERY route here answers the same 404 as a route that
-// does not exist. GET /api/public/config says whether it is on.
+// credentials are missing: services/calendar-sync/settings.ts) every route here answers the same 404 as a route that
+// does not exist, except that a member who still has a calendar connected can list it and disconnect it (OPEN_WHILE_OFF).
+// GET /api/public/config says whether it is on.
 //
 //   POST   /connect/:provider               signed in: the start address for this member        calendarConnectLimiter
 //   GET    /:provider/start?t=              the browser, on the API's host: nonce cookie, then
@@ -39,14 +40,27 @@ import type { CalendarProvider } from '@rsn/shared';
 
 const router = Router();
 
-/** Off means absent: the same 404, word for word, as a route that does not exist. */
-router.use((req: Request, res: Response, next: NextFunction) => {
-  if (calendarSyncState().enabled) { next(); return; }
+/** The same 404, word for word, as a route that does not exist. */
+function absent(req: Request, res: Response): void {
   const response: ApiResponse = {
     success: false,
     error: { code: 'NOT_FOUND', message: `Route ${req.method} ${req.baseUrl}${req.path} not found` },
   };
   res.status(404).json(response);
+}
+
+/**
+ * While switched off, a member can still see and remove what they connected (S8 review M5: members can always take their
+ * data back): GET /connections answers only a member who has a connection (anyone else gets the 404 of a route that
+ * does not exist), and DELETE /connections/:provider always works. Everything else is absent.
+ */
+const OPEN_WHILE_OFF = (req: Request) =>
+  (req.method === 'GET' && /^\/connections\/?$/.test(req.path))
+  || (req.method === 'DELETE' && /^\/connections\/(google|microsoft)\/?$/.test(req.path));
+
+router.use((req: Request, res: Response, next: NextFunction) => {
+  if (calendarSyncState().enabled || OPEN_WHILE_OFF(req)) { next(); return; }
+  absent(req, res);
 });
 
 // ─── The browser's nonce cookie (the calendar's own, beside the sign-in one) ──
@@ -64,7 +78,13 @@ const nonceCookieOptions = () => ({
 });
 
 const providerParams = z.object({ provider: z.enum(CALENDAR_PROVIDERS as [CalendarProvider, ...CalendarProvider[]]) });
-const connectBody = z.object({ returnTo: z.string().max(300).optional() }).strict();
+// A return path must already be a plain path on our site (no control character, whitespace, backslash or second
+// slash): one that safeReturnPath would rewrite is refused here rather than quietly changed (S8 review C1).
+const connectBody = z.object({
+  returnTo: z.string().max(300)
+    .refine((v) => calendar.safeReturnPath(v) === v, 'Return to a page of this site.')
+    .optional(),
+}).strict();
 const finishBody = z.object({ ticket: z.string().min(1).max(4096) }).strict();
 const busyQuery = z.object({
   from: z.string().datetime({ offset: true }),
@@ -124,6 +144,7 @@ router.post('/connections/:provider/finish', authenticate, calendarFinishLimiter
 router.get('/connections', authenticate, calendarReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await calendar.listConnections(req.user!.userId);
+    if (!calendarSyncState().enabled && data.length === 0) { absent(req, res); return; }
     res.json({ success: true, data } satisfies ApiResponse);
   } catch (err) {
     next(err);

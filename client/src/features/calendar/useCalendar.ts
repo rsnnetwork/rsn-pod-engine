@@ -23,18 +23,26 @@ export function usePublicConfig() {
 }
 
 /** Whether calendar free/busy is on, and which providers can be connected. Off while unknown or unreadable. */
-export function useCalendarSwitch(): { on: boolean; providers: CalendarProvider[] } {
-  const { data } = usePublicConfig();
+export function useCalendarSwitch(): { on: boolean; providers: CalendarProvider[]; known: boolean } {
+  const { data, isPending } = usePublicConfig();
   const on = data?.calendar?.enabled === true;
-  return { on, providers: on ? data!.calendar.providers : [] };
+  // `known`: the server has answered (or failed to): until then nothing calendar is shown, nor taken as off.
+  return { on, providers: on ? data!.calendar.providers : [], known: !isPending };
 }
 
-export function useCalendarConnections(on: boolean) {
+const statusOf = (err: unknown) => (err as { response?: { status?: number } })?.response?.status;
+
+/**
+ * The member's connected calendars. While calendar free/busy is switched off the server answers this only to a member who
+ * still has one connected (anyone else gets a 404, which is never retried), so they can always disconnect it.
+ */
+export function useCalendarConnections(enabled: boolean) {
   const me = useAuthStore((s) => s.user?.id);
   return useQuery<CalendarConnection[]>({
     queryKey: ['calendar-connections', me],
     queryFn: () => api.get('/calendar/connections').then((r) => r.data.data),
-    enabled: on && !!me,
+    enabled: enabled && !!me,
+    retry: (count, err) => statusOf(err) !== 404 && count < 2,
     meta: { entities: me ? [E.userCalendars(me)] : [] },
   });
 }
