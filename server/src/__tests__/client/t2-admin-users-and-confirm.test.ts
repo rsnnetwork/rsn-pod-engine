@@ -130,7 +130,8 @@ describe('the admin Users page tabs', () => {
     const page = read('features/admin/AdminUsersPage.tsx');
     expect(page).toMatch(/<ConfirmDialog[\s\S]{0,300}busy=\{status\.busy\}/);
     const bulk = read('features/admin/users/UsersBulkBar.tsx');
-    expect(bulk).toMatch(/onError: \(err\) => addToast\(failureText\(err\), 'error'\)/);
+    // A closed "Confirm it's you" dialog (Part 3 Task 7) is the one failure that says nothing.
+    expect(bulk).toMatch(/onError: \(err\) => \{ if \(!isReauthCancelled\(err\)\) addToast\(failureText\(err\), 'error'\); \}/);
     expect(bulk).toMatch(/busy=\{mutation\.isPending\}/);
   });
 });

@@ -11,6 +11,10 @@ import { Bell, Shield, Eye, CreditCard, Check, Lock, Zap, MessageSquare } from '
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { messageSoundOn, setMessageSoundOn } from '@/lib/chime';
+import { isEventGuest } from '@/features/call/guest-routes';
+import ChangeEmailDialog from './ChangeEmailDialog';
+import CloseAccountDialog from './CloseAccountDialog';
+import { REAUTH_WORDS } from './reauth';
 
 /**
  * Phase J (1 May 2026 spec) — per-channel toggles for chat notifications.
@@ -287,8 +291,73 @@ function PrefsPlaceholder({ rows, failed, announce, onRetry }: { rows: number; f
   );
 }
 
+/** The secondary button of the Account card's rows: 44px, never squeezed below its words. */
+const ACCOUNT_BUTTON = 'inline-flex min-h-[44px] flex-shrink-0 items-center justify-center rounded-xl border px-4 text-sm font-medium transition-colors';
+
+/**
+ * Who is signed in, their role, and the two changes that need "Confirm it's you" (Part 3 Task 7): Change email and
+ * Close account. Members only: an event guest has no sign-in email to change and no membership to close (the server
+ * refuses them too). The address is the session's, which the auth store reads again after a change (and user:<id>
+ * brings along on every other tab), so it is the new one without a reload.
+ */
+function AccountCard() {
+  const user = useAuthStore((s) => s.user);
+  const member = !!user && !isEventGuest(user);
+  const [open, setOpen] = useState<'email' | 'close' | null>(null);
+
+  return (
+    <Card className="animate-fade-in-up">
+      <div className="flex items-center gap-2 mb-4">
+        <Shield className="h-5 w-5 text-rsn-red" />
+        <h2 className="font-semibold text-[#1a1a2e]">Account</h2>
+      </div>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 py-2">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-800">Email</p>
+            <p className="text-xs text-gray-400 [overflow-wrap:anywhere]" data-testid="settings-account-email">{user?.email}</p>
+          </div>
+          {member && (
+            <button
+              type="button"
+              onClick={() => setOpen('email')}
+              data-testid="settings-change-email"
+              className={`${ACCOUNT_BUTTON} border-gray-200 bg-white text-gray-700 hover:bg-gray-50`}
+            >
+              {REAUTH_WORDS.changeEmail}
+            </button>
+          )}
+        </div>
+        <div className="flex items-center justify-between py-2">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Role</p>
+            <p className="text-xs text-gray-400 capitalize">{user?.role}</p>
+          </div>
+        </div>
+        {member && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-800">{REAUTH_WORDS.closeAccount}</p>
+              <p className="text-xs text-gray-400">Leave REASON and your pods and events. To come back you&apos;ll need to apply again.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpen('close')}
+              data-testid="settings-close-account"
+              className={`${ACCOUNT_BUTTON} border-red-200 bg-white text-red-700 hover:bg-red-50`}
+            >
+              {REAUTH_WORDS.closeAccount}
+            </button>
+          </div>
+        )}
+      </div>
+      <ChangeEmailDialog open={open === 'email'} onClose={() => setOpen(null)} />
+      <CloseAccountDialog open={open === 'close'} onClose={() => setOpen(null)} />
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
-  const { user } = useAuthStore();
   const { prefs, failed, toggle, save, saving, retry } = useSettingsPrefs();
 
   return (
@@ -363,27 +432,7 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      {/* Account */}
-      <Card className="animate-fade-in-up">
-        <div className="flex items-center gap-2 mb-4">
-          <Shield className="h-5 w-5 text-rsn-red" />
-          <h2 className="font-semibold text-[#1a1a2e]">Account</h2>
-        </div>
-        <div className="space-y-3">
-          <div className="flex items-center justify-between py-2">
-            <div>
-              <p className="text-sm font-medium text-gray-800">Email</p>
-              <p className="text-xs text-gray-400">{user?.email}</p>
-            </div>
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <div>
-              <p className="text-sm font-medium text-gray-800">Role</p>
-              <p className="text-xs text-gray-400 capitalize">{user?.role}</p>
-            </div>
-          </div>
-        </div>
-      </Card>
+      <AccountCard />
 
       {/* Billing & Subscription */}
       <Card className="animate-fade-in-up">

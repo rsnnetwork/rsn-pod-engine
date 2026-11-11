@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Search, Shield } from 'lucide-react';
-import type { PaginationMeta } from '@rsn/shared';
+import { touchesAdminRole, type PaginationMeta } from '@rsn/shared';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -24,6 +24,9 @@ import UsersBulkBar from './users/UsersBulkBar';
 import EntitlementsModal from './users/EntitlementsModal';
 import { ROLE_LABEL, STATUS_TABS, actionCopy, failureText, type AccountStatus } from './users/user-status';
 import { nameOf, useStatusAction, type AdminUserRowData } from './users/useStatusAction';
+import ReauthDialog from '@/features/settings/ReauthDialog';
+import { useReauth } from '@/features/settings/useReauth';
+import { isReauthCancelled, withProof } from '@/features/settings/reauth';
 
 const ROLE_FILTERS = ['super_admin', 'admin', 'host', 'founding_member', 'pro', 'member', 'free'];
 
@@ -58,10 +61,16 @@ export default function AdminUsersPage() {
     meta: { entities: [E.adminUsers] },
   });
 
+  // Granting or removing admin or super_admin needs "Confirm it's you" (Part 3 Task 7): asked first when the change is
+  // known to touch an admin role, and whenever the server answers REAUTH_REQUIRED; the change is then sent again with
+  // the proof in its body. A closed dialog changes nothing and says nothing.
+  const reauth = useReauth();
   const roleMutation = useMutation({
-    mutationFn: ({ target, role }: { target: AdminUserRowData; role: string }) => api.put(`/users/${target.id}/role`, { role }),
+    mutationFn: ({ target, role }: { target: AdminUserRowData; role: string }) =>
+      reauth.withReauth('admin_role', touchesAdminRole([target.role], role), (reauthToken) =>
+        api.put(`/users/${target.id}/role`, withProof({ role }, reauthToken))),
     onSuccess: (_res, { target, role }) => addToast(`${nameOf(target)} is now ${ROLE_LABEL[role] ?? role}.`, 'success'),
-    onError: (err) => addToast(failureText(err), 'error'),
+    onError: (err) => { if (!isReauthCancelled(err)) addToast(failureText(err), 'error'); },
     onSettled: () => { void queryClient.invalidateQueries({ queryKey: ['admin-users'] }); },
   });
 
@@ -206,6 +215,7 @@ export default function AdminUsersPage() {
         onCancel={status.cancel}
       />
       {limitsFor && <EntitlementsModal user={limitsFor} onClose={() => setLimitsFor(null)} />}
+      <ReauthDialog {...reauth.dialog} />
     </div>
   );
 }
