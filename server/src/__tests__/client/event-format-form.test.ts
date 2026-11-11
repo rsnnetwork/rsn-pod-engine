@@ -237,12 +237,14 @@ describe('what each field accepts, said at the field', () => {
 
 describe('what the forms send', () => {
   it("a video meeting sends its type and only its own settings, round length and rounds left out", () => {
-    const v = newEventValues({ pod: reasonPod as never, scheduledAt: '2026-11-02T10:00' });
+    // Part 3: the time is read on the event's own zone (Copenhagen here), and the zone is sent with it.
+    const v = newEventValues({ pod: reasonPod as never, scheduledAt: '2026-11-02T10:00', timezone: 'Europe/Copenhagen' });
     const body = eventBody({ ...v, description: '  ' }, { isAdmin: false });
     expect(body).toEqual({
       podId: 'pod-1',
       title: 'Video meeting · Test',
-      scheduledAt: new Date('2026-11-02T10:00').toISOString(),
+      scheduledAt: '2026-11-02T09:00:00.000Z',
+      timezone: 'Europe/Copenhagen',
       format: 'video_meeting',
       config: { durationMinutes: 60, maxParticipants: 25 },
     });
@@ -266,12 +268,13 @@ describe('what the forms send', () => {
   });
 
   it('an edit sends its type every time, its words trimmed, and a description emptied on purpose as empty', () => {
-    const { values } = editEventValues({ title: 'Mixer', description: 'Old words', format: 'video_meeting', config: { durationMinutes: 45, maxParticipants: 20 } }, '2026-11-02T10:00');
+    const { values } = editEventValues({ title: 'Mixer', description: 'Old words', format: 'video_meeting', config: { durationMinutes: 45, maxParticipants: 20 }, timezone: 'Europe/Copenhagen' }, '2026-11-02T10:00');
     const body = eventChanges({ ...values, title: '  Mixer two ', description: '' }, { isAdmin: false });
     expect(body).toEqual({
       title: 'Mixer two',
       description: '',
-      scheduledAt: new Date('2026-11-02T10:00').toISOString(),
+      scheduledAt: '2026-11-02T09:00:00.000Z',
+      timezone: 'Europe/Copenhagen',
       format: 'video_meeting',
       config: { durationMinutes: 45, maxParticipants: 20 },
     });
@@ -482,10 +485,10 @@ describe('what both event forms share', () => {
   });
 
   it("the fields a form draws for a type: who should meet whom for everyone (the presets), a place for in person", () => {
-    expect(shownEventKeys('video_meeting', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'durationMinutes', 'maxParticipants']);
+    expect(shownEventKeys('video_meeting', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'timezone', 'durationMinutes', 'maxParticipants']);
     expect(shownEventKeys('speed_networking', false)).toContain('matchingTemplateId');
     expect(shownEventKeys('speed_networking', true)).toContain('matchingTemplateId');
-    expect(shownEventKeys('physical_event', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'location', 'durationMinutes', 'maxParticipants']);
+    expect(shownEventKeys('physical_event', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'timezone', 'location', 'durationMinutes', 'maxParticipants']);
   });
 });
 

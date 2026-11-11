@@ -14,7 +14,8 @@ import { Skeleton } from '@/components/ui/Spinner';
 import { isForbidden, retryUnlessAnswered } from '@/components/wall/wall-logic';
 import { sessionStatusColor, sessionStatusLabel } from '@/features/sessions/statusConfig';
 import api from '@/lib/api';
-import { formatDateTime } from '@/lib/utils';
+import { formatEventDateTime } from '@/lib/utils';
+import EventImage from '@/features/sessions/EventImage';
 import { E } from '@/realtime/entities';
 import { podEventsInOrder } from './pod-event-order';
 
@@ -26,6 +27,9 @@ interface PodEventRow {
   id: string;
   title: string | null;
   scheduledAt: string | null;
+  /** Part 3: the event's zone (its time is on its clock, named) and its image, when it has one. */
+  timezone?: string | null;
+  imageUrl?: string | null;
   status: string;
 }
 
@@ -67,11 +71,12 @@ export default function PodEventsSection({ podId, mayReadEvents }: { podId: stri
               className="!p-4 cursor-pointer hover:border-gray-300 transition-colors"
               onClick={() => navigate(`/sessions/${s.id}`)}
             >
+              <EventImage src={s.imageUrl} className="mb-3" />
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="break-words text-sm font-medium text-[#1a1a2e]">{s.title || 'Untitled Event'}</p>
                   <p className="text-xs text-gray-400">
-                    {s.scheduledAt ? formatDateTime(s.scheduledAt) : 'No date set'}
+                    {formatEventDateTime(s.scheduledAt, s.timezone)}
                   </p>
                 </div>
                 {/* One helper names every state in plain words (21 Sep 2026: this showed the raw "round_transition"). */}

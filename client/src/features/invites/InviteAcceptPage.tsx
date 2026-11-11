@@ -8,6 +8,8 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import { Users, Calendar, LogIn, UserPlus, Clock, User, AlertCircle, CircleDashed } from 'lucide-react';
 import api from '@/lib/api';
+import { eventWhen } from '@/lib/event-time';
+import EventImage from '@/features/sessions/EventImage';
 
 /** Map accept-invite error codes to user-friendly messages */
 function getAcceptErrorMessage(err: any): { message: string } {
@@ -29,22 +31,6 @@ function getAcceptErrorMessage(err: any): { message: string } {
       return { message: 'You\'re already a member — navigating to the event' };
     default:
       return { message: message || 'Failed to accept invite' };
-  }
-}
-
-function formatEventDate(dateStr: string): string {
-  try {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  } catch {
-    return dateStr;
   }
 }
 
@@ -180,6 +166,8 @@ export default function InviteAcceptPage() {
   const inviterName = invite?.inviterName;
   const description = invite?.sessionDescription || invite?.podDescription || invite?.circleDescription;
   const scheduledAt = invite?.sessionScheduledAt;
+  // Part 3 (K1): the event's time on its own clock with its zone named; the invitee may be anywhere.
+  const when = eventWhen(scheduledAt, invite?.sessionTimezone, 'long');
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white to-gray-50/50 p-4">
@@ -207,14 +195,15 @@ export default function InviteAcceptPage() {
 
               {targetName && (
                 <div className="rounded-xl bg-gray-50 border border-gray-100 p-4 text-left space-y-2">
+                  <EventImage src={invite?.sessionImageUrl} />
                   <p className="font-semibold text-[#1a1a2e]">{targetName}</p>
                   {description && (
                     <p className="text-sm text-gray-500 line-clamp-3">{description}</p>
                   )}
-                  {scheduledAt && (
+                  {when && (
                     <div className="flex items-center gap-2 text-sm text-gray-600">
                       <Clock className="h-4 w-4 text-rsn-red flex-shrink-0" />
-                      <span>{formatEventDate(scheduledAt)}</span>
+                      <span>{when}</span>
                     </div>
                   )}
                 </div>

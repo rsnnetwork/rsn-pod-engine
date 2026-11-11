@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import { cn } from '@/lib/utils';
 import { boardErrorOf } from './board-errors';
-import { roomTitle, startsAtLabel } from './board-model';
+import { publishedAtLabel, roomTitle } from './board-model';
 import {
   hasSomethingToPublish, publishCopy, usePublish, usePublishPreview, useScheduleVersions, versionLine, wasUnchanged,
 } from './publish-api';
@@ -143,7 +143,7 @@ export default function PublishPanel({ sessionId, board, open, onClose, applyRet
             {versions.data.map((v) => (
               <li key={v.version} className="text-[14px] text-[#3d4a55] [overflow-wrap:anywhere]">
                 <span className="font-semibold text-[#12293a]">Version {v.version}</span>
-                {` · ${versionLine(v, startsAtLabel(v.publishedAt))}`}
+                {` · ${versionLine(v, publishedAtLabel(v.publishedAt))}`}
               </li>
             ))}
           </ol>

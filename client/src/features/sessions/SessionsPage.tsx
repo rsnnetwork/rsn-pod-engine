@@ -7,12 +7,13 @@ import { Button } from '@/components/ui/Button';
 import EmptyState from '@/components/ui/EmptyState';
 import { Spinner } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
-import { cn, formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
+import { cn, formatEventDateTime } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { EVENT_ACCESS, type EventVisibility } from '@rsn/shared';
 import MeetingsSection from '@/features/meetings/MeetingsSection';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
+import EventImage from './EventImage';
 
 // 26 Oct 2026 (CON-04): the meetings two members agree sit above the events, under one filter. The filter is kept in
 // the address (?filter=), so Back from a meeting or an event returns to the same view.
@@ -33,6 +34,9 @@ interface EventRow {
   title: string | null;
   status: string;
   scheduledAt: string | null;
+  /** Part 3: the event's zone (its times are on its clock, named) and its image, when it has one. */
+  timezone?: string | null;
+  imageUrl?: string | null;
   hostUserId: string;
   podName?: string | null;
   hostDisplayName?: string | null;
@@ -166,7 +170,8 @@ export default function SessionsPage() {
               const isHost = s.hostUserId === user?.id;
               return (
                 <Card key={s.id} hover onClick={() => navigate(`/sessions/${s.id}`)} className="card-hover">
-                  <div className="flex items-center justify-between">
+                  <EventImage src={s.imageUrl} className="mb-3" />
+                  <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-medium text-gray-800">
@@ -184,7 +189,7 @@ export default function SessionsPage() {
                         )}
                       </div>
                       <p className="text-sm text-gray-500 mt-0.5">
-                        {s.scheduledAt ? `${formatDateTime(s.scheduledAt)} ${LOCAL_TIME_LABEL}` : 'No date'}
+                        {s.scheduledAt ? formatEventDateTime(s.scheduledAt, s.timezone) : 'No date'}
                         {s.podName && <span className="ml-2 text-gray-400">· {s.podName}</span>}
                         {s.hostDisplayName && !isHost && (
                           <span className="ml-2 text-gray-400">· Host: {s.hostDisplayName}</span>

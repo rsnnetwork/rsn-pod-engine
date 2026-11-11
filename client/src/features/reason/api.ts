@@ -31,7 +31,8 @@ export interface ForYouPayload {
   matches: ForYouMatch[];
   profileIncomplete: boolean;
   youAreLookingFor: string | null;
-  nextEvent: { id: string; title: string; scheduledAt: string } | null;
+  /** Part 3: with the event's zone (its time is on its clock, named) and its image. */
+  nextEvent: { id: string; title: string; scheduledAt: string; timezone?: string | null; imageUrl?: string | null } | null;
 }
 
 export const reasonKeys = {

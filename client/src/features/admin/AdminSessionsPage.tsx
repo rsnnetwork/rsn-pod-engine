@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
-import { isAdmin, formatDateTime } from '@/lib/utils';
+import { isAdmin, formatEventDateTime } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from '@/features/sessions/statusConfig';
@@ -92,7 +92,7 @@ export default function AdminSessionsPage() {
                   <Badge variant={sessionStatusColor(session.status)}>{sessionStatusLabel(session.status)}</Badge>
                 </div>
                 <p className="text-xs text-gray-400 mt-1">
-                  Scheduled: {formatDateTime(session.scheduledAt)} · Participants: {session.participantCount || '—'}
+                  Scheduled: {formatEventDateTime(session.scheduledAt, session.timezone)} · Participants: {session.participantCount || '—'}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">

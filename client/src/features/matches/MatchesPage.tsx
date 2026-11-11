@@ -19,6 +19,7 @@ import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
+import { formatEventDateTime } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
@@ -40,7 +41,8 @@ interface PlatformMatch {
 interface PlatformMatchesResult {
   matches: PlatformMatch[];
   profileIncomplete: boolean;
-  nextEvent: { id: string; title: string; scheduledAt: string } | null;
+  /** Part 3: with the event's zone, so its time is on its clock, named. */
+  nextEvent: { id: string; title: string; scheduledAt: string; timezone?: string | null } | null;
 }
 
 export default function MatchesPage() {
@@ -199,7 +201,7 @@ export default function MatchesPage() {
                 <p className="font-medium text-gray-900">Join the next event</p>
                 <p className="text-xs text-gray-500 truncate">
                   {nextEvent
-                    ? `${nextEvent.title} · ${new Date(nextEvent.scheduledAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+                    ? `${nextEvent.title} · ${formatEventDateTime(nextEvent.scheduledAt, nextEvent.timezone)}`
                     : 'See upcoming events'}
                 </p>
               </div>

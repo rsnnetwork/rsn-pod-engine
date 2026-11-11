@@ -6,7 +6,7 @@
 // one person's meetings across the rounds.
 
 import {
-  checkRoom, roundRuleSentence,
+  checkRoom, formatEventTime, roundRuleSentence,
   type BoardOp, type BoardPerson, type BoardPersonStatus, type BoardRoom, type BoardRound, type RoomCheckContext, type RoomVerdict,
   type ScheduleBoard,
 } from '@rsn/shared';
@@ -44,8 +44,19 @@ export const roundTitle = (round: number) => `ROUND ${pad2(round)} / MATCHING BO
 export const roomTitle = (room: number) => `Room ${pad2(room)}`;
 export const waitingLine = (n: number) => `${n} ${n === 1 ? 'person' : 'people'} waiting`;
 
-/** When a round is expected to start, in the viewer's own clock ("Wed 7:40 PM"), or null. */
-export function startsAtLabel(iso: string | null): string | null {
+/**
+ * When a round is expected to start, on the EVENT's clock with its zone named ("19:40 CET", Part 3 K1), or null. The
+ * planner and every person on the board read the same time wherever they are.
+ */
+export function startsAtLabel(iso: string | null, zone: string | null | undefined): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  return formatEventTime(at, zone, 'clock');
+}
+
+/** When a plan was published, on the viewer's own clock ("Wed 7:40 PM"): a moment of the board's history, not an event time. */
+export function publishedAtLabel(iso: string | null): string | null {
   if (!iso) return null;
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return null;

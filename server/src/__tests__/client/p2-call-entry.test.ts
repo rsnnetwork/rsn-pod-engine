@@ -54,6 +54,8 @@ function landing(over: Partial<CallLanding> = {}): CallLanding {
     title: 'Founders meet funders',
     description: null,
     scheduledAt: '2026-11-20T17:00:00.000Z',
+    timezone: 'Europe/Copenhagen',
+    imageUrl: null,
     durationMinutes: 60,
     format: 'speed_networking',
     host: { displayName: 'Stefan', avatarUrl: null },
@@ -392,11 +394,11 @@ describe('what the flow says', () => {
     expect(CALL_WORDS.becomeMember).toBe('Become a REASON member: meet people beyond this event.');
   });
 
-  it('"You\'re in. {title} starts {when}." in the viewer\'s time, or as soon as the organiser opens it', () => {
+  it('"You\'re in. {title} starts {when}." on the event\'s clock with its zone named (Part 3), or as soon as the organiser opens it', () => {
     const now = Date.parse('2026-11-11T10:00:00Z');
-    expect(youreInSentence('Founders meet funders', '2026-11-20T17:00:00.000Z', now))
-      .toMatch(/^You're in\. Founders meet funders starts on \w+day \d{1,2} November at \d{2}:\d{2}\.$/);
-    expect(startsPhrase('2026-11-20T17:00:00.000Z', now, 'Europe/Copenhagen')).toBe('on Friday 20 November at 18:00');
+    expect(youreInSentence('Founders meet funders', '2026-11-20T17:00:00.000Z', 'Europe/Copenhagen', now))
+      .toBe("You're in. Founders meet funders starts on Friday 20 November at 18:00 CET.");
+    expect(startsPhrase('2026-11-20T17:00:00.000Z', now, 'Europe/Copenhagen')).toBe('on Friday 20 November at 18:00 CET');
     expect(startsPhrase(null, now)).toBe('as soon as the organiser opens it');
     expect(startsPhrase('2026-11-01T10:00:00Z', now)).toBe('as soon as the organiser opens it');
     expect(durationLabel(60)).toBe('1 hour');

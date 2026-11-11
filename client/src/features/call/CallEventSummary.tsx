@@ -1,11 +1,13 @@
-// The event, as anyone holding its RSN Call link sees it (Part 2, Task 12; spec 02 "Open link"): its title, its time in
-// the viewer's own zone, the host's name and photo, its format and length, and what it will ask for before entry. Never
+// The event, as anyone holding its RSN Call link sees it (Part 2, Task 12; spec 02 "Open link"): its image (Part 3, a
+// 3:1 strip at the top, when it has one), its title, its time on the event's own clock with the zone named (Part 3,
+// K1), the host's name and photo, its format and length, and what it will ask for before entry. Never
 // who else is in it: the landing does not carry that. "compact" is the one-line reminder above the later steps on a
 // phone and a tablet.
 import { useId } from 'react';
 import { CalendarDays, Clock, ListChecks } from 'lucide-react';
 import type { CallLanding } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
+import EventImage from '@/features/sessions/EventImage';
 import { asksSentence, durationLabel, eventTimeLabel, formatLabelOf } from './call-entry';
 
 function LifecycleChip({ lifecycle }: { lifecycle: CallLanding['lifecycle'] }) {
@@ -26,7 +28,7 @@ function LifecycleChip({ lifecycle }: { lifecycle: CallLanding['lifecycle'] }) {
 }
 
 export default function CallEventSummary({ landing, variant = 'full' }: { landing: CallLanding; variant?: 'full' | 'compact' }) {
-  const when = eventTimeLabel(landing.scheduledAt);
+  const when = eventTimeLabel(landing.scheduledAt, landing.timezone);
   // The summary is drawn twice on the first screen (beside the step from 1024px, in it below): each its own heading id.
   const titleId = useId();
   if (variant === 'compact') {
@@ -45,6 +47,8 @@ export default function CallEventSummary({ landing, variant = 'full' }: { landin
   const asks = asksSentence(landing.asks, landing.viewer.signedIn);
   return (
     <section aria-labelledby={titleId} data-testid="call-event-summary">
+      {/* The hero: decorative (the title follows), and loaded at once, as the first thing on the page. */}
+      <EventImage src={landing.imageUrl} variant="header" loading="eager" className="mb-4" />
       <LifecycleChip lifecycle={landing.lifecycle} />
       <h1 id={titleId} className="mt-2 break-words text-[26px] font-extrabold leading-[1.15] tracking-[-0.02em] sm:text-[30px]">
         {landing.title}
@@ -52,10 +56,7 @@ export default function CallEventSummary({ landing, variant = 'full' }: { landin
       <ul className="mt-4 space-y-2.5 text-[15px]">
         <li className="flex items-start gap-2.5">
           <CalendarDays aria-hidden="true" className="mt-0.5 h-[18px] w-[18px] shrink-0 text-reason-muted" />
-          <span>
-            {when ?? 'Time to be announced'}
-            {when && <span className="block text-[13px] text-reason-muted">Shown in your own time zone</span>}
-          </span>
+          <span>{when ?? 'Time to be announced'}</span>
         </li>
         <li className="flex items-start gap-2.5">
           <Clock aria-hidden="true" className="mt-0.5 h-[18px] w-[18px] shrink-0 text-reason-muted" />

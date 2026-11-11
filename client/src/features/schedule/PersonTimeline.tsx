@@ -16,11 +16,13 @@ interface Props {
   canEdit: boolean;
   onRun: (op: BoardOp, success: string) => void;
   onClose: () => void;
+  /** The event's zone: round starts are on its clock. */
+  zone: string | null | undefined;
 }
 
 const ACTION = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl px-4 text-[14px] font-bold disabled:opacity-50';
 
-export default function PersonTimeline({ board, person, busy, canEdit, onRun, onClose }: Props) {
+export default function PersonTimeline({ board, person, busy, canEdit, onRun, onClose, zone }: Props) {
   const selectId = useId();
   const rounds = board.rounds.filter((r) => !r.beyondLastRound);
   // Only rounds that have not started can be the one they arrive for (the server refuses the rest).
@@ -41,7 +43,7 @@ export default function PersonTimeline({ board, person, busy, canEdit, onRun, on
         {entries.map((e) => (
           <li key={e.round} className="rounded-xl border border-[#e3e7ea] bg-white px-3 py-2">
             <p className="text-[12px] font-extrabold uppercase tracking-[0.1em] text-[#7a858e]">
-              Round {e.round}{startsAtLabel(e.startsAt) ? ` · ${startsAtLabel(e.startsAt)}` : ''}{e.editable ? '' : ' · started'}
+              Round {e.round}{startsAtLabel(e.startsAt, zone) ? ` · ${startsAtLabel(e.startsAt, zone)}` : ''}{e.editable ? '' : ' · started'}
             </p>
             <p className={cn('mt-0.5 text-[15px] [overflow-wrap:anywhere]', e.place.kind === 'room' ? 'text-[#12293a]' : 'text-[#c4532f]')}>
               {timelineLine(e)}

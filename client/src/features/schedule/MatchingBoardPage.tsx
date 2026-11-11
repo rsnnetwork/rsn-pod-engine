@@ -53,7 +53,7 @@ export default function MatchingBoardPage() {
   const { sessionId = '' } = useParams();
   const { data: session } = useQuery({
     queryKey: ['session', sessionId],
-    queryFn: () => api.get(`/sessions/${sessionId}`).then((r) => r.data.data as { title?: string }),
+    queryFn: () => api.get(`/sessions/${sessionId}`).then((r) => r.data.data as { title?: string; timezone?: string }),
     enabled: !!sessionId,
     meta: { entities: [E.session(sessionId)] },
   });
@@ -158,7 +158,9 @@ export default function MatchingBoardPage() {
     void runAll(ops, locking ? `Every meeting in round ${r} is locked.` : `Round ${r} is unlocked.`);
   };
   const showConflict = (c: BoardConflict) => { setView('round'); setRoundNo(c.round); setFocusRoom(c.room); };
-  const time = startsAtLabel(active?.startsAt ?? null);
+  // Round starts are on the event's clock, its zone named, for everyone who plans it (Part 3, K1).
+  const zone = session?.timezone;
+  const time = startsAtLabel(active?.startsAt ?? null, zone);
 
   return (
     <div className="mx-auto flex w-full min-w-0 max-w-[1200px] flex-col gap-4">
@@ -224,7 +226,7 @@ export default function MatchingBoardPage() {
           />
         )}
         {view === 'all' && (
-          <AllRoundsOverview board={board} filter={filter} onOpenPerson={setTimelineFor}
+          <AllRoundsOverview board={board} filter={filter} onOpenPerson={setTimelineFor} zone={zone}
             onOpenRound={(n) => { setView('round'); setRoundNo(n); }} />
         )}
       </section>
@@ -234,7 +236,7 @@ export default function MatchingBoardPage() {
           onRun={(o) => void act(o, { origin: selectedPerson.userId })} onShowMeetings={(p) => setTimelineFor(p.userId)} onClose={() => setSelected(null)} />
       )}
       {timelinePerson && (
-        <PersonTimeline board={board} person={timelinePerson} busy={busy} canEdit={editing}
+        <PersonTimeline board={board} person={timelinePerson} busy={busy} canEdit={editing} zone={zone}
           onRun={(o, success) => op(o, success)} onClose={() => setTimelineFor(null)} />
       )}
       {refusal && (

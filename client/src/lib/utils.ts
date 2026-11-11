@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { formatEventTime } from '@rsn/shared';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -23,31 +24,13 @@ export function formatDateTime(iso: string): string {
   return `${day}, ${time} hrs ${tz}`;
 }
 
-export const LOCAL_TIME_LABEL = '(your local time)';
-
-/** Format a Date (or ISO string) as the LOCAL `YYYY-MM-DDTHH:MM` value a native
- *  `datetime-local` input expects. NEVER use `.toISOString().slice(0,16)` for
- *  this — that yields UTC, which the input then renders/saves as if it were
- *  local, shifting the time by the viewer's offset (Ali, 10 Jun — edit-event
- *  bug). getHours()/getMinutes() are local, so this round-trips correctly. */
-export function toLocalDatetimeInput(d: string | Date): string {
-  const date = typeof d === 'string' ? new Date(d) : d;
-  if (isNaN(date.getTime())) return '';
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/** The viewer's local timezone for display, e.g. "Asia/Karachi (GMT+5)".
- *  A datetime-local input is always in local time but shows no zone — label it. */
-export function localTimezoneLabel(): string {
-  const offsetMin = -new Date().getTimezoneOffset(); // +300 for GMT+5
-  const sign = offsetMin >= 0 ? '+' : '-';
-  const h = Math.floor(Math.abs(offsetMin) / 60);
-  const m = Math.abs(offsetMin) % 60;
-  const gmt = `GMT${sign}${h}${m ? `:${m.toString().padStart(2, '0')}` : ''}`;
-  let zone = '';
-  try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { /* ignore */ }
-  return zone ? `${zone} (${gmt})` : gmt;
+/**
+ * An EVENT's time (Part 3, K1): on the event's own clock with its zone named, "Tue 1 Dec, 14:00 CET", the same for
+ * every viewer wherever they are; "No date set" when it has none. formatDateTime above stays for what is not an
+ * event's time (an audit entry's moment), which reads on the viewer's own clock.
+ */
+export function formatEventDateTime(iso: string | null | undefined, zone: string | null | undefined): string {
+  return (iso && formatEventTime(iso, zone, 'short')) || 'No date set';
 }
 
 export function getInitials(name: string): string {

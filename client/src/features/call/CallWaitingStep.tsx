@@ -90,7 +90,7 @@ export default function CallWaitingStep({ landing, kind, sessionId, startsAt, gu
       <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-[#e8f7ef] text-reason-green-fill">
         <CheckCircle2 aria-hidden="true" className="h-6 w-6" />
       </div>
-      <h2 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.01em]">{youreInSentence(landing.title, startsAt)}</h2>
+      <h2 className="break-words text-[22px] font-extrabold leading-tight tracking-[-0.01em]">{youreInSentence(landing.title, startsAt, landing.timezone)}</h2>
       <p className="text-[15px] text-reason-muted">
         Keep this link: it takes you straight in once the event starts. This page does that by itself if you leave it open.
       </p>

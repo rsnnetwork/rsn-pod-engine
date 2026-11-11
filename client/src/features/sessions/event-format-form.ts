@@ -13,10 +13,12 @@ import { z } from 'zod';
 import {
   EVENT_FORMAT_KEYS, IN_PERSON_ENABLED_CLIENTS, MATCHING_PRESET_IDS, applyFormatChange, checkEventInput,
   defaultEventFormat, defaultTitle, defaultsFor, effectiveOrchestration, eventFormatsForPod, fieldsFor, formatOffered, formatRule,
-  liveKindOf, missingRequired, resolveEventFormat, valuesFromConfig,
+  canonicalTimeZone, liveKindOf, missingRequired, resolveEventFormat, utcToZonedWallTime, valuesFromConfig,
+  zonedWallTimeToUtc,
 } from '@rsn/shared';
 import type { EventFormat, OrchestrationMode, PodType } from '@rsn/shared';
 import { errorMessage, memberSentence } from '../reason/errors';
+import { defaultEventZone, formZone } from '../../lib/event-time';
 
 /**
  * Everything an event form holds. The settings of every offered type are kept, so a switch back restores what the
@@ -26,8 +28,13 @@ export interface EventFormValues {
   podId: string;
   title: string;
   description: string;
-  /** As a datetime-local field holds it: local time, "2026-11-02T10:00". */
+  /** As a datetime-local field holds it, on the event's own clock (`timezone`): "2026-11-02T10:00". */
   scheduledAt: string;
+  /**
+   * The event's IANA zone (Part 3, K1): the clock `scheduledAt` is read on, and the one every time of the event is
+   * shown in. Changing it keeps the wall clock: 14:00 stays 14:00, now on the new zone's clock.
+   */
+  timezone: string;
   format: EventFormat;
   numberOfRounds: number;
   roundMinutes: number;
@@ -69,6 +76,8 @@ export const DESCRIPTION_MAX = 2000;
 export const CHECK_SETTINGS = "Check the event's settings and try again.";
 export const DATE_REQUIRED = 'Choose a date and time.';
 export const POD_REQUIRED = 'Choose a pod.';
+/** The server's sentence for a zone it does not know (routes/sessions.ts, Part 3 Task 1). */
+export const TIME_ZONE_REQUIRED = "Choose the event's time zone from the list.";
 
 /**
  * Every type these forms may offer, in the table's order. They draw an in-person event's place, so they ask for In
@@ -135,26 +144,41 @@ function settingDefaults(format: EventFormat, podType?: PodType | null): Pick<Ev
   return merged as unknown as Pick<EventFormValues, EventSettingKey>;
 }
 
-/** A new event's form: the pod's starting type with that type's defaults, and a title already filled in. */
-export function newEventValues(o: { pod?: EventPod | null; scheduledAt: string }): EventFormValues {
+/**
+ * A new event's form: the pod's starting type with that type's defaults, and a title already filled in. Its zone is the
+ * one given (the screen passes defaultEventZone: the organiser's own, else the browser's), else the browser's, else UTC.
+ */
+export function newEventValues(o: { pod?: EventPod | null; scheduledAt: string; timezone?: string | null }): EventFormValues {
   const format = startingFormat(o.pod);
   return {
     podId: o.pod?.id ?? '',
     title: defaultTitle(format, o.pod?.name ?? ''),
     description: '',
     scheduledAt: o.scheduledAt,
+    timezone: o.timezone ? formZone(o.timezone) : defaultEventZone(null),
     format,
     ...settingDefaults(format, o.pod?.podType),
   };
 }
 
 /**
- * An event's edit form: its type (the stored column, else the old config.eventType, as the server reads it) and its
- * saved settings (the round length back in minutes). On an edit every saved setting counts as chosen (`touched`), so
- * a switch that would drop one asks first.
+ * The time an edit form starts on: the event's instant on the event's own clock ("2026-12-01T14:00" for 13:00Z in
+ * Copenhagen), whoever opens it and wherever they are; '' for an event with no date.
+ */
+export function eventWallTime(session: { scheduledAt?: string | null; timezone?: string | null }): string {
+  return session.scheduledAt ? utcToZonedWallTime(session.scheduledAt, formZone(session.timezone)) : '';
+}
+
+/**
+ * An event's edit form: its type (the stored column, else the old config.eventType, as the server reads it), its zone
+ * and its saved settings (the round length back in minutes). On an edit every saved setting counts as chosen
+ * (`touched`), so a switch that would drop one asks first. `scheduledAt` is eventWallTime's.
  */
 export function editEventValues(
-  session: { podId?: string | null; title?: string | null; description?: string | null; format?: unknown; config?: object | null },
+  session: {
+    podId?: string | null; title?: string | null; description?: string | null; format?: unknown; config?: object | null;
+    timezone?: string | null;
+  },
   scheduledAt: string,
 ): { values: EventFormValues; touched: Set<string> } {
   const format = resolveEventFormat({ format: session.format, config: session.config as { eventType?: unknown } | null });
@@ -164,6 +188,7 @@ export function editEventValues(
       title: session.title ?? '',
       description: session.description ?? '',
       scheduledAt,
+      timezone: formZone(session.timezone),
       format,
       ...settingDefaults(format),
       // An event saved with no template pairs on the engine's defaults, which General is: it shows as General.
@@ -247,7 +272,10 @@ function eventIssues(values: EventFormValues, ctx: z.RefinementCtx, o: { pod: bo
   };
   if (o.pod) say('podId', values.podId ? null : POD_REQUIRED);
   say('title', titleProblem(values.title));
-  say('scheduledAt', values.scheduledAt ? null : DATE_REQUIRED);
+  const realZone = !!canonicalTimeZone(values.timezone);
+  // A time read on a zone that is not one is the zone's problem, said once, at the zone.
+  say('scheduledAt', values.scheduledAt && (instantOf(values) || !realZone) ? null : DATE_REQUIRED);
+  say('timezone', realZone ? null : TIME_ZONE_REQUIRED);
   // Only the chosen type's settings are checked: settingProblem says nothing about another type's field.
   for (const key of SETTING_KEYS) {
     // The months are checked only under the cooldown rule, the one that uses them.
@@ -270,7 +298,7 @@ export const eventChangesSchema = eventFormValues.superRefine((v, ctx) => eventI
  * Who should meet whom is drawn for everyone (the presets); only its other templates are an admin's.
  */
 export function shownEventKeys(format: EventFormat, _isAdmin: boolean): string[] {
-  return ['format', 'title', 'description', 'scheduledAt', ...fieldsFor(format)];
+  return ['format', 'title', 'description', 'scheduledAt', 'timezone', ...fieldsFor(format)];
 }
 
 export interface NewEventBody {
@@ -278,6 +306,8 @@ export interface NewEventBody {
   title: string;
   description?: string;
   scheduledAt: string | null;
+  /** The event's zone: the server stores it and writes every time of the event on its clock. */
+  timezone: string;
   format: EventFormat;
   config: Record<string, unknown>;
 }
@@ -286,6 +316,7 @@ export interface EventChangesBody {
   title: string;
   description: string;
   scheduledAt?: string;
+  timezone: string;
   format: EventFormat;
   config: Record<string, unknown>;
 }
@@ -310,7 +341,14 @@ function settingsFor(values: EventFormValues, isAdmin: boolean): Record<string, 
   return config;
 }
 
-const isoFromLocal = (local: string) => new Date(local).toISOString();
+/**
+ * The instant the form's time names, read on the EVENT's clock, never the browser's: an organiser in Karachi who sets
+ * 14:00 on a Copenhagen event sends 13:00Z. null with no time, or for a time or a zone that is not one (the schema
+ * says so at the field first).
+ */
+function instantOf(values: Pick<EventFormValues, 'scheduledAt' | 'timezone'>): string | null {
+  return values.scheduledAt ? zonedWallTimeToUtc(values.scheduledAt, values.timezone) : null;
+}
 
 /** POST /sessions: the type at the top level, so the server checks it against the pod and the type's limits. */
 export function eventBody(values: EventFormValues, o: { isAdmin: boolean }): NewEventBody {
@@ -319,18 +357,25 @@ export function eventBody(values: EventFormValues, o: { isAdmin: boolean }): New
     podId: values.podId,
     title: values.title.trim(),
     ...(description ? { description } : {}),
-    scheduledAt: values.scheduledAt ? isoFromLocal(values.scheduledAt) : null,
+    scheduledAt: instantOf(values),
+    timezone: values.timezone,
     format: values.format,
     config: settingsFor(values, o.isAdmin),
   };
 }
 
-/** PUT /sessions/:id. The type is sent every time; an event with no date keeps none rather than getting an empty one. */
+/**
+ * PUT /sessions/:id. The type and the zone are sent every time; an event with no date keeps none rather than getting an
+ * empty one. A new zone with the same wall clock is a new instant (14:00 Copenhagen is not 14:00 London), so the
+ * server tells the event's people it has moved.
+ */
 export function eventChanges(values: EventFormValues, o: { isAdmin: boolean }): EventChangesBody {
+  const scheduledAt = instantOf(values);
   return {
     title: values.title.trim(),
     description: values.description.trim(),
-    ...(values.scheduledAt ? { scheduledAt: isoFromLocal(values.scheduledAt) } : {}),
+    ...(scheduledAt ? { scheduledAt } : {}),
+    timezone: values.timezone,
     format: values.format,
     config: settingsFor(values, o.isAdmin),
   };
@@ -368,6 +413,7 @@ const REQUEST_FIELD_WORDS: Record<string, (said: string) => string> = {
   title: (said) => (/at most|too long/i.test(said) ? `Keep the title to ${TITLE_MAX} characters.` : TITLE_REQUIRED),
   description: () => 'Keep the description to 2,000 characters.',
   scheduledAt: () => DATE_REQUIRED,
+  timezone: () => TIME_ZONE_REQUIRED,
   podId: () => POD_REQUIRED,
   format: () => 'Choose an event type.',
 };
@@ -446,9 +492,10 @@ export function eventProblems(err: unknown, format: EventFormat, copy: EventProb
 
 const FORM_FIELD_LABELS: Record<string, string> = {
   podId: 'Pod', format: 'Event type', title: 'Title', description: 'Description', scheduledAt: 'Date and time',
+  timezone: 'Time zone',
 };
 /** The fields above a type's own settings, in the order the forms draw them. */
-const LEADING_FIELDS = ['podId', 'format', 'title', 'description', 'scheduledAt'];
+const LEADING_FIELDS = ['podId', 'format', 'title', 'description', 'scheduledAt', 'timezone'];
 
 export function fieldLabel(key: string, format: EventFormat): string {
   return FORM_FIELD_LABELS[key] ?? formatRule(format).fields[key]?.label ?? key;

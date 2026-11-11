@@ -11,12 +11,14 @@ interface Props {
   filter: BoardFilter;
   onOpenPerson: (userId: string) => void;
   onOpenRound: (round: number) => void;
+  /** The event's zone: round starts are on its clock. */
+  zone: string | null | undefined;
 }
 
 const TH = 'whitespace-nowrap px-3 py-2 text-[11px] font-extrabold uppercase tracking-[0.1em] text-[#5a6670]';
 const TD = 'px-3 py-1 align-middle';
 
-export default function AllRoundsOverview({ board, filter, onOpenPerson, onOpenRound }: Props) {
+export default function AllRoundsOverview({ board, filter, onOpenPerson, onOpenRound, zone }: Props) {
   const people = peopleOf(board);
   const all = overviewRows(board);
   const rows = all.filter((row) => rowMatches(row, people.get(row.userId), filter));
@@ -46,7 +48,7 @@ export default function AllRoundsOverview({ board, filter, onOpenPerson, onOpenR
           )}
           {rows.map((row) => (
             <tr key={row.key} data-testid="board-overview-row" className="border-b border-[#eef1f3] last:border-0">
-              <td className={cn(TD, 'whitespace-nowrap text-[#5a6670]')}>{startsAtLabel(row.startsAt) ?? '–'}</td>
+              <td className={cn(TD, 'whitespace-nowrap text-[#5a6670]')}>{startsAtLabel(row.startsAt, zone) ?? '–'}</td>
               <td className={TD}>
                 <button type="button" onClick={() => onOpenRound(row.round)} className="min-h-[44px] whitespace-nowrap font-semibold text-[#1d6b5c] hover:underline">
                   Round {row.round}

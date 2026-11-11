@@ -14,6 +14,7 @@ import { E } from '@/realtime/entities';
 import { fetchRecentConnections, personName, reasonKeys, type ForYouPayload } from '../api';
 import { personHref } from '../human/profile-text';
 import { firstCharacter } from './firstCharacter';
+import { eventDateTile, eventWhen } from '@/lib/event-time';
 
 // GET /pods?status=active: the pods the member is in, each with its live member count.
 interface RailPod { id: string; name: string; memberCount: number }
@@ -70,19 +71,20 @@ export default function ForYouRail({ nextEvent, failed }: Props) {
     // An accepted request is the member's user and invites tags; a block either way is their blocks tag.
     meta: { entities: userId ? [E.user(userId), E.userInvites(userId), E.userBlocks(userId)] : [] },
   });
-  const when = nextEvent ? new Date(nextEvent.scheduledAt) : null;
+  // The event's day and clock, its zone named (Part 3, K1): the tile says the event zone's date, not the viewer's.
+  const tile = nextEvent ? eventDateTile(nextEvent.scheduledAt, nextEvent.timezone) : null;
 
   return (
     <aside aria-label="Your context" className="hidden min-w-0 gap-3.5 min-[981px]:grid">
       <RailCard title="Your next event" to="/sessions" all="events" load={loadOf(nextEvent, failed)}>
-        {nextEvent && when ? (
+        {nextEvent && tile ? (
           <Link to={`/sessions/${nextEvent.id}`} className="grid grid-cols-[52px_1fr] gap-[11px]">
             <span className="grid h-[52px] place-items-center rounded-[10px] bg-reason-red text-center text-[11px] font-extrabold leading-tight text-white">
-              {when.toLocaleString([], { month: 'short' }).toUpperCase()}<br />{String(when.getDate()).padStart(2, '0')}
+              {tile.month}<br />{tile.day}
             </span>
             <span className="min-w-0">
               <b className="block text-[13px] [overflow-wrap:anywhere]">{nextEvent.title}</b>
-              <span className="text-[11px] text-reason-muted">{when.toLocaleString([], { weekday: 'long', hour: '2-digit', minute: '2-digit' })}</span>
+              <span className="text-[11px] text-reason-muted">{eventWhen(nextEvent.scheduledAt, nextEvent.timezone)}</span>
             </span>
           </Link>
         ) : (

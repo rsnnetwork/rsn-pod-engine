@@ -11,7 +11,7 @@
 // code and sends the same 6-digit code again with it.
 
 import {
-  EVENT_FORMATS,
+  EVENT_FORMATS, formatEventTime,
   type CallEntryState, type CallLanding, type CallLandingGroupAsk, type EventFormat,
 } from '@rsn/shared';
 import { codeErrorMessage } from '../auth/sign-in-code';
@@ -149,25 +149,25 @@ export function durationLabel(minutes: number): string {
   return [hours, mins].filter(Boolean).join(' ');
 }
 
-/** The event's time in the viewer's own zone: "Thursday 12 November, 18:00 CET". */
-export function eventTimeLabel(iso: string | null, timeZone?: string): string | null {
+/**
+ * The event's time on the EVENT's clock, its zone named (Part 3, K1): "Thursday 12 November, 18:00 (CET)" for every
+ * viewer wherever they are. null for an event with no date.
+ */
+export function eventTimeLabel(iso: string | null, zone: string | null | undefined): string | null {
   if (!iso) return null;
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return null;
-  const day = at.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone });
-  const time = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone });
-  const zone = at.toLocaleTimeString('en-US', { timeZoneName: 'short', timeZone }).split(' ').pop() ?? '';
-  return `${day}, ${time}${zone ? ` ${zone}` : ''}`;
+  return formatEventTime(iso, zone, 'long') || null;
 }
 
-/** "on Thursday 12 November at 18:00" for the waiting step, or "as soon as the organiser opens it". */
-export function startsPhrase(iso: string | null, now: number = Date.now(), timeZone?: string): string {
+/**
+ * "on Thursday 12 November at 18:00 CET" for the waiting step, on the event's clock with its zone named, or "as soon as
+ * the organiser opens it" (no date, or a start already past).
+ */
+export function startsPhrase(iso: string | null, now: number = Date.now(), zone?: string | null): string {
   if (!iso) return 'as soon as the organiser opens it';
   const at = new Date(iso);
   if (Number.isNaN(at.getTime()) || at.getTime() <= now) return 'as soon as the organiser opens it';
-  const day = at.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone });
-  const time = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone });
-  return `on ${day} at ${time}`;
+  const long = formatEventTime(at, zone, 'long', { withZone: false });
+  return `on ${long.slice(0, long.lastIndexOf(', '))} at ${formatEventTime(at, zone, 'clock')}`;
 }
 
 // ─── Every sentence the flow says ─────────────────────────────────────────────
@@ -191,8 +191,8 @@ export const CALL_WORDS = {
 } as const;
 
 /** "You're in. {title} starts {when}." */
-export function youreInSentence(title: string, startsAt: string | null, now: number = Date.now()): string {
-  return `You're in. ${title} starts ${startsPhrase(startsAt, now)}.`;
+export function youreInSentence(title: string, startsAt: string | null, zone: string | null | undefined, now: number = Date.now()): string {
+  return `You're in. ${title} starts ${startsPhrase(startsAt, now, zone)}.`;
 }
 
 // ─── What a failed request says, and where ────────────────────────────────────

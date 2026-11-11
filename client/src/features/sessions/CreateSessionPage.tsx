@@ -23,7 +23,8 @@ import FormSummary from '@/components/ui/FormSummary';
 import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
-import { cn, isAdmin as isAdminRole, localTimezoneLabel } from '@/lib/utils';
+import { cn, isAdmin as isAdminRole } from '@/lib/utils';
+import { defaultEventZone } from '@/lib/event-time';
 import { E } from '@/realtime/entities';
 import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder } from './EventFormatFields';
 import { useMatchingChoices } from './useMatchingChoices';
@@ -34,6 +35,7 @@ import {
 } from './event-format-form';
 import { useEventFormatForm } from './useEventFormatForm';
 import { nextQuarterHourAfter } from './default-start';
+import EventZoneField from './EventZoneField';
 import { circleEntities, type CircleDetail } from '@/features/circles/circle-logic';
 import { circleForLine, circleGate, podsForCircle } from './circle-preset';
 
@@ -235,7 +237,12 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
   const addToast = useToastStore((s) => s.addToast);
   const podFieldId = useId();
   const descriptionId = useId();
-  const [start] = useState(() => newEventValues({ pod: toEventPod(fixedPod ?? null), scheduledAt: nextQuarterHourAfter(new Date()) }));
+  // Part 3 (K1): a new event is on its organiser's zone (their profile's, else this browser's), from its next quarter hour.
+  const organiserZone = useAuthStore((s) => s.user?.timezone as string | null | undefined);
+  const [start] = useState(() => {
+    const zone = defaultEventZone(organiserZone);
+    return newEventValues({ pod: toEventPod(fixedPod ?? null), scheduledAt: nextQuarterHourAfter(new Date(), zone), timezone: zone });
+  });
   const lastAutoTitle = useRef(start.title);
   const ev = useEventFormatForm({
     defaultValues: start,
@@ -378,9 +385,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
 
           <div>
             <Input label="Date and time" type="datetime-local" error={errors.scheduledAt?.message} className={FIELD_SCROLL_MARGINS} {...register('scheduledAt')} />
-            <p className="text-xs text-gray-400 mt-1">
-              Shown in your local time — {localTimezoneLabel()}. Each person sees the event in their own timezone.
-            </p>
+            <EventZoneField form={ev.form} />
           </div>
         </div>
       </Card>

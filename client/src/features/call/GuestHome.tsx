@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Spinner';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
+import EventImage from '@/features/sessions/EventImage';
 import { CALL_WORDS, eventTimeLabel } from './call-entry';
 import { isEventGuest } from './guest-routes';
 import { useMyCallEvents } from './useCallLink';
@@ -36,11 +37,12 @@ const TONE = {
 function EventCard({ event }: { event: CallEventSummary }) {
   const navigate = useNavigate();
   const chip = STEP_CHIP[event.step];
-  const when = eventTimeLabel(event.scheduledAt);
+  const when = eventTimeLabel(event.scheduledAt, event.timezone);
   const over = event.step === 'ended' || event.step === 'cancelled';
   return (
     <li className="flex flex-col gap-3 rounded-2xl border border-reason-line bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5" data-testid="guest-event">
-      <div className="min-w-0">
+      <div className="min-w-0 sm:flex-1">
+        <EventImage src={event.imageUrl} className="mb-3" />
         <span className={cn('inline-flex rounded-full px-2.5 py-1 text-[12px] font-bold', TONE[chip.tone])}>{chip.label}</span>
         <p className="mt-2 break-words text-[17px] font-bold leading-snug">{event.title}</p>
         <p className="mt-1 flex items-center gap-1.5 text-[14px] text-reason-muted">

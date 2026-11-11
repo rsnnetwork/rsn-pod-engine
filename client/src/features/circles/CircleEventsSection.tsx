@@ -6,6 +6,8 @@
 import { Link } from 'react-router-dom';
 import { Calendar } from 'lucide-react';
 import Card from '@/components/ui/Card';
+import EventImage from '@/features/sessions/EventImage';
+import { formatEventDateTime } from '@/lib/utils';
 import type { CircleDetail } from './circle-logic';
 
 export default function CircleEventsSection({ circle }: { circle: Pick<CircleDetail, 'upcomingEvents'> }) {
@@ -24,17 +26,20 @@ export default function CircleEventsSection({ circle }: { circle: Pick<CircleDet
         <div className="grid grid-cols-1 gap-2">
           {circle.upcomingEvents.map(e => (
             <Card key={e.id} className="card-hover !p-4">
-              <Link to={`/sessions/${e.id}`} data-testid="circle-event" className="flex min-h-[44px] items-center justify-between gap-2">
-                <span className="min-w-0">
-                  <span className="block font-medium text-gray-900 truncate">{e.title}</span>
-                  {e.forCircle && (
-                    <span className="mt-1 inline-block rounded-full bg-rsn-red/10 px-2 py-0.5 text-[11px] font-medium text-rsn-red" data-testid="circle-event-for-circle">
-                      For this circle
-                    </span>
-                  )}
-                </span>
-                <span className="text-xs text-gray-400 whitespace-nowrap">
-                  {new Date(e.scheduledAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              <Link to={`/sessions/${e.id}`} data-testid="circle-event" className="block">
+                <EventImage src={e.imageUrl} className="mb-3" />
+                <span className="flex min-h-[44px] items-center justify-between gap-2">
+                  <span className="min-w-0">
+                    <span className="block font-medium text-gray-900 truncate">{e.title}</span>
+                    {e.forCircle && (
+                      <span className="mt-1 inline-block rounded-full bg-rsn-red/10 px-2 py-0.5 text-[11px] font-medium text-rsn-red" data-testid="circle-event-for-circle">
+                        For this circle
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-xs text-gray-400 whitespace-nowrap">
+                    {formatEventDateTime(e.scheduledAt, e.timezone)}
+                  </span>
                 </span>
               </Link>
             </Card>

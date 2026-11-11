@@ -23,7 +23,10 @@ export interface CircleMember { userId: string; displayName: string | null; avat
 export interface CircleDetail extends CircleSummary {
   members: CircleMember[];
   pods: Array<{ podId: string; name: string; description: string | null }>;
-  upcomingEvents: Array<{ id: string; title: string; scheduledAt: string; podId: string; forCircle?: boolean }>;
+  /** Part 3: each event's zone (its time is on its clock, named) and its image, when it has one. */
+  upcomingEvents: Array<{
+    id: string; title: string; scheduledAt: string; podId: string; forCircle?: boolean; timezone?: string | null; imageUrl?: string | null;
+  }>;
   children: Array<{ id: string; name: string; memberCount: number }>;
   /** T15: the entities linked to it (a server from before T15 sends none). */
   entities?: CircleEntityLink[];

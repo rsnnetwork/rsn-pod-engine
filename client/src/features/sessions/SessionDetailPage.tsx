@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
-import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
+import { eventWhen } from '@/lib/event-time';
 import { eventDurationMinutes, liveKindOf, resolveEventFormat } from '@rsn/shared';
 import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { eventEntry, icsFile } from '@/components/calendar/calendar-links';
@@ -23,6 +23,7 @@ import EventChatHistory from './EventChatHistory';
 import EditEventModal from './EditEventModal';
 import { eventFacts, eventFactsLine, eventPlace, presetNameOf } from './event-format-form';
 import EventPlace from './EventPlace';
+import { EventImageHeader } from './EventImage';
 import { useMatchingPresets } from './useMatchingChoices';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
@@ -256,6 +257,8 @@ export default function SessionDetailPage() {
       ...(session?.visibility ? { visibility: session.visibility } : {}),
       format: session ? resolveEventFormat(session) : undefined,
       config: session?.config,
+      // Part 3: and its zone, so the copy's times read on the same clock (the image is not copied).
+      timezone: session?.timezone,
       // T13: and the circle it is for (the server lets only the circle's managers name it).
       ...duplicateCircleField(session ?? {}),
     }),
@@ -370,6 +373,8 @@ export default function SessionDetailPage() {
 
       {/* Session Info */}
       <Card className="animate-fade-in-up">
+        {/* Part 3: the event's image; its host and platform admins (the server's rule) add, change or remove it. */}
+        <EventImageHeader sessionId={session.id} src={session.imageUrl} title={session.title || 'Event'} canChange={isHost || isAdmin} />
         <div className="flex items-start justify-between gap-3 mb-4">
           <div className="min-w-0">
             <h1 className="text-2xl font-bold text-[#1a1a2e] [overflow-wrap:anywhere]">{session.title || 'Event'}</h1>
@@ -380,9 +385,10 @@ export default function SessionDetailPage() {
                 <CircleDashed className="h-4 w-4 shrink-0" /> {eventCircleLine(session.circle.name)}
               </Link>
             )}
-            <p className="text-gray-400 mt-2 text-sm flex items-center gap-1.5">
-              <Calendar className="h-4 w-4" />
-              {session.scheduledAt ? `${formatDateTime(session.scheduledAt)} ${LOCAL_TIME_LABEL}` : 'No date set'}
+            {/* On the event's own clock, its zone named, for everyone wherever they are (Part 3, K1). */}
+            <p className="text-gray-500 mt-2 text-sm flex items-center gap-1.5" data-testid="event-when">
+              <Calendar className="h-4 w-4 shrink-0" />
+              {eventWhen(session.scheduledAt, session.timezone, 'long') ?? 'No date set'}
             </p>
             <p className="text-gray-500 mt-1 text-sm flex items-center gap-1.5">
               <Radio className="h-4 w-4 shrink-0" />
