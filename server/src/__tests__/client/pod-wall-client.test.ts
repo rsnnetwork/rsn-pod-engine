@@ -129,9 +129,10 @@ describe('what the pod wall says where the composer would be, when the viewer ca
 });
 
 describe('a pod page hears an archive from the archive itself (P1 item 16)', () => {
-  // DELETE /api/pods/:id used to tell the pod's screens a moment BEFORE it saved the new status, so the wall had to
-  // notice the pod was closed before the page did. Since H2b item 20 the archive is saved first, then told: the page's
-  // own pod query is refreshed with the archive already in it, and the wall's re-read guard is gone.
+  // DELETE /api/pods/:id used to tell the pod's screens a moment BEFORE it saved the new status. Since H2b item 20 the
+  // archive is saved first, then told. A page whose read of the pod landed just before the save can still hold the old
+  // status, so since 12 Nov 2026 the wall's feed says the status it found and the page reads the pod again, once, when
+  // the two disagree (s4-pod-status-recheck.test.ts).
   it('the archive route saves first, then fans out', () => {
     const route = fs.readFileSync(path.join(__dirname, '../../routes/pods.ts'), 'utf8').replace(/\r\n/g, '\n');
     const del = route.slice(route.indexOf("router.delete(\n  '/:id',"), route.indexOf("res.json(response);", route.indexOf("router.delete(\n  '/:id',")));
@@ -139,7 +140,7 @@ describe('a pod page hears an archive from the archive itself (P1 item 16)', () 
     expect(del.indexOf('fanoutPodEntities(')).toBeGreaterThan(del.indexOf('await podService.deletePod('));
   });
 
-  it('nothing on the client second-guesses it any more', () => {
+  it('the old guard, which read the pod again whenever an active member could not post, stays gone', () => {
     expect(read('features/pods/pod-wall-config.ts')).not.toMatch(/podStatusLooksStale/);
     expect(read('features/pods/PodWall.tsx')).not.toMatch(/onPodStatusStale|onViewerChange/);
     expect(read('components/wall/Wall.tsx')).not.toMatch(/onViewerChange/);

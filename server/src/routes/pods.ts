@@ -14,7 +14,9 @@ import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
 import { withoutEmail } from '../services/user/public-card';
 import { podReadLimiter, podWriteLimiter } from '../middleware/rateLimit';
-import { fanoutAdminEntities, fanoutCircleChange, fanoutCirclesOfPod, fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
+import {
+  fanoutAdminEntities, fanoutCircleChange, fanoutCirclesOfPod, fanoutPodEntities, fanoutPodMembershipForUser, podAudience, tellPodAudience,
+} from '../realtime/fanout';
 import { assertCircleManager } from '../services/circle/circle-managers';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
@@ -721,12 +723,12 @@ router.delete(
   auditMiddleware('hard_delete_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Phase May-19 realtime — fan out BEFORE the hard delete so
-      // fanoutPodEntities' active-member lookup still finds rows. Mirrors
-      // the soft DELETE /pods/:id pattern above; includeUserPodsPerMember
-      // so every member's My Pods list flips.
-      fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
+      // The member list is read BEFORE the hard delete (the rows go with the pod), and the members are told AFTER the
+      // delete is saved, as every mutation does (12 Nov 2026: it used to tell them first, so a page that read the pod
+      // again at once could still find it). includeUserPodsPerMember so every member's My Pods list flips.
+      const audience = await podAudience(req.params.id);
       await podService.hardDeletePod(req.params.id);
+      tellPodAudience(audience, req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Pod permanently deleted' } };
       return res.json(response);
     } catch (err) {

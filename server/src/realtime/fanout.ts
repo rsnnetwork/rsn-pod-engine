@@ -61,7 +61,24 @@ const PUBLISHED_CIRCLE_AUDIENCE_ARM = `${CIRCLE_AUDIENCE_ARM} AND cs.publication
 // mutations, or `E.userPods(memberId)` for member-add/remove) and they're
 // concatenated.
 
-export async function fanoutPodEntities(
+/** Who a pod's change is told to: its members whose row is not removed or declined (read before a hard delete). */
+export async function podAudience(podId: string): Promise<string[]> {
+  const { query } = await import('../db');
+  const result = await query<{ user_id: string }>(
+    `SELECT user_id FROM pod_members
+      WHERE pod_id = $1 AND status NOT IN ('removed', 'declined')`,
+    [podId],
+  );
+  return result.rows.map(r => r.user_id);
+}
+
+/**
+ * Tell these people a pod changed: its tags and the caller's, and with includeUserPodsPerMember each person's My Pods.
+ * Split from fanoutPodEntities (12 Nov 2026) so a hard delete can read its audience BEFORE the rows go and tell them
+ * AFTER the delete has been saved, as every mutation does.
+ */
+export async function tellPodAudience(
+  userIds: string[],
   podId: string,
   extraEntities: string[] = [],
   options: { includeUserPodsPerMember?: boolean } = {},
@@ -69,13 +86,6 @@ export async function fanoutPodEntities(
   const io = getRealtimeIo();
   if (!io) return;
   try {
-    const { query } = await import('../db');
-    const result = await query<{ user_id: string }>(
-      `SELECT user_id FROM pod_members
-        WHERE pod_id = $1 AND status NOT IN ('removed', 'declined')`,
-      [podId],
-    );
-    const userIds = result.rows.map(r => r.user_id);
     const entities = [E.pod(podId), E.podMembers(podId), E.podInvites(podId), ...extraEntities];
     if (options.includeUserPodsPerMember) {
       // Pod-wide mutations (delete, reactivate, hard-delete) also flip each
@@ -84,6 +94,19 @@ export async function fanoutPodEntities(
       for (const id of userIds) entities.push(E.userPods(id));
     }
     await emitEntities(io, userIds, entities);
+  } catch (err) {
+    logger.warn({ err, podId }, 'tellPodAudience: failed to fan out');
+  }
+}
+
+export async function fanoutPodEntities(
+  podId: string,
+  extraEntities: string[] = [],
+  options: { includeUserPodsPerMember?: boolean } = {},
+): Promise<void> {
+  if (!getRealtimeIo()) return;
+  try {
+    await tellPodAudience(await podAudience(podId), podId, extraEntities, options);
   } catch (err) {
     logger.warn({ err, podId }, 'fanoutPodEntities: failed to fan out');
   }

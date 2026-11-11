@@ -400,6 +400,8 @@ describe('a pod that is not open takes no new activity, but moderation and your 
 
     it('can still be read; nobody may post there, and moderators are still shown the moderator controls', async () => {
       expect((await wall.listPosts(POD, asMember)).viewer).toEqual({ canPost: false, canModerate: false });
+      // The feed says the status it found, so a page that read the pod a moment earlier can tell the two disagree.
+      expect((await wall.listPosts(POD, asMember)).podStatus).toBe(status);
       world.member = { role: 'director', status: 'active' };
       expect((await wall.listPosts(POD, asMember)).viewer).toEqual({ canPost: false, canModerate: true });
       world.member = { role: 'host', status: 'active' };

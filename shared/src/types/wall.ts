@@ -126,4 +126,6 @@ export interface PodWallFeed {
   posts: PodWallPost[];
   nextCursor: string | null;
   viewer: PodWallViewer;
+  /** The pod's status as this read found it ('active', 'archived', 'suspended', 'draft'); the page compares it with its own. */
+  podStatus: string;
 }

@@ -32,6 +32,32 @@ export function podCannotPostNote(podStatus: string | undefined, isActiveMember:
   return 'This pod is not open for new activity right now.';
 }
 
+/**
+ * The pod as the wall's feed read it and as the page read it, when the two disagree: a key naming that disagreement.
+ * Null while either has not answered, or when they agree.
+ */
+export function podStatusDisagreement(fromFeed: string | undefined, onPage: string | undefined): string | null {
+  if (!fromFeed || !onPage || fromFeed === onPage) return null;
+  return `${fromFeed}|${onPage}`;
+}
+
+/**
+ * Reads the pod again when the wall's feed and the page disagree about its status, at most once per disagreement
+ * (12 Nov 2026, pod-wall.spec.ts "a page that read the pod a moment before the archive was saved"). A page whose
+ * read of the pod landed just before a change keeps the old status, while the wall's feed already has the new
+ * one: the composer goes, but the note under the wall still says the pod is open. A re-read that answers the same
+ * stale status is not followed by another (no loop); once the two agree, a later disagreement asks again.
+ */
+export function createPodStatusRecheck(reread: () => void): (fromFeed: string | undefined, onPage: string | undefined) => void {
+  let asked: string | null = null;
+  return (fromFeed, onPage) => {
+    const disagreement = podStatusDisagreement(fromFeed, onPage);
+    if (disagreement === asked) return;
+    asked = disagreement;
+    if (disagreement) reread();
+  };
+}
+
 export function podWallConfig({ podId, me, podStatus, isActiveMember }: PodWallInput): WallConfig {
   const blocks = me ? [E.userBlocks(me)] : [];
   // The feed answers more than the posts. Its viewer flags depend on the pod's status (pod:<id>) and on the

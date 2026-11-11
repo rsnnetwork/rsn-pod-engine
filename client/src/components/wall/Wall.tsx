@@ -14,7 +14,7 @@
 // S4: an author's edit of a post is held here (useHeldPostEdit), so a refetch never loses what was typed. A ?post= link
 // to a post that has gone says "This post was removed." where it would be (WallNotices).
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -38,12 +38,14 @@ const REFETCH_WINDOW_MS = 200;
 
 export { WallNotMember };
 
-export default function Wall({ config, fallbackViewer, highlightPostId }: {
+export default function Wall({ config, fallbackViewer, highlightPostId, onFeedPodStatus }: {
   config: WallConfig;
   /** What the viewer may do, for a wall whose feed does not say (the circle wall's page knows). */
   fallbackViewer?: WallViewer;
   /** The post a ?post= link names: scrolled into view and outlined. */
   highlightPostId?: string;
+  /** Told the pod's status each time the feed's first page reads a new one (the pod wall's feed says it). */
+  onFeedPodStatus?: (status: string) => void;
 }) {
   const userId = useAuthStore((s) => s.user?.id);
   const queryClient = useQueryClient();
@@ -71,6 +73,10 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
 
   const { pinned, rest, viewer: fromFeed } = arrangeFeed(feed.data?.pages);
   const viewer = viewerFor(fromFeed, fallbackViewer);
+  const feedPodStatus = feed.data?.pages[0]?.podStatus;
+  useEffect(() => {
+    if (feedPodStatus) onFeedPodStatus?.(feedPodStatus);
+  }, [feedPodStatus, onFeedPodStatus]);
   const loadedIds = new Set([...pinned, ...rest].map((p) => p.id));
 
   // The ?post= link: a post on the pages loaded so far is scrolled to where it stands. One that is not (older

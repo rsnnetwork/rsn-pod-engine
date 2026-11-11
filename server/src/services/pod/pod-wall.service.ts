@@ -348,6 +348,9 @@ export async function listPosts(
     posts: rows.map(mapPost),
     nextCursor: page.rows.length > limit && last ? cursorOf(last) : null,
     viewer: { canPost: access.canPost, canModerate: access.canModerate },
+    // The pod's status as this read found it (12 Nov 2026): the page compares it with its own read of the pod and reads
+    // the pod again when the two disagree, so a page that read the pod a moment before a change still settles.
+    podStatus: access.podStatus,
   };
 }
 

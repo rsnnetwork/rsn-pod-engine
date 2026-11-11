@@ -46,6 +46,8 @@ export interface WallFeedPage {
   nextCursor: string | null;
   /** What the viewer may do. Both walls' feeds name it (the circle wall's since S4); the page's fallback covers an old answer. */
   viewer?: WallViewer;
+  /** The pod's status as the read found it (the pod wall's feed only): the pod page compares it with its own read. */
+  podStatus?: string;
 }
 
 export interface WallCommentList {
