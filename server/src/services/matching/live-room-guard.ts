@@ -5,14 +5,15 @@
 // to write, before writing it:
 //   - two people one of whom blocked (or reported) the other are always refused, on every event, override or not;
 //   - on an event with groups, a room this round's rule does not allow is refused with the rule in the organiser's
-//     words, unless the request carries `override: true` and the actor is the event's owner (host_user_id) or a
-//     super admin; then it goes ahead and one `match.override` audit row records it, with the reason given.
+//     words, unless the request carries `override: true` and the actor may override (mayOverrideGroupRules: the
+//     event's owner, host_user_id, or a super admin; and its co-hosts when the owner chose so, Part 3 Task 12); then
+//     it goes ahead and one `match.override` audit row records it, with the reason given.
 // An event without groups checks the blocks only: a host may still seat an inviter with their guest, or two people
 // who met before, exactly as before.
 
 import { z } from 'zod';
 import {
-  checkRoom, ErrorCodes, roundRuleSentence, UserRole, type RoomCheckContext, type RoomProblem,
+  checkRoom, ErrorCodes, roundRuleSentence, UserRole, type GroupOverrideBy, type RoomCheckContext, type RoomProblem,
 } from '@rsn/shared';
 import { query } from '../../db';
 import { recordEventAudit } from '../audit/event-audit';
@@ -21,7 +22,16 @@ import { loadHardExclusions } from './hard-exclusions';
 import { getEventGroupRules, groupsForParticipants } from '../session/event-groups.service';
 
 export const BLOCKED_PAIR_MESSAGE = "These two people can't meet: one has blocked the other.";
-export const OVERRIDE_FORBIDDEN_MESSAGE = 'Only the event owner or a super admin can override group rules.';
+/**
+ * The refusal says who may override as the owner chose it (Part 3 Task 12 ruling): the owner alone, or the owner and
+ * the event's co-hosts. Super admins may always override but are not named to users.
+ */
+export const OWNER_ONLY_OVERRIDE_MESSAGE = "Only the event's owner can override group rules.";
+export const OWNER_AND_COHOSTS_OVERRIDE_MESSAGE = "Only the event's owner and co-hosts can override group rules.";
+
+export function overrideForbiddenMessage(overrideBy: GroupOverrideBy): string {
+  return overrideBy === 'owner_and_cohosts' ? OWNER_AND_COHOSTS_OVERRIDE_MESSAGE : OWNER_ONLY_OVERRIDE_MESSAGE;
+}
 const TOO_MANY_MESSAGE = 'A room holds at most three people.';
 const UNREADABLE_MESSAGE = "That request couldn't be read. Please try again.";
 
@@ -85,14 +95,38 @@ async function groupProblemMessage(ctx: RoomCheckContext, problem: RoomProblem):
   return `${who[0]} and ${who[1]} can't meet in this round: ${rule}`;
 }
 
-/** The event's owner or a super admin, read from the database (never from the token). */
-export async function mayOverrideGroupRules(sessionId: string, actorId: string): Promise<boolean> {
-  const result = await query<{ host_user_id: string | null; role: string | null }>(
-    `SELECT s.host_user_id, (SELECT u.role FROM users u WHERE u.id = $2) AS role FROM sessions s WHERE s.id = $1`,
+/** Whether this person may override the event's group rules, and the owner's choice (for the refusal's sentence). */
+export interface GroupOverrideStanding {
+  allowed: boolean;
+  overrideBy: GroupOverrideBy;
+}
+
+/**
+ * Who may override this event's group rules, read from the database on every call (never from the token): the event's
+ * owner (host_user_id) or a super admin, always; and, when the owner chose 'owner_and_cohosts'
+ * (event_matching_rules.override_by, Part 3 Task 12), the event's co-hosts. No choice (no row) is 'owner'.
+ * A co-host here is a session_cohosts row with role 'co_host' only: a moderator (role 'moderator') never gains the
+ * override, whatever the owner chose (Part 3 Task 12 ruling). Nor does a pod director who is not a co-host of the
+ * event, or a platform admin.
+ */
+export async function groupOverrideStanding(sessionId: string, actorId: string): Promise<GroupOverrideStanding> {
+  const result = await query<{ host_user_id: string | null; role: string | null; override_by: string | null; is_cohost: boolean | null }>(
+    `SELECT s.host_user_id, (SELECT u.role FROM users u WHERE u.id = $2) AS role,
+            (SELECT r.override_by FROM event_matching_rules r WHERE r.session_id = s.id) AS override_by,
+            EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2 AND c.role = 'co_host') AS is_cohost
+       FROM sessions s WHERE s.id = $1`,
     [sessionId, actorId],
   );
   const row = result.rows[0];
-  return !!row && (row.host_user_id === actorId || row.role === UserRole.SUPER_ADMIN);
+  if (!row) return { allowed: false, overrideBy: 'owner' };
+  const overrideBy: GroupOverrideBy = row.override_by === 'owner_and_cohosts' ? 'owner_and_cohosts' : 'owner';
+  if (row.host_user_id === actorId || row.role === UserRole.SUPER_ADMIN) return { allowed: true, overrideBy };
+  return { allowed: overrideBy === 'owner_and_cohosts' && row.is_cohost === true, overrideBy };
+}
+
+/** groupOverrideStanding, yes or no: the matching board's canOverride. */
+export async function mayOverrideGroupRules(sessionId: string, actorId: string): Promise<boolean> {
+  return (await groupOverrideStanding(sessionId, actorId)).allowed;
 }
 
 /**
@@ -126,8 +160,9 @@ export async function judgeLiveRooms(input: {
   if (parsed.data.override !== true) {
     return { ok: false, code: ErrorCodes.MATCH_GROUP_RULE, message: await groupProblemMessage(ctx, broken[0].verdict.problems[0]) };
   }
-  if (!(await mayOverrideGroupRules(input.sessionId, input.actorId))) {
-    return { ok: false, code: ErrorCodes.GROUP_OVERRIDE_FORBIDDEN, message: OVERRIDE_FORBIDDEN_MESSAGE };
+  const standing = await groupOverrideStanding(input.sessionId, input.actorId);
+  if (!standing.allowed) {
+    return { ok: false, code: ErrorCodes.GROUP_OVERRIDE_FORBIDDEN, message: overrideForbiddenMessage(standing.overrideBy) };
   }
   return {
     ok: true,

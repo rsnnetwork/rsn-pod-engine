@@ -198,6 +198,10 @@ describe('the engine: answers choose among the meetings the event allows', () =>
   });
 });
 
+const openCtx: RoomCheckContext = {
+  round: 1, rules: null, groupsOf: () => [], hardExcluded: () => false, metBefore: () => false, maxRoomSize: 3,
+};
+
 // ─── Fix round 1 (review C1): questions never make a round worse ─────────────────────────────────────────────
 
 const FIVE = ['A', 'B', 'C', 'D', 'E'];
@@ -300,6 +304,89 @@ describe('questions never seat fewer people or make more repeats (review C1)', (
     mockQuery.mockReset();
     installWorld({ questions: true, answers: {} });
     expect(roomsOf(await generateSingleRound(SESSION_ID, 1, ['host']))).toEqual(['A+C', 'B+D']);
+  });
+});
+
+// ─── Fix round 2 (review I1): the comparison build only when the first can still lose ──────────────────────
+
+describe('the second build without answers runs only when the first result can still lose (review I1)', () => {
+  // buildRound is the engine's one round build; counting it counts every round made.
+  const builds = () => jest.spyOn(MatchingEngineV1.prototype as unknown as { buildRound: () => RoundAssignment }, 'buildRound');
+
+  it('engine: a round that seats everyone with no repeat is kept without a second build', () => {
+    const spy = builds();
+    const r = engine.generateRound(PEOPLE.map(guest), configOf({ answers: BY_SECTOR }), new Set(), [], 1);
+    expect(roomsOf(r)).toEqual(['A+B', 'C+D']);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('engine: probe case 1 (byes with answers) still builds without them, and that build wins', () => {
+    const spy = builds();
+    const used = metSet(ONLY_AB_BC_CD);
+    const r = engine.generateRound(FIVE.map(guest), configOf({ answers: B_C_ALIKE }), new Set(used), [], 3);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(r.byeParticipants ?? []).toEqual([]);
+    expect(placed(r)).toHaveLength(5);
+  });
+
+  it('engine: probe case 2 (a trio repeat with answers) still builds without them, and that build wins', () => {
+    const spy = builds();
+    const used = metSet([['L', 'C'], ['L', 'D'], ['A', 'C'], ['A', 'D'], ['B', 'C'], ['B', 'D']]);
+    const answers = { A: { sector: ['fintech'] }, B: { sector: ['fintech'] }, C: { sector: ['health'] }, D: { sector: ['health'] }, L: { sector: ['health'] } };
+    const r = engine.generateRound(['A', 'B', 'C', 'D', 'L'].map(guest), configOf({ answers }), new Set(used), [], 3);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(roomsOf(r)).toEqual(['A+B+L', 'C+D']);
+  });
+
+  it('Live Match, the board and the plan: one build per round when every round is perfect', async () => {
+    installWorld({ questions: true });
+    let spy = builds();
+    await generateSingleRound(SESSION_ID, 1, ['host']);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    mockQuery.mockReset();
+    installWorld({ questions: true });
+    const generator = await prepareBoardRoundGenerator(SESSION_ID, PEOPLE);
+    spy = builds();
+    generator(PEOPLE, 1, new Set());
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    mockQuery.mockReset();
+    installWorld({ questions: true });
+    spy = builds();
+    const plan = await generateSessionSchedule(SESSION_ID, undefined, ['host']);
+    expect(plan.rounds).toHaveLength(3);
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it('Live Match: probe case 1 still climbs without answers (more than one build) and seats everyone', async () => {
+    installWorld({ questions: true, people: FIVE, answers: B_C_ALIKE, met: ONLY_AB_BC_CD });
+    const spy = builds();
+    const r = await generateSingleRound(SESSION_ID, 3, ['host']);
+    expect(spy.mock.calls.length).toBeGreaterThan(1);
+    expect(placed(r)).toHaveLength(5);
+  });
+
+  it('redistribute: when the answers choose no seat, the engine runs once (no second seating)', () => {
+    const generate = jest.fn((people: string[]) => engine.generateRound(people.map(guest), configOf(), new Set(), [], 1));
+    const r = redistributeRound({
+      round: 1, seated: new Map(), lockedRooms: new Set<number>(), lockedSlots: new Set<string>(),
+      basket: PEOPLE, ctx: openCtx, generate, affinity: () => 1,
+    });
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(r.placed).toHaveLength(4);
+  });
+
+  it('redistribute: answers that chose a seat but placed everyone with no fallback or repeat: no second seating', () => {
+    const generate = jest.fn((people: string[]) => engine.generateRound(people.map(guest), configOf(), new Set(), [], 1));
+    const r = redistributeRound({
+      round: 1, seated: new Map([[1, ['A']]]), lockedRooms: new Set<number>(), lockedSlots: new Set<string>(),
+      basket: ['C', 'B', 'D', 'E'], ctx: openCtx, generate,
+      affinity: (x, y) => ([x, y].sort().join('+') === 'A+B' ? 1 : 0),
+    });
+    expect(r.seated.get(1)!.slice(0, 2)).toEqual(['A', 'B']);
+    expect(r.waiting).toEqual([]);
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 });
 

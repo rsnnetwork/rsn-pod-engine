@@ -67,8 +67,12 @@ const SESSION_ID = '00000000-0000-4000-8000-0000000000bb';
 const OWNER = 'owner';
 const COHOST = 'cohost';
 const STEFAN = 'stefan';
+/** A pod director who runs the event (canActAsHost) without being one of its co-hosts (Part 3 Task 12). */
+const DIRECTOR = 'director';
 const NAMES: Record<string, string> = { f1: 'Ann', f2: 'Bob', u1: 'Cleo', u2: 'Dev' };
-const ROLES: Record<string, string> = { [OWNER]: 'member', [COHOST]: 'member', [STEFAN]: 'super_admin' };
+const ROLES: Record<string, string> = { [OWNER]: 'member', [COHOST]: 'member', [STEFAN]: 'super_admin', [DIRECTOR]: 'member' };
+/** event_matching_rules.override_by (migration 147); null = no row, read as 'owner'. */
+let overrideBy: 'owner' | 'owner_and_cohosts' | null = null;
 
 const CROSS: EventGroupRules = {
   ...GROUP_PRESETS.founders_funders,
@@ -114,12 +118,15 @@ const errorOf = (socket: { emit: jest.Mock }) => socket.emit.mock.calls.find(([e
 
 beforeEach(() => {
   activeSessions.clear();
+  overrideBy = null;
   gMockQuery.mockReset();
   gMockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     if (/SELECT id, display_name FROM users WHERE id = ANY/.test(sql)) {
       return { rows: (params[0] as string[]).map((id) => ({ id, display_name: NAMES[id] ?? null })) };
     }
-    if (/SELECT s\.host_user_id/.test(sql)) return { rows: [{ host_user_id: OWNER, role: ROLES[params[1] as string] ?? 'member' }] };
+    if (/SELECT s\.host_user_id/.test(sql)) {
+      return { rows: [{ host_user_id: OWNER, role: ROLES[params[1] as string] ?? 'member', override_by: overrideBy, is_cohost: params[1] === COHOST }] };
+    }
     return { rows: [], rowCount: 0 };
   });
   mockGetMatchesByRound.mockReset();
@@ -195,7 +202,7 @@ describe('swap, on an event with groups (founders meet funders in every round)',
     const socket = socketOf(COHOST);
     await handleHostSwapMatch(io, socket, { sessionId: SESSION_ID, userA: 'u1', userB: 'f2', override: true, reason: 'Same table' });
     expect(errorOf(socket)).toEqual({
-      code: 'GROUP_OVERRIDE_FORBIDDEN', message: 'Only the event owner or a super admin can override group rules.',
+      code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner can override group rules.",
     });
     expect(updates()).toHaveLength(0);
     expect(audits()).toHaveLength(0);
@@ -227,6 +234,43 @@ describe('swap, on an event with groups (founders meet funders in every round)',
         ],
       },
     });
+  });
+
+  it("Part 3 Task 12: with the owner's 'owner and co-hosts', a co-host's override is made and audited as match.override", async () => {
+    overrideBy = 'owner_and_cohosts';
+    event({ groups: true });
+    previewRound();
+    const socket = socketOf(COHOST);
+    await handleHostSwapMatch(io, socket, { sessionId: SESSION_ID, userA: 'u1', userB: 'f2', override: true, reason: 'Same table' });
+    expect(errorOf(socket)).toBeUndefined();
+    expect(updates()).toHaveLength(2);
+    expect(audits()).toHaveLength(1);
+    const [, params] = audits()[0] as [string, unknown[]];
+    expect(params[0]).toBe(COHOST);
+    expect(JSON.parse(params[3] as string)).toMatchObject({ reason: 'Same table', after: { via: 'swap' } });
+  });
+
+  it("Part 3 Task 12: 'owner and co-hosts' gives a pod director who is not a co-host nothing", async () => {
+    overrideBy = 'owner_and_cohosts';
+    event({ groups: true });
+    previewRound();
+    const socket = socketOf(DIRECTOR);
+    await handleHostSwapMatch(io, socket, { sessionId: SESSION_ID, userA: 'u1', userB: 'f2', override: true });
+    expect(errorOf(socket)).toEqual({
+      code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner and co-hosts can override group rules.",
+    });
+    expect(updates()).toHaveLength(0);
+    expect(audits()).toHaveLength(0);
+  });
+
+  it("Part 3 Task 12: the owner's 'owner' (as when nothing was chosen) refuses the co-host as before", async () => {
+    overrideBy = 'owner';
+    event({ groups: true });
+    previewRound();
+    const socket = socketOf(COHOST);
+    await handleHostSwapMatch(io, socket, { sessionId: SESSION_ID, userA: 'u1', userB: 'f2', override: true });
+    expect(errorOf(socket)).toEqual({ code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner can override group rules." });
+    expect(updates()).toHaveLength(0);
   });
 
   it('a super admin who is not the owner may override too', async () => {

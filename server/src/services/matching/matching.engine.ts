@@ -7,7 +7,7 @@
 import {
   MatchingInput, MatchingOutput, MatchingConfig, MatchingParticipant,
   RoundAssignment, MatchPair, EncounterHistoryEntry, HardConstraint, MatchingEventQuestions,
-  EVENT_QUESTION_WEIGHT, groupsAllowed, questionAffinity, ruleForRound,
+  EVENT_QUESTION_WEIGHT, groupsAllowed, prepareAnswers, preparedAffinity, ruleForRound, type PreparedAnswers,
 } from '@rsn/shared';
 import { IMatchingEngine, pairKey } from './matching.interface';
 import {
@@ -173,6 +173,8 @@ export class MatchingEngineV1 implements IMatchingEngine {
   ): RoundAssignment {
     const round = this.buildRound(participants, config, usedPairs, hardExclusions, encounterMap, roundNumber, options);
     if (!config.eventQuestions) return round;
+    // Fix round 2 (review I1): a round that seats everyone with no repeat at all cannot be beaten; no second build.
+    if (perfectRound(round, participants.length, usedPairs, encounterMap)) return round;
     const plain = this.buildRound(
       participants, { ...config, eventQuestions: undefined }, usedPairs, hardExclusions, encounterMap, roundNumber, options,
     );
@@ -670,7 +672,7 @@ export class MatchingEngineV1 implements IMatchingEngine {
     //     reason comes last, so a pair's matchReason (its first reason) is unchanged.
     if (questions) {
       const w = weights.eventQuestions ?? EVENT_QUESTION_WEIGHT;
-      const affinity = questionAffinity(questions.answersByUser[a.userId], questions.answersByUser[b.userId], questions.questions);
+      const affinity = preparedAffinity(preparedOf(questions, a.userId), preparedOf(questions, b.userId), questions.questions);
       totalScore += affinity * w;
       totalWeight += w;
       if (affinity > 0.5) reasonTags.push('event_answers');
@@ -889,6 +891,46 @@ export function meetingKeysOf(round: Pick<RoundAssignment, 'pairs'>): string[] {
     }
   }
   return keys;
+}
+
+/**
+ * Each person's answers prepared once per signal (fix round 2, review I1): the pair score reads them for every pair, so
+ * they are cleaned per person, not per pair. Keyed by the signal object itself, which every config copy of a round
+ * shares; dropped with it.
+ */
+const preparedBySignal = new WeakMap<MatchingEventQuestions, Map<string, PreparedAnswers>>();
+
+function preparedOf(signal: MatchingEventQuestions, userId: string): PreparedAnswers {
+  let byUser = preparedBySignal.get(signal);
+  if (!byUser) {
+    byUser = new Map();
+    preparedBySignal.set(signal, byUser);
+  }
+  let prepared = byUser.get(userId);
+  if (!prepared) {
+    prepared = prepareAnswers(signal.questions, signal.answersByUser[userId]);
+    byUser.set(userId, prepared);
+  }
+  return prepared;
+}
+
+/**
+ * A round no other round can beat (fix round 2, review I1): it seats all `everyone` people and makes no meeting of a
+ * pair kept apart (`met`) or, when given, met before (the encounter history). The questions guards keep such a round
+ * without making a second one.
+ */
+export function perfectRound(
+  round: Pick<RoundAssignment, 'pairs'>,
+  everyone: number,
+  met: ReadonlySet<string>,
+  encounterMap?: ReadonlyMap<string, EncounterHistoryEntry>,
+): boolean {
+  if (seatedIn(round) < everyone) return false;
+  for (const k of meetingKeysOf(round)) {
+    if (met.has(k)) return false;
+    if (encounterMap && (encounterMap.get(k)?.timesMet ?? 0) > 0) return false;
+  }
+  return true;
 }
 
 /** How many of a round's meetings are in `met` (trio meetings included). */

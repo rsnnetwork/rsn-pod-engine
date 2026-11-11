@@ -103,7 +103,21 @@ describe('PUT /sessions/:id/groups', () => {
     });
   });
 
+  it('Part 3 Task 12: passes who may override on when sent, and sends nothing when it is not (the service keeps the stored choice)', async () => {
+    for (const overrideBy of ['owner', 'owner_and_cohosts']) {
+      mockSave.mockClear();
+      const res = await request(app).put(`/sessions/${EVENT}/groups`).set(as('u-host')).send({ ...rules, overrideBy });
+      expect(res.status).toBe(200);
+      expect(mockSave.mock.calls[0][2]).toMatchObject({ overrideBy });
+    }
+    mockSave.mockClear();
+    await request(app).put(`/sessions/${EVENT}/groups`).set(as('u-host')).send(rules);
+    expect(mockSave.mock.calls[0][2]).not.toHaveProperty('overrideBy');
+  });
+
   it.each([
+    ['an unknown overrideBy', { groups: rules.groups, overrideBy: 'everyone' }],
+    ['a null overrideBy', { groups: rules.groups, overrideBy: null }],
     ['13 groups', { groups: Array.from({ length: 13 }, (_, i) => ({ key: `g${i}`, label: `G${i}` })) }],
     ['a key with capitals and spaces', { groups: [{ key: 'Big Group', label: 'Big' }] }],
     ['a label of 41 characters', { groups: [{ key: 'a', label: 'x'.repeat(41) }] }],

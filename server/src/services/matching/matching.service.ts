@@ -11,7 +11,7 @@ import {
 } from '@rsn/shared';
 import { getMatchingEngine, DEFAULT_ENGINE_ID } from './matching.registry';
 import { IMatchingEngine, pairKey } from './matching.interface';
-import { groupGate, meetingKeysOf, questionsNoWorse, seatedIn } from './matching.engine';
+import { groupGate, meetingKeysOf, perfectRound, questionsNoWorse, seatedIn } from './matching.engine';
 import { getEventGroupRules, groupsForParticipants } from '../session/event-groups.service';
 import { loadQuestionSignals } from '../session/event-questions.service';
 import { reduceRepeatPairs } from './repeat-reduction';
@@ -283,12 +283,16 @@ export async function generateSessionSchedule(
   // too, and that one is kept when the one with them seats fewer people over the rounds or makes more repeats (a pair
   // meeting again within the plan, or meeting a pair already met in the event or, per its policy, before it).
   if (config.eventQuestions) {
-    const plainOutput = await plan({ ...input, config: { ...config, eventQuestions: undefined } });
     const before = new Set([
       ...existingRounds.flatMap((r) => meetingKeysOf(r)),
       ...encounterHistory.filter((e) => (e.timesMet ?? 0) > 0).map((e) => pairKey(e.userAId, e.userBId)),
     ]);
-    if (!planNoWorse(output, plainOutput, before)) output = plainOutput;
+    // Fix round 2 (review I1): a plan that seats everyone in every round with no repeat cannot be beaten; no second plan.
+    const best = planOutcome(output, before);
+    if (best.repeats > 0 || best.seated < participants.length * output.rounds.length) {
+      const plainOutput = await plan({ ...input, config: { ...config, eventQuestions: undefined } });
+      if (!planNoWorse(output, plainOutput, before)) output = plainOutput;
+    }
   }
 
   // Persist matches to database
@@ -658,12 +662,15 @@ export async function prepareBoardRoundGenerator(sessionId: string, userIds: str
   const generator: BoardRoundGenerator = (people, round, avoid) => {
     const chosen = seatRound(config, people, round, avoid);
     if (!config.eventQuestions) return chosen;
+    const keptApartHere = new Set([...(matchingPolicy === 'none' ? [] : [...avoid]), ...earlierEvents]);
+    // Fix round 2 (review I1): seated by the strict pass, everyone, with no repeat: nothing can beat it.
+    const seatable = people.filter((id) => byId.has(id)).length;
+    if (!chosen.usedRepeats && perfectRound(chosen, seatable, keptApartHere)) return chosen;
     // Part 3 Task 5 (K5, fix round 1): questions never make the board's round worse. The round is seated without them
     // too, and that one is kept when the one with them seats fewer people or repeats more of the pairs this round keeps
     // apart (the event's own meetings and those its repeat policy forbids; every meeting of a trio counts).
     const plain = seatRound({ ...config, eventQuestions: undefined }, people, round, avoid);
-    const keptApart = new Set([...(matchingPolicy === 'none' ? [] : [...avoid]), ...earlierEvents]);
-    return questionsNoWorse(chosen, plain, keptApart) ? chosen : plain;
+    return questionsNoWorse(chosen, plain, keptApartHere) ? chosen : plain;
   };
   if (eventQuestions) {
     const { questions, answersByUser } = eventQuestions;
@@ -935,6 +942,18 @@ export async function generateSingleRound(
   const sortedExcludedKeys = Array.from(excludedPairs).sort();
   const halfExcludedPairs = new Set(sortedExcludedKeys.slice(Math.floor(sortedExcludedKeys.length / 2)));
 
+  // Fix round 2 (review N1): the same 2-opt the chosen round gets below (only genuine hard pairs, and on Re-match the
+  // current arrangement, are never made), for comparing two ladder results on equal terms.
+  const reduceForComparison = (r: RoundAssignment): void => {
+    const never = new Set<string>();
+    for (const s of [...blockedPairs, ...inviterInviteePairs]) {
+      const [a, b] = s.split(':');
+      if (a && b) never.add(pairKey(a, b));
+    }
+    for (const k of options?.excludePairKeys ?? []) never.add(k);
+    reduceRepeatPairs(r.pairs, excludedPairs, never, groupRules ? groupedMayMeet(groupRules, config, roundNumber) : undefined);
+  };
+
   // Part 3 Task 5 (K5, fix round 1): the ladder, as one function of the config, so an event with matching questions can
   // climb it twice (with and without them) and keep the questions' result only when it is no worse.
   const climbLadder = (ladderConfig: MatchingConfig): { round: RoundAssignment | null; landedAtLevel: number } => {
@@ -1000,10 +1019,19 @@ export async function generateSingleRound(
   // Questions never make the round worse: the ladder without them is climbed too, and its result is kept when the one
   // with them lands on a higher level (relaxes more), seats fewer people or makes more repeats of pairs the event keeps
   // apart (every meeting of a trio counts). An event without questions climbs once, exactly as before.
-  if (config.eventQuestions && round) {
+  // Fix round 2 (review I1): a round at L0 that seats everyone with no repeat cannot be beaten, so the second climb is
+  // skipped. Otherwise (review N1, N2) both results get the same repeat-reducing 2-opt the chosen round gets below before
+  // they are compared, and the soft history the event's policy reads counts too.
+  const history = new Map(encounterHistory.map((e) => [pairKey(e.userAId, e.userBId), e] as const));
+  if (config.eventQuestions && round
+      && !(landedAtLevel === 0 && perfectRound(round, participantsResult.rows.length, excludedPairs, history))) {
     const plain = climbLadder({ ...config, eventQuestions: undefined });
-    if (plain.round && (landedAtLevel > plain.landedAtLevel || !questionsNoWorse(round, plain.round, excludedPairs))) {
-      ({ round, landedAtLevel } = plain);
+    if (plain.round) {
+      if (landedAtLevel > 0) reduceForComparison(round);
+      if (plain.landedAtLevel > 0) reduceForComparison(plain.round);
+      if (landedAtLevel > plain.landedAtLevel || !questionsNoWorse(round, plain.round, excludedPairs, history)) {
+        ({ round, landedAtLevel } = plain);
+      }
     }
   }
 

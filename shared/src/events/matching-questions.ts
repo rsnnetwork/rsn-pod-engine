@@ -97,16 +97,37 @@ function usableKeys(question: EventMatchingQuestion, answer: readonly string[] |
   return [...new Set(answer.filter((k) => known.has(k)))];
 }
 
+/**
+ * A person's answers made ready for many affinity reads (fix round 2, review I1): per question, in the questions' order,
+ * the option keys the question still offers, each once. The engine prepares each person once per round instead of once
+ * per pair; questionAffinity reads through the same preparation, so the two can never differ.
+ */
+export type PreparedAnswers = ReadonlyArray<readonly string[]>;
+
+export function prepareAnswers(questions: readonly EventMatchingQuestion[], answers: EventAnswers | undefined): PreparedAnswers {
+  return questions.map((q) => usableKeys(q, answers?.[q.key]));
+}
+
 /** One question's affinity in [0, 1]; 0.5 when either side has not answered it. */
-function questionScore(question: EventMatchingQuestion, a: EventAnswers | undefined, b: EventAnswers | undefined): number {
-  const mine = usableKeys(question, a?.[question.key]);
-  const theirs = usableKeys(question, b?.[question.key]);
+function questionScore(question: EventMatchingQuestion, mine: readonly string[], theirs: readonly string[]): number {
   if (mine.length === 0 || theirs.length === 0) return 0.5;
-  const theirSet = new Set(theirs);
-  const shared = mine.filter((k) => theirSet.has(k)).length;
+  let shared = 0;
+  for (const k of mine) if (theirs.includes(k)) shared += 1;
   const overlap = shared / Math.min(mine.length, theirs.length);
   const same = overlap > 0 ? 0.5 + 0.5 * overlap : 0;
   return question.prefer === 'same' ? same : 1 - same;
+}
+
+/** questionAffinity over answers already prepared for these questions (prepareAnswers). */
+export function preparedAffinity(
+  a: PreparedAnswers | undefined,
+  b: PreparedAnswers | undefined,
+  questions: readonly EventMatchingQuestion[],
+): number {
+  if (questions.length === 0) return 0.5;
+  let total = 0;
+  for (let i = 0; i < questions.length; i++) total += questionScore(questions[i], a?.[i] ?? [], b?.[i] ?? []);
+  return total / questions.length;
 }
 
 /**
@@ -121,10 +142,7 @@ export function questionAffinity(
   b: EventAnswers | undefined,
   questions: readonly EventMatchingQuestion[],
 ): number {
-  if (questions.length === 0) return 0.5;
-  let total = 0;
-  for (const q of questions) total += questionScore(q, a, b);
-  return total / questions.length;
+  return preparedAffinity(prepareAnswers(questions, a), prepareAnswers(questions, b), questions);
 }
 
 // ─── The organiser's input ───────────────────────────────────────────────────

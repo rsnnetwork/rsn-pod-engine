@@ -46,7 +46,9 @@ import {
 } from '../matching/constraint-context';
 import { pairKey } from '../matching/matching.interface';
 import { prepareBoardRoundGenerator, type BoardRoundGenerator } from '../matching/matching.service';
-import { mayOverrideGroupRules, OVERRIDE_FORBIDDEN_MESSAGE } from '../matching/live-room-guard';
+import {
+  groupOverrideStanding, mayOverrideGroupRules, overrideForbiddenMessage, type GroupOverrideStanding,
+} from '../matching/live-room-guard';
 import { emitEventAuditChanged, recordEventAudit, type EventAuditAction } from '../audit/event-audit';
 import { fanoutScheduleDraft } from '../../realtime/fanout';
 import { redistributeRound, type WaitingReason } from './redistribute';
@@ -583,7 +585,7 @@ interface PlacementCheck { override: boolean; fallback: boolean }
  */
 function checkPlacement(
   state: BoardState, draft: Draft, ctx: RoomCheckContext, round: number, members: string[], mover: string,
-  op: { override?: boolean }, canOverride: boolean, skipRooms: number[],
+  op: { override?: boolean }, standing: GroupOverrideStanding, skipRooms: number[],
 ): PlacementCheck {
   const v = checkRoom(ctx, members, { fallback: true });
   const fallback = hasWarning(v, 'same_group_fallback', mover);
@@ -594,7 +596,9 @@ function checkPlacement(
   if (op.override !== true) {
     refuse(ErrorCodes.SCHEDULE_GROUP_RULE, problemMessage(state, round, group, mover), alternativesFor(state, draft, ctx, round, mover, skipRooms));
   }
-  if (!canOverride) throw new AppError(403, ErrorCodes.GROUP_OVERRIDE_FORBIDDEN, OVERRIDE_FORBIDDEN_MESSAGE);
+  if (!standing.allowed) {
+    throw new AppError(403, ErrorCodes.GROUP_OVERRIDE_FORBIDDEN, overrideForbiddenMessage(standing.overrideBy));
+  }
   return { override: true, fallback };
 }
 
@@ -762,7 +766,7 @@ async function vacate(state: BoardState, draft: Draft, userId: string, needs: Se
 // ─── The edits ───────────────────────────────────────────────────────────────
 
 async function applyOp(
-  state: BoardState, draft: Draft, op: BoardOp, canOverride: boolean, needs: SeatingNeeds,
+  state: BoardState, draft: Draft, op: BoardOp, standing: GroupOverrideStanding, needs: SeatingNeeds,
 ): Promise<DraftDecision> {
   const edited = (round: number | null, after: Record<string, unknown> = {}): DraftDecision => ({
     action: 'schedule.edited', round, generated: false, reason: op.reason, after: { op: op.kind, ...after },
@@ -778,7 +782,7 @@ async function applyOp(
       const ctx = roomCheckContextFor(state.base, op.round, pairsOutside(draft, op.round, 'earlier'));
       const target = (roomsOf(draft, op.round).get(op.toRoom) ?? []).map((s) => s.userId);
       const skip = from ? [from.room, op.toRoom] : [op.toRoom];
-      const check = checkPlacement(state, draft, ctx, op.round, [...target, op.userId], op.userId, op, canOverride, skip);
+      const check = checkPlacement(state, draft, ctx, op.round, [...target, op.userId], op.userId, op, standing, skip);
       removeSeat(draft, op.round, op.userId);
       const rooms = roomsOf(draft, op.round);
       rooms.set(op.toRoom, [...(rooms.get(op.toRoom) ?? []), manualSeat(op.userId, check)]);
@@ -800,11 +804,11 @@ async function applyOp(
       const skip = a ? [a.room, b.room] : [b.room];
       // A takes B's seat; B takes A's, or the basket when A came from it. Both stay assigned when both were.
       const roomB = rooms.get(b.room)!.map((s) => s.userId).map((id) => (id === op.withUserId ? op.userId : id));
-      const checkA = checkPlacement(state, draft, ctx, op.round, roomB, op.userId, op, canOverride, skip);
+      const checkA = checkPlacement(state, draft, ctx, op.round, roomB, op.userId, op, standing, skip);
       let checkB: PlacementCheck | null = null;
       if (a) {
         const roomA = rooms.get(a.room)!.map((s) => s.userId).map((id) => (id === op.userId ? op.withUserId : id));
-        checkB = checkPlacement(state, draft, ctx, op.round, roomA, op.withUserId, op, canOverride, skip);
+        checkB = checkPlacement(state, draft, ctx, op.round, roomA, op.withUserId, op, standing, skip);
       }
       rooms.set(b.room, rooms.get(b.room)!.map((s) => (s.userId === op.withUserId ? manualSeat(op.userId, checkA) : s)));
       if (a && checkB) rooms.set(a.room, rooms.get(a.room)!.map((s) => (s.userId === op.userId ? manualSeat(op.withUserId, checkB!) : s)));
@@ -1094,15 +1098,15 @@ type WriteOutcome = { changed: Array<{ round: number; userIds: string[] }>; wrot
  */
 async function writeBoard(
   sessionId: string, actor: Actor, expectedRevision: number, withEngine: boolean,
-  decide: (state: BoardState, draft: Draft, canOverride: boolean, needs: SeatingNeeds) => Promise<DraftDecision>,
+  decide: (state: BoardState, draft: Draft, standing: GroupOverrideStanding, needs: SeatingNeeds) => Promise<DraftDecision>,
 ): Promise<BoardOpResult> {
   await requireOrganiser(sessionId, actor);
-  const canOverride = await mayOverrideGroupRules(sessionId, actor.userId);
+  const standing = await groupOverrideStanding(sessionId, actor.userId);
   const prep = await prepareWrite(sessionId, withEngine);
   const outcome = await withLockedDraft(sessionId, prep, expectedRevision, async (locked): Promise<WriteOutcome> => {
     if (isEnded(locked.state)) throw new ConflictError(ErrorCodes.EVENT_ENDED, ENDED);
     const draft = cloneDraft(locked.state.draft);
-    const decision = await decide(locked.state, draft, canOverride, seatingNeeds(locked.state, prep));
+    const decision = await decide(locked.state, draft, standing, seatingNeeds(locked.state, prep));
     const done = await commitDraft(locked, draft, decision, { actorId: actor.userId, automatic: false });
     return done ? { changed: done.changed, wrote: true } : { changed: [], wrote: false };
   });
@@ -1124,7 +1128,7 @@ async function writeBoard(
 export async function generateBoard(
   sessionId: string, actor: Actor, expectedRevision: number, rounds: number[] | 'all',
 ): Promise<BoardOpResult> {
-  return writeBoard(sessionId, actor, expectedRevision, true, async (state, draft, _canOverride, needs) => {
+  return writeBoard(sessionId, actor, expectedRevision, true, async (state, draft, _standing, needs) => {
     const { scope, waiting } = await generate(state, draft, rounds, needs);
     return { action: 'schedule.generated', round: scope.length === 1 ? scope[0] : null, generated: true, after: { rounds: scope, waiting } };
   });
@@ -1133,6 +1137,6 @@ export async function generateBoard(
 /** One edit to the board: move, swap, unassign, lock or unlock, redistribute, or mark someone late or not coming. */
 export async function applyBoardOp(sessionId: string, actor: Actor, expectedRevision: number, op: BoardOp): Promise<BoardOpResult> {
   const seatsAutomatically = op.kind === 'redistribute' || op.kind === 'mark_late' || op.kind === 'mark_no_show';
-  return writeBoard(sessionId, actor, expectedRevision, seatsAutomatically, (state, draft, canOverride, needs) =>
-    applyOp(state, draft, op, canOverride, needs));
+  return writeBoard(sessionId, actor, expectedRevision, seatsAutomatically, (state, draft, standing, needs) =>
+    applyOp(state, draft, op, standing, needs));
 }
