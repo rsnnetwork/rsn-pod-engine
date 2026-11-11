@@ -401,20 +401,21 @@ test(`a stored LinkedIn share link never blocks a save and is left as it was; an
   expect(sent!).not.toHaveProperty('linkedinUrl');
   expect((await pool.query('SELECT linkedin_url, job_title FROM users WHERE id = $1', [owner.id])).rows[0])
     .toEqual({ linkedin_url: share, job_title: `Founder ${run}` });
-  // The share link is an https address on LinkedIn: the hero links it, and there is no card asking for LinkedIn.
+  // The share link is a LinkedIn profile: the hero links it, in the one https form (Shirley pilot S6: shown predictably),
+  // and there is no card asking for LinkedIn.
   await gotoRetry(page, `${APP}/profile`);
   await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: SLOW });
-  await expect(page.getByRole('link', { name: /^LinkedIn/ })).toHaveAttribute('href', share);
+  await expect(page.getByRole('link', { name: /^LinkedIn/ })).toHaveAttribute('href', `https://www.linkedin.com/in/ada-share-${run}`);
   await expect(page.getByText('Optimize your profile: connect LinkedIn')).toHaveCount(0);
 
-  // An http address: the hero links nothing, so the card asks to connect LinkedIn, and the form shows the address as it
-  // is stored, for the member to put right.
-  const old = `http://www.linkedin.com/in/ada-old-${run}`;
+  // An address that is no LinkedIn profile: the hero links nothing, so the card says it needs fixing, and the form shows
+  // the address as it is stored, for the member to put right. (An http LinkedIn address is linked in https since S6.)
+  const old = `www.linkedin-old.example/in/ada-old-${run}`;
   await pool.query('UPDATE users SET linkedin_url = $2 WHERE id = $1', [owner.id, old]);
   await gotoRetry(page, `${APP}/profile`);
-  await expect(page.getByText('Optimize your profile: connect LinkedIn')).toBeVisible({ timeout: SLOW });
+  await expect(page.getByText('Your LinkedIn link needs fixing')).toBeVisible({ timeout: SLOW });
   await expect(page.getByRole('link', { name: /^LinkedIn/ })).toHaveCount(0);
-  await page.getByRole('link', { name: 'Add LinkedIn' }).click();
+  await page.getByRole('link', { name: 'Fix LinkedIn' }).click();
   await expect(page).toHaveURL(/\/profile\/edit#linkedin$/);
   await expect(page.locator('#linkedin')).toHaveValue(old, { timeout: SLOW });
   await expect(page.locator('#linkedin')).toBeFocused({ timeout: 15_000 });

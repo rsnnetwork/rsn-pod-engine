@@ -158,8 +158,8 @@ test(`a member with no links sees no links row, and your own profile offers "Add
   await gotoRetry(me.page, `${APP}/profile`);
   await expect(me.page.getByRole('heading', { level: 1, name: OWNER_NAME })).toBeVisible({ timeout: SLOW });
   await expect(me.page.getByTestId('profile-banner')).toHaveCount(0);
-  const add = me.page.getByRole('button', { name: 'Add a cover image' });
-  await expectReachable(me.page, add, 'Add a cover image');
+  const add = me.page.getByRole('button', { name: 'Add banner' });
+  await expectReachable(me.page, add, 'Add banner');
   await add.click();
   await expect(me.page.getByRole('dialog', { name: 'Edit your banner' })).toBeVisible();
   await noSidewaysScroll(me.page, 'your profile, 390px');

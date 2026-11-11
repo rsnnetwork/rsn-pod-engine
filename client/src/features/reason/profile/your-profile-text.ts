@@ -56,3 +56,28 @@ export function answerLines(step: 'q1' | 'q2' | 'q3', answers: OnboardingV2Answe
  * not link to (an http address, text that is no link). The same parse as the hero's (fix round 1, 21 Oct 2026).
  */
 export const needsLinkedin = (card: Pick<PublicMember, 'linkedinUrl'>): boolean => linkedinLink(card.linkedinUrl) === null;
+
+/**
+ * Which LinkedIn prompt the owner sees on Your profile (Shirley pilot S6, RSN 13): none while the hero links it,
+ * "missing" while there is none at all, "fix" while something is stored that the hero cannot link (text that is no
+ * LinkedIn profile address), so the member is told to put it right instead of being asked to add one they have.
+ */
+export type LinkedinPrompt = 'missing' | 'fix' | null;
+export function linkedinPrompt(card: Pick<PublicMember, 'linkedinUrl'>): LinkedinPrompt {
+  if (!needsLinkedin(card)) return null;
+  return visibleText(card.linkedinUrl) ? 'fix' : 'missing';
+}
+
+/** What each prompt says. */
+export const LINKEDIN_PROMPT: Record<'missing' | 'fix', { title: string; line: string; action: string }> = {
+  missing: {
+    title: 'Optimize your profile: connect LinkedIn',
+    line: 'Add your LinkedIn profile so members can learn more about you. It shows as a LinkedIn button under your name.',
+    action: 'Add LinkedIn',
+  },
+  fix: {
+    title: 'Your LinkedIn link needs fixing',
+    line: 'What is saved is not a LinkedIn profile link, so nobody can open it. Enter it as linkedin.com/in/your-name.',
+    action: 'Fix LinkedIn',
+  },
+};

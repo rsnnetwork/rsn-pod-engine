@@ -348,7 +348,7 @@ export default function SettingsPage() {
                 enabled={prefs.profileVisible}
                 onToggle={() => toggle('profileVisible')}
                 label="Show me in search and suggestions"
-                description="When off, you won't appear in Find people or suggestions. Members with a link can still open your profile."
+                description="When off, you won't appear in Find people or suggestions. Members with a link can still open your profile, and your public profile link (if you made one) is paused until you turn this back on."
               />
               <Toggle
                 enabled={prefs.inviteOptOutPublicEvents}

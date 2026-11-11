@@ -1,7 +1,7 @@
 // client/src/features/reason/human/profile-text.ts
 // What the Human Profile says, and the small rules behind it. Pure on purpose (no React, axios, store or
 // router), so a test can run it: server/src/__tests__/client/reason-m1-profile-text.test.ts.
-import { OUTCOME_LABELS, parseProfileUrl, type MatchStrength, type PersonBrief, type PersonResponse, type ProfileLinkKind } from '@rsn/shared';
+import { OUTCOME_LABELS, linkedinProfileUrl, parseProfileUrl, type MatchStrength, type PersonBrief, type PersonResponse, type ProfileLinkKind } from '@rsn/shared';
 import { CONNECTION_LOST, errorMessage } from '../errors';
 import { personName, visibleText } from '../person';
 import { STATE_LABEL } from './labels';
@@ -152,12 +152,17 @@ export function profileLinks(p: PersonBrief['person']): ProfileLinkItem[] {
 }
 
 /**
- * A stored LinkedIn as a link that is safe to open: an https address on linkedin.com or one of its country sites, with
- * no user name in it. Anything else is no link at all (the old profile form once took any text as one).
+ * A stored LinkedIn as a link that is safe to open. A LinkedIn profile address in any form (http, no protocol, a country
+ * site, a share query: rows saved before the server stored one form) opens as https://www.linkedin.com/in/<name>
+ * (Shirley pilot S6, RSN 13: shown "visibly and predictably"). Otherwise an https address on linkedin.com or one of its
+ * country sites with no user name in it (a company page) opens as it is. Anything else is no link at all.
  */
 export function linkedinLink(stored: string | null | undefined): string | null {
   const text = visibleText(stored);
-  if (!text || !/^https:\/\//i.test(text)) return null;
+  if (!text) return null;
+  const profile = linkedinProfileUrl(text);
+  if (profile) return profile;
+  if (!/^https:\/\//i.test(text)) return null;
   let address: URL;
   try {
     address = new URL(text);

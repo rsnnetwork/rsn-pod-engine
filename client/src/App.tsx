@@ -28,6 +28,8 @@ import VerifyPage from '@/features/auth/VerifyPage';
 import ProfilePage from '@/features/profile/ProfilePage';
 import PublicProfilePage from '@/features/profile/PublicProfilePage';
 import YourProfilePage from '@/features/reason/profile/YourProfilePage';
+import ProfilePreviewPage from '@/features/reason/profile/ProfilePreviewPage';
+import SharedProfilePage from '@/features/reason/profile/SharedProfilePage';
 import PodsPage from '@/features/pods/PodsPage';
 import PodDetailPage from '@/features/pods/PodDetailPage';
 import SessionsPage from '@/features/sessions/SessionsPage';
@@ -230,6 +232,8 @@ export default function App() {
       <Route path="/invite/:code" element={<InviteAcceptPage />} />
       {/* Admin email-action page — token IS the auth, no session required. */}
       <Route path="/admin/jr/:token" element={<AdminJoinRequestActionPage />} />
+      {/* A member's public profile link (Shirley pilot S6, D5): the public card only, open signed out. */}
+      <Route path="/p/:token" element={<><SharedProfilePage /><ToastContainer /></>} />
 
       {/* Protected with layout */}
       <Route element={<ProtectedRoute><ReasonShell /></ProtectedRoute>}>
@@ -297,6 +301,9 @@ export default function App() {
           ("Photo added.", the Google photo outcome) was ever visible. */}
       <Route path="/onboarding" element={<ProtectedRoute><><OnboardingFlow /><ToastContainer /></></ProtectedRoute>} />
       <Route path="/people/:userId" element={<ProtectedRoute><><HumanProfilePage /><ToastContainer /></></ProtectedRoute>} />
+      {/* Shirley pilot S6: your Human Profile as a member with no connection to you sees it. Full screen like theirs; a
+          fixed path, so it ranks ahead of /profile/:userId. */}
+      <Route path="/profile/preview" element={<ProtectedRoute><><ProfilePreviewPage /><ToastContainer /></></ProtectedRoute>} />
       <Route path="/entities/:entityId" element={<ProtectedRoute><><EntityProfilePage /><ToastContainer /></></ProtectedRoute>} />
       <Route path="/meet/:conversationId" element={<ProtectedRoute><MeetPage /></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
