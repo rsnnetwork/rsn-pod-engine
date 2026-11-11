@@ -16,6 +16,7 @@ import { AppError, ConflictError, NotFoundError } from '../../middleware/errors'
 import { ErrorCodes, REPORT_REPEAT_HOURS, type ReportReason, type ReportSubjectKind } from '@rsn/shared';
 import { getPost as getPodPost } from '../pod/pod-wall.service';
 import { getPost as getCirclePost } from '../circle/circle-wall.service';
+import { canReadEventChat } from '../event-chat/event-chat.service';
 
 export type { ReportReason } from '@rsn/shared';
 export type ReportStatus = 'open' | 'resolved' | 'dismissed';
@@ -60,9 +61,11 @@ export const REPORT_WORDS = {
   self: 'You cannot report yourself.',
   ownMessage: 'You cannot report your own message.',
   ownPost: 'You cannot report your own post.',
+  ownComment: 'You cannot report your own comment.',
   systemMessage: 'This message comes from REASON and cannot be reported.',
   messageGone: 'That message is no longer there.',
   postGone: 'That post is no longer there.',
+  commentGone: 'That comment is no longer there.',
   noTarget: 'Say who or what you are reporting.',
   already: 'You already reported this.',
 } as const;
@@ -151,12 +154,112 @@ async function resolveCirclePost(reporter: Reporter, postId: string): Promise<Re
   return { authorId: post.authorId, excerpt: postExcerpt(post), conversationId: null };
 }
 
+/**
+ * A comment (or reply) on a pod wall post the reporter can read now: the comment and its post must stand, and the pod
+ * wall's own read of that post decides (an active member of the pod, or a platform admin; a removed member is refused).
+ */
+async function resolvePodComment(reporter: Reporter, commentId: string): Promise<ResolvedSubject> {
+  const r = await query<{ author_id: string; content: string; post_id: string; pod_id: string }>(
+    `SELECT c.author_id, c.content, c.post_id, p.pod_id
+       FROM pod_post_comments c
+       JOIN pod_posts p ON p.id = c.post_id
+      WHERE c.id = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL`,
+    [commentId],
+  );
+  const c = r.rows[0];
+  if (!c) throw new NotFoundError('Comment', commentId, REPORT_WORDS.commentGone);
+  await getPodPost(c.pod_id, c.post_id, { userId: reporter.userId, role: reporter.role });
+  return { authorId: c.author_id, excerpt: excerptOf(c.content), conversationId: null };
+}
+
+/** A comment (or reply) on a circle wall post the reporter can read now, by the circle wall's own read of the post. */
+async function resolveCircleComment(reporter: Reporter, commentId: string): Promise<ResolvedSubject> {
+  const r = await query<{ author_id: string; content: string; post_id: string }>(
+    `SELECT c.author_id, c.content, c.post_id
+       FROM circle_post_comments c
+       JOIN circle_posts p ON p.id = c.post_id
+      WHERE c.id = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL`,
+    [commentId],
+  );
+  const c = r.rows[0];
+  if (!c) throw new NotFoundError('Comment', commentId, REPORT_WORDS.commentGone);
+  const post = await getCirclePost(c.post_id, reporter.userId, reporter.role);
+  if (!post) throw new NotFoundError('Comment', commentId, REPORT_WORDS.commentGone);
+  return { authorId: c.author_id, excerpt: excerptOf(c.content), conversationId: null };
+}
+
+/**
+ * A message in a group chat the reporter is a member of now. Someone who left, or was never in it, reads it as "no
+ * longer there". REASON's own lines cannot be reported.
+ */
+async function resolveGroupMessage(reporterId: string, messageId: string): Promise<ResolvedSubject> {
+  const r = await query<{
+    from_user_id: string; content: string | null; kind: string | null;
+    attachment_type: string | null; attachment_url: string | null;
+  }>(
+    `SELECT m.from_user_id, m.content, m.kind, m.attachment_type, m.attachment_url
+       FROM direct_messages m
+       JOIN dm_group_members gm ON gm.group_id = m.group_id AND gm.user_id = $2
+      WHERE m.id = $1 AND m.group_id IS NOT NULL`,
+    [messageId, reporterId],
+  );
+  const m = r.rows[0];
+  if (!m) throw new NotFoundError('Message', messageId, REPORT_WORDS.messageGone);
+  if (m.kind === 'system') throw new AppError(400, ErrorCodes.VALIDATION_ERROR, REPORT_WORDS.systemMessage);
+  const label = m.attachment_type === 'audio' ? 'Voice message' : m.attachment_type === 'image' ? 'Photo' : 'Attachment';
+  return {
+    authorId: m.from_user_id,
+    excerpt: excerptOf(m.content, m.attachment_url ? [{ label, url: m.attachment_url }] : []),
+    conversationId: null,
+  };
+}
+
+/**
+ * A message in an event's chat the reporter can read: the event's own chat rule decides (its host, co-hosts and the
+ * people who joined it; a removed member reads nothing), and a breakout room's message only by the people it was for.
+ * A message whose sender's account is gone, or one deleted, is "no longer there".
+ */
+async function resolveEventChatMessage(reporter: Reporter, messageId: string): Promise<ResolvedSubject> {
+  const r = await query<{ session_id: string; sender_id: string | null; content: string; scope: string; audience_ids: string[] | null }>(
+    `SELECT session_id, sender_id, content, scope, audience_ids
+       FROM event_chat_messages
+      WHERE id = $1 AND deleted_at IS NULL`,
+    [messageId],
+  );
+  const m = r.rows[0];
+  if (!m || !m.sender_id) throw new NotFoundError('Message', messageId, REPORT_WORDS.messageGone);
+  const access = await canReadEventChat(reporter.userId, reporter.role, m.session_id);
+  const roomOk = m.scope === 'room' && access === 'all' && (m.audience_ids ?? []).includes(reporter.userId);
+  if (!access || (m.scope !== 'lobby' && !roomOk)) throw new NotFoundError('Message', messageId, REPORT_WORDS.messageGone);
+  return { authorId: m.sender_id, excerpt: excerptOf(m.content), conversationId: null };
+}
+
+const OWN_WORDS: Record<ReportSubjectKind, string> = {
+  dm_message: REPORT_WORDS.ownMessage,
+  group_message: REPORT_WORDS.ownMessage,
+  event_chat_message: REPORT_WORDS.ownMessage,
+  pod_post: REPORT_WORDS.ownPost,
+  circle_post: REPORT_WORDS.ownPost,
+  pod_comment: REPORT_WORDS.ownComment,
+  circle_comment: REPORT_WORDS.ownComment,
+};
+
+function readSubject(reporter: Reporter, subject: NonNullable<ReportInput['subject']>): Promise<ResolvedSubject> {
+  switch (subject.kind) {
+    case 'dm_message': return resolveDmMessage(reporter.userId, subject.id);
+    case 'pod_post': return resolvePodPost(reporter, subject.id);
+    case 'circle_post': return resolveCirclePost(reporter, subject.id);
+    case 'pod_comment': return resolvePodComment(reporter, subject.id);
+    case 'circle_comment': return resolveCircleComment(reporter, subject.id);
+    case 'group_message': return resolveGroupMessage(reporter.userId, subject.id);
+    case 'event_chat_message': return resolveEventChatMessage(reporter, subject.id);
+  }
+}
+
+/** What is reported, as the reporter can see it now; nobody reports their own words. */
 async function resolveSubject(reporter: Reporter, subject: NonNullable<ReportInput['subject']>): Promise<ResolvedSubject> {
-  if (subject.kind === 'dm_message') return resolveDmMessage(reporter.userId, subject.id);
-  const resolved = subject.kind === 'pod_post'
-    ? await resolvePodPost(reporter, subject.id)
-    : await resolveCirclePost(reporter, subject.id);
-  if (resolved.authorId === reporter.userId) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, REPORT_WORDS.ownPost);
+  const resolved = await readSubject(reporter, subject);
+  if (resolved.authorId === reporter.userId) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, OWN_WORDS[subject.kind]);
   return resolved;
 }
 

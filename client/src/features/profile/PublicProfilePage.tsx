@@ -334,7 +334,7 @@ export default function PublicProfilePage() {
                     variant="ghost"
                     size="sm"
                     onClick={async () => {
-                      if (await ask({ title: blockTitle(user.displayName), body: blockConsequence(user.displayName), confirmLabel: 'Block', tone: 'danger' })) {
+                      if (await ask({ title: blockTitle(user.displayName), body: blockConsequence(user.displayName, 'profile'), confirmLabel: 'Block', tone: 'danger' })) {
                         blockMutation.mutate();
                       }
                     }}

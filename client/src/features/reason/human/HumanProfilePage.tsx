@@ -229,7 +229,7 @@ export default function HumanProfilePage() {
   const onBlock = async () => {
     if (block.isPending) return;
     // What blocking does is said before it is done (11 Nov 2026, item 16).
-    if (await ask({ title: blockTitle(name), body: blockConsequence(name), confirmLabel: 'Block', tone: 'danger' })) block.mutate();
+    if (await ask({ title: blockTitle(name), body: blockConsequence(name, 'profile'), confirmLabel: 'Block', tone: 'danger' })) block.mutate();
   };
   // The page stays mounted when one profile opens another, so the dialog's "also blocked" is read once and cleared.
   const closeReport = () => {

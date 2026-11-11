@@ -16,13 +16,23 @@
 // disagree between them; see the presence-staleness history). The sockets are asked across instances too, through the
 // Socket.IO Redis adapter's fetchSockets. When Redis is unavailable each socket's own foreground flag
 // (socket.data.foreground, set by its pings, cleared by its `presence:away`) stands in for the key.
+//
+// ONE INSTANCE ASSUMED WITHOUT REDIS. "Never offline wrongly without Redis" holds only while the API runs as a single
+// Render instance (render.yaml today). With Redis down there is no Socket.IO Redis adapter either, so fetchSockets sees
+// this instance's sockets only: a member connected to ANOTHER instance would read "offline", and requestCall would
+// refuse to ring them. Before running more than one instance, either keep Redis a hard requirement for presence, or
+// read "no socket here and no Redis" as unknown (null) instead of offline.
+//
+// The key is `rsn:presence:<userId>` (CLAUDE.md §9: every key under its domain, every key with a TTL). It was
+// `presence:app:<userId>` before 11 Nov 2026; an old key lapses within its minute, and every client pings again as it
+// reconnects to the new server, so the rename needs no fallback read.
 
 import type { PresenceState } from '@rsn/shared';
 import { getRedisClient } from '../redis/redis.client';
 import { getRealtimeIo } from '../../realtime/emit';
 import logger from '../../config/logger';
 
-const key = (userId: string) => `presence:app:${userId}`;
+const key = (userId: string) => `rsn:presence:${userId}`;
 // A little over twice the client's 25s ping cadence, so one missed ping doesn't
 // flap someone offline.
 export const PRESENCE_TTL_SECONDS = 60;
@@ -40,8 +50,10 @@ export async function markActive(userId: string): Promise<boolean | null> {
   try {
     const set = await r.set(key(userId), '1', 'EX', PRESENCE_TTL_SECONDS, 'NX');
     if (set === 'OK') return true;
-    await r.expire(key(userId), PRESENCE_TTL_SECONDS);
-    return false;
+    // The key was there a moment ago; if it lapsed between the SET and this EXPIRE (EXPIRE answers 0), stamp it again,
+    // or a member who is pinging would read away until their next ping.
+    if ((await r.expire(key(userId), PRESENCE_TTL_SECONDS)) === 1) return false;
+    return (await r.set(key(userId), '1', 'EX', PRESENCE_TTL_SECONDS, 'NX')) === 'OK';
   } catch (err) {
     logger.warn({ err, userId }, 'presence markActive failed (non-fatal)');
     return null;

@@ -33,7 +33,7 @@ describe('client public profile renders Block / Unblock button', () => {
   it('block button shows confirm dialog with user-friendly explanation', () => {
     // T2 (1 Nov 2026): the question is a ConfirmDialog in the page (useConfirm), never window.confirm.
     // 11 Nov 2026 (item 16): every consequence said before it is done (safety-words.ts blockConsequence).
-    expect(src).toMatch(/await ask\(\{ title: blockTitle\(user\.displayName\), body: blockConsequence\(user\.displayName\)/);
+    expect(src).toMatch(/await ask\(\{ title: blockTitle\(user\.displayName\), body: blockConsequence\(user\.displayName, 'profile'\)/);
     expect(src).not.toMatch(/(^|[^\w.])confirm\(/m);
     expect(nodeFs.readFileSync(nodePath.join(__dirname, '../../../../client/src/components/safety/safety-words.ts'), 'utf8')).toMatch(/won't be matched together/);
   });

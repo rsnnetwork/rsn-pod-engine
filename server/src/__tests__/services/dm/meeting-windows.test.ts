@@ -1415,7 +1415,7 @@ describe('acceptPoke intro seeding', () => {
 // each person's invitation is claimed in meeting_invite_emails BEFORE it is offered to the provider, the provider's
 // answer is written back, and both people's screens are told once it is known.
 describe('the sent-invitation log (RSN 09)', () => {
-  interface Ledger { claimable: Record<string, boolean>; status?: string }
+  interface Ledger { claimable: Record<string, boolean>; status?: string; stale?: boolean; claimFails?: string[] }
   async function book(opts: { emails?: [string | null, string | null]; ledger?: Ledger } = {}) {
     const windowKey = futureKey(3, 'afternoon');
     const day = windowKey.split(':')[0];
@@ -1443,9 +1443,12 @@ describe('the sent-invitation log (RSN 09)', () => {
         { id: 'u-b', display_name: 'Bo', email: bo, timezone: 'America/New_York' },
       ] });
       if (/INSERT INTO meeting_invite_emails/.test(s)) {
+        if (ledger.claimFails?.includes(String(params?.[1]))) return Promise.reject(new Error('connection lost'));
         return Promise.resolve({ rows: ledger.claimable[String(params?.[1])] ? [{ id: `log-${String(params?.[1])}` }] : [] });
       }
-      if (/FROM meeting_invite_emails e JOIN meetings m/.test(s)) return Promise.resolve({ rows: ledger.status ? [{ status: ledger.status }] : [] });
+      if (/FROM meeting_invite_emails e JOIN meetings m/.test(s)) {
+        return Promise.resolve({ rows: ledger.status ? [{ status: ledger.status, stale: !!ledger.stale }] : [] });
+      }
       if (/INSERT INTO meetings/.test(s)) return Promise.resolve({ rows: [{ id: 'mtg-1' }] });
       return Promise.resolve({ rows: [{ id: 'n1', created_at: NOW }] });
     });
@@ -1459,9 +1462,10 @@ describe('the sent-invitation log (RSN 09)', () => {
     await book();
     const sql = String(claims()[0][0]).replace(/\s+/g, ' ');
     expect(sql).toContain("INSERT INTO meeting_invite_emails (meeting_id, user_id, sequence, method, status) VALUES ($1, $2, $3, 'REQUEST', $4)");
-    // Only a row that never went may be claimed again: one sent or on its way never is.
-    expect(sql).toContain("ON CONFLICT (meeting_id, user_id, sequence, method) DO UPDATE SET status = EXCLUDED.status, updated_at = NOW() WHERE meeting_invite_emails.status IN ('failed', 'no_provider', 'no_address') RETURNING id");
-    expect(claims().map(c => c[1])).toEqual([['mtg-1', 'u-a', 0, 'sending'], ['mtg-1', 'u-b', 0, 'sending']]);
+    // Only a row that never went may be claimed again: one sent or on its way never is, unless "on its way" has
+    // stood longer than SENDING_STALE_MINUTES (a restart mid-send; fix round 1).
+    expect(sql).toContain("ON CONFLICT (meeting_id, user_id, sequence, method) DO UPDATE SET status = EXCLUDED.status, updated_at = NOW() WHERE meeting_invite_emails.status IN ('failed', 'no_provider', 'no_address') OR (meeting_invite_emails.status = 'sending' AND meeting_invite_emails.updated_at < NOW() - ($5::int * INTERVAL '1 minute')) RETURNING id");
+    expect(claims().map(c => c[1])).toEqual([['mtg-1', 'u-a', 0, 'sending', 2], ['mtg-1', 'u-b', 0, 'sending', 2]]);
     expect(mockSendMtgEmail).toHaveBeenCalledTimes(2);
     expect(settles().map(c => (c[1] as unknown[]).slice(0, 4))).toEqual([['mtg-1', 'u-a', 0, 'sent'], ['mtg-1', 'u-b', 0, 'sent']]);
     expect(String(settles()[0][0])).toMatch(/AND status = 'sending'/);
@@ -1511,7 +1515,8 @@ describe('the sent-invitation log (RSN 09)', () => {
     expect(after.confirmed?.inviteEmail).toBe('sent');
     const read = mockQuery.mock.calls.find(c => /FROM meeting_invite_emails e/.test(String(c[0])))!;
     expect(String(read[0]).replace(/\s+/g, ' ')).toContain('JOIN meetings m ON m.id = e.meeting_id AND m.calendar_sequence = e.sequence');
-    expect(read[1]).toEqual(['mtg-1', 'u-a']);
+    expect(String(read[0]).replace(/\s+/g, ' ')).toContain("e.updated_at < NOW() - ($3::int * INTERVAL '1 minute') AS stale");
+    expect(read[1]).toEqual(['mtg-1', 'u-a', 2]);
   });
 
   it.each([
@@ -1519,6 +1524,19 @@ describe('the sent-invitation log (RSN 09)', () => {
   ])('a log row "%s" reads as %s', async (status, state) => {
     const after = await book({ ledger: { claimable: { 'u-a': true, 'u-b': true }, status } });
     expect(after.confirmed?.inviteEmail).toBe(state);
+  });
+
+  // Fix round 1 (I-3): a send cut off by a restart left the row 'sending' for good.
+  it('a "sending" row older than two minutes reads as not sent, never "emailing now" forever', async () => {
+    const after = await book({ ledger: { claimable: { 'u-a': true, 'u-b': true }, status: 'sending', stale: true } });
+    expect(after.confirmed?.inviteEmail).toBe('not_sent');
+  });
+
+  // Fix round 1 (M-9): an invitation that cannot be logged is not sent (it could go twice), and the booking says so.
+  it('a claim that cannot be written sends nothing to that person, and the booking\'s own answer says not sent', async () => {
+    const after = await book({ ledger: { claimable: { 'u-a': true, 'u-b': true }, status: 'sent', claimFails: ['u-a'] } });
+    expect(mockSendMtgEmail.mock.calls.map(c => c[0])).toEqual(['bo@example.com']);
+    expect(after.confirmed?.inviteEmail).toBe('not_sent');
   });
 
   it('pressing Confirm again on the same time claims nothing and sends nothing', async () => {

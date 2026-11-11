@@ -554,8 +554,9 @@ export async function setAvailability(
     return null;
   });
 
+  let unlogged: string[] = [];
   if (posted?.type === 'meeting_confirmed') {
-    await announceConfirmation(conversationId, userId, posted.confirmed);
+    unlogged = await announceConfirmation(conversationId, userId, posted.confirmed);
   } else {
     await announce(conversationId, userId, partnerId, posted, posted?.type === 'meeting_proposal'
       ? { type: 'meeting_proposed', title: 'You can both meet', body: 'Pick a time to confirm your meeting.' }
@@ -563,7 +564,7 @@ export async function setAvailability(
   }
 
   // The same shape as ever; once the save has booked a meeting, `confirmed` carries it.
-  return getScheduling(conversationId, userId);
+  return withUnloggedInvite(await getScheduling(conversationId, userId), userId, unlogged);
 }
 
 /**
@@ -833,8 +834,8 @@ export async function confirmInTx(
  * Every step is best-effort: the meeting is already saved, and a hiccup here
  * must never look like the booking failed.
  */
-async function announceConfirmation(conversationId: string, actorId: string, done: ConfirmResult): Promise<void> {
-  if (done.already) return;
+async function announceConfirmation(conversationId: string, actorId: string, done: ConfirmResult): Promise<string[]> {
+  if (done.already) return [];
   const { partnerId, window, startAt, durationMin, type, movedFrom, meeting } = done;
 
   let people: Array<{ id: string; display_name: string | null; email: string | null; timezone: string | null }> = [];
@@ -869,7 +870,9 @@ async function announceConfirmation(conversationId: string, actorId: string, don
   // retried or doubled booking never emails twice, and the log says whether it went, so the screens say "Calendar
   // invitation sent by email." only when it did. The booking waits up to INVITE_WAIT_MS for the mail provider, so its
   // own answer can already say so; when the provider answers, both people's screens are told to read it again.
-  if (!startAt || !durationMin) return;
+  if (!startAt || !durationMin) return [];
+  // The people whose invitation could not be written to the log, and so was not sent.
+  const unlogged: string[] = [];
   try {
     // Whoever booked the meeting first organises every copy of its file, moves included: a
     // calendar trusts an update to an entry from the organizer it already has.
@@ -887,8 +890,13 @@ async function announceConfirmation(conversationId: string, actorId: string, don
       if (!me) continue;
       const why = !me.email ? 'no_address' : !provider ? 'no_provider' : 'sending';
       if (meeting) {
+        // Fail safe: an invitation that cannot be logged is not sent (it could go twice), and the booking says so.
         const claimed = await claimInvite(meeting.id, uid, meeting.calendarSequence, why)
-          .catch((err) => { logger.warn({ err, uid }, 'invite claim failed: not sent (non-fatal)'); return false; });
+          .catch((err) => {
+            logger.error({ err, uid, meetingId: meeting.id }, 'calendar invitation not sent: its log row could not be written');
+            unlogged.push(uid);
+            return false;
+          });
         if (!claimed) continue;
       }
       if (why !== 'sending' || !me.email) continue;
@@ -921,13 +929,14 @@ async function announceConfirmation(conversationId: string, actorId: string, don
       }).then((r) => r.sent, (err) => { logger.warn({ err, uid }, 'meeting-confirmed email failed (non-fatal)'); return false; });
       sends.push(sent
         .then((ok) => (meeting ? settleInvite(meeting.id, uid, meeting.calendarSequence, ok) : undefined))
-        .catch((err) => logger.warn({ err, uid }, 'invite log update failed (non-fatal)')));
+        .catch((err) => logger.error({ err, uid }, 'calendar invitation log not updated: it will read as not sent once stale')));
     }
     const settled = Promise.all(sends).then(() => (meeting ? tellInviteSettled(conversationId, meeting.id, [actorId, partnerId]) : undefined));
     await waitAtMost(settled, INVITE_WAIT_MS);
   } catch (err) {
-    logger.warn({ err, conversationId }, 'meeting-confirmed email dispatch failed (non-fatal)');
+    logger.error({ err, conversationId }, 'meeting-confirmed email dispatch failed');
   }
+  return unlogged;
 }
 
 /** The invitations' fate is known: both people's thread, scheduler and meeting page read it again. */
@@ -973,6 +982,16 @@ export async function confirmWindow(
       })
     : writeConfirmation(client, conversationId, userId, { window: windowKey, startAt: null, durationMin: null, type: null }, expected)));
 
-  await announceConfirmation(conversationId, userId, done);
-  return getScheduling(conversationId, userId);
+  const unlogged = await announceConfirmation(conversationId, userId, done);
+  return withUnloggedInvite(await getScheduling(conversationId, userId), userId, unlogged);
+}
+
+/**
+ * A booking whose invitation for this member could not be written to the log was not emailed (fail safe: an unlogged
+ * send could go twice). Its own answer says so ("We couldn't email the calendar invitation"), as the log has no row
+ * to say it.
+ */
+function withUnloggedInvite(s: ConversationScheduling, userId: string, unlogged: string[]): ConversationScheduling {
+  if (!s.confirmed || !unlogged.includes(userId)) return s;
+  return { ...s, confirmed: { ...s.confirmed, inviteEmail: 'not_sent' } };
 }

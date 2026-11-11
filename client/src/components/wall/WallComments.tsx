@@ -17,6 +17,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import { useConfirm } from '@/hooks/useConfirm';
+import ReportCommentButton from './ReportCommentButton';
 import { canDeleteWallItem, isConflict, normalizeComments, retryUnlessAnswered, threadOf, timeAgo, wallErrorSentence } from './wall-logic';
 import type { WallCommentList, WallComment, WallConfig, WallViewer } from './wall-types';
 
@@ -143,6 +144,9 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
               >
                 Reply
               </button>
+            )}
+            {config.reportKind && userId && c.authorId !== userId && (
+              <ReportCommentButton kind={config.reportKind} commentId={c.id} authorId={c.authorId} authorName={c.authorName} excerpt={c.content} />
             )}
             {canDeleteWallItem(viewer, c.authorId, userId) && (
               <button

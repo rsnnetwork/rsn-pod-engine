@@ -300,7 +300,8 @@ describe('Human Profile: More, with Block member and Report member', () => {
 
   it('Block says what it does before it is done (11 Nov 2026), asked in the page, and makes its call', () => {
     // T2 (1 Nov 2026): asked in the page (ConfirmDialog through useConfirm) rather than window.confirm.
-    expect(human()).toContain("await ask({ title: blockTitle(name), body: blockConsequence(name), confirmLabel: 'Block', tone: 'danger' })");
+    // From a profile there may be no conversation: the profile's wording says "any conversation" (fix round 1).
+    expect(human()).toContain("await ask({ title: blockTitle(name), body: blockConsequence(name, 'profile'), confirmLabel: 'Block', tone: 'danger' })");
     expect(api()).toMatch(/export const blockMember = \(userId: string\) => api\.post\(`\/users\/\$\{memberSegment\(userId\)\}\/block`\);/);
     expect(human()).toMatch(/mutationFn: \(\) => blockMember\(userId\)/);
   });

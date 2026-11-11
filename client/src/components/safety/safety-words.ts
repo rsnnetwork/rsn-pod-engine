@@ -7,11 +7,12 @@
 export const REPORT_MEMBER = 'Report member';
 export const REPORT_MESSAGE = 'Report message';
 export const REPORT_POST = 'Report post';
+export const REPORT_COMMENT = 'Report comment';
 export const BLOCK_MEMBER = 'Block member';
 export const UNBLOCK = 'Unblock';
 
-/** What a report names: the member, one of their messages, or one of their posts. */
-export type ReportTarget = 'member' | 'message' | 'post';
+/** What a report names: the member, or one of their messages, posts or comments. */
+export type ReportTarget = 'member' | 'message' | 'post' | 'comment';
 
 /** "the member" when there is no name to say. */
 const who = (name: string | null | undefined) => name?.trim() || 'this member';
@@ -20,6 +21,7 @@ const They = (name: string | null | undefined) => name?.trim() || 'They';
 export function reportTitle(target: ReportTarget, name: string | null | undefined): string {
   if (target === 'message') return 'Report this message';
   if (target === 'post') return 'Report this post';
+  if (target === 'comment') return 'Report this comment';
   return `Report ${who(name)}`;
 }
 
@@ -28,14 +30,20 @@ export function reportTitle(target: ReportTarget, name: string | null | undefine
  * changes for the other person (who is not told) until the REASON team has looked.
  */
 export function reportConsequence(target: ReportTarget, name: string | null | undefined, inChat: boolean): string {
-  const what = target === 'message' ? 'this message' : target === 'post' ? 'this post' : 'your report';
+  const what = target === 'member' ? 'your report' : `this ${target}`;
   const reads = inChat ? ' and can read this conversation' : '';
   return `The REASON team will review ${what}${reads}. ${They(name)} won't be told about your report, and nothing changes for them until we have looked at it.`;
 }
 
-/** What blocking does, said before it is done (the confirmation and the report sheet's "Also block"). */
-export function blockConsequence(name: string | null | undefined): string {
-  return `${They(name)} won't be able to message or call you, you won't be matched together, and you won't see each other's posts or comments. They aren't told. Your conversation stays, read-only. You can unblock them from the conversation or their profile.`;
+/**
+ * What blocking does, said before it is done (the confirmation and the report sheet's "Also block"). From a chat, the
+ * conversation stays read-only; from a profile there may be no conversation at all, so it says "any conversation".
+ */
+export function blockConsequence(name: string | null | undefined, from: 'thread' | 'profile' = 'thread'): string {
+  const head = `${They(name)} won't be able to message or call you, you won't be matched together, and you won't see each other's posts or comments. They aren't told.`;
+  return from === 'thread'
+    ? `${head} Your conversation stays, read-only. You can unblock them from the conversation or their profile.`
+    : `${head} Any conversation you have stays, read-only. You can unblock them from their profile.`;
 }
 
 export const blockTitle = (name: string | null | undefined): string => `Block ${who(name)}?`;

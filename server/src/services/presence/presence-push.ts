@@ -33,6 +33,28 @@ export async function presenceAudience(userId: string): Promise<string[]> {
   return r.rows.map((row) => row.partner_id);
 }
 
+/** Changes within this window are told once: a connection's first socket (away) and its first ping (online) arrive
+ *  together, and the partners refetch once instead of twice. */
+export const PRESENCE_PUSH_COALESCE_MS = 300;
+const queued = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Tell the partners once the member's changes settle (PRESENCE_PUSH_COALESCE_MS). They read the state then. */
+export function queuePresencePush(userId: string): void {
+  if (queued.has(userId)) return;
+  const t = setTimeout(() => {
+    queued.delete(userId);
+    void pushPresence(userId);
+  }, PRESENCE_PUSH_COALESCE_MS);
+  t.unref?.();
+  queued.set(userId, t);
+}
+
+/** For tests: drop every queued push. */
+export function resetQueuedPresencePushes(): void {
+  for (const t of queued.values()) clearTimeout(t);
+  queued.clear();
+}
+
 /** Tell the member's partners that where they are has changed. Best-effort: presence is never worth a failure. */
 export async function pushPresence(userId: string): Promise<void> {
   const io = getRealtimeIo();

@@ -13,6 +13,7 @@ const mockQuery = jest.fn<any, any[]>();
 const mockTxSql: string[] = [];
 const mockPodPost = jest.fn();
 const mockCirclePost = jest.fn();
+const mockEventChatAccess = jest.fn();
 jest.mock('../../../db', () => ({
   query: (...a: unknown[]) => mockQuery(...a),
   transaction: (cb: Function) => cb({ query: (...a: unknown[]) => { mockTxSql.push(String(a[0])); return mockQuery(...a); } }),
@@ -24,6 +25,7 @@ jest.mock('../../../config/logger', () => ({
 }));
 jest.mock('../../../services/pod/pod-wall.service', () => ({ __esModule: true, getPost: (...a: unknown[]) => mockPodPost(...a) }));
 jest.mock('../../../services/circle/circle-wall.service', () => ({ __esModule: true, getPost: (...a: unknown[]) => mockCirclePost(...a) }));
+jest.mock('../../../services/event-chat/event-chat.service', () => ({ __esModule: true, canReadEventChat: (...a: unknown[]) => mockEventChatAccess(...a) }));
 
 import { ForbiddenError } from '../../../middleware/errors';
 import { EXCERPT_MAX, REPORT_WORDS, excerptOf, submitReport } from '../../../services/report/report.service';
@@ -41,6 +43,11 @@ interface World {
   conversation?: boolean;
   message?: { from_user_id: string; content: string | null; kind?: string | null; attachment_type?: string | null; attachment_url?: string | null } | null;
   podPostOf?: string | null;
+  /** Fix round 1: a wall comment (with its post's wall), a group message, an event chat message. */
+  podComment?: { author_id: string; content: string } | null;
+  circleComment?: { author_id: string; content: string } | null;
+  groupMessage?: { from_user_id: string; content: string; kind?: string } | null;
+  eventMessage?: { sender_id: string | null; content: string; scope: 'lobby' | 'room'; audience_ids?: string[] | null } | null;
 }
 
 /** The database as each statement finds it. */
@@ -55,6 +62,14 @@ function arm(w: World = {}) {
       return Promise.resolve({ rows: w.message ? [{ conversation_id: CONV, kind: 'user', attachment_type: null, attachment_url: null, ...w.message }] : [] });
     }
     if (/SELECT pod_id FROM pod_posts/.test(s)) return Promise.resolve({ rows: w.podPostOf ? [{ pod_id: w.podPostOf }] : [] });
+    if (/FROM pod_post_comments c JOIN pod_posts p/.test(s)) return Promise.resolve({ rows: w.podComment ? [{ ...w.podComment, post_id: 'post-9', pod_id: 'pod-9' }] : [] });
+    if (/FROM circle_post_comments c JOIN circle_posts p/.test(s)) return Promise.resolve({ rows: w.circleComment ? [{ ...w.circleComment, post_id: 'post-8' }] : [] });
+    if (/JOIN dm_group_members gm/.test(s)) {
+      return Promise.resolve({ rows: w.groupMessage ? [{ kind: 'user', attachment_type: null, attachment_url: null, ...w.groupMessage }] : [] });
+    }
+    if (/FROM event_chat_messages/.test(s)) {
+      return Promise.resolve({ rows: w.eventMessage ? [{ session_id: 'ev-1', audience_ids: null, ...w.eventMessage }] : [] });
+    }
     if (/INSERT INTO user_reports/.test(s)) {
       return Promise.resolve({ rows: [{
         id: 'rep-1', reporter_id: params?.[1], reported_id: params?.[2], reason: params?.[3], description: params?.[4],
@@ -74,6 +89,7 @@ beforeEach(() => {
   mockTxSql.length = 0;
   mockPodPost.mockReset();
   mockCirclePost.mockReset();
+  mockEventChatAccess.mockReset().mockResolvedValue('all');
   arm();
 });
 
@@ -254,5 +270,109 @@ describe('excerptOf', () => {
     expect(excerptOf('  hi  ', [{ label: 'Photo', url: 'u' }])).toBe('hi\n[Photo] u');
     expect(excerptOf(null)).toBe('');
     expect(excerptOf('x'.repeat(3000)).length).toBe(2000);
+  });
+});
+
+// ── Fix round 1 (controller ruling): comments on both walls, group chat and event chat messages ─────────────────────
+describe('a wall comment, a group message, an event chat message', () => {
+  const wordsOf = (kind: string) => (kind.endsWith('comment') ? REPORT_WORDS.ownComment : REPORT_WORDS.ownMessage);
+  const kinds = [
+    {
+      kind: 'pod_comment' as const,
+      visible: () => { arm({ podComment: { author_id: REPORTED, content: 'Nasty reply' } }); mockPodPost.mockResolvedValue({ id: 'post-9' }); },
+      hidden: () => { arm({ podComment: { author_id: REPORTED, content: 'Nasty reply' } }); mockPodPost.mockRejectedValue(new ForbiddenError('Join the pod')); },
+      gone: () => arm({ podComment: null }),
+      own: () => { arm({ podComment: { author_id: REPORTER, content: 'mine' } }); mockPodPost.mockResolvedValue({ id: 'post-9' }); },
+      readsThroughTheWall: () => expect(mockPodPost).toHaveBeenCalledWith('pod-9', 'post-9', { userId: REPORTER, role: 'member' }),
+    },
+    {
+      kind: 'circle_comment' as const,
+      visible: () => { arm({ circleComment: { author_id: REPORTED, content: 'Nasty reply' } }); mockCirclePost.mockResolvedValue({ id: 'post-8' }); },
+      hidden: () => { arm({ circleComment: { author_id: REPORTED, content: 'Nasty reply' } }); mockCirclePost.mockResolvedValue(null); },
+      gone: () => arm({ circleComment: null }),
+      own: () => { arm({ circleComment: { author_id: REPORTER, content: 'mine' } }); mockCirclePost.mockResolvedValue({ id: 'post-8' }); },
+      readsThroughTheWall: () => expect(mockCirclePost).toHaveBeenCalledWith('post-8', REPORTER, 'member'),
+    },
+    {
+      kind: 'group_message' as const,
+      visible: () => arm({ groupMessage: { from_user_id: REPORTED, content: 'Nasty reply' } }),
+      // The read joins the reporter's own membership: someone who left (or was never in it) finds nothing.
+      hidden: () => arm({ groupMessage: null }),
+      gone: () => arm({ groupMessage: null }),
+      own: () => arm({ groupMessage: { from_user_id: REPORTER, content: 'mine' } }),
+      readsThroughTheWall: () => {
+        const read = mockQuery.mock.calls.find((c) => /JOIN dm_group_members gm/.test(String(c[0])))!;
+        expect(String(read[0]).replace(/\s+/g, ' ')).toContain('JOIN dm_group_members gm ON gm.group_id = m.group_id AND gm.user_id = $2 WHERE m.id = $1 AND m.group_id IS NOT NULL');
+      },
+    },
+    {
+      kind: 'event_chat_message' as const,
+      visible: () => arm({ eventMessage: { sender_id: REPORTED, content: 'Nasty reply', scope: 'lobby' } }),
+      hidden: () => { arm({ eventMessage: { sender_id: REPORTED, content: 'Nasty reply', scope: 'lobby' } }); mockEventChatAccess.mockResolvedValue(null); },
+      gone: () => arm({ eventMessage: null }),
+      own: () => arm({ eventMessage: { sender_id: REPORTER, content: 'mine', scope: 'lobby' } }),
+      readsThroughTheWall: () => expect(mockEventChatAccess).toHaveBeenCalledWith(REPORTER, 'member', 'ev-1'),
+    },
+  ];
+
+  describe.each(kinds)('$kind', (k) => {
+    it('one the reporter can see is filed against its author, with a copy of its words', async () => {
+      k.visible();
+      await submitReport(me, { reportedId: 'u-someone-else', reason: 'harassment', subject: { kind: k.kind, id: 'x-1' } });
+      k.readsThroughTheWall();
+      const row = inserted();
+      expect(row[2]).toBe(REPORTED);
+      expect(row.slice(6)).toEqual([k.kind, 'x-1', 'Nasty reply']);
+    });
+
+    it('one the reporter cannot see (no longer a member, removed, not invited) is refused, nothing written', async () => {
+      k.hidden();
+      await expect(submitReport(me, { reason: 'spam', subject: { kind: k.kind, id: 'x-1' } })).rejects.toMatchObject({ statusCode: expect.any(Number) });
+      expect(insert()).toBeUndefined();
+    });
+
+    it('one that is gone is "no longer there"', async () => {
+      k.gone();
+      await expect(submitReport(me, { reason: 'spam', subject: { kind: k.kind, id: 'x-1' } })).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it("the reporter's own words are refused", async () => {
+      k.own();
+      await expect(submitReport(me, { reason: 'spam', subject: { kind: k.kind, id: 'x-1' } })).rejects.toMatchObject({
+        statusCode: 400, message: wordsOf(k.kind),
+      });
+    });
+
+    it('reported again within a day: "You already reported this.", locked and counted by the item itself', async () => {
+      k.visible();
+      arm({ ...(k.kind === 'pod_comment' ? { podComment: { author_id: REPORTED, content: 'x' } } : {}),
+        ...(k.kind === 'circle_comment' ? { circleComment: { author_id: REPORTED, content: 'x' } } : {}),
+        ...(k.kind === 'group_message' ? { groupMessage: { from_user_id: REPORTED, content: 'x' } } : {}),
+        ...(k.kind === 'event_chat_message' ? { eventMessage: { sender_id: REPORTED, content: 'x', scope: 'lobby' as const } } : {}),
+        earlier: true });
+      await expect(submitReport(me, { reason: 'spam', subject: { kind: k.kind, id: 'x-1' } })).rejects.toMatchObject({ statusCode: 409, message: REPORT_WORDS.already });
+      expect(mockQuery.mock.calls.find((c) => /pg_advisory_xact_lock/.test(String(c[0])))![1]).toEqual([`report:${REPORTER}:${k.kind}:x-1`]);
+      expect(insert()).toBeUndefined();
+    });
+  });
+
+  it("a group chat's REASON line cannot be reported", async () => {
+    arm({ groupMessage: { from_user_id: REPORTED, content: 'Ana joined', kind: 'system' } });
+    await expect(submitReport(me, { reason: 'spam', subject: { kind: 'group_message', id: 'x-1' } })).rejects.toMatchObject({
+      statusCode: 400, message: REPORT_WORDS.systemMessage,
+    });
+  });
+
+  it("an event's breakout room message only by the people it was for", async () => {
+    arm({ eventMessage: { sender_id: REPORTED, content: 'room words', scope: 'room', audience_ids: [REPORTED, 'u-other'] } });
+    await expect(submitReport(me, { reason: 'spam', subject: { kind: 'event_chat_message', id: 'x-1' } })).rejects.toMatchObject({ statusCode: 404 });
+    arm({ eventMessage: { sender_id: REPORTED, content: 'room words', scope: 'room', audience_ids: [REPORTED, REPORTER] } });
+    await submitReport(me, { reason: 'spam', subject: { kind: 'event_chat_message', id: 'x-1' } });
+    expect(inserted()[8]).toBe('room words');
+  });
+
+  it("an event chat message whose sender's account is gone is \"no longer there\"", async () => {
+    arm({ eventMessage: { sender_id: null, content: 'x', scope: 'lobby' } });
+    await expect(submitReport(me, { reason: 'spam', subject: { kind: 'event_chat_message', id: 'x-1' } })).rejects.toMatchObject({ statusCode: 404 });
   });
 });

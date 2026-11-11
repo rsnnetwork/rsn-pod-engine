@@ -65,16 +65,29 @@ export function ThreadMoreMenu({ dot, children }: {
 }
 
 /** "⋯" beside a message from the other person; its menu reports that message. */
+/** The room a menu needs above its button; with less (the topmost message in view), it opens below instead. */
+const MENU_ROOM_PX = 72;
+
 export function MessageMoreButton({ onReport }: { onReport: () => void }) {
   const [open, setOpen] = useState(false);
+  const [below, setBelow] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
   useDismiss(open, box, close);
+  // Opened where it fits: the thread scrolls inside a clipped panel, so a menu above the topmost message would be cut off.
+  const toggle = () => {
+    if (!open) {
+      const top = box.current?.getBoundingClientRect().top ?? Infinity;
+      const panel = box.current?.closest('.overflow-y-auto')?.getBoundingClientRect().top ?? 0;
+      setBelow(top - panel < MENU_ROOM_PX);
+    }
+    setOpen((o) => !o);
+  };
   return (
     <div ref={box} className="relative shrink-0">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-label="More actions for this message"
         aria-expanded={open}
         aria-haspopup="menu"
@@ -87,7 +100,7 @@ export function MessageMoreButton({ onReport }: { onReport: () => void }) {
         <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
       {open && (
-        <div role="menu" className="absolute bottom-full left-0 z-20 mb-1 w-48 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+        <div role="menu" data-placement={below ? 'below' : 'above'} className={`absolute left-0 z-20 w-48 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg ${below ? 'top-full mt-1' : 'bottom-full mb-1'}`}>
           <button type="button" role="menuitem" onClick={() => { close(); onReport(); }} className={MENU_ITEM} data-testid="report-message">
             <ShieldAlert className="h-4 w-4 text-gray-400" aria-hidden="true" /> {REPORT_MESSAGE}
           </button>

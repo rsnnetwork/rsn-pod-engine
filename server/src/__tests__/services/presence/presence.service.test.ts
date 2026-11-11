@@ -45,11 +45,19 @@ jest.mock('../../../db', () => ({ __esModule: true, query: (...a: unknown[]) => 
 import {
   markActive, isActive, clearActive, presenceOf, presenceState, PRESENCE_TTL_SECONDS, PRESENCE_READ_MAX,
 } from '../../../services/presence/presence.service';
-import { presenceAudience, pushPresence, PRESENCE_AUDIENCE_MAX } from '../../../services/presence/presence-push';
+import {
+  presenceAudience, pushPresence, queuePresencePush, resetQueuedPresencePushes, PRESENCE_AUDIENCE_MAX, PRESENCE_PUSH_COALESCE_MS,
+} from '../../../services/presence/presence-push';
 import {
   onPresenceAway, onPresenceConnect, onPresenceDisconnect, onPresencePing, resetPresenceTimers, watchPresence,
   PRESENCE_EVENTS_PER_WINDOW,
 } from '../../../services/presence/presence-socket';
+
+/** Changes are told once they settle (PRESENCE_PUSH_COALESCE_MS); wait that long before reading what was told. */
+const told = async () => {
+  await new Promise((r) => setTimeout(r, PRESENCE_PUSH_COALESCE_MS + 30));
+  await new Promise((r) => setImmediate(r));
+};
 
 const socket = (id: string, userId: string, foreground = false) => ({ id, rooms: new Set([id, `user:${userId}`]), data: { foreground } });
 
@@ -67,6 +75,7 @@ beforeEach(() => {
   mockEmitEntities.mockClear();
   mockQuery.mockReset().mockResolvedValue({ rows: [{ partner_id: 'u-partner' }] });
   resetPresenceTimers();
+  resetQueuedPresencePushes();
 });
 
 afterAll(() => resetPresenceTimers());
@@ -74,13 +83,20 @@ afterAll(() => resetPresenceTimers());
 describe('markActive', () => {
   it('stamps a short-TTL key only when it is not there (SET NX), and says that was a change', async () => {
     expect(await markActive('u-1')).toBe(true);
-    expect(mockRedis.set).toHaveBeenCalledWith('presence:app:u-1', '1', 'EX', PRESENCE_TTL_SECONDS, 'NX');
+    expect(mockRedis.set).toHaveBeenCalledWith('rsn:presence:u-1', '1', 'EX', PRESENCE_TTL_SECONDS, 'NX');
     expect(mockRedis.expire).not.toHaveBeenCalled();
   });
   it('a ping while already online only keeps the key alive, and is no change', async () => {
     mockRedis.set.mockResolvedValue(null);
     expect(await markActive('u-1')).toBe(false);
-    expect(mockRedis.expire).toHaveBeenCalledWith('presence:app:u-1', PRESENCE_TTL_SECONDS);
+    expect(mockRedis.expire).toHaveBeenCalledWith('rsn:presence:u-1', PRESENCE_TTL_SECONDS);
+  });
+  it('the key lapsing between the SET and the EXPIRE (EXPIRE answers 0) is stamped again, and that is a change', async () => {
+    mockRedis.set.mockResolvedValueOnce(null).mockResolvedValueOnce('OK');
+    mockRedis.expire.mockResolvedValue(0);
+    expect(await markActive('u-1')).toBe(true);
+    expect(mockRedis.set).toHaveBeenCalledTimes(2);
+    expect(mockRedis.set).toHaveBeenLastCalledWith('rsn:presence:u-1', '1', 'EX', PRESENCE_TTL_SECONDS, 'NX');
   });
   it('is null (nothing stamped) when Redis is unavailable or fails', async () => {
     redisNull = true;
@@ -100,7 +116,7 @@ describe('isActive and clearActive', () => {
   });
   it('clearActive deletes the key and says whether they were online', async () => {
     expect(await clearActive('u-1')).toBe(true);
-    expect(mockRedis.del).toHaveBeenCalledWith('presence:app:u-1');
+    expect(mockRedis.del).toHaveBeenCalledWith('rsn:presence:u-1');
     mockRedis.del.mockResolvedValue(0);
     expect(await clearActive('u-1')).toBe(false);
     redisNull = true;
@@ -113,7 +129,7 @@ describe('presenceOf: online, away, offline, or left out when unknown', () => {
     mockRedis.mget.mockResolvedValue(['1', null, null]);
     mockSockets = [socket('s-b', 'u-b')];
     expect(await presenceOf(['u-a', 'u-b', 'u-c'])).toEqual({ 'u-a': 'online', 'u-b': 'away', 'u-c': 'offline' });
-    expect(mockRedis.mget).toHaveBeenCalledWith('presence:app:u-a', 'presence:app:u-b', 'presence:app:u-c');
+    expect(mockRedis.mget).toHaveBeenCalledWith('rsn:presence:u-a', 'rsn:presence:u-b', 'rsn:presence:u-c');
     // One socket lookup for everyone without the key, across instances.
     expect(mockIn).toHaveBeenCalledTimes(1);
     expect(mockIn).toHaveBeenCalledWith(['user:u-b', 'user:u-c']);
@@ -148,7 +164,7 @@ describe('presenceOf: online, away, offline, or left out when unknown', () => {
     expect(await presenceOf([])).toEqual({});
     expect(mockRedis.mget).not.toHaveBeenCalled();
     await presenceOf(['u-a', 'u-a', '']);
-    expect(mockRedis.mget).toHaveBeenCalledWith('presence:app:u-a');
+    expect(mockRedis.mget).toHaveBeenCalledWith('rsn:presence:u-a');
     const many = Array.from({ length: PRESENCE_READ_MAX + 20 }, (_, i) => `u-${i}`);
     await presenceOf(many);
     expect(mockRedis.mget.mock.calls[1]).toHaveLength(PRESENCE_READ_MAX);
@@ -198,9 +214,11 @@ describe('the sockets (presence-socket.ts): told only on a change', () => {
     mockSockets = [socket('s-1', 'u-a')];
     await onPresenceConnect(io, 'u-a');
     expect(mockRedis.set).not.toHaveBeenCalled();
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(1);
     mockSockets.push(socket('s-2', 'u-a'));
     await onPresenceConnect(io, 'u-a');
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(1);
   });
 
@@ -208,9 +226,11 @@ describe('the sockets (presence-socket.ts): told only on a change', () => {
     const s = { data: { foreground: false } as Record<string, unknown> };
     await onPresencePing(s as never, 'u-a');
     expect(s.data.foreground).toBe(true);
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(1);
     mockRedis.set.mockResolvedValue(null); // already online: the key is only kept alive
     await onPresencePing(s as never, 'u-a');
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(1);
   });
 
@@ -219,6 +239,7 @@ describe('the sockets (presence-socket.ts): told only on a change', () => {
     const s = { data: { foreground: false } as Record<string, unknown> };
     await onPresencePing(s as never, 'u-a');
     await onPresencePing(s as never, 'u-a');
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(1);
   });
 
@@ -228,10 +249,12 @@ describe('the sockets (presence-socket.ts): told only on a change', () => {
     await onPresenceAway(io, me as never, 'u-a');
     expect(me.data.foreground).toBe(false);
     expect(mockRedis.del).not.toHaveBeenCalled(); // the other tab keeps them online
+    await told();
     expect(mockEmitEntities).not.toHaveBeenCalled();
     mockSockets = [me, socket('s-2', 'u-a', false)];
     await onPresenceAway(io, me as never, 'u-a');
-    expect(mockRedis.del).toHaveBeenCalledWith('presence:app:u-a');
+    expect(mockRedis.del).toHaveBeenCalledWith('rsn:presence:u-a');
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(1);
   });
 
@@ -240,24 +263,28 @@ describe('the sockets (presence-socket.ts): told only on a change', () => {
     const me = socket('s-1', 'u-a');
     mockSockets = [me];
     await onPresenceAway(io, me as never, 'u-a');
+    await told();
     expect(mockEmitEntities).not.toHaveBeenCalled();
   });
 
   it('the last socket closing is offline at once (pushed); one of several closing leaves them away only when none is in front', async () => {
     mockSockets = [];
     await onPresenceDisconnect(io, 'u-a');
-    expect(mockRedis.del).toHaveBeenCalledWith('presence:app:u-a');
+    expect(mockRedis.del).toHaveBeenCalledWith('rsn:presence:u-a');
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(1);
 
     mockRedis.del.mockClear();
     mockSockets = [socket('s-2', 'u-a', true)];
     await onPresenceDisconnect(io, 'u-a');
     expect(mockRedis.del).not.toHaveBeenCalled();
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(1);
 
     mockSockets = [socket('s-2', 'u-a', false)];
     await onPresenceDisconnect(io, 'u-a');
-    expect(mockRedis.del).toHaveBeenCalledWith('presence:app:u-a');
+    expect(mockRedis.del).toHaveBeenCalledWith('rsn:presence:u-a');
+    await told();
     expect(mockEmitEntities).toHaveBeenCalledTimes(2);
   });
 
@@ -265,13 +292,17 @@ describe('the sockets (presence-socket.ts): told only on a change', () => {
     jest.useFakeTimers();
     try {
       const s = { data: { foreground: false } as Record<string, unknown> };
+      const flush = () => new Promise(jest.requireActual('timers').setImmediate);
       await onPresencePing(s as never, 'u-a');
+      jest.advanceTimersByTime(PRESENCE_PUSH_COALESCE_MS);
+      await flush();
       expect(mockEmitEntities).toHaveBeenCalledTimes(1);
       mockRedis.exists.mockResolvedValue(0);
       jest.advanceTimersByTime((PRESENCE_TTL_SECONDS + 2) * 1000);
-      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-      expect(mockRedis.exists).toHaveBeenCalledWith('presence:app:u-a');
-      await new Promise(jest.requireActual('timers').setImmediate);
+      await flush();
+      expect(mockRedis.exists).toHaveBeenCalledWith('rsn:presence:u-a');
+      jest.advanceTimersByTime(PRESENCE_PUSH_COALESCE_MS);
+      await flush();
       expect(mockEmitEntities).toHaveBeenCalledTimes(2);
     } finally {
       jest.useRealTimers();
@@ -290,5 +321,26 @@ describe('the sockets (presence-socket.ts): told only on a change', () => {
     await new Promise((r) => setImmediate(r));
     // The connect counted as one; then pings up to the window's allowance; the rest were ignored.
     expect(mockRedis.set).toHaveBeenCalledTimes(PRESENCE_EVENTS_PER_WINDOW - 1);
+  });
+});
+
+describe('changes in one moment are told once (fix round 1, M-3)', () => {
+  it('a connection\'s first socket (away) and its first ping (online) reach the partners as ONE push', async () => {
+    mockSockets = [socket('s-1', 'u-a')];
+    await onPresenceConnect(fakeIo as never, 'u-a');
+    await onPresencePing({ data: { foreground: false } } as never, 'u-a');
+    await told();
+    expect(mockEmitEntities).toHaveBeenCalledTimes(1);
+    expect(mockEmitEntities).toHaveBeenCalledWith(fakeIo, ['u-partner'], ['user:u-a:presence']);
+  });
+
+  it('queuePresencePush twice in the window is one push; a later change is its own', async () => {
+    queuePresencePush('u-a');
+    queuePresencePush('u-a');
+    await told();
+    expect(mockEmitEntities).toHaveBeenCalledTimes(1);
+    queuePresencePush('u-a');
+    await told();
+    expect(mockEmitEntities).toHaveBeenCalledTimes(2);
   });
 });

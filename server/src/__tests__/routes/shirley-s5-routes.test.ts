@@ -113,6 +113,14 @@ describe('POST /reports', () => {
     expect(mockSubmit.mock.calls[0][1]).toMatchObject({ subject: { kind: 'dm_message', id: MSG } });
   });
 
+  // Fix round 1 (controller ruling): wall comments, group chat and event chat messages, through the same door, limiter
+  // and duplicate guard.
+  it.each(['pod_comment', 'circle_comment', 'group_message', 'event_chat_message'])('a %s report is taken', async (kind) => {
+    const res = await request(app).post('/reports').set('authorization', someone()).send({ reason: 'spam', subject: { kind, id: MSG } });
+    expect(res.status).toBe(201);
+    expect(mockSubmit.mock.calls[0][1]).toMatchObject({ subject: { kind, id: MSG } });
+  });
+
   it.each([
     ['nothing to report', { reason: 'spam' }],
     ['no reason (none is chosen for the person)', { reportedId: B }],

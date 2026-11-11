@@ -1,7 +1,8 @@
 // Task E4 — the member-facing report front door. Feeds POST /api/reports (server/src/routes/reports.ts), which lands
 // in the admin moderation queue.
 //
-// 11 Nov 2026 (Shirley Palmer's item 16): it reports a member, one message or one wall post (`subject`), and says so in
+// 11 Nov 2026 (Shirley Palmer's item 16): it reports a member, or one message (a chat, a group chat or an event's chat),
+// wall post or wall comment (`subject`), and says so in
 // its title; the message or post is quoted at the top. Before anything is sent it says what happens next
 // (safety-words.ts): who reviews it, what they can read, and that nothing changes for the other person, who is not told.
 // No reason is chosen for the person: Submit waits for one. Once sent, the sheet says "Report sent" and stays until it
@@ -62,8 +63,11 @@ interface Props {
 
 interface FailedRequest { response?: { status?: number; data?: { error?: { message?: unknown } } } }
 
-const targetOf = (subject: ReportSubject | null | undefined): ReportTarget =>
-  !subject ? 'member' : subject.kind === 'dm_message' ? 'message' : 'post';
+const TARGETS: Record<ReportSubjectKind, ReportTarget> = {
+  dm_message: 'message', group_message: 'message', event_chat_message: 'message',
+  pod_post: 'post', circle_post: 'post', pod_comment: 'comment', circle_comment: 'comment',
+};
+const targetOf = (subject: ReportSubject | null | undefined): ReportTarget => (subject ? TARGETS[subject.kind] : 'member');
 
 export default function ReportUserModal({ open, onClose, reportedId, reportedDisplayName, conversationId, subject, alreadyBlocked, onBlocked }: Props) {
   const [reason, setReason] = useState<ReportReason | ''>('');
@@ -202,7 +206,7 @@ export default function ReportUserModal({ open, onClose, reportedId, reportedDis
               />
               <span className="text-sm text-gray-700">
                 Also block {name?.trim() || 'this member'}
-                <span className="block text-xs text-gray-500">{blockConsequence(name)}</span>
+                <span className="block text-xs text-gray-500">{blockConsequence(name, conversationId ? 'thread' : 'profile')}</span>
               </span>
             </label>
           )}

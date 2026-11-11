@@ -10,6 +10,8 @@ import EmojiPicker, { pickInto } from '@/components/chat/EmojiPicker';
 import { isComposingEnter } from '@/components/chat/emoji';
 import { BUBBLE_LINK, OWN_BUBBLE, THEIR_BUBBLE } from '@/features/messages/bubble-look';
 import { CHAT_JOINING, chatJoinWaitLeft, chatWaitsForRoom } from './chatSend';
+import ReportUserModal from '@/components/ReportUserModal';
+import { MessageMoreButton } from '@/features/messages/thread/ThreadSafety';
 
 const CHAT_EMOJIS = [
   { type: 'heart', emoji: '❤️' },
@@ -287,6 +289,8 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
 
 function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boolean; sessionId: string }) {
   const [showPicker, setShowPicker] = useState(false);
+  // Report message (11 Nov 2026, item 16): someone else's message in the event's chat, reported where it is.
+  const [reporting, setReporting] = useState(false);
   const userId = useAuthStore(s => s.user?.id);
 
   const formatTime = (timestamp: string) => {
@@ -304,7 +308,7 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
   const hasReactions = Object.keys(reactions).length > 0;
 
   return (
-    <div className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} group/msg`}>
+    <div className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} group/msg group/bubble`}>
       <div
         // The same look as Messages (30 Oct 2026, L9): your own gray, others' white with a border; the host's stays amber.
         data-testid={isOwn ? 'bubble-own' : 'bubble-theirs'}
@@ -358,7 +362,8 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
           anchored on the same side as the bubble so it never clips off-screen
           on small phones. max-w + the picker's anchored side ensure the popup
           stays inside the viewport. */}
-      <div className={`relative ${isOwn ? 'self-end' : 'self-start'}`}>
+      <div className={`relative flex items-center gap-1 ${isOwn ? 'self-end' : 'self-start'}`}>
+        {!isOwn && <MessageMoreButton onReport={() => setReporting(true)} />}
         <button
           onClick={() => setShowPicker(!showPicker)}
           aria-label="Add reaction"
@@ -377,8 +382,15 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
           </div>
         )}
       </div>
+      {!isOwn && (
+        <ReportUserModal
+          open={reporting}
+          onClose={() => setReporting(false)}
+          reportedId={msg.userId}
+          reportedDisplayName={msg.displayName}
+          subject={{ kind: 'event_chat_message', id: msg.id, excerpt: msg.message }}
+        />
+      )}
     </div>
   );
 }
-
-

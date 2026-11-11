@@ -246,7 +246,10 @@ describe('the call button', () => {
   it('no presence read polls; each declares the person\'s presence tag and the blocks tag', () => {
     const hooks = readClientSource('features/calls/usePresence.ts');
     expect(hooks).not.toMatch(/refetchInterval/);
-    expect(hooks).toContain('[E.userDms(myUserId), E.userBlocks(myUserId), ...partnerIds.map((id) => E.userPresence(id))]');
+    // Fix round 1 (M-4): not on user:<me>:dms, which fires on every message; keyed by the partners on screen instead.
+    expect(hooks).toContain('[E.userBlocks(myUserId), ...partnerIds.map((id) => E.userPresence(id))]');
+    expect(hooks).not.toContain('E.userDms(myUserId)');
+    expect(hooks).toContain("['dm-inbox-presence', [...partnerIds].sort().join(',')]");
     expect(hooks).toContain('[E.userPresence(userId), E.userBlocks(myUserId)]');
     const src = readClientSource('features/messages/MessagesPage.tsx');
     expect(src).not.toMatch(/refetchInterval: 20_000/);
@@ -399,5 +402,75 @@ describe('Add manually', () => {
     const actions = readClientSource('features/messages/useSchedulerActions.ts');
     expect(actions).toContain('addToast(confirmedMessage((res.data?.data as Scheduling | undefined)?.confirmed?.inviteEmail, moving), \'success\');');
     expect(actions).toContain("addToast(saveMessage(outcome, zone, after.confirmed?.inviteEmail), asks ? 'info' : 'success');");
+  });
+});
+
+// ─── Fix round 1 (review s5-review.md) ────────────────────────────────────────────────────────────────────────────────
+
+describe('fix round 1: more to report, each where it is', () => {
+  it('a comment on either wall: "Report comment" on someone else\'s, never your own, its kind from the wall', () => {
+    const comments = readClientSource('components/wall/WallComments.tsx');
+    expect(comments).toMatch(/\{config\.reportKind && userId && c\.authorId !== userId && \(\s*<ReportCommentButton kind=\{config\.reportKind\} commentId=\{c\.id\} authorId=\{c\.authorId\} authorName=\{c\.authorName\} excerpt=\{c\.content\} \/>/);
+    const btn = readClientSource('components/wall/ReportCommentButton.tsx');
+    expect(btn).toContain("subject={{ kind: kind === 'pod_post' ? 'pod_comment' : 'circle_comment', id: commentId, excerpt }}");
+    expect(btn).toContain('{REPORT_COMMENT}');
+    expect(btn).toContain('min-h-[44px]');
+    expect(reportTitle('comment', 'Bo')).toBe('Report this comment');
+    expect(reportConsequence('comment', 'Bo', false)).toMatch(/^The REASON team will review this comment\. Bo won't be told/);
+  });
+
+  it('a group chat: "⋯ → Report message" on others\' messages, the chat staying open', () => {
+    const src = readClientSource('features/messages/GroupThread.tsx');
+    expect(src).toContain('{!mine && <MessageMoreButton onReport={() => onReport(m)} />}');
+    expect(src).toContain("subject={reporting ? { kind: 'group_message', id: reporting.m.id, excerpt: reporting.m.content } satisfies ReportSubject : null}");
+    expect(src).not.toMatch(/navigate\(/);
+  });
+
+  it("an event's chat: \"⋯ → Report message\" on others' messages", () => {
+    const src = readClientSource('features/live/ChatPanel.tsx');
+    expect(src).toContain('{!isOwn && <MessageMoreButton onReport={() => setReporting(true)} />}');
+    expect(src).toContain("subject={{ kind: 'event_chat_message', id: msg.id, excerpt: msg.message }}");
+  });
+
+  it('the admin queue labels every kind', () => {
+    const admin = readClientSource('features/admin/AdminModerationPage.tsx');
+    for (const label of ['Reported message', 'Reported group message', 'Reported event chat message', 'Reported post', 'Reported comment']) {
+      expect(admin).toContain(`'${label}'`);
+    }
+  });
+});
+
+describe('fix round 1: a read-only thread takes no reaction and no reply', () => {
+  it('the reaction trigger, the picker and Reply are not drawn, and a reaction pill does nothing', () => {
+    const src = readClientSource('features/messages/MessagesPage.tsx');
+    expect(src).toMatch(/\{!readOnly && \(\s*<button\s*type="button"\s*onClick=\{\(\) => setReactionPickerFor/);
+    expect(src).toContain('{!readOnly && <ReplyButton onReply={() => replyTo(m, fromMe)} />}');
+    expect(src).toContain('{pickerOpen && !readOnly && (');
+    expect(src).toContain('onClick={() => { if (!readOnly) toggleReaction(m.id, type, mine); }}');
+    // Report message stays: reporting never needs the two to be on speaking terms.
+    expect(src).toMatch(/\{!fromMe && \(\s*<MessageMoreButton/);
+  });
+});
+
+describe('fix round 1: a block during a call ends it for both', () => {
+  it('the room closed under them sends both back to the thread with a calm sentence', () => {
+    const src = readClientSource('features/messages/MeetPage.tsx');
+    expect(src).toContain("export const CALL_ENDED = 'The call has ended.';");
+    expect(src).toMatch(/onDisconnected=\{\(reason\) => \{[\s\S]{0,200}if \(reason === DisconnectReason\.ROOM_DELETED\) addToast\(CALL_ENDED, 'info'\);\s*leaveRoom\(\);/);
+  });
+});
+
+describe('fix round 1: minors', () => {
+  it('the message "⋯" menu opens below when there is no room above it in the thread', () => {
+    const src = readClientSource('features/messages/thread/ThreadSafety.tsx');
+    expect(src).toContain('const MENU_ROOM_PX = 72;');
+    expect(src).toContain("setBelow(top - panel < MENU_ROOM_PX);");
+    expect(src).toContain("${below ? 'top-full mt-1' : 'bottom-full mb-1'}");
+  });
+
+  it('a block from a profile does not promise a conversation that may not exist', () => {
+    expect(blockConsequence('Bo', 'profile')).toContain('Any conversation you have stays, read-only. You can unblock them from their profile.');
+    expect(blockConsequence('Bo')).toContain('Your conversation stays, read-only.');
+    expect(readClientSource('components/ReportUserModal.tsx')).toContain("blockConsequence(name, conversationId ? 'thread' : 'profile')");
   });
 });

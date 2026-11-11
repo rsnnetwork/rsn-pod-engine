@@ -15,7 +15,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LiveKitRoom, RoomAudioRenderer, ParticipantTile, ControlBar, useTracks, useRoomContext, type TrackReference } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track } from 'livekit-client';
+import { DisconnectReason, Track } from 'livekit-client';
 import { ArrowLeft, CalendarClock, Loader2, Maximize2, MessageSquare, Minimize2, PhoneOff } from 'lucide-react';
 import { MEETING_JOIN_EARLY_MIN } from '@rsn/shared';
 import api from '@/lib/api';
@@ -29,6 +29,7 @@ import PartnerSeen from './PartnerSeen';
 import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
 import { schedulingKey, type Scheduling } from './scheduling-types';
 import { useAuthStore } from '@/stores/authStore';
+import { useToastStore } from '@/stores/toastStore';
 import CallChatPanel from '@/features/meet/CallChatPanel';
 import { newestAt, unreadFrom } from '@/features/meet/call-chat';
 import { useThreadMessages } from './thread/useThreadMessages';
@@ -194,6 +195,9 @@ function CallEndWatcher({ conversationId, onLeave, leaving, depart }: {
     </div>
   );
 }
+
+/** What the thread says when the call's room was closed under both people. */
+export const CALL_ENDED = 'The call has ended.';
 
 /** The leave before the room is there (or after it has gone): nothing to say goodbye to. */
 const noDeparture = (): Promise<void> => Promise.resolve();
@@ -419,6 +423,7 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
   departRef: MutableRefObject<() => Promise<void>>;
 }) {
   const myUserId = useAuthStore((s) => s.user?.id);
+  const addToast = useToastStore((s) => s.addToast);
   // Kept once known: a block made during the call takes the conversation off the inbox, and the panel must still
   // try the send, so the person reads the server's refusal instead of a Send that went dead.
   const found = useConversationPartner(conversationId);
@@ -484,7 +489,11 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
         connect
         video={kind === 'video'}
         audio
-        onDisconnected={leaveRoom}
+        onDisconnected={(reason) => {
+          // The room was closed under both people (a block during the call, 11 Nov 2026): said calmly on the thread.
+          if (reason === DisconnectReason.ROOM_DELETED) addToast(CALL_ENDED, 'info');
+          leaveRoom();
+        }}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'transparent' }}
       >
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">

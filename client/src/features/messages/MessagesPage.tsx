@@ -1099,7 +1099,9 @@ export default function MessagesPage() {
                                   })()}
                                 </div>
                                 {/* Phase E — reaction trigger.
-                                    Mobile: always at low opacity. Desktop: hover-revealed. */}
+                                    Mobile: always at low opacity. Desktop: hover-revealed. A read-only thread (a former
+                                    member, or someone I blocked) takes no reaction and no reply (11 Nov 2026). */}
+                                {!readOnly && (
                                 <button
                                   type="button"
                                   onClick={() => setReactionPickerFor(prev => prev === m.id ? null : m.id)}
@@ -1109,8 +1111,9 @@ export default function MessagesPage() {
                                 >
                                   <SmilePlus className="h-3.5 w-3.5" />
                                 </button>
+                                )}
                                 {/* Reply (30 Oct 2026, L7), beside the reaction trigger and shown the same way. */}
-                                <ReplyButton onReply={() => replyTo(m, fromMe)} />
+                                {!readOnly && <ReplyButton onReply={() => replyTo(m, fromMe)} />}
                                 {/* Report message (11 Nov 2026, item 16): on the other person's messages, without leaving. */}
                                 {!fromMe && (
                                   <MessageMoreButton
@@ -1126,7 +1129,8 @@ export default function MessagesPage() {
                                         <button
                                           key={type}
                                           type="button"
-                                          onClick={() => toggleReaction(m.id, type, mine)}
+                                          onClick={() => { if (!readOnly) toggleReaction(m.id, type, mine); }}
+                                          disabled={readOnly}
                                           className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] border transition-colors ${
                                             mine
                                               ? 'bg-rsn-red/10 border-rsn-red/40 text-rsn-red'
@@ -1142,7 +1146,7 @@ export default function MessagesPage() {
                                   </div>
                                 )}
                                 {/* Reaction picker (6 emojis) — anchored above the bubble */}
-                                {pickerOpen && (
+                                {pickerOpen && !readOnly && (
                                   <div
                                     className={`absolute bottom-full mb-1 ${fromMe ? 'right-0' : 'left-0'} flex items-center gap-1 bg-white border border-gray-200 rounded-full shadow-lg px-1.5 py-1 z-10`}
                                     role="dialog"
@@ -1154,7 +1158,8 @@ export default function MessagesPage() {
                                         <button
                                           key={type}
                                           type="button"
-                                          onClick={() => toggleReaction(m.id, type, mine)}
+                                          onClick={() => { if (!readOnly) toggleReaction(m.id, type, mine); }}
+                                          disabled={readOnly}
                                           title={label}
                                           className={`text-base hover:scale-125 active:scale-110 transition-transform p-1 rounded-full ${mine ? 'bg-rsn-red/10' : ''}`}
                                         >

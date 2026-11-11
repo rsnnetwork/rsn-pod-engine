@@ -1,7 +1,8 @@
 // ─── Presence from a member's sockets (11 Nov 2026, Shirley Palmer's RSN 07) ─────────────────────────────
 //
 // What each of a member's connections says, turned into the three states (presence.service.ts) and pushed to their
-// partners only when the state changes (presence-push.ts):
+// partners only when the state changes (presence-push.ts, coalesced over 300 ms so a connection's away-then-online is
+// told once):
 //   - a connection opening: the member's first live socket takes them from offline to away. Connecting no longer marks
 //     anyone online: a phone reconnecting in the background read as online for a minute. The client says it is in front
 //     of the person with a ping as soon as it connects, when it is.
@@ -16,7 +17,7 @@
 
 import type { Server as SocketServer, Socket } from 'socket.io';
 import { PRESENCE_TTL_SECONDS, clearActive, isActive, markActive } from './presence.service';
-import { pushPresence } from './presence-push';
+import { queuePresencePush } from './presence-push';
 import logger from '../../config/logger';
 
 export const PRESENCE_EVENTS_PER_WINDOW = 20;
@@ -39,7 +40,7 @@ function armLapseTimer(userId: string): void {
   stopLapseTimer(userId);
   const t = setTimeout(() => {
     lapseTimers.delete(userId);
-    void isActive(userId).then((active) => { if (active === false) return pushPresence(userId); return undefined; });
+    void isActive(userId).then((active) => { if (active === false) queuePresencePush(userId); });
   }, (PRESENCE_TTL_SECONDS + 2) * 1000);
   t.unref?.();
   lapseTimers.set(userId, t);
@@ -64,7 +65,7 @@ export async function onPresencePing(socket: Pick<Socket, 'data'>, userId: strin
   const turned = await markActive(userId);
   if (turned !== null) armLapseTimer(userId);
   // Without Redis nothing is stamped: this socket coming to the front is the change.
-  if (turned === true || (turned === null && !wasForeground)) await pushPresence(userId);
+  if (turned === true || (turned === null && !wasForeground)) queuePresencePush(userId);
 }
 
 /** The tab went to the background: away, unless another of the member's tabs is still in front. */
@@ -74,13 +75,13 @@ export async function onPresenceAway(io: SocketServer, socket: Pick<Socket, 'id'
   if (sockets.some((s) => s.id !== socket.id && isForeground(s))) return;
   stopLapseTimer(userId);
   const was = await clearActive(userId);
-  if (was !== false) await pushPresence(userId);
+  if (was !== false) queuePresencePush(userId);
 }
 
 /** A connection opened: the member's first one takes them from offline to away. */
 export async function onPresenceConnect(io: SocketServer, userId: string): Promise<void> {
   const sockets = await io.in(room(userId)).fetchSockets();
-  if (sockets.length === 1) await pushPresence(userId);
+  if (sockets.length === 1) queuePresencePush(userId);
 }
 
 /** A connection closed: offline when it was the last; away when none of those left is in front of the member. */
@@ -89,14 +90,14 @@ export async function onPresenceDisconnect(io: SocketServer, userId: string): Pr
   if (remaining.length === 0) {
     stopLapseTimer(userId);
     await clearActive(userId);
-    await pushPresence(userId);
+    queuePresencePush(userId);
     return;
   }
   if (remaining.some(isForeground)) return;
   const was = await clearActive(userId);
   if (was !== false) {
     stopLapseTimer(userId);
-    await pushPresence(userId);
+    queuePresencePush(userId);
   }
 }
 

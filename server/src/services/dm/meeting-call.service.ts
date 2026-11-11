@@ -44,8 +44,14 @@ export const CALL_REQUEST_TTL_MS = 2 * 60 * 1000;
 export const MIN_CALL_MIN = 5;
 export const MAX_CALL_MIN = 240;
 
-export function callRoomId(conversationId: string): string {
-  return `dm-${conversationId}`;
+/**
+ * The pair's call room. A block during a call (11 Nov 2026, item 16) moves the pair to a new room (call_room_epoch, one
+ * up, migration 150) and closes the old one, so a token minted before the block (it lasts 4 hours, and LiveKit makes a
+ * room again for anyone who joins with one) only ever reaches an empty room nobody else is sent to. Epoch 0 is the room
+ * every conversation has always had.
+ */
+export function callRoomId(conversationId: string, epoch = 0): string {
+  return epoch > 0 ? `dm-${conversationId}-${epoch}` : `dm-${conversationId}`;
 }
 
 interface ConvParticipants {
@@ -62,6 +68,8 @@ interface ConvParticipants {
    * (current-meeting.ts): null when the pointer names a row that no longer stands at that time.
    */
   current_meeting_id: string | null;
+  /** Which call room the pair is in now (callRoomId). */
+  call_room_epoch: number;
 }
 
 /** Load the conversation, prove the caller is in it and not blocked either way. */
@@ -69,9 +77,9 @@ async function requireCallParticipant(conversationId: string, userId: string): P
   const r = await query<{
     id: string; user_a_id: string; user_b_id: string;
     calls_unlocked_at: Date | null; meeting_start_at: Date | null; meeting_duration_min: number | null;
-    current_meeting_id: string | null;
+    current_meeting_id: string | null; call_room_epoch: number | null;
   }>(
-    `SELECT id, user_a_id, user_b_id, calls_unlocked_at, meeting_start_at, meeting_duration_min, ${CURRENT_MEETING_ID}
+    `SELECT id, user_a_id, user_b_id, calls_unlocked_at, meeting_start_at, meeting_duration_min, call_room_epoch, ${CURRENT_MEETING_ID}
        FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
@@ -84,7 +92,7 @@ async function requireCallParticipant(conversationId: string, userId: string): P
   if (await blockService.areBlocked(userId, partnerId)) {
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You cannot call this member');
   }
-  return { ...conv, partnerId, iAmA: conv.user_a_id === userId };
+  return { ...conv, call_room_epoch: conv.call_room_epoch ?? 0, partnerId, iAmA: conv.user_a_id === userId };
 }
 
 /** Calls are only available once this pair's first scheduled meeting has happened. */
@@ -228,8 +236,8 @@ async function recordJoin(conv: ConvParticipants, userId: string, standing: Stan
  * A LiveKit failure never fails the leave.
  */
 export async function leaveCallRoom(conversationId: string, userId: string, sid: string): Promise<{ removed: boolean }> {
-  const r = await query<{ user_a_id: string; user_b_id: string }>(
-    `SELECT user_a_id, user_b_id FROM dm_conversations WHERE id = $1`,
+  const r = await query<{ user_a_id: string; user_b_id: string; call_room_epoch: number | null }>(
+    `SELECT user_a_id, user_b_id, call_room_epoch FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
   const conv = r.rows[0];
@@ -238,7 +246,8 @@ export async function leaveCallRoom(conversationId: string, userId: string, sid:
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Not your conversation');
   }
   try {
-    return { removed: await getVideoProvider().removeParticipantIfSession(callRoomId(conversationId), userId, sid) };
+    const room = callRoomId(conversationId, conv.call_room_epoch ?? 0);
+    return { removed: await getVideoProvider().removeParticipantIfSession(room, userId, sid) };
   } catch (err) {
     logger.warn({ err, conversationId, userId }, 'taking a member who left out of the call room failed (non-fatal)');
     return { removed: false };
@@ -263,7 +272,7 @@ export async function getCallToken(
   const me = (await query<{ display_name: string | null }>(
     `SELECT display_name FROM users WHERE id = $1`, [userId],
   )).rows[0];
-  const roomName = callRoomId(conversationId);
+  const roomName = callRoomId(conversationId, conv.call_room_epoch);
   const issued = await getVideoProvider().issueJoinToken(
     userId, roomName, me?.display_name || 'Member', CALL_TOKEN_TTL_SECONDS,
   );
@@ -596,19 +605,23 @@ async function claimAnswer(requestId: string, status: 'declined' | 'cancelled'):
 }
 
 /**
- * A block ends what the two had going (11 Nov 2026, Shirley Palmer's item 16: block in the middle of a call). A call
- * still ringing between them is withdrawn (both screens told, the callee's banner closed), and the person blocked is
- * taken out of the pair's call room, so the one who blocked is left alone in it and told they left. No new token is
- * minted for either while the block stands (requireCallParticipant). Best-effort: the block itself is already saved,
- * and someone not in the room (the usual case) is simply not there to take out.
+ * A block ends what the two had going (11 Nov 2026, Shirley Palmer's item 16; the controller's ruling: a block during a
+ * call ends it for BOTH sides). A call still ringing between them is withdrawn (both screens told, the callee's banner
+ * closed). The pair moves to a new call room (call_room_epoch one up) and the old one is closed: LiveKit disconnects
+ * everyone in it, both rooms go back to their thread with "The call has ended.", and a token minted before the block can
+ * only reach the old room, which nobody is sent to again. No new token is minted for either while the block stands
+ * (requireCallParticipant). Best-effort past the move: the block itself is already saved.
  */
 export async function endCallsOnBlock(blockerId: string, blockedId: string): Promise<void> {
-  const r = await query<{ id: string }>(
-    `SELECT id FROM dm_conversations WHERE user_a_id = LEAST($1::uuid, $2::uuid) AND user_b_id = GREATEST($1::uuid, $2::uuid)`,
+  const r = await query<{ id: string; call_room_epoch: number }>(
+    `UPDATE dm_conversations SET call_room_epoch = call_room_epoch + 1
+      WHERE user_a_id = LEAST($1::uuid, $2::uuid) AND user_b_id = GREATEST($1::uuid, $2::uuid)
+      RETURNING id, call_room_epoch`,
     [blockerId, blockedId],
   );
-  const conversationId = r.rows[0]?.id;
-  if (!conversationId) return;
+  const moved = r.rows[0];
+  if (!moved) return;
+  const conversationId = moved.id;
   const withdrawn = await query<RequestRow>(
     `UPDATE call_requests SET status = 'cancelled', responded_at = NOW()
       WHERE conversation_id = $1 AND status = 'pending'
@@ -620,9 +633,9 @@ export async function endCallsOnBlock(blockerId: string, blockedId: string): Pro
     await emitCallChanged(conversationId, [blockerId, blockedId]);
   }
   try {
-    await getVideoProvider().removeParticipant(callRoomId(conversationId), blockedId);
+    await getVideoProvider().closeRoom(callRoomId(conversationId, moved.call_room_epoch - 1));
   } catch (err) {
-    logger.debug({ err, conversationId }, 'the blocked member was not in the call room');
+    logger.error({ err, conversationId }, 'closing the call room after a block failed');
   }
 }
 

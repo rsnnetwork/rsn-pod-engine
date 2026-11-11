@@ -36,7 +36,9 @@ describe('migration 150 (report subjects; sent-invitation log)', () => {
   it('holds the kind to the shared list, the kind and id together, and the copy to 2000 characters; each CHECK dropped before it is added', () => {
     const f = flat(sql);
     const kinds = REPORT_SUBJECT_KINDS.map((k) => `'${k}'`).join(', ');
-    expect(f).toContain(`CHECK (subject_kind IS NULL OR subject_kind IN (${kinds}))`);
+    expect(f).toContain(`CHECK (subject_kind IS NULL OR subject_kind IN ( ${kinds}))`);
+    // Fix round 1: comments on both walls, group chat and event chat messages are reportable too.
+    expect(REPORT_SUBJECT_KINDS).toEqual(['dm_message', 'pod_post', 'circle_post', 'pod_comment', 'circle_comment', 'group_message', 'event_chat_message']);
     expect(f).toContain('CHECK ((subject_kind IS NULL) = (subject_id IS NULL))');
     expect(f).toContain('CHECK (subject_excerpt IS NULL OR length(subject_excerpt) <= 2000)');
     for (const name of ['user_reports_subject_kind_check', 'user_reports_subject_pair_check', 'user_reports_subject_excerpt_len']) {
@@ -62,6 +64,10 @@ describe('migration 150 (report subjects; sent-invitation log)', () => {
     expect(f).toContain('created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()');
     expect(f).toContain('CONSTRAINT meeting_invite_emails_once UNIQUE (meeting_id, user_id, sequence, method)');
     expect(f).toContain('CREATE INDEX IF NOT EXISTS idx_meeting_invite_emails_user ON meeting_invite_emails (user_id);');
+  });
+
+  it('gives every conversation a call room epoch, 0 for the room it has always had (a block moves the pair one up)', () => {
+    expect(flat(sql)).toContain('ALTER TABLE dm_conversations ADD COLUMN IF NOT EXISTS call_room_epoch INTEGER NOT NULL DEFAULT 0;');
   });
 
   it('the service claims against exactly that unique key', () => {
