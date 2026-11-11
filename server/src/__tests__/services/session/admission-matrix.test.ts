@@ -38,7 +38,7 @@ const base: EventAccessFacts = {
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
   outsideClosedCircle: false, admissionMode: null, entitled: false, entitledVia: null,
   publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
-  capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0,
+  capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0, eventStatus: 'scheduled',
 };
 
 type Viewer = 'organiser' | 'admin' | 'member' | 'invitee' | 'listed' | 'codeHolder' | 'stranger' | 'removed';

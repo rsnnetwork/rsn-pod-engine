@@ -178,7 +178,7 @@ const facts = (over: Partial<EventAccessFacts> = {}): EventAccessFacts => ({
   visibility: null, podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
   inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
   publication: 'draft', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
-  admissionMode: null, entitled: false, entitledVia: null, capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0,
+  admissionMode: null, entitled: false, entitledVia: null, capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0, eventStatus: 'scheduled',
   ...over,
 });
 

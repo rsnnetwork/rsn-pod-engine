@@ -565,10 +565,19 @@ export type RegisterTxOptions = RegisterOptions & {
  * promotion waits for the capacity lock, so it always reads what that transaction committed). Never throws.
  */
 export function lineStalled(sessionId: string): void {
+  // Fix round 2 (re-review N-1): coalesced. While one move-on for an event runs in this process, another ask for the same
+  // event (a refetch wave from every viewer) does nothing; across instances the promotion only tries the capacity lock
+  // (afterPlaceFreed's 'stalled' cause), so nobody queues behind a promotion already running.
+  if (linesBeingMovedOn.has(sessionId)) return;
+  linesBeingMovedOn.add(sessionId);
   void import('./event-waitlist.service')
     .then((w) => w.afterPlaceFreed(sessionId, 'stalled'))
-    .catch((err: unknown) => logger.warn({ err, sessionId }, 'A stalled waiting list could not be moved on (non-fatal)'));
+    .catch((err: unknown) => logger.warn({ err, sessionId }, 'A stalled waiting list could not be moved on (non-fatal)'))
+    .finally(() => linesBeingMovedOn.delete(sessionId));
 }
+
+/** The events whose stalled line this process is moving on right now (lineStalled). */
+const linesBeingMovedOn = new Set<string>();
 
 // S15 (live-test 2026-06-06) — isNewRegistration distinguishes a FRESH
 // registration from a re-activation (a 'left'/'no_show' row flipping back to
@@ -585,6 +594,17 @@ export type RegisterResult = SessionParticipant & { isNewRegistration: boolean }
  */
 export async function lockEventCapacity(client: PoolClient, sessionId: string): Promise<void> {
   await client.query(`SELECT pg_advisory_xact_lock(hashtext('event-capacity:' || $1::text))`, [sessionId]);
+}
+
+/**
+ * Fix round 2 (re-review N-1): the same lock, only if nobody holds it (false: a registration or a promotion for this event
+ * is running, on any instance, and will see the line itself). For the stalled-line move-on, which must never queue.
+ */
+export async function tryLockEventCapacity(client: PoolClient, sessionId: string): Promise<boolean> {
+  const r = await client.query<{ got: boolean }>(
+    `SELECT pg_try_advisory_xact_lock(hashtext('event-capacity:' || $1::text)) AS got`, [sessionId],
+  );
+  return r.rows[0]?.got === true;
 }
 
 /** registerParticipantTx in its own transaction, then the live event's memory (registerParticipantTx says the rules). */

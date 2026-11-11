@@ -333,6 +333,8 @@ export interface EventAccessFacts {
   outsideClosedCircle: boolean;
   /** Part 2 Task 2 (D1): a draft is seen only by the people who run it. */
   publication: EventPublication;
+  /** Part 3 Task 3, fix round 2 (re-review N-1): sessions.status ('scheduled', a live status, 'completed', 'cancelled'). */
+  eventStatus: string;
   /** Part 2 Task 2: it has been archived (out of the default lists; its page stays as it was). */
   archived: boolean;
   /** Part 2 Task 2: registration opens then (null: as soon as it is published). */
@@ -392,6 +394,7 @@ interface FactsRow {
   places_taken?: number | string | null;
   waitlist_position?: number | string | null;
   waitlist_ahead?: number | string | null;
+  event_status?: string | null;
 }
 
 type Reader = (text: string, params: unknown[]) => Promise<{ rows: FactsRow[] }>;
@@ -425,7 +428,8 @@ export async function readEventAccessFacts(
             ${eventCapacitySql('s')} AS capacity,
             ${capacityTakenSql('s')} AS places_taken,
             ${waitlistPositionSql('s', '$2')} AS waitlist_position,
-            ${waitlistAheadSql('s', '$2')} AS waitlist_ahead
+            ${waitlistAheadSql('s', '$2')} AS waitlist_ahead,
+            s.status::text AS event_status
        FROM sessions s
        LEFT JOIN pods p ON p.id = s.pod_id
       WHERE s.id = $1`,
@@ -464,6 +468,8 @@ export async function readEventAccessFacts(
     placesTaken: Number(row.places_taken ?? 0) || 0,
     waitlistPosition: positiveIntOrNull(row.waitlist_position),
     waitlistAhead: Number(row.waitlist_ahead ?? 0) || 0,
+    // A row without it (a test's) reads as today's event: scheduled.
+    eventStatus: row.event_status ?? 'scheduled',
   };
 }
 
@@ -705,7 +711,12 @@ export function eventIsFull(f: Pick<EventAccessFacts, 'capacity' | 'placesTaken'
  * Fix round 1 (review I-1): people are waiting while a place is free, so a promotion is overdue (a restart, a failed
  * pass, a release that did not tell the line). Whoever reads it moves the line on (session.service lineStalled).
  */
-export function lineLooksStalled(f: Pick<EventAccessFacts, 'capacity' | 'placesTaken' | 'waitlistAhead' | 'waitlistPosition'>): boolean {
+export function lineLooksStalled(
+  f: Pick<EventAccessFacts, 'capacity' | 'placesTaken' | 'waitlistAhead' | 'waitlistPosition' | 'eventStatus' | 'publication'>,
+): boolean {
+  // Fix round 2 (re-review N-1): only an event the promotion would move (published, upcoming or live). A draft, a
+  // completed and a cancelled event keep their waiting rows inert, and reading them starts nothing.
+  if (f.publication === 'draft' || f.eventStatus === 'completed' || f.eventStatus === 'cancelled') return false;
   return f.capacity !== null && f.placesTaken < f.capacity && (f.waitlistAhead > 0 || f.waitlistPosition !== null);
 }
 

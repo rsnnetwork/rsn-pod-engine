@@ -40,6 +40,8 @@ export const world = {
   rows: emptyRows(),
   sql: [] as string[],
   clock: 0,
+  /** Events whose capacity lock another instance holds (the try-lock answers false). */
+  lockHeldBy: new Set<string>(),
 };
 
 function emptyRows(): Rows {
@@ -53,6 +55,7 @@ export function resetWaitlistWorld(): void {
   world.rows = emptyRows();
   world.sql = [];
   world.clock = 0;
+  world.lockHeldBy = new Set();
   savepoints.clear();
 }
 
@@ -150,7 +153,7 @@ function factsRow(e: WwEvent, userId: string) {
     admission_code_held: false,
     admission_personal_invite: !!mode && !!u && personallyInvited(e, u),
     capacity: capacityOf(e), places_taken: placesTaken(e.id), waitlist_position: positionOf(e.id, userId),
-    waitlist_ahead: aheadOf(e.id, userId),
+    waitlist_ahead: aheadOf(e.id, userId), event_status: e.status,
   };
 }
 
@@ -200,6 +203,10 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
   if (m) { world.rows = savepoints.get(m[1])!; savepoints.set(m[1], snapshot()); return rows([]); }
   if (/^RELEASE SAVEPOINT \w+$/.test(sql)) return rows([]);
   if (/^SELECT pg_advisory_xact_lock\(hashtext\('event-capacity:' \|\| \$1::text\)\)$/.test(sql)) return rows([{}]);
+  // Fix round 2: the stalled-line move-on only tries the lock; a test holds it (lockHeldBy) to play another instance.
+  if (/^SELECT pg_try_advisory_xact_lock\(hashtext\('event-capacity:' \|\| \$1::text\)\) AS got$/.test(sql)) {
+    return rows([{ got: !world.lockHeldBy.has(String(a)) }]);
+  }
 
   // ── users ──
   if (sql === 'SELECT status, account_kind FROM users WHERE id = $1') {

@@ -27,7 +27,7 @@ const facts = (over: Record<string, unknown> = {}) => ({
   visibility: 'private', podId: 'p', podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
   admissionMode: 'approval', entitled: false, entitledVia: null, publication: 'published', archived: false,
-  registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0, capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0, ...over,
+  registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0, capacity: null, placesTaken: 0, waitlistPosition: null, waitlistAhead: 0, eventStatus: 'scheduled', ...over,
 });
 
 beforeEach(() => {

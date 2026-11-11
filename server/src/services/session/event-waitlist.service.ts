@@ -48,7 +48,7 @@ import { ensureCallCode } from './call-link.service';
 import { isLiveStatus } from './main-room';
 import { ringEventBells } from './event-notices';
 import {
-  lineStalled, lockEventCapacity, registerParticipantTx, syncLiveRegistration,
+  lineStalled, lockEventCapacity, registerParticipantTx, syncLiveRegistration, tryLockEventCapacity,
   type RegisterOptions, type RegisterTxOptions,
 } from './session.service';
 
@@ -312,8 +312,9 @@ function baseOptions(entry: WaitingEntry): RegisterTxOptions {
  * The say-so a waiting person is promoted with: the one they joined the line with, while it still stands. Controller
  * ruling (fix round 1, review M-2): someone who joined through an invite comes in through that invite only while it is
  * valid (accepted, or pending and not expired); a revoked or expired one lapses them with its own refusal code
- * (INVITE_REVOKED, INVITE_EXPIRED; INVITE_NOT_FOUND when none is left). Someone who joined through an approval keeps it
- * unless their request is no longer approved (EVENT_NEEDS_APPROVAL). Everyone else is checked by the rules alone.
+ * (INVITE_REVOKED, INVITE_EXPIRED). With no invite naming them (a shared link's later accepter), the rules alone decide.
+ * Someone who joined through an approval keeps it unless their request was declined or withdrawn (EVENT_NEEDS_APPROVAL).
+ * Everyone else is checked by the rules alone.
  */
 async function sayingSo(
   client: PoolClient, sessionId: string, entry: WaitingEntry,
@@ -331,14 +332,20 @@ async function sayingSo(
     if (rows.some((i) => i.status === 'accepted' || (i.status === 'pending' && !i.past))) return { options: { ...base, viaInvite: true } };
     if (rows.some((i) => i.status === 'revoked')) return { refusal: ErrorCodes.INVITE_REVOKED };
     if (rows.some((i) => i.status === 'expired' || i.past)) return { refusal: ErrorCodes.INVITE_EXPIRED };
-    return { refusal: ErrorCodes.INVITE_NOT_FOUND };
+    // Fix round 2 (re-review N-2): no invite names this person. A shared link records only its first accepter, so a later
+    // one is decided by the event's own rules, as anyone else (an invitation-only event never takes a shared link).
+    return { options: base };
   }
   if (entry.joined_via === 'approval') {
     const request = await client.query<{ status: string }>(
       `SELECT status FROM event_join_requests WHERE session_id = $1 AND user_id = $2`,
       [sessionId, entry.user_id],
     );
-    if (request.rows[0]?.status === 'approved') return { options: { ...base, approvedRequest: true } };
+    // Fix round 2 (re-review N-3): a pending request still stands. Approve queues the person on its own connection before
+    // its own transaction writes 'approved', so a promotion in between reads 'pending'; only a declined or withdrawn
+    // request (or none) lapses the entry.
+    const status = request.rows[0]?.status;
+    if (status === 'approved' || status === 'pending') return { options: { ...base, approvedRequest: true } };
     return { refusal: ErrorCodes.EVENT_NEEDS_APPROVAL };
   }
   return { options: base };
@@ -362,9 +369,14 @@ interface PromotionPass {
   lapsed: Array<{ userId: string; reason: string }>;
 }
 
-async function promoteTx(client: PoolClient, sessionId: string): Promise<PromotionPass> {
+async function promoteTx(client: PoolClient, sessionId: string, opts: { onlyIfFree?: boolean } = {}): Promise<PromotionPass> {
   const pass: PromotionPass = { promoted: [], lapsed: [] };
-  await lockEventCapacity(client, sessionId);
+  // A stalled line's move-on never waits for the lock: whoever holds it is registering or promoting for this event.
+  if (opts.onlyIfFree) {
+    if (!(await tryLockEventCapacity(client, sessionId))) return pass;
+  } else {
+    await lockEventCapacity(client, sessionId);
+  }
   const ev = await client.query<{ status: string; publication: string | null; capacity: number | string | null; taken: number | string }>(
     `SELECT s.status::text AS status, s.publication, ${eventCapacitySql('s')} AS capacity, ${capacityTakenSql('s')} AS taken
        FROM sessions s WHERE s.id = $1`,
@@ -442,7 +454,7 @@ export async function promoteFromWaitlist(sessionId: string, client?: PoolClient
  */
 export async function afterPlaceFreed(sessionId: string, cause: PlaceFreedCause): Promise<void> {
   try {
-    const pass = await transaction((c) => promoteTx(c, sessionId));
+    const pass = await transaction((c) => promoteTx(c, sessionId, { onlyIfFree: cause === 'stalled' }));
     if (pass.promoted.length === 0 && pass.lapsed.length === 0) return;
     logger.info({ sessionId, cause, promoted: pass.promoted.length, lapsed: pass.lapsed.length }, 'Waiting list moved on');
     void emitEventAuditChanged(sessionId);

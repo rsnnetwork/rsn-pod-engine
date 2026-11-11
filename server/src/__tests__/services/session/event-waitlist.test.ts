@@ -86,7 +86,8 @@ import {
   registerOrWaitlist, removeFromWaitlist,
 } from '../../../services/session/event-waitlist.service';
 import { lineLooksStalled, readEventAccessFacts, summariseEventAccess } from '../../../services/session/event-access';
-import { registerParticipant, unregisterParticipant } from '../../../services/session/session.service';
+import { lineStalled, registerParticipant, unregisterParticipant } from '../../../services/session/session.service';
+import * as waitlistService from '../../../services/session/event-waitlist.service';
 import { approveRequest } from '../../../services/session/event-requests.service';
 import { acceptInvite } from '../../../services/invite/invite.service';
 import { decideRoomEntry, EVENT_FULL_ROOM_SENTENCE } from '../../../services/orchestration/event-room-entry';
@@ -493,6 +494,104 @@ describe('a waiting person reaches no attendee surface (Review Focus #2)', () =>
   });
 });
 
+describe('the stalled-line move-on is coalesced and only for events it can move (fix round 2, N-1)', () => {
+  it('a refetch wave of N page reads starts one promotion per event at a time', async () => {
+    await fullEventWithLine();
+    await unregisterParticipant(EVENT, A); // a place free, nobody told the line
+    const spy = jest.spyOn(waitlistService, 'afterPlaceFreed');
+    for (let i = 0; i < 12; i += 1) lineStalled(EVENT);
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(EVENT, 'stalled');
+    expect(placeOf(EVENT, C)?.status).toBe('registered');
+    // Once that one is over, the next ask runs again (nothing is stuck in the in-flight set).
+    lineStalled(EVENT);
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
+
+  it('it never queues behind a promotion running elsewhere: with the capacity lock held, it does nothing', async () => {
+    await fullEventWithLine();
+    await unregisterParticipant(EVENT, A);
+    world.lockHeldBy.add(EVENT); // another instance is registering or promoting for this event
+    const from = world.sql.length;
+    await afterPlaceFreed(EVENT, 'stalled');
+    expect(placeOf(EVENT, C)).toBeUndefined();
+    expect(world.sql.slice(from).some((s) => s.startsWith('SELECT pg_advisory_xact_lock'))).toBe(false);
+    expect(world.sql.slice(from).some((s) => s.startsWith('SELECT pg_try_advisory_xact_lock'))).toBe(true);
+    world.lockHeldBy.clear();
+    await afterPlaceFreed(EVENT, 'stalled');
+    expect(placeOf(EVENT, C)?.status).toBe('registered');
+  });
+
+  it('a completed, cancelled or draft event with waiters and a free place reads as not stalled: no trigger', async () => {
+    await fullEventWithLine();
+    await unregisterParticipant(EVENT, A);
+    const stalledFor = async (who: string) => lineLooksStalled((await readEventAccessFacts(EVENT, who))!);
+    expect(await stalledFor(E)).toBe(true); // upcoming and published: it is
+    for (const status of ['completed', 'cancelled']) {
+      world.rows.events[0].status = status;
+      expect(await stalledFor(E)).toBe(false);
+      expect(await stalledFor(C)).toBe(false);
+    }
+    world.rows.events[0].status = 'scheduled';
+    world.rows.events[0].publication = 'draft';
+    expect(await stalledFor(E)).toBe(false);
+    world.rows.events[0].publication = 'published';
+    world.rows.events[0].status = 'lobby_open';
+    expect(await stalledFor(E)).toBe(true); // live: it is
+  });
+});
+
+describe('the say-so at promotion (fix round 2, N-2 and N-3)', () => {
+  const sharedLink = (sessionId: string, firstAccepter: string) => world.rows.invites.push({
+    id: 'link-1', code: 'LINK1', session_id: sessionId, invitee_email: null, status: 'accepted', max_uses: 25, use_count: 2,
+    inviter_id: HOST, created_at: new Date(), accepted_by_user_id: firstAccepter,
+  });
+  const queueDirect = (sessionId: string, userId: string, joinedVia: string) => world.rows.line.push({
+    id: `20000000-0000-4000-8000-${userId.slice(-12)}`, session_id: sessionId, user_id: userId, status: 'waiting', joined_via: joinedVia,
+    group_keys: [], lapsed_reason: null, queued_at: ++world.clock, decided_by: null,
+  });
+
+  it('a shared link\'s later accepter (no invite names them) is decided by the rules: promoted on a public event', async () => {
+    await fullEventWithLine();
+    sharedLink(EVENT, D);
+    expect(await registerOrWaitlist(EVENT, E, UserRole.MEMBER, { viaInvite: true, joinedVia: 'invite' })).toMatchObject({ position: 3 });
+    for (const u of [C, D]) await leaveWaitlist(EVENT, u);
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(placeOf(EVENT, E)?.status).toBe('registered');
+    expect(lineOf(EVENT, E)?.status).toBe('promoted');
+  });
+
+  it('on an invitation-only event a shared link never admits: the later accepter lapses with the admission code', async () => {
+    addEvent({ id: EVENT, host_user_id: HOST, visibility: 'private', admission_mode: 'restricted' });
+    for (const id of [A, B]) {
+      world.rows.entries.push({ session_id: EVENT, email: world.rows.users.find((u) => u.id === id)!.email, revoked_at: null });
+    }
+    await registerParticipant(EVENT, A, UserRole.MEMBER);
+    await registerParticipant(EVENT, B, UserRole.MEMBER);
+    sharedLink(EVENT, D);
+    queueDirect(EVENT, E, 'invite');
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(lineOf(EVENT, E)).toMatchObject({ status: 'lapsed', lapsed_reason: ErrorCodes.EVENT_ADMISSION_REQUIRED });
+    expect(placeOf(EVENT, E)).toBeUndefined();
+  });
+
+  it('an approval entry whose request is still pending (approve has not committed yet) is promoted, not lapsed', async () => {
+    addEvent({ id: EVENT, host_user_id: HOST, visibility: 'public_with_approval', admission_mode: null, config: { maxParticipants: 1 } });
+    world.rows.podMembers.push({ pod_id: 'pod-1', user_id: A, role: 'member' });
+    await registerParticipant(EVENT, A, UserRole.MEMBER);
+    world.rows.requests.push({ id: 'req-c', session_id: EVENT, user_id: C, status: 'pending' });
+    queueDirect(EVENT, C, 'approval');
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    expect(placeOf(EVENT, C)?.status).toBe('registered');
+  });
+});
+
 describe('the admin\'s own status writes (fix round 1, I-2)', () => {
   it('eventsHeldByActiveAccounts reads the upcoming and live events active accounts hold a place in; moveWaitlistsOn moves each line on', async () => {
     await fullEventWithLine();
@@ -535,7 +634,7 @@ describe('every deliberate release moves the line on (wiring)', () => {
   it('a read of the event page or the call link entry moves a stalled line on (fix round 1, I-1)', () => {
     expect(src('routes/sessions.ts')).toContain('if (facts && lineLooksStalled(facts)) sessionService.lineStalled(req.params.id);');
     expect(src('services/session/call-entry.service.ts')).toContain('if (lineLooksStalled(facts)) lineStalled(event.id);');
-    const f = { capacity: 2, placesTaken: 1, waitlistAhead: 0, waitlistPosition: null };
+    const f = { capacity: 2, placesTaken: 1, waitlistAhead: 0, waitlistPosition: null, eventStatus: 'scheduled', publication: 'published' as const };
     expect(lineLooksStalled(f)).toBe(false);
     expect(lineLooksStalled({ ...f, waitlistAhead: 2 })).toBe(true);
     expect(lineLooksStalled({ ...f, waitlistPosition: 1 })).toBe(true);
