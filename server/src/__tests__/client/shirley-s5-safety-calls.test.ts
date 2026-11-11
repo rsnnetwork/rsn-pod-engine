@@ -332,6 +332,42 @@ describe('the call button', () => {
     expect(noFind).toContain('Checking…');
   });
 
+  // Prod smoke (12 Nov): "Send a message" put the cursor in the box, then the closing sheet gave focus back to the call
+  // button. Focus a press moved out of the sheet on purpose now stays there; focus left in the sheet still goes back.
+  it('Send a message leaves the cursor in the message box: the sheet gives focus back to its opener only if nothing took it', () => {
+    const { focusMovedOn } = loadClientModule('features/reason/ui/Sheet.tsx', {
+      'react-dom': { __esModule: true, createPortal: (node: unknown) => node },
+      'lucide-react': iconStandIns,
+    }) as { focusMovedOn: (dialog: unknown) => boolean };
+    const el = (inDialog: boolean, isConnected = true) => ({ inDialog, isConnected });
+    const dialog = { contains: (n: { inDialog?: boolean }) => !!n?.inDialog };
+    const g = globalThis as { document?: unknown };
+    const hadDocument = 'document' in g;
+    const body = el(false);
+    const at = (activeElement: unknown) => { g.document = { activeElement, body }; return focusMovedOn(dialog); };
+    try {
+      expect({
+        messageBoxOutsideTheSheet: at(el(false)),
+        stillInTheSheet: at(el(true)),
+        lostWithTheSheetOnBody: at(body),
+        noActiveElement: at(null),
+        aControlAlreadyGone: at(el(false, false)),
+      }).toEqual({
+        messageBoxOutsideTheSheet: true,
+        stillInTheSheet: false,
+        lostWithTheSheetOnBody: false,
+        noActiveElement: false,
+        aControlAlreadyGone: false,
+      });
+    } finally {
+      if (hadDocument) g.document = undefined; else delete g.document;
+    }
+    expect(readClientSource('features/reason/ui/Sheet.tsx')).toContain('if (!focusMovedOn(dialog)) opener?.focus?.();');
+    // The box takes focus in the press itself (no timer or frame), so a phone opens its keyboard for it.
+    expect(readClientSource('features/messages/MessagesPage.tsx'))
+      .toMatch(/const sendAMessage = \(\) => \{\s*callRequest\.closeOffline\(\);\s*textareaRef\.current\?\.focus\(\);\s*\};/);
+  });
+
   it('the app says when a tab goes behind (presence:away), and where it is the moment it (re)connects', () => {
     const app = readClientSource('App.tsx');
     expect(app).toMatch(/else socket\.emit\('presence:away'\);/);

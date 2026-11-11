@@ -29,6 +29,17 @@ if (typeof document !== 'undefined') {
   }, { capture: true, passive: true });
 }
 
+/**
+ * Whether the action that closed the sheet put focus somewhere on purpose: on a control outside the sheet that is still
+ * on the page ("Send a message" puts the cursor in the message box, in the press itself, so a phone opens its
+ * keyboard). Then focus stays there instead of going back to the opener (prod smoke 12 Nov 2026: the opener took it
+ * back and the box lost its cursor). Focus left in the sheet, or lost with it, still goes back to the opener.
+ */
+export function focusMovedOn(dialog: HTMLElement): boolean {
+  const now = document.activeElement;
+  return !!now && now !== document.body && now.isConnected && !dialog.contains(now);
+}
+
 export default function Sheet({ open, onClose, title, children, footer }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   // Parents pass inline arrows. Reading the latest one through a ref keeps the
@@ -82,7 +93,7 @@ export default function Sheet({ open, onClose, title, children, footer }: Props)
       if (at !== -1) openPanels.splice(at, 1);
       if (openPanels.length === 0) document.body.style.overflow = overflowBeforeLock;
       window.removeEventListener('keydown', onKey);
-      opener?.focus?.();
+      if (!focusMovedOn(dialog)) opener?.focus?.();
     };
   }, [open]);
 
