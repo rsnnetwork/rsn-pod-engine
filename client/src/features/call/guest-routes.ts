@@ -8,7 +8,7 @@
 //
 // No imports but the shared constant, so the server's test suite can run it.
 
-import { CALL_LINK_BASE_PATH, callLinkPath } from '@rsn/shared';
+import { CALL_LINK_BASE_PATH, EVENT_LINK_BASE_PATH, callLinkPath, eventLinkPath, parseEventLinkSlug } from '@rsn/shared';
 
 /** The guest home: the guest's events by link, and the way to become a member. */
 export const GUEST_HOME_PATH = '/my-events';
@@ -38,6 +38,7 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** The pages a guest may open; every pattern matches the whole path. */
 const GUEST_PAGES: readonly RegExp[] = [
   new RegExp(`^${escape(CALL_LINK_BASE_PATH)}/${SEGMENT}/?$`),
+  new RegExp(`^${escape(EVENT_LINK_BASE_PATH)}/${SEGMENT}/?$`),
   new RegExp(`^/session/${SEGMENT}/live/?$`),
   new RegExp(`^${escape(GUEST_HOME_PATH)}/?$`),
   /^\/notifications\/?$/,
@@ -59,7 +60,8 @@ export function guestAllowedPath(pathname: string): boolean {
 
 const CALL_LINKS_KEY = 'rsn_call_links';
 const CALL_LINKS_KEPT = 20;
-const CODE_SHAPE = /^[0-9a-z]{1,40}$/;
+/** A call code, or an event link's slug ('rsn-3', 'rsn-3-k7m2q9'): lower-case letters and digits in hyphenated runs. */
+const CODE_SHAPE = /^[0-9a-z]{1,40}(?:-[0-9a-z]{1,40}){0,8}$/;
 
 interface KeyValueStore { getItem(key: string): string | null; setItem(key: string, value: string): void }
 
@@ -92,9 +94,10 @@ export function rememberCallLink(sessionId: string, code: string): void {
   }
 }
 
-/** The call page of the link that led this browser to event `sessionId`, or null when none did. */
+/** The page of the link that led this browser to event `sessionId` (its event link or its call link), or null. */
 export function callPathForEvent(sessionId: string | undefined): string | null {
   if (!sessionId) return null;
   const found = readKept().find(([id]) => id === sessionId);
-  return found ? callLinkPath(found[1]) : null;
+  if (!found) return null;
+  return parseEventLinkSlug(found[1]) ? eventLinkPath(found[1]) : callLinkPath(found[1]);
 }

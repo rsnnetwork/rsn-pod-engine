@@ -9,7 +9,7 @@
 // Fails open on what a session does not say: no status (a stale cached session) is never gated, and a session from a
 // server that does not send onboardingVersion yet keeps the old rule (only an unfinished status is gated).
 
-import { CALL_LINK_BASE_PATH, isLocationComplete } from '@rsn/shared';
+import { CALL_LINK_BASE_PATH, EVENT_LINK_BASE_PATH, isLocationComplete } from '@rsn/shared';
 
 export type OnboardingDue = 'flow' | 'location';
 
@@ -51,6 +51,8 @@ export function isGateExempt(pathname: string): boolean {
   // An event's RSN Call link (Part 2, Task 12): entering an event never goes through platform onboarding. The page is
   // public, outside the gate, and named by the one shared constant.
   if (pathname.startsWith(`${CALL_LINK_BASE_PATH}/`)) return true;
+  // Its event link (/events/<name>-<n>, 11 Nov 2026) is the same page.
+  if (pathname.startsWith(`${EVENT_LINK_BASE_PATH}/`)) return true;
   return EXEMPT.some(rule => rule.test(pathname));
 }
 

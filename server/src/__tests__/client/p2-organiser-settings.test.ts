@@ -197,26 +197,30 @@ describe('the event page', () => {
   });
 });
 
-describe('the RSN Call link', () => {
+describe('the event link card (was the RSN Call link; Stefan, 11 Nov 2026: "it is not a call, it is an event")', () => {
   it('reads Task 6\'s organiser routes through one module, and draws nothing for anyone they refuse', () => {
     expect(src.callLink).toMatch(/api\.get\(`\/sessions\/\$\{sessionId\}\/call-link`\)/);
     expect(src.callLink).toMatch(/api\.post\(`\/sessions\/\$\{sessionId\}\/call-link\/rotate`\)/);
     expect(src.callLinkCard).toMatch(/if \(link\.isError && notForThisViewer\(link\.error\)\) return null;/);
     expect(src.callLinkCard).not.toMatch(/api\./);
-    // Controller ruling (11 Nov): always this site's origin and the shared callLinkPath (CALL_LINK_BASE_PATH), never the
-    // server's url (built from CLIENT_URL, production's app, which has no call-link page until this client ships there).
-    expect(src.callLink).toMatch(/import \{ callLinkPath \} from '@rsn\/shared';/);
+    // Controller ruling (11 Nov): the call link is always this site's origin and the shared callLinkPath, never the
+    // server's url (built from CLIENT_URL). The event link is the server's eventLink.url, written on EVENT_LINK_BASE_URL
+    // or on the site the organiser asked from (event-link.service.ts eventLinkBaseUrl); an older server's answer falls
+    // back to the call link on this site.
+    expect(src.callLink).toMatch(/import \{ callLinkPath, type EventLinkInfo \} from '@rsn\/shared';/);
     expect(src.callLink).toMatch(/return `\$\{origin\}\$\{callLinkPath\(link\.code\)\}`;/);
     expect(src.callLink).not.toMatch(/link\.url/);
-    expect(src.callLinkCard).toMatch(/callLinkAddress\(link\.data, window\.location\.origin\)/);
+    expect(src.callLink).toMatch(/return link\.eventLink\?\.url \?\? callLinkAddress\(link, origin\);/);
+    expect(src.callLinkCard).toMatch(/eventLinkAddress\(link\.data, window\.location\.origin\)/);
   });
 
   it('matches Task 6\'s organiser route on main: { code, path, url } from the shared path, and rotate tells the organisers', () => {
     const service = fs.readFileSync(path.join(__dirname, '../../services/session/call-link.service.ts'), 'utf8');
-    expect(service).toMatch(/Promise<\{ code: string; path: string; url: string \}>/);
+    expect(service).toMatch(/Promise<EventLinksForOrganiser>/);
     // The path is the shared callLinkPath; the url's site is the server's choice (fa78a182: the asking site when it is
-    // one of ours), and the card never shows it anyway (it shows this site's origin and the same path).
-    expect(service).toMatch(/return \{ code, path: callLinkPath\(code\), url: `\$\{\w+\}\$\{callLinkPath\(code\)\}` \};/);
+    // one of ours); the event link rides beside it (eventLinkInfo), left out when it cannot be read.
+    expect(service).toMatch(/const callLink = \{ code, path: callLinkPath\(code\), url: `\$\{\w+\}\$\{callLinkPath\(code\)\}` \};/);
+    expect(service).toMatch(/return \{ \.\.\.callLink, eventLink: await eventLinkInfo\(sessionId, opts\) \};/);
     expect(service).toMatch(/emitEntities\(io, organisers, \[E\.sessionCallLink\(sessionId\), E\.session\(sessionId\)\]\)/);
     const routes = fs.readFileSync(path.join(__dirname, '../../routes/call-links.ts'), 'utf8');
     expect(routes).toMatch(/sessionCallLinkRoutes\.get\('\/:id\/call-link'/);
@@ -224,11 +228,13 @@ describe('the RSN Call link', () => {
     expect(historySentence({
       id: '1', at: '', actor: { id: 'h', displayName: 'Ana' }, automatic: false, action: 'call_link.rotated',
       round: null, scheduleVersion: null, subjects: [], reason: null,
-    })).toBe('Ana made a new RSN Call link');
+    })).toBe('Ana made a new event link');
   });
 
-  it('says "RSN Call link", Copy link, and asks before Make a new link', () => {
-    expect(src.callLinkCard).toContain("title: 'RSN Call link'");
+  it('says "Event link", Copy link, and asks before Make a new link, which only a link with a random code offers', () => {
+    expect(src.callLinkCard).toContain("title: 'Event link'");
+    expect(src.callLinkCard).toMatch(/const replaceable = !!link\.data && \(link\.data\.eventLink\?\.private \?\? true\);/);
+    expect(src.callLinkCard).toMatch(/\{replaceable && \(\s*<button type="button" data-testid="call-link-rotate"/);
     expect(src.callLinkCard).toContain("copy: 'Copy link'");
     expect(src.callLinkCard).toContain("rotate: 'Make a new link'");
     expect(src.callLinkCard).toContain("rotateBody: 'The old link stops working at once.'");

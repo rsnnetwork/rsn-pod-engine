@@ -1,4 +1,4 @@
-// /my-events (Part 2, Task 12): the events someone joined, or asked to join, from an RSN Call link, each opening its
+// /my-events (Part 2, Task 12): the events someone joined, or asked to join, from an event's link, each opening its
 // link again (which takes them in, says they are in, or says why not). For an event guest it is home, with the offer to
 // become a member; a member reaches it too, as one more list of their events.
 import { useNavigate } from 'react-router-dom';
@@ -55,7 +55,7 @@ function EventCard({ event }: { event: CallEventSummary }) {
         variant={event.step === 'enter' ? 'primary' : over ? 'ghost' : 'secondary'}
         size="lg"
         className="w-full shrink-0 rounded-2xl sm:w-auto"
-        onClick={() => navigate(callLinkPath(event.code))}
+        onClick={() => navigate(event.linkPath ?? callLinkPath(event.code))}
       >
         {event.step === 'enter' ? 'Join now' : 'Open'}
         <ArrowRight aria-hidden="true" className="ml-2 h-4 w-4" />

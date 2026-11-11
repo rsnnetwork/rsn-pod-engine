@@ -1,4 +1,4 @@
-// ─── An event's RSN Call link: /call/<code> (Part 2, Task 12; spec 02, 04, 12/01-05) ──────────────────────────
+// ─── An event's link: /events/<name>-<n>[-<tail>], and its call link /call/<code> (Part 2, Task 12; spec 02, 04) ───
 //
 // Design-review prototype 1, "open speed networking entry without onboarding". Anyone holding the link opens it and sees
 // the event; signed out they give an email, type the 6-digit code from it, give only what this event still needs (a name,
@@ -7,7 +7,7 @@
 // onboarding is never on this path, for a member or a guest: this page sits outside the protected routes, and the live
 // room is exempt from the onboarding gate.
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Spinner';
@@ -52,6 +52,7 @@ export default function CallLinkPage() {
   const { code = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { landing, entry, userId, checked } = useCallLink(code);
   const { sendCode, verify, enter, leaveWaitlist } = useCallActions(code);
   const addToast = useToastStore((s) => s.addToast);
@@ -121,6 +122,16 @@ export default function CallLinkPage() {
     ? closed === 'ended' ? 'ended' : closed === 'cancelled' ? 'cancelled'
       : callScreenOf({ landing: landing.data, entry: state, phase, started })
     : null;
+
+  // The event link as it is now, in the address bar (Stefan, 11 Nov 2026): an old call link (/call/<code>) or a renamed
+  // event's old link becomes the link to share, in place. Only before anything is asked on this page and never while the
+  // email's button (?entry=) is being read, so nothing typed or proved is lost.
+  const linkPath = landing.data?.link?.path ?? null;
+  useEffect(() => {
+    if (!linkPath || linkPath === location.pathname) return;
+    if (entryToken || tokenPending || phase !== 'summary' || started) return;
+    navigate(`${linkPath}${location.search}${location.hash}`, { replace: true });
+  }, [linkPath, location.pathname, location.search, location.hash, entryToken, tokenPending, phase, started, navigate]);
 
   // In: straight to the live room, writing down which link led there (a guest the room refuses comes back here).
   const livePath = state?.step === 'enter' ? state.livePath : null;

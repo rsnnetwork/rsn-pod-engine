@@ -38,12 +38,12 @@ export const WAITLIST_COPY = {
 /** How a person reached the line, in words. */
 export const JOINED_VIA_LABEL: Record<WaitlistJoinedVia, string> = {
   register: 'Joined on the event page',
-  call_link: 'Joined through the call link',
+  call_link: 'Joined through the event link',
   approval: 'Request approved',
   invite: 'Accepted an invite',
 };
 
-/** "Number 2 · Joined through the call link · Guest". */
+/** "Number 2 · Joined through the event link · Guest". */
 export function waitlistRowLine(entry: Pick<WaitlistEntryCard, 'position' | 'joinedVia' | 'accountKind'>): string {
   const parts = [`Number ${entry.position}`, JOINED_VIA_LABEL[entry.joinedVia] ?? JOINED_VIA_LABEL.register];
   if (entry.accountKind === 'event_guest') parts.push('Guest');

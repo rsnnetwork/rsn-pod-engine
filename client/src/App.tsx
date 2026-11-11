@@ -77,7 +77,7 @@ import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
 import OnboardingFlow from '@/features/onboarding/OnboardingFlow';
 import ToastContainer from '@/components/ui/Toast';
 import CallLayer from '@/features/calls/CallLayer';
-import { CALL_LINK_BASE_PATH } from '@rsn/shared';
+import { CALL_LINK_BASE_PATH, EVENT_LINK_BASE_PATH } from '@rsn/shared';
 import CallLinkPage from '@/features/call/CallLinkPage';
 import GuestHome from '@/features/call/GuestHome';
 import { GUEST_HOME_PATH } from '@/features/call/guest-routes';
@@ -252,9 +252,12 @@ export default function App() {
       <Route path="/request-to-join" element={<RequestToJoinPage />} />
       <Route path="/auth/verify" element={<VerifyPage />} />
       <Route path="/invite/:code" element={<InviteAcceptPage />} />
-      {/* An event's RSN Call link (Part 2, Task 12): anyone holding it, signed in or not, and never platform
+      {/* An event's call link (Part 2, Task 12): anyone holding it, signed in or not, and never platform
           onboarding on the way in. The path is the shared constant's (Stefan still has to confirm the naming). */}
       <Route path={`${CALL_LINK_BASE_PATH}/:code`} element={<CallLinkPage />} />
+      {/* The event link (Stefan, 11 Nov 2026): /events/<name>-<n>[-<tail>] opens the same entry; the server reads the slug
+          where it reads a code. */}
+      <Route path={`${EVENT_LINK_BASE_PATH}/:code`} element={<CallLinkPage />} />
       {/* Admin email-action page — token IS the auth, no session required. */}
       <Route path="/admin/jr/:token" element={<AdminJoinRequestActionPage />} />
       {/* A member's public profile link (Shirley pilot S6, D5): the public card only, open signed out. */}

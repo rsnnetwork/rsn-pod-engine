@@ -153,16 +153,17 @@ test('a host drafts, publishes, shares the call link, sets admission and groups,
       expect((await api(p, 'POST', `/sessions/${eventId}/register`)).status).toBe(201);
     }
 
-    // ── The RSN Call link ──────────────────────────────────────────────────────────────────────────────────────────
+    // ── The event link (was the RSN Call link) ───────────────────────────────────────────────────────────────────────
     const linkCard = h.page.getByTestId('call-link-card');
-    await expect(linkCard).toContainText('RSN Call link', { timeout: 30_000 });
+    await expect(linkCard).toContainText('Event link', { timeout: 30_000 });
     const link = await api(host!, 'GET', `/sessions/${eventId}/call-link`);
     expect(link.status).toBe(200);
-    await expect(linkCard.getByTestId('call-link-address')).toContainText(link.json.data.code);
+    const shown: string = link.json.data.eventLink?.slug ?? link.json.data.code;
+    await expect(linkCard.getByTestId('call-link-address')).toContainText(shown);
     await linkCard.getByTestId('call-link-copy').click();
     if (!process.env.E2E_DEVICE && process.env.E2E_ENGINE !== 'webkit') {
       await expect(linkCard.getByTestId('call-link-copy')).toContainText('Copied');
-      expect(await h.page.evaluate(() => navigator.clipboard.readText())).toContain(link.json.data.code);
+      expect(await h.page.evaluate(() => navigator.clipboard.readText())).toContain(shown);
     }
 
     // ── Admission: Invitation only, three addresses (one repeated), three codes ────────────────────────────────────

@@ -34,7 +34,7 @@ export const CALL_API = {
 
 // ─── The four stages the progress dots name ───────────────────────────────────
 
-export const PROGRESS_STEPS = ['Open link', 'Identify', 'Check', 'Join call'] as const;
+export const PROGRESS_STEPS = ['Open link', 'Identify', 'Check', 'Join event'] as const;
 
 /** Every screen the call page can show. */
 export type CallScreen =
