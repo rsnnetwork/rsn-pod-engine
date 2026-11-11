@@ -15,6 +15,13 @@ export * from './types/api';
 // own statically analysable named export for Rollup's CJS interop, as OPENINGS below explains.
 export * from './types/group-chat';
 export * from './types/message-reply';
+// Presence and reports (11 Nov 2026). REPORT_SUBJECT_KINDS, REPORT_REASONS and REPORT_REPEAT_HOURS are VALUES, so
+// they get their own named exports too (see OPENINGS below).
+export * from './types/safety';
+import { REPORT_SUBJECT_KINDS as _REPORT_SUBJECT_KINDS, REPORT_REASONS as _REPORT_REASONS, REPORT_REPEAT_HOURS as _REPORT_REPEAT_HOURS } from './types/safety';
+export const REPORT_SUBJECT_KINDS = _REPORT_SUBJECT_KINDS;
+export const REPORT_REASONS = _REPORT_REASONS;
+export const REPORT_REPEAT_HOURS = _REPORT_REPEAT_HOURS;
 import { GROUP_CHAT_MAX_MEMBERS as _GROUP_CHAT_MAX_MEMBERS, GROUP_CHAT_MIN_MEMBERS as _GROUP_CHAT_MIN_MEMBERS } from './types/group-chat';
 export const GROUP_CHAT_MAX_MEMBERS = _GROUP_CHAT_MAX_MEMBERS;
 export const GROUP_CHAT_MIN_MEMBERS = _GROUP_CHAT_MIN_MEMBERS;

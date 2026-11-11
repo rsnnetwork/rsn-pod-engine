@@ -13,6 +13,8 @@ import { searchConnectedUsers } from '../services/invite/connected-users';
 import { toPublicMember } from '../services/user/public-card';
 import { searchMembers } from '../services/user/user-search.service';
 import * as blockService from '../services/block/block.service';
+import { endCallsOnBlock } from '../services/dm/meeting-call.service';
+import logger from '../config/logger';
 import { listUserEntities } from '../services/entity/entity.service';
 import { getAvatarBlob } from '../services/onboarding/avatar.service';
 import { entityReadLimiter } from '../middleware/rateLimit';
@@ -638,6 +640,9 @@ router.post(
       // blocker's other tabs flip the Block button label and the
       // blocked user's profile-page Message button disappears.
       fanoutUserBlocks(req.user!.userId, req.params.id).catch(() => {});
+      // 11 Nov 2026 (item 16): a call ringing between them is withdrawn, and the person blocked is taken out of the
+      // pair's call room, so a block in the middle of a call ends it. Best-effort: the block is saved already.
+      endCallsOnBlock(req.user!.userId, req.params.id).catch((err) => logger.warn({ err }, 'ending calls on block failed (non-fatal)'));
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {

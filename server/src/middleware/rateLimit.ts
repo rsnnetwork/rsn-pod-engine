@@ -573,6 +573,32 @@ export const callRequestLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have rung a lot of calls in the last few minutes. Try again in a little while.' } },
 });
 
+// Reporting a member, a message or a post (11 Nov 2026, Shirley Palmer's item 16). Each report lands in the moderation
+// queue of every admin, so a member files at most 10 an hour. Only a report filed counts: a refusal (yourself, already
+// reported today, something you cannot see) filed nothing.
+export const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  skipFailedRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('report'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have sent a lot of reports this hour. Our team is looking at them; try again later.' } },
+});
+
+// The presence of a person a member may call (11 Nov 2026, RSN 07): read when a thread or a profile opens, and again
+// when that person comes, goes or steps away. A minute's worth is far more than a member's screens ask.
+export const presenceReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('presence-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // Leaving a 1:1 call (2 Nov 2026, leave fix): one request per leave, so 30 a minute is far more than anyone leaves.
 export const callLeaveLimiter = rateLimit({
   windowMs: 60 * 1000,

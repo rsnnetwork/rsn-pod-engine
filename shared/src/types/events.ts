@@ -290,6 +290,9 @@ export interface ClientToServerEvents {
   // — a lingering/backgrounded socket alone no longer counts. Drives the DM
   // online dot and gates "Meet now".
   'presence:ping': () => void;
+  // 11 Nov 2026 (Shirley Palmer's RSN 07): the tab went to the background. The member reads as away (still
+  // reachable) once none of their tabs is in front of them, instead of waiting a minute for the ping to lapse.
+  'presence:away': () => void;
   // T0-2 (Issue 7) — fired by client after LiveKit room.connect() resolves.
   // Distinct from presence:ready: confirms LiveKit room membership specifically.
   'presence:room_joined': (data: { sessionId: string; matchId: string; roomId: string }) => void;

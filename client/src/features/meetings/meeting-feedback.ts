@@ -3,8 +3,8 @@
 // room sends someone who leaves it. Pure on purpose (no React, axios, store or router), so a test can run it:
 // server/src/__tests__/client/meeting-feedback-ui.test.ts.
 //
-// Asked when someone leaves the 1:1 room after the other person had been in it with them, and as a card on the meeting's
-// page until they answer. Never rung as a bell (production's client has no meeting page to land on).
+// Asked when someone leaves the 1:1 room after the other person had been in it with them (over the conversation they
+// return to, since 11 Nov 2026), and as a card on the meeting's page until they answer. Never rung as a bell.
 import {
   MEETING_PROBLEMS, MEETING_PROBLEM_LABELS, MEETING_PROBLEM_TEXT_MAX,
   type Meeting, type MeetingFeedbackBody, type MeetingProblem, type WorthContinuing,
@@ -19,6 +19,9 @@ export const FEEDBACK_PRIVACY = 'Only you and the REASON team see this.';
 export const CARD_TITLE = 'How did it go?';
 export const cardLine = (name: string): string => `Tell us how your meeting with ${name} went.`;
 export const FEEDBACK_SAVED = 'Thanks. Your feedback is saved.';
+/** The sheet's way out (11 Nov 2026, RSN 08): feedback is optional, never a step to get past. */
+export const NOT_NOW = 'Not now';
+export const ANSWER_LATER = 'You can answer later from the meeting in Events.';
 export const PROBLEM_TEXT_MAX = MEETING_PROBLEM_TEXT_MAX;
 
 export const WORTH_OPTIONS: ReadonlyArray<{ key: WorthContinuing; label: string }> = [
@@ -54,12 +57,15 @@ export function feedbackBody(worth: WorthContinuing, problems: readonly MeetingP
 }
 
 /**
- * Where leaving the 1:1 room goes: to the meeting's page with the question open when the room was a scheduled meeting
- * the viewer knows the id of and the other person had been in it with them; otherwise back to the chat, as always.
+ * Where leaving the 1:1 room goes (11 Nov 2026, Shirley Palmer's RSN 08): back to the conversation, always. When the
+ * other person had been in the room and the meeting is known, the question comes with it as ?feedback=<meetingId>, which
+ * the thread asks over itself as an optional sheet. It never goes to the meeting's page: that page's Back returned
+ * into the call.
  */
 export function afterRoomPath(opts: { conversationId: string; meetingId?: string | null; hadPartner: boolean }): string {
-  if (opts.hadPartner && opts.meetingId) return `/meetings/${encodeURIComponent(opts.meetingId)}?feedback=1`;
-  return `/messages/${opts.conversationId}`;
+  const thread = `/messages/${opts.conversationId}`;
+  if (opts.hadPartner && opts.meetingId) return `${thread}?feedback=${encodeURIComponent(opts.meetingId)}`;
+  return thread;
 }
 
 /**

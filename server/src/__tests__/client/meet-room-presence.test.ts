@@ -560,8 +560,10 @@ describe('MeetPage, read from source', () => {
     // The question (read as the person leaves, before the room empties) and the departure run together; the page
     // moves on once both are done, each with its own bound (LEAVE_READ_MS, DEPART_MS).
     const leave = src.slice(src.indexOf('const leaveRoom = useCallback'));
-    expect(leave).toMatch(/^const leaveRoom = useCallback\(\(\) => \{\s*if \(leftRoom\.current\) return;\s*leftRoom\.current = true;\s*setLeaving\(true\);\s*void Promise\.all\(\[\s*afterRoomLeave\(\{[\s\S]*?\}\),\s*departRef\.current\(\),\s*\]\)\.then\(\(\[to\]\) => navigate\(to\)\);/);
-    expect(src.match(/navigate\(to\)/g)).toHaveLength(1);
+    expect(leave).toMatch(/^const leaveRoom = useCallback\(\(\) => \{\s*if \(leftRoom\.current\) return;\s*leftRoom\.current = true;\s*setLeaving\(true\);\s*void Promise\.all\(\[\s*afterRoomLeave\(\{[\s\S]*?\}\),\s*departRef\.current\(\),\s*\]\)\.then\(\(\[to\]\) => navigate\(to, \{ replace: true \}\)\);/);
+    // Every way out replaces the room in the history (11 Nov 2026, RSN 08): Back never re-enters the call.
+    expect(src.match(/navigate\(to, \{ replace: true \}\)/g)).toHaveLength(1);
+    expect(src).not.toMatch(/navigate\(to\)/);
   });
 
   it('the leave asks our server to take the connection that left out of the room (fix round 3)', () => {

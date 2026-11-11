@@ -34,7 +34,7 @@ jest.mock('../../services/dm/meeting-windows.service', () => ({
   __esModule: true,
 }));
 jest.mock('../../services/dm/meeting-call.service', () => ({ __esModule: true }));
-jest.mock('../../services/presence/presence.service', () => ({ areActive: jest.fn(), __esModule: true }));
+jest.mock('../../services/presence/presence.service', () => ({ presenceOf: jest.fn(), presenceState: jest.fn(), __esModule: true }));
 jest.mock('../../services/dm/dm.service', () => ({ __esModule: true }));
 jest.mock('../../services/email/email.service', () => ({ __esModule: true }));
 jest.mock('../../index', () => ({ __esModule: true, io: null }));

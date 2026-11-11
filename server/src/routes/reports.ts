@@ -8,35 +8,50 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { reportLimiter } from '../middleware/rateLimit';
 import * as reportService from '../services/report/report.service';
 import { fanoutAdminEntities } from '../realtime/fanout';
-import { ApiResponse, UserRole } from '@rsn/shared';
+import { ApiResponse, REPORT_REASONS, REPORT_SUBJECT_KINDS, UserRole } from '@rsn/shared';
 
 const router = Router();
 
+// Postgres reads an upper-case uuid as the same row, but the service compares ids as plain strings.
+const lowerUuid = z.string().uuid().transform((s) => s.toLowerCase());
+
 const submitBodySchema = z.object({
-  reportedId: z.string().uuid(),
-  reason: z.enum(['spam', 'harassment', 'inappropriate_content', 'fake_profile', 'safety', 'other']),
+  // The member reported. A report of a message or a post names its author itself, so it may leave this out.
+  reportedId: lowerUuid.optional(),
+  reason: z.enum(REPORT_REASONS),
   description: z.string().max(2000).optional(),
   // 8 Sep 2026: when reported from a chat, carry the conversation so admins can
   // review the messages behind the report.
-  conversationId: z.string().uuid().optional(),
-});
+  conversationId: lowerUuid.optional(),
+  // 11 Nov 2026 (Shirley Palmer's item 16): one message or wall post, reported as such.
+  subject: z.object({ kind: z.enum(REPORT_SUBJECT_KINDS), id: lowerUuid }).optional(),
+}).refine((b) => !!b.reportedId || !!b.subject, { message: 'Say who or what you are reporting.', path: ['reportedId'] });
 
 const resolveBodySchema = z.object({
   notes: z.string().max(2000).optional(),
 });
 
-// POST /reports — any authenticated user can submit
+// POST /reports — any authenticated user can submit, at most 10 an hour (reportLimiter); the same report again within a
+// day is a 409 "You already reported this." (REPORT_ALREADY_SENT).
 router.post(
   '/',
   authenticate,
+  reportLimiter,
   validate(submitBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await reportService.submitReport(
-        req.user!.userId, req.body.reportedId,
-        req.body.reason, req.body.description, req.body.conversationId,
+        { userId: req.user!.userId, role: req.user!.role },
+        {
+          reportedId: req.body.reportedId,
+          reason: req.body.reason,
+          description: req.body.description,
+          conversationId: req.body.conversationId,
+          subject: req.body.subject,
+        },
       );
       // Phase May-19 realtime — fanout so every admin moderation
       // queue shows the new report without a refresh.

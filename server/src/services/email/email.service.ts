@@ -1362,17 +1362,20 @@ export async function sendLlmBalanceAlertEmail(opts: { to: string; where: string
 
 // ─── Meeting-confirmed email (W6, 7 Sep 2026) ───────────────────────────────
 // Sent to BOTH people when a 1:1 meeting time is confirmed. Carries a real .ics
-// invite (attendees + RSVP) and an "Add to Google Calendar" link. The time is
-// rendered in the RECIPIENT's timezone so each person sees their own local time.
+// invite (attendees + RSVP). The time is rendered in the RECIPIENT's timezone so
+// each person sees their own local time.
 export interface MeetingConfirmedEmailData {
   partnerName: string;
   startAt: Date;
   durationMin: number;
   recipientTimezone?: string | null;
   threadUrl: string;
-  googleCalendarUrl: string;
-  /** 1 Nov 2026 (T7, L10): "Add to Outlook.com", beside the Google link. */
-  outlookCalendarUrl?: string;
+  /**
+   * The calendar invitation, attached (method REQUEST, the meeting's own UID and SEQUENCE). Since 11 Nov 2026 (Shirley
+   * Palmer's RSN 09) it is the only way into a calendar the email offers: the "Add to Google Calendar" and "Add to
+   * Outlook.com" links made a second entry with no UID, which a move never updated, and Outlook.com asked for a
+   * Microsoft sign-in.
+   */
   icsContent: string;
   /** W-meet: the REASON call link + kind, so they can join from the email. */
   joinUrl?: string;
@@ -1383,11 +1386,19 @@ export interface MeetingConfirmedEmailData {
   moved?: boolean;
 }
 
+/** Whether a mail provider is set up, so an email can be sent at all. */
+export function emailProviderReady(): boolean {
+  return !!config.resendApiKey;
+}
+
+/** The line under the meeting in the confirmation email: the attachment is the invitation. */
+export const MEETING_INVITE_LINE = 'This email includes a calendar invitation. Open the attachment, or accept it in your calendar.';
+
 export async function sendMeetingConfirmedEmail(
   to: string,
   recipientDisplayName: string,
   data: MeetingConfirmedEmailData,
-): Promise<void> {
+): Promise<SendEmailResult> {
   // 26 Oct 2026: the time goes in the subject, in the recipient's own zone, with the zone named.
   const t = meetingTime(data.startAt, data.recipientTimezone);
   const when = `${t.long} (${t.zone})`;
@@ -1412,13 +1423,7 @@ export async function sendMeetingConfirmedEmail(
             <a href="${escapeAttr(data.joinUrl)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Join the call</a>
           </div>
           <p style="color:#9ca3af;font-size:12px;text-align:center;margin:0 0 16px 0;">The Join link opens the call on REASON at meeting time.</p>` : ''}
-          <div style="text-align:center;margin:12px 0;">
-            <a href="${escapeAttr(data.googleCalendarUrl)}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Google Calendar</a>
-          </div>
-          ${data.outlookCalendarUrl ? `<div style="text-align:center;margin:12px 0;">
-            <a href="${escapeAttr(data.outlookCalendarUrl)}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Outlook.com</a>
-          </div>` : ''}
-          <p style="color:#9ca3af;font-size:13px;text-align:center;margin:0 0 16px 0;">The calendar invite is attached (.ics) — open it to add the meeting to any calendar.</p>
+          <p style="color:#4b5563;font-size:13px;text-align:center;margin:0 0 16px 0;">${MEETING_INVITE_LINE}</p>
           ${data.eventsUrl ? `<div style="text-align:center;margin:8px 0;">
             <a href="${escapeAttr(data.eventsUrl)}" style="color:#DE322E;font-size:14px;font-weight:600;">See it in Events</a>
           </div>` : ''}
@@ -1429,14 +1434,10 @@ export async function sendMeetingConfirmedEmail(
       </div>
     </body></html>`;
   const eventsLine = data.eventsUrl ? `See it in Events: ${data.eventsUrl}\n` : '';
-  const outlookLine = data.outlookCalendarUrl ? `Add to Outlook.com: ${data.outlookCalendarUrl}\n` : '';
-  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} ${firstLine}\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\n${outlookLine}${eventsLine}Open the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nREASON — Meet people you have a reason to know.`;
+  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} ${firstLine}\n\n${when}\nDuration: ${data.durationMin} minutes\n\n${MEETING_INVITE_LINE}\n\n${eventsLine}Open the conversation: ${data.threadUrl}\n\nREASON — Meet people you have a reason to know.`;
 
-  if (config.resendApiKey) {
-    await sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent, contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });
-    return;
-  }
-  logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-confirmed email skipped');
+  // sendEmail says whether the provider took it: no provider, a refusal or a spent daily quota is { sent: false }.
+  return sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent, contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });
 }
 
 // ─── Meeting-cancelled email (26 Oct 2026) ──────────────────────────────────

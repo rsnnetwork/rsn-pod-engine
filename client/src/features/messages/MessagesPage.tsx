@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, SmilePlus, Trash2, MessageSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
+import { ArrowLeft, SmilePlus, Trash2, MessageSquare, CalendarClock, ShieldAlert, Video, Phone, Ban } from 'lucide-react';
 import MeetingScheduler, { type SchedulerHandle } from './MeetingScheduler';
 import ThreadMeetingBanner from './ThreadMeetingBanner';
 import { messageCallAction } from './thread-call-rules';
@@ -19,6 +19,9 @@ import SystemMessageCard, { type DmMessageKind } from './SystemMessageCard';
 import { CallRequestModal } from './CallRequest';
 import CallButton from '@/features/calls/CallButton';
 import { useCallRequest } from '@/features/calls/useCallRequest';
+import OfflineCallSheet from '@/features/calls/OfflineCallSheet';
+import { useInboxPresence } from '@/features/calls/usePresence';
+import { awayNote, callHint, inboxDot, presenceBadge, stateIn } from '@/features/calls/presence-words';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
 import GroupThread from './GroupThread';
@@ -33,7 +36,8 @@ import { replyContentOf, type ReplyTarget } from './reply-text';
 import Avatar from '@/components/ui/Avatar';
 import PersonLink from '@/components/people/PersonLink';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
-import ReportUserModal from '@/components/ReportUserModal';
+import ReportUserModal, { type ReportSubject } from '@/components/ReportUserModal';
+import { BLOCK_MEMBER, REPORT_MEMBER, UNBLOCK, blockConsequence, blockTitle } from '@/components/safety/safety-words';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
@@ -41,11 +45,14 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useConfirm } from '@/hooks/useConfirm';
 import type { DmMessage } from './thread/dm-message';
+import type { InviteEmailState } from '@rsn/shared';
 import { useThreadMessages } from './thread/useThreadMessages';
 import DmComposer from './DmComposer';
 import VoiceNotePlayer from './voice/VoiceNotePlayer';
 import { dropDraftsTo, moveNewMessageDrafts, threadKeyOf } from './voice/composer-drafts';
 import { VOICE_COPY, knownDurationMs } from './voice/voice-note';
+import { BlockedThreadBanner, MENU_ITEM, MessageMoreButton, ThreadMoreMenu } from './thread/ThreadSafety';
+import PostCallFeedback from './thread/PostCallFeedback';
 
 interface ConversationSummary {
   conversationId: string;
@@ -124,9 +131,9 @@ export default function MessagesPage() {
   const [rescheduling, setRescheduling] = useState(false);
   // The open panel decides whether it may close: with unsaved times it asks first.
   const schedulerRef = useRef<SchedulerHandle>(null);
-  // Task E4 — report entry point for the thread's conversation partner.
-  const [reportOpen, setReportOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
+  // Task E4 — report entry point for the thread's conversation partner. 11 Nov 2026 (item 16): the member, or one of
+  // their messages (`subject`); the sheet is the same, and the person stays in the conversation afterwards.
+  const [reporting, setReporting] = useState<{ subject: ReportSubject | null } | null>(null);
   // 4 Sep 2026 (device audit): a guessed calc(100vh - 100px) was taller than the
   // space between the phone header and the bottom nav, so the page scrolled,
   // the thread header's first line (the name) slid away and the composer sat
@@ -172,14 +179,9 @@ export default function MessagesPage() {
   // The group chats the member is in, listed beside the conversations (26 Oct 2026, C12).
   const groups = useMyGroups();
 
-  // Online status of every conversation partner, for the green dot in the list.
-  // realtime: skip — presence is inherently pollable; a 20s poll is the source of truth.
-  const { data: inboxPresence } = useQuery({
-    queryKey: ['dm-inbox-presence'],
-    queryFn: () => api.get('/dm/presence').then(r => r.data.data.online as Record<string, boolean>),
-    refetchInterval: 20_000,
-    refetchOnWindowFocus: true,
-  });
+  // Where every conversation partner is (11 Nov 2026, RSN 07): online, away or offline, pushed by each partner's
+  // user:<id>:presence tag, never polled. The inbox dots and the thread header read this ONE query, so they agree.
+  const inboxPresence = useInboxPresence(myUserId, inboxData?.map((c) => c.otherUserId) ?? []);
 
   // Thread: messages in the active conversation, marked read on opening it (features/messages/thread, 1 Nov 2026).
   const { data: messagesData } = useThreadMessages(activeId);
@@ -202,8 +204,11 @@ export default function MessagesPage() {
     if (existing) {
       // Anything already written in the new-message box goes with it, to that same conversation (11 Nov 2026).
       if (myUserId) moveNewMessageDrafts(myUserId, composeToUserId, existing.conversationId);
-      navigate(`/messages/${existing.conversationId}`, { replace: true });
+      // What the link asked for goes too (a profile's "Find a time" asks for the scheduler with ?schedule=1).
+      const asked = searchParams.toString();
+      navigate(`/messages/${existing.conversationId}${asked ? `?${asked}` : ''}`, { replace: true });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the address's query is read when the redirect happens
   }, [composeToUserId, inboxData, navigate, myUserId]);
 
   // Nothing can be sent to a former member: what was written to them is dropped, so no hidden note keeps the leave
@@ -264,15 +269,21 @@ export default function MessagesPage() {
 
   const activeConv = inboxData?.find(c => c.conversationId === activeId);
 
-  // realtime: skip — presence is inherently pollable; a 20s poll is the source of truth for "online now"
-  const { data: presence } = useQuery({
-    queryKey: ['partner-presence', activeId],
-    queryFn: () => api.get(`/dm/conversations/${activeId}/partner-presence`).then(r => r.data.data as { online: boolean }),
-    enabled: !!activeId,
-    refetchInterval: 20_000,
-    refetchOnWindowFocus: true,
+  // The partner's presence, from the inbox's one read: undefined while it loads and null when unknown, both shown as
+  // nothing (never as "Offline"), and neither ever holds the call buttons back (RSN 07).
+  const partnerPresence = stateIn(inboxPresence.data, activeConv?.otherUserId);
+  const presenceShown = presenceBadge(partnerPresence);
+
+  // Have I blocked them (11 Nov 2026, item 16)? Then the thread stays open, read-only: no message box and no calls,
+  // with Unblock in their place. Asked only for a conversation with a member; the block tags answer it at once.
+  const otherId = activeConv?.otherUserId;
+  const { data: blockStatus } = useQuery({
+    queryKey: ['dm-block-status', otherId],
+    queryFn: () => api.get(`/users/${otherId}/block-status`).then(r => r.data.data as { hasBlocked: boolean }),
+    enabled: !!otherId && !activeConv?.otherIsFormerMember,
+    meta: { entities: myUserId && otherId ? [E.userBlocks(myUserId), E.userBlocks(otherId)] : [] },
   });
-  const partnerOnline = !!presence?.online;
+  const blockedByMe = !!blockStatus?.hasBlocked;
 
   // 9 Sep 2026 (Ali/Stefan): calls go REQUEST → ACCEPT, with a duration the
   // caller types. "startCall" opens the request dialog; the request itself is
@@ -280,7 +291,10 @@ export default function MessagesPage() {
   // features/calls/useCallSignals), so its "Calling…" card, the other person's
   // banner and the way into the room no longer depend on this thread staying
   // open. `calling` is true while a call I rang waits for an answer.
-  const callRequest = useCallRequest(activeId ? { conversationId: activeId } : null, activeConv?.otherDisplayName ?? null);
+  const callRequest = useCallRequest(activeId ? { conversationId: activeId } : null, activeConv?.otherDisplayName ?? null, {
+    state: partnerPresence,
+    refresh: () => inboxPresence.refetch().then((r) => stateIn(r.data, otherId)),
+  });
   const calling = callRequest.ringing;
 
   const startCall = (kind: 'audio' | 'video') => {
@@ -288,18 +302,32 @@ export default function MessagesPage() {
     callRequest.open(kind);
   };
 
-  // Block the conversation partner (8 Sep 2026, Ali). Blocking stops future
-  // messages and matches (enforced server-side); we leave the thread afterwards.
+  // Block the conversation partner (8 Sep 2026, Ali). Blocking stops future messages, calls and matches (enforced
+  // server-side). 11 Nov 2026 (item 16): what it does is said before it is done, and the person stays in the thread,
+  // which turns read-only (the block-status read, refreshed by the block tag).
+  const [unblocking, setUnblocking] = useState(false);
   const blockUser = async (userId: string, name: string | null) => {
-    if (!(await ask({ title: `Block ${name || 'this person'}?`, body: "They won't be able to message you, and you won't be matched again. You can unblock them from their profile.", confirmLabel: 'Block', tone: 'danger' }))) return;
+    if (!(await ask({ title: blockTitle(name), body: blockConsequence(name), confirmLabel: 'Block', tone: 'danger' }))) return;
     try {
       await api.post(`/users/${userId}/block`, {});
       dropDraftsTo(userId);
       addToast(`You blocked ${name || 'this person'}.`, 'success');
-      qc.invalidateQueries({ queryKey: ['dm-conversations'] });
-      navigate('/messages');
+      void qc.invalidateQueries({ queryKey: ['dm-block-status', userId] });
     } catch (e: any) {
       addToast(e?.response?.data?.error?.message || 'Could not block this person.', 'error');
+    }
+  };
+  const unblockUser = async (userId: string, name: string | null) => {
+    if (unblocking) return;
+    setUnblocking(true);
+    try {
+      await api.delete(`/users/${userId}/block`);
+      addToast(`You unblocked ${name || 'this person'}.`, 'success');
+      void qc.invalidateQueries({ queryKey: ['dm-block-status', userId] });
+    } catch (e: any) {
+      addToast(e?.response?.data?.error?.message || 'Could not unblock this person.', 'error');
+    } finally {
+      setUnblocking(false);
     }
   };
 
@@ -313,7 +341,10 @@ export default function MessagesPage() {
       callsUnlocked?: boolean;
       canCall?: boolean;
       overlap?: string[];
-      confirmed?: { type?: 'audio' | 'video' | null; startAt?: string | null; durationMin?: number | null } | null;
+      confirmed?: {
+        type?: 'audio' | 'video' | null; startAt?: string | null; durationMin?: number | null;
+        inviteEmail?: InviteEmailState | null;
+      } | null;
     }),
     enabled: !!activeId,
     meta: { entities: activeId ? [E.dmConversation(activeId)] : [] },
@@ -371,6 +402,20 @@ export default function MessagesPage() {
     markSchedulerSeen();
   };
 
+  // The offline sheet's Find a time (RSN 07): the scheduler, for every pair, as Reschedule opens it.
+  const findATime = () => {
+    callRequest.closeOffline();
+    setConfirmRequest(null);
+    setRescheduling(true);
+    setSchedulerOpen(true);
+    markSchedulerSeen();
+  };
+  // Its Send a message: the box takes the focus.
+  const sendAMessage = () => {
+    callRequest.closeOffline();
+    textareaRef.current?.focus();
+  };
+
   // A thread card's button: a proposal's time opens the panel on that time's
   // confirm card; "See all times" and "Add my times" just open it.
   const openSchedulerOn = (slot: string | null) => {
@@ -394,6 +439,16 @@ export default function MessagesPage() {
   // refresh does not open it again. It opens for every pair: one that has met
   // has calls instead of the scheduler, and Reschedule would land on nothing.
   const wantsScheduler = searchParams.get('schedule') === '1';
+  // Back from a call (11 Nov 2026, RSN 08): ?feedback=<meetingId> asks how it went over this thread, once. The flag is
+  // dropped by replacing the address, so Back or a refresh never asks again.
+  const feedbackFor = activeId ? searchParams.get('feedback') : null;
+  const feedbackDone = useCallback(() => {
+    setSearchParams((now) => {
+      const next = new URLSearchParams(now);
+      next.delete('feedback');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   useEffect(() => {
     if (!wantsScheduler || !activeId || !scheduling) return;
     setConfirmRequest(null);
@@ -458,6 +513,8 @@ export default function MessagesPage() {
   } | null = activeConv ?? composeTarget;
   // T2 (1 Nov 2026): a former member's thread keeps its messages, links to no profile and takes no new ones.
   const otherIsFormer = !!activeConv?.otherIsFormerMember;
+  // Nothing can be sent to them and they cannot be called: a former member, or someone I blocked (11 Nov 2026).
+  const readOnly = otherIsFormer || blockedByMe;
 
   // The box took the focus: a phone keyboard is opening, and the thread could scroll out from under it (Phase A).
   const pinNewest = () => { setTimeout(() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 250); };
@@ -549,17 +606,23 @@ export default function MessagesPage() {
                   to={`/messages/${c.conversationId}`}
                   className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 border-b border-gray-100 transition-colors ${activeId === c.conversationId ? 'bg-rsn-red/5' : ''}`}
                 >
-                  {/* Online dot on the avatar (8 Sep 2026) — green when this
-                      partner is on the platform now. */}
+                  {/* Presence dot on the avatar (8 Sep 2026; 11 Nov 2026, RSN 07): green when this partner is
+                      online, amber when away, none when offline or not known. The header reads the same query. */}
                   <span className="relative shrink-0">
                     <Avatar src={c.otherAvatarUrl || undefined} name={c.otherDisplayName || 'User'} size="md" />
-                    {inboxPresence?.[c.otherUserId] && (
-                      <span
-                        className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-white"
-                        title="On the platform now"
-                        aria-label="Online"
-                      />
-                    )}
+                    {(() => {
+                      const seen = stateIn(inboxPresence.data, c.otherUserId);
+                      const dot = inboxDot(seen);
+                      const badge = presenceBadge(seen);
+                      return dot && badge ? (
+                        <span
+                          className={`absolute bottom-0 right-0 h-3 w-3 rounded-full ${dot} ring-2 ring-white`}
+                          title={badge.label}
+                          aria-label={badge.label}
+                          data-testid="inbox-presence-dot"
+                        />
+                      ) : null;
+                    })()}
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline justify-between">
@@ -659,16 +722,16 @@ export default function MessagesPage() {
                     <span className="shrink-0 text-[11px] font-medium text-gray-500">View profile ›</span>
                   )}
                 </span>
-                {/* Online status (8 Sep 2026) — green when the partner is actually
-                    on the platform now (drives the Meet-now buttons too). */}
-                {activeConv && !otherIsFormer && (
+                {/* Presence (8 Sep 2026; 11 Nov 2026, RSN 07): Online, Away or Offline, and nothing at all until it
+                    is known, so a thread that is still loading never reads as "Offline". */}
+                {activeConv && !readOnly && presenceShown && (
                   <span
                     className="flex items-center gap-1 text-[11px]"
-                    title={partnerOnline ? 'On the platform now' : 'Not on the platform right now'}
                     data-testid="partner-presence"
+                    data-state={partnerPresence ?? undefined}
                   >
-                    <span className={`h-2 w-2 rounded-full ${partnerOnline ? 'bg-emerald-500' : 'bg-gray-300'}`} aria-hidden="true" />
-                    <span className={partnerOnline ? 'text-emerald-600' : 'text-gray-400'}>{partnerOnline ? 'Online' : 'Offline'}</span>
+                    <span className={`h-2 w-2 rounded-full ${presenceShown.dot}`} aria-hidden="true" />
+                    <span className={presenceShown.text}>{presenceShown.label}</span>
                   </span>
                 )}
                 {(headerContext.otherJobTitle || headerContext.otherCompany) && (
@@ -683,23 +746,23 @@ export default function MessagesPage() {
                 </span>
               </PersonLink>
               <div className="hidden sm:flex items-center gap-1">
-              {/* Video: any connection (canCall, 1 Nov 2026). Audio: once the pair's
-                  first meeting has happened (Ali, 9 Sep). Both only while the other
-                  person is online, and never to a former member (T2). */}
-              {activeConv && !otherIsFormer && canCall && (
+              {/* Video: any connection (canCall, 1 Nov 2026). Audio: once the pair's first meeting has happened (Ali,
+                  9 Sep). Never to a former member (T2) or someone I blocked. 11 Nov 2026 (RSN 07): never disabled for
+                  presence, only while a call of mine rings; pressed while they are offline, the offline sheet opens. */}
+              {activeConv && !readOnly && canCall && (
                 <CallButton
                   variant="icon"
                   onClick={() => startCall('video')}
-                  disabled={!partnerOnline || calling}
-                  title={partnerOnline ? 'Video call' : 'They are offline — send a message instead'}
+                  disabled={calling}
+                  title={callHint(partnerPresence, headerContext.otherDisplayName)}
                 />
               )}
-              {activeConv && !otherIsFormer && callsUnlocked && (
+              {activeConv && !readOnly && callsUnlocked && (
                 <button
                   onClick={() => startCall('audio')}
-                  disabled={!partnerOnline || calling}
+                  disabled={calling}
                   className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-rsn-red disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
-                  title={partnerOnline ? 'Start an audio call now' : 'They are offline — schedule a meeting instead'}
+                  title={callHint(partnerPresence, headerContext.otherDisplayName, 'Audio call')}
                   aria-label="Start an audio call now"
                 >
                   <Phone className="h-4 w-4" />
@@ -708,7 +771,7 @@ export default function MessagesPage() {
               {/* REASON Phase 2 — arrange a time to meet (availability windows).
                   A red dot appears when the partner changed their availability
                   since I last opened this (W-meet, 8 Sep 2026). */}
-              {activeConv && !otherIsFormer && !callsUnlocked && (
+              {activeConv && !readOnly && !callsUnlocked && (
                 <button
                   onClick={openScheduler}
                   data-scheduler-toggle
@@ -724,130 +787,105 @@ export default function MessagesPage() {
                   )}
                 </button>
               )}
-              {/* Delete is only available for existing conversations (compose-new
-                  mode has nothing to delete yet). */}
-              {activeConv && (
-                <button
-                  onClick={() => {
-                    void ask({ title: 'Delete this conversation?', body: "It goes from your Messages only. The other person's view is unaffected.", confirmLabel: 'Delete', tone: 'danger' })
-                      .then((yes) => { if (yes) deleteMutation.mutate(activeConv.conversationId); });
-                  }}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"
-                  title="Delete conversation"
-                  aria-label="Delete conversation"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              )}
-              {/* Task E4 — report entry point, targets the conversation partner.
-                  headerContext.otherUserId is never myUserId via normal
-                  navigation, but this guard is a defensive backstop against
-                  self-reports. */}
-              {headerContext.otherUserId !== myUserId && (
-                <button
-                  onClick={() => setReportOpen(true)}
-                  className="p-1.5 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                  title="Report this member"
-                  aria-label="Report this member"
-                >
-                  <Flag className="h-4 w-4" />
-                </button>
-              )}
-              {headerContext.otherUserId !== myUserId && !otherIsFormer && (
-                <button
-                  onClick={() => blockUser(headerContext.otherUserId, headerContext.otherDisplayName)}
-                  className="p-1.5 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                  title="Block this member"
-                  aria-label="Block this member"
-                >
-                  <Ban className="h-4 w-4" />
-                </button>
-              )}
               </div>
-              {/* On a phone the three actions collapse into one menu, so the
-                  name keeps the width it needs. */}
-              <div className="relative sm:hidden">
-                <button
-                  type="button"
-                  onClick={() => setMoreOpen(o => !o)}
-                  aria-label={availabilityDot ? 'More actions — they updated their availability' : 'More actions'}
-                  aria-expanded={moreOpen}
-                  className="relative flex h-11 w-11 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100"
-                >
-                  <MoreVertical className="h-5 w-5" />
-                  {availabilityDot && (
-                    <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rsn-red ring-2 ring-white" aria-hidden="true" />
-                  )}
-                </button>
-                {moreOpen && (
-                  <div className="absolute right-0 top-12 z-30 w-60 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
-                    {activeConv && !otherIsFormer && canCall && (
-                      <CallButton
-                        variant="menu"
-                        disabled={!partnerOnline || calling}
-                        onClick={() => { setMoreOpen(false); startCall('video'); }}
-                        title={partnerOnline ? 'Video call' : 'They are offline — send a message instead'}
-                      />
+              {/* 11 Nov 2026 (item 16): Report member, Block member and Delete conversation live in one labelled menu at
+                  every width, never as lone icons (the Flag read as an Outlook follow-up marker). On a phone it also
+                  holds the calls and Find a time, so the name keeps the width it needs. */}
+              <ThreadMoreMenu dot={availabilityDot && !readOnly}>
+                {(close) => (
+                  <>
+                    {activeConv && !readOnly && canCall && (
+                      <div className="sm:hidden">
+                        <CallButton
+                          variant="menu"
+                          disabled={calling}
+                          onClick={() => { close(); startCall('video'); }}
+                          title={callHint(partnerPresence, headerContext.otherDisplayName)}
+                          note={partnerPresence === 'away' ? awayNote(headerContext.otherDisplayName) : undefined}
+                        />
+                      </div>
                     )}
-                    {activeConv && !otherIsFormer && callsUnlocked && (
-                      <button type="button" disabled={!partnerOnline || calling}
-                        onClick={() => { setMoreOpen(false); startCall('audio'); }}
-                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">
-                        <Phone className="h-4 w-4 text-gray-400" /> {partnerOnline ? 'Audio call now' : 'Audio call (they are offline)'}
+                    {activeConv && !readOnly && callsUnlocked && (
+                      <button type="button" role="menuitem" disabled={calling}
+                        onClick={() => { close(); startCall('audio'); }}
+                        className={`${MENU_ITEM} disabled:opacity-40 sm:hidden`}>
+                        <Phone className="h-4 w-4 text-gray-400" /> Audio call
                       </button>
                     )}
-                    {activeConv && !otherIsFormer && !callsUnlocked && (
-                      <button type="button" onClick={() => { setMoreOpen(false); openScheduler(); }}
+                    {activeConv && !readOnly && !callsUnlocked && (
+                      <button type="button" role="menuitem" onClick={() => { close(); openScheduler(); }}
                         data-scheduler-toggle
-                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50">
+                        className={`${MENU_ITEM} sm:hidden`}>
                         <CalendarClock className="h-4 w-4 text-gray-400" /> Find a time to meet
                         {availabilityDot && <span className="ml-auto h-2 w-2 rounded-full bg-rsn-red" aria-hidden="true" />}
                       </button>
                     )}
+                    {/* headerContext.otherUserId is never myUserId via normal navigation; the guard is a backstop. */}
                     {headerContext.otherUserId !== myUserId && (
-                      <button type="button" onClick={() => { setMoreOpen(false); setReportOpen(true); }}
-                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50">
-                        <Flag className="h-4 w-4 text-gray-400" /> Report this member
+                      <button type="button" role="menuitem" onClick={() => { close(); setReporting({ subject: null }); }}
+                        className={MENU_ITEM} data-testid="report-member">
+                        <ShieldAlert className="h-4 w-4 text-gray-400" aria-hidden="true" /> {REPORT_MEMBER}
                       </button>
                     )}
                     {headerContext.otherUserId !== myUserId && !otherIsFormer && (
-                      <button type="button" onClick={() => { setMoreOpen(false); blockUser(headerContext.otherUserId, headerContext.otherDisplayName); }}
-                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50">
-                        <Ban className="h-4 w-4" /> Block this member
-                      </button>
+                      blockedByMe ? (
+                        <button type="button" role="menuitem" onClick={() => { close(); void unblockUser(headerContext.otherUserId, headerContext.otherDisplayName); }}
+                          className={MENU_ITEM} data-testid="unblock-member">
+                          <Ban className="h-4 w-4 text-gray-400" aria-hidden="true" /> {UNBLOCK}
+                        </button>
+                      ) : (
+                        <button type="button" role="menuitem" onClick={() => { close(); void blockUser(headerContext.otherUserId, headerContext.otherDisplayName); }}
+                          className={`${MENU_ITEM} text-red-600 hover:bg-red-50`} data-testid="block-member">
+                          <Ban className="h-4 w-4" aria-hidden="true" /> {BLOCK_MEMBER}
+                        </button>
+                      )
                     )}
+                    {/* Delete is only available for existing conversations (compose-new mode has nothing to delete). */}
                     {activeConv && (
-                      <button type="button"
+                      <button type="button" role="menuitem"
                         onClick={() => {
-                          setMoreOpen(false);
+                          close();
                           void ask({ title: 'Delete this conversation?', body: "It goes from your Messages only. The other person's view is unaffected.", confirmLabel: 'Delete', tone: 'danger' })
                             .then((yes) => { if (yes) deleteMutation.mutate(activeConv.conversationId); });
                         }}
-                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50">
-                        <Trash2 className="h-4 w-4" /> Delete conversation
+                        className={`${MENU_ITEM} text-red-600 hover:bg-red-50`}>
+                        <Trash2 className="h-4 w-4" aria-hidden="true" /> Delete conversation
                       </button>
                     )}
-                  </div>
+                  </>
                 )}
-              </div>
+              </ThreadMoreMenu>
             </div>
 
+            {/* Report member or message (11 Nov 2026, item 16). An "Also block" keeps the person here: the thread
+                turns read-only behind the sheet, whose "Report sent" stays until it is closed. */}
             <ReportUserModal
-              open={reportOpen}
-              onClose={() => setReportOpen(false)}
+              open={!!reporting}
+              onClose={() => setReporting(null)}
               reportedId={headerContext.otherUserId}
               reportedDisplayName={headerContext.otherDisplayName}
               conversationId={activeConv?.conversationId}
-              onBlocked={() => { qc.invalidateQueries({ queryKey: ['dm-conversations'] }); navigate('/messages'); }}
+              subject={reporting?.subject ?? null}
+              alreadyBlocked={blockedByMe || otherIsFormer}
+              onBlocked={() => { void qc.invalidateQueries({ queryKey: ['dm-block-status', headerContext.otherUserId] }); }}
             />
 
             {/* Request a call: pick video/audio + type a duration (Ali, 9 Sep). */}
             {/* Audio is offered only once calls are unlocked; before that a call is video. */}
             <CallRequestModal {...callRequest.modal} videoOnly={!callsUnlocked} />
+            {/* Pressed while they are offline, or the ring refused because they just went (RSN 07). */}
+            <OfflineCallSheet
+              {...callRequest.offline}
+              name={headerContext.otherDisplayName}
+              onFindATime={readOnly ? undefined : findATime}
+              onSendMessage={sendAMessage}
+            />
+            {/* Back from a call: how did it go, over the thread, with "Not now" (RSN 08). */}
+            {activeId && feedbackFor && <PostCallFeedback key={feedbackFor} meetingId={feedbackFor} onDone={feedbackDone} />}
 
             {/* Confirmed meeting — always pinned so both people see it in the
                 chat, with Join, not buried in the scheduler (Ali, 8 Sep 2026). */}
-            {activeConv && <ThreadMeetingBanner conversationId={activeConv.conversationId} onCallNow={startCall} former={otherIsFormer} canCall={canCall} />}
+            {activeConv && <ThreadMeetingBanner conversationId={activeConv.conversationId} onCallNow={startCall} former={readOnly} canCall={canCall} />}
 
 
             {/* Availability grid — collapsible so the thread stays primary. Gone
@@ -858,7 +896,7 @@ export default function MessagesPage() {
                 Without it the panel kept its full height and pushed "Confirm
                 meeting", Save and the message box past the clip edge on any
                 laptop-height window (Stefan + Shradha, 19 Sep 2026). */}
-            {activeConv && schedulerOpen && (!callsUnlocked || rescheduling) && (
+            {activeConv && !readOnly && schedulerOpen && (!callsUnlocked || rescheduling) && (
               <div data-scheduler-panel className="flex min-h-0 flex-col">
                 <MeetingScheduler
                   key={activeConv.conversationId}
@@ -918,13 +956,13 @@ export default function MessagesPage() {
                             meta={m.systemMeta}
                             liveSlots={scheduling ? confirmable(scheduling.overlap ?? [], Date.now()) : undefined}
                             meetingConfirmed={!!scheduling?.confirmed}
-                            onOpenScheduler={otherIsFormer ? undefined : () => openSchedulerOn(null)}
-                            onPickSlot={otherIsFormer ? undefined : (slot) => openSchedulerOn(slot)}
-                            calendar={!otherIsFormer && m.systemMeta?.type === 'meeting_confirmed' && activeId ? { conversationId: activeId, partnerName: headerContext.otherDisplayName || 'your match' } : undefined}
-                            onCallNow={otherIsFormer ? undefined : startCall}
+                            onOpenScheduler={readOnly ? undefined : () => openSchedulerOn(null)}
+                            onPickSlot={readOnly ? undefined : (slot) => openSchedulerOn(slot)}
+                            calendar={!readOnly && m.systemMeta?.type === 'meeting_confirmed' && activeId ? { conversationId: activeId, partnerName: headerContext.otherDisplayName || 'your match', inviteEmail: scheduling?.confirmed?.inviteEmail } : undefined}
+                            onCallNow={readOnly ? undefined : startCall}
                             callsUnlocked={callsUnlocked}
                             canCall={canCall}
-                            former={otherIsFormer}
+                            former={readOnly}
                             meetingOver={confirmedMeetingOver}
                             currentMeeting={scheduling ? (scheduling.confirmed ? { startAt: scheduling.confirmed.startAt ?? null } : null) : undefined}
                             viewerId={myUserId}
@@ -1035,7 +1073,7 @@ export default function MessagesPage() {
                                     // with a former member (final fix wave C1, thread-call-rules.ts).
                                     const scheduledLive = act.scheduled && !confirmedMeetingOver;
                                     const action = messageCallAction({
-                                      scheduled: act.scheduled, scheduledLive, kind: act.kind, canCall, callsUnlocked, former: otherIsFormer,
+                                      scheduled: act.scheduled, scheduledLive, kind: act.kind, canCall, callsUnlocked, former: readOnly,
                                     });
                                     if (!action) return null;
                                     const label = scheduledLive
@@ -1073,6 +1111,12 @@ export default function MessagesPage() {
                                 </button>
                                 {/* Reply (30 Oct 2026, L7), beside the reaction trigger and shown the same way. */}
                                 <ReplyButton onReply={() => replyTo(m, fromMe)} />
+                                {/* Report message (11 Nov 2026, item 16): on the other person's messages, without leaving. */}
+                                {!fromMe && (
+                                  <MessageMoreButton
+                                    onReport={() => setReporting({ subject: { kind: 'dm_message', id: m.id, excerpt: replyContentOf(m) } })}
+                                  />
+                                )}
                                 {/* Reaction pills — under the bubble, slightly indented onto it */}
                                 {hasReactions && (
                                   <div className={`absolute -bottom-3 ${fromMe ? 'right-2' : 'left-2'} flex gap-1`}>
@@ -1151,6 +1195,12 @@ export default function MessagesPage() {
               >
                 This person is no longer a member of REASON, so they cannot get messages.
               </p>
+            ) : blockedByMe ? (
+              <BlockedThreadBanner
+                name={headerContext.otherDisplayName}
+                onUnblock={() => { void unblockUser(headerContext.otherUserId, headerContext.otherDisplayName); }}
+                unblocking={unblocking}
+              />
             ) : threadKey ? (
               <DmComposer
                 key={threadKey}

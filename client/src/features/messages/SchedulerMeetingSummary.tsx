@@ -1,5 +1,6 @@
 // The pair's meeting at the top of the scheduler: when (in the reader's own time), how long, audio or video, Join and
-// Add to calendar. Once it is over (they did not both attend, or Reschedule opened the panel for a pair that has met),
+// Add to calendar. 11 Nov 2026 (RSN 09): "Calendar invitation sent by email." only when it was; else what is true,
+// and Add manually is then the way, after Join and quieter than it. Once it is over (they did not both attend, or Reschedule opened the panel for a pair that has met),
 // a line to pick a new time below.
 
 import { useNavigate } from 'react-router-dom';
@@ -7,6 +8,7 @@ import { CalendarCheck, Phone, Video } from 'lucide-react';
 import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { meetingEntry } from '@/components/calendar/calendar-links';
 import { conversationMeetingFile, meetingFile } from '@/components/calendar/calendar-files';
+import { inviteEmailed, inviteLine } from '@/components/calendar/invite-words';
 import { useConversationPartner } from './thread/useConversationPartner';
 import { isSlotKey, dayLabel, slotLabel, whenWithZone } from './scheduler-flow';
 import type { Scheduling } from './scheduling-types';
@@ -30,6 +32,8 @@ export default function SchedulerMeetingSummary({ conversationId, meeting, over,
   const partner = useConversationPartner(conversationId);
   const kind = meeting.type ?? 'video';
   const callWord = meeting.type === 'audio' ? 'Audio call' : 'Video call';
+  const invite = inviteLine(meeting.inviteEmail, false, 'card');
+  const emailed = inviteEmailed(meeting.inviteEmail);
   return (
     <div className={`rounded-lg border px-3 py-2.5 ${over ? 'bg-gray-50 border-gray-200' : 'bg-emerald-50 border-emerald-200'}`}>
       <div className="flex items-center gap-2">
@@ -47,6 +51,7 @@ export default function SchedulerMeetingSummary({ conversationId, meeting, over,
           <p className="text-xs text-emerald-700">
             {callWord} · {meeting.durationMin} minutes · shown in your local time
           </p>
+          {invite && <p className="text-xs font-medium text-emerald-800" data-testid="invite-line">{invite}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => navigate(`/meet/${conversationId}?kind=${meeting.type ?? 'video'}&scheduled=1`)}
@@ -65,10 +70,12 @@ export default function SchedulerMeetingSummary({ conversationId, meeting, over,
               })}
               file={meeting.meetingId ? meetingFile(meeting.meetingId) : conversationMeetingFile(conversationId)}
               icon={<CalendarCheck className="h-4 w-4" />}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+              emailed={emailed}
+              className={emailed
+                ? 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-emerald-700 underline-offset-2 hover:underline'
+                : 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100'}
             />
           </div>
-          <p className="text-[11px] text-emerald-700">A calendar invite was emailed to you both.</p>
         </div>
       )}
       {meeting.startAt && over && (

@@ -288,18 +288,19 @@ describe('Your profile: the banner', () => {
 
 // ── The Human Profile's More menu ──────────────────────────────────────────────────────────────────
 
-describe('Human Profile: More, with Block and Report this member', () => {
+describe('Human Profile: More, with Block member and Report member', () => {
   it('sits in the header while a profile is on screen', () => {
     expect(human()).toMatch(/<ProfileMoreMenu\b/);
     expect(more()).toMatch(/aria-expanded=\{open\}/);
     expect(more()).toMatch(/aria-label="More"/);
-    expect(more()).toMatch(/>Block</);
-    expect(more()).toMatch(/>Report this member</);
+    // 11 Nov 2026 (Shirley Palmer's item 16): the words, from the one place every safety entry point reads them.
+    expect(more()).toMatch(/>\{BLOCK_MEMBER\}</);
+    expect(more()).toMatch(/>\{REPORT_MEMBER\}</);
   });
 
-  it('Block uses the old public profile\'s confirmation and its call', () => {
-    // T2 (1 Nov 2026): the same words, asked in the page (ConfirmDialog through useConfirm) rather than window.confirm.
-    expect(human()).toMatch(/await ask\(\{ title: `Block \$\{name\}\?`, body: "They won't be able to message you, and you won't be matched together in future events\.", confirmLabel: 'Block', tone: 'danger' \}\)/);
+  it('Block says what it does before it is done (11 Nov 2026), asked in the page, and makes its call', () => {
+    // T2 (1 Nov 2026): asked in the page (ConfirmDialog through useConfirm) rather than window.confirm.
+    expect(human()).toContain("await ask({ title: blockTitle(name), body: blockConsequence(name), confirmLabel: 'Block', tone: 'danger' })");
     expect(api()).toMatch(/export const blockMember = \(userId: string\) => api\.post\(`\/users\/\$\{memberSegment\(userId\)\}\/block`\);/);
     expect(human()).toMatch(/mutationFn: \(\) => blockMember\(userId\)/);
   });
@@ -353,7 +354,8 @@ describe('Human Profile: More, with Block and Report this member', () => {
   });
 
   it('keeps the promise Messages makes when you block someone ("You can unblock them from their profile.")', () => {
-    expect(read('features/messages/MessagesPage.tsx')).toMatch(/You can unblock them from their profile\./);
+    expect(read('components/safety/safety-words.ts')).toMatch(/You can unblock them from the conversation or their profile\./);
+    expect(read('features/messages/MessagesPage.tsx')).toContain('body: blockConsequence(name)');
     expect(human()).toMatch(/<Notice title="You blocked this member\."[\s\S]*?'Unblock'/);
   });
 

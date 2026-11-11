@@ -47,7 +47,7 @@ jest.mock('../../services/video/video.service', () => ({
   }),
 }));
 jest.mock('../../services/presence/presence.service', () => ({
-  __esModule: true, isActive: () => Promise.resolve(true), areActive: () => Promise.resolve({}),
+  __esModule: true, presenceState: () => Promise.resolve('online'), presenceOf: () => Promise.resolve({}),
 }));
 jest.mock('../../services/block/block.service', () => ({ __esModule: true, areBlocked: () => Promise.resolve(false) }));
 jest.mock('../../index', () => ({

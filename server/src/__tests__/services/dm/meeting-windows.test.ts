@@ -55,18 +55,15 @@ jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
 // W6: an exact-time confirm emails both people an .ics invite. Mock the
 // calendar + email services so we can assert the invite is sent without hitting
 // Resend.
-const mockSendMtgEmail = jest.fn().mockResolvedValue(undefined);
+const mockSendMtgEmail = jest.fn().mockResolvedValue({ sent: true });
+// 11 Nov 2026 (RSN 09): whether a mail provider is set up decides what the sent-invitation log records.
+const mockProviderReady = jest.fn().mockReturnValue(true);
 // What the calendar entry is asked to say, kept so a test can read the words (21 Oct 2026: REASON).
 const mockIcsInputs: Array<Record<string, unknown>> = [];
 const mockGoogleInputs: Array<Record<string, unknown>> = [];
 jest.mock('../../../services/calendar/calendar.service', () => ({
   generateIcsContent: (input: Record<string, unknown>) => { mockIcsInputs.push(input); return 'ICSCONTENT'; },
   buildGoogleCalendarUrl: (input: Record<string, unknown>) => { mockGoogleInputs.push(input); return 'https://calendar.google.com/x'; },
-  // 1 Nov 2026 (T7): the Google and Outlook.com links come from one builder, per recipient.
-  meetingCalendarLinks: (input: Record<string, unknown>) => {
-    mockGoogleInputs.push(input);
-    return { google: `https://calendar.google.com/x?for=${String(input.partnerName)}`, outlook: `https://outlook.live.com/x?for=${String(input.partnerName)}` };
-  },
   meetingCalendarUid: (meetingId: string) => `meeting-${meetingId}`,
   __esModule: true,
 }));
@@ -78,6 +75,7 @@ jest.mock('../../../services/dm/call-eligibility', () => ({
 }));
 jest.mock('../../../services/email/email.service', () => ({
   sendMeetingConfirmedEmail: (...args: unknown[]) => mockSendMtgEmail(...args),
+  emailProviderReady: () => mockProviderReady(),
   __esModule: true,
 }));
 
@@ -128,6 +126,8 @@ beforeEach(() => {
   mockAreBlocked.mockClear();
   mockAreBlocked.mockResolvedValue(false);
   mockCanCall.mockReset().mockResolvedValue(true);
+  mockSendMtgEmail.mockReset().mockResolvedValue({ sent: true });
+  mockProviderReady.mockReset().mockReturnValue(true);
 });
 
 /**
@@ -933,27 +933,24 @@ describe('confirmWindow', () => {
       expect(mockIcsInputs.map(i => i.location)).toEqual([joinUrl, joinUrl]);
     });
 
-    it('each person gets Google and Outlook.com links for a meeting with the other, the join link in them', async () => {
+    // 11 Nov 2026 (Shirley Palmer's RSN 09): the email carries the attached invitation only, no Google or Outlook link.
+    it('each email carries the attached invitation and no Google or Outlook.com link', async () => {
       await confirmWithEmails('Ana');
-
-      expect(mockGoogleInputs).toHaveLength(2);
-      const startAt = mockIcsInputs[0].startTime;
-      expect(mockGoogleInputs).toEqual([
-        { partnerName: 'Bo', kind: 'video', startAt, durationMin: 45, joinUrl: `${config.clientUrl}/meet/conv-1?scheduled=1&kind=video` },
-        { partnerName: 'Ana', kind: 'video', startAt, durationMin: 45, joinUrl: `${config.clientUrl}/meet/conv-1?scheduled=1&kind=video` },
-      ]);
-      const byRecipient = Object.fromEntries(mockSendMtgEmail.mock.calls.map(c => [c[0], c[2] as Record<string, unknown>]));
-      expect(byRecipient['ana@example.com']).toMatchObject({
-        googleCalendarUrl: 'https://calendar.google.com/x?for=Bo', outlookCalendarUrl: 'https://outlook.live.com/x?for=Bo',
-      });
-      expect(byRecipient['bo@example.com']).toMatchObject({
-        googleCalendarUrl: 'https://calendar.google.com/x?for=Ana', outlookCalendarUrl: 'https://outlook.live.com/x?for=Ana',
-      });
+      expect(mockGoogleInputs).toHaveLength(0);
+      expect(mockSendMtgEmail).toHaveBeenCalledTimes(2);
+      for (const call of mockSendMtgEmail.mock.calls) {
+        const data = call[2] as Record<string, unknown>;
+        expect(data.icsContent).toBe('ICSCONTENT');
+        expect(data).not.toHaveProperty('googleCalendarUrl');
+        expect(data).not.toHaveProperty('outlookCalendarUrl');
+      }
     });
 
-    it('a person with no name on file is "your match" in the other\'s links, as in the email', async () => {
+    it('a person with no name on file is "your match" in the other\'s invitation, as in the email', async () => {
       await confirmWithEmails(null);
-      expect(mockGoogleInputs.map(i => i.partnerName)).toEqual(['Bo', 'your match']);
+      const byRecipient = Object.fromEntries(mockSendMtgEmail.mock.calls.map(c => [c[0], c[2] as Record<string, unknown>]));
+      expect(byRecipient['bo@example.com']).toMatchObject({ partnerName: 'your match' });
+      expect(byRecipient['ana@example.com']).toMatchObject({ partnerName: 'Bo' });
     });
 
     it('is organised by the person who confirmed it', async () => {
@@ -1410,5 +1407,129 @@ describe('acceptPoke intro seeding', () => {
     const params = dmInsert![1] as string[];
     expect(params[2]).toBe('u-send');
     expect(params[3]).toBe("You're connected. Say hello.");
+  });
+});
+
+// ── 11 Nov 2026 (Shirley Palmer's RSN 09): the sent-invitation log ──────────────────────────────────────
+// "Meeting booked. Calendar invitation sent by email." only when it went, and a retried booking never emails twice:
+// each person's invitation is claimed in meeting_invite_emails BEFORE it is offered to the provider, the provider's
+// answer is written back, and both people's screens are told once it is known.
+describe('the sent-invitation log (RSN 09)', () => {
+  interface Ledger { claimable: Record<string, boolean>; status?: string }
+  async function book(opts: { emails?: [string | null, string | null]; ledger?: Ledger } = {}) {
+    const windowKey = futureKey(3, 'afternoon');
+    const day = windowKey.split(':')[0];
+    const startAt = new Date(`${day}T14:00:00Z`).toISOString();
+    const [ana, bo] = opts.emails ?? ['ana@example.com', 'bo@example.com'];
+    const ledger = opts.ledger ?? { claimable: { 'u-a': true, 'u-b': true } };
+    // The conversation as the booking leaves it, so the answer read after it shows the meeting.
+    let current: Record<string, unknown> = { ...CONV };
+    mockQuery.mockImplementation((sql: string, params?: unknown[]) => {
+      const s = String(sql).replace(/\s+/g, ' ');
+      if (/UPDATE dm_conversations SET meeting_confirmed_window/.test(s)) {
+        const p = params as unknown[];
+        current = {
+          ...current, meeting_confirmed_window: p[1], meeting_confirmed_by: p[2], meeting_confirmed_at: NOW,
+          meeting_start_at: p[3], meeting_duration_min: p[4], meeting_type: p[5], current_meeting_id: p[6],
+        };
+        return Promise.resolve({ rows: [] });
+      }
+      if (/FROM dm_conversations WHERE id/.test(s)) return Promise.resolve({ rows: [current] });
+      if (/FROM meeting_availability/.test(s)) return Promise.resolve({ rows: [
+        { user_id: 'u-a', window_key: windowKey }, { user_id: 'u-b', window_key: windowKey },
+      ] });
+      if (/FROM users WHERE id = ANY/.test(s)) return Promise.resolve({ rows: [
+        { id: 'u-a', display_name: 'Ana', email: ana, timezone: 'Europe/Berlin' },
+        { id: 'u-b', display_name: 'Bo', email: bo, timezone: 'America/New_York' },
+      ] });
+      if (/INSERT INTO meeting_invite_emails/.test(s)) {
+        return Promise.resolve({ rows: ledger.claimable[String(params?.[1])] ? [{ id: `log-${String(params?.[1])}` }] : [] });
+      }
+      if (/FROM meeting_invite_emails e JOIN meetings m/.test(s)) return Promise.resolve({ rows: ledger.status ? [{ status: ledger.status }] : [] });
+      if (/INSERT INTO meetings/.test(s)) return Promise.resolve({ rows: [{ id: 'mtg-1' }] });
+      return Promise.resolve({ rows: [{ id: 'n1', created_at: NOW }] });
+    });
+    mockSendMtgEmail.mockClear();
+    return confirmWindow('conv-1', 'u-a', windowKey, { startAt, durationMin: 30 });
+  }
+  const claims = () => mockQuery.mock.calls.filter(c => /INSERT INTO meeting_invite_emails/.test(String(c[0])));
+  const settles = () => mockQuery.mock.calls.filter(c => /UPDATE meeting_invite_emails SET status/.test(String(c[0])));
+
+  it('claims each person\'s invitation for this meeting time before sending, then writes what the provider said', async () => {
+    await book();
+    const sql = String(claims()[0][0]).replace(/\s+/g, ' ');
+    expect(sql).toContain("INSERT INTO meeting_invite_emails (meeting_id, user_id, sequence, method, status) VALUES ($1, $2, $3, 'REQUEST', $4)");
+    // Only a row that never went may be claimed again: one sent or on its way never is.
+    expect(sql).toContain("ON CONFLICT (meeting_id, user_id, sequence, method) DO UPDATE SET status = EXCLUDED.status, updated_at = NOW() WHERE meeting_invite_emails.status IN ('failed', 'no_provider', 'no_address') RETURNING id");
+    expect(claims().map(c => c[1])).toEqual([['mtg-1', 'u-a', 0, 'sending'], ['mtg-1', 'u-b', 0, 'sending']]);
+    expect(mockSendMtgEmail).toHaveBeenCalledTimes(2);
+    expect(settles().map(c => (c[1] as unknown[]).slice(0, 4))).toEqual([['mtg-1', 'u-a', 0, 'sent'], ['mtg-1', 'u-b', 0, 'sent']]);
+    expect(String(settles()[0][0])).toMatch(/AND status = 'sending'/);
+  });
+
+  it('a second dispatch for the same meeting time finds the claim taken and sends nothing again', async () => {
+    await book({ ledger: { claimable: { 'u-a': false, 'u-b': false } } });
+    expect(claims()).toHaveLength(2);
+    expect(mockSendMtgEmail).not.toHaveBeenCalled();
+    expect(settles()).toHaveLength(0);
+  });
+
+  it('only the person whose invitation never went is sent one', async () => {
+    await book({ ledger: { claimable: { 'u-a': false, 'u-b': true } } });
+    expect(mockSendMtgEmail.mock.calls.map(c => c[0])).toEqual(['bo@example.com']);
+  });
+
+  it('no email address: recorded as no_address, nothing sent to them; the other still gets theirs', async () => {
+    await book({ emails: [null, 'bo@example.com'] });
+    expect(claims().map(c => (c[1] as unknown[])[3])).toEqual(['no_address', 'sending']);
+    expect(mockSendMtgEmail.mock.calls.map(c => c[0])).toEqual(['bo@example.com']);
+  });
+
+  it('no mail provider: recorded as no_provider for both, nothing offered to send', async () => {
+    mockProviderReady.mockReturnValue(false);
+    await book();
+    expect(claims().map(c => (c[1] as unknown[])[3])).toEqual(['no_provider', 'no_provider']);
+    expect(mockSendMtgEmail).not.toHaveBeenCalled();
+  });
+
+  it('a refusal or a throw from the provider is written as failed, never as sent', async () => {
+    mockSendMtgEmail.mockResolvedValueOnce({ sent: false }).mockRejectedValueOnce(new Error('network'));
+    await book();
+    expect(settles().map(c => (c[1] as unknown[])[3])).toEqual(['failed', 'failed']);
+  });
+
+  it('once the provider has answered, both people\'s thread, scheduler and meeting page are told to read it again', async () => {
+    await book();
+    const tags = mockEmits.filter(([, event]) => event === 'entity:changed').map(([room, , payload]) => [room, (payload as { entities: string[] }).entities]);
+    for (const room of ['user:u-a', 'user:u-b']) {
+      expect(tags.filter(([r]) => r === room).flatMap(([, e]) => e as string[])).toEqual(expect.arrayContaining(['meeting:mtg-1', 'dm-conversation:conv-1']));
+    }
+  });
+
+  it('the booking\'s own answer says whether MY invitation went (the log, at the meeting\'s current SEQUENCE)', async () => {
+    const after = await book({ ledger: { claimable: { 'u-a': true, 'u-b': true }, status: 'sent' } });
+    expect(after.confirmed?.inviteEmail).toBe('sent');
+    const read = mockQuery.mock.calls.find(c => /FROM meeting_invite_emails e/.test(String(c[0])))!;
+    expect(String(read[0]).replace(/\s+/g, ' ')).toContain('JOIN meetings m ON m.id = e.meeting_id AND m.calendar_sequence = e.sequence');
+    expect(read[1]).toEqual(['mtg-1', 'u-a']);
+  });
+
+  it.each([
+    ['sending', 'sending'], ['failed', 'not_sent'], ['no_provider', 'not_sent'], ['no_address', 'no_address'], [undefined, null],
+  ])('a log row "%s" reads as %s', async (status, state) => {
+    const after = await book({ ledger: { claimable: { 'u-a': true, 'u-b': true }, status } });
+    expect(after.confirmed?.inviteEmail).toBe(state);
+  });
+
+  it('pressing Confirm again on the same time claims nothing and sends nothing', async () => {
+    const windowKey = futureKey(2, 'evening');
+    armConv(
+      [{ user_id: 'u-a', window_key: windowKey }, { user_id: 'u-b', window_key: windowKey }],
+      { ...CONV, meeting_confirmed_window: windowKey, meeting_start_at: null, meeting_duration_min: null },
+    );
+    mockSendMtgEmail.mockClear();
+    await confirmWindow('conv-1', 'u-a', windowKey);
+    expect(claims()).toHaveLength(0);
+    expect(mockSendMtgEmail).not.toHaveBeenCalled();
   });
 });

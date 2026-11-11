@@ -20,6 +20,7 @@ import Linkify from '@/components/ui/Linkify';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import WallComments from './WallComments';
+import ReportPostButton from './ReportPostButton';
 import { REACTIONS, canDeleteWallItem, canPinWallPost, domainOf, isConflict, reactionOf, timeAgo, wallErrorSentence } from './wall-logic';
 import type { ReactionKey, WallConfig, WallPost, WallViewer } from './wall-types';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -75,7 +76,9 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
   const showsReactions = viewer.canPost || config.copy.reactNeedsMembership !== undefined;
   const showsCommentButton = showsReactions || p.commentCount > 0;
   // A post the viewer can do nothing with (an archived pod, someone else's words, no comments) has no row of controls.
-  const hasControls = showsReactions || showsCommentButton || !!config.share || mayDelete || mayPin;
+  // Someone else's post can be reported from where it is (11 Nov 2026, item 16).
+  const mayReport = !!config.reportKind && !!userId && p.authorId !== userId;
+  const hasControls = showsReactions || showsCommentButton || !!config.share || mayDelete || mayPin || mayReport;
   const authorHref = !p.authorClosed && config.authorHref ? config.authorHref(p.authorId) : null;
 
   const react = async (key: ReactionKey | null) => {
@@ -267,6 +270,16 @@ export default function WallPostCard({ config, post: p, viewer, userId, showPinB
                     <Share2 className="h-3.5 w-3.5" />
                     Share
                   </button>
+                )}
+                {mayReport && config.reportKind && (
+                  <ReportPostButton
+                    kind={config.reportKind}
+                    postId={p.id}
+                    authorId={p.authorId}
+                    authorName={p.authorName}
+                    excerpt={p.content}
+                    className={actionBtn}
+                  />
                 )}
                 {(mayDelete || mayPin) && (
                   // Together, at the right edge: on a 360px phone they wrap onto a line of their own as a pair.

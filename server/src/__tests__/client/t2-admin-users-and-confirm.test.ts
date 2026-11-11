@@ -154,7 +154,9 @@ describe('a former member in an old conversation', () => {
     expect(page).toMatch(/<PersonLink\s+userId=\{headerContext\.otherUserId\}\s+from="Messages"\s+former=\{otherIsFormer\}/);
     expect(page).toMatch(/\{otherIsFormer && <p className="text-xs text-gray-500" data-testid="former-member-header">No longer a member of REASON<\/p>\}/);
     expect(page).toMatch(/This person is no longer a member of REASON, so they cannot get messages\./);
-    expect(page).toMatch(/\{activeConv && !otherIsFormer && callsUnlocked && \(/);
+    // 11 Nov 2026 (item 16): calls are held back the same way for someone I blocked (readOnly).
+    expect(page).toContain('const readOnly = otherIsFormer || blockedByMe;');
+    expect(page).toMatch(/\{activeConv && !readOnly && callsUnlocked && \(/);
   });
 
   it('the old profile page says the server\'s sentence when the person is gone', () => {

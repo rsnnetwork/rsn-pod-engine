@@ -250,7 +250,8 @@ describe('moderation and posting are separate in the components too', () => {
   });
 
   it('a post the viewer can do nothing with (an archived pod, someone else\'s words, no comments) draws no empty row of controls under a divider', () => {
-    expect(card).toMatch(/const hasControls = showsReactions \|\| showsCommentButton \|\| !!config\.share \|\| mayDelete \|\| mayPin;/);
+    // 11 Nov 2026 (item 16): someone else's post can always be reported (Report post), so that is a control too.
+    expect(card).toMatch(/const hasControls = showsReactions \|\| showsCommentButton \|\| !!config\.share \|\| mayDelete \|\| mayPin \|\| mayReport;/);
     expect(card).toMatch(/\{hasControls && \(\s*<div className="mt-1 -ml-2 flex items-center gap-0\.5 flex-wrap border-t/);
   });
 

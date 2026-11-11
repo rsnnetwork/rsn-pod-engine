@@ -238,7 +238,10 @@ describe('what a Save says it did, read from the answer the save itself got', ()
   it('the save booked the one time both picked: "Meeting confirmed: Sun 25 Oct, 13:00", and the panel closes', () => {
     const outcome = saveOutcome(sched(['2026-10-25T12:00:00Z'], booked), ctx(null, ['2026-10-25T12:00:00Z']), now);
     expect(outcome).toEqual({ kind: 'confirmed', startAt: booked.startAt });
-    expect(saveMessage(outcome, CPH)).toBe('Meeting confirmed: Sun 25 Oct, 13:00');
+    // 11 Nov 2026 (Shirley Palmer's RSN 09): the toast says what happened to the calendar invitation, truthfully.
+    expect(saveMessage(outcome, CPH, 'sent')).toBe('Meeting booked. Calendar invitation sent by email.');
+    expect(saveMessage(outcome, CPH, 'not_sent')).toBe("Meeting booked. We couldn't email the calendar invitation; you can add it manually.");
+    expect(saveMessage(outcome, CPH)).toBe('Meeting booked.');
   });
 
   it('a meeting the PARTNER booked or moved meanwhile is never "Meeting confirmed" for this person: the server says who', () => {
@@ -297,9 +300,13 @@ describe('what a Save says it did, read from the answer the save itself got', ()
     expect(saveOutcome(sched(['2026-10-25T12:00:00Z', '2026-10-25T13:00:00Z'], ended), ctx(ended), now)).toEqual({ kind: 'overlap' });
   });
 
-  it('a confirm says what it did, and moving a meeting says so', () => {
-    expect(confirmedMessage('2026-10-25T12:00:00Z', CPH, false)).toBe('Meeting confirmed: Sun 25 Oct, 13:00');
-    expect(confirmedMessage('2026-10-27T15:00:00Z', CPH, true)).toBe('Meeting moved: Tue 27 Oct, 16:00');
+  it('a confirm says what it did, and moving a meeting says so, with the invitation\'s fate (RSN 09)', () => {
+    expect(confirmedMessage('sent', false)).toBe('Meeting booked. Calendar invitation sent by email.');
+    expect(confirmedMessage('sent', true)).toBe('Meeting moved. Updated invitation sent by email.');
+    expect(confirmedMessage('sending', false)).toBe("Meeting booked. We're emailing the calendar invitation now.");
+    expect(confirmedMessage('no_address', false)).toBe('Meeting booked. We have no email address for you, so you can add it manually.');
+    expect(confirmedMessage(null, false)).toBe('Meeting booked.');
+    expect(confirmedMessage(undefined, true)).toBe('Meeting moved.');
   });
 });
 
@@ -577,7 +584,7 @@ describe('the scheduler on screen', () => {
     // …and the outcome is read from the save's own answer, which says who booked or moved the meeting.
     expect(save).toMatch(/const after = res\.data\.data as Scheduling;\s*const outcome = saveOutcome\(after, \{ me, known, added \}, Date\.now\(\)\);/);
     expect(save).not.toMatch(/saveOutcome\(before/);
-    expect(save).toMatch(/addToast\(saveMessage\(outcome, zone\), asks \? 'info' : 'success'\);/);
+    expect(save).toMatch(/addToast\(saveMessage\(outcome, zone, after\.confirmed\?\.inviteEmail\), asks \? 'info' : 'success'\);/);
     // With a choice to make (times to confirm, or where to move the meeting) the panel stays open on it.
     expect(save).toMatch(/if \(outcome\.kind === 'overlap' \|\| outcome\.kind === 'move-choice'\) \{/);
   });
@@ -585,7 +592,7 @@ describe('the scheduler on screen', () => {
   it('a Save says what it did at once: its own answer stands for the saved times, and the refresh is not waited on', () => {
     const save = handler(container(), 'save');
     expect(save).not.toMatch(/await refreshThread\(\)/);
-    expect(save).toMatch(/forgetDraft\(after\);\s*const asks = [^;]+;\s*addToast\(saveMessage\(outcome, zone\), asks \? 'info' : 'success'\);\s*void refreshThread\(\);/);
+    expect(save).toMatch(/forgetDraft\(after\);\s*const asks = [^;]+;\s*addToast\(saveMessage\(outcome, zone, after\.confirmed\?\.inviteEmail\), asks \? 'info' : 'success'\);\s*void refreshThread\(\);/);
     // The draft stands on that answer until a read newer than it lands, so the picks never flick back meanwhile.
     const draftSrc = part('useSchedulerDraft.ts');
     expect(draftSrc).toMatch(/const saved: ReadonlySet<string> = answered && answered\.at > dataUpdatedAt \? answered\.mine : savedMine;/);
@@ -645,7 +652,8 @@ describe('the scheduler on screen', () => {
     const confirm = handler(container(), 'confirm');
     // The card closes only once the request has succeeded; the success is said before the thread refreshes.
     expect(confirm).toMatch(/scheduling\/confirm`, \{ window: key, durationMin, type: meetingKind, expectedWindow \}\);\s*setFinalizing\(null\);/);
-    expect(confirm).toMatch(/addToast\(confirmedMessage\(key, zone, moving\), 'success'\);\s*void refreshThread\(\);/);
+    // 11 Nov 2026 (RSN 09): the toast is the booking sentence, from the confirm's own answer (whether my invitation went).
+    expect(confirm).toMatch(/addToast\(confirmedMessage\(\(res\.data\?\.data as Scheduling \| undefined\)\?\.confirmed\?\.inviteEmail, moving\), 'success'\);\s*void refreshThread\(\);/);
     // The failure is said first, from the refusal itself, and the refresh is not waited on (no await anywhere in the catch).
     const failure = confirm.slice(confirm.indexOf('} catch (err) {'), confirm.indexOf('} finally {'));
     expect(failure).toMatch(/const message = confirmFailure\(err, \{ moving, stays, zone, now: Date\.now\(\) \}\);/);
@@ -718,7 +726,7 @@ describe('the thread: the card\'s time opens the confirm step for that time, and
   it('passes the slot through (it used to be () => setSchedulerOpen(true), which threw the slot away)', () => {
     const src = page();
     // Final fix wave C1: with a former member there is no scheduler to open (fw-thread-calls-former.test.ts).
-    expect(src).toMatch(/onPickSlot=\{otherIsFormer \? undefined : \(slot\) => openSchedulerOn\(slot\)\}/);
+    expect(src).toMatch(/onPickSlot=\{readOnly \? undefined : \(slot\) => openSchedulerOn\(slot\)\}/);
     expect(src).not.toMatch(/onPickSlot=\{\(\) => setSchedulerOpen\(true\)\}/);
     expect(src).toMatch(/confirmRequest=\{confirmRequest\}/);
   });
@@ -739,7 +747,7 @@ describe('the thread: the card\'s time opens the confirm step for that time, and
     const src = page();
     expect(src).toMatch(/searchParams\.get\('schedule'\) === '1'/);
     // Also a pair that has met: calls are unlocked and the scheduler is otherwise not offered to them.
-    expect(src).toMatch(/activeConv && schedulerOpen && \(!callsUnlocked \|\| rescheduling\) && \(/);
+    expect(src).toMatch(/activeConv && !readOnly && schedulerOpen && \(!callsUnlocked \|\| rescheduling\) && \(/);
     expect(src).toMatch(/setRescheduling\(true\);/);
     // The flag is dropped by replacing the entry, so Back does not open it again.
     expect(src).toMatch(/next\.delete\('schedule'\);\s*setSearchParams\(next, \{ replace: true \}\);/);

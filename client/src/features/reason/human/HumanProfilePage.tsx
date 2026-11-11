@@ -30,6 +30,7 @@ import {
 import { blockMember, errorMessage, fetchBrief, reasonKeys, setAlreadyMet, setPersonResponse } from '../api';
 import { useConfirm } from '@/hooks/useConfirm';
 import { dropDraftsTo } from '@/features/messages/voice/composer-drafts';
+import { blockConsequence, blockTitle } from '@/components/safety/safety-words';
 
 // The line under "could not load" when the failure itself has nothing more specific to say.
 const LOAD_HINT = 'Try again in a moment.';
@@ -227,7 +228,8 @@ export default function HumanProfilePage() {
   // T2 (1 Nov 2026): asked in the page (useConfirm), never window.confirm.
   const onBlock = async () => {
     if (block.isPending) return;
-    if (await ask({ title: `Block ${name}?`, body: "They won't be able to message you, and you won't be matched together in future events.", confirmLabel: 'Block', tone: 'danger' })) block.mutate();
+    // What blocking does is said before it is done (11 Nov 2026, item 16).
+    if (await ask({ title: blockTitle(name), body: blockConsequence(name), confirmLabel: 'Block', tone: 'danger' })) block.mutate();
   };
   // The page stays mounted when one profile opens another, so the dialog's "also blocked" is read once and cleared.
   const closeReport = () => {

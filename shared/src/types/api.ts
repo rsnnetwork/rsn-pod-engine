@@ -176,6 +176,9 @@ export const ErrorCodes = {
   // A member's public profile link (Shirley pilot S6)
   PUBLIC_LINK_NONE: 'PUBLIC_LINK_NONE',  // 409; making a new link needs a link to replace (turned off in another tab)
 
+  // Reports (11 Nov 2026)
+  REPORT_ALREADY_SENT: 'REPORT_ALREADY_SENT',  // 409; the same reporter reported the same member, message or post in the last 24 hours
+
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',
   MATCH_ALREADY_RATED: 'MATCH_ALREADY_RATED',

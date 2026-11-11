@@ -179,19 +179,32 @@ export default function App() {
   // member reads as "online" (DM dot + Meet-now gate) only when genuinely here,
   // not from a lingering/backgrounded socket. Stops when hidden; the server key
   // expires within a minute, flipping them to offline.
+  // 11 Nov 2026 (Shirley Palmer's RSN 07): the tab going to the background says so at once (`presence:away`), so the
+  // member reads as away (still reachable by a call) instead of waiting a minute for the key to lapse, and a
+  // (re)connection says where the tab is straight away: the server no longer marks anyone online just for connecting.
   useEffect(() => {
     if (!(isAuthenticated && accessToken)) return;
+    const socket = getSocket();
+    // Only on a live connection: a word queued while disconnected would arrive late and out of date. The connect
+    // handler says where the tab is the moment the connection is back.
     const ping = () => {
-      if (document.visibilityState === 'visible') getSocket()?.emit('presence:ping');
+      if (socket.connected && document.visibilityState === 'visible') socket.emit('presence:ping');
+    };
+    const onVisibility = () => {
+      if (!socket.connected) return;
+      if (document.visibilityState === 'visible') socket.emit('presence:ping');
+      else socket.emit('presence:away');
     };
     ping();
     const iv = setInterval(ping, 25_000);
-    document.addEventListener('visibilitychange', ping);
+    document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('focus', ping);
+    socket.on('connect', ping);
     return () => {
       clearInterval(iv);
-      document.removeEventListener('visibilitychange', ping);
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', ping);
+      socket.off('connect', ping);
     };
   }, [isAuthenticated, accessToken]);
 

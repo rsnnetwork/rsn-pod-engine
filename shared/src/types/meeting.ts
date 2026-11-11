@@ -18,6 +18,15 @@ export type MeetingScope = 'upcoming' | 'past' | 'cancelled';
  */
 export type MeetingSource = 'scheduled' | 'instant';
 
+/**
+ * Whether the viewer's own calendar invitation for the meeting's current time went by email (11 Nov 2026, Shirley
+ * Palmer's RSN 09), read from the sent-invitation log (migration 150): 'sent' once the mail provider took it,
+ * 'sending' while it is on its way, 'not_sent' when it failed or no mail provider is set up, 'no_address' when we hold
+ * no email address for the viewer, and null when nothing was recorded (a meeting booked before the log, an answered
+ * call, or a legacy day part with no time). Screens say "Calendar invitation sent by email." only for 'sent'.
+ */
+export type InviteEmailState = 'sent' | 'sending' | 'not_sent' | 'no_address';
+
 export interface MeetingPartner {
   userId: string;
   /** "Former member" once their account is closed. */
@@ -50,6 +59,8 @@ export interface Meeting {
    * branch whose server predates it still compiles, and a screen reads a missing one as scheduled.
    */
   source?: MeetingSource;
+  /** The viewer's own calendar invitation (InviteEmailState). Only GET /meetings/:id sends it; the lists leave it out. */
+  inviteEmail?: InviteEmailState | null;
 }
 
 /**

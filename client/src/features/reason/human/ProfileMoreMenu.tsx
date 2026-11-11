@@ -1,5 +1,5 @@
 // client/src/features/reason/human/ProfileMoreMenu.tsx
-// "More" in the Human Profile's header (21 Oct 2026): Block and Report this member, the two things the old public
+// "More" in the Human Profile's header (21 Oct 2026): Block member and Report member (their words since 11 Nov 2026), the two things the old public
 // profile offered beyond meeting, so nothing is lost when every people link opens this page. The page owns what
 // they do (the old page's confirmation, its block call and its report dialog); this only offers them.
 //
@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { ReasonIcon } from '../ui/icons';
+import { BLOCK_MEMBER, REPORT_MEMBER } from '@/components/safety/safety-words';
 
 const ITEM = 'flex min-h-[44px] w-full items-center rounded-xl px-3 text-left text-[14px] hover:bg-reason-soft';
 
@@ -73,8 +74,8 @@ export default function ProfileMoreMenu({ onBlock, onReport, blocking, alreadyMe
             onClick={choose(onBlock)}
             disabled={blocking}
             className={cn(ITEM, 'font-bold text-reason-red-hover disabled:cursor-default disabled:opacity-60')}
-          >Block</button>
-          <button type="button" onClick={choose(onReport)} className={ITEM}>Report this member</button>
+          >{BLOCK_MEMBER}</button>
+          <button type="button" onClick={choose(onReport)} className={ITEM}>{REPORT_MEMBER}</button>
         </div>
       )}
     </div>

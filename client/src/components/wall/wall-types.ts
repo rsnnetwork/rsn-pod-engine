@@ -110,4 +110,6 @@ export interface WallConfig {
   /** Where an author's name and picture lead. Unset: they lead nowhere. */
   authorHref?: (authorId: string) => string;
   share?: WallShare;
+  /** What a "Report post" on someone else's post reports (11 Nov 2026). Unset: no Report post. */
+  reportKind?: 'pod_post' | 'circle_post';
 }

@@ -90,6 +90,11 @@ export const E = {
   // cancelled, lapsed)
   userCalls: (userId: string) => `user:${userId}:calls`,
 
+  // Presence (11 Nov 2026, Shirley Palmer's RSN 07): the member came online, stepped away or went offline. Sent to
+  // their conversation partners (never across a block), so a thread header, an inbox dot and a call button redraw
+  // without polling
+  userPresence: (userId: string) => `user:${userId}:presence`,
+
   // Support
   supportTicket: (ticketId: string) => `support-ticket:${ticketId}`,
 

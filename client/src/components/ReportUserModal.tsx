@@ -1,23 +1,28 @@
-// Task E4 — the member-facing report front door. Feeds the existing, richer
-// POST /api/reports backend (server/src/routes/reports.ts), which previously
-// had no client caller: reports were reachable only by direct DB insert, so
-// they never reached the admin moderation queue (E3's inspector reads the
-// user_reports ∪ violations union). This modal is the missing "send" button.
+// Task E4 — the member-facing report front door. Feeds POST /api/reports (server/src/routes/reports.ts), which lands
+// in the admin moderation queue.
 //
-// Body field names are exact matches of the server's zod schema
-// (submitBodySchema in routes/reports.ts): { reportedId, reason, description }.
-// Note the field is `description`, NOT `details` — verified against the
-// schema before wiring this up.
-import { useState, useEffect } from 'react';
+// 11 Nov 2026 (Shirley Palmer's item 16): it reports a member, one message or one wall post (`subject`), and says so in
+// its title; the message or post is quoted at the top. Before anything is sent it says what happens next
+// (safety-words.ts): who reviews it, what they can read, and that nothing changes for the other person, who is not told.
+// No reason is chosen for the person: Submit waits for one. Once sent, the sheet says "Report sent" and stays until it
+// is closed, with the person still in the conversation they reported from. "Also block" blocks after the report lands;
+// the caller is told (onBlocked) and shows the thread read-only instead of leaving it. A report already sent in the last
+// day is answered "You already reported this." in the same calm way.
+//
+// Body field names are exact matches of the server's zod schema (submitBodySchema in routes/reports.ts).
+import { useState, useEffect, useId } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import type { ReportReason, ReportSubjectKind } from '@rsn/shared';
 import Modal from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import api from '@/lib/api';
 import { dropDraftsTo } from '@/features/messages/voice/composer-drafts';
+import {
+  ALREADY_REPORTED, CHOOSE_REASON, REASON_NEEDED, REPORT_SENT, blockConsequence, reportConsequence, reportSentLine,
+  reportTitle, type ReportTarget,
+} from './safety/safety-words';
 
-export type ReportReason =
-  | 'spam' | 'harassment' | 'inappropriate_content'
-  | 'fake_profile' | 'safety' | 'other';
+export type { ReportReason } from '@rsn/shared';
 
 // Matches server's VALID_REASONS (report.service.ts) exactly.
 const REPORT_REASONS: ReadonlyArray<{ value: ReportReason; label: string }> = [
@@ -31,79 +36,124 @@ const REPORT_REASONS: ReadonlyArray<{ value: ReportReason; label: string }> = [
 
 const fieldClass = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 min-h-[44px]';
 
+/** One message or post being reported, with its words to quote at the top. */
+export interface ReportSubject {
+  kind: ReportSubjectKind;
+  id: string;
+  excerpt?: string | null;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** The user being reported. Callers are responsible for never rendering
-   *  the entry point that opens this modal on the current user's own
-   *  profile/conversation — self-reports are also rejected server-side
-   *  (report.service.ts throws if reporterId === reportedId), but the UI
-   *  should never let a member reach that error in the first place. */
+  /** The member reported: the person, or the author of the message or post. The entry points are never drawn for the
+   *  viewer's own profile, messages or posts; the server refuses those too. */
   reportedId: string;
   reportedDisplayName?: string | null;
-  /** When reporting from a chat, the conversation — admins can then review the
-   *  messages behind the report (8 Sep 2026, Ali). */
+  /** When reporting from a chat, the conversation — admins can then review the messages behind the report. */
   conversationId?: string;
-  /** Fired after the reporter also chooses to block, so the chat can update. */
+  /** A message or post rather than the member alone. */
+  subject?: ReportSubject | null;
+  /** The viewer already blocked them: no "Also block". */
+  alreadyBlocked?: boolean;
+  /** Fired after the reporter also chose to block, so the screen can show it (it never leaves the conversation). */
   onBlocked?: () => void;
 }
 
-export default function ReportUserModal({ open, onClose, reportedId, reportedDisplayName, conversationId, onBlocked }: Props) {
-  const [reason, setReason] = useState<ReportReason>('spam');
+interface FailedRequest { response?: { status?: number; data?: { error?: { message?: unknown } } } }
+
+const targetOf = (subject: ReportSubject | null | undefined): ReportTarget =>
+  !subject ? 'member' : subject.kind === 'dm_message' ? 'message' : 'post';
+
+export default function ReportUserModal({ open, onClose, reportedId, reportedDisplayName, conversationId, subject, alreadyBlocked, onBlocked }: Props) {
+  const [reason, setReason] = useState<ReportReason | ''>('');
   const [description, setDescription] = useState('');
   const [alsoBlock, setAlsoBlock] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [outcome, setOutcome] = useState<null | { already: boolean; blocked: boolean }>(null);
+  const [tried, setTried] = useState(false);
+  const hintId = useId();
+  const target = targetOf(subject);
+  const name = reportedDisplayName;
 
   const mutation = useMutation({
     mutationFn: async () => {
-      await api.post('/reports', {
-        reportedId,
-        reason,
-        description: description.trim() || undefined,
-        conversationId,
-      });
-      // Reporting and blocking are separate actions server-side; when the
-      // reporter asks to block too, do it right after the report lands.
+      if (!reason) throw new Error(REASON_NEEDED);
+      let already = false;
+      try {
+        await api.post('/reports', {
+          reportedId,
+          reason,
+          description: description.trim() || undefined,
+          conversationId,
+          ...(subject ? { subject: { kind: subject.kind, id: subject.id } } : {}),
+        });
+      } catch (err) {
+        // The same report in the last day: said calmly, and an "Also block" still goes.
+        if ((err as FailedRequest)?.response?.status !== 409) throw err;
+        already = true;
+      }
+      // Reporting and blocking are separate actions server-side; when the reporter asks to block too, do it right
+      // after the report.
       if (alsoBlock) {
         await api.post(`/users/${reportedId}/block`, { reason: `Reported: ${reason}` });
         // Nothing can be sent to them now: an unsent message to them is dropped (11 Nov 2026).
         dropDraftsTo(reportedId);
       }
+      return { already, blocked: alsoBlock };
     },
-    onSuccess: () => {
-      setSubmitted(true);
-      if (alsoBlock) onBlocked?.();
+    onSuccess: (result) => {
+      setOutcome(result);
+      if (result.blocked) onBlocked?.();
     },
   });
 
-  // Fresh form state every time the modal is (re)opened.
+  // Fresh form state every time the modal is (re)opened: no reason chosen for the person.
   useEffect(() => {
     if (open) {
-      setReason('spam');
+      setReason('');
       setDescription('');
       setAlsoBlock(false);
-      setSubmitted(false);
+      setOutcome(null);
+      setTried(false);
       mutation.reset();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when it opens, not on every mutation change
   }, [open]);
 
+  const submit = () => {
+    setTried(true);
+    if (!reason || mutation.isPending) return;
+    mutation.mutate();
+  };
+
+  const failure = mutation.isError
+    ? (mutation.error as FailedRequest)?.response?.data?.error?.message
+    : null;
+
   return (
-    <Modal open={open} onClose={onClose} title={submitted ? 'Report submitted' : `Report ${reportedDisplayName || 'this member'}`}>
-      {submitted ? (
-        <div className="text-center py-4">
-          <p className="text-sm text-gray-700">
-            Thanks. Our team will review this.{alsoBlock ? ` You've also blocked ${reportedDisplayName || 'this person'}.` : ''}
+    <Modal open={open} onClose={onClose} title={outcome ? (outcome.already ? ALREADY_REPORTED : REPORT_SENT) : reportTitle(target, name)}>
+      {outcome ? (
+        <div className="py-2" data-testid="report-done">
+          <p className="text-sm text-gray-700" role="status">
+            {outcome.already ? `Our team already has it.${outcome.blocked ? ` You also blocked ${name?.trim() || 'this member'}.` : ''}` : reportSentLine(name, outcome.blocked)}
           </p>
-          <Button className="mt-4 min-h-[44px]" onClick={onClose}>Done</Button>
+          <div className="mt-4 flex justify-end">
+            <Button className="min-h-[44px]" onClick={onClose}>Done</Button>
+          </div>
         </div>
       ) : (
         <form
-          onSubmit={(e) => { e.preventDefault(); mutation.mutate(); }}
+          onSubmit={(e) => { e.preventDefault(); submit(); }}
           className="space-y-4"
+          data-testid="report-form"
         >
-          <p className="text-xs text-gray-500">
-            Your report goes to our moderation team. The person you're reporting won't be notified.
+          {subject?.excerpt && (
+            <blockquote className="max-h-32 overflow-y-auto rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 whitespace-pre-wrap [overflow-wrap:anywhere]" data-testid="report-quote">
+              {subject.excerpt}
+            </blockquote>
+          )}
+          <p className="text-xs text-gray-600" data-testid="report-consequence">
+            {reportConsequence(target, name, !!conversationId)}
           </p>
 
           <div>
@@ -114,12 +164,18 @@ export default function ReportUserModal({ open, onClose, reportedId, reportedDis
               id="report-reason"
               value={reason}
               onChange={(e) => setReason(e.target.value as ReportReason)}
+              aria-describedby={!reason ? hintId : undefined}
+              aria-invalid={tried && !reason ? true : undefined}
               className={fieldClass}
             >
+              <option value="" disabled>{CHOOSE_REASON}</option>
               {REPORT_REASONS.map((r) => (
                 <option key={r.value} value={r.value}>{r.label}</option>
               ))}
             </select>
+            {!reason && (
+              <p id={hintId} className={`mt-1.5 text-xs ${tried ? 'text-red-600' : 'text-gray-500'}`}>{REASON_NEEDED}</p>
+            )}
           </div>
 
           <div>
@@ -130,28 +186,30 @@ export default function ReportUserModal({ open, onClose, reportedId, reportedDis
               id="report-details"
               value={description}
               onChange={(e) => setDescription(e.target.value.slice(0, 2000))}
-              rows={4}
+              rows={3}
               placeholder="Anything that helps our team understand what happened"
               className={`${fieldClass} resize-none`}
             />
           </div>
 
-          <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-gray-200 bg-gray-50 p-3">
-            <input
-              type="checkbox"
-              checked={alsoBlock}
-              onChange={(e) => setAlsoBlock(e.target.checked)}
-              className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
-            />
-            <span className="text-sm text-gray-700">
-              Also block {reportedDisplayName || 'this person'}
-              <span className="block text-xs text-gray-400">They won't be able to message you, and you won't be matched again.</span>
-            </span>
-          </label>
+          {!alreadyBlocked && (
+            <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-gray-200 bg-gray-50 p-3 min-h-[44px]">
+              <input
+                type="checkbox"
+                checked={alsoBlock}
+                onChange={(e) => setAlsoBlock(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
+              />
+              <span className="text-sm text-gray-700">
+                Also block {name?.trim() || 'this member'}
+                <span className="block text-xs text-gray-500">{blockConsequence(name)}</span>
+              </span>
+            </label>
+          )}
 
           {mutation.isError && (
-            <p className="text-sm text-red-500">
-              {(mutation.error as any)?.response?.data?.error?.message || 'Failed to submit report. Please try again.'}
+            <p className="text-sm text-red-600" role="alert">
+              {typeof failure === 'string' && failure ? failure : 'We could not send your report. Please try again.'}
             </p>
           )}
 
@@ -159,8 +217,8 @@ export default function ReportUserModal({ open, onClose, reportedId, reportedDis
             <Button type="button" variant="ghost" onClick={onClose} className="min-h-[44px]">
               Cancel
             </Button>
-            <Button type="submit" isLoading={mutation.isPending} className="min-h-[44px]">
-              Submit report
+            <Button type="submit" isLoading={mutation.isPending} disabled={!reason} className="min-h-[44px]">
+              Send report
             </Button>
           </div>
         </form>

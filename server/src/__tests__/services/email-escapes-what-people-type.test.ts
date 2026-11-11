@@ -128,8 +128,6 @@ const cases: Case[] = [
     [{ to: 'delivered+ops@resend.dev', where: 'onboarding chat', at: '2026-11-05T17:00:00Z' }]),
   email('sendMeetingConfirmedEmail', 'a confirmed meeting', ['to', 'recipientDisplayName', 'data'], ['delivered+ana@resend.dev', 'Ana', {
     partnerName: 'Bo', startAt: STARTS, durationMin: 30, recipientTimezone: 'Europe/Berlin', threadUrl: `${APP}/messages/c1`,
-    googleCalendarUrl: 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=REASON%20meeting',
-    outlookCalendarUrl: 'https://outlook.live.com/calendar/0/deeplink/compose?subject=Meeting%20with%20Bo%20on%20REASON',
     icsContent: 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n',
     joinUrl: `${APP}/meet/c1?scheduled=1&kind=video`, kind: 'video',
     eventsUrl: `${APP}/sessions`, moved: true,
@@ -178,8 +176,8 @@ const cases: Case[] = [
 // The exports that build no email: the card shell, the enabled check, the provider's gate (H2b item 7: its gap,
 // the bulk lane and the test clock) and the daily-quota notice reset (H2b item 8b).
 const NOT_BUILDERS = [
-  'SEND_GAP_MS', '__resetDailyQuotaNoticeForTests', '__setSendPaceForTests', 'asBulkEmail',
-  'emailCardClose', 'emailCardOpen', 'isEmailTypeEnabled',
+  'MEETING_INVITE_LINE', 'SEND_GAP_MS', '__resetDailyQuotaNoticeForTests', '__setSendPaceForTests', 'asBulkEmail',
+  'emailCardClose', 'emailCardOpen', 'emailProviderReady', 'isEmailTypeEnabled',
 ];
 
 // ── Running one ──────────────────────────────────────────────────────────────────────────────────

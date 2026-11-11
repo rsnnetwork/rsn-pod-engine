@@ -108,6 +108,16 @@ export default function AdminModerationPage() {
                   </div>
                   <p className="text-sm text-gray-600 mb-1">{v.reason}</p>
                   {v.details && <p className="text-xs text-gray-400 mb-2">{v.details}</p>}
+                  {/* 11 Nov 2026 (item 16): the message or post reported, as it read when it was reported (kept even
+                      if it was deleted since). */}
+                  {v.subjectExcerpt && (
+                    <div className="mb-2 rounded-lg border border-gray-200 bg-gray-50 p-2" data-testid="report-subject">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                        {v.subjectKind === 'dm_message' ? 'Reported message' : 'Reported post'}
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-xs text-gray-700 [overflow-wrap:anywhere]">{v.subjectExcerpt}</p>
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-center gap-4 text-xs text-gray-400">
                     <span>Reported by: {v.reporterName || 'System'}</span>
                     <span>{new Date(v.createdAt).toLocaleDateString()}</span>

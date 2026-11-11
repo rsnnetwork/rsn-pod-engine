@@ -168,7 +168,7 @@ export function useSchedulerActions(o: ActionOptions) {
       // reads the server again; that refresh follows without anyone waiting on it.
       forgetDraft(after);
       const asks = outcome.kind === 'move' || outcome.kind === 'move-choice';
-      addToast(saveMessage(outcome, zone), asks ? 'info' : 'success');
+      addToast(saveMessage(outcome, zone, after.confirmed?.inviteEmail), asks ? 'info' : 'success');
       void refreshThread();
       if (outcome.kind === 'move') {
         // A save never moves a meeting: the Move card opens on the new time, and the member decides.
@@ -214,11 +214,12 @@ export function useSchedulerActions(o: ActionOptions) {
     try {
       // The slot IS the instant — the server stores it and every client
       // renders it in its own timezone.
-      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: key, durationMin, type: meetingKind, expectedWindow });
+      const res = await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: key, durationMin, type: meetingKind, expectedWindow });
       setFinalizing(null);
       ownConfirm.current = { window: key, durationMin, type: meetingKind };
       dismissFailures();
-      addToast(confirmedMessage(key, zone, moving), 'success');
+      // The answer is the scheduling as it stands, with whether my invitation went by email (RSN 09).
+      addToast(confirmedMessage((res.data?.data as Scheduling | undefined)?.confirmed?.inviteEmail, moving), 'success');
       void refreshThread();
     } catch (err) {
       const message = confirmFailure(err, { moving, stays, zone, now: Date.now() });

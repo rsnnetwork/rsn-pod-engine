@@ -49,6 +49,7 @@ export default function CircleWall({ circleId, isMember, highlightPostId }: { ci
       reactNeedsMembership: 'Join this circle to react.',
       likeNeedsMembership: 'Join this circle to like comments.',
     },
+    reportKind: 'circle_post',
     share: {
       href: (post) => `/circles/${post.circleId || circleId}?post=${post.id}`,
       renderTargetForm: ({ post, onDone }) => <ShareToCircle post={post} currentCircleId={circleId} onDone={onDone} />,

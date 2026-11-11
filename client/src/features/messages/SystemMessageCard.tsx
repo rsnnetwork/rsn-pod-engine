@@ -17,6 +17,8 @@ import SheepAvatar from '@/components/brand/SheepAvatar';
 import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { meetingEntry } from '@/components/calendar/calendar-links';
 import { conversationMeetingFile, meetingFile } from '@/components/calendar/calendar-files';
+import { inviteEmailed, inviteLine } from '@/components/calendar/invite-words';
+import type { InviteEmailState } from '@rsn/shared';
 import ReasonLineBox from './ReasonLineBox';
 import { meetingBannerAction } from './thread-call-rules';
 
@@ -55,8 +57,11 @@ interface Props {
   onOpenScheduler?: () => void;
   /** Hidden once a meeting is set: the proposal has been answered. */
   meetingConfirmed?: boolean;
-  /** Add to calendar on a "Meeting confirmed" card (1 Nov 2026, T7): the conversation and the other person's name. */
-  calendar?: { conversationId: string; partnerName: string };
+  /**
+   * Add to calendar on a "Meeting confirmed" card (1 Nov 2026, T7): the conversation and the other person's name, and
+   * (11 Nov 2026, RSN 09) whether my invitation for the meeting as it stands now went by email.
+   */
+  calendar?: { conversationId: string; partnerName: string; inviteEmail?: InviteEmailState | null };
   /** Ring them instead, once the meeting's own time has passed. Only offered
    *  when calls are unlocked — the first meeting is what unlocks them. */
   onCallNow?: (kind: 'audio' | 'video') => void;
@@ -123,6 +128,9 @@ export default function SystemMessageCard({
     // its Join used to open the room for a time nobody was keeping.
     const replaced = !over && currentMeeting !== undefined && !(currentMeeting && sameInstant(currentMeeting.startAt, meta.startAt));
     const settled = over || replaced;
+    // Whether my invitation for the meeting as it stands now went by email (RSN 09), on the card for that time only.
+    const invite = calendar ? inviteLine(calendar.inviteEmail, !!meta.movedFrom, 'card') : null;
+    const emailed = inviteEmailed(calendar?.inviteEmail);
     const action = meetingBannerAction({ over, kind: meta.meetingType, callsUnlocked: !!callsUnlocked, canCall: !!canCall, former: !!former });
     return (
       // The deck puts the sheep in message threads, matched pose, on exactly
@@ -147,6 +155,9 @@ export default function SystemMessageCard({
         <p className="text-[11px] text-emerald-700">
           {meta.durationMin} minutes · {meta.meetingType === 'audio' ? 'Audio call' : 'Video call'} · your local time
         </p>
+        {calendar && !settled && !replaced && invite && (
+          <p className="mt-1 text-[11px] font-medium text-emerald-800" data-testid="invite-line">{invite}</p>
+        )}
         {replaced && (
           <p className="mt-1 text-[11px] font-medium text-gray-700" data-testid="meeting-card-replaced">
             {currentMeeting === null ? 'This meeting was cancelled.' : 'This meeting moved to another time.'}
@@ -184,7 +195,10 @@ export default function SystemMessageCard({
               })}
               file={meta.meetingId ? meetingFile(meta.meetingId) : conversationMeetingFile(calendar.conversationId)}
               icon={<CalendarCheck className="h-4 w-4" />}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+              emailed={emailed}
+              className={emailed
+                ? 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-emerald-700 underline-offset-2 hover:underline'
+                : 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100'}
             />
           )}
         </div>

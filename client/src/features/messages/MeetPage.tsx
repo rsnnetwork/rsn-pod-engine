@@ -213,7 +213,9 @@ export default function MeetPage() {
   const [now, setNow] = useState<number>(Date.now());
   const [forceJoin, setForceJoin] = useState(false);
 
-  const leave = useCallback(() => navigate(`/messages/${conversationId}`), [navigate, conversationId]);
+  // Every way out of the room REPLACES it in the history (11 Nov 2026, Shirley Palmer's RSN 08): Back from the
+  // conversation never re-enters the call, which asked for a call token again on arrival.
+  const leave = useCallback(() => navigate(`/messages/${conversationId}`, { replace: true }), [navigate, conversationId]);
   // Feedback after meetings (30 Oct 2026): whether the other person has been in the room with me. Leaving the room
   // after that asks how a scheduled meeting went; the room's own leave can fire twice (its button, then the
   // disconnect), so it goes once.
@@ -272,7 +274,7 @@ export default function MeetPage() {
         readMeetingId: isScheduled ? readMeetingId : undefined,
       }),
       departRef.current(),
-    ]).then(([to]) => navigate(to));
+    ]).then(([to]) => navigate(to, { replace: true }));
   }, [navigate, conversationId, meeting?.meetingId, conn?.meetingId, isScheduled, readMeetingId]);
   const live = conn && conn.room === roomKey ? conn : null;
 
