@@ -48,6 +48,8 @@ export function circleWallConfig({ circleId, me, isMember }: CircleWallInput): W
       post: (postId) => [...feed, E.circleWallPost(postId)],
       comments: (postId) => [E.circleWallPost(postId), ...blocks],
     },
+    // The circle's page (archived or not, and the viewer's place in it): read again when a write is refused as archived.
+    spaceEntities: [E.circle(circleId), E.circleMembers(circleId)],
     composer: 'open',
     openCommentsOnLink: true,
     copy: {

@@ -110,6 +110,12 @@ export interface WallConfig {
   /** Where an author's name and picture lead. Unset: they lead nowhere. */
   authorHref?: (authorId: string) => string;
   share?: WallShare;
+  /**
+   * The tags of the space's own reads (its page: its status, the viewer's place in it). Read again when a write is
+   * refused because the space itself changed (archived, suspended, a draft), so its note and controls correct themselves
+   * even when the change was never heard over the socket (12 Nov 2026).
+   */
+  spaceEntities: string[];
   /** What a "Report post" on someone else's post reports (11 Nov 2026). Unset: no Report post. */
   reportKind?: 'pod_post' | 'circle_post';
 }

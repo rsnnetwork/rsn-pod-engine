@@ -9,10 +9,12 @@ import { ChevronDown, ThumbsUp } from 'lucide-react';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import { REACTIONS, WALL_ACTION_BUTTON, isConflict, reactionOf, wallErrorSentence } from './wall-logic';
+import { useSpaceRecheck } from './useSpaceRecheck';
 import type { ReactionKey, WallConfig, WallPost, WallViewer } from './wall-types';
 
 export function useWallReactions(p: WallPost, viewer: WallViewer, config: WallConfig, onChanged: () => void) {
   const addToast = useToastStore((s) => s.addToast);
+  const recheckSpace = useSpaceRecheck(config);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reacting, setReacting] = useState(false);
   const [local, setLocal] = useState<{ reactionCount: number; reactions: WallPost['reactions']; myReaction: ReactionKey | null } | null>(null);
@@ -41,6 +43,7 @@ export function useWallReactions(p: WallPost, viewer: WallViewer, config: WallCo
       addToast(wallErrorSentence(err, 'Could not react.'), 'error');
       // The pod was archived since the page last looked: read the feed again, so these buttons go.
       if (isConflict(err)) onChanged();
+      recheckSpace(err);
     } finally {
       setReacting(false);
     }

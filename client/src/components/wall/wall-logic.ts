@@ -232,6 +232,19 @@ export const isForbidden = (err: unknown): boolean => statusOf(err) === 403;
 /** 404: the post or comment is gone (removed, or never there for this viewer; the two answer alike). */
 export const isNotFound = (err: unknown): boolean => statusOf(err) === 404;
 
+/** The refusals that mean the space itself is closed to new words: a pod archived or not open, a circle archived. */
+export const SPACE_CLOSED_CODES = ['POD_ARCHIVED', 'POD_NOT_ACTIVE', 'CIRCLE_ARCHIVED'] as const;
+
+/**
+ * A 409 that says the space itself changed (one of SPACE_CLOSED_CODES), as opposed to a 409 about the item (a fourth pin,
+ * an edit made over another one, a post already sent): the space's own reads are then out of date (12 Nov 2026).
+ */
+export function isSpaceClosed(err: unknown): boolean {
+  if (statusOf(err) !== 409) return false;
+  const code = (requestOf(err).response?.data as { error?: { code?: unknown } } | undefined)?.error?.code;
+  return typeof code === 'string' && (SPACE_CLOSED_CODES as readonly string[]).includes(code);
+}
+
 /**
  * 409 on a write: the wall changed under the viewer, because the pod was archived or closed after the page last
  * looked. The screen that tried is refreshed, so it stops offering what the server has just refused.

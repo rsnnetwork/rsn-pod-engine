@@ -51,6 +51,8 @@ export function podWallConfig({ podId, me, podStatus, isActiveMember }: PodWallI
       post: (postId) => [...feed, E.podWallPost(postId)],
       comments: (postId) => [E.podWallPost(postId), ...blocks],
     },
+    // The pod's page (its status and the viewer's place in it): read again when a write is refused because the pod closed.
+    spaceEntities: [E.pod(podId), E.podMembers(podId)],
     composer: 'collapsible',
     visibleAtFirst: 10,
     openCommentsOnLink: true,

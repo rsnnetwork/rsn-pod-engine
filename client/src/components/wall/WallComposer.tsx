@@ -16,6 +16,7 @@ import api from '@/lib/api';
 import { isCloudinaryConfigured, uploadImageToCloudinary } from '@/lib/cloudinary';
 import { useToastStore } from '@/stores/toastStore';
 import { isConflict, wallErrorSentence } from './wall-logic';
+import { useSpaceRecheck } from './useSpaceRecheck';
 import type { WallConfig } from './wall-types';
 
 export default function WallComposer({ config, onSettled }: {
@@ -24,6 +25,7 @@ export default function WallComposer({ config, onSettled }: {
   onSettled: () => void;
 }) {
   const addToast = useToastStore((s) => s.addToast);
+  const recheckSpace = useSpaceRecheck(config);
   const [draft, setDraft] = useState('');
   const [clientId, setClientId] = useState(() => crypto.randomUUID());
   const [image, setImage] = useState<{ url: string; uploading: boolean } | null>(null);
@@ -63,6 +65,8 @@ export default function WallComposer({ config, onSettled }: {
       // The pod was archived since the page last looked: read the feed again, so the box that was just
       // refused goes, and says why. What was typed stays until it does.
       if (isConflict(err)) onSettled();
+      // The pod or circle closed since the page last read it: its own page is read again, so its note says why.
+      recheckSpace(err);
     } finally {
       setPosting(false);
     }

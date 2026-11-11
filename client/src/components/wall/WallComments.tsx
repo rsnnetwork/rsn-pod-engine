@@ -19,6 +19,7 @@ import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
 import { useConfirm } from '@/hooks/useConfirm';
 import WallCommentRow from './WallCommentRow';
+import { useSpaceRecheck } from './useSpaceRecheck';
 import WallEditForm from './WallEditForm';
 import { deletedSentence, isConflict, newerStamp, normalizeComments, retryUnlessAnswered, threadOf, wallErrorSentence } from './wall-logic';
 import type { WallCommentList, WallComment, WallConfig, WallViewer } from './wall-types';
@@ -33,6 +34,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
   onChanged: () => void;
 }) {
   const addToast = useToastStore((s) => s.addToast);
+  const recheckSpace = useSpaceRecheck(config);
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -73,6 +75,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
       addToast(wallErrorSentence(err, 'Could not comment.'), 'error');
       // The pod was archived since the page last looked: read the feed again, so this box goes.
       if (isConflict(err)) onChanged();
+      recheckSpace(err);
     } finally {
       setSending(false);
     }
@@ -89,6 +92,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
     } catch (err) {
       addToast(wallErrorSentence(err, 'Could not like that.'), 'error');
       if (isConflict(err)) onChanged();
+      recheckSpace(err);
     }
   };
 
@@ -136,7 +140,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
       allowEmpty={false}
       gone={gone ? 'This comment was removed.' : undefined}
       label="Edit your comment"
-      onSave={(text) => saveEdit(c, text)}
+      onSave={(text) => saveEdit(c, text).catch((err: unknown) => { recheckSpace(err); throw err; })}
       onCancel={() => setEditing(null)}
       testId={`edit-comment-${c.id}`}
     />

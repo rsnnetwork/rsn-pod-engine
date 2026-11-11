@@ -23,6 +23,7 @@ import WallPostActions from './WallPostActions';
 import WallPostBody from './WallPostBody';
 import { ReactionSummaryRow, useWallReactions } from './WallPostReactions';
 import { EDITED_LABEL, timeAgo } from './wall-logic';
+import { useSpaceRecheck } from './useSpaceRecheck';
 import type { WallConfig, WallPost, WallViewer } from './wall-types';
 
 /** The author's edit of this post, held by the wall: the words being written, and the stamp the post had when it opened. */
@@ -54,6 +55,7 @@ export default function WallPostCard({
   const root = useRef<HTMLDivElement>(null);
   const [openComments, setOpenComments] = useState(false);
   const r = useWallReactions(p, viewer, config, onChanged);
+  const recheckSpace = useSpaceRecheck(config);
 
   // A link that names this post (a bell, a shared address) brings it into view, once per link, and opens its comments
   // if the wall wants that. Once per link: the wall refetches whenever anything changes, and the page must not jump back
@@ -112,7 +114,7 @@ export default function WallPostCard({
                 </span>
               )}
             </div>
-            <WallPostBody post={p} content={content} highlighted={highlighted} edit={edit} gone={gone} onEdit={onEdit} onSave={saveEdit} />
+            <WallPostBody post={p} content={content} highlighted={highlighted} edit={edit} gone={gone} onEdit={onEdit} onSave={(text) => saveEdit(text).catch((err: unknown) => { recheckSpace(err); throw err; })} />
             <ReactionSummaryRow post={p} r={r} />
             <WallPostActions
               config={config} post={p} viewer={viewer} userId={userId} content={content} editedAt={editedAt}
