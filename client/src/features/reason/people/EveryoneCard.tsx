@@ -9,6 +9,7 @@ import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import { personName, visibleText } from '../person';
 import { PRIMARY_LABEL } from '../human/labels';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 // Everyone says what the button does in the member's own words; the other states keep the shared labels.
 const LABEL = { ...PRIMARY_LABEL, meet: 'I want to meet' } as const;
@@ -26,7 +27,7 @@ export default function EveryoneCard({ person, onMeet }: Props) {
 
   const onPrimary = () => {
     if (action === 'meet') onMeet(person);
-    else if (action === 'continue') navigate(`/messages/new/${encodeURIComponent(person.id)}`);
+    else if (action === 'continue') navigate(writeToPath(person.id));
     else if (action === 'respond') navigate(profileUrl);
   };
 

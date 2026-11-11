@@ -19,6 +19,7 @@ import OfflineCallSheet from './OfflineCallSheet';
 import { useCallRequest } from './useCallRequest';
 import { useMemberPresence } from './usePresence';
 import { awayNote, callHint } from './presence-words';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 export default function ProfileCallButton({ brief, userId, name }: { brief: PersonBrief; userId: string; name: string }) {
   const me = useAuthStore((s) => s.user?.id as string | undefined);
@@ -31,7 +32,7 @@ export default function ProfileCallButton({ brief, userId, name }: { brief: Pers
   if (!brief.canCall) return null;
   const toConversation = (schedule: boolean) => {
     call.closeOffline();
-    navigate(`/messages/new/${encodeURIComponent(userId)}${schedule ? '?schedule=1' : ''}`);
+    navigate(schedule ? `/messages/new/${encodeURIComponent(userId)}?schedule=1` : writeToPath(userId));
   };
   return (
     <>

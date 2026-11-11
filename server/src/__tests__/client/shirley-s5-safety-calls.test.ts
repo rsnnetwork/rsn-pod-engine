@@ -26,6 +26,7 @@ import {
   ADD_MANUALLY, ADD_TO_CALENDAR, bookedSentence, inviteEmailed, inviteLine,
 } from '../../../../client/src/components/calendar/invite-words';
 import { afterRoomPath } from '../../../../client/src/features/meetings/meeting-feedback';
+import { COMPOSE_PARAM, composeStep, wantsCompose, writeToPath } from '../../../../client/src/features/messages/compose-intent';
 import { iconStandIns, loadClientModule, readClientSource } from './load-client-module';
 
 const html = (el: unknown) => renderToStaticMarkup(el as never);
@@ -306,7 +307,7 @@ describe('the call button', () => {
     expect(src).toContain('const presence = useMemberPresence(me, userId, !!brief.canCall);');
     expect(src).toContain('disabled={call.ringing}');
     expect(src).toContain('<OfflineCallSheet');
-    expect(src).toContain("navigate(`/messages/new/${encodeURIComponent(userId)}${schedule ? '?schedule=1' : ''}`);");
+    expect(src).toContain("navigate(schedule ? `/messages/new/${encodeURIComponent(userId)}?schedule=1` : writeToPath(userId));");
   });
 
   it('pressing call while offline opens the sheet; the server refusing an offline ring opens it too; Try again reads again', () => {
@@ -364,6 +365,7 @@ describe('the call button', () => {
     }
     expect(readClientSource('features/reason/ui/Sheet.tsx')).toContain('if (!focusMovedOn(dialog)) opener?.focus?.();');
     // The box takes focus in the press itself (no timer or frame), so a phone opens its keyboard for it.
+    // (The profile's own "Send a message" goes to the chat with ?compose=1: see the compose intent below.)
     expect(readClientSource('features/messages/MessagesPage.tsx'))
       .toMatch(/const sendAMessage = \(\) => \{\s*callRequest\.closeOffline\(\);\s*textareaRef\.current\?\.focus\(\);\s*\};/);
   });
@@ -373,6 +375,61 @@ describe('the call button', () => {
     expect(app).toMatch(/else socket\.emit\('presence:away'\);/);
     expect(app).toContain("socket.on('connect', ping);");
     expect(app).toContain("socket.off('connect', ping);");
+  });
+});
+
+// ─── "Message" means write now (12 Nov 2026) ─────────────────────────────────────────────────────────────────────────
+
+describe('the compose intent: a Message button lands with the cursor in the box, opening a chat to read does not', () => {
+  it('the address asks for it with ?compose=1, and only that address does', () => {
+    expect(COMPOSE_PARAM).toBe('compose');
+    expect(writeToPath('u-1')).toBe('/messages/new/u-1?compose=1');
+    expect(writeToPath('a b/c')).toBe('/messages/new/a%20b%2Fc?compose=1');
+    expect(wantsCompose(new URLSearchParams('compose=1'))).toBe(true);
+    expect(wantsCompose(new URLSearchParams('schedule=1'))).toBe(false);
+    expect(wantsCompose(new URLSearchParams(''))).toBe(false);
+  });
+
+  it('waits for the thread (and for /messages/new to become the conversation), focuses once, drops it where there is no box', () => {
+    const base = { asked: true, redirectPending: false, threadShown: true, readOnly: false };
+    expect(composeStep({ ...base, asked: false })).toBe('none');
+    expect(composeStep({ ...base, redirectPending: true })).toBe('wait');
+    expect(composeStep({ ...base, threadShown: false })).toBe('wait');
+    expect(composeStep(base)).toBe('focus');
+    expect(composeStep({ ...base, readOnly: true })).toBe('drop');
+  });
+
+  it('the thread focuses the box for the flag and removes it by replacing the address, so Back and a refresh do not refocus', () => {
+    const src = readClientSource('features/messages/MessagesPage.tsx');
+    expect(src).toContain('asked: wantsCompose(searchParams),');
+    expect(src).toContain('redirectPending: !!composeToUserId && (!inboxData || inboxData.some((c) => c.otherUserId === composeToUserId)),');
+    expect(src).toContain('threadShown: !!headerContext && !!threadKey,');
+    expect(src).toMatch(/if \(composeNow === 'none' \|\| composeNow === 'wait'\) return;\s*if \(composeNow === 'focus'\) textareaRef\.current\?\.focus\(\);\s*setSearchParams\(\(now\) => \{\s*const next = new URLSearchParams\(now\);\s*next\.delete\(COMPOSE_PARAM\);\s*return next;\s*\}, \{ replace: true \}\);/);
+    // The /messages/new redirect keeps the query, so the flag reaches the conversation's own address.
+    expect(src).toContain("navigate(`/messages/${existing.conversationId}${asked ? `?${asked}` : ''}`, { replace: true });");
+    // Nothing else focuses the box on open: only a press (Reply, Send a message) or this flag.
+    expect(src.match(/textareaRef\.current\?\.focus\(\)/g)).toHaveLength(3);
+  });
+
+  it("every Message button that means 'write now' asks for it; the inbox and a meeting's chat link do not", () => {
+    const asks: Array<[string, string]> = [
+      ['features/calls/ProfileCallButton.tsx', 'writeToPath(userId)'],
+      ['features/reason/human/ProfileHeroActions.tsx', 'to={writeToPath(userId)}'],
+      ['features/profile/PublicProfilePage.tsx', 'navigate(writeToPath(userId))'],
+      ['features/reason/human/HumanCard.tsx', "else if (action === 'continue') navigate(writeToPath(person.userId));"],
+      ['features/reason/people/EveryoneCard.tsx', "else if (action === 'continue') navigate(writeToPath(person.id));"],
+      ['features/search/SearchPage.tsx', 'to={writeToPath(r.userId)}'],
+      ['features/sessions/RecapPage.tsx', 'to={writeToPath(userId)}'],
+      ['features/sessions/EncounterHistoryPage.tsx', 'navigate(writeToPath(e.otherUserId));'],
+      ['features/live/SessionComplete.tsx', "window.open(writeToPath(userId), '_blank', 'noopener,noreferrer');"],
+    ];
+    for (const [file, call] of asks) {
+      const src = readClientSource(file);
+      expect(src).toContain(call);
+      expect(src).not.toMatch(/\/messages\/new\/\$\{(?!encodeURIComponent\(userId\)\}\?schedule=1)/);
+    }
+    expect(readClientSource('features/messages/MessagesPage.tsx')).toContain('to={`/messages/${c.conversationId}`}');
+    expect(readClientSource('features/meetings/MeetingCard.tsx')).not.toContain(COMPOSE_PARAM);
   });
 });
 

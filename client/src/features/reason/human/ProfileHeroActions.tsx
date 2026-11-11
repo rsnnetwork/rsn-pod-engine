@@ -12,6 +12,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { MessageCircle } from 'lucide-react';
 import type { PersonBrief } from '@rsn/shared';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 export const NOT_MUTUAL_SENTENCE = 'Messages open when you both say you would meet again';
 
@@ -31,7 +32,7 @@ export default function ProfileHeroActions({ brief, userId, call }: { brief: Per
       <div className="mt-3 flex flex-wrap justify-center gap-2" data-testid="profile-hero-actions">
         {message && (
           <Link
-            to={`/messages/new/${userId}`}
+            to={writeToPath(userId)}
             className="inline-flex min-h-[44px] items-center gap-2 rounded-[11px] bg-reason-red px-4 text-[14px] font-bold text-white hover:bg-reason-red-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-reason-red focus-visible:ring-offset-2"
           >
             <MessageCircle className="h-4 w-4" aria-hidden="true" /> Message

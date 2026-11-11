@@ -45,6 +45,7 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useConfirm } from '@/hooks/useConfirm';
 import type { DmMessage } from './thread/dm-message';
+import { COMPOSE_PARAM, composeStep, wantsCompose } from './compose-intent';
 import type { InviteEmailState } from '@rsn/shared';
 import { useThreadMessages } from './thread/useThreadMessages';
 import DmComposer from './DmComposer';
@@ -530,6 +531,24 @@ export default function MessagesPage() {
     } });
     textareaRef.current?.focus();
   };
+
+  // "Message" means write now (12 Nov 2026, compose-intent.ts): ?compose=1 puts the cursor in the box once the thread is
+  // drawn, then the flag is dropped by replacing the address, so Back or a refresh does not do it again.
+  const composeNow = composeStep({
+    asked: wantsCompose(searchParams),
+    redirectPending: !!composeToUserId && (!inboxData || inboxData.some((c) => c.otherUserId === composeToUserId)),
+    threadShown: !!headerContext && !!threadKey,
+    readOnly,
+  });
+  useEffect(() => {
+    if (composeNow === 'none' || composeNow === 'wait') return;
+    if (composeNow === 'focus') textareaRef.current?.focus();
+    setSearchParams((now) => {
+      const next = new URLSearchParams(now);
+      next.delete(COMPOSE_PARAM);
+      return next;
+    }, { replace: true });
+  }, [composeNow, setSearchParams]);
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/dm/conversations/${id}`),

@@ -19,6 +19,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 import { dropDraftsTo } from '@/features/messages/voice/composer-drafts';
 import { BLOCK_MEMBER, REPORT_MEMBER, blockConsequence, blockTitle } from '@/components/safety/safety-words';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 // 13 Aug 2026 (D1): Stefan — "the profile card needs a major visual upgrade,
 // the greatest thing on the platform", and "About was cut off / too narrow".
@@ -244,7 +245,7 @@ export default function PublicProfilePage() {
                     // chat panel like any other message.
                     <Button
                       size="sm"
-                      onClick={() => navigate(`/messages/new/${userId}`)}
+                      onClick={() => { if (userId) navigate(writeToPath(userId)); }}
                       className="min-h-[44px] text-xs"
                     >
                       <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message

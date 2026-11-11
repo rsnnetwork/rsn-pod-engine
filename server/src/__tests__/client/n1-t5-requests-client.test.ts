@@ -144,9 +144,10 @@ describe('the hero\'s Message button (4.1) and the labels (4.2)', () => {
     ({ relationship: { state }, canMessage, canMessageReason });
   const draw = (b: ReturnType<typeof brief>) => renderToStaticMarkup(createElement(actions(), { brief: b, userId: STEFAN }));
 
-  it.each(['connected', 'met'])('%s and allowed: a red 44px Message to /messages/new/:userId', (state) => {
+  // Shirley pilot S5 (12 Nov 2026): with ?compose=1, so the chat opens with the cursor in the box.
+  it.each(['connected', 'met'])('%s and allowed: a red 44px Message to /messages/new/:userId?compose=1', (state) => {
     const html = draw(brief(state, true));
-    expect(html).toMatch(/<a href="\/messages\/new\/u-stefan" class="[^"]*\bmin-h-\[44px\][^"]*\bbg-reason-red\b[^"]*"[\s\S]*Message<\/a>/);
+    expect(html).toMatch(/<a href="\/messages\/new\/u-stefan\?compose=1" class="[^"]*\bmin-h-\[44px\][^"]*\bbg-reason-red\b[^"]*"[\s\S]*Message<\/a>/);
   });
 
   it('refused as not mutual: the sentence, and never a dead button', () => {

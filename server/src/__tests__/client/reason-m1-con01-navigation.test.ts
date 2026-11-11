@@ -64,14 +64,15 @@ describe('the Message buttons: the recap opens the conversation in this tab, the
 
   it('the recap is a post-event page, not the call: its Message is a link in this tab, so Back returns to the recap', () => {
     const button = recap.slice(recap.indexOf('function MessagePartnerButton'), recap.indexOf('function InterestBadge'));
-    expect(button).toMatch(/<Link\b[^>]*to=\{`\/messages\/new\/\$\{userId\}`\}/);
+    // Shirley pilot S5 (12 Nov 2026): writeToPath is /messages/new/:userId with ?compose=1 (the cursor in the box).
+    expect(button).toMatch(/<Link\b[^>]*to=\{writeToPath\(userId\)\}/);
     expect(button).toContain('data-testid={`recap-dm-button-${userId}`}');
     expect(button).not.toMatch(/window\.open|target="_blank"|preventDefault/);
   });
 
   it('the live end screen keeps its new tab (the call page must not be left), and says so with an arrow and "(opens in a new tab)"', () => {
     const button = end.slice(end.indexOf('function MessagePartnerButton'), end.indexOf('interface Connection'));
-    expect(button).toMatch(/window\.open\(`\/messages\/new\/\$\{userId\}`, '_blank', 'noopener,noreferrer'\);/);
+    expect(button).toMatch(/window\.open\(writeToPath\(userId\), '_blank', 'noopener,noreferrer'\);/);
     expect(button).toMatch(/<span aria-hidden="true">↗<\/span>/);
     expect(button).toMatch(/<span className="sr-only"> \(opens in a new tab\)<\/span>/);
     expect(button).toContain('data-testid={`recap-dm-button-${userId}`}');

@@ -194,7 +194,8 @@ describe('CON-01 — a profile\'s Back goes back, and goes somewhere when there 
 
   it('the page reads the router location, and the message button still opens the compose screen in this tab', () => {
     expect(page).toMatch(/useLocation/);
-    expect(page).toMatch(/navigate\(`\/messages\/new\/\$\{userId\}`\)/);
+    // Shirley pilot S5 (12 Nov 2026): to the compose screen with the cursor in the box (writeToPath adds ?compose=1).
+    expect(page).toContain('if (userId) navigate(writeToPath(userId));');
   });
 
   it('the Human Profile\'s Back is the browser\'s own step back, and with nothing behind it goes to the screen the link was on, replacing the entry', () => {

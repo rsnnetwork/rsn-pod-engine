@@ -23,6 +23,7 @@ import { errorMessage } from '@/features/reason/errors';
 import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 import SearchesHelp from './SearchesHelp';
 import api from '@/lib/api';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 interface Result {
   userId: string;
@@ -178,7 +179,7 @@ export default function SearchPage() {
               </div>
             ) : r.pokeStatus === 'accepted' ? (
               <Link
-                to={`/messages/new/${r.userId}`}
+                to={writeToPath(r.userId)}
                 className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-gray-300 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50"
               >
                 Message
