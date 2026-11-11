@@ -53,6 +53,16 @@ describe('Who can override these rules', () => {
     expect(HOOKS).toContain('E.sessionGroups(sessionId)');
   });
 
+  it('keeps the chosen tile until the refetch lands, and keeps keyboard focus while saving', () => {
+    // The mutation returns the invalidation, so it stays pending until the groups are read again.
+    expect(HOOKS).toContain('onSuccess: () => qc.invalidateQueries({ queryKey: groupsKey(sessionId) }),');
+    expect(HOOKS).not.toMatch(/onSuccess: () => { qc.invalidateQueries/);
+    expect(SETTING).toContain('save.variables.overrideBy');
+    expect(SETTING).toContain('aria-disabled={save.isPending}');
+    expect(SETTING).not.toMatch(/disabled={/);
+    expect(SETTING).toContain('if (value === current || save.isPending) return;');
+  });
+
   it('only the owner or a super admin is handed the tiles', () => {
     expect(DETAIL).toContain("mayChooseOverride={isHost || user?.role === 'super_admin'}");
     expect(SETTINGS).toContain('mayChooseOverride={mayChooseOverride}');

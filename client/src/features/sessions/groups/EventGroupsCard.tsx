@@ -23,9 +23,9 @@ const GROUPS_ANCHOR_HASH = `#${GROUPS_ANCHOR}`;
 interface Props {
   sessionId: string;
   numberOfRounds: number;
-  /** The page's read of the groups (useEventGroups), shared with the participant list's group chips. */
   /** The event's owner or a super admin: only they may change who can override (a co-host reads it). */
   mayChooseOverride?: boolean;
+  /** The page's read of the groups (useEventGroups), shared with the participant list's group chips. */
   view: { data?: EventGroupsView; isLoading: boolean; isError: boolean; error: unknown; refetch: () => unknown };
 }
 

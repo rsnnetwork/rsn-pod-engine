@@ -34,7 +34,8 @@ export function useSaveEventGroups(sessionId: string) {
       // Left out unless the owner is choosing it: the server then keeps the stored choice.
       ...(rules.overrideBy ? { overrideBy: rules.overrideBy } : {}),
     }).then((r) => r.data.data as EventGroupRules),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: groupsKey(sessionId) }); },
+    // Returned, so the mutation stays pending until the refetch has landed: a screen reading the saved value never flips back.
+    onSuccess: () => qc.invalidateQueries({ queryKey: groupsKey(sessionId) }),
   });
 }
 
@@ -44,6 +45,7 @@ export function useSetParticipantGroups(sessionId: string) {
     networkMode: 'always',
     mutationFn: ({ userId, groupKeys }: { userId: string; groupKeys: string[] }) =>
       api.put(`/sessions/${sessionId}/participants/${userId}/groups`, { groupKeys }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: groupsKey(sessionId) }); },
+    // Returned, so the mutation stays pending until the refetch has landed: a screen reading the saved value never flips back.
+    onSuccess: () => qc.invalidateQueries({ queryKey: groupsKey(sessionId) }),
   });
 }

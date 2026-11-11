@@ -49,7 +49,7 @@ export default function OverrideSetting({ current, rules, canChoose, save, onErr
                 )}
               >
                 <input
-                  type="radio" name={name} value={o.value} checked={shown === o.value} disabled={save.isPending}
+                  type="radio" name={name} value={o.value} checked={shown === o.value} aria-disabled={save.isPending}
                   onChange={() => choose(o.value)} className="h-4 w-4 shrink-0 accent-[#1a1a2e]"
                 />
                 <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{o.label}</span>
