@@ -1773,3 +1773,20 @@ describe('fix round 2: a withdrawn pod comment is a neutral placeholder, and mod
     expect(writes()).toHaveLength(0);
   });
 });
+
+// ─── 12 Nov 2026 prod re-smoke: a moderator's comment removal is live for every open page ───────────────────────
+
+describe('a director removing someone else\'s comment moves the count and tells every open feed', () => {
+  it('the count drops by one, the comment is removed (not withdrawn), and the feed\'s own tag is sent with the thread\'s', async () => {
+    world.member = { role: 'director', status: 'active' };
+    world.lockedComment = { author_id: AUTHOR, post_id: POST, deleted_at: null, has_replies: false };
+    world.commentsRemoved = 1;
+    await expect(wall.deleteComment(POD, COMMENT, asMember)).resolves.toEqual({ postId: POST, alreadyRemoved: false });
+    expect(calls(/^UPDATE pod_post_comments SET content = ''/)).toHaveLength(0);
+    expect(calls(/UPDATE pod_post_comments SET deleted_at/)[0][1]).toEqual([COMMENT, VIEWER, true]);
+    expect(calls(/UPDATE pod_posts SET comment_count = GREATEST\(comment_count - \$2, 0\)/)[0][1]).toEqual([POST, 1]);
+    // No { wall: false }: pod:<id>:wall goes to every active member, which is what an open feed (the card's count) declares.
+    expect(mockFanout).toHaveBeenCalledWith(POD, [E.podWallPost(POST)]);
+    expect(mockFanout.mock.calls.every((c) => c.length === 2)).toBe(true);
+  });
+});

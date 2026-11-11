@@ -64,7 +64,14 @@ test('the wall: members-only, idempotent, block-filtered, rate-limited, pinned �
   console.log('  ✓ of-pod lookup shows the attachment to who may see the pod, 404 to who may not (P3b, S2).');
 
   // (2) POSTING IS MEMBERS-ONLY — even the admin must be in it. Since R10a the admin who made the circle is its owner
-  // and a member, so the admin leaves it first to be the platform admin outside it.
+  // and a member, so the admin leaves it first to be the platform admin outside it. S2 (D3): a circle always has one
+  // owner, and the owner cannot leave without handing it on, so the admin hands it to m1 (the admin becomes a
+  // moderator) and then leaves.
+  const ownerLeave = await apiAs(admin, 'POST', `/circles/${circleId}/leave`);
+  expect(ownerLeave.status, 'the owner cannot leave').toBe(400);
+  expect(ownerLeave.json.error.message).toBe('Hand the circle to someone else before you leave it.');
+  const handed = await apiAs(admin, 'POST', `/circles/${circleId}/transfer`, { toUserId: m1.id });
+  expect(handed.status, JSON.stringify(handed.json)).toBe(200);
   expect((await apiAs(admin, 'POST', `/circles/${circleId}/leave`)).status).toBe(200);
   const adminPost = await apiAs(admin, 'POST', `/circles/${circleId}/posts`, { clientId: uuid(), content: 'hi' });
   expect(adminPost.status).toBe(403);

@@ -7,7 +7,7 @@ import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER, teardown, idsOf } fro
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
-import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
+import { acceptConfirmDialogs, confirmInPage } from '../helpers/confirm-dialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE POD'S DISCUSSION (COM-01, 26 Oct 2026). Stefan, back in the pod after an event: "We can't write in the
@@ -279,6 +279,7 @@ test('the director pins and deletes; a member can do neither to someone else\'s 
   const bobPage = await pageAt(bob, `/pods/${podId}`, { width: 390, height: 844 });
   const alicePage = await pageAt(alice, `/pods/${podId}`, { width: 1280, height: 900 });
   for (const p of [dirPage, bobPage, alicePage]) await expect(cardOf(p, postId)).toBeVisible({ timeout: 30_000 });
+  await alicePage.evaluate(() => { (window as unknown as { __samePage: string }).__samePage = 'never reloaded'; });
 
   // A member has no Pin, and no Delete on someone else's post. The author has Delete on her own.
   await expect(cardOf(bobPage, postId).getByTestId(`pin-post-${postId}`)).toHaveCount(0);
@@ -305,15 +306,21 @@ test('the director pins and deletes; a member can do neither to someone else\'s 
   // The director deletes B's comment: A's count goes back to nothing, live.
   await expect(cardOf(alicePage, postId)).toContainText('1 comment', { timeout: 15_000 });
   await cardOf(dirPage, postId).getByTestId(`comment-button-${postId}`).click();
-  await acceptNextDialog(dirPage);
+  // The in-page confirm is answered on the director's page itself. (acceptConfirmDialogs answers it only when the next
+  // action or assertion is on the SAME page, and the next one here is on Alice's, so the question stayed open and
+  // nothing was deleted: that, not the live update, is why Alice's count did not move in the 12 Nov run.)
   await dirPage.getByTestId(`comment-delete-${commentId}`).click();
+  await confirmInPage(dirPage);
+  await expect(dirPage.getByTestId(`comment-${commentId}`)).toHaveCount(0, { timeout: 15_000 });
+  await expect.poll(async () => (await pool.query(`SELECT deleted_at FROM pod_post_comments WHERE id = $1`, [commentId])).rows[0].deleted_at, { timeout: 15_000 }).not.toBeNull();
+  // Alice's page, which never reloads, follows by itself (pod:<id>:wall).
   await expect(cardOf(alicePage, postId)).not.toContainText('1 comment', { timeout: 15_000 });
-  const gone = await pool.query(`SELECT deleted_at FROM pod_post_comments WHERE id = $1`, [commentId]);
-  expect(gone.rows[0].deleted_at).not.toBeNull();
+  expect(await alicePage.evaluate(() => (window as unknown as { __samePage?: string }).__samePage), 'Alice\'s page never reloaded').toBe('never reloaded');
 
   // ...and the post itself: it leaves every open page, and the row stays, with who removed it.
-  await acceptNextDialog(dirPage);
   await cardOf(dirPage, postId).getByTestId(`delete-post-${postId}`).click();
+  await confirmInPage(dirPage);
+  await expect(cardOf(dirPage, postId)).toHaveCount(0, { timeout: 15_000 });
   await expect(cardOf(bobPage, postId)).toHaveCount(0, { timeout: 15_000 });
   await expect(cardOf(alicePage, postId)).toHaveCount(0, { timeout: 15_000 });
   await expect(cardOf(dirPage, postId)).toHaveCount(0, { timeout: 15_000 });
