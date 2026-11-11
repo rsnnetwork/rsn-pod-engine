@@ -124,6 +124,22 @@ export const config = {
   //   on     — send
   eventComms: (['off', 'report', 'on'] as const)
     .find(m => m === process.env.EVENT_COMMS) ?? 'off',
+  // Calendar free/busy (Shirley pilot S8, plan decision D7): a member may connect a Google or Microsoft calendar so the
+  // meeting picker shades the times they are busy. Dark until switched on, and it stays dark (fails closed) while
+  // CALENDAR_TOKEN_KEY is not a 32-byte base64 key or no provider has both its client id and secret
+  // (services/calendar-sync/settings.ts decides):
+  //   off — every calendar route answers 404 and the client shows nothing (default)
+  //   on  — the routes answer and the client shows Calendars in Settings and the hint in the meeting picker
+  calendarSync: (['off', 'on'] as const).find(m => m === process.env.CALENDAR_SYNC) ?? 'off',
+  calendarTokenKey: process.env.CALENDAR_TOKEN_KEY || '',
+  // Where the browser starts a connection and where the provider sends it back (`<base>/api/calendar/<provider>/...`).
+  // Unset, the API's own address (API_BASE_URL). The registered redirect URIs must match it exactly.
+  calendarRedirectBase: process.env.CALENDAR_REDIRECT_BASE || '',
+  googleCalendarClientId: process.env.GOOGLE_CALENDAR_CLIENT_ID || '',
+  googleCalendarClientSecret: process.env.GOOGLE_CALENDAR_CLIENT_SECRET || '',
+  microsoftCalendarClientId: process.env.MICROSOFT_CALENDAR_CLIENT_ID || '',
+  microsoftCalendarClientSecret: process.env.MICROSOFT_CALENDAR_CLIENT_SECRET || '',
+
   // Minutes after an event's planned end before it counts as overdue. A bad value reads as the default.
   overdueEventGraceMinutes: (() => {
     const minutes = Number(process.env.OVERDUE_EVENT_GRACE_MINUTES ?? 120);

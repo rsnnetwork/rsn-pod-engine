@@ -1271,3 +1271,26 @@ export const waitlistLimiter = rateLimit({
   store: buildStore('waitlist'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
+
+// Calendar free/busy (Shirley pilot S8, D7). Keyed per member where the route signs in first, else per address.
+//   calendarConnectLimiter  asking for a start address, and finishing a connection: ten an hour is many reconnects
+//   calendarOauthLimiter    the browser's start and the provider's callback (signed out, top-level navigations)
+//   calendarReadLimiter     the Calendars card and the picker's busy read (cached on the server for five minutes)
+//   calendarWriteLimiter    disconnecting
+const oneBucketLimit = (prefix: string, windowMs: number, max: number) => rateLimit({
+  windowMs,
+  max,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore(prefix),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+export const calendarConnectLimiter = oneBucketLimit('calendar-connect', 60 * 60 * 1000, 10);
+export const calendarFinishLimiter = oneBucketLimit('calendar-finish', 60 * 60 * 1000, 20);
+export const calendarOauthLimiter = oneBucketLimit('calendar-oauth', 10 * 60 * 1000, 40);
+export const calendarReadLimiter = oneBucketLimit('calendar-read', 60 * 1000, 60);
+export const calendarWriteLimiter = oneBucketLimit('calendar-write', 60 * 60 * 1000, 20);
+
+// GET /api/public/config: what the server has switched on (Shirley pilot S8). Read once per page load; per address.
+export const publicConfigLimiter = oneBucketLimit('public-config', 60 * 1000, 120);

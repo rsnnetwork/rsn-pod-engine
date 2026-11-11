@@ -595,6 +595,22 @@ export async function fanoutUserEntity(
   }
 }
 
+// ─── A member's connected calendars (Shirley pilot S8, 12 Nov 2026) ─────────
+//
+// The member connected, disconnected, or must reconnect a calendar (the provider stopped accepting REASON's access),
+// or closed their account with calendars connected. Only they are told: nobody else ever sees anything of another
+// member's calendar. Their Calendars card in Settings and the meeting picker's busy shading read again.
+
+export async function fanoutUserCalendars(userId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    await emitEntities(io, [userId], [E.userCalendars(userId)]);
+  } catch (err) {
+    logger.warn({ err, userId }, 'fanoutUserCalendars: failed to fan out');
+  }
+}
+
 // ─── Entity fanout (21 Oct 2026) ────────────────────────────────────────────
 //
 // An entity (an organisation members create, such as a company or a fund; not the realtime "entities"

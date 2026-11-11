@@ -106,6 +106,8 @@ import eventAdmissionRoutes from '../../routes/event-admission';
 import eventWaitlistRoutes from '../../routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from '../../routes/call-links';
 import publicProfileRoutes, { publicLinkRoutes } from '../../routes/public-profiles';
+import publicConfigRoutes from '../../routes/public-config';
+import calendarSyncRoutes from '../../routes/calendar-sync';
 import scheduleRoutes from '../../routes/schedule';
 import eventImageRoutes from '../../routes/event-image';
 import eventReportRoutes from '../../routes/event-report';
@@ -136,6 +138,8 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/sessions', sessionCallLinkRoutes],
   ['/api/call-links', callLinkRoutes],
   ['/api/public/profiles', publicProfileRoutes],
+  ['/api/public/config', publicConfigRoutes],
+  ['/api/calendar', calendarSyncRoutes],
   ['/api/sessions', scheduleRoutes],
   ['/api/sessions', eventImageRoutes],
   ['/api/sessions', eventReportRoutes],

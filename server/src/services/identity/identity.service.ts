@@ -1363,4 +1363,18 @@ export async function deleteUser(userId: string): Promise<void> {
   invalidateUserStatusCache(userId);
   logger.info({ userId }, 'User deleted (deactivated)');
   await freePlacesOf(userId, freedEvents);
+  await forgetCalendarsOf(userId);
+}
+
+/**
+ * Shirley pilot S8: a closed account keeps no calendar access. A close only marks the account, so the ON DELETE CASCADE
+ * on calendar_connections never fires: each connection is revoked where the provider allows and deleted. Never throws.
+ */
+async function forgetCalendarsOf(userId: string): Promise<void> {
+  try {
+    const { forgetCalendarConnections } = await import('../calendar-sync/calendar-sync.service');
+    await forgetCalendarConnections(userId);
+  } catch (err) {
+    logger.warn({ err, userId }, 'An account closed, but its calendar connections were not forgotten (non-fatal)');
+  }
 }

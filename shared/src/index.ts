@@ -139,6 +139,7 @@ export const ENTITY_SERVICE_CATEGORIES = _ENTITY_SERVICE_CATEGORIES;
 export const ENTITY_SERVICE_LABELS = _ENTITY_SERVICE_LABELS;
 // An organiser's export of their circle or pod (Shirley pilot S7): VALUES the export sheet renders, named exports as above.
 export * from './types/space-export';
+export * from './types/calendar-sync';
 import {
   SPACE_EXPORT_COPY as _SPACE_EXPORT_COPY, SPACE_EXPORT_SECTIONS as _SPACE_EXPORT_SECTIONS, SPACE_KINDS as _SPACE_KINDS,
 } from './types/space-export';

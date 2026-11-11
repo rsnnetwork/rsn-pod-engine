@@ -116,3 +116,26 @@ services:
       # nothing; "on" bells and emails members. Read the report before "on".
       # - key: EVENT_COMMS
       #   value: "report"
+
+      # Calendar free/busy (Shirley pilot S8): members may connect Google or
+      # Microsoft so the meeting picker shades their busy times. Off unless
+      # CALENDAR_SYNC is "on", and even then off until CALENDAR_TOKEN_KEY is a
+      # 32-byte base64 key (openssl rand -base64 32; keep a copy in the vault:
+      # losing it means everyone reconnects) and a provider has an id and a
+      # secret. Click-by-click setup: workspace/assets/Calendar_setup_for_Ali.md.
+      # Every one is set in the Render dashboard (sync: false), CALENDAR_SYNC too,
+      # so switching it on there never drifts from this file. Unset means off.
+      - key: CALENDAR_SYNC
+        sync: false
+      - key: CALENDAR_TOKEN_KEY
+        sync: false
+      - key: CALENDAR_REDIRECT_BASE
+        sync: false
+      - key: GOOGLE_CALENDAR_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CALENDAR_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_CALENDAR_CLIENT_ID
+        sync: false
+      - key: MICROSOFT_CALENDAR_CLIENT_SECRET
+        sync: false

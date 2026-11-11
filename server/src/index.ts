@@ -87,6 +87,9 @@ import eventAdmissionRoutes from './routes/event-admission';
 import eventWaitlistRoutes from './routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from './routes/call-links';
 import publicProfileRoutes, { publicLinkRoutes } from './routes/public-profiles';
+import calendarSyncRoutes from './routes/calendar-sync';
+import publicConfigRoutes from './routes/public-config';
+import { logCalendarSyncState } from './services/calendar-sync/settings';
 import scheduleRoutes from './routes/schedule';
 import eventImageRoutes from './routes/event-image';
 import eventReportRoutes from './routes/event-report';
@@ -375,6 +378,9 @@ app.use('/api/sessions', eventWaitlistRoutes); // A full event's waiting list: /
 app.use('/api/sessions', sessionCallLinkRoutes); // An event's RSN Call link for its organisers: /api/sessions/:id/call-link
 app.use('/api/call-links', callLinkRoutes); // The RSN Call link itself: open, verify by code, enter (Part 2 Task 6)
 app.use('/api/public/profiles', publicProfileRoutes); // A member's public profile link, read signed out (Shirley pilot S6)
+app.use('/api/public/config', publicConfigRoutes); // What the server has switched on, for the client (Shirley pilot S8)
+// Calendar free/busy (Shirley pilot S8): every route answers 404 until CALENDAR_SYNC is on with its key and a provider.
+app.use('/api/calendar', calendarSyncRoutes);
 app.use('/api/sessions', scheduleRoutes); // The organisers' matching board draft: /api/sessions/:id/schedule
 app.use('/api/sessions', eventImageRoutes); // An event's image: /api/sessions/:id/image (Part 3 Task 1)
 app.use('/api/sessions', eventReportRoutes); // The organisers' event report and its CSVs: /api/sessions/:id/report (Part 3 Task 4)
@@ -479,6 +485,9 @@ async function start(): Promise<void> {
       }, EVENT_REMINDER_INTERVAL_MS);
       logger.info({ mode: config.eventComms }, 'Event reminders started');
     }
+
+    // Calendar free/busy (Shirley pilot S8): say whether it is on, and when it was asked for but stays off, why.
+    logCalendarSyncState();
 
     // Overdue events close themselves (10 Nov 2026, F7): every minute, a live or never-started event whose start,
     // length and grace have passed is completed (end mode) or listed in the log (report mode, the default). Each
