@@ -159,6 +159,8 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
       // Check membership
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // Shirley pilot S2 fix round 2: not a member of the public pod, so whether an organiser removed them is read
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // Check existing registration — none found (Part 3 Task 3: read before capacity)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // Part 3 Task 3 (K3): a new place is given under the event's capacity lock, after the person's row is read again
@@ -173,6 +175,9 @@ describe('Session Service', () => {
 
       const participant = await sessionService.registerParticipant('session-123', 'user-new');
       expect(participant).toBeDefined();
+      // S2 fix round 2: the auto-add never reactivates a row an organiser removed.
+      expect(String(mockQuery.mock.calls.find(([sql]) => /INSERT INTO pod_members/.test(String(sql)))![0]))
+        .toMatch(/WHERE pod_members\.removal_kind IS DISTINCT FROM 'removed'/);
       // S15 — a fresh INSERT is the only path that earns the confirmation email.
       expect(participant.isNewRegistration).toBe(true);
       // Fix round 1 (review I-3): the lock comes before the pod row, as on every other path that gives a place.
@@ -181,6 +186,21 @@ describe('Session Service', () => {
       const podAt = sqls.findIndex((sql) => sql.includes('INSERT INTO pod_members'));
       expect(lockAt).toBeGreaterThan(-1);
       expect(podAt).toBeGreaterThan(lockAt);
+    });
+
+    // Shirley pilot S2 fix round 2: registering for an event of a public pod is no way back into the pod for someone an
+    // organiser removed from it. Refused in words; no place given and no pod row written.
+    it('refuses someone an organiser removed from the public pod, and writes nothing', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...mockSession, status: SessionStatus.LOBBY_OPEN }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                                 // not an active member
+      mockQuery.mockResolvedValueOnce({ rows: [{ removal_kind: 'removed' }], rowCount: 1 });      // removed by an organiser
+      await expect(sessionService.registerParticipant('session-123', 'user-removed')).rejects.toMatchObject({
+        statusCode: 403, message: "This event belongs to a pod you were removed from. Ask the pod's director for an invitation.",
+      });
+      const sqls = mockQuery.mock.calls.map(([sql]) => String(sql));
+      expect(sqls.some((sql) => /INSERT INTO pod_members|INSERT INTO session_participants/.test(sql))).toBe(false);
+      expect(sqls.find((sql) => /SELECT removal_kind FROM pod_members/.test(sql))).toMatch(/WHERE pod_id = \$1 AND user_id = \$2/);
     });
   });
 

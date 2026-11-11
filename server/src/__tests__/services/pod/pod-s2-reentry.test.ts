@@ -52,10 +52,10 @@ function answer(sql: string, params: unknown[] = []) {
     r.status = 'removed'; r.removal_kind = r.removal_kind ?? 'rejected'; r.left_at = new Date();
     return { rows: [], rowCount: 1 };
   }
-  if (s.startsWith("UPDATE pod_members SET status = 'active', joined_at = NOW(), removal_kind = NULL")) {
+  if (s.startsWith("UPDATE pod_members SET status = 'active', joined_at = NOW(), left_at = NULL, removal_kind = NULL")) {
     const r = row(params[1]);
     if (!r || r.status !== 'pending_approval') return { rows: [], rowCount: 0 };
-    r.status = 'active'; r.removal_kind = null;
+    r.status = 'active'; r.removal_kind = null; r.left_at = null;
     return { rows: [{ ...r }], rowCount: 1 };
   }
   if (s.startsWith("UPDATE pod_members SET status = 'left'")) {
@@ -137,7 +137,7 @@ describe('removed by an organiser: no way back by themselves', () => {
     podVisibility = 'public_with_approval';
     await requestToJoin('p1', 'ana');
     await approveMember('p1', 'ana', 'dir', M);
-    expect(statusOf('ana')).toMatchObject({ status: 'active', removal_kind: null });
+    expect(statusOf('ana')).toMatchObject({ status: 'active', removal_kind: null, left_at: null }); // fix round 2: left_at cleared too
   });
 
   it('the organiser adding them again lets them back in (an organiser decision)', async () => {
@@ -171,6 +171,21 @@ describe('turned down, or left: may come back', () => {
     await leavePod('p1', 'ana');
     await joinPod('p1', 'ana', M);
     expect(statusOf('ana')!.status).toBe('active');
+  });
+
+  // Fix round 2: an account closure (deleteUser) marks its rows 'closed', not 'removed': once the account is reopened,
+  // the member comes back to a public pod by themselves and the mark clears.
+  it('a reopened account whose pod rows the closure removed rejoins a public pod by themselves', async () => {
+    rows.push({ user_id: 'reopened', role: 'member', status: 'removed', removal_kind: 'closed', left_at: hourAgo() });
+    await joinPod('p1', 'reopened', M);
+    expect(statusOf('reopened')).toMatchObject({ status: 'active', removal_kind: null });
+  });
+
+  it('account closure writes removal_kind closed (never removed) on every active pod row', () => {
+    const fsx = jest.requireActual('fs') as typeof import('fs');
+    const pathx = jest.requireActual('path') as typeof import('path');
+    const src = fsx.readFileSync(pathx.join(__dirname, '../../../services/identity/identity.service.ts'), 'utf8');
+    expect(src).toContain("UPDATE pod_members SET status = 'removed', removal_kind = 'closed', left_at = NOW() WHERE user_id = $1 AND status = 'active'");
   });
 });
 

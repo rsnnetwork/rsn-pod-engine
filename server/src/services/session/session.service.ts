@@ -741,6 +741,13 @@ async function registerParticipantTx(
     const isMember = memberResult.rows.length > 0;
 
     if (podVisibility === 'public' && !isMember) {
+      // Shirley pilot S2 fix round 2: registering for its event is no way back into a pod an organiser removed them
+      // from (their own join of the pod is refused the same way). An organiser's invite readmits them first.
+      const mark = await client.query<{ removal_kind: string | null }>(
+        `SELECT removal_kind FROM pod_members WHERE pod_id = $1 AND user_id = $2`,
+        [session.podId, userId]
+      );
+      if (mark.rows[0]?.removal_kind === 'removed') throw new ForbiddenError(podService.REMOVED_FROM_EVENT_POD);
       // Auto-add to pod when registering for a session in a public pod. Never an event guest (Part 2, Task 3):
       // they take the event's place only, and never become a pod member. Fix round 1 (review I-3): written where the
       // place is given (joinPublicPod below), after the capacity lock and the recount for a new place, so every path
@@ -810,7 +817,8 @@ async function registerParticipantTx(
     try {
       await client.query(
         `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
-         ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
+         ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL, removal_kind = NULL
+           WHERE pod_members.removal_kind IS DISTINCT FROM 'removed'`,
         [session.podId, userId]
       );
     } catch { /* ignore if already member */ }

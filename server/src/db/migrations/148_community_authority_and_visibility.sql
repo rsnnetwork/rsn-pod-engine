@@ -27,11 +27,18 @@
 -- 4. Removed is not the same as turned down (S2 fix round 1, controller ruling). Someone an organiser REMOVED cannot
 --    come back by themselves (a Public open pod or an open circle refuses their own join; an approval pod or a closed
 --    circle takes their request, which the organiser decides); someone whose request was DECLINED may ask again.
---    - pod_members.removal_kind ('removed' | 'rejected', NULL otherwise): both used to be status 'removed'. Existing
---      'removed' rows are told apart from audit_log: the route that turned a request down records
---      action 'reject_pod_member' with the path /<pod>/members/<user>/reject; a row whose latest such record is newer
---      than any removal of it ('remove_pod_member') is 'rejected', every other 'removed' row is 'removed' (when the
---      log cannot tell, the safer side). The counts are raised as a NOTICE.
+--    - pod_members.removal_kind ('removed' | 'rejected' | 'closed', NULL otherwise): all three used to be status
+--      'removed'. 'closed' is a removal an account closure made (deleteUser takes the account out of every pod): not an
+--      organiser's decision, so a reopened member may come back like anyone else. Existing 'removed' rows are told
+--      apart from audit_log:
+--        rejected  the route that turned a request down records action 'reject_pod_member' with the path
+--                  /<pod>/members/<user>/reject; its latest such record is newer than any removal of it
+--                  ('remove_pod_member', path /<pod>/members/<user>);
+--        closed    the account's closure is on record ('user.closed_self' by the member, 'user.deleted' by an admin;
+--                  written right after deleteUser) from a minute before the row's left_at to ten minutes after it, and
+--                  no organiser removal of the row is recorded in that same span;
+--        removed   every other 'removed' row (when the log cannot tell, the safer side).
+--      The counts are raised as a NOTICE.
 --    - circle_removals: a circle's member row is deleted on removal, so who was removed is kept here (one row per
 --      circle and person, cleared when they are let back in). Removals before this file left no record (the circle
 --      route wrote no audit row), so nothing is backfilled.
@@ -101,11 +108,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS show_communities BOOLEAN NOT NULL DEF
 
 -- 4a. Pods: removed by an organiser, or a request turned down.
 ALTER TABLE pod_members ADD COLUMN IF NOT EXISTS removal_kind TEXT NULL
-  CHECK (removal_kind IS NULL OR removal_kind IN ('removed', 'rejected'));
+  CHECK (removal_kind IS NULL OR removal_kind IN ('removed', 'rejected', 'closed'));
 
 DO $$
 DECLARE
   rejected INTEGER;
+  closed INTEGER;
   removed INTEGER;
 BEGIN
   UPDATE pod_members pm
@@ -121,9 +129,22 @@ BEGIN
                AND lower(rm.details->>'path') = '/' || pm.pod_id::text || '/members/' || pm.user_id::text
                AND rm.created_at > rj.created_at));
   GET DIAGNOSTICS rejected = ROW_COUNT;
+  UPDATE pod_members pm
+     SET removal_kind = 'closed'
+   WHERE pm.status = 'removed' AND pm.removal_kind IS NULL AND pm.left_at IS NOT NULL
+     AND EXISTS (
+       SELECT 1 FROM audit_log cl
+        WHERE cl.action IN ('user.closed_self', 'user.deleted') AND cl.entity_id = pm.user_id
+          AND cl.created_at BETWEEN pm.left_at - INTERVAL '1 minute' AND pm.left_at + INTERVAL '10 minutes')
+     AND NOT EXISTS (
+       SELECT 1 FROM audit_log rm
+        WHERE rm.action = 'remove_pod_member' AND rm.entity_id = pm.pod_id
+          AND lower(rm.details->>'path') = '/' || pm.pod_id::text || '/members/' || pm.user_id::text
+          AND rm.created_at BETWEEN pm.left_at - INTERVAL '1 minute' AND pm.left_at + INTERVAL '10 minutes');
+  GET DIAGNOSTICS closed = ROW_COUNT;
   UPDATE pod_members SET removal_kind = 'removed' WHERE status = 'removed' AND removal_kind IS NULL;
   GET DIAGNOSTICS removed = ROW_COUNT;
-  RAISE NOTICE '148: % turned-down request(s) marked rejected; % removal(s) marked removed', rejected, removed;
+  RAISE NOTICE '148: % turned-down request(s) marked rejected; % account closure(s) marked closed; % removal(s) marked removed', rejected, closed, removed;
 END $$;
 
 -- 4b. Circles: who an organiser removed (cleared when they are let back in).

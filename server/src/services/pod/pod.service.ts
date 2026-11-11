@@ -643,7 +643,7 @@ export async function approveMember(podId: string, memberUserId: string, approve
   }
 
   const result = await query<PodMember>(
-    `UPDATE pod_members SET status = 'active', joined_at = NOW(), removal_kind = NULL
+    `UPDATE pod_members SET status = 'active', joined_at = NOW(), left_at = NULL, removal_kind = NULL
      WHERE pod_id = $1 AND user_id = $2 AND status = 'pending_approval'
      RETURNING ${MEMBER_COLUMNS}`,
     [podId, memberUserId]
@@ -824,6 +824,8 @@ export async function getPodMembersForInvite(podId: string, sessionId: string, a
 export const DIRECTOR_NOT_REMOVED = "The pod's director can't be removed.";
 export const ONLY_DIRECTOR_REMOVES_HOSTS = "Only the pod's director can remove a host.";
 export const REMOVED_FROM_POD = 'You were removed from this pod. Ask its director for an invitation.';
+/** S2 fix round 2: the same refusal, said where the person was registering for one of the pod's events. */
+export const REMOVED_FROM_EVENT_POD = "This event belongs to a pod you were removed from. Ask the pod's director for an invitation.";
 
 /** 'invite_only' is retired (D2): any that still arrives (an old instance mid-deploy, an old client) is stored Private. */
 export function normalisePodVisibility<T extends string | null | undefined>(v: T): T | PodVisibility.PRIVATE {

@@ -68,9 +68,9 @@ describe('migration 148 (community authority and pod visibility)', () => {
   });
 
   // Fix round 1 (controller ruling): removed is not the same as turned down.
-  it('adds pod_members.removal_kind, guarded, held to its two values', () => {
+  it('adds pod_members.removal_kind, guarded, held to its three values (removed, rejected, closed)', () => {
     expect(flat(sql)).toContain(
-      "ALTER TABLE pod_members ADD COLUMN IF NOT EXISTS removal_kind TEXT NULL CHECK (removal_kind IS NULL OR removal_kind IN ('removed', 'rejected'));");
+      "ALTER TABLE pod_members ADD COLUMN IF NOT EXISTS removal_kind TEXT NULL CHECK (removal_kind IS NULL OR removal_kind IN ('removed', 'rejected', 'closed'));");
   });
 
   it('backfills from audit_log: a request turned down (and not removed since) is rejected, every other removed row removed', () => {
@@ -82,7 +82,7 @@ describe('migration 148 (community authority and pod visibility)', () => {
     // Whatever the log cannot tell is the safer side.
     expect(f).toContain("UPDATE pod_members SET removal_kind = 'removed' WHERE status = 'removed' AND removal_kind IS NULL;");
     expect(f.indexOf("SET removal_kind = 'rejected'")).toBeLessThan(f.indexOf("SET removal_kind = 'removed'"));
-    expect(f).toContain("RAISE NOTICE '148: % turned-down request(s) marked rejected; % removal(s) marked removed', rejected, removed;");
+    expect(f).toContain("RAISE NOTICE '148: % turned-down request(s) marked rejected; % account closure(s) marked closed; % removal(s) marked removed', rejected, closed, removed;");
   });
 
   it('keeps circle removals in circle_removals: id, created_at, both foreign keys stating what a delete does, one row per pair', () => {
