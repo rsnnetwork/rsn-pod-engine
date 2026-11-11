@@ -330,15 +330,28 @@ test('4) presence: loading is not "Offline"; offline opens Try again / Find a ti
   test.setTimeout(240_000);
   const page = await signedIn(shirley, 1280, 860);
   // Hold the presence read: while it loads nothing says "Offline" and the call button works.
+  // The page reads presence more than once while it loads (its key follows the inbox's partners), so several reads can
+  // be held at once. Prod smoke 11 Nov: unrouting straight after the release raced the held handlers (Playwright went on
+  // with the request itself, then the handler's own continue threw "Route is already handled!"). Now every held read
+  // goes on first and the route is removed only once its handlers are done. Any query string is matched too.
   let release: () => void = () => undefined;
   const held = new Promise<void>((r) => { release = r; });
-  await page.route(`${SERVER}/api/dm/presence`, async (route) => { await held; await route.continue(); });
+  let heldReads = 0;
+  const presenceRead = (url: URL) => url.origin === new URL(SERVER).origin && url.pathname === '/api/dm/presence';
+  await page.route(presenceRead, async (route) => {
+    heldReads += 1;
+    await held;
+    // The one legitimate failure: openThread's fallback reload drops a read still held, and a dropped request cannot
+    // go on. What the page then shows is checked below, so nothing is hidden by letting it go.
+    await route.continue().catch(() => undefined);
+  });
   await openThread(page, anaConv, ANA_NAME);
+  await expect.poll(() => heldReads, { message: 'the presence read is really being held', timeout: 15_000 }).toBeGreaterThan(0);
   await expect(presenceWord(page)).toHaveCount(0);
   await expect(page.getByText('Offline', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('video-call-button')).toBeEnabled();
   release();
-  await page.unroute(`${SERVER}/api/dm/presence`);
+  await page.unrouteAll({ behavior: 'wait' });
   await markNotReloaded(page);
 
   // Ana has REASON nowhere open: Offline, and the button opens the sheet instead of ringing.
@@ -358,7 +371,9 @@ test('4) presence: loading is not "Offline"; offline opens Try again / Find a ti
   const anaPage = await signedIn(ana, 1280, 860);
   await gotoRetry(anaPage, `${APP}/`);
   await expect(presenceWord(page)).toHaveText('Online', { timeout: 30_000 });
-  const row = page.getByRole('link', { name: new RegExp(ANA_NAME) }).first();
+  // Ana's own inbox row, by its address: a link named after her also matches the group chat's row (its last message
+  // reads "Ana Safe …: S5 group words", and it sits first) and the thread header's link to her profile.
+  const row = page.locator(`a[href="/messages/${anaConv}"]`);
   await expect(row.getByTestId('inbox-presence-dot')).toHaveAttribute('aria-label', 'Online');
 
   // Her tab goes to the background: Away. A call still reaches her, so the call dialog opens (not the sheet).
