@@ -19,6 +19,8 @@
 //   3. Set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET
 //      in Vercel project env → Production. Redeploy.
 
+import { VOICE_COPY, VOICE_NOTE_UPLOAD_LIMIT_MS } from '@/features/messages/voice/voice-note';
+
 const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME as string | undefined;
 const UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET as string | undefined;
 
@@ -31,7 +33,18 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB — matches the preset
 // voice, more than enough for the speed-networking use case.
 export const ALLOWED_AUDIO_TYPES = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/mpeg'] as const;
 export const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
-export const MAX_AUDIO_DURATION_MS = 5 * 60 * 1000; // 5 min hard cap
+// The recorder stops itself at VOICE_NOTE_MAX_MS (1 minute, 11 Nov 2026, RSN 06; it was 5 minutes). The upload check
+// allows the stop's moment of lag (the tail flush before stop) on top, and no more: 65 s. The server cannot measure
+// the file: it checks only the length this client reports with it (routes/dm.ts, at most 65 s too).
+export const MAX_AUDIO_DURATION_MS = VOICE_NOTE_UPLOAD_LIMIT_MS;
+
+/** An upload stops when its send is stopped (the signed-in member changed, 11 Nov 2026). */
+function stopOnAbort(xhr: XMLHttpRequest, signal: AbortSignal | undefined, reject: (err: Error) => void): void {
+  if (!signal) return;
+  const abort = () => { xhr.abort(); reject(new Error('Upload stopped')); };
+  if (signal.aborted) { abort(); return; }
+  signal.addEventListener('abort', abort, { once: true });
+}
 
 export function isCloudinaryConfigured(): boolean {
   return !!CLOUD_NAME && !!UPLOAD_PRESET;
@@ -90,6 +103,7 @@ export function validateImageFile(file: File): ValidationFailure | null {
 export async function uploadImageToCloudinary(
   file: File,
   onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<CloudinaryImageResult> {
   if (!isCloudinaryConfigured()) {
     throw new Error('Cloudinary is not configured');
@@ -135,6 +149,7 @@ export async function uploadImageToCloudinary(
     };
 
     xhr.onerror = () => reject(new Error('Network error uploading image'));
+    stopOnAbort(xhr, signal, reject);
     xhr.send(form);
   });
 }
@@ -150,7 +165,7 @@ export function validateAudioBlob(blob: Blob, durationMs: number): ValidationFai
     return { reason: 'too-large', message: 'Voice message is over the 5 MB limit' };
   }
   if (durationMs > MAX_AUDIO_DURATION_MS) {
-    return { reason: 'too-large', message: 'Voice message is over the 5 minute limit' };
+    return { reason: 'too-large', message: VOICE_COPY.tooLong };
   }
   return null;
 }
@@ -166,6 +181,7 @@ export async function uploadAudioToCloudinary(
   blob: Blob,
   durationMs: number,
   onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<CloudinaryAudioResult> {
   if (!isCloudinaryConfigured()) {
     throw new Error('Cloudinary is not configured');
@@ -181,6 +197,7 @@ export async function uploadAudioToCloudinary(
   const ext = blob.type.includes('webm') ? 'webm'
     : blob.type.includes('mp4') ? 'mp4'
     : blob.type.includes('ogg') ? 'ogg'
+    : blob.type.includes('aac') ? 'aac'
     : 'webm';
   const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type || 'audio/webm' });
 
@@ -219,6 +236,7 @@ export async function uploadAudioToCloudinary(
     };
 
     xhr.onerror = () => reject(new Error('Network error uploading voice message'));
+    stopOnAbort(xhr, signal, reject);
     xhr.send(form);
   });
 }

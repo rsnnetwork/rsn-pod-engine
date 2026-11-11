@@ -58,16 +58,17 @@ export function eventListedForSql(sessionAlias: string, viewerParam: string): st
 }
 
 /**
- * Part 2 Task 2: the person in `userParam` is an admin of the pod the event aliased `sessionAlias` lives in: its creator
- * or one of its active directors (the pod admin of canActAsHost). A boolean SQL expression.
+ * Part 2 Task 2: the person in `userParam` is an admin of the pod the event aliased `sessionAlias` lives in: one of its
+ * active directors (the pod admin of canActAsHost). A boolean SQL expression. Shirley pilot S2 fix round 1: the role
+ * decides; having created the pod is no right of its own (a creator removed from the pod, or no longer its director,
+ * runs none of its events).
  */
 export function podAdminSql(sessionAlias: string, userParam: string): string {
   checked(sessionAlias, userParam);
   const s = sessionAlias;
   const u = userParam;
-  return `EXISTS (SELECT 1 FROM pods pa WHERE pa.id = ${s}.pod_id AND (pa.created_by = ${u} OR EXISTS (
-            SELECT 1 FROM pod_members pam WHERE pam.pod_id = pa.id AND pam.user_id = ${u}
-               AND pam.role = 'director' AND pam.status = 'active')))`;
+  return `EXISTS (SELECT 1 FROM pod_members pam WHERE pam.pod_id = ${s}.pod_id AND pam.user_id = ${u}
+               AND pam.role = 'director' AND pam.status = 'active')`;
 }
 
 /**
@@ -176,15 +177,14 @@ export function eventAudienceSql(sessionAlias: string, userParam: string): strin
 
 /**
  * T14 (L22): the person in `userParam` is outside the closed circle that the event aliased `sessionAlias` is for: the
- * event names a circle (sessions.circle_id) whose join_policy is closed, and they are neither in it (a
- * circle_members row) nor its creator. Whether they hold another tie to the event is the rules' to add.
+ * event names a circle (sessions.circle_id) whose join_policy is closed, and they are not in it (no circle_members
+ * row; S2: having made the circle is no longer a tie). Whether they hold another tie to the event is the rules' to add.
  */
 export function outsideClosedCircleSql(sessionAlias: string, userParam: string): string {
   checked(sessionAlias, userParam);
   const s = sessionAlias;
   const u = userParam;
   return `(${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = ${s}.circle_id AND cc_c.join_policy = 'closed'
-            AND cc_c.created_by <> ${u}
             AND NOT EXISTS (SELECT 1 FROM circle_members cc_m WHERE cc_m.circle_id = ${s}.circle_id AND cc_m.user_id = ${u})))`;
 }
 

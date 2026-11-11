@@ -10,9 +10,10 @@ import { EVENT_LABEL } from './EventFormatFields';
 import { CIRCLE_PRIVATE_LEAD, circlePrivateRest } from './circle-preset';
 
 const POD_ACCESS_WORDS: Record<string, string> = {
-  public: 'Public',
+  public: 'Public open',
   public_with_approval: 'Public with approval',
-  invite_only: 'Invite only',
+  // Shirley pilot S2 (D2): the retired setting reads as Private.
+  invite_only: 'Private',
   private: 'Private',
 };
 

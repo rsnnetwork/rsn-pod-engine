@@ -37,11 +37,11 @@ export interface CircleActor {
   role?: string;
 }
 
-interface CircleRow { id: string; name: string; join_policy: string; created_by: string }
+interface CircleRow { id: string; name: string; join_policy: string }
 
 async function liveCircle(circleId: string): Promise<CircleRow> {
   const r = await query<CircleRow>(
-    `SELECT id, name, join_policy, created_by FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
+    `SELECT id, name, join_policy FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (!r.rows[0]) throw new NotFoundError('Circle', circleId);
   return r.rows[0];
 }
@@ -68,16 +68,17 @@ async function pushBells(rows: Array<{ id: string; user_id: string; created_at: 
 }
 
 /**
- * The people an ask rings: the circle's creator, owners and moderators whose accounts are active; when none of them
- * is (the creator's account was closed and nobody else runs it), the platform admins, who still manage every circle.
+ * The people an ask rings: the circle's owner and moderators whose accounts are active (S2: the role decides, never
+ * having made the circle); when none of them is (their accounts were closed, or nobody holds the role), the platform
+ * admins, who still manage every circle.
  */
 async function managersToRing(circle: CircleRow, askerId: string): Promise<string[]> {
   const own = await query<{ id: string }>(
     `SELECT u.id FROM users u
-      WHERE ${activeMemberSql('u')} AND u.id <> $3
-        AND (u.id = $2 OR EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = $1 AND m.user_id = u.id
-                                     AND m.role IN ('owner', 'moderator')))`,
-    [circle.id, circle.created_by, askerId],
+      WHERE ${activeMemberSql('u')} AND u.id <> $2
+        AND EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = $1 AND m.user_id = u.id
+                       AND m.role IN ('owner', 'moderator'))`,
+    [circle.id, askerId],
   );
   if (own.rows.length > 0) return own.rows.map((r) => r.id);
   const admins = await query<{ id: string }>(
@@ -111,6 +112,25 @@ async function ringManagers(circle: CircleRow, askerId: string): Promise<void> {
     await pushBells(rows.rows, bell);
   } catch (err) {
     logger.warn({ err, circleId: circle.id, askerId }, 'circle join request bell failed (non-fatal)');
+  }
+}
+
+/**
+ * S2: "{circle} is yours now" for the person a circle was handed to (the allowed type 'approval': only migration 118
+ * restates the allowlist). Never throws: the handover stands whatever the bell does.
+ */
+export async function ringNewOwner(circleId: string, circleName: string, userId: string): Promise<void> {
+  try {
+    const bell = { type: 'approval', title: `${circleName} is yours now`, body: 'You are its owner. You can manage its members, moderators and settings.', link: `/circles/${circleId}` };
+    const rows = await query<{ id: string; user_id: string; created_at: Date }>(
+      `INSERT INTO notifications (user_id, type, title, body, link)
+       VALUES ($1, 'approval', $2, $3, $4)
+       RETURNING id, user_id, created_at`,
+      [userId, bell.title, bell.body, bell.link],
+    );
+    await pushBells(rows.rows, bell);
+  } catch (err) {
+    logger.warn({ err, circleId }, 'circle new-owner bell failed (non-fatal)');
   }
 }
 
@@ -235,22 +255,44 @@ export async function declineJoinRequest(circleId: string, requesterId: string, 
 
 // ── Removing a member ────────────────────────────────────────────────────────────────────────────────────────
 
+/** What a moderator is told on trying to remove another moderator (S2, D3). */
+export const ONLY_OWNER_REMOVES_MODERATORS = "Only the circle's owner can remove a moderator.";
+const REMOVE_REFUSAL = 'Only the people who run this circle can remove members.';
+
 /**
- * The people who run a circle remove a member ("same as Parts": a pod's director removes members). Never its
- * creator or an owner (403), and never yourself (you leave instead). The count moves in the same transaction. A
- * removed member of an open circle may join again; of a closed one, ask again.
+ * The people who run a circle remove a member ("same as Parts": a pod's director removes members). Never its owner
+ * (403), never yourself (you leave instead), and (S2, D3) a moderator only by the owner or a platform admin. The
+ * circle row is locked first, and the actor's own role is read again under that lock, so a remover demoted a moment
+ * ago, or two people removing at once, cannot act on a stale role. The count moves in the same transaction. A removed
+ * member does not come back by themselves (S2 fix round 1: circle_removals): an open circle refuses their own join, a
+ * closed one takes their ask, and an organiser's personal invite lets them in.
  */
 export async function removeCircleMember(circleId: string, memberId: string, actor: CircleActor): Promise<void> {
-  const circle = await assertCircleManager(circleId, actor.userId, actor.role, 'Only the people who run this circle can remove members.');
+  await assertCircleManager(circleId, actor.userId, actor.role, REMOVE_REFUSAL);
   if (memberId === actor.userId) throw new ValidationError('To leave the circle, use Leave.');
+  const admin = isPlatformAdmin(actor.role);
   await transaction(async (client) => {
-    const row = await client.query<{ role: string }>(
-      `SELECT role FROM circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE`, [circleId, memberId]);
-    if (!row.rows[0]) throw new NotFoundError('CircleMember', undefined, 'They are not in this circle.');
-    if (row.rows[0].role === 'owner' || memberId === circle.createdBy) {
+    const locked = await client.query(`SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL FOR UPDATE`, [circleId]);
+    if (!locked.rows[0]) throw new NotFoundError('Circle', circleId);
+    const rows = await client.query<{ user_id: string; role: string }>(
+      `SELECT user_id, role FROM circle_members WHERE circle_id = $1 AND user_id = ANY($2::uuid[]) FOR UPDATE`,
+      [circleId, [memberId, actor.userId]]);
+    const target = rows.rows.find((r) => r.user_id === memberId);
+    const mine = rows.rows.find((r) => r.user_id === actor.userId)?.role;
+    if (!admin && mine !== 'owner' && mine !== 'moderator') throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, REMOVE_REFUSAL);
+    if (!target) throw new NotFoundError('CircleMember', undefined, 'They are not in this circle.');
+    if (target.role === 'owner') {
       throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, "The circle's owner can't be removed.");
     }
+    if (target.role === 'moderator' && !admin && mine !== 'owner') {
+      throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, ONLY_OWNER_REMOVES_MODERATORS);
+    }
     await client.query(`DELETE FROM circle_members WHERE circle_id = $1 AND user_id = $2`, [circleId, memberId]);
+    // S2 fix round 1: they cannot come back by themselves (circle.service joinCircle reads this).
+    await client.query(
+      `INSERT INTO circle_removals (circle_id, user_id, removed_by) VALUES ($1, $2, $3)
+       ON CONFLICT (circle_id, user_id) DO UPDATE SET removed_by = EXCLUDED.removed_by, created_at = NOW()`,
+      [circleId, memberId, actor.userId]);
     await client.query(`UPDATE circles SET member_count = GREATEST(member_count - 1, 0) WHERE id = $1`, [circleId]);
   });
   logger.info({ circleId, memberId, actorId: actor.userId }, 'Circle member removed');

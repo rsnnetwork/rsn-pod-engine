@@ -24,6 +24,8 @@ export interface DmMessage {
   attachmentMeta?: {
     width?: number; height?: number; bytes?: number; format?: string;
     durationSec?: number;
+    /** The recorder's measure of a voice note, stored with it since 11 Nov 2026: the length the player shows. */
+    durationMs?: number;
   } | null;
   /** The message this one answers (30 Oct 2026); null or absent when it answers none (every row before then). */
   replyTo?: MessageReplyQuote | null;

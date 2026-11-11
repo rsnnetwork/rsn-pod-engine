@@ -13,7 +13,7 @@
 import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
-import { AppError, NotFoundError } from '../../middleware/errors';
+import { AppError, NotFoundError, ValidationError } from '../../middleware/errors';
 import { CircleAccess, CircleEntityLink, CircleJoinPolicy, ErrorCodes, UserRole, eventZone, hasRoleAtLeast } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 import { visibleEventsSql } from '../session/event-access';
@@ -22,6 +22,7 @@ import {
   CircleAccessRow, circleAccessColumns, isCircleManager, isPlatformAdmin, toCircleAccess,
 } from './circle-managers';
 import { entitiesOfCircle } from './circle-entities.service';
+import type { ReturningInvite } from '../pod/pod.service';
 
 /** What joinCircle answers someone outside a closed circle (30 Oct review, 7.5). */
 export const CIRCLE_CLOSED_JOIN = 'This circle is closed. Ask to join and its owner will let you in.';
@@ -31,9 +32,11 @@ export const CIRCLE_CLOSED_INVITE = 'This circle is closed now, so this invite n
 /**
  * T14 (1 Nov 2026): an attached pod is named on a circle's page only when it is not archived and, if private, only to
  * its active members (and platform admins, `$admin`). `pod` is the pods alias, `viewer` and `admin` parameters.
+ * S2 (D2): an old "invite only" row reads as private (migration 148 maps them; this holds for any it missed).
  */
+const NOT_DISCOVERABLE = `('private', 'invite_only')`;
 const visiblePodSql = (pod: string, viewer: string, admin: string) => `${pod}.status <> 'archived'
-  AND (${admin}::boolean OR ${pod}.visibility <> 'private'
+  AND (${admin}::boolean OR ${pod}.visibility::text NOT IN ${NOT_DISCOVERABLE}
        OR EXISTS (SELECT 1 FROM pod_members vp_m WHERE vp_m.pod_id = ${pod}.id AND vp_m.user_id = ${viewer} AND vp_m.status = 'active'))`;
 
 export const MAX_NESTING_DEPTH = 3;
@@ -73,7 +76,8 @@ export interface CircleDetail extends CircleSummary {
     userId: string; displayName: string | null; avatarUrl: string | null;
     role: string; joinedAt: Date;
   }>;
-  pods: Array<{ podId: string; name: string; description: string | null }>;
+  /** S2 (additive): each pod's visibility, so the page says which pods are private or need approval. */
+  pods: Array<{ podId: string; name: string; description: string | null; visibility: string }>;
   /**
    * T13: `forCircle` (additive) is true for an event made for this circle, false for an attached pod's event.
    * Part 3 Task 1 (additive): each event's IANA zone (its time reads on that clock) and its image (null: none).
@@ -202,8 +206,8 @@ export async function updateCircle(
  * Closing a circle (final fix wave S2, 2 Nov 2026; L22): an invite lets its person straight in, and in a closed circle
  * only the people who run it may make one. So the invites still usable that were made by anyone else (a plain member's
  * open link from while it was open, a moderator's who has stepped down, a closed account's) are withdrawn, in the
- * caller's transaction. Invites from its creator, its owners and moderators and platform admins, all with active
- * accounts, stand. Answers the people whose invite lists changed: each inviter, and each invitee who is a member.
+ * caller's transaction. Invites from its owner and moderators and platform admins, all with active accounts, stand
+ * (S2: having made the circle is no longer a reason). Answers the people whose invite lists changed: each inviter, and each invitee who is a member.
  */
 async function withdrawInvitesOfNonManagers(client: PoolClient, circleId: string): Promise<string[]> {
   const r = await client.query<{ inviter_id: string; invitee_id: string | null }>(
@@ -214,7 +218,7 @@ async function withdrawInvitesOfNonManagers(client: PoolClient, circleId: string
         AND NOT EXISTS (
           SELECT 1 FROM users a
            WHERE a.id = i.inviter_id AND ${activeMemberSql('a')}
-             AND (a.role IN ('admin', 'super_admin') OR a.id = c.created_by
+             AND (a.role IN ('admin', 'super_admin')
                   OR EXISTS (SELECT 1 FROM circle_members m
                               WHERE m.circle_id = c.id AND m.user_id = a.id AND m.role IN ('owner', 'moderator'))))
       RETURNING i.inviter_id, (SELECT u.id FROM users u WHERE lower(u.email) = i.invitee_email LIMIT 1) AS invitee_id`,
@@ -246,6 +250,7 @@ async function admitEveryoneWaiting(client: PoolClient, circleId: string, decide
   if (added.rowCount && added.rowCount > 0) {
     await client.query(`UPDATE circles SET member_count = member_count + $2 WHERE id = $1`, [circleId, added.rowCount]);
   }
+  await client.query(`DELETE FROM circle_removals WHERE circle_id = $1 AND user_id = ANY($2::uuid[])`, [circleId, ids]);
   return ids;
 }
 
@@ -284,8 +289,31 @@ export async function attachPod(circleId: string, podId: string, userId: string,
   );
 }
 
-export async function detachPod(circleId: string, podId: string): Promise<void> {
-  await query(`DELETE FROM circle_pods WHERE circle_id = $1 AND pod_id = $2`, [circleId, podId]);
+/** What anyone else is told on trying to take a pod out of a circle. */
+export const DETACH_REFUSAL = "Only the people who run this circle, or the pod's director, can take a pod out of it.";
+
+/**
+ * Take a pod out of a circle (S2, brief RSN 03): the people who run the circle, or the pod's own active director (who
+ * may always unlink their pod from any circle, run by them or not), or a platform admin. Only the link goes: the pod
+ * keeps its members, settings, wall and events. 404 for a missing or archived circle; a link that was not there
+ * changes nothing (`detached` false).
+ */
+export async function detachPod(circleId: string, podId: string, actor: CircleActor): Promise<{ detached: boolean }> {
+  const r = await query<{ manages: boolean; directs: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $3
+                       AND m.role IN ('owner', 'moderator')) AS manages,
+            EXISTS (SELECT 1 FROM pod_members pm WHERE pm.pod_id = $2 AND pm.user_id = $3
+                       AND pm.status = 'active' AND pm.role = 'director') AS directs
+       FROM circles c WHERE c.id = $1 AND c.archived_at IS NULL`,
+    [circleId, podId, actor.userId],
+  );
+  const facts = r.rows[0];
+  if (!facts) throw new NotFoundError('Circle', circleId);
+  if (!isPlatformAdmin(actor.role) && !facts.manages && !facts.directs) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, DETACH_REFUSAL);
+  }
+  const del = await query(`DELETE FROM circle_pods WHERE circle_id = $1 AND pod_id = $2`, [circleId, podId]);
+  return { detached: !!del.rowCount && del.rowCount > 0 };
 }
 
 // ── Membership (open join — flagged default, spec §10) ───────────────────────
@@ -309,6 +337,8 @@ export async function admitToCircle(client: PoolClient, circleId: string, userId
     await client.query(
       `UPDATE circles SET member_count = member_count + 1 WHERE id = $1`, [circleId]);
   }
+  // S2 fix round 1: let back in, so no longer "removed" (an organiser approved, invited or reopened for them).
+  await client.query(`DELETE FROM circle_removals WHERE circle_id = $1 AND user_id = $2`, [circleId, userId]);
   await client.query(
     `UPDATE circle_join_requests SET status = 'approved', decided_by = $3, decided_at = NOW()
       WHERE circle_id = $1 AND user_id = $2 AND status = 'pending'`,
@@ -333,19 +363,57 @@ async function inviterRunsCircle(circleId: string, inviterId: string): Promise<b
 export async function joinCircle(
   circleId: string,
   userId: string,
-  opts: { role?: string; invitedBy?: string } = {},
+  opts: { role?: string; invitedBy?: string; invite?: ReturningInvite } = {},
 ): Promise<void> {
   const circle = await query<{ id: string; join_policy: CircleJoinPolicy | null }>(
     `SELECT id, join_policy FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
+  const closed = circle.rows[0].join_policy === 'closed';
 
-  if (circle.rows[0].join_policy === 'closed'
+  // S2 fix round 1 (controller ruling): someone the circle's organisers removed does not come back by themselves. An
+  // open circle refuses their own join; a closed one tells them to ask (an organiser decides). Only a personal invite
+  // made after the removal by someone who runs the circle now lets them straight back in. Platform admins are exempt.
+  if (!isPlatformAdmin(opts.role) && !(await isCircleMember(circleId, userId))) {
+    const removedAt = await circleRemovalOf(circleId, userId);
+    if (removedAt && !(await organiserInvitedBack(circleId, removedAt, opts))) {
+      if (closed) throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_JOIN);
+      throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, REMOVED_FROM_CIRCLE);
+    }
+  }
+
+  if (closed
       && !(await isCircleMember(circleId, userId)) && !(await isCircleManager(circleId, userId, opts.role))
       && !(opts.invitedBy !== undefined && await inviterRunsCircle(circleId, opts.invitedBy))) {
     throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, opts.invitedBy !== undefined ? CIRCLE_CLOSED_INVITE : CIRCLE_CLOSED_JOIN);
   }
 
   await transaction((client) => admitToCircle(client, circleId, userId));
+}
+
+/** S2 fix round 1: what someone an organiser removed from a circle is told when they try to join it again. */
+export const REMOVED_FROM_CIRCLE = 'You were removed from this circle. Ask its owner or a moderator for an invitation.';
+
+/** The invite an accept would let someone in with: who made it, for whom, and when (pod.service's shape). */
+export type { ReturningInvite };
+
+/** When this person was removed from the circle by its organisers, or null (never, or let back in since). */
+async function circleRemovalOf(circleId: string, userId: string): Promise<Date | null> {
+  const r = await query<{ created_at: Date }>(
+    `SELECT created_at FROM circle_removals WHERE circle_id = $1 AND user_id = $2`, [circleId, userId]);
+  return r.rows[0]?.created_at ?? null;
+}
+
+/** A personal invite (one address, one use), made after the removal, by someone who runs the circle now. */
+async function organiserInvitedBack(
+  circleId: string,
+  removedAt: Date,
+  opts: { invitedBy?: string; invite?: ReturningInvite },
+): Promise<boolean> {
+  const inv = opts.invite;
+  if (!inv || opts.invitedBy === undefined) return false;
+  if (!inv.inviteeEmail || inv.maxUses > 1) return false;
+  if (new Date(inv.createdAt).getTime() <= new Date(removedAt).getTime()) return false;
+  return inviterRunsCircle(circleId, opts.invitedBy);
 }
 
 /** Is this member in the circle? The gate for circle-level invites (C3). */
@@ -357,8 +425,23 @@ export async function isCircleMember(circleId: string, userId: string): Promise<
   return r.rows.length > 0;
 }
 
+/** S2: what an owner is told on pressing Leave. A circle is never left without its owner. */
+export const OWNER_CANNOT_LEAVE = 'Hand the circle to someone else before you leave it.';
+
+/**
+ * Leave a circle. Its owner cannot (S2): they hand it to someone first, so a circle is never left without the person
+ * who runs it. The owner's row is read under a lock in the same transaction as the delete, so a handover that lands at
+ * the same moment is seen. Someone not in it leaves nothing (no error, as before).
+ */
 export async function leaveCircle(circleId: string, userId: string): Promise<void> {
   await transaction(async (client) => {
+    // S2 fix round 1: lock the circle row FIRST, the order every circle write takes (role change, handover, removal),
+    // so a Leave at the same moment as one of them waits its turn instead of deadlocking.
+    const locked = await client.query(`SELECT id FROM circles WHERE id = $1 FOR UPDATE`, [circleId]);
+    if (!locked.rows[0]) throw new NotFoundError('Circle', circleId);
+    const mine = await client.query<{ role: string }>(
+      `SELECT role FROM circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE`, [circleId, userId]);
+    if (mine.rows[0]?.role === 'owner') throw new ValidationError(OWNER_CANNOT_LEAVE);
     const del = await client.query(
       `DELETE FROM circle_members WHERE circle_id = $1 AND user_id = $2`,
       [circleId, userId],
@@ -417,7 +500,7 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
   }>(
     `SELECT c.id, c.name, c.description, c.parent_circle_id, ${activeCircleMemberCount('c')} AS member_count, c.created_at,
             (SELECT count(*)::int FROM circle_pods cp JOIN pods p ON p.id = cp.pod_id
-              WHERE cp.circle_id = c.id AND p.status <> 'archived' AND p.visibility <> 'private') AS public_pod_count,
+              WHERE cp.circle_id = c.id AND p.status <> 'archived' AND p.visibility::text NOT IN ${NOT_DISCOVERABLE}) AS public_pod_count,
             ${circleAccessColumns('c', '$2', '$3')}
      FROM circles c WHERE c.id = $1 AND c.archived_at IS NULL`,
     [circleId, userId, isAdmin],
@@ -442,8 +525,8 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
        WHERE m.circle_id = $1 AND ${activeMemberSql('u')} ORDER BY m.joined_at ASC LIMIT 100`,
       [circleId],
     ),
-    access.locked ? none : query<{ pod_id: string; name: string; description: string | null }>(
-      `SELECT cp.pod_id, p.name, p.description
+    access.locked ? none : query<{ pod_id: string; name: string; description: string | null; visibility: string }>(
+      `SELECT cp.pod_id, p.name, p.description, p.visibility::text AS visibility
        FROM circle_pods cp JOIN pods p ON p.id = cp.pod_id
        WHERE cp.circle_id = $1 AND ${visiblePodSql('p', '$2', '$3')} ORDER BY cp.created_at ASC`,
       [circleId, userId, seesEveryEvent],
@@ -481,7 +564,7 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
       userId: m.user_id, displayName: m.display_name, avatarUrl: m.avatar_url,
       role: m.role, joinedAt: m.joined_at,
     })),
-    pods: pods.rows.map(p => ({ podId: p.pod_id, name: p.name, description: p.description })),
+    pods: pods.rows.map(p => ({ podId: p.pod_id, name: p.name, description: p.description, visibility: p.visibility === 'invite_only' ? 'private' : p.visibility })),
     upcomingEvents: events.rows.map(e => ({
       id: e.id, title: e.title, scheduledAt: e.scheduled_at, podId: e.pod_id, forCircle: !!e.for_circle,
       timezone: eventZone(e.timezone), imageUrl: eventImageUrlOf(e.id, e),

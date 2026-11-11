@@ -593,8 +593,8 @@ export async function fanoutEntityChange(
 //   user:<recipient>:circles          their own Circles list, whose names and counts may have moved;
 //   user:<changed>:circles            for each member whose link changed, so a list that shows that member's
 //                                     circles redraws for the people who share the circle.
-// The audience is the circle's members, the person who made it (its creator manages it even with no member row),
-// the platform admins (final fix wave X3, 2 Nov 2026: they run every circle, L21, so their open Requests panel and
+// The audience is the circle's members, the person who made it (S2: no longer a right to run it, but a screen they still
+// have open is told; a tag carries no data), the platform admins (final fix wave X3, 2 Nov 2026: they run every circle, L21, so their open Requests panel and
 // request count follow an ask or an answer; read bounded, CIRCLE_CHANGE_ADMINS_MAX), the actor and the changed people.
 // A circle's invites change through `extra` (circle:<id>:invites). Someone outside the circle with its page open is
 // not told, and catches up on focus, as with an entity. The circle's wall keeps its own refresh and is not told.
@@ -651,6 +651,30 @@ export async function fanoutCircleChange(
     }
   } catch (err) {
     logger.warn({ err, circleId }, 'fanoutCircleChange: failed to fan out');
+  }
+}
+
+// ─── The circles a pod is in (Shirley pilot S2, 11 Nov 2026) ────────────────
+//
+// A pod's own change (renamed, made private or public, archived or reactivated) changes what each circle it is in
+// shows: a pod made private leaves the circle page of everyone outside it. Each circle the pod is in (not archived, at
+// most CIRCLES_OF_POD_MAX) is told through fanoutCircleChange, so its page reads again.
+
+export const CIRCLES_OF_POD_MAX = 20;
+
+export async function fanoutCirclesOfPod(podId: string, actorId: string): Promise<void> {
+  if (!getRealtimeIo()) return;
+  try {
+    const { query } = await import('../db');
+    const circles = await query<{ circle_id: string }>(
+      `SELECT cp.circle_id FROM circle_pods cp JOIN circles c ON c.id = cp.circle_id
+        WHERE cp.pod_id = $1 AND c.archived_at IS NULL
+        ORDER BY cp.circle_id LIMIT $2`,
+      [podId, CIRCLES_OF_POD_MAX],
+    );
+    for (const row of circles.rows) await fanoutCircleChange(row.circle_id, actorId);
+  } catch (err) {
+    logger.warn({ err, podId }, 'fanoutCirclesOfPod: failed to fan out');
   }
 }
 

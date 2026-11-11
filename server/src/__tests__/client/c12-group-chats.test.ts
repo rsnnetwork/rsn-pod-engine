@@ -695,8 +695,10 @@ describe('Messages: groups in the inbox, a group open at /messages/g/:groupId', 
   });
 
   it('the one-to-one message box is 44px tall too, and Enter does not send mid-composition', () => {
-    expect(classAfter(page, '<textarea').split(/\s+/)).toContain('min-h-[44px]');
-    expect(page).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !isComposingEnter\(e\.nativeEvent\)\)/);
+    // The one-to-one box is its own component since 11 Nov 2026 (DmComposer, keyed by conversation, RSN 01).
+    const box = read('features/messages/DmComposer.tsx');
+    expect(classAfter(box, '<textarea').split(/\s+/)).toContain('min-h-[44px]');
+    expect(box).toMatch(/if \(e\.key === 'Enter' && !e\.shiftKey && !isComposingEnter\(e\.nativeEvent\)\)/);
   });
 });
 

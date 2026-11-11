@@ -6,6 +6,7 @@ import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
   Invite, InviteStatus, InviteType, CreateInviteInput, Session, ErrorCodes, formatEventTime,
+  type CircleInviteRow, type CircleInviteState,
 } from '@rsn/shared';
 import { eventImageColumns, eventImageUrlOf } from '../session/event-image-url';
 import { NotFoundError, ConflictError, AppError, ForbiddenError } from '../../middleware/errors';
@@ -14,7 +15,8 @@ import * as sessionService from '../session/session.service';
 import { registerOrWaitlist } from '../session/event-waitlist.service';
 import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
 import * as circleService from '../circle/circle.service';
-import { mayInviteToCircle } from '../circle/circle-managers';
+import { isCircleManager, mayInviteToCircle } from '../circle/circle-managers';
+import { activeMemberSql } from '../users/active-member';
 import * as emailService from '../email/email.service';
 import config from '../../config';
 
@@ -175,14 +177,19 @@ export async function mayRunPodInvites(podId: string, userId: string, isAdmin: b
 
 /**
  * Whether this person runs the one target an invite is for: an event invite's event (its host or a co-host), a pod
- * invite's pod (its director or host). A platform or circle invite has no one who runs it. The invite's TYPE decides, not
- * whichever id happens to be set (fix round 3): an old event invite that carries a stray pod id is the event's alone,
- * and an old pod invite that carries a stray event id is the pod's, so that event's host has no hold on it. Admins are
- * settled by the callers, which skip the lookup for them.
+ * invite's pod (its director or host), a circle invite's circle (its owner or a moderator: Shirley pilot S2, so they
+ * can withdraw any invitation in the circle's list). A platform invite has no one who runs it. The invite's TYPE
+ * decides, not whichever id happens to be set (fix round 3): an old event invite that carries a stray pod id is the
+ * event's alone, and an old pod invite that carries a stray event id is the pod's, so that event's host has no hold on
+ * it. Admins are settled by the callers, which skip the lookup for them.
  */
-async function runsTheTargetOf(invite: { type: string; session_id: string | null; pod_id: string | null }, userId: string): Promise<boolean> {
+async function runsTheTargetOf(
+  invite: { type: string; session_id: string | null; pod_id: string | null; circle_id?: string | null },
+  userId: string,
+): Promise<boolean> {
   if (invite.type === InviteType.SESSION && invite.session_id !== null) return (await eventInviteRole(invite.session_id, userId, false)) !== null;
   if (invite.type === InviteType.POD && invite.pod_id !== null) return mayRunPodInvites(invite.pod_id, userId, false);
+  if (invite.type === InviteType.CIRCLE && invite.circle_id) return isCircleManager(invite.circle_id, userId, undefined);
   return false;
 }
 
@@ -847,6 +854,11 @@ async function followDatabaseAfterPersonalInvite(sessionId: string, userId: stri
 /** What an accept gave: the event, pod or circle; Part 3 Task 3: or a place in a full event's waiting list. */
 interface InviteRegistration { sessionId?: string; podId?: string; circleId?: string; waitlistPosition?: number }
 
+/** What a re-entry check needs to know about the invite being accepted. */
+function returningInvite(invite: Invite): podService.ReturningInvite {
+  return { inviterId: invite.inviterId, inviteeEmail: invite.inviteeEmail ?? null, maxUses: invite.maxUses, createdAt: invite.createdAt };
+}
+
 async function applyInviteRegistration(
   invite: Invite,
   userId: string,
@@ -858,13 +870,16 @@ async function applyInviteRegistration(
   if (invite.type === InviteType.CIRCLE && invite.circleId) {
     // T14: the invite is the doorway, so a closed circle takes them, and a pending ask of theirs is answered. Since the
     // final fix wave (S2, 2 Nov 2026) only while its maker still runs the circle; otherwise a closed circle refuses it.
-    await circleService.joinCircle(invite.circleId, userId, { invitedBy: invite.inviterId });
+    // S2 fix round 1: someone the circle's organisers removed comes back only through a personal invite one of them made
+    // after the removal (joinCircle checks it from these facts).
+    await circleService.joinCircle(invite.circleId, userId, { invitedBy: invite.inviterId, invite: returningInvite(invite) });
     out.circleId = invite.circleId;
   }
 
   if (invite.type === InviteType.POD && invite.podId) {
     try {
-      await podService.addMember(invite.podId, userId);
+      // S2 fix round 1: an organiser-removed person comes back only through an organiser's personal invite.
+      await podService.addMember(invite.podId, userId, undefined, undefined, { by: 'invite', invite: returningInvite(invite) });
     } catch (err) {
       // Already a member — that's fine, the invite still resolves to "you're in". A full pod is a refusal.
       if (!(err instanceof ConflictError && err.code === ErrorCodes.POD_MEMBER_EXISTS)) throw err;
@@ -890,7 +905,8 @@ async function applyInviteRegistration(
       out.podId = podId;
     } else if (podId) {
       try {
-        await podService.addMember(podId, userId);
+        // S2 fix round 1: an event invite does not bring someone the pod's organisers removed back into the pod.
+        await podService.addMember(podId, userId, undefined, undefined, { by: 'invite', invite: returningInvite(invite) });
       } catch (err) {
         // Already a member is fine — the invite still resolves to "you're in" — and so is a full pod:
         // registerParticipant decides whether the event needs its pod. These are the only two
@@ -1412,6 +1428,64 @@ export async function listSessionInvites(
   return result.rows;
 }
 
+/** A circle's invitations shown at once in its managers' list (the newest first). */
+export const CIRCLE_INVITES_SHOWN = 200;
+
+/**
+ * A circle's invitations for the people who run it (Shirley pilot S2): those still waiting (pending and not expired),
+ * accepted and declined, newest first, at most CIRCLE_INVITES_SHOWN. A withdrawn or expired invitation is not listed.
+ * The person invited is named by their display name when the address is an active member's; otherwise by the address,
+ * in full only to the person who sent that invite and to platform admins, masked to everyone else. A shared link names
+ * nobody. The caller has checked the viewer runs the circle.
+ */
+export async function listCircleInvites(
+  circleId: string,
+  viewer: { userId: string; isAdmin: boolean },
+): Promise<CircleInviteRow[]> {
+  const r = await query<{
+    id: string; status: string; declined_at: Date | null; invitee_email: string | null; max_uses: number;
+    inviter_id: string; inviter_name: string | null; member_id: string | null; member_name: string | null;
+    created_at: Date; expires_at: Date | null;
+  }>(
+    `SELECT i.id, i.status, i.declined_at, i.invitee_email, i.max_uses, i.inviter_id, inv.display_name AS inviter_name,
+            m.id AS member_id, m.display_name AS member_name, i.created_at, i.expires_at
+       FROM invites i
+       LEFT JOIN users inv ON inv.id = i.inviter_id
+       LEFT JOIN LATERAL (
+         SELECT u.id, u.display_name FROM users u
+          WHERE ${activeMemberSql('u')}
+            AND (u.id = i.accepted_by_user_id OR (i.invitee_email IS NOT NULL AND lower(u.email) = lower(i.invitee_email)))
+          ORDER BY (u.id = i.accepted_by_user_id) DESC NULLS LAST
+          LIMIT 1
+       ) m ON TRUE
+      WHERE i.circle_id = $1 AND i.type = 'circle'
+        AND ((i.status = 'pending' ${STILL_ACCEPTABLE}) OR i.status = 'accepted'
+             OR (i.status = 'revoked' AND i.declined_at IS NOT NULL))
+      ORDER BY i.created_at DESC, i.id
+      LIMIT ${CIRCLE_INVITES_SHOWN}`,
+    [circleId],
+  );
+  return r.rows.map((row) => {
+    const isLink = !row.invitee_email || row.max_uses > 1;
+    const sentByMe = row.inviter_id === viewer.userId;
+    let invitee: string | null = null;
+    if (row.member_name) invitee = row.member_name;
+    else if (row.invitee_email) invitee = sentByMe || viewer.isAdmin ? row.invitee_email : maskEmail(row.invitee_email);
+    const state: CircleInviteState = row.status === 'pending' ? 'pending' : row.status === 'accepted' ? 'accepted' : 'declined';
+    return {
+      id: row.id,
+      state,
+      invitee: isLink && !row.member_name ? null : invitee,
+      inviteeUserId: row.member_id,
+      isLink,
+      inviterName: row.inviter_name,
+      sentByMe,
+      createdAt: new Date(row.created_at).toISOString(),
+      expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+    };
+  });
+}
+
 /**
  * "a•••@example.com": the first letter of an address and its domain, nothing else. Something that is not an address
  * shows nothing of itself.
@@ -1552,8 +1626,11 @@ export async function revokeInvite(
   userId: string,
   userRole?: string,
 ): Promise<RevokedInvite> {
-  const found = await query<{ inviter_id: string; type: string; pod_id: string | null; session_id: string | null; invitee_user_id: string | null }>(
-    `SELECT i.inviter_id, i.type, i.pod_id, i.session_id, u.id AS invitee_user_id
+  const found = await query<{
+    inviter_id: string; type: string; pod_id: string | null; session_id: string | null; circle_id: string | null;
+    invitee_user_id: string | null;
+  }>(
+    `SELECT i.inviter_id, i.type, i.pod_id, i.session_id, i.circle_id, u.id AS invitee_user_id
        FROM invites i
        LEFT JOIN users u ON u.email = i.invitee_email
       WHERE i.id = $1 AND i.status = 'pending'`,

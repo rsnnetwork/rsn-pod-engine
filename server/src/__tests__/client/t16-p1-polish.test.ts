@@ -176,8 +176,9 @@ describe('P1 item 7: a message taken down during a socket gap leaves the open li
 
 describe('the sweep of the screens T16 touched: every tap target 44px', () => {
   it('the pod page\'s circle chips are app links with a 44px tap, the pods filters and the admin pods controls are 44px', () => {
-    const pod = read('features/pods/PodDetailPage.tsx');
-    expect(pod).toMatch(/<Link key=\{c\.id\} to=\{`\/circles\/\$\{c\.id\}`\} className="inline-flex min-h-\[44px\]/);
+    // Shirley pilot S2: the chips live in their own file now (with the pod director's Remove beside each).
+    const pod = read('features/pods/PodCircleChips.tsx');
+    expect(pod).toMatch(/<Link to=\{`\/circles\/\$\{c\.id\}`\} className="inline-flex min-h-\[44px\]/);
     expect(pod).not.toMatch(/href=\{`\/circles\//);
     expect(read('features/pods/PodsPage.tsx')).toMatch(/size="sm"\s*className="min-h-\[44px\]"\s*onClick=\{\(\) => setFilter\(key\)\}/);
     const admin = read('features/admin/AdminPodsPage.tsx');

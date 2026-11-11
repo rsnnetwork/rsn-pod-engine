@@ -17,6 +17,7 @@ import { E } from '@/realtime/entities';
 import { hasEarlierAppPage } from './profile-back';
 import { useConfirm } from '@/hooks/useConfirm';
 import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
+import { dropDraftsTo } from '@/features/messages/voice/composer-drafts';
 
 // 13 Aug 2026 (D1): Stefan — "the profile card needs a major visual upgrade,
 // the greatest thing on the platform", and "About was cut off / too narrow".
@@ -105,6 +106,8 @@ export default function PublicProfilePage() {
   const blockMutation = useMutation({
     mutationFn: () => api.post(`/users/${userId}/block`),
     onSuccess: () => {
+      // Nothing can be sent to them now: an unsent message to them is dropped (11 Nov 2026).
+      if (userId) dropDraftsTo(userId);
       addToast('User blocked. They can no longer message you, and you won\'t be matched together.', 'success');
       qc.invalidateQueries({ queryKey: ['user-block-status', userId] });
       qc.invalidateQueries({ queryKey: ['blocked-users'] });

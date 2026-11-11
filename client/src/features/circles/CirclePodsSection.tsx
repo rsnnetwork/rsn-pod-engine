@@ -2,6 +2,8 @@
 // Everyone sees the pods the server lists (archived pods never, a private pod only to its members). The people who
 // run the circle (canManage) get New pod (the pod form, attached in the same call, the page stays here) and Attach a
 // pod (a searchable sheet whose top offers Create a new pod), and may detach one, which asks first.
+// Shirley pilot S2: each pod says when it is Private or needs approval, so the people who run the circle see at a glance
+// which pods only their members see; a pod's own director may also take it out from the pod's page.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -13,6 +15,7 @@ import { useToastStore } from '@/stores/toastStore';
 import CreatePodModal from '@/features/pods/CreatePodModal';
 import AttachPodSheet from './AttachPodSheet';
 import type { CircleDetail } from './circle-logic';
+import { podVisibilityBadge } from './circle-admin';
 import { circleErrorSentence, refreshCircle } from './useCircleActions';
 
 const ACTION = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50';
@@ -58,7 +61,14 @@ export default function CirclePodsSection({ circle }: { circle: CircleDetail }) 
             <Card key={p.podId} className="card-hover !p-4">
               <div className="flex items-center justify-between gap-2">
                 <Link to={`/pods/${p.podId}`} className="flex min-h-[44px] min-w-0 flex-1 flex-col justify-center">
-                  <p className="font-medium text-gray-900 break-words">{p.name}</p>
+                  <p className="flex flex-wrap items-center gap-1.5 font-medium text-gray-900 break-words">
+                    {p.name}
+                    {podVisibilityBadge(p.visibility) && (
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600" data-testid={`circle-pod-badge-${p.podId}`}>
+                        {podVisibilityBadge(p.visibility)}
+                      </span>
+                    )}
+                  </p>
                   {p.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{p.description}</p>}
                 </Link>
                 {manager && (

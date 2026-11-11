@@ -13,6 +13,7 @@ import { useMutation } from '@tanstack/react-query';
 import Modal from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import api from '@/lib/api';
+import { dropDraftsTo } from '@/features/messages/voice/composer-drafts';
 
 export type ReportReason =
   | 'spam' | 'harassment' | 'inappropriate_content'
@@ -65,6 +66,8 @@ export default function ReportUserModal({ open, onClose, reportedId, reportedDis
       // reporter asks to block too, do it right after the report lands.
       if (alsoBlock) {
         await api.post(`/users/${reportedId}/block`, { reason: `Reported: ${reason}` });
+        // Nothing can be sent to them now: an unsent message to them is dropped (11 Nov 2026).
+        dropDraftsTo(reportedId);
       }
     },
     onSuccess: () => {

@@ -83,7 +83,7 @@ export function newPodValues(source?: PodSource): { values: PodFormValues; chose
     podType,
     orchestrationMode: (isOrchestration(source?.orchestrationMode) ? source.orchestrationMode : podTypeRule(podType).orchestration.default),
     communicationMode: podTypeRule(podType).communication,
-    visibility: source?.visibility ?? 'private',
+    visibility: podVisibilitySetting(source?.visibility),
     maxMembers: asText(source?.maxMembers),
     allowMemberInvites: !!source?.allowMemberInvites,
     rules: source?.rules ?? '',
@@ -91,6 +91,14 @@ export function newPodValues(source?: PodSource): { values: PodFormValues; chose
   const chosen = new Set<string>(isOrchestration(source?.orchestrationMode) ? ['orchestrationMode'] : []);
   const { values, notices } = applyTypeChange(base, podType, chosen);
   return { values, chosen, notices };
+}
+
+/**
+ * Shirley pilot S2 (D2): the form offers three settings. A saved pod still on the retired "invite only" (or any value
+ * the form does not offer) opens as Private, the more private setting, so saving it never makes it more visible.
+ */
+export function podVisibilitySetting(v: string | null | undefined): string {
+  return v === 'public' || v === 'public_with_approval' || v === 'private' ? v : 'private';
 }
 
 /**
@@ -108,7 +116,7 @@ export function editPodValues(pod: PodSource): { values: PodFormValues; chosen: 
     podType,
     orchestrationMode: effective,
     communicationMode: isCommunication(pod.communicationMode) ? pod.communicationMode : rule.communication,
-    visibility: pod.visibility ?? 'private',
+    visibility: podVisibilitySetting(pod.visibility),
     maxMembers: asText(pod.maxMembers),
     allowMemberInvites: !!pod.allowMemberInvites,
     rules: pod.rules ?? '',

@@ -81,16 +81,16 @@ export interface ReactionSummary {
 // ── Guards ───────────────────────────────────────────────────────────────────
 
 /**
- * T14 (1 Nov 2026): a closed circle's wall is read only by the people in it and those who run it (its creator, and
- * platform admins; owners and moderators are in it). Every read of the wall asks this: the feed, one post, its
- * comments, and a share out of it, so no path leaks it (audit 05, riskiest point 2). A circle that does not exist
- * reads as before (an empty feed).
+ * T14 (1 Nov 2026): a closed circle's wall is read only by the people in it and platform admins (its owner and
+ * moderators are in it; S2: having made the circle is no longer a reason). Every read of the wall asks this: the feed,
+ * one post, its comments, and a share out of it, so no path leaks it (audit 05, riskiest point 2). A circle that does
+ * not exist reads as before (an empty feed).
  */
 export async function assertMayReadWall(circleId: string, viewerId: string, viewerRole?: string): Promise<void> {
   if (isPlatformAdmin(viewerRole)) return;
   const r = await query<{ join_policy: string | null; inside: boolean }>(
     `SELECT c.join_policy,
-            (c.created_by = $2 OR EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $2)) AS inside
+            EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $2) AS inside
        FROM circles c WHERE c.id = $1`,
     [circleId, viewerId],
   );

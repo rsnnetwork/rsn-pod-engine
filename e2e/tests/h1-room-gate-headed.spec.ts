@@ -288,11 +288,11 @@ test('H1: a stranger on a private pod\'s running event is refused and receives n
   hostSock.emit('host:end_session', { sessionId, endEvent: true });
   await until(async () => (await pool.query('SELECT status FROM sessions WHERE id = $1', [sessionId])).rows[0]?.status === 'completed', 60_000, 'the event ended');
 
-  // 8. A member of an INVITE-ONLY pod, not yet registered, opens its event: the join registers them and lets them in.
+  // 8. A member of a PRIVATE pod (the retired "invite only" setting, Shirley pilot S2), not yet registered, opens its event: the join registers them and lets them in.
   const ioMember = await createTestUser('h1iomember');
   ids.push(ioMember.id);
   const ioPod = await apiRequest(host, 'POST', '/pods', {
-    name: 'E2E H1 Room Gate Invite-only Pod', description: 'E2E test pod', visibility: 'invite_only',
+    name: 'E2E H1 Room Gate Private Pod', description: 'E2E test pod', visibility: 'private',
     podType: 'speed_networking', orchestrationMode: 'timed_rounds', communicationMode: 'hybrid',
   });
   const ioPodMade = ioPod.data.id as string;

@@ -66,7 +66,8 @@ describe('a duplicated pod', () => {
     expect(values.orchestrationMode).toBe('free_form');
     expect(values.communicationMode).toBe('video');
     expect(values.maxMembers).toBe('12');
-    expect(values.visibility).toBe('invite_only');
+    // Shirley pilot S2 (D2): the retired "invite only" opens as Private, the more private setting.
+    expect(values.visibility).toBe('private');
     expect(notices).toEqual(["Changed to Freeform: Reason pods don't use timed rounds."]);
     expect(chosen.has('orchestrationMode')).toBe(true);
   });
@@ -172,7 +173,8 @@ describe('what the pod forms send', () => {
     });
     expect(podChanges({ ...values, maxMembers: '' })).toEqual({
       name: 'Deep', description: 'x', podType: 'reason', orchestrationMode: 'moderated', communicationMode: 'video',
-      visibility: 'invite_only', maxMembers: null, rules: 'Be kind', allowMemberInvites: false,
+      // Shirley pilot S2 (D2): a pod still on the retired "invite only" opens, and saves, as Private.
+      visibility: 'private', maxMembers: null, rules: 'Be kind', allowMemberInvites: false,
     });
   });
 });

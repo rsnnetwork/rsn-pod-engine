@@ -69,6 +69,12 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     const dmRoute = readServerSource('routes/dm.ts');
     const cloudinaryLib = readClientSource('lib/cloudinary.ts');
     const messagesPage = readClientSource('features/messages/MessagesPage.tsx');
+    // Since 11 Nov 2026 (Shirley Palmer, RSN 01/05/06) the box is DmComposer, keyed by conversation, and the recorder,
+    // its bar and the player live in features/messages/voice/.
+    const composer = readClientSource('features/messages/DmComposer.tsx');
+    const recorderHook = readClientSource('features/messages/voice/useVoiceRecorder.ts');
+    const recorder = readClientSource('features/messages/voice/voice-recorder.ts');
+    const recordingBar = readClientSource('features/messages/voice/RecordingBar.tsx');
 
     it('attachment type union accepts audio on server + route', () => {
       expect(dmService).toMatch(/type:\s*['"]image['"]\s*\|\s*['"]audio['"]/);
@@ -84,34 +90,38 @@ describe('Phase X — 13 May live-test bug fixes', () => {
       expect(cloudinaryLib).toMatch(/export async function uploadAudioToCloudinary/);
       // Audio caps pinned so a future bump is intentional.
       expect(cloudinaryLib).toMatch(/MAX_AUDIO_BYTES\s*=\s*5\s*\*\s*1024\s*\*\s*1024/);
-      expect(cloudinaryLib).toMatch(/MAX_AUDIO_DURATION_MS\s*=\s*5\s*\*\s*60\s*\*\s*1000/);
+      // 11 Nov 2026 (RSN 06): the cap is 1 minute, one constant (VOICE_NOTE_MAX_MS), plus the stop's moment of lag (65 s).
+      expect(cloudinaryLib).toMatch(/MAX_AUDIO_DURATION_MS\s*=\s*VOICE_NOTE_UPLOAD_LIMIT_MS;/);
       // Audio uploads use /auto/upload so the same preset works for both
       // images and audio. Pin the endpoint.
       expect(cloudinaryLib).toMatch(/\/auto\/upload/);
     });
 
-    it('MessagesPage exposes the mic button + recording state machine', () => {
-      expect(messagesPage).toMatch(/data-testid=['"]dm-mic-button['"]/);
-      // Three states: idle | recording | preview.
-      expect(messagesPage).toMatch(/'idle'\s*\|\s*'recording'\s*\|\s*'preview'/);
-      // MediaRecorder lifecycle.
-      expect(messagesPage).toMatch(/new MediaRecorder/);
-      expect(messagesPage).toMatch(/recorder\.start\(100\)/);
+    it('the message box exposes the mic button + the recorder\'s states', () => {
+      expect(composer).toMatch(/data-testid=['"]dm-mic-button['"]/);
+      // idle | starting (asking for the microphone) | recording; a stopped take is the conversation's voice draft.
+      expect(recorder).toMatch(/'idle'\s*\|\s*'starting'\s*\|\s*'recording'/);
+      // MediaRecorder lifecycle: no timeslice (the whole take on stop), the tail flushed with requestData() first.
+      expect(recorderHook).toMatch(/new MediaRecorder/);
+      expect(recorder).toMatch(/r\.start\(\);/);
+      expect(recorder).toMatch(/r\.requestData\(\)/);
     });
 
-    it('MessagesPage renders a recording bar with cancel + stop while recording', () => {
-      expect(messagesPage).toMatch(/data-testid=['"]dm-recording-bar['"]/);
-      expect(messagesPage).toMatch(/data-testid=['"]dm-recording-stop['"]/);
+    it('the message box renders a recording bar with cancel + stop while recording', () => {
+      expect(composer).toMatch(/<RecordingBar\b/);
+      expect(recordingBar).toMatch(/data-testid=['"]dm-recording-bar['"]/);
+      expect(recordingBar).toMatch(/data-testid=['"]dm-recording-stop['"]/);
     });
 
-    it('MessagesPage send mutation accepts audio and posts attachment.type=audio', () => {
-      expect(messagesPage).toMatch(/uploadAudioToCloudinary\(args\.audio\.blob/);
-      expect(messagesPage).toMatch(/type:\s*['"]audio['"]/);
+    it('the message box\'s send accepts audio and posts attachment.type=audio', () => {
+      expect(composer).toMatch(/uploadAudioToCloudinary\(vars\.audio\.blob/);
+      expect(composer).toMatch(/type:\s*['"]audio['"]/);
     });
 
-    it('MessagesPage renders <audio controls> in the bubble when attachmentType=audio', () => {
+    it('MessagesPage draws a voice note in the bubble with the player when attachmentType=audio', () => {
       expect(messagesPage).toMatch(/m\.attachmentType\s*===\s*['"]audio['"]/);
-      expect(messagesPage).toMatch(/<audio\b[\s\S]{0,80}controls/);
+      // The native <audio controls> ran its clock past a webm's end (RSN 06): the player holds it at the real length.
+      expect(messagesPage).toMatch(/<VoiceNotePlayer\b/);
     });
   });
 
@@ -124,6 +134,7 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     const dmRoute = readServerSource('routes/dm.ts');
     const cloudinaryLib = readClientSource('lib/cloudinary.ts');
     const messagesPage = readClientSource('features/messages/MessagesPage.tsx');
+    const composer = readClientSource('features/messages/DmComposer.tsx');
 
     it('migration 062 adds attachment columns + content/attachment xor check', () => {
       expect(migration).toMatch(/ADD COLUMN IF NOT EXISTS attachment_url\s+TEXT/);
@@ -160,16 +171,17 @@ describe('Phase X — 13 May live-test bug fixes', () => {
       expect(cloudinaryLib).toMatch(/MAX_IMAGE_BYTES\s*=\s*10\s*\*\s*1024\s*\*\s*1024/);
     });
 
-    it('MessagesPage shows the image button only when Cloudinary is configured', () => {
-      expect(messagesPage).toMatch(/cloudinaryReady\s*=\s*isCloudinaryConfigured\(\)/);
-      expect(messagesPage).toMatch(/cloudinaryReady\s*&&\s*\(/);
-      expect(messagesPage).toMatch(/data-testid=['"]dm-image-button['"]/);
+    it('the message box shows the image button only when Cloudinary is configured', () => {
+      expect(composer).toMatch(/cloudinaryReady\s*=\s*isCloudinaryConfigured\(\)/);
+      expect(composer).toMatch(/canAttach=\{cloudinaryReady\}/);
+      expect(composer).toMatch(/canAttach\s*&&\s*\(/);
+      expect(composer).toMatch(/data-testid=['"]dm-image-button['"]/);
     });
 
-    it('MessagesPage send mutation uploads then POSTs with attachment payload', () => {
-      expect(messagesPage).toMatch(/uploadImageToCloudinary\(args\.image\.file/);
-      // Since 1 Nov 2026 (T7) the page's prepareAttachment answers the attachment and useSendMessage posts it.
-      expect(messagesPage).toMatch(/prepareAttachment:[\s\S]{0,400}return \{ url: result\.url, type: ['"]image['"]/);
+    it('the message box\'s send uploads then POSTs with attachment payload', () => {
+      expect(composer).toMatch(/uploadImageToCloudinary\(vars\.image\.file/);
+      // Since 1 Nov 2026 (T7) the box's prepareAttachment answers the attachment and useSendMessage posts it.
+      expect(composer).toMatch(/prepareAttachment:[\s\S]{0,400}return \{ url: result\.url, type: ['"]image['"]/);
       expect(readClientSource('features/messages/thread/useSendMessage.ts')).toMatch(/content: vars\.content,\s*attachment,/);
     });
 
@@ -227,8 +239,12 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     it('MessagesPage sendMutation POSTs to /dm/messages and replaces URL with new conv id after first send', () => {
       // The POST moved into features/messages/thread/useSendMessage.ts (1 Nov 2026, T7); the page sends through it.
       expect(readClientSource('features/messages/thread/useSendMessage.ts')).toMatch(/api\.post\(['"]\/dm\/messages['"]/);
-      expect(messagesPage).toMatch(/useSendMessage</);
-      expect(messagesPage).toMatch(/isComposeMode[\s\S]{0,200}navigate\(`\/messages\/\$\{data\.conversationId\}`/);
+      // Since 11 Nov 2026 the box (DmComposer) sends; after the first message to someone the page moves to the new conversation.
+      const composer = readClientSource('features/messages/DmComposer.tsx');
+      expect(composer).toMatch(/useSendMessage</);
+      expect(composer).toMatch(/if \(!conversationId\) onFirstSend\?\.\(data\.conversationId\);/);
+      expect(messagesPage).toMatch(/onFirstSend=\{firstSent\}/);
+      expect(messagesPage).toMatch(/const firstSent = \(conversationId: string\) => \{[\s\S]{0,200}navigate\(`\/messages\/\$\{conversationId\}`, \{ replace: true \}\);/);
     });
 
     it('Recap row buttons keep data-testid for e2e selection', () => {

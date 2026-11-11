@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Users, Plus, Globe, Lock, Shield, Eye, UserCheck, Search } from 'lucide-react';
+import { Users, Plus, Globe, Lock, Eye, UserCheck, Search } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -16,10 +16,11 @@ import { podStatusLabel } from './pod-header-text';
 type PodFilter = 'browse' | 'active' | 'archived';
 
 const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; variant: 'default' | 'warning' | 'info' | 'success' }> = {
-  public:               { label: 'Public',              icon: Eye,       variant: 'info' },
-  invite_only:          { label: 'Invite Only',          icon: Shield,    variant: 'warning' },
+  // Shirley pilot S2 (D2): three settings; an old "invite only" pod reads as Private.
+  public:               { label: 'Public open',          icon: Eye,       variant: 'info' },
+  invite_only:          { label: 'Private',              icon: Lock,      variant: 'default' },
   private:              { label: 'Private',              icon: Lock,      variant: 'default' },
-  public_with_approval: { label: 'Public with Approval', icon: UserCheck, variant: 'info' },
+  public_with_approval: { label: 'Public with approval', icon: UserCheck, variant: 'info' },
 };
 
 export default function PodsPage() {

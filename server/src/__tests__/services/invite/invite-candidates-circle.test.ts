@@ -60,7 +60,8 @@ function world(opts: { policy?: 'open' | 'closed'; mayInvite?: boolean; archived
     if (/^SELECT id, name, join_policy FROM circles WHERE id = \$1 AND archived_at IS NULL$/.test(text)) {
       return { rows: opts.archived ? [] : [{ id: CIRCLE, name: 'Founders', join_policy: opts.policy ?? 'open' }] };
     }
-    if (/^SELECT 1 FROM circles c WHERE c.id = \$1 AND \(c.created_by = \$2/.test(text)) {
+    // Shirley pilot S2: the invite rule reads the asker's own row (an open circle: any role; closed: owner or moderator).
+    if (/^SELECT 1 FROM circles c JOIN circle_members m ON m\.circle_id = c\.id AND m\.user_id = \$2 WHERE c\.id = \$1/.test(text)) {
       return { rows: opts.mayInvite === false ? [] : [{ '?column?': 1 }] };
     }
     // createInvite's own daily allowance: nothing sent today.
@@ -112,7 +113,7 @@ describe('the candidates list for a circle', () => {
   it('a platform admin lists for any circle without the membership lookup', async () => {
     world({ policy: 'closed', mayInvite: false });
     await listInviteCandidates({ userId: ASKER, role: 'admin' }, { circleId: CIRCLE, source: 'connections', before: null, limit: 30 });
-    expect(mockQuery.mock.calls.some((c) => /c.created_by = \$2/.test(flat(c[0])))).toBe(false);
+    expect(mockQuery.mock.calls.some((c) => /JOIN circle_members m ON m\.circle_id = c\.id/.test(flat(c[0])))).toBe(false);
   });
 
   it('naming two targets, or none, is refused', async () => {

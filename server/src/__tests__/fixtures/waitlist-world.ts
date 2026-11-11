@@ -246,6 +246,9 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
   if (sql === "SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'") {
     return rows(world.rows.podMembers.filter((x) => x.pod_id === a && x.user_id === b));
   }
+  // Shirley pilot S2 fix round 2: whether an organiser removed them from the public pod (the world holds active members
+  // only, so never).
+  if (sql === 'SELECT removal_kind FROM pod_members WHERE pod_id = $1 AND user_id = $2') return rows([]);
   if (sql === 'SELECT key, label, description FROM event_groups WHERE session_id = $1 ORDER BY position, key') return rows([]);
   // Part 3 Task 5: no event in this world asks matching questions (the waiting list reads the one table and stops).
   if (sql === 'SELECT id, key, prompt, kind, prefer, required, options FROM event_matching_questions WHERE session_id = $1 ORDER BY position, key') return rows([]);

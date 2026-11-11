@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
+import { ArrowLeft, SmilePlus, Trash2, MessageSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
 import MeetingScheduler, { type SchedulerHandle } from './MeetingScheduler';
 import ThreadMeetingBanner from './ThreadMeetingBanner';
 import { messageCallAction } from './thread-call-rules';
@@ -28,13 +28,10 @@ import { GROUPS_FAILED, TRY_AGAIN, isRateLimited, mergeInbox } from './group-cha
 import { dayHeaderLabel, formatRelative, sameLocalDay, timeOnly } from './message-time';
 import { BUBBLE_LINK, bubbleLook, clusterMessages } from './bubble-look';
 import ReplyQuote from './ReplyQuote';
-import ReplyStrip, { ReplyButton } from './ReplyStrip';
+import { ReplyButton } from './ReplyStrip';
 import { replyContentOf, type ReplyTarget } from './reply-text';
 import Avatar from '@/components/ui/Avatar';
 import PersonLink from '@/components/people/PersonLink';
-import EmojiPicker, { pickInto } from '@/components/chat/EmojiPicker';
-import { isComposingEnter } from '@/components/chat/emoji';
-import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
 import ReportUserModal from '@/components/ReportUserModal';
 import { useAuthStore } from '@/stores/authStore';
@@ -43,16 +40,12 @@ import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useConfirm } from '@/hooks/useConfirm';
-import {
-  isCloudinaryConfigured,
-  validateImageFile,
-  uploadImageToCloudinary,
-  uploadAudioToCloudinary,
-  MAX_AUDIO_DURATION_MS,
-} from '@/lib/cloudinary';
 import type { DmMessage } from './thread/dm-message';
 import { useThreadMessages } from './thread/useThreadMessages';
-import { useSendMessage } from './thread/useSendMessage';
+import DmComposer from './DmComposer';
+import VoiceNotePlayer from './voice/VoiceNotePlayer';
+import { dropDraftsTo, moveNewMessageDrafts, threadKeyOf } from './voice/composer-drafts';
+import { VOICE_COPY, knownDurationMs } from './voice/voice-note';
 
 interface ConversationSummary {
   conversationId: string;
@@ -113,13 +106,15 @@ export default function MessagesPage() {
   const { user } = useAuthStore();
   const { addToast } = useToastStore();
   const myUserId = user?.id;
-  const [draft, setDraft] = useState('');
-  const [showEmoji, setShowEmoji] = useState(false);
   const { ask, confirmDialog } = useConfirm();
-  const closeEmoji = useCallback(() => setShowEmoji(false), []);
-  const emojiToggleRef = useRef<HTMLButtonElement>(null);
-  // The message being replied to (30 Oct 2026, L7): "Replying to …" above the box until it is sent or cancelled.
-  const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
+  // The message box's key: who is signed in, and this conversation (or the person a first message is for).
+  const threadKey = threadKeyOf(myUserId, { conversationId: activeId, toUserId: composeToUserId });
+  // The message being replied to (30 Oct 2026, L7): "Replying to …" above the box until it is sent or cancelled. It is
+  // kept with the conversation it was chosen in and shown only there, so another conversation never shows it, not
+  // even for the one render an effect resetting it on navigation would take (11 Nov 2026).
+  const [reply, setReply] = useState<{ key: string; target: ReplyTarget } | null>(null);
+  const replyTarget = reply && reply.key === threadKey ? reply.target : null;
+  const clearReply = useCallback(() => setReply(null), []);
   // REASON Phase 2 — "Find a time" panel (availability windows) per thread.
   const [schedulerOpen, setSchedulerOpen] = useState(false);
   // A time on a proposal card asks the panel for that time's confirm card (26 Oct 2026).
@@ -132,9 +127,6 @@ export default function MessagesPage() {
   // Task E4 — report entry point for the thread's conversation partner.
   const [reportOpen, setReportOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  // 360px phones: image + mic + send leave ~150px for the box, where "Type a
-  // message..." wraps under its own first word. A shorter prompt fits.
-  const narrowPhone = typeof window !== 'undefined' && window.matchMedia('(max-width: 379px)').matches;
   // 4 Sep 2026 (device audit): a guessed calc(100vh - 100px) was taller than the
   // space between the phone header and the bottom nav, so the page scrolled,
   // the thread header's first line (the name) slid away and the composer sat
@@ -154,44 +146,10 @@ export default function MessagesPage() {
     window.addEventListener('resize', compute);
     return () => { ro.disconnect(); window.removeEventListener('resize', compute); };
   }, [myUserId]);
-  // Feature 19 (13 May spec) — pending image attachment for the next send.
-  // pendingImage holds the file picked from the file dialog; previewUrl is
-  // an object URL so the user sees a thumbnail before the upload kicks off.
-  // uploadFraction drives the progress bar overlay on the thumbnail.
-  const [pendingImage, setPendingImage] = useState<{ file: File; previewUrl: string } | null>(null);
-  const [uploadFraction, setUploadFraction] = useState<number | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const cloudinaryReady = isCloudinaryConfigured();
-
-  // Feature 20 (13 May spec) — voice-message recording state machine.
-  //   idle      → no recording in progress; mic button shows
-  //   recording → MediaRecorder is capturing; stop + cancel buttons + timer
-  //   preview   → user reviewed; can play it back, replace, or send
-  // pendingAudio carries the captured blob + duration + a preview URL so the
-  // user can scrub through their own voice message before sending.
-  const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'preview'>('idle');
-  const [pendingAudio, setPendingAudio] = useState<{
-    blob: Blob; durationMs: number; previewUrl: string;
-  } | null>(null);
-  const [recordingMs, setRecordingMs] = useState(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordingChunksRef = useRef<Blob[]>([]);
-  const recordingStartRef = useRef<number>(0);
-  const recordingTimerRef = useRef<number | null>(null);
-  // Pass A (15 May follow-up) — Web Audio plumbing for the live waveform
-  // visualizer. AnalyserNode samples the mic stream in real time; the
-  // canvas draws a bar-meter that responds to volume. All of this is
-  // teardown-safe — startRecording resets the refs and stopRecording
-  // disconnects + closes the audio context.
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const waveformRafRef = useRef<number | null>(null);
-  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const cancelRecordingRef = useRef<boolean>(false);
   // Phase E — which message the reaction picker is currently anchored to.
   const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Phase E — toggle a reaction on a DM message. Uses socket events so the
   // server fan-out broadcasts to both users at once. Optimistic invalidation
@@ -242,12 +200,17 @@ export default function MessagesPage() {
     if (!composeToUserId || !inboxData) return;
     const existing = inboxData.find(c => c.otherUserId === composeToUserId);
     if (existing) {
+      // Anything already written in the new-message box goes with it, to that same conversation (11 Nov 2026).
+      if (myUserId) moveNewMessageDrafts(myUserId, composeToUserId, existing.conversationId);
       navigate(`/messages/${existing.conversationId}`, { replace: true });
     }
-  }, [composeToUserId, inboxData, navigate]);
+  }, [composeToUserId, inboxData, navigate, myUserId]);
 
-  // A reply belongs to its conversation: opening another one drops it.
-  useEffect(() => { setReplyTarget(null); }, [activeId, composeToUserId]);
+  // Nothing can be sent to a former member: what was written to them is dropped, so no hidden note keeps the leave
+  // prompt up (11 Nov 2026).
+  useEffect(() => {
+    inboxData?.filter((c) => c.otherIsFormerMember).forEach((c) => dropDraftsTo(c.otherUserId));
+  }, [inboxData]);
 
   // Real-time subscriptions: refresh inbox + active thread on incoming events.
   useEffect(() => {
@@ -331,6 +294,7 @@ export default function MessagesPage() {
     if (!(await ask({ title: `Block ${name || 'this person'}?`, body: "They won't be able to message you, and you won't be matched again. You can unblock them from their profile.", confirmLabel: 'Block', tone: 'danger' }))) return;
     try {
       await api.post(`/users/${userId}/block`, {});
+      dropDraftsTo(userId);
       addToast(`You blocked ${name || 'this person'}.`, 'success');
       qc.invalidateQueries({ queryKey: ['dm-conversations'] });
       navigate('/messages');
@@ -495,325 +459,27 @@ export default function MessagesPage() {
   // T2 (1 Nov 2026): a former member's thread keeps its messages, links to no profile and takes no new ones.
   const otherIsFormer = !!activeConv?.otherIsFormerMember;
 
-  // The send (features/messages/thread/useSendMessage, 1 Nov 2026): it posts to /dm/messages, refreshes the thread
-  // and the inbox, and says a refusal in the server's words. The uploads and the composer's own state stay here.
-  const sendMutation = useSendMessage<{
-    content: string;
-    image: { file: File } | null;
-    audio: { blob: Blob; durationMs: number } | null;
-    replyToId: string | null;
-  }>(activeId, activeConv?.otherUserId ?? composeToUserId, {
-    // Feature 19/20 (13 May spec) — at most one attachment per message.
-    // Image takes precedence if both are queued, but the UI disallows
-    // simultaneous capture so this is just a belt-and-braces guard.
-    prepareAttachment: async (args) => {
-      if (args.image) {
-        setUploadFraction(0);
-        const result = await uploadImageToCloudinary(args.image.file, setUploadFraction);
-        setUploadFraction(null);
-        return { url: result.url, type: 'image', meta: result };
-      }
-      if (args.audio) {
-        setUploadFraction(0);
-        const result = await uploadAudioToCloudinary(args.audio.blob, args.audio.durationMs, setUploadFraction);
-        setUploadFraction(null);
-        return { url: result.url, type: 'audio', meta: result };
-      }
-      return null;
-    },
-    onSent: (data) => {
-      setDraft('');
-      setReplyTarget(null);
-      if (pendingImage) {
-        URL.revokeObjectURL(pendingImage.previewUrl);
-        setPendingImage(null);
-      }
-      if (pendingAudio) {
-        URL.revokeObjectURL(pendingAudio.previewUrl);
-        setPendingAudio(null);
-        setRecordingState('idle');
-      }
-      // Feature 18 — first send in compose-new mode flips the URL from
-      // /messages/new/:userId to /messages/:conversationId so subsequent
-      // sends use the existing-thread path and the back button works.
-      if (isComposeMode) {
-        navigate(`/messages/${data.conversationId}`, { replace: true });
-      }
-    },
-    onFailed: () => setUploadFraction(null),
-  });
-
-  // Feature 19 — file picker handler. Validates client-side before showing
-  // the preview; server + Cloudinary preset are the authoritative gates.
-  const handleFilePicked: React.ChangeEventHandler<HTMLInputElement> = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const failure = validateImageFile(file);
-    if (failure) {
-      addToast(failure.message, 'error');
-      e.target.value = '';
-      return;
-    }
-    if (pendingImage) URL.revokeObjectURL(pendingImage.previewUrl);
-    setPendingImage({ file, previewUrl: URL.createObjectURL(file) });
-    e.target.value = '';
-  };
-
-  const clearPendingImage = () => {
-    if (pendingImage) URL.revokeObjectURL(pendingImage.previewUrl);
-    setPendingImage(null);
-  };
-
-  // Wraps both code-paths so the composer's submit + Enter handler stays
-  // simple. Text, image, audio, or text+image/audio is accepted.
-  const submitMessage = () => {
-    const text = draft.trim();
-    if (!text && !pendingImage && !pendingAudio) return;
-    if (sendMutation.isPending) return;
-    // Sending closes the emoji picker (it stays open for several picks until then).
-    setShowEmoji(false);
-    sendMutation.mutate({
-      content: text,
-      image: pendingImage,
-      audio: pendingAudio ? { blob: pendingAudio.blob, durationMs: pendingAudio.durationMs } : null,
-      replyToId: replyTarget?.id ?? null,
-    });
-  };
+  // The box took the focus: a phone keyboard is opening, and the thread could scroll out from under it (Phase A).
+  const pinNewest = () => { setTimeout(() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 250); };
 
   // Reply (30 Oct 2026, L7): the strip above the box names the message, and the box takes the focus for the answer.
   const replyTo = (m: DmMessage, fromMe: boolean) => {
-    setReplyTarget({
+    if (!threadKey) return;
+    setReply({ key: threadKey, target: {
       id: m.id,
       senderName: fromMe ? (user?.displayName ?? '') : (headerContext?.otherDisplayName ?? ''),
       content: replyContentOf(m),
       mine: fromMe,
-    });
+    } });
     textareaRef.current?.focus();
   };
 
-  // Feature 20 + Pass A fix (15 May follow-up) — recording lifecycle.
-  //
-  // The previous implementation used `recorder.start(100)` to slice the
-  // recording into 100ms chunks, but that hit a known browser quirk where
-  // the final ~half-second of audio could land mid-slice and never make it
-  // into the chunks array before `onstop` fired. Voice messages came back
-  // truncated at the tail (Ali's "missing last seconds" report).
-  //
-  // The fix:
-  //   1. Drop the timeslice entirely → recorder buffers the whole take and
-  //      delivers it in a single `dataavailable` event on stop.
-  //   2. Call `recorder.requestData()` ~100ms before `stop()` to force any
-  //      pending buffer to flush as its own `dataavailable` event first.
-  //   3. Use a `cancelRecordingRef` so cancel can flip a flag the `onstop`
-  //      handler reads instead of clearing chunks underneath the recorder.
-  const startRecording = async () => {
-    if (recordingState !== 'idle') return;
-    if (!cloudinaryReady) {
-      addToast('Voice messages are not configured for this deployment', 'error');
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
-      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-      recordingChunksRef.current = [];
-      cancelRecordingRef.current = false;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) recordingChunksRef.current.push(e.data);
-      };
-      recorder.onstop = () => {
-        // Always tear down the mic stream regardless of how we got here so
-        // the browser's recording indicator clears.
-        stream.getTracks().forEach(t => t.stop());
-        if (recordingTimerRef.current !== null) {
-          window.clearInterval(recordingTimerRef.current);
-          recordingTimerRef.current = null;
-        }
-        // Tear down the live-waveform plumbing.
-        if (waveformRafRef.current !== null) {
-          cancelAnimationFrame(waveformRafRef.current);
-          waveformRafRef.current = null;
-        }
-        if (analyserRef.current) {
-          try { analyserRef.current.disconnect(); } catch {}
-          analyserRef.current = null;
-        }
-        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-          audioContextRef.current.close().catch(() => {});
-          audioContextRef.current = null;
-        }
-
-        const durationMs = Date.now() - recordingStartRef.current;
-        const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || mime || 'audio/webm' });
-        recordingChunksRef.current = [];
-
-        if (cancelRecordingRef.current || blob.size === 0 || durationMs < 250) {
-          cancelRecordingRef.current = false;
-          setRecordingState('idle');
-          setRecordingMs(0);
-          return;
-        }
-        const previewUrl = URL.createObjectURL(blob);
-        setPendingAudio({ blob, durationMs, previewUrl });
-        setRecordingState('preview');
-      };
-
-      // Pass A — start with NO timeslice so the whole take streams into a
-      // single final chunk on stop. The 100ms requestData() in stopRecording
-      // belts-and-braces this against any browser that buffers the tail
-      // anyway.
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      recordingStartRef.current = Date.now();
-      setRecordingMs(0);
-      setRecordingState('recording');
-      recordingTimerRef.current = window.setInterval(() => {
-        const elapsed = Date.now() - recordingStartRef.current;
-        setRecordingMs(elapsed);
-        if (elapsed >= MAX_AUDIO_DURATION_MS) {
-          // Hard cap: auto-stop at 5 min. Use the wrapped helper so the
-          // requestData() flush still fires.
-          stopRecording();
-        }
-      }, 100);
-
-      // Pass A — live waveform visualizer. AnalyserNode taps the mic stream
-      // in real time; we draw a 40-bar meter to the canvas at requestAnimationFrame
-      // cadence. fftSize 256 → 128 freq bins; we down-sample to 40 bars so the
-      // bars are visibly wide on mobile. The canvas ref is set inside the JSX.
-      try {
-        const AudioCtor = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioCtor) {
-          const ctx = new AudioCtor();
-          const source = ctx.createMediaStreamSource(stream);
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 256;
-          analyser.smoothingTimeConstant = 0.6;
-          source.connect(analyser);
-          audioContextRef.current = ctx;
-          analyserRef.current = analyser;
-
-          const draw = () => {
-            const canvas = waveformCanvasRef.current;
-            if (!canvas || !analyserRef.current) return;
-            const a = analyserRef.current;
-            const data = new Uint8Array(a.frequencyBinCount);
-            a.getByteFrequencyData(data);
-            const c = canvas.getContext('2d');
-            if (!c) return;
-            const w = canvas.width;
-            const h = canvas.height;
-            c.clearRect(0, 0, w, h);
-            const bars = 40;
-            const stride = Math.floor(data.length / bars);
-            const barW = w / bars;
-            for (let i = 0; i < bars; i++) {
-              // Average a small slice for each bar so the visualization is
-              // smoother than picking one bin per bar.
-              let sum = 0;
-              for (let j = 0; j < stride; j++) sum += data[i * stride + j] || 0;
-              const v = sum / stride / 255; // 0..1
-              const barH = Math.max(2, v * h * 0.9);
-              c.fillStyle = '#e10600'; // rsn-red
-              c.fillRect(i * barW + barW * 0.15, (h - barH) / 2, barW * 0.7, barH);
-            }
-            waveformRafRef.current = requestAnimationFrame(draw);
-          };
-          waveformRafRef.current = requestAnimationFrame(draw);
-        }
-      } catch {
-        // Visualizer is purely cosmetic — silently skip if Web Audio API is
-        // unavailable or the user's browser blocks it.
-      }
-    } catch (err: any) {
-      addToast(
-        err?.name === 'NotAllowedError'
-          ? 'Microphone access denied. Check browser permissions.'
-          : 'Could not start recording',
-        'error',
-      );
-      setRecordingState('idle');
-    }
-  };
-
-  const stopRecording = () => {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state !== 'recording') {
-      mediaRecorderRef.current = null;
-      return;
-    }
-    // Pass A fix — force the recorder to emit any pending buffer as its own
-    // dataavailable event BEFORE we call stop. Without this, the last
-    // ~500ms of audio (between the most recent dataavailable and stop) can
-    // sit in the muxer buffer and never reach the chunks array. The 120ms
-    // delay gives the dataavailable event time to fire before stop runs.
-    try { recorder.requestData(); } catch {}
-    window.setTimeout(() => {
-      const r = mediaRecorderRef.current;
-      if (r && r.state === 'recording') r.stop();
-      mediaRecorderRef.current = null;
-    }, 120);
-  };
-
-  const cancelRecording = () => {
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state === 'recording') {
-      // Flip the cancel flag so onstop discards the blob instead of
-      // racing with chunk clearance. The previous implementation cleared
-      // chunks underneath the recorder which could leave the blob with
-      // a partial tail on some browsers.
-      cancelRecordingRef.current = true;
-      try { recorder.stop(); } catch {}
-    }
-    mediaRecorderRef.current = null;
-    if (recordingTimerRef.current !== null) {
-      window.clearInterval(recordingTimerRef.current);
-      recordingTimerRef.current = null;
-    }
-    setRecordingState('idle');
-    setRecordingMs(0);
-  };
-
-  const discardPendingAudio = () => {
-    if (pendingAudio) URL.revokeObjectURL(pendingAudio.previewUrl);
-    setPendingAudio(null);
-    setRecordingState('idle');
-    setRecordingMs(0);
-  };
-
-  // Clean up media stream + Web Audio plumbing on unmount in case the user
-  // navigates away mid-record. Each ref is teardown-safe on its own; the
-  // checks are belt-and-suspenders for unexpected state.
-  useEffect(() => {
-    return () => {
-      const recorder = mediaRecorderRef.current;
-      if (recorder && recorder.state === 'recording') {
-        try { recorder.stop(); } catch {}
-      }
-      if (recordingTimerRef.current !== null) window.clearInterval(recordingTimerRef.current);
-      if (waveformRafRef.current !== null) cancelAnimationFrame(waveformRafRef.current);
-      if (analyserRef.current) {
-        try { analyserRef.current.disconnect(); } catch {}
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close().catch(() => {});
-      }
-      if (pendingAudio) URL.revokeObjectURL(pendingAudio.previewUrl);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function formatRecordTime(ms: number): string {
-    const totalSec = Math.floor(ms / 1000);
-    const m = Math.floor(totalSec / 60);
-    const s = totalSec % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  }
-
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/dm/conversations/${id}`),
-    onSuccess: () => {
+    onSuccess: (_res, id) => {
+      // What was written in it and not sent goes with it.
+      const partner = inboxData?.find((c) => c.conversationId === id)?.otherUserId;
+      if (partner) dropDraftsTo(partner);
       addToast('Conversation deleted', 'info');
       qc.invalidateQueries({ queryKey: ['dm-conversations'] });
       navigate('/messages');
@@ -824,6 +490,13 @@ export default function MessagesPage() {
   });
 
   if (!myUserId) return <PageLoader />;
+
+  // The first message to someone made the conversation: its address replaces /messages/new/:userId (Feature 18), and
+  // what is still unsent in the box moves with it.
+  const firstSent = (conversationId: string) => {
+    if (composeToUserId) moveNewMessageDrafts(myUserId, composeToUserId, conversationId);
+    navigate(`/messages/${conversationId}`, { replace: true });
+  };
 
   // One list: the conversations and the group chats, the latest activity first (26 Oct 2026, C12).
   const inboxRows = inboxData ? mergeInbox(inboxData, groups.data ?? []) : [];
@@ -1327,20 +1000,16 @@ export default function MessagesPage() {
                                       />
                                     </a>
                                   )}
-                                  {/* Feature 20 (13 May spec) — audio bubble. Native
-                                      <audio controls> for v1 — the browser ships a
-                                      decent playback UI on every supported platform.
-                                      Padded inside the bubble so it doesn't run flush
-                                      to the rounded corner. */}
+                                  {/* A voice note (Feature 20; 11 Nov 2026, RSN 06): its length, the time played and a
+                                      progress bar, held at its real length; your own says Sent. */}
                                   {m.attachmentUrl && m.attachmentType === 'audio' && (
-                                    <div className="px-3 py-2 flex items-center gap-2 min-w-[220px]">
-                                      <Mic className="h-4 w-4 shrink-0 opacity-70" />
-                                      <audio
+                                    <div className="min-w-[220px] max-w-[280px] px-3 py-2">
+                                      <VoiceNotePlayer
                                         src={m.attachmentUrl}
-                                        controls
-                                        preload="metadata"
-                                        className="flex-1 h-9 max-w-full"
-                                        data-testid={`dm-audio-message-${m.id}`}
+                                        tone={fromMe ? 'own' : 'theirs'}
+                                        testId={`dm-audio-message-${m.id}`}
+                                        status={fromMe ? VOICE_COPY.sent : undefined}
+                                        durationMs={knownDurationMs(m.attachmentMeta)}
                                       />
                                     </div>
                                   )}
@@ -1471,15 +1140,9 @@ export default function MessagesPage() {
               <div ref={threadEndRef} />
             </div>
 
-            {/* Composer — Phase A polish: 16px input on mobile (kills iOS auto-zoom),
-                safe-area padding so iPhone home indicator doesn't cover it,
-                44pt send button on mobile (Apple HIG touch target).
-                Phase B polish: emoji picker behind the smile icon.
-                Feature 19 (13 May): image button + pending-image preview row
-                above the input. The pending image renders as a small thumb
-                with a remove button + an upload progress overlay when the
-                send is in flight. The picker is hidden if Cloudinary isn't
-                configured for this deployment. */}
+            {/* The message box (DmComposer, 11 Nov 2026, Shirley Palmer's RSN 01): one per conversation, keyed by it,
+                so nothing unsent in one conversation (typed text, a voice note, a picture) is ever shown in, or sent
+                to, another. A former member's thread takes no new messages. */}
             {otherIsFormer ? (
               <p
                 data-testid="former-member-composer"
@@ -1488,215 +1151,20 @@ export default function MessagesPage() {
               >
                 This person is no longer a member of REASON, so they cannot get messages.
               </p>
-            ) : (
-            <div
-              className="relative px-3 py-2 border-t border-gray-200"
-              style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
-            >
-              {/* One picker for every message box (30 Oct 2026, L9): it stays open for several
-                  emojis, each put where the caret is, until Escape, a tap outside, the smile
-                  button, Done or Send. */}
-              <EmojiPicker
-                open={showEmoji}
-                onClose={closeEmoji}
-                toggleRef={emojiToggleRef}
-                onPick={(e) => pickInto(textareaRef.current, draft, e, setDraft)}
-                className="absolute bottom-full left-3 right-3 mb-2"
+            ) : threadKey ? (
+              <DmComposer
+                key={threadKey}
+                threadKey={threadKey}
+                conversationId={activeId}
+                toUserId={headerContext.otherUserId}
+                recipientName={headerContext.otherDisplayName}
+                replyTarget={replyTarget}
+                onReplyDone={clearReply}
+                boxRef={textareaRef}
+                onBoxFocus={pinNewest}
+                onFirstSend={firstSent}
               />
-              {/* The message being answered (30 Oct 2026, L7), above the box. */}
-              {replyTarget && <ReplyStrip target={replyTarget} onCancel={() => setReplyTarget(null)} />}
-              {pendingImage && (
-                <div className="mb-2 inline-block relative">
-                  <img
-                    src={pendingImage.previewUrl}
-                    alt="Pending"
-                    className="max-h-32 max-w-full rounded-lg border border-gray-200"
-                  />
-                  {uploadFraction !== null && (
-                    <div className="absolute inset-0 bg-black/40 rounded-lg flex items-center justify-center text-white text-xs font-semibold">
-                      {Math.round(uploadFraction * 100)}%
-                    </div>
-                  )}
-                  {uploadFraction === null && (
-                    <button
-                      type="button"
-                      onClick={clearPendingImage}
-                      className="absolute -top-2 -right-2 bg-white border border-gray-300 rounded-full p-0.5 shadow hover:bg-gray-50"
-                      aria-label="Remove image"
-                      title="Remove image"
-                    >
-                      <X className="h-3.5 w-3.5 text-gray-600" />
-                    </button>
-                  )}
-                </div>
-              )}
-              {/* Feature 20 (13 May spec) — recorded audio preview row. The
-                  user can play it back, discard it, or hit Send to upload.
-                  Upload progress overlays as a percentage. */}
-              {pendingAudio && (
-                <div className="mb-2 flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                  <Mic className="h-4 w-4 text-rsn-red shrink-0" />
-                  <audio
-                    src={pendingAudio.previewUrl}
-                    controls
-                    className="flex-1 h-8 max-w-full"
-                    data-testid="dm-audio-preview"
-                  />
-                  {uploadFraction !== null ? (
-                    <span className="text-xs font-semibold text-gray-700 shrink-0">
-                      {Math.round(uploadFraction * 100)}%
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={discardPendingAudio}
-                      className="p-1 rounded hover:bg-gray-200 text-gray-500 shrink-0"
-                      aria-label="Discard voice message"
-                      title="Discard voice message"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-              )}
-              {/* Recording-active bar takes over the composer: pulsing red
-                  dot, elapsed time, a live waveform visualizer, and the
-                  cancel/stop buttons. The normal textarea + buttons hide
-                  while recording so the user can't accidentally send a
-                  half-formed message. Mobile-first: gap shrinks, waveform
-                  flexes to fill, buttons stay 44pt tap targets. */}
-              {recordingState === 'recording' && (
-                <div className="flex items-center gap-2 sm:gap-3 px-1 sm:px-2 py-1" data-testid="dm-recording-bar">
-                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-rsn-red animate-pulse shrink-0" />
-                  <span className="text-sm font-mono text-gray-700 shrink-0 tabular-nums">
-                    {formatRecordTime(recordingMs)}
-                  </span>
-                  {/* Live waveform. Canvas resolution chosen for clarity at
-                      device pixel ratio 1; CSS scales it to fit the flex space. */}
-                  <canvas
-                    ref={waveformCanvasRef}
-                    width={400}
-                    height={36}
-                    className="flex-1 min-w-0 h-9 rounded-md bg-gray-50"
-                    aria-label="Recording waveform"
-                    data-testid="dm-recording-waveform"
-                  />
-                  <button
-                    type="button"
-                    onClick={cancelRecording}
-                    aria-label="Cancel recording"
-                    title="Cancel"
-                    className="w-11 h-11 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
-                  >
-                    <X className="h-5 w-5 sm:h-4 sm:w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={stopRecording}
-                    aria-label="Stop and preview"
-                    title="Stop"
-                    className="w-11 h-11 flex items-center justify-center rounded-full bg-rsn-red text-white hover:bg-rsn-red/90 transition-colors flex-shrink-0"
-                    data-testid="dm-recording-stop"
-                  >
-                    <StopSquare className="h-5 w-5 sm:h-4 sm:w-4" />
-                  </button>
-                </div>
-              )}
-              {/* Normal composer hides while recording — the recording bar
-                  above takes its place so the user can't accidentally fire
-                  a send mid-record. */}
-              {recordingState !== 'recording' && (
-              <div className="flex items-end gap-2">
-                {/* Every button beside the box is 44px on every width, the box's own height, so
-                    they line up with it (P23, 26 Oct 2026: from 640px they were 36px, 4px off
-                    centre and under the 44px target). The smile stays hidden on a phone, whose
-                    keyboard has its own emoji panel. */}
-                <button
-                  ref={emojiToggleRef}
-                  type="button"
-                  onClick={() => setShowEmoji(s => !s)}
-                  aria-expanded={showEmoji}
-                  className="hidden sm:flex w-11 h-11 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
-                  aria-label="Add emoji"
-                  title="Add emoji"
-                >
-                  <Smile className="h-5 w-5" />
-                </button>
-                {cloudinaryReady && (
-                  <>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/gif"
-                      className="hidden"
-                      onChange={handleFilePicked}
-                      data-testid="dm-image-input"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={sendMutation.isPending || !!pendingAudio}
-                      className="w-11 h-11 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                      aria-label="Attach image"
-                      title={pendingAudio ? 'Discard the voice message first' : 'Attach image'}
-                      data-testid="dm-image-button"
-                    >
-                      <ImageIcon className="h-5 w-5" />
-                    </button>
-                    {/* Feature 20 — mic button kicks off recording. Disabled
-                        while an image is queued so the user picks one or the
-                        other; cancellation flows clear the conflict. */}
-                    <button
-                      type="button"
-                      onClick={startRecording}
-                      disabled={sendMutation.isPending || !!pendingImage || !!pendingAudio}
-                      className="w-11 h-11 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                      aria-label="Record voice message"
-                      title={pendingImage ? 'Discard the image first' : 'Record voice message'}
-                      data-testid="dm-mic-button"
-                    >
-                      <Mic className="h-5 w-5" />
-                    </button>
-                  </>
-                )}
-                <textarea
-                  ref={textareaRef}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onFocus={() => {
-                    // Phase A polish — when keyboard opens on mobile the thread
-                    // can scroll out from under it; pin to the latest message.
-                    setTimeout(() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 250);
-                    setShowEmoji(false);
-                  }}
-                  onKeyDown={(e) => {
-                    // Not while a word is still being composed (Japanese, Chinese, Korean input): there Enter picks the word.
-                    // Safari sends the Enter that confirms the word after composition has ended, as keyCode 229 (P22).
-                    if (e.key === 'Enter' && !e.shiftKey && !isComposingEnter(e.nativeEvent)) {
-                      e.preventDefault();
-                      submitMessage();
-                    }
-                  }}
-                  rows={1}
-                  placeholder={pendingImage ? 'Add a caption (optional)...' : narrowPhone ? 'Message…' : 'Type a message...'}
-                  // At least 44px tall on every width (26 Oct 2026): one row measured 42px on a phone and 38px from 640px.
-                  className="flex-1 min-w-0 min-h-[44px] resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
-                  maxLength={4000}
-                />
-                <Button
-                  size="sm"
-                  onClick={submitMessage}
-                  disabled={(!draft.trim() && !pendingImage && !pendingAudio) || sendMutation.isPending}
-                  isLoading={sendMutation.isPending}
-                  className="!w-11 !h-11 !p-0 flex-shrink-0"
-                  aria-label="Send message"
-                >
-                  <Send className="h-4 w-4" />
-                </Button>
-              </div>
-              )}
-            </div>
-            )}
+            ) : null}
           </>
         )}
       </div>

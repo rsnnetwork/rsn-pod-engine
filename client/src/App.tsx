@@ -6,6 +6,7 @@ import { useSessionFollowsServer } from '@/realtime/useSessionFollowsServer';
 import { useToastStore } from '@/stores/toastStore';
 import { useTabTitleCount } from '@/hooks/useTabTitleCount';
 import { useMessageChime } from '@/hooks/useMessageChime';
+import { useUnsentVoiceGuard } from '@/features/messages/voice/useLeaveGuard';
 
 // Backward-compat: old invite emails (pre-cbcef30) pointed users at
 // `/sessions/:id/live` (plural). The actual route is `/session/:id/live`
@@ -220,6 +221,10 @@ export default function App() {
   const signedInId = useAuthStore((s) => (s.isAuthenticated ? s.user?.id : undefined));
   useTabTitleCount();
   useMessageChime(signedInId);
+  // A voice note this member has not sent, kept in a conversation: closing or reloading the tab from ANY page asks
+  // first, the full-screen ones outside the shell too (a profile, the meeting room, a live event, onboarding), since
+  // the note outlives the Messages page but not the tab (11 Nov 2026).
+  useUnsentVoiceGuard(signedInId);
 
   return (
     <>

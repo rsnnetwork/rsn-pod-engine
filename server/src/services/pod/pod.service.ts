@@ -23,7 +23,9 @@ const ACTIVE_MEMBER_COUNTS = `SELECT pm.pod_id, COUNT(*) AS cnt
 
 const POD_COLUMNS = `
   id, name, description, pod_type AS "podType", orchestration_mode AS "orchestrationMode",
-  communication_mode AS "communicationMode", visibility, status, max_members AS "maxMembers",
+  communication_mode AS "communicationMode",
+  CASE WHEN visibility::text = 'invite_only' THEN 'private' ELSE visibility::text END AS visibility,
+  status, max_members AS "maxMembers",
   rules, join_config AS "joinConfig", config, allow_member_invites AS "allowMemberInvites",
   created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
 `;
@@ -73,7 +75,7 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
         podType,
         input.orchestrationMode || typeRule.orchestration.default,
         input.communicationMode || typeRule.communication,
-        input.visibility || PodVisibility.INVITE_ONLY,
+        normalisePodVisibility(input.visibility) ?? PodVisibility.PRIVATE,
         input.maxMembers || null,
         input.rules || null,
         userId,
@@ -135,11 +137,19 @@ export async function getPodById(podId: string): Promise<Pod & { memberCount?: n
   return result.rows[0];
 }
 
+/** S2: what a host is told on trying to change who may find, join or invite to the pod. */
+export const ONLY_DIRECTOR_SETS_ACCESS = "Only the pod's director can change who can find, join or invite to it.";
+
 export async function updatePod(podId: string, userId: string, input: UpdatePodInput, userRole?: UserRole): Promise<Pod> {
   const pod = await getPodById(podId);
   const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
   if (!isAdmin) {
     await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+    // Shirley pilot S2: who may find and enter the pod is its director's choice (the edit form is the director's), so
+    // a host cannot turn a private pod public, nor who may invite.
+    if (('visibility' in input || 'allowMemberInvites' in input) && (await getMemberRole(podId, userId)) !== PodMemberRole.DIRECTOR) {
+      throw new ForbiddenError(ONLY_DIRECTOR_SETS_ACCESS);
+    }
   }
 
   const setClauses: string[] = [];
@@ -163,7 +173,8 @@ export async function updatePod(podId: string, userId: string, input: UpdatePodI
 
   for (const [key, dbCol] of Object.entries(fieldMap)) {
     if (key in input) {
-      const val = (input as Record<string, unknown>)[key];
+      const raw = (input as Record<string, unknown>)[key];
+      const val = key === 'visibility' ? normalisePodVisibility(raw as string) : raw;
       setClauses.push(`${dbCol} = $${paramIdx}`);
       // joinConfig is stored as JSONB — cast explicitly
       values.push(dbCol === 'join_config' && val !== null ? JSON.stringify(val) : val);
@@ -219,9 +230,9 @@ export async function listPods(params: {
     paramIdx++;
   }
 
-  // Browse mode: show all non-private pods (includes public_with_approval)
+  // Browse mode: show the discoverable pods (public and public_with_approval). S2: an old invite_only row reads as private.
   if (params.browse) {
-    whereClause += ` AND p.visibility NOT IN ('private')`;
+    whereClause += ` AND p.visibility::text NOT IN ('private', 'invite_only')`;
   }
 
   if (params.podType) {
@@ -245,7 +256,9 @@ export async function listPods(params: {
   values.push(pageSize, offset);
   const result = await query<Pod & { memberCount: number; sessionCount: number; memberRole: string | null }>(
     `SELECT p.id, p.name, p.description, p.pod_type AS "podType", p.orchestration_mode AS "orchestrationMode",
-            p.communication_mode AS "communicationMode", p.visibility, p.status, p.max_members AS "maxMembers",
+            p.communication_mode AS "communicationMode",
+            CASE WHEN p.visibility::text = 'invite_only' THEN 'private' ELSE p.visibility::text END AS visibility,
+            p.status, p.max_members AS "maxMembers",
             p.rules, p.join_config AS "joinConfig", p.config,
             p.created_by AS "createdBy", p.created_at AS "createdAt", p.updated_at AS "updatedAt",
             COALESCE(mc.cnt, 0)::int AS "memberCount",
@@ -266,11 +279,19 @@ export async function listPods(params: {
 
 // ─── Pod Membership ─────────────────────────────────────────────────────────
 
+/**
+ * How someone is coming in (S2 fix round 1): an organiser's own add or approval (the default), their own join, or an
+ * invite they accepted. Someone an organiser removed comes back only through the first, or through an organiser's
+ * personal invite made after the removal; their own join, a shared link or a plain member's invite is refused in words.
+ */
+export type PodAdmission = { by: 'organiser' } | { by: 'self' } | { by: 'invite'; invite: ReturningInvite };
+
 export async function addMember(
   podId: string,
   userId: string,
   role: PodMemberRole = PodMemberRole.MEMBER,
-  status: PodMemberStatus = PodMemberStatus.ACTIVE
+  status: PodMemberStatus = PodMemberStatus.ACTIVE,
+  admission: PodAdmission = { by: 'organiser' },
 ): Promise<PodMember> {
   return transaction(async (client) => {
     // Lock the pod row to serialize concurrent member additions
@@ -297,8 +318,8 @@ export async function addMember(
     }
 
     // Check for existing membership
-    const existing = await client.query(
-      `SELECT id, status FROM pod_members WHERE pod_id = $1 AND user_id = $2`,
+    const existing = await client.query<{ id: string; status: string; removal_kind?: string | null; left_at?: Date | null }>(
+      `SELECT id, status, removal_kind, left_at FROM pod_members WHERE pod_id = $1 AND user_id = $2`,
       [podId, userId]
     );
 
@@ -307,13 +328,20 @@ export async function addMember(
       if (existingStatus === 'active') {
         throw new ConflictError('POD_MEMBER_EXISTS', 'User is already an active member of this pod');
       }
+      // S2 fix round 1: someone an organiser removed does not come back by themselves.
+      if (existing.rows[0].removal_kind === 'removed' && admission.by !== 'organiser') {
+        await assertOrganiserReadmits(client, podId, existing.rows[0].left_at ?? null, admission);
+      }
       // Reactivate if previously left, removed, declined, or no_response
       const result = await client.query<PodMember>(
-        `UPDATE pod_members SET role = $1, status = $2, joined_at = NOW(), left_at = NULL
+        `UPDATE pod_members SET role = $1, status = $2, joined_at = NOW(),
+                left_at = CASE WHEN $5::boolean THEN NULL ELSE left_at END,
+                removal_kind = CASE WHEN $5::boolean THEN NULL ELSE removal_kind END
          WHERE pod_id = $3 AND user_id = $4
            AND ${MEMBER_ACCOUNT_SQL('$4')}
          RETURNING ${MEMBER_COLUMNS}`,
-        [role, status, podId, userId]
+        // $5: they come back in (active). A pending ask keeps the removal mark and when it happened (S2 fix round 1).
+        [role, status, podId, userId, status === PodMemberStatus.ACTIVE]
       );
       if (result.rows.length === 0) throw guestCannotJoinPod();
       return result.rows[0];
@@ -338,10 +366,19 @@ export async function removeMember(podId: string, userId: string, removedBy: str
   const isAdmin = removedByRole && hasRoleAtLeast(removedByRole, UserRole.ADMIN);
   if (!isAdmin) {
     await requirePodRole(podId, removedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+    // S2 fix round 1: the director is never removed, and a host removes members only (a host removing the director
+    // took the pod from them: its private page turns 404 for them).
+    const target = await getMemberRole(podId, userId);
+    if (target === PodMemberRole.DIRECTOR) throw new ForbiddenError(DIRECTOR_NOT_REMOVED);
+    if (target === PodMemberRole.HOST && (await getMemberRole(podId, removedBy)) !== PodMemberRole.DIRECTOR) {
+      throw new ForbiddenError(ONLY_DIRECTOR_REMOVES_HOSTS);
+    }
   }
 
+  // S2 fix round 1: an organiser's removal (removal_kind 'removed'): they cannot come back by themselves.
   const result = await query(
-    `UPDATE pod_members SET status = 'removed', left_at = NOW() WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
+    `UPDATE pod_members SET status = 'removed', removal_kind = 'removed', left_at = NOW()
+      WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
     [podId, userId]
   );
 
@@ -519,8 +556,8 @@ export async function joinPod(podId: string, userId: string, actorRole?: UserRol
     throw new ForbiddenError('This pod requires approval. Use "Request to Join" instead.');
   }
 
-  // Public: direct join
-  return addMember(podId, userId, PodMemberRole.MEMBER);
+  // Public: direct join, unless an organiser removed them (S2 fix round 1).
+  return addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.ACTIVE, { by: 'self' });
 }
 
 export async function requestToJoin(podId: string, userId: string): Promise<PodMember> {
@@ -530,16 +567,17 @@ export async function requestToJoin(podId: string, userId: string): Promise<PodM
     throw new ForbiddenError('This pod is not currently active');
   }
 
-  if (pod.visibility === PodVisibility.PRIVATE) {
+  if (pod.visibility === PodVisibility.PRIVATE || pod.visibility === PodVisibility.INVITE_ONLY) {
     throw new ForbiddenError('This is a private pod. You need an invite to join.');
   }
 
   if (pod.visibility === PodVisibility.PUBLIC) {
-    // Public pods: join directly rather than requesting
-    return addMember(podId, userId, PodMemberRole.MEMBER);
+    // Public pods: join directly rather than requesting, unless an organiser removed them (S2 fix round 1). On an
+    // approval pod (below) they may ask again: the organiser decides.
+    return addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.ACTIVE, { by: 'self' });
   }
 
-  // invite_only, public_with_approval → pending approval
+  // public_with_approval → pending approval (S2: an old invite_only row is private, refused above)
   const member = await addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.PENDING_APPROVAL);
 
   // Stefan (2 Jul) — directors/hosts never learned someone asked to join;
@@ -605,7 +643,7 @@ export async function approveMember(podId: string, memberUserId: string, approve
   }
 
   const result = await query<PodMember>(
-    `UPDATE pod_members SET status = 'active', joined_at = NOW()
+    `UPDATE pod_members SET status = 'active', joined_at = NOW(), left_at = NULL, removal_kind = NULL
      WHERE pod_id = $1 AND user_id = $2 AND status = 'pending_approval'
      RETURNING ${MEMBER_COLUMNS}`,
     [podId, memberUserId]
@@ -626,7 +664,7 @@ export async function rejectMember(podId: string, memberUserId: string, rejected
   }
 
   const result = await query(
-    `UPDATE pod_members SET status = 'removed', left_at = NOW()
+    `UPDATE pod_members SET status = 'removed', left_at = NOW(), removal_kind = COALESCE(removal_kind, 'rejected')
      WHERE pod_id = $1 AND user_id = $2 AND status = 'pending_approval'`,
     [podId, memberUserId]
   );
@@ -779,6 +817,49 @@ export async function getPodMembersForInvite(podId: string, sessionId: string, a
     email: r.email,
     avatarUrl: r.avatar_url,
   }));
+}
+
+// ─── Removed is not turned down (S2 fix round 1, controller ruling) ─────────────────────────────────────────────
+
+export const DIRECTOR_NOT_REMOVED = "The pod's director can't be removed.";
+export const ONLY_DIRECTOR_REMOVES_HOSTS = "Only the pod's director can remove a host.";
+export const REMOVED_FROM_POD = 'You were removed from this pod. Ask its director for an invitation.';
+/** S2 fix round 2: the same refusal, said where the person was registering for one of the pod's events. */
+export const REMOVED_FROM_EVENT_POD = "This event belongs to a pod you were removed from. Ask the pod's director for an invitation.";
+
+/** 'invite_only' is retired (D2): any that still arrives (an old instance mid-deploy, an old client) is stored Private. */
+export function normalisePodVisibility<T extends string | null | undefined>(v: T): T | PodVisibility.PRIVATE {
+  return (v as string) === PodVisibility.INVITE_ONLY ? PodVisibility.PRIVATE : v;
+}
+
+/** The invite an accept would let someone in with: who made it, for whom, and when. */
+export interface ReturningInvite { inviterId: string; inviteeEmail: string | null; maxUses: number; createdAt: Date | string }
+
+/**
+ * S2 fix round 1: inside addMember's transaction, for a row an organiser removed. Their own join is refused. An invite
+ * readmits them only when an organiser decided it: a personal invite (one address, one use) made AFTER the removal by
+ * someone who runs the pod now (an active director or host with an active account, or a platform admin). A shared link,
+ * or a plain member's invite, is refused in words.
+ */
+async function assertOrganiserReadmits(
+  client: { query: <R extends Record<string, unknown>>(sql: string, params: unknown[]) => Promise<{ rows: R[] }> },
+  podId: string,
+  removedAt: Date | null,
+  admission: PodAdmission,
+): Promise<void> {
+  if (admission.by !== 'invite') throw new ForbiddenError(REMOVED_FROM_POD);
+  const { invite } = admission;
+  const personal = !!invite.inviteeEmail && invite.maxUses <= 1;
+  const after = !removedAt || new Date(invite.createdAt).getTime() > new Date(removedAt).getTime();
+  if (!personal || !after) throw new ForbiddenError(REMOVED_FROM_POD);
+  const r = await client.query<{ runs: boolean }>(
+    `SELECT (EXISTS (SELECT 1 FROM users a WHERE a.id = $2 AND a.status = 'active' AND a.role IN ('admin', 'super_admin'))
+             OR EXISTS (SELECT 1 FROM pod_members o JOIN users ou ON ou.id = o.user_id
+                         WHERE o.pod_id = $1 AND o.user_id = $2 AND o.status = 'active' AND o.role IN ('director', 'host')
+                           AND ou.status = 'active')) AS runs`,
+    [podId, invite.inviterId],
+  );
+  if (!r.rows[0]?.runs) throw new ForbiddenError(REMOVED_FROM_POD);
 }
 
 // ─── Authorization Helpers ──────────────────────────────────────────────────

@@ -83,7 +83,7 @@ describe('a guest accepting an event invite', () => {
 
   it('to an event that follows its pod: the pod refuses the guest, the accept goes on and registration decides', async () => {
     const result = await acceptInvite('CODE123', GUEST);
-    expect(mockAddMember).toHaveBeenCalledWith(POD, GUEST);
+    expect(mockAddMember).toHaveBeenCalledWith(POD, GUEST, undefined, undefined, expect.objectContaining({ by: 'invite' }));
     expect(mockRegister).toHaveBeenCalledWith(EVENT, GUEST, undefined, expect.objectContaining({ viaInvite: true }));
     // The guest is not in the pod, so the answer does not name it.
     expect(result.registeredFor).toEqual({ sessionId: EVENT });

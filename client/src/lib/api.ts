@@ -1,5 +1,15 @@
 import axios from 'axios';
-import { useAuthStore, accountBlockedReason } from '@/stores/authStore';
+import { useAuthStore, accountBlockedReason, tokenSubject } from '@/stores/authStore';
+
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /**
+     * Send only as this member (a message, 11 Nov 2026): when the token about to be attached is someone else's (another
+     * member signed in while it was on its way, here or in another tab), the request is not sent.
+     */
+    sentAs?: string;
+  }
+}
 import { API_BASE_URL } from '@/lib/runtimeEndpoints';
 
 const api = axios.create({
@@ -15,6 +25,11 @@ const api = axios.create({
 // Attach JWT
 api.interceptors.request.use((cfg) => {
   const token = useAuthStore.getState().accessToken;
+  // Checked here, as the token is attached: this runs again for the retry after a token refresh too.
+  // Thrown by name, which isSenderChanged (features/messages/thread/send-as.ts) reads: a stop, never a failure toast.
+  if (cfg.sentAs && (!token || tokenSubject(token) !== cfg.sentAs)) {
+    throw Object.assign(new Error('The signed-in member changed while the message was on its way.'), { name: 'SenderChangedError' });
+  }
   if (token && cfg.headers) {
     cfg.headers.Authorization = `Bearer ${token}`;
   }

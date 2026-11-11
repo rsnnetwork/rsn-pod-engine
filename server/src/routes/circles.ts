@@ -11,6 +11,10 @@
 // and archiving a circle stay a platform admin's. Every change to the asks also tells circle:<id>:requests.
 // T15 (30 Oct review 7.3): the people who run a circle link entities to it and unlink them (an entity's own admins may
 // also unlink it); each link tells circle:<id> and entity:<id>.
+// Shirley pilot S2 (11 Nov 2026, D3): authority comes from the role alone (circle-managers.ts). Moderators run the
+// circle with its owner; only the owner (or a platform admin) chooses who can join, makes and unmakes moderators
+// (PATCH /:id/members/:userId/role) and hands the circle to someone else in it (POST /:id/transfer). A pod's own
+// director may take their pod out of any circle. Which circles a pod is in is read only by someone who may see the pod.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -19,14 +23,17 @@ import { authenticate } from '../middleware/auth';
 import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 import { requireRole } from '../middleware/rbac';
 import { circleReadLimiter, circleWriteLimiter, wallWriteLimiter } from '../middleware/rateLimit';
-import { fanoutCircleChange, fanoutEntityChange, fanoutOwnInvites } from '../realtime/fanout';
+import { fanoutCircleChange, fanoutEntityChange, fanoutOwnInvites, fanoutPodEntities } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as circleService from '../services/circle/circle.service';
 import * as joinService from '../services/circle/circle-join.service';
 import * as linkService from '../services/circle/circle-entities.service';
 import * as wallService from '../services/circle/circle-wall.service';
-import { assertCircleManager } from '../services/circle/circle-managers';
+import * as roleService from '../services/circle/circle-roles.service';
+import { assertCircleManager, assertCircleOwner } from '../services/circle/circle-managers';
+import { canViewPod } from '../services/pods/pod-access';
+import { NotFoundError } from '../middleware/errors';
 
 const router = Router();
 
@@ -41,7 +48,15 @@ const updateBodySchema = createBodySchema.partial().extend({
   // T14: who can join. Production's client never sends it.
   joinPolicy: z.enum(['open', 'closed']).optional(),
 });
-const attachBodySchema = z.object({ podId: z.string().uuid() });
+const attachBodySchema = z.object({ podId: z.string().uuid().transform((s) => s.toLowerCase()) });
+// S2: the roles the owner gives and takes ('owner' moves only through a handover).
+const roleBodySchema = z.object({
+  role: z.enum(['moderator', 'member'], { errorMap: () => ({ message: 'Choose moderator or member.' }) }),
+});
+const transferBodySchema = z.object({
+  toUserId: z.string({ required_error: 'Choose who will own the circle.' }).uuid('Choose who will own the circle.')
+    .transform((s) => s.toLowerCase()),
+});
 const attachableQuery = z.object({
   q: z.string().trim().max(100).optional(),
   page: z.coerce.number().int().min(1).max(1000).default(1),
@@ -58,10 +73,12 @@ router.get('/', authenticate, circleReadLimiter, async (req: Request, res: Respo
   } catch (err) { next(err); }
 });
 
-// GET /circles/of-pod/:podId — circles a pod is attached to (any member).
+// GET /circles/of-pod/:podId — circles a pod is attached to, for anyone who may see the pod (S2: a private pod's
+// links are its members' and admins' to read; anyone else gets the pod's own 404, so its existence is not confirmed).
 // Two path segments, so it can never be shadowed by GET /:id below.
 router.get('/of-pod/:podId', authenticate, circleReadLimiter, uuidInPath('podId', PATH_REFUSALS.pod), async (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (!(await canViewPod(req.user!.userId, req.params.podId, req.user!.role))) throw new NotFoundError('Pod', req.params.podId);
     const data = await circleService.listCirclesOfPod(req.params.podId);
     res.json({ success: true, data } satisfies ApiResponse);
   } catch (err) { next(err); }
@@ -85,12 +102,15 @@ router.post('/', authenticate, circleWriteLimiter, requireRole(UserRole.ADMIN), 
     } catch (err) { next(err); }
   });
 
-// PATCH /circles/:id — update (the people who run it; T14). Name, description and who can join; moving it under
-// another circle stays a platform admin's (the service says so). Opening a closed circle lets everyone waiting in.
+// PATCH /circles/:id — update (the people who run it; T14). Name and description: its owner and moderators. Who can
+// join (S2, D3): its owner only, since opening a closed circle lets everyone waiting in. Moving it under another
+// circle stays a platform admin's (the service says so).
 router.patch('/:id', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle), validate(updateBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const circle = await assertCircleManager(req.params.id, req.user!.userId, req.user!.role, 'Only the people who run this circle can change it.');
+      const circle = req.body.joinPolicy !== undefined
+        ? await assertCircleOwner(req.params.id, req.user!.userId, req.user!.role, "Only the circle's owner can choose who can join.")
+        : await assertCircleManager(req.params.id, req.user!.userId, req.user!.role, 'Only the people who run this circle can change it.');
       const changed = await circleService.updateCircle(req.params.id, req.body, { userId: req.user!.userId, role: req.user!.role });
       const approved = changed?.approvedUserIds ?? [];
       // Closing withdraws the invites of people who do not run it (final fix wave S2): the circle's invites and each
@@ -135,18 +155,24 @@ router.post('/:id/pods', authenticate, circleWriteLimiter, uuidInPath('id', PATH
       await assertCircleManager(req.params.id, req.user!.userId, req.user!.role, 'Only the people who run this circle can attach pods.');
       await circleService.attachPod(req.params.id, req.body.podId, req.user!.userId, isAdminRole(req.user!.role));
       void fanoutCircleChange(req.params.id, req.user!.userId);
+      // S2: the pod's own page names its circles ("In circles"), so its members are told too.
+      void fanoutPodEntities(req.body.podId);
       res.status(201).json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
-// DELETE /circles/:id/pods/:podId — detach (the people who run it; T14)
+// DELETE /circles/:id/pods/:podId — take a pod out of the circle: the people who run the circle (T14), or (S2) the
+// pod's own director, who may always unlink their pod. Only the link goes; the pod keeps everything of its own.
 router.delete('/:id/pods/:podId', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle),
   uuidInPath('podId', PATH_REFUSALS.pod),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await assertCircleManager(req.params.id, req.user!.userId, req.user!.role, 'Only the people who run this circle can detach pods.');
-      await circleService.detachPod(req.params.id, req.params.podId);
-      void fanoutCircleChange(req.params.id, req.user!.userId);
+      const podId = req.params.podId.toLowerCase();
+      const { detached } = await circleService.detachPod(req.params.id, podId, { userId: req.user!.userId, role: req.user!.role });
+      if (detached) {
+        void fanoutCircleChange(req.params.id, req.user!.userId);
+        void fanoutPodEntities(podId);
+      }
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
@@ -225,6 +251,36 @@ router.delete('/:id/members/:userId', authenticate, circleWriteLimiter,
       await joinService.removeCircleMember(req.params.id, req.params.userId, { userId: req.user!.userId, role: req.user!.role });
       void fanoutCircleChange(req.params.id, req.user!.userId, [req.params.userId]);
       res.json({ success: true, data: { ok: true } } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// ── Roles (Shirley pilot S2, 11 Nov 2026; D3) ─────────────────────────────────────────────────────────────
+
+// PATCH /circles/:id/members/:userId/role { role: 'moderator' | 'member' } — the owner (or a platform admin) makes a
+// member a moderator or a moderator a member. Audited; everyone in the circle and the person changed are told.
+router.patch('/:id/members/:userId/role', authenticate, circleWriteLimiter,
+  uuidInPath('id', PATH_REFUSALS.circle), uuidInPath('userId', PATH_REFUSALS.member), validate(roleBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const targetId = req.params.userId.toLowerCase();
+      const { role } = req.body as z.infer<typeof roleBodySchema>;
+      const change = await roleService.setCircleMemberRole(req.params.id, targetId, role, { userId: req.user!.userId, role: req.user!.role });
+      if (change.changed) void fanoutCircleChange(req.params.id, req.user!.userId, [targetId]);
+      res.json({ success: true, data: { role: change.to, changed: change.changed } } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// POST /circles/:id/transfer { toUserId } — the owner (or a platform admin) hands the circle to someone in it; the old
+// owner becomes a moderator. Audited; both people and everyone in the circle are told, and the new owner gets a bell.
+router.post('/:id/transfer', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REFUSALS.circle), validate(transferBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { toUserId } = req.body as z.infer<typeof transferBodySchema>;
+      const handover = await roleService.transferCircleOwnership(req.params.id, toUserId, { userId: req.user!.userId, role: req.user!.role });
+      const changed = [toUserId, ...(handover.previousOwnerId ? [handover.previousOwnerId] : [])];
+      void fanoutCircleChange(req.params.id, req.user!.userId, changed);
+      void joinService.ringNewOwner(req.params.id, handover.circleName, toUserId);
+      res.json({ success: true, data: { ownerId: toUserId, previousOwnerId: handover.previousOwnerId } } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 

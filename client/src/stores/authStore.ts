@@ -284,7 +284,7 @@ function getTokenExpiryMs(token: string): number | null {
 }
 
 /** Whose session a token holds: the `sub` of its payload. Decoded, not verified (the server does that): it is only compared. */
-function tokenSubject(token: string): string | null {
+export function tokenSubject(token: string): string | null {
   try {
     // A JWT payload is base64url, which atob cannot read when it holds a "-" or a "_".
     const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));

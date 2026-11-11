@@ -327,13 +327,15 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'circle-1' }], rowCount: 1 });
-      mockQuery.mockResolvedValueOnce({ rows: [{ '?column?': 1 }], rowCount: 1 }); // created_by or member
+      mockQuery.mockResolvedValueOnce({ rows: [{ '?column?': 1 }], rowCount: 1 }); // their row: an open circle, or a manager
       mockQuery.mockResolvedValueOnce({ rows: [circleInvite], rowCount: 1 });
 
       await inviteService.createInvite('user-creator', { type: InviteType.CIRCLE, circleId: 'circle-1' }, 'member');
 
-      const lookup = mockQuery.mock.calls.find(c => /created_by = \$2/.test(String(c[0])));
+      // Shirley pilot S2: the role decides; having made the circle is no reason of its own.
+      const lookup = mockQuery.mock.calls.find(c => /JOIN circle_members m ON m\.circle_id = c\.id AND m\.user_id = \$2/.test(String(c[0])));
       expect(lookup![1]).toEqual(['circle-1', 'user-creator']);
+      expect(String(lookup![0])).not.toMatch(/created_by/);
     });
 
     it('someone who is not in the circle cannot invite to it', async () => {
@@ -899,7 +901,7 @@ describe('Invite Service', () => {
       lands({ pod_id: null, session_id: 'session-1' });
       await inviteService.revokeInvite('invite-1', 'user-ann', 'member');
       expect(flatSql(mockQuery.mock.calls[0][0])).toBe(
-        "SELECT i.inviter_id, i.type, i.pod_id, i.session_id, u.id AS invitee_user_id FROM invites i LEFT JOIN users u ON u.email = i.invitee_email WHERE i.id = $1 AND i.status = 'pending'");
+        "SELECT i.inviter_id, i.type, i.pod_id, i.session_id, i.circle_id, u.id AS invitee_user_id FROM invites i LEFT JOIN users u ON u.email = i.invitee_email WHERE i.id = $1 AND i.status = 'pending'");
     });
 
     it('says who sent it and which member it was for, whoever withdrew it: the screens of both are to be told', async () => {
@@ -985,6 +987,24 @@ describe('Invite Service', () => {
       queue(invite({ type: 'circle', inviter_id: 'user-ann' }));
       lands({ pod_id: null, session_id: null });
       await expect(inviteService.revokeInvite('invite-2', 'user-ann', 'member')).resolves.toMatchObject({ inviterId: 'user-ann' });
+    });
+
+    // Shirley pilot S2: the circle's owner and moderators withdraw any of its invitations from its invitations list.
+    it('a circle invite is also withdrawn by the people who run that circle (an owner or a moderator), asked by role', async () => {
+      queue(invite({ type: 'circle', circle_id: 'circle-1', inviter_id: 'user-ann' }), { '?column?': 1 });
+      lands({ pod_id: null, session_id: null, circle_id: 'circle-1' });
+      await expect(inviteService.revokeInvite('invite-1', 'user-moderator', 'member'))
+        .resolves.toMatchObject({ circleId: 'circle-1', inviterId: 'user-ann' });
+      const lookup = mockQuery.mock.calls[1];
+      expect(flatSql(lookup[0])).toMatch(/FROM circle_members m WHERE m\.circle_id = \$1 AND m\.user_id = \$2 AND m\.role IN \('owner', 'moderator'\)/);
+      expect(lookup[1]).toEqual(['circle-1', 'user-moderator']);
+      expect(updates()).toHaveLength(1);
+    });
+
+    it('...but a plain member of that circle cannot withdraw someone else\'s circle invite: not found, nothing changes', async () => {
+      queue(invite({ type: 'circle', circle_id: 'circle-1', inviter_id: 'user-ann' }), null);
+      await expect(inviteService.revokeInvite('invite-1', 'user-member', 'member')).rejects.toMatchObject({ statusCode: 404 });
+      expect(updates()).toHaveLength(0);
     });
 
     it('...and by nobody else: another member, even one who belongs to the circle or the pod of the same name, is told it is not found', async () => {

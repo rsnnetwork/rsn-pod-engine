@@ -1311,7 +1311,9 @@ export async function deleteUser(userId: string): Promise<void> {
   await getUserById(userId); // Verify exists
 
   // Remove from all pods
-  await query(`UPDATE pod_members SET status = 'removed', left_at = NOW() WHERE user_id = $1 AND status = 'active'`, [userId]);
+  // Shirley pilot S2 fix round 2: 'closed', not 'removed': the closure, not an organiser, took them out, so if the
+  // account is reopened the member may come back to a public pod by themselves.
+  await query(`UPDATE pod_members SET status = 'removed', removal_kind = 'closed', left_at = NOW() WHERE user_id = $1 AND status = 'active'`, [userId]);
 
   // Part 3 Task 3: the upcoming and live events they hold a place in, read before the places are removed below.
   const freedEvents = await eventsWithPlace(userId);

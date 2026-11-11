@@ -163,7 +163,8 @@ describe('an event invite', () => {
     invite = sessionInvite();
     mockAddMember.mockClear();
     await acceptInvite('CODE123', MEMBER);
-    expect(mockAddMember).toHaveBeenCalledWith(POD, MEMBER);
+    // S2 fix round 1: with how they come in (an invite), so an organiser-removed member is not let back by any link.
+    expect(mockAddMember).toHaveBeenCalledWith(POD, MEMBER, undefined, undefined, expect.objectContaining({ by: 'invite' }));
   });
 
   it('still fails on anything else the registration throws', async () => {

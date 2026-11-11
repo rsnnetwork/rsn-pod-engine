@@ -64,7 +64,8 @@ function arm(world: { circle?: typeof CIRCLE | null; manager?: boolean; session?
     if (/SELECT name FROM circles WHERE id = \$1/.test(sql)) {
       return { rows: world.circle ? [{ name: world.circle.name }] : [], rowCount: 1 };
     }
-    if (/FROM circles c\s+WHERE c\.id = \$1\s+AND \(c\.created_by = \$2/.test(sql)) {
+    // Shirley pilot S2: the manager gate reads the person's own owner or moderator row (never the circle's maker).
+    if (/FROM circle_members m\s+WHERE m\.circle_id = \$1 AND m\.user_id = \$2 AND m\.role IN \('owner', 'moderator'\)/.test(sql)) {
       return { rows: world.manager ? [{ '?column?': 1 }] : [], rowCount: world.manager ? 1 : 0 };
     }
     if (/INSERT INTO notifications/.test(sql)) {
