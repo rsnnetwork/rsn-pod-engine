@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { Suspense, lazy, useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { connectSocket, disconnectSocket, getSocket, reconnectSocket } from '@/lib/socket';
 import { useEntityChangedHandler } from '@/realtime/useEntityChangedHandler';
@@ -39,6 +39,7 @@ import SessionGuard from '@/features/live/SessionGuard';
 import HostDashboardPage from '@/features/host/HostDashboardPage';
 import RecapPage from '@/features/sessions/RecapPage';
 import MatchingBoardPage from '@/features/schedule/MatchingBoardPage';
+import { PageLoader } from '@/components/ui/Spinner';
 import MeetingDetailPage from '@/features/meetings/MeetingDetailPage';
 import MessagesPage from '@/features/messages/MessagesPage';
 import MeetPage from '@/features/messages/MeetPage';
@@ -77,6 +78,9 @@ import { CALL_LINK_BASE_PATH } from '@rsn/shared';
 import CallLinkPage from '@/features/call/CallLinkPage';
 import GuestHome from '@/features/call/GuestHome';
 import { GUEST_HOME_PATH } from '@/features/call/guest-routes';
+
+// The organisers' event report (Part 3 Task 9): a page few people open, so it loads only when it is.
+const EventReportPage = lazy(() => import('@/features/sessions/report/EventReportPage'));
 
 export default function App() {
   const { checkSession } = useAuthStore();
@@ -250,6 +254,8 @@ export default function App() {
         <Route path="/sessions/new" element={<CreateSessionPage />} />
         <Route path="/sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
+        {/* The organisers' event report (10 Nov 2026 spec 03, Part 3 Task 9), loaded when opened. */}
+        <Route path="/sessions/:sessionId/report" element={<Suspense fallback={<PageLoader />}><EventReportPage /></Suspense>} />
         {/* The organisers' matching board of a rounds event (10 Nov 2026 spec, Part 2 Task 13). */}
         <Route path="/sessions/:sessionId/board" element={<MatchingBoardPage />} />
         {/* A meeting two members agreed (26 Oct 2026), under Events. */}

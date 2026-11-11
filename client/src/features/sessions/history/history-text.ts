@@ -16,6 +16,11 @@ export interface HistoryEntry {
   scheduleVersion: number | null;
   subjects: HistoryPerson[];
   reason: string | null;
+  /**
+   * Which part of the event report a report.downloaded entry took out ('attendance', 'meetings', 'mutual-matches'),
+   * when the server says (it stores it as the entry's `after.section`); without it the sentence names the report.
+   */
+  section?: string | null;
 }
 
 export const HISTORY_COPY = {
@@ -65,12 +70,26 @@ const ACTIONS: Record<string, string> = {
   'schedule.unlocked': 'unlocked a room',
   'schedule.published': 'published the schedule',
   'call_link.rotated': 'made a new RSN Call link',
+  'report.downloaded': 'downloaded the event report',
 };
+
+/** The words for each part of the event report (Part 3 Task 9): "{actor} downloaded the {section} report". */
+const REPORT_SECTIONS: Record<string, string> = {
+  attendance: 'attendance',
+  meetings: 'meetings',
+  'mutual-matches': 'mutual matches',
+};
+
+function actionWords(entry: HistoryEntry): string {
+  const section = entry.action === 'report.downloaded' && entry.section ? REPORT_SECTIONS[entry.section] : undefined;
+  if (section) return `downloaded the ${section} report`;
+  return ACTIONS[entry.action] ?? 'changed the event';
+}
 
 /** "Ana Lee published the event"; REASON for what the product did by itself. */
 export function historySentence(entry: HistoryEntry): string {
   const who = entry.actor?.displayName || HISTORY_COPY.product;
-  const what = ACTIONS[entry.action] ?? 'changed the event';
+  const what = actionWords(entry);
   const how = entry.automatic && entry.actor ? ` ${HISTORY_COPY.automatically}` : '';
   return `${who} ${what}${how}`;
 }

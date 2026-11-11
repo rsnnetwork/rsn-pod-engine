@@ -35,6 +35,7 @@ import { duplicateCircleField, eventCircleLine } from './circle-preset';
 import { circleErrorSentence } from '@/features/circles/useCircleActions';
 import OrganiserSettings from './OrganiserSettings';
 import EventHistoryPanel from './history/EventHistoryPanel';
+import EventReportCard from './report/EventReportCard';
 import { useEventGroups } from './groups/useEventGroups';
 import ParticipantGroupControl from './groups/ParticipantGroupControl';
 
@@ -606,6 +607,14 @@ export default function SessionDetailPage() {
         <div data-testid="after-event-tools" className="grid gap-3 empty:hidden animate-fade-in-up stagger-1">
           <MessageParticipantsPanel sessionId={sessionId} />
           <StartGroupChatCard sessionId={sessionId} />
+        </div>
+      )}
+
+      {/* The event report (Part 3 Task 9): the figures, the three spreadsheets and the full report, for the same people.
+          It draws nothing for anyone the server refuses. */}
+      {showAfterEventTools && sessionId && (
+        <div className="animate-fade-in-up stagger-1">
+          <EventReportCard sessionId={sessionId} />
         </div>
       )}
 

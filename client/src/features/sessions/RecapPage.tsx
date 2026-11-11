@@ -5,7 +5,7 @@ import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import Avatar from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
-import { CheckCircle, Users, Star, Handshake, ArrowLeft, Calendar, Download, UserCheck, CircleDot, MessageSquare } from 'lucide-react';
+import { CheckCircle, Users, Star, Handshake, ArrowLeft, Calendar, FileText, UserCheck, CircleDot, MessageSquare } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
@@ -214,7 +214,6 @@ export default function RecapPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
-  const [exportLoading, setExportLoading] = useState(false);
 
   const fetchRecap = async () => {
     if (!sessionId) return;
@@ -246,22 +245,6 @@ export default function RecapPage() {
     fetchRecap();
   }, [sessionId]);
 
-  const handleExport = async () => {
-    if (!sessionId) return;
-    setExportLoading(true);
-    try {
-      const res = await api.get(`/ratings/sessions/${sessionId}/export`);
-      const blob = new Blob([JSON.stringify(res.data.data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `session-${sessionId}-export.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch { /* silently fail */ }
-    setExportLoading(false);
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -285,15 +268,20 @@ export default function RecapPage() {
     <div className="max-w-3xl mx-auto py-8 px-4 space-y-6">
       {/* Header. The way back is the event's own page, wherever the recap was opened from (COM-05): a step back in
           the browser's history went to the ended live event, or out of the app from a link. */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Link to={`/sessions/${sessionId}`} className="inline-flex min-h-[44px] items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition-colors">
           <ArrowLeft className="h-4 w-4" />
           Event details
         </Link>
-        {isHost && (
-          <Button variant="secondary" onClick={handleExport} isLoading={exportLoading}>
-            <Download className="h-4 w-4 mr-1" /> Export
-          </Button>
+        {/* Part 3 Task 9: the organisers' figures, rooms and spreadsheets are the event report's, made on the server. */}
+        {(isHost || isAdmin) && (
+          <Link
+            to={`/sessions/${sessionId}/report`}
+            data-testid="recap-report-link"
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 text-sm font-semibold text-[#1a1a2e] hover:bg-gray-50 transition-colors"
+          >
+            <FileText className="h-4 w-4" aria-hidden="true" /> See the event report
+          </Link>
         )}
       </div>
 
@@ -550,8 +538,8 @@ export default function RecapPage() {
         </Card>
       )}
 
-      {/* Host-only: full event recap */}
-      {isHost && <HostRecapSection sessionId={sessionId!} />}
+      {/* For the host and co-hosts: what people wrote about the event (the event report counts it; the words are here). */}
+      {isHost && sessionId && <EventFeedbackSection sessionId={sessionId} />}
 
       {/* Stacked full width on a phone, where two padded buttons side by side were wider than the screen. */}
       <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
@@ -568,129 +556,33 @@ export default function RecapPage() {
   );
 }
 
-/* ─── Host Event-Wide Recap ──────────────────────────────────────────────── */
+/* ─── What people wrote about the event (for its host and co-hosts) ──────────────────────────────────────────────
+   Part 3 Task 9: the host's old breakdown (rooms, figures and a CSV built in this browser) is the event report now
+   (/sessions/:id/report, built and guarded on the server). What stays here is the event feedback text, which the
+   report counts but does not carry. A 403 (not the host or a co-host) draws nothing. */
 
-function HostRecapSection({ sessionId }: { sessionId: string }) {
-  const [hostData, setHostData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+interface EventFeedbackEntry { userId: string; displayName: string; feedback: string; createdAt: string }
 
-  useEffect(() => {
-    api.get(`/sessions/${sessionId}/host-recap`).then(r => {
-      setHostData(r.data.data);
-    }).catch(err => {
-      // Host recap fetch can fail for non-hosts (403) — that's expected,
-      // the section just stays empty. For other errors, log so the host
-      // dev tools surface the issue rather than seeing a silent blank page.
-      const code = err?.response?.data?.error?.code;
-      if (code !== 'AUTH_FORBIDDEN') {
-        console.warn('host recap fetch failed', { sessionId, code, err });
-      }
-    }).finally(() => setLoading(false));
-  }, [sessionId]);
+function EventFeedbackSection({ sessionId }: { sessionId: string }) {
+  const { data: feedback } = useQuery({
+    queryKey: ['host-recap-feedback', sessionId],
+    queryFn: () => api.get(`/sessions/${sessionId}/host-recap`).then(r => (r.data.data?.feedback ?? []) as EventFeedbackEntry[]),
+    retry: (count, err: unknown) => (err as { response?: { status?: number } })?.response?.status !== 403 && count < 2,
+    meta: { entities: [E.session(sessionId), E.sessionParticipants(sessionId)] },
+  });
 
-  const exportCSV = () => {
-    if (!hostData) return;
-    const rows: string[] = ['Round,Room,Participant A,Participant B,Participant C,Status,Type'];
-    for (const m of hostData.matches) {
-      const type = m.isManual ? 'manual' : m.isOverride ? 'host-edited' : 'algorithm';
-      rows.push(`${m.roundNumber},${m.roomId || ''},${m.nameA},${m.nameB},${m.nameC || ''},${m.status},${type}`);
-    }
-    rows.push('');
-    rows.push('Participant,Email,Rounds Completed,Status,No Show');
-    for (const p of hostData.participants) {
-      rows.push(`${p.displayName},${p.email},${p.roundsCompleted},${p.status},${p.isNoShow}`);
-    }
-    if (hostData.feedback.length > 0) {
-      rows.push('');
-      rows.push('Feedback From,Feedback,Submitted At');
-      for (const f of hostData.feedback) {
-        rows.push(`${f.displayName},"${f.feedback.replace(/"/g, '""')}",${f.createdAt}`);
-      }
-    }
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `event-recap-${sessionId}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  if (loading) return null;
-  if (!hostData) return null;
-
-  // Group matches by round
-  const byRound: Record<number, any[]> = {};
-  for (const m of hostData.matches) {
-    (byRound[m.roundNumber] ||= []).push(m);
-  }
-  const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
-
+  if (!feedback || feedback.length === 0) return null;
   return (
-    <>
-      <div className="border-t border-gray-200 pt-6 mt-2">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold text-gray-800">Host Recap — Full Breakdown</h2>
-          <Button variant="secondary" onClick={exportCSV}>
-            <Download className="h-4 w-4 mr-1" /> Export CSV
-          </Button>
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          <Card className="text-center py-3">
-            <p className="text-xl font-bold text-gray-800">{hostData.participants.length}</p>
-            <p className="text-xs text-gray-400">Total Participants</p>
-          </Card>
-          <Card className="text-center py-3">
-            <p className="text-xl font-bold text-gray-800">{hostData.stats.totalRatings}</p>
-            <p className="text-xs text-gray-400">Ratings Submitted</p>
-          </Card>
-          <Card className="text-center py-3">
-            <p className="text-xl font-bold text-gray-800">{Number(hostData.stats.avgQuality).toFixed(1)}</p>
-            <p className="text-xs text-gray-400">Avg Quality</p>
-          </Card>
-        </div>
-
-        {/* Round-by-round match breakdown */}
-        {rounds.map(round => (
-          <Card key={round} className="mb-3">
-            <h3 className="text-sm font-semibold text-gray-600 mb-2">Round {round} — {byRound[round].length} room{byRound[round].length !== 1 ? 's' : ''}</h3>
-            <div className="space-y-1.5">
-              {byRound[round].map((m: any) => (
-                <div key={m.id} className="flex items-center gap-2 text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-1.5">
-                  <span className="font-medium">{m.nameA}</span>
-                  <span className="text-gray-400">&</span>
-                  <span className="font-medium">{m.nameB}</span>
-                  {m.nameC && <><span className="text-gray-400">&</span><span className="font-medium">{m.nameC}</span></>}
-                  <span className="ml-auto flex items-center gap-1.5">
-                    {m.isManual && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">Manual</span>}
-                    {!m.isManual && m.isOverride && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">Host-edited</span>}
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${m.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : m.status === 'no_show' ? 'bg-red-50 text-red-500' : 'bg-gray-100 text-gray-500'}`}>
-                      {m.status}
-                    </span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </Card>
+    <Card data-testid="recap-event-feedback">
+      <h2 className="text-sm font-semibold text-gray-600 mb-3">What people said about the event ({feedback.length})</h2>
+      <div className="space-y-3">
+        {feedback.map(f => (
+          <div key={f.userId} className="bg-gray-50 rounded-lg px-3 py-2">
+            <p className="text-xs font-medium text-gray-500 mb-1 [overflow-wrap:anywhere]">{f.displayName}</p>
+            <p className="text-sm text-gray-700 [overflow-wrap:anywhere]">{f.feedback}</p>
+          </div>
         ))}
-
-        {/* Participant feedback */}
-        {hostData.feedback.length > 0 && (
-          <Card>
-            <h3 className="text-sm font-semibold text-gray-600 mb-3">Participant Feedback ({hostData.feedback.length})</h3>
-            <div className="space-y-3">
-              {hostData.feedback.map((f: any) => (
-                <div key={f.userId} className="bg-gray-50 rounded-lg px-3 py-2">
-                  <p className="text-xs font-medium text-gray-500 mb-1">{f.displayName}</p>
-                  <p className="text-sm text-gray-700">{f.feedback}</p>
-                </div>
-              ))}
-            </div>
-          </Card>
-        )}
       </div>
-    </>
+    </Card>
   );
 }
