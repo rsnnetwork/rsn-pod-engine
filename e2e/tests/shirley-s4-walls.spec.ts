@@ -165,7 +165,8 @@ test(`owners and moderators run the wall; authors edit; bells open the post (${e
   const reply = await api(me, 'POST', `/circles/posts/${firstId}/comments`, { content: 'Thank you', parentCommentId: comment.json.data.id });
   expect(reply.status).toBe(201);
   const replyBell = await pool.query(`SELECT link FROM notifications WHERE user_id = $1 AND type = 'circle_reply'`, [o.id]);
-  expect(replyBell.rows[0]?.link).toBe(`/circles/${circleId}?post=${firstId}`);
+  // A comment bell names its own comment so removing that comment can delete exactly its bells; the page reads only `post`.
+  expect(replyBell.rows[0]?.link).toBe(`/circles/${circleId}?post=${firstId}&comment=${reply.json.data.id}`);
   expect((await api(b, 'POST', `/circles/posts/${firstId}/react`, { reaction: 'like' })).status).toBe(404);
   const editButton = mp.getByTestId(`edit-post-button-${firstId}`);
   await fitsViewport(mp, editButton);
