@@ -1284,6 +1284,8 @@ export async function sendMatchPreview(
       participantB: { userId: m.participantBId, displayName: safeName(m.participantBId) },
       metBefore: timesMet > 0,
       timesMet,
+      // Part 2 Task 9 — the host sees which meetings are locked on the matching board (false without a board).
+      locked: m.locked === true,
     };
     if (m.participantCId) {
       preview.participantC = { userId: m.participantCId, displayName: safeName(m.participantCId) };
@@ -1661,6 +1663,8 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
           participants,
           isTrio: !!m.participantCId,
           isManual,
+          // Part 2 Task 9 — locked on the matching board (false for an event without a board).
+          locked: m.locked === true,
           // Manual-room-only fields. null when the manual room has no
           // timer (host chose "no limit") or when this is an algorithm room.
           roomEndsAt: roomTimer ? roomTimer.endsAt.toISOString() : null,

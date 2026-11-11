@@ -863,7 +863,11 @@ export async function handleJoinSession(
             // flipped true → End Round rendered → its no-endEvent press fell
             // through and completed the event. Label the rooms like the
             // canonical builder (matching-flow) does.
-            return { matchId: m.id, roomId: m.roomId || '', status: m.status, participants, isTrio: !!m.participantCId, isManual: m.isManual === true };
+            return {
+              matchId: m.id, roomId: m.roomId || '', status: m.status, participants, isTrio: !!m.participantCId, isManual: m.isManual === true,
+              // Part 2 Task 9 — locked on the matching board, as the canonical builder sends it (false without a board).
+              locked: m.locked === true,
+            };
           });
           // Bye participants are those in_lobby during an active round (not in any active match)
           const matchedUserIds = new Set<string>();

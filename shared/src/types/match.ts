@@ -28,6 +28,9 @@ export interface Match {
   score: number | null;
   reasonTags: string[];
   isManual: boolean;  // TRUE = host-created breakout (independent from algorithm rounds)
+  // Part 2 Task 9 — locked on the matching board (a published schedule's locked meeting). Read by getMatchesByRound;
+  // FALSE for every row of an event without a board. Optional for rows fetched by queries that don't select it.
+  locked?: boolean;
   // Phase 2 — richer storage (optional; rows from older queries may omit them).
   matchingTemplateId?: string | null;
   confidence?: number | null;
