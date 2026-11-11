@@ -211,13 +211,16 @@ export default function CallLinkPage() {
     }
   };
 
-  // Part 3 Task 8: off the line. The page starts again from the event (its Join would queue them at the back), so the
-  // join it already made is not remembered as tried.
+  // Part 3 Task 8: off the line, and never back on it by itself. The leave's own refresh reads the entry again (details,
+  // nothing missing) BEFORE mutateAsync resolves; with `started` still true that is the 'joining' screen, whose effect
+  // entered at once and queued them again at the back (preview smoke, 11 Nov). So the page stops asking first: back to
+  // the event's summary, the automatic enter spent, and only a fresh Join press (joinAgain) arms it again. A failed
+  // leave still shows the waiting-list screen, which follows the server's step, not `started`.
   const leaveTheLine = async () => {
+    setStarted(false);
+    setAutoTried(true);
     try {
       await leaveWaitlist.mutateAsync();
-      setStarted(false);
-      setAutoTried(false);
       setJoinError(null);
       addToast(CALL_WORDS.leftWaitlist, 'info');
     } catch (err) {
@@ -225,6 +228,12 @@ export default function CallLinkPage() {
       if (said.closed) setClosed(said.closed);
       else addToast(CALL_WORDS.leaveWaitlistFailed, 'error');
     }
+  };
+
+  /** The summary's Join, pressed: the only way back into the event (and, when it is full, onto its line). */
+  const joinAgain = () => {
+    setAutoTried(false);
+    setStarted(true);
   };
 
   const signOut = async () => {
@@ -247,7 +256,7 @@ export default function CallLinkPage() {
             <Button
               size="lg"
               className="w-full rounded-2xl"
-              onClick={() => (userId ? setStarted(true) : setPhase('email'))}
+              onClick={() => (userId ? joinAgain() : setPhase('email'))}
               data-testid="call-join"
             >
               {userId ? (approval ? 'Ask to join' : 'Join this event') : 'Join with your email'}

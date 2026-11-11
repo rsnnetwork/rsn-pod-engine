@@ -273,5 +273,12 @@ test(`guest: the call link of the full event says "number 1", and leaving asks f
   await dialog.getByRole('button', { name: 'Leave the waiting list' }).click();
   await expect(step).toBeHidden({ timeout: LIVE });
   await expect(page.getByTestId('call-join')).toBeVisible({ timeout: LIVE });
-  expect(await lineRows(guestId)).toEqual(['left']);
+  // The row is left within 10 s, and stays left: nothing on the page queues the guest again by itself (only a Join press).
+  await expect.poll(() => lineRows(guestId), { message: "the guest's row is left", timeout: LIVE }).toEqual(['left']);
+  const held = Date.now() + 3_000;
+  while (Date.now() < held) {
+    expect(await lineRows(guestId), 'no re-queue after leaving').toEqual(['left']);
+    await page.waitForTimeout(500);
+  }
+  await expect(page.getByTestId('call-waitlisted')).toHaveCount(0);
 });

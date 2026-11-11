@@ -572,7 +572,9 @@ describe('the wiring', () => {
 
   it('a signed-in member skips the email and the code; the email\'s button (?entry=) verifies by itself and leaves the address bar', () => {
     const page = read('features/call/CallLinkPage.tsx');
-    expect(page).toMatch(/onClick=\{\(\) => \(userId \? setStarted\(true\) : setPhase\('email'\)\)\}/);
+    // Part 3 Task 8: the Join press is joinAgain(), which starts (setStarted(true)) and re-arms the automatic enter.
+    expect(page).toMatch(/onClick=\{\(\) => \(userId \? (setStarted\(true\)|joinAgain\(\)) : setPhase\('email'\)\)\}/);
+    expect(page).toMatch(/const joinAgain = \(\) => \{\s*setAutoTried\(false\);\s*setStarted\(true\);\s*\};/);
     expect(page).toMatch(/const entryToken = params\.get\('entry'\);/);
     expect(page).toMatch(/rest\.delete\('entry'\);\s*setParams\(rest, \{ replace: true \}\);\s*setTokenPending\(true\);\s*verify\.mutateAsync\(\{ token: entryToken \}\)/);
   });

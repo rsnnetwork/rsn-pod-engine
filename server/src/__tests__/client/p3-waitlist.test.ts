@@ -245,9 +245,45 @@ describe('the call link\'s waitlisted screen', () => {
     expect(page).toContain("case 'waitlisted':");
     expect(page).toContain('position={state?.waitlistPosition ?? null}');
     expect(page).toContain('await leaveWaitlist.mutateAsync();');
-    expect(page).toMatch(/await leaveWaitlist\.mutateAsync\(\);\s*setStarted\(false\);\s*setAutoTried\(false\);/);
     const hook = read('features/call/useCallLink.ts');
     expect(hook).toContain('api.delete(CALL_API.leaveWaitlist(code))');
+  });
+});
+
+// ─── 4b. Leaving the line never queues them again by itself (preview smoke, 11 Nov 2026) ───────────────────────────
+//
+// The leave's own refresh reads the entry again (step 'details', nothing missing) before mutateAsync resolves. With
+// `started` still true that is the 'joining' screen, and its effect entered at once: the guest was back in line at the
+// back. A guest who gave their name on the details step entered through giveDetails, so `autoTried` was still false.
+
+describe('leaving the line on the call link never enters again by itself', () => {
+  const page = read('features/call/CallLinkPage.tsx');
+  const leaveFn = page.slice(page.indexOf('const leaveTheLine = async () => {'), page.indexOf('const joinAgain = () => {'));
+
+  it('the hazard: a signed-in person with nothing missing who had pressed Join is on the joining screen', () => {
+    const afterLeave = state({ step: 'details', waitlistPosition: null });
+    expect(callScreenOf({ landing: LANDING, entry: afterLeave, phase: 'summary', started: true })).toBe('joining');
+    expect(callScreenOf({ landing: LANDING, entry: afterLeave, phase: 'summary', started: false })).toBe('summary');
+  });
+
+  it('before the request: back to the summary and the automatic enter spent', () => {
+    expect(leaveFn).toMatch(/const leaveTheLine = async \(\) => \{\s*setStarted\(false\);\s*setAutoTried\(true\);\s*try \{\s*await leaveWaitlist\.mutateAsync\(\);/);
+  });
+
+  it('nothing in the leave re-arms the automatic enter or starts again', () => {
+    expect(leaveFn.length).toBeGreaterThan(100);
+    expect(leaveFn).not.toContain('setAutoTried(false)');
+    expect(leaveFn).not.toContain('setStarted(true)');
+  });
+
+  it('the automatic enter runs only on the joining screen and only once until re-armed', () => {
+    expect(page).toContain("if (screen !== 'joining' || autoTried || enter.isPending) return;");
+  });
+
+  it('only the summary\'s Join press re-arms it', () => {
+    expect(page).toMatch(/const joinAgain = \(\) => \{\s*setAutoTried\(false\);\s*setStarted\(true\);\s*\};/);
+    expect(page).toContain("onClick={() => (userId ? joinAgain() : setPhase('email'))}");
+    expect(page.match(/joinAgain\(\)/g)).toHaveLength(1);
   });
 });
 
