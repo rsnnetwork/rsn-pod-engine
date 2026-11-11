@@ -189,14 +189,15 @@ suite('circles: open or closed, asks, invites and a pod from the circle (real Po
       expect(forMember).toMatchObject({ isMember: true, joinPolicy: 'open', myStatus: 'member', canManage: false, canInvite: true, locked: false });
     }, 30_000);
 
-    it('a creator who is not a member (the Doctors shape) still runs it, closed or open, and may invite', async () => {
+    // Shirley pilot S2 (D3): the role decides. A maker with no row (the Doctors shape; migration 148 left such circles
+    // to platform admins) no longer runs it, and is outside a closed circle like anyone else.
+    it('a creator who is not a member (the Doctors shape) no longer runs it: locked when closed, may not invite, must ask', async () => {
       const creator = await person('Creator');
       const c = await circle(creator, { ownerRow: false, policy: 'closed' });
-      expect(await circles.getCircleDetail(c, creator, 'member')).toMatchObject({ isMember: false, canManage: true, canInvite: true, locked: false, myStatus: null });
-      await expect(invites.assertMayInviteToCircle(c, creator, false)).resolves.toMatchObject({ id: c });
-      // Running it, they may join their own closed circle without asking.
-      await circles.joinCircle(c, creator, { role: 'member' });
-      expect(await memberRows(c)).toEqual([creator]);
+      expect(await circles.getCircleDetail(c, creator, 'member')).toMatchObject({ isMember: false, canManage: false, canInvite: false, locked: true, myStatus: null, myRole: null, isOwner: false });
+      await expect(invites.assertMayInviteToCircle(c, creator, false)).rejects.toMatchObject({ statusCode: 403 });
+      await expect(circles.joinCircle(c, creator, { role: 'member' })).rejects.toMatchObject({ statusCode: 403 });
+      expect(await memberRows(c)).toEqual([]);
     }, 30_000);
 
     it('an accepted circle invite still reads by its code', async () => {

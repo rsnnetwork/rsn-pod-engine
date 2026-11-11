@@ -15,7 +15,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Users, CalendarPlus, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox } from 'lucide-react';
+import { ArrowLeft, Users, CalendarPlus, CircleDashed, MessagesSquare, Mail, Lock, Settings2, Inbox, Pencil, Send } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
@@ -30,7 +30,10 @@ import CircleMembersSection from './CircleMembersSection';
 import CircleEventsSection from './CircleEventsSection';
 import { scheduleForCircleHref } from '@/features/sessions/circle-preset';
 import CircleOrganisationsSection from './CircleOrganisationsSection';
+import EditCircleSheet from './EditCircleSheet';
+import CircleInvitesSheet from './CircleInvitesSheet';
 import { LOCKED_COPY, WHO_CAN_JOIN, circleEntities, requestsLabel, type CircleDetail } from './circle-logic';
+import { EDIT_DETAILS, INVITATIONS } from './circle-admin';
 
 const HEADER_ACTION = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50';
 
@@ -41,7 +44,7 @@ export default function CircleDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightPostId = searchParams.get('post') || undefined;
   const { user } = useAuthStore();
-  const [sheet, setSheet] = useState<'invite' | 'settings' | null>(null);
+  const [sheet, setSheet] = useState<'invite' | 'settings' | 'edit' | 'invitations' | null>(null);
   const qc = useQueryClient();
   // Final fix wave CM5 (2 Nov 2026): the people who run the circle also follow its asks (circle:<id>:requests), so its
   // Requests (n) count moves with them. Read from the page's own answer once it has one; the tags follow each render.
@@ -100,7 +103,19 @@ export default function CircleDetailPage() {
               <Mail className="h-4 w-4" /> Invite
             </button>
           )}
-          {circle.canManage && circle.joinPolicy !== undefined && (
+          {/* S2: the people who run it edit its name and description; the owner also chooses who can join there. */}
+          {circle.canManage && (
+            <button type="button" onClick={() => setSheet('edit')} data-testid="circle-edit" className={HEADER_ACTION}>
+              <Pencil className="h-4 w-4" /> {EDIT_DETAILS}
+            </button>
+          )}
+          {circle.canManage && (
+            <button type="button" onClick={() => setSheet('invitations')} data-testid="circle-invitations" className={HEADER_ACTION}>
+              <Send className="h-4 w-4" /> {INVITATIONS}
+            </button>
+          )}
+          {/* S2 (D3): who can join is the owner's choice (or a platform admin's). */}
+          {circle.isOwner && circle.joinPolicy !== undefined && (
             <button type="button" onClick={() => setSheet('settings')} data-testid="circle-settings" className={HEADER_ACTION} aria-label={WHO_CAN_JOIN}>
               <Settings2 className="h-4 w-4" /> {WHO_CAN_JOIN}
             </button>
@@ -163,6 +178,10 @@ export default function CircleDetailPage() {
         <CircleSettingsSheet circleId={circle.id} name={circle.name} current={circle.joinPolicy} waiting={circle.requestCount ?? 0} onClose={() => setSheet(null)} />
       )}
       {requestsOpen && <CircleRequestsSheet circleId={circle.id} onClose={closeRequests} />}
+      {sheet === 'edit' && <EditCircleSheet circle={circle} onClose={() => setSheet(null)} />}
+      {sheet === 'invitations' && (
+        <CircleInvitesSheet circleId={circle.id} circleName={circle.name} onClose={() => setSheet(null)} onInvite={() => setSheet('invite')} />
+      )}
     </div>
   );
 }

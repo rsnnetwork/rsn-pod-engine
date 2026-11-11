@@ -478,6 +478,30 @@ export const circleWriteLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// Pods (Shirley pilot S2, 11 Nov 2026). Every route under /api/pods had only the general limiter. Any pod can be asked
+// for by id, so its reads get their own allowance: a pod page reads the pod, its members, counts, events count and
+// circles at once, and again on every change it is told of, so the allowance is twice the circles'. Every write (make,
+// edit, archive, join, ask, leave, add, remove, approve, change a role, rules) shares one allowance.
+export const podReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 240,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('pod-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const podWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('pod-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 // REASON milestone 1 (7 Oct 2026): opening a person's brief and listing recent connections. The brief can
 // be aimed at any member by id, so without a limit one member could read it for the whole member list as
 // fast as the server answers. Reads have their own bucket: reading never uses up a member's Saves.

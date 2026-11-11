@@ -21,11 +21,13 @@ const f = (over: Partial<EventAccessFacts>): EventAccessFacts => ({ ...base, ...
 const M = UserRole.MEMBER;
 
 describe('defaultEventVisibility', () => {
-  it('follows the pod: invite-only and private pods start private', () => {
+  it('follows the pod\'s own audience: only a public open pod\'s events start public', () => {
     expect(defaultEventVisibility('public')).toBe('public');
-    expect(defaultEventVisibility('public_with_approval')).toBe('public_with_approval');
+    // Shirley pilot S2: an approval pod's event starts private, never listed to the whole platform by default.
+    expect(defaultEventVisibility('public_with_approval')).toBe('private');
     expect(defaultEventVisibility('invite_only')).toBe('private');
     expect(defaultEventVisibility('private')).toBe('private');
+    expect(defaultEventVisibility(null)).toBe('private');
   });
 });
 
@@ -205,7 +207,8 @@ describe('an event of a closed circle', () => {
     expect(list).toContain(`AND NOT ${closedCircleOutsiderSql('s', '$2').replace(/\s+/g, ' ')}`);
     const hidden = closedCircleOutsiderSql('s', '$2').replace(/\s+/g, ' ');
     expect(hidden).toContain("s.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = s.circle_id AND cc_c.join_policy = 'closed'");
-    expect(hidden).toContain('cc_c.created_by <> $2');
+    // Shirley pilot S2: having made the circle is no tie to it; only a member row is.
+    expect(hidden).not.toContain('created_by');
     expect(hidden).toContain('NOT EXISTS (SELECT 1 FROM circle_members cc_m WHERE cc_m.circle_id = s.circle_id AND cc_m.user_id = $2)');
     expect(publicEventsSql('s').replace(/\s+/g, ' ')).toContain(
       "AND NOT (s.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = s.circle_id AND pc_c.join_policy = 'closed'))",

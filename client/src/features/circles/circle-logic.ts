@@ -6,6 +6,7 @@
 // none of those fields: then a circle reads as open, and the member's place comes from isMember, as before.
 import type { CircleAccess, CircleEntityLink, CircleJoinPolicy, CircleMyStatus } from '@rsn/shared';
 import { E } from '../../realtime/entities';
+import { memberActions } from './circle-admin';
 
 /** What the list and the page read of a circle, the T14 fields optional (an older server sends none). */
 export interface CircleSummary extends Partial<CircleAccess> {
@@ -22,7 +23,8 @@ export interface CircleMember { userId: string; displayName: string | null; avat
 
 export interface CircleDetail extends CircleSummary {
   members: CircleMember[];
-  pods: Array<{ podId: string; name: string; description: string | null }>;
+  /** S2: each pod's visibility (a server from before S2 sends none). */
+  pods: Array<{ podId: string; name: string; description: string | null; visibility?: string }>;
   upcomingEvents: Array<{ id: string; title: string; scheduledAt: string; podId: string; forCircle?: boolean }>;
   children: Array<{ id: string; name: string; memberCount: number }>;
   /** T15: the entities linked to it (a server from before T15 sends none). */
@@ -95,9 +97,17 @@ export function podMadeToast(pod: string, circle: string): string {
   return `${pod} is created and added to ${circle}.`;
 }
 
-/** A member row's Remove: never the owner, never yourself (you leave instead), only for the people who run it. */
-export function canRemoveMember(m: Pick<CircleMember, 'userId' | 'role'>, me: string | undefined, canManage: boolean | undefined): boolean {
-  return !!canManage && m.userId !== me && m.role !== 'owner';
+/**
+ * A member row's Remove: never the owner, never yourself (you leave instead), only for the people who run it; S2: a
+ * moderator only by the owner (or a platform admin, `isOwner`).
+ */
+export function canRemoveMember(
+  m: Pick<CircleMember, 'userId' | 'role'>,
+  me: string | undefined,
+  canManage: boolean | undefined,
+  isOwner = false,
+): boolean {
+  return memberActions(m, me, { canManage, isOwner }).includes('remove');
 }
 
 /** The role badge on a member row. */

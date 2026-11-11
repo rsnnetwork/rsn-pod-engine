@@ -1,4 +1,9 @@
 // ─── Pod Routes ──────────────────────────────────────────────────────────────
+// Shirley pilot S2 (11 Nov 2026): every route is rate limited (podReadLimiter, podWriteLimiter); a private pod's events
+// count, rules and circles are read only by someone who may see the pod (canViewPod: an ACTIVE member, or anyone for a
+// discoverable pod; 404 otherwise, as the pod itself); a pod's settings are Private, Public with approval or Public
+// open ("invite only" is refused); nobody adds a second director, and only the director adds a host; a change to the
+// pod also tells the circles it is in.
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
@@ -8,13 +13,17 @@ import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
 import { withoutEmail } from '../services/user/public-card';
-import { fanoutAdminEntities, fanoutCircleChange, fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
+import { podReadLimiter, podWriteLimiter } from '../middleware/rateLimit';
+import { fanoutAdminEntities, fanoutCircleChange, fanoutCirclesOfPod, fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
 import { assertCircleManager } from '../services/circle/circle-managers';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { canViewPod } from '../services/pods/pod-access';
 import { eventListedForSql } from '../services/session/event-access';
-import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast } from '@rsn/shared';
+import {
+  ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast,
+  POD_VISIBILITY_SETTINGS,
+} from '@rsn/shared';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
 
@@ -22,13 +31,20 @@ const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
+// Shirley pilot S2 (11 Nov 2026, D2): a pod is Private, Public with approval or Public open. "Invite only" is retired
+// (migration 148 maps it to Private and refuses it); asking for it, or any other value, is a 400 in words.
+const podVisibility = z.nativeEnum(PodVisibility).refine(
+  (v) => (POD_VISIBILITY_SETTINGS as readonly string[]).includes(v),
+  { message: 'Choose Private, Public with approval or Public open.' },
+);
+
 const createPodSchema = z.object({
   name:              z.string().min(1).max(200),
   description:       z.string().max(2000).optional(),
   podType:           z.nativeEnum(PodType).optional(),
   orchestrationMode: z.nativeEnum(OrchestrationMode).optional(),
   communicationMode: z.nativeEnum(CommunicationMode).optional(),
-  visibility:        z.nativeEnum(PodVisibility).optional(),
+  visibility:        podVisibility.optional(),
   maxMembers:        z.number().int().positive().max(10000).optional(),
   rules:             z.string().max(5000).optional(),
   allowMemberInvites: z.boolean().optional(),
@@ -42,7 +58,7 @@ const updatePodSchema = z.object({
   podType:           z.nativeEnum(PodType).optional(),
   orchestrationMode: z.nativeEnum(OrchestrationMode).optional(),
   communicationMode: z.nativeEnum(CommunicationMode).optional(),
-  visibility:        z.nativeEnum(PodVisibility).optional(),
+  visibility:        podVisibility.optional(),
   maxMembers:        z.number().int().positive().max(10000).nullable().optional(),
   rules:             z.string().max(5000).optional(),
   status:            z.enum(['draft', 'active', 'archived', 'suspended']).optional(),
@@ -53,10 +69,14 @@ const updatePodSchema = z.object({
   allowMemberInvites: z.boolean().optional(),
 });
 
+// S2: a pod has one director, made when the pod is. Adding someone makes them a member or (by the director) a host;
+// 'director' is refused, so a host can no longer make a second director, nor make themselves one through a second
+// account.
 const addMemberSchema = z.object({
   userId: z.string().uuid(),
-  role:   z.enum(['director', 'host', 'member']).optional(),
+  role:   z.enum(['host', 'member'], { errorMap: () => ({ message: 'Add them as a member or a host.' }) }).optional(),
 });
+export const ONLY_DIRECTOR_ADDS_HOSTS = "Only the pod's director can add a host.";
 
 const joinConfigSchema = z.object({
   rulesText:     z.string().max(5000).optional(),
@@ -68,6 +88,7 @@ const joinConfigSchema = z.object({
 router.post(
   '/',
   authenticate,
+  podWriteLimiter,
   validate(createPodSchema),
   auditMiddleware('create_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
@@ -97,6 +118,7 @@ router.post(
 router.get(
   '/',
   authenticate,
+  podReadLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { podType, status, page, pageSize, browse } = req.query as Record<string, string>;
@@ -147,6 +169,7 @@ router.get(
 router.get(
   '/:id/members/for-invite',
   authenticate,
+  podReadLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const asked = z.string().uuid().safeParse(req.query.sessionId);
@@ -185,6 +208,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
+  podReadLimiter,
   uuidInPath('id', PATH_REFUSALS.pod), // a malformed id: a 400 in a member's words, not a Postgres 500 (26 Oct 2026)
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -210,6 +234,7 @@ router.get(
 router.put(
   '/:id',
   authenticate,
+  podWriteLimiter,
   validate(updatePodSchema),
   auditMiddleware('update_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
@@ -219,6 +244,8 @@ router.put(
       // update route was missed. Renames, archive toggles, visibility
       // changes etc. now propagate to every active member instantly.
       fanoutPodEntities(req.params.id).catch(() => {});
+      // S2: a pod made private (or renamed, archived) changes the page of every circle it is in.
+      void fanoutCirclesOfPod(req.params.id, req.user!.userId); // never throws
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -232,6 +259,7 @@ router.put(
 router.delete(
   '/:id',
   authenticate,
+  podWriteLimiter,
   auditMiddleware('delete_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -241,6 +269,7 @@ router.delete(
       // open. includeUserPods tags so every member's My Pods list invalidates too.
       await podService.deletePod(req.params.id, req.user!.userId, req.user!.role);
       fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
+      void fanoutCirclesOfPod(req.params.id, req.user!.userId); // never throws
       const response: ApiResponse = { success: true, data: { message: 'Pod deleted' } };
       res.json(response);
     } catch (err) {
@@ -254,6 +283,7 @@ router.delete(
 router.get(
   '/:id/members',
   authenticate,
+  podReadLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const isAdmin = hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
@@ -288,6 +318,7 @@ router.get(
 router.get(
   '/:id/active-session',
   authenticate,
+  podReadLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Same access gate as other pod-scoped reads (member or admin).
@@ -339,6 +370,7 @@ router.get(
 router.get(
   '/:id/member-counts',
   authenticate,
+  podReadLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
@@ -361,17 +393,23 @@ router.get(
 router.post(
   '/:id/members',
   authenticate,
+  podWriteLimiter,
   validate(addMemberSchema),
   auditMiddleware('add_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const asked = (req.body.role as 'host' | 'member' | undefined) === 'host' ? PodMemberRole.HOST : PodMemberRole.MEMBER;
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         const requesterRole = await podService.getMemberRole(req.params.id, req.user!.userId);
         if (!requesterRole || ![PodMemberRole.DIRECTOR, PodMemberRole.HOST].includes(requesterRole)) {
           throw new ForbiddenError('Only pod directors and hosts can add members');
         }
+        // S2: a host adds members; only the director makes a host.
+        if (asked === PodMemberRole.HOST && requesterRole !== PodMemberRole.DIRECTOR) {
+          throw new ForbiddenError(ONLY_DIRECTOR_ADDS_HOSTS);
+        }
       }
-      const member = await podService.addMember(req.params.id, req.body.userId, req.body.role || PodMemberRole.MEMBER);
+      const member = await podService.addMember(req.params.id, req.body.userId, asked);
       // Bug 19 (18 May Stefan) — broadcast so every current member's UI
       // refetches the pod queries and sees the new row immediately. The
       // added user's own My Pods list also needs the user-scoped invalidator.
@@ -392,6 +430,7 @@ router.post(
 router.delete(
   '/:id/members/:userId',
   authenticate,
+  podWriteLimiter,
   auditMiddleware('remove_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -415,6 +454,7 @@ router.delete(
 router.patch(
   '/:id/members/:userId/role',
   authenticate,
+  podWriteLimiter,
   auditMiddleware('update_pod_member_role', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -438,6 +478,7 @@ router.patch(
 router.post(
   '/:id/join',
   authenticate,
+  podWriteLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const member = await podService.joinPod(req.params.id, req.user!.userId, req.user!.role);
@@ -461,6 +502,7 @@ router.post(
 router.post(
   '/:id/request-join',
   authenticate,
+  podWriteLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const member = await podService.requestToJoin(req.params.id, req.user!.userId);
@@ -484,6 +526,7 @@ router.post(
 router.post(
   '/:id/decline',
   authenticate,
+  podWriteLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await podService.declineMember(req.params.id, req.user!.userId);
@@ -500,6 +543,7 @@ router.post(
 router.post(
   '/:id/members/:userId/approve',
   authenticate,
+  podWriteLimiter,
   auditMiddleware('approve_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -530,6 +574,7 @@ router.post(
 router.post(
   '/:id/members/:userId/reject',
   authenticate,
+  podWriteLimiter,
   auditMiddleware('reject_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -553,6 +598,7 @@ router.post(
 router.post(
   '/:id/leave',
   authenticate,
+  podWriteLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await podService.leavePod(req.params.id, req.user!.userId);
@@ -577,6 +623,7 @@ router.post(
 router.post(
   '/:id/reactivate',
   authenticate,
+  podWriteLimiter,
   auditMiddleware('reactivate_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -584,6 +631,7 @@ router.post(
       // Phase May-19 realtime — fan out so every member's UI flips
       // back from "archived" to "active" instantly.
       fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
+      void fanoutCirclesOfPod(req.params.id, req.user!.userId); // never throws
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -597,8 +645,12 @@ router.post(
 router.get(
   '/:id/session-count',
   authenticate,
+  podReadLimiter,
+  uuidInPath('id', PATH_REFUSALS.pod),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // S2: read only by someone who may see the pod (a private pod's count by id was open to anyone; 404 as the pod).
+      if (!(await canViewPod(req.user!.userId, req.params.id, req.user!.role))) throw new NotFoundError('Pod', req.params.id);
       const count = await podService.getSessionCountForPod(req.params.id);
       const response: ApiResponse = { success: true, data: { count } };
       res.json(response);
@@ -613,8 +665,12 @@ router.get(
 router.get(
   '/:id/join-config',
   authenticate,
+  podReadLimiter,
+  uuidInPath('id', PATH_REFUSALS.pod),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // S2: a private pod's rules are its members' (they were readable by id); 404 as the pod for anyone else.
+      if (!(await canViewPod(req.user!.userId, req.params.id, req.user!.role))) throw new NotFoundError('Pod', req.params.id);
       const config = await podService.getJoinConfig(req.params.id);
       const response: ApiResponse = { success: true, data: config };
       res.json(response);
@@ -629,6 +685,7 @@ router.get(
 router.put(
   '/:id/join-config',
   authenticate,
+  podWriteLimiter,
   validate(z.object({ joinConfig: joinConfigSchema })),
   auditMiddleware('update_pod_join_config', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
@@ -650,6 +707,7 @@ router.put(
 router.delete(
   '/:id/permanent',
   authenticate,
+  podWriteLimiter,
   requireRole(UserRole.SUPER_ADMIN),
   auditMiddleware('hard_delete_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {

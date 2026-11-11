@@ -171,13 +171,14 @@ describe('setAdmissionMode', () => {
     expect(event).toMatchObject({ admission_mode: null, visibility: 'public' });
   });
 
-  it('a public pod\'s event gets public, an approval pod\'s public_with_approval', async () => {
+  // Shirley pilot S2: an approval pod\'s event starts private (its own audience), never listed to the whole platform.
+  it('a public pod\'s event gets public, an approval pod\'s private', async () => {
     event.pod_visibility = 'public';
     await setAdmissionMode(EVENT, HOST, 'open');
     expect(event.visibility).toBe('public');
     event = { status: 'scheduled', visibility: null, admission_mode: null, pod_visibility: 'public_with_approval' };
     await setAdmissionMode(EVENT, HOST, 'open');
-    expect(event.visibility).toBe('public_with_approval');
+    expect(event.visibility).toBe('private');
   });
 
   it('setting the mode it already has writes and tells nothing', async () => {

@@ -75,7 +75,7 @@ async function seed(): Promise<void> {
       const podId = uuid();
       await client.query(
         `INSERT INTO pods (id, name, description, pod_type, orchestration_mode, communication_mode, visibility, status, max_members, created_by)
-         VALUES ($1, $2, $3, 'speed_networking', 'timed_rounds', 'video', 'invite_only', 'active', 500, $4)
+         VALUES ($1, $2, $3, 'speed_networking', 'timed_rounds', 'video', 'private', 'active', 500, $4)
          ON CONFLICT DO NOTHING`,
         [
           podId,

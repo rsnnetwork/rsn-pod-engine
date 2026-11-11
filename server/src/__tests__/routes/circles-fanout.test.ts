@@ -82,12 +82,21 @@ beforeEach(() => {
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
     if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] }; // authenticate
-    // T14: the manager gate reads the circle, then whether the caller made it or is its owner or a moderator.
-    if (/SELECT id, name, join_policy, created_by FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(text)) {
-      return { rows: [{ id: CIRCLE, name: 'Doctors', join_policy: 'open', created_by: creator }] };
+    // T14: the manager gate reads the circle, then whether the caller is its owner or a moderator. Shirley pilot S2:
+    // the role alone decides (the person who made it, `creator`, is its owner here); who can join asks for the owner.
+    if (/SELECT id, name, join_policy FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(text)) {
+      return { rows: [{ id: CIRCLE, name: 'Doctors', join_policy: 'open' }] };
     }
-    if (/SELECT 1 FROM circles c WHERE c.id = \$1 AND \(c.created_by = \$2/.test(text)) {
+    if (/SELECT 1 FROM circle_members m WHERE m\.circle_id = \$1 AND m\.user_id = \$2 AND m\.role IN \('owner', 'moderator'\)/.test(text)) {
       return { rows: params[1] === creator ? [{ '?column?': 1 }] : [] };
+    }
+    if (/SELECT role FROM circle_members WHERE circle_id = \$1 AND user_id = \$2/.test(text)) {
+      if (params[1] === creator) return { rows: [{ role: 'owner' }] };
+      return { rows: members.includes(String(params[1])) ? [{ role: 'member' }] : [] };
+    }
+    // S2: which circles a pod is in is read only by someone who may see the pod (canViewPod); this pod is public.
+    if (/SELECT p\.visibility::text AS visibility, EXISTS/.test(text)) {
+      return { rows: [{ visibility: 'public', active_member: false }] };
     }
     // T15: an entity's live links, for the entity's own fan-out when it is linked or unlinked.
     if (/SELECT m\.user_id FROM entity_members m WHERE m\.entity_id = \$1 AND m\.status IN \('active', 'pending'\)/.test(text)) {
@@ -108,7 +117,7 @@ beforeEach(() => {
   jest.mocked(circleService.updateCircle).mockResolvedValue({ approvedUserIds: [] });
   jest.mocked(circleService.archiveCircle).mockResolvedValue(undefined);
   jest.mocked(circleService.attachPod).mockResolvedValue(undefined);
-  jest.mocked(circleService.detachPod).mockResolvedValue(undefined);
+  jest.mocked(circleService.detachPod).mockResolvedValue({ detached: true });
   jest.mocked(circleService.joinCircle).mockResolvedValue(undefined);
   jest.mocked(circleService.leaveCircle).mockResolvedValue(undefined);
   jest.mocked(circleService.listCircles).mockResolvedValue([]);
@@ -435,7 +444,11 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
     mockEmitEntities.mockClear();
     const refused = await request(app).patch(`/circles/${CIRCLE}`).set(as(MEMBER)).send({ joinPolicy: 'open' });
     expect(refused.status).toBe(403);
-    expect(refused.body.error.message).toBe('Only the people who run this circle can change it.');
+    // Shirley pilot S2 (D3): who can join is the owner's choice; a name or description is anyone's who runs it.
+    expect(refused.body.error.message).toBe("Only the circle's owner can choose who can join.");
+    const renamed = await request(app).patch(`/circles/${CIRCLE}`).set(as(MEMBER)).send({ name: 'Nurses' });
+    expect(renamed.status).toBe(403);
+    expect(renamed.body.error.message).toBe('Only the people who run this circle can change it.');
     expect((await request(app).patch(`/circles/${CIRCLE}`).set(as(ADMIN)).send({ joinPolicy: 'secret' })).status).toBe(400);
   });
 
@@ -453,8 +466,22 @@ describe('a closed circle\'s asks and answers: who hears them, and who may answe
     expect((await request(app).post(`/circles/${CIRCLE}/pods`).set(as(ADMIN)).send({ podId: POD })).status).toBe(201);
     expect(circleService.attachPod).toHaveBeenCalledWith(CIRCLE, POD, ADMIN, false);
     expect((await request(app).post(`/circles/${CIRCLE}/pods`).set(as(MEMBER)).send({ podId: POD })).status).toBe(403);
+    // S2: who may take a pod out (the circle's managers, or the pod's own director) is the service's to decide, with the
+    // actor the route passes; its refusal is the route's answer and tells nobody.
+    const { AppError } = jest.requireActual('../../middleware/errors');
+    jest.mocked(circleService.detachPod).mockRejectedValueOnce(new AppError(403, 'AUTH_FORBIDDEN', 'no'));
     expect((await request(app).delete(`/circles/${CIRCLE}/pods/${POD}`).set(as(MEMBER))).status).toBe(403);
+    expect(circleService.detachPod).toHaveBeenLastCalledWith(CIRCLE, POD, { userId: MEMBER, role: 'member' });
+    mockEmitEntities.mockClear();
+    jest.mocked(circleService.detachPod).mockResolvedValueOnce({ detached: false });
     expect((await request(app).delete(`/circles/${CIRCLE}/pods/${POD}`).set(as(ADMIN))).status).toBe(200);
+    await settle();
+    expect(mockEmitEntities).not.toHaveBeenCalled(); // a link that was not there changed nothing
+    expect((await request(app).delete(`/circles/${CIRCLE}/pods/${POD}`).set(as(ADMIN))).status).toBe(200);
+    await settle();
+    // S2: the pod's own page ("In circles") is told too, through the pod's members.
+    expect(mockQuery.mock.calls.some(([sql, params]) => /SELECT user_id FROM pod_members/.test(String(sql)) && (params as unknown[])[0] === POD)).toBe(true);
+    expect(emits().some(([, , tags]) => tags.includes(E.pod(POD)))).toBe(true);
   });
 
   it('the attach picker pages with pageSize (50 unless asked, never over 100) and passes the search', async () => {

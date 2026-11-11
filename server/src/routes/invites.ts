@@ -3,7 +3,9 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate, optionalAuth } from '../middleware/auth';
-import { inviteLimiter, inviteBatchLimiter, peopleReadLimiter } from '../middleware/rateLimit';
+import { circleReadLimiter, inviteLimiter, inviteBatchLimiter, peopleReadLimiter } from '../middleware/rateLimit';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
+import { assertCircleManager } from '../services/circle/circle-managers';
 import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
 import * as inviteCandidates from '../services/invite/invite-candidates.service';
@@ -316,6 +318,31 @@ router.get(
 
       const invites = await inviteService.listPodInvites(podId, status);
       const response: ApiResponse = { success: true, data: invites };
+      return res.json(response);
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+// ─── GET /invites/circle/:circleId ────────────────────────────────────────────
+// Shirley pilot S2 (11 Nov 2026): a circle's invitations (waiting, accepted, declined) for the people who run it: its
+// owner, its moderators and platform admins (404 for a missing or archived circle, 403 for anyone else). Each row may
+// be withdrawn through DELETE /invites/:id, which the people who run the circle may now do for any of them.
+
+router.get(
+  '/circle/:circleId',
+  authenticate,
+  circleReadLimiter,
+  uuidInPath('circleId', PATH_REFUSALS.circle),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const circleId = req.params.circleId.toLowerCase();
+      await assertCircleManager(circleId, req.user!.userId, req.user!.role, "Only the people who run this circle can see its invitations.");
+      const data = await inviteService.listCircleInvites(circleId, {
+        userId: req.user!.userId, isAdmin: inviteService.isAdminRole(req.user!.role),
+      });
+      const response: ApiResponse = { success: true, data };
       return res.json(response);
     } catch (err) {
       return next(err);

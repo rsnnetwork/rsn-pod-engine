@@ -47,6 +47,9 @@ async function runMigrations(): Promise<void> {
       logger.info({ migration: file }, 'Running migration...');
 
       const client = await pool.connect();
+      // A migration that counts what it changed says so with RAISE NOTICE (148 onwards); the count reaches the log.
+      const logNotice = (notice: { message?: string }) => logger.info({ migration: file, notice: notice.message }, 'Migration notice');
+      client.on('notice', logNotice);
       try {
         await client.query('BEGIN');
         await client.query(sql);
@@ -61,6 +64,7 @@ async function runMigrations(): Promise<void> {
         logger.error({ err, migration: file }, 'Migration failed');
         throw err;
       } finally {
+        client.removeListener('notice', logNotice);
         client.release();
       }
     }

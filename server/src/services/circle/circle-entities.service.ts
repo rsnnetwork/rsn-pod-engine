@@ -90,7 +90,7 @@ export async function circlesOfEntity(entityId: string, viewerId: string, viewer
     `SELECT c.id, c.name, c.join_policy,
             (SELECT count(*)::int FROM circle_members cm JOIN users cu ON cu.id = cm.user_id
               WHERE cm.circle_id = c.id AND ${activeMemberSql('cu')}) AS member_count,
-            (c.join_policy = 'closed' AND NOT ($3::boolean OR c.created_by = $2
+            (c.join_policy = 'closed' AND NOT ($3::boolean
               OR EXISTS (SELECT 1 FROM circle_members mm WHERE mm.circle_id = c.id AND mm.user_id = $2))) AS locked
        FROM circle_entities ce JOIN circles c ON c.id = ce.circle_id
       WHERE ce.entity_id = $1 AND c.archived_at IS NULL

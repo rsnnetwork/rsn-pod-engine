@@ -29,7 +29,7 @@ jest.mock('../../../realtime/emit', () => ({
 
 import {
   requestToJoinCircle, approveJoinRequest, declineJoinRequest, listJoinRequests, removeCircleMember,
-  listAttachablePods, REQUEST_ALREADY_ANSWERED,
+  listAttachablePods, REQUEST_ALREADY_ANSWERED, ONLY_OWNER_REMOVES_MODERATORS,
 } from '../../../services/circle/circle-join.service';
 
 const C = 'c1';
@@ -39,19 +39,35 @@ const flat = (sql: unknown) => String(sql).replace(/\s+/g, ' ').trim();
 const sqls = () => mockQuery.mock.calls.map((c) => flat(c[0]));
 const callOf = (re: RegExp) => mockQuery.mock.calls.find((c) => re.test(flat(c[0])));
 
-interface World { policy?: 'open' | 'closed'; manager?: boolean; member?: boolean; inserted?: boolean; pending?: boolean; role?: string }
+interface World {
+  policy?: 'open' | 'closed'; manager?: boolean; member?: boolean; inserted?: boolean; pending?: boolean; role?: string;
+  /** S2: the remover's own role, read again under the circle's lock (removeCircleMember). */
+  actorRole?: string | null;
+}
 function world(w: World = {}) {
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = flat(sql);
-    if (/^SELECT id, name, join_policy, created_by FROM circles/.test(text)) {
-      return { rows: [{ id: C, name: 'Founders', join_policy: w.policy ?? 'closed', created_by: OWNER }] };
+    if (/^SELECT id, name, join_policy FROM circles/.test(text)) {
+      return { rows: [{ id: C, name: 'Founders', join_policy: w.policy ?? 'closed' }] };
     }
-    if (/^SELECT 1 FROM circles c WHERE c.id = \$1 AND \(c.created_by = \$2/.test(text)) return { rows: (w.manager ?? params[1] === OWNER) ? [{}] : [] };
+    // S2: the manager gate asks only for an owner or moderator row (the person who made it is no longer asked about).
+    if (/^SELECT 1 FROM circle_members m WHERE m\.circle_id = \$1 AND m\.user_id = \$2 AND m\.role IN \('owner', 'moderator'\)$/.test(text)) {
+      return { rows: (w.manager ?? params[1] === OWNER) ? [{}] : [] };
+    }
     if (/^SELECT 1 FROM circle_members WHERE circle_id = \$1 AND user_id = \$2$/.test(text)) return { rows: w.member ? [{}] : [] };
     if (/^SELECT id, join_policy FROM circles/.test(text)) return { rows: [{ id: C, join_policy: w.policy ?? 'closed' }] };
+    if (/^SELECT id FROM circles WHERE id = \$1 AND archived_at IS NULL FOR UPDATE$/.test(text)) return { rows: [{ id: C }] };
+    if (/^SELECT user_id, role FROM circle_members WHERE circle_id = \$1 AND user_id = ANY\(\$2::uuid\[\]\) FOR UPDATE$/.test(text)) {
+      const [target, actor] = params[1] as string[];
+      const rows: Array<{ user_id: string; role: string }> = [];
+      if (w.member !== false) rows.push({ user_id: target, role: w.role ?? 'member' });
+      const mine = w.actorRole === undefined ? (actor === OWNER ? 'owner' : null) : w.actorRole;
+      if (mine) rows.push({ user_id: actor, role: mine });
+      return { rows };
+    }
     if (/^INSERT INTO circle_join_requests/.test(text)) return { rows: w.inserted === false ? [] : [{ id: 'r1' }] };
     if (/^SELECT display_name FROM users/.test(text)) return { rows: [{ display_name: 'Asker Name' }] };
-    if (/^SELECT u.id FROM users u WHERE u.status = 'active' AND u.id <> \$3/.test(text)) return { rows: [{ id: OWNER }] };
+    if (/^SELECT u.id FROM users u WHERE u.status = 'active' AND u.id <> \$2 AND EXISTS/.test(text)) return { rows: [{ id: OWNER }] };
     if (/^INSERT INTO notifications/.test(text)) return { rows: [{ id: 'n1', user_id: (params[0] as string[])[0], created_at: new Date() }] };
     if (/^SELECT r.id FROM circle_join_requests r/.test(text)) return { rows: w.pending === false ? [] : [{ id: 'r1' }] };
     if (/^SELECT role FROM circle_members/.test(text)) return { rows: w.member === false ? [] : [{ role: w.role ?? 'member' }] };
@@ -155,9 +171,46 @@ describe('removing a member', () => {
     expect(mockClientSql.some((s) => /GREATEST\(member_count - 1, 0\)/.test(s))).toBe(true);
   });
 
-  it('the creator is never removed, whatever their row says', async () => {
+  // Shirley pilot S2 (D3): the role decides. A maker who stepped down to member is removed like any member; a
+  // moderator is removed only by the owner or a platform admin; the remover's role is read again under the lock.
+  it('S2: the person who made the circle, now a plain member, may be removed like anyone else', async () => {
+    world({ role: 'member', actorRole: null });
+    await removeCircleMember(C, 'u-maker', { userId: 'u-platform', role: 'admin' });
+    expect(mockClientSql.some((s) => /^DELETE FROM circle_members/.test(s))).toBe(true);
+  });
+
+  it('S2: a moderator cannot remove another moderator (403 in words); the owner can', async () => {
+    world({ role: 'moderator', manager: true, actorRole: 'moderator' });
+    await expect(removeCircleMember(C, 'u-mod-2', { userId: 'u-mod-1', role: 'member' }))
+      .rejects.toMatchObject({ statusCode: 403, message: ONLY_OWNER_REMOVES_MODERATORS });
+    expect(mockClientSql.some((s) => /^DELETE FROM circle_members/.test(s))).toBe(false);
+    mockClientSql.length = 0;
+    world({ role: 'moderator' });
+    await removeCircleMember(C, 'u-mod-2', { userId: OWNER, role: 'member' });
+    expect(mockClientSql.some((s) => /^DELETE FROM circle_members/.test(s))).toBe(true);
+  });
+
+  it('S2: a moderator removes a plain member; the circle row is locked before the rows are read', async () => {
+    world({ role: 'member', manager: true, actorRole: 'moderator' });
+    await removeCircleMember(C, ASKER, { userId: 'u-mod-1', role: 'member' });
+    const lock = mockClientSql.findIndex((s) => /^SELECT id FROM circles WHERE id = \$1 AND archived_at IS NULL FOR UPDATE$/.test(s));
+    const rows = mockClientSql.findIndex((s) => /^SELECT user_id, role FROM circle_members/.test(s));
+    expect(lock).toBeGreaterThan(-1);
+    expect(rows).toBeGreaterThan(lock);
+  });
+
+  it('S2: two removers at once: one demoted a moment ago (no longer a moderator under the lock) is refused', async () => {
+    // The gate before the transaction still saw them as a manager; the row read under the lock says member.
+    world({ role: 'member', manager: true, actorRole: 'member' });
+    await expect(removeCircleMember(C, ASKER, { userId: 'u-was-mod', role: 'member' })).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockClientSql.some((s) => /^DELETE FROM circle_members/.test(s))).toBe(false);
+  });
+
+  it('nobody removes themselves (they leave), and someone not in the circle is a 404 in words', async () => {
     world({ role: 'member' });
-    await expect(removeCircleMember(C, OWNER, { userId: 'u-platform', role: 'admin' })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(removeCircleMember(C, OWNER, { userId: OWNER, role: 'member' })).rejects.toMatchObject({ statusCode: 400 });
+    world({ member: false });
+    await expect(removeCircleMember(C, 'u-gone', { userId: OWNER, role: 'member' })).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 

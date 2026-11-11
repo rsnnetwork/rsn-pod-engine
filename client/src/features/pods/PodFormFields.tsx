@@ -5,17 +5,16 @@
 // recommended size ("Up to 12 recommended" for a Reason pod), never enforced.
 import { useId, useRef, useState } from 'react';
 import type { UseFormReturn } from 'react-hook-form';
-import type { OrchestrationMode, PodType } from '@rsn/shared';
+import { POD_VISIBILITY_COPY, POD_VISIBILITY_SETTINGS, type OrchestrationMode, type PodType } from '@rsn/shared';
 import Input from '@/components/ui/Input';
 import PodTypeFields, { POD_FIELD, POD_LABEL } from './PodTypeFields';
 import { POD_NAME_MAX, changeType, sizeHint, type PodFormValues } from './pod-type-form';
 
-const VISIBILITY_OPTIONS = [
-  { value: 'private', label: 'Private', desc: 'Invite only, hidden from browse' },
-  { value: 'invite_only', label: 'Invite Only', desc: 'Discoverable but requires an invite link' },
-  { value: 'public_with_approval', label: 'Public with Approval', desc: 'Anyone can find and request to join; you approve' },
-  { value: 'public', label: 'Public (Open Join)', desc: 'Anyone can join immediately' },
-];
+// Shirley pilot S2 (D2): three settings, each with the exact words for who finds the pod, who sees inside it and how
+// people get in (shared POD_VISIBILITY_COPY). "Invite only" is retired: the server refuses it.
+const VISIBILITY_OPTIONS = POD_VISIBILITY_SETTINGS.map((value) => ({
+  value, label: POD_VISIBILITY_COPY[value].label, desc: POD_VISIBILITY_COPY[value].summary,
+}));
 
 const ERROR_LINE = 'text-xs text-red-400 mt-1';
 

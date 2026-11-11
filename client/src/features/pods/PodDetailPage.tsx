@@ -27,6 +27,8 @@ import PodEventsSection from './PodEventsSection';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
+import PodCircleChips from './PodCircleChips';
+import { POD_VISIBILITY_COPY } from '@rsn/shared';
 
 // ─── Label / icon maps ──────────────────────────────────────────────────────
 
@@ -41,11 +43,13 @@ const POD_TYPE_LABELS: Record<string, string> = {
   one_sided_networking:'One-Sided Networking',
 };
 
+// Shirley pilot S2 (D2): three settings, in the shared words; an old "invite only" pod reads as Private.
+const PRIVATE_LOOK = { label: POD_VISIBILITY_COPY.private.label, icon: Lock, color: 'text-red-400', desc: POD_VISIBILITY_COPY.private.summary };
 const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; color: string; desc: string }> = {
-  public:              { label: 'Public',               icon: Eye,    color: 'text-emerald-400', desc: 'Anyone can join directly' },
-  invite_only:         { label: 'Invite Only',          icon: Shield, color: 'text-amber-400',   desc: 'Requires an invite link' },
-  private:             { label: 'Private',              icon: Lock,   color: 'text-red-400',     desc: 'Hidden, invite only' },
-  public_with_approval:{ label: 'Public with Approval', icon: UserCheck, color: 'text-indigo-400', desc: 'Anyone can find and request to join; director approves' },
+  public:              { label: POD_VISIBILITY_COPY.public.label, icon: Eye, color: 'text-emerald-400', desc: POD_VISIBILITY_COPY.public.summary },
+  invite_only:         PRIVATE_LOOK,
+  private:             PRIVATE_LOOK,
+  public_with_approval:{ label: POD_VISIBILITY_COPY.public_with_approval.label, icon: UserCheck, color: 'text-indigo-400', desc: POD_VISIBILITY_COPY.public_with_approval.summary },
 };
 
 // The sections a phone's chip row jumps to; the ids are on the sections below.
@@ -376,11 +380,9 @@ export default function PodDetailPage() {
                 <UserPlus className="h-4 w-4 mr-2" /> Request to Join
               </Button>
               <p className="text-sm text-gray-400 self-center">
-                {pod.visibility === 'invite_only'
-                  ? 'This pod is invite-only. Request to join or use an invite link.'
-                  : pod.visibility === 'public_with_approval'
+                {pod.visibility === 'public_with_approval'
                   ? 'Your request will be reviewed by the pod director.'
-                  : 'This is a private pod. Request access from the director.'}
+                  : 'This is a private pod. You join it with an invitation from its director.'}
               </p>
             </>
           )}
@@ -437,7 +439,25 @@ export default function PodDetailPage() {
             </Button>
           )}
           {isMember && !isPodDirector && (
-            <Button variant="danger" onClick={() => leaveMutation.mutate()} isLoading={leaveMutation.isPending}>
+            // S2: leaving asks first (CLAUDE.md §12), and says what it means for a private pod.
+            <Button
+              variant="danger"
+              onClick={async () => {
+                if (leaveMutation.isPending) return;
+                if (await ask({
+                  title: `Leave ${pod.name}?`,
+                  body: pod.visibility === 'public'
+                    ? 'You stop seeing its discussion and members. You can join again at any time.'
+                    : pod.visibility === 'public_with_approval'
+                    ? 'You stop seeing its discussion, members and events. To come back you ask to join again.'
+                    : 'You stop seeing its discussion, members and events. To come back you need a new invitation.',
+                  confirmLabel: 'Leave',
+                  tone: 'danger',
+                })) leaveMutation.mutate();
+              }}
+              isLoading={leaveMutation.isPending}
+              data-testid="pod-leave"
+            >
               <LogOut className="h-4 w-4 mr-2" /> Leave Pod
             </Button>
           )}
@@ -506,8 +526,8 @@ export default function PodDetailPage() {
         </div>
       </Modal>
 
-      {/* ── Circles this pod belongs to (REASON P3b) ────────────────────── */}
-      <PodCircleChips podId={podId} />
+      {/* ── Circles this pod belongs to (REASON P3b); S2: its director may take it out of one ── */}
+      <PodCircleChips podId={podId} podName={pod.name} canUnlink={isPodDirector || isAdminUser} />
 
       {/* ── Jump to a section (phone and tablet; from 1024px the sections sit side by side) ── */}
       <nav aria-label="Jump to a section" className="flex flex-wrap gap-2 lg:hidden">
@@ -716,30 +736,6 @@ export default function PodDetailPage() {
         </div>
       </div>
       {confirmDialog}
-    </div>
-  );
-}
-
-// ── REASON P3b — circles this pod is attached to (chips) ────────────────────
-function PodCircleChips({ podId }: { podId?: string }) {
-  // realtime: skip — attachment changes are rare admin actions; refetches on visit
-  const { data: circles } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ['circlesOfPod', podId],
-    queryFn: () => api.get(`/circles/of-pod/${podId}`).then(r => r.data.data ?? []),
-    enabled: !!podId,
-  });
-  if (!circles || circles.length === 0) return null;
-  return (
-    <div className="animate-fade-in-up">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs font-semibold text-gray-500">In circles:</span>
-        {circles.map(c => (
-          // A 44px tap around the 28px chip, inside the app (a bare link reloaded the whole page).
-          <Link key={c.id} to={`/circles/${c.id}`} className="inline-flex min-h-[44px] items-center hover:opacity-80 transition-opacity">
-            <span className="inline-flex min-h-[28px] items-center rounded-full bg-rsn-red-light px-2.5 py-1 text-xs font-medium text-rsn-red">{c.name}</span>
-          </Link>
-        ))}
-      </div>
     </div>
   );
 }

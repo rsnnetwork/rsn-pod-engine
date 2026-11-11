@@ -2,7 +2,7 @@
 //
 // A circle event still lives in its pod; sessions.circle_id names the circle whose active members are its
 // audience too (event-access.ts, eventAudienceSql). This file holds what the event paths need about the circle:
-//   - who may name a circle on an event: its managers (isCircleManager: the creator, an owner or moderator, a
+//   - who may name a circle on an event: its managers (isCircleManager: an owner or moderator, or a
 //     platform admin), for a circle that exists and is not archived;
 //   - the bells: one event_invite per active member but the person who scheduled it, in one INSERT … SELECT,
 //     and never an email;

@@ -9,10 +9,14 @@ export type CircleMyStatus = 'member' | 'requested' | 'declined' | null;
 
 /**
  * Added to every circle a member reads (the list and the page), beside the fields it always had.
- * `canManage`: the viewer runs it (its creator, an owner or moderator, or a platform admin).
+ * `canManage`: the viewer runs it (its owner or a moderator, or a platform admin; Shirley pilot S2: being the person
+ *   who made it gives no right of its own).
  * `canInvite`: an open circle, anyone in it or running it; a closed circle, only the people who run it.
  * `requestCount`: pending asks, only for the people who run it.
  * `locked`: a closed circle the viewer is not in, so its wall, members, pods and events are not sent.
+ * `myRole`: the viewer's own role in it, or null when they are not in it.
+ * `isOwner`: the viewer holds the owner's powers (its owner, or a platform admin): only they make or unmake
+ *   moderators, hand the circle to someone else and choose who can join.
  */
 export interface CircleAccess {
   joinPolicy: CircleJoinPolicy;
@@ -21,6 +25,37 @@ export interface CircleAccess {
   canInvite: boolean;
   requestCount?: number;
   locked: boolean;
+  myRole: CircleRole | null;
+  isOwner: boolean;
+}
+
+/** A circle's roles (S2, D3): one owner, any number of moderators who run it with the owner, and members. */
+export type CircleRole = 'owner' | 'moderator' | 'member';
+
+/** The roles the owner gives and takes; the owner's own role moves only by handing the circle to someone else. */
+export type CircleAssignableRole = 'moderator' | 'member';
+
+/** Where one of a circle's invitations stands, in its managers' list (GET /invites/circle/:circleId). */
+export type CircleInviteState = 'pending' | 'accepted' | 'declined';
+
+/**
+ * One of a circle's invitations (S2). `invitee` is the member's name when the address belongs to a member, else the
+ * address, shown in full only to the person who sent it and to platform admins (masked for everyone else); a shared
+ * link has none.
+ */
+export interface CircleInviteRow {
+  id: string;
+  state: CircleInviteState;
+  invitee: string | null;
+  inviteeUserId: string | null;
+  /** A link anyone may open: no address, or more than one use. */
+  isLink: boolean;
+  inviterName: string | null;
+  /** The person viewing the list sent it. */
+  sentByMe: boolean;
+  /** ISO times. */
+  createdAt: string;
+  expiresAt: string | null;
 }
 
 /** One pending ask, as the circle's managers see it (GET /circles/:id/requests). */

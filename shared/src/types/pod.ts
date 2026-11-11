@@ -31,6 +31,39 @@ export enum PodVisibility {
   PUBLIC_WITH_APPROVAL = 'public_with_approval',  // anyone can find + request; director approves; optional rules/agreement
 }
 
+/**
+ * Shirley pilot S2 (11 Nov 2026, D2): a pod has three settings. "Invite only" is retired: it behaved like Public with
+ * approval while reading like Private, so migration 148 maps any such pod to Private (the more private setting) and
+ * nothing may set it again. The enum keeps the value because Postgres cannot drop one; every read treats it as Private.
+ */
+export const POD_VISIBILITY_SETTINGS = [
+  PodVisibility.PRIVATE,
+  PodVisibility.PUBLIC_WITH_APPROVAL,
+  PodVisibility.PUBLIC,
+] as const;
+export type PodVisibilitySetting = (typeof POD_VISIBILITY_SETTINGS)[number];
+
+/** Each setting's name and the exact words for who finds the pod, who sees inside it and how people get in. */
+export const POD_VISIBILITY_COPY: Record<PodVisibilitySetting, { label: string; summary: string }> = {
+  [PodVisibility.PRIVATE]: {
+    label: 'Private',
+    summary: 'Not listed anywhere. Only its members see it. People join only when you, a host or (if you allow it) a member invites them.',
+  },
+  [PodVisibility.PUBLIC_WITH_APPROVAL]: {
+    label: 'Public with approval',
+    summary: 'Listed on REASON. Anyone can see its name and description and ask to join; you approve each person. Only members see its discussion, members and events.',
+  },
+  [PodVisibility.PUBLIC]: {
+    label: 'Public open',
+    summary: 'Listed on REASON. Anyone can see its name and description and join straight away. Only members see its discussion and members.',
+  },
+};
+
+/** Whether people outside a pod may find it and read its overview: never for Private, nor an old Invite only row. */
+export function isDiscoverablePod(visibility: string | null | undefined): boolean {
+  return visibility === PodVisibility.PUBLIC || visibility === PodVisibility.PUBLIC_WITH_APPROVAL;
+}
+
 export enum PodStatus {
   DRAFT     = 'draft',
   ACTIVE    = 'active',

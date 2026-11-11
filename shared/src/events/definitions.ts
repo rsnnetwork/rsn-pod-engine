@@ -324,10 +324,14 @@ export const EVENT_ACCESS: Record<EventVisibility, EventAccessRule> = {
   },
 };
 
-/** What a new event in a pod starts with: the pod's own access, an invite-only pod's events being private. */
+/**
+ * What a new event in a pod starts with: the pod's own audience. Only a Public open pod's events start public. Shirley
+ * pilot S2 (11 Nov 2026): an event in a Public with approval pod starts Private (its members and the people invited),
+ * because "with approval" is about joining the pod: its events were listed to the whole platform by default, which a
+ * cohort pod never meant. The organiser may still choose otherwise on the form.
+ */
 export function defaultEventVisibility(podVisibility: string | null | undefined): EventVisibility {
   if (podVisibility === 'public') return 'public';
-  if (podVisibility === 'public_with_approval') return 'public_with_approval';
   return 'private';
 }
 

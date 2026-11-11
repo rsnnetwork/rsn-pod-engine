@@ -62,12 +62,15 @@ const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
 let circleRow: Record<string, unknown> | null;
 beforeEach(() => {
   jest.clearAllMocks();
-  circleRow = { id: CIRCLE, name: 'Founders', join_policy: 'open', created_by: OWNER };
+  circleRow = { id: CIRCLE, name: 'Founders', join_policy: 'open' };
   mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     const text = String(sql).replace(/\s+/g, ' ');
     if (/SELECT status, account_kind FROM users/.test(text)) return { rows: [{ status: 'active', account_kind: 'member' }] };
-    if (/SELECT id, name, join_policy, created_by FROM circles/.test(text)) return { rows: circleRow ? [circleRow] : [] };
-    if (/SELECT 1 FROM circles c WHERE c.id = \$1 AND \(c.created_by = \$2/.test(text)) return { rows: params[1] === OWNER ? [{}] : [] };
+    if (/SELECT id, name, join_policy FROM circles/.test(text)) return { rows: circleRow ? [circleRow] : [] };
+    // Shirley pilot S2: the manager gate asks for an owner or moderator row only.
+    if (/SELECT 1 FROM circle_members m WHERE m\.circle_id = \$1 AND m\.user_id = \$2 AND m\.role IN \('owner', 'moderator'\)/.test(text)) {
+      return { rows: params[1] === OWNER ? [{}] : [] };
+    }
     return { rows: [] };
   });
   jest.mocked(podService.createPod).mockResolvedValue(POD as never);

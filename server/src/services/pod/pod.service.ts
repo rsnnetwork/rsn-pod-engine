@@ -73,7 +73,7 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
         podType,
         input.orchestrationMode || typeRule.orchestration.default,
         input.communicationMode || typeRule.communication,
-        input.visibility || PodVisibility.INVITE_ONLY,
+        input.visibility || PodVisibility.PRIVATE,
         input.maxMembers || null,
         input.rules || null,
         userId,
@@ -135,11 +135,19 @@ export async function getPodById(podId: string): Promise<Pod & { memberCount?: n
   return result.rows[0];
 }
 
+/** S2: what a host is told on trying to change who may find, join or invite to the pod. */
+export const ONLY_DIRECTOR_SETS_ACCESS = "Only the pod's director can change who can find, join or invite to it.";
+
 export async function updatePod(podId: string, userId: string, input: UpdatePodInput, userRole?: UserRole): Promise<Pod> {
   const pod = await getPodById(podId);
   const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
   if (!isAdmin) {
     await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+    // Shirley pilot S2: who may find and enter the pod is its director's choice (the edit form is the director's), so
+    // a host cannot turn a private pod public, nor who may invite.
+    if (('visibility' in input || 'allowMemberInvites' in input) && (await getMemberRole(podId, userId)) !== PodMemberRole.DIRECTOR) {
+      throw new ForbiddenError(ONLY_DIRECTOR_SETS_ACCESS);
+    }
   }
 
   const setClauses: string[] = [];
@@ -219,9 +227,9 @@ export async function listPods(params: {
     paramIdx++;
   }
 
-  // Browse mode: show all non-private pods (includes public_with_approval)
+  // Browse mode: show the discoverable pods (public and public_with_approval). S2: an old invite_only row reads as private.
   if (params.browse) {
-    whereClause += ` AND p.visibility NOT IN ('private')`;
+    whereClause += ` AND p.visibility::text NOT IN ('private', 'invite_only')`;
   }
 
   if (params.podType) {
@@ -530,7 +538,7 @@ export async function requestToJoin(podId: string, userId: string): Promise<PodM
     throw new ForbiddenError('This pod is not currently active');
   }
 
-  if (pod.visibility === PodVisibility.PRIVATE) {
+  if (pod.visibility === PodVisibility.PRIVATE || pod.visibility === PodVisibility.INVITE_ONLY) {
     throw new ForbiddenError('This is a private pod. You need an invite to join.');
   }
 
@@ -539,7 +547,7 @@ export async function requestToJoin(podId: string, userId: string): Promise<PodM
     return addMember(podId, userId, PodMemberRole.MEMBER);
   }
 
-  // invite_only, public_with_approval → pending approval
+  // public_with_approval → pending approval (S2: an old invite_only row is private, refused above)
   const member = await addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.PENDING_APPROVAL);
 
   // Stefan (2 Jul) — directors/hosts never learned someone asked to join;

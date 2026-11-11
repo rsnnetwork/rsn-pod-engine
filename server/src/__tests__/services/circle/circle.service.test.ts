@@ -154,7 +154,9 @@ describe('the circle page (T13, 1 Nov 2026)', () => {
     arm(true);
     expect((await getCircleDetail('c1', 'u1', 'member')).canManage).toBe(true);
     const read = mockQuery.mock.calls.find(([sql]) => /FROM circles c WHERE c\.id = \$1 AND c\.archived_at IS NULL/.test(String(sql)))!;
-    expect(String(read[0])).toMatch(/\$3::boolean OR c\.created_by = \$2/);
+    // S2: the role row decides; the person who made it is no longer asked about.
+    expect(String(read[0])).toMatch(/\(\$3::boolean\s+OR EXISTS \(SELECT 1 FROM circle_members ax_o/);
+    expect(String(read[0])).not.toMatch(/created_by/);
     expect(read[1]).toEqual(['c1', 'u1', false]);
     mockQuery.mockClear();
     arm(false);
@@ -183,8 +185,8 @@ describe('route authz matrix (source pins)', () => {
 
   // T14 (1 Nov 2026, L22): the people who run a circle edit it, attach and detach pods and remove members; the
   // asks are answered by them too (circle-join.service.ts asks assertCircleManager itself).
-  it('update, attach and detach ask the manager gate before anything else, and no longer requireRole', () => {
-    for (const route of ["router.patch('/:id',", "router.post('/:id/pods',", "router.delete('/:id/pods/:podId',"]) {
+  it('update and attach ask the manager gate before anything else, and no longer requireRole', () => {
+    for (const route of ["router.patch('/:id',", "router.post('/:id/pods',"]) {
       const i = src.indexOf(route);
       expect(i).toBeGreaterThan(-1);
       const head = src.slice(i, src.indexOf('async (req', i));
@@ -193,6 +195,17 @@ describe('route authz matrix (source pins)', () => {
       expect(body).toMatch(/await assertCircleManager\(req\.params\.id, req\.user!\.userId, req\.user!\.role/);
       expect(body.indexOf('assertCircleManager')).toBeLessThan(body.indexOf('circleService.'));
     }
+  });
+
+  // Shirley pilot S2 (D3): who can join is the owner's; a pod's own director may take their pod out of a circle.
+  it('who can join asks the owner gate; detach hands the actor to the service, which decides', () => {
+    const i = src.indexOf("router.patch('/:id',");
+    const body = src.slice(i, i + 900);
+    expect(body).toMatch(/req\.body\.joinPolicy !== undefined\s+\? await assertCircleOwner\(req\.params\.id, req\.user!\.userId, req\.user!\.role/);
+    const d = src.indexOf("router.delete('/:id/pods/:podId',");
+    const detach = src.slice(d, d + 900);
+    expect(src.slice(d, detach.indexOf('async (req') + d)).not.toMatch(/requireRole/);
+    expect(detach).toMatch(/circleService\.detachPod\(req\.params\.id, podId, \{ userId: req\.user!\.userId, role: req\.user!\.role \}\)/);
   });
 
   it('join, leave, the asks and reads are authenticated but NOT role-gated (the service applies the circle\'s policy)', () => {
@@ -244,7 +257,7 @@ describe('joining a closed circle (T14, 1 Nov 2026)', () => {
     mockQuery.mockImplementation((sql: string) => {
       if (/SELECT id, join_policy FROM circles/.test(sql)) return Promise.resolve({ rows: [{ id: 'c1', join_policy: 'closed' }] });
       if (/SELECT 1 FROM circle_members WHERE circle_id = \$1 AND user_id = \$2/.test(sql)) return Promise.resolve({ rows: opts.member ? [{}] : [] });
-      if (/c.created_by = \$2/.test(sql)) return Promise.resolve({ rows: opts.manager ? [{}] : [] });
+      if (/m\.role IN \('owner', 'moderator'\)/.test(sql)) return Promise.resolve({ rows: opts.manager ? [{}] : [] });
       if (/INSERT INTO circle_members/.test(sql)) return Promise.resolve({ rowCount: 1, rows: [] });
       return Promise.resolve({ rowCount: 1, rows: [] });
     });
@@ -275,7 +288,7 @@ describe('joining a closed circle (T14, 1 Nov 2026)', () => {
       if (/SELECT u\.role FROM users u WHERE u\.id = \$1 AND u\.status = 'active'/.test(text)) {
         return Promise.resolve({ rows: params[0] === 'inviter' && inviter.active !== false ? [{ role: inviter.role ?? 'member' }] : [] });
       }
-      if (/c.created_by = \$2/.test(text)) return Promise.resolve({ rows: params[1] === 'inviter' && inviter.runs ? [{}] : [] });
+      if (/m\.role IN \('owner', 'moderator'\)/.test(text)) return Promise.resolve({ rows: params[1] === 'inviter' && inviter.runs ? [{}] : [] });
       return Promise.resolve({ rowCount: 1, rows: [] });
     });
   }
@@ -318,7 +331,7 @@ describe('joining a closed circle (T14, 1 Nov 2026)', () => {
       return Promise.resolve({ rowCount: 1, rows: [] });
     });
     await joinCircle('c1', 'u1');
-    expect(mockQuery.mock.calls.some(c => /created_by = \$2/.test(c[0] as string))).toBe(false);
+    expect(mockQuery.mock.calls.some(c => /role IN \('owner', 'moderator'\)/.test(c[0] as string))).toBe(false);
     expect(mockQuery.mock.calls.some(c => /member_count = member_count \+ 1/.test(c[0] as string))).toBe(true);
   });
 });
@@ -330,7 +343,9 @@ describe('what a viewer may do with a circle (toCircleAccess)', () => {
   });
 
   it('a legacy circle (no policy stored) reads as open', () => {
-    expect(toCircleAccess(row({ join_policy: null }))).toEqual({ joinPolicy: 'open', myStatus: null, canManage: false, canInvite: false, locked: false });
+    expect(toCircleAccess(row({ join_policy: null }))).toEqual({
+      joinPolicy: 'open', myStatus: null, canManage: false, canInvite: false, locked: false, myRole: null, isOwner: false,
+    });
   });
 
   it('open: a member may invite; a stranger may not; nothing is locked', () => {
@@ -347,7 +362,7 @@ describe('what a viewer may do with a circle (toCircleAccess)', () => {
 
   it('the people who run it may always invite, are never locked, and alone see the request count', () => {
     expect(toCircleAccess(row({ join_policy: 'closed', can_manage: true }))).toEqual({
-      joinPolicy: 'closed', myStatus: null, canManage: true, canInvite: true, locked: false, requestCount: 3,
+      joinPolicy: 'closed', myStatus: null, canManage: true, canInvite: true, locked: false, requestCount: 3, myRole: null, isOwner: false,
     });
     expect(toCircleAccess(row({ join_policy: 'closed', is_member: true }))).not.toHaveProperty('requestCount');
   });
@@ -382,7 +397,16 @@ describe("a closed circle's page, from outside it (T14)", () => {
     expect(d.locked).toBe(false);
     expect(d.members).toHaveLength(1);
     const pods = mockQuery.mock.calls.map(c => String(c[0]).replace(/\s+/g, ' ')).find(s => /SELECT cp.pod_id, p.name, p.description/.test(s))!;
-    expect(pods).toContain("p.status <> 'archived' AND ($3::boolean OR p.visibility <> 'private' OR EXISTS (SELECT 1 FROM pod_members vp_m WHERE vp_m.pod_id = p.id AND vp_m.user_id = $2 AND vp_m.status = 'active'))");
+    // S2 (D2): an old invite-only row reads as private too; each pod carries its visibility for the page's badge.
+    expect(pods).toContain("p.status <> 'archived' AND ($3::boolean OR p.visibility::text NOT IN ('private', 'invite_only') OR EXISTS (SELECT 1 FROM pod_members vp_m WHERE vp_m.pod_id = p.id AND vp_m.user_id = $2 AND vp_m.status = 'active'))");
+    expect(pods).toContain('SELECT cp.pod_id, p.name, p.description, p.visibility::text AS visibility');
+  });
+
+  it('S2: the locked count of pods names only discoverable ones (never a private or old invite-only pod)', async () => {
+    armDetail({});
+    await getCircleDetail('c1', 'stranger', 'member');
+    const read = String(mockQuery.mock.calls[0][0]).replace(/\s+/g, ' ');
+    expect(read).toContain("p.status <> 'archived' AND p.visibility::text NOT IN ('private', 'invite_only')) AS public_pod_count");
   });
 });
 
@@ -401,10 +425,12 @@ describe('closing a circle withdraws the invites of people who do not run it (fi
     expect(out).toEqual({ approvedUserIds: [], invitesChangedFor: ['plain', 'bo'] });
     const revoke = mockClientSql.map(s => s.replace(/\s+/g, ' ')).find(s => /UPDATE invites i SET status = 'revoked'/.test(s));
     expect(revoke).toBeDefined();
-    // Only links that could still be used, and never the invites of the creator, its owners and moderators, or admins.
+    // Only links that could still be used, and never the invites of its owner and moderators, or admins. S2: the
+    // person who made it is no exception of its own (if they no longer run it, their open links go too).
     expect(revoke).toMatch(/i\.status IN \('pending', 'accepted'\) AND i\.use_count < i\.max_uses/);
     expect(revoke).toMatch(/NOT EXISTS/);
-    expect(revoke).toMatch(/a\.role IN \('admin', 'super_admin'\) OR a\.id = c\.created_by/);
+    expect(revoke).toMatch(/a\.role IN \('admin', 'super_admin'\) OR EXISTS/);
+    expect(revoke).not.toMatch(/created_by/);
     expect(revoke).toMatch(/m\.role IN \('owner', 'moderator'\)/);
     // The switch and the withdrawal are one transaction: both ran on the transaction's client.
     expect(mockClientSql.some(s => /UPDATE circles SET/.test(s))).toBe(true);

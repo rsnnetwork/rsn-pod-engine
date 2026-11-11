@@ -176,15 +176,14 @@ export function eventAudienceSql(sessionAlias: string, userParam: string): strin
 
 /**
  * T14 (L22): the person in `userParam` is outside the closed circle that the event aliased `sessionAlias` is for: the
- * event names a circle (sessions.circle_id) whose join_policy is closed, and they are neither in it (a
- * circle_members row) nor its creator. Whether they hold another tie to the event is the rules' to add.
+ * event names a circle (sessions.circle_id) whose join_policy is closed, and they are not in it (no circle_members
+ * row; S2: having made the circle is no longer a tie). Whether they hold another tie to the event is the rules' to add.
  */
 export function outsideClosedCircleSql(sessionAlias: string, userParam: string): string {
   checked(sessionAlias, userParam);
   const s = sessionAlias;
   const u = userParam;
   return `(${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = ${s}.circle_id AND cc_c.join_policy = 'closed'
-            AND cc_c.created_by <> ${u}
             AND NOT EXISTS (SELECT 1 FROM circle_members cc_m WHERE cc_m.circle_id = ${s}.circle_id AND cc_m.user_id = ${u})))`;
 }
 
