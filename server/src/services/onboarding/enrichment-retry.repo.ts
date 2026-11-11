@@ -1,7 +1,7 @@
 // ─── LinkedIn lookups to try once more, later (12 Nov 2026) ──────────────────
 //
 // ScrapingDog answers a page it holds no copy of with "it will be scraped and stored, try again after 2-3 minutes"
-// (scrapingdog.provider.ts). A lookup that ends that way leaves one row in enrichment_retries (migration 153);
+// (scrapingdog.provider.ts). A lookup that ends that way leaves one row in enrichment_retries (migration 155);
 // enrichment-retry.worker.ts runs it once when run_at comes. The table holds only waiting rows: a claim deletes them.
 
 import { query } from '../../db';

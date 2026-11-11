@@ -2,7 +2,7 @@
 //
 // `if (!result) return;` dropped every empty lookup without a word: six days of ScrapingDog answering "not stored yet,
 // try again after 2-3 minutes" reached no log and no alert. Now every empty end is logged with the request id and the
-// reason, and a "try again later" answer leaves ONE later attempt (enrichment_retries, migration 153).
+// reason, and a "try again later" answer leaves ONE later attempt (enrichment_retries, migration 155).
 
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({

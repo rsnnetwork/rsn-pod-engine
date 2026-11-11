@@ -1,11 +1,11 @@
-// ─── Migration 153: LinkedIn lookups to try once more, later (12 Nov 2026) ──────────────────────────────────────────
+// ─── Migration 155: LinkedIn lookups to try once more, later (12 Nov 2026) ──────────────────────────────────────────
 //
 // enrichment_retries holds one waiting row per lookup ScrapingDog asked us to repeat ("not stored yet, try again after
 // 2-3 minutes"): for a join request (the approval-time lookup) or a member (their own lookup), never both, at most one
 // waiting per request and per member. The worker deletes a row when it claims it. Applied files are never edited.
 //
 // Running the file twice, the schedule's ON CONFLICT and the claim were run for real on a scratch Postgres (PGlite,
-// workspace/scratch/2026-11-12-enrich/pglite-153.mjs) for the report.
+// workspace/scratch/2026-11-12-enrich/pglite-155.mjs) for the report.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -13,14 +13,14 @@ import { transactionControl } from './transaction-control';
 import { SCHEDULE_RETRY_SQL, CLAIM_DUE_RETRIES_SQL } from '../../services/onboarding/enrichment-retry.repo';
 
 const MIGRATIONS = path.join(__dirname, '../../db/migrations');
-const FILE = '153_enrichment_retries.sql';
+const FILE = '155_enrichment_retries.sql';
 const sql = fs.readFileSync(path.join(MIGRATIONS, FILE), 'utf8');
 const flat = (text: string) => text.replace(/--[^\n]*/g, '').replace(/\s+/g, ' ').trim();
 
-describe('migration 153 (enrichment retries)', () => {
-  it('is the only file numbered 153, and has no top-level transaction control (the runner wraps each file)', () => {
+describe('migration 155 (enrichment retries)', () => {
+  it('is the only file numbered 155, and has no top-level transaction control (the runner wraps each file)', () => {
     const numbers = fs.readdirSync(MIGRATIONS).filter((f) => /^\d{3}_.*\.sql$/.test(f)).map((f) => f.slice(0, 3));
-    expect(numbers.filter((n) => n === '153')).toHaveLength(1);
+    expect(numbers.filter((n) => n === '155')).toHaveLength(1);
     expect(transactionControl(sql)).toEqual([]);
   });
 
