@@ -202,7 +202,7 @@ describe('swap, on an event with groups (founders meet funders in every round)',
     const socket = socketOf(COHOST);
     await handleHostSwapMatch(io, socket, { sessionId: SESSION_ID, userA: 'u1', userB: 'f2', override: true, reason: 'Same table' });
     expect(errorOf(socket)).toEqual({
-      code: 'GROUP_OVERRIDE_FORBIDDEN', message: 'Only the event owner or a super admin can override group rules.',
+      code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner can override group rules.",
     });
     expect(updates()).toHaveLength(0);
     expect(audits()).toHaveLength(0);
@@ -256,7 +256,9 @@ describe('swap, on an event with groups (founders meet funders in every round)',
     previewRound();
     const socket = socketOf(DIRECTOR);
     await handleHostSwapMatch(io, socket, { sessionId: SESSION_ID, userA: 'u1', userB: 'f2', override: true });
-    expect(errorOf(socket)).toMatchObject({ code: 'GROUP_OVERRIDE_FORBIDDEN' });
+    expect(errorOf(socket)).toEqual({
+      code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner and co-hosts can override group rules.",
+    });
     expect(updates()).toHaveLength(0);
     expect(audits()).toHaveLength(0);
   });
@@ -267,7 +269,7 @@ describe('swap, on an event with groups (founders meet funders in every round)',
     previewRound();
     const socket = socketOf(COHOST);
     await handleHostSwapMatch(io, socket, { sessionId: SESSION_ID, userA: 'u1', userB: 'f2', override: true });
-    expect(errorOf(socket)).toMatchObject({ code: 'GROUP_OVERRIDE_FORBIDDEN' });
+    expect(errorOf(socket)).toEqual({ code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner can override group rules." });
     expect(updates()).toHaveLength(0);
   });
 

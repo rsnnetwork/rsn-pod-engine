@@ -67,7 +67,9 @@ jest.mock('../../../services/matching/hard-exclusions', () => ({
 }));
 jest.mock('../../../services/audit/event-audit', () => ({ __esModule: true, recordEventAudit: jest.fn() }));
 
-import { mayOverrideGroupRules } from '../../../services/matching/live-room-guard';
+import {
+  groupOverrideStanding, mayOverrideGroupRules, overrideForbiddenMessage,
+} from '../../../services/matching/live-room-guard';
 
 const EVENT = '22222222-2222-4222-8222-222222222222';
 const OWNER = 'owner';
@@ -144,6 +146,31 @@ describe("mayOverrideGroupRules: override_by = 'owner_and_cohosts'", () => {
   });
 });
 
+describe("the refusal's sentence matches the owner's choice (Part 3 Task 12 ruling)", () => {
+  it("'owner' (and nothing chosen): only the owner is named; super admins are never named", async () => {
+    expect(overrideForbiddenMessage('owner')).toBe("Only the event's owner can override group rules.");
+    expect(await groupOverrideStanding(EVENT, CO)).toEqual({ allowed: false, overrideBy: 'owner' });
+    fake.overrideBy = 'owner';
+    expect(await groupOverrideStanding(EVENT, MOD)).toEqual({ allowed: false, overrideBy: 'owner' });
+  });
+
+  it("'owner_and_cohosts': the owner and co-hosts are named", async () => {
+    fake.overrideBy = 'owner_and_cohosts';
+    expect(overrideForbiddenMessage('owner_and_cohosts')).toBe("Only the event's owner and co-hosts can override group rules.");
+    expect(await groupOverrideStanding(EVENT, DIRECTOR)).toEqual({ allowed: false, overrideBy: 'owner_and_cohosts' });
+    expect(await groupOverrideStanding(EVENT, CO)).toEqual({ allowed: true, overrideBy: 'owner_and_cohosts' });
+  });
+
+  it('neither sentence names a super admin', () => {
+    for (const by of ['owner', 'owner_and_cohosts'] as const) expect(overrideForbiddenMessage(by)).not.toMatch(/admin/i);
+  });
+
+  it('an unknown event reads as the owner only', async () => {
+    fake.exists = false;
+    expect(await groupOverrideStanding(EVENT, OWNER)).toEqual({ allowed: false, overrideBy: 'owner' });
+  });
+});
+
 describe('the one read', () => {
   it('is a single statement per call, with the actor as a parameter (never the token\'s role)', async () => {
     fake.overrideBy = 'owner_and_cohosts';
@@ -152,12 +179,16 @@ describe('the one read', () => {
     expect(fake.sql[0]).toMatch(STANDING_SQL);
   });
 
-  it('live-room-guard keeps the owner-or-super-admin rule and asks for a co-host only by the setting', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../../../services/matching/live-room-guard.ts'), 'utf8');
-    const fn = src.slice(src.indexOf('export async function mayOverrideGroupRules'));
-    const body = fn.slice(0, fn.indexOf('\n}\n') > 0 ? fn.indexOf('\n}\n') : fn.indexOf('\r\n}\r\n'));
+  it('live-room-guard keeps the owner-or-super-admin rule, asks for a co-host only by the setting, and says moderators never count', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../../services/matching/live-room-guard.ts'), 'utf8').replace(/\r\n/g, '\n');
+    const start = src.indexOf('export async function groupOverrideStanding');
+    const body = src.slice(start, src.indexOf('\n}\n', start));
     expect(body).toContain('row.host_user_id === actorId');
     expect(body).toContain('UserRole.SUPER_ADMIN');
-    expect(body).toMatch(/row\.override_by === 'owner_and_cohosts' && row\.is_cohost === true/);
+    expect(body).toMatch(/overrideBy === 'owner_and_cohosts' && row\.is_cohost === true/);
+    expect(body).toContain("c.role = 'co_host'");
+    // The ruling, in a comment above it: a moderator never gains the override.
+    const doc = src.slice(src.lastIndexOf('/**', start), start);
+    expect(doc).toMatch(/moderator[^.]*never gains the\s+(\/\/\s*|\*\s*)?override/);
   });
 });

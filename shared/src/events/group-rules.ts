@@ -66,6 +66,11 @@ export interface EventGroupsView {
   allowMultiple: boolean;
   mine: string[];
   rules?: EventGroupRules | null;
+  /**
+   * Who may override the rules (the people running the event only; Part 3 Task 12). Present even while the event has
+   * no groups, since the owner's choice outlives them.
+   */
+  overrideBy?: GroupOverrideBy;
   counts?: Record<string, number>;
   /** People with a place but no group yet (the people running the event left out). */
   ungrouped?: number;

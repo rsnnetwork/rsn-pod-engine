@@ -10,7 +10,8 @@ import { cleanup, idsOf, teardown } from '../helpers/live-ui';
 // owner saves founders/funders rules with overrideBy 'owner_and_cohosts'; the co-host's board move that puts two
 // founders in one meeting, sent with override, succeeds and is in the event's history. The owner switches back to
 // 'owner': the co-host's next override is 403 GROUP_OVERRIDE_FORBIDDEN, and the co-host trying to change overrideBy is
-// 403. GET /sessions/matching-presets lists "Buyers and vendors". Throwaway accounts only (%rsn-e2e.invalid), deleted by
+// 403. A co-host removing every group leaves the owner's choice as it was. GET /sessions/matching-presets lists
+// "Buyers and vendors". Throwaway accounts only (%rsn-e2e.invalid), deleted by
 // id at the end with their pod and event.
 
 const API = process.env.E2E_API_URL || 'https://rsn-api-h04m.onrender.com';
@@ -153,12 +154,20 @@ test('the owner lets co-hosts override, then takes it back; only the owner choos
   const refused = await seatTwoFoundersTogether(cohost!, `${RUN} again`);
   expect(refused.status).toBe(403);
   expect(refused.json.error.code).toBe('GROUP_OVERRIDE_FORBIDDEN');
+  expect(refused.json.error.message).toBe("Only the event's owner can override group rules.");
 
   // Only the owner chooses: the co-host changing overrideBy is refused, and nothing changes.
   const choose = await call(cohost!, 'PUT', `/sessions/${eventId}/groups`, { ...FOUNDERS_FUNDERS, overrideBy: 'owner_and_cohosts' });
   expect(choose.status).toBe(403);
   expect(choose.json.error.message).toBe("Only the event's owner can choose who may override group rules.");
   expect((await call(owner!, 'GET', `/sessions/${eventId}/groups`)).json.data.rules.overrideBy).toBe('owner');
+
+  // Fix round 1 (ruling 3): the owner's choice survives a co-host removing every group.
+  expect((await call(owner!, 'PUT', `/sessions/${eventId}/groups`, { ...FOUNDERS_FUNDERS, overrideBy: 'owner_and_cohosts' })).status).toBe(200);
+  const wiped = await call(cohost!, 'PUT', `/sessions/${eventId}/groups`, { ...FOUNDERS_FUNDERS, groups: [], rounds: [] });
+  expect(wiped.status).toBe(200);
+  expect(wiped.json.data.overrideBy).toBe('owner_and_cohosts');
+  expect((await call(owner!, 'GET', `/sessions/${eventId}/groups`)).json.data).toMatchObject({ rules: null, overrideBy: 'owner_and_cohosts' });
 
   // Buyers and vendors is one of the speed-networking types.
   const presets = await call(owner!, 'GET', '/sessions/matching-presets');

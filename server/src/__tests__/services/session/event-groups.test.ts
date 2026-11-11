@@ -161,6 +161,14 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
     });
     return rows([]);
   }
+  // Part 3 Task 12: the owner's choice read on its own, and kept as a row of its own when every group is removed.
+  if (sql === 'SELECT override_by FROM event_matching_rules WHERE session_id = $1') {
+    return rows(world.matching ? [{ override_by: world.matching.override_by ?? 'owner' }] : []);
+  }
+  if (sql === 'INSERT INTO event_matching_rules (session_id, override_by, updated_by, updated_at) VALUES ($1, $2, $3, NOW())') {
+    world.matching = { group_question: 'Which group are you in?', allow_multiple: false, imbalance_fallback: 'leave_unmatched', override_by: params[1] as string };
+    return rows([]);
+  }
   if (/^INSERT INTO event_matching_rules/.test(sql)) {
     world.matching = {
       group_question: params[1] as string, allow_multiple: params[2] as boolean, imbalance_fallback: params[3] as string,
@@ -526,11 +534,37 @@ describe('saveEventGroupRules: who may override (Part 3 Task 12)', () => {
     expect(world.sql.some((q) => q.startsWith('SELECT s.host_user_id'))).toBe(false);
   });
 
-  it('removing every group takes the choice with it: the event is back to the owner only', async () => {
+  it("a co-host removing every group keeps the owner's choice (owner_and_cohosts), and it comes back with the next groups", async () => {
     await saveEventGroupRules(EVENT, host, foundersFunders({ overrideBy: 'owner_and_cohosts' }));
-    const cleared = await saveEventGroupRules(EVENT, host, { ...foundersFunders(), groups: [], rounds: [] });
-    expect(cleared.overrideBy).toBe('owner');
+    const cleared = await saveEventGroupRules(EVENT, cohost, { ...foundersFunders(), groups: [], rounds: [] });
+    expect(cleared).toMatchObject({ groups: [], overrideBy: 'owner_and_cohosts' });
+    expect(await getEventGroupRules(EVENT)).toBeNull();
+    expect(world.groups).toEqual([]);
+    expect(world.matching).toMatchObject({ override_by: 'owner_and_cohosts', group_question: 'Which group are you in?' });
+    // The organisers read it while there are no groups; a participant does not.
+    expect(await readEventGroups(EVENT, host)).toMatchObject({ rules: null, overrideBy: 'owner_and_cohosts' });
+    expect(await readEventGroups(EVENT, { userId: 'f3', role: UserRole.MEMBER })).not.toHaveProperty('overrideBy');
+    // A co-host saving groups again (without the choice) starts from it, never from the default.
+    const again = await saveEventGroupRules(EVENT, cohost, foundersFunders());
+    expect(again.overrideBy).toBe('owner_and_cohosts');
+    expect(world.matching?.override_by).toBe('owner_and_cohosts');
+  });
+
+  it('the owner removing every group keeps the choice too; only sending another value changes it', async () => {
+    await saveEventGroupRules(EVENT, host, foundersFunders({ overrideBy: 'owner_and_cohosts' }));
+    expect((await saveEventGroupRules(EVENT, host, { ...foundersFunders(), groups: [], rounds: [] })).overrideBy).toBe('owner_and_cohosts');
+    expect(await refusal(saveEventGroupRules(EVENT, cohost, { ...foundersFunders(), groups: [], rounds: [], overrideBy: 'owner' }))).toEqual(OWNER_ONLY);
+    const reset = await saveEventGroupRules(EVENT, host, { ...foundersFunders(), groups: [], rounds: [], overrideBy: 'owner' });
+    expect(reset.overrideBy).toBe('owner');
+    // The default is no row at all: the event is back to having none, as before Task 12.
     expect(world.matching).toBeNull();
+  });
+
+  it('the owner may choose before there are any groups, and it holds', async () => {
+    const chosen = await saveEventGroupRules(EVENT, host, { ...foundersFunders(), groups: [], rounds: [], overrideBy: 'owner_and_cohosts' });
+    expect(chosen.overrideBy).toBe('owner_and_cohosts');
+    expect(world.matching?.override_by).toBe('owner_and_cohosts');
+    expect((await saveEventGroupRules(EVENT, cohost, foundersFunders())).overrideBy).toBe('owner_and_cohosts');
   });
 
   it('a participant reads no rules, so not the choice either', async () => {

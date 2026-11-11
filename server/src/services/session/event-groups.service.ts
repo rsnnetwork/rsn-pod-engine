@@ -12,7 +12,9 @@
 // Part 3 Task 12: the rules also say who may override them (event_matching_rules.override_by, migration 147): the
 // owner alone ('owner', also when nothing was chosen) or the owner and the event's co-hosts. Only the owner
 // (host_user_id) or a super admin may change that choice; everyone else who runs the event keeps their say over the
-// rest. The override itself is decided by mayOverrideGroupRules (services/matching/live-room-guard.ts).
+// rest, and no save changes it unless it says so: removing every group keeps it (the row stays, holding only the
+// choice, when it is not the default). The override itself is decided by mayOverrideGroupRules
+// (services/matching/live-room-guard.ts).
 
 import type { PoolClient, QueryResultRow } from 'pg';
 import {
@@ -93,6 +95,17 @@ export async function getEventGroupRules(sessionId: string, client?: PoolClient)
     })),
     overrideBy: m?.override_by === 'owner_and_cohosts' ? 'owner_and_cohosts' : 'owner',
   };
+}
+
+/**
+ * The owner's stored choice of who may override (Part 3 Task 12), read on its own: it is kept even when the event has
+ * no groups (getEventGroupRules then answers null). No row is 'owner'.
+ */
+async function storedOverrideBy(read: Reader, sessionId: string): Promise<GroupOverrideBy> {
+  const result = await read<{ override_by: string | null }>(
+    `SELECT override_by FROM event_matching_rules WHERE session_id = $1`, [sessionId],
+  );
+  return result.rows[0]?.override_by === 'owner_and_cohosts' ? 'owner_and_cohosts' : 'owner';
 }
 
 /** One person's group keys in this event, in the event's group order. */
@@ -194,13 +207,23 @@ function numberOfRoundsOf(config: unknown): number {
   return Number(parsed.numberOfRounds) || DEFAULT_SESSION_CONFIG.numberOfRounds;
 }
 
-/** Remove every group (the event goes back to having none); their memberships go with them. */
-async function clearGroups(client: PoolClient, sessionId: string): Promise<string[]> {
+/**
+ * Remove every group (the event goes back to having none); their memberships go with them. The owner's choice of who
+ * may override is kept: a choice other than the default stays as a row holding only it (the question and the rest
+ * back to their defaults), so the next groups saved start from it.
+ */
+async function clearGroups(client: PoolClient, sessionId: string, actorId: string, overrideBy: GroupOverrideBy): Promise<string[]> {
   const members = await client.query<{ user_id: string }>(
     `SELECT DISTINCT user_id FROM event_participant_groups WHERE session_id = $1`, [sessionId],
   );
   await client.query(`DELETE FROM event_round_rules WHERE session_id = $1`, [sessionId]);
   await client.query(`DELETE FROM event_matching_rules WHERE session_id = $1`, [sessionId]);
+  if (overrideBy !== 'owner') {
+    await client.query(
+      `INSERT INTO event_matching_rules (session_id, override_by, updated_by, updated_at) VALUES ($1, $2, $3, NOW())`,
+      [sessionId, overrideBy, actorId],
+    );
+  }
   await client.query(`DELETE FROM event_groups WHERE session_id = $1`, [sessionId]);
   return members.rows.map((r) => r.user_id);
 }
@@ -253,9 +276,9 @@ async function writeRules(
   return dropped.rows.map((r) => r.user_id);
 }
 
-const EMPTY_RULES: EventGroupRules = {
-  groups: [], question: DEFAULT_GROUP_QUESTION, allowMultiple: false, fallback: 'leave_unmatched', rounds: [], overrideBy: 'owner',
-};
+const emptyRules = (overrideBy: GroupOverrideBy): EventGroupRules => ({
+  groups: [], question: DEFAULT_GROUP_QUESTION, allowMultiple: false, fallback: 'leave_unmatched', rounds: [], overrideBy,
+});
 
 /**
  * Part 3 Task 12: changing who may override is the owner's (host_user_id) or a super admin's alone, read from the
@@ -272,7 +295,7 @@ async function requireOwnerToChooseOverride(client: PoolClient, sessionId: strin
  * them all: the event goes back to matching as it did before. Audited `group.rules_changed` with before and after.
  * Who may override (`overrideBy`, Part 3 Task 12): left out keeps the stored choice ('owner' when there is none); a
  * value other than the stored one is the owner's or a super admin's to send (403 for anyone else, nothing written).
- * No groups at all takes the choice with them.
+ * No other save changes it, removing every group included.
  */
 export async function saveEventGroupRules(sessionId: string, actor: GroupsActor, rules: EventGroupRules): Promise<EventGroupRules> {
   // An unknown event reads as unknown to everyone (as GET does), before who is asking is looked at.
@@ -290,9 +313,9 @@ export async function saveEventGroupRules(sessionId: string, actor: GroupsActor,
       throw new ConflictError(ErrorCodes.EVENT_ENDED, "This event has ended, so its groups can't change.");
     }
     const before = await getEventGroupRules(sessionId, client);
-    const storedOverrideBy: GroupOverrideBy = before?.overrideBy ?? 'owner';
-    const overrideBy: GroupOverrideBy = next.overrideBy ?? storedOverrideBy;
-    if (overrideBy !== storedOverrideBy) await requireOwnerToChooseOverride(client, sessionId, actor.userId);
+    const stored = await storedOverrideBy(readerOf(client), sessionId);
+    const overrideBy: GroupOverrideBy = next.overrideBy ?? stored;
+    if (overrideBy !== stored) await requireOwnerToChooseOverride(client, sessionId, actor.userId);
     if (next.groups.length > 0) {
       const issues = validateGroupRules(next, numberOfRoundsOf(event.rows[0].config));
       if (issues.length > 0) {
@@ -302,13 +325,13 @@ export async function saveEventGroupRules(sessionId: string, actor: GroupsActor,
       }
     }
     const affected = next.groups.length === 0
-      ? await clearGroups(client, sessionId)
+      ? await clearGroups(client, sessionId, actor.userId, overrideBy)
       : await writeRules(client, sessionId, actor.userId, next, overrideBy);
     const after = next.groups.length === 0 ? null : await getEventGroupRules(sessionId, client);
     await auditGroups(client, {
       sessionId, actorId: actor.userId, action: 'group.rules_changed', subjectUserIds: affected, before, after,
     });
-    return after ?? EMPTY_RULES;
+    return after ?? emptyRules(overrideBy);
   });
   void fanoutEventGroups(sessionId);
   void emitEventAuditChanged(sessionId);
@@ -515,7 +538,8 @@ export async function readEventGroups(sessionId: string, viewer: GroupsActor): P
   };
   const { allowed } = await canActAsHost(viewer.userId, viewer.role, sessionId);
   if (!allowed) return view;
-  if (!rules) return { ...view, rules: null, counts: {}, ungrouped: 0, capacity: [], members: {} };
+  const overrideBy = rules?.overrideBy ?? await storedOverrideBy(readerOf(), sessionId);
+  if (!rules) return { ...view, rules: null, overrideBy, counts: {}, ungrouped: 0, capacity: [], members: {} };
   const [{ counts, ungrouped }, event, members] = await Promise.all([
     groupCounts(sessionId),
     query<{ config: unknown }>(`SELECT config FROM sessions WHERE id = $1`, [sessionId]),
@@ -523,5 +547,5 @@ export async function readEventGroups(sessionId: string, viewer: GroupsActor): P
   ]);
   const rounds = numberOfRoundsOf(event.rows[0]?.config);
   const capacity = Array.from({ length: rounds }, (_, i) => explainRoundCapacity(rules, i + 1, counts, rounds, ungrouped));
-  return { ...view, rules, counts, ungrouped, capacity, members: Object.fromEntries(members) };
+  return { ...view, rules, overrideBy, counts, ungrouped, capacity, members: Object.fromEntries(members) };
 }

@@ -297,7 +297,9 @@ describe('a group-rule refusal (founders meet funders)', () => {
     board = (await op(board, { kind: 'unassign', round: 1, userId: 'f3' })).board;
     const target = roomOf(board, 1, 'f1')!.roomNumber;
     const move: BoardOp = { kind: 'move', round: 1, userId: 'f3', toRoom: target, override: true, reason: 'They co-founded a fund' };
-    await expect(op(board, move, CO)).rejects.toMatchObject({ statusCode: 403, code: 'GROUP_OVERRIDE_FORBIDDEN' });
+    await expect(op(board, move, CO)).rejects.toMatchObject({
+      statusCode: 403, code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner can override group rules.",
+    });
     const after = (await op(board, move)).board;
     const room = roomOf(after, 1, 'f3')!;
     expect(room.seats.find((s) => s.userId === 'f3')).toMatchObject({ override: true, source: 'manual' });
@@ -319,7 +321,9 @@ describe('a group-rule refusal (founders meet funders)', () => {
     const target = roomOf(board, 1, 'f1')!.roomNumber;
     const move: BoardOp = { kind: 'move', round: 1, userId: 'f3', toRoom: target, override: true, reason: 'Same fund' };
 
-    await expect(op(board, move, DIRECTOR)).rejects.toMatchObject({ statusCode: 403, code: 'GROUP_OVERRIDE_FORBIDDEN' });
+    await expect(op(board, move, DIRECTOR)).rejects.toMatchObject({
+      statusCode: 403, code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner and co-hosts can override group rules.",
+    });
     expect((await getBoard(EVENT, DIRECTOR)).canOverride).toBe(false);
     expect((await getBoard(EVENT, CO)).canOverride).toBe(true);
 
@@ -337,7 +341,7 @@ describe('a group-rule refusal (founders meet funders)', () => {
     const target = roomOf(board, 1, 'f1')!.roomNumber;
     world.overrideBy = 'owner';
     await expect(op(board, { kind: 'move', round: 1, userId: 'f3', toRoom: target, override: true }, CO))
-      .rejects.toMatchObject({ statusCode: 403, code: 'GROUP_OVERRIDE_FORBIDDEN' });
+      .rejects.toMatchObject({ statusCode: 403, code: 'GROUP_OVERRIDE_FORBIDDEN', message: "Only the event's owner can override group rules." });
     expect((await getBoard(EVENT, CO)).canOverride).toBe(false);
     expect((await getBoard(EVENT, OWNER)).canOverride).toBe(true);
   });
