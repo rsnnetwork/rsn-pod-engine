@@ -178,6 +178,7 @@ export const ErrorCodes = {
   VALIDATION_ERROR: 'VALIDATION_ERROR',
   INVALID_INPUT: 'INVALID_INPUT',
   PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',  // 413; a request body over its route's own limit (an admission import)
+  REPORT_TOO_LARGE: 'REPORT_TOO_LARGE',    // 413; an event report over 2,000 people or 50 rounds (Part 3 Task 4)
 
   // Rate limiting
   RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',

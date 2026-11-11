@@ -32,6 +32,8 @@ export const EVENT_AUDIT_ACTIONS = [
   'participant.removed', 'breakout.created',
   'call_link.rotated',
   'schedule.generated', 'schedule.edited', 'schedule.locked', 'schedule.unlocked', 'schedule.published',
+  // Part 3 Task 4: an organiser took a CSV of the event report (member data leaving RSN): which part and how many rows.
+  'report.downloaded',
 ] as const;
 
 export type EventAuditAction = typeof EVENT_AUDIT_ACTIONS[number];

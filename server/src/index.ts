@@ -84,6 +84,7 @@ import eventAdmissionRoutes from './routes/event-admission';
 import callLinkRoutes, { sessionCallLinkRoutes } from './routes/call-links';
 import scheduleRoutes from './routes/schedule';
 import eventImageRoutes from './routes/event-image';
+import eventReportRoutes from './routes/event-report';
 
 // Services
 import { initOrchestration } from './services/orchestration/orchestration.service';
@@ -366,6 +367,7 @@ app.use('/api/sessions', sessionCallLinkRoutes); // An event's RSN Call link for
 app.use('/api/call-links', callLinkRoutes); // The RSN Call link itself: open, verify by code, enter (Part 2 Task 6)
 app.use('/api/sessions', scheduleRoutes); // The organisers' matching board draft: /api/sessions/:id/schedule
 app.use('/api/sessions', eventImageRoutes); // An event's image: /api/sessions/:id/image (Part 3 Task 1)
+app.use('/api/sessions', eventReportRoutes); // The organisers' event report and its CSVs: /api/sessions/:id/report (Part 3 Task 4)
 app.use('/api/join-requests', joinRequestRoutes);
 app.use('/api/admin', adminRoutes);
 // Task E2 — admin per-user inspection API (onboarding, conversations, interactions).
