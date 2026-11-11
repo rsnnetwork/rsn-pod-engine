@@ -15,6 +15,7 @@ import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { eventEntry, icsFile } from '@/components/calendar/calendar-links';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
+import { isRateLimited } from '@/realtime/rate-limited-reads';
 import { personHref } from '@/features/reason/human/profile-text';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase, isEventLifecycleChip, lifecycleColor, lifecycleLabel } from './statusConfig';
 import MessageParticipantsPanel from './MessageParticipantsPanel';
@@ -85,6 +86,8 @@ export default function SessionDetailPage() {
     retry: (failureCount, err: any) => {
       // Don't retry 403s — access is intentionally denied
       if (err?.response?.status === 403) return false;
+      // Review I2: nor a 429: its re-read waits for the limit's window (realtime/rate-limited-reads.ts).
+      if (isRateLimited(err)) return false;
       return failureCount < 3;
     },
     // Part 3 Task 8: the access block carries the waiting list (full, my number), which session:<id>:waitlist moves.
@@ -106,7 +109,8 @@ export default function SessionDetailPage() {
     queryKey: ['session-participants', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
     enabled: !!sessionId && !waitingInLine,
-    retry: (failureCount, err: unknown) => (err as { response?: { status?: number } })?.response?.status !== 403 && failureCount < 3,
+    retry: (failureCount, err: unknown) =>
+      (err as { response?: { status?: number } })?.response?.status !== 403 && !isRateLimited(err) && failureCount < 3,
     // R2 safety net (20 May 2026 — live-test post-mortem). Entity-tag
     // fanout is the primary refresh path, but missed emits at scattered
     // session_participants write sites left clients showing stale lists

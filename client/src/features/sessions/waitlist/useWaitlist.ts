@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WaitlistEntryCard } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import { isRateLimited } from '@/realtime/rate-limited-reads';
 import { useToastStore } from '@/stores/toastStore';
 import { WAITLIST_COPY, notForThisViewer, waitlistFailure } from './waitlist-text';
 
@@ -17,7 +18,8 @@ export function useWaitlistLine(sessionId: string, enabled: boolean) {
     queryKey: ['session-waitlist', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/waitlist`).then((r) => r.data.data ?? []),
     enabled: enabled && sessionId.length > 0,
-    retry: (count, err: unknown) => !notForThisViewer(err) && count < 2,
+    // Review I2: never a 429, whose re-read waits for the limit's window (realtime/rate-limited-reads.ts).
+    retry: (count, err: unknown) => !notForThisViewer(err) && !isRateLimited(err) && count < 2,
     meta: { entities: [E.sessionWaitlist(sessionId), E.sessionParticipants(sessionId)] },
   });
 }

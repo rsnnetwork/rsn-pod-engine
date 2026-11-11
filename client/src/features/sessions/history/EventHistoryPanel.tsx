@@ -7,6 +7,7 @@ import { History } from 'lucide-react';
 import api from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
 import { E } from '@/realtime/entities';
+import { isRateLimited } from '@/realtime/rate-limited-reads';
 import { notForThisViewer } from '../organiser-errors';
 import { EmptyRow, ErrorRow, LoadingRows, OrganiserCard, QUIET_BUTTON } from '../organiser-ui';
 import { HISTORY_COPY, historyDetail, historySentence, type HistoryEntry } from './history-text';
@@ -21,7 +22,8 @@ export default function EventHistoryPanel({ sessionId }: { sessionId: string }) 
     }).then((r) => r.data.data as { entries: HistoryEntry[]; nextCursor: string | null }),
     initialPageParam: '',
     getNextPageParam: (last) => last.nextCursor ?? undefined,
-    retry: (count, err: unknown) => !notForThisViewer(err) && count < 2,
+    // Review I2: never a 429, whose re-read waits for the limit's window (realtime/rate-limited-reads.ts).
+    retry: (count, err: unknown) => !notForThisViewer(err) && !isRateLimited(err) && count < 2,
     meta: { entities: [E.sessionAudit(sessionId)] },
   });
 

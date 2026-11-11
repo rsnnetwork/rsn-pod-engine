@@ -15,7 +15,8 @@ export function useEventGroups(sessionId: string, enabled = true) {
     enabled,
     retry: (count, err: unknown) => {
       const status = (err as { response?: { status?: number } })?.response?.status;
-      return status !== 403 && status !== 404 && count < 2;
+      // Review I2: never a 429, whose re-read waits for the limit's window (realtime/rate-limited-reads.ts).
+      return status !== 403 && status !== 404 && status !== 429 && count < 2;
     },
     meta: { entities: [E.sessionGroups(sessionId), E.sessionParticipants(sessionId)] },
   });
