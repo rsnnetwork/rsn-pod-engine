@@ -29,7 +29,8 @@ import {
 import { NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
 import {
-  ApiResponse, UserRole, canonicalTimeZone, hasRoleAtLeast, PROFILE_LINK_HELP, PROFILE_LINK_MAX, parseProfileUrl, type ProfileLinkKind,
+  ApiResponse, UserRole, canonicalTimeZone, hasRoleAtLeast, LINKEDIN_PROFILE_HELP, linkedinProfileUrl, PROFILE_LINK_HELP,
+  PROFILE_LINK_MAX, parseProfileUrl, type ProfileLinkKind,
 } from '@rsn/shared';
 import * as bannerService from '../services/user/banner.service';
 import { getPictureSource, savePicture } from '../services/user/picture.service';
@@ -50,6 +51,20 @@ const profileLink = (kind: ProfileLinkKind) => z.string().max(PROFILE_LINK_MAX).
     return z.NEVER;
   }
   return result.url;
+});
+
+// LinkedIn (Shirley pilot S6, RSN 13): saved in the one form REASON stores, https://www.linkedin.com/in/<name>, whatever
+// form was typed (http, no protocol, a share query, a country site), so the profile always links it the same way. A
+// blank box (or null) clears it as before; anything that is not a LinkedIn profile address is refused in the sentence
+// the form shows under the field.
+const linkedinProfileField = z.string().max(500).nullable().optional().transform((value, ctx) => {
+  if (value === undefined || value === null || !value.trim()) return value;
+  const url = linkedinProfileUrl(value);
+  if (!url) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: LINKEDIN_PROFILE_HELP });
+    return z.NEVER;
+  }
+  return url;
 });
 
 // Part 3 Task 1: a member's zone is a real IANA zone, as onboarding already holds it (a new event takes its host's zone,
@@ -87,7 +102,7 @@ const updateUserSchema = z.object({
   jobTitle: z.string().max(200).nullable().optional(),
   industry: z.string().max(100).nullable().optional(),
   location: z.string().max(200).nullable().optional(),
-  linkedinUrl: z.string().max(500).nullable().optional(),
+  linkedinUrl: linkedinProfileField,
   websiteUrl: profileLink('website'),
   instagramUrl: profileLink('instagram'),
   xUrl: profileLink('x'),
@@ -420,6 +435,13 @@ router.get(
   memberIdInPath,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // Shirley pilot S6: a block in either direction closes the profile, to admins as much as to members (blocks always
+      // win; the admin inspector is the moderation view). The answer is the very 404 an unknown id gets, so it tells
+      // nobody that a block stands, nor that the account exists.
+      const viewerId = req.user!.userId;
+      if (viewerId !== req.params.id && await blockService.areBlocked(viewerId, req.params.id)) {
+        throw new NotFoundError('User', req.params.id);
+      }
       const user = await identityService.getUserById(req.params.id);
 
       // Two cards (Stefan, 9 Sep 2026): the owner and admins get the full

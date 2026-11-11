@@ -104,6 +104,8 @@ function buildStore(prefix: string): RateLimitOptions['store'] | undefined {
  *   GET  /api/call-links/:code            the RSN Call link's landing (callLinkReadLimiter, with callLinkMissLimiter)
  *   POST /api/call-links/:code/email      a code by email (callLinkEmailLimiter, callLinkEmailTargetLimiter)
  *   POST /api/call-links/:code/verify     the code back (callLinkVerifyLimiter, the code's own tries)
+ *   GET  /api/public/profiles/:token      a member's public profile link (publicProfileReadLimiter, with
+ *                                         publicProfileMissLimiter; Shirley pilot S6)
  * Everything else, /api/call-links/me/events and /:code/entry and /:code/enter included, stays under the general one.
  * `path` is the request's path from /api on, without the query; a HEAD is a GET (Express answers it with the GET route).
  */
@@ -112,6 +114,7 @@ export const OWN_BUCKET_ROUTES: ReadonlyArray<{ method: 'GET' | 'POST'; pattern:
   { method: 'GET', pattern: /^\/api\/call-links\/[^/]+\/?$/ },
   { method: 'POST', pattern: /^\/api\/call-links\/[^/]+\/email\/?$/ },
   { method: 'POST', pattern: /^\/api\/call-links\/[^/]+\/verify\/?$/ },
+  { method: 'GET', pattern: /^\/api\/public\/profiles\/[^/]+\/?$/ },
 ];
 
 /** Whether a request is one of OWN_BUCKET_ROUTES, so the general limiter leaves it to its own buckets. */
@@ -706,6 +709,47 @@ export const eventImageReadLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
   store: buildStore('event-image-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// A member's public profile link (Shirley pilot S6, 11 Nov 2026): read signed out, by whoever the member shared it with,
+// so a whole room behind one venue's Wi-Fi may open it at once. It has the event image's venue-sized bucket: 600 reads
+// a minute per client (a signed-in reader by their account, everyone else by their network address). Guessing is
+// stopped by the token itself (128 random bits) and by the miss bucket below, which counts only the answers that found
+// no profile (404) per network address.
+export const PUBLIC_PROFILE_READS_PER_CLIENT = 600;
+export const publicProfileReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: PUBLIC_PROFILE_READS_PER_CLIENT,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('public-profile-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const PUBLIC_PROFILE_MISSES_MAX = 60;
+export const publicProfileMissLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: PUBLIC_PROFILE_MISSES_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  // Only a link that leads nowhere counts: every other answer is "successful" here.
+  requestWasSuccessful: (_req: Request, res: Response) => res.statusCode !== 404,
+  keyGenerator: (req: Request) => `ip:${clientIp(req)}`,
+  store: buildStore('public-profile-miss'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many links tried. Please wait 10 minutes, then try again.' } },
+});
+
+// The owner making, replacing or turning off their public link: a few presses at most, so 20 an hour per member.
+export const publicLinkWriteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('public-link-write'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 

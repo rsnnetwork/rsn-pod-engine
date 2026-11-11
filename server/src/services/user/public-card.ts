@@ -22,6 +22,8 @@ export const PRIVATE_MEMBER_KEYS: ReadonlySet<string> = new Set([
   // account / prefs / lifecycle
   'invitedByUserId', 'notifyEmail', 'notifyEventReminders', 'notifyMatches',
   'profileVisible', 'inviteOptOutPublicEvents', 'onboardingStatus', 'lastOnboardedAt',
+  // the public profile link (Shirley pilot S6): only its owner is ever told it
+  'publicProfileToken', 'publicProfileTokenCreatedAt',
 ]);
 
 /** The public card: who they are and what they offer — nothing about why they're here. */

@@ -30,10 +30,12 @@ jest.mock('../../services/people/meeting-outcome.service', () => ({ recordOutcom
 const mockBrief = jest.fn().mockResolvedValue({ person: { id: 'x' } });
 const mockRecent = jest.fn().mockResolvedValue([]);
 const mockCard = jest.fn().mockResolvedValue({ id: 'u-viewer', displayName: 'Vera Viewer', bannerUrl: null });
+const mockPreview = jest.fn().mockResolvedValue({ person: { id: 'u-viewer' }, relationship: { state: 'none' } });
 jest.mock('../../services/people/person-brief.service', () => ({
   getPersonBrief: (...a: unknown[]) => mockBrief(...a),
   listRecentConnections: (...a: unknown[]) => mockRecent(...a),
   getOwnCard: (...a: unknown[]) => mockCard(...a),
+  getOwnPreview: (...a: unknown[]) => mockPreview(...a),
   __esModule: true,
 }));
 const mockConnections = jest.fn().mockResolvedValue({ items: [], nextBefore: null });
@@ -293,6 +295,7 @@ describe('the routes are rate limited', () => {
     ['get', '/connections'],
     ['get', '/connections/recent'],
     ['get', '/me/card'],
+    ['get', '/me/preview'],
     ['get', '/:userId/brief'],
   ])('%s %s carries peopleReadLimiter, after authenticate and ahead of its handler', (method, path) => {
     const handlers = handlersOf(method, path);
@@ -528,5 +531,36 @@ describe('GET /people/me/card', () => {
     expect(paths.indexOf('/me/card')).toBeLessThan(paths.indexOf('/:userId/brief'));
     expect((await request(app).get('/people/me/brief').set(auth)).status).toBe(400);
     expect(mockBrief).not.toHaveBeenCalled();
+  });
+});
+
+// Shirley pilot S6 (RSN 12): "Preview as others see it" is the member's own Human Profile as a member with no connection
+// to them is sent it. It takes no id, like /me/card, so it can never be aimed at anyone else.
+describe('GET /people/me/preview', () => {
+  const auth = { Authorization: `Bearer ${token()}` };
+  type Layer = { route?: { path: string } };
+  const routePaths = () => (peopleRoutes as unknown as { stack: Layer[] }).stack
+    .flatMap((layer) => (layer.route ? [layer.route.path] : []));
+  beforeEach(() => { mockPreview.mockClear(); mockBrief.mockClear(); mockFanout.mockClear(); });
+
+  it("answers the signed-in member's own preview, built by the brief service, and tells no screens", async () => {
+    const res = await request(app).get(`/people/me/preview?userId=${TARGET}`).set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { person: { id: 'u-viewer' }, relationship: { state: 'none' } } });
+    expect(mockPreview).toHaveBeenCalledWith('u-viewer');
+    expect(mockPreview).not.toHaveBeenCalledWith(TARGET);
+    expect(mockBrief).not.toHaveBeenCalled();
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing token without calling the service', async () => {
+    expect((await request(app).get('/people/me/preview')).status).toBe(401);
+    expect(mockPreview).not.toHaveBeenCalled();
+  });
+
+  it('is registered before the brief', () => {
+    const paths = routePaths();
+    expect(paths.indexOf('/me/preview')).toBeGreaterThanOrEqual(0);
+    expect(paths.indexOf('/me/preview')).toBeLessThan(paths.indexOf('/:userId/brief'));
   });
 });

@@ -113,7 +113,7 @@ describe('the editor and the pencil, as built', () => {
     expect(pencil).toMatch(/h-11 w-11/);
     expect(pencil).toMatch(/aria-label=\{label\}/);
     expect(read('features/reason/profile/YourProfilePage.tsx')).toMatch(/<PencilButton label="Edit photo"/);
-    expect(read('features/reason/profile/BannerEditor.tsx')).toMatch(/<PencilButton label="Edit banner"/);
+    expect(read('features/reason/profile/BannerEditor.tsx')).toMatch(/<PencilButton label="Change banner"/);
     expect(read('features/profile/ProfilePage.tsx')).toMatch(/<PencilButton label="Edit photo"/);
   });
 

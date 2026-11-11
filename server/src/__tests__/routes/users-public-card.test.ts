@@ -47,12 +47,25 @@ jest.mock('../../services/identity/identity.service', () => ({
   __esModule: true,
   getUsers: jest.fn(),
   getUserById: jest.fn(),
+  updateUser: jest.fn(),
+}));
+const mockAreBlocked = jest.fn().mockResolvedValue(false);
+jest.mock('../../services/block/block.service', () => ({
+  __esModule: true,
+  areBlocked: (...a: unknown[]) => mockAreBlocked(...a),
+}));
+jest.mock('../../realtime/fanout', () => ({
+  __esModule: true,
+  fanoutUserEntity: jest.fn().mockResolvedValue(undefined),
+  fanoutAdminEntities: jest.fn().mockResolvedValue(undefined),
+  fanoutPodEntities: jest.fn().mockResolvedValue(undefined),
 }));
 
 import userRoutes from '../../routes/users';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import * as identityService from '../../services/identity/identity.service';
 import { searchConnectedUsers } from '../../services/invite/connected-users';
+import { NotFoundError } from '../../middleware/errors';
 
 const app = express();
 app.use(express.json());
@@ -114,6 +127,7 @@ const PRIVATE = ['email', 'phone', 'interests', 'reasonsToConnect', 'whatICareAb
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockAreBlocked.mockResolvedValue(false);
   (identityService.getUserById as jest.Mock).mockResolvedValue(subject);
 });
 
@@ -175,5 +189,86 @@ describe('GET /users/connected', () => {
     const res = await request(app).get('/users/connected?q=any&limit=7').set('Authorization', `Bearer ${token('u-admin', 'admin')}`);
     expect(res.status).toBe(200);
     expect(identityService.getUsers).toHaveBeenCalledWith({ search: 'any', pageSize: 7, status: 'active', notBlockedWith: 'u-admin' });
+  });
+});
+
+// Shirley pilot S6: GET /users/:id respects a block in either direction, with the very 404 an unknown id gets, so the
+// answer tells nobody that a block stands, nor that the account exists.
+describe('GET /users/:id and blocks', () => {
+  const SUBJECT = '5ab1ec70-0000-4000-8000-00000000005b';
+  const UNKNOWN = '5ab1ec70-0000-4000-8000-0000000000ff';
+  const get = (id: string, sub: string, role = 'member') =>
+    request(app).get(`/users/${id}`).set('Authorization', `Bearer ${token(sub, role)}`);
+
+  it('a block either way answers exactly what an unknown id answers, and reads nothing of the profile', async () => {
+    (identityService.getUserById as jest.Mock).mockImplementation((id: string) => (id === SUBJECT
+      ? Promise.resolve(subject)
+      : Promise.reject(new NotFoundError('User', id))));
+    const unknown = await get(UNKNOWN, 'u-viewer');
+    expect(unknown.status).toBe(404);
+
+    mockAreBlocked.mockResolvedValue(true);
+    (identityService.getUserById as jest.Mock).mockClear();
+    const blocked = await get(SUBJECT, 'u-viewer');
+    expect(blocked.status).toBe(404);
+    expect(blocked.body).toEqual(unknown.body);
+    expect(mockAreBlocked).toHaveBeenCalledWith('u-viewer', SUBJECT);
+    expect(identityService.getUserById).not.toHaveBeenCalled();
+  });
+
+  it('holds for an admin as well (blocks always win; the admin inspector is the moderation view)', async () => {
+    mockAreBlocked.mockResolvedValue(true);
+    expect((await get(SUBJECT, 'u-admin', 'admin')).status).toBe(404);
+  });
+
+  it('never stops the owner reading their own profile', async () => {
+    mockAreBlocked.mockResolvedValue(true);
+    const res = await get(SUBJECT, SUBJECT);
+    expect(res.status).toBe(200);
+    expect(mockAreBlocked).not.toHaveBeenCalled();
+  });
+
+  it('with no block, another member still gets the public card', async () => {
+    const res = await get(SUBJECT, 'u-viewer');
+    expect(res.status).toBe(200);
+    expect(res.body.data).not.toHaveProperty('email');
+  });
+});
+
+// Shirley pilot S6 (RSN 13): LinkedIn is saved in the one stored form, https://www.linkedin.com/in/<name>.
+describe('PUT /users/me and LinkedIn', () => {
+  const put = (body: Record<string, unknown>) =>
+    request(app).put('/users/me').set('Authorization', `Bearer ${token('u-viewer')}`).send(body);
+  beforeEach(() => (identityService.updateUser as jest.Mock).mockResolvedValue(subject));
+
+  it.each([
+    ['http://linkedin.com/in/shirley-palmer', 'https://www.linkedin.com/in/shirley-palmer'],
+    ['linkedin.com/in/shirley-palmer/', 'https://www.linkedin.com/in/shirley-palmer'],
+    ['www.linkedin.com/in/shirley-palmer?utm_source=share', 'https://www.linkedin.com/in/shirley-palmer'],
+    ['https://uk.linkedin.com/in/shirley-palmer', 'https://www.linkedin.com/in/shirley-palmer'],
+    ['https://www.linkedin.com/in/shirley-palmer', 'https://www.linkedin.com/in/shirley-palmer'],
+  ])('%s is saved as %s', async (typed, stored) => {
+    const res = await put({ linkedinUrl: typed });
+    expect(res.status).toBe(200);
+    expect(identityService.updateUser).toHaveBeenCalledWith('u-viewer', expect.objectContaining({ linkedinUrl: stored }));
+  });
+
+  it.each([[''], [null]])('%p clears it as before', async (blank) => {
+    expect((await put({ linkedinUrl: blank })).status).toBe(200);
+    expect(identityService.updateUser).toHaveBeenCalledWith('u-viewer', expect.objectContaining({ linkedinUrl: blank }));
+  });
+
+  it.each([['https://evil.example/in/shirley'], ['https://www.linkedin.com/company/acme'], ['javascript:alert(1)']])(
+    "%s is refused in the form's own sentence and nothing is saved", async (typed) => {
+      const res = await put({ linkedinUrl: typed });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).toContain('Enter your LinkedIn profile link, for example linkedin.com/in/your-name');
+      expect(identityService.updateUser).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a save that does not mention LinkedIn leaves it alone', async () => {
+    expect((await put({ bio: 'Hi' })).status).toBe(200);
+    expect((identityService.updateUser as jest.Mock).mock.calls[0][1]).not.toHaveProperty('linkedinUrl');
   });
 });

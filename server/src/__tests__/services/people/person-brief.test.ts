@@ -25,7 +25,7 @@ jest.mock('../../../services/dm/dm.service', () => ({ canMessage: (...a: unknown
 const mockCanVideoCall = jest.fn().mockResolvedValue(false);
 jest.mock('../../../services/dm/call-eligibility', () => ({ canVideoCall: (...a: unknown[]) => mockCanVideoCall(...a), __esModule: true }));
 
-import { getOwnCard, getPersonBrief, listRecentConnections } from '../../../services/people/person-brief.service';
+import { getOwnCard, getOwnPreview, getPersonBrief, listRecentConnections } from '../../../services/people/person-brief.service';
 import { PRIVATE_MEMBER_KEYS, toPublicMember } from '../../../services/user/public-card';
 import { NotFoundError } from '../../../middleware/errors';
 
@@ -161,6 +161,66 @@ describe('getPersonBrief', () => {
 
 // 21 Oct 2026 (Stefan): "when I look at my profile, I should see my profile, how other people see it". The
 // brief refuses your own id, and keeps refusing it; your own card is its own read, and it is the public card.
+// Shirley pilot S6 (RSN 12): "Preview as others see it" is the brief a signed-in member with no connection to you is
+// sent, through the same assembly: not a copy of it drawn on the screen.
+describe('getOwnPreview', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  /** A member who has never met, asked, shared anything with or been matched to the target, and wants nothing said. */
+  function armStranger() {
+    arm({ score: 0, canMessage: { allowed: false, reason: 'no_encounter' } });
+    mockCanVideoCall.mockResolvedValue(false);
+    mockLoadProfile.mockImplementation((id: string) => Promise.resolve(
+      id === VIEWER
+        ? { id, whoIWantToMeet: null, myIntent: null }
+        : { id, whoIWantToMeet: target.whoIWantToMeet, whatICanHelpWith: target.whatICanHelpWith, expertiseText: null },
+    ));
+    const entity = {
+      id: 'e1', name: 'Harbor Collective', kind: 'company', role: 'founder', title: 'Founder', status: 'active',
+      has_logo: false, has_banner: false, pictures_updated_at: null,
+    };
+    const base = mockQuery.getMockImplementation()!;
+    mockQuery.mockImplementation((sql: string, params: unknown[]) =>
+      /FROM entity_members m JOIN entities e/.test(sql) ? Promise.resolve({ rows: [entity] }) : base(sql, params));
+  }
+
+  it('is exactly the brief a member with no connection to you is sent', async () => {
+    armStranger();
+    const stranger = await getPersonBrief(VIEWER, TARGET);
+    expect(stranger.relationship.state).toBe('none');
+    const preview = await getOwnPreview(TARGET);
+    expect(preview).toEqual(stranger);
+    expect(preview.entities).toHaveLength(1);
+    expect(preview.match).toBeNull();
+    expect(preview.youAreLookingFor).toBeNull();
+    expect(preview.canMessage).toBe(false);
+    expect(preview.canCall).toBe(false);
+  });
+
+  it('reads your entities exactly as the brief does (approved links only) and asks nothing about any viewer', async () => {
+    armStranger();
+    await getPersonBrief(VIEWER, TARGET);
+    const briefEntitySql = mockQuery.mock.calls.map((c) => String(c[0])).filter((q) => /FROM entity_members m/.test(q));
+    mockQuery.mockClear();
+    mockBlocked.mockClear();
+    mockPokeWith.mockClear();
+    await getOwnPreview(TARGET);
+    const previewSql = mockQuery.mock.calls.map((c) => String(c[0]));
+    expect(previewSql.filter((q) => /FROM entity_members m/.test(q))).toEqual(briefEntitySql);
+    expect(previewSql.join(' ')).not.toMatch(/encounter_history|dm_conversations|circle_members|pod_members|session_participants/);
+    expect(mockBlocked).not.toHaveBeenCalled();
+    expect(mockPokeWith).not.toHaveBeenCalled();
+    expect(mockGetUser).toHaveBeenCalledWith(TARGET);
+  });
+
+  it('never carries your private answers', async () => {
+    armStranger();
+    const preview = await getOwnPreview(TARGET);
+    for (const k of PRIVATE_MEMBER_KEYS) expect(preview.person).not.toHaveProperty(k);
+    expect(JSON.stringify(preview)).not.toMatch(/SECRET-|sarah@example\.com/);
+  });
+});
+
 describe('getOwnCard', () => {
   beforeEach(() => jest.clearAllMocks());
   const me = { ...target, id: VIEWER, bannerUrl: `https://api.example.test/api/users/${VIEWER}/banner?v=1` };

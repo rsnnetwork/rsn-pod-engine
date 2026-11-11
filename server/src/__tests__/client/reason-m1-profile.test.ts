@@ -232,7 +232,7 @@ describe('Human Profile: faults found by looking at it', () => {
     expect(hero()).toMatch(/min-\[981px\]:grid-cols-\[minmax\(0,1fr\)_330px\] min-\[1200px\]:grid-cols-\[minmax\(0,1fr\)_380px\]/);
     expect(hero()).toMatch(/<h1 className="[^"]*md:text-\[52px\]">/);
     // The Human Profile is drawn with the window's breakpoints, as it always was.
-    expect(hero()).toMatch(/export function HeroFrame\(\{[^}]*fit = 'screen' \}: FrameProps\)/);
+    expect(hero()).toMatch(/export function HeroFrame\(\{[^}]*fit = 'screen',?\s*\}: FrameProps\)/);
     expect(hero()).not.toMatch(/<HeroFrame[^>]*fit=/);
   });
   it('a failed photo and no photo look alike: Avatar draws round initials in the same circle', () => {
@@ -359,7 +359,9 @@ describe('REASON api: a member id is data, never part of the path', () => {
   it('still exports every name the pages import', () => {
     expect(loadApi().exported).toEqual([
       'blockMember', 'errorMessage', 'fetchBlockStatus', 'fetchBrief', 'fetchConnections', 'fetchEveryone', 'fetchForYou', 'fetchMyCard',
-      'fetchPictureSource', 'fetchRecentConnections', 'personName', 'reasonKeys', 'recordOutcomeRequest', 'removeBannerRequest',
+      // Shirley pilot S6: the preview, and the public link.
+      'fetchMyPreview', 'fetchPictureSource', 'fetchPublicLink', 'fetchPublicProfile', 'fetchRecentConnections', 'makePublicLinkRequest',
+      'personName', 'reasonKeys', 'recordOutcomeRequest', 'regeneratePublicLinkRequest', 'removeBannerRequest', 'revokePublicLinkRequest',
       'savePictureRequest', 'sendMeetRequest', 'setAlreadyMet', 'setPersonResponse', 'stateFromPoke', 'unblockMember',
     ]);
   });

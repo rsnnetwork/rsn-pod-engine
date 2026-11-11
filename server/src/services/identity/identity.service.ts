@@ -1352,8 +1352,12 @@ export async function deleteUser(userId: string): Promise<void> {
   // Revoke all tokens
   await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
 
-  // Deactivate the account (soft delete)
-  await query(`UPDATE users SET status = 'deactivated', updated_at = NOW() WHERE id = $1`, [userId]);
+  // Deactivate the account (soft delete). Its public profile link goes with it (Shirley pilot S6), so a link shared
+  // before the close never opens again, and an account reopened later starts with none.
+  await query(
+    `UPDATE users SET status = 'deactivated', public_profile_token = NULL, public_profile_token_created_at = NULL, updated_at = NOW() WHERE id = $1`,
+    [userId],
+  );
   invalidateUserStatusCache(userId);
   logger.info({ userId }, 'User deleted (deactivated)');
   await freePlacesOf(userId, freedEvents);

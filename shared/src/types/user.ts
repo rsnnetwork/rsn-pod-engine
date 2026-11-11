@@ -132,6 +132,32 @@ export interface PublicMember {
   whatICanHelpWith: string | null;
 }
 
+/**
+ * What a member's public profile link shows anyone who holds it, signed in or not (Shirley pilot S6, D5): the public
+ * card, cut from PublicMember so it can only ever hold less (no member id), and what they can bring, worded as members
+ * read it. Nothing else: no entities, no circles or pods, no way to message, call or meet them.
+ */
+export interface PublicProfileCard extends Omit<PublicMember, 'id'> {
+  canBring: string | null;
+}
+
+/** A member's own public profile link. The token is sent to its owner and to nobody else. */
+export interface PublicProfileLink {
+  token: string;
+  /** The page's path on the app, `/p/<token>`. The screen puts its own origin in front. */
+  path: string;
+  createdAt: string;
+}
+
+/**
+ * The owner's view of their public link. `paused` says why a link that exists opens nothing right now: the member
+ * chose not to be shown in search (profile_visible false), and a hidden profile is never opened by a stranger's link.
+ */
+export interface PublicProfileLinkState {
+  link: PublicProfileLink | null;
+  paused: 'hidden' | null;
+}
+
 export interface CreateUserInput {
   email: string;
   firstName: string;

@@ -3,6 +3,7 @@
 // GET    /people/connections/recent
 // GET    /people/everyone           ?q&cursor&limit  (10 Nov 2026) every member you may meet, A to Z
 // GET    /people/me/card            (21 Oct 2026) your own public card, exactly what others see
+// GET    /people/me/preview         (Shirley pilot S6) your own Human Profile as a member with no connection to you sees it
 // GET    /people/:userId/brief
 // PUT    /people/:userId/response  { response: 'saved' | 'passed' }
 // DELETE /people/:userId/response
@@ -112,6 +113,17 @@ router.get('/connections/recent', authenticate, peopleReadLimiter, async (req: R
 router.get('/me/card', authenticate, peopleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await brief.getOwnCard(req.user!.userId);
+    res.json({ success: true, data } as ApiResponse);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// "Preview as others see it" (Shirley pilot S6, RSN 12): your own Human Profile exactly as a member with no connection
+// to you is sent it. Like /me/card it takes no id, and sits ahead of /:userId/brief.
+router.get('/me/preview', authenticate, peopleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await brief.getOwnPreview(req.user!.userId);
     res.json({ success: true, data } as ApiResponse);
   } catch (err) {
     next(err);

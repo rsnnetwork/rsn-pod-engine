@@ -173,6 +173,9 @@ export const ErrorCodes = {
   CALL_PARTNER_OFFLINE: 'CALL_PARTNER_OFFLINE',  // 409; the person rung is not on REASON right now (no ring, no bell)
   CALL_ALREADY_WAITING: 'CALL_ALREADY_WAITING',  // 409; this pair already has a call ringing, from either side
 
+  // A member's public profile link (Shirley pilot S6)
+  PUBLIC_LINK_NONE: 'PUBLIC_LINK_NONE',  // 409; making a new link needs a link to replace (turned off in another tab)
+
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',
   MATCH_ALREADY_RATED: 'MATCH_ALREADY_RATED',

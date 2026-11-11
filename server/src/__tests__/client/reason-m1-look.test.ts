@@ -1019,8 +1019,8 @@ describe('The hero links to the member\'s LinkedIn, on the Human Profile and on 
     expect(at.link).toBeLessThan(at.bio);
   });
 
-  it('with no LinkedIn, or one that is not an https address on LinkedIn, there is no link at all', () => {
-    for (const linkedinUrl of [null, '', 'http://www.linkedin.com/in/nora', 'javascript:alert(1)', 'https://evil.example/in/nora']) {
+  it('with no LinkedIn, or one that is not a LinkedIn address, there is no link at all', () => {
+    for (const linkedinUrl of [null, '', 'javascript:alert(1)', 'https://evil.example/in/nora', 'not a link']) {
       expect({ linkedinUrl, links: (draw({ linkedinUrl }).match(/<a /g) ?? []).length }).toEqual({ linkedinUrl, links: 0 });
     }
   });

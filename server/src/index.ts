@@ -84,6 +84,7 @@ import eventQuestionRoutes from './routes/event-questions';
 import eventAdmissionRoutes from './routes/event-admission';
 import eventWaitlistRoutes from './routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from './routes/call-links';
+import publicProfileRoutes, { publicLinkRoutes } from './routes/public-profiles';
 import scheduleRoutes from './routes/schedule';
 import eventImageRoutes from './routes/event-image';
 import eventReportRoutes from './routes/event-report';
@@ -348,6 +349,7 @@ app.get('/health/deep', async (_req, res) => {
 app.use('/api/auth', authRoutes);
 // The member's own email change and account close (Part 3 Task 2) before the users router, so /me/email/* and /me/close
 // are served there and never read as /:id.
+app.use('/api/users/me/public-link', publicLinkRoutes); // The member's own public profile link (Shirley pilot S6)
 app.use('/api/users/me', accountSecurityRoutes);
 app.use('/api/users', userRoutes);
 // Onboarding v2 (21 Oct 2026) before v1, so its /v2 paths never reach the v1 router.
@@ -369,6 +371,7 @@ app.use('/api/sessions', eventAdmissionRoutes); // Who gets a place: /api/sessio
 app.use('/api/sessions', eventWaitlistRoutes); // A full event's waiting list: /api/sessions/:id/waitlist* (Part 3 Task 3)
 app.use('/api/sessions', sessionCallLinkRoutes); // An event's RSN Call link for its organisers: /api/sessions/:id/call-link
 app.use('/api/call-links', callLinkRoutes); // The RSN Call link itself: open, verify by code, enter (Part 2 Task 6)
+app.use('/api/public/profiles', publicProfileRoutes); // A member's public profile link, read signed out (Shirley pilot S6)
 app.use('/api/sessions', scheduleRoutes); // The organisers' matching board draft: /api/sessions/:id/schedule
 app.use('/api/sessions', eventImageRoutes); // An event's image: /api/sessions/:id/image (Part 3 Task 1)
 app.use('/api/sessions', eventReportRoutes); // The organisers' event report and its CSVs: /api/sessions/:id/report (Part 3 Task 4)
