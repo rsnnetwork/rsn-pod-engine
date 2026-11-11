@@ -16,7 +16,10 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 import logger from '../../../config/logger';
-import { scrapingdogProvider, lookupWindow, freshSlug } from '../../../services/onboarding/providers/scrapingdog.provider';
+import {
+  scrapingdogProvider, lookupWindow, freshSlug, cachedBudgetAfter, scrubMessage, SCRAPE_TOTAL_MS, GAP_FILL_RESERVE_MS,
+} from '../../../services/onboarding/providers/scrapingdog.provider';
+import { PROVIDER_DEADLINE_MS } from '../../../services/onboarding/providers/deadline';
 
 const mockResponse = (status: number, body?: unknown) => ({ status, json: async () => body } as unknown as Response);
 const NOT_READY_BODY = {
@@ -208,5 +211,99 @@ describe('4xx, 5xx and network failures are logged', () => {
       expect(l).not.toHaveProperty('linkId');
       expect(l).not.toHaveProperty('url');
     }
+  });
+});
+
+// ─── Review I3: the second call gets only the time left; the gap fill keeps 45 s of the 150 s deadline ────────────
+describe('the time budget across both calls', () => {
+  it('both calls together take at most 105 s, which keeps a 45 s gap-fill reserve inside the 150 s deadline', () => {
+    expect(SCRAPE_TOTAL_MS).toBe(105_000);
+    expect(GAP_FILL_RESERVE_MS).toBe(45_000);
+    expect(SCRAPE_TOTAL_MS + GAP_FILL_RESERVE_MS).toBeLessThanOrEqual(PROVIDER_DEADLINE_MS);
+  });
+
+  it.each([
+    [0, { budgetMs: 40_000, hardCapMs: 55_000 }],
+    [50_000, { budgetMs: 40_000, hardCapMs: 55_000 }],
+    [75_000, { budgetMs: 30_000, hardCapMs: 30_000 }],
+    [95_000, { budgetMs: 10_000, hardCapMs: 10_000 }],
+    [95_001, null],
+    [120_000, null],
+  ])('after a live call of %i ms the cached call gets %o', (elapsed, budget) => {
+    expect(cachedBudgetAfter(elapsed)).toEqual(budget);
+  });
+
+  it('a live call that took 75 s for a thin page: the cached call is cut at the 30 s left, never its own 55 s', async () => {
+    jest.useFakeTimers({ now: Date.UTC(2026, 10, 12, 10) });
+    const timeouts = jest.spyOn(AbortSignal, 'timeout');
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const id = new URL(String(input)).searchParams.get('id');
+      if (id !== SLUG) { jest.setSystemTime(Date.now() + 75_000); return mockResponse(200, { fullName: 'Jane Doe', headline: '', experience: [] }); }
+      return mockResponse(200, FULL);
+    });
+
+    const out = await scrapingdogProvider.enrich({ linkedinUrl: URL_IN });
+
+    // The cached copy still filled the gaps (the current company stays the live page's, by design).
+    expect(out.kind).toBe('partial');
+    if (out.kind === 'partial') expect(out.result.profile?.headline).toBe('CTO');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(timeouts.mock.calls[1][0]).toBeLessThanOrEqual(30_000);
+    expect(timeouts.mock.calls[0][0]).toBe(80_000);
+  });
+
+  it('a live call that took 100 s: no cached call at all (a thin page is returned as it is, inside the reserve)', async () => {
+    jest.useFakeTimers({ now: Date.UTC(2026, 10, 12, 10) });
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      jest.setSystemTime(Date.now() + 100_000);
+      return mockResponse(200, { fullName: 'Jane Doe', headline: '', experience: [] });
+    });
+
+    const out = await scrapingdogProvider.enrich({ linkedinUrl: URL_IN });
+
+    expect(out.kind).toBe('partial');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Review I4: the cached call's "not stored yet" counts when the live call brought nothing ──────────────────────
+describe('the verdict when neither call brought a profile', () => {
+  const cachedNotReady = (live: () => Promise<Response>) =>
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) =>
+      new URL(String(input)).searchParams.get('id') === SLUG ? mockResponse(400, NOT_READY_BODY) : live());
+
+  it.each([
+    ['a 5xx', async () => mockResponse(503)],
+    ['a timeout', async () => { throw new Error('The operation was aborted due to timeout'); }],
+    ['an empty 200', async () => mockResponse(200, {})],
+  ])('live %s + cached "not stored yet" → retry_exhausted notReady (so the later attempt is scheduled)', async (_what, live) => {
+    cachedNotReady(live);
+    expect(await scrapingdogProvider.enrich({ linkedinUrl: URL_IN })).toEqual({ kind: 'retry_exhausted', notReady: true });
+  });
+
+  it('a live 404 still means the profile does not exist, whatever the cached call says', async () => {
+    cachedNotReady(async () => mockResponse(404));
+    expect(await scrapingdogProvider.enrich({ linkedinUrl: URL_IN })).toEqual({ kind: 'not_found', reason: 'scrapingdog 404' });
+  });
+
+  it('live 5xx + cached 5xx: the live failure stands, no retry asked for', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse(500));
+    expect(await scrapingdogProvider.enrich({ linkedinUrl: URL_IN })).toEqual({ kind: 'provider_error', reason: 'scrapingdog 500' });
+  });
+});
+
+// ─── Review M6: a returned reason (stored as the member's error, logged upstream) carries no profile id ───────────
+describe('reasons and log messages never carry the profile', () => {
+  it('scrubs the id plain, in any casing, and percent-encoded (a full URL echo), and the key', () => {
+    const id = 'claus-sønderskov-51b2943';
+    const msg = `Failed for https://www.linkedin.com/in/${encodeURIComponent(id)} (CLAUS-SØNDERSKOV-51B2943) key test-key-do-not-leak`;
+    const out = scrubMessage(msg, id);
+    expect(out).toBe('Failed for https://www.linkedin.com/in/[profile] ([profile]) key [redacted]');
+  });
+
+  it('a success:false body that names the profile returns a reason without it', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse(200, { success: false, message: `Profile ${SLUG} is private` }));
+    const out = await scrapingdogProvider.enrich({ linkedinUrl: URL_IN });
+    expect(out).toEqual({ kind: 'provider_error', reason: 'Profile [profile] is private' });
   });
 });

@@ -46,6 +46,13 @@
 //      logged now (status, attempt, elapsed; never the key or the slug).
 // The endpoint is the documented one (`/profile?type=profile&id=`, docs read
 // 12 Nov 2026); the old `/linkedin/?linkId=` is no longer in the docs.
+// What the fixed id costs: within a window every lookup, an admin's
+// refresh-enrichment and a member who has since edited their LinkedIn page
+// included, reads the copy ScrapingDog stored at the window's first request.
+// ScrapingDog documents no parameter to ask for a fresh copy (only api_key,
+// type, id, premium, webhook), and a never-seen id only answers "not stored
+// yet" after ~50 s, so a fresh read cannot be had in one call; the next window
+// (at most 90 days, our own refresh period) reads the page anew.
 //
 // Security: the api_key never appears in anything this module returns,
 // throws, or logs — only status codes and (sanitized) error messages.
@@ -94,12 +101,25 @@ const FETCH_TIMEOUT_MS = 100_000;
 // long first fetch (a cold scrape can take 60-90s); the cached copy answers
 // from ScrapingDog's own store in seconds, so its budget is short.
 // 12 Nov 2026: the cached budget (20 s) equalled the 202 wait (20 s), so the
-// cached copy never got a second attempt; it now allows two more. Both hard
-// caps together (135 s) stay inside the orchestrator's 150 s deadline, and
-// each lets ScrapingDog's ~50 s "not stored yet" answer arrive.
+// cached copy never got a second attempt; it now allows two more. Each lets
+// ScrapingDog's ~50 s "not stored yet" answer arrive. The two calls together
+// never take more than SCRAPE_TOTAL_MS (105 s): the cached call gets only what
+// the live one left. Of the 150 s deadline (deadline.ts) that keeps 45 s for
+// the Anthropic gap fill that runs after a thin profile.
 interface ScrapeBudget { budgetMs: number; hardCapMs: number }
 const LIVE_BUDGET: ScrapeBudget = { budgetMs: 45_000, hardCapMs: 80_000 };
 const CACHED_BUDGET: ScrapeBudget = { budgetMs: 40_000, hardCapMs: 55_000 };
+export const SCRAPE_TOTAL_MS = 105_000;
+export const GAP_FILL_RESERVE_MS = 45_000;
+/** Less than this left: the cached call is not started (it could not answer, and a "not stored yet" needs ~50 s). */
+const MIN_CACHED_MS = 10_000;
+
+/** The cached call's budget once the live call has taken `liveElapsedMs`: the time left, at most its own; null when too little is left. */
+export function cachedBudgetAfter(liveElapsedMs: number): ScrapeBudget | null {
+  const left = SCRAPE_TOTAL_MS - liveElapsedMs;
+  if (left < MIN_CACHED_MS) return null;
+  return { budgetMs: Math.min(CACHED_BUDGET.budgetMs, left), hardCapMs: Math.min(CACHED_BUDGET.hardCapMs, left) };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -444,11 +464,9 @@ type Scrape =
 
 type ScrapeCall = 'live' | 'cached';
 
-/** ScrapingDog's message for the log: short, without the key, and without the profile id in any casing. */
-function scrubMessage(message: string, linkId: string): string {
-  const m = redact(message).slice(0, 300);
-  const needle = linkId.toLowerCase();
-  if (!needle) return m.slice(0, 200);
+/** Every occurrence of needle (compared in lower case) replaced by [profile]. String steps only, never a pattern. */
+function replaceAllInsensitive(m: string, needle: string): string {
+  if (!needle) return m;
   const lower = m.toLowerCase();
   let out = '';
   let from = 0;
@@ -456,7 +474,19 @@ function scrubMessage(message: string, linkId: string): string {
     out += m.slice(from, at) + '[profile]';
     from = at + needle.length;
   }
-  return (out + m.slice(from)).slice(0, 200);
+  return out + m.slice(from);
+}
+
+/**
+ * ScrapingDog's message for a log line or a returned reason (a reason is stored as the member's enrichment error and
+ * logged further up): short, without the key, and without the profile id in any casing, plain or percent-encoded
+ * (a full URL echo carries the id too).
+ */
+export function scrubMessage(message: string, linkId: string): string {
+  let m = redact(message).slice(0, 400);
+  m = replaceAllInsensitive(m, encodeURIComponent(linkId).toLowerCase());
+  m = replaceAllInsensitive(m, linkId.toLowerCase());
+  return m.slice(0, 200);
 }
 
 /** Every answer that is not a profile, in the log: never the key, never the slug or any personal data. */
@@ -494,7 +524,7 @@ async function scrape(linkId: string, budget: ScrapeBudget, call: ScrapeCall): P
           if (attempt < MAX_ATTEMPTS && anotherAttemptFitsAfter(delay)) { await sleep(delay); continue; }
           return { kind: 'retry_exhausted', rateLimited: true };
         }
-        return { kind: 'provider_error', reason: redact(message) };
+        return { kind: 'provider_error', reason: scrubMessage(message, linkId) };
       }
       if (status === 200) return { kind: 'ok', body };
       logAnswer(call, linkId, status, attempt, elapsed(), typeof body?.message === 'string' ? body.message : undefined);
@@ -517,7 +547,7 @@ async function scrape(linkId: string, budget: ScrapeBudget, call: ScrapeCall): P
     }
     return { kind: 'retry_exhausted' };
   } catch (err) {
-    const reason = err instanceof Error ? redact(err.message) : 'unknown';
+    const reason = err instanceof Error ? scrubMessage(err.message, linkId) : 'unknown';
     logAnswer(call, linkId, 0, attempt, elapsed(), reason);
     return { kind: 'provider_error', reason };
   }
@@ -530,6 +560,7 @@ export const scrapingdogProvider: EnrichmentProvider = {
     if (!slug) return { kind: 'not_found', reason: 'no /in/ slug in submitted URL' };
     const requestedUrl = normalizeLinkedinUrl(linkedinUrl)!;
 
+    const startedAt = Date.now();
     // 1. The live page, through this window's id (cached by ScrapingDog at most since the window began).
     const live = await scrape(freshSlug(slug, lookupWindow()), LIVE_BUDGET, 'live');
     let liveMapped = live.kind === 'ok' ? mapProfile(live.body, requestedUrl) : null;
@@ -542,18 +573,27 @@ export const scrapingdogProvider: EnrichmentProvider = {
     //    rate-limited too. A live scrape that merely ran out of time (18 Sep
     //    2026, Shradha's six minutes of 202s) still reads it.
     let cachedMapped: { profile: EnrichedProfile; missing: string[]; masked: number } | null = null;
+    let cached: Scrape | null = null;
     const liveFailedHard = live.kind === 'retry_exhausted' && live.rateLimited === true;
     // Thin, or with entries the guest view masked: the cached copy may hold
     // the headline, the About or the older positions the live page hid.
-    if ((!liveMapped || isThin(liveMapped.profile) || liveMapped.masked > 0) && !liveFailedHard) {
-      const cached = await scrape(slug, CACHED_BUDGET, 'cached');
+    // 12 Nov 2026: it gets only what is left of SCRAPE_TOTAL_MS, so the gap fill keeps its reserve in the deadline.
+    const cachedBudget = cachedBudgetAfter(Date.now() - startedAt);
+    if ((!liveMapped || isThin(liveMapped.profile) || liveMapped.masked > 0) && !liveFailedHard && cachedBudget) {
+      cached = await scrape(slug, cachedBudget, 'cached');
       if (cached.kind === 'ok') {
         cachedMapped = mapProfile(cached.body, requestedUrl);
         if (cachedMapped) sources.push(`scrapingdog:${slug}`);
       }
     }
     if (!liveMapped && !cachedMapped) {
-      // Neither answered with a profile: the live attempt's verdict stands
+      // 12 Nov 2026: the cached call said "not stored yet, try again later" while the live call failed (a timeout, a
+      // 5xx, a network error, its own wait) or came back empty: ScrapingDog asked for a later attempt, so that is the
+      // verdict. Only a live 404/410 still says the profile does not exist.
+      if (cached?.kind === 'retry_exhausted' && cached.notReady && live.kind !== 'not_found') {
+        return { kind: 'retry_exhausted', notReady: true };
+      }
+      // Otherwise the live attempt's verdict stands
       // (an empty body is "no such profile"; a failure is reported as it was).
       return live.kind === 'ok' ? { kind: 'not_found', reason: 'empty profile body' } : live;
     }

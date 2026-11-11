@@ -225,7 +225,7 @@ async function fillGapsFromWeb(
       const own = await roleFromOwnWords(merged);
       if (own) { merged.currentRole = own; merged.roleSource = 'stated'; filled.push('currentRole (own words)'); }
     } catch (err) {
-      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (own words) failed — trying the rest of the page');
+      logger.warn({ err }, 'enrichment gap fill (own words) failed — trying the rest of the page');
     }
   }
 
@@ -235,7 +235,7 @@ async function fillGapsFromWeb(
       const page = await roleFromPage(merged);
       if (page) { merged.currentRole = page.role; merged.roleSource = 'inferred'; filled.push(`currentRole (page, ${page.basis})`); }
     } catch (err) {
-      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (page) failed — trying the web');
+      logger.warn({ err }, 'enrichment gap fill (page) failed — trying the web');
     }
   }
 
@@ -263,14 +263,14 @@ async function fillGapsFromWeb(
         sources = [...sources, ...web.sources.filter((s) => !sources.includes(s))];
       }
     } catch (err) {
-      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (web) failed — continuing with what we hold');
+      logger.warn({ err }, 'enrichment gap fill (web) failed — continuing with what we hold');
     }
   }
 
   if (!filled.length) return outcome;
 
   const missing = REQUIRED_FOR_FOUND.filter((k) => !merged[k]);
-  logger.info({ linkedinUrl: input.linkedinUrl, filled, missing }, 'enrichment: gap fill added what scrapingdog left empty');
+  logger.info({ filled, missing }, 'enrichment: gap fill added what scrapingdog left empty');
   if (missing.length === 0) {
     return { kind: 'found', result: { ...outcome.result, profile: merged, sources, confidence: 0.95 }, photoUrl: outcome.photoUrl };
   }
