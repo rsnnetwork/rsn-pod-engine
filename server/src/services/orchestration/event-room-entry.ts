@@ -55,6 +55,10 @@ export function eventRoomRefusal(eventStatus: string, registrationCode: string |
   if (registrationCode === ErrorCodes.EVENT_GROUP_REQUIRED) {
     return { code: ErrorCodes.EVENT_GROUP_REQUIRED, message: 'Choose your group for this event first, on the event page.' };
   }
+  // Part 3 Task 5: likewise an event's required matching questions, before a person's own first place.
+  if (registrationCode === ErrorCodes.EVENT_ANSWERS_REQUIRED) {
+    return { code: ErrorCodes.EVENT_ANSWERS_REQUIRED, message: "Answer this event's questions first, on the event page." };
+  }
   // Part 3 Task 3: a full event's newcomer (no place yet) is not let in; the live page cannot queue them itself.
   if (registrationCode === ErrorCodes.SESSION_FULL) {
     return { code: ErrorCodes.SESSION_FULL, message: EVENT_FULL_ROOM_SENTENCE };

@@ -254,7 +254,7 @@ describe('the landing', () => {
       host: { displayName: 'Stefan Host', avatarUrl: null },
       lifecycle: 'registration_open',
       admission: 'restricted',
-      asks: { displayName: true, group: null, admissionCode: true },
+      asks: { displayName: true, group: null, admissionCode: true, questions: null },
       viewer: { signedIn: false, accountKind: null, sessionId: null, step: 'identify' },
     });
     const text = JSON.stringify(landing);

@@ -21,6 +21,8 @@ import { readEventCircle } from '../services/circle/circle-events.service';
 import { summariseEventLifecycle } from '../services/session/event-lifecycle.service';
 import * as eventRequests from '../services/session/event-requests.service';
 import { fanoutEventGroups } from '../services/session/event-groups.service';
+import { fanoutMyAnswers, saveAnswersWithRequest } from '../services/session/event-questions.service';
+import { eventAnswersSchema } from './event-questions';
 import { eventChatReadLimiter, eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
 import { afterPlaceFreed, registerOrWaitlist } from '../services/session/event-waitlist.service';
@@ -30,7 +32,7 @@ import { getCanonicalConnectedSet } from '../services/orchestration/state/canoni
 import {
   ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
   EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes, GROUP_LIMITS, isGroupKey, canonicalTimeZone,
-  type WaitlistedRegistration,
+  type WaitlistedRegistration, type EventAnswers,
 } from '@rsn/shared';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
@@ -468,7 +470,9 @@ router.get(
 // An event that asks the host to approve each place: the person asks, may withdraw, and the event's organisers
 // approve or decline. Every write tells the organisers and the requester (session:<id>:join-requests).
 
-const joinRequestSchema = z.object({ message: z.string().trim().max(500).optional() });
+// Part 3 Task 5 (fix round 1): a request may carry the answers to the event's matching questions, saved before it is
+// sent (as the RSN Call link's entry saves them), so a member asks with one call.
+const joinRequestSchema = z.object({ message: z.string().trim().max(500).optional(), answers: eventAnswersSchema.optional() });
 const joinRequestListSchema = z.object({ status: z.enum(['pending', 'approved', 'declined', 'withdrawn']).optional() });
 const requesterPath = z.object({ userId: z.string().uuid() });
 
@@ -487,6 +491,8 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const message = (req.body.message as string | undefined)?.trim() || null;
+      const { answers } = req.body as z.infer<typeof joinRequestSchema>;
+      if (answers) await saveAnswersWithRequest(req.params.id, { userId: req.user!.userId, role: req.user!.role }, answers);
       const request = await eventRequests.requestToJoin(req.params.id, req.user!.userId, req.user!.role, message);
       const response: ApiResponse = { success: true, data: request };
       res.status(201).json(response);
@@ -581,18 +587,31 @@ router.post(
 // may come with the registration as `groupKeys`. Every other field, and no body at all, reads as before.
 const registerBodySchema = z.object({
   groupKeys: z.array(z.string().refine(isGroupKey, "That group isn't one of this event's groups.")).max(GROUP_LIMITS.maxGroups).optional(),
+  // Part 3 Task 5: answers to the event's extra matching questions, written with the place (or the waiting-list row).
+  answers: eventAnswersSchema.optional(),
 }).passthrough();
 // Part 3 Task 3: `waitlist: true` asks to join the waiting list when the event is full (202). Without it a full event
 // answers 409 SESSION_FULL exactly as before (controller ruling: no environment switch; production's client sends no
 // such field, so it behaves as today). Read from the same body, which registerBodySchema passes through.
 const registerWaitlistSchema = z.object({ waitlist: z.boolean().optional() }).passthrough();
 
+/**
+ * The registration's options from its body: the group chosen (Part 2 Task 5) and (Part 3 Task 5) the answers to the
+ * event's matching questions, or undefined when it carries neither (exactly as before either existed). Answers given are
+ * kept with a place or a waiting-list row alike, and their change is told to the organisers and the person.
+ */
+function registerOptionsOf(body: z.infer<typeof registerBodySchema>): sessionService.RegisterOptions | undefined {
+  const answers: EventAnswers | undefined = body.answers && Object.keys(body.answers).length > 0 ? body.answers : undefined;
+  if (!body.groupKeys && !answers) return undefined;
+  return { ...(body.groupKeys ? { groupKeys: body.groupKeys } : {}), ...(answers ? { answers } : {}) };
+}
+
 /** Part 3 Task 3: the event page's registration with `waitlist: true`: a full event answers the person's place in its line. */
 async function registerOrQueueFromEventPage(
-  req: Request, groupKeys: string[] | undefined,
+  req: Request, options: sessionService.RegisterOptions | undefined,
 ): Promise<sessionService.RegisterResult | WaitlistedRegistration> {
   const outcome = await registerOrWaitlist(req.params.id, req.user!.userId, req.user!.role, {
-    ...(groupKeys ? { groupKeys } : {}), joinedVia: 'register',
+    ...(options ?? {}), joinedVia: 'register',
   });
   if (outcome.kind === 'waitlisted') return { waitlisted: true, position: outcome.position };
   return { ...outcome.participant, isNewRegistration: outcome.isNewRegistration };
@@ -604,14 +623,13 @@ router.post(
   validate(registerBodySchema.default({})),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { groupKeys } = req.body as z.infer<typeof registerBodySchema>;
+      const options = registerOptionsOf(req.body);
       const asked = registerWaitlistSchema.safeParse(req.body);
       if (!asked.success) throw new ValidationError('Check what you entered and try again.');
       const participant = asked.data.waitlist === true
-        ? await registerOrQueueFromEventPage(req, groupKeys)
-        : await sessionService.registerParticipant(
-          req.params.id, req.user!.userId, req.user!.role, groupKeys ? { groupKeys } : undefined,
-        );
+        ? await registerOrQueueFromEventPage(req, options)
+        : await sessionService.registerParticipant(req.params.id, req.user!.userId, req.user!.role, options);
+      if (options?.answers) void fanoutMyAnswers(req.params.id, req.user!.userId);
       if ('waitlisted' in participant) {
         res.status(202).json({ success: true, data: participant } satisfies ApiResponse);
         return;
@@ -637,7 +655,7 @@ router.post(
         ]).catch(() => {});
       } catch { /* non-fatal */ }
       // Part 2 Task 5: a group chosen with the registration changes the event's group counts.
-      if (groupKeys?.length) void fanoutEventGroups(req.params.id);
+      if (options?.groupKeys?.length) void fanoutEventGroups(req.params.id);
 
       // 26 May (Stefan) — self-registration now sends a "you're registered"
       // confirmation with a calendar invite (.ics) attached, mirroring what

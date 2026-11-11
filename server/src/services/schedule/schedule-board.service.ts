@@ -678,6 +678,8 @@ async function seatBasket(
     round, seated, lockedRooms, lockedSlots, basket, ctx,
     generate: (people) => (generate ? generate(people, round, avoid) : { roundNumber: round, pairs: [], byeParticipant: null }),
     meetingsOf: meetingsCounter(draft, round),
+    // Part 3 Task 5: an event with matching questions prefers alike (or unlike) answers among the seats it may give.
+    ...(generate?.affinity && { affinity: generate.affinity }),
   });
   const rooms: Rooms = new Map();
   for (const [room, members] of result.seated) {

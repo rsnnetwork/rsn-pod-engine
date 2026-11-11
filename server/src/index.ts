@@ -80,6 +80,7 @@ import eventChatRoutes from './routes/event-chat';
 import eventAuditRoutes from './routes/event-audit';
 import eventLifecycleRoutes from './routes/event-lifecycle';
 import eventGroupRoutes from './routes/event-groups';
+import eventQuestionRoutes from './routes/event-questions';
 import eventAdmissionRoutes from './routes/event-admission';
 import eventWaitlistRoutes from './routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from './routes/call-links';
@@ -363,6 +364,7 @@ app.use('/api/sessions', eventChatRoutes); // An event's chat, kept as it was se
 app.use('/api/sessions', eventAuditRoutes); // An event's audit trail for its organisers: /api/sessions/:id/audit
 app.use('/api/sessions', eventLifecycleRoutes); // Publish, unpublish, cancel, archive, delete for good: /api/sessions/:id/<step>
 app.use('/api/sessions', eventGroupRoutes); // An event's matching groups and round rules: /api/sessions/:id/groups
+app.use('/api/sessions', eventQuestionRoutes); // An event's extra matching questions: /api/sessions/:id/questions (Part 3 Task 5)
 app.use('/api/sessions', eventAdmissionRoutes); // Who gets a place: /api/sessions/:id/admission/* (Part 2 Task 4)
 app.use('/api/sessions', eventWaitlistRoutes); // A full event's waiting list: /api/sessions/:id/waitlist* (Part 3 Task 3)
 app.use('/api/sessions', sessionCallLinkRoutes); // An event's RSN Call link for its organisers: /api/sessions/:id/call-link

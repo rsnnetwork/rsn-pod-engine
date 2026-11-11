@@ -10,7 +10,8 @@
 
 import crypto from 'crypto';
 import {
-  ErrorCodes, UserRole, type AdmissionMode, type EventGroupRules, type EventVisibility,
+  EVENT_LIVE_STATUSES, ErrorCodes, UserRole, missingRequiredQuestions,
+  type AdmissionMode, type EventAnswers, type EventGroupRules, type EventMatchingQuestion, type EventVisibility,
 } from '@rsn/shared';
 import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
 
@@ -49,6 +50,9 @@ export const world = {
   audit: [] as Array<{ action: string; sessionId: string }>,
   /** Part 3 Task 3: a full event's waiting list, in order (the waiting-list tests fill it; nothing else does). */
   line: [] as Array<{ session_id: string; user_id: string; status: string }>,
+  /** Part 3 Task 5: an event's extra matching questions, and each person's answers (by key(sessionId, userId)). */
+  questions: new Map<string, EventMatchingQuestion[]>(),
+  answers: new Map<string, EventAnswers>(),
   sql: [] as string[],
   writes: [] as string[],
 };
@@ -63,6 +67,7 @@ export function resetWorld(): void {
   world.users = []; world.events = []; world.links = []; world.entries = []; world.invites = []; world.codes = [];
   world.places = new Map(); world.requests = new Map(); world.audience = new Set(); world.rules = new Map();
   world.memberGroups = new Map(); world.audit = []; world.sql = []; world.writes = []; world.line = [];
+  world.questions = new Map(); world.answers = new Map();
 }
 
 export function addUser(over: Partial<WUser> & { id: string; email: string }): WUser {
@@ -190,6 +195,12 @@ export function modelRegister(rules: {
     if (groupRules && !world.memberGroups.has(placeKey) && e.host_user_id !== userId) {
       if (!opts.groupKeys?.length) throw new ConflictError(ErrorCodes.EVENT_GROUP_REQUIRED, 'Choose your group for this event first.');
       world.memberGroups.set(placeKey, { keys: opts.groupKeys, by: 'self' });
+    }
+    // Part 3 Task 5: a required matching question unanswered refuses only a person's own first place.
+    const questions = world.questions.get(sessionId) ?? [];
+    if (!place && !opts.approvedRequest && e.host_user_id !== userId && !EVENT_LIVE_STATUSES.includes(e.status)
+        && missingRequiredQuestions(questions, world.answers.get(placeKey) ?? {}).length > 0) {
+      throw new ConflictError(ErrorCodes.EVENT_ANSWERS_REQUIRED, "Answer this event's questions first.");
     }
     world.places.set(placeKey, { status: 'registered', admitted_via: rules.admittedViaOf(facts as never, role, opts) });
     world.writes.push(`place:${placeKey}`);
@@ -400,6 +411,43 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     return rows([], 1);
   }
   if (sql.startsWith('SELECT host_user_id AS user_id FROM sessions')) return rows([]);
+
+  // ── Part 3 Task 5: the event's matching questions and each person's answers ──
+  if (sql === 'SELECT id, key, prompt, kind, prefer, required, options FROM event_matching_questions WHERE session_id = $1 ORDER BY position, key') {
+    return rows((world.questions.get(String(params[0])) ?? []).map((q) => ({ id: `${params[0]}:${q.key}`, ...q })));
+  }
+  if (sql === 'SELECT status FROM sessions WHERE id = $1') {
+    const e = eventById(params[0]);
+    return rows(e ? [{ status: e.status }] : []);
+  }
+  if (sql.startsWith('SELECT q.key, a.option_keys FROM event_question_answers a JOIN event_matching_questions q ON q.id = a.question_id WHERE a.session_id = $1 AND a.user_id = $2')) {
+    const mine = world.answers.get(key(String(params[0]), String(params[1]))) ?? {};
+    return rows(Object.entries(mine).map(([k, optionKeys]) => ({ key: k, option_keys: optionKeys })));
+  }
+  if (sql.startsWith('INSERT INTO event_question_answers (session_id, question_id, user_id, option_keys)')) {
+    const k = key(String(params[0]), String(params[1]));
+    const known = new Set((world.questions.get(String(params[0])) ?? []).map((q) => q.key));
+    const mine = { ...(world.answers.get(k) ?? {}) };
+    let changed = 0;
+    (params[2] as string[]).forEach((qk, i) => {
+      if (!known.has(qk)) return;
+      const next = String((params[3] as string[])[i]).split(',');
+      if ((mine[qk] ?? []).join(',') === next.join(',')) return;
+      mine[qk] = next;
+      changed += 1;
+    });
+    world.answers.set(k, mine);
+    if (changed > 0) world.writes.push(`answers:${k}`);
+    return rows([], changed);
+  }
+  if (sql.startsWith('DELETE FROM event_question_answers a USING event_matching_questions q WHERE q.id = a.question_id AND a.session_id = $1 AND a.user_id = $2 AND q.key = ANY($3::text[])')) {
+    const k = key(String(params[0]), String(params[1]));
+    const mine = { ...(world.answers.get(k) ?? {}) };
+    let changed = 0;
+    for (const qk of params[2] as string[]) if (qk in mine) { delete mine[qk]; changed += 1; }
+    world.answers.set(k, mine);
+    return rows([], changed);
+  }
 
   throw new Error(`The Call link world does not know this statement: ${sql.slice(0, 160)}`);
 }

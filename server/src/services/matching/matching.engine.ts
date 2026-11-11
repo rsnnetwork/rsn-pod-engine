@@ -6,8 +6,8 @@
 
 import {
   MatchingInput, MatchingOutput, MatchingConfig, MatchingParticipant,
-  RoundAssignment, MatchPair, EncounterHistoryEntry, HardConstraint,
-  groupsAllowed, ruleForRound,
+  RoundAssignment, MatchPair, EncounterHistoryEntry, HardConstraint, MatchingEventQuestions,
+  EVENT_QUESTION_WEIGHT, groupsAllowed, questionAffinity, ruleForRound,
 } from '@rsn/shared';
 import { IMatchingEngine, pairKey } from './matching.interface';
 import {
@@ -147,7 +147,7 @@ export class MatchingEngineV1 implements IMatchingEngine {
     encounterHistory: EncounterHistoryEntry[]
   ): { score: number; reasonTags: string[] } {
     const encounterMap = this.buildEncounterMap(encounterHistory);
-    const r = this.computePairScore(a, b, config.weights, encounterMap);
+    const r = this.computePairScore(a, b, config.weights, encounterMap, config.eventQuestions);
     // Public scorePair contract is { score, reasonTags } per IMatchingEngine
     // — premiumInfluenced is consumed internally by generateSingleRound.
     return { score: r.score, reasonTags: r.reasonTags };
@@ -155,7 +155,31 @@ export class MatchingEngineV1 implements IMatchingEngine {
 
   // ─── Private Methods ─────────────────────────────────────────────────────
 
+  /**
+   * One round. Part 3 Task 5 (K5, fix round 1): an event's matching questions change the pair scores, and the greedy
+   * steps (an odd count, more than 30 people, the trio) take pairs in score order, so a soft term alone could seat fewer
+   * people or make a repeat. With questions the round is therefore made twice, with and without them, and the one with
+   * questions is kept only when it is no worse (questionsNoWorse): as many people seated and no more repeats. Without
+   * questions the round is made once, exactly as before.
+   */
   private generateSingleRound(
+    participants: MatchingParticipant[],
+    config: MatchingConfig,
+    usedPairs: Set<string>,
+    hardExclusions: Set<string>,
+    encounterMap: Map<string, EncounterHistoryEntry>,
+    roundNumber: number,
+    options?: { regenerate?: boolean },
+  ): RoundAssignment {
+    const round = this.buildRound(participants, config, usedPairs, hardExclusions, encounterMap, roundNumber, options);
+    if (!config.eventQuestions) return round;
+    const plain = this.buildRound(
+      participants, { ...config, eventQuestions: undefined }, usedPairs, hardExclusions, encounterMap, roundNumber, options,
+    );
+    return questionsNoWorse(round, plain, usedPairs, encounterMap) ? round : plain;
+  }
+
+  private buildRound(
     participants: MatchingParticipant[],
     config: MatchingConfig,
     usedPairs: Set<string>,
@@ -191,8 +215,10 @@ export class MatchingEngineV1 implements IMatchingEngine {
           continue;
         }
 
+        // Part 3 Task 5 (K5): scored only here, after the used-pair, hard-exclusion and group-rule skips above, so an
+        // event's matching questions only ever choose among pairs the event already allows.
         const r = this.computePairScore(
-          participants[i], participants[j], config.weights, encounterMap
+          participants[i], participants[j], config.weights, encounterMap, config.eventQuestions
         );
 
         // Phase 1 (5 May spec) — Re-match jitter. ±2.5% noise is small
@@ -363,8 +389,12 @@ export class MatchingEngineV1 implements IMatchingEngine {
         if (mayMeet && (!mayMeet(leftover.userId, pairs[pi].participantAId)
           || !mayMeet(leftover.userId, pairs[pi].participantBId))) continue;
 
-        const scoreA = this.computePairScore(participants[leftover.idx], participants[aIdx], config.weights, encounterMap).score;
-        const scoreB = this.computePairScore(participants[leftover.idx], participants[bIdx], config.weights, encounterMap).score;
+        const scoreA = this.computePairScore(
+          participants[leftover.idx], participants[aIdx], config.weights, encounterMap, config.eventQuestions,
+        ).score;
+        const scoreB = this.computePairScore(
+          participants[leftover.idx], participants[bIdx], config.weights, encounterMap, config.eventQuestions,
+        ).score;
         const avgScore = (scoreA + scoreB) / 2;
 
         if (avgScore > bestTrioScore) {
@@ -437,7 +467,8 @@ export class MatchingEngineV1 implements IMatchingEngine {
     a: MatchingParticipant,
     b: MatchingParticipant,
     weights: Record<string, number | undefined>,
-    encounterMap: Map<string, EncounterHistoryEntry>
+    encounterMap: Map<string, EncounterHistoryEntry>,
+    questions?: MatchingEventQuestions,
   ): { score: number; reasonTags: string[]; premiumInfluenced: boolean } {
     let totalScore = 0;
     let totalWeight = 0;
@@ -630,6 +661,19 @@ export class MatchingEngineV1 implements IMatchingEngine {
         totalWeight += weights.mutualMeetAgainBoost;
         if (encounter.averageRating >= 4) reasonTags.push('positive_history');
       }
+    }
+
+    // 12. Part 3 Task 5 (K5) — the event's extra matching questions, a soft preference only. Present only for an event
+    //     that has questions: without them nothing is added, not even a zero weight, so the score is exactly as before.
+    //     The callers score only pairs that passed every hard exclusion and the round's group rule, and sort by times met
+    //     before the score, so answers never make a refused meeting or a repeat. Unanswered reads 0.5 (neutral). The
+    //     reason comes last, so a pair's matchReason (its first reason) is unchanged.
+    if (questions) {
+      const w = weights.eventQuestions ?? EVENT_QUESTION_WEIGHT;
+      const affinity = questionAffinity(questions.answersByUser[a.userId], questions.answersByUser[b.userId], questions.questions);
+      totalScore += affinity * w;
+      totalWeight += w;
+      if (affinity > 0.5) reasonTags.push('event_answers');
     }
 
     // Normalize to 0-1
@@ -826,6 +870,49 @@ export class MatchingEngineV1 implements IMatchingEngine {
     const setB = new Set(b.map((s) => s.toLowerCase()));
     return a.filter((item) => setB.has(item.toLowerCase())).length;
   }
+}
+
+// ─── Part 3 Task 5 (K5, fix round 1): questions never make a round worse ───────────────────────────────────────
+
+/** Everyone a round seats (in a pair or a trio). */
+export function seatedIn(round: Pick<RoundAssignment, 'pairs'>): number {
+  return round.pairs.reduce((n, p) => n + (p.participantCId ? 3 : 2), 0);
+}
+
+/** Every pair of people a round's rooms make meet: one per pair, all three of a trio. */
+export function meetingKeysOf(round: Pick<RoundAssignment, 'pairs'>): string[] {
+  const keys: string[] = [];
+  for (const p of round.pairs) {
+    const people = [p.participantAId, p.participantBId, p.participantCId].filter((x): x is string => !!x);
+    for (let i = 0; i < people.length; i++) {
+      for (let j = i + 1; j < people.length; j++) keys.push(pairKey(people[i], people[j]));
+    }
+  }
+  return keys;
+}
+
+/** How many of a round's meetings are in `met` (trio meetings included). */
+export function repeatsIn(round: Pick<RoundAssignment, 'pairs'>, met: ReadonlySet<string>): number {
+  return meetingKeysOf(round).filter((k) => met.has(k)).length;
+}
+
+/**
+ * Whether a round made with an event's matching questions is no worse than the same round made without them: it seats at
+ * least as many people, makes no more repeats of pairs the caller keeps apart in this round (`usedPairs`: the event's
+ * own earlier meetings and those the event's repeat policy forbids), and no more meetings of people who met before (the
+ * encounter history the event's policy reads). Every meeting of a trio counts.
+ */
+export function questionsNoWorse(
+  withQuestions: Pick<RoundAssignment, 'pairs'>,
+  without: Pick<RoundAssignment, 'pairs'>,
+  usedPairs: ReadonlySet<string>,
+  encounterMap?: ReadonlyMap<string, EncounterHistoryEntry>,
+): boolean {
+  if (seatedIn(withQuestions) < seatedIn(without)) return false;
+  if (repeatsIn(withQuestions, usedPairs) > repeatsIn(without, usedPairs)) return false;
+  if (!encounterMap || encounterMap.size === 0) return true;
+  const metBefore = new Set([...encounterMap].filter(([, e]) => (e.timesMet ?? 0) > 0).map(([k]) => k));
+  return repeatsIn(withQuestions, metBefore) <= repeatsIn(without, metBefore);
 }
 
 /**

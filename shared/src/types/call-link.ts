@@ -5,6 +5,7 @@
 
 import type { EventFormat } from '../events/definitions';
 import type { EventLifecycle } from '../events/lifecycle';
+import type { EventMatchingQuestion } from '../events/matching-questions';
 import type { EffectiveAdmission } from './session';
 import type { AccountKind } from './user';
 
@@ -49,8 +50,14 @@ export interface CallLanding {
   host: { displayName: string; avatarUrl: string | null };
   lifecycle: EventLifecycle;
   admission: EffectiveAdmission;
-  /** What the event may ask for before someone enters. */
-  asks: { displayName: boolean; group: CallLandingGroupAsk | null; admissionCode: boolean };
+  /**
+   * What the event may ask for before someone enters. Part 3 Task 5: `questions` are the event's extra matching questions
+   * this viewer has not answered, required ones first (signed out: all of them), or null when there are none to ask.
+   * Never anyone's answers.
+   */
+  asks: {
+    displayName: boolean; group: CallLandingGroupAsk | null; admissionCode: boolean; questions: EventMatchingQuestion[] | null;
+  };
   /** `sessionId` only for a signed-in viewer who holds a place or runs the event. */
   viewer: { signedIn: boolean; accountKind: AccountKind | null; sessionId: string | null; step: CallEntryStep };
 }
@@ -62,11 +69,17 @@ export interface CallEntryState {
   sessionId: string | null;
   /** Where to go in, when `step` is 'enter'. */
   livePath: string | null;
-  missing: { displayName: boolean; group: boolean; admissionCode: boolean };
+  /** Part 3 Task 5: `questions` is a required matching question they have not answered (asked on approval events too). */
+  missing: { displayName: boolean; group: boolean; admissionCode: boolean; questions: boolean };
   refusal: { code: string; message: string } | null;
   startsAt: string | null;
   /** Part 3 Task 3: their place in the event's waiting list (1 = next) when `step` is 'waitlisted', else null. */
   waitlistPosition: number | null;
+}
+
+/** True when the event still needs something from the person before a place (or a request). */
+export function somethingMissing(missing: CallEntryState['missing']): boolean {
+  return missing.displayName || missing.group || missing.admissionCode || missing.questions;
 }
 
 /** One of a person's events reached by its link (their place or their request), for the guest home. */

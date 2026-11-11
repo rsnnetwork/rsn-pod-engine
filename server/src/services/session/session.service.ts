@@ -12,7 +12,7 @@ import {
   resolveEventFormat, normaliseConfig, checkEventInput, valuesFromConfig, formatRefusal,
   liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS, type SessionCircle,
   type EventPublication,
-  type AdmittedVia,
+  type AdmittedVia, type EventAnswers,
   canonicalTimeZone, eventZone, FALLBACK_TIME_ZONE,
 } from '@rsn/shared';
 import { eventImageUrl } from './event-image-url';
@@ -29,6 +29,7 @@ import {
   readEventAccessFacts, runsEvent, visibleEventsSql, waitlistAheadSql,
 } from './event-access';
 import { applyRegistrationGroups } from './event-groups.service';
+import { applyRegistrationAnswers } from './event-questions.service';
 import { ensureCallCode } from './call-link.service';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 import { notifyEventRescheduled } from './event-notices';
@@ -534,6 +535,8 @@ const ACCOUNT_CLOSED_SENTENCE = 'Your account cannot join events right now.';
  *                          written as their own choice in this transaction. An event without groups ignores it.
  *   arrivedThroughCallLink Part 2 Task 6: the person is entering through this event's own RSN Call link (call-entry
  *                          service's enterCall, the only caller that sets it): an event guest may then ask for a place here.
+ *   answers                10 Nov 2026 spec, Part 3 Task 5: the person's answers to the event's extra matching questions,
+ *                          written in this transaction. An event without questions ignores them.
  */
 export interface RegisterOptions {
   personalInviteCreatedAt?: Date;
@@ -541,6 +544,7 @@ export interface RegisterOptions {
   approvedRequest?: boolean;
   groupKeys?: string[];
   arrivedThroughCallLink?: boolean;
+  answers?: EventAnswers;
 }
 
 /**
@@ -653,9 +657,13 @@ async function registerParticipantTx(
   // Part 2 Task 5: whether the event has matching groups is read in the same row, so an event without them
   // (every event before groups existed) makes exactly the reads it always made.
   // Part 3 Task 3: and whether the account is active, in the same read (a closed or suspended account takes no place).
-  const sessionResult = await client.query<SessionRow & { hasEventGroups?: boolean; accountActive?: boolean | null }>(
+  // Part 3 Task 5: and whether it asks a required matching question, in the same read (no extra read without one).
+  const sessionResult = await client.query<SessionRow & {
+    hasEventGroups?: boolean; accountActive?: boolean | null; hasRequiredQuestions?: boolean;
+  }>(
     `SELECT ${SESSION_COLUMNS},
             (SELECT ${activeMemberSql('acct')} FROM users acct WHERE acct.id = $2) AS "accountActive",
+            EXISTS (SELECT 1 FROM event_matching_questions emq WHERE emq.session_id = sessions.id AND emq.required) AS "hasRequiredQuestions",
             EXISTS (SELECT 1 FROM event_groups eg WHERE eg.session_id = sessions.id) AS "hasEventGroups"
        FROM sessions WHERE id = $1`,
     [sessionId, userId]
@@ -786,6 +794,12 @@ async function registerParticipantTx(
   const writeGroups = async (ownFirstPlace: boolean): Promise<void> => {
     if (session.hasEventGroups) {
       await applyRegistrationGroups(client, sessionId, userId, userRole, options.groupKeys, ownFirstPlace);
+    }
+    // Part 3 Task 5: likewise the event's extra matching questions, with the same rule (only a person's own first
+    // registration waits for a required answer). Read further only on an event with a required question or when answers
+    // came with the registration.
+    if (session.hasRequiredQuestions || (options.answers && Object.keys(options.answers).length > 0)) {
+      await applyRegistrationAnswers(client, sessionId, userId, userRole, options.answers, ownFirstPlace);
     }
   };
 

@@ -5,7 +5,8 @@
 //   1. a locked room is never read or written; a locked seat keeps its person where they are;
 //   2. each unlocked room holding one person gets the basket person the room checker allows, preferring a
 //      rule-abiding pair over the organiser's same-group fallback, then someone they have not met, then whoever
-//      has had the fewest meetings, then registration order;
+//      has had the fewest meetings, then (Part 3 Task 5, an event with matching questions) whose answers suit best,
+//      then registration order;
 //   3. the rest of the basket is paired by the engine (`generate`: Task 7's generateGroupedRound, which applies
 //      the round's rule and the organiser's fallback) into new rooms numbered after the highest in use;
 //   4. anyone still waiting joins an unlocked pair as a trio only when the checker allows the three, else waits,
@@ -29,6 +30,11 @@ export interface RedistributeInput {
   generate: (people: string[]) => RoundAssignment;
   /** Meetings each person already has in the event (fewer is preferred when filling a seat); none known = 0. */
   meetingsOf?: (userId: string) => number;
+  /**
+   * Part 3 Task 5 (K5) — how well two people's answers to the event's matching questions suit each other (0..1). Only an
+   * event with questions passes it; it orders the candidates the checker already allows, after fairness, never before.
+   */
+  affinity?: (a: string, b: string) => number;
 }
 
 export interface RedistributeResult {
@@ -73,7 +79,42 @@ function waitingReason(ctx: RoomCheckContext, id: string, candidates: string[][]
   return refusedByRule ? 'group_rule' : 'no_allowed_partner';
 }
 
+/**
+ * Seat the basket. Part 3 Task 5 (K5, fix round 1): an event's matching questions (`affinity`) only order the candidates,
+ * and step 2 fills rooms one at a time, so a preference alone could leave a later room with nobody it may take. With
+ * `affinity` the basket is therefore seated twice, with and without it, and the result with it is kept only when it
+ * seats at least as many people with no more same-group fallbacks and no more repeats. Without `affinity` it is seated
+ * once, exactly as before.
+ */
 export function redistributeRound(input: RedistributeInput): RedistributeResult {
+  const result = seatOnce(input);
+  if (!input.affinity) return result;
+  const plain = seatOnce({ ...input, affinity: undefined });
+  return affinityNoWorse(input.ctx, result, plain) ? result : plain;
+}
+
+/** Same-group fallbacks and repeats among the rooms a result holds (each warning counted per person it names). */
+function costsOf(ctx: RoomCheckContext, result: RedistributeResult): { fallback: number; repeat: number } {
+  let fallback = 0;
+  let repeat = 0;
+  for (const members of result.seated.values()) {
+    if (members.length < 2) continue;
+    for (const w of verdictOf(ctx, members).warnings) {
+      if (w.kind === 'same_group_fallback') fallback += w.userIds.length;
+      if (w.kind === 'repeat') repeat += w.userIds.length;
+    }
+  }
+  return { fallback, repeat };
+}
+
+function affinityNoWorse(ctx: RoomCheckContext, withAffinity: RedistributeResult, without: RedistributeResult): boolean {
+  if (withAffinity.placed.length < without.placed.length) return false;
+  const a = costsOf(ctx, withAffinity);
+  const b = costsOf(ctx, without);
+  return a.fallback <= b.fallback && a.repeat <= b.repeat;
+}
+
+function seatOnce(input: RedistributeInput): RedistributeResult {
   const { ctx, lockedRooms } = input;
   const seated = new Map<number, string[]>([...input.seated].map(([room, members]) => [room, [...members]]));
   const occupied = new Set([...seated.values()].flat());
@@ -97,7 +138,9 @@ export function redistributeRound(input: RedistributeInput): RedistributeResult 
     for (const id of waitingSet) {
       const v = verdictOf(ctx, [...members, id]);
       if (!v.ok) continue;
-      const cost = [...seatCost(v, id), meetings(id), order.get(id)!];
+      const cost = input.affinity
+        ? [...seatCost(v, id), meetings(id), -input.affinity(members[0], id), order.get(id)!]
+        : [...seatCost(v, id), meetings(id), order.get(id)!];
       if (!best || lessThan(cost, best.cost)) best = { id, cost };
     }
     if (best) seat(room, best.id);
