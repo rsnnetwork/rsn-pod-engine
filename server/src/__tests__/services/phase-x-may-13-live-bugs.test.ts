@@ -210,16 +210,23 @@ describe('Phase X — 13 May live-test bug fixes', () => {
       // CON-01 (25 Oct 2026) — the recap page is a post-event page, so its
       // helper is a Link in the same tab (Back returns to the recap); the live
       // end screen keeps the new tab.
-      expect(sessionComplete).toMatch(/window\.open\(`\/messages\/new\/\$\{userId\}`/);
-      expect(recapPage).toMatch(/to=\{`\/messages\/new\/\$\{userId\}`\}/);
+      // 12 Nov 2026: the address comes from writeToPath (compose-intent.ts): /messages/new/:userId plus the one-shot
+      // ?compose=1 that puts the cursor in the message box (pinned below).
+      expect(sessionComplete).toMatch(/window\.open\(writeToPath\(userId\)/);
+      expect(recapPage).toMatch(/to=\{writeToPath\(userId\)\}/);
       // Forbid the regression to the prompt() flow.
       expect(sessionComplete).not.toMatch(/prompt\(`Send your first message/);
       expect(recapPage).not.toMatch(/prompt\(`Send your first message/);
     });
 
     it('PublicProfilePage Message button also uses the new route + drops the prompt', () => {
-      expect(profile).toMatch(/navigate\(`\/messages\/new\/\$\{userId\}`\)/);
+      expect(profile).toMatch(/navigate\(writeToPath\(userId\)\)/);
       expect(profile).not.toMatch(/prompt\(`Send your first message/);
+    });
+
+    it('writeToPath opens /messages/new/:userId straight away, with only the one-shot compose flag added', () => {
+      const intent = readClientSource('features/messages/compose-intent.ts');
+      expect(intent).toMatch(/return `\/messages\/new\/\$\{encodeURIComponent\(userId\)\}\?\$\{COMPOSE_PARAM\}=1`;/);
     });
 
     it('MessagesPage reads both conversationId and userId params (dual-mode)', () => {
