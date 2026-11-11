@@ -26,9 +26,11 @@ import {
   fanoutUserBlocks,
   fanoutUserEntity,
 } from '../realtime/fanout';
-import { NotFoundError } from '../middleware/errors';
+import { NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
-import { ApiResponse, UserRole, hasRoleAtLeast, PROFILE_LINK_HELP, PROFILE_LINK_MAX, parseProfileUrl, type ProfileLinkKind } from '@rsn/shared';
+import {
+  ApiResponse, UserRole, canonicalTimeZone, hasRoleAtLeast, PROFILE_LINK_HELP, PROFILE_LINK_MAX, parseProfileUrl, type ProfileLinkKind,
+} from '@rsn/shared';
 import * as bannerService from '../services/user/banner.service';
 import { getPictureSource, savePicture } from '../services/user/picture.service';
 import { pictureBodySchema, type PictureBody } from './picture-body';
@@ -50,6 +52,31 @@ const profileLink = (kind: ProfileLinkKind) => z.string().max(PROFILE_LINK_MAX).
   return result.url;
 });
 
+// Part 3 Task 1: a member's zone is a real IANA zone, as onboarding already holds it (a new event takes its host's zone,
+// and a 1:1 meeting is written in each person's). Spelled as the runtime spells it; blank clears it; anything else is
+// refused in a sentence. The profile form used to take any text here.
+export const MEMBER_ZONE_REFUSAL = 'Choose a time zone from the list.';
+const memberZone = z.string().max(50).nullable().optional().transform((value, ctx) => {
+  if (value === undefined || value === null) return value;
+  if (!value.trim()) return null;
+  const canonical = canonicalTimeZone(value);
+  if (!canonical) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: MEMBER_ZONE_REFUSAL });
+    return z.NEVER;
+  }
+  return canonical;
+});
+
+/** The zone refusal's sentence is the 400's message too (production's form shows a refusal's message). */
+function refuseUnknownMemberZone(req: Request, _res: Response, next: NextFunction): void {
+  const zone: unknown = req.body?.timezone;
+  if (zone === undefined || zone === null || (typeof zone === 'string' && (!zone.trim() || canonicalTimeZone(zone)))) {
+    next();
+    return;
+  }
+  next(new ValidationError(MEMBER_ZONE_REFUSAL, { timezone: [MEMBER_ZONE_REFUSAL] }));
+}
+
 const updateUserSchema = z.object({
   displayName: z.string().max(100).optional(),
   firstName: z.string().max(100).optional(),
@@ -68,7 +95,7 @@ const updateUserSchema = z.object({
   interests: z.array(z.string().max(50)).max(20).optional(),
   reasonsToConnect: z.array(z.string().max(100)).max(10).optional(),
   languages: z.array(z.string().max(30)).max(10).optional(),
-  timezone: z.string().max(50).nullable().optional(),
+  timezone: memberZone,
   phone: z.string().max(30).nullable().optional(),
   professionalRole: z.array(z.string().max(50)).max(10).optional(),
   currentState: z.string().max(50).nullable().optional(),
@@ -139,6 +166,7 @@ router.put(
   '/me',
   authenticate,
   photoInBodyLimit,
+  refuseUnknownMemberZone,
   validate(updateUserSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

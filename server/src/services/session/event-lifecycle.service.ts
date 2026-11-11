@@ -13,7 +13,7 @@
 // Ending stays the live event's own (End Event, the overdue job). Cancelling is for an event that has not started.
 
 import {
-  ErrorCodes, UserRole, hasRoleAtLeast, eventLifecycleOf, allowedLifecycleActions, eventAllowedActions,
+  ErrorCodes, UserRole, hasRoleAtLeast, eventLifecycleOf, allowedLifecycleActions, eventAllowedActions, formatEventTime,
   type EventLifecycle, type EventLifecycleAction, type EventLifecycleInput, type EventLifecycleWho, type EventPublication,
   type Session,
 } from '@rsn/shared';
@@ -28,7 +28,6 @@ import { fanoutSessionEntities, fanoutSessionListEntities, resolveSessionListAud
 import { emitEventAuditChanged, recordEventAudit, type EventAuditAction } from '../audit/event-audit';
 import { announceCircleEvent, readEventCircle } from '../circle/circle-events.service';
 import * as emailService from '../email/email.service';
-import { meetingTime } from '../meetings/meeting-time';
 import type { Actor } from '../roles/actor';
 import { activeMemberSql } from '../users/active-member';
 import { podAdminSql, placesHeldSql, type EventAccessFacts } from './event-access';
@@ -144,6 +143,8 @@ interface LifecycleRow {
   archived_at: Date | null;
   registration_opens_at: Date | null;
   scheduled_at: Date | null;
+  /** The event's own zone (Part 3 Task 1, K1): the cancellation email's time is on its clock. */
+  timezone: string | null;
   pod_id: string | null;
   circle_id: string | null;
   is_owner: boolean;
@@ -154,7 +155,7 @@ interface LifecycleRow {
 
 const LIFECYCLE_ROW_SQL = `
   SELECT s.id, s.title, s.status::text AS status, s.publication, s.archived_at, s.registration_opens_at, s.scheduled_at,
-         s.pod_id, s.circle_id,
+         s.timezone, s.pod_id, s.circle_id,
          s.host_user_id = $2 AS is_owner,
          EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost,
          ${podAdminSql('s', '$2')} AS is_pod_admin,
@@ -295,7 +296,6 @@ async function listAudienceBeforeUnpublish(sessionId: string): Promise<string[] 
 interface CancelRecipient {
   id: string;
   email: string | null;
-  timezone: string | null;
   notify_email: boolean | null;
 }
 
@@ -333,7 +333,7 @@ export async function cancelEvent(sessionId: string, actor: Actor, reason: strin
 async function noticeOfCancellation(row: LifecycleRow, actor: Actor, reason: string | null): Promise<number> {
   try {
     const recipients = await query<CancelRecipient>(
-      `SELECT u.id, u.email, u.timezone, u.notify_email
+      `SELECT u.id, u.email, u.notify_email
          FROM users u
         WHERE u.id <> $2 AND ${activeMemberSql('u')}
           AND (u.id IN (SELECT sp.user_id FROM session_participants sp WHERE sp.session_id = $1 AND sp.status <> 'removed')
@@ -369,7 +369,7 @@ async function noticeOfCancellation(row: LifecycleRow, actor: Actor, reason: str
 
 /** One email each, in the bulk lane, to the people whose email switch is on, while the admin switch is on. */
 export async function emailCancellation(
-  row: Pick<LifecycleRow, 'id' | 'title' | 'scheduled_at'>,
+  row: Pick<LifecycleRow, 'id' | 'title' | 'scheduled_at' | 'timezone'>,
   actor: Actor,
   reason: string | null,
   recipients: CancelRecipient[],
@@ -381,11 +381,11 @@ export async function emailCancellation(
     const named = await query<{ display_name: string | null }>(`SELECT display_name FROM users WHERE id = $1`, [actor.userId]);
     const hostName = named.rows[0]?.display_name?.trim() || 'The organiser';
     const link = `${config.clientUrl}/sessions/${row.id}`;
+    // Part 3 Task 1 (K1): the same time for everyone, on the event's clock and naming its zone.
+    const when = row.scheduled_at ? formatEventTime(row.scheduled_at, row.timezone) : 'a time not yet set';
     return await emailService.asBulkEmail(async () => {
       let sent = 0;
       for (const person of wanted) {
-        const t = row.scheduled_at ? meetingTime(new Date(row.scheduled_at), person.timezone) : null;
-        const when = t ? `${t.long} (${t.zone})` : 'a time not yet set';
         const result = await emailService.sendEventCancelledEmail(person.email as string, {
           eventTitle: row.title, hostName, when, reason, link,
         }).catch((err: unknown) => {

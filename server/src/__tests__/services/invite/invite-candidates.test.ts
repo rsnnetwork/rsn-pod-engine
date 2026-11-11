@@ -569,7 +569,7 @@ describe('createInvitesBatch', () => {
     if (/COUNT\(\*\) as count FROM invites/.test(text)) return { rows: [{ count: String(allowance.sent) }] };
     if (/display_name AS "displayName" FROM users/.test(text)) return { rows: [{ displayName: 'Host User' }] };
     if (/SELECT name FROM pods/.test(text)) return { rows: [{ name: 'Reason circle' }] };
-    if (/SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions/.test(text)) {
+    if (/SELECT title, scheduled_at, host_user_id, config, event_format, timezone, [\s\S]*?FROM sessions/.test(text)) {
       return { rows: [{ title: 'Kickoff', scheduled_at: null, host_user_id: HOST, config: {}, event_format: 'video_meeting' }] };
     }
     if (/INSERT INTO notifications/.test(text)) return { rows: [{ id: 'notification-1', created_at: '2026-10-26T09:00:00.000Z' }] };
@@ -967,7 +967,7 @@ describe('createInvitesBatch', () => {
     it('looks up the sender, the pod and the event once for the whole batch, and never looks a member up by address', async () => {
       await eventBatch([person(1), person(2), person(3)]);
       expect(statementsMatching(/display_name AS "displayName" FROM users/)).toHaveLength(1);
-      expect(statementsMatching(/SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions/)).toHaveLength(1);
+      expect(statementsMatching(/SELECT title, scheduled_at, host_user_id, config, event_format, timezone, [\s\S]*?FROM sessions/)).toHaveLength(1);
       expect(statementsMatching(/SELECT id FROM users WHERE email/)).toHaveLength(0);
     });
 

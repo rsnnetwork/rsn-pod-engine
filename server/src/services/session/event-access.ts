@@ -19,14 +19,13 @@
 // they hold another tie to the event (host, co-host, invitee, a place, the pod's own members). Admins see everything.
 
 import {
-  ADMISSION_MODES, ErrorCodes, UserRole, hasRoleAtLeast, isEventVisibility,
+  ADMISSION_MODES, ErrorCodes, UserRole, formatEventTime, hasRoleAtLeast, isEventVisibility,
   type AdmissionMode, type AdmittedVia, type EffectiveAdmission,
   type EventAccessMode, type EventJoinRequestStatus, type EventPublication, type EventVisibility,
 } from '@rsn/shared';
 import { query } from '../../db';
 import { AppError } from '../../middleware/errors';
 import { activeMemberSql } from '../users/active-member';
-import { meetingTime } from '../meetings/meeting-time';
 import { eventRoomAdmission, visibleEventSql, APPROVAL_POD_EVENT_REFUSAL, type EventRoomAdmission } from './session-access';
 
 export { defaultEventVisibility } from '@rsn/shared';
@@ -279,8 +278,11 @@ export interface EventAccessFacts {
   archived: boolean;
   /** Part 2 Task 2: registration opens then (null: as soon as it is published). */
   registrationOpensAt: Date | null;
-  /** The person's own time zone (users.timezone), so "Registration opens ..." reads in their hours; null reads UTC. */
-  viewerTimezone: string | null;
+  /**
+   * The event's own zone (sessions.timezone; Part 3 Task 1, K1), so "Registration opens ..." reads on the event's clock
+   * and names it, whoever reads it; null reads UTC.
+   */
+  eventTimezone: string | null;
   /** The person is an admin of the event's pod: its creator or an active director (canActAsHost's pod admin). */
   isPodAdmin: boolean;
   /** Places held by anyone but the event's host and co-hosts (a participant row that is not removed). */
@@ -309,7 +311,7 @@ interface FactsRow {
   publication?: string | null;
   archived?: boolean | null;
   registration_opens_at?: Date | string | null;
-  viewer_timezone?: string | null;
+  event_timezone?: string | null;
   is_pod_admin?: boolean | null;
   places_held?: number | string | null;
   admission_mode?: string | null;
@@ -339,7 +341,7 @@ export async function readEventAccessFacts(
             (SELECT r.status FROM event_join_requests r WHERE r.session_id = s.id AND r.user_id = $2) AS my_request,
             ${outsideClosedCircleSql('s', '$2')} AS outside_closed_circle,
             s.publication, (s.archived_at IS NOT NULL) AS archived, s.registration_opens_at,
-            (SELECT tz.timezone FROM users tz WHERE tz.id = $2) AS viewer_timezone,
+            s.timezone AS event_timezone,
             ${podAdminSql('s', '$2')} AS is_pod_admin,
             ${placesHeldSql('s')} AS places_held,
             s.admission_mode,
@@ -373,7 +375,7 @@ export async function readEventAccessFacts(
     publication: row.publication === 'draft' ? 'draft' : 'published',
     archived: !!row.archived,
     registrationOpensAt: row.registration_opens_at ? new Date(row.registration_opens_at) : null,
-    viewerTimezone: row.viewer_timezone ?? null,
+    eventTimezone: row.event_timezone ?? null,
     isPodAdmin: !!row.is_pod_admin,
     placesHeld: Number(row.places_held ?? 0) || 0,
     admissionMode,
@@ -458,7 +460,7 @@ export const EVENT_ADMISSION_REQUIRED_SENTENCE =
 /**
  * Part 2 Task 2: the refusal for someone who would take a place before the event's registration opens, or null. The
  * people who run it are never held back, nor is anyone the host invited (an invite is the host's say-so). The time
- * reads in the person's own zone and names it.
+ * reads on the event's clock and names its zone (Part 3 Task 1).
  */
 export function registrationNotOpenRefusal(
   f: EventAccessFacts,
@@ -468,10 +470,9 @@ export function registrationNotOpenRefusal(
 ): RegisterDecision | null {
   if (!f.registrationOpensAt || f.registrationOpensAt.getTime() <= now.getTime()) return null;
   if (runsEvent(f, role) || f.isInvited || options.viaInvite) return null;
-  const t = meetingTime(f.registrationOpensAt, f.viewerTimezone);
   return {
     ok: false, status: 409, code: ErrorCodes.REGISTRATION_NOT_OPEN,
-    message: `Registration for this event opens ${t.long} (${t.zone}).`,
+    message: `Registration for this event opens ${formatEventTime(f.registrationOpensAt, f.eventTimezone)}.`,
   };
 }
 

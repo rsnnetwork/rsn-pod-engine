@@ -15,6 +15,7 @@ interface Participant { user_id: string; status: string }
 interface Ev {
   id: string; title: string; status: string; publication: 'draft' | 'published'; archived_at: Date | null;
   registration_opens_at: Date | null; scheduled_at: Date | null; pod_id: string | null; circle_id: string | null;
+  timezone: string | null;
   host: string; cohosts: string[]; participants: Participant[]; cancel_reason: string | null; cancelled_by: string | null;
 }
 interface Person { id: string; email: string | null; timezone: string | null; notify_email: boolean; active: boolean; name: string }
@@ -40,6 +41,7 @@ function freshEvent(over: Partial<Ev> = {}): Ev {
   return {
     id: EVENT_ID, title: 'Founders breakfast', status: 'scheduled', publication: 'published', archived_at: null,
     registration_opens_at: null, scheduled_at: new Date('2026-11-20T08:00:00.000Z'), pod_id: 'pod-1', circle_id: null,
+    timezone: 'Europe/Copenhagen',
     host: HOST, cohosts: [COHOST], participants: [{ user_id: HOST, status: 'registered' }],
     cancel_reason: null, cancelled_by: null, ...over,
   };
@@ -56,7 +58,8 @@ async function clientQuery(sql: string, params: unknown[]): Promise<{ rows: unkn
     return {
       rows: [{
         id: ev.id, title: ev.title, status: ev.status, publication: ev.publication, archived_at: ev.archived_at,
-        registration_opens_at: ev.registration_opens_at, scheduled_at: ev.scheduled_at, pod_id: ev.pod_id, circle_id: ev.circle_id,
+        registration_opens_at: ev.registration_opens_at, scheduled_at: ev.scheduled_at, timezone: ev.timezone,
+        pod_id: ev.pod_id, circle_id: ev.circle_id,
         is_owner: ev.host === actor, is_cohost: ev.cohosts.includes(actor), is_pod_admin: podAdmins.includes(actor),
         places_held: placesHeld(ev),
       }],
@@ -345,14 +348,14 @@ describe('cancel with notice', () => {
     for (const id of rung) expect(mockEmitEntities).toHaveBeenCalledWith(mockIo, [id], [`user:${id}:notifications`]);
   });
 
-  it('emails each of them once whose email switch is on, in their own zone, naming who cancelled; the removed get nothing', async () => {
+  it('emails each of them once whose email switch is on, on the event\'s clock (Part 3 Task 1), naming who cancelled; the removed get nothing', async () => {
     await cancelEvent(EVENT_ID, host, 'The venue closed.');
     await settle();
     const to = mockSendCancelled.mock.calls.map(([address]) => address).sort();
     expect(to).toEqual([`${COHOST}@example.org`, `${MEMBER}@example.org`, `${OTHER}@example.org`].sort());
     const toMember = mockSendCancelled.mock.calls.find(([address]) => address === `${MEMBER}@example.org`)!;
     expect(toMember[1]).toEqual({
-      eventTitle: 'Founders breakfast', hostName: 'Hana Host', when: 'Friday 20 November, 13:00 (GMT+5)',
+      eventTitle: 'Founders breakfast', hostName: 'Hana Host', when: 'Friday 20 November, 09:00 (CET)',
       reason: 'The venue closed.', link: `https://app.rsn.network/sessions/${EVENT_ID}`,
     });
   });
@@ -510,7 +513,7 @@ describe('summariseEventLifecycle', () => {
     visibility: null, podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
     inAudience: true, isInvited: false, participantStatus: 'registered', accountActive: true, myRequest: null,
     outsideClosedCircle: false, publication: 'published' as const, archived: false, registrationOpensAt: null,
-    viewerTimezone: null, isPodAdmin: false, placesHeld: 3, admissionMode: null, entitled: false, entitledVia: null,
+    eventTimezone: null, isPodAdmin: false, placesHeld: 3, admissionMode: null, entitled: false, entitledVia: null,
   };
 
   it('a production-shaped event (no lifecycle columns read) is open for registration, and a member may do nothing', () => {

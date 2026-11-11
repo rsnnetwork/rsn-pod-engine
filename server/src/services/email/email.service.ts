@@ -11,7 +11,7 @@ import { query } from '../../db';
 import { isReservedTestAddress, maskAddress } from '../identity/reserved-address';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { SIGN_IN_CODE_TTL_MINUTES } from '../identity/sign-in-code';
-import { ErrorCodes } from '@rsn/shared';
+import { ErrorCodes, formatEventTime } from '@rsn/shared';
 import { AppError } from '../../middleware/errors';
 
 let resend: Resend | null = null;
@@ -549,6 +549,24 @@ export async function sendHostRecapEmail(
   logger.warn({ to, sessionTitle: data.sessionTitle }, 'No email provider — host recap email skipped');
 }
 
+// ─── An event's image and time, in an event email (10 Nov 2026 spec, Part 3 Task 1) ────────────────────────────
+
+/**
+ * The event's image at the head of its email, as wide as the card: an absolute address on the API (mail clients block
+ * a data URL). Empty for an event with no image, whose emails are unchanged, and for any address that is not an event
+ * image on this API (only eventImageUrl's own addresses are ever shown).
+ */
+function eventImageHead(imageUrl: string | null | undefined): string {
+  const api = (config.apiBaseUrl ?? '').replace(/\/+$/, '');
+  if (!imageUrl || !api || !imageUrl.startsWith(`${api}/api/sessions/`)) return '';
+  return `<img src="${escapeAttr(imageUrl)}" alt="" width="560" style="display:block;width:100%;max-width:100%;height:auto;border:0;border-radius:10px;margin:0 0 24px 0;" />`;
+}
+
+/** When an event starts, on its own clock and naming its zone ("Tuesday 17 November, 14:00 (CET)"); UTC when it has none. */
+function eventWhen(calendarEvent: { startTime: Date; timezone?: string | null }): string {
+  return formatEventTime(calendarEvent.startTime, calendarEvent.timezone, 'long');
+}
+
 // ─── An in-person event's place, in an event email (30 Oct 2026) ───────────────────────────────
 
 /**
@@ -600,6 +618,10 @@ interface InviteEmailData {
     sessionId?: string;
     /** Where an in-person event happens (30 Oct 2026); absent for an event online. */
     place?: string;
+    /** The event's own zone (Part 3 Task 1): the When line is on its clock. Absent: UTC, named. */
+    timezone?: string | null;
+    /** The event's image (Part 3 Task 1), shown at the head of the email; absent or null: none. */
+    imageUrl?: string | null;
   };
 }
 
@@ -635,6 +657,8 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
     ? 'Joining takes a few minutes: a short conversation about who you want to meet, and you are in.'
     : '';
   const place = inPersonLines(data.calendarEvent);
+  // Part 3 Task 1 (spec 03, "every email"): an event invite says when, on the event's clock, and shows its image.
+  const when = data.calendarEvent ? `When: ${eventWhen(data.calendarEvent)}` : '';
 
   const html = `
     <!DOCTYPE html>
@@ -646,10 +670,12 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
     <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         ${emailCardOpen()}
+          ${eventImageHead(data.calendarEvent?.imageUrl)}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             ${openingHtml}
           </p>
+          ${when ? `<p data-when style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 16px 0;">${escapeHtml(when)}</p>` : ''}
           <p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 16px 0;">
             ${whatItIs}
           </p>
@@ -678,7 +704,7 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
     </html>
   `;
 
-  const text = [openingText, '', whatItIs, whatHappensNext, ...(place.text ? ['', place.text] : []), '', `Accept Invite: ${data.inviteUrl}`, '', 'REASON — Meet people you have a reason to know.']
+  const text = [openingText, ...(when ? ['', when] : []), '', whatItIs, whatHappensNext, ...(place.text ? ['', place.text] : []), '', `Accept Invite: ${data.inviteUrl}`, '', 'REASON — Meet people you have a reason to know.']
     .filter((line, i, all) => !(line === '' && all[i - 1] === ''))
     .join('\n');
 
@@ -732,16 +758,23 @@ interface RegistrationConfirmationData {
     sessionId?: string;
     /** Where an in-person event happens (30 Oct 2026); absent for an event online. */
     place?: string;
+    /** The event's own zone (Part 3 Task 1): the time is on its clock, named. Absent: UTC, named. */
+    timezone?: string | null;
+    /** The event's image (Part 3 Task 1), shown at the head of the email; absent or null: none. */
+    imageUrl?: string | null;
   };
 }
 
-export async function sendSessionRegistrationConfirmationEmail(
-  to: string,
-  data: RegistrationConfirmationData,
-): Promise<void> {
+/**
+ * The "you're registered" email, built without sending (testable). Part 3 Task 1: the time is the event's wall clock
+ * with its zone named ("Tuesday 17 November, 14:00 (CET)"), where it used to be a raw GMT timestamp, and an event with
+ * an image shows it at the head.
+ */
+export function buildRegistrationConfirmationEmail(data: RegistrationConfirmationData): { subject: string; html: string; text: string } {
   const greetingName = data.recipientName ? ` ${escapeHtml(data.recipientName)}` : '';
-  const whenLine = data.calendarEvent
-    ? `<p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 8px 0;text-align:center;">${escapeHtml(data.calendarEvent.startTime.toUTCString())}</p>`
+  const when = data.calendarEvent ? eventWhen(data.calendarEvent) : '';
+  const whenLine = when
+    ? `<p data-when style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 8px 0;text-align:center;">${escapeHtml(when)}</p>`
     : '';
   const calendarNote = data.calendarEvent
     ? `<p style="color:#64748b;font-size:13px;line-height:1.5;margin:20px 0 0 0;text-align:center;">A calendar invite is attached — add it to get a reminder 15 minutes before.</p>`
@@ -758,6 +791,7 @@ export async function sendSessionRegistrationConfirmationEmail(
     <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         ${emailCardOpen()}
+          ${eventImageHead(data.calendarEvent?.imageUrl)}
           <h1 style="color:#1a1a2e;font-size:22px;font-weight:700;margin:0 0 16px 0;text-align:center;">You're registered${greetingName}!</h1>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;text-align:center;">
             You're all set for <strong>${escapeHtml(data.sessionTitle)}</strong>.
@@ -780,9 +814,18 @@ export async function sendSessionRegistrationConfirmationEmail(
     </html>
   `;
 
+  const placeText = place.text ? `\n\n${place.text}` : '';
+  const whenText = when ? `\n\nWhen: ${when}` : '';
+  const text = `You're registered for ${data.sessionTitle}.${data.calendarEvent ? ' A calendar invite is attached.' : ''}${whenText}${placeText}\n\nView event: ${data.sessionUrl}\n\nREASON — Meet people you have a reason to know.`;
+  return { subject, html, text };
+}
+
+export async function sendSessionRegistrationConfirmationEmail(
+  to: string,
+  data: RegistrationConfirmationData,
+): Promise<void> {
+  const { subject, html, text } = buildRegistrationConfirmationEmail(data);
   if (config.resendApiKey) {
-    const placeText = place.text ? `\n\n${place.text}` : '';
-    const text = `You're registered for ${data.sessionTitle}.${data.calendarEvent ? ' A calendar invite is attached.' : ''}${placeText}\n\nView event: ${data.sessionUrl}\n\nREASON — Meet people you have a reason to know.`;
     const attachments: { filename: string; content: string }[] = [];
 
     if (data.calendarEvent) {
@@ -1515,12 +1558,12 @@ export async function sendMeetingReminderEmail(
 // ─── Event-cancelled email (Part 2 foundation, Task 2) ──────────────────────
 // Sent by event-lifecycle.service.ts to each person who held a place (and each co-host) when an event is cancelled,
 // only while their notify_email is on and the admin switch for 'event_cancelled' is on (email_config, seeded on by
-// migration 135). This only renders and sends; `when` is already in the recipient's own zone.
+// migration 135). This only renders and sends; `when` is already on the event's own clock, named (Part 3 Task 1).
 export interface EventCancelledEmailData {
   eventTitle: string;
   /** Who cancelled it, as the email names them. */
   hostName: string;
-  /** The event's planned start, in the recipient's own zone and named ("Tuesday 17 November, 14:00 (CET)"). */
+  /** The event's planned start, on the event's clock and named ("Tuesday 17 November, 14:00 (CET)"). */
   when: string;
   /** The organiser's own words, when they gave any. */
   reason: string | null;
@@ -1560,13 +1603,16 @@ export async function sendEventCancelledEmail(to: string, data: EventCancelledEm
 // Sent by the event reminder worker (24 hours and 1 hour before) and by notifyEventRescheduled (event-notices.ts), only
 // while the person's notify_email is on and the admin switch for 'event_reminder' / 'event_rescheduled' is on
 // (email_config, seeded on by migration 135), and only while EVENT_COMMS is 'on'. These only render and send; every
-// time is already written for the recipient ("in 1 hour", "tomorrow at 18:00", or a full day and zone).
+// time is already written on the event's own clock with its zone named ("in 1 hour", "tomorrow at 18:00 (CET)", or a
+// full day and zone; Part 3 Task 1).
 export interface EventReminderEmailData {
   eventTitle: string;
-  /** How soon it starts, as the recipient reads it ("in 1 hour", "tomorrow at 18:00"). */
+  /** How soon it starts, on the event's clock ("in 1 hour", "tomorrow at 18:00 (CET)"). */
   when: string;
   /** The event's page. */
   link: string;
+  /** The event's image (Part 3 Task 1), shown at the head; absent or null: none. */
+  imageUrl?: string | null;
 }
 
 export async function sendEventReminderEmail(to: string, data: EventReminderEmailData): Promise<SendEmailResult> {
@@ -1576,6 +1622,7 @@ export async function sendEventReminderEmail(to: string, data: EventReminderEmai
     <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         ${emailCardOpen()}
+          ${eventImageHead(data.imageUrl)}
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Event reminder</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 20px 0;">
             <strong>${escapeHtml(data.eventTitle)}</strong> starts ${escapeHtml(data.when)}.
@@ -1596,7 +1643,7 @@ REASON — Meet people you have a reason to know.`;
 
 export interface EventRescheduledEmailData {
   eventTitle: string;
-  /** Where it was, in the recipient's own zone and named ("Tuesday 17 November, 14:00 (CET)"). */
+  /** Where it was, on the event's clock and named ("Tuesday 17 November, 14:00 (CET)"). */
   previousWhen: string;
   /** Where it is now, written the same way. */
   when: string;

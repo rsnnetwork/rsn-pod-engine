@@ -14,9 +14,10 @@ import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
-import { CircleAccess, CircleEntityLink, CircleJoinPolicy, ErrorCodes, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { CircleAccess, CircleEntityLink, CircleJoinPolicy, ErrorCodes, UserRole, eventZone, hasRoleAtLeast } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 import { visibleEventsSql } from '../session/event-access';
+import { eventImageColumns, eventImageUrlOf } from '../session/event-image-url';
 import {
   CircleAccessRow, circleAccessColumns, isCircleManager, isPlatformAdmin, toCircleAccess,
 } from './circle-managers';
@@ -73,8 +74,13 @@ export interface CircleDetail extends CircleSummary {
     role: string; joinedAt: Date;
   }>;
   pods: Array<{ podId: string; name: string; description: string | null }>;
-  /** T13: `forCircle` (additive) is true for an event made for this circle, false for an attached pod's event. */
-  upcomingEvents: Array<{ id: string; title: string; scheduledAt: Date; podId: string; forCircle: boolean }>;
+  /**
+   * T13: `forCircle` (additive) is true for an event made for this circle, false for an attached pod's event.
+   * Part 3 Task 1 (additive): each event's IANA zone (its time reads on that clock) and its image (null: none).
+   */
+  upcomingEvents: Array<{
+    id: string; title: string; scheduledAt: Date; podId: string; forCircle: boolean; timezone: string; imageUrl: string | null;
+  }>;
   children: Array<{ id: string; name: string; memberCount: number }>;
   /** T15 (additive): the entities linked to it (at most 50, none archived); empty on a locked circle. */
   entities: CircleEntityLink[];
@@ -442,8 +448,12 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
        WHERE cp.circle_id = $1 AND ${visiblePodSql('p', '$2', '$3')} ORDER BY cp.created_at ASC`,
       [circleId, userId, seesEveryEvent],
     ),
-    access.locked ? none : query<{ id: string; title: string; scheduled_at: Date; pod_id: string; for_circle: boolean }>(
-      `SELECT s.id, s.title, s.scheduled_at, s.pod_id, (s.circle_id IS NOT DISTINCT FROM $1::uuid) AS for_circle
+    access.locked ? none : query<{
+      id: string; title: string; scheduled_at: Date; pod_id: string; for_circle: boolean;
+      timezone: string | null; has_image: boolean | null; image_updated_at: Date | null;
+    }>(
+      `SELECT s.id, s.title, s.scheduled_at, s.pod_id, (s.circle_id IS NOT DISTINCT FROM $1::uuid) AS for_circle,
+              s.timezone, ${eventImageColumns('s')}
        FROM sessions s
        WHERE (s.circle_id = $1 OR s.pod_id IN (SELECT pod_id FROM circle_pods WHERE circle_id = $1))
          AND s.status = 'scheduled' AND s.scheduled_at > NOW()
@@ -474,6 +484,7 @@ export async function getCircleDetail(circleId: string, userId: string, userRole
     pods: pods.rows.map(p => ({ podId: p.pod_id, name: p.name, description: p.description })),
     upcomingEvents: events.rows.map(e => ({
       id: e.id, title: e.title, scheduledAt: e.scheduled_at, podId: e.pod_id, forCircle: !!e.for_circle,
+      timezone: eventZone(e.timezone), imageUrl: eventImageUrlOf(e.id, e),
     })),
     children: children.rows.map(ch => ({ id: ch.id, name: ch.name, memberCount: ch.member_count })),
     entities,

@@ -246,6 +246,9 @@ describe('the landing', () => {
       title: 'Founders breakfast',
       description: 'Coffee and introductions',
       scheduledAt: world.events[0].scheduled_at!.toISOString(),
+      // Part 3 Task 1 (additive): the event's zone (none on this row: UTC) and its image (none).
+      timezone: 'UTC',
+      imageUrl: null,
       durationMinutes: expect.any(Number),
       format: 'speed_networking',
       host: { displayName: 'Stefan Host', avatarUrl: null },

@@ -49,7 +49,7 @@ import {
   CLAIM_SQL, DUE_EVENTS_SQL, EVENT_REMINDERS_PER_TICK, EVENT_REMINDER_INTERVAL_MS, EVENT_REPORT_REPEAT_MS,
   OWED_SQL, processEventReminders, reminderKindFor, resetEventReminderReport,
 } from '../../../services/session/event-reminder.worker';
-import { relativeEventWhen } from '../../../services/session/event-notices';
+import { relativeEventTime } from '@rsn/shared';
 
 const mutableConfig = config as unknown as { eventComms: 'off' | 'report' | 'on' };
 
@@ -66,6 +66,7 @@ const uid = (n: number) => `uuuuuuuu-0000-4000-8000-${String(n).padStart(12, '0'
 interface FakeEvent {
   id: string; title: string; scheduled_at: Date | null; status: string; publication: string;
   archived_at: Date | null; registration_opens_at: Date | null;
+  timezone: string | null; has_image: boolean; image_updated_at: Date | null;
 }
 interface FakeUser {
   id: string; email: string | null; timezone: string | null; status: string; notify_email: boolean; notify_event_reminders: boolean;
@@ -87,7 +88,7 @@ const sendKey = (sessionId: string, userId: string, kind: string, scheduledFor: 
 
 const event = (extra: Partial<FakeEvent> = {}): FakeEvent => ({
   id: EVENT_ID, title: 'Founders evening', scheduled_at: at(23 * HOUR), status: 'scheduled', publication: 'published',
-  archived_at: null, registration_opens_at: null, ...extra,
+  archived_at: null, registration_opens_at: null, timezone: null, has_image: false, image_updated_at: null, ...extra,
 });
 const user = (id: string, extra: Partial<FakeUser> = {}): FakeUser => ({
   id, email: `${id}@example.test`, timezone: null, status: 'active', notify_email: true, notify_event_reminders: true, ...extra,
@@ -256,19 +257,25 @@ describe('processEventReminders: on, an event 23 hours away', () => {
     expect([...world.sends.values()].every((s) => s.emailed)).toBe(true);
   });
 
-  it('writes the bell in each person\'s own zone: "{title} starts tomorrow at 16:00" for Karachi, 11:00 for UTC', async () => {
-    world.users = [user(HOST, { timezone: 'Asia/Karachi' }), user(COHOST), user(uid(1)), user(uid(2))];
+  it('writes every bell on the event\'s clock, naming its zone, whatever each person\'s own zone (Part 3 Task 1)', async () => {
+    world.events = [event({ timezone: 'Asia/Karachi' })];
+    world.users = [user(HOST, { timezone: 'Europe/Copenhagen' }), user(COHOST), user(uid(1)), user(uid(2))];
     await run();
     const bell = (id: string) => world.bells.find((b) => b.user_id === id)!.title;
-    expect(bell(HOST)).toBe('Founders evening starts tomorrow at 16:00');
-    expect(bell(uid(1))).toBe('Founders evening starts tomorrow at 11:00');
+    expect(bell(HOST)).toBe('Founders evening starts tomorrow at 16:00 (GMT+5)');
+    expect(bell(uid(1))).toBe('Founders evening starts tomorrow at 16:00 (GMT+5)');
+  });
+
+  it('an event with no zone of its own reads UTC, and says so', async () => {
+    await run();
+    expect(world.bells.every((b) => b.title === 'Founders evening starts tomorrow at 11:00 (UTC)')).toBe(true);
   });
 
   it('emails "Reminder: ..." data with the relative time and the event page, through the bulk lane', async () => {
     await run();
     const [to, data] = mockSendReminder.mock.calls.find(([address]) => address === `${uid(1)}@example.test`)!;
     expect(to).toBe(`${uid(1)}@example.test`);
-    expect(data).toEqual({ eventTitle: 'Founders evening', when: 'tomorrow at 11:00', link: `https://app.rsn.network/sessions/${EVENT_ID}` });
+    expect(data).toEqual({ eventTitle: 'Founders evening', when: 'tomorrow at 11:00 (UTC)', link: `https://app.rsn.network/sessions/${EVENT_ID}`, imageUrl: null });
   });
 
   it('pushes each bell to the person\'s screens and tells them to refetch their notifications', async () => {
@@ -440,7 +447,7 @@ describe('processEventReminders: report mode', () => {
     expect(world.bells).toHaveLength(0);
     expect(mockSendReminder).not.toHaveBeenCalled();
     expect(mockEmailEnabled).not.toHaveBeenCalled();
-    expect(mockQuery.mock.calls.every(([sql]) => !/INSERT|UPDATE/i.test(String(sql)))).toBe(true);
+    expect(mockQuery.mock.calls.every(([sql]) => !/\b(INSERT|UPDATE)\b/i.test(String(sql)))).toBe(true);
     expect(mockInfo).toHaveBeenCalledTimes(1);
     const [fields, message] = mockInfo.mock.calls[0];
     expect(fields).toMatchObject({ mode: 'report', people: 4, events: [{ sessionId: EVENT_ID, kind: '24h', people: 4 }] });
@@ -472,19 +479,19 @@ describe('the database\'s clock', () => {
   });
 });
 
-describe('relativeEventWhen', () => {
+describe('relativeEventTime (shared, Part 3 Task 1: the event\'s clock, its zone named)', () => {
   const from = new Date('2026-11-12T12:00:00.000Z');
   it.each([
     [59 * MIN, null, 'in 59 minutes'],
     [60 * MIN, null, 'in 1 hour'],
     [MIN, null, 'in 1 minute'],
     [3 * HOUR, null, 'in 3 hours'],
-    [6 * HOUR, null, 'today at 18:00'],
-    [23 * HOUR, null, 'tomorrow at 11:00'],
-    [23 * HOUR, 'Asia/Karachi', 'tomorrow at 16:00'],
-    [23 * HOUR, 'Not/AZone', 'tomorrow at 11:00'],
+    [6 * HOUR, null, 'today at 18:00 (UTC)'],
+    [23 * HOUR, null, 'tomorrow at 11:00 (UTC)'],
+    [23 * HOUR, 'Asia/Karachi', 'tomorrow at 16:00 (GMT+5)'],
+    [23 * HOUR, 'Not/AZone', 'tomorrow at 11:00 (UTC)'],
     [-MIN, null, 'now'],
   ])('%i ms ahead in %s reads "%s"', (ahead, zone, expected) => {
-    expect(relativeEventWhen(new Date(from.getTime() + (ahead as number)), from, zone as string | null)).toBe(expected);
+    expect(relativeEventTime(new Date(from.getTime() + (ahead as number)), from, zone as string | null)).toBe(expected);
   });
 });

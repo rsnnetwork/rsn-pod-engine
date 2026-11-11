@@ -640,6 +640,22 @@ export const pictureSourceLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// An event's image (10 Nov 2026 spec, Part 3 Task 1): public, because an <img> sends no token, and opened by the event
+// page, the lists and the call landing. At an in-person event a whole room behind one venue's Wi-Fi opens the landing
+// at once, so the image has its own bucket, five times the banner's: 600 reads a minute per client (a signed-in reader
+// by their account, everyone else by their network address). Each device then keeps it for a day (?v= changes the
+// address when the image does).
+export const EVENT_IMAGE_READS_PER_CLIENT = 600;
+export const eventImageReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: EVENT_IMAGE_READS_PER_CLIENT,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-image-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 export const bannerReadLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 120,

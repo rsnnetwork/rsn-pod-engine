@@ -99,12 +99,12 @@ describe('the registration confirmation', () => {
     expect(ics()).toContain('LOCATION:The Ivy\\, 1-5 West St\\, London');
   });
 
-  it('an online event is as before', async () => {
+  it('an online event is as before, with its time now on the event\'s clock (Part 3 Task 1: none here, so UTC, named)', async () => {
     await emailService.sendSessionRegistrationConfirmationEmail('delivered+ana@resend.dev', {
       recipientName: 'Ana', sessionTitle: 'Founders dinner', sessionUrl: 'https://app.rsn.network/sessions/s-1', calendarEvent: online,
     });
     expect(sent().html).not.toContain('In person');
-    expect(sent().text).toBe("You're registered for Founders dinner. A calendar invite is attached.\n\nView event: https://app.rsn.network/sessions/s-1\n\nREASON — Meet people you have a reason to know.");
+    expect(sent().text).toBe("You're registered for Founders dinner. A calendar invite is attached.\n\nWhen: Friday 20 November, 19:00 (UTC)\n\nView event: https://app.rsn.network/sessions/s-1\n\nREASON — Meet people you have a reason to know.");
     expect(ics()).toContain('LOCATION:https://app.rsn.network/sessions/s-1');
   });
 });

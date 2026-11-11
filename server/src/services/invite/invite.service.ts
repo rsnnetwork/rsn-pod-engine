@@ -5,8 +5,9 @@ import { customAlphabet } from 'nanoid';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
-  Invite, InviteStatus, InviteType, CreateInviteInput, Session, ErrorCodes,
+  Invite, InviteStatus, InviteType, CreateInviteInput, Session, ErrorCodes, formatEventTime,
 } from '@rsn/shared';
+import { eventImageColumns, eventImageUrlOf } from '../session/event-image-url';
 import { NotFoundError, ConflictError, AppError, ForbiddenError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
@@ -324,6 +325,8 @@ export interface InviteContext {
   calendarEvent?: InviteCalendarEvent;
   /** When the event starts (ISO), for the bell; null for a pod, a circle or an unscheduled event. */
   scheduledAt: string | null;
+  /** The event's own zone (Part 3 Task 1, K1): the bell's time is on its clock, named. Null for a pod or a circle. */
+  timezone?: string | null;
 }
 
 export async function buildInviteContext(
@@ -351,13 +354,19 @@ export async function buildInviteContext(
   }
   let calendarEvent: InviteCalendarEvent | undefined = undefined;
   let scheduledAt: string | null = null;
+  let timezone: string | null = null;
   if (type === InviteType.SESSION && target.sessionId) {
-    const sessionResult = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: Record<string, unknown>; event_format?: string | null }>(
-      'SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions WHERE id = $1', [target.sessionId]
+    const sessionResult = await query<{
+      title: string; scheduled_at: string | null; host_user_id: string; config: Record<string, unknown>; event_format?: string | null;
+      timezone: string | null; has_image: boolean | null; image_updated_at: Date | null;
+    }>(
+      `SELECT title, scheduled_at, host_user_id, config, event_format, timezone, ${eventImageColumns('sessions')}
+         FROM sessions WHERE id = $1`, [target.sessionId]
     );
     const session = sessionResult.rows[0];
     targetName = session?.title;
     scheduledAt = session?.scheduled_at ?? null;
+    timezone = session?.timezone ?? null;
 
     // Build calendar event data if session has a scheduled time
     if (session?.scheduled_at) {
@@ -379,13 +388,15 @@ export async function buildInviteContext(
         organizerEmail: host?.email,
         sessionId: target.sessionId,
         place: eventPlaceOf(session),
+        timezone: session.timezone,
+        imageUrl: eventImageUrlOf(target.sessionId, session),
       };
     }
   }
   return {
     type, podId: target.podId ?? null, sessionId: target.sessionId ?? null,
     circleId: type === InviteType.CIRCLE ? target.circleId ?? null : null,
-    inviterName, targetName, calendarEvent, scheduledAt,
+    inviterName, targetName, calendarEvent, scheduledAt, timezone,
   };
 }
 
@@ -475,8 +486,8 @@ export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery):
   let notifBody = `Invite from ${inviterName}`;
   if (type === InviteType.SESSION && ctx.sessionId) {
     if (ctx.scheduledAt) {
-      const d = new Date(ctx.scheduledAt);
-      notifBody = `${targetName || 'Event'} · ${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+      // Part 3 Task 1 (K1): on the event's clock, its zone named ("Tue 17 Nov, 14:00 CET"), never the server's.
+      notifBody = `${targetName || 'Event'} · ${formatEventTime(ctx.scheduledAt, ctx.timezone, 'short')}`;
     }
   } else if (type === InviteType.POD) {
     notifBody = `Join ${targetName || 'this pod'} — invited by ${inviterName}`;

@@ -13,7 +13,9 @@ import {
   liveKindOf, eventDurationMinutes, missingRequired, IN_PERSON_ENABLED_CLIENTS, type SessionCircle,
   type EventPublication,
   type AdmittedVia,
+  canonicalTimeZone, FALLBACK_TIME_ZONE,
 } from '@rsn/shared';
+import { eventImageUrl } from './event-image-url';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import { activeMemberSql } from '../users/active-member';
@@ -48,8 +50,38 @@ const SESSION_COLUMNS = `
   archived_at AS "archivedAt",
   cancelled_at AS "cancelledAt",
   cancel_reason AS "cancelReason",
+  timezone,
+  (image_blob IS NOT NULL) AS "hasImage", image_updated_at AS "imageUpdatedAt",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
+
+/** A sessions row as SESSION_COLUMNS reads it: whether there is an image and when it changed, not yet its address. */
+type SessionRow = Omit<Session, 'imageUrl'> & { hasImage?: boolean | null; imageUpdatedAt?: Date | string | null };
+
+/**
+ * Part 3 Task 1: the one mapper that gives every Session-shaped answer its image's address (eventImageUrl), in place
+ * of the two columns it is made from.
+ */
+export function withEventImageUrl<T extends SessionRow>(row: T): Omit<T, 'hasImage' | 'imageUpdatedAt'> & { imageUrl: string | null } {
+  const { hasImage, imageUpdatedAt, ...rest } = row;
+  return { ...rest, imageUrl: eventImageUrl(row.id, !!hasImage, imageUpdatedAt ?? null) };
+}
+
+/** Part 3 Task 1: the refusal for a zone that is not a real IANA zone, at the field. */
+export const EVENT_ZONE_REFUSAL = "Choose the event's time zone from the list.";
+
+/** The zone sent, spelled as the runtime spells it, or a 400 in the forms' words. */
+function eventZoneOrRefuse(zone: string): string {
+  const canonical = canonicalTimeZone(zone);
+  if (!canonical) throw new ValidationError(EVENT_ZONE_REFUSAL, { timezone: [EVENT_ZONE_REFUSAL] });
+  return canonical;
+}
+
+/** A new event's zone when none is sent: the host's own (users.timezone, never checked on the profile form) when real, else UTC. */
+async function hostZone(userId: string): Promise<string> {
+  const found = await query<{ timezone: string | null }>(`SELECT timezone FROM users WHERE id = $1`, [userId]);
+  return canonicalTimeZone(found.rows[0]?.timezone) ?? FALLBACK_TIME_ZONE;
+}
 
 // ─── Event format (26 Oct 2026) ─────────────────────────────────────────────
 
@@ -161,12 +193,15 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   // neither field: the event is published at once, as today, and registration opens with it.
   const publication: EventPublication = input.publication ?? 'published';
   const registrationOpensAt = input.registrationOpensAt ?? null;
+  // Part 3 Task 1 (K1): the zone sent (the new forms), else the host's own when real, else UTC. Production's form sends
+  // none. scheduledAt is an instant either way: the zone only says which clock its times are written on.
+  const timezone = input.timezone !== undefined ? eventZoneOrRefuse(input.timezone) : await hostZone(userId);
 
-  const result = await query<Session>(
+  const result = await query<SessionRow>(
     `INSERT INTO sessions (id, pod_id, title, description, scheduled_at, config, host_user_id, event_format, visibility, circle_id,
-                           publication, published_at, registration_opens_at)
+                           publication, published_at, registration_opens_at, timezone)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-             $11, CASE WHEN $11::text = 'published' THEN NOW() END, $12)
+             $11, CASE WHEN $11::text = 'published' THEN NOW() END, $12, $13)
      RETURNING ${SESSION_COLUMNS}`,
     [
       sessionId,
@@ -182,6 +217,7 @@ export async function createSession(userId: string, input: CreateSessionInput, u
       circle?.id ?? null,
       publication,
       registrationOpensAt,
+      timezone,
     ]
   );
 
@@ -204,11 +240,11 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   if (circle && publication === 'published') await announceCircleEvent({ sessionId, actorId: userId, circle });
 
   logger.info({ sessionId, podId: input.podId, userId, circleId: circle?.id }, 'Session created');
-  return result.rows[0];
+  return withEventImageUrl(result.rows[0]);
 }
 
 export async function getSessionById(sessionId: string): Promise<Session> {
-  const result = await query<Session>(
+  const result = await query<SessionRow>(
     `SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = $1`,
     [sessionId]
   );
@@ -216,7 +252,7 @@ export async function getSessionById(sessionId: string): Promise<Session> {
   if (result.rows.length === 0) {
     throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
   }
-  return result.rows[0];
+  return withEventImageUrl(result.rows[0]);
 }
 
 export async function updateSession(sessionId: string, userId: string, input: UpdateSessionInput, userRole?: UserRole): Promise<Session> {
@@ -322,15 +358,27 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     }
   }
 
+  // Part 3 Task 1 (K1): a new zone for the event's times. The stored instant is kept: the form converts its wall clock
+  // in the zone and sends scheduledAt with it, and the server never reinterprets scheduled_at.
+  if (input.timezone !== undefined) {
+    const zone = eventZoneOrRefuse(input.timezone);
+    if (zone !== session.timezone) {
+      setClauses.push(`timezone = $${paramIdx}`);
+      values.push(zone);
+      paramIdx++;
+    }
+  }
+
   if (setClauses.length === 0) {
     return session;
   }
 
   values.push(sessionId);
-  const result = await query<Session>(
+  const updated = await query<SessionRow>(
     `UPDATE sessions SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING ${SESSION_COLUMNS}`,
     values
   );
+  const result = { rows: updated.rows.map(withEventImageUrl) };
 
   // A draft's circle is told nothing yet (Part 2 Task 2): publishing it rings the circle it names then.
   if (circleChanges && session.publication !== 'draft') {
@@ -422,7 +470,7 @@ export async function listSessions(params: {
   const total = parseInt(countResult.rows[0].count, 10);
 
   values.push(pageSize, offset);
-  const result = await query<Session & { podName?: string; hostDisplayName?: string }>(
+  const result = await query<SessionRow & { podName?: string; hostDisplayName?: string }>(
     `SELECT s.id, s.pod_id AS "podId", s.title, s.description, s.scheduled_at AS "scheduledAt",
             s.started_at AS "startedAt", s.ended_at AS "endedAt", s.status,
             s.current_round AS "currentRound", s.config, s.host_user_id AS "hostUserId",
@@ -432,6 +480,7 @@ export async function listSessions(params: {
             s.circle_id AS "circleId",
             s.publication, s.registration_opens_at AS "registrationOpensAt",
             s.archived_at AS "archivedAt", s.cancelled_at AS "cancelledAt",
+            s.timezone, (s.image_blob IS NOT NULL) AS "hasImage", s.image_updated_at AS "imageUpdatedAt",
             p.name AS "podName",
             u.display_name AS "hostDisplayName"
      FROM sessions s
@@ -443,7 +492,7 @@ export async function listSessions(params: {
     values
   );
 
-  return { sessions: result.rows, total };
+  return { sessions: result.rows.map(withEventImageUrl), total };
 }
 
 // ─── Participant Registration ───────────────────────────────────────────────
@@ -497,7 +546,7 @@ export async function registerParticipant(
     // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously.
     // Part 2 Task 5: whether the event has matching groups is read in the same row, so an event without them
     // (every event before groups existed) makes exactly the reads it always made.
-    const sessionResult = await client.query<Session & { hasEventGroups?: boolean }>(
+    const sessionResult = await client.query<SessionRow & { hasEventGroups?: boolean }>(
       `SELECT ${SESSION_COLUMNS},
               EXISTS (SELECT 1 FROM event_groups eg WHERE eg.session_id = sessions.id) AS "hasEventGroups"
          FROM sessions WHERE id = $1`,
@@ -906,13 +955,15 @@ export async function updateSessionStatus(
   }
 
   values.push(sessionId);
-  const result = await query<Session>(
+  const result = await query<SessionRow>(
     `UPDATE sessions SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING ${SESSION_COLUMNS}`,
     values
   );
 
   logger.info({ sessionId, status }, 'Session status updated');
-  return result.rows[0];
+  // A row that is gone answers nothing, as before (no address to make).
+  const row = result.rows[0];
+  return (row ? withEventImageUrl(row) : row) as Session;
 }
 
 // Valid participant status transitions. A null source means "from any state".

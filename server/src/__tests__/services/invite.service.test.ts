@@ -57,7 +57,7 @@ const worldAnswersForEvents = (sql: string) => {
   if (/max_invites_per_day/.test(sql)) return { rows: [{ max_invites_per_day: 100 }] };
   if (/COUNT\(\*\) as count FROM invites/.test(sql)) return { rows: [{ count: '0' }] };
   if (/SELECT email FROM users WHERE id = \$1/.test(sql)) return { rows: [{ email: 'host@example.com' }] };
-  if (/SELECT title, scheduled_at, host_user_id, config, event_format FROM sessions/.test(sql)) {
+  if (/SELECT title, scheduled_at, host_user_id, config, event_format, timezone, [\s\S]*?FROM sessions/.test(sql)) {
     return { rows: [{ title: 'Test Session', scheduled_at: null, host_user_id: 'user-host', config: {}, event_format: 'speed_networking' }] };
   }
   if (/FROM sessions WHERE id = \$1/.test(sql)) return { rows: [{ id: 'session-123', status: 'scheduled', hostUserId: 'user-host' }] };

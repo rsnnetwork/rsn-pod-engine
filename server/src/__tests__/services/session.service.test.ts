@@ -35,9 +35,15 @@ const mockSession = {
   config: DEFAULT_SESSION_CONFIG,
   hostUserId: 'user-host',
   lobbyRoomId: null,
+  timezone: 'UTC',
+  hasImage: false,
+  imageUpdatedAt: null,
   createdAt: new Date(),
   updatedAt: new Date(),
 };
+// Part 3 Task 1: what a Session-shaped answer is made of the row: the image's address instead of the two image columns.
+const { hasImage: _hasImage, imageUpdatedAt: _imageUpdatedAt, ...answeredSession } = mockSession;
+const expectedSession = { ...answeredSession, imageUrl: null };
 
 describe('Session Service', () => {
   beforeEach(() => {
@@ -51,7 +57,7 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [mockSession], rowCount: 1 });
 
       const session = await sessionService.getSessionById('session-123');
-      expect(session).toEqual(mockSession);
+      expect(session).toEqual(expectedSession);
     });
 
     it('a missing event is a 404 that says "event" in words, with the code production\'s client knows and no id (H2b review M8)', async () => {
@@ -80,6 +86,8 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active', maxMembers: 50, createdBy: 'user-host' }], rowCount: 1 });
       // podService.getMemberRole — SELECT pod_members
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+      // Part 3 Task 1: the host's own zone, for an event sent without one (none on file: UTC)
+      mockQuery.mockResolvedValueOnce({ rows: [{ timezone: null }], rowCount: 1 });
       // INSERT INTO sessions RETURNING
       mockQuery.mockResolvedValueOnce({ rows: [mockSession], rowCount: 1 });
 
@@ -89,7 +97,7 @@ describe('Session Service', () => {
         scheduledAt: '2025-01-15T18:00:00Z',
       });
 
-      expect(session).toEqual(mockSession);
+      expect(session).toEqual(expectedSession);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO sessions'),
         expect.any(Array),
@@ -371,7 +379,7 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [mockSession], rowCount: 1 });
 
       const result = await sessionService.updateSession('session-123', 'user-host', {});
-      expect(result).toEqual(mockSession);
+      expect(result).toEqual(expectedSession);
     });
   });
 

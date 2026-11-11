@@ -96,7 +96,9 @@ describe('production\'s create body (no circleId)', () => {
     expect(insert[0]).toMatch(/visibility, circle_id,/);
     expect(insert[1].slice(8, 10)).toEqual([null, null]);
     // Part 2 Task 2: production's body sends no lifecycle fields, so the event is published at once, as today.
-    expect(insert[1].slice(10)).toEqual(['published', null]);
+    expect(insert[1].slice(10, 12)).toEqual(['published', null]);
+    // Part 3 Task 1: production's body sends no zone, so the event takes the host's own when real, else UTC.
+    expect(insert[1].slice(12)).toEqual(['UTC']);
     expect(sqlSent().some((sql) => /circles|circle_members|INSERT INTO notifications/.test(sql))).toBe(false);
   });
 });
@@ -209,7 +211,7 @@ describe('the audience fragment', () => {
     const facts: EventAccessFacts = {
       visibility: 'private', podId: POD_ID, podVisibility: 'private', isHost: false, isCohost: false, isPodOrganiser: false,
       inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
-      publication: 'published', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
+      publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
       admissionMode: null, entitled: false, entitledVia: null,
     };
     expect(canSeeEvent(facts, UserRole.MEMBER)).toBe(true);

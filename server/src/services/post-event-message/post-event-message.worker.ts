@@ -29,6 +29,7 @@
 //     two runs then share the people still pending until the older one reaches the end of its list.
 
 import type { Server as SocketServer } from 'socket.io';
+import { formatEventTime } from '@rsn/shared';
 import { query } from '../../db';
 import logger from '../../config/logger';
 import { getRedisClient } from '../redis/redis.client';
@@ -74,15 +75,6 @@ interface RecipientRow {
   /** Whether either person has blocked the other, as of this read. */
   blocked: boolean;
 }
-
-// ─── Date formatter ───────────────────────────────────────────────────────────
-
-const dateFormatter = new Intl.DateTimeFormat('en-GB', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-});
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
 
@@ -171,14 +163,15 @@ async function _runWorkerCycle(io: SocketServer): Promise<void> {
     progressAudience = await resolveProgressAudience(sessionId, createdBy);
 
     // ── 4. Load context once ─────────────────────────────────────────────────
-    const sessionResult = await query<{ title: string; ended_at: Date | null; scheduled_at: Date }>(
-      `SELECT title, ended_at, scheduled_at FROM sessions WHERE id = $1`,
+    const sessionResult = await query<{ title: string; ended_at: Date | null; scheduled_at: Date; timezone: string | null }>(
+      `SELECT title, ended_at, scheduled_at, timezone FROM sessions WHERE id = $1`,
       [sessionId],
     );
     const sessionRow = sessionResult.rows[0];
     const eventTitle = sessionRow?.title ?? 'the event';
     const rawDate = sessionRow?.ended_at ?? sessionRow?.scheduled_at ?? new Date();
-    const eventDate = dateFormatter.format(new Date(rawDate));
+    // Part 3 Task 1 (K1): the event's day on its own clock ("Tue 17 Nov 2026"), never the server's.
+    const eventDate = formatEventTime(rawDate, sessionRow?.timezone, 'day');
 
     const senderResult = await query<{ first_name: string | null; display_name: string | null }>(
       `SELECT first_name, display_name FROM users WHERE id = $1`,

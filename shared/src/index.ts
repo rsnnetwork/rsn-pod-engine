@@ -315,3 +315,21 @@ export const REAUTH_REQUIRED_MESSAGE = _REAUTH_REQUIRED_MESSAGE;
 export const isReauthScope = _isReauthScope;
 export const isAdminRole = _isAdminRole;
 export const touchesAdminRole = _touchesAdminRole;
+
+// An event's time in the event's own zone (10 Nov 2026 spec, Part 3 Task 1; K1): VALUES the server writes every bell
+// and email with and the client writes every event time with, so each has its own statically analysable named export,
+// same as OPENINGS above.
+export * from './events/event-time';
+import {
+  FALLBACK_TIME_ZONE as _FALLBACK_TIME_ZONE, canonicalTimeZone as _canonicalTimeZone, eventZone as _eventZone,
+  formatEventTime as _formatEventTime, relativeEventTime as _relativeEventTime,
+  zonedWallTimeToUtc as _zonedWallTimeToUtc, utcToZonedWallTime as _utcToZonedWallTime, timeZoneLabel as _timeZoneLabel,
+} from './events/event-time';
+export const FALLBACK_TIME_ZONE = _FALLBACK_TIME_ZONE;
+export const canonicalTimeZone = _canonicalTimeZone;
+export const eventZone = _eventZone;
+export const formatEventTime = _formatEventTime;
+export const relativeEventTime = _relativeEventTime;
+export const zonedWallTimeToUtc = _zonedWallTimeToUtc;
+export const utcToZonedWallTime = _utcToZonedWallTime;
+export const timeZoneLabel = _timeZoneLabel;

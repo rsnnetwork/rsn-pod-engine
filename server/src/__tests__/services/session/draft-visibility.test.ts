@@ -177,7 +177,7 @@ describe('every other list that names an event', () => {
 const facts = (over: Partial<EventAccessFacts> = {}): EventAccessFacts => ({
   visibility: null, podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
   inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
-  publication: 'draft', archived: false, registrationOpensAt: null, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
+  publication: 'draft', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
   admissionMode: null, entitled: false, entitledVia: null,
   ...over,
 });
@@ -197,7 +197,7 @@ describe('canSeeEvent on a draft', () => {
 describe('registration that opens later', () => {
   const later = new Date(Date.now() + 86_400_000);
   it('holds back a member who may register, in words naming when (in their zone); never its organisers or invitees', () => {
-    const f = facts({ publication: 'published', visibility: 'public', registrationOpensAt: later, viewerTimezone: 'Europe/Berlin' });
+    const f = facts({ publication: 'published', visibility: 'public', registrationOpensAt: later, eventTimezone: 'Europe/Berlin' });
     const refused = canRegister(f, UserRole.MEMBER);
     expect(refused).toMatchObject({ ok: false, status: 409, code: 'REGISTRATION_NOT_OPEN' });
     expect(!refused.ok && refused.message).toMatch(/^Registration for this event opens \w+day \d+ \w+, \d{2}:\d{2} \(CES?T\)\.$/);
@@ -331,7 +331,7 @@ function armRoute(world: { exists: boolean; publication?: string; viewerIsHost?:
       return { rows: [{ visibility: null, pod_id: 'pod-1', pod_visibility: 'public', is_host: params?.[1] === HOST, is_cohost: false,
         is_pod_organiser: false, in_audience: true, is_invited: false, participant_status: 'registered', account_active: true,
         my_request: null, outside_closed_circle: false, publication: world.publication ?? 'published', archived: false,
-        registration_opens_at: null, viewer_timezone: null, is_pod_admin: false, places_held: 2 }] };
+        registration_opens_at: null, event_timezone: null, is_pod_admin: false, places_held: 2 }] };
     }
     if (sql.includes('"registrationOpensAt"') && sql.includes('WHERE id = $1')) {
       return { rows: [{ ...productionRow, ...LIFECYCLE_COLUMNS, publication: world.publication ?? 'published' }] };
@@ -370,6 +370,8 @@ describe('GET /sessions/:id', () => {
     expect(before).toEqual({
       ...productionRow,
       participantCount: 3,
+      // Part 3 Task 1 adds `imageUrl` (additive): null for an event with no image.
+      imageUrl: null,
       // Part 2 Task 4 adds `admission` (additive): an event with no mode and no visibility follows its pod's rules.
       access: { visibility: null, mode: 'register', myRequest: null, autoRegister: true, canManageRequests: false, admission: 'pod_rules' },
     });

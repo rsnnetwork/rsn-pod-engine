@@ -125,7 +125,7 @@ export function factsOf(sessionId: string, userId: string) {
     outsideClosedCircle: false, admissionMode: mode, entitled: entitledVia !== null,
     entitledVia: entitledVia as 'allow_list' | 'code' | 'invite' | null,
     publication: (e.publication === 'draft' ? 'draft' : 'published') as 'draft' | 'published', archived: !!e.archived_at,
-    registrationOpensAt: e.registration_opens_at, viewerTimezone: null, isPodAdmin: false, placesHeld: 0,
+    registrationOpensAt: e.registration_opens_at, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
   };
 }
 

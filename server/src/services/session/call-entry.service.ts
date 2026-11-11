@@ -27,7 +27,7 @@
 //   - A guest made by the link is named 'Guest' (users.display_name is NOT NULL); the details step replaces it.
 
 import {
-  ErrorCodes, callLinkPath, cleanCallDisplayName,
+  ErrorCodes, callLinkPath, cleanCallDisplayName, eventZone,
   type AccountKind, type CallEntryState, type CallEventSummary, type EventLifecycle, type UserRole,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
@@ -53,6 +53,7 @@ import {
 import { fanoutEventGroups, getEventGroupRules, setParticipantGroups } from './event-groups.service';
 import { requestToJoin } from './event-requests.service';
 import { registerParticipant } from './session.service';
+import { eventImageColumns, eventImageUrlOf } from './event-image-url';
 import { sendRegistrationEmail } from './registration-email';
 
 export const CALL_EVENT_ENDED_SENTENCE = 'This event has ended.';
@@ -478,6 +479,9 @@ interface MyCallEventRow {
   registration_opens_at: Date | null;
   place: string | null;
   request: string | null;
+  timezone: string | null;
+  has_image: boolean | null;
+  image_updated_at: Date | null;
 }
 
 /** The step a row of listMyCallEvents shows (no reads: the list's own columns decide it). */
@@ -505,7 +509,8 @@ export async function listMyCallEvents(userId: string): Promise<CallEventSummary
        SELECT session_id FROM event_join_requests WHERE user_id = $1 AND status IN ('pending', 'approved', 'declined')
      )
      SELECT s.id, s.call_code, s.title, s.scheduled_at, s.status::text AS status, s.publication, s.archived_at,
-            s.registration_opens_at, sp.status::text AS place, r.status AS request
+            s.registration_opens_at, sp.status::text AS place, r.status AS request,
+            s.timezone, ${eventImageColumns('s')}
        FROM mine
        JOIN sessions s ON s.id = mine.session_id
        LEFT JOIN session_participants sp ON sp.session_id = s.id AND sp.user_id = $1
@@ -525,7 +530,10 @@ export async function listMyCallEvents(userId: string): Promise<CallEventSummary
       ...row, call_code: code, description: null, config: null, event_format: null, visibility: null,
       admission_mode: null, host_user_id: '', host_name: null, host_avatar: null,
     });
-    out.push({ code, title: row.title, scheduledAt: iso(row.scheduled_at), lifecycle, step: stepOfRow(row, lifecycle) });
+    out.push({
+      code, title: row.title, scheduledAt: iso(row.scheduled_at), timezone: eventZone(row.timezone),
+      imageUrl: eventImageUrlOf(row.id, row), lifecycle, step: stepOfRow(row, lifecycle),
+    });
   }
   return out;
 }

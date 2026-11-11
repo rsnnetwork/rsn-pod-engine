@@ -15,6 +15,7 @@ import { AppError } from '../middleware/errors';
 import { query } from '../db';
 import { ApiResponse, InviteType, InviteStatus, InviteBatchResponse } from '@rsn/shared';
 import { eventDurationOf, eventPlaceOf } from '../services/session/event-duration';
+import { eventImageColumns, eventImageUrlOf } from '../services/session/event-image-url';
 
 const router = Router();
 
@@ -438,8 +439,12 @@ router.post(
       const { sessionId } = req.params;
 
       // Only the host, a co-host or an admin can bulk remind (26 Oct 2026: co-hosts send event invites, so they remind them)
-      const sessionResult = await query<{ host_user_id: string; title: string; scheduled_at: string | null; config: any; event_format?: string | null }>(
-        `SELECT host_user_id, title, scheduled_at, config, event_format FROM sessions WHERE id = $1`, [sessionId]
+      const sessionResult = await query<{
+        host_user_id: string; title: string; scheduled_at: string | null; config: any; event_format?: string | null;
+        timezone: string | null; has_image: boolean | null; image_updated_at: Date | null;
+      }>(
+        `SELECT host_user_id, title, scheduled_at, config, event_format, timezone, ${eventImageColumns('sessions')}
+           FROM sessions WHERE id = $1`, [sessionId]
       );
       if (sessionResult.rows.length === 0) {
         return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Event not found' } });
@@ -504,6 +509,9 @@ router.post(
           organizerEmail: host?.email,
           sessionId,
           place: eventPlaceOf(session),
+          // Part 3 Task 1: the reminder says When on the event's clock, and shows its image.
+          timezone: session.timezone,
+          imageUrl: eventImageUrlOf(sessionId, session),
         };
       }
 
@@ -577,6 +585,9 @@ router.get(
       let sessionScheduledAt: string | undefined;
       let sessionDescription: string | undefined;
       let sessionStatus: string | undefined;
+      // Part 3 Task 1: the event's zone (its time reads on that clock) and its image, for the invite page.
+      let sessionTimezone: string | undefined;
+      let sessionImageUrl: string | null | undefined;
 
       // Fetch inviter display name
       const inviterResult = await query<{ displayName: string }>(
@@ -614,17 +625,27 @@ router.get(
 
       // Fetch session details
       if (invite.sessionId) {
-        const sessionResult = await query<{ title: string; scheduledAt: string; description: string; status: string }>(
-          `SELECT title, scheduled_at AS "scheduledAt", description, status FROM sessions WHERE id = $1`,
+        const sessionResult = await query<{
+          title: string; scheduledAt: string; description: string; status: string;
+          timezone: string; has_image: boolean | null; image_updated_at: Date | null;
+        }>(
+          `SELECT title, scheduled_at AS "scheduledAt", description, status, timezone, ${eventImageColumns('sessions')}
+             FROM sessions WHERE id = $1`,
           [invite.sessionId]
         );
-        sessionTitle = sessionResult.rows[0]?.title;
-        sessionScheduledAt = sessionResult.rows[0]?.scheduledAt;
-        sessionDescription = sessionResult.rows[0]?.description;
-        sessionStatus = sessionResult.rows[0]?.status;
+        const found = sessionResult.rows[0];
+        sessionTitle = found?.title;
+        sessionScheduledAt = found?.scheduledAt;
+        sessionDescription = found?.description;
+        sessionStatus = found?.status;
+        sessionTimezone = found?.timezone;
+        sessionImageUrl = found ? eventImageUrlOf(invite.sessionId, found) : undefined;
       }
 
-      const context = { inviterName, podName, podDescription, sessionTitle, sessionScheduledAt, sessionDescription, sessionStatus, circleName, circleDescription };
+      const context = {
+        inviterName, podName, podDescription, sessionTitle, sessionScheduledAt, sessionDescription, sessionStatus,
+        sessionTimezone, sessionImageUrl, circleName, circleDescription,
+      };
 
       // Non-authenticated users see limited invite fields but full context. A signed-in caller sees the whole invite,
       // but its address only if they have a right to it (fix round 2): the invitee, the sender, the event's host or the

@@ -25,7 +25,9 @@ import logger from '../../config/logger';
 import { query } from '../../db';
 import * as emailService from '../email/email.service';
 import { activeMemberSql } from '../users/active-member';
-import { eventPagePath, eventPageUrl, isRemindable, relativeEventWhen, ringEventBells, type EventFacts } from './event-notices';
+import { relativeEventTime } from '@rsn/shared';
+import { eventPagePath, eventPageUrl, isRemindable, ringEventBells, type EventFacts } from './event-notices';
+import { eventImageColumns, eventImageUrlOf } from './event-image-url';
 
 /** How often the server looks for reminders due. */
 export const EVENT_REMINDER_INTERVAL_MS = 60 * 1000;
@@ -56,19 +58,23 @@ interface DueEvent extends EventFacts {
   title: string;
   scheduled_at: Date;
   now_at: Date;
+  /** The event's own zone: "tomorrow at 09:00 (CET)" is judged and written on its clock (Part 3 Task 1, K1). */
+  timezone: string | null;
+  has_image: boolean | null;
+  image_updated_at: Date | null;
 }
 
 interface ClaimedPerson {
   user_id: string;
   email: string | null;
-  timezone: string | null;
   notify_email: boolean | null;
 }
 
 /** Soonest first, the events that start within 24 hours: the claim then splits each by how near its start is. */
 export const DUE_EVENTS_SQL = `
   SELECT s.id, s.title, s.scheduled_at, s.status::text AS status, s.publication, s.archived_at,
-         s.registration_opens_at, COALESCE($1::timestamptz, NOW()) AS now_at
+         s.registration_opens_at, COALESCE($1::timestamptz, NOW()) AS now_at,
+         s.timezone, ${eventImageColumns('s')}
     FROM sessions s
    WHERE s.status = 'scheduled' AND s.publication = 'published' AND s.archived_at IS NULL
      AND s.scheduled_at IS NOT NULL
@@ -83,7 +89,7 @@ export const DUE_EVENTS_SQL = `
  * $3 the event's planned start, $4 now, $5 minutes a person must have been registered, $6 how many at most.
  */
 export const OWED_SQL = `
-  SELECT u.id AS user_id, u.email, u.timezone, u.notify_email
+  SELECT u.id AS user_id, u.email, u.notify_email
     FROM users u
    WHERE ${activeMemberSql('u')} AND u.notify_event_reminders = TRUE
      AND (u.id IN (SELECT sp.user_id FROM session_participants sp
@@ -103,7 +109,7 @@ export const CLAIM_SQL = `
          SELECT $1::uuid, owed.user_id, $2::text, $3::timestamptz FROM owed
          ON CONFLICT (session_id, user_id, kind, scheduled_for) DO NOTHING
          RETURNING user_id)
-  SELECT owed.user_id, owed.email, owed.timezone, owed.notify_email
+  SELECT owed.user_id, owed.email, owed.notify_email
     FROM claimed JOIN owed ON owed.user_id = claimed.user_id`;
 
 /** The kind and the registration age that go with how far away an event's start is. */
@@ -179,13 +185,13 @@ function reportWhoWouldBeTold(wouldTell: Array<{ sessionId: string; kind: Remind
   );
 }
 
-/** The bells (each in the person's own zone), then the emails of those whose email switch is on. */
+/** The bells (on the event's clock, its zone named), then the emails of those whose email switch is on. */
 async function tell(
   event: DueEvent, startsAt: Date, now: Date, kind: ReminderKind, people: ClaimedPerson[],
 ): Promise<{ belled: number; emailed: number }> {
   const belled = await ringEventBells(
     'event_reminder',
-    people.map((p) => ({ userId: p.user_id, title: `${event.title} starts ${relativeEventWhen(startsAt, now, p.timezone)}` })),
+    people.map((p) => ({ userId: p.user_id, title: `${event.title} starts ${relativeEventTime(startsAt, now, event.timezone)}` })),
     'Join from the event page.',
     eventPagePath(event.id),
   );
@@ -201,11 +207,13 @@ async function emailReminders(
     if (wanted.length === 0) return 0;
     if (!(await emailService.isEmailTypeEnabled('event_reminder'))) return 0;
     const link = eventPageUrl(event.id);
+    const when = relativeEventTime(startsAt, now, event.timezone);
+    const imageUrl = eventImageUrlOf(event.id, event);
     const sentTo: string[] = await emailService.asBulkEmail(async () => {
       const sent: string[] = [];
       for (const person of wanted) {
         const result = await emailService.sendEventReminderEmail(person.email as string, {
-          eventTitle: event.title, when: relativeEventWhen(startsAt, now, person.timezone), link,
+          eventTitle: event.title, when, link, imageUrl,
         }).catch((err: unknown) => {
           logger.warn({ err, sessionId: event.id, userId: person.user_id }, 'Event reminder email failed (claimed, not retried)');
           return { sent: false };

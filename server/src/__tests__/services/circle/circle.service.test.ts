@@ -142,7 +142,10 @@ describe('the circle page (T13, 1 Nov 2026)', () => {
     for (const key of ['id', 'name', 'description', 'memberCount', 'isMember', 'members', 'pods', 'upcomingEvents', 'children']) {
       expect(detail).toHaveProperty(key);
     }
-    expect(detail.upcomingEvents[0]).toEqual({ id: 'e1', title: 'For the circle', scheduledAt: expect.any(Date), podId: 'p9', forCircle: true });
+    // Part 3 Task 1 (additive): each event's zone (none on this row: UTC) and its image (none).
+    expect(detail.upcomingEvents[0]).toEqual({
+      id: 'e1', title: 'For the circle', scheduledAt: expect.any(Date), podId: 'p9', forCircle: true, timezone: 'UTC', imageUrl: null,
+    });
     expect(detail.upcomingEvents[1]).toMatchObject({ id: 'e2', podId: 'p1', forCircle: false });
     expect(detail.canManage).toBe(false);
   });
