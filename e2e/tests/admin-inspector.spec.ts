@@ -222,7 +222,8 @@ test('a member reports another member from the profile page, and it appears in t
   await expect(reportEntry).toBeVisible({ timeout: 20_000 });
   await reportEntry.click();
 
-  await reporterPage.getByLabel('Reason').selectOption('inappropriate_content');
+  // Scoped and exact: a bare getByLabel('Reason') also matches the shell's "REASON home" links and marks.
+  await reporterPage.getByTestId('report-form').getByLabel('Reason', { exact: true }).selectOption('inappropriate_content');
   await reporterPage.getByPlaceholder(/helps our team understand/i).fill('Kept sending unsolicited spammy links.');
   await reporterPage.getByRole('button', { name: 'Send report' }).click();
   await expect(reporterPage.getByText('Thanks. The REASON team will review it.')).toBeVisible({ timeout: 15_000 });

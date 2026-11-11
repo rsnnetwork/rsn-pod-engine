@@ -136,6 +136,10 @@ const notReloaded = (page: Page) => page.evaluate(() => (window as unknown as { 
 
 const presenceWord = (page: Page) => page.getByTestId('partner-presence');
 
+/** The report sheet's Reason field. A bare getByLabel('Reason') also matches the shell's two "REASON home" links and
+ *  their "REASON" marks (a label match is a case-insensitive substring), five elements in all. */
+const reasonField = (page: Page) => page.getByTestId('report-form').getByLabel('Reason', { exact: true });
+
 async function noSideways(page: Page, what: string) {
   const fits = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(fits, `${what}: nothing scrolls sideways`).toBe(true);
@@ -245,7 +249,7 @@ test('2) Report member and Report message are labelled, say what happens, choose
   );
   const send = page.getByRole('button', { name: 'Send report' });
   await expect(send, 'no reason is chosen for her').toBeDisabled();
-  await page.getByLabel('Reason').selectOption('harassment');
+  await reasonField(page).selectOption('harassment');
   await send.click();
   await expect(page.getByRole('heading', { name: 'Report sent' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('Thanks. The REASON team will review it.')).toBeVisible();
@@ -260,7 +264,7 @@ test('2) Report member and Report message are labelled, say what happens, choose
   await page.getByRole('menuitem', { name: 'Report message' }).click();
   await expect(page.getByRole('heading', { name: 'Report this message' })).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('report-quote')).toHaveText(`S5 second message ${RUN}`);
-  await page.getByLabel('Reason').selectOption('spam');
+  await reasonField(page).selectOption('spam');
   await page.getByRole('button', { name: 'Send report' }).click();
   await expect(page.getByRole('heading', { name: 'Report sent' })).toBeVisible({ timeout: 20_000 });
   await page.getByRole('button', { name: 'Done' }).click();
@@ -273,7 +277,7 @@ test('2) Report member and Report message are labelled, say what happens, choose
   await bubble.hover();
   await bubble.getByRole('button', { name: 'More actions for this message' }).click();
   await page.getByRole('menuitem', { name: 'Report message' }).click();
-  await page.getByLabel('Reason').selectOption('spam');
+  await reasonField(page).selectOption('spam');
   await page.getByRole('button', { name: 'Send report' }).click();
   await expect(page.getByRole('heading', { name: 'You already reported this.' })).toBeVisible({ timeout: 20_000 });
   await page.getByRole('button', { name: 'Done' }).click();
@@ -476,11 +480,11 @@ test('6b) a block during a call ends it for both: each lands on the thread with 
       // Straight to the thread, with no "How did your meeting go?" about the person just blocked (fix round 2).
       await expect(p, `${who} is back on the thread`).toHaveURL(new RegExp(`/messages/${anaConv}$`), { timeout: 30_000 });
       await expect(p.getByRole('dialog', { name: /How did your meeting with/ }), `${who} is asked nothing`).toHaveCount(0);
-      await expect(p.getByText('The call has ended.'), `${who} is told calmly`).toBeVisible({ timeout: 15_000 });
+      await expect(p.getByText('The call has ended.', { exact: true }).first(), `${who} is told calmly`).toBeVisible({ timeout: 15_000 });
     }
     // Neither gets back in: the call page refuses a new entry while the block stands.
     await gotoRetry(anaPage, `${APP}/meet/${anaConv}?kind=video`);
-    await expect(anaPage.getByText(/cannot call this member|Could not start the call/i)).toBeVisible({ timeout: 30_000 });
+    await expect(anaPage.getByText(/cannot call this member|Could not start the call/i).first()).toBeVisible({ timeout: 30_000 });
     await expect(anaPage.locator('.lk-participant-tile')).toHaveCount(0);
     expect((await pool.query<{ e: number }>(`SELECT call_room_epoch AS e FROM dm_conversations WHERE id = $1`, [anaConv])).rows[0].e, 'the pair moved to a new call room').toBeGreaterThanOrEqual(1);
   } finally {

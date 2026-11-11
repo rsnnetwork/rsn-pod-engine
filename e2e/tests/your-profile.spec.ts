@@ -500,7 +500,8 @@ test(`Report member with "Also block" ticked: the report is sent, they are block
   await expect(page.getByRole('heading', { name: `Report ${REPORTED_NAME}` })).toBeVisible();
   // No reason is chosen for the person (11 Nov 2026): Send report waits for one.
   await expect(page.getByRole('button', { name: 'Send report' })).toBeDisabled();
-  await page.getByLabel('Reason').selectOption('spam');
+  // Scoped and exact: a bare getByLabel('Reason') also matches the shell's "REASON home" links and marks.
+  await page.getByTestId('report-form').getByLabel('Reason', { exact: true }).selectOption('spam');
   await page.getByLabel('Details (optional)').fill(`spec ${run}`);
   await page.getByText(`Also block ${REPORTED_NAME}`).click();
   await page.getByRole('button', { name: 'Send report' }).click();

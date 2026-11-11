@@ -121,6 +121,43 @@ describe('the report sheet', () => {
     expect(src).toContain("...(subject ? { subject: { kind: subject.kind, id: subject.id } } : {}),");
     expect(mutateCalls).toBe(0);
   });
+
+  // Prod smoke (11 Nov): every thread, comment and post keeps a report sheet ready, so a closed one must draw nothing,
+  // or a long thread carries a hidden Reason field per item. Drawn with the real Modal; only the portal, the animation
+  // library and the icons are stood in.
+  it('a closed report sheet draws nothing at all (no form, no Reason field); open, it draws one, portalled', () => {
+    const portalled: unknown[] = [];
+    const Report = loadClientModule('components/ReportUserModal.tsx', {
+      'react-dom': { __esModule: true, createPortal: (node: unknown) => { portalled.push(node); return node; } },
+      'framer-motion': {
+        __esModule: true,
+        AnimatePresence: (p: { children?: unknown }) => (p.children ?? null),
+        motion: { div: (p: { className?: string; children?: unknown }) => createElement('div', { className: p.className }, p.children as never) },
+      },
+      'lucide-react': iconStandIns,
+      '@/components/ui/Button': { __esModule: true, Button: (p: Record<string, unknown>) => createElement('button', { type: p.type as string }, p.children as never) },
+      '@/lib/api': { __esModule: true, default: { post: () => Promise.resolve({}) } },
+      '@tanstack/react-query': { useMutation: () => ({ mutate: () => undefined, reset: () => undefined, isPending: false, isError: false }) },
+      '@/features/messages/voice/composer-drafts': { dropDraftsTo: () => undefined },
+    }).default as (p: Record<string, unknown>) => unknown;
+    const g = globalThis as { document?: unknown };
+    const hadDocument = 'document' in g;
+    if (!hadDocument) g.document = {}; // Modal draws nothing at all without a document (server rendering).
+    try {
+      const props = { onClose: () => undefined, reportedId: 'u-bo', reportedDisplayName: 'Bo', conversationId: 'c-1' };
+      expect(html(createElement(Report as never, { ...props, open: false }))).toBe('');
+      const open = html(createElement(Report as never, { ...props, open: true }));
+      expect(open.match(/data-testid="report-form"/g)).toHaveLength(1);
+      expect(open.match(/id="report-reason"/g)).toHaveLength(1);
+      expect(portalled.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      if (!hadDocument) delete g.document;
+    }
+    // The Modal keeps its contents behind `open`, inside the portal: closed is nothing, not hidden.
+    const modal = readClientSource('components/ui/Modal.tsx');
+    expect(modal).toMatch(/return createPortal\(\s*<AnimatePresence>\s*\{open && \(/);
+    expect(modal).not.toMatch(/hidden=\{!open\}|display: open \?|open \? '' : 'hidden'/);
+  });
 });
 
 describe('the thread keeps the person in it (item 16)', () => {
