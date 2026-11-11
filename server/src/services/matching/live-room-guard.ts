@@ -5,8 +5,9 @@
 // to write, before writing it:
 //   - two people one of whom blocked (or reported) the other are always refused, on every event, override or not;
 //   - on an event with groups, a room this round's rule does not allow is refused with the rule in the organiser's
-//     words, unless the request carries `override: true` and the actor is the event's owner (host_user_id) or a
-//     super admin; then it goes ahead and one `match.override` audit row records it, with the reason given.
+//     words, unless the request carries `override: true` and the actor may override (mayOverrideGroupRules: the
+//     event's owner, host_user_id, or a super admin; and its co-hosts when the owner chose so, Part 3 Task 12); then
+//     it goes ahead and one `match.override` audit row records it, with the reason given.
 // An event without groups checks the blocks only: a host may still seat an inviter with their guest, or two people
 // who met before, exactly as before.
 
@@ -85,14 +86,24 @@ async function groupProblemMessage(ctx: RoomCheckContext, problem: RoomProblem):
   return `${who[0]} and ${who[1]} can't meet in this round: ${rule}`;
 }
 
-/** The event's owner or a super admin, read from the database (never from the token). */
+/**
+ * Who may override this event's group rules, read from the database on every call (never from the token): the event's
+ * owner (host_user_id) or a super admin, always; and, when the owner chose 'owner_and_cohosts'
+ * (event_matching_rules.override_by, Part 3 Task 12), the event's co-hosts (session_cohosts role 'co_host'). No
+ * choice (no row) is 'owner'. A moderator, a pod director who is not a co-host and a platform admin gain nothing.
+ */
 export async function mayOverrideGroupRules(sessionId: string, actorId: string): Promise<boolean> {
-  const result = await query<{ host_user_id: string | null; role: string | null }>(
-    `SELECT s.host_user_id, (SELECT u.role FROM users u WHERE u.id = $2) AS role FROM sessions s WHERE s.id = $1`,
+  const result = await query<{ host_user_id: string | null; role: string | null; override_by: string | null; is_cohost: boolean | null }>(
+    `SELECT s.host_user_id, (SELECT u.role FROM users u WHERE u.id = $2) AS role,
+            (SELECT r.override_by FROM event_matching_rules r WHERE r.session_id = s.id) AS override_by,
+            EXISTS (SELECT 1 FROM session_cohosts c WHERE c.session_id = s.id AND c.user_id = $2 AND c.role = 'co_host') AS is_cohost
+       FROM sessions s WHERE s.id = $1`,
     [sessionId, actorId],
   );
   const row = result.rows[0];
-  return !!row && (row.host_user_id === actorId || row.role === UserRole.SUPER_ADMIN);
+  if (!row) return false;
+  if (row.host_user_id === actorId || row.role === UserRole.SUPER_ADMIN) return true;
+  return row.override_by === 'owner_and_cohosts' && row.is_cohost === true;
 }
 
 /**

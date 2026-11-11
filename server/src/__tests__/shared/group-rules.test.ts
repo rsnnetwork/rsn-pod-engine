@@ -157,7 +157,10 @@ describe('validateGroupRules', () => {
 });
 
 describe('GROUP_PRESETS', () => {
-  it('offers the four presets with their labels and questions, every round across groups', () => {
+  it('offers the five presets with their labels and questions, every round across groups', () => {
+    expect(Object.keys(GROUP_PRESETS)).toEqual([
+      'founders_funders', 'teachers_pupils', 'employers_candidates', 'mentors_mentees', 'buyers_vendors',
+    ]);
     expect(GROUP_PRESETS.founders_funders.groups.map((g) => g.label)).toEqual(['Founders', 'Funders']);
     expect(GROUP_PRESETS.founders_funders.question).toBe('Are you a founder or a funder?');
     expect(GROUP_PRESETS.teachers_pupils.groups.map((g) => g.label)).toEqual(['Teachers', 'Pupils']);
@@ -166,6 +169,9 @@ describe('GROUP_PRESETS', () => {
     expect(GROUP_PRESETS.employers_candidates.question).toBe('Are you hiring or looking for a role?');
     expect(GROUP_PRESETS.mentors_mentees.groups.map((g) => g.label)).toEqual(['Mentors', 'Mentees']);
     expect(GROUP_PRESETS.mentors_mentees.question).toBe('Are you a mentor or a mentee?');
+    // Part 3 Task 12: vendor matching, a two-sided type like the others.
+    expect(GROUP_PRESETS.buyers_vendors.groups).toEqual([{ key: 'buyer', label: 'Buyers' }, { key: 'vendor', label: 'Vendors' }]);
+    expect(GROUP_PRESETS.buyers_vendors.question).toBe('Are you buying or selling?');
     for (const preset of Object.values(GROUP_PRESETS)) {
       expect(preset.rounds).toBe('all_cross_group');
       expect(preset.allowMultiple).toBe(false);
@@ -267,6 +273,7 @@ describe('the shared package exports the group rules as values (Rollup interop r
     expect(typeof shared.validateGroupRules).toBe('function');
     expect(typeof shared.explainRoundCapacity).toBe('function');
     expect(shared.GROUP_PRESETS).toBe(GROUP_PRESETS);
+    expect(shared.GROUP_OVERRIDE_BY).toEqual(['owner', 'owner_and_cohosts']);
     expect(typeof shared.checkRoom).toBe('function');
     expect(typeof shared.checkRound).toBe('function');
     expect(typeof shared.estimatedRoundStarts).toBe('function');
@@ -276,7 +283,7 @@ describe('the shared package exports the group rules as values (Rollup interop r
     const src = fs.readFileSync(path.join(__dirname, '../../../../shared/src/index.ts'), 'utf8');
     for (const name of [
       'groupPairKey', 'ruleForRound', 'groupsAllowed', 'validateGroupRules', 'explainRoundCapacity', 'GROUP_PRESETS',
-      'checkRoom', 'checkRound', 'estimatedRoundStarts',
+      'GROUP_OVERRIDE_BY', 'checkRoom', 'checkRound', 'estimatedRoundStarts',
     ]) {
       expect(src).toMatch(new RegExp(`export const ${name} = `));
     }

@@ -2,7 +2,8 @@
 //
 // GET /sessions/:id/groups                           EventGroupsView: the groups, the question, my groups;
 //                                                    the people running it also get rules, counts, capacity
-// PUT /sessions/:id/groups                           the organiser saves the groups and round rules
+// PUT /sessions/:id/groups                           the organiser saves the groups and round rules (and, the owner
+//                                                    only, who may override them: overrideBy, Part 3 Task 12)
 // PUT /sessions/:id/participants/:userId/groups      the organiser puts a person in groups { groupKeys }
 //
 // Mounted at /api/sessions beside the event routes. The routes check the shape of what was sent; the service
@@ -11,7 +12,9 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { DEFAULT_GROUP_QUESTION, GROUP_LIMITS, type ApiResponse, type EventGroupRules, type EventGroupsView } from '@rsn/shared';
+import {
+  DEFAULT_GROUP_QUESTION, GROUP_LIMITS, type ApiResponse, type EventGroupRules, type EventGroupsView, type GroupOverrideBy,
+} from '@rsn/shared';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { eventChatReadLimiter, groupsWriteLimiter } from '../middleware/rateLimit';
@@ -44,6 +47,8 @@ const rulesBody = z.object({
   allowMultiple: z.boolean().default(false),
   fallback: z.enum(['leave_unmatched', 'same_group_meeting']).default('leave_unmatched'),
   rounds: z.array(roundRule).max(100).default([]),
+  // Part 3 Task 12: who may override the rules. Left out keeps the stored choice; changing it is the owner's (the service).
+  overrideBy: z.enum(['owner', 'owner_and_cohosts'] satisfies [GroupOverrideBy, GroupOverrideBy]).optional(),
 });
 type RulesBody = z.infer<typeof rulesBody>;
 
@@ -70,6 +75,7 @@ router.put('/:id/groups', authenticate, groupsWriteLimiter, validate(eventParams
         allowMultiple: body.allowMultiple,
         fallback: body.fallback,
         rounds: body.rounds,
+        ...(body.overrideBy ? { overrideBy: body.overrideBy } : {}),
       };
       const data = await saveEventGroupRules(req.params.id, { userId: req.user!.userId, role: req.user!.role }, rules);
       res.json({ success: true, data } satisfies ApiResponse<EventGroupRules>);

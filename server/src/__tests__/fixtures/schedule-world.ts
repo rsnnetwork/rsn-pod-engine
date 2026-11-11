@@ -37,6 +37,11 @@ export interface ScheduleWorld {
     scheduled_at: string | null; event_format: string;
   };
   cohosts: string[];
+  /**
+   * event_matching_rules.override_by (Part 3 Task 12, migration 147): who may override the group rules. null: no row
+   * (the event has no groups saved), which reads as 'owner', as does 'owner'.
+   */
+  overrideBy: 'owner' | 'owner_and_cohosts' | null;
   participants: Array<{ user_id: string; status: string; created_at: number }>;
   users: Map<string, { display_name: string; role: string; status: string }>;
   schedule: { revision: number; published_version: number | null; generated_at: number | null; updated_by: string | null; live_conflicts?: unknown[] } | null;
@@ -75,6 +80,7 @@ export function freshWorld(): ScheduleWorld {
       scheduled_at: '2026-12-01T18:00:00.000Z', event_format: 'speed_networking',
     },
     cohosts: [COHOST],
+    overrideBy: null,
     participants: [],
     users: new Map([
       [HOST, { display_name: 'Hana Host', role: 'member', status: 'active' }],
@@ -174,8 +180,14 @@ function handle(raw: string, params: unknown[] = []): { rows: unknown[]; rowCoun
   if (/^SELECT host_user_id, status, current_round, config, scheduled_at, event_format FROM sessions WHERE id = \$1$/.test(sql)) {
     return rows(params[0] === s.id ? [{ ...s }] : []);
   }
-  if (/^SELECT s\.host_user_id, \(SELECT u\.role FROM users u WHERE u\.id = \$2\) AS role FROM sessions s WHERE s\.id = \$1$/.test(sql)) {
-    return rows([{ host_user_id: s.host_user_id, role: world.users.get(params[1] as string)?.role ?? null }]);
+  // mayOverrideGroupRules (Part 3 Task 12): the owner, the actor's role, the owner's choice and whether they co-host.
+  if (/^SELECT s\.host_user_id, \(SELECT u\.role FROM users u WHERE u\.id = \$2\) AS role, \(SELECT r\.override_by FROM event_matching_rules r WHERE r\.session_id = s\.id\) AS override_by, EXISTS \(SELECT 1 FROM session_cohosts c WHERE c\.session_id = s\.id AND c\.user_id = \$2 AND c\.role = 'co_host'\) AS is_cohost FROM sessions s WHERE s\.id = \$1$/.test(sql)) {
+    return rows(params[0] === s.id ? [{
+      host_user_id: s.host_user_id,
+      role: world.users.get(params[1] as string)?.role ?? null,
+      override_by: world.overrideBy,
+      is_cohost: world.cohosts.includes(params[1] as string),
+    }] : []);
   }
   if (/^SELECT host_user_id AS user_id FROM sessions WHERE id = \$1 AND host_user_id IS NOT NULL UNION SELECT user_id FROM session_cohosts WHERE session_id = \$1$/.test(sql)) {
     return rows([...new Set([s.host_user_id, ...world.cohosts])].map((user_id) => ({ user_id })));

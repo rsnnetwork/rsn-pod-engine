@@ -33,6 +33,16 @@ export interface EventGroup {
   description?: string | null;
 }
 
+/**
+ * Who may override this event's group rules (Part 3 Task 12, the product owner's ruling of 11 Nov 2026): the event's
+ * owner alone (host_user_id; with super admins, as always), or the owner and the event's co-hosts. Only the owner or a
+ * super admin chooses. Every override is audited either way.
+ */
+export type GroupOverrideBy = 'owner' | 'owner_and_cohosts';
+
+/** The choices, in the order the organiser's form offers them; the first is the rule when nothing was chosen. */
+export const GROUP_OVERRIDE_BY: readonly GroupOverrideBy[] = ['owner', 'owner_and_cohosts'];
+
 export interface EventGroupRules {
   groups: EventGroup[];
   /** The required question a participant answers when they register ("Which group are you in?"). */
@@ -41,6 +51,8 @@ export interface EventGroupRules {
   allowMultiple: boolean;
   fallback: GroupFallback;
   rounds: RoundRule[];
+  /** Who may override the rules (absent = 'owner': the owner and super admins only, the rule before this choice existed). */
+  overrideBy?: GroupOverrideBy;
 }
 
 /**
@@ -192,7 +204,8 @@ export function validateGroupRules(rules: EventGroupRules, numberOfRounds: numbe
 
 // ─── Presets ─────────────────────────────────────────────────────────────────
 
-export type GroupPresetId = 'founders_funders' | 'teachers_pupils' | 'employers_candidates' | 'mentors_mentees';
+export type GroupPresetId =
+  | 'founders_funders' | 'teachers_pupils' | 'employers_candidates' | 'mentors_mentees' | 'buyers_vendors';
 
 /** A preset's groups and question; its rounds are "every round across groups", made into a range for the event. */
 export type GroupPreset = Omit<EventGroupRules, 'rounds'> & { rounds: 'all_cross_group' };
@@ -208,6 +221,8 @@ export const GROUP_PRESETS: Record<GroupPresetId, GroupPreset> = {
     { key: 'employer', label: 'Employers' }, { key: 'candidate', label: 'Candidates' }, 'Are you hiring or looking for a role?',
   ),
   mentors_mentees: twoSided({ key: 'mentor', label: 'Mentors' }, { key: 'mentee', label: 'Mentees' }, 'Are you a mentor or a mentee?'),
+  // Part 3 Task 12: vendor matching, beside the other two-sided types.
+  buyers_vendors: twoSided({ key: 'buyer', label: 'Buyers' }, { key: 'vendor', label: 'Vendors' }, 'Are you buying or selling?'),
 };
 
 // ─── Capacity: how many meetings a round's rule allows ──────────────────────

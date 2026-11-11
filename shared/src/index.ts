@@ -279,12 +279,14 @@ import {
   isGroupKey as _isGroupKey, groupPairKey as _groupPairKey, ruleForRound as _ruleForRound,
   groupsAllowed as _groupsAllowed, validateGroupRules as _validateGroupRules,
   explainRoundCapacity as _explainRoundCapacity, roundRuleSentence as _roundRuleSentence,
+  GROUP_OVERRIDE_BY as _GROUP_OVERRIDE_BY,
 } from './events/group-rules';
 import { checkRoom as _checkRoom, checkRound as _checkRound } from './events/room-check';
 import { estimatedRoundStarts as _estimatedRoundStarts } from './events/round-times';
 export const GROUP_LIMITS = _GROUP_LIMITS;
 export const DEFAULT_GROUP_QUESTION = _DEFAULT_GROUP_QUESTION;
 export const GROUP_PRESETS = _GROUP_PRESETS;
+export const GROUP_OVERRIDE_BY = _GROUP_OVERRIDE_BY;
 export const isGroupKey = _isGroupKey;
 export const groupPairKey = _groupPairKey;
 export const ruleForRound = _ruleForRound;

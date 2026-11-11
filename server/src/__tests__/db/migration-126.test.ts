@@ -23,7 +23,11 @@ const DEFAULTS = {
   eventIntentionAlignment: 0.15,
 };
 
-const EXPECTED: Record<keyof typeof MATCHING_PRESET_IDS, { name: string; description: string; weights: Record<string, number> }> = {
+/** The four ids this file seeds; later presets are later migrations' (Buyers and vendors: 147, migration-147.test.ts). */
+type Seeded126 = 'general' | 'foundersInvestors' | 'jobsHiring' | 'mentorship';
+const SEEDED_126: Seeded126[] = ['general', 'foundersInvestors', 'jobsHiring', 'mentorship'];
+
+const EXPECTED: Record<Seeded126, { name: string; description: string; weights: Record<string, number> }> = {
   general: { name: 'General', description: 'A broad mix of people, with shared interests first', weights: DEFAULTS },
   foundersInvestors: {
     name: 'Founders and investors', description: 'Founders meet investors first',
@@ -68,11 +72,11 @@ describe('migration 126 (speed-networking presets)', () => {
 
   it('seeds exactly the four presets, with the shared ids, as presets that are not the default template', () => {
     const seeded = rows();
-    expect(seeded.map((r) => r.id)).toEqual(Object.values(MATCHING_PRESET_IDS));
+    expect(seeded.map((r) => r.id)).toEqual(SEEDED_126.map((key) => MATCHING_PRESET_IDS[key]));
     for (const r of seeded) expect([r.isDefault, r.isPreset]).toEqual(['FALSE', 'TRUE']);
   });
 
-  it.each(Object.keys(EXPECTED) as Array<keyof typeof MATCHING_PRESET_IDS>)('%s has its name, its one line and its weights', (key) => {
+  it.each(SEEDED_126)('%s has its name, its one line and its weights', (key) => {
     const row = rows().find((r) => r.id === MATCHING_PRESET_IDS[key])!;
     expect(row).toMatchObject({ name: EXPECTED[key].name, description: EXPECTED[key].description });
     expect(row.weights).toEqual(EXPECTED[key].weights);

@@ -308,6 +308,40 @@ describe('a group-rule refusal (founders meet funders)', () => {
     expect((await getBoard(EVENT, CO)).canOverride).toBe(false);
   });
 
+  // Part 3 Task 12: the owner may let the event's co-hosts override too (event_matching_rules.override_by).
+  it("with the owner's 'owner and co-hosts', a co-host's override goes ahead and is audited; a pod director who is not a co-host is still refused", async () => {
+    world.overrideBy = 'owner_and_cohosts';
+    const DIRECTOR = { userId: 'director', role: UserRole.MEMBER };
+    world.users.set('director', { display_name: 'Dee Director', role: 'member', status: 'active' });
+    world.organisers.add('director');
+    let board = await generated();
+    board = (await op(board, { kind: 'unassign', round: 1, userId: 'f3' })).board;
+    const target = roomOf(board, 1, 'f1')!.roomNumber;
+    const move: BoardOp = { kind: 'move', round: 1, userId: 'f3', toRoom: target, override: true, reason: 'Same fund' };
+
+    await expect(op(board, move, DIRECTOR)).rejects.toMatchObject({ statusCode: 403, code: 'GROUP_OVERRIDE_FORBIDDEN' });
+    expect((await getBoard(EVENT, DIRECTOR)).canOverride).toBe(false);
+    expect((await getBoard(EVENT, CO)).canOverride).toBe(true);
+
+    const after = (await op(board, move, CO)).board;
+    expect(roomOf(after, 1, 'f3')!.seats.find((s) => s.userId === 'f3')).toMatchObject({ override: true, source: 'manual' });
+    expect(world.audit.at(-1)).toMatchObject({
+      actor_id: COHOST, action: 'schedule.edited', details: { reason: 'Same fund', after: { override: true } },
+    });
+  });
+
+  it("the owner switching back to 'owner' takes it from the co-hosts at once (403 GROUP_OVERRIDE_FORBIDDEN)", async () => {
+    world.overrideBy = 'owner_and_cohosts';
+    let board = await generated();
+    board = (await op(board, { kind: 'unassign', round: 1, userId: 'f3' })).board;
+    const target = roomOf(board, 1, 'f1')!.roomNumber;
+    world.overrideBy = 'owner';
+    await expect(op(board, { kind: 'move', round: 1, userId: 'f3', toRoom: target, override: true }, CO))
+      .rejects.toMatchObject({ statusCode: 403, code: 'GROUP_OVERRIDE_FORBIDDEN' });
+    expect((await getBoard(EVENT, CO)).canOverride).toBe(false);
+    expect((await getBoard(EVENT, OWNER)).canOverride).toBe(true);
+  });
+
   it('a block is never overridden', async () => {
     world.blocks.push(['f3', 'u1']);
     let board = await generated();
