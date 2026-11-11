@@ -131,9 +131,9 @@ describe('the event page', () => {
   // or a refetch of the list, never makes it try again, so it can never loop.
   it('registers on opening whichever of the event and the participant list arrives last, and tries at most once', () => {
     const effect = detail.slice(detail.indexOf('// Auto-register:'), detail.indexOf('const openEdit'));
-    expect(effect).toMatch(/\}, \[session\?\.id, user\?\.id, isRegistered, !!participants, access\?\.autoRegister, phase\]\);/);
+    expect(effect).toMatch(/\}, \[session\?\.id, user\?\.id, isRegistered, !!participants, access\?\.autoRegister, phase, autoRegistering\]\);/);
     expect(effect).toMatch(/if \(autoRegisterTriedRef\.current === sessionId\) return false;/);
-    expect(effect).toMatch(/autoRegisterTriedRef\.current = sessionId \?\? null;\s*setAutoRegistering\(true\);/);
+    expect(effect).toMatch(/const tried = sessionId \?\? null;\s*autoRegisterTriedRef\.current = tried;\s*setAutoRegisteringFor\(tried\);/);
     expect(detail).toMatch(/const autoRegisterTriedRef = useRef<string \| null>\(null\);/);
     // The guards it always had stay: an explicit unregister, an ended event, the server's autoRegister.
     expect(effect).toMatch(/if \(explicitlyUnregisteredRef\.current\) return false;/);

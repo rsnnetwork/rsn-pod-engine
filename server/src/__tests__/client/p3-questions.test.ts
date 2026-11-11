@@ -235,6 +235,22 @@ describe('"Before you join" opens on both refusals and registers again with what
     ]) expect(due).toContain(guard);
   });
 
+  // Review I1 (11 Nov 2026): the route reuses this page from event A to event B. With one boolean, A's registration still
+  // on its way kept B's effect from running, and when A's answered nothing re-ran it: B's Register stayed busy forever.
+  it('A to B mid-registration: the busy state is B\'s own, the effect re-runs when it ends, and A\'s refusal stays off B', () => {
+    expect(page).toContain('const [autoRegisteringFor, setAutoRegisteringFor] = useState<string | null>(null);');
+    expect(page).toContain('const autoRegistering = !!sessionId && autoRegisteringFor === sessionId;');
+    // A's answer clears only A's mark, never one B has set meanwhile.
+    expect(page).toContain('.finally(() => setAutoRegisteringFor((now) => (now === tried ? null : now)));');
+    expect(page).toMatch(/\}, \[session\?\.id, user\?\.id, isRegistered, !!participants, access\?\.autoRegister, phase, autoRegistering\]\);/);
+    // A refusal that comes back after the page moved to another event neither opens B's sheet nor toasts on B.
+    expect(page).toContain('pageEventRef.current = sessionId;');
+    const refusal = page.slice(page.indexOf('.catch(err => {', page.indexOf('const tried = sessionId')), page.indexOf('.finally(() => setAutoRegisteringFor'));
+    expect(refusal.indexOf('if (pageEventRef.current !== tried) return;')).toBeGreaterThan(-1);
+    expect(refusal.indexOf('if (pageEventRef.current !== tried) return;')).toBeLessThan(refusal.indexOf('setAnswersSheetOpen(true)'));
+    expect(page).not.toMatch(/setAutoRegistering\(/);
+  });
+
   it('retries /register with the body: the old body plus { groupKeys, answers }', () => {
     expect(page).toContain('mutationFn: (choices?: GivenAnswers) => api.post(`/sessions/${sessionId}/register`, registerBodyWith(registerBody(access), choices)),');
     expect(page).toContain('return registerMutation.mutateAsync(given);');

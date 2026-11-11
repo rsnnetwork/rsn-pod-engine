@@ -202,7 +202,14 @@ export default function SessionDetailPage() {
   const access: EventAccess | undefined = session?.access;
   // Part 3 Task 8: the event cannot take this viewer now: it is full, or they are already on its waiting list.
   const cannotTakeMe = !!access?.waitlist && (access.waitlist.full || access.waitlist.position !== null);
-  const [autoRegistering, setAutoRegistering] = useState(false);
+  // Review I1 (11 Nov 2026): whose registration is on its way, by event. The route reuses this page from one event to
+  // the next, so a registration still on its way for the last event never holds this one's Register busy, nor keeps
+  // this event's own registration from being sent.
+  const [autoRegisteringFor, setAutoRegisteringFor] = useState<string | null>(null);
+  const autoRegistering = !!sessionId && autoRegisteringFor === sessionId;
+  // The event on screen now, for an answer that comes back after the page has moved on.
+  const pageEventRef = useRef(sessionId);
+  pageEventRef.current = sessionId;
   // Bug 13 (April 19) — block the auto-register useEffect after an EXPLICIT
   // unregister click. Without this, unregister → isRegistered flips false →
   // useEffect fires → re-registers automatically (the visible "flash" of
@@ -241,11 +248,14 @@ export default function SessionDetailPage() {
   const pageRegistering = autoRegistering || autoRegisterDue();
   useEffect(() => {
     if (autoRegistering || !autoRegisterDue()) return;
-    autoRegisterTriedRef.current = sessionId ?? null;
-    setAutoRegistering(true);
+    const tried = sessionId ?? null;
+    autoRegisterTriedRef.current = tried;
+    setAutoRegisteringFor(tried);
     // Register stays busy until the list it invalidates has been read again (it then says Registered).
     api.post(`/sessions/${sessionId}/register`).then(() => qc.invalidateQueries({ queryKey: ['session-participants', sessionId] }))
       .catch(err => {
+        // The page has moved to another event meanwhile: this refusal is not about the event on screen.
+        if (pageEventRef.current !== tried) return;
         const code = err?.response?.data?.error?.code;
         if (code === 'SESSION_ALREADY_REGISTERED') return; // idempotent — silent
         if (code === 'SESSION_FULL') return void qc.invalidateQueries({ queryKey: ['session', sessionId] }); // Part 3: offers the line
@@ -253,11 +263,12 @@ export default function SessionDetailPage() {
         const msg = err?.response?.data?.error?.message;
         if (msg) addToast(msg, 'error');
       })
-      .finally(() => setAutoRegistering(false));
+      .finally(() => setAutoRegisteringFor((now) => (now === tried ? null : now)));
     // T13 fix round 1: the participant list and the server's autoRegister are deps too. The event and the list load in
     // parallel, and when the list came second the effect never ran again, so a circle member (whose list read is a little
-    // slower) was left looking at Register.
-  }, [session?.id, user?.id, isRegistered, !!participants, access?.autoRegister, phase]); // eslint-disable-line react-hooks/exhaustive-deps
+    // slower) was left looking at Register. Review I1: and whether this event's registration is on its way, so the
+    // effect runs again the moment one ends (a page that moved on while the last event's was still out).
+  }, [session?.id, user?.id, isRegistered, !!participants, access?.autoRegister, phase, autoRegistering]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openEdit = () => setEditOpen(true);
 
