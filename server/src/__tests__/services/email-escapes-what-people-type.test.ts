@@ -149,6 +149,14 @@ const cases: Case[] = [
   email('sendCallEntryCodeEmail', 'an event entry code', ['to', 'data'], ['delivered+ana@resend.dev', {
     eventTitle: 'Founders breakfast', code: '481206', link: `${APP}/call/k7m2x9q4ra?entry=abc`,
   }]),
+  // Part 3 Task 2.
+  email('sendReauthCodeEmail', 'a confirmation code', ['to', 'data'], ['delivered+ana@resend.dev', {
+    code: '481206', purposeText: 'close your account',
+  }]),
+  email('sendEmailChangeCodeEmail', 'the new address code', ['to', 'data'], ['delivered+ana@resend.dev', { code: '481206' }]),
+  email('sendEmailChangedNoticeEmail', 'the email changed notice', ['oldAddress', 'data'], ['delivered+ana@resend.dev', {
+    maskedNew: 'n•••@example.org',
+  }]),
 ];
 
 /** Exports that build no email: the shared card and the admin switch. Anything new must be put in one list or the other. */

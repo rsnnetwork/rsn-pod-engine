@@ -978,3 +978,87 @@ export const scheduleWriteLimiter = rateLimit({
   store: buildStore('schedule-write'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
+
+// ─── Confirm it's you before a sensitive change (Part 3 Task 2, 11 Nov 2026) ──────────────────────────────────────
+// Every route here signs in first, so each bucket is the member's own (`u:<id>`): a crowd behind one address never
+// shares one, and a member cannot spend another's. On top of these, every code allows five wrong tries (sign-in-code.ts).
+// The new address's own bucket (a hash of it, no address in the store) stops anyone mail-bombing a third party.
+
+const memberKey = (req: Request): string => (req.user ? `u:${req.user.userId}` : userOrIpKey(req));
+const accountSecurityLimited = (message: string) => (_req: Request, res: Response) => {
+  const response: ApiResponse = { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message } };
+  res.status(429).json(response);
+};
+const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+/** Confirmation codes emailed to the member's current address: five per 15 minutes. */
+export const REAUTH_CODES_PER_WINDOW = 5;
+export const reauthCodeLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: REAUTH_CODES_PER_WINDOW,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: memberKey,
+  store: buildStore('reauth-code'),
+  handler: accountSecurityLimited('Too many codes asked for. Please wait 15 minutes, then try again.'),
+});
+
+/** Confirmation codes typed: ten per 15 minutes. */
+export const reauthVerifyLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: memberKey,
+  store: buildStore('reauth-verify'),
+  handler: accountSecurityLimited('Too many codes tried. Please wait 15 minutes, then try again.'),
+});
+
+/** Codes emailed to a new sign-in address: five an hour per member. */
+export const emailChangeCodeLimiter = rateLimit({
+  windowMs: ONE_HOUR_MS,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: memberKey,
+  store: buildStore('email-change-code'),
+  handler: accountSecurityLimited('Too many codes asked for. Please wait an hour, then try again.'),
+});
+
+/**
+ * Codes emailed to any one new address: three an hour, whoever asks. Runs after validation (body.newEmail is a string)
+ * and before the proof is spent; only a request that sent a code counts, so a refused one never uses up the address.
+ */
+export const emailChangeTargetLimiter = rateLimit({
+  windowMs: ONE_HOUR_MS,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipFailedRequests: true,
+  keyGenerator: (req: Request) => signInCodeEmailKey(typeof req.body?.newEmail === 'string' ? req.body.newEmail : ''),
+  store: buildStore('email-change-target'),
+  handler: accountSecurityLimited('Too many codes asked for this address. Please wait an hour, then try again.'),
+});
+
+/** The new address's code typed: ten per 15 minutes. */
+export const emailChangeVerifyLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: memberKey,
+  store: buildStore('email-change-verify'),
+  handler: accountSecurityLimited('Too many codes tried. Please wait 15 minutes, then try again.'),
+});
+
+/** Closing one's own account: ten tries per 15 minutes (each also needs a fresh proof). */
+export const closeAccountLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: memberKey,
+  store: buildStore('close-account'),
+  handler: accountSecurityLimited('Too many tries. Please wait 15 minutes, then try again.'),
+});

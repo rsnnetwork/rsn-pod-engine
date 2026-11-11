@@ -3,9 +3,12 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
-import { authLimiter, signInCodeEmailLimiter, signInCodeLimiter } from '../middleware/rateLimit';
+import {
+  authLimiter, reauthCodeLimiter, reauthVerifyLimiter, signInCodeEmailLimiter, signInCodeLimiter,
+} from '../middleware/rateLimit';
 import * as identityService from '../services/identity/identity.service';
-import { ApiResponse, ErrorCodes } from '@rsn/shared';
+import { issueReauthCode, verifyReauthCode } from '../services/identity/reauth.service';
+import { ApiResponse, ErrorCodes, REAUTH_SCOPES } from '@rsn/shared';
 import config from '../config';
 import logger from '../config/logger';
 import {
@@ -106,6 +109,49 @@ router.post(
         success: true,
         data: tokens,
       };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /auth/reauth/code, /auth/reauth/verify ────────────────────────────
+// Confirm it's you before a sensitive change (Part 3 Task 2, services/identity/reauth.service.ts): a code to the
+// signed-in member's current address, then the code typed for a reauth token the change sends as `reauthToken`.
+
+const reauthScope = z.enum(REAUTH_SCOPES, { errorMap: () => ({ message: 'Choose what to confirm.' }) });
+const reauthCodeSchema = z.object({ scope: reauthScope });
+const reauthVerifySchema = z.object({
+  scope: reauthScope,
+  code: z.string().max(32).transform((c) => c.replace(/[\s-]/g, '')).pipe(z.string().regex(/^\d{6}$/, SIGN_IN_CODE_MESSAGE)),
+});
+
+router.post(
+  '/reauth/code',
+  authenticate,
+  reauthCodeLimiter,
+  validate(reauthCodeSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await issueReauthCode(req.user!.userId, req.body.scope);
+      const response: ApiResponse = { success: true, data: result };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/reauth/verify',
+  authenticate,
+  reauthVerifyLimiter,
+  validate(reauthVerifySchema, 'body', SIGN_IN_CODE_MESSAGE),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await verifyReauthCode(req.user!.userId, req.body.scope, req.body.code);
+      const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {
       next(err);

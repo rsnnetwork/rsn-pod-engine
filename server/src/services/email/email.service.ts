@@ -1699,3 +1699,82 @@ function escapeHtml(s: string): string {
 function escapeAttr(s: string): string {
   return escapeHtml(s);
 }
+
+// ─── Confirm it's you before a sensitive change (Part 3 Task 2, 11 Nov 2026) ────
+// Three emails, none behind an admin switch (like the sign-in email: turning one off would lock a member out of the
+// change). A code to the CURRENT address before the change (no button: a button would sign in whichever browser opens
+// it, not the tab that asked), a code to the NEW address to prove it, and a notice to the OLD address once the sign-in
+// email has changed. Each code works for 15 minutes (sign-in-code.ts). The two code emails throw a 503 AppError when they
+// could not be sent, so the member is told at once; the notice is sent after the change and its failure only logged.
+
+/** The large code block the two code emails show. */
+function confirmationCodeHtml(code: string): string {
+  return `
+          <div style="text-align:center;margin:0 0 8px 0;">
+            <p data-confirmation-code style="display:inline-block;color:#1a1a2e;background:#f4f5f7;border:1px solid #dfe3ea;border-radius:12px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:36px;font-weight:700;letter-spacing:8px;padding:14px 18px 14px 26px;margin:0;">${escapeHtml(code)}</p>
+            <p style="color:#64748b;font-size:13px;line-height:1.5;margin:10px 0 0 0;">It works for ${SIGN_IN_CODE_TTL_MINUTES} minutes.</p>
+          </div>`;
+}
+
+/** The page around one card: the same for the three emails below. */
+function accountEmailPage(body: string): string {
+  return `
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        ${emailCardOpen()}${body}
+        ${emailCardClose()}
+      </div>
+    </body></html>`;
+}
+
+const CODE_NOT_SENT = "We couldn't send the code just now. Please try again in a moment.";
+
+export interface ReauthCodeEmailData {
+  code: string;
+  /** What the code confirms, finishing "before you ...": "change your sign-in email", "close your account", "change an admin role". */
+  purposeText: string;
+}
+
+export async function sendReauthCodeEmail(to: string, data: ReauthCodeEmailData): Promise<void> {
+  const subject = 'Your REASON confirmation code';
+  const warning = "If you didn't ask for this, someone may be signed in as you, so don't share the code.";
+  const html = accountEmailPage(`
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 20px 0;">
+            Type this code in REASON to confirm it's you before you ${escapeHtml(data.purposeText)}:
+          </p>${confirmationCodeHtml(data.code)}
+          <p style="color:#64748b;font-size:13px;line-height:1.5;margin:24px 0 0 0;">${warning}</p>`);
+  const text = `Type this code in REASON to confirm it's you before you ${data.purposeText}: ${data.code}. It works for ${SIGN_IN_CODE_TTL_MINUTES} minutes. ${warning}`;
+  const result = await sendEmail({ to, subject, html, text });
+  if (!result.sent) throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, CODE_NOT_SENT);
+}
+
+export interface EmailChangeCodeEmailData {
+  code: string;
+}
+
+export async function sendEmailChangeCodeEmail(to: string, data: EmailChangeCodeEmailData): Promise<void> {
+  const subject = 'Confirm your new REASON email';
+  const after = "If you didn't ask for this, ignore this email and nothing changes.";
+  const html = accountEmailPage(`
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 20px 0;">
+            Type this code in REASON to make this your sign-in email:
+          </p>${confirmationCodeHtml(data.code)}
+          <p style="color:#64748b;font-size:13px;line-height:1.5;margin:24px 0 0 0;">${after}</p>`);
+  const text = `Type this code in REASON to make this your sign-in email: ${data.code}. It works for ${SIGN_IN_CODE_TTL_MINUTES} minutes. ${after}`;
+  const result = await sendEmail({ to, subject, html, text });
+  if (!result.sent) throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, CODE_NOT_SENT);
+}
+
+export interface EmailChangedNoticeEmailData {
+  /** The new address as maskAddress shows it ("n•••@domain"): the old mailbox never learns the whole of it. */
+  maskedNew: string;
+}
+
+export async function sendEmailChangedNoticeEmail(oldAddress: string, data: EmailChangedNoticeEmailData): Promise<SendEmailResult> {
+  const subject = 'Your REASON sign-in email was changed';
+  const line = `Your REASON sign-in email was changed to ${data.maskedNew}. If this wasn't you, reply to this email straight away.`;
+  const html = accountEmailPage(`
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0;">Your REASON sign-in email was changed to ${escapeHtml(data.maskedNew)}. If this wasn't you, reply to this email straight away.</p>`);
+  return sendEmail({ to: oldAddress, subject, html, text: line });
+}

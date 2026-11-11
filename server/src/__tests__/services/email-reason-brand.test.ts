@@ -306,6 +306,28 @@ const cases: EmailCase[] = [
       eventTitle: 'Founders breakfast', code: '481206', link: 'https://app.rsn.network/call/k7m2x9q4ra?entry=abc',
     }),
   },
+  // Part 3 Task 2: confirm it's you before a sensitive change; the new address's code; the notice to the old address.
+  {
+    fn: 'sendReauthCodeEmail', label: 'a confirmation code', subject: 'Your REASON confirmation code',
+    says: [
+      "Type this code in REASON to confirm it's you before you close your account", '481206', 'It works for 15 minutes',
+      "If you didn't ask for this, someone may be signed in as you, so don't share the code.",
+    ],
+    run: () => emailService.sendReauthCodeEmail('delivered+ana@resend.dev', { code: '481206', purposeText: 'close your account' }),
+  },
+  {
+    fn: 'sendEmailChangeCodeEmail', label: 'the new address code', subject: 'Confirm your new REASON email',
+    says: [
+      'Type this code in REASON to make this your sign-in email', '481206', 'It works for 15 minutes',
+      "If you didn't ask for this, ignore this email and nothing changes.",
+    ],
+    run: () => emailService.sendEmailChangeCodeEmail('delivered+ana@resend.dev', { code: '481206' }),
+  },
+  {
+    fn: 'sendEmailChangedNoticeEmail', label: 'the email changed notice', subject: 'Your REASON sign-in email was changed',
+    says: ["Your REASON sign-in email was changed to n•••@example.org. If this wasn't you, reply to this email straight away."],
+    run: () => emailService.sendEmailChangedNoticeEmail('delivered+ana@resend.dev', { maskedNew: 'n•••@example.org' }),
+  },
 ];
 
 const count = (haystack: string, pattern: RegExp) => (haystack.match(pattern) ?? []).length;

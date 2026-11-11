@@ -300,3 +300,18 @@ export const estimatedRoundStarts = _estimatedRoundStarts;
 export * from './types/schedule';
 import { BOARD_BASKET_ROOM as _BOARD_BASKET_ROOM } from './types/schedule';
 export const BOARD_BASKET_ROOM = _BOARD_BASKET_ROOM;
+// Confirm it's you again before a sensitive change (10 Nov 2026 spec, Part 3 Task 2): the kinds of change, the proof's
+// life, the refusal's words and the admin-role test are VALUES the server and the client both use, so each has its own
+// statically analysable named export, same as OPENINGS above.
+export * from './identity/reauth';
+import {
+  REAUTH_SCOPES as _REAUTH_SCOPES, REAUTH_GRANT_MINUTES as _REAUTH_GRANT_MINUTES,
+  REAUTH_REQUIRED_MESSAGE as _REAUTH_REQUIRED_MESSAGE, isReauthScope as _isReauthScope, isAdminRole as _isAdminRole,
+  touchesAdminRole as _touchesAdminRole,
+} from './identity/reauth';
+export const REAUTH_SCOPES = _REAUTH_SCOPES;
+export const REAUTH_GRANT_MINUTES = _REAUTH_GRANT_MINUTES;
+export const REAUTH_REQUIRED_MESSAGE = _REAUTH_REQUIRED_MESSAGE;
+export const isReauthScope = _isReauthScope;
+export const isAdminRole = _isAdminRole;
+export const touchesAdminRole = _touchesAdminRole;

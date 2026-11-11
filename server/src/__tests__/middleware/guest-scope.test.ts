@@ -67,6 +67,7 @@ import { GUEST_ROUTES, isGuestAllowed } from '../../middleware/guest-scope';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import authRoutes from '../../routes/auth';
 import userRoutes from '../../routes/users';
+import accountSecurityRoutes from '../../routes/account-security';
 import onboardingRoutes from '../../routes/onboarding';
 import onboardingV2Routes from '../../routes/onboarding-v2';
 import podRoutes from '../../routes/pods';
@@ -106,6 +107,7 @@ import scheduleRoutes from '../../routes/schedule';
 // The API exactly as index.ts mounts it, in the same order (the last test below holds the two lists together).
 const MOUNTS: Array<[string, express.Router]> = [
   ['/api/auth', authRoutes],
+  ['/api/users/me', accountSecurityRoutes],
   ['/api/users', userRoutes],
   ['/api/onboarding/v2', onboardingV2Routes],
   ['/api/onboarding', onboardingRoutes],
@@ -186,6 +188,10 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['get', `/api/users/${OTHER}`],
   ['get', '/api/users/blocked'],
   ['put', '/api/users/me/banner'],
+  // Part 3 Task 2: changing the sign-in email and closing the account are members' own (a guest's address is them).
+  ['post', '/api/users/me/email/code'],
+  ['post', '/api/users/me/email/verify'],
+  ['post', '/api/users/me/close'],
   ['get', '/api/sessions'],
   ['post', '/api/sessions'],
   ['post', `/api/sessions/${EVENT}/register`],
