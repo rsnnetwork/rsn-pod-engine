@@ -37,6 +37,11 @@ interface Stats {
   avgQualityScore: number;
   meetAgainRate: number;
   mutualMeetAgainCount: number;
+  /**
+   * How many ratings the average rests on: not marked "didn't work", on meetings that took place (Part 3 Task 4).
+   * Absent from an older server, when totalRatings stands in for it.
+   */
+  scoredRatingCount?: number;
 }
 
 interface PeopleMetData {
@@ -381,7 +386,7 @@ export default function RecapPage() {
                 <Card className="text-center py-4" data-testid="recap-event-average">
                   <Star className="h-5 w-5 text-amber-400 mx-auto mb-1" />
                   {(() => {
-                    const avg = eventAverageText(stats.totalRatings, stats.avgQualityScore);
+                    const avg = eventAverageText(stats.scoredRatingCount ?? stats.totalRatings, stats.avgQualityScore);
                     return <p className={avg.figure ? 'text-2xl font-bold text-[#1a1a2e]' : 'text-sm font-medium text-gray-500 py-1.5'}>{avg.text}</p>;
                   })()}
                   <p className="text-xs text-gray-400">Avg Rating</p>

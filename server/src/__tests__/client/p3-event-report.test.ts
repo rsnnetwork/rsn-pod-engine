@@ -371,11 +371,18 @@ describe('what the report says', () => {
       id: '1', at: '', actor: { id: 'h', displayName: 'Ana Host' }, automatic: false, action: 'report.downloaded',
       round: null, scheduleVersion: null, subjects: [], reason: null, ...over,
     });
-    expect(historySentence(entry({ section: 'attendance' }))).toBe('Ana Host downloaded the attendance report');
-    expect(historySentence(entry({ section: 'meetings' }))).toBe('Ana Host downloaded the meetings report');
-    expect(historySentence(entry({ section: 'mutual-matches' }))).toBe('Ana Host downloaded the mutual matches report');
+    expect(historySentence(entry({ reportSection: 'attendance' }))).toBe('Ana Host downloaded the attendance report');
+    expect(historySentence(entry({ reportSection: 'meetings' }))).toBe('Ana Host downloaded the meetings report');
+    expect(historySentence(entry({ reportSection: 'mutual-matches' }))).toBe('Ana Host downloaded the mutual matches report');
+    expect(historySentence(entry({ reportSection: null }))).toBe('Ana Host downloaded the event report');
     expect(historySentence(entry({}))).toBe('Ana Host downloaded the event report');
-    expect(historySentence(entry({ section: 'bogus' }))).toBe('Ana Host downloaded the event report');
+    // A section only counts on a report.downloaded row.
+    expect(historySentence(entry({ action: 'event.published', reportSection: 'attendance' }))).toBe('Ana Host published the event');
+    // The field the client reads is the one the server sends (listEventAudit, Part 3 Task 4).
+    const audit = fs.readFileSync(path.join(__dirname, '../../services/audit/event-audit.ts'), 'utf8');
+    expect(audit).toContain('reportSection?: EventReportSection | null;');
+    expect(audit).toContain("...(row.action === 'report.downloaded' ? { reportSection: reportSectionOf(d.after) } : {}),");
+    expect(read('features/sessions/history/history-text.ts')).toContain('reportSection?: EventReportSection | null;');
   });
 });
 
@@ -420,12 +427,25 @@ describe('the recap shows no event-wide rating figure under five ratings, to any
     expect(fn).toContain('COALESCE(AVG(quality_score) FILTER (WHERE NOT excluded_from_quality_stats), 0)');
     expect(fn).toContain('WHERE m.session_id = $1`');
     expect(fn).not.toMatch(/rater_id|ratee_id|\$2/);
+    // It also says how many scores the average rests on, the count the recap gates on.
+    expect(fn).toContain('scoredRatingCount: number;');
+    expect(fn).toContain(`COUNT(*) FILTER (WHERE NOT r.excluded_from_quality_stats AND m.status IN ('completed', 'reassigned'))::text AS "scoredRatingCount"`);
+  });
+
+  it('the recap gates on the scores, not every rating: five ratings with four marked "didn\'t work" are withheld', () => {
+    const stats = { totalRatings: 5, scoredRatingCount: 1, avgQualityScore: 2 };
+    expect(eventAverageText(stats.scoredRatingCount ?? stats.totalRatings, stats.avgQualityScore).text).toBe('Too few ratings to show');
+    // An older server without the field: today's rule on totalRatings.
+    const older: { totalRatings: number; scoredRatingCount?: number; avgQualityScore: number } = { totalRatings: 6, avgQualityScore: 4.5 };
+    expect(eventAverageText(older.scoredRatingCount ?? older.totalRatings, older.avgQualityScore).text).toBe('4.5');
+    expect(eventAverageText(0, 0).text).toBe('No ratings yet');
   });
 
   it('so the one avgQualityScore the recap draws goes through eventAverageText, never toFixed on its own', () => {
     // Once in the Stats type, once in the tile.
     expect(recap.split('avgQualityScore').length - 1).toBe(2);
-    expect(recap).toContain('eventAverageText(stats.totalRatings, stats.avgQualityScore)');
+    expect(recap).toContain('eventAverageText(stats.scoredRatingCount ?? stats.totalRatings, stats.avgQualityScore)');
+    expect(recap).toContain('scoredRatingCount?: number;');
     expect(recap).not.toMatch(/avgQualityScore\.toFixed|avgQuality\)\.toFixed/);
   });
 

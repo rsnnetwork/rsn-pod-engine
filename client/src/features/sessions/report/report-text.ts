@@ -71,12 +71,13 @@ export function shareText(rate: number | null, withheld: boolean, submitted: num
 
 /**
  * The recap's "Avg Rating": GET /ratings/sessions/:id/stats is the EVENT's average over every rating in it (whoever
- * reads it), so it follows the report's rule. Under RATING_FIGURE_MIN ratings it would be a named partner's score:
+ * reads it), so it follows the report's rule. `scored` is how many scores the average rests on (the stats'
+ * scoredRatingCount; totalRatings from an older server). Under RATING_FIGURE_MIN it would be a named partner's score:
  * "Too few ratings to show"; none at all: "No ratings yet", never "0.0". `figure` says whether `text` is a number.
  */
-export function eventAverageText(totalRatings: number, average: number): { text: string; figure: boolean } {
-  if (totalRatings <= 0) return { text: REPORT_COPY.noRatings, figure: false };
-  if (totalRatings < RATING_FIGURE_MIN) return { text: REPORT_COPY.withheld, figure: false };
+export function eventAverageText(scored: number, average: number): { text: string; figure: boolean } {
+  if (scored <= 0) return { text: REPORT_COPY.noRatings, figure: false };
+  if (scored < RATING_FIGURE_MIN) return { text: REPORT_COPY.withheld, figure: false };
   return { text: average.toFixed(1), figure: true };
 }
 

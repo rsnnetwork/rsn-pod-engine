@@ -3,6 +3,8 @@
 // reads a sentence ("Ana Lee published the event"), never the name. An action this page does not know yet reads as a
 // change to the event.
 
+import type { EventReportSection } from '@rsn/shared';
+
 export interface HistoryPerson { id: string; displayName: string }
 
 /** One entry as GET /sessions/:id/audit sends it. */
@@ -17,10 +19,10 @@ export interface HistoryEntry {
   subjects: HistoryPerson[];
   reason: string | null;
   /**
-   * Which part of the event report a report.downloaded entry took out ('attendance', 'meetings', 'mutual-matches'),
-   * when the server says (it stores it as the entry's `after.section`); without it the sentence names the report.
+   * On a report.downloaded entry only: which part of the event report was downloaded (the server reads it from the
+   * row it stored, Part 3 Task 4). Null or absent (an older row, an older server) and the sentence names the report.
    */
-  section?: string | null;
+  reportSection?: EventReportSection | null;
 }
 
 export const HISTORY_COPY = {
@@ -74,14 +76,14 @@ const ACTIONS: Record<string, string> = {
 };
 
 /** The words for each part of the event report (Part 3 Task 9): "{actor} downloaded the {section} report". */
-const REPORT_SECTIONS: Record<string, string> = {
+const REPORT_SECTIONS: Record<EventReportSection, string> = {
   attendance: 'attendance',
   meetings: 'meetings',
   'mutual-matches': 'mutual matches',
 };
 
 function actionWords(entry: HistoryEntry): string {
-  const section = entry.action === 'report.downloaded' && entry.section ? REPORT_SECTIONS[entry.section] : undefined;
+  const section = entry.action === 'report.downloaded' && entry.reportSection ? REPORT_SECTIONS[entry.reportSection] : undefined;
   if (section) return `downloaded the ${section} report`;
   return ACTIONS[entry.action] ?? 'changed the event';
 }
