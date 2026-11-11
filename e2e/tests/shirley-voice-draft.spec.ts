@@ -2,6 +2,7 @@ import { test, expect, chromium, type Browser, type BrowserContext, type Page } 
 import { createTestUser, pool, type TestUser } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, wait, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
+import { confirmInPage } from '../helpers/confirm-dialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shirley Palmer's walkthrough, 11 Nov 2026 (RSN 01, P0; RSN 05 and 06, P1): a voice note recorded to one person and
@@ -22,6 +23,9 @@ import { primePreview } from '../helpers/preview-bypass';
 //      a recording lives in the tab's memory only) and Ben still has nothing.
 //   5. A refused microphone: a plain sentence, no recording bar.
 //   6. At 360px: Stop, Discard and Send voice note are 44px and inside the screen; nothing scrolls sideways.
+//   7. (fix round 1, I2) A voice note, a text and a picture each sent to Ana with the upload (or, for the text, the
+//      post) held ~3 s, and Ben opened at once: Ana gets exactly one message, Ben nothing, Ben's box is empty, and Ana's
+//      box afterwards holds no draft and sends nothing twice.
 // Not covered here (Ali's phone list): the 60 s cap end to end (unit-tested with a fake clock), iOS Safari's recorder.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -77,8 +81,15 @@ async function connect(from: TestUser, to: TestUser): Promise<string> {
   return conv.rows[0].id;
 }
 
-/** Shirley, signed in, at this width; Cloudinary's upload answered by a stand-in so nothing is stored there. */
-async function shirleyAt(width: number, height: number, opts: { denyMic?: boolean } = {}): Promise<Page> {
+/** A 1x1 PNG, for the picture case. */
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+
+/**
+ * Shirley, signed in, at this width; Cloudinary's upload answered by a stand-in so nothing is stored there. `holdMs`
+ * holds that answer (a picture or a voice note) and Shirley's own POST /dm/messages (a text) that long, so the member
+ * can open another conversation while the send is on its way. `name` makes the stand-in's file address this run's own.
+ */
+async function shirleyAt(width: number, height: number, opts: { denyMic?: boolean; holdMs?: number; name?: string } = {}): Promise<Page> {
   const ctx = await browser.newContext({ viewport: { width, height } });
   await ctx.addInitScript((t: { a: string; r: string; deny: boolean }) => {
     localStorage.setItem('rsn_access', t.a);
@@ -88,7 +99,22 @@ async function shirleyAt(width: number, height: number, opts: { denyMic?: boolea
       navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));
     }
   }, { a: shirley.accessToken, r: shirley.refreshToken, deny: !!opts.denyMic });
-  await ctx.route('https://api.cloudinary.com/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(FAKE_UPLOAD) }));
+  const hold = opts.holdMs ?? 0;
+  const name = opts.name ?? `e2e-voice-${RUN}`;
+  await ctx.route('https://api.cloudinary.com/**', async (route) => {
+    if (hold) await wait(hold);
+    const image = route.request().url().includes('/image/upload');
+    const body = image
+      ? { secure_url: `https://res.cloudinary.com/demo/image/upload/v1/${name}.png`, width: 1, height: 1, bytes: PNG.length, format: 'png' }
+      : { ...FAKE_UPLOAD, secure_url: `https://res.cloudinary.com/demo/video/upload/v1/${name}.webm` };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
+  if (hold) {
+    await ctx.route(`${SERVER}/api/dm/messages`, async (route) => {
+      if (route.request().method() === 'POST') await wait(hold);
+      await route.continue();
+    });
+  }
   ctxs.push(ctx);
   await primePreview(ctx);
   const page = await ctx.newPage();
@@ -195,11 +221,11 @@ test('a note stopped to Ana is never in Ben\'s box, never sent to Ben, and is st
   await expectCleanBox(page, 'deep link');
   expect(await voiceTo(benConv)).toBe('0');
 
-  // Clear it for the next test: back in Ana's thread, Discard (a note under 3 s goes at once).
+  // Clear it for the next test: back in Ana's thread, Discard. It always asks first (a destructive action).
   await page.goBack();
   await page.getByTestId('dm-voice-discard').click();
-  const confirm = page.getByRole('dialog');
-  if (await confirm.count()) await confirm.getByRole('button', { name: 'Discard' }).click();
+  await expect(page.getByTestId('confirm-dialog-confirm')).toBeVisible({ timeout: 10_000 });
+  await confirmInPage(page);
   await expect(draftCard(page)).toHaveCount(0);
 });
 
@@ -296,3 +322,62 @@ test('at 360px: Stop, Discard and Send voice note are 44px and on screen, nothin
   expect(await voiceTo(benConv)).toBe('0');
   expect(pageErrors, 'no page errors').toEqual([]);
 });
+
+/** Everything Shirley has stored in a conversation. */
+const storedIn = async (conversationId: string) => (await pool.query<{ content: string | null; attachment_type: string | null; attachment_url: string | null }>(
+  `SELECT content, attachment_type, attachment_url FROM direct_messages WHERE conversation_id = $1 AND from_user_id = $2`, [conversationId, shirley.id],
+)).rows;
+
+for (const kind of ['voice note', 'text', 'picture'] as const) {
+  test(`a ${kind} sent to Ana while its send is held 3 s, with Ben opened at once: Ana gets one, Ben nothing (I2)`, async () => {
+    test.setTimeout(240_000);
+    const name = `e2e-held-${kind.replace(' ', '-')}-${RUN}`;
+    const page = await shirleyAt(1280, 860, { holdMs: 3_000, name });
+    await openThread(page, anaConv);
+    const anaBefore = await storedIn(anaConv);
+    const benBefore = await storedIn(benConv);
+    const words = `Held ${kind} ${RUN}`;
+
+    if (kind === 'voice note') {
+      await recordAndStop(page);
+      await page.getByTestId('dm-voice-send').click();
+      await expect(page.getByTestId('dm-voice-draft-status')).toHaveText(/Sending/, { timeout: 5_000 });
+    } else if (kind === 'text') {
+      await box(page).locator('textarea').fill(words);
+      await box(page).getByRole('button', { name: 'Send message' }).click();
+    } else {
+      await page.getByTestId('dm-image-input').setInputFiles({ name: 'held.png', mimeType: 'image/png', buffer: PNG });
+      await expect(box(page).locator('img[alt="Pending"]')).toBeVisible({ timeout: 10_000 });
+      await box(page).getByRole('button', { name: 'Send message' }).click();
+    }
+
+    // Ben, at once, while the send is still held.
+    await page.getByRole('link', { name: new RegExp(BEN_NAME) }).first().click();
+    await expectCleanBox(page, `${kind} held`);
+    await expect(box(page).locator('img[alt="Pending"]'), 'no picture waiting in Ben\'s box').toHaveCount(0);
+
+    // Let it land, then read what was stored.
+    await wait(8_000);
+    const anaAfter = await storedIn(anaConv);
+    const benAfter = await storedIn(benConv);
+    expect(anaAfter.length - anaBefore.length, `exactly one new message to Ana (${kind})`).toBe(1);
+    expect(benAfter.length - benBefore.length, `nothing new to Ben (${kind})`).toBe(0);
+    const added = anaAfter.filter((m) => !anaBefore.some((b) => b.content === m.content && b.attachment_url === m.attachment_url));
+    expect(added, `the new message to Ana (${kind})`).toHaveLength(1);
+    if (kind === 'voice note') expect(added[0].attachment_type).toBe('audio');
+    if (kind === 'text') expect(added[0].content).toBe(words);
+    if (kind === 'picture') expect(added[0].attachment_type).toBe('image');
+    expect(benAfter.some((m) => m.content === words || (m.attachment_url ?? '').includes(name)), 'Ben has none of it').toBe(false);
+    await benSeesNoVoice();
+    await expectCleanBox(page, `${kind} landed`);
+
+    // Back in Ana's thread: nothing waiting, and nothing goes a second time.
+    await page.getByRole('link', { name: new RegExp(ANA_NAME) }).first().click();
+    await expect(page.getByTestId('thread-partner-name')).toHaveText(ANA_NAME, { timeout: 30_000 });
+    await expect(draftCard(page)).toHaveCount(0, { timeout: 15_000 });
+    await expect(box(page).locator('textarea')).toHaveValue('', { timeout: 15_000 });
+    await expect(box(page).getByRole('button', { name: 'Send message' }), 'an empty box cannot send').toBeDisabled();
+    await wait(2_000);
+    expect((await storedIn(anaConv)).length - anaBefore.length, `still exactly one (${kind})`).toBe(1);
+  });
+}
